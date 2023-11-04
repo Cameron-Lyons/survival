@@ -71,3 +71,54 @@ struct CoxModel {
     iter_used: usize,
     work: Vec<f64>,
 }
+
+impl CoxModel {
+    pub fn new(
+        maxiter: usize,
+        nused: usize,
+        nvar: usize,
+        start: Vec<f64>,
+        stop: Vec<f64>,
+        event: Vec<u8>,
+        covar: Vec<Vec<f64>>,
+        strata: Vec<u8>,
+        offset: Vec<f64>,
+        eps: f64,
+        tol_chol: f64,
+        initial_beta: Vec<f64>,
+    ) -> CoxModel {
+        let means = vec![0.0; nvar];
+        let imat = vec![vec![0.0; nvar]; nvar];
+        let u = vec![0.0; nvar];
+
+        let loglik = [0.0, 0.0];
+        let sctest = 0.0;
+        let flag = 0;
+
+        // Work arrays
+        let work_len = nvar * nvar + nvar + nvar; 
+        let work = vec![0.0; work_len];
+
+        CoxModel {
+            maxiter,
+            nused,
+            nvar,
+            start,
+            stop,
+            event,
+            covar,
+            strata,
+            offset,
+            eps,
+            tol_chol,
+            means,
+            beta: initial_beta,
+            u,
+            imat,
+            loglik,
+            sctest,
+            flag,
+            iter_used: 0,
+            work,
+        }
+    }
