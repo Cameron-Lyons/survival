@@ -47,3 +47,27 @@
 **  the data must be sorted by ascending time within strata, deaths before
 **          living within tied times.
 */
+
+struct CoxModel {
+    maxiter: usize,
+    nused: usize,
+    nvar: usize,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    event: Vec<u8>,
+    covar: Vec<Vec<f64>>,
+    strata: Vec<u8>,
+    offset: Vec<f64>,
+    eps: f64,
+    tol_chol: f64,
+    // returned parameters
+    means: Vec<f64>,
+    beta: Vec<f64>,
+    u: Vec<f64>,
+    imat: Vec<Vec<f64>>,
+    loglik: [f64; 2],
+    sctest: f64,
+    flag: i32,
+    iter_used: usize,
+    work: Vec<f64>,
+}
