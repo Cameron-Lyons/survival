@@ -122,3 +122,25 @@ impl CoxModel {
             work,
         }
     }
+
+    pub fn compute(&mut self) {
+        for iter in 0..self.maxiter {
+            self.score_and_info();
+
+            let delta_beta = self.solve_system();
+
+            for i in 0..self.nvar {
+                self.beta[i] += delta_beta[i];
+            }
+
+            if self.has_converged(&delta_beta) {
+                self.iter_used = iter + 1;
+                self.flag = 0; // Indicating successful convergence
+                break;
+            }
+        if self.flag != 0 {
+            self.flag = 1000;
+        }
+        self.finalize_statistics();
+    }
+}
