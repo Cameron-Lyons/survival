@@ -96,7 +96,7 @@ impl CoxModel {
         let flag = 0;
 
         // Work arrays
-        let work_len = nvar * nvar + nvar + nvar; 
+        let work_len = nvar * nvar + nvar + nvar;
         let work = vec![0.0; work_len];
 
         CoxModel {
@@ -138,9 +138,16 @@ impl CoxModel {
                 self.flag = 0; // Indicating successful convergence
                 break;
             }
+        }
+
         if self.flag != 0 {
             self.flag = 1000;
         }
         self.finalize_statistics();
+    }
+
+    fn has_converged(&self, delta_beta: &[f64]) -> bool {
+        // Check if the maximum absolute change in beta coefficients is below the threshold
+        delta_beta.iter().all(|&change| change.abs() <= self.eps)
     }
 }
