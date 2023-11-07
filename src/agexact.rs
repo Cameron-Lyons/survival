@@ -150,4 +150,69 @@ impl CoxModel {
         // Check if the maximum absolute change in beta coefficients is below the threshold
         delta_beta.iter().all(|&change| change.abs() <= self.eps)
     }
+
+    fn score_and_info(&mut self) {
+        let mut score = vec![0.0; self.nvar];
+        let mut info_matrix = vec![vec![0.0; self.nvar]; self.nvar];
+
+        let mut strata_start = 0;
+        while strata_start < self.nused {
+            let strata_end = self.strata[strata_start..]
+                .iter()
+                .position(|&x| x == 1)
+                .map(|x| x + strata_start)
+                .unwrap_or(self.nused);
+
+            let mut risk_set_sum = vec![0.0; self.nvar];
+            let mut weighted_risk_set_sum = vec![0.0; self.nvar];
+            let mut exp_lin_pred = Vec::with_capacity(self.nused);
+
+            for i in strata_start..strata_end {
+                let lin_pred = self.offset[i]
+                    + self.covar[i]
+                        .iter()
+                        .zip(&self.beta)
+                        .map(|(&x, &b)| x * b)
+                        .sum::<f64>();
+
+                let exp_lin = lin_pred.exp();
+                exp_lin_pred.push(exp_lin);
+
+                if self.event[i] == 1 {
+                    for (j, &cov_ij) in self.covar[i].iter().enumerate() {
+                        score[j] += cov_ij;
+                        risk_set_sum[j] += cov_ij * exp_lin;
+                    }
+                }
+            }
+
+            let mut denominator = 0.0;
+            for i in (strata_start..strata_end).rev() {
+                denominator += exp_lin_pred[i - strata_start];
+                if self.event[i] == 1 {
+                    for j in 0..self.nvar {
+                        score[j] -= self.covar[i][j] * weighted_risk_set_sum[j] / denominator;
+                        for k in 0..=j {
+                            info_matrix[j][k] += (self.covar[i][j]
+                                * self.covar[i][k]
+                                * exp_lin_pred[i - strata_start])
+                                / denominator;
+                            if k != j {
+                                info_matrix[k][j] = info_matrix[j][k];
+                            }
+                        }
+                    }
+                }
+
+                for j in 0..self.nvar {
+                    weighted_risk_set_sum[j] += self.covar[i][j] * exp_lin_pred[i - strata_start];
+                }
+            }
+
+            strata_start = strata_end + 1;
+        }
+
+        self.u = score;
+        self.imat = info_matrix;
+    }
 }
