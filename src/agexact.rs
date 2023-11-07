@@ -271,4 +271,33 @@ impl CoxModel {
 
         x
     }
+
+    fn chinv2(&mut self) {
+        let n = self.nvar;
+
+        // Inverting the lower triangular matrix L
+        for i in 0..n {
+            self.imat[i][i] = 1.0 / self.imat[i][i];
+            for j in (i + 1)..n {
+                let mut sum = 0.0;
+                for k in (i..j).rev() {
+                    sum -= self.imat[j][k] * self.imat[k][i];
+                }
+                self.imat[j][i] = sum / self.imat[j][j];
+            }
+        }
+
+        // Computing the inverse of the original matrix from the inverse of L
+        for i in 0..n {
+            for j in 0..=i {
+                let mut sum = 0.0;
+                let end = if i < j { i } else { j };
+                for k in j..=end {
+                    sum += self.imat[k][i] * self.imat[k][j];
+                }
+                self.imat[i][j] = sum;
+                self.imat[j][i] = sum; // because the matrix is symmetric
+            }
+        }
+    }
 }
