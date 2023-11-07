@@ -300,4 +300,55 @@ impl CoxModel {
             }
         }
     }
+
+    fn finalize_statistics(&mut self) {
+        let mut loglik = 0.0;
+        let mut score_test_statistic = 0.0;
+
+        let mut strata_start = 0;
+        while strata_start < self.nused {
+            let strata_end = self.strata[strata_start..]
+                .iter()
+                .position(|&x| x == 1)
+                .map(|x| x + strata_start)
+                .unwrap_or(self.nused);
+
+            let mut risk_sum = 0.0;
+
+            for i in strata_start..strata_end {
+                let lin_pred = self.offset[i]
+                    + self.covar[i]
+                        .iter()
+                        .zip(&self.beta)
+                        .map(|(&cov_ij, &beta_j)| cov_ij * beta_j)
+                        .sum::<f64>();
+
+                risk_sum += lin_pred.exp();
+
+                if self.event[i] == 1 {
+                    loglik += lin_pred - risk_sum.ln();
+                }
+            }
+
+            strata_start = strata_end + 1;
+        }
+
+        if let Some(imat_inv) = self.invert_information_matrix() {
+            score_test_statistic = self
+                .u
+                .iter()
+                .zip(imat_inv.iter())
+                .map(|(&ui, inv_row)| {
+                    ui * inv_row
+                        .iter()
+                        .zip(&self.u)
+                        .map(|(&inv_ij, &uj)| inv_ij * uj)
+                        .sum::<f64>()
+                })
+                .sum();
+        }
+
+        self.loglik[1] = loglik;
+        self.sctest = score_test_statistic;
+    }
 }
