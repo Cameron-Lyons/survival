@@ -226,4 +226,24 @@ impl CoxModel {
 
         delta_beta
     }
+
+    fn cholesky2(&mut self) -> Result<(), &'static str> {
+        for i in 0..self.nvar {
+            for j in 0..(i + 1) {
+                let mut sum = self.imat[i][j];
+                for k in 0..j {
+                    sum -= self.imat[i][k] * self.imat[j][k];
+                }
+                if i == j {
+                    if sum <= 0.0 {
+                        return Err("Matrix is not positive definite");
+                    }
+                    self.imat[i][i] = sum.sqrt();
+                } else {
+                    self.imat[j][i] = sum / self.imat[j][j];
+                }
+            }
+        }
+        Ok(())
+    }
 }
