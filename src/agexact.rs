@@ -246,4 +246,29 @@ impl CoxModel {
         }
         Ok(())
     }
+
+    fn chsolve2(&self, b: &[f64]) -> Vec<f64> {
+        let n = b.len();
+        let mut x = b.to_vec();
+
+        // Solve L * y = b
+        for i in 0..n {
+            let mut sum = x[i];
+            for j in 0..i {
+                sum -= self.imat[i][j] * x[j];
+            }
+            x[i] = sum / self.imat[i][i];
+        }
+
+        // Solve L^T * x = y
+        for i in (0..n).rev() {
+            let mut sum = x[i];
+            for j in (i + 1)..n {
+                sum -= self.imat[j][i] * x[j];
+            }
+            x[i] = sum / self.imat[i][i];
+        }
+
+        x
+    }
 }
