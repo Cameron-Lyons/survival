@@ -215,4 +215,15 @@ impl CoxModel {
         self.u = score;
         self.imat = info_matrix;
     }
+
+    fn solve_system(&self) -> Vec<f64> {
+        let mut cholesky = self.imat.clone();
+        if !self.cholesky2(&mut cholesky) {
+            panic!("Cholesky decomposition failed, matrix might not be positive definite!");
+        }
+
+        let delta_beta = self.chsolve2(&cholesky, &self.u);
+
+        delta_beta
+    }
 }
