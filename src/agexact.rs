@@ -351,4 +351,67 @@ impl CoxModel {
         self.loglik[1] = loglik;
         self.sctest = score_test_statistic;
     }
+    fn invert_information_matrix(&self) -> Result<Vec<Vec<f64>>, &'static str> {
+        let n = self.imat.len();
+        let mut inv_matrix = vec![vec![0.0; n]; n];
+        let mut l = vec![vec![0.0; n]; n];
+
+        // Performing Cholesky decomposition
+        for i in 0..n {
+            for j in 0..=i {
+                let mut sum = 0.0;
+
+                // Summation for diagonals
+                if j == i {
+                    for k in 0..j {
+                        sum += l[j][k] * l[j][k];
+                    }
+                    let diag = self.imat[j][j] - sum;
+                    if diag <= 0.0 {
+                        return Err("Matrix is not positive definite");
+                    }
+                    l[j][j] = diag.sqrt();
+                } else {
+                    for k in 0..j {
+                        sum += l[i][k] * l[j][k];
+                    }
+                    if l[j][j] == 0.0 {
+                        return Err("Divide by zero encountered");
+                    }
+                    l[i][j] = (self.imat[i][j] - sum) / l[j][j];
+                }
+            }
+        }
+
+        // Inverting the lower triangular matrix L
+        for i in 0..n {
+            for j in 0..=i {
+                if i == j {
+                    inv_matrix[i][i] = 1.0 / l[i][i];
+                } else {
+                    let mut sum = 0.0;
+                    for k in j..i {
+                        sum += l[i][k] * inv_matrix[k][j];
+                    }
+                    inv_matrix[i][j] = -sum / l[i][i];
+                }
+            }
+        }
+
+        // Transposing and multiplying by the inverse to get the inverse of the original matrix
+        for i in 0..n {
+            for j in 0..=i {
+                let mut sum = 0.0;
+                for k in i..n {
+                    sum += inv_matrix[k][i] * inv_matrix[k][j];
+                }
+                inv_matrix[i][j] = sum;
+                if i != j {
+                    inv_matrix[j][i] = sum;
+                }
+            }
+        }
+
+        Ok(inv_matrix)
+    }
 }
