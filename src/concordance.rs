@@ -81,3 +81,14 @@ fn walkup(nwt: &Vec<f64>, twt: &Vec<f64>, index: usize, wsum: &mut [f64; 3], ntr
         }
     }
 }
+
+fn addin(nwt: &mut Vec<f64>, twt: &mut Vec<f64>, x: usize, weight: f64) {
+    nwt[x] += weight;
+    let mut node_index = x;
+    while node_index != 0 {
+        let parent_index = (node_index - 1) / 2;
+        twt[parent_index] += weight;
+        node_index = parent_index;
+    }
+    twt[x] += weight;
+}
