@@ -65,3 +65,19 @@ fn concordance(
 
     ConcordanceResult { count }
 }
+
+fn walkup(nwt: &Vec<f64>, twt: &Vec<f64>, index: usize, wsum: &mut [f64; 3], ntree: usize) {
+    wsum[0] = 0.0; // Greater than
+    wsum[1] = 0.0; // Less than
+    wsum[2] = 0.0; // Equal
+
+    for i in 0..ntree {
+        if i < index {
+            wsum[1] += twt[i];
+        } else if i > index {
+            wsum[0] += nwt[i];
+        } else {
+            wsum[2] += nwt[i];
+        }
+    }
+}
