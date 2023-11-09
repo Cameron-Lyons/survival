@@ -46,11 +46,31 @@ fn concordance(
             // Pass 1
             while i + ndeath < n && y[sortstop[i + ndeath]] == current_time {
                 let jj = sortstop[i + ndeath];
+                if x[jj] == xsave {
+                    // If this is a tied event, update the appropriate count
+                    count[2] += 1.0;
+                } else {
+                    // If this is not a tied event, update the concordance/discordance
+                    for k in 0..i {
+                        let kk = sortstop[k];
+                        if x[kk] != x[jj] {
+                            if (x[kk] < x[jj] && y[kk] > current_time)
+                                || (x[kk] > x[jj] && y[kk] < current_time)
+                            {
+                                count[0] += 1.0;
+                            } else {
+                                count[1] += 1.0;
+                            }
+                        }
+                    }
+                }
+                dwt += wt[jj];
+                dwt2 += wt[jj] * adjtimewt;
                 ndeath += 1;
-                // ... rest of the logic, updating count, handling ties etc.
-                // Walkup and addin functions will be needed here as well
             }
 
+            // Updating the tied events
+            count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
             // Pass 2
             for j in i..(i + ndeath) {
                 let jj = sortstop[j];
