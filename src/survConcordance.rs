@@ -20,7 +20,6 @@ fn surv_concordance(
         *count = 0;
     }
 
-    // Translating the core logic
     for i in 0..n {
         let mut tdeath = 0;
         let mut nright = 0;
