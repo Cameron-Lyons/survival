@@ -37,3 +37,55 @@ struct SurvivalModel {
     jmat: Vec<Vec<f64>>,
     expect: Vec<f64>,
 }
+
+impl SurvivalModel {
+    fn new(
+        maxiter: usize,
+        nused: usize,
+        nvar: usize,
+        yy: Vec<SurvivalData>,
+        covar: Vec<Covariate>,
+        strata: Vec<usize>,
+        sort: Vec<(usize, usize)>,
+        offset: Vec<f64>,
+        weights: Vec<f64>,
+        eps: f64,
+        tolerch: f64,
+        method: u8,
+        ptype: u8,
+        nfrail: usize,
+        frail: Vec<f64>,
+        fbeta: Vec<f64>,
+        pdiag: u8,
+    ) -> Self {
+        Self {
+            maxiter,
+            nused,
+            nvar,
+            yy,
+            covar,
+            strata,
+            sort,
+            offset,
+            weights,
+            eps,
+            tolerch,
+            method,
+            ptype,
+            nfrail,
+            frail,
+            fbeta,
+            pdiag,
+            // The following are initializations of return parameters, assuming default values
+            means: vec![0.0; nvar],
+            beta: vec![0.0; nvar],
+            u: vec![0.0; nvar],
+            imat: vec![vec![0.0; nvar]; nvar],
+            loglik: 0.0,
+            flag: 0,
+            fdiag: vec![0.0; nfrail + nvar],
+            jmat: vec![vec![0.0; nvar]; nvar],
+            expect: vec![0.0; nused],
+        }
+    }
+}
