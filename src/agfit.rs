@@ -130,4 +130,12 @@ impl SurvivalModel {
             self.beta[i] += self.u[i] / denom;
         }
     }
+    pub fn calculate_score_vector(&mut self) {
+        for i in 0..self.nvar {
+            self.u[i] = 0.0;
+            for j in 0..self.nvar {
+                self.u[i] += self.imat[i][j] * self.beta[j];
+            }
+        }
+    }
 }
