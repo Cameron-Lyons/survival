@@ -105,5 +105,11 @@ impl SurvivalModel {
 
         self.u = vec![0.0; self.nvar];
         self.imat = vec![vec![0.0; self.nvar]; self.nvar];
-
+        
+        for i in 0..self.nvar {
+            self.u[i] = 0.0; 
+            for j in 0..self.nvar {
+                self.imat[i][j] = if i == j { 1.0 } else { 0.0 }; 
+            }
+        }
 }
