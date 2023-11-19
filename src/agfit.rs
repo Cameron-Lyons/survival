@@ -88,7 +88,7 @@ impl SurvivalModel {
             expect: vec![0.0; nused],
         }
     }
-        pub fn gfit5a(&mut self) {
+    pub fn gfit5a(&mut self) {
         // Check if the model has enough data
         if self.yy.len() != self.nused || self.covar.len() != self.nvar {
             panic!("Insufficient data for the number of people or covariates specified");
@@ -105,11 +105,11 @@ impl SurvivalModel {
 
         self.u = vec![0.0; self.nvar];
         self.imat = vec![vec![0.0; self.nvar]; self.nvar];
-        
+
         for i in 0..self.nvar {
-            self.u[i] = 0.0; 
+            self.u[i] = 0.0;
             for j in 0..self.nvar {
-                self.imat[i][j] = if i == j { 1.0 } else { 0.0 }; 
+                self.imat[i][j] = if i == j { 1.0 } else { 0.0 };
             }
         }
     }
@@ -119,5 +119,15 @@ impl SurvivalModel {
         }
 
         let mut iter = 0;
-        while iter < self.maxiter {
+        while iter < self.maxiter {}
+    }
+    pub fn update_beta(&mut self) {
+        let mut denom = 0.0;
+        for i in 0..self.nvar {
+            denom += self.imat[i][i];
+        }
+        for i in 0..self.nvar {
+            self.beta[i] += self.u[i] / denom;
+        }
+    }
 }
