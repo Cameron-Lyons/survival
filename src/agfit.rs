@@ -112,4 +112,12 @@ impl SurvivalModel {
                 self.imat[i][j] = if i == j { 1.0 } else { 0.0 }; 
             }
         }
+    }
+    pub fn agfit5b(&mut self) {
+        if self.maxiter == 0 || self.nused == 0 || self.nvar == 0 {
+            return;
+        }
+
+        let mut iter = 0;
+        while iter < self.maxiter {
 }
