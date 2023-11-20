@@ -123,6 +123,7 @@ impl SurvivalModel {
             self.update_beta();
             self.calculate_score_vector();
             self.update_infromation_matrix();
+            iter += 1;
         }
     }
     pub fn update_beta(&mut self) {
