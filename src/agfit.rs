@@ -119,7 +119,11 @@ impl SurvivalModel {
         }
 
         let mut iter = 0;
-        while iter < self.maxiter {}
+        while iter < self.maxiter {
+            self.update_beta();
+            self.calculate_score_vector();
+            self.update_infromation_matrix();
+        }
     }
     pub fn update_beta(&mut self) {
         let mut denom = 0.0;
