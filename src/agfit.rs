@@ -138,4 +138,14 @@ impl SurvivalModel {
             }
         }
     }
+    pub fn update_infromation_matrix(&mut self) {
+        for i in 0..self.nvar {
+            for j in 0..self.nvar {
+                self.imat[i][j] = 0.0;
+                for k in 0..self.nvar {
+                    self.imat[i][j] += self.imat[i][k] * self.imat[k][j];
+                }
+            }
+        }
+    }
 }
