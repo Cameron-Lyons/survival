@@ -111,3 +111,22 @@ struct FitDetails {
     // Any warnings or notes generated during the fitting process
     warnings: Vec<String>,
 }
+
+struct Diagnostics {
+    // DFBetas for each predictor variable to assess their influence on the model
+    dfbetas: Option<Vec<f64>>,
+    // Cook's distance for each observation, indicating its influence on the fitted values
+    cooks_distance: Option<Vec<f64>>,
+    // Leverage values for each observation, indicating their influence on the model fit
+    leverage: Option<Vec<f64>>,
+    // Deviance residuals, which are useful for identifying outliers
+    deviance_residuals: Option<Vec<f64>>,
+    // Martingale residuals, which are particularly relevant in survival analysis
+    martingale_residuals: Option<Vec<f64>>,
+    // Schoenfeld residuals, useful for checking the proportional hazards assumption in survival models
+    schoenfeld_residuals: Option<Vec<f64>>,
+    // Score residuals, useful for diagnostic checks in various regression models
+    score_residuals: Option<Vec<f64>>,
+    // Optional: Additional model-specific diagnostic measures
+    additional_measures: Option<Vec<f64>>,
+}
