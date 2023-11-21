@@ -156,4 +156,15 @@ impl SurvivalModel {
             }
         }
     }
+
+    pub fn converged(&self) -> bool {
+        let mut max = 0.0;
+        for i in 0..self.nvar {
+            let abs = self.u[i].abs();
+            if abs > max {
+                max = abs;
+            }
+        }
+        max < self.eps
+    }
 }
