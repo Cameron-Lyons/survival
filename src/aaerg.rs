@@ -130,3 +130,25 @@ struct Diagnostics {
     // Optional: Additional model-specific diagnostic measures
     additional_measures: Option<Vec<f64>>,
 }
+
+enum AaregError {
+    DataError(String),        // e.g., "Data dimensions mismatch"
+    FormulaError(String),     // e.g., "Formula parsing error"
+    WeightsError(String),     // e.g., "Weights length does not match number of observations"
+    CalculationError(String), // e.g., "Singular matrix encountered in calculations"
+    InputError(String),       // e.g., "Invalid input: negative values in data"
+    InternalError(String),    // e.g., "Unexpected internal error"
+}
+
+impl std::fmt::Debug for AaregError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AaregError::DataError(msg) => write!(f, "Data Error: {}", msg),
+            AaregError::FormulaError(msg) => write!(f, "Formula Error: {}", msg),
+            AaregError::WeightsError(msg) => write!(f, "Weights Error: {}", msg),
+            AaregError::CalculationError(msg) => write!(f, "Calculation Error: {}", msg),
+            AaregError::InputError(msg) => write!(f, "Input Error: {}", msg),
+            AaregError::InternalError(msg) => write!(f, "Internal Error: {}", msg),
+        }
+    }
+}
