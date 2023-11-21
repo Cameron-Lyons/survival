@@ -24,3 +24,24 @@ struct AaregOptions {
     x: bool,                               // Whether to include the matrix of predictors
     y: bool,                               // Whether to include the response vector
 }
+
+impl AaregOptions {
+    fn new(formula: String, data: Array2<f64>) -> AaregOptions {
+        AaregOptions {
+            formula,
+            data,
+            weights: None,
+            subset: None,
+            na_action: None,
+            qrtol: 1e-07,
+            nmin: None,
+            dfbeta: false,
+            taper: 1.0,
+            test: vec![],
+            cluster: None,
+            model: false,
+            x: false,
+            y: false,
+        }
+    }
+}
