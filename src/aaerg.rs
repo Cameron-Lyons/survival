@@ -45,3 +45,26 @@ impl AaregOptions {
         }
     }
 }
+
+struct Surv {
+    time: Vec<f64>,
+    event: Vec<u8>,
+}
+
+impl Surv {
+    /// Constructs a new `Surv` instance.
+    /// # Arguments
+    /// * `time` - A vector of event times.
+    /// * `event` - A vector indicating event occurrence (1 for observed, 0 for censored).
+    /// # Panics
+    /// Panics if `time` and `event` have different lengths.
+    pub fn new(time: Vec<f64>, event: Vec<u8>) -> Self {
+        assert_eq!(
+            time.len(),
+            event.len(),
+            "Time and event vectors must be of the same length."
+        );
+
+        Surv { time, event }
+    }
+}
