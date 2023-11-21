@@ -152,3 +152,21 @@ impl std::fmt::Debug for AaregError {
         }
     }
 }
+
+fn aareg(options: AaregOptions) -> Result<AaregResult, AaregError> {
+    // Parse the formula
+    let formula = options.formula;
+    let data = options.data;
+    let weights = options.weights;
+    let subset = options.subset;
+    let na_action = options.na_action;
+    let qrtol = options.qrtol;
+    let nmin = options.nmin;
+    let dfbeta = options.dfbeta;
+    let taper = options.taper;
+    let test = options.test;
+    let cluster = options.cluster;
+    let model = options.model;
+    let x = options.x;
+    let y = options.y;
+}
