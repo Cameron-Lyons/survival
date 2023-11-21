@@ -92,3 +92,22 @@ struct ConfidenceInterval {
     lower_bound: f64,
     upper_bound: f64,
 }
+
+struct FitDetails {
+    // Number of iterations taken by the fitting algorithm
+    iterations: u32,
+    // Whether the fitting algorithm successfully converged
+    converged: bool,
+    // The final value of the objective function (e.g., log-likelihood, residual sum of squares)
+    final_objective_value: f64,
+    // The threshold for convergence, showing how close the algorithm needs to get to the solution
+    convergence_threshold: f64,
+    // Optional: The rate of change of the objective function in the last iteration
+    change_in_objective: Option<f64>,
+    // Optional: The maximum number of iterations allowed
+    max_iterations: Option<u32>,
+    // Optional: Information about the optimization method used (e.g., gradient descent, Newton-Raphson)
+    optimization_method: Option<String>,
+    // Any warnings or notes generated during the fitting process
+    warnings: Vec<String>,
+}
