@@ -68,3 +68,27 @@ impl Surv {
         Surv { time, event }
     }
 }
+
+struct AaregResult {
+    // Estimated coefficients for each predictor variable
+    coefficients: Vec<f64>,
+    // Standard errors for the estimated coefficients
+    standard_errors: Vec<f64>,
+    // Confidence intervals for the coefficients
+    confidence_intervals: Vec<ConfidenceInterval>,
+    // P-values for testing the hypothesis that each coefficient is zero
+    p_values: Vec<f64>,
+    // The overall goodness-of-fit statistic for the model
+    goodness_of_fit: f64,
+    // Optional: Information about the model fit, convergence details, etc.
+    fit_details: Option<FitDetails>,
+    // Optional: Residuals from the model
+    residuals: Option<Vec<f64>>,
+    // Optional: Additional diagnostic information
+    diagnostics: Option<Diagnostics>,
+}
+
+struct ConfidenceInterval {
+    lower_bound: f64,
+    upper_bound: f64,
+}
