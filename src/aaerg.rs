@@ -154,19 +154,13 @@ impl std::fmt::Debug for AaregError {
 }
 
 fn aareg(options: AaregOptions) -> Result<AaregResult, AaregError> {
-    // Parse the formula
-    let formula = options.formula;
-    let data = options.data;
-    let weights = options.weights;
-    let subset = options.subset;
-    let na_action = options.na_action;
-    let qrtol = options.qrtol;
-    let nmin = options.nmin;
-    let dfbeta = options.dfbeta;
-    let taper = options.taper;
-    let test = options.test;
-    let cluster = options.cluster;
-    let model = options.model;
-    let x = options.x;
-    let y = options.y;
+    let (response, covariates) = parse_formula(&options.formula)?;
+    let subset_data = apply_subset(&options.data, &options.subset)?;
+    let weighted_data = apply_weights(&subset_data, &options.weights)?;
+    let filtered_data = handle_missing_data(weighted_data, options.na_action)?;
+    let (y, x) = prepare_data_for_regression(&filtered_data, &response, &covariates)?;
+    let regression_result = perform_aalen_regression(&y, &x, &options)?;
+    let processed_result = post_process_results(regression_result, &options)?;
+
+    Ok(processed_result)
 }
