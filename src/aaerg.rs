@@ -258,3 +258,28 @@ fn prepare_data_for_regression(
     let x = data.select(ndarray::Axis(1), &covariate_indices);
     Ok((y, x))
 }
+
+fn perform_aalen_regression(
+    y: &Array2<f64>,
+    x: &Array2<f64>,
+    options: &AaregOptions,
+) -> Result<AaregResult, AaregError> {
+    let mut coefficients = vec![];
+    let mut standard_errors = vec![];
+    let mut confidence_intervals = vec![];
+    let mut p_values = vec![];
+    let mut goodness_of_fit = 0.0;
+    let mut fit_details = None;
+    let mut residuals = None;
+    let mut diagnostics = None;
+    Ok(AaregResult {
+        coefficients,
+        standard_errors,
+        confidence_intervals,
+        p_values,
+        goodness_of_fit,
+        fit_details,
+        residuals,
+        diagnostics,
+    })
+}
