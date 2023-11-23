@@ -177,3 +177,16 @@ fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
         .collect();
     Ok((response, covariates))
 }
+
+fn apply_subset(
+    data: &Array2<f64>,
+    subset: &Option<Vec<usize>>,
+) -> Result<Array2<f64>, AaregError> {
+    match subset {
+        Some(s) => {
+            let subset_data = data.select(ndarray::Axis(0), s);
+            Ok(subset_data)
+        }
+        None => Ok(data.to_owned()),
+    }
+}
