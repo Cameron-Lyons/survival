@@ -190,3 +190,22 @@ fn apply_subset(
         None => Ok(data.to_owned()),
     }
 }
+
+fn apply_weights(
+    data: &Array2<f64>,
+    weights: &Option<Vec<f64>>,
+) -> Result<Array2<f64>, AaregError> {
+    match weights {
+        Some(w) => {
+            if w.len() != data.nrows() {
+                Err(AaregError::WeightsError(
+                    "Weights length does not match number of observations".to_string(),
+                ))
+            } else {
+                let weighted_data = data * w;
+                Ok(weighted_data)
+            }
+        }
+        None => Ok(data.to_owned()),
+    }
+}
