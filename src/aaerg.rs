@@ -231,3 +231,30 @@ fn handle_missing_data(
         None => Ok(data),
     }
 }
+
+fn prepare_data_for_regression(
+    data: &Array2<f64>,
+    response: &str,
+    covariates: &[String],
+) -> Result<(Array2<f64>, Array2<f64>), AaregError> {
+    let response_index = match data.column_names().iter().position(|s| s == response) {
+        Some(i) => i,
+        None => {
+            return Err(AaregError::FormulaError(
+                "Response variable not found in data".to_string(),
+            ))
+        }
+    };
+    let covariate_indices = covariates
+        .iter()
+        .map(|c| match data.column_names().iter().position(|s| s == c) {
+            Some(i) => Ok(i),
+            None => Err(AaregError::FormulaError(
+                "Covariate not found in data".to_string(),
+            )),
+        })
+        .collect::<Result<Vec<usize>, AaregError>>()?;
+    let y = data.select(ndarray::Axis(1), response_index);
+    let x = data.select(ndarray::Axis(1), &covariate_indices);
+    Ok((y, x))
+}
