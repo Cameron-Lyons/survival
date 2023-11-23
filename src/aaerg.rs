@@ -209,3 +209,25 @@ fn apply_weights(
         None => Ok(data.to_owned()),
     }
 }
+
+fn handle_missing_data(
+    data: Array2<f64>,
+    na_action: Option<NaAction>,
+) -> Result<Array2<f64>, AaregError> {
+    match na_action {
+        Some(NaAction::Fail) => {
+            if data.iter().any(|&x| x.is_nan()) {
+                Err(AaregError::InputError(
+                    "Invalid input: missing values in data".to_string(),
+                ))
+            } else {
+                Ok(data)
+            }
+        }
+        Some(NaAction::Exclude) => {
+            let filtered_data = data.select(ndarray::Axis(1), |&x| !x.is_nan());
+            Ok(filtered_data)
+        }
+        None => Ok(data),
+    }
+}
