@@ -283,3 +283,24 @@ fn perform_aalen_regression(
         diagnostics,
     })
 }
+
+fn post_process_results(
+    regression_result: AaregResult,
+    options: &AaregOptions,
+) -> Result<AaregResult, AaregError> {
+    let mut processed_result = regression_result;
+    if options.dfbeta {
+        let dfbetas = calculate_dfbetas(&regression_result);
+        processed_result.diagnostics = Some(Diagnostics {
+            dfbetas: Some(dfbetas),
+            cooks_distance: None,
+            leverage: None,
+            deviance_residuals: None,
+            martingale_residuals: None,
+            schoenfeld_residuals: None,
+            score_residuals: None,
+            additional_measures: None,
+        });
+    }
+    Ok(processed_result)
+}
