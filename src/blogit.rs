@@ -1,0 +1,1 @@
+// Bounded link functions
