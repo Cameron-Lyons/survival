@@ -40,4 +40,12 @@ impl LinkFunctionParams {
         };
         adjusted_input.cloglog() - (1.0 - adjusted_input).cloglog()
     }
+
+    fn blog(&self, input: f64) -> f64 {
+        let adjusted_input = if input < self.edge {
+            self.edge
+        } else {
+            input
+        };
+    
 }
