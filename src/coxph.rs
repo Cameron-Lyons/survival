@@ -36,4 +36,12 @@ impl CoxPHModel {
             self.baseline_hazard.push(hazard_at_t);
         }
     }
+    fn update_baseline_hazard(&mut self) {
+        let mut baseline_hazard = Vec::new();
+        for t in &self.event_times {
+            let hazard_at_t = 0.0;
+            baseline_hazard.push(hazard_at_t);
+        }
+        self.baseline_hazard = baseline_hazard;
+    }
 }
