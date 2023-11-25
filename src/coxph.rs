@@ -52,4 +52,12 @@ impl CoxPHModel {
         }
         self.coefficients = coefficients;
     }
+    pub fn predict(&self, covariates: Array2<f64>) -> Vec<f64> {
+        let mut risk_scores = Vec::new();
+        for (i, row) in covariates.outer_iter().enumerate() {
+            let risk_score = self.coefficients.dot(&row);
+            risk_scores.push(risk_score);
+        }
+        risk_scores
+    }
 }
