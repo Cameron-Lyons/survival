@@ -44,4 +44,12 @@ impl CoxPHModel {
         }
         self.baseline_hazard = baseline_hazard;
     }
+    fn update_coefficients(&mut self) {
+        let mut coefficients = Array2::<f64>::zeros((self.covariates.ncols(), 1));
+        for (i, row) in self.covariates.outer_iter().enumerate() {
+            let risk_score = self.coefficients.dot(&row);
+            self.risk_scores.push(risk_score);
+        }
+        self.coefficients = coefficients;
+    }
 }
