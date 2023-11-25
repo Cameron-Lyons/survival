@@ -22,4 +22,18 @@ impl CoxPHModel {
             covariates,
         }
     }
+    pub fn fit(&mut self, n_iters: u16{
+        for (i, row) in self.covariates.outer_iter().enumerate() {
+            let risk_score = self.coefficients.dot(&row);
+            self.risk_scores.push(risk_score);
+        }
+        for _ in 0..n_iters {
+            self.update_baseline_hazard();
+            self.update_coefficients();
+        }
+        for t in &self.event_times {
+            let hazard_at_t = 0.0;
+            self.baseline_hazard.push(hazard_at_t);
+        }
+    }
 }
