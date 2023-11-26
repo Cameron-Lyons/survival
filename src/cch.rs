@@ -19,3 +19,14 @@ struct Subject {
 struct CohortData {
     subjects: Vec<Subject>, // Collection of all subjects
 }
+
+impl CohortData {
+    pub fn new() -> CohortData {
+        CohortData {
+            subjects: Vec::new(),
+        }
+    }
+    pub fn add_subject(&mut self, subject: Subject) {
+        self.subjects.push(subject);
+    }
+}
