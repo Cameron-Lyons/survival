@@ -32,4 +32,14 @@ impl CohortData {
     pub fn get_subject(&self, id: usize) -> &Subject {
         &self.subjects[id]
     }
+    pub fn fit(&self, method: Method) -> CoxPHModel {
+        let mut model = CoxPHModel::new();
+        for subject in &self.subjects {
+            if subject.is_subcohort {
+                model.add_subject(subject);
+            }
+        }
+        model.fit(method);
+        model
+    }
 }
