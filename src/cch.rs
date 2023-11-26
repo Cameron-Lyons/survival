@@ -1,5 +1,7 @@
 // Fits proportional hazards regression model to case-cohort data
 
+use coxph::CoxPHModel;
+
 enum Method {
     Prentice,
     SelfPrentice,
