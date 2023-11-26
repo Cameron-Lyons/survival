@@ -29,4 +29,7 @@ impl CohortData {
     pub fn add_subject(&mut self, subject: Subject) {
         self.subjects.push(subject);
     }
+    pub fn get_subject(&self, id: usize) -> &Subject {
+        &self.subjects[id]
+    }
 }
