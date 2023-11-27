@@ -164,4 +164,24 @@ impl PSpline {
         ubre = df / (1.0 - trace / self.nterm as f64).powi(2);
         ubre
     }
+    fn optimize_fit(&self, basis: Vec<Vec<f64>>) -> Vec<f64> {
+        let mut coefficients = vec![0.0; self.nterm as usize];
+        let mut a = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
+        let mut b = vec![0.0; self.nterm as usize];
+        for i in 0..self.nterm {
+            for j in 0..self.nterm {
+                for k in 0..self.nterm {
+                    a[i as usize][j as usize] +=
+                        basis[k as usize][i as usize] * basis[k as usize][j as usize];
+                }
+            }
+        }
+        for i in 0..self.nterm {
+            for j in 0..self.nterm {
+                b[i as usize] += basis[j as usize][i as usize];
+            }
+        }
+        coefficients = self.solve(a, b);
+        coefficients
+    }
 }
