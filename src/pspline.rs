@@ -39,9 +39,19 @@ impl PSpline {
             penalty: penalty,
         }
     }
-    fn fit(&self) {
+    pub fn fit(&self) {
         let basis = self.create_basis();
         let penalized_basis = self.apply_penalty(basis);
         let coefficients = self.optimize_fit(penalized_basis);
+    }
+    fn create_basis(&self) -> Vec<Vec<f64>> {
+        let n = self.x.len();
+        let mut basis = vec![vec![0.0; self.nterm as usize]; n];
+        for i in 0..n {
+            for j in 0..self.nterm {
+                basis[i][j as usize] = self.basis_function(self.x[i], j);
+            }
+        }
+        basis
     }
 }
