@@ -12,3 +12,31 @@ struct PSpline {
     intercept: bool,            // Include intercept in basis functions or not
     penalty: bool,              // Apply penalty or not
 }
+
+impl PSpline {
+    fn new(
+        x: Vec<f64>,
+        df: u32,
+        theta: f64,
+        eps: f64,
+        method: String,
+        boundary_knots: (f64, f64),
+        intercept: bool,
+        penalty: bool,
+    ) -> PSpline {
+        let nterm = df + 1;
+        let degree = 3;
+        PSpline {
+            x: x,
+            df: df,
+            theta: theta,
+            nterm: nterm,
+            degree: degree,
+            eps: eps,
+            method: method,
+            boundary_knots: boundary_knots,
+            intercept: intercept,
+            penalty: penalty,
+        }
+    }
+}
