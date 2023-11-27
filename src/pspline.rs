@@ -84,4 +84,25 @@ impl PSpline {
         }
         knots
     }
+    fn apply_penalty(&self, basis: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
+        let mut penalized_basis = basis.clone();
+        if self.penalty {
+            let mut penalty = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
+            for i in 0..self.nterm {
+                for j in 0..self.nterm {
+                    penalty[i as usize][j as usize] = self.penalty_function(i, j);
+                }
+            }
+            for i in 0..self.nterm {
+                for j in 0..self.nterm {
+                    for k in 0..self.nterm {
+                        penalized_basis[i as usize][j as usize] -= self.theta
+                            * penalty[i as usize][k as usize]
+                            * basis[k as usize][j as usize];
+                    }
+                }
+            }
+        }
+        penalized_basis
+    }
 }
