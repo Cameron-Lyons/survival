@@ -75,4 +75,13 @@ impl PSpline {
         }
         b * d[0]
     }
+    fn knots(&self) -> Vec<f64> {
+        let (a, b) = self.boundary_knots;
+        let mut knots = vec![0.0; self.nterm as usize + self.degree as usize + 1];
+        for i in 0..self.degree + 1 {
+            knots[i as usize] = a;
+            knots[(self.nterm + self.degree - i) as usize] = b;
+        }
+        knots
+    }
 }
