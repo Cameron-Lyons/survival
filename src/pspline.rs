@@ -39,4 +39,9 @@ impl PSpline {
             penalty: penalty,
         }
     }
+    fn fit(&self) {
+        let basis = self.create_basis();
+        let penalized_basis = self.apply_penalty(basis);
+        let coefficients = self.optimize_fit(penalized_basis);
+    }
 }
