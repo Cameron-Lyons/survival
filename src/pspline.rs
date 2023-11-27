@@ -112,4 +112,30 @@ impl PSpline {
             _ => panic!("Method not implemented"),
         }
     }
+    fn gcv(&self, i: u32, j: u32) -> f64 {
+        if i == j {
+            return self.nterm as f64;
+        }
+        let mut gcv = 0.0;
+        let mut df = 0.0;
+        let mut trace = 0.0;
+        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
+            }
+        }
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                df += basis[k as usize][i as usize]
+                    * basis[l as usize][j as usize]
+                    * basis[k as usize][l as usize];
+                trace += basis[k as usize][i as usize]
+                    * basis[k as usize][l as usize]
+                    * basis[l as usize][j as usize];
+            }
+        }
+        gcv = df / (1.0 - trace / self.nterm as f64).powi(2);
+        gcv
+    }
 }
