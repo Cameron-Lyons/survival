@@ -105,4 +105,11 @@ impl PSpline {
         }
         penalized_basis
     }
+    fn penalty_function(&self, i: u32, j: u32) -> f64 {
+        match self.method {
+            "GCV" => self.gcv(i, j),
+            "UBRE" => self.ubre(i, j),
+            _ => panic!("Method not implemented"),
+        }
+    }
 }
