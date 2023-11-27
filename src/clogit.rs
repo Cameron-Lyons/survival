@@ -35,3 +35,8 @@ impl DataSet {
         self.covariates[0].len()
     }
 }
+
+struct ConditionalLogisticRegression {
+    data: DataSet,
+    coefficients: Vec<f64>,
+}
