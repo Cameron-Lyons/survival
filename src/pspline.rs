@@ -54,4 +54,25 @@ impl PSpline {
         }
         basis
     }
+    fn basis_function(&self, x: f64, j: u32) -> f64 {
+        let mut b = 0.0;
+        if self.intercept {
+            b += 1.0;
+        }
+        if j == 0 {
+            return b;
+        }
+        let (a, b) = self.boundary_knots;
+        let t = (x - a) / (b - a);
+        let knots = self.knots();
+        let mut d = vec![0.0; self.degree as usize + 1];
+        d[0] = 1.0;
+        for k in 1..self.degree + 1 {
+            for i in 0..self.degree - k + 1 {
+                let w = (t - knots[i] / (knots[i + k] - knots[i])).max(0.0);
+                d[i as usize] = (1.0 - w) * d[i as usize] + w * d[i as usize + 1];
+            }
+        }
+        b * d[0]
+    }
 }
