@@ -1,6 +1,7 @@
 // Aalen’s additive regression model for censored data
 
 use ndarray::Array2;
+use pyo3::prelude::*;
 use std::collections::HashMap;
 
 enum NaAction {
@@ -8,6 +9,7 @@ enum NaAction {
     Exclude,
 }
 
+#[pyclass]
 struct AaregOptions {
     formula: String,                       // Formula as a string
     data: Array2<f64>,                     // 2D array for the dataset
@@ -25,6 +27,7 @@ struct AaregOptions {
     y: bool,                               // Whether to include the response vector
 }
 
+#[pymethods]
 impl AaregOptions {
     fn new(formula: String, data: Array2<f64>) -> AaregOptions {
         AaregOptions {
@@ -46,11 +49,13 @@ impl AaregOptions {
     }
 }
 
+#[pyclass]
 struct Surv {
     time: Vec<f64>,
     event: Vec<u8>,
 }
 
+#[pymethods]
 impl Surv {
     /// Constructs a new `Surv` instance.
     /// # Arguments
@@ -69,6 +74,7 @@ impl Surv {
     }
 }
 
+#[pyclass]
 struct AaregResult {
     // Estimated coefficients for each predictor variable
     coefficients: Vec<f64>,
@@ -88,11 +94,13 @@ struct AaregResult {
     diagnostics: Option<Diagnostics>,
 }
 
+#[pyclass]
 struct ConfidenceInterval {
     lower_bound: f64,
     upper_bound: f64,
 }
 
+#[pyclass]
 struct FitDetails {
     // Number of iterations taken by the fitting algorithm
     iterations: u32,
@@ -112,6 +120,7 @@ struct FitDetails {
     warnings: Vec<String>,
 }
 
+#[pyclass]
 struct Diagnostics {
     // DFBetas for each predictor variable to assess their influence on the model
     dfbetas: Option<Vec<f64>>,
@@ -140,6 +149,7 @@ enum AaregError {
     InternalError(String),    // e.g., "Unexpected internal error"
 }
 
+#[pymethods]
 impl std::fmt::Debug for AaregError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -153,6 +163,7 @@ impl std::fmt::Debug for AaregError {
     }
 }
 
+#[pymethods]
 fn aareg(options: AaregOptions) -> Result<AaregResult, AaregError> {
     let (response, covariates) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&options.data, &options.subset)?;
@@ -165,6 +176,7 @@ fn aareg(options: AaregOptions) -> Result<AaregResult, AaregError> {
     Ok(processed_result)
 }
 
+#[pymethods]
 fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     let mut formula_parts = formula.split("~");
     let response = formula_parts.next().unwrap().trim().to_string();
@@ -178,6 +190,7 @@ fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     Ok((response, covariates))
 }
 
+#[pymethods]
 fn apply_subset(
     data: &Array2<f64>,
     subset: &Option<Vec<usize>>,
@@ -191,6 +204,7 @@ fn apply_subset(
     }
 }
 
+#[pymethods]
 fn apply_weights(
     data: &Array2<f64>,
     weights: &Option<Vec<f64>>,
@@ -210,6 +224,7 @@ fn apply_weights(
     }
 }
 
+#[pymethods]
 fn handle_missing_data(
     data: Array2<f64>,
     na_action: Option<NaAction>,
@@ -232,6 +247,7 @@ fn handle_missing_data(
     }
 }
 
+#[pymethods]
 fn prepare_data_for_regression(
     data: &Array2<f64>,
     response: &str,
@@ -259,6 +275,7 @@ fn prepare_data_for_regression(
     Ok((y, x))
 }
 
+#[pymethods]
 fn perform_aalen_regression(
     y: &Array2<f64>,
     x: &Array2<f64>,
@@ -284,6 +301,7 @@ fn perform_aalen_regression(
     })
 }
 
+#[pymethods]
 fn post_process_results(
     regression_result: AaregResult,
     options: &AaregOptions,
@@ -303,4 +321,10 @@ fn post_process_results(
         });
     }
     Ok(processed_result)
+}
+
+#[pymodule]
+fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<MyStruct>()?;
+    Ok(())
 }
