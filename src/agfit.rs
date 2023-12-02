@@ -8,6 +8,7 @@ struct Covariate {
     values: Vec<f64>,
 }
 
+#[pyclass]
 struct SurvivalModel {
     maxiter: usize,
     nused: usize,
@@ -38,6 +39,7 @@ struct SurvivalModel {
     expect: Vec<f64>,
 }
 
+#[pymethods]
 impl SurvivalModel {
     fn new(
         maxiter: usize,
@@ -129,7 +131,7 @@ impl SurvivalModel {
             }
         }
     }
-    pub fn update_beta(&mut self) {
+    pub fn update_beta&mut self) {
         let mut denom = 0.0;
         for i in 0..self.nvar {
             denom += self.imat[i][i];
@@ -167,4 +169,10 @@ impl SurvivalModel {
         }
         max < self.eps
     }
+}
+
+#[pymodule]
+fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<SurvivalModel>()?;
+    Ok(())
 }

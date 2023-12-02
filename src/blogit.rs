@@ -1,9 +1,10 @@
 // Bounded link functions
-
+#[pyclass]
 struct LinkFunctionParams {
     edge: f64,
 }
 
+#[pymethods]
 impl LinkFunctionParams {
     fn new(edge: f64) -> Self {
         LinkFunctionParams { edge }
@@ -48,4 +49,10 @@ impl LinkFunctionParams {
             input
         };
     
+}
+
+#[pymodule]
+fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<LinkFunctionParams>()?;
+    Ok(())
 }
