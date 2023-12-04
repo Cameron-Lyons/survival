@@ -172,7 +172,7 @@ impl SurvivalModel {
 }
 
 #[pymodule]
-fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+fn pySurvivalModel(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<SurvivalModel>()?;
     Ok(())
 }

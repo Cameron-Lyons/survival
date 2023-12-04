@@ -371,7 +371,7 @@ impl CoxModel {
 }
 
 #[pymodule]
-fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+fn pyCoxModel(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<CoxModel>()?;
     Ok(())
 }

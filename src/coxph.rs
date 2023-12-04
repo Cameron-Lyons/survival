@@ -65,7 +65,7 @@ impl CoxPHModel {
 }
 
 #[pymodule]
-fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+fn pyCoxPHModel(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<CoxPHModel>()?;
     Ok(())
 }

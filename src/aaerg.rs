@@ -324,7 +324,7 @@ fn post_process_results(
 }
 
 #[pymodule]
-fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+fn pyAaregError(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<AaregError>()?;
     Ok(())
 }

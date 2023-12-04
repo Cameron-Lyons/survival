@@ -50,7 +50,7 @@ impl CohortData {
 }
 
 #[pymodule]
-fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+fn pyCohortData(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<CohortData>()?;
     Ok(())
 }
