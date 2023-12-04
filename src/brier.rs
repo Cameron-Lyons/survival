@@ -2,6 +2,7 @@
 
 use coxph::CoxPHModel;
 
+#[pymethods]
 impl CoxPHModel {
     /// Compute the Brier score for the model
     pub fn brier_score(&self) -> f64 {
