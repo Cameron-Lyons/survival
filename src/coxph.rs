@@ -2,6 +2,7 @@
 
 use ndarray::Array2;
 
+#[pyclass]
 struct CoxPHModel {
     coefficients: Array2<f64>,
     baseline_hazard: Vec<f64>,
@@ -11,6 +12,7 @@ struct CoxPHModel {
     covariates: Array2<f64>,
 }
 
+#[pymethods]
 impl CoxPHModel {
     pub fn new(covariates: Array2<f64>, event_times: Vec<f64>, censoring: Vec<u8>) -> Self {
         Self {
@@ -60,4 +62,10 @@ impl CoxPHModel {
         }
         risk_scores
     }
+}
+
+#[pymodule]
+fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<CoxPHModel>()?;
+    Ok(())
 }
