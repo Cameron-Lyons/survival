@@ -10,6 +10,7 @@ enum Method {
     IIBorgan,
 }
 
+#[pyclass]
 struct Subject {
     id: usize,            // Unique identifier for each subject
     covariates: Vec<f64>, // Covariates (e.g., age, blood pressure, etc.)
@@ -18,10 +19,12 @@ struct Subject {
     stratum: usize,       // Stratum identifier, if applicable
 }
 
+#[pyclass]
 struct CohortData {
     subjects: Vec<Subject>, // Collection of all subjects
 }
 
+#[pymethods]
 impl CohortData {
     pub fn new() -> CohortData {
         CohortData {
@@ -44,4 +47,10 @@ impl CohortData {
         model.fit(method);
         model
     }
+}
+
+#[pymodule]
+fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<CohortData>()?;
+    Ok(())
 }
