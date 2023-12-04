@@ -1,11 +1,13 @@
 // Conditional logistic regression
 
+#[pyclass]
 struct DataSet {
     case_control_status: Vec<u8>, // 0 = control, 1 = case
     strata: Vec<u8>,
     covariates: Vec<Vec<f64>>,
 }
 
+#[pymethods]
 impl DataSet {
     pub fn new() -> DataSet {
         DataSet {
@@ -36,6 +38,7 @@ impl DataSet {
     }
 }
 
+#[pyclass]
 struct ConditionalLogisticRegression {
     data: DataSet,
     coefficients: Vec<f64>,
@@ -43,6 +46,7 @@ struct ConditionalLogisticRegression {
     tol: f64,
 }
 
+#[pymethods]
 impl ConditionalLogisticRegression {
     pub fn new(data: DataSet) -> ConditionalLogisticRegression {
         ConditionalLogisticRegression {
@@ -102,4 +106,10 @@ impl ConditionalLogisticRegression {
         }
         exp_sum.exp()
     }
+}
+
+#[pymodule]
+fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<ConditionalLogisticRegression>()?;
+    Ok(())
 }
