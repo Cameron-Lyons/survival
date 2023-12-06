@@ -1,4 +1,6 @@
 // Bounded link functions
+use pyo3::prelude::*;
+
 #[pyclass]
 struct LinkFunctionParams {
     edge: f64,
@@ -55,4 +57,4 @@ impl LinkFunctionParams {
 fn pyLinkFunctionParams(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<LinkFunctionParams>()?;
     Ok(())
-}
+    }

@@ -1,6 +1,7 @@
 // Fits proportional hazards regression model to case-cohort data
 
 use coxph::CoxPHModel;
+use pyo3::prelude::*;
 
 enum Method {
     Prentice,

@@ -1,6 +1,7 @@
 // Compute the Brier score for a Cox model
 
 use coxph::CoxPHModel;
+use pyo3::prelude::*;
 
 #[pymethods]
 impl CoxPHModel {
