@@ -1,5 +1,6 @@
 // Aalen’s additive regression model for censored data
 
+extern crate pyo3;
 use ndarray::Array2;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -55,7 +56,6 @@ struct Surv {
     event: Vec<u8>,
 }
 
-#[pymethods]
 impl Surv {
     /// Constructs a new `Surv` instance.
     /// # Arguments
