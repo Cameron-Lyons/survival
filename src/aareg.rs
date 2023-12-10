@@ -28,7 +28,6 @@ struct AaregOptions {
     y: bool,                               // Whether to include the response vector
 }
 
-#[pymethods]
 impl AaregOptions {
     fn new(formula: String, data: Array2<f64>) -> AaregOptions {
         AaregOptions {
