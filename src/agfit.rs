@@ -41,7 +41,6 @@ struct SurvivalModel {
     expect: Vec<f64>,
 }
 
-#[pymethods]
 impl SurvivalModel {
     fn new(
         maxiter: usize,
