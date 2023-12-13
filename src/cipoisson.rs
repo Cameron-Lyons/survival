@@ -1,6 +1,5 @@
 // Confidence limits for the Poisson
 
-use pyo3::prelude::*;
 use statrs::distribution::{Gamma, Normal, Univariate};
 
 enum Method {

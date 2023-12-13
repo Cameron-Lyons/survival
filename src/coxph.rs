@@ -14,7 +14,6 @@ struct CoxPHModel {
     covariates: Array2<f64>,
 }
 
-#[pymethods]
 impl CoxPHModel {
     pub fn new(covariates: Array2<f64>, event_times: Vec<f64>, censoring: Vec<u8>) -> Self {
         Self {
