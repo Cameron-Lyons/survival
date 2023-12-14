@@ -47,7 +47,6 @@ struct ConditionalLogisticRegression {
     tol: f64,
 }
 
-#[pymethods]
 impl ConditionalLogisticRegression {
     pub fn new(data: DataSet) -> ConditionalLogisticRegression {
         ConditionalLogisticRegression {
