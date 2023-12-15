@@ -1,3 +1,6 @@
+use pyo3::prelude::*;
+
+#[pyfunction]
 fn surv_concordance(
     np: usize,
     time: &[f64],
