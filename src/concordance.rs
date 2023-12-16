@@ -5,6 +5,7 @@ struct ConcordanceResult {
     count: Vec<f64>,
 }
 
+#[pyfunction]
 fn concordance(
     y: &Vec<f64>,
     x: &Vec<i32>,
