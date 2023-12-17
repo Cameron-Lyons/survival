@@ -174,7 +174,7 @@ fn aareg(options: AaregOptions) -> Result<AaregResult, AaregError> {
     Ok(processed_result)
 }
 
-#[pymethods]
+#[pyfunction]
 fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     let mut formula_parts = formula.split("~");
     let response = formula_parts.next().unwrap().trim().to_string();
