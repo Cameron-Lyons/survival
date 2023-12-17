@@ -148,7 +148,6 @@ enum AaregError {
     InternalError(String),    // e.g., "Unexpected internal error"
 }
 
-#[pymethods]
 impl std::fmt::Debug for AaregError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -162,7 +161,7 @@ impl std::fmt::Debug for AaregError {
     }
 }
 
-#[pymethods]
+#[pyfunction]
 fn aareg(options: AaregOptions) -> Result<AaregResult, AaregError> {
     let (response, covariates) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&options.data, &options.subset)?;
