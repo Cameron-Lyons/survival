@@ -25,7 +25,6 @@ struct CoxModel {
     work: Vec<f64>,
 }
 
-#[pymethods]
 impl CoxModel {
     pub fn new(
         maxiter: usize,
