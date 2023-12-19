@@ -273,7 +273,7 @@ fn prepare_data_for_regression(
     Ok((y, x))
 }
 
-#[pymethods]
+#[pyfunction]
 fn perform_aalen_regression(
     y: &Array2<f64>,
     x: &Array2<f64>,
@@ -299,7 +299,7 @@ fn perform_aalen_regression(
     })
 }
 
-#[pymethods]
+#[pyfunction]
 fn post_process_results(
     regression_result: AaregResult,
     options: &AaregOptions,
