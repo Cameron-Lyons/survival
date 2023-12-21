@@ -132,7 +132,7 @@ impl SurvivalModel {
             }
         }
     }
-    pub fn update_beta&mut self) {
+    pub fn update_beta(&mut self) {
         let mut denom = 0.0;
         for i in 0..self.nvar {
             denom += self.imat[i][i];
