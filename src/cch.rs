@@ -25,6 +25,7 @@ struct CohortData {
     subjects: Vec<Subject>, // Collection of all subjects
 }
 
+#[pymethods]
 impl CohortData {
     pub fn new() -> CohortData {
         CohortData {
