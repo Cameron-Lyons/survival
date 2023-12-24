@@ -8,7 +8,6 @@ struct DataSet {
     covariates: Vec<Vec<f64>>,
 }
 
-#[pymethods]
 impl DataSet {
     pub fn new() -> DataSet {
         DataSet {
