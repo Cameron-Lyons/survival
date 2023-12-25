@@ -1,5 +1,6 @@
 // Confidence limits for the Poisson
 
+use pyo3::prelude::*;
 use statrs::distribution::{Gamma, Normal, Univariate};
 
 enum Method {
@@ -7,6 +8,7 @@ enum Method {
     Anscombe,
 }
 
+#[pyfunction]
 fn cipoisson_exact(k: u32, time: f64, p: f64) -> Result<(f64, f64), &'static str> {
     if time <= 0.0 || p <= 0.0 || p >= 1.0 {
         return Err("Invalid input values");
@@ -25,6 +27,7 @@ fn cipoisson_exact(k: u32, time: f64, p: f64) -> Result<(f64, f64), &'static str
     Ok((lower_bound / time, upper_bound / time))
 }
 
+#[pyfunction]
 fn cipoisson_anscombe(k: u32, time: f64, p: f64) -> Result<(f64, f64), &'static str> {
     if time <= 0.0 || p <= 0.0 || p >= 1.0 {
         return Err("Invalid input values");
@@ -46,6 +49,7 @@ fn cipoisson_anscombe(k: u32, time: f64, p: f64) -> Result<(f64, f64), &'static 
     Ok((lower_bound_poisson, upper_bound_poisson))
 }
 
+#[pyfunction]
 fn cipoisson(k: u32, time: f64, p: f64, method: Method) -> Result<(f64, f64), &'static str> {
     match method {
         Method::Exact => cipoisson_exact(k, time, p),
