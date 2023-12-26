@@ -1,6 +1,7 @@
 // Smoothing splines using a pspline basis
 use pyo3::prelude::*;
 
+#[pyclass]
 struct PSpline {
     x: Vec<f64>,                // Covariate vector
     df: u32,                    // Degrees of freedom
