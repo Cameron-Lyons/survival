@@ -6,7 +6,6 @@ struct LinkFunctionParams {
     edge: f64,
 }
 
-#[pymethods]
 impl LinkFunctionParams {
     fn new(edge: f64) -> Self {
         LinkFunctionParams { edge }
