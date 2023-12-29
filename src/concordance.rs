@@ -88,6 +88,7 @@ fn concordance(
     ConcordanceResult { count }
 }
 
+#[pyfunction]
 fn walkup(nwt: &Vec<f64>, twt: &Vec<f64>, index: usize, wsum: &mut [f64; 3], ntree: usize) {
     wsum[0] = 0.0; // Greater than
     wsum[1] = 0.0; // Less than
@@ -103,7 +104,7 @@ fn walkup(nwt: &Vec<f64>, twt: &Vec<f64>, index: usize, wsum: &mut [f64; 3], ntr
         }
     }
 }
-
+#[pyfunction]
 fn addin(nwt: &mut Vec<f64>, twt: &mut Vec<f64>, x: usize, weight: f64) {
     nwt[x] += weight;
     let mut node_index = x;
