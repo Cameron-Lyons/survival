@@ -188,7 +188,6 @@ fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     Ok((response, covariates))
 }
 
-#[pymethods]
 fn apply_subset(
     data: &Array2<f64>,
     subset: &Option<Vec<usize>>,
