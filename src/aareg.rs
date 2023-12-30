@@ -1,6 +1,7 @@
 // Aalen’s additive regression model for censored data
 
 use ndarray::Array2;
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
@@ -157,6 +158,12 @@ impl std::fmt::Debug for AaregError {
             AaregError::InputError(msg) => write!(f, "Input Error: {}", msg),
             AaregError::InternalError(msg) => write!(f, "Internal Error: {}", msg),
         }
+    }
+}
+
+impl From<AaregError> for PyErr {
+    fn from(err: AaregError) -> PyErr {
+        PyRuntimeError::new_err(format!("Aareg error: {}", err))
     }
 }
 
