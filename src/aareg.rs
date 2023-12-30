@@ -220,7 +220,7 @@ fn apply_weights(
     }
 }
 
-#[pymethods]
+#[pyfunction]
 fn handle_missing_data(
     data: Array2<f64>,
     na_action: Option<NaAction>,
@@ -243,7 +243,7 @@ fn handle_missing_data(
     }
 }
 
-#[pymethods]
+#[pyfunction]
 fn prepare_data_for_regression(
     data: &Array2<f64>,
     response: &str,
