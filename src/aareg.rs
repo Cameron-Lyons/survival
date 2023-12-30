@@ -161,7 +161,7 @@ impl std::fmt::Debug for AaregError {
 }
 
 #[pyfunction]
-fn aareg(options: AaregOptions) -> Result<AaregResult, AaregError> {
+fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
     let (response, covariates) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&options.data, &options.subset)?;
     let weighted_data = apply_weights(&subset_data, &options.weights)?;
