@@ -1,6 +1,5 @@
 // Aalen’s additive regression model for censored data
 
-extern crate pyo3;
 use ndarray::Array2;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -201,7 +200,7 @@ fn apply_subset(
     }
 }
 
-#[pymethods]
+#[pyfunction]
 fn apply_weights(
     data: &Array2<f64>,
     weights: &Option<Vec<f64>>,
