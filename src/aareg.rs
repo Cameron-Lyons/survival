@@ -1,6 +1,5 @@
 // Aalen’s additive regression model for censored data
-
-use ndarray::Array2;
+use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -215,18 +214,25 @@ fn apply_weights(
     match weights {
         Some(w) => {
             if w.len() != data.nrows() {
-                Err(AaregError::WeightsError(
+                return Err(AaregError::WeightsError(
                     "Weights length does not match number of observations".to_string(),
-                ))
-            } else {
-                let weighted_data = data * w;
-                Ok(weighted_data)
+                ));
             }
+
+            let weights_array = Array1::from_vec(w.clone());
+
+            let weighted_data = data
+                .genrows()
+                .into_iter()
+                .zip(weights_array)
+                .map(|(row, weight)| row.to_owned() * weight)
+                .collect::<Array2<f64>>();
+
+            Ok(weighted_data)
         }
         None => Ok(data.to_owned()),
     }
 }
-
 #[pyfunction]
 fn handle_missing_data(
     data: Array2<f64>,
