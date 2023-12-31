@@ -222,7 +222,7 @@ fn apply_weights(
             let weights_array = Array1::from_vec(w.clone());
 
             let weighted_data = data
-                .genrows()
+                .rows()
                 .into_iter()
                 .zip(weights_array)
                 .map(|(row, weight)| row.to_owned() * weight)
