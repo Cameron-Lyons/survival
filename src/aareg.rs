@@ -3,6 +3,7 @@ use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::fmt;
 
 enum NaAction {
     Fail,
@@ -160,6 +161,11 @@ impl std::fmt::Debug for AaregError {
     }
 }
 
+impl fmt::Display for AaregError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Error in Aareg")
+    }
+}
 impl From<AaregError> for PyErr {
     fn from(err: AaregError) -> PyErr {
         PyRuntimeError::new_err(format!("Aareg error: {}", err))
