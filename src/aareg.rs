@@ -212,6 +212,7 @@ fn apply_subset(
     }
 }
 
+
 #[pyfunction]
 fn apply_weights(
     data: &Array2<f64>,
@@ -226,13 +227,11 @@ fn apply_weights(
             }
 
             let weights_array = Array1::from_vec(w.clone());
+            let mut weighted_data = Array2::zeros(data.dim());
 
-            let weighted_data = data
-                .rows()
-                .into_iter()
-                .zip(weights_array)
-                .map(|(row, weight)| row.to_owned() * weight)
-                .collect::<Array2<f64>>();
+            for ((i, j), elem) in weighted_data.indexed_iter_mut() {
+                *elem = data[[i, j]] * weights_array[i];
+            }
 
             Ok(weighted_data)
         }
