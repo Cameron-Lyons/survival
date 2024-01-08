@@ -176,7 +176,9 @@ impl From<AaregError> for PyErr {
 fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
     let (response, covariates) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&options.data, &options.subset)?;
-    let weighted_data = apply_weights(&subset_data, &options.weights)?;
+    let gil = Python::acquire_gil();
+    let py = gil.python();
+    let weighted_data = apply_weights(py, &subset_data, &options.weights)?;
     let filtered_data = handle_missing_data(weighted_data, options.na_action)?;
     let (y, x) = prepare_data_for_regression(&filtered_data, &response, &covariates)?;
     let regression_result = perform_aalen_regression(&y, &x, &options)?;
