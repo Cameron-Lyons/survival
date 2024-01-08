@@ -212,32 +212,38 @@ fn apply_subset(
     }
 }
 
-
 #[pyfunction]
 fn apply_weights(
-    data: &Array2<f64>,
-    weights: &Option<Vec<f64>>,
-) -> Result<Array2<f64>, AaregError> {
-    match weights {
+    py: Python,   // Add Python context
+    data: &PyAny, // Use PyAny for accepting Python objects
+    weights: Option<Vec<f64>>,
+) -> PyResult<PyObject> {
+    let data_array: Array2<f64> = data.extract()?; // Convert Python object to Rust ndarray
+
+    let result_array = match weights {
         Some(w) => {
-            if w.len() != data.nrows() {
+            if w.len() != data_array.nrows() {
                 return Err(AaregError::WeightsError(
                     "Weights length does not match number of observations".to_string(),
-                ));
+                )
+                .into());
             }
 
-            let weights_array = Array1::from_vec(w.clone());
-            let mut weighted_data = Array2::zeros(data.dim());
+            let weights_array = Array1::from_vec(w);
+            let mut weighted_data = Array2::zeros(data_array.dim());
 
             for ((i, j), elem) in weighted_data.indexed_iter_mut() {
-                *elem = data[[i, j]] * weights_array[i];
+                *elem = data_array[[i, j]] * weights_array[i];
             }
 
-            Ok(weighted_data)
+            weighted_data
         }
-        None => Ok(data.to_owned()),
-    }
+        None => data_array.to_owned(),
+    };
+
+    Ok(result_array.to_pyobject(py)) // Convert the result ndarray back to a Python object
 }
+
 #[pyfunction]
 fn handle_missing_data(
     data: Array2<f64>,
