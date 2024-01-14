@@ -177,7 +177,9 @@ fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
     let (response, covariates) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&options.data, &options.subset)?;
 
-    let weighted_data = Python::with_gil(|py| apply_weights(py, &subset_data, options.weights))?;
+    let py = Python::acquire_gil().python();
+    let py_subset_data = subset_data.to_object(py); // Convert your array to a Python object
+    let weighted_data = apply_weights(py, &py_subset_data, options.weights)?;
 
     let filtered_data = handle_missing_data(weighted_data, options.na_action)?;
     let (y, x) = prepare_data_for_regression(&filtered_data, &response, &covariates)?;
