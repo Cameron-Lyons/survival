@@ -177,7 +177,7 @@ fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
     let (response, covariates) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&options.data, &options.subset)?;
 
-    let py = Python::acquire_gil().python();
+    let py = unsafe { Python::assume_gil_acquired() };
     let py_subset_data = subset_data.to_object(py); // Convert your array to a Python object
     let weighted_data = apply_weights(py, &py_subset_data, options.weights)?;
 
