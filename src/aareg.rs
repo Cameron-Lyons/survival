@@ -2,6 +2,9 @@
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::IntoPyDict;
+use pyo3::Python;
+use pyo3::ToPyObject;
 use std::collections::HashMap;
 use std::fmt;
 
