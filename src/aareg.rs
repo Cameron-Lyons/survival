@@ -3,6 +3,7 @@ use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::Python;
+use pyo3::ToPyObject;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -179,7 +180,9 @@ fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
     let subset_data = apply_subset(&options.data, &options.subset)?;
 
     let py = unsafe { Python::assume_gil_acquired() };
-    let py_subset_data = subset_data.to_object(py); // Convert your array to a Python object
+
+    let py_subset_data = subset_data.to_object(py);
+
     let weighted_data = apply_weights(py, &py_subset_data, options.weights)?;
 
     let filtered_data = handle_missing_data(weighted_data, options.na_action)?;
