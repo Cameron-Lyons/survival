@@ -175,6 +175,11 @@ impl From<AaregError> for PyErr {
     }
 }
 
+impl From<pyo3::PyErr> for AaregError {
+    fn from(err: pyo3::PyErr) -> AaregError {
+        AaregError::new(err.to_string())
+    }
+}
 #[pyfunction]
 fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
     let (response, covariates) = parse_formula(&options.formula)?;
