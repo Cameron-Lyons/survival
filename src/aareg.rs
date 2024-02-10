@@ -2,6 +2,7 @@
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyList;
 use pyo3::Python;
 use pyo3::ToPyObject;
 use std::collections::HashMap;
@@ -181,7 +182,8 @@ fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
 
     let py = unsafe { Python::assume_gil_acquired() };
 
-    let py_subset_data = subset_data.to_object(py);
+    let py_array = subset_data.iter().collect::<Vec<_>>();
+    let py_subset_data = PyList::new(py, &py_array);
 
     let weighted_data = apply_weights(py, &py_subset_data, options.weights)?;
 
