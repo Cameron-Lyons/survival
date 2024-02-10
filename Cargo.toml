@@ -8,5 +8,6 @@ name = "survival"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.20.0", features = ["extension-module"] }
+pyo3 = { version = "0.20.2", features = ["extension-module"] }
 ndarray = "0.15.6"
+numpy = "0.20.0"
