@@ -1,10 +1,8 @@
 // Aalen’s additive regression model for censored data
 use ndarray::{Array1, Array2};
-use numpy::PyArray2;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use pyo3::PyTryFrom;
 use pyo3::Python;
 use std::collections::HashMap;
 use std::fmt;
