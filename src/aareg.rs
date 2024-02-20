@@ -148,6 +148,7 @@ enum AaregError {
     CalculationError(String), // e.g., "Singular matrix encountered in calculations"
     InputError(String),       // e.g., "Invalid input: negative values in data"
     InternalError(String),    // e.g., "Unexpected internal error"
+    ErrorVariant(String),
 }
 
 impl std::fmt::Debug for AaregError {
