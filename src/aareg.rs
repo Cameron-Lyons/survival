@@ -149,6 +149,7 @@ enum AaregError {
     InputError(String),       // e.g., "Invalid input: negative values in data"
     InternalError(String),    // e.g., "Unexpected internal error"
     ErrorVariant(String),
+    GenericError(String),
 }
 
 impl std::fmt::Debug for AaregError {
