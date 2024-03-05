@@ -161,6 +161,8 @@ impl std::fmt::Debug for AaregError {
             AaregError::CalculationError(msg) => write!(f, "Calculation Error: {}", msg),
             AaregError::InputError(msg) => write!(f, "Input Error: {}", msg),
             AaregError::InternalError(msg) => write!(f, "Internal Error: {}", msg),
+            AaregError::GenericError(msg) => write!(f, "Generic Error: {}", msg),
+            _ => write!(f, "Error in Aareg"),
         }
     }
 }
