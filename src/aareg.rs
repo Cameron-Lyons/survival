@@ -152,8 +152,38 @@ enum AaregError {
     GenericError(String),
 }
 
-impl std::fmt::Debug for AaregError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl AaregError {
+    fn data_error(msg: String) -> AaregError {
+        AaregError::DataError(msg)
+    }
+
+    fn formula_error(msg: String) -> AaregError {
+        AaregError::FormulaError(msg)
+    }
+
+    fn weights_error(msg: String) -> AaregError {
+        AaregError::WeightsError(msg)
+    }
+
+    fn calculation_error(msg: String) -> AaregError {
+        AaregError::CalculationError(msg)
+    }
+
+    fn input_error(msg: String) -> AaregError {
+        AaregError::InputError(msg)
+    }
+
+    fn internal_error(msg: String) -> AaregError {
+        AaregError::InternalError(msg)
+    }
+
+    fn generic_error(msg: String) -> AaregError {
+        AaregError::GenericError(msg)
+    }
+}
+
+impl fmt::Display for AaregError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AaregError::DataError(msg) => write!(f, "Data Error: {}", msg),
             AaregError::FormulaError(msg) => write!(f, "Formula Error: {}", msg),
@@ -162,27 +192,23 @@ impl std::fmt::Debug for AaregError {
             AaregError::InputError(msg) => write!(f, "Input Error: {}", msg),
             AaregError::InternalError(msg) => write!(f, "Internal Error: {}", msg),
             AaregError::GenericError(msg) => write!(f, "Generic Error: {}", msg),
-            _ => write!(f, "Error in Aareg"),
+            _ => write!(f, "Unknown error"),
         }
     }
 }
 
-impl fmt::Display for AaregError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Error in Aareg")
+impl From<pyo3::PyErr> for AaregError {
+    fn from(err: pyo3::PyErr) -> AaregError {
+        AaregError::generic_error(err.to_string())
     }
 }
+
 impl From<AaregError> for PyErr {
     fn from(err: AaregError) -> PyErr {
         PyRuntimeError::new_err(format!("Aareg error: {}", err))
     }
 }
 
-impl From<pyo3::PyErr> for AaregError {
-    fn from(err: pyo3::PyErr) -> AaregError {
-        AaregError::new(err.to_string())
-    }
-}
 #[pyfunction]
 fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
     let (response, covariates) = parse_formula(&options.formula)?;
