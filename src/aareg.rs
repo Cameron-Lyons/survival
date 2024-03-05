@@ -7,6 +7,7 @@ use pyo3::Python;
 use std::collections::HashMap;
 use std::fmt;
 
+#[derive(Clone)]
 enum NaAction {
     Fail,
     Exclude,
