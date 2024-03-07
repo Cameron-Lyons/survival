@@ -1,5 +1,5 @@
 // Aalen’s additive regression model for censored data
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, Axis};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -263,15 +263,25 @@ fn apply_weights(
     data: &PyAny, // Use PyAny for accepting Python objects
     weights: Option<Vec<f64>>,
 ) -> PyResult<PyObject> {
-    let data_array: Array2<f64> = data.extract()?; // Convert Python object to Rust ndarray
+    let data_vec: Vec<Vec<f64>> = data.extract()?;
+
+    let data_array = Array2::from_shape_vec(
+        (data_vec.len(), data_vec[0].len()),
+        data_vec.into_iter().flatten().collect::<Vec<_>>(),
+    )
+    .map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Failed to convert to Array2: {}",
+            e
+        ))
+    })?;
 
     let result_array = match weights {
         Some(w) => {
             if w.len() != data_array.nrows() {
-                return Err(AaregError::WeightsError(
-                    "Weights length does not match number of observations".to_string(),
-                )
-                .into());
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Weights length does not match number of observations",
+                ));
             }
 
             let weights_array = Array1::from_vec(w);
@@ -289,24 +299,39 @@ fn apply_weights(
     Ok(result_array.to_pyobject(py)) // Convert the result ndarray back to a Python object
 }
 
-#[pyfunction]
 fn handle_missing_data(
     data: Array2<f64>,
     na_action: Option<NaAction>,
-) -> Result<Array2<f64>, AaregError> {
+) -> Result<Array2<f64>, Box<dyn Error>> {
     match na_action {
         Some(NaAction::Fail) => {
-            if data.iter().any(|&x| x.is_nan()) {
-                Err(AaregError::InputError(
+            if data.iter().any(|x| x.is_nan()) {
+                Err(Box::new(AaregError::InputError(
                     "Invalid input: missing values in data".to_string(),
-                ))
+                )))
             } else {
                 Ok(data)
             }
         }
         Some(NaAction::Exclude) => {
-            let filtered_data = data.select(ndarray::Axis(1), |&x| !x.is_nan());
-            Ok(filtered_data)
+            let filtered_data = data
+                .axis_iter(Axis(0))
+                .filter(|row| !row.iter().any(|x| x.is_nan()))
+                .collect::<Vec<_>>();
+
+            if filtered_data.is_empty() {
+                Err(Box::new(AaregError::InputError(
+                    "All rows contain NaN values".to_string(),
+                )))
+            } else {
+                let rows = filtered_data.len();
+                let cols = filtered_data[0].len();
+                let flat_data: Vec<f64> = filtered_data
+                    .into_iter()
+                    .flat_map(|r| r.iter().cloned())
+                    .collect();
+                Ok(Array2::from_shape_vec((rows, cols), flat_data)?)
+            }
         }
         None => Ok(data),
     }
