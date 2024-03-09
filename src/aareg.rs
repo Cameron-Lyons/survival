@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::Python;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt;
 
 #[derive(Clone)]
