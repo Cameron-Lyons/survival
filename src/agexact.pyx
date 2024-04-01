@@ -5,12 +5,9 @@ cimport numpy as cnp
 cdef extern from "survS.h":
     double** dmatrix(double* data, int nrows, int ncols)
 
-cdef extern from "survproto.h":
-    int cholesky2(double** mat, int n, double tol)
-    void chsolve2(double** mat, int n, double* b)
-    void chinv2(double** mat, int n)
-    int init_doloop(int start, int end)
-    int doloop(int size, int* index)
+from libc.stdlib cimport malloc, free
+import numpy as np
+cimport numpy as cnp
 
 cpdef void agexact(int* maxiter, int* nusedx, int* nvarx, double* start, 
                    double* stop, int* event, double* covar2, double* offset, 
@@ -19,18 +16,54 @@ cpdef void agexact(int* maxiter, int* nusedx, int* nvarx, double* start,
                    int* work2, double* eps, double* tol_chol, 
                    double* sctest, int* nocenter):
     cdef:
-        int i, j, k, l, person
+        int i, j, k, person
         int iter
         int n = nusedx[0]
         int nvar = nvarx[0]
-        double **covar, **cmat, **imat
+        double **covar, **imat
         double *a, *newbeta
-        double *score, *newvar
-        double denom, zbeta, weight
-        double time
         double temp
-        double newlk = 0
-        int halving
-        int nrisk, deaths
-        int *index, *atrisk
+        double *score
+        double **cmat
+        double *newvar
+        int *index
+        int deaths, nrisk
+        int halving = 0
+
+    # Allocate memory for pointers-to-pointers and other arrays
+    covar = <double **>malloc(n * sizeof(double *))
+    for i in range(n):
+        covar[i] = <double *>malloc(nvar * sizeof(double))
+
+    imat = <double **>malloc(nvar * sizeof(double *))
+    for i in range(nvar):
+        imat[i] = <double *>malloc(nvar * sizeof(double))
+    
+    cmat = <double **>malloc(nvar * sizeof(double *))
+    for i in range(nvar):
+        cmat[i] = <double *>malloc(nvar * sizeof(double))
+    
+    a = <double *>malloc(nvar * sizeof(double))
+    newbeta = <double *>malloc(nvar * sizeof(double))
+    score = <double *>malloc(nvar * sizeof(double))
+    newvar = <double *>malloc(nvar * sizeof(double))
+    index = <int *>malloc(n * sizeof(int))
+
+    for i in range(n):
+        free(covar[i])
+    free(covar)
+
+    for i in range(nvar):
+        free(imat[i])
+    free(imat)
+
+    for i in range(nvar):
+        free(cmat[i])
+    free(cmat)
+    
+    free(a)
+    free(newbeta)
+    free(score)
+    free(newvar)
+    free(index)
 
