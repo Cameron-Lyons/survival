@@ -1,5 +1,6 @@
-// Aalen’s additive regression model for censored data
-use ndarray::{Array1, Array2, Axis};
+// Aalen’s additive regression model for censored dat
+
+use ndarray::{Array1, Array2, Axis, s};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -79,22 +80,14 @@ impl Surv {
 
 #[pyclass]
 struct AaregResult {
-    // Estimated coefficients for each predictor variable
-    coefficients: Vec<f64>,
-    // Standard errors for the estimated coefficients
-    standard_errors: Vec<f64>,
-    // Confidence intervals for the coefficients
-    confidence_intervals: Vec<ConfidenceInterval>,
-    // P-values for testing the hypothesis that each coefficient is zero
-    p_values: Vec<f64>,
-    // The overall goodness-of-fit statistic for the model
-    goodness_of_fit: f64,
-    // Optional: Information about the model fit, convergence details, etc.
-    fit_details: Option<FitDetails>,
-    // Optional: Residuals from the model
-    residuals: Option<Vec<f64>>,
-    // Optional: Additional diagnostic information
-    diagnostics: Option<Diagnostics>,
+    coefficients: Vec<f64>,                  // Estimated coefficients for each predictor variable
+    standard_errors: Vec<f64>,               // Standard errors for the estimated coefficients
+    confidence_intervals: Vec<ConfidenceInterval>, // Confidence intervals for the coefficients
+    p_values: Vec<f64>,                      // P-values for testing the hypothesis that each coefficient is zero
+    goodness_of_fit: f64,                    // The overall goodness-of-fit statistic for the model
+    fit_details: Option<FitDetails>,         // Optional: Information about the model fit, convergence details, etc.
+    residuals: Option<Vec<f64>>,             // Optional: Residuals from the model
+    diagnostics: Option<Diagnostics>,        // Optional: Additional diagnostic information
 }
 
 #[pyclass]
@@ -105,44 +98,29 @@ struct ConfidenceInterval {
 
 #[pyclass]
 struct FitDetails {
-    // Number of iterations taken by the fitting algorithm
-    iterations: u32,
-    // Whether the fitting algorithm successfully converged
-    converged: bool,
-    // The final value of the objective function (e.g., log-likelihood, residual sum of squares)
-    final_objective_value: f64,
-    // The threshold for convergence, showing how close the algorithm needs to get to the solution
-    convergence_threshold: f64,
-    // Optional: The rate of change of the objective function in the last iteration
-    change_in_objective: Option<f64>,
-    // Optional: The maximum number of iterations allowed
-    max_iterations: Option<u32>,
-    // Optional: Information about the optimization method used (e.g., gradient descent, Newton-Raphson)
-    optimization_method: Option<String>,
-    // Any warnings or notes generated during the fitting process
-    warnings: Vec<String>,
+    iterations: u32,                  // Number of iterations taken by the fitting algorithm
+    converged: bool,                  // Whether the fitting algorithm successfully converged
+    final_objective_value: f64,       // The final value of the objective function
+    convergence_threshold: f64,       // The threshold for convergence
+    change_in_objective: Option<f64>, // Optional: The rate of change of the objective function in the last iteration
+    max_iterations: Option<u32>,      // Optional: The maximum number of iterations allowed
+    optimization_method: Option<String>, // Optional: Information about the optimization method used
+    warnings: Vec<String>,            // Any warnings or notes generated during the fitting process
 }
 
 #[pyclass]
 struct Diagnostics {
-    // DFBetas for each predictor variable to assess their influence on the model
-    dfbetas: Option<Vec<f64>>,
-    // Cook's distance for each observation, indicating its influence on the fitted values
-    cooks_distance: Option<Vec<f64>>,
-    // Leverage values for each observation, indicating their influence on the model fit
-    leverage: Option<Vec<f64>>,
-    // Deviance residuals, which are useful for identifying outliers
-    deviance_residuals: Option<Vec<f64>>,
-    // Martingale residuals, which are particularly relevant in survival analysis
-    martingale_residuals: Option<Vec<f64>>,
-    // Schoenfeld residuals, useful for checking the proportional hazards assumption in survival models
-    schoenfeld_residuals: Option<Vec<f64>>,
-    // Score residuals, useful for diagnostic checks in various regression models
-    score_residuals: Option<Vec<f64>>,
-    // Optional: Additional model-specific diagnostic measures
-    additional_measures: Option<Vec<f64>>,
+    dfbetas: Option<Vec<f64>>,            // DFBetas for each predictor variable to assess their influence on the model
+    cooks_distance: Option<Vec<f64>>,     // Cook's distance for each observation
+    leverage: Option<Vec<f64>>,           // Leverage values for each observation
+    deviance_residuals: Option<Vec<f64>>, // Deviance residuals
+    martingale_residuals: Option<Vec<f64>>, // Martingale residuals
+    schoenfeld_residuals: Option<Vec<f64>>, // Schoenfeld residuals
+    score_residuals: Option<Vec<f64>>,    // Score residuals
+    additional_measures: Option<Vec<f64>>, // Optional: Additional model-specific diagnostic measures
 }
 
+#[derive(Debug)]
 enum AaregError {
     DataError(String),        // e.g., "Data dimensions mismatch"
     FormulaError(String),     // e.g., "Formula parsing error"
@@ -150,38 +128,7 @@ enum AaregError {
     CalculationError(String), // e.g., "Singular matrix encountered in calculations"
     InputError(String),       // e.g., "Invalid input: negative values in data"
     InternalError(String),    // e.g., "Unexpected internal error"
-    ErrorVariant(String),
     GenericError(String),
-}
-
-impl AaregError {
-    fn data_error(msg: String) -> AaregError {
-        AaregError::DataError(msg)
-    }
-
-    fn formula_error(msg: String) -> AaregError {
-        AaregError::FormulaError(msg)
-    }
-
-    fn weights_error(msg: String) -> AaregError {
-        AaregError::WeightsError(msg)
-    }
-
-    fn calculation_error(msg: String) -> AaregError {
-        AaregError::CalculationError(msg)
-    }
-
-    fn input_error(msg: String) -> AaregError {
-        AaregError::InputError(msg)
-    }
-
-    fn internal_error(msg: String) -> AaregError {
-        AaregError::InternalError(msg)
-    }
-
-    fn generic_error(msg: String) -> AaregError {
-        AaregError::GenericError(msg)
-    }
 }
 
 impl fmt::Display for AaregError {
@@ -194,14 +141,13 @@ impl fmt::Display for AaregError {
             AaregError::InputError(msg) => write!(f, "Input Error: {}", msg),
             AaregError::InternalError(msg) => write!(f, "Internal Error: {}", msg),
             AaregError::GenericError(msg) => write!(f, "Generic Error: {}", msg),
-            _ => write!(f, "Unknown error"),
         }
     }
 }
 
 impl From<pyo3::PyErr> for AaregError {
     fn from(err: pyo3::PyErr) -> AaregError {
-        AaregError::generic_error(err.to_string())
+        AaregError::GenericError(err.to_string())
     }
 }
 
@@ -217,29 +163,25 @@ fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
     let subset_data = apply_subset(&options.data, &options.subset)?;
 
     let py = unsafe { Python::assume_gil_acquired() };
+    let py_subset_data = PyList::new(py, subset_data.outer_iter().map(|x| x.to_vec()).collect::<Vec<_>>());
 
-    let py_array = subset_data.iter().collect::<Vec<_>>();
-    let py_subset_data = PyList::new(py, &py_array);
-
-    let weighted_data = apply_weights(py, &py_subset_data, options.weights)?;
-
-    let filtered_data = handle_missing_data(weighted_data, options.na_action)?;
+    let weighted_data = apply_weights(py, &py_subset_data, options.weights.clone())?;
+    let filtered_data = handle_missing_data(weighted_data, options.na_action.clone())?;
     let (y, x) = prepare_data_for_regression(&filtered_data, &response, &covariates)?;
-    let regression_result = perform_aalen_regression(&y, &x, &options)?;
-    let processed_result = post_process_results(regression_result, &options)?;
+    let regression_result = perform_aalen_regression(&y, &x, options)?;
+    let processed_result = post_process_results(regression_result, options)?;
 
     Ok(processed_result)
 }
 
-#[pyfunction]
 fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
-    let mut formula_parts = formula.split("~");
+    let mut formula_parts = formula.splitn(2, '~');
     let response = formula_parts.next().unwrap().trim().to_string();
     let covariates = formula_parts
         .next()
-        .unwrap()
+        .unwrap_or("")
         .trim()
-        .split("+")
+        .split('+')
         .map(|s| s.trim().to_string())
         .collect();
     Ok((response, covariates))
@@ -251,26 +193,23 @@ fn apply_subset(
 ) -> Result<Array2<f64>, AaregError> {
     match subset {
         Some(s) => {
-            let subset_data = data.select(ndarray::Axis(0), s);
+            let subset_data = data.select(Axis(0), s);
             Ok(subset_data)
         }
         None => Ok(data.to_owned()),
     }
 }
 
-#[pyfunction]
 fn apply_weights(
-    py: Python,   // Add Python context
-    data: &PyAny, // Use PyAny for accepting Python objects
+    py: Python,
+    data: &PyList,
     weights: Option<Vec<f64>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Array2<f64>> {
     let data_vec: Vec<Vec<f64>> = data.extract()?;
-
     let data_array = Array2::from_shape_vec(
         (data_vec.len(), data_vec[0].len()),
         data_vec.into_iter().flatten().collect::<Vec<_>>(),
-    )
-    .map_err(|e| {
+    ).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "Failed to convert to Array2: {}",
             e
@@ -286,30 +225,26 @@ fn apply_weights(
             }
 
             let weights_array = Array1::from_vec(w);
-            let mut weighted_data = Array2::zeros(data_array.dim());
-
-            for ((i, j), elem) in weighted_data.indexed_iter_mut() {
-                *elem = data_array[[i, j]] * weights_array[i];
-            }
+            let weighted_data = data_array * &weights_array.insert_axis(Axis(1));
 
             weighted_data
         }
-        None => data_array.to_owned(),
+        None => data_array,
     };
 
-    Ok(result_array.to_pyobject(py)) // Convert the result ndarray back to a Python object
+    Ok(result_array)
 }
 
 fn handle_missing_data(
     data: Array2<f64>,
     na_action: Option<NaAction>,
-) -> Result<Array2<f64>, Box<dyn Error>> {
+) -> Result<Array2<f64>, AaregError> {
     match na_action {
         Some(NaAction::Fail) => {
             if data.iter().any(|x| x.is_nan()) {
-                Err(Box::new(AaregError::InputError(
+                Err(AaregError::InputError(
                     "Invalid input: missing values in data".to_string(),
-                )))
+                ))
             } else {
                 Ok(data)
             }
@@ -321,9 +256,9 @@ fn handle_missing_data(
                 .collect::<Vec<_>>();
 
             if filtered_data.is_empty() {
-                Err(Box::new(AaregError::InputError(
+                Err(AaregError::InputError(
                     "All rows contain NaN values".to_string(),
-                )))
+                ))
             } else {
                 let rows = filtered_data.len();
                 let cols = filtered_data[0].len();
@@ -331,55 +266,65 @@ fn handle_missing_data(
                     .into_iter()
                     .flat_map(|r| r.iter().cloned())
                     .collect();
-                Ok(Array2::from_shape_vec((rows, cols), flat_data)?)
+                Ok(Array2::from_shape_vec((rows, cols), flat_data).unwrap())
             }
         }
         None => Ok(data),
     }
 }
 
-#[pyfunction]
 fn prepare_data_for_regression(
     data: &Array2<f64>,
     response: &str,
     covariates: &[String],
 ) -> Result<(Array2<f64>, Array2<f64>), AaregError> {
-    let response_index = match data.column_names().iter().position(|s| s == response) {
-        Some(i) => i,
-        None => {
-            return Err(AaregError::FormulaError(
-                "Response variable not found in data".to_string(),
-            ))
-        }
-    };
-    let covariate_indices = covariates
-        .iter()
-        .map(|c| match data.column_names().iter().position(|s| s == c) {
-            Some(i) => Ok(i),
-            None => Err(AaregError::FormulaError(
-                "Covariate not found in data".to_string(),
-            )),
-        })
-        .collect::<Result<Vec<usize>, AaregError>>()?;
-    let y = data.select(ndarray::Axis(1), response_index);
-    let x = data.select(ndarray::Axis(1), &covariate_indices);
-    Ok((y, x))
+    let response_index = 0; // Assuming the response is always the first column; this will need to be adjusted
+    let covariate_indices: Vec<usize> = (1..covariates.len() + 1).collect(); // Assuming covariates follow the response
+
+    let y = data.slice(s![.., response_index..response_index + 1]);
+    let x = data.select(Axis(1), &covariate_indices);
+    Ok((y.to_owned(), x))
 }
 
-#[pyfunction]
 fn perform_aalen_regression(
     y: &Array2<f64>,
     x: &Array2<f64>,
-    options: &AaregOptions,
+    _options: &AaregOptions,
 ) -> Result<AaregResult, AaregError> {
-    let mut coefficients = vec![];
-    let mut standard_errors = vec![];
-    let mut confidence_intervals = vec![];
-    let mut p_values = vec![];
-    let mut goodness_of_fit = 0.0;
-    let mut fit_details = None;
-    let mut residuals = None;
-    let mut diagnostics = None;
+    // Placeholder for actual regression logic
+    let coefficients = vec![0.0; x.ncols()];
+    let standard_errors = vec![0.0; x.ncols()];
+    let confidence_intervals = coefficients
+        .iter()
+        .map(|&_| ConfidenceInterval {
+            lower_bound: 0.0,
+            upper_bound: 0.0,
+        })
+        .collect();
+    let p_values = vec![0.0; x.ncols()];
+    let goodness_of_fit = 1.0;
+    let fit_details = Some(FitDetails {
+        iterations: 10,
+        converged: true,
+        final_objective_value: 0.0,
+        convergence_threshold: 1e-7,
+        change_in_objective: Some(0.0),
+        max_iterations: Some(100),
+        optimization_method: Some("Gradient Descent".to_string()),
+        warnings: vec![],
+    });
+    let residuals = Some(vec![0.0; y.len_of(Axis(0))]);
+    let diagnostics = Some(Diagnostics {
+        dfbetas: Some(vec![0.0; x.ncols()]),
+        cooks_distance: Some(vec![0.0; y.len_of(Axis(0))]),
+        leverage: Some(vec![0.0; y.len_of(Axis(0))]),
+        deviance_residuals: Some(vec![0.0; y.len_of(Axis(0))]),
+        martingale_residuals: Some(vec![0.0; y.len_of(Axis(0))]),
+        schoenfeld_residuals: Some(vec![0.0; y.len_of(Axis(0))]),
+        score_residuals: Some(vec![0.0; y.len_of(Axis(0))]),
+        additional_measures: None,
+    });
+
     Ok(AaregResult {
         coefficients,
         standard_errors,
@@ -392,30 +337,26 @@ fn perform_aalen_regression(
     })
 }
 
-#[pyfunction]
 fn post_process_results(
-    regression_result: AaregResult,
+    mut regression_result: AaregResult,
     options: &AaregOptions,
 ) -> Result<AaregResult, AaregError> {
-    let mut processed_result = regression_result;
     if options.dfbeta {
-        let dfbetas = calculate_dfbetas(&regression_result);
-        processed_result.diagnostics = Some(Diagnostics {
-            dfbetas: Some(dfbetas),
-            cooks_distance: None,
-            leverage: None,
-            deviance_residuals: None,
-            martingale_residuals: None,
-            schoenfeld_residuals: None,
-            score_residuals: None,
-            additional_measures: None,
-        });
+        if let Some(ref mut diagnostics) = regression_result.diagnostics {
+            diagnostics.dfbetas = Some(vec![0.1; regression_result.coefficients.len()]); // Placeholder logic
+        }
     }
-    Ok(processed_result)
+    Ok(regression_result)
 }
 
 #[pymodule]
-fn pyAaregError(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<AaregError>()?;
+fn pyAareg(py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<AaregOptions>()?;
+    m.add_class::<Surv>()?;
+    m.add_class::<AaregResult>()?;
+    m.add_class::<ConfidenceInterval>()?;
+    m.add_class::<FitDetails>()?;
+    m.add_class::<Diagnostics>()?;
+    m.add_function(wrap_pyfunction!(aareg, m)?)?;
     Ok(())
 }
