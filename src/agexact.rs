@@ -13,7 +13,6 @@ struct CoxModel {
     offset: Vec<f64>,
     eps: f64,
     tol_chol: f64,
-    // returned parameters
     means: Vec<f64>,
     beta: Vec<f64>,
     u: Vec<f64>,
@@ -43,12 +42,9 @@ impl CoxModel {
         let means = vec![0.0; nvar];
         let imat = vec![vec![0.0; nvar]; nvar];
         let u = vec![0.0; nvar];
-
         let loglik = [0.0, 0.0];
         let sctest = 0.0;
         let flag = 0;
-
-        // Work arrays
         let work_len = nvar * nvar + nvar + nvar;
         let work = vec![0.0; work_len];
 
@@ -88,7 +84,7 @@ impl CoxModel {
 
             if self.has_converged(&delta_beta) {
                 self.iter_used = iter + 1;
-                self.flag = 0; // Indicating successful convergence
+                self.flag = 0;
                 break;
             }
         }
@@ -100,7 +96,6 @@ impl CoxModel {
     }
 
     fn has_converged(&self, delta_beta: &[f64]) -> bool {
-        // Check if the maximum absolute change in beta coefficients is below the threshold
         delta_beta.iter().all(|&change| change.abs() <= self.eps)
     }
 
@@ -171,7 +166,7 @@ impl CoxModel {
 
     fn solve_system(&self) -> Vec<f64> {
         let mut cholesky = self.imat.clone();
-        if !self.cholesky2(&mut cholesky) {
+        if !self.cholesky2(&mut cholesky).is_ok() {
             panic!("Cholesky decomposition failed, matrix might not be positive definite!");
         }
 
@@ -180,78 +175,47 @@ impl CoxModel {
         delta_beta
     }
 
-    fn cholesky2(&mut self) -> Result<(), &'static str> {
+    fn cholesky2(&self, imat: &mut Vec<Vec<f64>>) -> Result<(), &'static str> {
         for i in 0..self.nvar {
-            for j in 0..(i + 1) {
-                let mut sum = self.imat[i][j];
+            for j in 0..=i {
+                let mut sum = imat[i][j];
                 for k in 0..j {
-                    sum -= self.imat[i][k] * self.imat[j][k];
+                    sum -= imat[i][k] * imat[j][k];
                 }
                 if i == j {
                     if sum <= 0.0 {
                         return Err("Matrix is not positive definite");
                     }
-                    self.imat[i][i] = sum.sqrt();
+                    imat[i][i] = sum.sqrt();
                 } else {
-                    self.imat[j][i] = sum / self.imat[j][j];
+                    imat[j][i] = sum / imat[j][j];
                 }
             }
         }
         Ok(())
     }
 
-    fn chsolve2(&self, b: &[f64]) -> Vec<f64> {
-        let n = b.len();
-        let mut x = b.to_vec();
+    fn chsolve2(&self, imat: &Vec<Vec<f64>>, u: &[f64]) -> Vec<f64> {
+        let n = u.len();
+        let mut x = u.to_vec();
 
-        // Solve L * y = b
         for i in 0..n {
             let mut sum = x[i];
             for j in 0..i {
-                sum -= self.imat[i][j] * x[j];
+                sum -= imat[i][j] * x[j];
             }
-            x[i] = sum / self.imat[i][i];
+            x[i] = sum / imat[i][i];
         }
 
-        // Solve L^T * x = y
         for i in (0..n).rev() {
             let mut sum = x[i];
             for j in (i + 1)..n {
-                sum -= self.imat[j][i] * x[j];
+                sum -= imat[j][i] * x[j];
             }
-            x[i] = sum / self.imat[i][i];
+            x[i] = sum / imat[i][i];
         }
 
         x
-    }
-
-    fn chinv2(&mut self) {
-        let n = self.nvar;
-
-        // Inverting the lower triangular matrix L
-        for i in 0..n {
-            self.imat[i][i] = 1.0 / self.imat[i][i];
-            for j in (i + 1)..n {
-                let mut sum = 0.0;
-                for k in (i..j).rev() {
-                    sum -= self.imat[j][k] * self.imat[k][i];
-                }
-                self.imat[j][i] = sum / self.imat[j][j];
-            }
-        }
-
-        // Computing the inverse of the original matrix from the inverse of L
-        for i in 0..n {
-            for j in 0..=i {
-                let mut sum = 0.0;
-                let end = if i < j { i } else { j };
-                for k in j..=end {
-                    sum += self.imat[k][i] * self.imat[k][j];
-                }
-                self.imat[i][j] = sum;
-                self.imat[j][i] = sum; // because the matrix is symmetric
-            }
-        }
     }
 
     fn finalize_statistics(&mut self) {
@@ -286,7 +250,7 @@ impl CoxModel {
             strata_start = strata_end + 1;
         }
 
-        if let Some(imat_inv) = self.invert_information_matrix() {
+        if let Ok(imat_inv) = self.invert_information_matrix() {
             score_test_statistic = self
                 .u
                 .iter()
@@ -304,17 +268,15 @@ impl CoxModel {
         self.loglik[1] = loglik;
         self.sctest = score_test_statistic;
     }
+
     fn invert_information_matrix(&self) -> Result<Vec<Vec<f64>>, &'static str> {
         let n = self.imat.len();
         let mut inv_matrix = vec![vec![0.0; n]; n];
         let mut l = vec![vec![0.0; n]; n];
 
-        // Performing Cholesky decomposition
         for i in 0..n {
             for j in 0..=i {
                 let mut sum = 0.0;
-
-                // Summation for diagonals
                 if j == i {
                     for k in 0..j {
                         sum += l[j][k] * l[j][k];
@@ -336,7 +298,6 @@ impl CoxModel {
             }
         }
 
-        // Inverting the lower triangular matrix L
         for i in 0..n {
             for j in 0..=i {
                 if i == j {
@@ -351,7 +312,6 @@ impl CoxModel {
             }
         }
 
-        // Transposing and multiplying by the inverse to get the inverse of the original matrix
         for i in 0..n {
             for j in 0..=i {
                 let mut sum = 0.0;
