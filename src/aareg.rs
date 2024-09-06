@@ -6,7 +6,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::Python;
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt;
 
 #[derive(Clone)]
@@ -264,7 +263,7 @@ fn handle_missing_data(
                 let cols = filtered_data[0].len();
                 let flat_data: Vec<f64> = filtered_data
                     .into_iter()
-                    .flat_map(|r| r.iter().cloned())
+                    .flat_map(|r| r.iter().cloned().collect::<Vec<f64>>())
                     .collect();
                 Ok(Array2::from_shape_vec((rows, cols), flat_data).unwrap())
             }
