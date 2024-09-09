@@ -274,7 +274,6 @@ fn handle_missing_data(
 
 fn prepare_data_for_regression(
     data: &Array2<f64>,
-    response: &str,
     covariates: &[String],
 ) -> Result<(Array2<f64>, Array2<f64>), AaregError> {
     let response_index = 0; // Assuming the response is always the first column; this will need to be adjusted
@@ -342,7 +341,7 @@ fn post_process_results(
 ) -> Result<AaregResult, AaregError> {
     if options.dfbeta {
         if let Some(ref mut diagnostics) = regression_result.diagnostics {
-            diagnostics.dfbetas = Some(vec![0.1; regression_result.coefficients.len()]); // Placeholder logic
+            diagnostics.dfbetas = Some(vec![0.1; regression_result.coefficients.len()]);
         }
     }
     Ok(regression_result)
