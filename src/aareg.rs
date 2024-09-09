@@ -166,7 +166,7 @@ fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
 
     let weighted_data = apply_weights(py, &py_subset_data, options.weights.clone())?;
     let filtered_data = handle_missing_data(weighted_data, options.na_action.clone())?;
-    let (y, x) = prepare_data_for_regression(&filtered_data, &response, &covariates)?;
+    let (y, x) = prepare_data_for_regression(&filtered_data, &covariates)?;
     let regression_result = perform_aalen_regression(&y, &x, options)?;
     let processed_result = post_process_results(regression_result, options)?;
 
