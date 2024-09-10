@@ -158,13 +158,13 @@ impl From<AaregError> for PyErr {
 
 #[pyfunction]
 fn aareg(options: &AaregOptions) -> Result<AaregResult, AaregError> {
-    let (response, covariates) = parse_formula(&options.formula)?;
+    let (_response, covariates) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&options.data, &options.subset)?;
 
     let py = unsafe { Python::assume_gil_acquired() };
     let py_subset_data = PyList::new(py, &subset_data.outer_iter().map(|x| x.to_vec()).collect::<Vec<_>>());
 
-    let weighted_data = apply_weights(py, &py_subset_data, options.weights.clone())?;
+    let weighted_data = apply_weights(&py_subset_data, options.weights.clone())?;
     let filtered_data = handle_missing_data(weighted_data, options.na_action.clone())?;
     let (y, x) = prepare_data_for_regression(&filtered_data, &covariates)?;
     let regression_result = perform_aalen_regression(&y, &x, options)?;
@@ -200,7 +200,6 @@ fn apply_subset(
 }
 
 fn apply_weights(
-    py: Python,
     data: &PyList,
     weights: Option<Vec<f64>>,
 ) -> PyResult<Array2<f64>> {
@@ -348,7 +347,7 @@ fn post_process_results(
 }
 
 #[pymodule]
-fn pyAareg(py: Python, m: &PyModule) -> PyResult<()> {
+fn pyAareg(m: &PyModule) -> PyResult<()> {
     m.add_class::<AaregOptions>()?;
     m.add_class::<Surv>()?;
     m.add_class::<AaregResult>()?;
