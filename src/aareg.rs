@@ -347,7 +347,7 @@ fn post_process_results(
 }
 
 #[pymodule]
-fn pyAareg(m: &PyModule) -> PyResult<()> {
+fn py_aareg(m: &PyModule) -> PyResult<()> {
     m.add_class::<AaregOptions>()?;
     m.add_class::<Surv>()?;
     m.add_class::<AaregResult>()?;
