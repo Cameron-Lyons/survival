@@ -79,7 +79,7 @@ impl SurvivalModel {
             frail,
             fbeta,
             pdiag,
-            // The following are initializations of return parameters, assuming default values
+            // Init default returns
             means: vec![0.0; nvar],
             beta: vec![0.0; nvar],
             u: vec![0.0; nvar],
