@@ -1,86 +1,88 @@
 use pyo3::prelude::*;
+use ndarray::{Array1, Array2};
+use ndarray_linalg::{Cholesky, Solve};
+use rayon::prelude::*;
 
+/// Cox proportional hazards model.
 #[pyclass]
 struct CoxModel {
-    maxiter: usize,
-    nused: usize,
-    nvar: usize,
+    max_iter: usize,
+    n_used: usize,
+    n_var: usize,
     start: Vec<f64>,
     stop: Vec<f64>,
-    event: Vec<u8>,
-    covar: Vec<Vec<f64>>,
-    strata: Vec<u8>,
-    offset: Vec<f64>,
+    event: Vec<bool>,
+    covar: Array2<f64>,
+    strata: Vec<usize>,
+    offset: Array1<f64>,
     eps: f64,
     tol_chol: f64,
-    means: Vec<f64>,
-    beta: Vec<f64>,
-    u: Vec<f64>,
-    imat: Vec<Vec<f64>>,
+    means: Array1<f64>,
+    beta: Array1<f64>,
+    u: Array1<f64>,
+    imat: Array2<f64>,
     loglik: [f64; 2],
     sctest: f64,
     flag: i32,
     iter_used: usize,
-    work: Vec<f64>,
 }
 
+#[pymethods]
 impl CoxModel {
+    /// Creates a new CoxModel instance.
+    #[new]
     pub fn new(
-        maxiter: usize,
-        nused: usize,
-        nvar: usize,
+        max_iter: usize,
+        n_used: usize,
+        n_var: usize,
         start: Vec<f64>,
         stop: Vec<f64>,
-        event: Vec<u8>,
+        event: Vec<bool>,
         covar: Vec<Vec<f64>>,
-        strata: Vec<u8>,
+        strata: Vec<usize>,
         offset: Vec<f64>,
         eps: f64,
         tol_chol: f64,
         initial_beta: Vec<f64>,
-    ) -> CoxModel {
-        let means = vec![0.0; nvar];
-        let imat = vec![vec![0.0; nvar]; nvar];
-        let u = vec![0.0; nvar];
+    ) -> PyResult<Self> {
+        let covar_array = Array2::from_shape_vec((n_used, n_var), covar.into_iter().flatten().collect())
+            .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid covariate matrix dimensions"))?;
+        let offset_array = Array1::from(offset);
+        let means = Array1::zeros(n_var);
+        let beta = Array1::from(initial_beta);
+        let u = Array1::zeros(n_var);
+        let imat = Array2::zeros((n_var, n_var));
         let loglik = [0.0, 0.0];
-        let sctest = 0.0;
-        let flag = 0;
-        let work_len = nvar * nvar + nvar + nvar;
-        let work = vec![0.0; work_len];
 
-        CoxModel {
-            maxiter,
-            nused,
-            nvar,
+        Ok(CoxModel {
+            max_iter,
+            n_used,
+            n_var,
             start,
             stop,
             event,
-            covar,
+            covar: covar_array,
             strata,
-            offset,
+            offset: offset_array,
             eps,
             tol_chol,
             means,
-            beta: initial_beta,
+            beta,
             u,
             imat,
             loglik,
-            sctest,
-            flag,
+            sctest: 0.0,
+            flag: 0,
             iter_used: 0,
-            work,
-        }
+        })
     }
 
-    pub fn compute(&mut self) {
-        for iter in 0..self.maxiter {
-            self.score_and_info();
-
-            let delta_beta = self.solve_system();
-
-            for i in 0..self.nvar {
-                self.beta[i] += delta_beta[i];
-            }
+    /// Fits the Cox model using the Newton-Raphson algorithm.
+    pub fn compute(&mut self) -> PyResult<()> {
+        for iter in 0..self.max_iter {
+            self.score_and_info()?;
+            let delta_beta = self.solve_system()?;
+            self.beta += &delta_beta;
 
             if self.has_converged(&delta_beta) {
                 self.iter_used = iter + 1;
@@ -92,245 +94,154 @@ impl CoxModel {
         if self.flag != 0 {
             self.flag = 1000;
         }
-        self.finalize_statistics();
-    }
-
-    fn has_converged(&self, delta_beta: &[f64]) -> bool {
-        delta_beta.iter().all(|&change| change.abs() <= self.eps)
-    }
-
-    fn score_and_info(&mut self) {
-        let mut score = vec![0.0; self.nvar];
-        let mut info_matrix = vec![vec![0.0; self.nvar]; self.nvar];
-
-        let mut strata_start = 0;
-        while strata_start < self.nused {
-            let strata_end = self.strata[strata_start..]
-                .iter()
-                .position(|&x| x == 1)
-                .map(|x| x + strata_start)
-                .unwrap_or(self.nused);
-
-            let mut risk_set_sum = vec![0.0; self.nvar];
-            let mut weighted_risk_set_sum = vec![0.0; self.nvar];
-            let mut exp_lin_pred = Vec::with_capacity(self.nused);
-
-            for i in strata_start..strata_end {
-                let lin_pred = self.offset[i]
-                    + self.covar[i]
-                        .iter()
-                        .zip(&self.beta)
-                        .map(|(&x, &b)| x * b)
-                        .sum::<f64>();
-
-                let exp_lin = lin_pred.exp();
-                exp_lin_pred.push(exp_lin);
-
-                if self.event[i] == 1 {
-                    for (j, &cov_ij) in self.covar[i].iter().enumerate() {
-                        score[j] += cov_ij;
-                        risk_set_sum[j] += cov_ij * exp_lin;
-                    }
-                }
-            }
-
-            let mut denominator = 0.0;
-            for i in (strata_start..strata_end).rev() {
-                denominator += exp_lin_pred[i - strata_start];
-                if self.event[i] == 1 {
-                    for j in 0..self.nvar {
-                        score[j] -= self.covar[i][j] * weighted_risk_set_sum[j] / denominator;
-                        for k in 0..=j {
-                            info_matrix[j][k] += (self.covar[i][j]
-                                * self.covar[i][k]
-                                * exp_lin_pred[i - strata_start])
-                                / denominator;
-                            if k != j {
-                                info_matrix[k][j] = info_matrix[j][k];
-                            }
-                        }
-                    }
-                }
-
-                for j in 0..self.nvar {
-                    weighted_risk_set_sum[j] += self.covar[i][j] * exp_lin_pred[i - strata_start];
-                }
-            }
-
-            strata_start = strata_end + 1;
-        }
-
-        self.u = score;
-        self.imat = info_matrix;
-    }
-
-    fn solve_system(&self) -> Vec<f64> {
-        let mut cholesky = self.imat.clone();
-        if !self.cholesky2(&mut cholesky).is_ok() {
-            panic!("Cholesky decomposition failed, matrix might not be positive definite!");
-        }
-
-        let delta_beta = self.chsolve2(&cholesky, &self.u);
-
-        delta_beta
-    }
-
-    fn cholesky2(&self, imat: &mut Vec<Vec<f64>>) -> Result<(), &'static str> {
-        for i in 0..self.nvar {
-            for j in 0..=i {
-                let mut sum = imat[i][j];
-                for k in 0..j {
-                    sum -= imat[i][k] * imat[j][k];
-                }
-                if i == j {
-                    if sum <= 0.0 {
-                        return Err("Matrix is not positive definite");
-                    }
-                    imat[i][i] = sum.sqrt();
-                } else {
-                    imat[j][i] = sum / imat[j][j];
-                }
-            }
-        }
+        self.finalize_statistics()?;
         Ok(())
     }
 
-    fn chsolve2(&self, imat: &Vec<Vec<f64>>, u: &[f64]) -> Vec<f64> {
-        let n = u.len();
-        let mut x = u.to_vec();
-
-        for i in 0..n {
-            let mut sum = x[i];
-            for j in 0..i {
-                sum -= imat[i][j] * x[j];
-            }
-            x[i] = sum / imat[i][i];
-        }
-
-        for i in (0..n).rev() {
-            let mut sum = x[i];
-            for j in (i + 1)..n {
-                sum -= imat[j][i] * x[j];
-            }
-            x[i] = sum / imat[i][i];
-        }
-
-        x
+    /// Checks if the algorithm has converged based on the change in beta.
+    fn has_converged(&self, delta_beta: &Array1<f64>) -> bool {
+        delta_beta.iter().all(|&change| change.abs() <= self.eps)
     }
 
-    fn finalize_statistics(&mut self) {
-        let mut loglik = 0.0;
-        let mut score_test_statistic = 0.0;
+    /// Computes the score vector and information matrix for the Cox model.
+    fn score_and_info(&mut self) -> PyResult<()> {
+        let mut score = Array1::<f64>::zeros(self.n_var);
+        let mut info_matrix = Array2::<f64>::zeros((self.n_var, self.n_var));
 
-        let mut strata_start = 0;
-        while strata_start < self.nused {
-            let strata_end = self.strata[strata_start..]
-                .iter()
-                .position(|&x| x == 1)
-                .map(|x| x + strata_start)
-                .unwrap_or(self.nused);
+        let beta = &self.beta;
+        let covar = &self.covar;
+        let offset = &self.offset;
 
-            let mut risk_sum = 0.0;
+        let lin_pred = covar.dot(beta) + offset;
+        let exp_lin_pred = lin_pred.mapv(f64::exp);
 
-            for i in strata_start..strata_end {
-                let lin_pred = self.offset[i]
-                    + self.covar[i]
-                        .iter()
-                        .zip(&self.beta)
-                        .map(|(&cov_ij, &beta_j)| cov_ij * beta_j)
-                        .sum::<f64>();
+        // Group indices by strata
+        let strata_indices: Vec<_> = self
+            .strata
+            .iter()
+            .enumerate()
+            .group_by(|&(_, &stratum)| stratum)
+            .into_iter()
+            .map(|(_, group)| group.map(|(idx, _)| idx).collect::<Vec<_>>())
+            .collect();
 
-                risk_sum += lin_pred.exp();
+        for indices in strata_indices {
+            let mut risk_set_sum = Array1::<f64>::zeros(self.n_var);
+            let mut weighted_risk_set_sum = Array1::<f64>::zeros(self.n_var);
+            let mut denominator = 0.0;
 
-                if self.event[i] == 1 {
-                    loglik += lin_pred - risk_sum.ln();
+            for &i in indices.iter().rev() {
+                let exp_lp = exp_lin_pred[i];
+                denominator += exp_lp;
+                risk_set_sum += &covar.row(i) * exp_lp;
+
+                if self.event[i] {
+                    score += &covar.row(i);
+                    weighted_risk_set_sum += &risk_set_sum / denominator;
+
+                    let outer = covar.row(i).to_owned().insert_axis(ndarray::Axis(1))
+                        .dot(&covar.row(i).to_owned().insert_axis(ndarray::Axis(0)));
+
+                    info_matrix += &outer * exp_lp / denominator;
                 }
             }
-
-            strata_start = strata_end + 1;
         }
 
-        if let Ok(imat_inv) = self.invert_information_matrix() {
-            score_test_statistic = self
-                .u
-                .iter()
-                .zip(imat_inv.iter())
-                .map(|(&ui, inv_row)| {
-                    ui * inv_row
-                        .iter()
-                        .zip(&self.u)
-                        .map(|(&inv_ij, &uj)| inv_ij * uj)
-                        .sum::<f64>()
-                })
-                .sum();
+        self.u = &score - &weighted_risk_set_sum;
+        self.imat = info_matrix;
+
+        Ok(())
+    }
+
+    /// Solves the linear system to find the change in beta coefficients.
+    fn solve_system(&self) -> PyResult<Array1<f64>> {
+        let cholesky = self.imat.clone().cholesky().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>("Cholesky decomposition failed")
+        })?;
+        let delta_beta = cholesky.solve(&self.u).map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>("Failed to solve linear system")
+        })?;
+        Ok(delta_beta)
+    }
+
+    /// Finalizes the statistics after fitting the model.
+    fn finalize_statistics(&mut self) -> PyResult<()> {
+        self.compute_log_likelihood()?;
+        self.compute_score_test()?;
+        Ok(())
+    }
+
+    /// Computes the log-likelihood of the fitted model.
+    fn compute_log_likelihood(&mut self) -> PyResult<()> {
+        let beta = &self.beta;
+        let covar = &self.covar;
+        let offset = &self.offset;
+
+        let lin_pred = covar.dot(beta) + offset;
+        let exp_lin_pred = lin_pred.mapv(f64::exp);
+
+        let mut loglik = 0.0;
+
+        let strata_indices: Vec<_> = self
+            .strata
+            .iter()
+            .enumerate()
+            .group_by(|&(_, &stratum)| stratum)
+            .into_iter()
+            .map(|(_, group)| group.map(|(idx, _)| idx).collect::<Vec<_>>())
+            .collect();
+
+        for indices in strata_indices {
+            let mut denominator = 0.0;
+
+            for &i in indices.iter().rev() {
+                let exp_lp = exp_lin_pred[i];
+                denominator += exp_lp;
+
+                if self.event[i] {
+                    loglik += lin_pred[i] - denominator.ln();
+                }
+            }
         }
 
         self.loglik[1] = loglik;
-        self.sctest = score_test_statistic;
+        Ok(())
     }
 
-    fn invert_information_matrix(&self) -> Result<Vec<Vec<f64>>, &'static str> {
-        let n = self.imat.len();
-        let mut inv_matrix = vec![vec![0.0; n]; n];
-        let mut l = vec![vec![0.0; n]; n];
+    /// Computes the score test statistic.
+    fn compute_score_test(&mut self) -> PyResult<()> {
+        let imat_inv = self
+            .imat
+            .clone()
+            .inv()
+            .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Matrix inversion failed"))?;
+        let score_test_statistic = self.u.dot(&imat_inv.dot(&self.u));
+        self.sctest = score_test_statistic;
+        Ok(())
+    }
 
-        for i in 0..n {
-            for j in 0..=i {
-                let mut sum = 0.0;
-                if j == i {
-                    for k in 0..j {
-                        sum += l[j][k] * l[j][k];
-                    }
-                    let diag = self.imat[j][j] - sum;
-                    if diag <= 0.0 {
-                        return Err("Matrix is not positive definite");
-                    }
-                    l[j][j] = diag.sqrt();
-                } else {
-                    for k in 0..j {
-                        sum += l[i][k] * l[j][k];
-                    }
-                    if l[j][j] == 0.0 {
-                        return Err("Divide by zero encountered");
-                    }
-                    l[i][j] = (self.imat[i][j] - sum) / l[j][j];
-                }
-            }
-        }
+    /// Returns the fitted beta coefficients.
+    #[getter]
+    fn get_beta(&self) -> Vec<f64> {
+        self.beta.to_vec()
+    }
 
-        for i in 0..n {
-            for j in 0..=i {
-                if i == j {
-                    inv_matrix[i][i] = 1.0 / l[i][i];
-                } else {
-                    let mut sum = 0.0;
-                    for k in j..i {
-                        sum += l[i][k] * inv_matrix[k][j];
-                    }
-                    inv_matrix[i][j] = -sum / l[i][i];
-                }
-            }
-        }
+    /// Returns the log-likelihood of the model.
+    #[getter]
+    fn get_loglik(&self) -> [f64; 2] {
+        self.loglik
+    }
 
-        for i in 0..n {
-            for j in 0..=i {
-                let mut sum = 0.0;
-                for k in i..n {
-                    sum += inv_matrix[k][i] * inv_matrix[k][j];
-                }
-                inv_matrix[i][j] = sum;
-                if i != j {
-                    inv_matrix[j][i] = sum;
-                }
-            }
-        }
-
-        Ok(inv_matrix)
+    /// Returns the score test statistic.
+    #[getter]
+    fn get_sctest(&self) -> f64 {
+        self.sctest
     }
 }
 
 #[pymodule]
-fn py_cox_model(m: &PyModule) -> PyResult<()> {
+fn py_cox_model(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<CoxModel>()?;
     Ok(())
 }
+
