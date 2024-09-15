@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
-use ndarray::{Array1, Array2};
-use ndarray_linalg::{Cholesky, Solve};
-use rayon::prelude::*;
+use ndarray::prelude::*;
+use ndarray_linalg::{Cholesky, Inverse, Solve};
+use itertools::Itertools;
 
 /// Cox proportional hazards model.
 #[pyclass]
@@ -45,7 +45,8 @@ impl CoxModel {
         tol_chol: f64,
         initial_beta: Vec<f64>,
     ) -> PyResult<Self> {
-        let covar_array = Array2::from_shape_vec((n_used, n_var), covar.into_iter().flatten().collect())
+        let covar_flat: Vec<f64> = covar.into_iter().flatten().collect();
+        let covar_array = Array2::from_shape_vec((n_used, n_var), covar_flat)
             .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid covariate matrix dimensions"))?;
         let offset_array = Array1::from(offset);
         let means = Array1::zeros(n_var);
@@ -127,8 +128,12 @@ impl CoxModel {
 
         for indices in strata_indices {
             let mut risk_set_sum = Array1::<f64>::zeros(self.n_var);
-            let mut weighted_risk_set_sum = Array1::<f64>::zeros(self.n_var);
             let mut denominator = 0.0;
+
+            // Temporary accumulators for this stratum
+            let mut stratum_score = Array1::<f64>::zeros(self.n_var);
+            let mut stratum_weighted_risk_set_sum = Array1::<f64>::zeros(self.n_var);
+            let mut stratum_info_matrix = Array2::<f64>::zeros((self.n_var, self.n_var));
 
             for &i in indices.iter().rev() {
                 let exp_lp = exp_lin_pred[i];
@@ -136,18 +141,22 @@ impl CoxModel {
                 risk_set_sum += &covar.row(i) * exp_lp;
 
                 if self.event[i] {
-                    score += &covar.row(i);
-                    weighted_risk_set_sum += &risk_set_sum / denominator;
+                    stratum_score += &covar.row(i);
+                    let weighted_mean = &risk_set_sum / denominator;
+                    stratum_weighted_risk_set_sum += &weighted_mean;
 
-                    let outer = covar.row(i).to_owned().insert_axis(ndarray::Axis(1))
-                        .dot(&covar.row(i).to_owned().insert_axis(ndarray::Axis(0)));
+                    let diff = covar.row(i) - &weighted_mean;
+                    let outer = diff.insert_axis(Axis(1)).dot(&diff.insert_axis(Axis(0)));
 
-                    info_matrix += &outer * exp_lp / denominator;
+                    stratum_info_matrix += &outer;
                 }
             }
+
+            score += &stratum_score;
+            info_matrix += &stratum_info_matrix;
         }
 
-        self.u = &score - &weighted_risk_set_sum;
+        self.u = score - &info_matrix.dot(&self.beta);
         self.imat = info_matrix;
 
         Ok(())
@@ -244,4 +253,3 @@ fn py_cox_model(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<CoxModel>()?;
     Ok(())
 }
-
