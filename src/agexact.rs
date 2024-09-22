@@ -1,10 +1,6 @@
-use pyo3::prelude::*;
-use ndarray::prelude::*;
-use ndarray::ScalarOperand;
-use ndarray_linalg::Cholesky;
-use ndarray_linalg::Inverse;
-use ndarray_linalg::Solve;
 use itertools::Itertools;
+use ndarray::prelude::*;
+use pyo3::prelude::*;
 
 /// Cox proportional hazards model.
 #[pyclass]
@@ -49,8 +45,9 @@ impl CoxModel {
         initial_beta: Vec<f64>,
     ) -> PyResult<Self> {
         let covar_flat: Vec<f64> = covar.into_iter().flatten().collect();
-        let covar_array = Array2::from_shape_vec((n_used, n_var), covar_flat)
-            .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid covariate matrix dimensions"))?;
+        let covar_array = Array2::from_shape_vec((n_used, n_var), covar_flat).map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid covariate matrix dimensions")
+        })?;
         let offset_array = Array1::from(offset);
         let means = Array1::zeros(n_var);
         let beta = Array1::from(initial_beta);
@@ -145,9 +142,8 @@ impl CoxModel {
             .strata
             .iter()
             .enumerate()
-            .group_by(|&(_, &stratum)| stratum)
-            .into_iter()
-            .map(|(_, group)| group.map(|(idx, _)| idx).collect::<Vec<_>>())
+            .chunk_by(|&(_, &stratum1), &(_, &stratum2)| stratum1 == stratum2)
+            .map(|chunk| chunk.map(|(idx, _)| idx).collect::<Vec<_>>())
             .collect();
 
         for indices in strata_indices {
@@ -161,10 +157,10 @@ impl CoxModel {
             for &i in indices.iter().rev() {
                 let exp_lp = exp_lin_pred[i];
                 denominator += exp_lp;
-                risk_set_sum += &covar.row(i).to_owned() * exp_lp;
+                risk_set_sum += covar.row(i).to_owned() * exp_lp;
 
                 if self.event[i] {
-                    stratum_score += &covar.row(i).to_owned();
+                    stratum_score += covar.row(i).to_owned();
                     let weighted_mean = &risk_set_sum / denominator;
 
                     let diff = covar.row(i).to_owned() - &weighted_mean;
@@ -174,8 +170,8 @@ impl CoxModel {
                 }
             }
 
-            score += &stratum_score - &info_matrix.dot(beta);
-            info_matrix += &stratum_info_matrix;
+            score += stratum_score - info_matrix.dot(beta);
+            info_matrix += stratum_info_matrix;
         }
 
         self.u = score;
@@ -186,7 +182,7 @@ impl CoxModel {
 
     /// Solves the linear system to find the change in beta coefficients.
     fn solve_system(&self) -> PyResult<Array1<f64>> {
-        let cholesky = self.imat.clone().cholesky().map_err(|_| {
+        let cholesky = self.imat.clone().cholesky_into().map_err(|_| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>("Cholesky decomposition failed")
         })?;
         let delta_beta = cholesky.solve(&self.u).map_err(|_| {
@@ -218,9 +214,8 @@ impl CoxModel {
             .strata
             .iter()
             .enumerate()
-            .group_by(|&(_, &stratum)| stratum)
-            .into_iter()
-            .map(|(_, group)| group.map(|(idx, _)| idx).collect::<Vec<_>>())
+            .chunk_by(|&(_, &stratum1), &(_, &stratum2)| stratum1 == stratum2)
+            .map(|chunk| chunk.map(|(idx, _)| idx).collect::<Vec<_>>())
             .collect();
 
         for indices in strata_indices {
@@ -242,11 +237,9 @@ impl CoxModel {
 
     /// Computes the score test statistic.
     fn compute_score_test(&mut self) -> PyResult<()> {
-        let imat_inv = self
-            .imat
-            .clone()
-            .inv()
-            .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Matrix inversion failed"))?;
+        let imat_inv = self.imat.clone().inv().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>("Matrix inversion failed")
+        })?;
         let score_test_statistic = self.u.dot(&imat_inv.dot(&self.u));
         self.sctest = score_test_statistic;
         Ok(())
@@ -254,8 +247,7 @@ impl CoxModel {
 }
 
 #[pymodule]
-fn py_cox_model(_py: Python, m: &PyModule) -> PyResult<()> {
+fn py_cox_model(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<CoxModel>()?;
     Ok(())
 }
-
