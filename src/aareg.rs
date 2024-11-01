@@ -1,36 +1,45 @@
 // src/lib.rs
 
+
 use ndarray::{Array1, Array2, Axis};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
 
-/// Enum to specify action for missing values.
-#[derive(Clone)]
-enum NaAction {
-    Fail,
-    Exclude,
-}
-
 /// Options for the Aalen's additive regression model.
 #[pyclass]
 #[derive(Clone)]
 struct AaregOptions {
+    #[pyo3(get, set)]
     formula: String,                   // Formula as a string
-    data: Array2<f64>,                 // 2D array for the dataset
+    #[pyo3(get, set)]
+    data: Vec<Vec<f64>>,               // 2D array for the dataset
+    #[pyo3(get, set)]
     variable_names: Vec<String>,       // Names of the variables (columns in data)
+    #[pyo3(get, set)]
     weights: Option<Vec<f64>>,         // Optional weights
+    #[pyo3(get, set)]
     subset: Option<Vec<usize>>,        // Optional subset of data indices
-    na_action: Option<NaAction>,       // Action for NA values
+    #[pyo3(get, set)]
+    na_action: Option<String>,         // Action for NA values ("Fail" or "Exclude")
+    #[pyo3(get, set)]
     qrtol: f64,                        // Tolerance for singularity detection
+    #[pyo3(get, set)]
     nmin: Option<usize>,               // Minimum number of observations
+    #[pyo3(get, set)]
     dfbeta: bool,                      // Whether to compute dfbeta residuals
+    #[pyo3(get, set)]
     taper: f64,                        // Taper parameter
+    #[pyo3(get, set)]
     test: Vec<String>,                 // List of tests to perform
+    #[pyo3(get, set)]
     cluster: Option<HashMap<String, i32>>, // Optional clustering
+    #[pyo3(get, set)]
     model: bool,                       // Whether to include the model frame in the output
+    #[pyo3(get, set)]
     x: bool,                           // Whether to include the matrix of predictors
+    #[pyo3(get, set)]
     y: bool,                           // Whether to include the response vector
 }
 
@@ -41,11 +50,7 @@ impl AaregOptions {
     fn new(formula: String, data: Vec<Vec<f64>>, variable_names: Vec<String>) -> Self {
         AaregOptions {
             formula,
-            data: Array2::from_shape_vec(
-                (data.len(), data[0].len()),
-                data.into_iter().flatten().collect(),
-            )
-            .unwrap(),
+            data,
             variable_names,
             weights: None,
             subset: None,
@@ -67,13 +72,21 @@ impl AaregOptions {
 #[pyclass]
 #[derive(Clone)]
 struct AaregResult {
+    #[pyo3(get, set)]
     coefficients: Vec<f64>,                  // Estimated coefficients
+    #[pyo3(get, set)]
     standard_errors: Vec<f64>,               // Standard errors
+    #[pyo3(get, set)]
     confidence_intervals: Vec<ConfidenceInterval>, // Confidence intervals
+    #[pyo3(get, set)]
     p_values: Vec<f64>,                      // P-values
+    #[pyo3(get, set)]
     goodness_of_fit: f64,                    // Goodness-of-fit statistic
+    #[pyo3(get, set)]
     fit_details: Option<FitDetails>,         // Fit details
+    #[pyo3(get, set)]
     residuals: Option<Vec<f64>>,             // Residuals
+    #[pyo3(get, set)]
     diagnostics: Option<Diagnostics>,        // Diagnostics
 }
 
@@ -81,7 +94,9 @@ struct AaregResult {
 #[pyclass]
 #[derive(Clone)]
 struct ConfidenceInterval {
+    #[pyo3(get, set)]
     lower_bound: f64,
+    #[pyo3(get, set)]
     upper_bound: f64,
 }
 
@@ -89,13 +104,21 @@ struct ConfidenceInterval {
 #[pyclass]
 #[derive(Clone)]
 struct FitDetails {
+    #[pyo3(get, set)]
     iterations: u32,                  // Number of iterations
+    #[pyo3(get, set)]
     converged: bool,                  // Convergence status
+    #[pyo3(get, set)]
     final_objective_value: f64,       // Final objective value
+    #[pyo3(get, set)]
     convergence_threshold: f64,       // Convergence threshold
+    #[pyo3(get, set)]
     change_in_objective: Option<f64>, // Change in objective
+    #[pyo3(get, set)]
     max_iterations: Option<u32>,      // Max iterations allowed
+    #[pyo3(get, set)]
     optimization_method: Option<String>, // Optimization method used
+    #[pyo3(get, set)]
     warnings: Vec<String>,            // Warnings during fitting
 }
 
@@ -103,13 +126,21 @@ struct FitDetails {
 #[pyclass]
 #[derive(Clone)]
 struct Diagnostics {
+    #[pyo3(get, set)]
     dfbetas: Option<Vec<f64>>,            // DFBetas
+    #[pyo3(get, set)]
     cooks_distance: Option<Vec<f64>>,     // Cook's distance
+    #[pyo3(get, set)]
     leverage: Option<Vec<f64>>,           // Leverage values
+    #[pyo3(get, set)]
     deviance_residuals: Option<Vec<f64>>, // Deviance residuals
+    #[pyo3(get, set)]
     martingale_residuals: Option<Vec<f64>>, // Martingale residuals
+    #[pyo3(get, set)]
     schoenfeld_residuals: Option<Vec<f64>>, // Schoenfeld residuals
+    #[pyo3(get, set)]
     score_residuals: Option<Vec<f64>>,    // Score residuals
+    #[pyo3(get, set)]
     additional_measures: Option<Vec<f64>>, // Additional measures
 }
 
@@ -153,19 +184,26 @@ impl From<AaregError> for PyErr {
 
 /// Main function to perform Aalen's additive regression.
 #[pyfunction]
-fn aareg(options: &AaregOptions) -> PyResult<AaregResult> {
+fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
+    // Convert data to Array2<f64>
+    let data_array = Array2::from_shape_vec(
+        (options.data.len(), options.data[0].len()),
+        options.data.into_iter().flatten().collect(),
+    )
+    .map_err(|e| AaregError::DataError(e.to_string()))?;
+
     // Parse the formula to get response and covariate names
     let (response_name, covariate_names) = parse_formula(&options.formula)?;
-    
+
     // Apply subset if provided
-    let subset_data = apply_subset(&options.data, &options.subset)?;
-    
+    let subset_data = apply_subset(&data_array, &options.subset)?;
+
     // Apply weights if provided
     let weighted_data = apply_weights(&subset_data, options.weights.clone())?;
-    
+
     // Handle missing data according to na_action
     let filtered_data = handle_missing_data(&weighted_data, options.na_action.clone())?;
-    
+
     // Prepare data for regression
     let (y, x) = prepare_data_for_regression(
         &filtered_data,
@@ -173,13 +211,13 @@ fn aareg(options: &AaregOptions) -> PyResult<AaregResult> {
         &covariate_names,
         &options.variable_names,
     )?;
-    
+
     // Perform Aalen's additive regression
-    let regression_result = perform_aalen_regression(&y, &x, options)?;
-    
+    let regression_result = perform_aalen_regression(&y, &x, &options)?;
+
     // Post-process results
-    let processed_result = post_process_results(regression_result, options)?;
-    
+    let processed_result = post_process_results(regression_result, &options)?;
+
     Ok(processed_result)
 }
 
@@ -244,10 +282,10 @@ fn apply_weights(
 /// Handles missing data according to the specified action.
 fn handle_missing_data(
     data: &Array2<f64>,
-    na_action: Option<NaAction>,
+    na_action: Option<String>,
 ) -> Result<Array2<f64>, AaregError> {
-    match na_action {
-        Some(NaAction::Fail) => {
+    match na_action.as_deref() {
+        Some("Fail") => {
             if data.iter().any(|x| x.is_nan()) {
                 Err(AaregError::InputError(
                     "Invalid input: missing values in data".to_string(),
@@ -256,7 +294,7 @@ fn handle_missing_data(
                 Ok(data.clone())
             }
         }
-        Some(NaAction::Exclude) => {
+        Some("Exclude") => {
             let not_nan_rows: Vec<usize> = data
                 .axis_iter(Axis(0))
                 .enumerate()
@@ -272,6 +310,10 @@ fn handle_missing_data(
                 Ok(data.select(Axis(0), &not_nan_rows))
             }
         }
+        Some(other) => Err(AaregError::InputError(format!(
+            "Invalid na_action '{}'. Expected 'Fail' or 'Exclude'.",
+            other
+        ))),
         None => Ok(data.clone()),
     }
 }
