@@ -1,253 +1,419 @@
 use itertools::Itertools;
-use ndarray::prelude::*;
-use pyo3::prelude::*;
+use std::f64::EPSILON;
 
-/// Cox proportional hazards model.
-#[pyclass]
-struct CoxModel {
-    max_iter: usize,
-    n_used: usize,
-    n_var: usize,
-    start: Vec<f64>,
-    stop: Vec<f64>,
-    event: Vec<bool>,
-    covar: Array2<f64>,
-    strata: Vec<usize>,
-    offset: Array1<f64>,
-    eps: f64,
-    tol_chol: f64,
-    means: Array1<f64>,
-    beta: Array1<f64>,
-    u: Array1<f64>,
-    imat: Array2<f64>,
-    loglik: [f64; 2],
-    sctest: f64,
-    flag: i32,
-    iter_used: usize,
+/// Helper function to compute combinations and handle risk sets
+fn init_doloop(start: usize, end: usize, k: usize) -> Vec<Vec<usize>> {
+    (start..end).combinations(k).collect()
 }
 
-#[pymethods]
-impl CoxModel {
-    /// Creates a new CoxModel instance.
-    #[new]
-    pub fn new(
-        max_iter: usize,
-        n_used: usize,
-        n_var: usize,
-        start: Vec<f64>,
-        stop: Vec<f64>,
-        event: Vec<bool>,
-        covar: Vec<Vec<f64>>,
-        strata: Vec<usize>,
-        offset: Vec<f64>,
-        eps: f64,
-        tol_chol: f64,
-        initial_beta: Vec<f64>,
-    ) -> PyResult<Self> {
-        let covar_flat: Vec<f64> = covar.into_iter().flatten().collect();
-        let covar_array = Array2::from_shape_vec((n_used, n_var), covar_flat).map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid covariate matrix dimensions")
-        })?;
-        let offset_array = Array1::from(offset);
-        let means = Array1::zeros(n_var);
-        let beta = Array1::from(initial_beta);
-        let u = Array1::zeros(n_var);
-        let imat = Array2::zeros((n_var, n_var));
-        let loglik = [0.0, 0.0];
+/// Anderson-Gill exact Cox model implementation
+pub fn agexact(
+    maxiter: &mut i32,
+    nused: &i32,
+    nvar: &i32,
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    covar: &mut [f64],
+    offset: &[f64],
+    strata: &[i32],
+    means: &mut [f64],
+    beta: &mut [f64],
+    u: &mut [f64],
+    imat: &mut [f64],
+    loglik: &mut [f64; 2],
+    flag: &mut i32,
+    work: &mut [f64],
+    work2: &mut [i32],
+    eps: &f64,
+    tol_chol: &f64,
+    sctest: &mut f64,
+    nocenter: &[i32],
+) {
+    let n = *nused as usize;
+    let nvar = *nvar as usize;
+    let p = nvar;
 
-        Ok(CoxModel {
-            max_iter,
-            n_used,
-            n_var,
-            start,
-            stop,
-            event,
-            covar: covar_array,
-            strata,
-            offset: offset_array,
-            eps,
-            tol_chol,
-            means,
-            beta,
-            u,
-            imat,
-            loglik,
-            sctest: 0.0,
-            flag: 0,
-            iter_used: 0,
-        })
-    }
+    // Split work array into components
+    let (cmat, rest) = work.split_at_mut(p * p);
+    let (a, rest) = rest.split_at_mut(p);
+    let (newbeta, rest) = rest.split_at_mut(p);
+    let (score, newvar) = rest.split_at_mut(n);
 
-    /// Fits the Cox model using the Newton-Raphson algorithm.
-    pub fn compute(&mut self) -> PyResult<()> {
-        for iter in 0..self.max_iter {
-            self.score_and_info()?;
-            let delta_beta = self.solve_system()?;
-            self.beta += &delta_beta;
+    let index = &mut work2[0..n];
+    let atrisk = &mut work2[n..2 * n];
 
-            if self.has_converged(&delta_beta) {
-                self.iter_used = iter + 1;
-                self.flag = 0;
-                break;
+    // Initialize covariate means
+    for i in 0..nvar {
+        if nocenter[i] == 0 {
+            means[i] = 0.0;
+        } else {
+            let mut sum = 0.0;
+            for j in 0..n {
+                sum += covar[i * n + j];
+            }
+            means[i] = sum / n as f64;
+            for j in 0..n {
+                covar[i * n + j] -= means[i];
             }
         }
+    }
 
-        if self.flag != 0 {
-            self.flag = 1000;
+    // Initial score calculation
+    for person in 0..n {
+        let mut zbeta = 0.0;
+        for i in 0..nvar {
+            zbeta += beta[i] * covar[i * n + person];
         }
-        self.finalize_statistics()?;
-        Ok(())
+        score[person] = (zbeta + offset[person]).exp();
     }
 
-    /// Returns the fitted beta coefficients.
-    #[getter]
-    fn beta(&self) -> Vec<f64> {
-        self.beta.to_vec()
-    }
+    // Initial accumulation
+    loglik[1] = 0.0;
+    u.fill(0.0);
+    imat.fill(0.0);
 
-    /// Returns the log-likelihood of the model.
-    #[getter]
-    fn loglik(&self) -> [f64; 2] {
-        self.loglik
-    }
+    let mut person = 0;
+    while person < n {
+        if event[person] == 0 {
+            person += 1;
+        } else {
+            let time = stop[person];
+            let mut deaths = 0;
+            let mut nrisk = 0;
+            let mut k = person;
 
-    /// Returns the score test statistic.
-    #[getter]
-    fn sctest(&self) -> f64 {
-        self.sctest
-    }
-}
+            // Determine risk set and deaths
+            while k < n {
+                if stop[k] == time {
+                    deaths += event[k];
+                }
+                if start[k] < time {
+                    atrisk[nrisk] = k as i32;
+                    nrisk += 1;
+                }
+                if strata[k] == 1 {
+                    k += 1;
+                    break;
+                }
+                k += 1;
+            }
 
-// Private methods (not exposed to Python)
-impl CoxModel {
-    /// Checks if the algorithm has converged based on the change in beta.
-    fn has_converged(&self, delta_beta: &Array1<f64>) -> bool {
-        delta_beta.iter().all(|&change| change.abs() <= self.eps)
-    }
+            let mut denom = 0.0;
+            a.fill(0.0);
+            cmat.fill(0.0);
 
-    /// Computes the score vector and information matrix for the Cox model.
-    fn score_and_info(&mut self) -> PyResult<()> {
-        let mut score = Array1::<f64>::zeros(self.n_var);
-        let mut info_matrix = Array2::<f64>::zeros((self.n_var, self.n_var));
-
-        let beta = &self.beta;
-        let covar = &self.covar;
-        let offset = &self.offset;
-
-        let lin_pred = covar.dot(beta) + offset;
-        let exp_lin_pred = lin_pred.mapv(f64::exp);
-
-        // Group indices by strata
-        let strata_indices: Vec<_> = self
-            .strata
-            .iter()
-            .enumerate()
-            .chunk_by(|&(_, &stratum1), &(_, &stratum2)| stratum1 == stratum2)
-            .map(|chunk| chunk.map(|(idx, _)| idx).collect::<Vec<_>>())
-            .collect();
-
-        for indices in strata_indices {
-            let mut risk_set_sum = Array1::<f64>::zeros(self.n_var);
-            let mut denominator = 0.0;
-
-            // Temporary accumulators for this stratum
-            let mut stratum_score = Array1::<f64>::zeros(self.n_var);
-            let mut stratum_info_matrix = Array2::<f64>::zeros((self.n_var, self.n_var));
-
-            for &i in indices.iter().rev() {
-                let exp_lp = exp_lin_pred[i];
-                denominator += exp_lp;
-                risk_set_sum += covar.row(i).to_owned() * exp_lp;
-
-                if self.event[i] {
-                    stratum_score += covar.row(i).to_owned();
-                    let weighted_mean = &risk_set_sum / denominator;
-
-                    let diff = covar.row(i).to_owned() - &weighted_mean;
-                    let outer = diff.insert_axis(Axis(1)).dot(&diff.insert_axis(Axis(0)));
-
-                    stratum_info_matrix += &outer;
+            if deaths == 1 {
+                for l in 0..nrisk {
+                    let k = atrisk[l] as usize;
+                    let weight = score[k];
+                    denom += weight;
+                    for i in 0..nvar {
+                        let covar_ik = covar[i * n + k];
+                        a[i] += weight * covar_ik;
+                        for j in 0..=i {
+                            let covar_jk = covar[j * n + k];
+                            cmat[i * p + j] += weight * covar_ik * covar_jk;
+                        }
+                    }
+                }
+            } else {
+                let combinations = init_doloop(0, nrisk, deaths);
+                for indices in combinations {
+                    newvar.fill(0.0);
+                    let mut weight = 1.0;
+                    for &idx in &indices {
+                        let k = atrisk[idx] as usize;
+                        weight *= score[k];
+                        for i in 0..nvar {
+                            newvar[i] += covar[i * n + k];
+                        }
+                    }
+                    denom += weight;
+                    for i in 0..nvar {
+                        a[i] += weight * newvar[i];
+                        for j in 0..=i {
+                            cmat[i * p + j] += weight * newvar[i] * newvar[j];
+                        }
+                    }
                 }
             }
 
-            score += stratum_score - info_matrix.dot(beta);
-            info_matrix += stratum_info_matrix;
+            // Update log-likelihood and information matrix
+            loglik[1] -= denom.ln();
+            for i in 0..nvar {
+                u[i] -= a[i] / denom;
+                for j in 0..=i {
+                    let cmat_ij = cmat[i * p + j];
+                    let term = (cmat_ij - a[i] * a[j] / denom) / denom;
+                    imat[j * p + i] += term;
+                }
+            }
+
+            // Process events at this time point
+            let mut k = person;
+            while k < n && stop[k] == time {
+                if event[k] == 1 {
+                    loglik[1] += score[k].ln();
+                    for i in 0..nvar {
+                        u[i] += covar[i * n + k];
+                    }
+                }
+                person += 1;
+                if strata[k] == 1 {
+                    break;
+                }
+                k += 1;
+            }
+        }
+    }
+
+    loglik[0] = loglik[1];
+    let mut a_copy = a.to_vec();
+    *flag = cholesky2(imat, p, *tol_chol);
+    chsolve2(imat, p, &mut a_copy);
+    *sctest = a_copy.iter().zip(u.iter()).map(|(a, u)| a * u).sum();
+
+    if *maxiter == 0 {
+        chinv2(imat, p);
+        for i in 0..p {
+            for j in 0..i {
+                imat[i * p + j] = imat[j * p + i];
+            }
+        }
+        *flag = 0;
+        return;
+    }
+
+    // Main iteration loop
+    let mut iter = 0;
+    let mut halving = false;
+    let mut newbeta_vec = newbeta.to_vec();
+
+    while iter < *maxiter {
+        iter += 1;
+        let mut newlk = 0.0;
+        u.fill(0.0);
+        imat.fill(0.0);
+
+        // Calculate new scores
+        for person in 0..n {
+            let mut zbeta = 0.0;
+            for i in 0..nvar {
+                zbeta += newbeta_vec[i] * covar[i * n + person];
+            }
+            score[person] = (zbeta + offset[person]).exp();
         }
 
-        self.u = score;
-        self.imat = info_matrix;
+        let mut person = 0;
+        while person < n {
+            if event[person] == 0 {
+                person += 1;
+            } else {
+                let time = stop[person];
+                let mut deaths = 0;
+                let mut nrisk = 0;
+                let mut k = person;
 
-        Ok(())
-    }
+                while k < n {
+                    if stop[k] == time {
+                        deaths += event[k];
+                    }
+                    if start[k] < time {
+                        atrisk[nrisk] = k as i32;
+                        nrisk += 1;
+                    }
+                    if strata[k] == 1 {
+                        k += 1;
+                        break;
+                    }
+                    k += 1;
+                }
 
-    /// Solves the linear system to find the change in beta coefficients.
-    fn solve_system(&self) -> PyResult<Array1<f64>> {
-        let cholesky = self.imat.clone().cholesky_into().map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>("Cholesky decomposition failed")
-        })?;
-        let delta_beta = cholesky.solve(&self.u).map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>("Failed to solve linear system")
-        })?;
-        Ok(delta_beta)
-    }
+                let mut denom = 0.0;
+                a.fill(0.0);
+                cmat.fill(0.0);
 
-    /// Finalizes the statistics after fitting the model.
-    fn finalize_statistics(&mut self) -> PyResult<()> {
-        self.compute_log_likelihood()?;
-        self.compute_score_test()?;
-        Ok(())
-    }
+                if deaths == 1 {
+                    for l in 0..nrisk {
+                        let k = atrisk[l] as usize;
+                        let weight = score[k];
+                        denom += weight;
+                        for i in 0..nvar {
+                            let covar_ik = covar[i * n + k];
+                            a[i] += weight * covar_ik;
+                            for j in 0..=i {
+                                cmat[i * p + j] += weight * covar_ik * covar[j * n + k];
+                            }
+                        }
+                    }
+                } else {
+                    let combinations = init_doloop(0, nrisk, deaths);
+                    for indices in combinations {
+                        newvar.fill(0.0);
+                        let mut weight = 1.0;
+                        for &idx in &indices {
+                            let k = atrisk[idx] as usize;
+                            weight *= score[k];
+                            for i in 0..nvar {
+                                newvar[i] += covar[i * n + k];
+                            }
+                        }
+                        denom += weight;
+                        for i in 0..nvar {
+                            a[i] += weight * newvar[i];
+                            for j in 0..=i {
+                                cmat[i * p + j] += weight * newvar[i] * newvar[j];
+                            }
+                        }
+                    }
+                }
 
-    /// Computes the log-likelihood of the fitted model.
-    fn compute_log_likelihood(&mut self) -> PyResult<()> {
-        let beta = &self.beta;
-        let covar = &self.covar;
-        let offset = &self.offset;
+                newlk -= denom.ln();
+                for i in 0..nvar {
+                    u[i] -= a[i] / denom;
+                    for j in 0..=i {
+                        let cmat_ij = cmat[i * p + j];
+                        let term = (cmat_ij - a[i] * a[j] / denom) / denom;
+                        imat[j * p + i] += term;
+                    }
+                }
 
-        let lin_pred = covar.dot(beta) + offset;
-        let exp_lin_pred = lin_pred.mapv(f64::exp);
-
-        let mut loglik = 0.0;
-
-        // Group indices by strata
-        let strata_indices: Vec<_> = self
-            .strata
-            .iter()
-            .enumerate()
-            .chunk_by(|&(_, &stratum1), &(_, &stratum2)| stratum1 == stratum2)
-            .map(|chunk| chunk.map(|(idx, _)| idx).collect::<Vec<_>>())
-            .collect();
-
-        for indices in strata_indices {
-            let mut denominator = 0.0;
-
-            for &i in indices.iter().rev() {
-                let exp_lp = exp_lin_pred[i];
-                denominator += exp_lp;
-
-                if self.event[i] {
-                    loglik += lin_pred[i] - denominator.ln();
+                let mut k = person;
+                while k < n && stop[k] == time {
+                    if event[k] == 1 {
+                        newlk += score[k].ln();
+                        for i in 0..nvar {
+                            u[i] += covar[i * n + k];
+                        }
+                    }
+                    person += 1;
+                    if strata[k] == 1 {
+                        break;
+                    }
+                    k += 1;
                 }
             }
         }
 
-        self.loglik[1] = loglik;
-        Ok(())
+        // Check convergence
+        if (1.0 - (loglik[1] / newlk)).abs() <= *eps && !halving {
+            loglik[1] = newlk;
+            chinv2(imat, p);
+            for i in 0..p {
+                for j in 0..i {
+                    imat[i * p + j] = imat[j * p + i];
+                }
+            }
+            beta.copy_from_slice(&newbeta_vec);
+            *maxiter = iter;
+            return;
+        }
+
+        if iter == *maxiter {
+            break;
+        }
+
+        if newlk < loglik[1] {
+            // Step halving
+            halving = true;
+            for i in 0..nvar {
+                newbeta_vec[i] = (newbeta_vec[i] + beta[i]) / 2.0;
+            }
+        } else {
+            halving = false;
+            loglik[1] = newlk;
+            *flag = cholesky2(imat, p, *tol_chol);
+            let mut u_copy = u.to_vec();
+            chsolve2(imat, p, &mut u_copy);
+
+            for i in 0..nvar {
+                beta[i] = newbeta_vec[i];
+                newbeta_vec[i] += u_copy[i];
+            }
+        }
     }
 
-    /// Computes the score test statistic.
-    fn compute_score_test(&mut self) -> PyResult<()> {
-        let imat_inv = self.imat.clone().inv().map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>("Matrix inversion failed")
-        })?;
-        let score_test_statistic = self.u.dot(&imat_inv.dot(&self.u));
-        self.sctest = score_test_statistic;
-        Ok(())
+    // Final updates if max iterations reached
+    loglik[1] = newlk;
+    chinv2(imat, p);
+    for i in 0..p {
+        for j in 0..i {
+            imat[i * p + j] = imat[j * p + i];
+        }
+    }
+    beta.copy_from_slice(&newbeta_vec);
+    *flag = 1000;
+}
+
+/// Cholesky decomposition (lower triangular)
+fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
+    for i in 0..n {
+        for j in i..n {
+            let mut temp = matrix[i * n + j];
+            for k in 0..i {
+                temp -= matrix[i * n + k] * matrix[j * n + k];
+            }
+            if j == i {
+                if temp <= 0.0 {
+                    matrix[i * n + i] = 0.0;
+                    return (i + 1) as i32;
+                }
+                if temp < tol * matrix[i * n + i].abs() {
+                    temp = 0.0;
+                }
+                matrix[i * n + i] = temp.sqrt();
+            } else {
+                matrix[j * n + i] = temp / matrix[i * n + i];
+            }
+        }
+    }
+    0
+}
+
+/// Solve Ax = b using Cholesky decomposition
+fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
+    // Forward substitution (L y = b)
+    for i in 0..n {
+        let mut sum = b[i];
+        for j in 0..i {
+            sum -= chol[i * n + j] * b[j];
+        }
+        b[i] = sum / chol[i * n + i];
+    }
+
+    // Backward substitution (L^T x = y)
+    for i in (0..n).rev() {
+        let mut sum = b[i];
+        for j in (i + 1)..n {
+            sum -= chol[j * n + i] * b[j];
+        }
+        b[i] = sum / chol[i * n + i];
     }
 }
 
-#[pymodule]
-fn py_cox_model(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<CoxModel>()?;
-    Ok(())
+/// Invert Cholesky decomposed matrix
+fn chinv2(chol: &mut [f64], n: usize) {
+    // Invert the Cholesky factor
+    for i in 0..n {
+        chol[i * n + i] = 1.0 / chol[i * n + i];
+        for j in (i + 1)..n {
+            let mut sum = 0.0;
+            for k in i..j {
+                sum += chol[j * n + k] * chol[k * n + i];
+            }
+            chol[j * n + i] = -sum * chol[j * n + j];
+        }
+    }
+
+    // Compute the full inverse
+    for i in 0..n {
+        for j in i..n {
+            let mut sum = 0.0;
+            for k in j..n {
+                sum += chol[k * n + i] * chol[k * n + j];
+            }
+            chol[i * n + j] = sum;
+        }
+    }
 }
