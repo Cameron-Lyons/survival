@@ -3,3 +3,8 @@ mod agexact;
 mod agfit4;
 mod agfit5;
 mod agmart;
+mod agscore2;
+mod agscore3;
+mod agsurv4;
+mod agsurv5;
+mod cdecomp;
