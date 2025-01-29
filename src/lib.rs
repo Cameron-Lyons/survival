@@ -8,3 +8,4 @@ mod agscore3;
 mod agsurv4;
 mod agsurv5;
 mod cdecomp;
+mod chinv2;
