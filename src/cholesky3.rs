@@ -3,7 +3,6 @@ fn cholesky3(matrix: &mut [&mut [f64]], n: usize, m: usize, diag: &[f64], toler:
     let mut nonneg = 1;
     let mut eps = 0.0;
 
-    // Compute the initial epsilon based on diagonal elements
     for &val in diag.iter().take(m) {
         if val < eps {
             eps = val;
