@@ -135,7 +135,8 @@ fn concordance3(
                 add_internal(&mut nwt, twt, x[jj] as usize, wt[jj]);
             }
 
-            if doresid {}
+            if doresid { //TODO
+            }
 
             count[5] += dwt * adjtimewt * z2 / twt[0];
             i += ndeath;
