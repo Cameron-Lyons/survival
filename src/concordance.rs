@@ -25,7 +25,7 @@ fn concordance(
     }
 
     let mut utime = 0;
-    let mut i2 = 0; // Only used for concordance6
+    let mut i2 = 0;
     let mut i = 0;
 
     while i < n {
