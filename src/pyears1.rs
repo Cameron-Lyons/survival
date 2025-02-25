@@ -259,8 +259,73 @@ fn pystep(
 
             index += k * stride;
             stride *= dims[j];
-        } else {
-            // Special handling (calendar year etc.) - placeholder
+        } else if fac[j] >= 2 {
+            let cuts = cut[j];
+            if cuts.len() < 2 {
+                continue; // Invalid cut specification
+            }
+
+            let nyear = cuts[0] as i32;
+            let peryear = cuts[1];
+            let current_pos = data[j];
+
+            let year = (current_pos / nyear as f64).floor() as i32;
+            let time_in_year = current_pos % nyear as f64;
+
+            let time_to_year_edge = (nyear as f64 - time_in_year) * peryear;
+
+            let year_offset = 2 + (year as usize) * dims[j];
+            if year_offset + dims[j] > cuts.len() {
+                continue; // Invalid cut specification
+            }
+            let year_cuts = &cuts[year_offset..year_offset + dims[j]];
+
+            let mut m = 0;
+            while m < year_cuts.len() && current_pos >= year_cuts[m] {
+                m += 1;
+            }
+            m = m.saturating_sub(1);
+
+            let time_to_interval_edge = if m < year_cuts.len() - 1 {
+                year_cuts[m + 1] - current_pos
+            } else {
+                f64::INFINITY
+            };
+
+            let (step, is_year_edge) = if time_to_year_edge < time_to_interval_edge {
+                (time_to_year_edge, true)
+            } else {
+                (time_to_interval_edge, false)
+            };
+
+            if step < thiscell {
+                thiscell = step;
+                indx2 = -1;
+                lwt = 1.0;
+
+                let base_index = m * stride;
+
+                if is_year_edge {
+                    let next_year = year + 1;
+                    let next_year_offset = 2 + (next_year as usize) * dims[j];
+
+                    if next_year_offset < cuts.len() {
+                        let next_year_cuts = &cuts[next_year_offset..next_year_offset + dims[j]];
+                        let next_m = 0; // First interval of next year
+
+                        let next_index = next_m * stride;
+
+                        indx2 = next_index as i32;
+                        lwt = time_to_year_edge / step;
+                    }
+                }
+
+                index += base_index;
+            }
+
+            stride *= dims[j];
+
+            data[j] += thiscell;
         }
     }
 
