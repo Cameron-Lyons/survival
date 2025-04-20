@@ -1,9 +1,36 @@
 import numpy as np
 import pandas as pd
+import warnings
+from typing import Optional, Union, List
 
 
 class Surv:
-    def __init__(self, time, time2=None, event=None, type="right", origin=0):
+    """
+    A class to handle different types of survival data.
+
+    Parameters:
+    -----------
+    time : Union[List[float], np.ndarray]
+        The primary time variable.
+    time2 : Optional[Union[List[float], np.ndarray]]
+        The secondary time variable (optional, based on type).
+    event : Optional[Union[List[int], List[bool], np.ndarray]]
+        Event occurrence indicators.
+    type : str
+        Type of survival data ('right', 'left', 'counting', 'interval', 'interval2').
+    origin : float
+        Origin point for time measurements (default is 0).
+    """
+
+    def __init__(
+        self,
+        time: Union[List[float], np.ndarray],
+        time2: Optional[Union[List[float], np.ndarray]] = None,
+        event: Optional[Union[List[int], List[bool], np.ndarray]] = None,
+        type: str = "right",
+        origin: float = 0,
+    ) -> None:
+
         if time is None:
             raise ValueError("Must have a time argument")
 
@@ -14,19 +41,16 @@ class Surv:
         self.time = np.asarray(time, dtype=float) - origin
         self.nn = len(self.time)
 
-        if time2 is not None:
-            self.time2 = np.asarray(time2, dtype=float) - origin
-        else:
-            self.time2 = None
-
-        if event is not None:
-            self.event = np.asarray(event)
-        else:
-            self.event = None
+        self.time2 = (
+            np.asarray(time2, dtype=float) - origin if time2 is not None else None
+        )
+        self.event = np.asarray(event) if event is not None else None
 
         self.process_data()
 
-    def process_data(self):
+    def process_data(self) -> None:
+        """Process data based on the specified survival type."""
+
         if self.type in ["right", "left"]:
             if self.event is None and self.time2 is not None:
                 self.event = self.time2
@@ -45,9 +69,10 @@ class Surv:
             if len(self.time2) != self.nn or len(self.event) != self.nn:
                 raise ValueError("Start, stop, and event must be same length")
 
-            if np.any(self.time >= self.time2):
+            invalid_times = self.time >= self.time2
+            if np.any(invalid_times):
                 warnings.warn("Stop time must be > start time; NA created")
-                self.time[self.time >= self.time2] = np.nan
+                self.time[invalid_times] = np.nan
 
             status = self.validate_event(self.event)
             self.data = pd.DataFrame(
@@ -106,7 +131,20 @@ class Surv:
 
         self.data.attrs["type"] = self.type
 
-    def validate_event(self, event):
+    def validate_event(self, event: np.ndarray) -> np.ndarray:
+        """
+        Validate and format the event/status data.
+
+        Parameters:
+        -----------
+        event : np.ndarray
+            Event/status indicator array.
+
+        Returns:
+        --------
+        np.ndarray
+            Validated and formatted event/status array.
+        """
         if np.issubdtype(event.dtype, np.bool_):
             return event.astype(int)
         elif np.issubdtype(event.dtype, np.number):
@@ -120,10 +158,5 @@ class Surv:
         else:
             raise ValueError("Invalid status value; must be logical or numeric")
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Surv(type='{self.type}', data=\n{self.data})"
-
-
-# Example usage:
-surv_example = Surv(time=[1, 2, 5], event=[1, 0, 1])
-print(surv_example)
