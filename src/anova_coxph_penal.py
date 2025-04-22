@@ -5,6 +5,10 @@ from lifelines import CoxPHFitter
 from scipy import stats
 
 
+def has_frailty(x):
+    return hasattr(x, "pterms") and any(x.pterms == 2)
+
+
 def anova_coxph_penal(object: Any, *args, test: str = "Chisq") -> pd.DataFrame:
     """
     Analysis of deviance for Cox proportional hazards models with penalized terms.
@@ -54,7 +58,6 @@ def anova_coxph_penal(object: Any, *args, test: str = "Chisq") -> pd.DataFrame:
         if not all([a or b for a, b in zip(is_cox_model, is_coxme)]):
             raise TypeError("All arguments must be Cox models")
 
-        has_frailty = lambda x: hasattr(x, "pterms") and any(x.pterms == 2)
         if any(has_frailty(x) for x in dot_args):
             raise ValueError("anova command does not handle frailty terms")
 
