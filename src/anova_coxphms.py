@@ -123,11 +123,9 @@ def anova_coxphms(object: Any, *args, test: str = "score") -> pd.DataFrame:
 
     table = pd.DataFrame(
         {
-            "loglik": [0] * nmodel,  # This would be filled with actual values
-            "Chisq": [np.nan]
-            + [0] * (nmodel - 1),  # This would be filled with actual values
-            "Df": [np.nan]
-            + [0] * (nmodel - 1),  # This would be filled with actual values
+            "loglik": [0] * nmodel,  # TODO fill with actual values
+            "Chisq": [np.nan] + [0] * (nmodel - 1),  # TODO fill with actual values
+            "Df": [np.nan] + [0] * (nmodel - 1),  # TODO fill with actual values
         }
     )
 
