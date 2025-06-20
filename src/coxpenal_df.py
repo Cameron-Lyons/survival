@@ -8,7 +8,7 @@ and non-sparse penalty terms.
 Original R function: coxpenal.df
 """
 
-from typing import List, Union, Tuple, Optional, Dict, Any, cast
+from typing import List, Union, Dict, Any, cast
 import numpy as np
 from numpy.typing import NDArray
 
