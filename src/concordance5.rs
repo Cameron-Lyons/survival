@@ -1,4 +1,7 @@
-// use extendr_api::prelude::*;
+use pyo3::prelude::*;
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::types::PyDict;
+use std::cmp::Ordering;
 
 struct FenwickTree {
     tree: Vec<f64>,
@@ -46,160 +49,188 @@ fn walkup(nwt: &[f64], fenwick: &FenwickTree, x: usize) -> [f64; 3] {
     [sum_greater, sum_less, sum_equal]
 }
 
-// #[extendr]
-// fn concordance5(
-//     y: RealVector,
-//     x: IntVector,
-//     wt: RealVector,
-//     timewt: RealVector,
-//     sortstop: IntVector,
-// ) -> List {
-//     let n = y.len() / 2;
-//     let time: Vec<f64> = y.iter().take(n).collect();
-//     let status: Vec<f64> = y.iter().skip(n).take(n).collect();
-//     let x: Vec<usize> = x.iter().map(|&xi| xi as usize).collect();
-//     let wt: Vec<f64> = wt.iter().collect();
-//     let timewt: Vec<f64> = timewt.iter().collect();
-//     let sortstop: Vec<usize> = sortstop.iter().map(|&si| (si - 1) as usize).collect();
-//
-//     let ntree = x.iter().max().map(|&m| m + 1).unwrap_or(0);
-//     let mut nwt = vec![0.0; ntree];
-//     let mut fenwick = FenwickTree::new(ntree);
-//     let mut count = vec![0.0; 5];
-//     let mut utime = 0;
-//     let mut i = 0;
-//
-//     while i < n {
-//         let ii = sortstop[i];
-//         if (status[ii] - 0.0).abs() < f64::EPSILON {
-//             addin(&mut nwt, &mut fenwick, x[ii], wt[ii]);
-//             i += 1;
-//         } else {
-//             let current_time = time[ii];
-//             let mut j = i;
-//             let mut ndeath = 0;
-//             let mut dwt = 0.0;
-//             let mut xsave = x[ii];
-//             let adjtimewt = timewt[utime];
-//             utime += 1;
-//
-//             while j < n && (time[sortstop[j]] - current_time).abs() < f64::EPSILON {
-//                 let jj = sortstop[j];
-//                 ndeath += 1;
-//                 count[3] += wt[jj] * dwt * adjtimewt;
-//                 dwt += wt[jj];
-//
-//                 if x[jj] != xsave {
-//                     xsave = x[jj];
-//                     dwt2 = 0.0;
-//                 }
-//                 count[4] += wt[jj] * dwt2 * adjtimewt;
-//                 dwt2 += wt[jj];
-//
-//                 let wsum = walkup(&nwt, &fenwick, x[jj]);
-//                 for k in 0..3 {
-//                     count[k] += wt[jj] * wsum[k] * adjtimewt;
-//                 }
-//
-//                 j += 1;
-//             }
-//
-//             for j in i..i + ndeath {
-//                 let jj = sortstop[j];
-//                 addin(&mut nwt, &mut fenwick, x[jj], wt[jj]);
-//             }
-//
-//             i += ndeath;
-//         }
-//     }
-//
-//     count[3] -= count[4];
-//     list!(count = count)
-// }
+pub fn concordance5(
+    y: &[f64],
+    x: &[i32],
+    wt: &[f64],
+    timewt: &[f64],
+    sortstart: Option<&[usize]>,
+    sortstop: &[usize],
+    doresid: bool,
+) -> (Vec<f64>, Vec<f64>, Option<Vec<f64>>) {
+    let n = x.len();
+    let mut ntree = 0;
+    
+    for &val in x {
+        ntree = ntree.max(val as usize + 1);
+    }
+    
+    let mut nwt = vec![0.0; ntree];
+    let mut fenwick = FenwickTree::new(ntree);
+    let mut count = vec![0.0; 6]; // [concordant, discordant, tied_x, tied_y, tied_xy, variance]
+    let mut imat = vec![0.0; 3 * n];
+    let mut resid = if doresid {
+        let nevent = y[n..].iter().filter(|&&v| v == 1.0).count();
+        Some(vec![0.0; 3 * nevent])
+    } else {
+        None
+    };
+    
+    let mut utime = 0;
+    let mut i2 = 0;
+    let mut i = 0;
+    let mut z2 = 0.0;
+    
+    while i < n {
+        let ii = sortstop[i];
+        let current_time = y[ii];
+        
+        if (sortstart.is_some() && i2 < n && y[sortstart.unwrap()[i2]] >= current_time)
+            || y[ii] == 0.0
+        {
+            addin(&mut nwt, &mut fenwick, x[ii] as usize, wt[ii]);
+            i += 1;
+        } else {
+            let mut ndeath = 0;
+            let mut dwt = 0.0;
+            let mut dwt2 = 0.0;
+            let adjtimewt = timewt[utime];
+            utime += 1;
+            
+            while i + ndeath < n && y[sortstop[i + ndeath]] == current_time {
+                let jj = sortstop[i + ndeath];
+                if y[n + jj] == 1.0 { // Event occurred
+                    dwt += wt[jj];
+                    dwt2 += wt[jj] * adjtimewt;
+                }
+                ndeath += 1;
+            }
+            
+            for j in i..(i + ndeath) {
+                let jj = sortstop[j];
+                if y[n + jj] == 1.0 { // Only process actual events
+                    let wsum = walkup(&nwt, &fenwick, x[jj] as usize);
+                    
+                    count[0] += wt[jj] * wsum[0] * adjtimewt; // Concordant
+                    count[1] += wt[jj] * wsum[1] * adjtimewt; // Discordant
+                    count[2] += wt[jj] * wsum[2] * adjtimewt; // Tied on x
+                    
+                    imat[jj] += wsum[1] * adjtimewt;
+                    imat[n + jj] += wsum[0] * adjtimewt;
+                    imat[2 * n + jj] += wsum[2] * adjtimewt;
+                    
+                    z2 += compute_z2(wt[jj], &wsum);
+                }
+            }
+            
+            count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
+            
+            for j in i..(i + ndeath) {
+                let jj = sortstop[j];
+                addin(&mut nwt, &mut fenwick, x[jj] as usize, wt[jj]);
+            }
+            
+            i += ndeath;
+        }
+    }
+    
+    count[3] = count[4];
+    count[4] = 0.0;
+    
+    if fenwick.total() > 0.0 {
+        count[5] = z2 / fenwick.total();
+    }
+    
+    (count, imat, resid)
+}
 
-// #[extendr]
-// fn concordance6(
-//     y: RealVector,
-//     x: IntVector,
-//     wt: RealVector,
-//     timewt: RealVector,
-//     sortstart: IntVector,
-//     sortstop: IntVector,
-// ) -> List {
-//     let n = y.len() / 3;
-//     let time1: Vec<f64> = y.iter().take(n).collect();
-//     let time2: Vec<f64> = y.iter().skip(n).take(n).collect();
-//     let status: Vec<f64> = y.iter().skip(2 * n).take(n).collect();
-//     let x: Vec<usize> = x.iter().map(|&xi| xi as usize).collect();
-//     let wt: Vec<f64> = wt.iter().collect();
-//     let timewt: Vec<f64> = timewt.iter().collect();
-//     let sortstart: Vec<usize> = sortstart.iter().map(|&si| (si - 1) as usize).collect();
-//     let sortstop: Vec<usize> = sortstop.iter().map(|&si| (si - 1) as usize).collect();
-//
-//     let ntree = x.iter().max().map(|&m| m + 1).unwrap_or(0);
-//     let mut nwt = vec![0.0; ntree];
-//     let mut fenwick = FenwickTree::new(ntree);
-//     let mut count = vec![0.0; 5];
-//     let mut utime = 0;
-//     let mut i2 = 0;
-//     let mut i = 0;
-//
-//     while i < n {
-//         let ii = sortstop[i];
-//         if (status[ii] - 0.0).abs() < f64::EPSILON {
-//             addin(&mut nwt, &mut fenwick, x[ii], wt[ii]);
-//             i += 1;
-//         } else {
-//             while i2 < n && time1[sortstart[i2]] >= time2[ii] {
-//                 let jj = sortstart[i2];
-//                 addin(&mut nwt, &mut fenwick, x[jj], -wt[jj]);
-//                 i2 += 1;
-//             }
-//
-//             let current_time = time2[ii];
-//             let mut j = i;
-//             let mut ndeath = 0;
-//             let mut dwt = 0.0;
-//             let mut xsave = x[ii];
-//             let adjtimewt = timewt[utime];
-//             utime += 1;
-//
-//             while j < n && (time2[sortstop[j]] - current_time).abs() < f64::EPSILON {
-//                 let jj = sortstop[j];
-//                 ndeath += 1;
-//                 count[3] += wt[jj] * dwt * adjtimewt;
-//                 dwt += wt[jj];
-//
-//                 if x[jj] != xsave {
-//                     xsave = x[jj];
-//                     dwt2 = 0.0;
-//                 }
-//                 count[4] += wt[jj] * dwt2 * adjtimewt;
-//                 dwt2 += wt[jj];
-//
-//                 let wsum = walkup(&nwt, &fenwick, x[jj]);
-//                 for k in 0..3 {
-//                     count[k] += wt[jj] * wsum[k] * adjtimewt;
-//                 }
-//
-//                 j += 1;
-//             }
-//
-//             for j in i..i + ndeath {
-//                 let jj = sortstop[j];
-//                 addin(&mut nwt, &mut fenwick, x[jj], wt[jj]);
-//             }
-//
-//             i += ndeath;
-//         }
-//     }
-//
-//     count[3] -= count[4];
-//     list!(count = count)
-// }
+fn compute_z2(wt: f64, wsum: &[f64]) -> f64 {
+    let total = wsum[0] + wsum[1] + wsum[2];
+    if total == 0.0 {
+        return 0.0;
+    }
+    
+    let expected = total / 3.0;
+    let observed = wsum[0]; // Greater than
+    wt * (observed - expected).powi(2) / expected
+}
 
-// extendr_module! {
-//     mod concordance;
-//     fn concordance5;
-//     fn concordance6;
-// }
+#[pyfunction]
+pub fn perform_concordance_calculation(
+    time_data: Vec<f64>,
+    predictor_values: Vec<i32>,
+    weights: Vec<f64>,
+    time_weights: Vec<f64>,
+    sort_stop: Vec<usize>,
+    sort_start: Option<Vec<usize>>,
+    do_residuals: Option<bool>,
+) -> PyResult<PyObject> {
+    let n = weights.len();
+    if n == 0 {
+        return Err(PyRuntimeError::new_err("No observations provided"));
+    }
+    
+    if time_data.len() != 2 * n {
+        return Err(PyRuntimeError::new_err("Time data should have 2*n elements (time, status)"));
+    }
+    
+    if predictor_values.len() != n {
+        return Err(PyRuntimeError::new_err("Predictor values length does not match observations"));
+    }
+    
+    if weights.len() != n {
+        return Err(PyRuntimeError::new_err("Weights length does not match observations"));
+    }
+    
+    if time_weights.len() != n {
+        return Err(PyRuntimeError::new_err("Time weights length does not match observations"));
+    }
+    
+    if sort_stop.len() != n {
+        return Err(PyRuntimeError::new_err("Sort stop length does not match observations"));
+    }
+    
+    let doresid = do_residuals.unwrap_or(false);
+    
+    let (count, imat, resid) = concordance5(
+        &time_data,
+        &predictor_values,
+        &weights,
+        &time_weights,
+        sort_start.as_deref(),
+        &sort_stop,
+        doresid,
+    );
+    
+    let concordant = count[0];
+    let discordant = count[1];
+    let tied_x = count[2];
+    let tied_y = count[3];
+    let tied_xy = count[4];
+    let variance = count[5];
+    
+    let total_pairs = concordant + discordant + tied_x + tied_y + tied_xy;
+    let concordance_index = if total_pairs > 0.0 {
+        (concordant + 0.5 * (tied_x + tied_y + tied_xy)) / total_pairs
+    } else {
+        0.0
+    };
+    
+    Python::with_gil(|py| {
+        let dict = PyDict::new(py);
+        dict.set_item("concordant", concordant).unwrap();
+        dict.set_item("discordant", discordant).unwrap();
+        dict.set_item("tied_x", tied_x).unwrap();
+        dict.set_item("tied_y", tied_y).unwrap();
+        dict.set_item("tied_xy", tied_xy).unwrap();
+        dict.set_item("variance", variance).unwrap();
+        dict.set_item("concordance_index", concordance_index).unwrap();
+        dict.set_item("total_pairs", total_pairs).unwrap();
+        dict.set_item("information_matrix", imat).unwrap();
+        if let Some(residuals) = resid {
+            dict.set_item("residuals", residuals).unwrap();
+        }
+        Ok(dict.into())
+    })
+}
+
