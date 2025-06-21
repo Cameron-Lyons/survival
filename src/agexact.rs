@@ -1,12 +1,10 @@
 use itertools::Itertools;
 use std::f64::EPSILON;
 
-/// Helper function to compute combinations and handle risk sets
 fn init_doloop(start: usize, end: usize, k: usize) -> Vec<Vec<usize>> {
     (start..end).combinations(k).collect()
 }
 
-/// Anderson-Gill exact Cox model implementation
 pub fn agexact(
     maxiter: &mut i32,
     nused: &i32,
@@ -34,7 +32,6 @@ pub fn agexact(
     let nvar = *nvar as usize;
     let p = nvar;
 
-    // Split work array into components
     let (cmat, rest) = work.split_at_mut(p * p);
     let (a, rest) = rest.split_at_mut(p);
     let (newbeta, rest) = rest.split_at_mut(p);
@@ -43,7 +40,6 @@ pub fn agexact(
     let index = &mut work2[0..n];
     let atrisk = &mut work2[n..2 * n];
 
-    // Initialize covariate means
     for i in 0..nvar {
         if nocenter[i] == 0 {
             means[i] = 0.0;
@@ -59,7 +55,6 @@ pub fn agexact(
         }
     }
 
-    // Initial score calculation
     for person in 0..n {
         let mut zbeta = 0.0;
         for i in 0..nvar {
@@ -68,7 +63,6 @@ pub fn agexact(
         score[person] = (zbeta + offset[person]).exp();
     }
 
-    // Initial accumulation
     loglik[1] = 0.0;
     u.fill(0.0);
     imat.fill(0.0);
@@ -83,7 +77,6 @@ pub fn agexact(
             let mut nrisk = 0;
             let mut k = person;
 
-            // Determine risk set and deaths
             while k < n {
                 if stop[k] == time {
                     deaths += event[k];
@@ -139,7 +132,6 @@ pub fn agexact(
                 }
             }
 
-            // Update log-likelihood and information matrix
             loglik[1] -= denom.ln();
             for i in 0..nvar {
                 u[i] -= a[i] / denom;
@@ -150,7 +142,6 @@ pub fn agexact(
                 }
             }
 
-            // Process events at this time point
             let mut k = person;
             while k < n && stop[k] == time {
                 if event[k] == 1 {
@@ -185,7 +176,6 @@ pub fn agexact(
         return;
     }
 
-    // Main iteration loop
     let mut iter = 0;
     let mut halving = false;
     let mut newbeta_vec = newbeta.to_vec();
@@ -197,7 +187,6 @@ pub fn agexact(
         u.fill(0.0);
         imat.fill(0.0);
 
-        // Calculate new scores
         for person in 0..n {
             let mut zbeta = 0.0;
             for i in 0..nvar {
@@ -297,7 +286,6 @@ pub fn agexact(
             }
         }
 
-        // Check convergence
         if (1.0 - (loglik[1] / newlk)).abs() <= *eps && !halving {
             loglik[1] = newlk;
             chinv2(imat, p);
@@ -316,7 +304,6 @@ pub fn agexact(
         }
 
         if newlk < loglik[1] {
-            // Step halving
             halving = true;
             for i in 0..nvar {
                 newbeta_vec[i] = (newbeta_vec[i] + beta[i]) / 2.0;
@@ -335,7 +322,6 @@ pub fn agexact(
         }
     }
 
-    // Final updates if max iterations reached
     loglik[1] = newlk;
     chinv2(imat, p);
     for i in 0..p {
@@ -347,7 +333,6 @@ pub fn agexact(
     *flag = 1000;
 }
 
-/// Cholesky decomposition (lower triangular)
 fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
     for i in 0..n {
         for j in i..n {
@@ -372,9 +357,7 @@ fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
     0
 }
 
-/// Solve Ax = b using Cholesky decomposition
 fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
-    // Forward substitution (L y = b)
     for i in 0..n {
         let mut sum = b[i];
         for j in 0..i {
@@ -383,7 +366,6 @@ fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
         b[i] = sum / chol[i * n + i];
     }
 
-    // Backward substitution (L^T x = y)
     for i in (0..n).rev() {
         let mut sum = b[i];
         for j in (i + 1)..n {
@@ -393,9 +375,7 @@ fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
     }
 }
 
-/// Invert Cholesky decomposed matrix
 fn chinv2(chol: &mut [f64], n: usize) {
-    // Invert the Cholesky factor
     for i in 0..n {
         chol[i * n + i] = 1.0 / chol[i * n + i];
         for j in (i + 1)..n {
@@ -407,7 +387,6 @@ fn chinv2(chol: &mut [f64], n: usize) {
         }
     }
 
-    // Compute the full inverse
     for i in 0..n {
         for j in i..n {
             let mut sum = 0.0;

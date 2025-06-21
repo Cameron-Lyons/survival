@@ -1,10 +1,3 @@
-// use extendr_api::prelude::*;
-// #[extendr]
-// fn agfit4(...) -> Robj { /* ... */ }
-// let result = list!(...);
-// extendr_module! { ... }
-
-// Cholesky decomposition and solver implementations
 fn cholesky(mat: &mut [f64], n: usize, tol: f64) -> i32 {
     let mut rank = 0;
     for col in 0..n {
@@ -36,7 +29,6 @@ fn cholesky(mat: &mut [f64], n: usize, tol: f64) -> i32 {
 }
 
 fn chsolve2(mat: &[f64], n: usize, b: &mut [f64]) {
-    // Forward substitution
     for i in 0..n {
         let diag = i * n + i;
         if mat[diag] == 0.0 {
@@ -49,7 +41,6 @@ fn chsolve2(mat: &[f64], n: usize, b: &mut [f64]) {
         }
         b[i] = temp / mat[diag];
     }
-    // Backward substitution
     for i in (0..n).rev() {
         let diag = i * n + i;
         if mat[diag] == 0.0 {

@@ -1,10 +1,3 @@
-// use extendr_api::prelude::*;
-// #[extendr]
-// fn collapse(...) -> Robj { /* ... */ }
-// let result = list!(...);
-// extendr_module! { ... }
-
-#[extendr]
 fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order: &[i32]) -> Robj {
     let n = id.len();
     assert_eq!(y.len(), 3 * n, "y must have 3 columns");
@@ -47,7 +40,6 @@ fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order:
         i += 1;
     }
 
-    // Combine indices into a matrix (column-major order)
     let mut out_data = Vec::with_capacity(i1.len() * 2);
     out_data.extend(i2);
     out_data.extend(i1);
@@ -58,13 +50,9 @@ fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order:
         .unwrap()
 }
 
-// extendr_module! {
-//     mod collapseutils;
-//     fn collapse;
-// }
 
-#[extendr]
-fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order: &[i32]) -> Robj {
+
+#fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order: &[i32]) -> Robj {
     let n = id.len();
     assert_eq!(y.len(), 3 * n, "y must have 3 columns");
     assert_eq!(x.len(), n, "x length mismatch");
@@ -106,7 +94,6 @@ fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order:
         i += 1;
     }
 
-    // Combine indices into a matrix (column-major order)
     let mut out_data = Vec::with_capacity(i1.len() * 2);
     out_data.extend(i2);
     out_data.extend(i1);
@@ -115,9 +102,4 @@ fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order:
         .expect("Failed to create matrix")
         .set_attrib("dimnames", list!(vec!["start", "end"]))
         .unwrap()
-}
-
-extendr_module! {
-    mod collapseutils;
-    fn collapse;
 }
