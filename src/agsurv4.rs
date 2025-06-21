@@ -11,7 +11,7 @@ pub fn agsurv4(ndeath: &[i32], risk: &[f64], wt: &[f64], sn: usize, denom: &[f64
                 j += 1;
             }
             _ => {
-                let mut guess = 0.5;
+                let mut guess: f64 = 0.5;
                 let mut inc = 0.25;
                 let death_count = ndeath[i] as usize;
                 let range = j..(j + death_count);

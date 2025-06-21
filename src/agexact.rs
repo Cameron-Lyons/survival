@@ -118,7 +118,7 @@ pub fn agexact(
                     }
                 }
             } else {
-                let combinations = init_doloop(0, nrisk, deaths);
+                let combinations = init_doloop(0, nrisk, deaths.try_into().unwrap());
                 for indices in combinations {
                     newvar.fill(0.0);
                     let mut weight = 1.0;
@@ -189,10 +189,11 @@ pub fn agexact(
     let mut iter = 0;
     let mut halving = false;
     let mut newbeta_vec = newbeta.to_vec();
+    let mut newlk = 0.0;
 
     while iter < *maxiter {
         iter += 1;
-        let mut newlk = 0.0;
+        newlk = 0.0;
         u.fill(0.0);
         imat.fill(0.0);
 
@@ -248,7 +249,7 @@ pub fn agexact(
                         }
                     }
                 } else {
-                    let combinations = init_doloop(0, nrisk, deaths);
+                    let combinations = init_doloop(0, nrisk, deaths.try_into().unwrap());
                     for indices in combinations {
                         newvar.fill(0.0);
                         let mut weight = 1.0;

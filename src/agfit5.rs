@@ -139,13 +139,13 @@ fn agfit5a(
     mut means: Vec<f64>,
     mut beta: Vec<f64>,
     u: Vec<f64>,
-    loglik: &mut f64,
+    loglik: f64,
     method: i32,
     ptype: i32,
     pdiag: i32,
     nfrail: i32,
     frail2: Vec<i32>,
-    docenter: Vec<bool>,
+    docenter: Vec<i32>,
 ) -> Robj {
     let nused = nused as usize;
     let nvar = nvar as usize;
@@ -157,13 +157,13 @@ fn agfit5a(
     );
 
     // Compute initial log-likelihood
-    *loglik = 0.0;
+    let mut loglik = 0.0;
     for person in 0..nused {
         let mut zbeta = state.offset[person];
         for i in 0..nvar {
             zbeta += beta[i] * state.covar[i][person];
         }
-        *loglik += state.weights[person] * zbeta;
+        loglik += state.weights[person] * zbeta;
     }
 
     // Return state as external pointer
@@ -173,7 +173,7 @@ fn agfit5a(
 
 #[extendr]
 fn agfit5b(
-    state: ExternalPtr<CoxState>,
+    state_ptr: ExternalPtr<CoxState>,
     maxiter: i32,
     eps: f64,
     tolerch: f64,
@@ -186,7 +186,7 @@ fn agfit5b(
     mut fbeta: Vec<f64>,
     mut fdiag: Vec<f64>,
 ) -> Robj {
-    let mut state = state.0;
+    let state = state_ptr.as_mut().expect("Null pointer in ExternalPtr");
     let nvar = beta.len();
     let nfrail = fbeta.len();
 

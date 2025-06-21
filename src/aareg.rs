@@ -7,7 +7,6 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
 
-/// Options for the Aalen's additive regression model.
 #[pyclass]
 #[derive(Clone)]
 struct AaregOptions {
@@ -188,7 +187,7 @@ fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
     // Convert data to Array2<f64>
     let data_array = Array2::from_shape_vec(
         (options.data.len(), options.data[0].len()),
-        options.data.into_iter().flatten().collect(),
+        options.data.clone().into_iter().flatten().collect(),
     )
     .map_err(|e| AaregError::DataError(e.to_string()))?;
 
@@ -415,7 +414,7 @@ fn post_process_results(
 
 /// Python module definition
 #[pymodule]
-fn py_aareg(_py: Python, m: &PyModule) -> PyResult<()> {
+fn py_aareg(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AaregOptions>()?;
     m.add_class::<AaregResult>()?;
     m.add_class::<ConfidenceInterval>()?;

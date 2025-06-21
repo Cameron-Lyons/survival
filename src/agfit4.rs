@@ -15,7 +15,7 @@ fn agfit4(
     maxiter: i32,
     eps: f64,
     tolerance: f64,
-    doscale: Vec<bool>,
+    doscale: Vec<i32>,
 ) -> Robj {
     let nused = nused as usize;
     let nvar = ibeta.len();
@@ -39,7 +39,7 @@ fn agfit4(
     let mut covar_ptrs = vec![vec![0.0; nr]; nvar];
 
     for i in 0..nvar {
-        if !doscale[i] {
+        if doscale[i] == 0 {
             continue;
         }
 
@@ -139,14 +139,15 @@ fn agfit4(
     }
 
     // Prepare output list
-    let mut result = List::new(nvar + 7);
-    result.push(("coef", beta));
-    result.push(("u", u));
-    result.push(("imat", imat));
-    result.push(("loglik", loglik));
-    result.push(("sctest", sctest));
-    result.push(("flag", flag));
-    result.push(("iter", iter));
+    let result = list!(
+        coef = beta,
+        u = u,
+        imat = imat,
+        loglik = loglik,
+        sctest = sctest,
+        flag = flag,
+        iter = iter
+    );
     result.into()
 }
 
