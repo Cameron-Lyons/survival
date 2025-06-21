@@ -14,7 +14,6 @@ pub fn c_decomp(r: &[f64], time: f64) -> Decomposition {
     let mut ainv = vec![0.0; nc * nc];
     let mut p = vec![0.0; nc * nc];
 
-    // Compute eigenvectors (matrix A) and eigenvalues (vector d)
     for i in 0..nc {
         let diag_idx = i * nc + i;
         d[i] = r[diag_idx];
@@ -29,7 +28,6 @@ pub fn c_decomp(r: &[f64], time: f64) -> Decomposition {
         }
     }
 
-    // Compute inverse of A (ainv)
     for i in 0..nc {
         let diag_idx = i * nc + i;
         ainv[diag_idx] = 1.0;
@@ -43,7 +41,6 @@ pub fn c_decomp(r: &[f64], time: f64) -> Decomposition {
         }
     }
 
-    // Compute matrix P = A * diag(exp(time*d)) * ainv
     let ediag: Vec<f64> = d.iter().map(|&val| (time * val).exp()).collect();
 
     for i in 0..nc {

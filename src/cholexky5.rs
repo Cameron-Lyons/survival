@@ -16,7 +16,6 @@ fn cholesky5(matrix: &mut [&mut [f64]], n: usize, toler: f64) -> i32 {
 
     let mut rank = 0;
 
-    // Main Cholesky decomposition loop
     for i in 0..n {
         let pivot = matrix[i][i];
 
@@ -42,7 +41,6 @@ fn cholesky5(matrix: &mut [&mut [f64]], n: usize, toler: f64) -> i32 {
 }
 
 fn chinv5(matrix: &mut [&mut [f64]], n: usize, flag: i32) {
-    // Invert the Cholesky decomposition in the lower triangle
     for i in 0..n {
         if matrix[i][i] != 0.0 {
             matrix[i][i] = 1.0 / matrix[i][i];
@@ -64,7 +62,6 @@ fn chinv5(matrix: &mut [&mut [f64]], n: usize, flag: i32) {
         return;
     }
 
-    // Compute full inverse matrix in upper triangle
     for i in 0..n {
         if matrix[i][i] == 0.0 {
             for j in 0..i {

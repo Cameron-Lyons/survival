@@ -24,7 +24,6 @@ pub fn coxscho(
     let stop = &y[nused..2 * nused];
     let event = &y[2 * nused..3 * nused];
 
-    // Split covar into columns (column-major order)
     let mut covar_cols = Vec::with_capacity(nvar);
     let mut remaining = covar;
     for _ in 0..nvar {
@@ -33,7 +32,6 @@ pub fn coxscho(
         remaining = rest;
     }
 
-    // Split work into a, a2, mean
     let (a, rest) = work.split_at_mut(nvar);
     let (a2, mean) = rest.split_at_mut(nvar);
 
@@ -49,13 +47,11 @@ pub fn coxscho(
         let mut denom = 0.0;
         let mut efron_wt = 0.0;
 
-        // Initialize a and a2 to zero
         for i in 0..nvar {
             a[i] = 0.0;
             a2[i] = 0.0;
         }
 
-        // Compute denominator, a, a2, deaths, and efron_wt
         let mut k = person;
         while k < nused {
             if start[k] < time {
@@ -80,7 +76,6 @@ pub fn coxscho(
             k += 1;
         }
 
-        // Compute mean
         for i in 0..nvar {
             mean[i] = 0.0;
         }
@@ -100,7 +95,6 @@ pub fn coxscho(
             }
         }
 
-        // Update residuals for each death at this time
         let mut k = person;
         while k < nused && stop[k] == time {
             if event[k] == 1.0 {

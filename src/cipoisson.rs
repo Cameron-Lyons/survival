@@ -1,5 +1,3 @@
-// Confidence limits for the Poisson
-
 use pyo3::prelude::*;
 use statrs::distribution::{Gamma, Normal, Univariate};
 
@@ -42,7 +40,6 @@ fn cipoisson_anscombe(k: u32, time: f64, p: f64) -> Result<(f64, f64), &'static 
     let lower_bound = transformed_k - z * (variance.sqrt());
     let upper_bound = transformed_k + z * (variance.sqrt());
 
-    // Re-transforming the bounds back to the Poisson scale
     let lower_bound_poisson = (lower_bound.powi(2) - 3.0 / 8.0).max(0.0) / time;
     let upper_bound_poisson = (upper_bound.powi(2) - 3.0 / 8.0) / time;
 

@@ -8,6 +8,7 @@ This package provides:
 - Kaplan-Meier and Aalen-Johansen (multi-state) curves
 - Cox models
 - Parametric accelerated failure time models
+- Penalized splines (P-splines) for smooth covariate effects
 
 ## Installation
 
@@ -61,7 +62,36 @@ options = AaregOptions(
 )
 result = aareg(options)
 print(result)
+
+# Example: Penalized spline (P-spline) usage
+from survival import PSpline
+
+x = [0.1 * i for i in range(100)]
+pspline = PSpline(
+    x=x,
+    df=10,
+    theta=1.0,
+    eps=1e-6,
+    method="GCV",  # or "UBRE"
+    boundary_knots=(0.0, 10.0),
+    intercept=True,
+    penalty=True,
+)
+pspline.fit()
 ```
+
+## PSpline: Penalized Splines
+The `PSpline` class provides penalized spline (P-spline) smoothing for modeling smooth covariate effects. Key options:
+- `x`: Covariate vector (list of floats)
+- `df`: Degrees of freedom (integer)
+- `theta`: Roughness penalty (float)
+- `eps`: Accuracy for degrees of freedom (float)
+- `method`: Penalty method for tuning parameter selection. Supported: `"GCV"`, `"UBRE"`. Any other value will result in an error.
+- `boundary_knots`: Tuple of (min, max) for the spline basis
+- `intercept`: Whether to include an intercept in the basis
+- `penalty`: Whether to apply the penalty
+
+**Note:** Only "GCV" and "UBRE" are currently supported for the penalty method. Using any other value will result in a runtime error.
 
 ## Development
 - To build the Rust library for Python, use `maturin build` or `maturin develop`.

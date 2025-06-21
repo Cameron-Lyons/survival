@@ -65,7 +65,6 @@ impl CoxFit5 {
         self.ptype = params.ptype;
         self.pdiag = params.pdiag;
 
-        // Initialize arrays
         if nvar > 0 {
             self.covar = vec![vec![0.0; nused]; nvar];
             self.cmat = vec![vec![0.0; nvar + 1]; nvar2];
@@ -83,7 +82,6 @@ impl CoxFit5 {
         self.sort = data.sorted.clone();
         self.ttime = data.y.chunks_exact(2).map(|c| c[0]).collect();
 
-        // Calculate mark and wtave
         let mut istrat = 0;
         for i in 0..nused {
             let p = self.sort[i] as usize;
@@ -107,7 +105,6 @@ impl CoxFit5 {
             }
         }
 
-        // Center covariates
         let mut means = vec![0.0; nvar];
         for i in 0..nvar {
             if data.docenter[i] != 0 {
@@ -119,7 +116,6 @@ impl CoxFit5 {
             }
         }
 
-        // Initial log-likelihood calculation
         let mut loglik = 0.0;
         let mut u = vec![0.0; nvar];
         let mut denom = 0.0;
@@ -171,24 +167,165 @@ impl CoxFit5 {
             expect: vec![0.0; nused],
         }
     }
-
     pub fn coxfit5_b(&mut self, params: &mut CoxParams, data: &CoxData) -> CoxResult {
         let nvar = data.nvar;
         let nf = params.nfrail;
         let nvar2 = nvar + nf;
         let mut result = CoxResult::new(nvar, nf, nvar2, data.nused);
+        let mut oldbeta = vec![0.0; nvar2];
+        let mut newbeta = vec![0.0; nvar2];
+        let mut u = vec![0.0; nvar2];
+        let mut imat = vec![vec![0.0; nvar2]; nvar2];
+        let mut cholesky = vec![vec![0.0; nvar2]; nvar2];
+        let mut work = vec![0.0; nvar2];
+        let mut loglik = 0.0;
+
+        for i in 0..nvar {
+            newbeta[i] = params.beta[i];
+        }
+        for i in 0..nf {
+            newbeta[nvar + i] = params.fbeta[i];
+        }
 
         for iter in 0..params.maxiter {
-            // Main iteration loop
-            // (Implement Newton-Raphson iteration with Cholesky decomposition)
+            loglik = 0.0;
+            
+            u.fill(0.0);
+            for row in &mut imat {
+                row.fill(0.0);
+            }
 
-            // Convergence check
-            if (result.loglik - result.loglik).abs() < params.eps {
+            let mut istrat = 0;
+            let mut denom = 0.0;
+            let mut efron_wt = 0.0;
+            let mut risk_sum = vec![0.0; nvar2];
+            let mut risk_sum2 = vec![vec![0.0; nvar2]; nvar2];
+
+            for ii in 0..data.nused {
+                if ii == data.strata[istrat] as usize {
+                    denom = 0.0;
+                    efron_wt = 0.0;
+                    risk_sum.fill(0.0);
+                    for row in &mut risk_sum2 {
+                        row.fill(0.0);
+                    }
+                    istrat += 1;
+                }
+
+                let p = self.sort[ii] as usize;
+                let mut zbeta = self.offset[p];
+                
+                for i in 0..nvar {
+                    zbeta += newbeta[i] * self.covar[i][p];
+                }
+                for i in 0..nf {
+                    zbeta += newbeta[nvar + i] * data.fmat[i][p];
+                }
+                zbeta = coxsafe(zbeta);
+                let risk = zbeta.exp() * self.weights[p];
+                denom += risk;
+
+                for i in 0..nvar {
+                    risk_sum[i] += risk * self.covar[i][p];
+                }
+                for i in 0..nf {
+                    risk_sum[nvar + i] += risk * data.fmat[i][p];
+                }
+
+                for i in 0..nvar2 {
+                    for j in 0..nvar2 {
+                        let x_i = if i < nvar { self.covar[i][p] } else { data.fmat[i - nvar][p] };
+                        let x_j = if j < nvar { self.covar[j][p] } else { data.fmat[j - nvar][p] };
+                        risk_sum2[i][j] += risk * x_i * x_j;
+                    }
+                }
+
+                if self.status[p] == 1 {
+                    efron_wt += risk;
+                    loglik += self.weights[p] * zbeta;
+                }
+
+                if self.mark[p] > 0.0 {
+                    let ndead = self.mark[p] as usize;
+                    for k in 0..ndead {
+                        let temp = k as f64 * params.method / ndead as f64;
+                        let d2 = denom - temp * efron_wt;
+                        loglik -= self.wtave[p] * d2.ln();
+
+                        let wt = self.wtave[p] / d2;
+                        for i in 0..nvar2 {
+                            let x_i = if i < nvar { self.covar[i][p] } else { data.fmat[i - nvar][p] };
+                            u[i] += wt * (risk_sum[i] - temp * efron_wt * x_i);
+                        }
+
+                        for i in 0..nvar2 {
+                            for j in 0..nvar2 {
+                                let x_i = if i < nvar { self.covar[i][p] } else { data.fmat[i - nvar][p] };
+                                let x_j = if j < nvar { self.covar[j][p] } else { data.fmat[j - nvar][p] };
+                                imat[i][j] += wt * (risk_sum2[i][j] - temp * efron_wt * x_i * x_j);
+                            }
+                        }
+                    }
+                    efron_wt = 0.0;
+                }
+            }
+
+            if nf > 0 {
+                for i in 0..nf {
+                    u[nvar + i] -= newbeta[nvar + i] / params.fdiag[i];
+                    imat[nvar + i][nvar + i] += 1.0 / params.fdiag[i];
+                    loglik -= 0.5 * newbeta[nvar + i] * newbeta[nvar + i] / params.fdiag[i];
+                }
+            }
+
+            oldbeta.copy_from_slice(&newbeta);
+            
+            cholesky.copy_from_slice(&imat);
+            if cholesky_decompose(&mut cholesky, nvar2) != 0 {
+                result.flag = 1000;
+                return result;
+            }
+            
+            work.copy_from_slice(&u);
+            if cholesky_solve(&cholesky, &mut work, nvar2) != 0 {
+                result.flag = 1000;
+                return result;
+            }
+
+            for i in 0..nvar2 {
+                newbeta[i] += work[i];
+            }
+
+            let mut max_change = 0.0;
+            for i in 0..nvar2 {
+                let change = (newbeta[i] - oldbeta[i]).abs();
+                if change > max_change {
+                    max_change = change;
+                }
+            }
+
+            if max_change < params.eps {
                 result.flag = 0;
-                result.maxiter = iter;
+                result.maxiter = iter + 1;
+                result.loglik = loglik;
+                result.beta = newbeta[..nvar].to_vec();
+                result.fbeta = newbeta[nvar..].to_vec();
+                result.u = u[..nvar].to_vec();
+                result.imat = imat[..nvar].iter().map(|row| row[..nvar].to_vec()).collect();
+                result.fdiag = params.fdiag.clone();
                 return result;
             }
         }
+
+        result.flag = 1000;
+        result.maxiter = params.maxiter;
+        result.loglik = loglik;
+        result.beta = newbeta[..nvar].to_vec();
+        result.fbeta = newbeta[nvar..].to_vec();
+        result.u = u[..nvar].to_vec();
+        result.imat = imat[..nvar].iter().map(|row| row[..nvar].to_vec()).collect();
+        result.fdiag = params.fdiag.clone();
+        result
 
         result.flag = 1000;
         result
@@ -223,7 +360,6 @@ impl CoxFit5 {
     }
 }
 
-// Helper implementations
 impl CoxResult {
     fn new(nvar: usize, nf: usize, nvar2: usize, nused: usize) -> Self {
         CoxResult {
@@ -242,7 +378,6 @@ impl CoxResult {
     }
 }
 
-// Matrix operations
 fn cholesky(mat: &mut [Vec<f64>], tolerch: f64) -> i32 {
     let n = mat.len();
     for i in 0..n {
@@ -266,7 +401,6 @@ fn cholesky(mat: &mut [Vec<f64>], tolerch: f64) -> i32 {
 
 fn cholesky_solve(mat: &[Vec<f64>], b: &mut [f64]) {
     let n = mat.len();
-    // Forward substitution
     for i in 0..n {
         let mut sum = b[i];
         for j in 0..i {
@@ -274,7 +408,6 @@ fn cholesky_solve(mat: &[Vec<f64>], b: &mut [f64]) {
         }
         b[i] = sum / mat[i][i];
     }
-    // Backward substitution
     for i in (0..n).rev() {
         let mut sum = b[i];
         for j in (i + 1)..n {

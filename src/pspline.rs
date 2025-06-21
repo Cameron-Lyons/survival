@@ -1,4 +1,3 @@
-// Smoothing splines using a pspline basis
 use pyo3::prelude::*;
 
 #[pyclass]

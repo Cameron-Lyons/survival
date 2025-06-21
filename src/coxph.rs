@@ -1,5 +1,3 @@
-//Fit Proportional Hazards Regression Model
-
 use ndarray::Array2;
 use pyo3::prelude::*;
 

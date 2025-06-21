@@ -1,7 +1,5 @@
-use extendr_api::prelude::*;
 use std::cmp::Ordering;
 
-#[extendr]
 fn agmart3(
     nused: i32,
     surv: Vec<f64>,
@@ -100,7 +98,6 @@ fn agmart3(
             }
 
             if event[p2] > 0.0 {
-                // Event case
                 atrisk[p2] = true;
                 resid[p2] = 1.0 + cumhaz * score[p2];
                 deaths += 1;
@@ -108,7 +105,6 @@ fn agmart3(
                 e_denom += score[p2] * weight[p2];
                 wtsum += weight[p2];
             } else if tstart[p2] < dtime {
-                // At risk but no event
                 atrisk[p2] = true;
                 denom += score[p2] * weight[p2];
                 resid[p2] = cumhaz * score[p2];
@@ -119,10 +115,8 @@ fn agmart3(
         let hazard = if deaths == 0 {
             0.0
         } else if method == 0 || deaths == 1 {
-            // Breslow method
             wtsum / denom
         } else {
-            // Efron method
             let wtsum_norm = wtsum / deaths as f64;
             let mut hazard_total = 0.0;
             let mut e_hazard_total = 0.0;
@@ -134,7 +128,6 @@ fn agmart3(
                 e_hazard_total += wtsum_norm * (1.0 - temp) / denominator;
             }
 
-            // Adjust residuals for tied deaths
             let temp = hazard_total - e_hazard_total;
             for p2 in sort2[person2..k].iter().filter(|&&p| event[p] > 0.0) {
                 resid[*p] += temp * score[*p];
@@ -147,7 +140,6 @@ fn agmart3(
         person2 = k;
     }
 
-    // Finalize remaining subjects
     while person1 < nused {
         let p1 = sort1[person1];
         if atrisk[p1] {

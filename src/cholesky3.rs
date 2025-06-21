@@ -46,7 +46,6 @@ fn cholesky3(matrix: &mut [&mut [f64]], n: usize, m: usize, diag: &[f64], toler:
         }
     }
 
-    // Process the dense portion (remaining columns)
     for i in 0..n2 {
         let pivot = matrix[i][i + m];
         if !pivot.is_finite() || pivot < eps {

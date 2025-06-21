@@ -1,4 +1,3 @@
-// Bounded link functions
 use pyo3::prelude::*;
 
 #[pyclass]

@@ -1,10 +1,3 @@
-/// Performs Cholesky inversion for matrices with diagonal upper portion and dense lower portion
-///
-/// # Arguments
-/// * `matrix` - Mutable slice representing the dense lower portion (n-m rows x n columns)
-/// * `n` - Total matrix dimension
-/// * `m` - Size of diagonal upper portion
-/// * `fdiag` - Mutable slice containing diagonal elements of upper portion
 pub fn chinv3(matrix: &mut [f64], n: usize, m: usize, fdiag: &mut [f64]) {
     let n2 = n - m;
     assert_eq!(
@@ -14,18 +7,15 @@ pub fn chinv3(matrix: &mut [f64], n: usize, m: usize, fdiag: &mut [f64]) {
     );
     assert_eq!(fdiag.len(), m, "fdiag must contain m elements");
 
-    // Invert diagonal upper portion
     for i in 0..m {
         if fdiag[i] > 0.0 {
             fdiag[i] = 1.0 / fdiag[i];
-            // Negate corresponding column in dense portion
             for row in 0..n2 {
                 matrix[row * n + i] = -matrix[row * n + i];
             }
         }
     }
 
-    // Invert dense lower portion
     for i in 0..n2 {
         let original_row = i + m;
         let diag_idx = i * n + original_row;
@@ -47,7 +37,6 @@ pub fn chinv3(matrix: &mut [f64], n: usize, m: usize, fdiag: &mut [f64]) {
     }
 }
 
-/// Computes matrix product for the specialized Cholesky inversion
 pub fn chprod3(matrix: &mut [f64], n: usize, m: usize, fdiag: &[f64]) {
     let n2 = n - m;
     assert_eq!(
@@ -62,7 +51,6 @@ pub fn chprod3(matrix: &mut [f64], n: usize, m: usize, fdiag: &[f64]) {
         let diag_idx = i * n + original_row;
 
         if matrix[diag_idx] == 0.0 {
-            // Handle singular row
             for j in 0..i {
                 matrix[j * n + original_row] = 0.0;
             }

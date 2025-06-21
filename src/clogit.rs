@@ -1,4 +1,3 @@
-// Conditional logistic regression
 use pyo3::prelude::*;
 
 #[pyclass]

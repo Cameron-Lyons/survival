@@ -1,16 +1,6 @@
-/// Performs matrix inversion using a Cholesky decomposition
-///
-/// # Arguments
-/// * `matrix` - A mutable slice representing an n x n matrix in row-major order.
-///               Must contain the Cholesky decomposition in its lower triangle.
-/// * `n` - The dimension of the square matrix.
-///
-/// # Panics
-/// Panics if the matrix length doesn't match n x n.
 pub fn chinv2(matrix: &mut [f64], n: usize) {
     assert_eq!(matrix.len(), n * n, "Matrix must be of size n x n");
 
-    // Invert the Cholesky decomposition in the lower triangle
     for i in 0..n {
         let diag_idx = i * n + i;
         if matrix[diag_idx] > 0.0 {
@@ -29,7 +19,6 @@ pub fn chinv2(matrix: &mut [f64], n: usize) {
         }
     }
 
-    // Compute F'DF to get inverse of original matrix
     for i in 0..n {
         let diag_idx = i * n + i;
 
@@ -46,10 +35,8 @@ pub fn chinv2(matrix: &mut [f64], n: usize) {
                 let j_j = j * n + j;
                 let temp = matrix[j_i] * matrix[j_j];
 
-                // Store in upper triangle
                 matrix[i * n + j] = temp;
 
-                // Update row i
                 for k in i..j {
                     let i_k = i * n + k;
                     let j_k = j * n + k;

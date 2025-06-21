@@ -15,7 +15,6 @@ pub fn agmart(
         local_strata[nused - 1] = 1; // Failsafe like original C code
     }
 
-    // Initialize residuals with event indicators
     for i in 0..nused {
         resid[i] = event[i] as f64;
     }
@@ -33,7 +32,6 @@ pub fn agmart(
         let mut deaths = 0;
         let mut wtsum = 0.0;
 
-        // First pass: calculate denominators and counts
         let mut k = person;
         while k < nused {
             if start[k] < time {
@@ -50,7 +48,6 @@ pub fn agmart(
             k += 1;
         }
 
-        // Calculate hazards
         let (hazard, e_hazard) = if deaths == 0 {
             (0.0, 0.0)
         } else {
@@ -68,7 +65,6 @@ pub fn agmart(
             (hazard_total, e_hazard_total)
         };
 
-        // Second pass: update residuals and advance person counter
         let initial_person = person;
         let mut k = initial_person;
         while k < nused {
