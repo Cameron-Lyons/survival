@@ -414,12 +414,12 @@ fn post_process_results(
 
 /// Python module definition
 #[pymodule]
-fn py_aareg(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AaregOptions>()?;
     m.add_class::<AaregResult>()?;
     m.add_class::<ConfidenceInterval>()?;
     m.add_class::<FitDetails>()?;
     m.add_class::<Diagnostics>()?;
-    m.add_function(wrap_pyfunction!(aareg, m)?)?;
+    m.add_function(wrap_pyfunction!(aareg, &m)?)?;
     Ok(())
 }

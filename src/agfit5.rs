@@ -1,4 +1,4 @@
-use extendr_api::prelude::*;
+// use extendr_api::prelude::*;
 use std::f64::{EPSILON, INFINITY};
 
 struct CoxState {
@@ -126,105 +126,105 @@ impl CoxState {
     }
 }
 
-#[extendr]
-fn agfit5a(
-    nused: i32,
-    nvar: i32,
-    yy: Vec<f64>,
-    covar2: Vec<f64>,
-    offset2: Vec<f64>,
-    weights2: Vec<f64>,
-    strata: Vec<i32>,
-    sort: Vec<i32>,
-    mut means: Vec<f64>,
-    mut beta: Vec<f64>,
-    u: Vec<f64>,
-    loglik: f64,
-    method: i32,
-    ptype: i32,
-    pdiag: i32,
-    nfrail: i32,
-    frail2: Vec<i32>,
-    docenter: Vec<i32>,
-) -> Robj {
-    let nused = nused as usize;
-    let nvar = nvar as usize;
-    let nfrail = nfrail as usize;
+// #[extendr]
+// fn agfit5a(
+//     nused: i32,
+//     nvar: i32,
+//     yy: Vec<f64>,
+//     covar2: Vec<f64>,
+//     offset2: Vec<f64>,
+//     weights2: Vec<f64>,
+//     strata: Vec<i32>,
+//     sort: Vec<i32>,
+//     mut means: Vec<f64>,
+//     mut beta: Vec<f64>,
+//     u: Vec<f64>,
+//     loglik: f64,
+//     method: i32,
+//     ptype: i32,
+//     pdiag: i32,
+//     nfrail: i32,
+//     frail2: Vec<i32>,
+//     docenter: Vec<i32>,
+// ) -> Robj {
+//     let nused = nused as usize;
+//     let nvar = nvar as usize;
+//     let nfrail = nfrail as usize;
+//
+//     let state = CoxState::new(
+//         nused, nvar, nfrail, &yy, &covar2, &offset2, &weights2, &strata, &sort, ptype, pdiag,
+//         &frail2,
+//     );
+//
+//     // Compute initial log-likelihood
+//     let mut loglik = 0.0;
+//     for person in 0..nused {
+//         let mut zbeta = state.offset[person];
+//         for i in 0..nvar {
+//             zbeta += beta[i] * state.covar[i][person];
+//         }
+//         loglik += state.weights[person] * zbeta;
+//     }
+//
+//     // Return state as external pointer
+//     let external_ptr = ExternalPtr::new(state);
+//     external_ptr.into()
+// }
 
-    let state = CoxState::new(
-        nused, nvar, nfrail, &yy, &covar2, &offset2, &weights2, &strata, &sort, ptype, pdiag,
-        &frail2,
-    );
+// #[extendr]
+// fn agfit5b(
+//     mut state_ptr: ExternalPtr<CoxState>,
+//     maxiter: i32,
+//     eps: f64,
+//     tolerch: f64,
+//     method: i32,
+//     mut beta: Vec<f64>,
+//     mut u: Vec<f64>,
+//     mut imat: Vec<f64>,
+//     mut loglik: f64,
+//     mut flag: i32,
+//     mut fbeta: Vec<f64>,
+//     mut fdiag: Vec<f64>,
+// ) -> Robj {
+//     let state = state_ptr.as_mut();
+//     let nvar = beta.len();
+//     let nfrail = fbeta.len();
+//
+//     for iter in 0..maxiter {
+//         state.update(&mut beta, &mut u, &mut imat, &mut loglik);
+//
+//         // Check convergence
+//         if (state
+//             .oldbeta
+//             .iter()
+//             .zip(&beta)
+//             .all(|(a, b)| (a - b).abs() < eps))
+//         {
+//             flag = 0;
+//             break;
+//         }
+//     }
+//
+//     list!(
+//         beta = beta,
+//         u = u,
+//         imat = imat,
+//         loglik = loglik,
+//         flag = flag,
+//         fbeta = fbeta,
+//         fdiag = fdiag
+//     )
+//     .into()
+// }
 
-    // Compute initial log-likelihood
-    let mut loglik = 0.0;
-    for person in 0..nused {
-        let mut zbeta = state.offset[person];
-        for i in 0..nvar {
-            zbeta += beta[i] * state.covar[i][person];
-        }
-        loglik += state.weights[person] * zbeta;
-    }
+// #[extendr]
+// fn agfit5c(state: ExternalPtr<CoxState>) {
+//     // Rust's drop mechanism will automatically clean up the state
+// }
 
-    // Return state as external pointer
-    let external_ptr = ExternalPtr::new(state);
-    external_ptr.into()
-}
-
-#[extendr]
-fn agfit5b(
-    state_ptr: ExternalPtr<CoxState>,
-    maxiter: i32,
-    eps: f64,
-    tolerch: f64,
-    method: i32,
-    mut beta: Vec<f64>,
-    mut u: Vec<f64>,
-    mut imat: Vec<f64>,
-    mut loglik: f64,
-    mut flag: i32,
-    mut fbeta: Vec<f64>,
-    mut fdiag: Vec<f64>,
-) -> Robj {
-    let state = state_ptr.as_mut().expect("Null pointer in ExternalPtr");
-    let nvar = beta.len();
-    let nfrail = fbeta.len();
-
-    for iter in 0..maxiter {
-        state.update(&mut beta, &mut u, &mut imat, &mut loglik);
-
-        // Check convergence
-        if (state
-            .oldbeta
-            .iter()
-            .zip(&beta)
-            .all(|(a, b)| (a - b).abs() < eps))
-        {
-            flag = 0;
-            break;
-        }
-    }
-
-    list!(
-        beta = beta,
-        u = u,
-        imat = imat,
-        loglik = loglik,
-        flag = flag,
-        fbeta = fbeta,
-        fdiag = fdiag
-    )
-    .into()
-}
-
-#[extendr]
-fn agfit5c(state: ExternalPtr<CoxState>) {
-    // Rust's drop mechanism will automatically clean up the state
-}
-
-extendr_module! {
-    mod coxph;
-    fn agfit5a;
-    fn agfit5b;
-    fn agfit5c;
-}
+// extendr_module! {
+//     mod coxph5;
+//     fn agfit5a;
+//     fn agfit5b;
+//     fn agfit5c;
+// }
