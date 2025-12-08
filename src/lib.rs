@@ -1,33 +1,51 @@
 use pyo3::prelude::*;
 
-mod aareg;
-mod agexact;
-mod agfit4;
-mod agfit5;
-mod agmart;
-mod agscore2;
-mod agscore3;
-mod agsurv4;
-mod agsurv5;
-mod cdecomp;
-mod chinv2;
-mod concordance1;
-mod concordance3;
-mod concordance5;
-mod pspline;
-mod pyears3b;
-mod pystep;
+mod regression {
+    pub mod aareg;
+    pub mod agfit4;
+    pub mod agfit5;
+}
 
-use aareg::{AaregOptions, aareg as aareg_function};
-use agfit5::perform_cox_regression_frailty;
-use agscore2::perform_score_calculation;
-use agscore3::perform_agscore3_calculation;
-use concordance1::perform_concordance1_calculation;
-use concordance3::perform_concordance3_calculation;
-use concordance5::perform_concordance_calculation;
-use pspline::PSpline;
-use pyears3b::perform_pyears_calculation;
-use pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
+mod surv_analysis {
+    pub mod agsurv4;
+    pub mod agsurv5;
+}
+
+mod concordance {
+    pub mod concordance1;
+    pub mod concordance3;
+    pub mod concordance5;
+}
+
+mod matrix {
+    pub mod cdecomp;
+    pub mod chinv2;
+}
+
+mod scoring {
+    pub mod agscore2;
+    pub mod agscore3;
+}
+
+mod python {
+    pub mod pyears3b;
+    pub mod pystep;
+}
+
+mod core {
+    pub mod pspline;
+}
+
+use concordance::concordance1::perform_concordance1_calculation;
+use concordance::concordance3::perform_concordance3_calculation;
+use concordance::concordance5::perform_concordance_calculation;
+use core::pspline::PSpline;
+use python::pyears3b::perform_pyears_calculation;
+use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
+use regression::aareg::{AaregOptions, aareg as aareg_function};
+use regression::agfit5::perform_cox_regression_frailty;
+use scoring::agscore2::perform_score_calculation;
+use scoring::agscore3::perform_agscore3_calculation;
 
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
