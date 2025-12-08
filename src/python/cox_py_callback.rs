@@ -1,45 +1,50 @@
 #![allow(dead_code)]
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 
 pub fn cox_callback(
-    _which: i32,
-    _coef: &mut [f64],
-    _first: &mut [f64],
-    _second: &mut [f64],
-    _penalty: &mut [f64],
-    _flag: &mut [i32],
-    _fexpr: &PyAny,
+    which: i32,
+    coef: &mut [f64],
+    first: &mut [f64],
+    second: &mut [f64],
+    penalty: &mut [f64],
+    flag: &mut [i32],
+    fexpr: &PyAny,
 ) -> PyResult<()> {
-    // TODO: Fix PyO3 0.27 API compatibility - this function is currently not used
-    // The issue is calling a Python callable from &PyAny in PyO3 0.27
-    // Possible solutions:
-    // 1. Change function signature to accept Bound<PyAny> or PyObject
-    // 2. Use proper PyO3 0.27 API for calling callables
-    Python::attach(|_py| {
-        /* Temporarily disabled - needs PyO3 0.27 API fix
+    Python::attach(|py| {
+        // Convert &PyAny to Bound<PyAny> for PyO3 0.27 API
+        // Use Py::from_borrowed_ptr with raw pointer from PyNativeType
+        let bound_fexpr = unsafe { 
+            Py::from_borrowed_ptr(py, fexpr as *const _ as *mut _)
+        }.into_bound(py);
+
+        // Create coefficient list using PyO3 0.27 API
         let coef_vec: Vec<f64> = coef.iter().copied().collect();
-        let coef_list = PyList::new(py, &coef_vec);
+        let coef_list = PyList::new(py, &coef_vec)?;
+
+        // Create kwargs dictionary using PyO3 0.27 API
         let kwargs = PyDict::new(py);
         kwargs.set_item("which", which)?;
 
-        // Call the Python function - use unsafe conversion (PyO3 0.27 compatibility)
-        let py_obj = unsafe { PyObject::from_borrowed_ptr(py, fexpr.as_ptr()) };
-        let result = py_obj.call(py, (coef_list,), Some(kwargs))?;
-        let dict = result.downcast::<PyDict>()?;
+        // Call the Python callable using PyO3 0.27 Bound API with positional args and kwargs
+        let result = bound_fexpr.call((coef_list.as_any(),), Some(&kwargs))?;
+        
+        // Downcast result to PyDict using PyO3 0.27 API (cast instead of downcast)
+        let dict = result.cast::<PyDict>()?;
 
         macro_rules! extract_values {
             ($key:expr, $rust_slice:expr, $pytype:ty) => {
-                let py_values = dict
+                let item = dict
                     .get_item($key)?
                     .ok_or_else(|| {
                         PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
                             "Missing key: {}",
                             $key
                         ))
-                    })?
-                    .downcast::<PyList>()?;
+                    })?;
+                let py_values = item.cast::<PyList>()?;
 
-                if py_values.len()? != $rust_slice.len() {
+                if py_values.len() != $rust_slice.len() {
                     return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                         "Invalid length for {}",
                         $key
@@ -57,25 +62,23 @@ pub fn cox_callback(
         extract_values!("second", second, f64);
         extract_values!("penalty", penalty, f64);
 
-        let py_flags = dict
+        let flag_item = dict
             .get_item("flag")?
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyKeyError, _>("Missing key: flag"))?
-            .downcast::<PyList>()?;
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyKeyError, _>("Missing key: flag"))?;
+        let py_flags = flag_item.cast::<PyList>()?;
 
-        if py_flags.len()? != flag.len() {
+        if py_flags.len() != flag.len() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Invalid length for flag",
             ));
         }
 
         for (i, item) in py_flags.iter().enumerate() {
-            flag[i] = if let Ok(b) = item.extract::<bool>() {
-                b as i32
-            } else {
-                item.extract::<i32>()?
+            flag[i] = match item.extract::<bool>() {
+                Ok(b) => b as i32,
+                Err(_) => item.extract::<i32>()?,
             };
         }
-        */
 
         Ok(())
     })

@@ -1,7 +1,17 @@
-// TODO: This function requires extendr/R types (Robj, list!) which are not currently available
-// Uncomment and add extendr dependency if needed
-/*
-fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order: &[i32]) -> Robj {
+#![allow(dead_code)]
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+
+/// Collapse function for Python compatibility
+/// Returns a dictionary with "matrix" (2D list) and "dimnames" (list of row/column names)
+pub fn collapse(
+    y: &[f64],
+    x: &[i32],
+    istate: &[i32],
+    id: &[i32],
+    wt: &[f64],
+    order: &[i32],
+) -> PyResult<Py<PyAny>> {
     let n = id.len();
     assert_eq!(y.len(), 3 * n, "y must have 3 columns");
     assert_eq!(x.len(), n, "x length mismatch");
@@ -43,13 +53,16 @@ fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order:
         i += 1;
     }
 
-    let mut out_data = Vec::with_capacity(i1.len() * 2);
-    out_data.extend(i2);
-    out_data.extend(i1);
+    // Create the matrix as a 2D list: [[i2[0], i1[0]], [i2[1], i1[1]], ...]
+    let mut matrix = Vec::new();
+    for (start, end) in i2.iter().zip(i1.iter()) {
+        matrix.push(vec![*start, *end]);
+    }
 
-    Robj::new_matrix(i1.len(), 2, out_data)
-        .expect("Failed to create matrix")
-        .set_attrib("dimnames", list!(vec!["start", "end"]))
-        .unwrap()
+    Python::attach(|py| {
+        let dict = PyDict::new(py);
+        dict.set_item("matrix", matrix)?;
+        dict.set_item("dimnames", vec!["start", "end"])?;
+        Ok(dict.into())
+    })
 }
-*/
