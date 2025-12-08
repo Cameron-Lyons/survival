@@ -48,7 +48,7 @@ impl LinkFunctionParams {
         } else {
             input
         };
-    
+
 }
 
 #[pymodule]

@@ -29,7 +29,7 @@ struct SurvivalModel {
     frail: Vec<f64>,
     fbeta: Vec<f64>,
     pdiag: u8,
-    // Returned parameters
+
     means: Vec<f64>,
     beta: Vec<f64>,
     u: Vec<f64>,
@@ -79,7 +79,7 @@ impl SurvivalModel {
             frail,
             fbeta,
             pdiag,
-            // Init default returns
+
             means: vec![0.0; nvar],
             beta: vec![0.0; nvar],
             u: vec![0.0; nvar],
@@ -92,7 +92,7 @@ impl SurvivalModel {
         }
     }
     pub fn gfit5a(&mut self) {
-        // Check if the model has enough data
+
         if self.yy.len() != self.nused || self.covar.len() != self.nvar {
             panic!("Insufficient data for the number of people or covariates specified");
         }

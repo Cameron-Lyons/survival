@@ -262,7 +262,7 @@ fn pystep(
         } else if fac[j] >= 2 {
             let cuts = cut[j];
             if cuts.len() < 2 {
-                continue; // Invalid cut specification
+                continue;
             }
 
             let nyear = cuts[0] as i32;
@@ -276,7 +276,7 @@ fn pystep(
 
             let year_offset = 2 + (year as usize) * dims[j];
             if year_offset + dims[j] > cuts.len() {
-                continue; // Invalid cut specification
+                continue;
             }
             let year_cuts = &cuts[year_offset..year_offset + dims[j]];
 
@@ -311,7 +311,7 @@ fn pystep(
 
                     if next_year_offset < cuts.len() {
                         let next_year_cuts = &cuts[next_year_offset..next_year_offset + dims[j]];
-                        let next_m = 0; // First interval of next year
+                        let next_m = 0;
 
                         let next_index = next_m * stride;
 

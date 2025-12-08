@@ -1,6 +1,5 @@
-use std::cmp::Ordering;
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 fn walkup(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
@@ -38,6 +37,7 @@ fn walkup(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
     sums
 }
 
+#[allow(dead_code)]
 fn addin(nwt: &mut [f64], twt: &mut [f64], mut index: usize, wt: f64) {
     if index >= nwt.len() {
         return;
@@ -67,7 +67,6 @@ fn add_internal(nwt: &mut [f64], twt: &mut [f64], index: usize, wt: f64) {
     }
     twt[0] += wt;
 }
-
 
 pub fn concordance3(
     y: &[f64],
@@ -118,7 +117,7 @@ pub fn concordance3(
         } else {
             let mut ndeath = 0;
             let mut dwt = 0.0;
-            let mut dwt2 = 0.0;
+            let _dwt2 = 0.0;
             let adjtimewt = timewt[utime];
             utime += 1;
 
@@ -153,7 +152,6 @@ pub fn concordance3(
             }
 
             if doresid {
-                // Compute concordance residuals for each event in this tied group
                 let mut event_idx = 0;
                 for j in i..(i + ndeath) {
                     let jj = sortstop[j] as usize;
@@ -190,30 +188,40 @@ pub fn perform_concordance3_calculation(
     time_weights: Vec<f64>,
     sort_stop: Vec<i32>,
     do_residuals: bool,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let n = weights.len();
     if n == 0 {
         return Err(PyRuntimeError::new_err("No observations provided"));
     }
-    
+
     if time_data.len() != 2 * n {
-        return Err(PyRuntimeError::new_err("Time data should have 2*n elements (time, status)"));
+        return Err(PyRuntimeError::new_err(
+            "Time data should have 2*n elements (time, status)",
+        ));
     }
-    
+
     if indices.len() != n {
-        return Err(PyRuntimeError::new_err("Indices length does not match observations"));
+        return Err(PyRuntimeError::new_err(
+            "Indices length does not match observations",
+        ));
     }
-    
+
     if weights.len() != n {
-        return Err(PyRuntimeError::new_err("Weights length does not match observations"));
+        return Err(PyRuntimeError::new_err(
+            "Weights length does not match observations",
+        ));
     }
-    
+
     if time_weights.len() != n {
-        return Err(PyRuntimeError::new_err("Time weights length does not match observations"));
+        return Err(PyRuntimeError::new_err(
+            "Time weights length does not match observations",
+        ));
     }
-    
+
     if sort_stop.len() != n {
-        return Err(PyRuntimeError::new_err("Sort stop length does not match observations"));
+        return Err(PyRuntimeError::new_err(
+            "Sort stop length does not match observations",
+        ));
     }
 
     let (count, imat, resid_opt) = concordance3(
@@ -239,7 +247,7 @@ pub fn perform_concordance3_calculation(
         0.0
     };
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("concordant", concordant).unwrap();
         dict.set_item("discordant", discordant).unwrap();
@@ -247,15 +255,16 @@ pub fn perform_concordance3_calculation(
         dict.set_item("tied_y", tied_y).unwrap();
         dict.set_item("tied_xy", tied_xy).unwrap();
         dict.set_item("variance", variance).unwrap();
-        dict.set_item("concordance_index", concordance_index).unwrap();
+        dict.set_item("concordance_index", concordance_index)
+            .unwrap();
         dict.set_item("total_pairs", total_pairs).unwrap();
         dict.set_item("information_matrix", imat).unwrap();
         dict.set_item("n_observations", n).unwrap();
-        
+
         if let Some(resid) = resid_opt {
             dict.set_item("residuals", resid).unwrap();
         }
-        
+
         Ok(dict.into())
     })
 }

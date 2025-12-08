@@ -2,7 +2,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use std::f64::consts::{PI, SQRT_2};
 
 const SMALL: f64 = -200.0;
-const SPI: f64 = 2.506628274631001; // sqrt(2*π)
+const SPI: f64 = 2.506628274631001;
 const ROOT_2: f64 = 1.414213562373095;
 
 #[derive(Clone, Copy)]

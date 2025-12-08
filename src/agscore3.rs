@@ -1,7 +1,7 @@
-use pyo3::prelude::*;
+use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 
 pub fn agscore3(
     y: &[f64],
@@ -159,7 +159,7 @@ pub fn agscore3(
         i1 -= 1;
     }
 
-    resid_matrix.into_raw_vec()
+    resid_matrix.into_raw_vec_and_offset().0
 }
 
 #[pyfunction]
@@ -171,37 +171,57 @@ pub fn perform_agscore3_calculation(
     weights: Vec<f64>,
     method: i32,
     sort1: Vec<i32>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let n = weights.len();
     if n == 0 {
         return Err(PyRuntimeError::new_err("No observations provided"));
     }
 
     if time_data.len() != 3 * n {
-        return Err(PyRuntimeError::new_err("Time data should have 3*n elements (start, stop, event)"));
+        return Err(PyRuntimeError::new_err(
+            "Time data should have 3*n elements (start, stop, event)",
+        ));
     }
 
     if covariates.len() % n != 0 {
-        return Err(PyRuntimeError::new_err("Covariates length should be divisible by number of observations"));
+        return Err(PyRuntimeError::new_err(
+            "Covariates length should be divisible by number of observations",
+        ));
     }
 
     if strata.len() != n {
-        return Err(PyRuntimeError::new_err("Strata length does not match observations"));
+        return Err(PyRuntimeError::new_err(
+            "Strata length does not match observations",
+        ));
     }
 
     if score.len() != n {
-        return Err(PyRuntimeError::new_err("Score length does not match observations"));
+        return Err(PyRuntimeError::new_err(
+            "Score length does not match observations",
+        ));
     }
 
     if weights.len() != n {
-        return Err(PyRuntimeError::new_err("Weights length does not match observations"));
+        return Err(PyRuntimeError::new_err(
+            "Weights length does not match observations",
+        ));
     }
 
     if sort1.len() != n {
-        return Err(PyRuntimeError::new_err("Sort1 length does not match observations"));
+        return Err(PyRuntimeError::new_err(
+            "Sort1 length does not match observations",
+        ));
     }
 
-    let residuals = agscore3(&time_data, &covariates, &strata, &score, &weights, method, &sort1);
+    let residuals = agscore3(
+        &time_data,
+        &covariates,
+        &strata,
+        &score,
+        &weights,
+        method,
+        &sort1,
+    );
 
     let nvar = covariates.len() / n;
     let mut summary_stats = Vec::new();
@@ -212,20 +232,23 @@ pub fn perform_agscore3_calculation(
         let var_residuals = &residuals[start_idx..end_idx];
 
         let mean = var_residuals.iter().sum::<f64>() / n as f64;
-        let variance = var_residuals.iter()
+        let variance = var_residuals
+            .iter()
             .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (n - 1) as f64;
+            .sum::<f64>()
+            / (n - 1) as f64;
 
         summary_stats.push(mean);
         summary_stats.push(variance);
     }
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("residuals", residuals).unwrap();
         dict.set_item("n_observations", n).unwrap();
         dict.set_item("n_variables", nvar).unwrap();
-        dict.set_item("method", if method == 0 { "breslow" } else { "efron" }).unwrap();
+        dict.set_item("method", if method == 0 { "breslow" } else { "efron" })
+            .unwrap();
         dict.set_item("summary_stats", summary_stats).unwrap();
         Ok(dict.into())
     })

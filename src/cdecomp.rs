@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub struct Decomposition {
     pub d: Vec<f64>,
     pub a: Vec<f64>,
@@ -5,6 +6,7 @@ pub struct Decomposition {
     pub p: Vec<f64>,
 }
 
+#[allow(dead_code)]
 pub fn c_decomp(r: &[f64], time: f64) -> Decomposition {
     let nc = (r.len() as f64).sqrt() as usize;
     assert_eq!(nc * nc, r.len(), "R must be a square matrix");

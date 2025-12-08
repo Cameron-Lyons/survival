@@ -33,7 +33,7 @@ pub fn survdiff2(
         while n < ntotal && strata[n] != 1 {
             n += 1;
         }
-        n += 1; // Convert to exclusive end index
+        n += 1;
         let n_in_stratum = n - istart;
 
         if rho != 0.0 {
@@ -75,7 +75,7 @@ pub fn survdiff2(
                 deaths += status[j] as usize;
                 j -= 1;
             }
-            j += 1; // Adjust to inclusive start index
+            j += 1;
 
             let nrisk = (n - j) as f64;
             if deaths > 0 {

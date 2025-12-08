@@ -64,7 +64,7 @@ pub fn tmerge2(id: &[i32], time1: &[f64], nid: &[i32], ntime: &[f64]) -> Vec<usi
         let mut local_k = k;
 
         while local_k < n2 && nid[local_k] == current_id && ntime[local_k] <= start_time {
-            last_valid = local_k + 1; // Convert to 1-based index
+            last_valid = local_k + 1;
             local_k += 1;
         }
 
@@ -89,7 +89,7 @@ pub fn tmerge3(id: &[i32], miss: &[bool]) -> Vec<usize> {
         if is_missing {
             result[i] = last_good;
         } else {
-            result[i] = i + 1; // 1-based index
+            result[i] = i + 1;
             last_good = i + 1;
         }
     }

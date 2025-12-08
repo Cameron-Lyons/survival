@@ -35,8 +35,8 @@ fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order:
             k += 1;
         }
 
-        i1.push((k1 + 1) as i32); // Convert to 1-based index
-        i2.push((order[start_pos] as usize + 1) as i32); // Convert to 1-based index
+        i1.push((k1 + 1) as i32);
+        i2.push((order[start_pos] as usize + 1) as i32);
         i += 1;
     }
 
@@ -89,8 +89,8 @@ fn collapse(y: &[f64], x: &[i32], istate: &[i32], id: &[i32], wt: &[f64], order:
             k += 1;
         }
 
-        i1.push((k1 + 1) as i32); // Convert to 1-based index
-        i2.push((order[start_pos] as usize + 1) as i32); // Convert to 1-based index
+        i1.push((k1 + 1) as i32);
+        i2.push((order[start_pos] as usize + 1) as i32);
         i += 1;
     }
 

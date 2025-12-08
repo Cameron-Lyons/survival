@@ -10,7 +10,7 @@ pub fn cox_callback(
     flag: &mut [i32],
     fexpr: &PyAny,
 ) -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let coef_list = PyList::new(py, coef);
         let kwargs = PyDict::new(py);
         kwargs.set_item("which", which)?;

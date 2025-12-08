@@ -37,7 +37,7 @@ pub fn coxph_wtest(
             .zip(&solve[solve_start..solve_end])
             .map(|(b_val, solve_val)| b_val * solve_val)
             .sum();
-        
+
         b[i] = sum;
     }
 }

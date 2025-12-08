@@ -1,8 +1,7 @@
-use std::f64::{EPSILON, INFINITY};
-use ndarray::{Array1, Array2, Axis};
-use ndarray_linalg::{Solve, Inverse};
-use pyo3::prelude::*;
+use ndarray::{Array1, Array2};
+use ndarray_linalg::{Inverse, Solve};
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 #[derive(Debug)]
@@ -21,23 +20,36 @@ pub struct CoxResult {
 
 struct CoxState {
     covar: Vec<Vec<f64>>,
+    #[allow(dead_code)]
     cmat: Vec<Vec<f64>>,
+    #[allow(dead_code)]
     cmat2: Vec<Vec<f64>>,
     a: Vec<f64>,
+    #[allow(dead_code)]
     oldbeta: Vec<f64>,
     a2: Vec<f64>,
     offset: Vec<f64>,
     weights: Vec<f64>,
     event: Vec<i32>,
+    #[allow(dead_code)]
     start: Vec<f64>,
+    #[allow(dead_code)]
     stop: Vec<f64>,
+    #[allow(dead_code)]
     sort1: Vec<usize>,
+    #[allow(dead_code)]
     sort2: Vec<usize>,
+    #[allow(dead_code)]
     tmean: Vec<f64>,
+    #[allow(dead_code)]
     ptype: i32,
+    #[allow(dead_code)]
     pdiag: i32,
+    #[allow(dead_code)]
     ipen: Vec<f64>,
+    #[allow(dead_code)]
     upen: Vec<f64>,
+    #[allow(dead_code)]
     zflag: Vec<i32>,
     frail: Vec<i32>,
     score: Vec<f64>,
@@ -129,31 +141,30 @@ impl CoxState {
 
         *loglik = 0.0;
         let mut istrat = 0;
-        let mut indx2 = 0;
+        let _indx2 = 0;
 
         while istrat < self.strata.len() {
-            let mut denom = 0.0;
+            let _denom = 0.0;
             let mut risk_sum = 0.0;
-            let mut risk_sum2 = 0.0;
-            
+
             for person in istrat..self.weights.len() {
                 if self.strata[person] != self.strata[istrat] {
                     break;
                 }
                 let risk_score = self.score[person].exp();
                 risk_sum += self.weights[person] * risk_score;
-                risk_sum2 += self.weights[person] * risk_score * risk_score;
+                let _ = self.weights[person] * risk_score * risk_score;
             }
 
             for person in istrat..self.weights.len() {
                 if self.strata[person] != self.strata[istrat] {
                     break;
                 }
-                
+
                 if self.event[person] == 1 {
                     *loglik += self.weights[person] * self.score[person];
                     *loglik -= self.weights[person] * risk_sum.ln();
-                    
+
                     for i in 0..nvar {
                         let mut temp = 0.0;
                         for j in person..self.weights.len() {
@@ -163,69 +174,77 @@ impl CoxState {
                         }
                         u[i] += self.weights[person] * (self.covar[i][person] - temp / risk_sum);
                     }
-                    
+
                     if nfrail > 0 {
                         let mut temp = 0.0;
                         for j in person..self.weights.len() {
                             if self.strata[j] == self.strata[person] {
-                                temp += self.weights[j] * self.score[j].exp() * self.frail[j] as f64;
+                                temp +=
+                                    self.weights[j] * self.score[j].exp() * self.frail[j] as f64;
                             }
                         }
-                        u[nvar] += self.weights[person] * (self.frail[person] as f64 - temp / risk_sum);
+                        u[nvar] +=
+                            self.weights[person] * (self.frail[person] as f64 - temp / risk_sum);
                     }
-                    
+
                     for i in 0..nvar {
                         for j in i..nvar {
                             let mut temp = 0.0;
                             for k in person..self.weights.len() {
                                 if self.strata[k] == self.strata[person] {
-                                    temp += self.weights[k] * self.score[k].exp() * 
-                                           self.covar[i][k] * self.covar[j][k];
+                                    temp += self.weights[k]
+                                        * self.score[k].exp()
+                                        * self.covar[i][k]
+                                        * self.covar[j][k];
                                 }
                             }
                             let idx = i * nvar2 + j;
-                            imat[idx] += self.weights[person] * 
-                                       (temp / risk_sum - 
-                                        (self.a[i] * self.a[j]) / (risk_sum * risk_sum));
+                            imat[idx] += self.weights[person]
+                                * (temp / risk_sum
+                                    - (self.a[i] * self.a[j]) / (risk_sum * risk_sum));
                         }
                     }
-                    
+
                     if nfrail > 0 {
                         for i in 0..nvar {
                             let mut temp = 0.0;
                             for k in person..self.weights.len() {
                                 if self.strata[k] == self.strata[person] {
-                                    temp += self.weights[k] * self.score[k].exp() * 
-                                           self.covar[i][k] * self.frail[k] as f64;
+                                    temp += self.weights[k]
+                                        * self.score[k].exp()
+                                        * self.covar[i][k]
+                                        * self.frail[k] as f64;
                                 }
                             }
                             let idx = i * nvar2 + nvar;
-                            imat[idx] += self.weights[person] * 
-                                       (temp / risk_sum - 
-                                        (self.a[i] * self.a[nvar]) / (risk_sum * risk_sum));
+                            imat[idx] += self.weights[person]
+                                * (temp / risk_sum
+                                    - (self.a[i] * self.a[nvar]) / (risk_sum * risk_sum));
                         }
-                        
+
                         let mut temp = 0.0;
                         for k in person..self.weights.len() {
                             if self.strata[k] == self.strata[person] {
-                                temp += self.weights[k] * self.score[k].exp() * 
-                                       (self.frail[k] as f64).powi(2);
+                                temp += self.weights[k]
+                                    * self.score[k].exp()
+                                    * (self.frail[k] as f64).powi(2);
                             }
                         }
                         let idx = nvar * nvar2 + nvar;
-                        imat[idx] += self.weights[person] * 
-                                   (temp / risk_sum - 
-                                    (self.a[nvar] * self.a[nvar]) / (risk_sum * risk_sum));
+                        imat[idx] += self.weights[person]
+                            * (temp / risk_sum
+                                - (self.a[nvar] * self.a[nvar]) / (risk_sum * risk_sum));
                     }
                 }
-                
-                if person < self.weights.len() - 1 && self.strata[person + 1] == self.strata[person] {
+
+                if person < self.weights.len() - 1 && self.strata[person + 1] == self.strata[person]
+                {
                     let risk_score = self.score[person].exp();
                     risk_sum -= self.weights[person] * risk_score;
-                    risk_sum2 -= self.weights[person] * risk_score * risk_score;
+                    let _ = self.weights[person] * risk_score * risk_score;
                 }
             }
-            
+
             while istrat < self.strata.len() && self.strata[istrat] == self.strata[istrat] {
                 istrat += 1;
             }
@@ -250,36 +269,35 @@ pub fn agfit5(
     eps: f64,
 ) -> Result<CoxResult, Box<dyn std::error::Error>> {
     let mut state = CoxState::new(
-        nused, nvar, nfrail, yy, covar, offset, weights, 
-        strata, sort, ptype, pdiag, frail
+        nused, nvar, nfrail, yy, covar, offset, weights, strata, sort, ptype, pdiag, frail,
     );
-    
+
     let nvar2 = nvar + nfrail;
     let mut beta = vec![0.0; nvar2];
     let mut u = vec![0.0; nvar2];
     let mut imat = vec![0.0; nvar2 * nvar2];
     let mut loglik = 0.0;
-    
+
     let mut iter = 0;
     let mut converged = false;
-    
+
     while iter < max_iter {
         let old_loglik = loglik;
-        
+
         state.update(&mut beta, &mut u, &mut imat, &mut loglik);
-        
+
         if (loglik - old_loglik).abs() < eps {
             converged = true;
             break;
         }
-        
+
         let mut imat_array = Array2::from_shape_vec((nvar2, nvar2), imat.clone())?;
         let u_array = Array1::from_vec(u.clone());
-        
+
         for i in 0..nvar2 {
             imat_array[[i, i]] += 1e-8;
         }
-        
+
         match imat_array.solve_into(u_array) {
             Ok(delta) => {
                 for i in 0..nvar2 {
@@ -290,15 +308,15 @@ pub fn agfit5(
                 return Err("Failed to solve linear system".into());
             }
         }
-        
+
         iter += 1;
     }
-    
+
     state.update(&mut beta, &mut u, &mut imat, &mut loglik);
-    
+
     let mut variance_matrix = vec![vec![0.0; nvar2]; nvar2];
     let imat_array = Array2::from_shape_vec((nvar2, nvar2), imat)?;
-    
+
     match imat_array.inv() {
         Ok(inv_imat) => {
             for i in 0..nvar2 {
@@ -311,11 +329,11 @@ pub fn agfit5(
             return Err("Failed to invert information matrix".into());
         }
     }
-    
+
     let standard_errors: Vec<f64> = (0..nvar2)
         .map(|i| (variance_matrix[i][i] as f64).sqrt())
         .collect();
-    
+
     let p_values: Vec<f64> = (0..nvar2)
         .map(|i| {
             if standard_errors[i] > 0.0 {
@@ -326,7 +344,7 @@ pub fn agfit5(
             }
         })
         .collect();
-    
+
     let confidence_intervals: Vec<(f64, f64)> = (0..nvar2)
         .map(|i| {
             let se = standard_errors[i];
@@ -334,14 +352,15 @@ pub fn agfit5(
             (coef - 1.96 * se, coef + 1.96 * se)
         })
         .collect();
-    
+
     let score: f64 = u.iter().map(|&x| x * x).sum();
-    
-    let wald_test: f64 = beta.iter()
+
+    let wald_test: f64 = beta
+        .iter()
         .zip(standard_errors.iter())
         .map(|(&coef, &se)| if se > 0.0 { (coef / se).powi(2) } else { 0.0 })
         .sum();
-    
+
     Ok(CoxResult {
         coefficients: beta,
         standard_errors,
@@ -361,12 +380,12 @@ fn normal_cdf(x: f64) -> f64 {
 }
 
 fn erf(x: f64) -> f64 {
-    let a1 =  0.254829592;
+    let a1 = 0.254829592;
     let a2 = -0.284496736;
-    let a3 =  1.421413741;
+    let a3 = 1.421413741;
     let a4 = -1.453152027;
-    let a5 =  1.061405429;
-    let p  =  0.3275911;
+    let a5 = 1.061405429;
+    let p = 0.3275911;
 
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
@@ -388,7 +407,7 @@ pub fn perform_cox_regression_frailty(
     frail: Option<Vec<i32>>,
     max_iter: Option<i32>,
     eps: Option<f64>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let nused = time.len();
     if nused == 0 {
         return Err(PyRuntimeError::new_err("No observations provided"));
@@ -398,11 +417,15 @@ pub fn perform_cox_regression_frailty(
         return Err(PyRuntimeError::new_err("No covariates provided"));
     }
     if event.len() != nused {
-        return Err(PyRuntimeError::new_err("Event vector length does not match time vector"));
+        return Err(PyRuntimeError::new_err(
+            "Event vector length does not match time vector",
+        ));
     }
     for cov in &covariates {
         if cov.len() != nused {
-            return Err(PyRuntimeError::new_err("Covariate vector length does not match time vector"));
+            return Err(PyRuntimeError::new_err(
+                "Covariate vector length does not match time vector",
+            ));
         }
     }
     let offset = offset.unwrap_or_else(|| vec![0.0; nused]);
@@ -424,25 +447,30 @@ pub fn perform_cox_regression_frailty(
     let sort: Vec<i32> = (1..=nused as i32).collect();
     let nfrail = if frail.iter().any(|&x| x != 0) { 1 } else { 0 };
     match agfit5(
-        nused, nvar, nfrail, &yy, &covar, &offset, &weights,
-        &strata, &sort, 0, 0, &frail, max_iter, eps
+        nused, nvar, nfrail, &yy, &covar, &offset, &weights, &strata, &sort, 0, 0, &frail,
+        max_iter, eps,
     ) {
-        Ok(result) => {
-            Python::with_gil(|py| {
-                let dict = PyDict::new(py);
-                dict.set_item("coefficients", result.coefficients).unwrap();
-                dict.set_item("standard_errors", result.standard_errors).unwrap();
-                dict.set_item("p_values", result.p_values).unwrap();
-                dict.set_item("confidence_intervals", result.confidence_intervals).unwrap();
-                dict.set_item("log_likelihood", result.log_likelihood).unwrap();
-                dict.set_item("score", result.score).unwrap();
-                dict.set_item("wald_test", result.wald_test).unwrap();
-                dict.set_item("iterations", result.iterations).unwrap();
-                dict.set_item("converged", result.converged).unwrap();
-                dict.set_item("variance_matrix", result.variance_matrix).unwrap();
-                Ok(dict.into())
-            })
-        }
-        Err(e) => Err(PyRuntimeError::new_err(format!("Cox regression failed: {}", e))),
+        Ok(result) => Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("coefficients", result.coefficients).unwrap();
+            dict.set_item("standard_errors", result.standard_errors)
+                .unwrap();
+            dict.set_item("p_values", result.p_values).unwrap();
+            dict.set_item("confidence_intervals", result.confidence_intervals)
+                .unwrap();
+            dict.set_item("log_likelihood", result.log_likelihood)
+                .unwrap();
+            dict.set_item("score", result.score).unwrap();
+            dict.set_item("wald_test", result.wald_test).unwrap();
+            dict.set_item("iterations", result.iterations).unwrap();
+            dict.set_item("converged", result.converged).unwrap();
+            dict.set_item("variance_matrix", result.variance_matrix)
+                .unwrap();
+            Ok(dict.into())
+        }),
+        Err(e) => Err(PyRuntimeError::new_err(format!(
+            "Cox regression failed: {}",
+            e
+        ))),
     }
 }

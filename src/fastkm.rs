@@ -72,7 +72,7 @@ pub fn fastkm1(
         let current_status = status[p];
 
         if current_status != 0.0 {
-            // Death event
+
             if dfirst || (current_time != dtime_current) {
                 dtime_current = current_time;
                 dfirst = false;
@@ -86,7 +86,7 @@ pub fn fastkm1(
                 k += 1;
             }
         } else {
-            // Censoring event
+
             if cfirst || (current_time != ctime_current) {
                 ctime_current = current_time;
                 cfirst = false;

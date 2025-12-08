@@ -1,7 +1,6 @@
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use pyo3::types::PyDict;
-
 
 fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     match cuts.binary_search_by(|&cut| cut.partial_cmp(&x).unwrap()) {
@@ -22,7 +21,6 @@ fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     }
 }
 
-
 fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {
     let mut index = 0;
     let mut stride = 1;
@@ -32,7 +30,6 @@ fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {
     }
     index
 }
-
 
 pub fn pystep(
     edim: usize,
@@ -50,12 +47,12 @@ pub fn pystep(
         if efac[j] != 0 {
             continue;
         }
-        
+
         let cuts = ecut[j];
         if cuts.is_empty() {
             continue;
         }
-        
+
         let current = data[j];
         let pos = cuts.partition_point(|&x| x <= current);
 
@@ -70,7 +67,7 @@ pub fn pystep(
     }
 
     et2 = et2.min(tmax);
-    
+
     let mut indices_current = vec![0; edim];
     let mut indices_next = vec![0; edim];
 
@@ -182,36 +179,34 @@ pub fn perform_pystep_calculation(
     edims: Vec<usize>,
     ecut: Vec<Vec<f64>>,
     tmax: f64,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     if data.len() != edim {
         return Err(PyRuntimeError::new_err("Data length does not match edim"));
     }
-    
+
     if efac.len() != edim {
         return Err(PyRuntimeError::new_err("Factor length does not match edim"));
     }
-    
+
     if edims.len() != edim {
-        return Err(PyRuntimeError::new_err("Dimensions length does not match edim"));
+        return Err(PyRuntimeError::new_err(
+            "Dimensions length does not match edim",
+        ));
     }
-    
+
     if ecut.len() != edim {
-        return Err(PyRuntimeError::new_err("Cutpoints length does not match edim"));
+        return Err(PyRuntimeError::new_err(
+            "Cutpoints length does not match edim",
+        ));
     }
 
     let mut data_mut = data.clone();
     let ecut_refs: Vec<&[f64]> = ecut.iter().map(|v| v.as_slice()).collect();
-    
-    let (time_step, current_index, next_index, weight) = pystep(
-        edim,
-        &mut data_mut,
-        &efac,
-        &edims,
-        &ecut_refs,
-        tmax,
-    );
 
-    Python::with_gil(|py| {
+    let (time_step, current_index, next_index, weight) =
+        pystep(edim, &mut data_mut, &efac, &edims, &ecut_refs, tmax);
+
+    Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("time_step", time_step).unwrap();
         dict.set_item("current_index", current_index).unwrap();
@@ -230,35 +225,32 @@ pub fn perform_pystep_simple_calculation(
     odims: Vec<usize>,
     ocut: Vec<Vec<f64>>,
     timeleft: f64,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     if data.len() != odim {
         return Err(PyRuntimeError::new_err("Data length does not match odim"));
     }
-    
+
     if ofac.len() != odim {
         return Err(PyRuntimeError::new_err("Factor length does not match odim"));
     }
-    
+
     if odims.len() != odim {
-        return Err(PyRuntimeError::new_err("Dimensions length does not match odim"));
+        return Err(PyRuntimeError::new_err(
+            "Dimensions length does not match odim",
+        ));
     }
-    
+
     if ocut.len() != odim {
-        return Err(PyRuntimeError::new_err("Cutpoints length does not match odim"));
+        return Err(PyRuntimeError::new_err(
+            "Cutpoints length does not match odim",
+        ));
     }
 
     let ocut_refs: Vec<&[f64]> = ocut.iter().map(|v| v.as_slice()).collect();
-    
-    let (time_step, index) = pystep_simple(
-        odim,
-        &data,
-        &ofac,
-        &odims,
-        &ocut_refs,
-        timeleft,
-    );
 
-    Python::with_gil(|py| {
+    let (time_step, index) = pystep_simple(odim, &data, &ofac, &odims, &ocut_refs, timeleft);
+
+    Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("time_step", time_step).unwrap();
         dict.set_item("index", index).unwrap();

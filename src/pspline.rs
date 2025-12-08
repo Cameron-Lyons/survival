@@ -1,20 +1,26 @@
+use ndarray::{Array1, Array2};
+use ndarray_linalg::Solve;
 use pyo3::prelude::*;
 
 #[pyclass]
-struct PSpline {
-    x: Vec<f64>,                // Covariate vector
-    df: u32,                    // Degrees of freedom
-    theta: f64,                 // Roughness penalty
-    nterm: u32,                 // Number of splines in the basis
-    degree: u32,                // Degree of splines
-    eps: f64,                   // Accuracy for df
-    method: String,             // Method for choosing tuning parameter theta
-    boundary_knots: (f64, f64), // Boundary knots
-    intercept: bool,            // Include intercept in basis functions or not
-    penalty: bool,              // Apply penalty or not
+pub struct PSpline {
+    x: Vec<f64>,
+    #[allow(dead_code)]
+    df: u32,
+    theta: f64,
+    nterm: u32,
+    degree: u32,
+    #[allow(dead_code)]
+    eps: f64,
+    method: String,
+    boundary_knots: (f64, f64),
+    intercept: bool,
+    penalty: bool,
 }
 
+#[pymethods]
 impl PSpline {
+    #[new]
     fn new(
         x: Vec<f64>,
         df: u32,
@@ -24,7 +30,7 @@ impl PSpline {
         boundary_knots: (f64, f64),
         intercept: bool,
         penalty: bool,
-    ) -> PSpline {
+    ) -> Self {
         let nterm = df + 1;
         let degree = 3;
         PSpline {
@@ -40,10 +46,11 @@ impl PSpline {
             penalty: penalty,
         }
     }
+
     pub fn fit(&self) {
         let basis = self.create_basis();
         let penalized_basis = self.apply_penalty(basis);
-        let coefficients = self.optimize_fit(penalized_basis);
+        let _coefficients = self.optimize_fit(penalized_basis);
     }
     fn create_basis(&self) -> Vec<Vec<f64>> {
         let n = self.x.len();
@@ -68,10 +75,17 @@ impl PSpline {
         let knots = self.knots();
         let mut d = vec![0.0; self.degree as usize + 1];
         d[0] = 1.0;
-        for k in 1..self.degree + 1 {
-            for i in 0..self.degree - k + 1 {
-                let w = (t - knots[i] / (knots[i + k] - knots[i])).max(0.0);
-                d[i as usize] = (1.0 - w) * d[i as usize] + w * d[i as usize + 1];
+        for k in 1..=self.degree {
+            for i in 0..=(self.degree - k) {
+                let i_usize = i as usize;
+                let k_usize = k as usize;
+                let denom = knots[i_usize + k_usize] - knots[i_usize];
+                let w = if denom.abs() > 1e-10 {
+                    ((t - knots[i_usize]) / denom).max(0.0).min(1.0)
+                } else {
+                    0.0
+                };
+                d[i_usize] = (1.0 - w) * d[i_usize] + w * d[i_usize + 1];
             }
         }
         b * d[0]
@@ -107,7 +121,7 @@ impl PSpline {
         penalized_basis
     }
     fn penalty_function(&self, i: u32, j: u32) -> f64 {
-        match self.method {
+        match self.method.as_str() {
             "GCV" => self.gcv(i, j),
             "UBRE" => self.ubre(i, j),
             _ => panic!("Method not implemented"),
@@ -117,7 +131,7 @@ impl PSpline {
         if i == j {
             return self.nterm as f64;
         }
-        let mut gcv = 0.0;
+
         let mut df = 0.0;
         let mut trace = 0.0;
         let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
@@ -136,14 +150,13 @@ impl PSpline {
                     * basis[l as usize][j as usize];
             }
         }
-        gcv = df / (1.0 - trace / self.nterm as f64).powi(2);
-        gcv
+        df / (1.0 - trace / self.nterm as f64).powi(2)
     }
     fn ubre(&self, i: u32, j: u32) -> f64 {
         if i == j {
             return self.nterm as f64;
         }
-        let mut ubre = 0.0;
+
         let mut df = 0.0;
         let mut trace = 0.0;
         let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
@@ -162,11 +175,9 @@ impl PSpline {
                     * basis[l as usize][j as usize];
             }
         }
-        ubre = df / (1.0 - trace / self.nterm as f64).powi(2);
-        ubre
+        df / (1.0 - trace / self.nterm as f64).powi(2)
     }
     fn optimize_fit(&self, basis: Vec<Vec<f64>>) -> Vec<f64> {
-        let mut coefficients = vec![0.0; self.nterm as usize];
         let mut a = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
         let mut b = vec![0.0; self.nterm as usize];
         for i in 0..self.nterm {
@@ -182,7 +193,18 @@ impl PSpline {
                 b[i as usize] += basis[j as usize][i as usize];
             }
         }
-        coefficients = self.solve(a, b);
-        coefficients
+        self.solve(a, b)
+    }
+
+    fn solve(&self, a: Vec<Vec<f64>>, b: Vec<f64>) -> Vec<f64> {
+        let n = a.len();
+        let a_array = Array2::from_shape_vec((n, n), a.into_iter().flatten().collect())
+            .expect("Failed to create matrix");
+        let b_array = Array1::from_vec(b);
+
+        let x = a_array
+            .solve_into(b_array)
+            .expect("Failed to solve linear system");
+        x.to_vec()
     }
 }

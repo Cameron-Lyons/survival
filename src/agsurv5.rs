@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub fn agsurv5(
     n: usize,
     nvar: usize,
@@ -24,7 +25,7 @@ pub fn agsurv5(
             }
         } else {
             let d_int = dd[i] as i32;
-            let mut temp = 1.0 / x1[i];
+            let mut temp;
 
             for j in 0..d_int {
                 let j_f64 = j as f64;

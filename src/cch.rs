@@ -11,16 +11,16 @@ enum Method {
 
 #[pyclass]
 struct Subject {
-    id: usize,            // Unique identifier for each subject
-    covariates: Vec<f64>, // Covariates (e.g., age, blood pressure, etc.)
-    is_case: bool,        // True if the subject is a case, false if a control
-    is_subcohort: bool,   // True if the subject is in the sub-cohort
-    stratum: usize,       // Stratum identifier, if applicable
+    id: usize,
+    covariates: Vec<f64>,
+    is_case: bool,
+    is_subcohort: bool,
+    stratum: usize,
 }
 
 #[pyclass]
 struct CohortData {
-    subjects: Vec<Subject>, // Collection of all subjects
+    subjects: Vec<Subject>,
 }
 
 #[pymethods]

@@ -11,7 +11,7 @@ pub struct ZphResult {
 
 pub fn zph1(
     gt: ArrayView1<f64>,
-    y: (ArrayView1<f64>, ArrayView1<f64>), // (time, status)
+    y: (ArrayView1<f64>, ArrayView1<f64>),
     covar: ArrayView2<f64>,
     eta: ArrayView1<f64>,
     weights: ArrayView1<f64>,
@@ -113,7 +113,7 @@ pub fn zph1(
 
         if ndead_current > 0 {
             match method {
-                // Breslow method
+
                 0 => process_breslow(
                     &mut u,
                     &mut imat,

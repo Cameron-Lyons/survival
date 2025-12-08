@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub fn chinv2(matrix: &mut [f64], n: usize) {
     assert_eq!(matrix.len(), n * n, "Matrix must be of size n x n");
 
@@ -24,10 +25,10 @@ pub fn chinv2(matrix: &mut [f64], n: usize) {
 
         if matrix[diag_idx] == 0.0 {
             for j in 0..i {
-                matrix[j * n + i] = 0.0; // Upper triangle column i
+                matrix[j * n + i] = 0.0;
             }
             for j in i..n {
-                matrix[i * n + j] = 0.0; // Row i from diagonal onward
+                matrix[i * n + j] = 0.0;
             }
         } else {
             for j in (i + 1)..n {

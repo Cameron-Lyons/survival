@@ -11,7 +11,7 @@ pub struct ZphResult {
 
 pub fn zph2(
     gt: ArrayView1<f64>,
-    y: (ArrayView1<f64>, ArrayView1<f64>, ArrayView1<f64>), // (start, stop, status)
+    y: (ArrayView1<f64>, ArrayView1<f64>, ArrayView1<f64>),
     covar: ArrayView2<f64>,
     eta: ArrayView1<f64>,
     weights: ArrayView1<f64>,

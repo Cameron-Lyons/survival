@@ -1,6 +1,6 @@
 use itertools::izip;
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 pub fn pyears3b(
@@ -121,33 +121,19 @@ pub fn pyears3b(
         };
 
         let mut cumhaz = 0.0;
-        let mut index = -1;
-
         if timeleft <= eps && doevent == 1 {
-            let (_, idx, _, _) = pystep(
-                odim,
-                &mut data.clone(),
-                ofac,
-                odims,
-                &ocut_slices,
-                timeleft,
-            );
-            index = idx as i32;
+            let (_, _idx, _, _) =
+                pystep(odim, &mut data.clone(), ofac, odims, &ocut_slices, timeleft);
         }
 
         while timeleft > eps {
             let mut data_current = data.clone();
-            let (thiscell, idx, idx2, lwt) = pystep(
-                odim,
-                &mut data_current,
-                ofac,
-                odims,
-                &ocut_slices,
-                timeleft,
-            );
+            let (thiscell, idx, _idx2, _lwt) =
+                pystep(odim, &mut data_current, ofac, odims, &ocut_slices, timeleft);
 
             data.copy_from_slice(&data_current);
 
+            #[allow(unused_comparisons)]
             if idx >= 0 {
                 let idx = idx as usize;
                 pyears[idx] += thiscell * weight[i];
@@ -163,14 +149,8 @@ pub fn pyears3b(
                 let mut data2_current = data2.clone();
 
                 while etime > 0.0 {
-                    let (et2, edx, edx2, elwt) = pystep(
-                        edim,
-                        &mut data2_current,
-                        efac,
-                        edims,
-                        &ecut_slices,
-                        etime,
-                    );
+                    let (et2, edx, edx2, elwt) =
+                        pystep(edim, &mut data2_current, efac, edims, &ecut_slices, etime);
 
                     let lambda = if elwt < 1.0 {
                         elwt * expect[edx] + (1.0 - elwt) * expect[edx2]
@@ -179,7 +159,8 @@ pub fn pyears3b(
                     };
 
                     if method == 0 {
-                        temp += (-hazard as f64).exp() * (1.0 - (-lambda * et2 as f64).exp()) / lambda;
+                        temp +=
+                            (-hazard as f64).exp() * (1.0 - (-lambda * et2 as f64).exp()) / lambda;
                     }
                     hazard += lambda * et2;
 
@@ -311,7 +292,7 @@ pub fn perform_pyears_calculation(
     observed_data: Vec<f64>,
     do_event: Option<i32>,
     ny: Option<usize>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let n = weights.len();
     if n == 0 {
         return Err(PyRuntimeError::new_err("No observations provided"));
@@ -325,10 +306,13 @@ pub fn perform_pyears_calculation(
         total_observed *= dim;
     }
 
-    let mut total_expected = 1;
-    for &dim in &expected_dims {
-        total_expected *= dim;
-    }
+    let _total_expected = {
+        let mut result = 1;
+        for &dim in &expected_dims {
+            result *= dim;
+        }
+        result
+    };
 
     let mut pyears = vec![0.0; total_observed];
     let mut pn = vec![0.0; total_observed];
@@ -361,7 +345,7 @@ pub fn perform_pyears_calculation(
         &mut offtable,
     );
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("pyears", pyears).unwrap();
         dict.set_item("pn", pn).unwrap();
@@ -371,4 +355,3 @@ pub fn perform_pyears_calculation(
         Ok(dict.into())
     })
 }
-

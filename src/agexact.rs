@@ -1,10 +1,11 @@
 use itertools::Itertools;
-use std::f64::EPSILON;
 
+#[allow(dead_code)]
 fn init_doloop(start: usize, end: usize, k: usize) -> Vec<Vec<usize>> {
     (start..end).combinations(k).collect()
 }
 
+#[allow(dead_code)]
 pub fn agexact(
     maxiter: &mut i32,
     nused: &i32,
@@ -37,7 +38,7 @@ pub fn agexact(
     let (newbeta, rest) = rest.split_at_mut(p);
     let (score, newvar) = rest.split_at_mut(n);
 
-    let index = &mut work2[0..n];
+    let _index = &mut work2[0..n];
     let atrisk = &mut work2[n..2 * n];
 
     for i in 0..nvar {
@@ -86,7 +87,6 @@ pub fn agexact(
                     nrisk += 1;
                 }
                 if strata[k] == 1 {
-                    k += 1;
                     break;
                 }
                 k += 1;
@@ -214,7 +214,6 @@ pub fn agexact(
                         nrisk += 1;
                     }
                     if strata[k] == 1 {
-                        k += 1;
                         break;
                     }
                     k += 1;
@@ -333,6 +332,7 @@ pub fn agexact(
     *flag = 1000;
 }
 
+#[allow(dead_code)]
 fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
     for i in 0..n {
         for j in i..n {
@@ -357,6 +357,7 @@ fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
     0
 }
 
+#[allow(dead_code)]
 fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
     for i in 0..n {
         let mut sum = b[i];
@@ -375,6 +376,7 @@ fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
     }
 }
 
+#[allow(dead_code)]
 fn chinv2(chol: &mut [f64], n: usize) {
     for i in 0..n {
         chol[i * n + i] = 1.0 / chol[i * n + i];

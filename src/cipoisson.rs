@@ -35,7 +35,7 @@ fn cipoisson_anscombe(k: u32, time: f64, p: f64) -> Result<(f64, f64), &'static 
     let z = Normal::new(0.0, 1.0)
         .map_err(|_| "Error creating Normal distribution")?
         .inverse_cdf(p / 2.0);
-    let variance = 1.0 / 4.0; // The variance of sqrt(k + 3/8) is approximately 1/4
+    let variance = 1.0 / 4.0;
 
     let lower_bound = transformed_k - z * (variance.sqrt());
     let upper_bound = transformed_k + z * (variance.sqrt());

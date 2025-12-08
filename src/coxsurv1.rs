@@ -28,7 +28,7 @@ pub fn coxsurv1(
     let mut xbar = Array2::zeros((irow_total, nvar));
     let mut xsum2_arr = Array2::zeros((irow_total, nvar));
 
-    let mut person2 = nused as isize - 1; // Use isize for negative checks
+    let mut person2 = nused as isize - 1;
 
     for ii in 0..ntrans {
         if person2 < 0 {
@@ -36,7 +36,7 @@ pub fn coxsurv1(
         }
 
         let current_trans = trans[sort2[person2 as usize]];
-        let mut n = [0.0; 12]; // n[0] to n[9] are used
+        let mut n = [0.0; 12];
         let mut xsum1 = vec![0.0; nvar];
         let mut xsum2 = vec![0.0; nvar];
 

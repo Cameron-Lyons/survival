@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub fn agmart(
     n: usize,
     method: i32,
@@ -12,7 +13,7 @@ pub fn agmart(
     let nused = n;
     let mut local_strata = strata.to_vec();
     if nused > 0 {
-        local_strata[nused - 1] = 1; // Failsafe like original C code
+        local_strata[nused - 1] = 1;
     }
 
     for i in 0..nused {

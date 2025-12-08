@@ -7,13 +7,13 @@ pub struct CoxSurvResult {
 }
 
 pub fn coxsurv3(
-    y: &[(f64, f64)],  // (time, status) pairs
-    xmat: &[Vec<f64>], // Covariate matrix [n_obs x n_vars]
-    strata: &[i32],    // Stratum identifiers
-    risk: &[f64],      // Risk scores (exp(linear predictor))
-    weight: &[f64],    // Observation weights
-    sort2: &[usize],   // Sorted indices by stop time
-    efron: bool,       // Use Efron approximation
+    y: &[(f64, f64)],
+    xmat: &[Vec<f64>],
+    strata: &[i32],
+    risk: &[f64],
+    weight: &[f64],
+    sort2: &[usize],
+    efron: bool,
 ) -> CoxSurvResult {
     let n_obs = y.len();
     let n_vars = xmat[0].len();
@@ -48,7 +48,7 @@ pub fn coxsurv3(
     let mut cum_haz = 0.0;
     let mut current_stratum = strata[sort2[n_obs - 1]];
     let mut strat_start = n_obs - 1;
-    let mut itime = ntime - 1; // Output index (fill from end)
+    let mut itime = ntime - 1;
 
     let mut n = [0.0; 7];
     let mut xsum1 = vec![0.0; n_vars];

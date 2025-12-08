@@ -44,7 +44,7 @@ pub fn survregc2(
     };
 
     let mut icount = n;
-    let mut z = vec![0.0; n * 2]; // Worst case size for interval censoring
+    let mut z = vec![0.0; n * 2];
 
     for person in 0..n {
         let strata = if nstrat > 1 {

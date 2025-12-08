@@ -152,7 +152,7 @@ pub fn coxcount2(
         }
 
         if status[iptr] == 0.0 {
-            // Add to risk set
+
             if atrisk[iptr].is_none() {
                 atrisk[iptr] = Some(who.len());
                 who.push(iptr);

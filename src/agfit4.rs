@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 fn cholesky(mat: &mut [f64], n: usize, tol: f64) -> i32 {
     let mut rank = 0;
     for col in 0..n {
@@ -28,6 +29,7 @@ fn cholesky(mat: &mut [f64], n: usize, tol: f64) -> i32 {
     rank
 }
 
+#[allow(dead_code)]
 fn chsolve2(mat: &[f64], n: usize, b: &mut [f64]) {
     for i in 0..n {
         let diag = i * n + i;

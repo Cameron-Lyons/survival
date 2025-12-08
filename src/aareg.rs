@@ -1,43 +1,43 @@
 use ndarray::{Array1, Array2, Axis};
+use ndarray_linalg::Solve;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
-use ndarray_linalg::{Solve, Lapack};
 
 #[pyclass]
 #[derive(Clone)]
-struct AaregOptions {
+pub struct AaregOptions {
     #[pyo3(get, set)]
-    formula: String,                   // Formula as a string
+    formula: String,
     #[pyo3(get, set)]
-    data: Vec<Vec<f64>>,               // 2D array for the dataset
+    data: Vec<Vec<f64>>,
     #[pyo3(get, set)]
-    variable_names: Vec<String>,       // Names of the variables (columns in data)
+    variable_names: Vec<String>,
     #[pyo3(get, set)]
-    weights: Option<Vec<f64>>,         // Optional weights
+    weights: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    subset: Option<Vec<usize>>,        // Optional subset of data indices
+    subset: Option<Vec<usize>>,
     #[pyo3(get, set)]
-    na_action: Option<String>,         // Action for NA values ("Fail" or "Exclude")
+    na_action: Option<String>,
     #[pyo3(get, set)]
-    qrtol: f64,                        // Tolerance for singularity detection
+    qrtol: f64,
     #[pyo3(get, set)]
-    nmin: Option<usize>,               // Minimum number of observations
+    nmin: Option<usize>,
     #[pyo3(get, set)]
-    dfbeta: bool,                      // Whether to compute dfbeta residuals
+    dfbeta: bool,
     #[pyo3(get, set)]
-    taper: f64,                        // Taper parameter
+    taper: f64,
     #[pyo3(get, set)]
-    test: Vec<String>,                 // List of tests to perform
+    test: Vec<String>,
     #[pyo3(get, set)]
-    cluster: Option<HashMap<String, i32>>, // Optional clustering
+    cluster: Option<HashMap<String, i32>>,
     #[pyo3(get, set)]
-    model: bool,                       // Whether to include the model frame in the output
+    model: bool,
     #[pyo3(get, set)]
-    x: bool,                           // Whether to include the matrix of predictors
+    x: bool,
     #[pyo3(get, set)]
-    y: bool,                           // Whether to include the response vector
+    y: bool,
 }
 
 #[pymethods]
@@ -66,23 +66,23 @@ impl AaregOptions {
 
 #[pyclass]
 #[derive(Clone)]
-struct AaregResult {
+pub struct AaregResult {
     #[pyo3(get, set)]
-    coefficients: Vec<f64>,                  // Estimated coefficients
+    coefficients: Vec<f64>,
     #[pyo3(get, set)]
-    standard_errors: Vec<f64>,               // Standard errors
+    standard_errors: Vec<f64>,
     #[pyo3(get, set)]
-    confidence_intervals: Vec<ConfidenceInterval>, // Confidence intervals
+    confidence_intervals: Vec<ConfidenceInterval>,
     #[pyo3(get, set)]
-    p_values: Vec<f64>,                      // P-values
+    p_values: Vec<f64>,
     #[pyo3(get, set)]
-    goodness_of_fit: f64,                    // Goodness-of-fit statistic
+    goodness_of_fit: f64,
     #[pyo3(get, set)]
-    fit_details: Option<FitDetails>,         // Fit details
+    fit_details: Option<FitDetails>,
     #[pyo3(get, set)]
-    residuals: Option<Vec<f64>>,             // Residuals
+    residuals: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    diagnostics: Option<Diagnostics>,        // Diagnostics
+    diagnostics: Option<Diagnostics>,
 }
 
 #[pyclass]
@@ -98,42 +98,42 @@ struct ConfidenceInterval {
 #[derive(Clone)]
 struct FitDetails {
     #[pyo3(get, set)]
-    iterations: u32,                  // Number of iterations
+    iterations: u32,
     #[pyo3(get, set)]
-    converged: bool,                  // Convergence status
+    converged: bool,
     #[pyo3(get, set)]
-    final_objective_value: f64,       // Final objective value
+    final_objective_value: f64,
     #[pyo3(get, set)]
-    convergence_threshold: f64,       // Convergence threshold
+    convergence_threshold: f64,
     #[pyo3(get, set)]
-    change_in_objective: Option<f64>, // Change in objective
+    change_in_objective: Option<f64>,
     #[pyo3(get, set)]
-    max_iterations: Option<u32>,      // Max iterations allowed
+    max_iterations: Option<u32>,
     #[pyo3(get, set)]
-    optimization_method: Option<String>, // Optimization method used
+    optimization_method: Option<String>,
     #[pyo3(get, set)]
-    warnings: Vec<String>,            // Warnings during fitting
+    warnings: Vec<String>,
 }
 
 #[pyclass]
 #[derive(Clone)]
 struct Diagnostics {
     #[pyo3(get, set)]
-    dfbetas: Option<Vec<f64>>,            // DFBetas
+    dfbetas: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    cooks_distance: Option<Vec<f64>>,     // Cook's distance
+    cooks_distance: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    leverage: Option<Vec<f64>>,           // Leverage values
+    leverage: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    deviance_residuals: Option<Vec<f64>>, // Deviance residuals
+    deviance_residuals: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    martingale_residuals: Option<Vec<f64>>, // Martingale residuals
+    martingale_residuals: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    schoenfeld_residuals: Option<Vec<f64>>, // Schoenfeld residuals
+    schoenfeld_residuals: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    score_residuals: Option<Vec<f64>>,    // Score residuals
+    score_residuals: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    additional_measures: Option<Vec<f64>>, // Additional measures
+    additional_measures: Option<Vec<f64>>,
 }
 
 #[derive(Debug)]
@@ -143,6 +143,7 @@ enum AaregError {
     WeightsError(String),
     CalculationError(String),
     InputError(String),
+    #[allow(dead_code)]
     InternalError(String),
     GenericError(String),
 }
@@ -174,7 +175,8 @@ impl From<AaregError> for PyErr {
 }
 
 #[pyfunction]
-fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
+#[pyo3(name = "aareg")]
+pub fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
     let data_array = Array2::from_shape_vec(
         (options.data.len(), options.data[0].len()),
         options.data.clone().into_iter().flatten().collect(),
@@ -207,7 +209,9 @@ fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     let mut formula_parts = formula.splitn(2, '~');
     let response = formula_parts
         .next()
-        .ok_or_else(|| AaregError::FormulaError("Formula is missing a response variable.".to_string()))?
+        .ok_or_else(|| {
+            AaregError::FormulaError("Formula is missing a response variable.".to_string())
+        })?
         .trim()
         .to_string();
     let covariates_str = formula_parts
@@ -239,10 +243,7 @@ fn apply_subset(
     }
 }
 
-fn apply_weights(
-    data: &Array2<f64>,
-    weights: Option<Vec<f64>>,
-) -> Result<Array2<f64>, AaregError> {
+fn apply_weights(data: &Array2<f64>, weights: Option<Vec<f64>>) -> Result<Array2<f64>, AaregError> {
     match weights {
         Some(w) => {
             if w.len() != data.nrows() {
@@ -307,9 +308,9 @@ fn prepare_data_for_regression(
         name_to_index.insert(name.clone(), i);
     }
 
-    let response_index = name_to_index
-        .get(response_name)
-        .ok_or_else(|| AaregError::FormulaError(format!("Response variable '{}' not found.", response_name)))?;
+    let response_index = name_to_index.get(response_name).ok_or_else(|| {
+        AaregError::FormulaError(format!("Response variable '{}' not found.", response_name))
+    })?;
 
     let mut covariate_indices = Vec::new();
     for cov_name in covariate_names {
@@ -332,97 +333,105 @@ fn perform_aalen_regression(
 ) -> Result<AaregResult, AaregError> {
     let n = y.len();
     let p = x.ncols();
-    
+
     if n == 0 || p == 0 {
-        return Err(AaregError::DataError("Empty dataset or no covariates".to_string()));
+        return Err(AaregError::DataError(
+            "Empty dataset or no covariates".to_string(),
+        ));
     }
-    
+
     if n < p {
-        return Err(AaregError::DataError("More covariates than observations".to_string()));
+        return Err(AaregError::DataError(
+            "More covariates than observations".to_string(),
+        ));
     }
-    
+
     if let Some(nmin) = options.nmin {
         if n < nmin {
-            return Err(AaregError::DataError(
-                format!("Number of observations ({}) is less than minimum required ({})", n, nmin)
-            ));
+            return Err(AaregError::DataError(format!(
+                "Number of observations ({}) is less than minimum required ({})",
+                n, nmin
+            )));
         }
     }
-    
+
     let mut design_matrix = Array2::zeros((n, p + 1));
-    design_matrix.column_mut(0).fill(1.0); // Intercept
+    design_matrix.column_mut(0).fill(1.0);
     for j in 0..p {
         design_matrix.column_mut(j + 1).assign(&x.column(j));
     }
-    
+
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(std::cmp::Ordering::Equal));
-    
+
     let sorted_times: Vec<f64> = indices.iter().map(|&i| y[i]).collect();
-    
+
     let mut sorted_design = Array2::zeros((n, p + 1));
     for (new_idx, &old_idx) in indices.iter().enumerate() {
         for j in 0..(p + 1) {
             sorted_design[[new_idx, j]] = design_matrix[[old_idx, j]];
         }
     }
-    
+
     let mut coefficients = vec![0.0; p + 1];
     let mut cumulative_coefficients = vec![0.0; p + 1];
     let mut standard_errors = vec![0.0; p + 1];
     let mut p_values = vec![1.0; p + 1];
-    
+
     let mut unique_times = Vec::new();
     let mut time_indices = Vec::new();
-    
+
     for (i, &time) in sorted_times.iter().enumerate() {
         if unique_times.is_empty() || ((time - unique_times.last().unwrap()) as f64).abs() > 1e-10 {
             unique_times.push(time);
             time_indices.push(i);
         }
     }
-    
+
     let num_unique_times = unique_times.len();
-    
+
     let mut warnings = Vec::new();
     let mut converged = true;
     let mut iterations = 0;
     let max_iterations = 100;
-    
+
     for t_idx in 0..num_unique_times {
         let current_time = unique_times[t_idx];
         let event_idx = time_indices[t_idx];
-        
+
         let at_risk: Vec<usize> = (event_idx..n).collect();
-        
+
         if at_risk.len() < p + 1 {
-            warnings.push(format!("Insufficient observations at risk at time {:.3}", current_time));
+            warnings.push(format!(
+                "Insufficient observations at risk at time {:.3}",
+                current_time
+            ));
             continue;
         }
-        
-        let at_risk_design = sorted_design.select(Axis(0), &at_risk);
-        
-        let xtx = at_risk_design.t().dot(&at_risk_design);
-        
-        let dN = vec![1.0; at_risk.len()]; // Assuming all events are failures
-        let xt_dn = at_risk_design.t().dot(&Array1::from_vec(dN.clone()));
 
-        let beta_increment = xtx
-            .solve_into(xt_dn)
-            .map_err(|_| AaregError::CalculationError("Failed to solve linear system".to_string()))?;
-        
+        let at_risk_design = sorted_design.select(Axis(0), &at_risk);
+
+        let xtx = at_risk_design.t().dot(&at_risk_design);
+
+        let d_n = vec![1.0; at_risk.len()];
+        let xt_dn = at_risk_design.t().dot(&Array1::from_vec(d_n.clone()));
+
+        let beta_increment = xtx.solve_into(xt_dn).map_err(|_| {
+            AaregError::CalculationError("Failed to solve linear system".to_string())
+        })?;
+
         for i in 0..coefficients.len() {
             cumulative_coefficients[i] += beta_increment[i];
         }
-        
-        let residuals = at_risk_design.dot(&beta_increment) - &Array1::from_vec(dN);
+
+        let residuals = at_risk_design.dot(&beta_increment) - &Array1::from_vec(d_n);
         let residual_variance = residuals.dot(&residuals) / (at_risk.len() as f64 - p as f64 - 1.0);
-        
+
         for i in 0..standard_errors.len() {
             let se: f64 = standard_errors[i];
             standard_errors[i] = (se.powi(2) + residual_variance).sqrt();
         }
-        
+
         iterations += 1;
         if iterations >= max_iterations {
             converged = false;
@@ -430,36 +439,48 @@ fn perform_aalen_regression(
             break;
         }
     }
-    
+
     coefficients = cumulative_coefficients.clone();
-    
+
     for i in 0..p_values.len() {
         if standard_errors[i] > 0.0 {
             let z_stat: f64 = coefficients[i] / standard_errors[i];
             p_values[i] = 2.0 * (1.0 - normal_cdf(z_stat.abs()));
         }
     }
-    
+
     let confidence_intervals: Vec<ConfidenceInterval> = coefficients
         .iter()
         .zip(standard_errors.iter())
         .map(|(&coef, &se)| {
-            let margin = 1.96 * se; // 95% confidence interval
+            let margin = 1.96 * se;
             ConfidenceInterval {
                 lower_bound: coef - margin,
                 upper_bound: coef + margin,
             }
         })
         .collect();
-    
+
     let mean_y = y.mean().unwrap_or(0.0);
     let total_ss: f64 = y.iter().map(|&yi| (yi - mean_y).powi(2)).sum();
     let predicted = design_matrix.dot(&Array1::from_vec(coefficients.clone()));
-    let residual_ss: f64 = y.iter().zip(predicted.iter()).map(|(&yi, &pi)| (yi - pi).powi(2)).sum();
-    let goodness_of_fit = if total_ss > 0.0 { 1.0 - residual_ss / total_ss } else { 0.0 };
-    
-    let residuals: Vec<f64> = y.iter().zip(predicted.iter()).map(|(&yi, &pi)| yi - pi).collect();
-    
+    let residual_ss: f64 = y
+        .iter()
+        .zip(predicted.iter())
+        .map(|(&yi, &pi)| (yi - pi).powi(2))
+        .sum();
+    let goodness_of_fit = if total_ss > 0.0 {
+        1.0 - residual_ss / total_ss
+    } else {
+        0.0
+    };
+
+    let residuals: Vec<f64> = y
+        .iter()
+        .zip(predicted.iter())
+        .map(|(&yi, &pi)| yi - pi)
+        .collect();
+
     Ok(AaregResult {
         coefficients,
         standard_errors,
@@ -495,19 +516,19 @@ fn normal_cdf(x: f64) -> f64 {
 }
 
 fn erf(x: f64) -> f64 {
-    let a1 =  0.254829592;
+    let a1 = 0.254829592;
     let a2 = -0.284496736;
-    let a3 =  1.421413741;
+    let a3 = 1.421413741;
     let a4 = -1.453152027;
-    let a5 =  1.061405429;
-    let p  =  0.3275911;
-    
+    let a5 = 1.061405429;
+    let p = 0.3275911;
+
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
-    
+
     let t = 1.0 / (1.0 + p * x);
     let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-    
+
     sign * y
 }
 

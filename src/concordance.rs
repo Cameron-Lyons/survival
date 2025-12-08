@@ -45,14 +45,14 @@ fn concordance(
             let adjtimewt = timewt[utime];
             utime += 1;
 
-            // Pass 1
+
             while i + ndeath < n && y[sortstop[i + ndeath]] == current_time {
                 let jj = sortstop[i + ndeath];
                 if x[jj] == xsave {
-                    // If this is a tied event, update the appropriate count
+
                     count[2] += 1.0;
                 } else {
-                    // If this is not a tied event, update the concordance/discordance
+
                     for k in 0..i {
                         let kk = sortstop[k];
                         if x[kk] != x[jj] {
@@ -71,9 +71,9 @@ fn concordance(
                 ndeath += 1;
             }
 
-            // Updating the tied events
+
             count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
-            // Pass 2
+
             for j in i..(i + ndeath) {
                 let jj = sortstop[j];
                 addin(&mut nwt, &mut twt, x[jj] as usize, wt[jj]);
@@ -90,9 +90,9 @@ fn concordance(
 
 #[pyfunction]
 fn walkup(nwt: &Vec<f64>, twt: &Vec<f64>, index: usize, wsum: &mut [f64; 3], ntree: usize) {
-    wsum[0] = 0.0; // Greater than
-    wsum[1] = 0.0; // Less than
-    wsum[2] = 0.0; // Equal
+    wsum[0] = 0.0;
+    wsum[1] = 0.0;
+    wsum[2] = 0.0;
 
     for i in 0..ntree {
         if i < index {

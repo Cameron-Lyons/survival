@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub fn agsurv4(ndeath: &[i32], risk: &[f64], wt: &[f64], sn: usize, denom: &[f64], km: &mut [f64]) {
     let n = sn;
     let mut j = 0;

@@ -1,19 +1,19 @@
 struct CoxSurvResult {
     time: Vec<f64>,
     strata: Vec<f64>,
-    count: Vec<f64>, // ntime × 12 matrix (flattened)
-    xbar1: Vec<f64>, // ntime × nvar matrix (flattened)
-    xbar2: Vec<f64>, // ntime × nvar matrix (flattened)
+    count: Vec<f64>,
+    xbar1: Vec<f64>,
+    xbar2: Vec<f64>,
 }
 
 fn coxsurv4(
-    y: &[f64], // Flattened [tstart, stime, status] each of length nused
+    y: &[f64],
     weight: &[f64],
-    sort1: &[usize], // Start time sorted indices
-    sort2: &[usize], // Stop time sorted indices
+    sort1: &[usize],
+    sort2: &[usize],
     position: &[i32],
     strata: &[i32],
-    xmat: &[f64], // Column-major matrix (nvar columns × nused rows)
+    xmat: &[f64],
     risk: &[f64],
 ) -> CoxSurvResult {
     let nused = sort2.len();

@@ -189,7 +189,7 @@ impl CoxFit5 {
 
         for iter in 0..params.maxiter {
             loglik = 0.0;
-            
+
             u.fill(0.0);
             for row in &mut imat {
                 row.fill(0.0);
@@ -214,7 +214,7 @@ impl CoxFit5 {
 
                 let p = self.sort[ii] as usize;
                 let mut zbeta = self.offset[p];
-                
+
                 for i in 0..nvar {
                     zbeta += newbeta[i] * self.covar[i][p];
                 }
@@ -279,13 +279,13 @@ impl CoxFit5 {
             }
 
             oldbeta.copy_from_slice(&newbeta);
-            
+
             cholesky.copy_from_slice(&imat);
             if cholesky_decompose(&mut cholesky, nvar2) != 0 {
                 result.flag = 1000;
                 return result;
             }
-            
+
             work.copy_from_slice(&u);
             if cholesky_solve(&cholesky, &mut work, nvar2) != 0 {
                 result.flag = 1000;

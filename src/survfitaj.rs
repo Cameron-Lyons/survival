@@ -51,19 +51,19 @@ pub fn survfitaj(
     let mut ntemp = Array1::zeros(2 * nstate);
     let mut phat = Array1::from_vec(p0.to_vec());
     let mut chaz = Array1::zeros(nhaz);
-    
+
     let mut person1 = nused - 1;
     let mut person2 = nused - 1;
-    
+
     for i in (0..ntime).rev() {
         let ctime = utime[i];
-        
+
         while person1 > 0 && y[sort1[person1] * 3] >= ctime {
             let idx = sort1[person1];
             let cs = cstate[idx];
             ntemp[cs] -= wt[idx];
             ntemp[cs + nstate] -= 1.0;
-            
+
             if entry && (position[idx] & 0x1) != 0 {
                 if let Some(ref mut ne) = n_enter {
                     ne[[i, cs]] += wt[idx];
@@ -72,13 +72,13 @@ pub fn survfitaj(
             }
             person1 -= 1;
         }
-        
+
         while person2 > 0 && y[sort2[person2] * 3 + 1 >= ctime {
             let idx = sort2[person2];
             let cs = cstate[idx];
             ntemp[cs] += wt[idx];
             ntemp[cs + nstate] += 1.0;
-            
+
             let state = y[idx * 3 + 2] as usize;
             if state > 0 {
                 let trans = hindx[[cs, state - 1]];
@@ -91,7 +91,7 @@ pub fn survfitaj(
             }
             person2 -= 1;
         }
-        
+
         n_risk.row_mut(i).assign(&ntemp);
     }
 
@@ -102,7 +102,7 @@ pub fn survfitaj(
     } else {
         None
     };
-    
+
     for i in 0..ntime {
         for jk in 0..nhaz {
             if n_transition[[i, jk]] > 0.0 {
@@ -115,7 +115,7 @@ pub fn survfitaj(
                 phat[k] += pj * haz;
             }
         }
-        
+
         pstate.row_mut(i).assign(&phat);
         cumhaz.row_mut(i).assign(&chaz);
 
