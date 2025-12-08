@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn norisk(
     time1: &[f64],
     time2: &[f64],

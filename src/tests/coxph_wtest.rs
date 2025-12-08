@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn coxph_wtest(
     nvar2: &mut i32,
     ntest: &i32,
@@ -18,7 +19,9 @@ pub fn coxph_wtest(
 
     cholesky2(&mut var2, tolerch);
 
-    let df = var2.iter().enumerate()
+    let df = var2
+        .iter()
+        .enumerate()
         .filter(|(i, row)| row[*i] > 0.0)
         .count();
     *nvar2 = df as i32;
@@ -33,7 +36,8 @@ pub fn coxph_wtest(
 
         chsolve2(&var2, &mut solve[solve_start..solve_end]);
 
-        let sum = b[b_start..b_end].iter()
+        let sum = b[b_start..b_end]
+            .iter()
             .zip(&solve[solve_start..solve_end])
             .map(|(b_val, solve_val)| b_val * solve_val)
             .sum();
@@ -51,11 +55,7 @@ fn cholesky2(matrix: &mut [Vec<f64>], tolerch: f64) {
                 sum -= matrix[i][k] * matrix[j][k];
             }
             if j == i {
-                matrix[i][j] = if sum > tolerch {
-                    sum.sqrt()
-                } else {
-                    0.0
-                };
+                matrix[i][j] = if sum > tolerch { sum.sqrt() } else { 0.0 };
             } else {
                 matrix[i][j] = if matrix[j][j] != 0.0 {
                     sum / matrix[j][j]

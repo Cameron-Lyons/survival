@@ -1,5 +1,5 @@
+#![allow(dead_code)]
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
-use std::f64::consts::{PI, SQRT_2};
 
 const SMALL: f64 = -200.0;
 const SPI: f64 = 2.506628274631001;
@@ -37,7 +37,7 @@ pub fn survregc1(
     covar: &ArrayView2<f64>,
     nf: usize,
     frail: &ArrayView1<i32>,
-) -> Result<SurvivalLikelihood, &'static str> {
+) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
     let nvar2 = nvar + nstrat;
     let nvar3 = nvar2 + nf;
 
@@ -51,7 +51,7 @@ pub fn survregc1(
     };
 
     let mut sigma;
-    let mut sig2;
+    let mut _sig2;
     let mut strata = 0;
 
     for person in 0..n {
@@ -61,7 +61,7 @@ pub fn survregc1(
         } else {
             sigma = beta[nvar + nf].exp();
         }
-        sig2 = 1.0 / (sigma * sigma);
+        _sig2 = 1.0 / (sigma * sigma);
 
         let mut eta = offset[person];
         for i in 0..nvar {
@@ -84,8 +84,12 @@ pub fn survregc1(
             1 => compute_exact(z, sz, sigma, dist),
             0 => compute_right_censored(z, sz, sigma, dist),
             2 => compute_left_censored(z, sz, sigma, dist),
-            3 => compute_interval_censored(z, sz, time2.unwrap()[person], eta, sigma, dist),
-            _ => return Err("Invalid status value"),
+            3 => {
+                let time2_val = time2
+                    .ok_or_else(|| "Missing time2 for interval censored data".to_string())?[person];
+                compute_interval_censored(z, sz, time2_val, eta, sigma, dist)
+            }
+            _ => return Err("Invalid status value".into()),
         }?;
 
         result.loglik += g * wt[person];
@@ -100,6 +104,7 @@ pub fn survregc1(
             fgrp,
             nf,
             nvar,
+            nstrat,
             strata,
             covar,
             w,
@@ -121,7 +126,7 @@ fn compute_exact(
     sz: f64,
     sigma: f64,
     dist: SurvivalDist,
-) -> Result<(f64, f64, f64, f64, f64, f64), &'static str> {
+) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
     let (f, df, ddf) = match dist {
         SurvivalDist::ExtremeValue => exvalue_d(z, 1),
         SurvivalDist::Logistic => logistic_d(z, 1),
@@ -141,6 +146,97 @@ fn compute_exact(
         let dsg = sz * temp2 - dg * (dsig + 1.0);
         let ddsig = sz.powi(2) * temp2 - dsig * (1.0 + dsig);
         Ok((g, dg, ddg, dsig - 1.0, ddsig, dsg))
+    }
+}
+
+fn compute_right_censored(
+    z: f64,
+    sz: f64,
+    sigma: f64,
+    dist: SurvivalDist,
+) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+    let (f, df, _ddf) = match dist {
+        SurvivalDist::ExtremeValue => exvalue_d(z, 2),
+        SurvivalDist::Logistic => logistic_d(z, 2),
+        SurvivalDist::Gaussian => gauss_d(z, 2),
+    };
+
+    if f <= 0.0 || f >= 1.0 {
+        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+    } else {
+        let g = f.ln();
+        let temp = df / (f * sigma);
+        let dg = temp;
+        let dsig = temp * sz;
+        let ddg = -dg.powi(2);
+        let dsg = -sz * dg.powi(2);
+        let ddsig = -sz.powi(2) * dg.powi(2);
+        Ok((g, dg, ddg, dsig, ddsig, dsg))
+    }
+}
+
+fn compute_left_censored(
+    z: f64,
+    sz: f64,
+    sigma: f64,
+    dist: SurvivalDist,
+) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+    let (f, df, _ddf) = match dist {
+        SurvivalDist::ExtremeValue => exvalue_d(z, 2),
+        SurvivalDist::Logistic => logistic_d(z, 2),
+        SurvivalDist::Gaussian => gauss_d(z, 2),
+    };
+
+    if f <= 0.0 || f >= 1.0 {
+        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+    } else {
+        let g = (1.0 - f).ln();
+        let temp = -df / ((1.0 - f) * sigma);
+        let dg = temp;
+        let dsig = temp * sz;
+        let ddg = -dg.powi(2);
+        let dsg = -sz * dg.powi(2);
+        let ddsig = -sz.powi(2) * dg.powi(2);
+        Ok((g, dg, ddg, dsig, ddsig, dsg))
+    }
+}
+
+fn compute_interval_censored(
+    z: f64,
+    sz: f64,
+    time2: f64,
+    eta: f64,
+    sigma: f64,
+    dist: SurvivalDist,
+) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+    let sz2 = time2 - eta;
+    let z2 = sz2 / sigma;
+
+    let (f1, df1, _ddf1) = match dist {
+        SurvivalDist::ExtremeValue => exvalue_d(z, 2),
+        SurvivalDist::Logistic => logistic_d(z, 2),
+        SurvivalDist::Gaussian => gauss_d(z, 2),
+    };
+
+    let (f2, df2, _ddf2) = match dist {
+        SurvivalDist::ExtremeValue => exvalue_d(z2, 2),
+        SurvivalDist::Logistic => logistic_d(z2, 2),
+        SurvivalDist::Gaussian => gauss_d(z2, 2),
+    };
+
+    let diff = f2 - f1;
+    if diff <= 0.0 {
+        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+    } else {
+        let g = diff.ln();
+        let temp1 = df1 / (diff * sigma);
+        let temp2 = df2 / (diff * sigma);
+        let dg = temp2 - temp1;
+        let dsig = (temp2 * sz2 - temp1 * sz) / sigma;
+        let ddg = -(dg.powi(2));
+        let dsg = -(sz * temp1.powi(2) + sz2 * temp2.powi(2)) / sigma;
+        let ddsig = -(sz.powi(2) * temp1.powi(2) + sz2.powi(2) * temp2.powi(2)) / (sigma * sigma);
+        Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
 
@@ -221,6 +317,7 @@ fn update_derivatives(
     fgrp: usize,
     nf: usize,
     nvar: usize,
+    nstrat: usize,
     strata: usize,
     covar: &ArrayView2<f64>,
     w: f64,
@@ -229,8 +326,8 @@ fn update_derivatives(
     dsig: f64,
     ddsig: f64,
     dsg: f64,
-    sigma: f64,
-    sz: f64,
+    _sigma: f64,
+    _sz: f64,
 ) {
     if nf > 0 {
         res.u[fgrp] += dg * w;

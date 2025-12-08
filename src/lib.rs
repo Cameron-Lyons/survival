@@ -1,40 +1,16 @@
 use pyo3::prelude::*;
 
-mod regression {
-    pub mod aareg;
-    pub mod agfit4;
-    pub mod agfit5;
-}
-
-mod surv_analysis {
-    pub mod agsurv4;
-    pub mod agsurv5;
-}
-
-mod concordance {
-    pub mod concordance1;
-    pub mod concordance3;
-    pub mod concordance5;
-}
-
-mod matrix {
-    pub mod cdecomp;
-    pub mod chinv2;
-}
-
-mod scoring {
-    pub mod agscore2;
-    pub mod agscore3;
-}
-
-mod python {
-    pub mod pyears3b;
-    pub mod pystep;
-}
-
-mod core {
-    pub mod pspline;
-}
+mod concordance;
+mod core;
+mod matrix;
+mod python;
+mod regression;
+mod residuals;
+mod scoring;
+mod specialized;
+mod surv_analysis;
+mod tests;
+mod utilities;
 
 use concordance::concordance1::perform_concordance1_calculation;
 use concordance::concordance3::perform_concordance3_calculation;

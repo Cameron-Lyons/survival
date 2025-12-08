@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn coxscho(
     nused: usize,
     nvar: usize,

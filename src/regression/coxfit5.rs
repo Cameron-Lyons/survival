@@ -1,7 +1,45 @@
-use libc::{calloc, free, malloc};
-use std::ffi::c_void;
-use std::mem::{forget, size_of};
-use std::ptr::null_mut;
+#![allow(dead_code)]
+use crate::core::coxsafe::coxsafe;
+
+pub struct CoxParams {
+    pub beta: Vec<f64>,
+    pub fbeta: Vec<f64>,
+    pub fdiag: Vec<f64>,
+    pub nfrail: usize,
+    pub method: i32,
+    pub ptype: i32,
+    pub pdiag: i32,
+    pub strata: Vec<i32>,
+    pub maxiter: usize,
+    pub eps: f64,
+}
+
+pub struct CoxData {
+    pub nused: usize,
+    pub nvar: usize,
+    pub y: Vec<f64>,
+    pub covar2: Vec<f64>,
+    pub weights2: Vec<f64>,
+    pub offset2: Vec<f64>,
+    pub sorted: Vec<i32>,
+    pub strata: Vec<i32>,
+    pub docenter: Vec<i32>,
+    pub fmat: Vec<Vec<f64>>,
+}
+
+pub struct CoxResult {
+    pub means: Vec<f64>,
+    pub beta: Vec<f64>,
+    pub u: Vec<f64>,
+    pub imat: Vec<Vec<f64>>,
+    pub loglik: f64,
+    pub flag: i32,
+    pub maxiter: usize,
+    pub fbeta: Vec<f64>,
+    pub fdiag: Vec<f64>,
+    pub jmat: Vec<Vec<f64>>,
+    pub expect: Vec<f64>,
+}
 
 pub struct CoxFit5 {
     covar: Vec<Vec<f64>>,
@@ -72,8 +110,8 @@ impl CoxFit5 {
         }
 
         self.a = vec![0.0; 4 * nvar2 + 6 * nused];
-        let mut oldbeta = vec![0.0; nvar2];
-        let mut a2 = vec![0.0; nvar2];
+        let _oldbeta = vec![0.0; nvar2];
+        let _a2 = vec![0.0; nvar2];
         self.mark = vec![0.0; nused];
         self.wtave = vec![0.0; nused];
         self.weights = data.weights2.clone();
@@ -117,7 +155,7 @@ impl CoxFit5 {
         }
 
         let mut loglik = 0.0;
-        let mut u = vec![0.0; nvar];
+        let u = vec![0.0; nvar];
         let mut denom = 0.0;
         let mut efron_wt = 0.0;
         istrat = 0;
@@ -176,7 +214,7 @@ impl CoxFit5 {
         let mut newbeta = vec![0.0; nvar2];
         let mut u = vec![0.0; nvar2];
         let mut imat = vec![vec![0.0; nvar2]; nvar2];
-        let mut cholesky = vec![vec![0.0; nvar2]; nvar2];
+        let mut cholesky_mat = vec![vec![0.0; nvar2]; nvar2];
         let mut work = vec![0.0; nvar2];
         let mut loglik = 0.0;
 
@@ -234,8 +272,16 @@ impl CoxFit5 {
 
                 for i in 0..nvar2 {
                     for j in 0..nvar2 {
-                        let x_i = if i < nvar { self.covar[i][p] } else { data.fmat[i - nvar][p] };
-                        let x_j = if j < nvar { self.covar[j][p] } else { data.fmat[j - nvar][p] };
+                        let x_i = if i < nvar {
+                            self.covar[i][p]
+                        } else {
+                            data.fmat[i - nvar][p]
+                        };
+                        let x_j = if j < nvar {
+                            self.covar[j][p]
+                        } else {
+                            data.fmat[j - nvar][p]
+                        };
                         risk_sum2[i][j] += risk * x_i * x_j;
                     }
                 }
@@ -248,20 +294,32 @@ impl CoxFit5 {
                 if self.mark[p] > 0.0 {
                     let ndead = self.mark[p] as usize;
                     for k in 0..ndead {
-                        let temp = k as f64 * params.method / ndead as f64;
+                        let temp = k as f64 * params.method as f64 / ndead as f64;
                         let d2 = denom - temp * efron_wt;
                         loglik -= self.wtave[p] * d2.ln();
 
                         let wt = self.wtave[p] / d2;
                         for i in 0..nvar2 {
-                            let x_i = if i < nvar { self.covar[i][p] } else { data.fmat[i - nvar][p] };
+                            let x_i = if i < nvar {
+                                self.covar[i][p]
+                            } else {
+                                data.fmat[i - nvar][p]
+                            };
                             u[i] += wt * (risk_sum[i] - temp * efron_wt * x_i);
                         }
 
                         for i in 0..nvar2 {
                             for j in 0..nvar2 {
-                                let x_i = if i < nvar { self.covar[i][p] } else { data.fmat[i - nvar][p] };
-                                let x_j = if j < nvar { self.covar[j][p] } else { data.fmat[j - nvar][p] };
+                                let x_i = if i < nvar {
+                                    self.covar[i][p]
+                                } else {
+                                    data.fmat[i - nvar][p]
+                                };
+                                let x_j = if j < nvar {
+                                    self.covar[j][p]
+                                } else {
+                                    data.fmat[j - nvar][p]
+                                };
                                 imat[i][j] += wt * (risk_sum2[i][j] - temp * efron_wt * x_i * x_j);
                             }
                         }
@@ -280,17 +338,18 @@ impl CoxFit5 {
 
             oldbeta.copy_from_slice(&newbeta);
 
-            cholesky.copy_from_slice(&imat);
-            if cholesky_decompose(&mut cholesky, nvar2) != 0 {
+            for i in 0..nvar2 {
+                for j in 0..nvar2 {
+                    cholesky_mat[i][j] = imat[i][j];
+                }
+            }
+            if cholesky(&mut cholesky_mat, 1e-10) != 0 {
                 result.flag = 1000;
                 return result;
             }
 
             work.copy_from_slice(&u);
-            if cholesky_solve(&cholesky, &mut work, nvar2) != 0 {
-                result.flag = 1000;
-                return result;
-            }
+            cholesky_solve(&cholesky_mat, &mut work);
 
             for i in 0..nvar2 {
                 newbeta[i] += work[i];
@@ -311,7 +370,10 @@ impl CoxFit5 {
                 result.beta = newbeta[..nvar].to_vec();
                 result.fbeta = newbeta[nvar..].to_vec();
                 result.u = u[..nvar].to_vec();
-                result.imat = imat[..nvar].iter().map(|row| row[..nvar].to_vec()).collect();
+                result.imat = imat[..nvar]
+                    .iter()
+                    .map(|row| row[..nvar].to_vec())
+                    .collect();
                 result.fdiag = params.fdiag.clone();
                 return result;
             }
@@ -323,10 +385,11 @@ impl CoxFit5 {
         result.beta = newbeta[..nvar].to_vec();
         result.fbeta = newbeta[nvar..].to_vec();
         result.u = u[..nvar].to_vec();
-        result.imat = imat[..nvar].iter().map(|row| row[..nvar].to_vec()).collect();
+        result.imat = imat[..nvar]
+            .iter()
+            .map(|row| row[..nvar].to_vec())
+            .collect();
         result.fdiag = params.fdiag.clone();
-        result
-
         result.flag = 1000;
         result
     }

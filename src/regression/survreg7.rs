@@ -1,6 +1,6 @@
-use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
-use ndarray_linalg::{Cholesky, Inverse, UPLO};
-use std::f64::EPSILON;
+#![allow(dead_code)]
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
 
 #[derive(Debug)]
 pub struct SurvivalResult {
@@ -31,8 +31,8 @@ pub fn survreg(
     ptype: PenaltyType,
     pdiag: bool,
     nfrail: usize,
-    fgrp: &[usize],
-) -> Result<SurvivalResult, &'static str> {
+    _fgrp: &[usize],
+) -> Result<SurvivalResult, Box<dyn std::error::Error>> {
     let n = y.nrows();
     let ny = y.ncols();
     let nvar2 = nvar + nstrat;
@@ -44,29 +44,42 @@ pub fn survreg(
     let mut jdiag = Array1::zeros(nfrail);
     let mut u = Array1::zeros(nvar3);
     let mut newbeta = beta.clone();
-    let mut loglik = 0.0;
     let mut penalty_val = 0.0;
-    let mut flag = 0;
+    let flag = 0;
 
-    let (time1, time2, status) = match ny {
-        2 => (y.column(0), None, y.column(1)),
-        3 => (y.column(0), Some(y.column(1)), y.column(2)),
-        _ => return Err("Invalid y matrix columns"),
+    let time1_vec: Vec<f64> = y.column(0).iter().cloned().collect();
+    let status_vec: Vec<f64> = if ny == 2 {
+        y.column(1).iter().cloned().collect()
+    } else {
+        y.column(2).iter().cloned().collect()
+    };
+    let time2_vec: Option<Vec<f64>> = if ny == 3 {
+        Some(y.column(1).iter().cloned().collect())
+    } else {
+        None
     };
 
-    loglik = calculate_likelihood(
+    let time1_arr = Array1::from_vec(time1_vec);
+    let status_arr = Array1::from_vec(status_vec);
+    let time2_arr = time2_vec.map(|v| Array1::from_vec(v));
+
+    let time1_view = time1_arr.view();
+    let status_view = status_arr.view();
+    let time2_view = time2_arr.as_ref().map(|v| v.view());
+
+    let mut loglik = calculate_likelihood(
         n,
         nvar,
         nstrat,
         &beta,
         &distribution,
         strata,
-        offsets,
-        &time1,
-        time2,
-        &status,
-        weights,
-        covariates,
+        &offsets.view(),
+        &time1_view,
+        time2_view.as_ref(),
+        &status_view,
+        &weights.view(),
+        &covariates.view(),
         &mut hmat,
         &mut jj,
         &mut u,
@@ -82,12 +95,16 @@ pub fn survreg(
     let mut iter = 0;
     while iter < max_iter {
         let delta = match hmat.cholesky(UPLO::Lower) {
-            Ok(chol) => chol.solve(&u).map_err(|_| "Cholesky solve failed")?,
+            Ok(chol) => chol
+                .solve(&u)
+                .map_err(|_| "Cholesky solve failed".to_string())?,
             Err(_) => {
                 let jj_chol = jj
                     .cholesky(UPLO::Lower)
-                    .map_err(|_| "Cholesky decomposition failed")?;
-                jj_chol.solve(&u).map_err(|_| "Cholesky solve failed")?
+                    .map_err(|_| "Cholesky decomposition failed".to_string())?;
+                jj_chol
+                    .solve(&u)
+                    .map_err(|_| "Cholesky solve failed".to_string())?
             }
         };
 
@@ -103,12 +120,12 @@ pub fn survreg(
             &newbeta,
             &distribution,
             strata,
-            offsets,
-            &time1,
-            time2,
-            &status,
-            weights,
-            covariates,
+            &offsets.view(),
+            &time1_view,
+            time2_view.as_ref(),
+            &status_view,
+            &weights.view(),
+            &covariates.view(),
             &mut hmat,
             &mut jj,
             &mut u,
@@ -137,13 +154,13 @@ pub fn survreg(
                 nvar,
                 nstrat,
                 strata,
-                offsets,
-                &time1,
-                time2,
-                &status,
-                weights,
-                covariates,
-                distribution,
+                &offsets.view(),
+                &time1_view,
+                time2_view.as_ref(),
+                &status_view,
+                &weights.view(),
+                &covariates.view(),
+                &distribution,
             )?;
             newbeta
                 .iter_mut()
@@ -173,75 +190,76 @@ pub fn survreg(
 }
 
 fn calculate_likelihood(
-    n: usize,
-    nvar: usize,
-    nstrat: usize,
-    beta: &[f64],
-    distribution: &Distribution,
-    strata: &[usize],
-    offsets: &ArrayView1<f64>,
-    time1: &ArrayView1<f64>,
-    time2: Option<&ArrayView1<f64>>,
-    status: &ArrayView1<f64>,
-    weights: &ArrayView1<f64>,
-    covariates: &ArrayView2<f64>,
-    hmat: &mut Array2<f64>,
-    jj: &mut Array2<f64>,
-    u: &mut Array1<f64>,
-    hdiag: &mut Array1<f64>,
-    jdiag: &mut Array1<f64>,
-) -> Result<f64, &'static str> {
+    _n: usize,
+    _nvar: usize,
+    _nstrat: usize,
+    _beta: &[f64],
+    _distribution: &Distribution,
+    _strata: &[usize],
+    _offsets: &ArrayView1<f64>,
+    _time1: &ArrayView1<f64>,
+    _time2: Option<&ArrayView1<f64>>,
+    _status: &ArrayView1<f64>,
+    _weights: &ArrayView1<f64>,
+    _covariates: &ArrayView2<f64>,
+    _hmat: &mut Array2<f64>,
+    _jj: &mut Array2<f64>,
+    _u: &mut Array1<f64>,
+    _hdiag: &mut Array1<f64>,
+    _jdiag: &mut Array1<f64>,
+) -> Result<f64, Box<dyn std::error::Error>> {
     Ok(0.0)
 }
 
 fn apply_penalties(
-    hmat: &mut Array2<f64>,
-    jj: &mut Array2<f64>,
-    hdiag: &mut Array1<f64>,
-    jdiag: &mut Array1<f64>,
-    u: &mut Array1<f64>,
-    beta: &[f64],
-    ptype: PenaltyType,
-    pdiag: bool,
-) -> Result<f64, &'static str> {
+    _hmat: &mut Array2<f64>,
+    _jj: &mut Array2<f64>,
+    _hdiag: &mut Array1<f64>,
+    _jdiag: &mut Array1<f64>,
+    _u: &mut Array1<f64>,
+    _beta: &[f64],
+    _ptype: PenaltyType,
+    _pdiag: bool,
+) -> Result<f64, Box<dyn std::error::Error>> {
     Ok(0.0)
 }
 
 fn golden_section_search(
-    beta: &[f64],
-    newbeta: &[f64],
-    current_loglik: f64,
-    n: usize,
-    nvar: usize,
-    nstrat: usize,
-    strata: &[usize],
-    offsets: &ArrayView1<f64>,
-    time1: &ArrayView1<f64>,
-    time2: Option<&ArrayView1<f64>>,
-    status: &ArrayView1<f64>,
-    weights: &ArrayView1<f64>,
-    covariates: &ArrayView2<f64>,
-    distribution: Distribution,
-) -> Result<f64, &'static str> {
+    _beta: &[f64],
+    _newbeta: &[f64],
+    _current_loglik: f64,
+    _n: usize,
+    _nvar: usize,
+    _nstrat: usize,
+    _strata: &[usize],
+    _offsets: &ArrayView1<f64>,
+    _time1: &ArrayView1<f64>,
+    _time2: Option<&ArrayView1<f64>>,
+    _status: &ArrayView1<f64>,
+    _weights: &ArrayView1<f64>,
+    _covariates: &ArrayView2<f64>,
+    _distribution: &Distribution,
+) -> Result<f64, Box<dyn std::error::Error>> {
     Ok(0.5)
 }
 
 fn calculate_inverse(
     hmat: &Array2<f64>,
-    nvar3: usize,
-    nfrail: usize,
-    hdiag: &Array1<f64>,
-    tol_chol: f64,
-) -> Result<Array2<f64>, &'static str> {
-    Ok(hmat.inv().map_err(|_| "Matrix inversion failed")?)
+    _nvar3: usize,
+    _nfrail: usize,
+    _hdiag: &Array1<f64>,
+    _tol_chol: f64,
+) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
+    Ok(hmat
+        .inv()
+        .map_err(|_| "Matrix inversion failed".to_string())?)
 }
 
-#[derive(Debug, Clone)]
 pub enum Distribution {
     ExtremeValue,
     Logistic,
     Gaussian,
-    Custom(fn(f64) -> f64),
+    Custom(Box<dyn Fn(f64) -> f64 + Send + Sync>),
 }
 
 #[derive(Debug, Clone, Copy)]

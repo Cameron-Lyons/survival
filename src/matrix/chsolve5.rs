@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 fn chsolve5(matrix: &mut [&mut [f64]], n: usize, y: &mut [f64], flag: i32) {
     if flag < 2 {
         for i in 0..n {

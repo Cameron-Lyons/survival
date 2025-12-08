@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use ndarray::{Array2, ArrayView2};
 
 pub fn coxsurv1(

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn coxdetail(
     nused: usize,
     nvar: usize,
@@ -35,9 +36,11 @@ pub fn coxdetail(
         }
     }
 
-    let start = &mut y[0..nused];
-    let stop = &mut y[nused..2 * nused];
-    let event = &mut y[2 * nused..3 * nused];
+    let (start_slice, rest1) = y.split_at_mut(nused);
+    let (stop_slice, rest2) = rest1.split_at_mut(nused);
+    let event = &mut rest2[0..nused];
+    let start = start_slice;
+    let stop = stop_slice;
 
     let mut person = 0;
     let mut ideath = 0;

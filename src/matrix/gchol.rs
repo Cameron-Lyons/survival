@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn gchol(matrix: &[f64], n: usize, toler: f64) -> Vec<f64> {
     let mut gc = matrix.to_vec();
     let _status = cholesky5(&mut gc, n, toler);

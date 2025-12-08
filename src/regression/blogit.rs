@@ -1,7 +1,21 @@
+#![allow(dead_code)]
 use pyo3::prelude::*;
+use statrs::distribution::{ContinuousCDF, Normal};
+
+#[allow(dead_code)]
+fn probit(p: f64) -> f64 {
+    let normal = Normal::new(0.0, 1.0).unwrap();
+    normal.inverse_cdf(p)
+}
+
+#[allow(dead_code)]
+fn cloglog(p: f64) -> f64 {
+    (-(1.0 - p).ln()).ln()
+}
 
 #[pyclass]
 struct LinkFunctionParams {
+    #[allow(dead_code)]
     edge: f64,
 }
 
@@ -28,7 +42,7 @@ impl LinkFunctionParams {
         } else {
             input
         };
-        adjusted_input.probit() - (1.0 - adjusted_input).probit()
+        probit(adjusted_input) - probit(1.0 - adjusted_input)
     }
 
     fn bcloglog(&self, input: f64) -> f64 {
@@ -39,20 +53,18 @@ impl LinkFunctionParams {
         } else {
             input
         };
-        adjusted_input.cloglog() - (1.0 - adjusted_input).cloglog()
+        cloglog(adjusted_input) - cloglog(1.0 - adjusted_input)
     }
 
     fn blog(&self, input: f64) -> f64 {
-        let adjusted_input = if input < self.edge {
-            self.edge
-        } else {
-            input
-        };
-
+        let adjusted_input = if input < self.edge { self.edge } else { input };
+        adjusted_input.ln()
+    }
 }
 
 #[pymodule]
-fn pyLinkFunctionParams(py: Python, m: &PyModule) -> PyResult<()> {
+#[pyo3(name = "pyLinkFunctionParams")]
+fn py_link_function_params(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LinkFunctionParams>()?;
     Ok(())
-    }
+}

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub struct CoxSurvResult {
     pub time: Vec<f64>,
     pub strata: Vec<i32>,
@@ -58,7 +59,7 @@ pub fn coxsurv3(
     let mut i = n_obs as isize - 1;
     while i >= 0 {
         let idx = sort2[i as usize];
-        let (time, status) = y[idx];
+        let (time, _status) = y[idx];
         let stratum = strata[idx];
 
         if stratum != current_stratum {

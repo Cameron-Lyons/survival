@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 fn cox_score_residuals(
     y: &[f64],
     strata: &[i32],

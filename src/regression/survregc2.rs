@@ -1,5 +1,5 @@
+#![allow(dead_code)]
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
-use std::f64::consts::PI;
 
 const SMALL: f64 = -200.0;
 
@@ -30,7 +30,7 @@ pub fn survregc2(
     nf: usize,
     frail: &ArrayView1<i32>,
     callback: CallbackFunc,
-) -> Result<SurvivalLikelihood, &'static str> {
+) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
     let nvar2 = nvar + nstrat;
     let nvar3 = nvar2 + nf;
 
@@ -76,7 +76,7 @@ pub fn survregc2(
                 z[icount] = (t2[person] - eta) / sigma;
                 icount += 1;
             } else {
-                return Err("Missing time2 for interval censored data");
+                return Err("Missing time2 for interval censored data".into());
             }
         }
     }
@@ -97,7 +97,7 @@ pub fn survregc2(
         } else {
             beta[nvar + nf].exp()
         };
-        let sig2 = 1.0 / (sigma * sigma);
+        let _sig2 = 1.0 / (sigma * sigma);
 
         let zz = z[person];
         let sz = zz * sigma;
@@ -108,7 +108,7 @@ pub fn survregc2(
             0 => process_right_censored(person, sigma, sz, &callback_result),
             2 => process_left_censored(person, sigma, sz, &callback_result),
             3 => process_interval_censored(person, &mut icount, sigma, zz, &z, &callback_result),
-            _ => return Err("Invalid status code"),
+            _ => return Err("Invalid status code".into()),
         }?;
 
         result.loglik += g * wt[person];
@@ -119,6 +119,7 @@ pub fn survregc2(
         update_derivatives(
             &mut result,
             person,
+            nstrat,
             strata,
             nvar,
             nf,
@@ -143,7 +144,7 @@ fn process_exact(
     sigma: f64,
     sz: f64,
     callback_result: &[f64],
-) -> Result<(f64, f64, f64, f64, f64, f64), &'static str> {
+) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
     let f = callback_result[person * 5 + 2];
     if f <= 0.0 {
         Ok((SMALL, -sz / sigma, -1.0 / sigma, 0.0, 0.0, 0.0))
@@ -165,9 +166,86 @@ fn process_exact(
     }
 }
 
+fn process_right_censored(
+    person: usize,
+    sigma: f64,
+    sz: f64,
+    callback_result: &[f64],
+) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+    let f = callback_result[person * 5 + 2];
+    if f <= 0.0 || f >= 1.0 {
+        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+    } else {
+        let df = callback_result[person * 5 + 3];
+        let g = f.ln();
+        let temp = df / (f * sigma);
+        let dg = temp;
+        let dsig = temp * sz;
+        let ddg = -dg.powi(2);
+        let dsg = -sz * dg.powi(2);
+        let ddsig = -sz.powi(2) * dg.powi(2);
+        Ok((g, dg, ddg, dsig, ddsig, dsg))
+    }
+}
+
+fn process_left_censored(
+    person: usize,
+    sigma: f64,
+    sz: f64,
+    callback_result: &[f64],
+) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+    let f = callback_result[person * 5 + 2];
+    if f <= 0.0 || f >= 1.0 {
+        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+    } else {
+        let df = callback_result[person * 5 + 3];
+        let g = (1.0 - f).ln();
+        let temp = -df / ((1.0 - f) * sigma);
+        let dg = temp;
+        let dsig = temp * sz;
+        let ddg = -dg.powi(2);
+        let dsg = -sz * dg.powi(2);
+        let ddsig = -sz.powi(2) * dg.powi(2);
+        Ok((g, dg, ddg, dsig, ddsig, dsg))
+    }
+}
+
+fn process_interval_censored(
+    person: usize,
+    icount: &mut usize,
+    sigma: f64,
+    zz: f64,
+    z: &[f64],
+    callback_result: &[f64],
+) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+    let f1 = callback_result[person * 5 + 2];
+    let f2 = callback_result[*icount * 5 + 2];
+    *icount += 1;
+
+    let diff = f2 - f1;
+    if diff <= 0.0 {
+        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+    } else {
+        let df1 = callback_result[person * 5 + 3];
+        let df2 = callback_result[(*icount - 1) * 5 + 3];
+        let sz2 = zz * sigma;
+        let g = diff.ln();
+        let temp1 = df1 / (diff * sigma);
+        let temp2 = df2 / (diff * sigma);
+        let dg = temp2 - temp1;
+        let dsig = (temp2 * sz2 - temp1 * z[person] * sigma) / sigma;
+        let ddg = -(dg.powi(2));
+        let dsg = -(z[person] * temp1.powi(2) + zz * temp2.powi(2)) * sigma;
+        let ddsig =
+            -(z[person].powi(2) * temp1.powi(2) + zz.powi(2) * temp2.powi(2)) * sigma.powi(2);
+        Ok((g, dg, ddg, dsig, ddsig, dsg))
+    }
+}
+
 fn update_derivatives(
     res: &mut SurvivalLikelihood,
     person: usize,
+    nstrat: usize,
     strata: usize,
     nvar: usize,
     nf: usize,
@@ -179,8 +257,8 @@ fn update_derivatives(
     dsig: f64,
     ddsig: f64,
     dsg: f64,
-    sigma: f64,
-    sz: f64,
+    _sigma: f64,
+    _sz: f64,
 ) {
     if nf > 0 {
         let fgrp = (frail[person] - 1) as usize;

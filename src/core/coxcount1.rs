@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub struct CoxCountOutput {
     pub time: Vec<f64>,
     pub nrisk: Vec<i32>,
@@ -5,17 +6,18 @@ pub struct CoxCountOutput {
     pub status: Vec<i32>,
 }
 
+#[allow(dead_code)]
 pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput {
     let n = time.len();
     let mut ntime = 0;
     let mut nrow = 0;
-    let mut stratastart = 0;
+    let mut _stratastart = 0; // Used later in the function
     let mut nrisk = 0;
 
     let mut i = 0;
     while i < n {
         if strata[i] == 1 {
-            stratastart = i;
+            _stratastart = i;
             nrisk = 0;
         }
         nrisk += 1;
@@ -43,12 +45,12 @@ pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput
     let mut index_vec = Vec::with_capacity(nrow);
     let mut status_vec = Vec::with_capacity(nrow);
 
-    let mut stratastart = 0;
+    let mut _stratastart = 0;
     let mut i = 0;
 
     while i < n {
         if strata[i] == 1 {
-            stratastart = i;
+            _stratastart = i;
         }
 
         if status[i] == 1.0 {
@@ -62,7 +64,7 @@ pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput
                 j += 1;
             }
 
-            for k in stratastart..i {
+            for k in _stratastart..i {
                 status_vec.push(0);
                 index_vec.push((k + 1) as i32);
             }
@@ -73,7 +75,7 @@ pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput
             }
 
             time_vec.push(dtime);
-            nrisk_vec.push((j - stratastart) as i32);
+            nrisk_vec.push((j - _stratastart) as i32);
             i = j - 1;
         }
         i += 1;
@@ -87,6 +89,7 @@ pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput
     }
 }
 
+#[allow(dead_code)]
 pub fn coxcount2(
     time1: &[f64],
     time2: &[f64],
@@ -152,7 +155,6 @@ pub fn coxcount2(
         }
 
         if status[iptr] == 0.0 {
-
             if atrisk[iptr].is_none() {
                 atrisk[iptr] = Some(who.len());
                 who.push(iptr);

@@ -1,5 +1,24 @@
-use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
-use ndarray_stats::QuantileExt;
+#![allow(dead_code)]
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+
+fn update_used(
+    used: &mut Array2<i32>,
+    stratum: i32,
+    start: usize,
+    end: usize,
+    covar: &ArrayView2<f64>,
+    sort: &ArrayView1<usize>,
+) {
+    let stratum_idx = stratum as usize;
+    for i in start..end {
+        let person = sort[i];
+        for j in 0..covar.ncols() {
+            if covar[(person, j)] != 0.0 {
+                used[(stratum_idx, j)] += 1;
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ZphResult {
@@ -31,7 +50,7 @@ pub fn zph1(
 
     let mut current_stratum = -1;
     let mut k = 0;
-    let mut ndead = 0;
+    let mut _ndead = 0;
     for (i, &idx) in sort.iter().enumerate() {
         let stratum = strata[idx];
         if stratum != current_stratum {
@@ -40,9 +59,9 @@ pub fn zph1(
             }
             current_stratum = stratum;
             k = i;
-            ndead = 0;
+            _ndead = 0;
         }
-        ndead += y.1[idx] as usize;
+        _ndead += y.1[idx] as usize;
     }
     if current_stratum != -1 {
         update_used(&mut used, current_stratum, k, sort.len(), &covar, &sort);
@@ -63,6 +82,7 @@ pub fn zph1(
     let mut cmat2 = Array2::zeros((nvar, nvar));
     let mut nevent_counter = nevent;
 
+    #[allow(unused_comparisons)]
     while ip >= 0 {
         let person = sort[ip];
         if strata[person] != cstrat {
@@ -76,9 +96,10 @@ pub fn zph1(
         let timewt = gt[person];
         let mut ndead_current = 0;
         let mut deadwt = 0.0;
-        let mut denom2 = 0.0;
+        let mut _denom2 = 0.0;
 
-        let mut ip_start = ip;
+        let _ip_start = ip;
+        #[allow(unused_comparisons)]
         while ip >= 0 {
             let p = sort[ip];
             if y.0[p] != dtime || strata[p] != cstrat {
@@ -96,7 +117,7 @@ pub fn zph1(
             } else {
                 ndead_current += 1;
                 deadwt += weights[p];
-                denom2 += risk;
+                _denom2 += risk;
                 nevent_counter -= 1;
                 for i in 0..nvar {
                     schoen[(nevent_counter, i)] = centered_covar[(p, i)];
@@ -113,7 +134,6 @@ pub fn zph1(
 
         if ndead_current > 0 {
             match method {
-
                 0 => process_breslow(
                     &mut u,
                     &mut imat,
@@ -161,5 +181,78 @@ pub fn zph1(
         imat,
         schoen,
         used,
+    }
+}
+
+fn process_breslow(
+    u: &mut Array1<f64>,
+    imat: &mut Array2<f64>,
+    _schoen: &mut Array2<f64>,
+    _nevent_counter: usize,
+    _ndead_current: usize,
+    deadwt: f64,
+    timewt: f64,
+    a: &Array1<f64>,
+    a2: &mut Array1<f64>,
+    cmat: &Array2<f64>,
+    cmat2: &mut Array2<f64>,
+    denom: &mut f64,
+    nvar: usize,
+) {
+    let wt = deadwt / *denom;
+    for i in 0..nvar {
+        u[i] -= wt * a[i];
+        u[i + nvar] -= timewt * wt * a[i];
+        for j in 0..=i {
+            imat[(i, j)] += wt * cmat[(i, j)];
+            imat[(i, j + nvar)] += timewt * wt * cmat[(i, j)];
+            imat[(i + nvar, j + nvar)] += timewt * timewt * wt * cmat[(i, j)];
+        }
+    }
+    *denom += a2.iter().sum::<f64>();
+    for i in 0..nvar {
+        a2[i] = 0.0;
+        for j in 0..=i {
+            cmat2[(i, j)] = 0.0;
+        }
+    }
+}
+
+fn process_efron(
+    u: &mut Array1<f64>,
+    imat: &mut Array2<f64>,
+    _schoen: &mut Array2<f64>,
+    _nevent_counter: usize,
+    ndead_current: usize,
+    deadwt: f64,
+    timewt: f64,
+    a: &Array1<f64>,
+    a2: &mut Array1<f64>,
+    cmat: &Array2<f64>,
+    cmat2: &mut Array2<f64>,
+    denom: &mut f64,
+    nvar: usize,
+) {
+    for k in 0..ndead_current {
+        let temp = k as f64 / ndead_current as f64;
+        let d2 = *denom - temp * a2.iter().sum::<f64>();
+        let wt = deadwt / (ndead_current as f64 * d2);
+        for i in 0..nvar {
+            u[i] -= wt * (a[i] - temp * a2[i]);
+            u[i + nvar] -= timewt * wt * (a[i] - temp * a2[i]);
+            for j in 0..=i {
+                imat[(i, j)] += wt * (cmat[(i, j)] - temp * cmat2[(i, j)]);
+                imat[(i, j + nvar)] += timewt * wt * (cmat[(i, j)] - temp * cmat2[(i, j)]);
+                imat[(i + nvar, j + nvar)] +=
+                    timewt * timewt * wt * (cmat[(i, j)] - temp * cmat2[(i, j)]);
+            }
+        }
+    }
+    *denom += a2.iter().sum::<f64>();
+    for i in 0..nvar {
+        a2[i] = 0.0;
+        for j in 0..=i {
+            cmat2[(i, j)] = 0.0;
+        }
     }
 }

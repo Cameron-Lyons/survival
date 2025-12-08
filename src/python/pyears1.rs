@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn pyears1(
     n: usize,
     ny: usize,
@@ -30,10 +31,10 @@ pub fn pyears1(
     } else {
         let stop = &y[0..n];
         let event = &y[n..2 * n];
-        (&[].as_slice(), stop, event)
+        (&[] as &[f64], stop, event)
     };
 
-    let mut ecut_slices = Vec::with_capacity(edim);
+    let mut ecut_slices: Vec<&[f64]> = Vec::with_capacity(edim);
     let mut ecut_ptr = ecut;
     for j in 0..edim {
         let len = if efac[j] == 0 {
@@ -51,7 +52,7 @@ pub fn pyears1(
         }
     }
 
-    let mut ocut_slices = Vec::with_capacity(odim);
+    let mut ocut_slices: Vec<&[f64]> = Vec::with_capacity(odim);
     let mut ocut_ptr = ocut;
     for j in 0..odim {
         if ofac[j] == 0 {
@@ -132,7 +133,7 @@ pub fn pyears1(
 
         while timeleft > eps {
             let mut data_current = data.clone();
-            let (thiscell, idx, idx2, lwt) = pystep(
+            let (thiscell, idx, _idx2, _lwt) = pystep(
                 odim,
                 &mut data_current,
                 ofac,
@@ -172,7 +173,9 @@ pub fn pyears1(
                     };
 
                     if method == 0 {
-                        temp += (-hazard).exp() * (1.0 - (-lambda * et2).exp()) / lambda;
+                        temp += (-hazard as f64).exp()
+                            * (1.0 - (-lambda as f64 * et2 as f64).exp())
+                            / lambda as f64;
                     }
                     hazard += lambda * et2;
 
@@ -187,7 +190,7 @@ pub fn pyears1(
                 if method == 1 {
                     pexpect[idx] += hazard * weight[i];
                 } else {
-                    pexpect[idx] += (-cumhaz).exp() * temp * weight[i];
+                    pexpect[idx] += (-cumhaz as f64).exp() * temp * weight[i];
                 }
                 cumhaz += hazard;
             } else {
@@ -222,7 +225,7 @@ fn pystep(
     dims: &[usize],
     cut: &[&[f64]],
     timeleft: f64,
-    is_lower: bool,
+    _is_lower: bool,
 ) -> (f64, i32, i32, f64) {
     let mut thiscell = timeleft;
     let mut index = 0;
@@ -310,7 +313,7 @@ fn pystep(
                     let next_year_offset = 2 + (next_year as usize) * dims[j];
 
                     if next_year_offset < cuts.len() {
-                        let next_year_cuts = &cuts[next_year_offset..next_year_offset + dims[j]];
+                        let _next_year_cuts = &cuts[next_year_offset..next_year_offset + dims[j]];
                         let next_m = 0;
 
                         let next_index = next_m * stride;

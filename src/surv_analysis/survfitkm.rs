@@ -1,5 +1,4 @@
-use std::collections::BTreeSet;
-
+#![allow(dead_code)]
 pub struct SurvFitKMOutput {
     pub time: Vec<f64>,
     pub n_risk: Vec<f64>,
@@ -13,19 +12,19 @@ pub fn survfitkm(
     time: &[f64],
     status: &[f64],
     weights: &[f64],
-    entry_times: Option<&[f64]>,
+    _entry_times: Option<&[f64]>,
     position: &[i32],
-    reverse: bool,
-    computation_type: i32,
+    _reverse: bool,
+    _computation_type: i32,
 ) -> SurvFitKMOutput {
-    let mut unique_times = BTreeSet::new();
+    let mut unique_times = Vec::new();
     for (&t, &s) in time.iter().zip(status) {
-        if s > 0.0 {
-            unique_times.insert(t);
+        if s > 0.0 && !unique_times.contains(&t) {
+            unique_times.push(t);
         }
     }
-    let mut dtime: Vec<f64> = unique_times.into_iter().collect();
-    dtime.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let dtime = unique_times;
 
     let ntime = dtime.len();
     let mut n_risk = vec![0.0; ntime];
@@ -39,15 +38,13 @@ pub fn survfitkm(
     let mut cumulative_variance = 0.0;
 
     for (i, &t) in dtime.iter().enumerate().rev() {
-        let mut events = 0.0;
         let mut censored = 0.0;
         let mut weighted_events = 0.0;
-        let mut weighted_risk = current_risk;
+        let weighted_risk = current_risk;
 
         for (j, (&time_j, &status_j)) in time.iter().zip(status).enumerate() {
             if (time_j - t).abs() < 1e-9 {
                 if status_j > 0.0 {
-                    events += 1.0;
                     weighted_events += weights[j];
                 } else if position[j] & 2 != 0 {
                     censored += 1.0;
@@ -84,13 +81,13 @@ pub fn survfitkm(
 }
 
 fn process_entry_times(entry_times: Option<&[f64]>, position: &[i32]) -> Vec<f64> {
-    let mut entries = Vec::new();
+    let mut entry_vec = Vec::new();
     if let Some(entries) = entry_times {
         for (&time, &pos) in entries.iter().zip(position) {
             if pos & 1 != 0 {
-                entries.push(time);
+                entry_vec.push(time);
             }
         }
     }
-    entries
+    entry_vec
 }

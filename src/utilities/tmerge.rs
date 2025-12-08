@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn tmerge(
     id: &[i32],
     time1: &[f64],
@@ -96,4 +97,3 @@ pub fn tmerge3(id: &[i32], miss: &[bool]) -> Vec<usize> {
 
     result
 }
-

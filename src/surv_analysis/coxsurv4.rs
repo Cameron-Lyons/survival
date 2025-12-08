@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 struct CoxSurvResult {
     time: Vec<f64>,
     strata: Vec<f64>,

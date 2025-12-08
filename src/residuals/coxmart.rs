@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn coxmart(
     n: usize,
     method: i32,

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub struct SurvivalResult {
     pub influence_pstate: Vec<Vec<f64>>,
     pub influence_auc: Option<Vec<Vec<f64>>>,
@@ -118,7 +119,7 @@ pub fn survfitresid(
 
         let mut cmat = vec![vec![0.0; nstate]; nstate];
         let mut nevent = 0;
-        let mut wevent = 0.0;
+        let mut _wevent = 0.0;
         let mut transitions = Vec::new();
 
         for j in i..nobs {
@@ -134,7 +135,7 @@ pub fn survfitresid(
                     cmat[oldstate][newstate] += wt[p2j] / ws[oldstate];
                     cmat[oldstate][oldstate] -= wt[p2j] / ws[oldstate];
                     nevent += 1;
-                    wevent += wt[p2j];
+                    _wevent += wt[p2j];
                 }
             }
         }

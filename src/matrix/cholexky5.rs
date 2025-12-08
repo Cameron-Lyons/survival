@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 fn cholesky5(matrix: &mut [&mut [f64]], n: usize, toler: f64) -> i32 {
     let mut eps = 0.0;
 

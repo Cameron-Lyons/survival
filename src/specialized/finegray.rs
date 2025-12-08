@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 #[derive(Debug)]
 pub struct FineGrayOutput {
     pub row: Vec<usize>,
@@ -54,7 +55,7 @@ pub fn finegray(
         let is_valid = !original_start.is_nan() && !original_end.is_nan();
         let is_extended = extend[i] && is_valid;
 
-        let (mut current_end, temp_wt, j_initial) = if is_extended {
+        let (current_end, temp_wt, j_initial) = if is_extended {
             let mut j = 0;
             while j < ncut && ctime[j] < original_end {
                 j += 1;

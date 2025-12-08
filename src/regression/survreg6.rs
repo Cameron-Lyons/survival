@@ -1,5 +1,5 @@
-use ndarray::{arr2, Array1, Array2, Axis};
-use std::f64::EPSILON;
+#![allow(dead_code)]
+use ndarray::{Array1, Array2, ArrayView1};
 
 #[derive(Debug)]
 pub struct SurvivalFit {
@@ -24,12 +24,11 @@ pub fn survreg(
     eps: f64,
     tol_chol: f64,
     distribution: DistributionType,
-) -> Result<SurvivalFit, &'static str> {
+) -> Result<SurvivalFit, Box<dyn std::error::Error>> {
     let n = y.nrows();
     let ny = y.ncols();
     let nvar2 = nvar + nstrat;
-    let mut loglik = 0.0;
-    let mut flag = 0;
+    let flag = 0;
 
     let mut imat = Array2::zeros((nvar2, nvar2));
     let mut jj = Array2::zeros((nvar2, nvar2));
@@ -37,17 +36,27 @@ pub fn survreg(
     let mut newbeta = beta.clone();
     let mut usave = Array1::zeros(nvar2);
 
-    let (time1, time2, status) = match ny {
-        2 => (y.column(0).to_owned(), None, y.column(1).to_owned()),
-        3 => (
-            y.column(0).to_owned(),
-            Some(y.column(1).to_owned()),
-            y.column(2).to_owned(),
-        ),
-        _ => return Err("Invalid y matrix columns"),
+    let time1_vec: Vec<f64> = y.column(0).iter().cloned().collect();
+    let status_vec: Vec<f64> = if ny == 2 {
+        y.column(1).iter().cloned().collect()
+    } else {
+        y.column(2).iter().cloned().collect()
+    };
+    let time2_vec: Option<Vec<f64>> = if ny == 3 {
+        Some(y.column(1).iter().cloned().collect())
+    } else {
+        None
     };
 
-    loglik = calculate_likelihood(
+    let time1_arr = Array1::from_vec(time1_vec);
+    let status_arr = Array1::from_vec(status_vec);
+    let time2_arr = time2_vec.map(|v| Array1::from_vec(v));
+
+    let time1 = time1_arr.view();
+    let status = status_arr.view();
+    let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());
+
+    let mut loglik = calculate_likelihood(
         n,
         nvar,
         nstrat,
@@ -56,7 +65,7 @@ pub fn survreg(
         strata,
         offsets,
         &time1,
-        time2.as_ref(),
+        time2_view.as_ref(),
         &status,
         weights,
         covariates,
@@ -89,7 +98,7 @@ pub fn survreg(
             strata,
             offsets,
             &time1,
-            time2.as_ref(),
+            time2_view.as_ref(),
             &status,
             weights,
             covariates,
@@ -136,30 +145,30 @@ pub fn survreg(
 }
 
 fn calculate_likelihood(
-    n: usize,
-    nvar: usize,
-    nstrat: usize,
-    beta: &[f64],
-    distribution: &DistributionType,
-    strata: &[usize],
-    offsets: &Array1<f64>,
-    time1: &Array1<f64>,
-    time2: Option<&Array1<f64>>,
-    status: &Array1<f64>,
-    weights: &Array1<f64>,
-    covariates: &Array2<f64>,
-    imat: &mut Array2<f64>,
-    jj: &mut Array2<f64>,
-    u: &mut Array1<f64>,
-) -> Result<f64, &'static str> {
+    _n: usize,
+    _nvar: usize,
+    _nstrat: usize,
+    _beta: &[f64],
+    _distribution: &DistributionType,
+    _strata: &[usize],
+    _offsets: &Array1<f64>,
+    _time1: &ArrayView1<f64>,
+    _time2: Option<&ArrayView1<f64>>,
+    _status: &ArrayView1<f64>,
+    _weights: &Array1<f64>,
+    _covariates: &Array2<f64>,
+    _imat: &mut Array2<f64>,
+    _jj: &mut Array2<f64>,
+    _u: &mut Array1<f64>,
+) -> Result<f64, Box<dyn std::error::Error>> {
     Ok(0.0)
 }
 
 fn cholesky_solve(
-    matrix: &Array2<f64>,
+    _matrix: &Array2<f64>,
     vector: &Array1<f64>,
-    tol: f64,
-) -> Result<Array1<f64>, &'static str> {
+    _tol: f64,
+) -> Result<Array1<f64>, Box<dyn std::error::Error>> {
     Ok(Array1::zeros(vector.len()))
 }
 
@@ -177,18 +186,17 @@ fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) 
 }
 
 fn calculate_variance_matrix(
-    mut imat: Array2<f64>,
+    imat: Array2<f64>,
     nvar2: usize,
     tol_chol: f64,
-) -> Result<Array2<f64>, &'static str> {
+) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
     cholesky_solve(&imat, &Array1::zeros(nvar2), tol_chol)?;
     Ok(imat)
 }
 
-#[derive(Debug, Clone)]
 pub enum DistributionType {
     ExtremeValue,
     Logistic,
     Gaussian,
-    Custom(Box<dyn Fn(f64) -> f64>),
+    Custom(Box<dyn Fn(f64) -> f64 + Send + Sync>),
 }

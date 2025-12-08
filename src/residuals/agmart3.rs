@@ -1,5 +1,4 @@
-use std::cmp::Ordering;
-
+#![allow(dead_code)]
 fn agmart3(
     nused: i32,
     surv: Vec<f64>,
@@ -130,7 +129,7 @@ fn agmart3(
 
             let temp = hazard_total - e_hazard_total;
             for p2 in sort2[person2..k].iter().filter(|&&p| event[p] > 0.0) {
-                resid[*p] += temp * score[*p];
+                resid[*p2] += temp * score[*p2];
             }
 
             hazard_total
@@ -149,9 +148,4 @@ fn agmart3(
     }
 
     resid
-}
-
-extendr_module! {
-    mod coxresiduals;
-    fn agmart3;
 }

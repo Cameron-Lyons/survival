@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 fn chsolve3(matrix: &mut [&mut [f64]], n: usize, m: usize, diag: &[f64], y: &mut [f64]) {
     let n2 = n - m;
 

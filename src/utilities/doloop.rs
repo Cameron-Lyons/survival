@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub struct DoloopState {
     minval: i32,
     maxval: i32,

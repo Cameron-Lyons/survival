@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn surv_concordance(
     n: usize,
     time: &[f64],
@@ -22,8 +23,6 @@ pub fn surv_concordance(
 
     for i in 0..n {
         if status[i] > 0 {
-            let count = if tdeath == 0 { count1 } else { count2 };
-
             let mut nright = 0;
             let mut start = 0;
             let mut end = n2 - 1;
@@ -39,20 +38,30 @@ pub fn surv_concordance(
                     let right_end = end;
                     if right_start <= right_end {
                         let mid = (right_start + right_end) / 2;
-                        nright += count[mid];
+                        let count_val = if tdeath == 0 {
+                            count1[mid]
+                        } else {
+                            count2[mid]
+                        };
+                        nright += count_val;
                     }
                 } else {
                     start = k + 1;
                 }
             }
 
-            let mut nsame = count[k];
+            let count_val = if tdeath == 0 { count1[k] } else { count2[k] };
+            let mut nsame = count_val;
 
             if k < end {
                 let right_start = k + 1;
                 let right_end = end;
                 let mid = (right_start + right_end) / 2;
-                let j = count[mid];
+                let j = if tdeath == 0 {
+                    count1[mid]
+                } else {
+                    count2[mid]
+                };
                 nsame -= j;
                 nright += j;
             }
@@ -61,26 +70,30 @@ pub fn surv_concordance(
                 let left_start = start;
                 let left_end = k - 1;
                 let mid = (left_start + left_end) / 2;
-                let j = count[mid];
+                let j = if tdeath == 0 {
+                    count1[mid]
+                } else {
+                    count2[mid]
+                };
                 nsame -= j;
             }
 
             result[3] += nsame;
             result[1] += nright;
-            result[0] += (i - tdeath) - (nsame + nright);
+            result[0] += ((i as i32 - tdeath) - (nsame + nright)) as i32;
 
             if i < n - 1 && status[i + 1] > 0 && time[i] == time[i + 1] {
                 tdeath += 1;
                 if tdeath == 1 {
-                    count2.copy_from_slice(count1);
+                    count2.copy_from_slice(&count1);
                 }
             } else {
-                result[2] += (tdeath * (tdeath + 1)) / 2;
+                result[2] += ((tdeath * (tdeath + 1)) / 2) as i32;
                 tdeath = 0;
             }
         } else {
             tdeath = 0;
-            result[4] += i;
+            result[4] += i as i32;
         }
 
         let mut start = 0;

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn cholesky2(matrix: &mut [f64], n: usize, toler: f64) -> i32 {
     let mut eps = 0.0;
     let mut nonneg = 1;
@@ -18,7 +19,6 @@ pub fn cholesky2(matrix: &mut [f64], n: usize, toler: f64) -> i32 {
 
     if eps == 0.0 {
         eps = toler;
-        73301
     } else {
         eps *= toler;
     }

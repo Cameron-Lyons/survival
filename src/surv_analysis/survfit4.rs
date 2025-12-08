@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn survfit4(dd: &[i32], x1: &mut [f64], x2: &mut [f64]) {
     assert_eq!(dd.len(), x1.len(), "dd and x1 must have the same length");
     assert_eq!(dd.len(), x2.len(), "dd and x2 must have the same length");

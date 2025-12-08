@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PenaltyResult {
     pub new_coef: Vec<f64>,
@@ -12,7 +13,7 @@ pub fn survpenal(
     nfrail: usize,
     nvar: usize,
     hmat: &mut [f64],
-    JJ: &mut [f64],
+    #[allow(non_snake_case)] JJ: &mut [f64],
     hdiag: &mut [f64],
     jdiag: &mut [f64],
     u: &mut [f64],

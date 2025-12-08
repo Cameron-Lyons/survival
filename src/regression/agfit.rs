@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use pyo3::prelude::*;
 
 struct SurvivalData {
@@ -92,7 +93,6 @@ impl SurvivalModel {
         }
     }
     pub fn gfit5a(&mut self) {
-
         if self.yy.len() != self.nused || self.covar.len() != self.nvar {
             panic!("Insufficient data for the number of people or covariates specified");
         }
@@ -173,7 +173,8 @@ impl SurvivalModel {
 }
 
 #[pymodule]
-fn pySurvivalModel(py: Python, m: &PyModule) -> PyResult<()> {
+#[pyo3(name = "pySurvivalModel")]
+fn py_survival_model(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SurvivalModel>()?;
     Ok(())
 }

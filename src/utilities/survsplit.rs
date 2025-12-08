@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub struct SplitResult {
     pub row: Vec<usize>,
     pub interval: Vec<usize>,

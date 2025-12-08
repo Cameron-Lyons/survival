@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn dmatrix(array: &[f64], nrow: usize, ncol: usize) -> Vec<&[f64]> {
     let mut columns = Vec::with_capacity(ncol);
     for col in 0..ncol {

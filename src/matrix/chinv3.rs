@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn chinv3(matrix: &mut [f64], n: usize, m: usize, fdiag: &mut [f64]) {
     let n2 = n - m;
     assert_eq!(

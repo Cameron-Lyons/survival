@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use pyo3::prelude::*;
 
 #[pyclass]
@@ -71,7 +72,7 @@ impl ConditionalLogisticRegression {
                 let mut denominator = 0.0;
                 for observation in 0..self.data.get_num_observations() {
                     let case_control_status = self.data.get_case_control_status(observation);
-                    let stratum = self.data.get_stratum(observation);
+                    let _stratum = self.data.get_stratum(observation);
                     let covariates = self.data.get_covariates(observation);
                     let mut exp_sum = 0.0;
                     for covariate in 0..num_covariates {
@@ -107,7 +108,7 @@ impl ConditionalLogisticRegression {
 }
 
 #[pymodule]
-fn my_python_module(py: Python, m: &PyModule) -> PyResult<()> {
+fn my_python_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ConditionalLogisticRegression>()?;
     Ok(())
 }

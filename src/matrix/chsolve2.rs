@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 fn chsolve2(matrix: &mut [&mut [f64]], n: usize, y: &mut [f64]) {
     for i in 0..n {
         let mut temp = y[i];

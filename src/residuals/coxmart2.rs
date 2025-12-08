@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn coxmart2(
     time: &[f64],
     status: &[i32],

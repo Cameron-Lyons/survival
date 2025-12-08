@@ -1,58 +1,59 @@
 use pyo3::prelude::*;
-use std::collections::HashMap;
+use pyo3::types::PyDict;
 
+#[allow(dead_code)]
 struct ConcordanceResult {
     count: Vec<f64>,
 }
 
 #[pyfunction]
+#[allow(dead_code)]
 fn concordance(
-    y: &Vec<f64>,
-    x: &Vec<i32>,
-    wt: &Vec<f64>,
-    timewt: &Vec<f64>,
-    sortstart: Option<&Vec<usize>>,
-    sortstop: &Vec<usize>,
-) -> ConcordanceResult {
+    y: Vec<f64>,
+    x: Vec<i32>,
+    wt: Vec<f64>,
+    timewt: Vec<f64>,
+    sortstart: Option<Vec<usize>>,
+    sortstop: Vec<usize>,
+) -> PyResult<Py<PyDict>> {
     let n = y.len();
     let mut ntree = 0;
     let mut nwt = vec![0.0; n];
     let mut twt = vec![0.0; n];
     let mut count = vec![0.0; 5];
 
-    for &val in x {
-        ntree = ntree.max(val as usize + 1);
+    for val in &x {
+        ntree = ntree.max(*val as usize + 1);
     }
 
     let mut utime = 0;
-    let mut i2 = 0;
+    let i2 = 0;
     let mut i = 0;
 
     while i < n {
         let ii = sortstop[i];
         let current_time = y[ii];
 
-        if (sortstart.is_some() && i2 < n && y[sortstart.unwrap()[i2]] >= current_time)
+        if (sortstart.as_ref().is_some()
+            && i2 < n
+            && y[sortstart.as_ref().unwrap()[i2]] >= current_time)
             || y[ii] == 0.0
         {
             addin(&mut nwt, &mut twt, x[ii] as usize, wt[ii]);
             i += 1;
         } else {
             let mut ndeath = 0;
-            let mut dwt = 0.0;
-            let mut dwt2 = 0.0;
-            let mut xsave = x[ii];
+            let mut _dwt = 0.0;
+            let mut _dwt2 = 0.0;
+            let xsave = x[ii];
             let adjtimewt = timewt[utime];
             utime += 1;
-
 
             while i + ndeath < n && y[sortstop[i + ndeath]] == current_time {
                 let jj = sortstop[i + ndeath];
                 if x[jj] == xsave {
-
                     count[2] += 1.0;
                 } else {
-
                     for k in 0..i {
                         let kk = sortstop[k];
                         if x[kk] != x[jj] {
@@ -66,11 +67,10 @@ fn concordance(
                         }
                     }
                 }
-                dwt += wt[jj];
-                dwt2 += wt[jj] * adjtimewt;
+                _dwt += wt[jj];
+                _dwt2 += wt[jj] * adjtimewt;
                 ndeath += 1;
             }
-
 
             count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
 
@@ -85,11 +85,15 @@ fn concordance(
 
     count[3] -= count[4];
 
-    ConcordanceResult { count }
+    Python::attach(|py| {
+        let dict = PyDict::new(py);
+        dict.set_item("count", count)?;
+        Ok(dict.into())
+    })
 }
 
-#[pyfunction]
-fn walkup(nwt: &Vec<f64>, twt: &Vec<f64>, index: usize, wsum: &mut [f64; 3], ntree: usize) {
+#[allow(dead_code)]
+fn walkup(nwt: &[f64], twt: &[f64], index: usize, wsum: &mut [f64; 3], ntree: usize) {
     wsum[0] = 0.0;
     wsum[1] = 0.0;
     wsum[2] = 0.0;
@@ -104,8 +108,8 @@ fn walkup(nwt: &Vec<f64>, twt: &Vec<f64>, index: usize, wsum: &mut [f64; 3], ntr
         }
     }
 }
-#[pyfunction]
-fn addin(nwt: &mut Vec<f64>, twt: &mut Vec<f64>, x: usize, weight: f64) {
+#[allow(dead_code)]
+fn addin(nwt: &mut [f64], twt: &mut [f64], x: usize, weight: f64) {
     nwt[x] += weight;
     let mut node_index = x;
     while node_index != 0 {

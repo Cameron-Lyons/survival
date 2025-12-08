@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     if cuts.is_empty() {
         return None;

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use ndarray::{Array2, ArrayView2};
 
 pub fn coxsurv2(
@@ -24,6 +25,7 @@ pub fn coxsurv2(
         }
     }
 
+    let irow_total = ntime * ntrans;
     let mut count = Array2::zeros((irow_total, 12));
     let mut xbar = Array2::zeros((irow_total, nvar));
     let mut xsum2_arr = Array2::zeros((irow_total, nvar));

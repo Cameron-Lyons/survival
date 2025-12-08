@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn has_multiple_clusters(id: &[i32], cluster: &[i32], idord: &[i32]) -> bool {
     let n = id.len();
     let mut i = 0;

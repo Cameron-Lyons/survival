@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn fastkm1(
     time: &[f64],
     status: &[f64],
@@ -49,7 +50,10 @@ pub fn fastkm1(
         nevent += 1;
     }
 
+    #[allow(non_snake_case)]
+    #[allow(non_snake_case)]
     let mut S = vec![0.0; nevent];
+    #[allow(non_snake_case)]
     let mut G = vec![0.0; nevent];
     let mut nrisk = vec![0.0; nevent];
     let mut etime = vec![0.0; nevent];
@@ -72,7 +76,6 @@ pub fn fastkm1(
         let current_status = status[p];
 
         if current_status != 0.0 {
-
             if dfirst || (current_time != dtime_current) {
                 dtime_current = current_time;
                 dfirst = false;
@@ -86,7 +89,6 @@ pub fn fastkm1(
                 k += 1;
             }
         } else {
-
             if cfirst || (current_time != ctime_current) {
                 ctime_current = current_time;
                 cfirst = false;
@@ -159,6 +161,7 @@ pub fn fastkm2(
         i = j;
     }
 
+    #[allow(non_snake_case)]
     let mut S = vec![0.0; nevent];
     let mut nrisk = vec![0.0; nevent];
     let mut etime = vec![0.0; nevent];

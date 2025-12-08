@@ -1,6 +1,7 @@
-use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
+#![allow(dead_code)]
+use ndarray::{Array1, Array2};
 use ndarray_linalg::cholesky::CholeskyInto;
-use ndarray_linalg::{error::Result as LinalgResult, Cholesky, Inverse, Solve};
+use ndarray_linalg::{Inverse, Solve};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -57,7 +58,7 @@ impl CoxFit {
         initial_beta: Vec<f64>,
     ) -> Result<Self, CoxError> {
         let nvar = covar.ncols();
-        let nused = covar.nrows();
+        let _nused = covar.nrows();
 
         let mut cox = Self {
             time,
@@ -157,12 +158,12 @@ impl CoxFit {
             let mut ndead = 0;
             let mut deadwt = 0.0;
             let mut denom2 = 0.0;
-            let mut nrisk = 0;
+            let mut _nrisk = 0;
             let mut denom = 0.0;
 
             while person >= 0 && self.time[person as usize] == dtime {
                 let person_i = person as usize;
-                nrisk += 1;
+                _nrisk += 1;
                 let zbeta = self.offset[person_i]
                     + beta
                         .iter()
@@ -225,7 +226,7 @@ impl CoxFit {
                     Method::Efron => {
                         let wtave = deadwt / ndead as f64;
                         for k in 0..ndead {
-                            let kf = k as f64;
+                            let _kf = k as f64;
                             denom += denom2 / ndead as f64;
                             loglik -= wtave * denom.ln();
 
@@ -260,9 +261,10 @@ impl CoxFit {
         let mut newbeta = vec![0.0; nvar];
         let mut a = vec![0.0; nvar];
         let mut halving = 0;
-        let mut notfinite;
+        let mut _notfinite;
 
-        self.loglik[0] = self.iterate(&self.beta)?;
+        let beta_copy = self.beta.clone();
+        self.loglik[0] = self.iterate(&beta_copy)?;
         self.loglik[1] = self.loglik[0];
 
         a.copy_from_slice(&self.u);
@@ -288,28 +290,28 @@ impl CoxFit {
             let newlk = match self.iterate(&newbeta) {
                 Ok(lk) if lk.is_finite() => lk,
                 _ => {
-                    notfinite = true;
+                    _notfinite = true;
                     f64::NAN
                 }
             };
 
-            notfinite = !newlk.is_finite();
-            if !notfinite {
+            _notfinite = !newlk.is_finite();
+            if !_notfinite {
                 for i in 0..nvar {
                     if !self.u[i].is_finite() {
-                        notfinite = true;
+                        _notfinite = true;
                         break;
                     }
                     for j in 0..nvar {
                         if !self.imat[(i, j)].is_finite() {
-                            notfinite = true;
+                            _notfinite = true;
                             break;
                         }
                     }
                 }
             }
 
-            if !notfinite && ((self.loglik[1] - newlk).abs() / newlk.abs() <= self.eps) {
+            if !_notfinite && ((self.loglik[1] - newlk).abs() / newlk.abs() <= self.eps) {
                 self.loglik[1] = newlk;
                 Self::chinv(&mut self.imat)?;
                 self.rescale_params();
@@ -319,7 +321,7 @@ impl CoxFit {
                 return Ok(());
             }
 
-            if notfinite || newlk < self.loglik[1] {
+            if _notfinite || newlk < self.loglik[1] {
                 halving += 1;
                 for i in 0..nvar {
                     newbeta[i] =
@@ -337,7 +339,8 @@ impl CoxFit {
             }
         }
 
-        self.loglik[1] = self.iterate(&self.beta)?;
+        let beta_final = self.beta.clone();
+        self.loglik[1] = self.iterate(&beta_final)?;
         Self::chinv(&mut self.imat)?;
         self.rescale_params();
         self.flag = 1000;
@@ -364,7 +367,8 @@ impl CoxFit {
             }
         }
 
-        match mat.cholesky_into() {
+        let mat_clone3 = mat.clone();
+        match mat_clone3.cholesky_into(ndarray_linalg::UPLO::Lower) {
             Ok(_) => Ok(n as i32),
             Err(_) => {
                 for i in 0..n {
@@ -378,18 +382,18 @@ impl CoxFit {
     }
 
     fn chsolve(chol: &Array2<f64>, a: &mut [f64]) -> Result<(), CoxError> {
-        let n = chol.nrows();
-        let mut b = Array1::from_vec(a.to_vec());
-        if let Err(_) = chol.solve_mut(&mut b) {
-            return Err(CoxError::CholeskyDecomposition);
-        }
-        a.copy_from_slice(&b.to_vec());
+        let _n = chol.nrows();
+        let b = Array1::from_vec(a.to_vec());
+        let result = chol
+            .solve(&b)
+            .map_err(|_| CoxError::CholeskyDecomposition)?;
+        a.copy_from_slice(&result.to_vec());
         Ok(())
     }
 
     fn chinv(mat: &mut Array2<f64>) -> Result<(), CoxError> {
-        let n = mat.nrows();
-        let chol = match mat.cholesky_into() {
+        let mat_clone = mat.clone();
+        let chol = match mat_clone.cholesky_into(ndarray_linalg::UPLO::Lower) {
             Ok(chol) => chol,
             Err(_) => return Err(CoxError::MatrixInversion),
         };

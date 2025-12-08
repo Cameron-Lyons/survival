@@ -1,7 +1,8 @@
+#![allow(dead_code)]
 pub fn survdiff2(
     nn: i32,
     nngroup: i32,
-    nstrat: i32,
+    _nstrat: i32,
     rho: f64,
     time: &[f64],
     status: &[i32],
@@ -34,7 +35,7 @@ pub fn survdiff2(
             n += 1;
         }
         n += 1;
-        let n_in_stratum = n - istart;
+        let _n_in_stratum = n - istart;
 
         if rho != 0.0 {
             let mut km = 1.0;
@@ -63,7 +64,7 @@ pub fn survdiff2(
             let current_time = time[i];
             let mut deaths = 0;
             let mut j = i;
-            let mut wt = if rho == 0.0 { 1.0 } else { kaplan[i].powf(rho) };
+            let wt = if rho == 0.0 { 1.0 } else { kaplan[i].powf(rho) };
 
             for r in risk.iter_mut().take(ngroup) {
                 *r = 0.0;
