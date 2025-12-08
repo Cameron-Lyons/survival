@@ -8,7 +8,7 @@ enum Method {
 }
 
 #[pyfunction]
-fn cipoisson_exact(k: u32, time: f64, p: f64) -> PyResult<(f64, f64)> {
+pub fn cipoisson_exact(k: u32, time: f64, p: f64) -> PyResult<(f64, f64)> {
     if time <= 0.0 || p <= 0.0 || p >= 1.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "Invalid input values",
@@ -32,7 +32,7 @@ fn cipoisson_exact(k: u32, time: f64, p: f64) -> PyResult<(f64, f64)> {
 }
 
 #[pyfunction]
-fn cipoisson_anscombe(k: u32, time: f64, p: f64) -> PyResult<(f64, f64)> {
+pub fn cipoisson_anscombe(k: u32, time: f64, p: f64) -> PyResult<(f64, f64)> {
     if time <= 0.0 || p <= 0.0 || p >= 1.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "Invalid input values",
@@ -57,7 +57,7 @@ fn cipoisson_anscombe(k: u32, time: f64, p: f64) -> PyResult<(f64, f64)> {
 }
 
 #[pyfunction]
-fn cipoisson(k: u32, time: f64, p: f64, method: String) -> PyResult<(f64, f64)> {
+pub fn cipoisson(k: u32, time: f64, p: f64, method: String) -> PyResult<(f64, f64)> {
     match method.as_str() {
         "exact" => cipoisson_exact(k, time, p),
         "anscombe" => cipoisson_anscombe(k, time, p),

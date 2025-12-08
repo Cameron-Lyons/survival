@@ -1,33 +1,41 @@
-#[allow(dead_code)]
+use pyo3::prelude::*;
+
+#[pyfunction]
 pub fn agmart(
     n: usize,
     method: i32,
-    start: &[f64],
-    stop: &[f64],
-    event: &[i32],
-    score: &[f64],
-    wt: &[f64],
-    strata: &[i32],
-    resid: &mut [f64],
-) {
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    event: Vec<i32>,
+    score: Vec<f64>,
+    wt: Vec<f64>,
+    strata: Vec<i32>,
+) -> PyResult<Vec<f64>> {
+    let start_slice = &start;
+    let stop_slice = &stop;
+    let event_slice = &event;
+    let score_slice = &score;
+    let wt_slice = &wt;
+    let strata_slice = &strata;
+    let mut resid = vec![0.0; n];
     let nused = n;
-    let mut local_strata = strata.to_vec();
+    let mut local_strata = strata_slice.to_vec();
     if nused > 0 {
         local_strata[nused - 1] = 1;
     }
 
     for i in 0..nused {
-        resid[i] = event[i] as f64;
+        resid[i] = event_slice[i] as f64;
     }
 
     let mut person = 0;
     while person < nused {
-        if event[person] == 0 {
+        if event_slice[person] == 0 {
             person += 1;
             continue;
         }
 
-        let time = stop[person];
+        let time = stop_slice[person];
         let mut denom = 0.0;
         let mut e_denom = 0.0;
         let mut deaths = 0;
@@ -35,12 +43,12 @@ pub fn agmart(
 
         let mut k = person;
         while k < nused {
-            if start[k] < time {
-                denom += score[k] * wt[k];
-                if stop[k] == time && event[k] == 1 {
+            if start_slice[k] < time {
+                denom += score_slice[k] * wt_slice[k];
+                if stop_slice[k] == time && event_slice[k] == 1 {
                     deaths += 1;
-                    wtsum += wt[k];
-                    e_denom += score[k] * wt[k];
+                    wtsum += wt_slice[k];
+                    e_denom += score_slice[k] * wt_slice[k];
                 }
             }
             if local_strata[k] == 1 {
@@ -69,15 +77,15 @@ pub fn agmart(
         let initial_person = person;
         let mut k = initial_person;
         while k < nused {
-            if start[k] < time {
-                if stop[k] == time && event[k] == 1 {
-                    resid[k] -= score[k] * e_hazard;
+            if start_slice[k] < time {
+                if stop_slice[k] == time && event_slice[k] == 1 {
+                    resid[k] -= score_slice[k] * e_hazard;
                 } else {
-                    resid[k] -= score[k] * hazard;
+                    resid[k] -= score_slice[k] * hazard;
                 }
             }
 
-            if stop[k] == time {
+            if stop_slice[k] == time {
                 person += 1;
             }
 
@@ -87,4 +95,6 @@ pub fn agmart(
             k += 1;
         }
     }
+
+    Ok(resid)
 }

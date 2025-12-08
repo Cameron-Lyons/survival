@@ -1,37 +1,32 @@
 use itertools::Itertools;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
-#[allow(dead_code)]
-fn init_doloop(start: usize, end: usize, k: usize) -> Vec<Vec<usize>> {
-    (start..end).combinations(k).collect()
-}
-
-#[allow(dead_code)]
+#[pyfunction]
 pub fn agexact(
-    maxiter: &mut i32,
-    nused: &i32,
-    nvar: &i32,
-    start: &[f64],
-    stop: &[f64],
-    event: &[i32],
-    covar: &mut [f64],
-    offset: &[f64],
-    strata: &[i32],
-    means: &mut [f64],
-    beta: &mut [f64],
-    u: &mut [f64],
-    imat: &mut [f64],
-    loglik: &mut [f64; 2],
-    flag: &mut i32,
-    work: &mut [f64],
-    work2: &mut [i32],
-    eps: &f64,
-    tol_chol: &f64,
-    sctest: &mut f64,
-    nocenter: &[i32],
-) {
-    let n = *nused as usize;
-    let nvar = *nvar as usize;
-    let p = nvar;
+    mut maxiter: i32,
+    nused: i32,
+    nvar: i32,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    event: Vec<i32>,
+    mut covar: Vec<f64>,
+    offset: Vec<f64>,
+    strata: Vec<i32>,
+    mut means: Vec<f64>,
+    mut beta: Vec<f64>,
+    mut u: Vec<f64>,
+    mut imat: Vec<f64>,
+    mut loglik: Vec<f64>,
+    mut work: Vec<f64>,
+    mut work2: Vec<i32>,
+    eps: f64,
+    tol_chol: f64,
+    nocenter: Vec<i32>,
+) -> PyResult<Py<PyDict>> {
+    let n = nused as usize;
+    let nvar_usize = nvar as usize;
+    let p = nvar_usize;
 
     let (cmat, rest) = work.split_at_mut(p * p);
     let (a, rest) = rest.split_at_mut(p);
@@ -41,7 +36,7 @@ pub fn agexact(
     let _index = &mut work2[0..n];
     let atrisk = &mut work2[n..2 * n];
 
-    for i in 0..nvar {
+    for i in 0..nvar_usize {
         if nocenter[i] == 0 {
             means[i] = 0.0;
         } else {
@@ -58,12 +53,15 @@ pub fn agexact(
 
     for person in 0..n {
         let mut zbeta = 0.0;
-        for i in 0..nvar {
+        for i in 0..nvar_usize {
             zbeta += beta[i] * covar[i * n + person];
         }
         score[person] = (zbeta + offset[person]).exp();
     }
 
+    if loglik.len() < 2 {
+        loglik.resize(2, 0.0);
+    }
     loglik[1] = 0.0;
     u.fill(0.0);
     imat.fill(0.0);
@@ -101,7 +99,7 @@ pub fn agexact(
                     let k = atrisk[l] as usize;
                     let weight = score[k];
                     denom += weight;
-                    for i in 0..nvar {
+                    for i in 0..nvar_usize {
                         let covar_ik = covar[i * n + k];
                         a[i] += weight * covar_ik;
                         for j in 0..=i {
@@ -118,12 +116,12 @@ pub fn agexact(
                     for &idx in &indices {
                         let k = atrisk[idx] as usize;
                         weight *= score[k];
-                        for i in 0..nvar {
+                        for i in 0..nvar_usize {
                             newvar[i] += covar[i * n + k];
                         }
                     }
                     denom += weight;
-                    for i in 0..nvar {
+                    for i in 0..nvar_usize {
                         a[i] += weight * newvar[i];
                         for j in 0..=i {
                             cmat[i * p + j] += weight * newvar[i] * newvar[j];
@@ -133,7 +131,7 @@ pub fn agexact(
             }
 
             loglik[1] -= denom.ln();
-            for i in 0..nvar {
+            for i in 0..nvar_usize {
                 u[i] -= a[i] / denom;
                 for j in 0..=i {
                     let cmat_ij = cmat[i * p + j];
@@ -146,7 +144,7 @@ pub fn agexact(
             while k < n && stop[k] == time {
                 if event[k] == 1 {
                     loglik[1] += score[k].ln();
-                    for i in 0..nvar {
+                    for i in 0..nvar_usize {
                         u[i] += covar[i * n + k];
                     }
                 }
@@ -161,178 +159,219 @@ pub fn agexact(
 
     loglik[0] = loglik[1];
     let mut a_copy = a.to_vec();
-    *flag = cholesky2(imat, p, *tol_chol);
-    chsolve2(imat, p, &mut a_copy);
-    *sctest = a_copy.iter().zip(u.iter()).map(|(a, u)| a * u).sum();
+    let _ = cholesky2(&mut imat[..p * p], p, tol_chol);
+    chsolve2(&mut imat[..p * p], p, &mut a_copy);
+    let sctest = a_copy.iter().zip(u.iter()).map(|(a, u)| a * u).sum::<f64>();
 
-    if *maxiter == 0 {
-        chinv2(imat, p);
+    if maxiter == 0 {
+        chinv2(&mut imat[..p * p], p);
         for i in 0..p {
             for j in 0..i {
                 imat[i * p + j] = imat[j * p + i];
             }
         }
-        *flag = 0;
-        return;
-    }
+        let final_flag = 0;
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("maxiter", maxiter)?;
+            dict.set_item("covar", covar.to_vec())?;
+            dict.set_item("means", means.to_vec())?;
+            dict.set_item("beta", beta.to_vec())?;
+            dict.set_item("u", u.to_vec())?;
+            dict.set_item("imat", imat.to_vec())?;
+            dict.set_item("loglik", loglik.to_vec())?;
+            dict.set_item("flag", final_flag)?;
+            dict.set_item("sctest", sctest)?;
+            Ok(dict.into())
+        })
+    } else {
+        let mut iter = 0;
+        let mut halving = false;
+        let mut newbeta_vec = newbeta.to_vec();
+        let mut newlk = 0.0;
 
-    let mut iter = 0;
-    let mut halving = false;
-    let mut newbeta_vec = newbeta.to_vec();
-    let mut newlk = 0.0;
+        while iter < maxiter {
+            iter += 1;
+            newlk = 0.0;
+            u.fill(0.0);
+            imat.fill(0.0);
 
-    while iter < *maxiter {
-        iter += 1;
-        newlk = 0.0;
-        u.fill(0.0);
-        imat.fill(0.0);
-
-        for person in 0..n {
-            let mut zbeta = 0.0;
-            for i in 0..nvar {
-                zbeta += newbeta_vec[i] * covar[i * n + person];
-            }
-            score[person] = (zbeta + offset[person]).exp();
-        }
-
-        let mut person = 0;
-        while person < n {
-            if event[person] == 0 {
-                person += 1;
-            } else {
-                let time = stop[person];
-                let mut deaths = 0;
-                let mut nrisk = 0;
-                let mut k = person;
-
-                while k < n {
-                    if stop[k] == time {
-                        deaths += event[k];
-                    }
-                    if start[k] < time {
-                        atrisk[nrisk] = k as i32;
-                        nrisk += 1;
-                    }
-                    if strata[k] == 1 {
-                        break;
-                    }
-                    k += 1;
+            for person in 0..n {
+                let mut zbeta = 0.0;
+                for i in 0..nvar_usize {
+                    zbeta += newbeta_vec[i] * covar[i * n + person];
                 }
+                score[person] = (zbeta + offset[person]).exp();
+            }
 
-                let mut denom = 0.0;
-                a.fill(0.0);
-                cmat.fill(0.0);
+            let mut person = 0;
+            while person < n {
+                if event[person] == 0 {
+                    person += 1;
+                } else {
+                    let time = stop[person];
+                    let mut deaths = 0;
+                    let mut nrisk = 0;
+                    let mut k = person;
 
-                if deaths == 1 {
-                    for l in 0..nrisk {
-                        let k = atrisk[l] as usize;
-                        let weight = score[k];
-                        denom += weight;
-                        for i in 0..nvar {
-                            let covar_ik = covar[i * n + k];
-                            a[i] += weight * covar_ik;
-                            for j in 0..=i {
-                                cmat[i * p + j] += weight * covar_ik * covar[j * n + k];
+                    while k < n {
+                        if stop[k] == time {
+                            deaths += event[k];
+                        }
+                        if start[k] < time {
+                            atrisk[nrisk] = k as i32;
+                            nrisk += 1;
+                        }
+                        if strata[k] == 1 {
+                            break;
+                        }
+                        k += 1;
+                    }
+
+                    let mut denom = 0.0;
+                    a.fill(0.0);
+                    cmat.fill(0.0);
+
+                    if deaths == 1 {
+                        for l in 0..nrisk {
+                            let k = atrisk[l] as usize;
+                            let weight = score[k];
+                            denom += weight;
+                            for i in 0..nvar_usize {
+                                let covar_ik = covar[i * n + k];
+                                a[i] += weight * covar_ik;
+                                for j in 0..=i {
+                                    cmat[i * p + j] += weight * covar_ik * covar[j * n + k];
+                                }
                             }
                         }
+                    } else {
+                        let combinations = init_doloop(0, nrisk, deaths.try_into().unwrap());
+                        for indices in combinations {
+                            newvar.fill(0.0);
+                            let mut weight = 1.0;
+                            for &idx in &indices {
+                                let k = atrisk[idx] as usize;
+                                weight *= score[k];
+                                for i in 0..nvar_usize {
+                                    newvar[i] += covar[i * n + k];
+                                }
+                            }
+                            denom += weight;
+                            for i in 0..nvar_usize {
+                                a[i] += weight * newvar[i];
+                                for j in 0..=i {
+                                    cmat[i * p + j] += weight * newvar[i] * newvar[j];
+                                }
+                            }
+                        }
+                    }
+
+                    newlk -= denom.ln();
+                    for i in 0..nvar_usize {
+                        u[i] -= a[i] / denom;
+                        for j in 0..=i {
+                            let cmat_ij = cmat[i * p + j];
+                            let term = (cmat_ij - a[i] * a[j] / denom) / denom;
+                            imat[j * p + i] += term;
+                        }
+                    }
+
+                    let mut k = person;
+                    while k < n && stop[k] == time {
+                        if event[k] == 1 {
+                            newlk += score[k].ln();
+                            for i in 0..nvar_usize {
+                                u[i] += covar[i * n + k];
+                            }
+                        }
+                        person += 1;
+                        if strata[k] == 1 {
+                            break;
+                        }
+                        k += 1;
+                    }
+                }
+            }
+
+            if (1.0 - (loglik[1] / newlk)).abs() <= eps && !halving {
+                loglik[1] = newlk;
+                chinv2(&mut imat[..p * p], p);
+                for i in 0..p {
+                    for j in 0..i {
+                        imat[i * p + j] = imat[j * p + i];
+                    }
+                }
+                beta.copy_from_slice(&newbeta_vec);
+                maxiter = iter;
+                return Python::attach(|py| {
+                    let dict = PyDict::new(py);
+                    dict.set_item("maxiter", maxiter)?;
+                    dict.set_item("covar", covar.to_vec())?;
+                    dict.set_item("means", means.to_vec())?;
+                    dict.set_item("beta", beta.to_vec())?;
+                    dict.set_item("u", u.to_vec())?;
+                    dict.set_item("imat", imat.to_vec())?;
+                    dict.set_item("loglik", loglik.to_vec())?;
+                    dict.set_item("flag", 0)?;
+                    dict.set_item("sctest", sctest)?;
+                    Ok(dict.into())
+                });
+            } else {
+                if iter == maxiter {
+                    break;
+                }
+
+                if newlk < loglik[1] {
+                    halving = true;
+                    for i in 0..nvar_usize {
+                        newbeta_vec[i] = (newbeta_vec[i] + beta[i]) / 2.0;
                     }
                 } else {
-                    let combinations = init_doloop(0, nrisk, deaths.try_into().unwrap());
-                    for indices in combinations {
-                        newvar.fill(0.0);
-                        let mut weight = 1.0;
-                        for &idx in &indices {
-                            let k = atrisk[idx] as usize;
-                            weight *= score[k];
-                            for i in 0..nvar {
-                                newvar[i] += covar[i * n + k];
-                            }
-                        }
-                        denom += weight;
-                        for i in 0..nvar {
-                            a[i] += weight * newvar[i];
-                            for j in 0..=i {
-                                cmat[i * p + j] += weight * newvar[i] * newvar[j];
-                            }
-                        }
-                    }
-                }
+                    halving = false;
+                    loglik[1] = newlk;
+                    let _flag_check = cholesky2(&mut imat[..p * p], p, tol_chol);
+                    let mut u_copy = u.to_vec();
+                    chsolve2(&mut imat[..p * p], p, &mut u_copy);
 
-                newlk -= denom.ln();
-                for i in 0..nvar {
-                    u[i] -= a[i] / denom;
-                    for j in 0..=i {
-                        let cmat_ij = cmat[i * p + j];
-                        let term = (cmat_ij - a[i] * a[j] / denom) / denom;
-                        imat[j * p + i] += term;
+                    for i in 0..nvar_usize {
+                        beta[i] = newbeta_vec[i];
+                        newbeta_vec[i] += u_copy[i];
                     }
-                }
-
-                let mut k = person;
-                while k < n && stop[k] == time {
-                    if event[k] == 1 {
-                        newlk += score[k].ln();
-                        for i in 0..nvar {
-                            u[i] += covar[i * n + k];
-                        }
-                    }
-                    person += 1;
-                    if strata[k] == 1 {
-                        break;
-                    }
-                    k += 1;
                 }
             }
         }
 
-        if (1.0 - (loglik[1] / newlk)).abs() <= *eps && !halving {
-            loglik[1] = newlk;
-            chinv2(imat, p);
-            for i in 0..p {
-                for j in 0..i {
-                    imat[i * p + j] = imat[j * p + i];
-                }
-            }
-            beta.copy_from_slice(&newbeta_vec);
-            *maxiter = iter;
-            return;
-        }
-
-        if iter == *maxiter {
-            break;
-        }
-
-        if newlk < loglik[1] {
-            halving = true;
-            for i in 0..nvar {
-                newbeta_vec[i] = (newbeta_vec[i] + beta[i]) / 2.0;
-            }
-        } else {
-            halving = false;
-            loglik[1] = newlk;
-            *flag = cholesky2(imat, p, *tol_chol);
-            let mut u_copy = u.to_vec();
-            chsolve2(imat, p, &mut u_copy);
-
-            for i in 0..nvar {
-                beta[i] = newbeta_vec[i];
-                newbeta_vec[i] += u_copy[i];
+        loglik[1] = newlk;
+        chinv2(&mut imat[..p * p], p);
+        for i in 0..p {
+            for j in 0..i {
+                imat[i * p + j] = imat[j * p + i];
             }
         }
+        beta.copy_from_slice(&newbeta_vec);
+        let final_flag = 1000;
+
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("maxiter", maxiter)?;
+            dict.set_item("covar", covar.to_vec())?;
+            dict.set_item("means", means.to_vec())?;
+            dict.set_item("beta", beta.to_vec())?;
+            dict.set_item("u", u.to_vec())?;
+            dict.set_item("imat", imat.to_vec())?;
+            dict.set_item("loglik", loglik.to_vec())?;
+            dict.set_item("flag", final_flag)?;
+            dict.set_item("sctest", sctest)?;
+            Ok(dict.into())
+        })
     }
-
-    loglik[1] = newlk;
-    chinv2(imat, p);
-    for i in 0..p {
-        for j in 0..i {
-            imat[i * p + j] = imat[j * p + i];
-        }
-    }
-    beta.copy_from_slice(&newbeta_vec);
-    *flag = 1000;
 }
 
-#[allow(dead_code)]
+fn init_doloop(start: usize, end: usize, k: usize) -> Vec<Vec<usize>> {
+    (start..end).combinations(k).collect()
+}
+
 fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
     for i in 0..n {
         for j in i..n {
@@ -357,7 +396,6 @@ fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
     0
 }
 
-#[allow(dead_code)]
 fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
     for i in 0..n {
         let mut sum = b[i];
@@ -376,7 +414,6 @@ fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
     }
 }
 
-#[allow(dead_code)]
 fn chinv2(chol: &mut [f64], n: usize) {
     for i in 0..n {
         chol[i * n + i] = 1.0 / chol[i * n + i];

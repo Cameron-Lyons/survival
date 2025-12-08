@@ -7,8 +7,7 @@ struct ConcordanceResult {
 }
 
 #[pyfunction]
-#[allow(dead_code)]
-fn concordance(
+pub fn concordance(
     y: Vec<f64>,
     x: Vec<i32>,
     wt: Vec<f64>,

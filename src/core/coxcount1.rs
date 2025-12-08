@@ -1,14 +1,27 @@
-#[allow(dead_code)]
+use pyo3::prelude::*;
+
+#[pyclass]
 pub struct CoxCountOutput {
+    #[pyo3(get)]
     pub time: Vec<f64>,
+    #[pyo3(get)]
     pub nrisk: Vec<i32>,
+    #[pyo3(get)]
     pub index: Vec<i32>,
+    #[pyo3(get)]
     pub status: Vec<i32>,
 }
 
-#[allow(dead_code)]
-pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput {
-    let n = time.len();
+#[pyfunction]
+pub fn coxcount1(
+    time: Vec<f64>,
+    status: Vec<f64>,
+    strata: Vec<i32>,
+) -> PyResult<Py<CoxCountOutput>> {
+    let time_slice = &time;
+    let status_slice = &status;
+    let strata_slice = &strata;
+    let n = time_slice.len();
     let mut ntime = 0;
     let mut nrow = 0;
     let mut _stratastart = 0;
@@ -16,19 +29,19 @@ pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput
 
     let mut i = 0;
     while i < n {
-        if strata[i] == 1 {
+        if strata_slice[i] == 1 {
             _stratastart = i;
             nrisk = 0;
         }
         nrisk += 1;
 
-        if status[i] == 1.0 {
-            let dtime = time[i];
+        if status_slice[i] == 1.0 {
+            let dtime = time_slice[i];
             let mut j = i + 1;
             while j < n
-                && (time[j] - dtime).abs() < f64::EPSILON
-                && status[j] == 1.0
-                && strata[j] == 0
+                && (time_slice[j] - dtime).abs() < f64::EPSILON
+                && status_slice[j] == 1.0
+                && strata_slice[j] == 0
             {
                 nrisk += 1;
                 j += 1;
@@ -49,17 +62,17 @@ pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput
     let mut i = 0;
 
     while i < n {
-        if strata[i] == 1 {
+        if strata_slice[i] == 1 {
             _stratastart = i;
         }
 
-        if status[i] == 1.0 {
-            let dtime = time[i];
+        if status_slice[i] == 1.0 {
+            let dtime = time_slice[i];
             let mut j = i + 1;
             while j < n
-                && (time[j] - dtime).abs() < f64::EPSILON
-                && status[j] == 1.0
-                && strata[j] == 0
+                && (time_slice[j] - dtime).abs() < f64::EPSILON
+                && status_slice[j] == 1.0
+                && strata_slice[j] == 0
             {
                 j += 1;
             }
@@ -81,24 +94,35 @@ pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput
         i += 1;
     }
 
-    CoxCountOutput {
-        time: time_vec,
-        nrisk: nrisk_vec,
-        index: index_vec,
-        status: status_vec,
-    }
+    Python::attach(|py| {
+        Ok(Py::new(
+            py,
+            CoxCountOutput {
+                time: time_vec,
+                nrisk: nrisk_vec,
+                index: index_vec,
+                status: status_vec,
+            },
+        )?)
+    })
 }
 
-#[allow(dead_code)]
+#[pyfunction]
 pub fn coxcount2(
-    time1: &[f64],
-    time2: &[f64],
-    status: &[f64],
-    sort1: &[usize],
-    sort2: &[usize],
-    strata: &[i32],
-) -> CoxCountOutput {
-    let n = time1.len();
+    time1: Vec<f64>,
+    time2: Vec<f64>,
+    status: Vec<f64>,
+    sort1: Vec<usize>,
+    sort2: Vec<usize>,
+    strata: Vec<i32>,
+) -> PyResult<Py<CoxCountOutput>> {
+    let time1_slice = &time1;
+    let time2_slice = &time2;
+    let status_slice = &status;
+    let sort1_slice = &sort1;
+    let sort2_slice = &sort2;
+    let strata_slice = &strata;
+    let n = time1_slice.len();
     let mut ntime = 0;
     let mut nrow = 0;
     let mut j = 0;
@@ -106,16 +130,16 @@ pub fn coxcount2(
     let mut nrisk = 0;
 
     while i < n {
-        let iptr = sort2[i];
-        if strata[i] == 1 {
+        let iptr = sort2_slice[i];
+        if strata_slice[i] == 1 {
             nrisk = 0;
             j = i;
         }
 
-        if status[iptr] == 1.0 {
-            let dtime = time2[iptr];
+        if status_slice[iptr] == 1.0 {
+            let dtime = time2_slice[iptr];
 
-            while j < i && time1[sort1[j]] >= dtime {
+            while j < i && time1_slice[sort1_slice[j]] >= dtime {
                 nrisk -= 1;
                 j += 1;
             }
@@ -123,7 +147,10 @@ pub fn coxcount2(
             nrisk += 1;
             i += 1;
 
-            while i < n && strata[i] == 0 && (time2[sort2[i]] - dtime).abs() < f64::EPSILON {
+            while i < n
+                && strata_slice[i] == 0
+                && (time2_slice[sort2_slice[i]] - dtime).abs() < f64::EPSILON
+            {
                 nrisk += 1;
                 i += 1;
             }
@@ -147,25 +174,25 @@ pub fn coxcount2(
     let mut i = 0;
 
     while i < n {
-        let iptr = sort2[i];
-        if strata[i] == 1 {
+        let iptr = sort2_slice[i];
+        if strata_slice[i] == 1 {
             atrisk.iter_mut().for_each(|x| *x = None);
             who.clear();
             j = i;
         }
 
-        if status[iptr] == 0.0 {
+        if status_slice[iptr] == 0.0 {
             if atrisk[iptr].is_none() {
                 atrisk[iptr] = Some(who.len());
                 who.push(iptr);
             }
             i += 1;
         } else {
-            let dtime = time2[iptr];
+            let dtime = time2_slice[iptr];
 
             while j < i {
-                let jptr = sort1[j];
-                if time1[jptr] >= dtime {
+                let jptr = sort1_slice[j];
+                if time1_slice[jptr] >= dtime {
                     if let Some(pos) = atrisk[jptr] {
                         if pos < who.len() {
                             let last = who.pop().unwrap();
@@ -189,8 +216,11 @@ pub fn coxcount2(
 
             let mut events = vec![iptr];
             i += 1;
-            while i < n && strata[i] == 0 && (time2[sort2[i]] - dtime).abs() < f64::EPSILON {
-                events.push(sort2[i]);
+            while i < n
+                && strata_slice[i] == 0
+                && (time2_slice[sort2_slice[i]] - dtime).abs() < f64::EPSILON
+            {
+                events.push(sort2_slice[i]);
                 i += 1;
             }
 
@@ -209,10 +239,15 @@ pub fn coxcount2(
         }
     }
 
-    CoxCountOutput {
-        time: time_vec,
-        nrisk: nrisk_vec,
-        index: index_vec,
-        status: status_vec,
-    }
+    Python::attach(|py| {
+        Ok(Py::new(
+            py,
+            CoxCountOutput {
+                time: time_vec,
+                nrisk: nrisk_vec,
+                index: index_vec,
+                status: status_vec,
+            },
+        )?)
+    })
 }

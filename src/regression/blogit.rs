@@ -14,15 +14,18 @@ fn cloglog(p: f64) -> f64 {
 }
 
 #[pyclass]
-struct LinkFunctionParams {
+pub struct LinkFunctionParams {
     #[allow(dead_code)]
     edge: f64,
 }
 
+#[pymethods]
 impl LinkFunctionParams {
+    #[new]
     fn new(edge: f64) -> Self {
         LinkFunctionParams { edge }
     }
+
     fn blogit(&self, input: f64) -> f64 {
         let adjusted_input = if input < self.edge {
             self.edge
@@ -60,11 +63,4 @@ impl LinkFunctionParams {
         let adjusted_input = if input < self.edge { self.edge } else { input };
         adjusted_input.ln()
     }
-}
-
-#[pymodule]
-#[pyo3(name = "pyLinkFunctionParams")]
-fn py_link_function_params(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<LinkFunctionParams>()?;
-    Ok(())
 }
