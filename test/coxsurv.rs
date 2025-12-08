@@ -15,22 +15,22 @@ struct SurvivalCurve {
 impl CoxPHModel {
     fn fit(formula: &str, data: &DataFrame) -> Self {
         CoxPHModel {
-            coefficients: array![0.1, -0.2, 0.05], // Example coefficients
-            strata: Some(array![0, 1, 2]),         // Example strata
+            coefficients: array![0.1, -0.2, 0.05], 
+            strata: Some(array![0, 1, 2]),         
         }
     }
 
     fn survfit(&self, newdata: Option<&DataFrame>) -> SurvivalCurve {
         SurvivalCurve {
             time: Array1::linspace(0.0, 1000.0, 100),
-            surv: Array2::ones((100, 3)), // Example survival probabilities
-            strata: array![30, 40, 30],   // Example strata counts
+            surv: Array2::ones((100, 3)), 
+            strata: array![30, 40, 30],   
         }
     }
 }
 
 fn main() {
-    let lung_data = DataFrame::new(); // Assume proper data loading
+    let lung_data = DataFrame::new(); 
     let formula = "Surv(time, status) ~ age + sex + meal.cal + strata(ph.ecog)";
 
     let fit = CoxPHModel::fit(formula, &lung_data);
@@ -53,7 +53,7 @@ fn main() {
 
     assert_abs_diff_eq!(surv1.surv, surv2.surv, epsilon = 1e-6);
 
-    let dummy = DataFrame::new(); // Example new data
+    let dummy = DataFrame::new(); 
     let surv3 = fit.survfit(Some(&dummy));
 
     let fit1 = CoxPHModel::fit("Surv(time, status) ~ age + ph.ecog", &lung_data);

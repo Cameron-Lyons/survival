@@ -9,7 +9,7 @@ struct SurvivalData {
     status: u32,
     trt: u32,
     wt: f32,
-    pos: u32, // Position indicator (1,2,3,... per id and trt)
+    pos: u32, 
 }
 
 #[derive(Debug)]
@@ -35,7 +35,7 @@ fn main() {
 
     let true_results = byhand(&tdata);
 
-    assert_eq!(true_results[&1].n_id, 5); // Example values
+    assert_eq!(true_results[&1].n_id, 5); 
     assert_abs_diff_eq!(true_results[&1].surv[0], 0.8, epsilon = 0.001);
 }
 

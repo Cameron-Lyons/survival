@@ -67,6 +67,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     assert!(aeq(fit1.coefficients(), fit2.coefficients()));
     
-    
     Ok(())
 }

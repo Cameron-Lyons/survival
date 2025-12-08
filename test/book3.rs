@@ -107,7 +107,7 @@ fn byhand(beta: f64, newx: f64) -> ByhandResult {
     for i in 0..6 {
         dM[[i, i]] += 1.0;
     }
-    dM[[6, 5]] += 1.0; // Adjust for 7th observation at time 9
+    dM[[6, 5]] += 1.0; 
     
     let mart = dM.sum_axis(Axis(1));
     

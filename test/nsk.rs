@@ -35,7 +35,7 @@ fn main() {
 
 fn design_matrix_ns(x: &[f64], df: usize) -> DynMatrix {
     let n = x.len();
-    let mut matrix = DMatrix::zeros(n, df + 1); // Including intercept
+    let mut matrix = DMatrix::zeros(n, df + 1); 
     matrix.column_mut(0).fill(1.0);
     for (i, &xi) in x.iter().enumerate() {
         for j in 1..=df {

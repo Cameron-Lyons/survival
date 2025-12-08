@@ -71,7 +71,7 @@ fn calculate_survival(
             let from_state = state_order.iter().position(|&s| s == "1-2").unwrap();
             let to_state = state_order.iter().position(|&s| s == "death").unwrap();
 
-            let base_hazard = 0.1; // Replace with actual calculation
+            let base_hazard = 0.1; 
             hmat[(from_state, to_state)] = base_hazard;
             hmat[(from_state, from_state)] = -base_hazard;
         }

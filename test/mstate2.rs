@@ -56,7 +56,7 @@ impl SurvivalData {
         let event_times = self.get_event_times();
         
         for (it, &time) in event_times.iter().enumerate() {
-            if it == 0 { continue; } // Skip initial time
+            if it == 0 { continue; } 
             
             let at_risk = self.get_at_risk(time);
             

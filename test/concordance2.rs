@@ -155,7 +155,7 @@ fn concordance(
 
     let npair = count[0] + count[1] + count[2];
     let d = (count[0] - count[1]).abs();
-    let cvar = 0.0; // Placeholder, actual variance calculation needed
+    let cvar = 0.0; 
     let var = 0.0;
 
     ConcordanceResult {

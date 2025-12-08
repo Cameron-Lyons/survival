@@ -15,7 +15,7 @@ struct Terms {
 impl Terms {
     fn drop_special(&self, indices: &[usize]) -> Self {
         let mut sorted_indices = indices.to_vec();
-        sorted_indices.sort_unstable_by(|a, b| b.cmp(a)); // Sort descending for removal
+        sorted_indices.sort_unstable_by(|a, b| b.cmp(a)); 
 
         let mut new_cols = self.factors_cols.clone();
         let mut new_labels = self.term_labels.clone();

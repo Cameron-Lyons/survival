@@ -234,7 +234,7 @@ fn compute_pstate(
     let state_map: HashMap<_, _> = states.iter().enumerate().map(|(i, &s)| (s, i)).collect();
 
     let mut pstate = vec![vec![0.0; n_states]; n_time + 1];
-    pstate[0][state_map[&1]] = 1.0; // Assuming initial state is 1
+    pstate[0][state_map[&1]] = 1.0; 
 
     for (t_idx, haz_row) in haz.iter().enumerate() {
         let mut tmat = vec![vec![0.0; n_states]; n_states];

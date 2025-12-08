@@ -30,7 +30,6 @@ cpdef void agexact(int* maxiter, int* nusedx, int* nvarx, double* start,
         int deaths, nrisk
         int halving = 0
 
-    # Allocate memory for pointers-to-pointers and other arrays
     covar = <double **>malloc(n * sizeof(double *))
     for i in range(n):
         covar[i] = <double *>malloc(nvar * sizeof(double))

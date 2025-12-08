@@ -2,8 +2,6 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// Collapse function for Python compatibility
-/// Returns a dictionary with "matrix" (2D list) and "dimnames" (list of row/column names)
 pub fn collapse(
     y: &[f64],
     x: &[i32],
@@ -53,7 +51,6 @@ pub fn collapse(
         i += 1;
     }
 
-    // Create the matrix as a 2D list: [[i2[0], i1[0]], [i2[1], i1[1]], ...]
     let mut matrix = Vec::new();
     for (start, end) in i2.iter().zip(i1.iter()) {
         matrix.push(vec![*start, *end]);

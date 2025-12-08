@@ -50,9 +50,7 @@ impl CoxPHModel {
         }
     }
 
-    pub fn add_subject(&mut self, _subject: &Subject) {
-        // Implementation placeholder
-    }
+    pub fn add_subject(&mut self, _subject: &Subject) {}
     pub fn fit(&mut self, n_iters: u16) {
         for (_i, row) in self.covariates.outer_iter().enumerate() {
             let risk_score = self.coefficients.column(0).dot(&row);

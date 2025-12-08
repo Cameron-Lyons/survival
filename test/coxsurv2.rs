@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut cox_model = survival::coxph(
             ×,
             &status,
-            &[age.as_slice()], // Covariates
+            &[age.as_slice()], 
             params,
         )?;
 
@@ -67,7 +67,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         let baseline_hazards = cox_model.baseline_hazard();
         
     }
-
 
     Ok(())
 }

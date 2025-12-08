@@ -103,8 +103,8 @@ mod tests {
         let start = vec![0.0; 11];
         let stop = vec![
             9.0, 13.0, 28.0, 31.0, 7.0, 16.0, 23.0, 34.0, 45.0, 48.0, 60.0,
-        ]; // Example times
-        let status = vec![1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0]; // Example statuses
+        ]; 
+        let status = vec![1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0]; 
         let x = vec![1.0, 6.0, 2.0, 7.0, 3.0, 7.0, 3.0, 8.0, 4.0, 4.0, 5.0];
         let weights = vec![1.0, 2.0, 3.0, 2.0, 1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0];
 
@@ -134,7 +134,7 @@ mod tests {
             &x,
             Some(&weights),
             None,
-            true, // reverse=true
+            true, 
         );
 
         assert_abs_diff_eq!(conc, 70.0, epsilon = 1e-6);

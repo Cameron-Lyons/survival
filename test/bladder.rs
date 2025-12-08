@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Wei et al. model:");
     println!("{:?}", wfit);
 
-    let rx_indices = vec![1, 4, 5, 6]; // Assuming these are the coefficient positions
+    let rx_indices = vec![1, 4, 5, 6];
     let cmat = Array2::from_shape_fn((4, 4), |(i, j)| if i == 0 || j == i { 1.0 } else { 0.0 });
 
     let coefficients = wfit.coefficients().select(Axis(0), &rx_indices);

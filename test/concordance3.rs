@@ -92,7 +92,7 @@ fn analyze_aml(data: &DataFrame) {
 }
 
 fn analyze_nafld(data: &DataFrame) {
-    // NAFLD dataset analysis
+    
     let time = data.column("futime").as_f64();
     let status = data.column("status").as_bool();
     let male = data.column("male").as_bool();
@@ -108,7 +108,7 @@ fn analyze_nafld(data: &DataFrame) {
 }
 
 fn check_interval_censoring(data: &DataFrame) {
-    // Interval censoring checks
+    
     let tstart = data.column("tstart").as_f64();
     let tstop = data.column("tstop").as_f64();
     let status = data.column("status").as_bool();

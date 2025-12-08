@@ -19,7 +19,7 @@ def cholesky2(cnp.ndarray[cnp.float64_t, ndim=2] matrix, int n, double toler):
         for j in range(i + 1, n):
             matrix[j, i] = matrix[i, j]
     if eps == 0:
-        eps = toler  # no positive diagonals!
+        eps = toler
     else:
         eps *= toler
 

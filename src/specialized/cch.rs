@@ -37,7 +37,7 @@ impl CohortData {
                 model.add_subject(subject);
             }
         }
-        model.fit(100); // Default iterations
+        model.fit(100);
         model
     }
 }

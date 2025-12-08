@@ -22,6 +22,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = CoxPHModel::new();
     model.fit(&tdata, formula)?;
     
-    
     Ok(())
 }

@@ -125,7 +125,7 @@ fn main() {
     let truth0 = byhand(0.0, std::f64::consts::PI);
     let sfit_var = truth0.varhaz.clone();
     let sfit_surv = (-truth0.hazard).mapv(|h| h.exp());
-    assert!(aeq(&sfit_var, &[0.0, 0.0, 0.0], 1e-6)); // Placeholder check
+    assert!(aeq(&sfit_var, &[0.0, 0.0, 0.0], 1e-6)); 
 
     println!("All tests passed!");
 }

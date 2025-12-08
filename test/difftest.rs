@@ -53,7 +53,7 @@ fn log_rank_test(data: &SurvivalData) -> SurvivalTestResult {
     let variance = vec![vec![total_events * (1.0 - 1.0 / group_count); groups.len()]; groups.len()];
 
     SurvivalTestResult {
-        chi_squared: 10.0, // Placeholder value
+        chi_squared: 10.0, 
         degrees_of_freedom: groups.len() - 1,
         observed: groups
             .iter()
@@ -90,11 +90,11 @@ fn main() {
     assert!(relative_eq!(result.observed[2], 0.0, epsilon = 1e-6));
 
     let lung_data = SurvivalData::new(
-        vec![/* lung dataset times */],
-        vec![/* lung dataset statuses */],
-        vec![/* pat.karno groups */],
+        vec![/],
+        vec![/],
+        vec![/],
     )
-    .with_strata(vec![/* institution strata */]);
+    .with_strata(vec![/]);
 
     let stratified_result = log_rank_test(&lung_data);
 

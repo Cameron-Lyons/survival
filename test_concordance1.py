@@ -9,7 +9,7 @@ try:
     import survival
     print("✅ Successfully imported survival module")
     
-    time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]  # time, status
+    time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
     weights = [1.0, 1.0, 1.0, 1.0, 1.0]
     indices = [0, 1, 2, 3, 4]
     ntree = 5

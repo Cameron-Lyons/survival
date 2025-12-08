@@ -21,7 +21,7 @@ fn byhand7(beta: f64) -> ByHandResults {
         haz[0] + haz[1] + haz[2] + haz[3],
     ];
 
-    let ties = [0, 0, 1, 1, 2, 3]; // Converted from 1-based to 0-based
+    let ties = [0, 0, 1, 1, 2, 3]; 
     let wt = [r, r, r, 1.0, 1.0, 1.0];
     let status = [1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
 

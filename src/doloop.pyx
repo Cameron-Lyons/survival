@@ -2,7 +2,6 @@
 cimport numpy as cnp
 import numpy as np
 
-# Declaring global variables
 cdef int maxval, minval
 cdef int firsttime, depth
 
@@ -28,7 +27,7 @@ def doloop(int nloops, cnp.ndarray[cnp.int_t, ndim=1] index):
             return minval - 1
 
     nloops -= 1
-    index[nloops] += 1  # increment the lastmost index
+    index[nloops] += 1
 
     if index[nloops] <= (maxval - depth):
         return index[nloops]

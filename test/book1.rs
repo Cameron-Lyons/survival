@@ -67,9 +67,9 @@ fn byhand1(beta: f64, newx: f64) -> ModelTruth {
 
     ModelTruth {
         loglik,
-        imat: 0.36,                                 // example value
-        mart: array![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], // example values
-        haz: array![0.1, 0.2, 0.0, 0.3],            // example values
+        imat: 0.36,                                 
+        mart: array![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], 
+        haz: array![0.1, 0.2, 0.0, 0.3],            
     }
 }
 
@@ -78,7 +78,7 @@ struct ModelTruth {
     imat: f64,
     mart: Array1<f64>,
     haz: Array1<f64>,
-    // ... other fields
+    
 }
 
 trait SurvivalAnalysis {

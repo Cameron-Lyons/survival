@@ -143,11 +143,11 @@ mod tests {
 
         let mut rates = vec![0.0; dim_sizes.iter().product()];
         
-        let age_index = 20; // 20-year-old
-        let sex_index = 0;  // male (assuming 1 maps to index 0)
-        let year_index = 0; // 1960
+        let age_index = 20; 
+        let sex_index = 0;  
+        let year_index = 0; 
         let idx = compute_linear_index(&[age_index, sex_index, year_index], &dim_sizes).unwrap();
-        rates[idx] = - (1.0 - 0.00169).ln() / 365.25; // daily hazard rate
+        rates[idx] = - (1.0 - 0.00169).ln() / 365.25; 
 
         let ratetable = Ratetable {
             dim_sizes,

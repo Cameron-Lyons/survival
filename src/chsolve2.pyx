@@ -7,14 +7,12 @@ def chsolve2(cnp.ndarray[cnp.float64_t, ndim=2] matrix, int n, cnp.ndarray[cnp.f
     cdef int i, j
     cdef double temp
 
-    # solve Fb = y
     for i in range(n):
         temp = y[i]
         for j in range(i):
             temp -= y[j] * matrix[i, j]
         y[i] = temp
 
-    # solve DF'z = b
     for i in range(n - 1, -1, -1):
         if matrix[i, i] == 0:
             y[i] = 0

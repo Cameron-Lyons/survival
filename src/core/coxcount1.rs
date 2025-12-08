@@ -11,7 +11,7 @@ pub fn coxcount1(time: &[f64], status: &[f64], strata: &[i32]) -> CoxCountOutput
     let n = time.len();
     let mut ntime = 0;
     let mut nrow = 0;
-    let mut _stratastart = 0; // Used later in the function
+    let mut _stratastart = 0;
     let mut nrisk = 0;
 
     let mut i = 0;

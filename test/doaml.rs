@@ -78,7 +78,7 @@ mod tests {
         let status = arr1(&[
             1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1,
         ]);
-        let covariates = Array2::eye(23); // Dummy covariates
+        let covariates = Array2::eye(23); 
 
         SurvivalData::new(time, status, covariates)
     }
@@ -88,7 +88,7 @@ mod tests {
         let aml = create_aml_data();
 
         let fit1 = aml.coxph(TieMethod::Breslow);
-        let fit2 = aml.coxph(TieMethod::Breslow); // Should match
+        let fit2 = aml.coxph(TieMethod::Breslow); 
 
         assert_relative_eq!(fit1.log_likelihood, fit2.log_likelihood, epsilon = 1e-6);
         assert_relative_eq!(
@@ -124,7 +124,7 @@ mod tests {
         let p = 1.0 - dist.cdf(result.chi_squared);
 
         assert_relative_eq!(result.p_value, p, epsilon = 1e-6);
-        assert!(result.chi_squared > 5.0); // Expect significant result
+        assert!(result.chi_squared > 5.0); 
     }
 }
 

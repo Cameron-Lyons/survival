@@ -3,7 +3,7 @@ use polars::prelude::*;
 use survival::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let df = DataFrame::default(); // Assume logan data is loaded here
+    let df = DataFrame::default(); 
 
     let n = df.height();
     let occupation = df.column("occupation")?.unique()?.sort(false);
@@ -44,9 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut covariates = Vec::new();
     for row in expanded_df.iter_rows() {
-        let mut features = vec![/* dummy encoded occ2 */];
-        features.extend(/* occ2:education interactions */);
-        features.extend(/* occ2:race interactions */);
+        let mut features = vec![/];
+        features.extend(/);
+        features.extend(/);
         covariates.extend(features);
     }
     let covariates =
