@@ -3,7 +3,7 @@
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'target', 'wheels'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'target', 'wheels'))
 
 try:
     import survival
