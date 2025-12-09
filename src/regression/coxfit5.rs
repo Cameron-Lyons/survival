@@ -1,9 +1,9 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::manual_memcpy)]
 use crate::core::coxsafe::coxsafe;
 
-pub struct CoxParams {
+#[allow(dead_code)]
+pub(crate) struct CoxParams {
     pub beta: Vec<f64>,
     pub fbeta: Vec<f64>,
     pub fdiag: Vec<f64>,
@@ -16,7 +16,8 @@ pub struct CoxParams {
     pub eps: f64,
 }
 
-pub struct CoxData {
+#[allow(dead_code)]
+pub(crate) struct CoxData {
     pub nused: usize,
     pub nvar: usize,
     pub y: Vec<f64>,
@@ -29,7 +30,8 @@ pub struct CoxData {
     pub fmat: Vec<Vec<f64>>,
 }
 
-pub struct CoxResult {
+#[allow(dead_code)]
+pub(crate) struct CoxResult {
     pub means: Vec<f64>,
     pub beta: Vec<f64>,
     pub u: Vec<f64>,
@@ -43,7 +45,8 @@ pub struct CoxResult {
     pub expect: Vec<f64>,
 }
 
-pub struct CoxFit5 {
+#[allow(dead_code)]
+pub(crate) struct CoxFit5 {
     covar: Vec<Vec<f64>>,
     cmat: Vec<Vec<f64>>,
     cmat2: Vec<Vec<f64>>,
@@ -68,6 +71,7 @@ pub struct CoxFit5 {
     score: Vec<f64>,
 }
 
+#[allow(dead_code)]
 impl CoxFit5 {
     pub fn new() -> Self {
         CoxFit5 {
@@ -96,6 +100,7 @@ impl CoxFit5 {
         }
     }
 
+    #[allow(dead_code)]
     pub fn coxfit5_a(&mut self, params: &CoxParams, data: &CoxData) -> CoxResult {
         let nused = data.nused;
         let nvar = data.nvar;
@@ -207,6 +212,7 @@ impl CoxFit5 {
             expect: vec![0.0; nused],
         }
     }
+    #[allow(dead_code)]
     pub fn coxfit5_b(&mut self, params: &mut CoxParams, data: &CoxData) -> CoxResult {
         let nvar = data.nvar;
         let nf = params.nfrail;
@@ -392,6 +398,7 @@ impl CoxFit5 {
         result
     }
 
+    #[allow(dead_code)]
     pub fn coxfit5_c(self, data: &CoxData) -> Vec<f64> {
         let mut expect = vec![0.0; data.nused];
         let mut hazard = 0.0;
@@ -421,6 +428,7 @@ impl CoxFit5 {
     }
 }
 
+#[allow(dead_code)]
 impl CoxResult {
     fn new(nvar: usize, nf: usize, nvar2: usize, nused: usize) -> Self {
         CoxResult {
@@ -439,6 +447,7 @@ impl CoxResult {
     }
 }
 
+#[allow(dead_code)]
 fn cholesky(mat: &mut [Vec<f64>], tolerch: f64) -> i32 {
     let n = mat.len();
     for i in 0..n {
@@ -460,6 +469,7 @@ fn cholesky(mat: &mut [Vec<f64>], tolerch: f64) -> i32 {
     0
 }
 
+#[allow(dead_code)]
 fn cholesky_solve(mat: &[Vec<f64>], b: &mut [f64]) {
     let n = mat.len();
     for i in 0..n {

@@ -1,14 +1,15 @@
-#![allow(dead_code)]
-struct Agmart3Input {
-    surv: Vec<f64>,
-    score: Vec<f64>,
-    weight: Vec<f64>,
-    strata: Vec<i32>,
-    sort1: Vec<i32>,
-    sort2: Vec<i32>,
+#[allow(dead_code)]
+pub(crate) struct Agmart3Input {
+    pub surv: Vec<f64>,
+    pub score: Vec<f64>,
+    pub weight: Vec<f64>,
+    pub strata: Vec<i32>,
+    pub sort1: Vec<i32>,
+    pub sort2: Vec<i32>,
 }
 
-fn agmart3(nused: i32, input: Agmart3Input, method: i32) -> Vec<f64> {
+#[allow(dead_code)]
+pub(crate) fn agmart3(nused: i32, input: Agmart3Input, method: i32) -> Vec<f64> {
     let nused = nused as usize;
     let nr = input.surv.len() / 3;
 

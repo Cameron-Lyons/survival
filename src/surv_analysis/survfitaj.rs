@@ -1,10 +1,10 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
 use ndarray::{Array1, Array2, s};
 use std::error::Error;
 
 #[derive(Debug)]
-pub struct SurvFitAJ {
+#[allow(dead_code)]
+pub(crate) struct SurvFitAJ {
     pub n_risk: Array2<f64>,
     pub n_event: Array2<f64>,
     pub n_censor: Array2<f64>,
@@ -18,8 +18,9 @@ pub struct SurvFitAJ {
     pub n_transition: Array2<f64>,
 }
 
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-pub fn survfitaj(
+pub(crate) fn survfitaj(
     y: &[f64],
     sort1: &[usize],
     sort2: &[usize],

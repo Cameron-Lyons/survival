@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#[allow(dead_code)]
 fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     if cuts.is_empty() {
         return None;
@@ -24,6 +24,7 @@ fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     }
 }
 
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn pystep(
     odim: usize,
@@ -84,8 +85,9 @@ fn pystep(
     (maxtime, index as i32)
 }
 
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-pub fn pyears2(
+pub(crate) fn pyears2(
     n: usize,
     ny: usize,
     doevent: bool,

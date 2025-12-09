@@ -1,13 +1,14 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-pub struct SurvDiffInput<'a> {
+#[allow(dead_code)]
+pub(crate) struct SurvDiffInput<'a> {
     pub time: &'a [f64],
     pub status: &'a [i32],
     pub group: &'a [i32],
     pub strata: &'a [i32],
 }
 
-pub struct SurvDiffOutput<'a> {
+#[allow(dead_code)]
+pub(crate) struct SurvDiffOutput<'a> {
     pub obs: &'a mut [f64],
     pub exp: &'a mut [f64],
     pub var: &'a mut [f64],
@@ -15,14 +16,16 @@ pub struct SurvDiffOutput<'a> {
     pub kaplan: &'a mut [f64],
 }
 
-pub struct SurvDiffParams {
+#[allow(dead_code)]
+pub(crate) struct SurvDiffParams {
     pub nn: i32,
     pub nngroup: i32,
     pub _nstrat: i32,
     pub rho: f64,
 }
 
-pub fn survdiff2(params: SurvDiffParams, input: SurvDiffInput, output: SurvDiffOutput) {
+#[allow(dead_code)]
+pub(crate) fn survdiff2(params: SurvDiffParams, input: SurvDiffInput, output: SurvDiffOutput) {
     let ntotal = params.nn as usize;
     let ngroup = params.nngroup as usize;
     let mut istart = 0;

@@ -1,20 +1,22 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-struct CoxScoreData<'a> {
-    y: &'a [f64],
-    strata: &'a [i32],
-    covar: &'a [f64],
-    score: &'a [f64],
-    weights: &'a [f64],
+#[allow(dead_code)]
+pub(crate) struct CoxScoreData<'a> {
+    pub y: &'a [f64],
+    pub strata: &'a [i32],
+    pub covar: &'a [f64],
+    pub score: &'a [f64],
+    pub weights: &'a [f64],
 }
 
-struct CoxScoreParams {
-    method: i32,
-    n: usize,
-    nvar: usize,
+#[allow(dead_code)]
+pub(crate) struct CoxScoreParams {
+    pub method: i32,
+    pub n: usize,
+    pub nvar: usize,
 }
 
-fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) -> Vec<f64> {
+#[allow(dead_code)]
+pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) -> Vec<f64> {
     let time = &data.y[0..params.n];
     let status = &data.y[params.n..2 * params.n];
     let mut resid = vec![0.0; params.n * params.nvar];

@@ -1,6 +1,6 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-fn residcsum(y2: &[f64], strata: &[i32], nrows: usize, ncols: usize) -> Vec<f64> {
+#[allow(dead_code)]
+pub(crate) fn residcsum(y2: &[f64], strata: &[i32], nrows: usize, ncols: usize) -> Vec<f64> {
     let mut csum = y2.to_vec();
 
     for j in 0..ncols {

@@ -1,6 +1,6 @@
-#![allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-pub fn pyears1(
+#[allow(dead_code)]
+pub(crate) fn pyears1(
     n: usize,
     ny: usize,
     doevent: i32,
@@ -220,6 +220,7 @@ pub fn pyears1(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn pystep(
     dim: usize,
     data: &mut [f64],

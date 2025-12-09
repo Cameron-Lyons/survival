@@ -1,5 +1,5 @@
-#![allow(dead_code)]
-pub fn tmerge(
+#[allow(dead_code)]
+pub(crate) fn tmerge(
     id: &[i32],
     time1: &[f64],
     newx: &[f64],
@@ -46,7 +46,8 @@ pub fn tmerge(
     result
 }
 
-pub fn tmerge2(id: &[i32], time1: &[f64], nid: &[i32], ntime: &[f64]) -> Vec<usize> {
+#[allow(dead_code)]
+pub(crate) fn tmerge2(id: &[i32], time1: &[f64], nid: &[i32], ntime: &[f64]) -> Vec<usize> {
     let n1 = id.len();
     let n2 = nid.len();
     let mut result = vec![0; n1];
@@ -75,7 +76,8 @@ pub fn tmerge2(id: &[i32], time1: &[f64], nid: &[i32], ntime: &[f64]) -> Vec<usi
     result
 }
 
-pub fn tmerge3(id: &[i32], miss: &[bool]) -> Vec<usize> {
+#[allow(dead_code)]
+pub(crate) fn tmerge3(id: &[i32], miss: &[bool]) -> Vec<usize> {
     let n = id.len();
     let mut result = vec![0; n];
     let mut last_good = 0;

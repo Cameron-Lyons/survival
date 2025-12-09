@@ -1,6 +1,6 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-pub struct CoxSurvResult {
+#[allow(dead_code)]
+pub(crate) struct CoxSurvResult {
     pub time: Vec<f64>,
     pub strata: Vec<i32>,
     pub count: Vec<[f64; 7]>,
@@ -8,7 +8,8 @@ pub struct CoxSurvResult {
     pub sresid: Vec<Vec<f64>>,
 }
 
-pub fn coxsurv3(
+#[allow(dead_code)]
+pub(crate) fn coxsurv3(
     y: &[(f64, f64)],
     xmat: &[Vec<f64>],
     strata: &[i32],

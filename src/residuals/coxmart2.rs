@@ -1,5 +1,5 @@
-#![allow(dead_code)]
-pub fn coxmart2(
+#[allow(dead_code)]
+pub(crate) fn coxmart2(
     time: &[f64],
     status: &[i32],
     strata: &[i32],

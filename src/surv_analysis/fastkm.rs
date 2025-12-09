@@ -1,5 +1,5 @@
-#![allow(dead_code)]
-pub fn fastkm1(
+#[allow(dead_code)]
+pub(crate) fn fastkm1(
     time: &[f64],
     status: &[f64],
     wt: &[f64],
@@ -98,7 +98,8 @@ pub fn fastkm1(
     (S, G, nrisk, etime)
 }
 
-pub fn fastkm2(
+#[allow(dead_code)]
+pub(crate) fn fastkm2(
     tstart: &[f64],
     tstop: &[f64],
     status: &[f64],

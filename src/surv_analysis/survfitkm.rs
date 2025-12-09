@@ -1,5 +1,5 @@
-#![allow(dead_code)]
-pub struct SurvFitKMOutput {
+#[allow(dead_code)]
+pub(crate) struct SurvFitKMOutput {
     pub time: Vec<f64>,
     pub n_risk: Vec<f64>,
     pub n_event: Vec<f64>,
@@ -8,7 +8,8 @@ pub struct SurvFitKMOutput {
     pub std_err: Vec<f64>,
 }
 
-pub fn survfitkm(
+#[allow(dead_code)]
+pub(crate) fn survfitkm(
     time: &[f64],
     status: &[f64],
     weights: &[f64],
@@ -80,6 +81,7 @@ pub fn survfitkm(
     }
 }
 
+#[allow(dead_code)]
 fn process_entry_times(entry_times: Option<&[f64]>, position: &[i32]) -> Vec<f64> {
     let mut entry_vec = Vec::new();
     if let Some(entries) = entry_times {

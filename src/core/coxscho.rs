@@ -1,18 +1,20 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-pub struct CoxSchoInput<'a> {
+#[allow(dead_code)]
+pub(crate) struct CoxSchoInput<'a> {
     pub y: &'a [f64],
     pub score: &'a [f64],
     pub strata: &'a [i32],
 }
 
-pub struct CoxSchoParams {
+#[allow(dead_code)]
+pub(crate) struct CoxSchoParams {
     pub nused: usize,
     pub nvar: usize,
     pub method: i32,
 }
 
-pub fn coxscho(params: CoxSchoParams, input: CoxSchoInput, covar: &mut [f64], work: &mut [f64]) {
+#[allow(dead_code)]
+pub(crate) fn coxscho(params: CoxSchoParams, input: CoxSchoInput, covar: &mut [f64], work: &mut [f64]) {
     assert!(input.y.len() >= 3 * params.nused, "y array too short");
     assert!(
         covar.len() >= params.nvar * params.nused,

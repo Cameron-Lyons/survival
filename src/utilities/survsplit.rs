@@ -1,5 +1,5 @@
-#![allow(dead_code)]
-pub struct SplitResult {
+#[allow(dead_code)]
+pub(crate) struct SplitResult {
     pub row: Vec<usize>,
     pub interval: Vec<usize>,
     pub start: Vec<f64>,
@@ -7,7 +7,8 @@ pub struct SplitResult {
     pub censor: Vec<bool>,
 }
 
-pub fn survsplit(tstart: &[f64], tstop: &[f64], cut: &[f64]) -> SplitResult {
+#[allow(dead_code)]
+pub(crate) fn survsplit(tstart: &[f64], tstop: &[f64], cut: &[f64]) -> SplitResult {
     let n = tstart.len();
     let ncut = cut.len();
     let mut extra = 0;

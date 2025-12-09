@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#[allow(dead_code)]
 enum ClusterVariable {
     Character(String),
     Factor(Vec<String>),

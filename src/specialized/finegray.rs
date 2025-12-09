@@ -1,7 +1,7 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
 #[derive(Debug)]
-pub struct FineGrayOutput {
+#[allow(dead_code)]
+pub(crate) struct FineGrayOutput {
     pub row: Vec<usize>,
     pub start: Vec<f64>,
     pub end: Vec<f64>,
@@ -9,7 +9,8 @@ pub struct FineGrayOutput {
     pub add: Vec<usize>,
 }
 
-pub fn finegray(
+#[allow(dead_code)]
+pub(crate) fn finegray(
     tstart: &[f64],
     tstop: &[f64],
     ctime: &[f64],

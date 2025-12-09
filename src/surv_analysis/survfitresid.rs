@@ -1,12 +1,13 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-pub struct SurvivalResult {
+#[allow(dead_code)]
+pub(crate) struct SurvivalResult {
     pub influence_pstate: Vec<Vec<f64>>,
     pub influence_auc: Option<Vec<Vec<f64>>>,
 }
 
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-pub fn survfitresid(
+pub(crate) fn survfitresid(
     y: &[f64],
     sort1: &[usize],
     sort2: &[usize],

@@ -1,15 +1,16 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-struct CoxSurvResult {
-    time: Vec<f64>,
-    strata: Vec<f64>,
-    count: Vec<f64>,
-    xbar1: Vec<f64>,
-    xbar2: Vec<f64>,
+#[allow(dead_code)]
+pub(crate) struct CoxSurvResult {
+    pub time: Vec<f64>,
+    pub strata: Vec<f64>,
+    pub count: Vec<f64>,
+    pub xbar1: Vec<f64>,
+    pub xbar2: Vec<f64>,
 }
 
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-fn coxsurv4(
+pub(crate) fn coxsurv4(
     y: &[f64],
     weight: &[f64],
     sort1: &[usize],

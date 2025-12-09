@@ -1,6 +1,6 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-pub struct DoloopState {
+#[allow(dead_code)]
+pub(crate) struct DoloopState {
     minval: i32,
     maxval: i32,
     firsttime: bool,
@@ -8,6 +8,7 @@ pub struct DoloopState {
 }
 
 impl DoloopState {
+    #[allow(dead_code)]
     pub fn new(min: i32, max: i32) -> Self {
         DoloopState {
             minval: min,
@@ -17,6 +18,7 @@ impl DoloopState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn doloop(&mut self, indices: &mut [i32]) -> i32 {
         let nloops = indices.len();
 

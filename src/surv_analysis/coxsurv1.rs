@@ -1,8 +1,8 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
 use ndarray::{Array2, ArrayView2};
 
-pub fn coxsurv1(
+#[allow(dead_code)]
+pub(crate) fn coxsurv1(
     otime: &[f64],
     y: ArrayView2<f64>,
     weight: &[f64],

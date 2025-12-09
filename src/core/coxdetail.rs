@@ -1,6 +1,6 @@
-#![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
-pub struct CoxDetailInput<'a> {
+#[allow(dead_code)]
+pub(crate) struct CoxDetailInput<'a> {
     pub center: &'a [f64],
     pub y: &'a mut [f64],
     pub covar2: &'a mut [f64],
@@ -9,7 +9,8 @@ pub struct CoxDetailInput<'a> {
     pub weights: &'a mut [f64],
 }
 
-pub struct CoxDetailOutput<'a> {
+#[allow(dead_code)]
+pub(crate) struct CoxDetailOutput<'a> {
     pub ndead: &'a mut usize,
     pub means2: &'a mut [f64],
     pub u2: &'a mut [f64],
@@ -18,12 +19,14 @@ pub struct CoxDetailOutput<'a> {
     pub nrisk2: &'a mut [f64],
 }
 
-pub struct CoxDetailParams {
+#[allow(dead_code)]
+pub(crate) struct CoxDetailParams {
     pub nused: usize,
     pub nvar: usize,
 }
 
-pub fn coxdetail(
+#[allow(dead_code)]
+pub(crate) fn coxdetail(
     params: CoxDetailParams,
     input: CoxDetailInput,
     output: CoxDetailOutput,
