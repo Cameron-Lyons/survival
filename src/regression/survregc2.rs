@@ -14,6 +14,7 @@ pub struct SurvivalLikelihood {
 
 pub type CallbackFunc = fn(z: &[f64], result: &mut [f64]);
 
+#[allow(clippy::too_many_arguments)]
 pub fn survregc2(
     n: usize,
     nvar: usize,
@@ -139,6 +140,7 @@ pub fn survregc2(
     Ok(result)
 }
 
+#[allow(clippy::type_complexity)]
 fn process_exact(
     person: usize,
     sigma: f64,
@@ -166,6 +168,7 @@ fn process_exact(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn process_right_censored(
     person: usize,
     sigma: f64,
@@ -188,6 +191,7 @@ fn process_right_censored(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn process_left_censored(
     person: usize,
     sigma: f64,
@@ -210,6 +214,7 @@ fn process_left_censored(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn process_interval_censored(
     person: usize,
     icount: &mut usize,
@@ -242,6 +247,8 @@ fn process_interval_censored(
     }
 }
 
+#[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn update_derivatives(
     res: &mut SurvivalLikelihood,
     person: usize,

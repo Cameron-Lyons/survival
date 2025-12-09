@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::explicit_counter_loop)]
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 

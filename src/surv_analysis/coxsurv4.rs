@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 struct CoxSurvResult {
     time: Vec<f64>,
     strata: Vec<f64>,
@@ -7,6 +8,7 @@ struct CoxSurvResult {
     xbar2: Vec<f64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn coxsurv4(
     y: &[f64],
     weight: &[f64],

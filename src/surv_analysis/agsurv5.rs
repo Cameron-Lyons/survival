@@ -32,7 +32,7 @@ pub fn agsurv5(
                 xbar[idx] = xsum_slice[idx] * temp.powi(2);
             }
         } else {
-            let d_int = dd_slice[i] as i32;
+            let d_int = dd_slice[i];
             let mut temp;
 
             for j in 0..d_int {

@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 use pyo3::prelude::*;
 
 #[pyclass]
@@ -98,7 +99,7 @@ impl ConditionalLogisticRegression {
     pub fn get_coefficients(&self) -> &Vec<f64> {
         &self.coefficients
     }
-    pub fn predict(&self, covariates: &Vec<f64>) -> f64 {
+    pub fn predict(&self, covariates: &[f64]) -> f64 {
         let mut exp_sum = 0.0;
         for covariate in 0..self.data.get_num_covariates() {
             exp_sum += self.coefficients[covariate] * covariates[covariate];

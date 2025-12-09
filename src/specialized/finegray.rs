@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 #[derive(Debug)]
 pub struct FineGrayOutput {
     pub row: Vec<usize>,

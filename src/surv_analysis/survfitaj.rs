@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 use ndarray::{Array1, Array2, s};
 use std::error::Error;
 
@@ -17,6 +18,7 @@ pub struct SurvFitAJ {
     pub n_transition: Array2<f64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn survfitaj(
     y: &[f64],
     sort1: &[usize],
@@ -69,11 +71,11 @@ pub fn survfitaj(
             ntemp[cs] -= wt[idx];
             ntemp[cs + nstate] -= 1.0;
 
-            if entry && (position[idx] & 0x1) != 0 {
-                if let Some(ref mut ne) = n_enter {
-                    ne[[i, cs]] += wt[idx];
-                    ne[[i, cs + nstate]] += 1.0;
-                }
+            if entry && (position[idx] & 0x1) != 0
+                && let Some(ref mut ne) = n_enter
+            {
+                ne[[i, cs]] += wt[idx];
+                ne[[i, cs + nstate]] += 1.0;
             }
             person1 -= 1;
         }
@@ -214,7 +216,7 @@ pub fn survfitaj(
                 continue;
             }
 
-            ucopy.assign(&u);
+            ucopy.assign(u);
             for j in 0..nstate {
                 if h[[j, j]] != 0.0 {
                     for k in 0..nstate {

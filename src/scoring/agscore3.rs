@@ -183,7 +183,7 @@ pub fn perform_agscore3_calculation(
         ));
     }
 
-    if covariates.len() % n != 0 {
+    if !covariates.len().is_multiple_of(n) {
         return Err(PyRuntimeError::new_err(
             "Covariates length should be divisible by number of observations",
         ));

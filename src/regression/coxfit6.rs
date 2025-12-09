@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 use ndarray::{Array1, Array2};
 use ndarray_linalg::cholesky::CholeskyInto;
 use ndarray_linalg::{Inverse, Solve};
@@ -43,6 +44,7 @@ pub struct CoxFit {
 }
 
 impl CoxFit {
+#[allow(clippy::too_many_arguments)]
     pub fn new(
         time: Array1<f64>,
         status: Array1<i32>,
@@ -405,6 +407,7 @@ impl CoxFit {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn results(
         self,
     ) -> (

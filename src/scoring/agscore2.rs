@@ -139,7 +139,7 @@ pub fn agscore2(
             }
         }
 
-        while person < n && tstop[person] == time && strata[person] == strata[person] {
+        while person < n && tstop[person] == time {
             person += 1;
         }
     }
@@ -167,7 +167,7 @@ pub fn perform_score_calculation(
         ));
     }
 
-    if covariates.len() % n != 0 {
+    if !covariates.len().is_multiple_of(n) {
         return Err(PyRuntimeError::new_err(
             "Covariates length should be divisible by number of observations",
         ));

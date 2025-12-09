@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::explicit_counter_loop)]
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -156,7 +158,7 @@ pub fn concordance3(
                 for j in i..(i + ndeath) {
                     let jj = sortstop[j] as usize;
                     let wsum = walkup(nwt_main, twt, x[jj] as usize, ntree);
-                    resid[event_idx * 3 + 0] = wsum[0];
+                    resid[event_idx * 3] = wsum[0];
                     resid[event_idx * 3 + 1] = wsum[1];
                     resid[event_idx * 3 + 2] = wsum[2];
                     event_idx += 1;

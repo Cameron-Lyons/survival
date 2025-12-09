@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::manual_memcpy)]
 use crate::core::coxsafe::coxsafe;
 
 pub struct CoxParams {
@@ -218,12 +220,8 @@ impl CoxFit5 {
         let mut work = vec![0.0; nvar2];
         let mut loglik = 0.0;
 
-        for i in 0..nvar {
-            newbeta[i] = params.beta[i];
-        }
-        for i in 0..nf {
-            newbeta[nvar + i] = params.fbeta[i];
-        }
+        newbeta[..nvar].copy_from_slice(&params.beta[..nvar]);
+        newbeta[nvar..(nf + nvar)].copy_from_slice(&params.fbeta[..nf]);
 
         for iter in 0..params.maxiter {
             loglik = 0.0;

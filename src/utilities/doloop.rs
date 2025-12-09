@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 pub struct DoloopState {
     minval: i32,
     maxval: i32,

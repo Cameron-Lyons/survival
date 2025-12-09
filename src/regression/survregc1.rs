@@ -3,7 +3,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
 const SMALL: f64 = -200.0;
 const SPI: f64 = 2.506628274631001;
-const ROOT_2: f64 = 1.414213562373095;
+const ROOT_2: f64 = std::f64::consts::SQRT_2;
 
 #[derive(Clone, Copy)]
 pub enum SurvivalDist {
@@ -21,6 +21,7 @@ pub struct SurvivalLikelihood {
     pub jdiag: Array1<f64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn survregc1(
     n: usize,
     nvar: usize,
@@ -121,6 +122,7 @@ pub fn survregc1(
     Ok(result)
 }
 
+#[allow(clippy::type_complexity)]
 fn compute_exact(
     z: f64,
     sz: f64,
@@ -149,6 +151,7 @@ fn compute_exact(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn compute_right_censored(
     z: f64,
     sz: f64,
@@ -175,6 +178,7 @@ fn compute_right_censored(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn compute_left_censored(
     z: f64,
     sz: f64,
@@ -201,6 +205,7 @@ fn compute_left_censored(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn compute_interval_censored(
     z: f64,
     sz: f64,
@@ -311,6 +316,8 @@ fn erfc(x: f64) -> f64 {
     1.0 - erf(x)
 }
 
+#[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn update_derivatives(
     res: &mut SurvivalLikelihood,
     person: usize,

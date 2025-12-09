@@ -103,7 +103,7 @@ pub fn pystep(
                 let width = next_cut - prev_cut;
                 if width > 0.0 {
                     wt = (current + et2 - prev_cut) / width;
-                    wt = wt.min(1.0).max(0.0);
+                    wt = wt.clamp(0.0, 1.0);
                 }
             }
         }

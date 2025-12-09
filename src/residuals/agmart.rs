@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn agmart(
     n: usize,

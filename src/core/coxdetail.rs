@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
+#[allow(clippy::too_many_arguments)]
 pub fn coxdetail(
     nused: usize,
     nvar: usize,
@@ -17,7 +19,7 @@ pub fn coxdetail(
     work: &mut [f64],
 ) {
     let method = means2[0];
-    let rflag = 1 - rmat[0] as i32;
+    let rflag = 1 - rmat[0];
 
     u2.fill(0.0);
     means2.fill(0.0);

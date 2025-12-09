@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn pyears1(
     n: usize,
     ny: usize,
@@ -173,9 +174,10 @@ pub fn pyears1(
                     };
 
                     if method == 0 {
-                        temp += (-hazard as f64).exp()
-                            * (1.0 - (-lambda as f64 * et2 as f64).exp())
-                            / lambda as f64;
+                        let neg_hazard: f64 = -hazard;
+                        temp += neg_hazard.exp()
+                            * (1.0 - (-lambda * et2).exp())
+                            / lambda;
                     }
                     hazard += lambda * et2;
 
@@ -190,7 +192,8 @@ pub fn pyears1(
                 if method == 1 {
                     pexpect[idx] += hazard * weight[i];
                 } else {
-                    pexpect[idx] += (-cumhaz as f64).exp() * temp * weight[i];
+                    let neg_cumhaz: f64 = -cumhaz;
+                    pexpect[idx] += neg_cumhaz.exp() * temp * weight[i];
                 }
                 cumhaz += hazard;
             } else {
@@ -218,6 +221,7 @@ pub fn pyears1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pystep(
     dim: usize,
     data: &mut [f64],

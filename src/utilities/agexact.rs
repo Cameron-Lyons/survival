@@ -1,7 +1,9 @@
+#![allow(clippy::needless_range_loop)]
 use itertools::Itertools;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn agexact(
     mut maxiter: i32,
@@ -334,8 +336,8 @@ pub fn agexact(
                     let mut u_copy = u.to_vec();
                     chsolve2(&mut imat[..p * p], p, &mut u_copy);
 
+                    beta[..nvar_usize].copy_from_slice(&newbeta_vec[..nvar_usize]);
                     for i in 0..nvar_usize {
-                        beta[i] = newbeta_vec[i];
                         newbeta_vec[i] += u_copy[i];
                     }
                 }
@@ -368,6 +370,7 @@ pub fn agexact(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn init_doloop(start: usize, end: usize, k: usize) -> Vec<Vec<usize>> {
     (start..end).combinations(k).collect()
 }

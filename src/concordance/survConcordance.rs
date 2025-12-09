@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn surv_concordance(
     n: usize,
     time: &[f64],
@@ -80,15 +81,15 @@ pub fn surv_concordance(
 
             result[3] += nsame;
             result[1] += nright;
-            result[0] += ((i as i32 - tdeath) - (nsame + nright)) as i32;
+            result[0] += (i as i32 - tdeath) - (nsame + nright);
 
             if i < n - 1 && status[i + 1] > 0 && time[i] == time[i + 1] {
                 tdeath += 1;
                 if tdeath == 1 {
-                    count2.copy_from_slice(&count1);
+                    count2.copy_from_slice(count1);
                 }
             } else {
-                result[2] += ((tdeath * (tdeath + 1)) / 2) as i32;
+                result[2] += (tdeath * (tdeath + 1)) / 2;
                 tdeath = 0;
             }
         } else {

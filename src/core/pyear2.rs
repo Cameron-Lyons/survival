@@ -24,6 +24,7 @@ fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pystep(
     odim: usize,
     data: &[f64],
@@ -83,6 +84,7 @@ fn pystep(
     (maxtime, index as i32)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn pyears2(
     n: usize,
     ny: usize,

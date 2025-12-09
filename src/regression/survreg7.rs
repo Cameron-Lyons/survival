@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::redundant_closure)]
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
 
@@ -15,6 +16,7 @@ pub struct SurvivalResult {
     pub convergence_flag: i32,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn survreg(
     max_iter: usize,
     nvar: usize,
@@ -189,6 +191,7 @@ pub fn survreg(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn calculate_likelihood(
     _n: usize,
     _nvar: usize,
@@ -211,6 +214,7 @@ fn calculate_likelihood(
     Ok(0.0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_penalties(
     _hmat: &mut Array2<f64>,
     _jj: &mut Array2<f64>,
@@ -224,6 +228,7 @@ fn apply_penalties(
     Ok(0.0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn golden_section_search(
     _beta: &[f64],
     _newbeta: &[f64],

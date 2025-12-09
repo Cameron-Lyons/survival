@@ -43,6 +43,7 @@ struct SurvivalModel {
 }
 
 impl SurvivalModel {
+#[allow(clippy::too_many_arguments)]
     fn new(
         maxiter: usize,
         nused: usize,

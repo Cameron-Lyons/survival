@@ -88,12 +88,10 @@ pub fn fastkm1(
                 stemp *= (ncount[i] - dcount[i]) / ncount[i];
                 k += 1;
             }
-        } else {
-            if cfirst || (current_time != ctime_current) {
-                ctime_current = current_time;
-                cfirst = false;
-                gtemp *= (ncount[i] - ccount[i]) / ncount[i];
-            }
+        } else if cfirst || (current_time != ctime_current) {
+            ctime_current = current_time;
+            cfirst = false;
+            gtemp *= (ncount[i] - ccount[i]) / ncount[i];
         }
     }
 
@@ -176,21 +174,21 @@ pub fn fastkm2(
         let current_time = tstop[p2];
         let current_status = status[p2];
 
-        if current_status == 1.0 {
-            if dfirst || current_time != dtime_current {
-                dtime_current = current_time;
-                dfirst = false;
+        if current_status == 1.0
+            && (dfirst || current_time != dtime_current)
+        {
+            dtime_current = current_time;
+            dfirst = false;
 
-                S[k_out] = stemp;
-                nrisk[k_out] = ncount[i];
-                etime[k_out] = dtime_current;
+            S[k_out] = stemp;
+            nrisk[k_out] = ncount[i];
+            etime[k_out] = dtime_current;
 
-                stemp *= (ncount[i] - dcount[i]) / ncount[i];
-                k_out += 1;
+            stemp *= (ncount[i] - dcount[i]) / ncount[i];
+            k_out += 1;
 
-                if k_out >= nevent {
-                    break;
-                }
+            if k_out >= nevent {
+                break;
             }
         }
     }

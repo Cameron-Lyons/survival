@@ -3,6 +3,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+#[allow(clippy::too_many_arguments)]
 pub fn pyears3b(
     n: usize,
     ny: usize,
@@ -133,65 +134,58 @@ pub fn pyears3b(
 
             data.copy_from_slice(&data_current);
 
-            #[allow(unused_comparisons)]
-            if idx >= 0 {
-                let idx = idx as usize;
-                pyears[idx] += thiscell * weight[i];
-                pn[idx] += 1.0;
+            pyears[idx] += thiscell * weight[i];
+            pn[idx] += 1.0;
 
-                if doevent == 1 && !event.is_empty() && event[i] > 0.0 {
-                    pcount[idx] += weight[i];
-                }
+            if doevent == 1 && !event.is_empty() && event[i] > 0.0 {
+                pcount[idx] += weight[i];
+            }
 
-                let mut etime = thiscell;
-                let mut hazard = 0.0;
-                let mut temp = 0.0;
-                let mut data2_current = data2.clone();
+            let mut etime = thiscell;
+            let mut hazard = 0.0;
+            let mut temp = 0.0;
+            let mut data2_current = data2.clone();
 
-                while etime > 0.0 {
-                    let (et2, edx, edx2, elwt) =
-                        pystep(edim, &mut data2_current, efac, edims, &ecut_slices, etime);
+            while etime > 0.0 {
+                let (et2, edx, edx2, elwt) =
+                    pystep(edim, &mut data2_current, efac, edims, &ecut_slices, etime);
 
-                    let lambda = if elwt < 1.0 {
-                        elwt * expect[edx] + (1.0 - elwt) * expect[edx2]
-                    } else {
-                        expect[edx]
-                    };
-
-                    if method == 0 {
-                        temp +=
-                            (-hazard as f64).exp() * (1.0 - (-lambda * et2 as f64).exp()) / lambda;
-                    }
-                    hazard += lambda * et2;
-
-                    for j in 0..edim {
-                        if efac[j] != 1 {
-                            data2_current[j] += et2;
-                        }
-                    }
-                    etime -= et2;
-                }
-
-                if method == 1 {
-                    pexpect[idx] += hazard * weight[i];
+                let lambda = if elwt < 1.0 {
+                    elwt * expect[edx] + (1.0 - elwt) * expect[edx2]
                 } else {
-                    pexpect[idx] += (-cumhaz as f64).exp() * temp * weight[i];
+                    expect[edx]
+                };
+
+                if method == 0 {
+                    let neg_hazard: f64 = -hazard;
+                    let neg_lambda_et2: f64 = -lambda * et2;
+                    temp +=
+                        neg_hazard.exp() * (1.0 - neg_lambda_et2.exp()) / lambda;
                 }
-                cumhaz += hazard;
-            } else {
-                *offtable += thiscell * weight[i];
+                hazard += lambda * et2;
+
                 for j in 0..edim {
                     if efac[j] != 1 {
-                        data2[j] += thiscell;
+                        data2_current[j] += et2;
                     }
                 }
+                etime -= et2;
             }
+
+            if method == 1 {
+                pexpect[idx] += hazard * weight[i];
+            } else {
+                let neg_cumhaz: f64 = -cumhaz;
+                pexpect[idx] += neg_cumhaz.exp() * temp * weight[i];
+            }
+            cumhaz += hazard;
 
             timeleft -= thiscell;
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {
     let mut index = 0;
     let mut stride = 1;
@@ -268,13 +262,14 @@ fn pystep(
         } else {
             1.0
         };
-        wt = wt.min(1.0).max(0.0);
+        wt = wt.clamp(0.0, 1.0);
     }
 
     (et2, indx, indx2, wt)
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn perform_pyears_calculation(
     time_data: Vec<f64>,
     weights: Vec<f64>,

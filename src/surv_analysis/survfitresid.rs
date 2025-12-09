@@ -1,9 +1,11 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 pub struct SurvivalResult {
     pub influence_pstate: Vec<Vec<f64>>,
     pub influence_auc: Option<Vec<Vec<f64>>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn survfitresid(
     y: &[f64],
     sort1: &[usize],
@@ -16,7 +18,7 @@ pub fn survfitresid(
     starttime: f64,
     doauc: bool,
 ) -> SurvivalResult {
-    let ncoly = if y.len() % sort1.len() == 0 {
+    let ncoly = if y.len().is_multiple_of(sort1.len()) {
         y.len() / sort1.len()
     } else {
         panic!("Invalid Y matrix dimensions");

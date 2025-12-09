@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 use ndarray::{Array1, Array2};
 use ndarray_linalg::Solve;
 use pyo3::prelude::*;
@@ -21,6 +22,7 @@ pub struct PSpline {
 #[pymethods]
 impl PSpline {
     #[new]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         x: Vec<f64>,
         df: u32,
@@ -34,16 +36,16 @@ impl PSpline {
         let nterm = df + 1;
         let degree = 3;
         PSpline {
-            x: x,
-            df: df,
-            theta: theta,
-            nterm: nterm,
-            degree: degree,
-            eps: eps,
-            method: method,
-            boundary_knots: boundary_knots,
-            intercept: intercept,
-            penalty: penalty,
+            x,
+            df,
+            theta,
+            nterm,
+            degree,
+            eps,
+            method,
+            boundary_knots,
+            intercept,
+            penalty,
         }
     }
 
@@ -81,7 +83,7 @@ impl PSpline {
                 let k_usize = k as usize;
                 let denom = knots[i_usize + k_usize] - knots[i_usize];
                 let w = if denom.abs() > 1e-10 {
-                    ((t - knots[i_usize]) / denom).max(0.0).min(1.0)
+                    ((t - knots[i_usize]) / denom).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };

@@ -1,3 +1,5 @@
+#![allow(clippy::new_without_default)]
+#![allow(clippy::unused_enumerate_index)]
 use ndarray::Array2;
 use pyo3::prelude::*;
 
@@ -24,6 +26,7 @@ pub struct CoxPHModel {
 }
 
 impl CoxPHModel {
+#[allow(clippy::too_many_arguments)]
     pub fn new() -> Self {
         Self {
             coefficients: Array2::<f64>::zeros((1, 1)),

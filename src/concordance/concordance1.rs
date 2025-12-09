@@ -52,11 +52,7 @@ fn walkup(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
     let mut current = index;
     while current > 0 {
         let parent = (current - 1) / 2;
-        if current % 2 == 1 {
-            wsum[1] += twt[parent] - twt[current];
-        } else {
-            wsum[1] += twt[parent] - twt[current];
-        }
+        wsum[1] += twt[parent] - twt[current];
         current = parent;
     }
 
@@ -133,7 +129,7 @@ pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64>
             while current > 0 {
                 let parent = (current - 1) / 2;
                 twt[parent] += wt[i_idx];
-                if current % 2 == 0 {
+                if current.is_multiple_of(2) {
                     wsum1 += twt[parent] - twt[current];
                 }
                 current = parent;

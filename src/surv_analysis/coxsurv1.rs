@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 use ndarray::{Array2, ArrayView2};
 
 pub fn coxsurv1(

@@ -57,6 +57,7 @@ struct CoxState {
 }
 
 impl CoxState {
+#[allow(clippy::too_many_arguments)]
     fn new(
         nused: usize,
         nvar: usize,
@@ -73,9 +74,9 @@ impl CoxState {
     ) -> Self {
         let mut covar = vec![vec![0.0; nused]; nvar];
         let mut k = 0;
-        for i in 0..nvar {
-            for j in 0..nused {
-                covar[i][j] = covar2[k];
+        for covar_row in covar.iter_mut().take(nvar) {
+            for covar_elem in covar_row.iter_mut().take(nused) {
+                *covar_elem = covar2[k];
                 k += 1;
             }
         }
@@ -118,6 +119,7 @@ impl CoxState {
         state
     }
 
+#[allow(clippy::too_many_arguments)]
     fn update(&mut self, beta: &mut [f64], u: &mut [f64], imat: &mut [f64], loglik: &mut f64) {
         let nvar = beta.len();
         let nfrail = self.frail.len();
@@ -130,8 +132,8 @@ impl CoxState {
 
         for person in 0..self.weights.len() {
             let mut zbeta = self.offset[person];
-            for i in 0..nvar {
-                zbeta += beta[i] * self.covar[i][person];
+            for (i, beta_val) in beta.iter().enumerate().take(nvar) {
+                zbeta += beta_val * self.covar[i][person];
             }
             if nfrail > 0 {
                 zbeta += beta[nvar] * self.frail[person] as f64;
@@ -165,14 +167,14 @@ impl CoxState {
                     *loglik += self.weights[person] * self.score[person];
                     *loglik -= self.weights[person] * risk_sum.ln();
 
-                    for i in 0..nvar {
+                    for (i, u_elem) in u.iter_mut().enumerate().take(nvar) {
                         let mut temp = 0.0;
                         for j in person..self.weights.len() {
                             if self.strata[j] == self.strata[person] {
                                 temp += self.weights[j] * self.score[j].exp() * self.covar[i][j];
                             }
                         }
-                        u[i] += self.weights[person] * (self.covar[i][person] - temp / risk_sum);
+                        *u_elem += self.weights[person] * (self.covar[i][person] - temp / risk_sum);
                     }
 
                     if nfrail > 0 {
@@ -245,13 +247,14 @@ impl CoxState {
                 }
             }
 
-            while istrat < self.strata.len() && self.strata[istrat] == self.strata[istrat] {
+            while istrat < self.strata.len() {
                 istrat += 1;
             }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn agfit5(
     nused: usize,
     nvar: usize,
@@ -396,6 +399,7 @@ fn erf(x: f64) -> f64 {
     sign * y
 }
 
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn perform_cox_regression_frailty(
     time: Vec<f64>,
@@ -440,8 +444,8 @@ pub fn perform_cox_regression_frailty(
     yy.extend(event.iter().map(|&x| x as f64));
     let mut covar = Vec::with_capacity(nvar * nused);
     for i in 0..nused {
-        for j in 0..nvar {
-            covar.push(covariates[j][i]);
+        for covariate_row in covariates.iter().take(nvar) {
+            covar.push(covariate_row[i]);
         }
     }
     let sort: Vec<i32> = (1..=nused as i32).collect();

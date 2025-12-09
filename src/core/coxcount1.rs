@@ -95,7 +95,7 @@ pub fn coxcount1(
     }
 
     Python::attach(|py| {
-        Ok(Py::new(
+        Py::new(
             py,
             CoxCountOutput {
                 time: time_vec,
@@ -103,7 +103,7 @@ pub fn coxcount1(
                 index: index_vec,
                 status: status_vec,
             },
-        )?)
+        )
     })
 }
 
@@ -193,15 +193,15 @@ pub fn coxcount2(
             while j < i {
                 let jptr = sort1_slice[j];
                 if time1_slice[jptr] >= dtime {
-                    if let Some(pos) = atrisk[jptr] {
+                    if let Some(pos) = atrisk[jptr]
+                        && pos < who.len()
+                    {
+                        let last = who.pop().unwrap();
                         if pos < who.len() {
-                            let last = who.pop().unwrap();
-                            if pos < who.len() {
-                                who[pos] = last;
-                                atrisk[last] = Some(pos);
-                            }
-                            atrisk[jptr] = None;
+                            who[pos] = last;
+                            atrisk[last] = Some(pos);
                         }
+                        atrisk[jptr] = None;
                     }
                     j += 1;
                 } else {
@@ -240,7 +240,7 @@ pub fn coxcount2(
     }
 
     Python::attach(|py| {
-        Ok(Py::new(
+        Py::new(
             py,
             CoxCountOutput {
                 time: time_vec,
@@ -248,6 +248,6 @@ pub fn coxcount2(
                 index: index_vec,
                 status: status_vec,
             },
-        )?)
+        )
     })
 }

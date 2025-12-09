@@ -1,6 +1,8 @@
 #![allow(dead_code)]
+#![allow(clippy::absurd_extreme_comparisons)]
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
+#[allow(clippy::too_many_arguments)]
 fn update_used(
     used: &mut Array2<i32>,
     stratum: i32,
@@ -28,6 +30,7 @@ pub struct ZphResult {
     pub used: Array2<i32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn zph1(
     gt: ArrayView1<f64>,
     y: (ArrayView1<f64>, ArrayView1<f64>),
@@ -184,6 +187,7 @@ pub fn zph1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_breslow(
     u: &mut Array1<f64>,
     imat: &mut Array2<f64>,
@@ -218,6 +222,7 @@ fn process_breslow(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_efron(
     u: &mut Array1<f64>,
     imat: &mut Array2<f64>,

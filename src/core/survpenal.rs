@@ -8,6 +8,7 @@ pub struct PenaltyResult {
     pub flags: Vec<i32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn survpenal(
     whichcase: i32,
     nfrail: usize,

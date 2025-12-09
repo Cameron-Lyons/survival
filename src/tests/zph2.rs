@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
+#[allow(clippy::too_many_arguments)]
 fn update_used(
     used: &mut Array2<i32>,
     stratum: i32,
@@ -28,6 +29,7 @@ pub struct ZphResult {
     pub used: Array2<i32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn zph2(
     _gt: ArrayView1<f64>,
     y: (ArrayView1<f64>, ArrayView1<f64>, ArrayView1<f64>),
@@ -170,6 +172,7 @@ pub fn zph2(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn find_next_death(
     y: &(ArrayView1<f64>, ArrayView1<f64>, ArrayView1<f64>),
     strata: &ArrayView1<i32>,
@@ -186,6 +189,7 @@ fn find_next_death(
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_risk_set(
     y: &(ArrayView1<f64>, ArrayView1<f64>, ArrayView1<f64>),
     _strata: &ArrayView1<i32>,
@@ -224,6 +228,7 @@ fn update_risk_set(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_events(
     u: &mut Array1<f64>,
     schoen: &mut Array2<f64>,
@@ -265,6 +270,7 @@ fn process_events(
     (meanwt / ndead_current.max(1) as f64, ndead_current)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_scores_and_imat(
     method: i32,
     ndead_current: usize,

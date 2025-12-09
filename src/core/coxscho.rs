@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
+#[allow(clippy::too_many_arguments)]
 pub fn coxscho(
     nused: usize,
     nvar: usize,

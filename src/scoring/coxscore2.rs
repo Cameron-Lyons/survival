@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
+#[allow(clippy::too_many_arguments)]
 fn cox_score_residuals(
     y: &[f64],
     strata: &[i32],
@@ -107,7 +109,7 @@ fn cox_score_residuals(
             }
         }
 
-        if i < 0 || (i >= 0 && strata[i as usize] != currentstrata) {
+        if i < 0 || strata[i as usize] != currentstrata {
             for k in (i + 1)..=stratastart {
                 let k_usize = k as usize;
                 for var in 0..nvar {

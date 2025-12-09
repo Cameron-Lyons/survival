@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 fn agmart3(
     nused: i32,
     surv: Vec<f64>,
@@ -11,7 +12,6 @@ fn agmart3(
 ) -> Vec<f64> {
     let nused = nused as usize;
     let nr = surv.len() / 3;
-    let method = method as i32;
 
     let tstart = &surv[0..nr];
     let tstop = &surv[nr..2 * nr];

@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 pub struct CoxSurvResult {
     pub time: Vec<f64>,
     pub strata: Vec<i32>,
@@ -175,9 +176,7 @@ pub fn coxsurv3(
             result.strata.push(current_stratum);
             result.count.push(n);
 
-            for var in 0..n_vars {
-                result.xbar[itime][var] = xmean[var];
-            }
+            result.xbar[itime][..n_vars].copy_from_slice(&xmean[..n_vars]);
 
             itime -= 1;
         }

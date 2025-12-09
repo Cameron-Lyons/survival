@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 use ndarray::{Array1, Array2, Axis};
 use ndarray_linalg::Solve;
 use pyo3::exceptions::PyRuntimeError;
@@ -137,6 +138,7 @@ struct Diagnostics {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 enum AaregError {
     DataError(String),
     FormulaError(String),
@@ -149,6 +151,7 @@ enum AaregError {
 }
 
 impl fmt::Display for AaregError {
+#[allow(clippy::too_many_arguments)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AaregError::DataError(msg) => write!(f, "Data Error: {}", msg),
@@ -346,13 +349,13 @@ fn perform_aalen_regression(
         ));
     }
 
-    if let Some(nmin) = options.nmin {
-        if n < nmin {
-            return Err(AaregError::DataError(format!(
-                "Number of observations ({}) is less than minimum required ({})",
-                n, nmin
-            )));
-        }
+    if let Some(nmin) = options.nmin
+        && n < nmin
+    {
+        return Err(AaregError::DataError(format!(
+            "Number of observations ({}) is less than minimum required ({})",
+            n, nmin
+        )));
     }
 
     let mut design_matrix = Array2::zeros((n, p + 1));
@@ -378,13 +381,19 @@ fn perform_aalen_regression(
     let mut standard_errors = vec![0.0; p + 1];
     let mut p_values = vec![1.0; p + 1];
 
-    let mut unique_times = Vec::new();
+    let mut unique_times: Vec<f64> = Vec::new();
     let mut time_indices = Vec::new();
 
     for (i, &time) in sorted_times.iter().enumerate() {
-        if unique_times.is_empty() || ((time - unique_times.last().unwrap()) as f64).abs() > 1e-10 {
+        if unique_times.is_empty() {
             unique_times.push(time);
             time_indices.push(i);
+        } else {
+            let last_time = *unique_times.last().unwrap();
+            if (time - last_time).abs() > 1e-10 {
+                unique_times.push(time);
+                time_indices.push(i);
+            }
         }
     }
 
@@ -493,7 +502,7 @@ fn perform_aalen_regression(
             final_objective_value: residual_ss,
             convergence_threshold: options.qrtol,
             change_in_objective: None,
-            max_iterations: Some(max_iterations as u32),
+            max_iterations: Some(max_iterations),
             optimization_method: Some("Aalen's Additive Regression".to_string()),
             warnings,
         }),
@@ -536,10 +545,10 @@ fn post_process_results(
     mut regression_result: AaregResult,
     options: &AaregOptions,
 ) -> Result<AaregResult, AaregError> {
-    if options.dfbeta {
-        if let Some(ref mut diagnostics) = regression_result.diagnostics {
-            diagnostics.dfbetas = Some(vec![0.0; regression_result.coefficients.len()]);
-        }
+    if options.dfbeta
+        && let Some(ref mut diagnostics) = regression_result.diagnostics
+    {
+        diagnostics.dfbetas = Some(vec![0.0; regression_result.coefficients.len()]);
     }
     Ok(regression_result)
 }

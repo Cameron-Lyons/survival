@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::redundant_closure)]
 use ndarray::{Array1, Array2, ArrayView1};
 
 #[derive(Debug)]
@@ -11,6 +12,7 @@ pub struct SurvivalFit {
     pub score_vector: Vec<f64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn survreg(
     max_iter: usize,
     nvar: usize,
@@ -144,6 +146,7 @@ pub fn survreg(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn calculate_likelihood(
     _n: usize,
     _nvar: usize,
