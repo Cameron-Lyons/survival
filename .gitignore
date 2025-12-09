@@ -1,2 +1,25 @@
-debug/
+# Virtualenv
+.venv/
+venv/
+ENV/
+
+# Test extraction directory
+.test_wheel_extract/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Rust build artifacts
 target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

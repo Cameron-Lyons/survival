@@ -1,17 +1,17 @@
-#!/usr/bin/env python3
 
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'target', 'wheels'))
+sys.path.insert(0, os.path.dirname(__file__))
 
 try:
-    import survival
-    print("✅ Successfully imported survival module")
+    from helpers import setup_survival_import
+    survival = setup_survival_import()
+    print(" Successfully imported survival module")
     
     print("\n=== Testing cipoisson_exact ===")
     result = survival.cipoisson_exact(k=5, time=10.0, p=0.95)
-    print(f"✅ cipoisson_exact executed successfully")
+    print(f" cipoisson_exact executed successfully")
     print(f"   Result (lower, upper): {result}")
     assert isinstance(result, tuple), "Should return a tuple"
     assert len(result) == 2, "Should return (lower, upper)"
@@ -19,7 +19,7 @@ try:
     
     print("\n=== Testing cipoisson_anscombe ===")
     result = survival.cipoisson_anscombe(k=5, time=10.0, p=0.95)
-    print(f"✅ cipoisson_anscombe executed successfully")
+    print(f" cipoisson_anscombe executed successfully")
     print(f"   Result (lower, upper): {result}")
     assert isinstance(result, tuple), "Should return a tuple"
     assert len(result) == 2, "Should return (lower, upper)"
@@ -27,7 +27,7 @@ try:
     print("\n=== Testing cipoisson ===")
     result_exact = survival.cipoisson(k=5, time=10.0, p=0.95, method="exact")
     result_anscombe = survival.cipoisson(k=5, time=10.0, p=0.95, method="anscombe")
-    print(f"✅ cipoisson executed successfully")
+    print(f" cipoisson executed successfully")
     print(f"   Exact method: {result_exact}")
     print(f"   Anscombe method: {result_anscombe}")
     assert isinstance(result_exact, tuple), "Should return a tuple"
@@ -42,19 +42,19 @@ try:
     strata = [1, 0, 0, 0, 0]
     
     result = survival.norisk(time1, time2, status, sort1, sort2, strata)
-    print(f"✅ norisk executed successfully")
+    print(f" norisk executed successfully")
     print(f"   Result: {result}")
     assert isinstance(result, list), "Should return a list"
     assert len(result) == len(time1), "Should return same length as input"
     
-    print("\n✅ All specialized tests passed!")
+    print("\n All specialized tests passed!")
     
 except ImportError as e:
-    print(f"❌ Failed to import survival module: {e}")
+    print(f" Failed to import survival module: {e}")
     print("Make sure to build the project first with: maturin build")
     sys.exit(1)
 except Exception as e:
-    print(f"❌ Error in specialized tests: {e}")
+    print(f" Error in specialized tests: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(1)

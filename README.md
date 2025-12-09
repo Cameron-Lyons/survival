@@ -21,6 +21,11 @@ A high-performance survival analysis library written in Rust, with a Python API 
 - Python 3.12 or 3.13 (recommended: 3.12)
 - Rust toolchain (see [rustup.rs](https://rustup.rs/))
 - [maturin](https://github.com/PyO3/maturin)
+- BLAS libraries (required at runtime):
+  - Arch Linux: `sudo pacman -S openblas`
+  - Ubuntu/Debian: `sudo apt-get install libopenblas-dev`
+  - Fedora: `sudo dnf install openblas-devel`
+  - macOS: Usually included with Xcode Command Line Tools
 
 Install maturin:
 ```sh

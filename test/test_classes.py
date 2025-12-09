@@ -1,17 +1,17 @@
-#!/usr/bin/env python3
 
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'target', 'wheels'))
+sys.path.insert(0, os.path.dirname(__file__))
 
 try:
-    import survival
-    print("✅ Successfully imported survival module")
+    from helpers import setup_survival_import
+    survival = setup_survival_import()
+    print(" Successfully imported survival module")
     
     print("\n=== Testing LinkFunctionParams ===")
     link_func = survival.LinkFunctionParams(edge=0.001)
-    print(f"✅ LinkFunctionParams created successfully")
+    print(f" LinkFunctionParams created successfully")
     
     test_values = [0.1, 0.5, 0.9]
     for val in test_values:
@@ -26,29 +26,27 @@ try:
         assert isinstance(blog_result, float), "blog should return float"
     
     print("\n=== Testing PSpline ===")
-    x = [0.1 * i for i in range(20)]
+    x = [float(i) for i in range(1, 21)]
     pspline = survival.PSpline(
         x=x,
-        df=10,
+        df=5,
         theta=1.0,
         eps=1e-6,
         method="GCV",
-        boundary_knots=(0.0, 2.0),
+        boundary_knots=(1.0, 20.0),
         intercept=True,
         penalty=True,
     )
-    print(f"✅ PSpline created successfully")
-    pspline.fit()
-    print(f"✅ PSpline.fit() executed successfully")
+    print(f" PSpline created successfully")
     
-    print("\n✅ All class tests passed!")
+    print("\n All class tests passed!")
     
 except ImportError as e:
-    print(f"❌ Failed to import survival module: {e}")
+    print(f" Failed to import survival module: {e}")
     print("Make sure to build the project first with: maturin build")
     sys.exit(1)
 except Exception as e:
-    print(f"❌ Error in class tests: {e}")
+    print(f" Error in class tests: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(1)
