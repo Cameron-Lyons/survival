@@ -175,9 +175,7 @@ pub fn pyears1(
 
                     if method == 0 {
                         let neg_hazard: f64 = -hazard;
-                        temp += neg_hazard.exp()
-                            * (1.0 - (-lambda * et2).exp())
-                            / lambda;
+                        temp += neg_hazard.exp() * (1.0 - (-lambda * et2).exp()) / lambda;
                     }
                     hazard += lambda * et2;
 

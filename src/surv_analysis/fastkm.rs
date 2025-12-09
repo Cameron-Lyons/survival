@@ -174,9 +174,7 @@ pub fn fastkm2(
         let current_time = tstop[p2];
         let current_status = status[p2];
 
-        if current_status == 1.0
-            && (dfirst || current_time != dtime_current)
-        {
+        if current_status == 1.0 && (dfirst || current_time != dtime_current) {
             dtime_current = current_time;
             dfirst = false;
 

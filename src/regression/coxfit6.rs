@@ -44,7 +44,7 @@ pub struct CoxFit {
 }
 
 impl CoxFit {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         time: Array1<f64>,
         status: Array1<i32>,

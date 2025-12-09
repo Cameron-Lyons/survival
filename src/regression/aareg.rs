@@ -151,7 +151,7 @@ enum AaregError {
 }
 
 impl fmt::Display for AaregError {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AaregError::DataError(msg) => write!(f, "Data Error: {}", msg),

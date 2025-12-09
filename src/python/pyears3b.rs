@@ -159,8 +159,7 @@ pub fn pyears3b(
                 if method == 0 {
                     let neg_hazard: f64 = -hazard;
                     let neg_lambda_et2: f64 = -lambda * et2;
-                    temp +=
-                        neg_hazard.exp() * (1.0 - neg_lambda_et2.exp()) / lambda;
+                    temp += neg_hazard.exp() * (1.0 - neg_lambda_et2.exp()) / lambda;
                 }
                 hazard += lambda * et2;
 

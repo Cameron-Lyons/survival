@@ -26,7 +26,7 @@ pub struct CoxPHModel {
 }
 
 impl CoxPHModel {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new() -> Self {
         Self {
             coefficients: Array2::<f64>::zeros((1, 1)),

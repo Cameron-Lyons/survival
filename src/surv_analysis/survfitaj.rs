@@ -71,7 +71,8 @@ pub fn survfitaj(
             ntemp[cs] -= wt[idx];
             ntemp[cs + nstate] -= 1.0;
 
-            if entry && (position[idx] & 0x1) != 0
+            if entry
+                && (position[idx] & 0x1) != 0
                 && let Some(ref mut ne) = n_enter
             {
                 ne[[i, cs]] += wt[idx];

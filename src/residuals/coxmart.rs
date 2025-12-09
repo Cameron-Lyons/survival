@@ -1,31 +1,38 @@
 #![allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
+pub struct SurvivalData<'a> {
+    pub time: &'a [f64],
+    pub status: &'a [i32],
+    pub strata: &'a mut [i32],
+}
+
+pub struct Weights<'a> {
+    pub score: &'a [f64],
+    pub wt: &'a [f64],
+}
+
 pub fn coxmart(
     n: usize,
     method: i32,
-    time: &[f64],
-    status: &[i32],
-    strata: &mut [i32],
-    score: &[f64],
-    wt: &[f64],
+    surv_data: SurvivalData,
+    weights: Weights,
     expect: &mut [f64],
 ) {
     if n == 0 {
         return;
     }
 
-    strata[n - 1] = 1;
+    surv_data.strata[n - 1] = 1;
 
     let mut denom = 0.0;
     for i in (0..n).rev() {
-        if strata[i] == 1 {
+        if surv_data.strata[i] == 1 {
             denom = 0.0;
         }
-        denom += score[i] * wt[i];
+        denom += weights.score[i] * weights.wt[i];
         let condition = if i == 0 {
             true
         } else {
-            strata[i - 1] == 1 || (time[i - 1] != time[i])
+            surv_data.strata[i - 1] == 1 || (surv_data.time[i - 1] != surv_data.time[i])
         };
         expect[i] = if condition { denom } else { 0.0 };
     }
@@ -41,18 +48,20 @@ pub fn coxmart(
         if expect[i] != 0.0 {
             current_denom = expect[i];
         }
-        expect[i] = status[i] as f64;
-        deaths += status[i];
-        wtsum += status[i] as f64 * wt[i];
-        e_denom += score[i] * status[i] as f64 * wt[i];
+        expect[i] = surv_data.status[i] as f64;
+        deaths += surv_data.status[i];
+        wtsum += surv_data.status[i] as f64 * weights.wt[i];
+        e_denom += weights.score[i] * surv_data.status[i] as f64 * weights.wt[i];
 
-        let is_last = strata[i] == 1 || (i < n - 1 && time[i + 1] != time[i]);
+        let is_last =
+            surv_data.strata[i] == 1 || (i < n - 1 && surv_data.time[i + 1] != surv_data.time[i]);
 
         if is_last {
             if deaths < 2 || method == 0 {
                 hazard += wtsum / current_denom;
+                #[allow(clippy::needless_range_loop)]
                 for j in lastone..=i {
-                    expect[j] -= score[j] * hazard;
+                    expect[j] -= weights.score[j] * hazard;
                 }
             } else {
                 let mut temp = hazard;
@@ -64,11 +73,12 @@ pub fn coxmart(
                     hazard += wtsum / (current_denom - e_denom * downwt);
                     temp += wtsum * (1.0 - downwt) / (current_denom - e_denom * downwt);
                 }
+                #[allow(clippy::needless_range_loop)]
                 for j in lastone..=i {
-                    if status[j] == 0 {
-                        expect[j] = -score[j] * hazard;
+                    if surv_data.status[j] == 0 {
+                        expect[j] = -weights.score[j] * hazard;
                     } else {
-                        expect[j] -= score[j] * temp;
+                        expect[j] -= weights.score[j] * temp;
                     }
                 }
             }
@@ -79,12 +89,13 @@ pub fn coxmart(
             e_denom = 0.0;
         }
 
-        if strata[i] == 1 {
+        if surv_data.strata[i] == 1 {
             hazard = 0.0;
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     for j in lastone..n {
-        expect[j] -= score[j] * hazard;
+        expect[j] -= weights.score[j] * hazard;
     }
 }

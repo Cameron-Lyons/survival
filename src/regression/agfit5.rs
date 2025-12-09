@@ -57,7 +57,7 @@ struct CoxState {
 }
 
 impl CoxState {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         nused: usize,
         nvar: usize,
@@ -119,7 +119,7 @@ impl CoxState {
         state
     }
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn update(&mut self, beta: &mut [f64], u: &mut [f64], imat: &mut [f64], loglik: &mut f64) {
         let nvar = beta.len();
         let nfrail = self.frail.len();
@@ -252,6 +252,30 @@ impl CoxState {
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+pub fn perform_cox_regression_frailty(
+    time: Vec<f64>,
+    event: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    frail: Option<Vec<i32>>,
+    max_iter: Option<i32>,
+    eps: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    let config = CoxRegressionConfig {
+        offset,
+        weights,
+        strata,
+        frail,
+        max_iter,
+        eps,
+    };
+    perform_cox_regression_internal(time, event, covariates, config)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -399,18 +423,21 @@ fn erf(x: f64) -> f64 {
     sign * y
 }
 
-#[allow(clippy::too_many_arguments)]
-#[pyfunction]
-pub fn perform_cox_regression_frailty(
-    time: Vec<f64>,
-    event: Vec<i32>,
-    covariates: Vec<Vec<f64>>,
+#[derive(Clone, Default)]
+struct CoxRegressionConfig {
     offset: Option<Vec<f64>>,
     weights: Option<Vec<f64>>,
     strata: Option<Vec<i32>>,
     frail: Option<Vec<i32>>,
     max_iter: Option<i32>,
     eps: Option<f64>,
+}
+
+fn perform_cox_regression_internal(
+    time: Vec<f64>,
+    event: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    config: CoxRegressionConfig,
 ) -> PyResult<Py<PyAny>> {
     let nused = time.len();
     if nused == 0 {
@@ -432,12 +459,12 @@ pub fn perform_cox_regression_frailty(
             ));
         }
     }
-    let offset = offset.unwrap_or_else(|| vec![0.0; nused]);
-    let weights = weights.unwrap_or_else(|| vec![1.0; nused]);
-    let strata = strata.unwrap_or_else(|| vec![1; nused]);
-    let frail = frail.unwrap_or_else(|| vec![0; nused]);
-    let max_iter = max_iter.unwrap_or(20);
-    let eps = eps.unwrap_or(1e-6);
+    let offset = config.offset.unwrap_or_else(|| vec![0.0; nused]);
+    let weights = config.weights.unwrap_or_else(|| vec![1.0; nused]);
+    let strata = config.strata.unwrap_or_else(|| vec![1; nused]);
+    let frail = config.frail.unwrap_or_else(|| vec![0; nused]);
+    let max_iter = config.max_iter.unwrap_or(20);
+    let eps = config.eps.unwrap_or(1e-6);
     let mut yy = Vec::with_capacity(3 * nused);
     yy.extend_from_slice(&time);
     yy.extend_from_slice(&time);

@@ -1,23 +1,21 @@
 use pyo3::prelude::*;
 
-#[allow(clippy::too_many_arguments)]
-#[pyfunction]
-pub fn agmart(
-    n: usize,
-    method: i32,
+struct AgmartInput {
     start: Vec<f64>,
     stop: Vec<f64>,
     event: Vec<i32>,
     score: Vec<f64>,
     wt: Vec<f64>,
     strata: Vec<i32>,
-) -> PyResult<Vec<f64>> {
-    let start_slice = &start;
-    let stop_slice = &stop;
-    let event_slice = &event;
-    let score_slice = &score;
-    let wt_slice = &wt;
-    let strata_slice = &strata;
+}
+
+fn agmart_internal(n: usize, method: i32, input: AgmartInput) -> Vec<f64> {
+    let start_slice = &input.start;
+    let stop_slice = &input.stop;
+    let event_slice = &input.event;
+    let score_slice = &input.score;
+    let wt_slice = &input.wt;
+    let strata_slice = &input.strata;
     let mut resid = vec![0.0; n];
     let nused = n;
     let mut local_strata = strata_slice.to_vec();
@@ -97,5 +95,28 @@ pub fn agmart(
         }
     }
 
-    Ok(resid)
+    resid
+}
+
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+pub fn agmart(
+    n: usize,
+    method: i32,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    event: Vec<i32>,
+    score: Vec<f64>,
+    wt: Vec<f64>,
+    strata: Vec<i32>,
+) -> PyResult<Vec<f64>> {
+    let input = AgmartInput {
+        start,
+        stop,
+        event,
+        score,
+        wt,
+        strata,
+    };
+    Ok(agmart_internal(n, method, input))
 }
