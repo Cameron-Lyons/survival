@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 #![allow(clippy::redundant_closure)]
 use crate::core::survpenal::{self, MatrixBuffers, PenaltyParams, PenaltyResult};
+use crate::regression::survregc1::SurvivalDist;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
 
@@ -202,25 +203,89 @@ pub fn survreg(
 
 #[allow(clippy::too_many_arguments)]
 fn calculate_likelihood(
-    _n: usize,
-    _nvar: usize,
-    _nstrat: usize,
-    _beta: &[f64],
-    _distribution: &Distribution,
-    _strata: &[usize],
-    _offsets: &ArrayView1<f64>,
-    _time1: &ArrayView1<f64>,
-    _time2: Option<&ArrayView1<f64>>,
-    _status: &ArrayView1<f64>,
-    _weights: &ArrayView1<f64>,
-    _covariates: &ArrayView2<f64>,
-    _hmat: &mut Array2<f64>,
-    _jj: &mut Array2<f64>,
-    _u: &mut Array1<f64>,
-    _hdiag: &mut Array1<f64>,
+    n: usize,
+    nvar: usize,
+    nstrat: usize,
+    beta: &[f64],
+    distribution: &Distribution,
+    strata: &[usize],
+    offsets: &ArrayView1<f64>,
+    time1: &ArrayView1<f64>,
+    time2: Option<&ArrayView1<f64>>,
+    status: &ArrayView1<f64>,
+    weights: &ArrayView1<f64>,
+    covariates: &ArrayView2<f64>,
+    hmat: &mut Array2<f64>,
+    jj: &mut Array2<f64>,
+    u: &mut Array1<f64>,
+    hdiag: &mut Array1<f64>,
     _jdiag: &mut Array1<f64>,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    Ok(0.0)
+    use crate::regression::survregc1::survregc1;
+
+    let dist = match distribution {
+        Distribution::ExtremeValue => SurvivalDist::ExtremeValue,
+        Distribution::Logistic => SurvivalDist::Logistic,
+        Distribution::Gaussian => SurvivalDist::Gaussian,
+        Distribution::Custom(_) => {
+            return Err("Custom distributions not yet supported in calculate_likelihood".into());
+        }
+    };
+
+    let strat_vec: Vec<i32> = strata.iter().map(|&s| (s + 1) as i32).collect();
+    let strat_arr = Array1::from_vec(strat_vec);
+
+    let status_vec: Vec<i32> = status.iter().map(|&s| s as i32).collect();
+    let status_arr = Array1::from_vec(status_vec);
+
+    let beta_arr = Array1::from_vec(beta.to_vec());
+    let beta_view = beta_arr.view();
+
+    let frail_arr = Array1::zeros(n);
+    let frail_view = frail_arr.view();
+
+    let result = survregc1(
+        n,
+        nvar,
+        nstrat,
+        false,
+        &beta_view,
+        dist,
+        &strat_arr.view(),
+        offsets,
+        time1,
+        time2,
+        &status_arr.view(),
+        weights,
+        covariates,
+        0,
+        &frail_view,
+    )?;
+
+    let nvar2 = nvar + nstrat;
+    let nvar3 = nvar2;
+
+    for i in 0..nvar3.min(result.u.len()) {
+        u[i] = result.u[i];
+    }
+
+    for i in 0..nvar2.min(hmat.nrows()) {
+        for j in 0..nvar2.min(hmat.ncols()) {
+            hmat[[i, j]] = -result.imat[[j, i]];
+        }
+    }
+
+    for i in 0..nvar2.min(jj.nrows()) {
+        for j in 0..nvar2.min(jj.ncols()) {
+            jj[[i, j]] = result.jj[[j, i]];
+        }
+    }
+
+    for i in 0..nvar2.min(hdiag.len()) {
+        hdiag[i] = -result.imat[[i, i]];
+    }
+
+    Ok(result.loglik)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -236,8 +301,6 @@ fn apply_penalties(
     ptype: PenaltyType,
     pdiag: bool,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    // Map PenaltyType enum to ptype integer
-    // 0 = None, 1 = Sparse only, 2 = Dense only, 3 = Both
     let ptype_int = match ptype {
         PenaltyType::None => 0,
         PenaltyType::Sparse => 1,
@@ -245,40 +308,60 @@ fn apply_penalties(
         PenaltyType::Both => 3,
     };
 
-    // If no penalty, return early
     if ptype_int == 0 {
         return Ok(0.0);
     }
 
     let pdiag_int = if pdiag { 1 } else { 0 };
-    let whichcase = 0; // 0 means update matrices, 1 means just compute penalty
+    let whichcase = 0;
 
-    // Get mutable slices from ndarray
     let hmat_slice = hmat.as_slice_mut().ok_or("Failed to get hmat slice")?;
     let jj_slice = jj.as_slice_mut().ok_or("Failed to get jj slice")?;
     let hdiag_slice = hdiag.as_slice_mut().ok_or("Failed to get hdiag slice")?;
     let jdiag_slice = jdiag.as_slice_mut().ok_or("Failed to get jdiag slice")?;
     let u_slice = u.as_slice_mut().ok_or("Failed to get u slice")?;
 
-    // Default penalty functions that return zero penalties
-    // These can be replaced with actual penalty implementations later
+    const LAMBDA: f64 = 0.1;
+
     let sparse_penalty = |coef: &[f64]| -> PenaltyResult {
+        let n = coef.len();
+        let mut first_deriv = vec![0.0; n];
+        let mut second_deriv = vec![0.0; n];
+        let mut loglik_penalty = 0.0;
+
+        for i in 0..n {
+            loglik_penalty += LAMBDA * 0.5 * coef[i].powi(2);
+            first_deriv[i] = LAMBDA * coef[i];
+            second_deriv[i] = LAMBDA;
+        }
+
         PenaltyResult {
-            new_coef: coef.to_vec(), // Preserve coefficients
-            first_deriv: vec![0.0; coef.len()],
-            second_deriv: vec![0.0; coef.len()],
-            loglik_penalty: 0.0,
-            flags: vec![0; coef.len()],
+            new_coef: coef.to_vec(),
+            first_deriv,
+            second_deriv,
+            loglik_penalty,
+            flags: vec![0; n],
         }
     };
 
     let dense_penalty = |coef: &[f64]| -> PenaltyResult {
+        let n = coef.len();
+        let mut first_deriv = vec![0.0; n];
+        let mut second_deriv = vec![0.0; n];
+        let mut loglik_penalty = 0.0;
+
+        for i in 0..n {
+            loglik_penalty += LAMBDA * 0.5 * coef[i].powi(2);
+            first_deriv[i] = LAMBDA * coef[i];
+            second_deriv[i] = LAMBDA;
+        }
+
         PenaltyResult {
-            new_coef: coef.to_vec(), // Preserve coefficients
-            first_deriv: vec![0.0; coef.len()],
-            second_deriv: vec![0.0; coef.len()],
-            loglik_penalty: 0.0,
-            flags: vec![0; coef.len()],
+            new_coef: coef.to_vec(),
+            first_deriv,
+            second_deriv,
+            loglik_penalty,
+            flags: vec![0; n],
         }
     };
 
@@ -313,22 +396,162 @@ fn apply_penalties(
 
 #[allow(clippy::too_many_arguments)]
 fn golden_section_search(
-    _beta: &[f64],
-    _newbeta: &[f64],
+    beta: &[f64],
+    newbeta: &[f64],
     _current_loglik: f64,
-    _n: usize,
-    _nvar: usize,
-    _nstrat: usize,
-    _strata: &[usize],
-    _offsets: &ArrayView1<f64>,
-    _time1: &ArrayView1<f64>,
-    _time2: Option<&ArrayView1<f64>>,
-    _status: &ArrayView1<f64>,
-    _weights: &ArrayView1<f64>,
-    _covariates: &ArrayView2<f64>,
-    _distribution: &Distribution,
+    n: usize,
+    nvar: usize,
+    nstrat: usize,
+    strata: &[usize],
+    offsets: &ArrayView1<f64>,
+    time1: &ArrayView1<f64>,
+    time2: Option<&ArrayView1<f64>>,
+    status: &ArrayView1<f64>,
+    weights: &ArrayView1<f64>,
+    covariates: &ArrayView2<f64>,
+    distribution: &Distribution,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    Ok(0.5)
+    const GOLDEN_RATIO: f64 = 0.6180339887498949;
+    const TOL: f64 = 1e-6;
+    const MAX_ITER: usize = 50;
+
+    let mut a = 0.0;
+    let mut b = 1.0;
+    let mut c = b - GOLDEN_RATIO * (b - a);
+    let mut d = a + GOLDEN_RATIO * (b - a);
+
+    let mut fc = evaluate_likelihood_at_alpha(
+        beta,
+        newbeta,
+        c,
+        n,
+        nvar,
+        nstrat,
+        strata,
+        offsets,
+        time1,
+        time2,
+        status,
+        weights,
+        covariates,
+        distribution,
+    )?;
+    let mut fd = evaluate_likelihood_at_alpha(
+        beta,
+        newbeta,
+        d,
+        n,
+        nvar,
+        nstrat,
+        strata,
+        offsets,
+        time1,
+        time2,
+        status,
+        weights,
+        covariates,
+        distribution,
+    )?;
+
+    let mut iter = 0;
+    while (b - a).abs() > TOL && iter < MAX_ITER {
+        if fc > fd {
+            b = d;
+            d = c;
+            fd = fc;
+            c = b - GOLDEN_RATIO * (b - a);
+            fc = evaluate_likelihood_at_alpha(
+                beta,
+                newbeta,
+                c,
+                n,
+                nvar,
+                nstrat,
+                strata,
+                offsets,
+                time1,
+                time2,
+                status,
+                weights,
+                covariates,
+                distribution,
+            )?;
+        } else {
+            a = c;
+            c = d;
+            fc = fd;
+            d = a + GOLDEN_RATIO * (b - a);
+            fd = evaluate_likelihood_at_alpha(
+                beta,
+                newbeta,
+                d,
+                n,
+                nvar,
+                nstrat,
+                strata,
+                offsets,
+                time1,
+                time2,
+                status,
+                weights,
+                covariates,
+                distribution,
+            )?;
+        }
+        iter += 1;
+    }
+
+    Ok((a + b) / 2.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_likelihood_at_alpha(
+    beta: &[f64],
+    newbeta: &[f64],
+    alpha: f64,
+    n: usize,
+    nvar: usize,
+    nstrat: usize,
+    strata: &[usize],
+    offsets: &ArrayView1<f64>,
+    time1: &ArrayView1<f64>,
+    time2: Option<&ArrayView1<f64>>,
+    status: &ArrayView1<f64>,
+    weights: &ArrayView1<f64>,
+    covariates: &ArrayView2<f64>,
+    distribution: &Distribution,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let beta_alpha: Vec<f64> = beta
+        .iter()
+        .zip(newbeta.iter())
+        .map(|(b, nb)| b + alpha * (nb - b))
+        .collect();
+
+    let mut hmat_temp = Array2::zeros((nvar + nstrat, nvar + nstrat));
+    let mut jj_temp = Array2::zeros((nvar + nstrat, nvar + nstrat));
+    let mut u_temp = Array1::zeros(nvar + nstrat);
+    let mut hdiag_temp = Array1::zeros(nvar + nstrat);
+    let mut jdiag_temp = Array1::zeros(0);
+
+    calculate_likelihood(
+        n,
+        nvar,
+        nstrat,
+        &beta_alpha,
+        distribution,
+        strata,
+        offsets,
+        time1,
+        time2,
+        status,
+        weights,
+        covariates,
+        &mut hmat_temp,
+        &mut jj_temp,
+        &mut u_temp,
+        &mut hdiag_temp,
+        &mut jdiag_temp,
+    )
 }
 
 fn calculate_inverse(
