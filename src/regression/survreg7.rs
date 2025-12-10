@@ -35,7 +35,7 @@ pub fn survreg(
     ptype: PenaltyType,
     pdiag: bool,
     nfrail: usize,
-    _fgrp: &[usize],
+    fgrp: &[usize],
 ) -> Result<SurvivalResult, Box<dyn std::error::Error>> {
     let n = y.nrows();
     let ny = y.ncols();
@@ -48,7 +48,7 @@ pub fn survreg(
     let mut jdiag = Array1::zeros(nfrail);
     let mut u = Array1::zeros(nvar3);
     let mut newbeta = beta.clone();
-    let flag = 0;
+    let mut flag = 0;
 
     let time1_vec: Vec<f64> = y.column(0).iter().cloned().collect();
     let status_vec: Vec<f64> = if ny == 2 {
@@ -88,6 +88,8 @@ pub fn survreg(
         &mut u,
         &mut hdiag,
         &mut jdiag,
+        nfrail,
+        fgrp,
     )?;
 
     let mut penalty_val = apply_penalties(
@@ -134,6 +136,8 @@ pub fn survreg(
             &mut u,
             &mut hdiag,
             &mut jdiag,
+            nfrail,
+            fgrp,
         )?;
 
         let new_penalty = apply_penalties(
@@ -154,6 +158,7 @@ pub fn survreg(
             loglik = newlik;
             penalty_val = new_penalty;
             beta.copy_from_slice(&newbeta);
+            flag = 0;
             break;
         }
 
@@ -173,6 +178,8 @@ pub fn survreg(
                 &weights.view(),
                 &covariates.view(),
                 &distribution,
+                nfrail,
+                fgrp,
             )?;
             newbeta
                 .iter_mut()
@@ -184,6 +191,10 @@ pub fn survreg(
         loglik = newlik;
         penalty_val = new_penalty;
         iter += 1;
+    }
+
+    if iter >= max_iter {
+        flag = 1;
     }
 
     let h_inv = calculate_inverse(&hmat, nvar3, nfrail, &hdiag, tol_chol)?;
@@ -220,6 +231,8 @@ fn calculate_likelihood(
     u: &mut Array1<f64>,
     hdiag: &mut Array1<f64>,
     _jdiag: &mut Array1<f64>,
+    nfrail: usize,
+    fgrp: &[usize],
 ) -> Result<f64, Box<dyn std::error::Error>> {
     use crate::regression::survregc1::survregc1;
 
@@ -241,7 +254,12 @@ fn calculate_likelihood(
     let beta_arr = Array1::from_vec(beta.to_vec());
     let beta_view = beta_arr.view();
 
-    let frail_arr = Array1::zeros(n);
+    let frail_vec: Vec<i32> = if nfrail > 0 && !fgrp.is_empty() {
+        fgrp.iter().map(|&g| (g + 1) as i32).collect()
+    } else {
+        vec![0; n]
+    };
+    let frail_arr = Array1::from_vec(frail_vec);
     let frail_view = frail_arr.view();
 
     let result = survregc1(
@@ -258,31 +276,43 @@ fn calculate_likelihood(
         &status_arr.view(),
         weights,
         covariates,
-        0,
+        nfrail,
         &frail_view,
     )?;
 
     let nvar2 = nvar + nstrat;
-    let nvar3 = nvar2;
+    let nvar3 = nvar2 + nfrail;
 
     for i in 0..nvar3.min(result.u.len()) {
         u[i] = result.u[i];
     }
 
-    for i in 0..nvar2.min(hmat.nrows()) {
+    for i in 0..nvar3.min(hmat.nrows()) {
         for j in 0..nvar2.min(hmat.ncols()) {
-            hmat[[i, j]] = -result.imat[[j, i]];
+            if i < result.imat.ncols() && j < result.imat.nrows() {
+                hmat[[i, j]] = -result.imat[[j, i]];
+            }
         }
     }
 
-    for i in 0..nvar2.min(jj.nrows()) {
+    for i in 0..nvar3.min(jj.nrows()) {
         for j in 0..nvar2.min(jj.ncols()) {
-            jj[[i, j]] = result.jj[[j, i]];
+            if i < result.jj.ncols() && j < result.jj.nrows() {
+                jj[[i, j]] = result.jj[[j, i]];
+            }
         }
     }
 
-    for i in 0..nvar2.min(hdiag.len()) {
-        hdiag[i] = -result.imat[[i, i]];
+    for i in 0..nvar3.min(hdiag.len()) {
+        if i < result.imat.nrows() && i < result.imat.ncols() {
+            hdiag[i] = -result.imat[[i, i]];
+        }
+    }
+
+    if nfrail > 0 {
+        for i in 0..nfrail.min(result.fdiag.len()) {
+            hdiag[i] = -result.fdiag[i];
+        }
     }
 
     Ok(result.loglik)
@@ -410,6 +440,8 @@ fn golden_section_search(
     weights: &ArrayView1<f64>,
     covariates: &ArrayView2<f64>,
     distribution: &Distribution,
+    nfrail: usize,
+    fgrp: &[usize],
 ) -> Result<f64, Box<dyn std::error::Error>> {
     const GOLDEN_RATIO: f64 = 0.6180339887498949;
     const TOL: f64 = 1e-6;
@@ -435,6 +467,8 @@ fn golden_section_search(
         weights,
         covariates,
         distribution,
+        nfrail,
+        fgrp,
     )?;
     let mut fd = evaluate_likelihood_at_alpha(
         beta,
@@ -451,6 +485,8 @@ fn golden_section_search(
         weights,
         covariates,
         distribution,
+        nfrail,
+        fgrp,
     )?;
 
     let mut iter = 0;
@@ -475,6 +511,8 @@ fn golden_section_search(
                 weights,
                 covariates,
                 distribution,
+                nfrail,
+                fgrp,
             )?;
         } else {
             a = c;
@@ -496,6 +534,8 @@ fn golden_section_search(
                 weights,
                 covariates,
                 distribution,
+                nfrail,
+                fgrp,
             )?;
         }
         iter += 1;
@@ -520,6 +560,8 @@ fn evaluate_likelihood_at_alpha(
     weights: &ArrayView1<f64>,
     covariates: &ArrayView2<f64>,
     distribution: &Distribution,
+    nfrail: usize,
+    fgrp: &[usize],
 ) -> Result<f64, Box<dyn std::error::Error>> {
     let beta_alpha: Vec<f64> = beta
         .iter()
@@ -527,11 +569,13 @@ fn evaluate_likelihood_at_alpha(
         .map(|(b, nb)| b + alpha * (nb - b))
         .collect();
 
-    let mut hmat_temp = Array2::zeros((nvar + nstrat, nvar + nstrat));
-    let mut jj_temp = Array2::zeros((nvar + nstrat, nvar + nstrat));
-    let mut u_temp = Array1::zeros(nvar + nstrat);
-    let mut hdiag_temp = Array1::zeros(nvar + nstrat);
-    let mut jdiag_temp = Array1::zeros(0);
+    let nvar2 = nvar + nstrat;
+    let nvar3 = nvar2 + nfrail;
+    let mut hmat_temp = Array2::zeros((nvar3, nvar2));
+    let mut jj_temp = Array2::zeros((nvar3, nvar2));
+    let mut u_temp = Array1::zeros(nvar3);
+    let mut hdiag_temp = Array1::zeros(nvar3);
+    let mut jdiag_temp = Array1::zeros(nfrail);
 
     calculate_likelihood(
         n,
@@ -551,6 +595,8 @@ fn evaluate_likelihood_at_alpha(
         &mut u_temp,
         &mut hdiag_temp,
         &mut jdiag_temp,
+        nfrail,
+        fgrp,
     )
 }
 
