@@ -14,7 +14,12 @@ pub(crate) struct CoxSchoParams {
 }
 
 #[allow(dead_code)]
-pub(crate) fn coxscho(params: CoxSchoParams, input: CoxSchoInput, covar: &mut [f64], work: &mut [f64]) {
+pub(crate) fn coxscho(
+    params: CoxSchoParams,
+    input: CoxSchoInput,
+    covar: &mut [f64],
+    work: &mut [f64],
+) {
     assert!(input.y.len() >= 3 * params.nused, "y array too short");
     assert!(
         covar.len() >= params.nvar * params.nused,

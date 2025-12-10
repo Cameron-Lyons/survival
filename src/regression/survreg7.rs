@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 #![allow(clippy::redundant_closure)]
+use crate::core::survpenal::{self, MatrixBuffers, PenaltyParams, PenaltyResult};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
 
@@ -46,7 +47,6 @@ pub fn survreg(
     let mut jdiag = Array1::zeros(nfrail);
     let mut u = Array1::zeros(nvar3);
     let mut newbeta = beta.clone();
-    let mut penalty_val = 0.0;
     let flag = 0;
 
     let time1_vec: Vec<f64> = y.column(0).iter().cloned().collect();
@@ -89,8 +89,8 @@ pub fn survreg(
         &mut jdiag,
     )?;
 
-    apply_penalties(
-        &mut hmat, &mut jj, &mut hdiag, &mut jdiag, &mut u, &beta, ptype, pdiag,
+    let mut penalty_val = apply_penalties(
+        &mut hmat, &mut jj, &mut hdiag, &mut jdiag, &mut u, &mut beta, nvar, nfrail, ptype, pdiag,
     )?;
     loglik += penalty_val;
 
@@ -136,7 +136,16 @@ pub fn survreg(
         )?;
 
         let new_penalty = apply_penalties(
-            &mut hmat, &mut jj, &mut hdiag, &mut jdiag, &mut u, &newbeta, ptype, pdiag,
+            &mut hmat,
+            &mut jj,
+            &mut hdiag,
+            &mut jdiag,
+            &mut u,
+            &mut newbeta,
+            nvar,
+            nfrail,
+            ptype,
+            pdiag,
         )?;
         let newlik = newlik + new_penalty;
 
@@ -216,16 +225,90 @@ fn calculate_likelihood(
 
 #[allow(clippy::too_many_arguments)]
 fn apply_penalties(
-    _hmat: &mut Array2<f64>,
-    _jj: &mut Array2<f64>,
-    _hdiag: &mut Array1<f64>,
-    _jdiag: &mut Array1<f64>,
-    _u: &mut Array1<f64>,
-    _beta: &[f64],
-    _ptype: PenaltyType,
-    _pdiag: bool,
+    hmat: &mut Array2<f64>,
+    jj: &mut Array2<f64>,
+    hdiag: &mut Array1<f64>,
+    jdiag: &mut Array1<f64>,
+    u: &mut Array1<f64>,
+    beta: &mut [f64],
+    nvar: usize,
+    nfrail: usize,
+    ptype: PenaltyType,
+    pdiag: bool,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    Ok(0.0)
+    // Map PenaltyType enum to ptype integer
+    // 0 = None, 1 = Sparse only, 2 = Dense only, 3 = Both
+    let ptype_int = match ptype {
+        PenaltyType::None => 0,
+        PenaltyType::Sparse => 1,
+        PenaltyType::Dense => 2,
+        PenaltyType::Both => 3,
+    };
+
+    // If no penalty, return early
+    if ptype_int == 0 {
+        return Ok(0.0);
+    }
+
+    let pdiag_int = if pdiag { 1 } else { 0 };
+    let whichcase = 0; // 0 means update matrices, 1 means just compute penalty
+
+    // Get mutable slices from ndarray
+    let hmat_slice = hmat.as_slice_mut().ok_or("Failed to get hmat slice")?;
+    let jj_slice = jj.as_slice_mut().ok_or("Failed to get jj slice")?;
+    let hdiag_slice = hdiag.as_slice_mut().ok_or("Failed to get hdiag slice")?;
+    let jdiag_slice = jdiag.as_slice_mut().ok_or("Failed to get jdiag slice")?;
+    let u_slice = u.as_slice_mut().ok_or("Failed to get u slice")?;
+
+    // Default penalty functions that return zero penalties
+    // These can be replaced with actual penalty implementations later
+    let sparse_penalty = |coef: &[f64]| -> PenaltyResult {
+        PenaltyResult {
+            new_coef: coef.to_vec(), // Preserve coefficients
+            first_deriv: vec![0.0; coef.len()],
+            second_deriv: vec![0.0; coef.len()],
+            loglik_penalty: 0.0,
+            flags: vec![0; coef.len()],
+        }
+    };
+
+    let dense_penalty = |coef: &[f64]| -> PenaltyResult {
+        PenaltyResult {
+            new_coef: coef.to_vec(), // Preserve coefficients
+            first_deriv: vec![0.0; coef.len()],
+            second_deriv: vec![0.0; coef.len()],
+            loglik_penalty: 0.0,
+            flags: vec![0; coef.len()],
+        }
+    };
+
+    let params = PenaltyParams {
+        whichcase,
+        nfrail,
+        nvar,
+        ptype: ptype_int,
+        pdiag: pdiag_int,
+    };
+
+    let matrices = MatrixBuffers {
+        hmat: hmat_slice,
+        JJ: jj_slice,
+        hdiag: hdiag_slice,
+        jdiag: jdiag_slice,
+        u: u_slice,
+        beta,
+    };
+
+    let mut penalty = 0.0;
+    survpenal::survpenal(
+        params,
+        matrices,
+        &mut penalty,
+        sparse_penalty,
+        dense_penalty,
+    );
+
+    Ok(penalty)
 }
 
 #[allow(clippy::too_many_arguments)]
