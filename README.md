@@ -146,16 +146,119 @@ result = perform_pyears_calculation(
 )
 ```
 
+### Kaplan-Meier Survival Curves
+
+```python
+from survival import survfitkm, SurvFitKMOutput
+
+# Example survival data
+time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]  # 1 = event, 0 = censored
+weights = [1.0] * len(time)  # Optional: equal weights
+
+result = survfitkm(
+    time=time,
+    status=status,
+    weights=weights,
+    entry_times=None,  # Optional: entry times for left-truncation
+    position=None,     # Optional: position flags
+    reverse=False,     # Optional: reverse time order
+    computation_type=0 # Optional: computation type
+)
+
+print(f"Time points: {result.time}")
+print(f"Survival estimates: {result.estimate}")
+print(f"Standard errors: {result.std_err}")
+print(f"Number at risk: {result.n_risk}")
+```
+
+### Fine-Gray Competing Risks Model
+
+```python
+from survival import finegray, FineGrayOutput
+
+# Example competing risks data
+tstart = [0.0, 0.0, 0.0, 0.0]
+tstop = [1.0, 2.0, 3.0, 4.0]
+ctime = [0.5, 1.5, 2.5, 3.5]  # Cut points
+cprob = [0.1, 0.2, 0.3, 0.4]  # Cumulative probabilities
+extend = [True, True, False, False]  # Whether to extend intervals
+keep = [True, True, True, True]      # Which cut points to keep
+
+result = finegray(
+    tstart=tstart,
+    tstop=tstop,
+    ctime=ctime,
+    cprob=cprob,
+    extend=extend,
+    keep=keep
+)
+
+print(f"Row indices: {result.row}")
+print(f"Start times: {result.start}")
+print(f"End times: {result.end}")
+print(f"Weights: {result.wt}")
+```
+
+### Cox Proportional Hazards Model
+
+```python
+from survival import CoxPHModel, Subject
+
+# Create a Cox PH model
+model = CoxPHModel()
+
+# Or create with data
+covariates = [[1.0, 2.0], [2.0, 3.0], [1.5, 2.5]]
+event_times = [1.0, 2.0, 3.0]
+censoring = [1, 1, 0]  # 1 = event, 0 = censored
+
+model = CoxPHModel.new_with_data(covariates, event_times, censoring)
+
+# Fit the model
+model.fit(n_iters=10)
+
+# Get results
+print(f"Baseline hazard: {model.baseline_hazard}")
+print(f"Risk scores: {model.risk_scores}")
+print(f"Coefficients: {model.get_coefficients()}")
+
+# Predict on new data
+new_covariates = [[1.0, 2.0], [2.0, 3.0]]
+predictions = model.predict(new_covariates)
+print(f"Predictions: {predictions}")
+
+# Calculate Brier score
+brier = model.brier_score()
+print(f"Brier score: {brier}")
+
+# Create and add subjects
+subject = Subject(
+    id=1,
+    covariates=[1.0, 2.0],
+    is_case=True,
+    is_subcohort=True,
+    stratum=0
+)
+model.add_subject(&subject)
+```
+
 ## API Reference
 
 ### Classes
 
 - `AaregOptions`: Configuration options for Aalen's additive regression model
 - `PSpline`: Penalized spline class for smooth covariate effects
+- `CoxPHModel`: Cox proportional hazards model class
+- `Subject`: Subject data structure for Cox PH models
+- `SurvFitKMOutput`: Output from Kaplan-Meier survival curve fitting
+- `FineGrayOutput`: Output from Fine-Gray competing risks model
 
 ### Functions
 
 - `aareg(options)`: Fit Aalen's additive regression model
+- `survfitkm(...)`: Fit Kaplan-Meier survival curves
+- `finegray(...)`: Fine-Gray competing risks model data preparation
 - `perform_concordance1_calculation(...)`: Calculate concordance index (version 1)
 - `perform_concordance3_calculation(...)`: Calculate concordance index (version 3)
 - `perform_concordance_calculation(...)`: Calculate concordance index (version 5)

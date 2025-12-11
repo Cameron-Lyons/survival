@@ -24,13 +24,16 @@ use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculati
 use regression::aareg::{AaregOptions, aareg as aareg_function};
 use regression::agfit5::perform_cox_regression_frailty;
 use regression::blogit::LinkFunctionParams;
+use regression::coxph::{CoxPHModel, Subject};
 use residuals::agmart::agmart;
 use scoring::agscore2::perform_score_calculation;
 use scoring::agscore3::perform_agscore3_calculation;
 use specialized::cipoisson::{cipoisson, cipoisson_anscombe, cipoisson_exact};
+use specialized::finegray::{FineGrayOutput, finegray};
 use specialized::norisk::norisk;
 use surv_analysis::agsurv4::agsurv4;
 use surv_analysis::agsurv5::agsurv5;
+use surv_analysis::survfitkm::{SurvFitKMOutput, survfitkm};
 use utilities::agexact::agexact;
 use utilities::collapse::collapse;
 
@@ -59,9 +62,15 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agsurv4, &m)?)?;
     m.add_function(wrap_pyfunction!(agsurv5, &m)?)?;
     m.add_function(wrap_pyfunction!(agmart, &m)?)?;
+    m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
+    m.add_function(wrap_pyfunction!(finegray, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
     m.add_class::<LinkFunctionParams>()?;
+    m.add_class::<CoxPHModel>()?;
+    m.add_class::<Subject>()?;
+    m.add_class::<SurvFitKMOutput>()?;
+    m.add_class::<FineGrayOutput>()?;
     Ok(())
 }

@@ -1,16 +1,34 @@
 #![allow(clippy::needless_range_loop)]
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) struct FineGrayOutput {
+use pyo3::prelude::*;
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct FineGrayOutput {
+    #[pyo3(get)]
     pub row: Vec<usize>,
+    #[pyo3(get)]
     pub start: Vec<f64>,
+    #[pyo3(get)]
     pub end: Vec<f64>,
+    #[pyo3(get)]
     pub wt: Vec<f64>,
+    #[pyo3(get)]
     pub add: Vec<usize>,
 }
 
-#[allow(dead_code)]
-pub(crate) fn finegray(
+#[pyfunction]
+pub fn finegray(
+    tstart: Vec<f64>,
+    tstop: Vec<f64>,
+    ctime: Vec<f64>,
+    cprob: Vec<f64>,
+    extend: Vec<bool>,
+    keep: Vec<bool>,
+) -> FineGrayOutput {
+    finegray_internal(&tstart, &tstop, &ctime, &cprob, &extend, &keep)
+}
+
+pub(crate) fn finegray_internal(
     tstart: &[f64],
     tstop: &[f64],
     ctime: &[f64],
@@ -99,4 +117,12 @@ pub(crate) fn finegray(
         wt,
         add,
     }
+}
+
+#[pymodule]
+#[pyo3(name = "finegray")]
+fn finegray_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(finegray, &m)?)?;
+    m.add_class::<FineGrayOutput>()?;
+    Ok(())
 }

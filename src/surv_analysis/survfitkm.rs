@@ -1,15 +1,50 @@
-#[allow(dead_code)]
-pub(crate) struct SurvFitKMOutput {
+use pyo3::prelude::*;
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct SurvFitKMOutput {
+    #[pyo3(get)]
     pub time: Vec<f64>,
+    #[pyo3(get)]
     pub n_risk: Vec<f64>,
+    #[pyo3(get)]
     pub n_event: Vec<f64>,
+    #[pyo3(get)]
     pub n_censor: Vec<f64>,
+    #[pyo3(get)]
     pub estimate: Vec<f64>,
+    #[pyo3(get)]
     pub std_err: Vec<f64>,
 }
 
-#[allow(dead_code)]
-pub(crate) fn survfitkm(
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn survfitkm(
+    time: Vec<f64>,
+    status: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    entry_times: Option<Vec<f64>>,
+    position: Option<Vec<i32>>,
+    reverse: Option<bool>,
+    computation_type: Option<i32>,
+) -> SurvFitKMOutput {
+    let weights = weights.unwrap_or_else(|| vec![1.0; time.len()]);
+    let position = position.unwrap_or_else(|| vec![0; time.len()]);
+    let _reverse = reverse.unwrap_or(false);
+    let _computation_type = computation_type.unwrap_or(0);
+
+    survfitkm_internal(
+        &time,
+        &status,
+        &weights,
+        entry_times.as_deref(),
+        &position,
+        _reverse,
+        _computation_type,
+    )
+}
+
+pub(crate) fn survfitkm_internal(
     time: &[f64],
     status: &[f64],
     weights: &[f64],
@@ -92,4 +127,12 @@ fn process_entry_times(entry_times: Option<&[f64]>, position: &[i32]) -> Vec<f64
         }
     }
     entry_vec
+}
+
+#[pymodule]
+#[pyo3(name = "survfitkm")]
+fn survfitkm_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
+    m.add_class::<SurvFitKMOutput>()?;
+    Ok(())
 }
