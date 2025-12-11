@@ -273,6 +273,13 @@ print(f"Predictions: {predictions}")
 brier = model.brier_score()
 print(f"Brier score: {brier}")
 
+# Compute survival curves for new covariates
+new_covariates = [[1.0, 2.0], [2.0, 3.0]]
+time_points = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]  # Optional: specific time points
+times, survival_curves = model.survival_curve(new_covariates, time_points)
+print(f"Time points: {times}")
+print(f"Survival curves: {survival_curves}")  # One curve per covariate set
+
 # Create and add subjects
 subject = Subject(
     id=1,

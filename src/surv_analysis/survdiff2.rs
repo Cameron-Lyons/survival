@@ -40,11 +40,9 @@ pub fn survdiff2(
 
     let rho_val = rho.unwrap_or(0.0);
 
-    // Determine number of groups
     let max_group = group.iter().max().copied().unwrap_or(0);
     let ngroup = if max_group > 0 { max_group as usize } else { 1 };
 
-    // Count strata
     let nstrat = if strata_vec.is_empty() {
         1
     } else {
@@ -81,7 +79,6 @@ pub fn survdiff2(
 
     survdiff2_internal(params, input, &mut output);
 
-    // Calculate chi-squared statistic
     let mut chi_sq = 0.0;
     let mut df = 0;
     for i in 0..ngroup {
@@ -93,7 +90,6 @@ pub fn survdiff2(
     }
     df = (df - 1).max(0);
 
-    // Convert variance to 2D matrix
     let mut variance_matrix = Vec::new();
     for i in 0..ngroup {
         let start = i * ngroup;

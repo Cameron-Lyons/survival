@@ -173,7 +173,6 @@ fn calculate_likelihood(
     _jj: &mut Array2<f64>,
     _u: &mut Array1<f64>,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    // Placeholder implementation - actual likelihood calculation would go here
     Ok(0.0)
 }
 

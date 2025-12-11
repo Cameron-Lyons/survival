@@ -170,4 +170,59 @@ impl CoxPHModel {
     fn predict_survival(&self, _time: f64) -> f64 {
         0.5
     }
+
+    pub fn survival_curve(
+        &self,
+        covariates: Vec<Vec<f64>>,
+        time_points: Option<Vec<f64>>,
+    ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+        let nrows = covariates.len();
+        let ncols = if nrows > 0 { covariates[0].len() } else { 0 };
+        let mut cov_array = Array2::<f64>::zeros((nrows, ncols));
+        for (i, row) in covariates.iter().enumerate() {
+            for (j, &val) in row.iter().enumerate() {
+                cov_array[[i, j]] = val;
+            }
+        }
+
+        let times = time_points.unwrap_or_else(|| {
+            let mut t = self.event_times.clone();
+            t.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            t.dedup();
+            t
+        });
+
+        let mut risk_scores = Vec::new();
+        for row in cov_array.outer_iter() {
+            let risk = self.coefficients.column(0).dot(&row);
+            risk_scores.push(risk.exp());
+        }
+
+        let mut cum_baseline_haz = Vec::new();
+        let mut cum = 0.0;
+        for &haz in &self.baseline_hazard {
+            cum += haz;
+            cum_baseline_haz.push(cum);
+        }
+
+        let mut survival_curves = Vec::new();
+        for risk_exp in &risk_scores {
+            let mut surv = Vec::new();
+            for &t in &times {
+                let baseline_haz = self
+                    .baseline_hazard
+                    .iter()
+                    .zip(&self.event_times)
+                    .filter(|&(_, et)| *et <= t)
+                    .map(|(h, _)| *h)
+                    .sum::<f64>();
+
+                let s = (-baseline_haz * risk_exp).exp();
+                surv.push(s);
+            }
+            survival_curves.push(surv);
+        }
+
+        Ok((times, survival_curves))
+    }
 }
