@@ -25,6 +25,7 @@ use regression::aareg::{AaregOptions, aareg as aareg_function};
 use regression::agfit5::perform_cox_regression_frailty;
 use regression::blogit::LinkFunctionParams;
 use regression::coxph::{CoxPHModel, Subject};
+use regression::survreg6::{DistributionType, SurvivalFit, survreg};
 use residuals::agmart::agmart;
 use scoring::agscore2::perform_score_calculation;
 use scoring::agscore3::perform_agscore3_calculation;
@@ -64,6 +65,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agmart, &m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
     m.add_function(wrap_pyfunction!(finegray, &m)?)?;
+    m.add_function(wrap_pyfunction!(survreg, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -72,5 +74,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Subject>()?;
     m.add_class::<SurvFitKMOutput>()?;
     m.add_class::<FineGrayOutput>()?;
+    m.add_class::<SurvivalFit>()?;
+    m.add_class::<DistributionType>()?;
     Ok(())
 }

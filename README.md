@@ -200,6 +200,47 @@ print(f"End times: {result.end}")
 print(f"Weights: {result.wt}")
 ```
 
+### Parametric Survival Regression (Accelerated Failure Time Models)
+
+```python
+from survival import survreg, SurvivalFit, DistributionType
+
+# Example survival data
+time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]  # 1 = event, 0 = censored
+covariates = [
+    [1.0, 2.0],
+    [1.5, 2.5],
+    [2.0, 3.0],
+    [2.5, 3.5],
+    [3.0, 4.0],
+    [3.5, 4.5],
+    [4.0, 5.0],
+    [4.5, 5.5],
+]
+
+# Fit parametric survival model
+result = survreg(
+    time=time,
+    status=status,
+    covariates=covariates,
+    weights=None,          # Optional: observation weights
+    offsets=None,          # Optional: offset values
+    initial_beta=None,     # Optional: initial coefficient values
+    strata=None,           # Optional: stratification variable
+    distribution="extreme_value",  # "extreme_value", "logistic", or "gaussian"
+    max_iter=20,          # Optional: maximum iterations
+    eps=1e-5,             # Optional: convergence tolerance
+    tol_chol=1e-9,        # Optional: Cholesky tolerance
+)
+
+print(f"Coefficients: {result.coefficients}")
+print(f"Log-likelihood: {result.log_likelihood}")
+print(f"Iterations: {result.iterations}")
+print(f"Variance matrix: {result.variance_matrix}")
+print(f"Convergence flag: {result.convergence_flag}")
+```
+
 ### Cox Proportional Hazards Model
 
 ```python
@@ -253,11 +294,14 @@ model.add_subject(&subject)
 - `Subject`: Subject data structure for Cox PH models
 - `SurvFitKMOutput`: Output from Kaplan-Meier survival curve fitting
 - `FineGrayOutput`: Output from Fine-Gray competing risks model
+- `SurvivalFit`: Output from parametric survival regression
+- `DistributionType`: Distribution types for parametric models (extreme_value, logistic, gaussian)
 
 ### Functions
 
 - `aareg(options)`: Fit Aalen's additive regression model
 - `survfitkm(...)`: Fit Kaplan-Meier survival curves
+- `survreg(...)`: Fit parametric accelerated failure time models
 - `finegray(...)`: Fine-Gray competing risks model data preparation
 - `perform_concordance1_calculation(...)`: Calculate concordance index (version 1)
 - `perform_concordance3_calculation(...)`: Calculate concordance index (version 3)
