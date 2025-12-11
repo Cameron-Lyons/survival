@@ -11,8 +11,66 @@ pub(crate) struct Weights<'a> {
     pub wt: &'a [f64],
 }
 
+#[pymodule]
+#[pyo3(name = "coxmart")]
+fn coxmart_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(coxmart, &m)?)?;
+    Ok(())
+}
+
+use pyo3::prelude::*;
+
+#[pyfunction]
+pub fn coxmart(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    score: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    method: Option<i32>,
+) -> PyResult<Vec<f64>> {
+    let n = time.len();
+    if status.len() != n || score.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time, status, and score must have the same length",
+        ));
+    }
+
+    let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
+    let mut strata_vec = strata.unwrap_or_else(|| vec![0; n]);
+    let method_val = method.unwrap_or(0);
+
+    if weights_vec.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "weights must have the same length as time",
+        ));
+    }
+    if strata_vec.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "strata must have the same length as time",
+        ));
+    }
+
+    let mut expect = vec![0.0; n];
+
+    let surv_data = SurvivalData {
+        time: &time,
+        status: &status,
+        strata: &mut strata_vec,
+    };
+
+    let weights_data = Weights {
+        score: &score,
+        wt: &weights_vec,
+    };
+
+    coxmart_internal(n, method_val, surv_data, weights_data, &mut expect);
+
+    Ok(expect)
+}
+
 #[allow(dead_code)]
-pub(crate) fn coxmart(
+pub(crate) fn coxmart_internal(
     n: usize,
     method: i32,
     surv_data: SurvivalData,

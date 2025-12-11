@@ -284,6 +284,55 @@ subject = Subject(
 model.add_subject(&subject)
 ```
 
+### Cox Martingale Residuals
+
+```python
+from survival import coxmart
+
+# Example survival data
+time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+status = [1, 1, 0, 1, 0, 1, 1, 0]  # 1 = event, 0 = censored
+score = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]  # Risk scores
+
+# Calculate martingale residuals
+residuals = coxmart(
+    time=time,
+    status=status,
+    score=score,
+    weights=None,      # Optional: observation weights
+    strata=None,       # Optional: stratification variable
+    method=0,          # Optional: method (0 = Breslow, 1 = Efron)
+)
+
+print(f"Martingale residuals: {residuals}")
+```
+
+### Survival Difference Tests (Log-Rank Test)
+
+```python
+from survival import survdiff2, SurvDiffResult
+
+# Example: Compare survival between two groups
+time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
+status = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
+group = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]  # Group 1 and Group 2
+
+# Perform log-rank test (rho=0 for standard log-rank)
+result = survdiff2(
+    time=time,
+    status=status,
+    group=group,
+    strata=None,  # Optional: stratification variable
+    rho=0.0,      # 0.0 = log-rank, 1.0 = Wilcoxon, other = generalized
+)
+
+print(f"Observed events: {result.observed}")
+print(f"Expected events: {result.expected}")
+print(f"Chi-squared statistic: {result.chi_squared}")
+print(f"Degrees of freedom: {result.degrees_of_freedom}")
+print(f"Variance matrix: {result.variance}")
+```
+
 ## API Reference
 
 ### Classes
@@ -296,12 +345,15 @@ model.add_subject(&subject)
 - `FineGrayOutput`: Output from Fine-Gray competing risks model
 - `SurvivalFit`: Output from parametric survival regression
 - `DistributionType`: Distribution types for parametric models (extreme_value, logistic, gaussian)
+- `SurvDiffResult`: Output from survival difference tests (log-rank test)
 
 ### Functions
 
 - `aareg(options)`: Fit Aalen's additive regression model
 - `survfitkm(...)`: Fit Kaplan-Meier survival curves
 - `survreg(...)`: Fit parametric accelerated failure time models
+- `survdiff2(...)`: Perform survival difference tests (log-rank, Wilcoxon, etc.)
+- `coxmart(...)`: Calculate Cox martingale residuals
 - `finegray(...)`: Fine-Gray competing risks model data preparation
 - `perform_concordance1_calculation(...)`: Calculate concordance index (version 1)
 - `perform_concordance3_calculation(...)`: Calculate concordance index (version 3)

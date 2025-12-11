@@ -1,4 +1,115 @@
 #![allow(clippy::needless_range_loop)]
+use pyo3::prelude::*;
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct SurvDiffResult {
+    #[pyo3(get)]
+    pub observed: Vec<f64>,
+    #[pyo3(get)]
+    pub expected: Vec<f64>,
+    #[pyo3(get)]
+    pub variance: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub chi_squared: f64,
+    #[pyo3(get)]
+    pub degrees_of_freedom: usize,
+}
+
+#[pyfunction]
+pub fn survdiff2(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    group: Vec<i32>,
+    strata: Option<Vec<i32>>,
+    rho: Option<f64>,
+) -> PyResult<SurvDiffResult> {
+    let n = time.len();
+    if status.len() != n || group.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time, status, and group must have the same length",
+        ));
+    }
+
+    let strata_vec = strata.unwrap_or_else(|| vec![0; n]);
+    if strata_vec.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "strata must have the same length as time",
+        ));
+    }
+
+    let rho_val = rho.unwrap_or(0.0);
+
+    // Determine number of groups
+    let max_group = group.iter().max().copied().unwrap_or(0);
+    let ngroup = if max_group > 0 { max_group as usize } else { 1 };
+
+    // Count strata
+    let nstrat = if strata_vec.is_empty() {
+        1
+    } else {
+        strata_vec.iter().max().copied().unwrap_or(0) as usize + 1
+    };
+
+    let mut obs = vec![0.0; ngroup * nstrat];
+    let mut exp = vec![0.0; ngroup * nstrat];
+    let mut var = vec![0.0; ngroup * ngroup * nstrat];
+    let mut risk = vec![0.0; ngroup];
+    let mut kaplan = vec![0.0; n];
+
+    let params = SurvDiffParams {
+        nn: n as i32,
+        nngroup: ngroup as i32,
+        _nstrat: nstrat as i32,
+        rho: rho_val,
+    };
+
+    let input = SurvDiffInput {
+        time: &time,
+        status: &status,
+        group: &group,
+        strata: &strata_vec,
+    };
+
+    let mut output = SurvDiffOutput {
+        obs: &mut obs,
+        exp: &mut exp,
+        var: &mut var,
+        risk: &mut risk,
+        kaplan: &mut kaplan,
+    };
+
+    survdiff2_internal(params, input, &mut output);
+
+    // Calculate chi-squared statistic
+    let mut chi_sq = 0.0;
+    let mut df = 0;
+    for i in 0..ngroup {
+        let diff = obs[i] - exp[i];
+        if exp[i] > 0.0 {
+            chi_sq += diff * diff / exp[i];
+            df += 1;
+        }
+    }
+    df = (df - 1).max(0);
+
+    // Convert variance to 2D matrix
+    let mut variance_matrix = Vec::new();
+    for i in 0..ngroup {
+        let start = i * ngroup;
+        let end = start + ngroup;
+        variance_matrix.push(var[start..end].to_vec());
+    }
+
+    Ok(SurvDiffResult {
+        observed: obs[..ngroup].to_vec(),
+        expected: exp[..ngroup].to_vec(),
+        variance: variance_matrix,
+        chi_squared: chi_sq,
+        degrees_of_freedom: df,
+    })
+}
+
 #[allow(dead_code)]
 pub(crate) struct SurvDiffInput<'a> {
     pub time: &'a [f64],
@@ -25,7 +136,11 @@ pub(crate) struct SurvDiffParams {
 }
 
 #[allow(dead_code)]
-pub(crate) fn survdiff2(params: SurvDiffParams, input: SurvDiffInput, output: SurvDiffOutput) {
+pub(crate) fn survdiff2_internal(
+    params: SurvDiffParams,
+    input: SurvDiffInput,
+    output: &mut SurvDiffOutput,
+) {
     let ntotal = params.nn as usize;
     let ngroup = params.nngroup as usize;
     let mut istart = 0;
@@ -133,4 +248,12 @@ pub(crate) fn survdiff2(params: SurvDiffParams, input: SurvDiffInput, output: Su
         istart = n;
         koff += ngroup;
     }
+}
+
+#[pymodule]
+#[pyo3(name = "survdiff2")]
+fn survdiff2_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(survdiff2, &m)?)?;
+    m.add_class::<SurvDiffResult>()?;
+    Ok(())
 }
