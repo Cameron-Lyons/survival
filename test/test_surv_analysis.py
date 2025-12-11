@@ -57,6 +57,49 @@ try:
     assert isinstance(result, list), "Should return a list"
     assert len(result) == n, "Should return same length as n"
 
+    print("\n=== Testing survfitkm ===")
+    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+    
+    result = survival.survfitkm(
+        time=time,
+        status=status,
+        weights=None,
+        entry_times=None,
+        position=None,
+        reverse=False,
+        computation_type=0
+    )
+    print(" survfitkm executed successfully")
+    assert hasattr(result, 'time'), "Should have time attribute"
+    assert hasattr(result, 'estimate'), "Should have estimate attribute"
+    assert hasattr(result, 'std_err'), "Should have std_err attribute"
+    assert len(result.time) > 0, "Should have time points"
+    assert len(result.estimate) == len(result.time), "Estimate should match time length"
+    print(f"   Time points: {len(result.time)}")
+    print(f"   First estimate: {result.estimate[0]:.4f}")
+
+    print("\n=== Testing survdiff2 ===")
+    time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
+    status = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
+    group = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
+    
+    result = survival.survdiff2(
+        time=time,
+        status=status,
+        group=group,
+        strata=None,
+        rho=0.0
+    )
+    print(" survdiff2 executed successfully")
+    assert hasattr(result, 'observed'), "Should have observed attribute"
+    assert hasattr(result, 'expected'), "Should have expected attribute"
+    assert hasattr(result, 'chi_squared'), "Should have chi_squared attribute"
+    assert len(result.observed) > 0, "Should have observed values"
+    print(f"   Observed: {result.observed}")
+    print(f"   Expected: {result.expected}")
+    print(f"   Chi-squared: {result.chi_squared:.4f}")
+
     print("\n All survival analysis tests passed!")
 
 except ImportError as e:

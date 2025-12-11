@@ -47,6 +47,31 @@ try:
     assert isinstance(result, list), "Should return a list"
     assert len(result) == len(time1), "Should return same length as input"
 
+    print("\n=== Testing finegray ===")
+    tstart = [0.0, 0.0, 0.0, 0.0]
+    tstop = [1.0, 2.0, 3.0, 4.0]
+    ctime = [0.5, 1.5, 2.5, 3.5]
+    cprob = [0.1, 0.2, 0.3, 0.4]
+    extend = [True, True, False, False]
+    keep = [True, True, True, True]
+    
+    result = survival.finegray(
+        tstart=tstart,
+        tstop=tstop,
+        ctime=ctime,
+        cprob=cprob,
+        extend=extend,
+        keep=keep
+    )
+    print(" finegray executed successfully")
+    assert hasattr(result, 'row'), "Should have row attribute"
+    assert hasattr(result, 'start'), "Should have start attribute"
+    assert hasattr(result, 'end'), "Should have end attribute"
+    assert hasattr(result, 'wt'), "Should have wt attribute"
+    assert len(result.row) > 0, "Should have rows"
+    print(f"   Number of rows: {len(result.row)}")
+    print(f"   First row: {result.row[0]}")
+
     print("\n All specialized tests passed!")
 
 except ImportError as e:

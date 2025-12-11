@@ -5,12 +5,13 @@ This directory contains tests for the Python bindings of the survival-rust libra
 ## Test Files
 
 - `test_core.py` - Tests for core functions (coxcount1, coxcount2)
-- `test_specialized.py` - Tests for specialized functions (cipoisson, norisk)
+- `test_specialized.py` - Tests for specialized functions (cipoisson, norisk, finegray)
 - `test_utilities.py` - Tests for utility functions (collapse)
 - `test_classes.py` - Tests for Python classes (LinkFunctionParams, PSpline)
-- `test_surv_analysis.py` - Tests for survival analysis functions (agsurv4, agsurv5, agmart)
+- `test_surv_analysis.py` - Tests for survival analysis functions (agsurv4, agsurv5, agmart, survfitkm, survdiff2)
 - `test_concordance1.py` - Tests for concordance1 calculation
 - `test_concordance_additional.py` - Additional concordance tests
+- `test_regression.py` - Tests for regression models (survreg, coxmart, CoxPHModel, Subject)
 - `test_all.py` - Runner script to execute all tests
 
 ## Running Tests
