@@ -1,12 +1,12 @@
 #[allow(dead_code)]
-pub(crate) struct SurvivalData<'a> {
+pub struct SurvivalData<'a> {
     pub time: &'a [f64],
     pub status: &'a [i32],
     pub strata: &'a mut [i32],
 }
 
 #[allow(dead_code)]
-pub(crate) struct Weights<'a> {
+pub struct Weights<'a> {
     pub score: &'a [f64],
     pub wt: &'a [f64],
 }
@@ -70,7 +70,7 @@ pub fn coxmart(
 }
 
 #[allow(dead_code)]
-pub(crate) fn coxmart_internal(
+pub fn coxmart_internal(
     n: usize,
     method: i32,
     surv_data: SurvivalData,

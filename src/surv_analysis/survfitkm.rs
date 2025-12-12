@@ -44,7 +44,7 @@ pub fn survfitkm(
     )
 }
 
-pub(crate) fn survfitkm_internal(
+pub fn survfitkm_internal(
     time: &[f64],
     status: &[f64],
     weights: &[f64],

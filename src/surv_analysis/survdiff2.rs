@@ -107,7 +107,7 @@ pub fn survdiff2(
 }
 
 #[allow(dead_code)]
-pub(crate) struct SurvDiffInput<'a> {
+pub struct SurvDiffInput<'a> {
     pub time: &'a [f64],
     pub status: &'a [i32],
     pub group: &'a [i32],
@@ -115,7 +115,7 @@ pub(crate) struct SurvDiffInput<'a> {
 }
 
 #[allow(dead_code)]
-pub(crate) struct SurvDiffOutput<'a> {
+pub struct SurvDiffOutput<'a> {
     pub obs: &'a mut [f64],
     pub exp: &'a mut [f64],
     pub var: &'a mut [f64],
@@ -124,7 +124,7 @@ pub(crate) struct SurvDiffOutput<'a> {
 }
 
 #[allow(dead_code)]
-pub(crate) struct SurvDiffParams {
+pub struct SurvDiffParams {
     pub nn: i32,
     pub nngroup: i32,
     pub _nstrat: i32,
@@ -132,7 +132,7 @@ pub(crate) struct SurvDiffParams {
 }
 
 #[allow(dead_code)]
-pub(crate) fn survdiff2_internal(
+pub fn survdiff2_internal(
     params: SurvDiffParams,
     input: SurvDiffInput,
     output: &mut SurvDiffOutput,
