@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -10,11 +11,11 @@ try:
     print(" Successfully imported survival module")
 
     print("\n=== Testing agsurv4 ===")
-    ndeath = [1, 1, 0, 1, 0]
-    risk = [1.0, 1.0, 1.0, 1.0, 1.0]
-    wt = [1.0, 1.0, 1.0, 1.0]
-    sn = 5
-    denom = [5.0, 4.0, 3.0, 2.0, 1.0]
+    ndeath: list[int] = [1, 1, 0, 1, 0]
+    risk: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+    wt: list[float] = [1.0, 1.0, 1.0, 1.0]
+    sn: int = 5
+    denom: list[float] = [5.0, 4.0, 3.0, 2.0, 1.0]
 
     result = survival.agsurv4(ndeath, risk, wt, sn, denom)
     print(" agsurv4 executed successfully")
@@ -23,13 +24,13 @@ try:
     assert len(result) == sn, "Should return same length as sn"
 
     print("\n=== Testing agsurv5 ===")
-    n = 5
-    nvar = 2
-    dd = [1, 1, 2, 1, 1]
-    x1 = [10.0, 9.0, 8.0, 7.0, 6.0]
-    x2 = [5.0, 4.0, 3.0, 2.0, 1.0]
-    xsum = [10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
-    xsum2 = [5.0, 4.0, 3.0, 2.0, 1.0, 2.5, 2.0, 1.5, 1.0, 0.5]
+    n: int = 5
+    nvar: int = 2
+    dd: list[int] = [1, 1, 2, 1, 1]
+    x1: list[float] = [10.0, 9.0, 8.0, 7.0, 6.0]
+    x2: list[float] = [5.0, 4.0, 3.0, 2.0, 1.0]
+    xsum: list[float] = [10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+    xsum2: list[float] = [5.0, 4.0, 3.0, 2.0, 1.0, 2.5, 2.0, 1.5, 1.0, 0.5]
 
     result = survival.agsurv5(n, nvar, dd, x1, x2, xsum, xsum2)
     print(" agsurv5 executed successfully")
@@ -42,14 +43,14 @@ try:
     print(f"   sum2: {result['sum2']}")
 
     print("\n=== Testing agmart ===")
-    n = 5
-    method = 0
-    start = [0.0, 0.0, 1.0, 1.0, 2.0]
-    stop = [1.0, 2.0, 2.0, 3.0, 3.0]
-    event = [1, 0, 1, 0, 1]
-    score = [1.0, 1.0, 1.0, 1.0, 1.0]
-    wt = [1.0, 1.0, 1.0, 1.0, 1.0]
-    strata = [1, 0, 0, 0, 0]
+    n: int = 5
+    method: int = 0
+    start: list[float] = [0.0, 0.0, 1.0, 1.0, 2.0]
+    stop: list[float] = [1.0, 2.0, 2.0, 3.0, 3.0]
+    event: list[int] = [1, 0, 1, 0, 1]
+    score: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+    wt: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+    strata: list[int] = [1, 0, 0, 0, 0]
 
     result = survival.agmart(n, method, start, stop, event, score, wt, strata)
     print(" agmart executed successfully")
@@ -58,8 +59,8 @@ try:
     assert len(result) == n, "Should return same length as n"
 
     print("\n=== Testing survfitkm ===")
-    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-    status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+    time: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    status: list[float] = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
     
     result = survival.survfitkm(
         time=time,
@@ -80,9 +81,9 @@ try:
     print(f"   First estimate: {result.estimate[0]:.4f}")
 
     print("\n=== Testing survdiff2 ===")
-    time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
-    status = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
-    group = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
+    time: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
+    status: list[int] = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
+    group: list[int] = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
     
     result = survival.survdiff2(
         time=time,

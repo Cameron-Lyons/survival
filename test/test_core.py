@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -10,9 +11,9 @@ try:
     print(" Successfully imported survival module")
 
     print("\n=== Testing coxcount1 ===")
-    time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5]
-    status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
-    strata = [1, 0, 0, 0, 0, 0, 0, 0]
+    time: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5]
+    status: list[float] = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+    strata: list[int] = [1, 0, 0, 0, 0, 0, 0, 0]
 
     result = survival.coxcount1(time, status, strata)
     print(" coxcount1 executed successfully")
@@ -26,12 +27,12 @@ try:
     assert hasattr(result, "status"), "Missing 'status' attribute"
 
     print("\n=== Testing coxcount2 ===")
-    time1 = [0.0, 0.0, 1.0, 1.0, 2.0, 2.0]
-    time2 = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0]
-    status = [1.0, 0.0, 1.0, 0.0, 1.0, 0.0]
-    sort1 = [0, 2, 4, 1, 3, 5]
-    sort2 = [0, 2, 4, 1, 3, 5]
-    strata2 = [1, 0, 0, 0, 0, 0]
+    time1: list[float] = [0.0, 0.0, 1.0, 1.0, 2.0, 2.0]
+    time2: list[float] = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0]
+    status: list[float] = [1.0, 0.0, 1.0, 0.0, 1.0, 0.0]
+    sort1: list[int] = [0, 2, 4, 1, 3, 5]
+    sort2: list[int] = [0, 2, 4, 1, 3, 5]
+    strata2: list[int] = [1, 0, 0, 0, 0, 0]
 
     result2 = survival.coxcount2(time1, time2, status, sort1, sort2, strata2)
     print(" coxcount2 executed successfully")

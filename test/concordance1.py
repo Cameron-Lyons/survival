@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any, Dict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "target", "wheels"))
 
@@ -8,10 +9,10 @@ try:
 
     print(" Successfully imported survival module")
 
-    time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-    weights = [1.0, 1.0, 1.0, 1.0, 1.0]
-    indices = [0, 1, 2, 3, 4]
-    ntree = 5
+    time_data: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    weights: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+    indices: list[int] = [0, 1, 2, 3, 4]
+    ntree: int = 5
 
     print(f"Testing concordance1 with {len(weights)} observations...")
 
@@ -20,7 +21,7 @@ try:
     print(" concordance1 function executed successfully")
     print(f"Results: {result}")
 
-    expected_keys = [
+    expected_keys: list[str] = [
         "concordant",
         "discordant",
         "tied_x",

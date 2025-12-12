@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -13,7 +14,7 @@ try:
     link_func = survival.LinkFunctionParams(edge=0.001)
     print(" LinkFunctionParams created successfully")
 
-    test_values = [0.1, 0.5, 0.9]
+    test_values: list[float] = [0.1, 0.5, 0.9]
     for val in test_values:
         blogit_result = link_func.blogit(val)
         bprobit_result = link_func.bprobit(val)
@@ -30,7 +31,7 @@ try:
         assert isinstance(blog_result, float), "blog should return float"
 
     print("\n=== Testing PSpline ===")
-    x = [float(i) for i in range(1, 21)]
+    x: list[float] = [float(i) for i in range(1, 21)]
     pspline = survival.PSpline(
         x=x,
         df=5,

@@ -4,17 +4,18 @@ import glob
 import os
 import subprocess
 import sys
+from typing import List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "target", "wheels"))
 
 
-def run_test_file(test_file):
+def run_test_file(test_file: str) -> bool:
     print(f"\n{'=' * 60}")
     print(f"Running {test_file}")
     print(f"{'=' * 60}")
 
     try:
-        result = subprocess.run(
+        result: subprocess.CompletedProcess[str] = subprocess.run(
             [sys.executable, test_file], capture_output=True, text=True, timeout=60
         )
         print(result.stdout)
@@ -29,12 +30,12 @@ def run_test_file(test_file):
         return False
 
 
-def main():
-    test_dir = os.path.dirname(__file__)
-    this_file = os.path.abspath(__file__)
-    all_test_files = sorted(glob.glob(os.path.join(test_dir, "test_*.py")))
+def main() -> int:
+    test_dir: str = os.path.dirname(__file__)
+    this_file: str = os.path.abspath(__file__)
+    all_test_files: List[str] = sorted(glob.glob(os.path.join(test_dir, "test_*.py")))
 
-    test_files = [f for f in all_test_files if os.path.abspath(f) != this_file]
+    test_files: List[str] = [f for f in all_test_files if os.path.abspath(f) != this_file]
 
     if not test_files:
         print("No test files found!")
@@ -42,8 +43,8 @@ def main():
 
     print(f"Found {len(test_files)} test file(s)")
 
-    passed = 0
-    failed = 0
+    passed: int = 0
+    failed: int = 0
 
     for test_file in test_files:
         if run_test_file(test_file):

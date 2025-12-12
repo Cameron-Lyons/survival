@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any, Tuple
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -34,12 +35,12 @@ try:
     assert isinstance(result_anscombe, tuple), "Should return a tuple"
 
     print("\n=== Testing norisk ===")
-    time1 = [0.0, 1.0, 2.0, 3.0, 4.0]
-    time2 = [1.0, 2.0, 3.0, 4.0, 5.0]
-    status = [1, 0, 1, 0, 1]
-    sort1 = [0, 1, 2, 3, 4]
-    sort2 = [0, 1, 2, 3, 4]
-    strata = [1, 0, 0, 0, 0]
+    time1: list[float] = [0.0, 1.0, 2.0, 3.0, 4.0]
+    time2: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0]
+    status: list[int] = [1, 0, 1, 0, 1]
+    sort1: list[int] = [0, 1, 2, 3, 4]
+    sort2: list[int] = [0, 1, 2, 3, 4]
+    strata: list[int] = [1, 0, 0, 0, 0]
 
     result = survival.norisk(time1, time2, status, sort1, sort2, strata)
     print(" norisk executed successfully")
@@ -48,12 +49,12 @@ try:
     assert len(result) == len(time1), "Should return same length as input"
 
     print("\n=== Testing finegray ===")
-    tstart = [0.0, 0.0, 0.0, 0.0]
-    tstop = [1.0, 2.0, 3.0, 4.0]
-    ctime = [0.5, 1.5, 2.5, 3.5]
-    cprob = [0.1, 0.2, 0.3, 0.4]
-    extend = [True, True, False, False]
-    keep = [True, True, True, True]
+    tstart: list[float] = [0.0, 0.0, 0.0, 0.0]
+    tstop: list[float] = [1.0, 2.0, 3.0, 4.0]
+    ctime: list[float] = [0.5, 1.5, 2.5, 3.5]
+    cprob: list[float] = [0.1, 0.2, 0.3, 0.4]
+    extend: list[bool] = [True, True, False, False]
+    keep: list[bool] = [True, True, True, True]
     
     result = survival.finegray(
         tstart=tstart,

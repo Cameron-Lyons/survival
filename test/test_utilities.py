@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -10,12 +11,12 @@ try:
     print(" Successfully imported survival module")
 
     print("\n=== Testing collapse ===")
-    y = [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0]
-    x = [1, 1, 1, 1]
-    istate = [0, 0, 0, 0]
-    id = [1, 1, 2, 2]
-    wt = [1.0, 1.0, 1.0, 1.0]
-    order = [0, 1, 2, 3]
+    y: list[float] = [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0]
+    x: list[int] = [1, 1, 1, 1]
+    istate: list[int] = [0, 0, 0, 0]
+    id: list[int] = [1, 1, 2, 2]
+    wt: list[float] = [1.0, 1.0, 1.0, 1.0]
+    order: list[int] = [0, 1, 2, 3]
 
     result = survival.collapse(y, x, istate, id, wt, order)
     print(" collapse executed successfully")

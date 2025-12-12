@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -10,9 +11,9 @@ try:
     print(" Successfully imported survival module")
 
     print("\n=== Testing survreg (Parametric Survival Regression) ===")
-    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-    status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
-    covariates = [
+    time: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    status: list[float] = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+    covariates: list[list[float]] = [
         [1.0, 2.0],
         [1.5, 2.5],
         [2.0, 3.0],
@@ -46,9 +47,9 @@ try:
     print(f"   Iterations: {result.iterations}")
 
     print("\n=== Testing coxmart (Cox Martingale Residuals) ===")
-    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-    status = [1, 1, 0, 1, 0, 1, 1, 0]
-    score = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
+    time: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    status: list[int] = [1, 1, 0, 1, 0, 1, 1, 0]
+    score: list[float] = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
 
     result = survival.coxmart(
         time=time,
@@ -67,9 +68,9 @@ try:
     model = survival.CoxPHModel()
     print(" CoxPHModel created successfully")
 
-    covariates = [[1.0, 2.0], [2.0, 3.0], [1.5, 2.5]]
-    event_times = [1.0, 2.0, 3.0]
-    censoring = [1, 1, 0]
+    covariates: list[list[float]] = [[1.0, 2.0], [2.0, 3.0], [1.5, 2.5]]
+    event_times: list[float] = [1.0, 2.0, 3.0]
+    censoring: list[int] = [1, 1, 0]
 
     model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
     print(" CoxPHModel.new_with_data executed successfully")
@@ -85,7 +86,7 @@ try:
     coefficients = model.get_coefficients()
     print(f"   Coefficients: {coefficients}")
 
-    new_covariates = [[1.0, 2.0], [2.0, 3.0]]
+    new_covariates: list[list[float]] = [[1.0, 2.0], [2.0, 3.0]]
     predictions = model.predict(new_covariates)
     print(f"   Predictions: {predictions}")
     assert isinstance(predictions, list), "Predictions should be a list"

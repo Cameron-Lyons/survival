@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any, Optional
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -10,12 +11,12 @@ try:
     print(" Successfully imported survival module")
 
     print("\n=== Testing concordance (concordance function) ===")
-    y = [1.0, 2.0, 3.0, 4.0, 5.0]
-    x = [1, 2, 1, 2, 1]
-    wt = [1.0, 1.0, 1.0, 1.0, 1.0]
-    timewt = [1.0, 1.0, 1.0, 1.0, 1.0]
-    sortstart = None
-    sortstop = [0, 1, 2, 3, 4]
+    y: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0]
+    x: list[int] = [1, 2, 1, 2, 1]
+    wt: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+    timewt: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+    sortstart: Optional[list[int]] = None
+    sortstop: list[int] = [0, 1, 2, 3, 4]
 
     result = survival.concordance(y, x, wt, timewt, sortstart, sortstop)
     print(" concordance executed successfully")
@@ -26,9 +27,9 @@ try:
 
     print("\n=== Testing perform_concordance3_calculation ===")
     try:
-        time_data = [1.0, 2.0, 3.0, 4.0, 5.0]
-        weights = [1.0, 1.0, 1.0, 1.0, 1.0]
-        indices = [0, 1, 2, 3, 4]
+        time_data: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0]
+        weights: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+        indices: list[int] = [0, 1, 2, 3, 4]
         result = survival.perform_concordance3_calculation(time_data, weights, indices)
         print(" perform_concordance3_calculation executed successfully")
         print(f"   Result: {result}")
