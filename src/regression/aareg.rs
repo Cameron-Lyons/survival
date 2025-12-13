@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use ndarray::{Array1, Array2, Axis};
 use ndarray_linalg::Solve;
 use pyo3::exceptions::PyRuntimeError;
@@ -371,12 +370,11 @@ fn perform_aalen_regression(
 
     let mut sorted_design = Array2::zeros((n, p + 1));
     for (new_idx, &old_idx) in indices.iter().enumerate() {
-        for j in 0..(p + 1) {
-            sorted_design[[new_idx, j]] = design_matrix[[old_idx, j]];
+        for (j, col) in sorted_design.row_mut(new_idx).iter_mut().enumerate() {
+            *col = design_matrix[[old_idx, j]];
         }
     }
 
-    let mut coefficients = vec![0.0; p + 1];
     let mut cumulative_coefficients = vec![0.0; p + 1];
     let mut standard_errors = vec![0.0; p + 1];
     let mut p_values = vec![1.0; p + 1];
@@ -429,16 +427,19 @@ fn perform_aalen_regression(
             AaregError::CalculationError("Failed to solve linear system".to_string())
         })?;
 
-        for i in 0..coefficients.len() {
-            cumulative_coefficients[i] += beta_increment[i];
+        for (cum_coef, &inc) in cumulative_coefficients
+            .iter_mut()
+            .zip(beta_increment.iter())
+        {
+            *cum_coef += inc;
         }
 
         let residuals = at_risk_design.dot(&beta_increment) - &Array1::from_vec(d_n);
         let residual_variance = residuals.dot(&residuals) / (at_risk.len() as f64 - p as f64 - 1.0);
 
-        for i in 0..standard_errors.len() {
-            let se: f64 = standard_errors[i];
-            standard_errors[i] = (se.powi(2) + residual_variance).sqrt();
+        for se in standard_errors.iter_mut() {
+            let se_val: f64 = *se;
+            *se = (se_val.powi(2) + residual_variance).sqrt();
         }
 
         iterations += 1;
@@ -449,12 +450,16 @@ fn perform_aalen_regression(
         }
     }
 
-    coefficients = cumulative_coefficients.clone();
+    let coefficients = cumulative_coefficients.clone();
 
-    for i in 0..p_values.len() {
-        if standard_errors[i] > 0.0 {
-            let z_stat: f64 = coefficients[i] / standard_errors[i];
-            p_values[i] = 2.0 * (1.0 - normal_cdf(z_stat.abs()));
+    for ((p_val, &coef), &se) in p_values
+        .iter_mut()
+        .zip(coefficients.iter())
+        .zip(standard_errors.iter())
+    {
+        if se > 0.0 {
+            let z_stat = coef / se;
+            *p_val = 2.0 * (1.0 - normal_cdf(z_stat.abs()));
         }
     }
 

@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 #![allow(clippy::explicit_counter_loop)]
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -140,6 +139,7 @@ pub fn concordance3(
                 j += 1;
             }
 
+            #[allow(clippy::needless_range_loop)]
             for j in i..(i + ndeath) {
                 let jj = sortstop[j] as usize;
                 let wsum_death = walkup(dnwt, dtwt, x[jj] as usize, ntree);
@@ -155,6 +155,7 @@ pub fn concordance3(
 
             if doresid {
                 let mut event_idx = 0;
+                #[allow(clippy::needless_range_loop)]
                 for j in i..(i + ndeath) {
                     let jj = sortstop[j] as usize;
                     let wsum = walkup(nwt_main, twt, x[jj] as usize, ntree);

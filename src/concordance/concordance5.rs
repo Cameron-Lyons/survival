@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -106,6 +105,7 @@ pub fn concordance5(
                 ndeath += 1;
             }
 
+            #[allow(clippy::needless_range_loop)]
             for j in i..(i + ndeath) {
                 let jj = sortstop[j];
                 if y[n + jj] == 1.0 {
@@ -125,6 +125,7 @@ pub fn concordance5(
 
             count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
 
+            #[allow(clippy::needless_range_loop)]
             for j in i..(i + ndeath) {
                 let jj = sortstop[j];
                 addin(&mut nwt, &mut fenwick, x[jj] as usize, wt[jj]);

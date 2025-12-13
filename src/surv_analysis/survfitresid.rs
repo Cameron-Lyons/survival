@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 #[allow(dead_code)]
 pub(crate) struct SurvivalResult {
     pub influence_pstate: Vec<Vec<f64>>,

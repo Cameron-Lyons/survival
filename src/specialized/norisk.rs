@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use pyo3::prelude::*;
 
 #[pyfunction]
@@ -28,6 +27,7 @@ pub fn norisk(
     let mut istrat = 0;
     let mut j = 0;
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         let p2 = sort2_slice[i] as usize;
         let dtime = time2_slice[p2];

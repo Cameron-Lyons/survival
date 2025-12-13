@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -81,10 +80,10 @@ pub fn survdiff2(
 
     let mut chi_sq = 0.0;
     let mut df = 0;
-    for i in 0..ngroup {
-        let diff = obs[i] - exp[i];
-        if exp[i] > 0.0 {
-            chi_sq += diff * diff / exp[i];
+    for (obs_val, exp_val) in obs.iter().zip(exp.iter()).take(ngroup) {
+        let diff = obs_val - exp_val;
+        if *exp_val > 0.0 {
+            chi_sq += diff * diff / exp_val;
             df += 1;
         }
     }
@@ -207,9 +206,9 @@ pub fn survdiff2_internal(
 
             let nrisk = (n - j) as f64;
             if deaths > 0 {
-                for k in 0..ngroup {
+                for (k, risk_val) in output.risk.iter().take(ngroup).enumerate() {
                     let exp_index = koff + k;
-                    output.exp[exp_index] += wt * (deaths as f64) * output.risk[k] / nrisk;
+                    output.exp[exp_index] += wt * (deaths as f64) * risk_val / nrisk;
 
                     let obs_index = koff + k;
                     output.obs[obs_index] += (input.status[i] as f64) * wt;
@@ -220,13 +219,11 @@ pub fn survdiff2_internal(
                     let factor =
                         wt_sq * (deaths as f64) * (nrisk - deaths as f64) / (nrisk * (nrisk - 1.0));
 
-                    for j_group in 0..ngroup {
-                        let rj = output.risk[j_group];
+                    for (j_group, &rj) in output.risk.iter().take(ngroup).enumerate() {
                         let var_start = j_group * ngroup;
                         let tmp = factor * rj;
 
-                        for k_group in 0..ngroup {
-                            let rk = output.risk[k_group];
+                        for (k_group, &rk) in output.risk.iter().take(ngroup).enumerate() {
                             output.var[var_start + k_group] += tmp
                                 * (if j_group == k_group {
                                     rj - rk / nrisk

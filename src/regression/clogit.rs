@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![allow(clippy::needless_range_loop)]
+
 use pyo3::prelude::*;
 
 #[pyclass]

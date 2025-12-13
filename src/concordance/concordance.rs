@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 #![allow(clippy::explicit_counter_loop)]
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -55,6 +54,7 @@ pub fn concordance(
                 if x[jj] == xsave {
                     count[2] += 1.0;
                 } else {
+                    #[allow(clippy::needless_range_loop)]
                     for k in 0..i {
                         let kk = sortstop[k];
                         if x[kk] != x[jj] {
@@ -75,6 +75,7 @@ pub fn concordance(
 
             count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
 
+            #[allow(clippy::needless_range_loop)]
             for j in i..(i + ndeath) {
                 let jj = sortstop[j];
                 addin(&mut nwt, &mut twt, x[jj] as usize, wt[jj]);

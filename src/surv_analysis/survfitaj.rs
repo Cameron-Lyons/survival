@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use ndarray::{Array1, Array2, s};
 use std::error::Error;
 

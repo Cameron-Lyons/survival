@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use ndarray::{Array2, ArrayView2};
 
 #[allow(dead_code)]

@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use ndarray::{Array1, Array2};
 use ndarray_linalg::Solve;
 use pyo3::prelude::*;
@@ -57,9 +56,9 @@ impl PSpline {
     fn create_basis(&self) -> Vec<Vec<f64>> {
         let n = self.x.len();
         let mut basis = vec![vec![0.0; self.nterm as usize]; n];
-        for i in 0..n {
+        for (i, x_val) in self.x.iter().enumerate() {
             for j in 0..self.nterm {
-                basis[i][j as usize] = self.basis_function(self.x[i], j);
+                basis[i][j as usize] = self.basis_function(*x_val, j);
             }
         }
         basis

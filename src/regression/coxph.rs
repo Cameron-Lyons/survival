@@ -1,5 +1,3 @@
-#![allow(clippy::new_without_default)]
-#![allow(clippy::unused_enumerate_index)]
 use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
@@ -53,6 +51,12 @@ pub struct CoxPHModel {
     covariates: Array2<f64>,
 }
 
+impl Default for CoxPHModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[pymethods]
 impl CoxPHModel {
     #[new]
@@ -101,13 +105,13 @@ impl CoxPHModel {
         }
 
         let mut new_covariates = Array2::<f64>::zeros((n + 1, ncols));
-        for i in 0..n {
-            for j in 0..ncols {
-                new_covariates[[i, j]] = self.covariates[[i, j]];
+        for row_idx in 0..n {
+            for col_idx in 0..ncols {
+                new_covariates[[row_idx, col_idx]] = self.covariates[[row_idx, col_idx]];
             }
         }
-        for j in 0..ncols {
-            new_covariates[[n, j]] = subject.covariates[j];
+        for col_idx in 0..ncols {
+            new_covariates[[n, col_idx]] = subject.covariates[col_idx];
         }
 
         self.covariates = new_covariates;
@@ -167,8 +171,8 @@ impl CoxPHModel {
         let (beta, _means, _u, _imat, _loglik, _sctest, _flag, _iter) = cox_fit.results();
 
         let mut coefficients_array = Array2::<f64>::zeros((nvar, 1));
-        for i in 0..nvar {
-            coefficients_array[[i, 0]] = beta[i];
+        for (idx, &beta_val) in beta.iter().enumerate() {
+            coefficients_array[[idx, 0]] = beta_val;
         }
         self.coefficients = coefficients_array;
 
@@ -260,13 +264,13 @@ impl CoxPHModel {
         let nrows = covariates.len();
         let ncols = if nrows > 0 { covariates[0].len() } else { 0 };
         let mut cov_array = Array2::<f64>::zeros((nrows, ncols));
-        for (i, row) in covariates.iter().enumerate() {
-            for (j, &val) in row.iter().enumerate() {
-                cov_array[[i, j]] = val;
+        for (row_idx, row) in covariates.iter().enumerate() {
+            for (col_idx, &val) in row.iter().enumerate() {
+                cov_array[[row_idx, col_idx]] = val;
             }
         }
         let mut risk_scores = Vec::new();
-        for (_i, row) in cov_array.outer_iter().enumerate() {
+        for row in cov_array.outer_iter() {
             let risk_score = self.coefficients.column(0).dot(&row);
             risk_scores.push(risk_score);
         }
@@ -285,11 +289,9 @@ impl CoxPHModel {
     pub fn brier_score(&self) -> f64 {
         let mut score = 0.0;
         let mut count = 0.0;
-        for i in 0..self.event_times.len() {
-            let time = self.event_times[i];
-            let status = self.censoring[i] as f64;
-            let pred = self.predict_survival(time);
-            score += (pred - status).powi(2);
+        for (time, &status) in self.event_times.iter().zip(self.censoring.iter()) {
+            let pred = self.predict_survival(*time);
+            score += (pred - status as f64).powi(2);
             count += 1.0;
         }
         if count > 0.0 { score / count } else { 0.0 }
@@ -306,7 +308,7 @@ impl CoxPHModel {
             .zip(&self.event_times)
             .filter(|&(_, &et)| et <= time)
             .map(|(h, _)| *h)
-            .last()
+            .next_back()
             .unwrap_or(0.0);
 
         let avg_risk = if !self.risk_scores.is_empty() {
@@ -326,9 +328,9 @@ impl CoxPHModel {
         let nrows = covariates.len();
         let ncols = if nrows > 0 { covariates[0].len() } else { 0 };
         let mut cov_array = Array2::<f64>::zeros((nrows, ncols));
-        for (i, row) in covariates.iter().enumerate() {
-            for (j, &val) in row.iter().enumerate() {
-                cov_array[[i, j]] = val;
+        for (row_idx, row) in covariates.iter().enumerate() {
+            for (col_idx, &val) in row.iter().enumerate() {
+                cov_array[[row_idx, col_idx]] = val;
             }
         }
 

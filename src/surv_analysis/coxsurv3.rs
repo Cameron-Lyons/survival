@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 #[allow(dead_code)]
 pub(crate) struct CoxSurvResult {
     pub time: Vec<f64>,

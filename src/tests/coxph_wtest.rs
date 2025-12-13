@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![allow(clippy::needless_range_loop)]
+
 pub fn coxph_wtest(
     nvar2: &mut i32,
     ntest: &i32,

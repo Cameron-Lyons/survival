@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 #[allow(dead_code)]
 pub(crate) struct DoloopState {
     minval: i32,
@@ -23,8 +22,8 @@ impl DoloopState {
         let nloops = indices.len();
 
         if self.firsttime {
-            for i in 0..nloops {
-                indices[i] = self.minval + i as i32;
+            for (i, idx) in indices.iter_mut().enumerate() {
+                *idx = self.minval + i as i32;
             }
             self.firsttime = false;
 

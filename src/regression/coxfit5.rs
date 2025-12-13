@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 #![allow(clippy::manual_memcpy)]
 use crate::core::coxsafe::coxsafe;
 

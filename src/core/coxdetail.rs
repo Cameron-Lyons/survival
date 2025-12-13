@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 #[allow(dead_code)]
 pub(crate) struct CoxDetailInput<'a> {
     pub center: &'a [f64],
@@ -45,7 +44,9 @@ pub(crate) fn coxdetail(
     let (a_work, rest) = rest.split_at_mut(params.nvar);
     let (a2_work, _) = rest.split_at_mut(params.nvar);
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..params.nvar {
+        #[allow(clippy::needless_range_loop)]
         for person in 0..params.nused {
             let idx = i * params.nused + person;
             input.covar2[idx] -= input.center[i];
@@ -95,6 +96,7 @@ pub(crate) fn coxdetail(
                     let risk = input.score[k] * input.weights[k];
                     denom += risk;
 
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..params.nvar {
                         let covar_ik = input.covar2[i * params.nused + k];
                         a_work[i] += risk * covar_ik;
@@ -112,6 +114,7 @@ pub(crate) fn coxdetail(
                         efron_wt += risk;
                         meanwt += input.weights[k];
 
+                        #[allow(clippy::needless_range_loop)]
                         for i in 0..params.nvar {
                             let covar_ik = input.covar2[i * params.nused + k];
                             a2_work[i] += risk * covar_ik;
@@ -146,6 +149,7 @@ pub(crate) fn coxdetail(
                     hazard += meanwt / d2;
                     varhaz += meanwt.powi(2) / d2.powi(2);
 
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..params.nvar {
                         let temp2 = (a_work[i] - temp * a2_work[i]) / d2;
                         let means_idx = i * *output.ndead + ideath;
@@ -155,6 +159,7 @@ pub(crate) fn coxdetail(
                         output.u2[u_idx] +=
                             input.weights[k] * input.covar2[i * params.nused + k] - meanwt * temp2;
 
+                        #[allow(clippy::needless_range_loop)]
                         for j in 0..params.nvar {
                             let cmat_idx = i * params.nvar + j;
                             let cmat_val = cmat_work[cmat_idx];

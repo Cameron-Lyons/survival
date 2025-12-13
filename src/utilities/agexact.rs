@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use itertools::Itertools;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -38,23 +37,29 @@ pub fn agexact(
     let _index = &mut work2[0..n];
     let atrisk = &mut work2[n..2 * n];
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..nvar_usize {
         if nocenter[i] == 0 {
             means[i] = 0.0;
         } else {
             let mut sum = 0.0;
+            #[allow(clippy::needless_range_loop)]
             for j in 0..n {
                 sum += covar[i * n + j];
             }
             means[i] = sum / n as f64;
+            let mean_val = means[i];
+            #[allow(clippy::needless_range_loop)]
             for j in 0..n {
-                covar[i * n + j] -= means[i];
+                covar[i * n + j] -= mean_val;
             }
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     for person in 0..n {
         let mut zbeta = 0.0;
+        #[allow(clippy::needless_range_loop)]
         for i in 0..nvar_usize {
             zbeta += beta[i] * covar[i * n + person];
         }
@@ -97,13 +102,16 @@ pub fn agexact(
             cmat.fill(0.0);
 
             if deaths == 1 {
+                #[allow(clippy::needless_range_loop)]
                 for l in 0..nrisk {
                     let k = atrisk[l] as usize;
                     let weight = score[k];
                     denom += weight;
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar_usize {
                         let covar_ik = covar[i * n + k];
                         a[i] += weight * covar_ik;
+                        #[allow(clippy::needless_range_loop)]
                         for j in 0..=i {
                             let covar_jk = covar[j * n + k];
                             cmat[i * p + j] += weight * covar_ik * covar_jk;
@@ -118,13 +126,16 @@ pub fn agexact(
                     for &idx in &indices {
                         let k = atrisk[idx] as usize;
                         weight *= score[k];
+                        #[allow(clippy::needless_range_loop)]
                         for i in 0..nvar_usize {
                             newvar[i] += covar[i * n + k];
                         }
                     }
                     denom += weight;
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar_usize {
                         a[i] += weight * newvar[i];
+                        #[allow(clippy::needless_range_loop)]
                         for j in 0..=i {
                             cmat[i * p + j] += weight * newvar[i] * newvar[j];
                         }
@@ -133,8 +144,10 @@ pub fn agexact(
             }
 
             loglik[1] -= denom.ln();
+            #[allow(clippy::needless_range_loop)]
             for i in 0..nvar_usize {
                 u[i] -= a[i] / denom;
+                #[allow(clippy::needless_range_loop)]
                 for j in 0..=i {
                     let cmat_ij = cmat[i * p + j];
                     let term = (cmat_ij - a[i] * a[j] / denom) / denom;
@@ -146,6 +159,7 @@ pub fn agexact(
             while k < n && stop[k] == time {
                 if event[k] == 1 {
                     loglik[1] += score[k].ln();
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar_usize {
                         u[i] += covar[i * n + k];
                     }
@@ -167,7 +181,9 @@ pub fn agexact(
 
     if maxiter == 0 {
         chinv2(&mut imat[..p * p], p);
+        #[allow(clippy::needless_range_loop)]
         for i in 0..p {
+            #[allow(clippy::needless_range_loop)]
             for j in 0..i {
                 imat[i * p + j] = imat[j * p + i];
             }
@@ -198,8 +214,10 @@ pub fn agexact(
             u.fill(0.0);
             imat.fill(0.0);
 
+            #[allow(clippy::needless_range_loop)]
             for person in 0..n {
                 let mut zbeta = 0.0;
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..nvar_usize {
                     zbeta += newbeta_vec[i] * covar[i * n + person];
                 }
@@ -235,13 +253,16 @@ pub fn agexact(
                     cmat.fill(0.0);
 
                     if deaths == 1 {
+                        #[allow(clippy::needless_range_loop)]
                         for l in 0..nrisk {
                             let k = atrisk[l] as usize;
                             let weight = score[k];
                             denom += weight;
+                            #[allow(clippy::needless_range_loop)]
                             for i in 0..nvar_usize {
                                 let covar_ik = covar[i * n + k];
                                 a[i] += weight * covar_ik;
+                                #[allow(clippy::needless_range_loop)]
                                 for j in 0..=i {
                                     cmat[i * p + j] += weight * covar_ik * covar[j * n + k];
                                 }
@@ -255,13 +276,16 @@ pub fn agexact(
                             for &idx in &indices {
                                 let k = atrisk[idx] as usize;
                                 weight *= score[k];
+                                #[allow(clippy::needless_range_loop)]
                                 for i in 0..nvar_usize {
                                     newvar[i] += covar[i * n + k];
                                 }
                             }
                             denom += weight;
+                            #[allow(clippy::needless_range_loop)]
                             for i in 0..nvar_usize {
                                 a[i] += weight * newvar[i];
+                                #[allow(clippy::needless_range_loop)]
                                 for j in 0..=i {
                                     cmat[i * p + j] += weight * newvar[i] * newvar[j];
                                 }
@@ -270,8 +294,10 @@ pub fn agexact(
                     }
 
                     newlk -= denom.ln();
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar_usize {
                         u[i] -= a[i] / denom;
+                        #[allow(clippy::needless_range_loop)]
                         for j in 0..=i {
                             let cmat_ij = cmat[i * p + j];
                             let term = (cmat_ij - a[i] * a[j] / denom) / denom;
@@ -283,6 +309,7 @@ pub fn agexact(
                     while k < n && stop[k] == time {
                         if event[k] == 1 {
                             newlk += score[k].ln();
+                            #[allow(clippy::needless_range_loop)]
                             for i in 0..nvar_usize {
                                 u[i] += covar[i * n + k];
                             }
@@ -299,7 +326,9 @@ pub fn agexact(
             if (1.0 - (loglik[1] / newlk)).abs() <= eps && !halving {
                 loglik[1] = newlk;
                 chinv2(&mut imat[..p * p], p);
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..p {
+                    #[allow(clippy::needless_range_loop)]
                     for j in 0..i {
                         imat[i * p + j] = imat[j * p + i];
                     }
@@ -326,6 +355,7 @@ pub fn agexact(
 
                 if newlk < loglik[1] {
                     halving = true;
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar_usize {
                         newbeta_vec[i] = (newbeta_vec[i] + beta[i]) / 2.0;
                     }
@@ -337,6 +367,7 @@ pub fn agexact(
                     chsolve2(&mut imat[..p * p], p, &mut u_copy);
 
                     beta[..nvar_usize].copy_from_slice(&newbeta_vec[..nvar_usize]);
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar_usize {
                         newbeta_vec[i] += u_copy[i];
                     }
@@ -346,7 +377,9 @@ pub fn agexact(
 
         loglik[1] = newlk;
         chinv2(&mut imat[..p * p], p);
+        #[allow(clippy::needless_range_loop)]
         for i in 0..p {
+            #[allow(clippy::needless_range_loop)]
             for j in 0..i {
                 imat[i * p + j] = imat[j * p + i];
             }
@@ -376,9 +409,11 @@ fn init_doloop(start: usize, end: usize, k: usize) -> Vec<Vec<usize>> {
 }
 
 fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         for j in i..n {
             let mut temp = matrix[i * n + j];
+            #[allow(clippy::needless_range_loop)]
             for k in 0..i {
                 temp -= matrix[i * n + k] * matrix[j * n + k];
             }
@@ -400,8 +435,10 @@ fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
 }
 
 fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         let mut sum = b[i];
+        #[allow(clippy::needless_range_loop)]
         for j in 0..i {
             sum -= chol[i * n + j] * b[j];
         }
@@ -418,6 +455,7 @@ fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
 }
 
 fn chinv2(chol: &mut [f64], n: usize) {
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         chol[i * n + i] = 1.0 / chol[i * n + i];
         for j in (i + 1)..n {
@@ -429,6 +467,7 @@ fn chinv2(chol: &mut [f64], n: usize) {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         for j in i..n {
             let mut sum = 0.0;

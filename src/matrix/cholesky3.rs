@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![allow(clippy::needless_range_loop)]
+
 fn cholesky3(matrix: &mut [&mut [f64]], n: usize, m: usize, diag: &[f64], toler: f64) -> i32 {
     let n2 = n - m;
     let mut nonneg = 1;

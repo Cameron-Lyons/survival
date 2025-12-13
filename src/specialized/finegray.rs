@@ -1,4 +1,3 @@
-#![allow(clippy::needless_range_loop)]
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -44,6 +43,7 @@ pub(crate) fn finegray_internal(
     assert_eq!(keep.len(), ncut);
 
     let mut extra = 0;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         if extend[i] && !tstart[i].is_nan() && !tstop[i].is_nan() {
             let j_initial = {
@@ -69,6 +69,7 @@ pub(crate) fn finegray_internal(
     let mut wt = Vec::with_capacity(total);
     let mut add = Vec::with_capacity(total);
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         let original_start = tstart[i];
         let original_end = tstop[i];
