@@ -1,6 +1,7 @@
 #![allow(clippy::new_without_default)]
 #![allow(clippy::unused_enumerate_index)]
-use ndarray::Array2;
+use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
+use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 
 #[derive(Clone)]
@@ -91,41 +92,168 @@ impl CoxPHModel {
         }
     }
 
-    pub fn add_subject(&mut self, _subject: &Subject) {}
+    pub fn add_subject(&mut self, subject: &Subject) {
+        let n = self.event_times.len();
+        let ncols = self.covariates.ncols();
 
-    #[pyo3(signature = (n_iters = 10))]
+        if ncols != subject.covariates.len() {
+            return;
+        }
+
+        let mut new_covariates = Array2::<f64>::zeros((n + 1, ncols));
+        for i in 0..n {
+            for j in 0..ncols {
+                new_covariates[[i, j]] = self.covariates[[i, j]];
+            }
+        }
+        for j in 0..ncols {
+            new_covariates[[n, j]] = subject.covariates[j];
+        }
+
+        self.covariates = new_covariates;
+        self.event_times.push(0.0);
+        self.censoring.push(if subject.is_case { 1 } else { 0 });
+    }
+
+    #[pyo3(signature = (n_iters = 20))]
     pub fn fit(&mut self, n_iters: u16) {
+        if self.event_times.is_empty() || self.covariates.nrows() == 0 {
+            return;
+        }
+
+        let n = self.event_times.len();
+        let nvar = self.covariates.ncols();
+
+        if nvar == 0 {
+            return;
+        }
+
+        let time_array = Array1::from_vec(self.event_times.clone());
+        let status_array: Array1<i32> =
+            Array1::from_vec(self.censoring.iter().map(|&x| x as i32).collect());
+        let strata = Array1::zeros(n);
+        let offset = Array1::zeros(n);
+        let weights = Array1::from_elem(n, 1.0);
+
+        let initial_beta: Vec<f64> =
+            if self.coefficients.nrows() == nvar && self.coefficients.ncols() > 0 {
+                self.coefficients.column(0).to_vec()
+            } else {
+                vec![0.0; nvar]
+            };
+
+        let mut cox_fit = match CoxFit::new(
+            time_array,
+            status_array,
+            self.covariates.clone(),
+            strata,
+            offset,
+            weights,
+            CoxMethod::Breslow,
+            n_iters as usize,
+            1e-5,
+            1e-9,
+            vec![true; nvar],
+            initial_beta,
+        ) {
+            Ok(fit) => fit,
+            Err(_) => return,
+        };
+
+        if cox_fit.fit().is_err() {
+            return;
+        }
+
+        let (beta, _means, _u, _imat, _loglik, _sctest, _flag, _iter) = cox_fit.results();
+
+        let mut coefficients_array = Array2::<f64>::zeros((nvar, 1));
+        for i in 0..nvar {
+            coefficients_array[[i, 0]] = beta[i];
+        }
+        self.coefficients = coefficients_array;
+
         self.risk_scores.clear();
-        for (_i, row) in self.covariates.outer_iter().enumerate() {
+        for row in self.covariates.outer_iter() {
             let risk_score = self.coefficients.column(0).dot(&row);
-            self.risk_scores.push(risk_score);
+            self.risk_scores.push(risk_score.exp());
         }
-        for _ in 0..n_iters {
-            self.update_baseline_hazard();
-            self.update_coefficients();
-        }
-        for _t in &self.event_times {
-            let hazard_at_t = 0.0;
-            self.baseline_hazard.push(hazard_at_t);
-        }
+
+        self.calculate_baseline_hazard();
     }
 
-    fn update_baseline_hazard(&mut self) {
+    fn calculate_baseline_hazard(&mut self) {
+        let n = self.event_times.len();
+        if n == 0 {
+            self.baseline_hazard = Vec::new();
+            return;
+        }
+
+        let mut indices: Vec<usize> = (0..n).collect();
+        indices.sort_by(|&i, &j| {
+            self.event_times[i]
+                .partial_cmp(&self.event_times[j])
+                .unwrap()
+                .then_with(|| self.censoring[j].cmp(&self.censoring[i]))
+        });
+
+        let mut unique_times = Vec::new();
         let mut baseline_hazard = Vec::new();
-        for _t in &self.event_times {
-            let hazard_at_t = 0.0;
-            baseline_hazard.push(hazard_at_t);
-        }
-        self.baseline_hazard = baseline_hazard;
-    }
+        let mut cum_hazard = 0.0;
 
-    fn update_coefficients(&mut self) {
-        let coefficients = Array2::<f64>::zeros((self.covariates.ncols(), 1));
-        for (_i, row) in self.covariates.outer_iter().enumerate() {
-            let risk_score = self.coefficients.column(0).dot(&row);
-            self.risk_scores.push(risk_score);
+        for &idx in &indices {
+            if self.censoring[idx] == 0 {
+                continue;
+            }
+
+            let current_time = self.event_times[idx];
+
+            let should_add = if unique_times.is_empty() {
+                true
+            } else {
+                let last_time: f64 = unique_times[unique_times.len() - 1];
+                (current_time - last_time).abs() > 1e-9
+            };
+
+            if should_add {
+                let mut events = 0.0;
+                let mut risk_sum = 0.0;
+
+                for &j in &indices {
+                    if self.event_times[j] >= current_time {
+                        risk_sum += self.risk_scores[j];
+                        if self.event_times[j] == current_time && self.censoring[j] == 1 {
+                            events += 1.0;
+                        }
+                    }
+                }
+
+                if risk_sum > 0.0 {
+                    let hazard = events / risk_sum;
+                    cum_hazard += hazard;
+                }
+
+                unique_times.push(current_time);
+                baseline_hazard.push(cum_hazard);
+            }
         }
-        self.coefficients = coefficients;
+
+        if baseline_hazard.is_empty() {
+            self.baseline_hazard = vec![0.0; n];
+        } else {
+            let mut full_baseline = vec![0.0; n];
+            for (i, &t) in self.event_times.iter().enumerate() {
+                let mut closest_hazard = 0.0;
+                for (j, &ut) in unique_times.iter().enumerate() {
+                    if ut <= t {
+                        closest_hazard = baseline_hazard[j];
+                    } else {
+                        break;
+                    }
+                }
+                full_baseline[i] = closest_hazard;
+            }
+            self.baseline_hazard = full_baseline;
+        }
     }
 
     pub fn predict(&self, covariates: Vec<Vec<f64>>) -> Vec<f64> {
@@ -167,8 +295,27 @@ impl CoxPHModel {
         if count > 0.0 { score / count } else { 0.0 }
     }
 
-    fn predict_survival(&self, _time: f64) -> f64 {
-        0.5
+    fn predict_survival(&self, time: f64) -> f64 {
+        if self.baseline_hazard.is_empty() || self.risk_scores.is_empty() {
+            return 0.5;
+        }
+
+        let baseline_haz = self
+            .baseline_hazard
+            .iter()
+            .zip(&self.event_times)
+            .filter(|&(_, &et)| et <= time)
+            .map(|(h, _)| *h)
+            .last()
+            .unwrap_or(0.0);
+
+        let avg_risk = if !self.risk_scores.is_empty() {
+            self.risk_scores.iter().sum::<f64>() / self.risk_scores.len() as f64
+        } else {
+            1.0
+        };
+
+        (-baseline_haz * avg_risk).exp()
     }
 
     pub fn survival_curve(
