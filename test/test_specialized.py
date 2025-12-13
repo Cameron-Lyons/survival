@@ -55,14 +55,14 @@ try:
     cprob: list[float] = [0.1, 0.2, 0.3, 0.4]
     extend: list[bool] = [True, True, False, False]
     keep: list[bool] = [True, True, True, True]
-    
+
     result = survival.finegray(
         tstart=tstart,
         tstop=tstop,
         ctime=ctime,
         cprob=cprob,
         extend=extend,
-        keep=keep
+        keep=keep,
     )
     print(" finegray executed successfully")
     assert hasattr(result, 'row'), "Should have row attribute"

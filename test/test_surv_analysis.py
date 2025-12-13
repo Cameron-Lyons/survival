@@ -61,7 +61,7 @@ try:
     print("\n=== Testing survfitkm ===")
     time: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
     status: list[float] = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
-    
+
     result = survival.survfitkm(
         time=time,
         status=status,
@@ -84,7 +84,7 @@ try:
     time: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
     status: list[int] = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
     group: list[int] = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
-    
+
     result = survival.survdiff2(
         time=time,
         status=status,

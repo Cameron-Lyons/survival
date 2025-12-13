@@ -57,7 +57,7 @@ try:
         score=score,
         weights=None,
         strata=None,
-        method=0
+        method=0,
     )
     print(" coxmart executed successfully")
     assert isinstance(result, list), "Should return a list"
@@ -105,7 +105,7 @@ try:
     )
     print(" Subject created successfully")
     assert subject.id == 1, "ID should be 1"
-    assert subject.is_case == True, "is_case should be True"
+    assert subject.is_case is True, "is_case should be True"
 
     print("\n All regression model tests passed!")
 
