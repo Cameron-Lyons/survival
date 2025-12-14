@@ -69,7 +69,7 @@ try:
         entry_times=None,
         position=None,
         reverse=False,
-        computation_type=0
+        computation_type=0,
     )
     print(" survfitkm executed successfully")
     assert hasattr(result, 'time'), "Should have time attribute"
@@ -90,7 +90,7 @@ try:
         status=status,
         group=group,
         strata=None,
-        rho=0.0
+        rho=0.0,
     )
     print(" survdiff2 executed successfully")
     assert hasattr(result, 'observed'), "Should have observed attribute"

@@ -101,7 +101,7 @@ try:
         covariates=[1.0, 2.0],
         is_case=True,
         is_subcohort=True,
-        stratum=0
+        stratum=0,
     )
     print(" Subject created successfully")
     assert subject.id == 1, "ID should be 1"
