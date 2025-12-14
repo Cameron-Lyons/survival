@@ -30,15 +30,20 @@ use residuals::agmart::agmart;
 use residuals::coxmart::coxmart;
 use scoring::agscore2::perform_score_calculation;
 use scoring::agscore3::perform_agscore3_calculation;
+use specialized::brier::{brier, integrated_brier};
+use specialized::cch::{CchMethod, CohortData};
 use specialized::cipoisson::{cipoisson, cipoisson_anscombe, cipoisson_exact};
 use specialized::finegray::{FineGrayOutput, finegray};
 use specialized::norisk::norisk;
 use surv_analysis::agsurv4::agsurv4;
 use surv_analysis::agsurv5::agsurv5;
 use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
+use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
 use surv_analysis::survfitkm::{SurvFitKMOutput, survfitkm};
 use utilities::agexact::agexact;
 use utilities::collapse::collapse;
+use utilities::survsplit::{SplitResult, survsplit};
+use utilities::tmerge::{tmerge, tmerge2, tmerge3};
 
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
@@ -67,9 +72,16 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agmart, &m)?)?;
     m.add_function(wrap_pyfunction!(coxmart, &m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
+    m.add_function(wrap_pyfunction!(survfitaj, &m)?)?;
     m.add_function(wrap_pyfunction!(survdiff2, &m)?)?;
     m.add_function(wrap_pyfunction!(finegray, &m)?)?;
     m.add_function(wrap_pyfunction!(survreg, &m)?)?;
+    m.add_function(wrap_pyfunction!(brier, &m)?)?;
+    m.add_function(wrap_pyfunction!(integrated_brier, &m)?)?;
+    m.add_function(wrap_pyfunction!(tmerge, &m)?)?;
+    m.add_function(wrap_pyfunction!(tmerge2, &m)?)?;
+    m.add_function(wrap_pyfunction!(tmerge3, &m)?)?;
+    m.add_function(wrap_pyfunction!(survsplit, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -77,9 +89,13 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CoxPHModel>()?;
     m.add_class::<Subject>()?;
     m.add_class::<SurvFitKMOutput>()?;
+    m.add_class::<SurvFitAJ>()?;
     m.add_class::<FineGrayOutput>()?;
     m.add_class::<SurvivalFit>()?;
     m.add_class::<DistributionType>()?;
     m.add_class::<SurvDiffResult>()?;
+    m.add_class::<CchMethod>()?;
+    m.add_class::<CohortData>()?;
+    m.add_class::<SplitResult>()?;
     Ok(())
 }

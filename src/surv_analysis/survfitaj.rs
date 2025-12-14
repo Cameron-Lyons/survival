@@ -1,9 +1,37 @@
 use ndarray::{Array1, Array2, s};
+use pyo3::prelude::*;
 use std::error::Error;
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct SurvFitAJ {
+    #[pyo3(get)]
+    pub n_risk: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_event: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_censor: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub pstate: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub cumhaz: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub std_err: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub std_chaz: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub std_auc: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub influence: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub n_enter: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub n_transition: Vec<Vec<f64>>,
+}
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) struct SurvFitAJ {
+struct SurvFitAJInternal {
     pub n_risk: Array2<f64>,
     pub n_event: Array2<f64>,
     pub n_censor: Array2<f64>,
@@ -17,9 +45,34 @@ pub(crate) struct SurvFitAJ {
     pub n_transition: Array2<f64>,
 }
 
-#[allow(dead_code)]
+impl SurvFitAJInternal {
+    fn to_python_result(self) -> SurvFitAJ {
+        let array2_to_vec = |arr: Array2<f64>| -> Vec<Vec<f64>> {
+            arr.outer_iter().map(|row| row.to_vec()).collect()
+        };
+
+        let option_array2_to_vec = |opt: Option<Array2<f64>>| -> Option<Vec<Vec<f64>>> {
+            opt.map(array2_to_vec)
+        };
+
+        SurvFitAJ {
+            n_risk: array2_to_vec(self.n_risk),
+            n_event: array2_to_vec(self.n_event),
+            n_censor: array2_to_vec(self.n_censor),
+            pstate: array2_to_vec(self.pstate),
+            cumhaz: array2_to_vec(self.cumhaz),
+            std_err: option_array2_to_vec(self.std_err),
+            std_chaz: option_array2_to_vec(self.std_chaz),
+            std_auc: option_array2_to_vec(self.std_auc),
+            influence: option_array2_to_vec(self.influence),
+            n_enter: option_array2_to_vec(self.n_enter),
+            n_transition: array2_to_vec(self.n_transition),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn survfitaj(
+fn survfitaj_internal(
     y: &[f64],
     sort1: &[usize],
     sort2: &[usize],
@@ -36,7 +89,7 @@ pub(crate) fn survfitaj(
     hindx: &Array2<usize>,
     trmat: &Array2<usize>,
     t0: f64,
-) -> Result<SurvFitAJ, Box<dyn Error>> {
+) -> Result<SurvFitAJInternal, Box<dyn Error>> {
     let ntime = utime.len();
     let _n = y.len() / 3;
     let nused = sort1.len();
@@ -305,7 +358,7 @@ pub(crate) fn survfitaj(
         (None, None, None, None)
     };
 
-    Ok(SurvFitAJ {
+    Ok(SurvFitAJInternal {
         n_risk,
         n_event,
         n_censor,
@@ -318,4 +371,59 @@ pub(crate) fn survfitaj(
         n_enter,
         n_transition,
     })
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn survfitaj(
+    y: Vec<f64>,
+    sort1: Vec<usize>,
+    sort2: Vec<usize>,
+    utime: Vec<f64>,
+    cstate: Vec<usize>,
+    wt: Vec<f64>,
+    grp: Vec<usize>,
+    ngrp: usize,
+    p0: Vec<f64>,
+    i0: Vec<f64>,
+    sefit: i32,
+    entry: bool,
+    position: Vec<usize>,
+    hindx: Vec<Vec<usize>>,
+    trmat: Vec<Vec<usize>>,
+    t0: f64,
+) -> PyResult<SurvFitAJ> {
+    let hindx_array = Array2::from_shape_vec(
+        (hindx.len(), hindx[0].len()),
+        hindx.into_iter().flatten().collect(),
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid hindx array: {}", e)))?;
+
+    let trmat_array = Array2::from_shape_vec(
+        (trmat.len(), trmat[0].len()),
+        trmat.into_iter().flatten().collect(),
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid trmat array: {}", e)))?;
+
+    let result = survfitaj_internal(
+        &y,
+        &sort1,
+        &sort2,
+        &utime,
+        &cstate,
+        &wt,
+        &grp,
+        ngrp,
+        &p0,
+        &i0,
+        sefit,
+        entry,
+        &position,
+        &hindx_array,
+        &trmat_array,
+        t0,
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("survfitaj failed: {}", e)))?;
+
+    Ok(result.to_python_result())
 }

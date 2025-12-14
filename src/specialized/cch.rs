@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 
 #[derive(Clone)]
 #[pyclass]
-enum Method {
+pub enum CchMethod {
     Prentice,
     SelfPrentice,
     LinYing,
@@ -12,7 +12,7 @@ enum Method {
 }
 
 #[pyclass]
-struct CohortData {
+pub struct CohortData {
     subjects: Vec<Subject>,
 }
 
@@ -30,7 +30,7 @@ impl CohortData {
     pub fn get_subject(&self, id: usize) -> Subject {
         self.subjects[id].clone()
     }
-    pub fn fit(&self, _method: Method) -> CoxPHModel {
+    pub fn fit(&self, _method: CchMethod) -> CoxPHModel {
         let mut model = CoxPHModel::new();
         for subject in &self.subjects {
             if subject.is_subcohort {
@@ -42,9 +42,3 @@ impl CohortData {
     }
 }
 
-#[pymodule]
-#[pyo3(name = "pyCohortData")]
-fn py_cohort_data(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<CohortData>()?;
-    Ok(())
-}

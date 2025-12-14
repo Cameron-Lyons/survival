@@ -116,6 +116,44 @@ class SurvDiffResult:
     chi_squared: float
     degrees_of_freedom: int
 
+class CchMethod:
+    """Case-cohort analysis method."""
+    Prentice: "CchMethod"
+    SelfPrentice: "CchMethod"
+    LinYing: "CchMethod"
+    IBorgan: "CchMethod"
+    IIBorgan: "CchMethod"
+
+class CohortData:
+    """Case-cohort data structure."""
+    @staticmethod
+    def new() -> "CohortData": ...
+    def add_subject(self, subject: Subject) -> None: ...
+    def get_subject(self, id: int) -> Subject: ...
+    def fit(self, method: CchMethod) -> CoxPHModel: ...
+
+class SurvFitAJ:
+    """Result of Aalen-Johansen multi-state survival estimation."""
+    n_risk: List[List[float]]
+    n_event: List[List[float]]
+    n_censor: List[List[float]]
+    pstate: List[List[float]]
+    cumhaz: List[List[float]]
+    std_err: Optional[List[List[float]]]
+    std_chaz: Optional[List[List[float]]]
+    std_auc: Optional[List[List[float]]]
+    influence: Optional[List[List[float]]]
+    n_enter: Optional[List[List[float]]]
+    n_transition: List[List[float]]
+
+class SplitResult:
+    """Result of splitting survival data at time points."""
+    row: List[int]
+    interval: List[int]
+    start: List[float]
+    end: List[float]
+    censor: List[bool]
+
 def aareg(options: AaregOptions) -> Dict[str, Any]: ...
 
 def survfitkm(
@@ -190,4 +228,63 @@ def agexact(*args: Any, **kwargs: Any) -> Any: ...
 def agsurv4(*args: Any, **kwargs: Any) -> Any: ...
 def agsurv5(*args: Any, **kwargs: Any) -> Any: ...
 def agmart(*args: Any, **kwargs: Any) -> Any: ...
+
+def brier(
+    predictions: List[float],
+    outcomes: List[int],
+    weights: Optional[List[float]] = None,
+) -> float: ...
+
+def integrated_brier(
+    predictions: List[List[float]],
+    outcomes: List[int],
+    times: List[float],
+    weights: Optional[List[float]] = None,
+) -> float: ...
+
+def tmerge(
+    id: List[int],
+    time1: List[float],
+    newx: List[float],
+    nid: List[int],
+    ntime: List[float],
+    x: List[float],
+) -> List[float]: ...
+
+def tmerge2(
+    id: List[int],
+    time1: List[float],
+    nid: List[int],
+    ntime: List[float],
+) -> List[int]: ...
+
+def tmerge3(
+    id: List[int],
+    miss: List[bool],
+) -> List[int]: ...
+
+def survsplit(
+    tstart: List[float],
+    tstop: List[float],
+    cut: List[float],
+) -> SplitResult: ...
+
+def survfitaj(
+    y: List[float],
+    sort1: List[int],
+    sort2: List[int],
+    utime: List[float],
+    cstate: List[int],
+    wt: List[float],
+    grp: List[int],
+    ngrp: int,
+    p0: List[float],
+    i0: List[float],
+    sefit: int,
+    entry: bool,
+    position: List[int],
+    hindx: List[List[int]],
+    trmat: List[List[int]],
+    t0: float,
+) -> SurvFitAJ: ...
 

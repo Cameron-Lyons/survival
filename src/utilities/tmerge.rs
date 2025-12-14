@@ -1,15 +1,17 @@
-#[allow(dead_code)]
-pub(crate) fn tmerge(
-    id: &[i32],
-    time1: &[f64],
-    newx: &[f64],
-    nid: &[i32],
-    ntime: &[f64],
-    x: &[f64],
+use pyo3::prelude::*;
+
+#[pyfunction]
+pub fn tmerge(
+    id: Vec<i32>,
+    time1: Vec<f64>,
+    newx: Vec<f64>,
+    nid: Vec<i32>,
+    ntime: Vec<f64>,
+    x: Vec<f64>,
 ) -> Vec<f64> {
     let n1 = id.len();
     let n2 = nid.len();
-    let mut result = newx.to_vec();
+    let mut result = newx;
     let mut k = 0;
     let mut current_id = -1;
     let mut csum = 0.0;
@@ -46,8 +48,8 @@ pub(crate) fn tmerge(
     result
 }
 
-#[allow(dead_code)]
-pub(crate) fn tmerge2(id: &[i32], time1: &[f64], nid: &[i32], ntime: &[f64]) -> Vec<usize> {
+#[pyfunction]
+pub fn tmerge2(id: Vec<i32>, time1: Vec<f64>, nid: Vec<i32>, ntime: Vec<f64>) -> Vec<usize> {
     let n1 = id.len();
     let n2 = nid.len();
     let mut result = vec![0; n1];
@@ -76,14 +78,14 @@ pub(crate) fn tmerge2(id: &[i32], time1: &[f64], nid: &[i32], ntime: &[f64]) -> 
     result
 }
 
-#[allow(dead_code)]
-pub(crate) fn tmerge3(id: &[i32], miss: &[bool]) -> Vec<usize> {
+#[pyfunction]
+pub fn tmerge3(id: Vec<i32>, miss: Vec<bool>) -> Vec<usize> {
     let n = id.len();
     let mut result = vec![0; n];
     let mut last_good = 0;
     let mut current_id = -1;
 
-    for (i, (&current, &is_missing)) in id.iter().zip(miss).enumerate() {
+    for (i, (&current, is_missing)) in id.iter().zip(miss).enumerate() {
         if current != current_id {
             current_id = current;
             last_good = 0;

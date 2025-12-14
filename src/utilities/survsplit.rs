@@ -1,14 +1,22 @@
-#[allow(dead_code)]
-pub(crate) struct SplitResult {
+use pyo3::prelude::*;
+
+#[pyclass]
+#[derive(Clone)]
+pub struct SplitResult {
+    #[pyo3(get)]
     pub row: Vec<usize>,
+    #[pyo3(get)]
     pub interval: Vec<usize>,
+    #[pyo3(get)]
     pub start: Vec<f64>,
+    #[pyo3(get)]
     pub end: Vec<f64>,
+    #[pyo3(get)]
     pub censor: Vec<bool>,
 }
 
-#[allow(dead_code)]
-pub(crate) fn survsplit(tstart: &[f64], tstop: &[f64], cut: &[f64]) -> SplitResult {
+#[pyfunction]
+pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> SplitResult {
     let n = tstart.len();
     let ncut = cut.len();
     let mut extra = 0;
@@ -17,7 +25,7 @@ pub(crate) fn survsplit(tstart: &[f64], tstop: &[f64], cut: &[f64]) -> SplitResu
         if tstart[i].is_nan() || tstop[i].is_nan() {
             continue;
         }
-        for &c in cut {
+        for &c in &cut {
             if c > tstart[i] && c < tstop[i] {
                 extra += 1;
             }
@@ -47,12 +55,12 @@ pub(crate) fn survsplit(tstart: &[f64], tstop: &[f64], cut: &[f64]) -> SplitResu
         }
 
         let mut cuts_in_interval = Vec::new();
-        for &c in cut {
+        for &c in &cut {
             if c > current_start && c < current_stop {
                 cuts_in_interval.push(c);
             }
         }
-        cuts_in_interval.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        cuts_in_interval.sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap());
 
         let mut current = current_start;
         let mut interval_num = 1;
