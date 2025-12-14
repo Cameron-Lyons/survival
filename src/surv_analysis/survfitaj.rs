@@ -51,9 +51,8 @@ impl SurvFitAJInternal {
             arr.outer_iter().map(|row| row.to_vec()).collect()
         };
 
-        let option_array2_to_vec = |opt: Option<Array2<f64>>| -> Option<Vec<Vec<f64>>> {
-            opt.map(array2_to_vec)
-        };
+        let option_array2_to_vec =
+            |opt: Option<Array2<f64>>| -> Option<Vec<Vec<f64>>> { opt.map(array2_to_vec) };
 
         SurvFitAJ {
             n_risk: array2_to_vec(self.n_risk),
