@@ -49,8 +49,8 @@ pub(crate) fn coxsurv2(
             let jj = jj as isize;
             let row_idx = (ntrans - transition_idx - 1) * ntime + jj as usize;
 
-            for k in 3..12 {
-                n[k] = 0.0;
+            for n_elem in n.iter_mut().skip(3).take(9) {
+                *n_elem = 0.0;
             }
 
             while person2 >= 0 && trans[sort2[person2 as usize]] == current_trans {

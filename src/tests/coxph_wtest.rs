@@ -49,9 +49,12 @@ pub fn coxph_wtest(
 
 fn cholesky2(matrix: &mut [Vec<f64>], tolerch: f64) {
     let n = matrix.len();
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
+        #[allow(clippy::needless_range_loop)]
         for j in 0..=i {
             let mut sum = matrix[i][j];
+            #[allow(clippy::needless_range_loop)]
             for k in 0..j {
                 sum -= matrix[i][k] * matrix[j][k];
             }

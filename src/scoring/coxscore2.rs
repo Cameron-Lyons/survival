@@ -51,22 +51,22 @@ pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) ->
             let risk = data.score[j_usize] * data.weights[j_usize];
             denom += risk;
 
-            for var in 0..params.nvar {
+            for (var, (resid_elem, xhaz_elem)) in resid.iter_mut().skip(j_usize * params.nvar).take(params.nvar).zip(xhaz.iter()).enumerate() {
                 let idx = j_usize * params.nvar + var;
                 let covar_val = data.covar[idx];
-                resid[idx] = data.score[j_usize] * (covar_val * cumhaz - xhaz[var]);
+                *resid_elem = data.score[j_usize] * (covar_val * cumhaz - xhaz_elem);
             }
 
-            for var in 0..params.nvar {
-                a[var] += risk * data.covar[j_usize * params.nvar + var];
+            for (var, a_elem) in a.iter_mut().enumerate().take(params.nvar) {
+                *a_elem += risk * data.covar[j_usize * params.nvar + var];
             }
 
             if status[j_usize] == 1.0 {
                 deaths_count += 1;
                 e_denom += risk;
                 meanwt += data.weights[j_usize];
-                for var in 0..params.nvar {
-                    a2[var] += risk * data.covar[j_usize * params.nvar + var];
+                for (var, a2_elem) in a2.iter_mut().enumerate().take(params.nvar) {
+                    *a2_elem += risk * data.covar[j_usize * params.nvar + var];
                 }
             }
 
@@ -84,9 +84,9 @@ pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) ->
                 let hazard = meanwt / denom;
                 cumhaz += hazard;
 
-                for var in 0..params.nvar {
-                    let xbar = a[var] / denom;
-                    xhaz[var] += xbar * hazard;
+                for (var, (a_elem, xhaz_elem)) in a.iter().zip(xhaz.iter_mut()).enumerate().take(params.nvar) {
+                    let xbar = a_elem / denom;
+                    *xhaz_elem += xbar * hazard;
 
                     for k in processed_start..=processed_end {
                         let k_usize = k as usize;
@@ -121,9 +121,9 @@ pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) ->
         if i < 0 || data.strata[i as usize] != currentstrata {
             for k in (i + 1)..=stratastart {
                 let k_usize = k as usize;
-                for var in 0..params.nvar {
+                for (var, (resid_elem, xhaz_elem)) in resid.iter_mut().skip(k_usize * params.nvar).take(params.nvar).zip(xhaz.iter()).enumerate() {
                     let idx = k_usize * params.nvar + var;
-                    resid[idx] += data.score[k_usize] * (xhaz[var] - data.covar[idx] * cumhaz);
+                    *resid_elem += data.score[k_usize] * (xhaz_elem - data.covar[idx] * cumhaz);
                 }
             }
 

@@ -171,8 +171,8 @@ pub fn concordance3(
         }
     }
 
-    for i in 0..n {
-        let ii = sortstop[i] as usize;
+    for &sort_idx in sortstop.iter().take(n) {
+        let ii = sort_idx as usize;
         let wsum = walkup(dnwt, dtwt, x[ii] as usize, ntree);
         imat[ii] += wsum[1];
         imat[n + ii] += wsum[0];

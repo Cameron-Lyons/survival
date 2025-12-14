@@ -6,9 +6,8 @@ pub(crate) fn residcsum(y2: &[f64], strata: &[i32], nrows: usize, ncols: usize) 
         let mut current_stratum = None;
         let mut temp = 0.0;
 
-        for i in 0..nrows {
+        for (i, &stratum) in strata.iter().enumerate().take(nrows) {
             let idx = j * nrows + i;
-            let stratum = strata[i];
 
             if i == 0 || Some(stratum) != current_stratum {
                 temp = 0.0;

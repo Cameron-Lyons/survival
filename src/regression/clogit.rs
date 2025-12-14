@@ -68,27 +68,29 @@ impl ConditionalLogisticRegression {
         let mut old_coefficients = vec![0.0; num_covariates];
         let mut iter = 0;
         while iter < self.max_iter {
-            for covariate in 0..num_covariates {
+            for covariate_idx in 0..num_covariates {
                 let mut numerator = 0.0;
                 let mut denominator = 0.0;
                 for observation in 0..self.data.get_num_observations() {
                     let case_control_status = self.data.get_case_control_status(observation);
                     let _stratum = self.data.get_stratum(observation);
                     let covariates = self.data.get_covariates(observation);
-                    let mut exp_sum = 0.0;
-                    for covariate in 0..num_covariates {
-                        exp_sum += self.coefficients[covariate] * covariates[covariate];
-                    }
+                    let exp_sum: f64 = self
+                        .coefficients
+                        .iter()
+                        .zip(covariates.iter())
+                        .map(|(coef, cov)| coef * cov)
+                        .sum();
                     let exp = exp_sum.exp();
-                    numerator += case_control_status as f64 * covariates[covariate] * exp;
-                    denominator += covariates[covariate] * exp;
+                    numerator += case_control_status as f64 * covariates[covariate_idx] * exp;
+                    denominator += covariates[covariate_idx] * exp;
                 }
-                old_coefficients[covariate] = self.coefficients[covariate];
-                self.coefficients[covariate] += numerator / denominator;
+                old_coefficients[covariate_idx] = self.coefficients[covariate_idx];
+                self.coefficients[covariate_idx] += numerator / denominator;
             }
             let mut diff = 0.0;
-            for covariate in 0..num_covariates {
-                diff += (self.coefficients[covariate] - old_coefficients[covariate]).abs();
+            for (coef, old_coef) in self.coefficients.iter().zip(old_coefficients.iter()) {
+                diff += (coef - old_coef).abs();
             }
             if diff < self.tol {
                 break;
@@ -100,10 +102,12 @@ impl ConditionalLogisticRegression {
         &self.coefficients
     }
     pub fn predict(&self, covariates: &[f64]) -> f64 {
-        let mut exp_sum = 0.0;
-        for covariate in 0..self.data.get_num_covariates() {
-            exp_sum += self.coefficients[covariate] * covariates[covariate];
-        }
+        let exp_sum: f64 = self
+            .coefficients
+            .iter()
+            .zip(covariates.iter())
+            .map(|(coef, cov)| coef * cov)
+            .sum();
         exp_sum.exp()
     }
 }

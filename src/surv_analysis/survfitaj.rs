@@ -192,6 +192,7 @@ pub(crate) fn survfitaj(
             let mut h: Array2<f64> = Array2::zeros((nstate, nstate));
             let mut tdeath = 0;
 
+            #[allow(clippy::needless_range_loop)]
             for p in person2_wg..nused {
                 let idx = sort2[p];
                 if y[idx * 3 + 1] != utime[i] {
@@ -233,6 +234,7 @@ pub(crate) fn survfitaj(
                 }
             }
 
+            #[allow(clippy::needless_range_loop)]
             for p in person2_wg..nused {
                 let idx = sort2[p];
                 if y[idx * 3 + 1] != utime[i] {

@@ -16,8 +16,7 @@ pub(crate) fn coxsurv1(
 
     let mut ntrans = 1;
     let mut current_trans = trans[sort2[0]];
-    for i in 1..nused {
-        let i2 = sort2[i];
+    for &i2 in sort2.iter().skip(1).take(nused - 1) {
         if trans[i2] != current_trans {
             ntrans += 1;
             current_trans = trans[i2];
@@ -44,8 +43,8 @@ pub(crate) fn coxsurv1(
         for jj in (0..ntime).rev() {
             let dtime = otime[jj];
 
-            for k in 3..8 {
-                n[k] = 0.0;
+            for n_elem in n.iter_mut().skip(3).take(5) {
+                *n_elem = 0.0;
             }
 
             while person2 >= 0 && trans[sort2[person2 as usize]] == current_trans {

@@ -150,12 +150,12 @@ impl CoxFit5 {
         }
 
         let mut means = vec![0.0; nvar];
-        for i in 0..nvar {
-            if data.docenter[i] != 0 {
+        for (i, &docenter_val) in data.docenter.iter().enumerate() {
+            if docenter_val != 0 {
                 means[i] =
                     data.covar2[i * nused..(i + 1) * nused].iter().sum::<f64>() / nused as f64;
-                for p in 0..nused {
-                    self.covar[i][p] = data.covar2[i * nused + p] - means[i];
+                for (p, covar_elem) in self.covar[i].iter_mut().enumerate() {
+                    *covar_elem = data.covar2[i * nused + p] - means[i];
                 }
             }
         }
@@ -174,9 +174,12 @@ impl CoxFit5 {
 
             let p = self.sort[ii] as usize;
             let mut zbeta = self.offset[p];
-            for i in 0..nvar {
-                zbeta += params.beta[i] * self.covar[i][p];
-            }
+            zbeta += params
+                .beta
+                .iter()
+                .zip(self.covar.iter())
+                .map(|(&beta_val, covar_row)| beta_val * covar_row[p])
+                .sum::<f64>();
             zbeta = coxsafe(zbeta);
             let risk = zbeta.exp() * self.weights[p];
             denom += risk;
@@ -256,36 +259,44 @@ impl CoxFit5 {
                 let p = self.sort[ii] as usize;
                 let mut zbeta = self.offset[p];
 
-                for i in 0..nvar {
-                    zbeta += newbeta[i] * self.covar[i][p];
-                }
-                for i in 0..nf {
-                    zbeta += newbeta[nvar + i] * data.fmat[i][p];
-                }
+                zbeta += newbeta
+                    .iter()
+                    .take(nvar)
+                    .zip(self.covar.iter())
+                    .map(|(&beta_val, covar_row)| beta_val * covar_row[p])
+                    .sum::<f64>();
+                zbeta += newbeta
+                    .iter()
+                    .skip(nvar)
+                    .take(nf)
+                    .zip(data.fmat.iter())
+                    .map(|(&beta_val, fmat_row)| beta_val * fmat_row[p])
+                    .sum::<f64>();
                 zbeta = coxsafe(zbeta);
                 let risk = zbeta.exp() * self.weights[p];
                 denom += risk;
 
-                for i in 0..nvar {
-                    risk_sum[i] += risk * self.covar[i][p];
+                for (risk_sum_elem, covar_row) in risk_sum.iter_mut().take(nvar).zip(self.covar.iter()) {
+                    *risk_sum_elem += risk * covar_row[p];
                 }
-                for i in 0..nf {
-                    risk_sum[nvar + i] += risk * data.fmat[i][p];
+                for (risk_sum_elem, fmat_row) in risk_sum.iter_mut().skip(nvar).take(nf).zip(data.fmat.iter()) {
+                    *risk_sum_elem += risk * fmat_row[p];
                 }
 
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..nvar2 {
-                    for j in 0..nvar2 {
-                        let x_i = if i < nvar {
-                            self.covar[i][p]
-                        } else {
-                            data.fmat[i - nvar][p]
-                        };
+                    let x_i = if i < nvar {
+                        self.covar[i][p]
+                    } else {
+                        data.fmat[i - nvar][p]
+                    };
+                    for (j, risk_sum2_elem) in risk_sum2[i].iter_mut().enumerate().take(nvar2) {
                         let x_j = if j < nvar {
                             self.covar[j][p]
                         } else {
                             data.fmat[j - nvar][p]
                         };
-                        risk_sum2[i][j] += risk * x_i * x_j;
+                        *risk_sum2_elem += risk * x_i * x_j;
                     }
                 }
 
@@ -341,10 +352,8 @@ impl CoxFit5 {
 
             oldbeta.copy_from_slice(&newbeta);
 
-            for i in 0..nvar2 {
-                for j in 0..nvar2 {
-                    cholesky_mat[i][j] = imat[i][j];
-                }
+            for (cholesky_row, imat_row) in cholesky_mat.iter_mut().zip(imat.iter()) {
+                cholesky_row.copy_from_slice(imat_row);
             }
             if cholesky(&mut cholesky_mat, 1e-10) != 0 {
                 result.flag = 1000;
@@ -354,13 +363,13 @@ impl CoxFit5 {
             work.copy_from_slice(&u);
             cholesky_solve(&cholesky_mat, &mut work);
 
-            for i in 0..nvar2 {
-                newbeta[i] += work[i];
+            for (beta_elem, work_elem) in newbeta.iter_mut().zip(work.iter()) {
+                *beta_elem += work_elem;
             }
 
             let mut max_change = 0.0;
-            for i in 0..nvar2 {
-                let change = (newbeta[i] - oldbeta[i]).abs();
+            for (new_beta, old_beta) in newbeta.iter().zip(oldbeta.iter()) {
+                let change = (new_beta - old_beta).abs();
                 if change > max_change {
                     max_change = change;
                 }
@@ -449,9 +458,12 @@ impl CoxResult {
 #[allow(dead_code)]
 fn cholesky(mat: &mut [Vec<f64>], tolerch: f64) -> i32 {
     let n = mat.len();
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
+        #[allow(clippy::needless_range_loop)]
         for j in i..n {
             let mut sum = mat[i][j];
+            #[allow(clippy::needless_range_loop)]
             for k in 0..i {
                 sum -= mat[i][k] * mat[j][k];
             }

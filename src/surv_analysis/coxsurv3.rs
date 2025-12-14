@@ -184,10 +184,9 @@ pub(crate) fn coxsurv3(
         i = j;
     }
 
-    for k in 0..=strat_start {
-        let k_idx = sort2[k];
-        for var in 0..n_vars {
-            result.sresid[k_idx][var] += risk[k_idx] * (xhaz[var] - xmat[k_idx][var] * cum_haz);
+    for &k_idx in sort2.iter().take(strat_start + 1) {
+        for (var, (sresid_elem, xhaz_elem)) in result.sresid[k_idx].iter_mut().zip(xhaz.iter()).enumerate().take(n_vars) {
+            *sresid_elem += risk[k_idx] * (xhaz_elem - xmat[k_idx][var] * cum_haz);
         }
     }
 

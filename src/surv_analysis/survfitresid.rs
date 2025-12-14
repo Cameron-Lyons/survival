@@ -47,7 +47,9 @@ pub(crate) fn survfitresid(
         None
     };
 
+    #[allow(clippy::needless_range_loop)]
     for k in 0..nstate {
+        #[allow(clippy::needless_range_loop)]
         for i in 0..nobs {
             influence_pstate[i][k] = i0[i * nstate + k];
         }
@@ -74,6 +76,7 @@ pub(crate) fn survfitresid(
             }
         }
     } else {
+        #[allow(clippy::needless_range_loop)]
         for i in 0..nobs {
             let s = cstate[i] as usize;
             ws[s] += wt[i];
@@ -89,7 +92,9 @@ pub(crate) fn survfitresid(
         while itime < nout && otime[itime] < ctime {
             if doauc {
                 let delta = otime[itime] - starttime;
+                #[allow(clippy::needless_range_loop)]
                 for k in 0..nstate {
+                    #[allow(clippy::needless_range_loop)]
                     for j in 0..nobs {
                         influence_auc.as_mut().unwrap()[j][itime * nstate + k] +=
                             influence_pstate[j][itime * nstate + k] * delta;
@@ -124,6 +129,7 @@ pub(crate) fn survfitresid(
         let mut _wevent = 0.0;
         let mut transitions = Vec::new();
 
+        #[allow(clippy::needless_range_loop)]
         for j in i..nobs {
             let p2j = sort2[j];
             if etime[p2j] > ctime {
@@ -145,7 +151,9 @@ pub(crate) fn survfitresid(
         if nevent > 0 {
             if doauc {
                 let delta = ctime - starttime;
+                #[allow(clippy::needless_range_loop)]
                 for k in 0..nstate {
+                    #[allow(clippy::needless_range_loop)]
                     for j in 0..nobs {
                         influence_auc.as_mut().unwrap()[j][itime * nstate + k] +=
                             influence_pstate[j][itime * nstate + k] * delta;
@@ -159,6 +167,7 @@ pub(crate) fn survfitresid(
                 let temp = -cmat[oldstate][oldstate];
                 let temp2 = pstate[oldstate] / ws[oldstate];
 
+                #[allow(clippy::needless_range_loop)]
                 for j in 0..nobs {
                     let inf_old = influence_pstate[j][itime * nstate + oldstate];
                     influence_pstate[j][itime * nstate + newstate] += temp * inf_old;
@@ -168,6 +177,7 @@ pub(crate) fn survfitresid(
                 influence_pstate[psave][itime * nstate + newstate] += temp2;
                 influence_pstate[psave][itime * nstate + oldstate] -= temp2;
 
+                #[allow(clippy::needless_range_loop)]
                 for j in i..nobs {
                     let p2j = sort2[j];
                     if atrisk[p2j] && cstate[p2j] as usize == oldstate {
@@ -177,23 +187,29 @@ pub(crate) fn survfitresid(
                 }
             } else if nevent > 1 {
                 let mut tempvec = vec![0.0; nstate];
+                #[allow(clippy::needless_range_loop)]
                 for j in 0..nobs {
+                    #[allow(clippy::needless_range_loop)]
                     for k in 0..nstate {
                         tempvec[k] = 0.0;
+                        #[allow(clippy::needless_range_loop)]
                         for kk in 0..nstate {
                             tempvec[k] += influence_pstate[j][itime * nstate + kk] * cmat[kk][k];
                         }
                     }
+                    #[allow(clippy::needless_range_loop)]
                     for k in 0..nstate {
                         influence_pstate[j][itime * nstate + k] += tempvec[k];
                     }
                 }
 
+                #[allow(clippy::needless_range_loop)]
                 for j in i..nobs {
                     let p2j = sort2[j];
                     if atrisk[p2j] {
                         let oldstate = cstate[p2j] as usize;
                         let temp2 = pstate[oldstate] / ws[oldstate];
+                        #[allow(clippy::needless_range_loop)]
                         for k in 0..nstate {
                             influence_pstate[p2j][itime * nstate + k] -= cmat[oldstate][k] * temp2;
                         }
@@ -234,7 +250,9 @@ pub(crate) fn survfitresid(
     while itime < nout {
         if doauc {
             let delta = otime[itime] - starttime;
+            #[allow(clippy::needless_range_loop)]
             for k in 0..nstate {
+                #[allow(clippy::needless_range_loop)]
                 for j in 0..nobs {
                     influence_auc.as_mut().unwrap()[j][itime * nstate + k] +=
                         influence_pstate[j][itime * nstate + k] * delta;

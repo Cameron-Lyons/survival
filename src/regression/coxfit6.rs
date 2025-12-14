@@ -20,6 +20,17 @@ pub enum Method {
     Efron,
 }
 
+pub type CoxFitResults = (
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Array2<f64>,
+    [f64; 2],
+    f64,
+    i32,
+    usize,
+);
+
 pub struct CoxFit {
     time: Array1<f64>,
     status: Array1<i32>,
@@ -328,9 +339,9 @@ impl CoxFit {
 
             if _notfinite || newlk < self.loglik[1] {
                 halving += 1;
-                for i in 0..nvar {
-                    newbeta[i] =
-                        (newbeta[i] + (halving as f64) * self.beta[i]) / (halving as f64 + 1.0);
+                for (newbeta_elem, beta_elem) in newbeta.iter_mut().zip(self.beta.iter()).take(nvar) {
+                    *newbeta_elem =
+                        (*newbeta_elem + (halving as f64) * beta_elem) / (halving as f64 + 1.0);
                 }
             } else {
                 halving = 0;
@@ -338,8 +349,8 @@ impl CoxFit {
                 self.beta.copy_from_slice(&newbeta);
                 a.copy_from_slice(&self.u);
                 Self::chsolve(&self.imat, &mut a)?;
-                for i in 0..nvar {
-                    newbeta[i] = self.beta[i] + a[i];
+                for (newbeta_elem, (beta_elem, a_elem)) in newbeta.iter_mut().zip(self.beta.iter().zip(a.iter())).take(nvar) {
+                    *newbeta_elem = beta_elem + a_elem;
                 }
             }
         }
@@ -414,16 +425,7 @@ impl CoxFit {
 
     pub fn results(
         self,
-    ) -> (
-        Vec<f64>,
-        Vec<f64>,
-        Vec<f64>,
-        Array2<f64>,
-        [f64; 2],
-        f64,
-        i32,
-        usize,
-    ) {
+    ) -> CoxFitResults {
         (
             self.beta,
             self.means,
