@@ -1,6 +1,5 @@
 import os
 import sys
-from typing import Any, Optional
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -15,7 +14,7 @@ try:
     x: list[int] = [1, 2, 1, 2, 1]
     wt: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
     timewt: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
-    sortstart: Optional[list[int]] = None
+    sortstart: list[int] | None = None
     sortstop: list[int] = [0, 1, 2, 3, 4]
 
     result = survival.concordance(y, x, wt, timewt, sortstart, sortstop)

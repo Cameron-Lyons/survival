@@ -4,7 +4,6 @@ import glob
 import os
 import subprocess
 import sys
-from typing import List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "target", "wheels"))
 
@@ -33,9 +32,9 @@ def run_test_file(test_file: str) -> bool:
 def main() -> int:
     test_dir: str = os.path.dirname(__file__)
     this_file: str = os.path.abspath(__file__)
-    all_test_files: List[str] = sorted(glob.glob(os.path.join(test_dir, "test_*.py")))
+    all_test_files: list[str] = sorted(glob.glob(os.path.join(test_dir, "test_*.py")))
 
-    test_files: List[str] = [f for f in all_test_files if os.path.abspath(f) != this_file]
+    test_files: list[str] = [f for f in all_test_files if os.path.abspath(f) != this_file]
 
     if not test_files:
         print("No test files found!")

@@ -1,7 +1,6 @@
 import glob
 import os
 import sys
-
 from typing import Any
 
 

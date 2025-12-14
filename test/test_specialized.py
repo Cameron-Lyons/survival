@@ -1,8 +1,6 @@
 import os
 import sys
 
-from typing import Any, Tuple
-
 sys.path.insert(0, os.path.dirname(__file__))
 
 try:
