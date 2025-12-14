@@ -51,7 +51,13 @@ pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) ->
             let risk = data.score[j_usize] * data.weights[j_usize];
             denom += risk;
 
-            for (var, (resid_elem, xhaz_elem)) in resid.iter_mut().skip(j_usize * params.nvar).take(params.nvar).zip(xhaz.iter()).enumerate() {
+            for (var, (resid_elem, xhaz_elem)) in resid
+                .iter_mut()
+                .skip(j_usize * params.nvar)
+                .take(params.nvar)
+                .zip(xhaz.iter())
+                .enumerate()
+            {
                 let idx = j_usize * params.nvar + var;
                 let covar_val = data.covar[idx];
                 *resid_elem = data.score[j_usize] * (covar_val * cumhaz - xhaz_elem);
@@ -84,7 +90,9 @@ pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) ->
                 let hazard = meanwt / denom;
                 cumhaz += hazard;
 
-                for (var, (a_elem, xhaz_elem)) in a.iter().zip(xhaz.iter_mut()).enumerate().take(params.nvar) {
+                for (var, (a_elem, xhaz_elem)) in
+                    a.iter().zip(xhaz.iter_mut()).enumerate().take(params.nvar)
+                {
                     let xbar = a_elem / denom;
                     *xhaz_elem += xbar * hazard;
 
@@ -121,7 +129,13 @@ pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) ->
         if i < 0 || data.strata[i as usize] != currentstrata {
             for k in (i + 1)..=stratastart {
                 let k_usize = k as usize;
-                for (var, (resid_elem, xhaz_elem)) in resid.iter_mut().skip(k_usize * params.nvar).take(params.nvar).zip(xhaz.iter()).enumerate() {
+                for (var, (resid_elem, xhaz_elem)) in resid
+                    .iter_mut()
+                    .skip(k_usize * params.nvar)
+                    .take(params.nvar)
+                    .zip(xhaz.iter())
+                    .enumerate()
+                {
                     let idx = k_usize * params.nvar + var;
                     *resid_elem += data.score[k_usize] * (xhaz_elem - data.covar[idx] * cumhaz);
                 }

@@ -276,10 +276,17 @@ impl CoxFit5 {
                 let risk = zbeta.exp() * self.weights[p];
                 denom += risk;
 
-                for (risk_sum_elem, covar_row) in risk_sum.iter_mut().take(nvar).zip(self.covar.iter()) {
+                for (risk_sum_elem, covar_row) in
+                    risk_sum.iter_mut().take(nvar).zip(self.covar.iter())
+                {
                     *risk_sum_elem += risk * covar_row[p];
                 }
-                for (risk_sum_elem, fmat_row) in risk_sum.iter_mut().skip(nvar).take(nf).zip(data.fmat.iter()) {
+                for (risk_sum_elem, fmat_row) in risk_sum
+                    .iter_mut()
+                    .skip(nvar)
+                    .take(nf)
+                    .zip(data.fmat.iter())
+                {
                     *risk_sum_elem += risk * fmat_row[p];
                 }
 

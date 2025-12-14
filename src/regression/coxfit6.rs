@@ -339,7 +339,8 @@ impl CoxFit {
 
             if _notfinite || newlk < self.loglik[1] {
                 halving += 1;
-                for (newbeta_elem, beta_elem) in newbeta.iter_mut().zip(self.beta.iter()).take(nvar) {
+                for (newbeta_elem, beta_elem) in newbeta.iter_mut().zip(self.beta.iter()).take(nvar)
+                {
                     *newbeta_elem =
                         (*newbeta_elem + (halving as f64) * beta_elem) / (halving as f64 + 1.0);
                 }
@@ -349,7 +350,11 @@ impl CoxFit {
                 self.beta.copy_from_slice(&newbeta);
                 a.copy_from_slice(&self.u);
                 Self::chsolve(&self.imat, &mut a)?;
-                for (newbeta_elem, (beta_elem, a_elem)) in newbeta.iter_mut().zip(self.beta.iter().zip(a.iter())).take(nvar) {
+                for (newbeta_elem, (beta_elem, a_elem)) in newbeta
+                    .iter_mut()
+                    .zip(self.beta.iter().zip(a.iter()))
+                    .take(nvar)
+                {
                     *newbeta_elem = beta_elem + a_elem;
                 }
             }
@@ -423,9 +428,7 @@ impl CoxFit {
         Ok(())
     }
 
-    pub fn results(
-        self,
-    ) -> CoxFitResults {
+    pub fn results(self) -> CoxFitResults {
         (
             self.beta,
             self.means,
