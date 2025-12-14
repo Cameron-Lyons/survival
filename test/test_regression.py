@@ -1,5 +1,6 @@
 import os
 import sys
+
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -38,9 +39,9 @@ try:
         tol_chol=1e-9,
     )
     print(" survreg executed successfully")
-    assert hasattr(result, 'coefficients'), "Should have coefficients attribute"
-    assert hasattr(result, 'log_likelihood'), "Should have log_likelihood attribute"
-    assert hasattr(result, 'iterations'), "Should have iterations attribute"
+    assert hasattr(result, "coefficients"), "Should have coefficients attribute"
+    assert hasattr(result, "log_likelihood"), "Should have log_likelihood attribute"
+    assert hasattr(result, "iterations"), "Should have iterations attribute"
     assert isinstance(result.coefficients, list), "Coefficients should be a list"
     print(f"   Coefficients: {result.coefficients}")
     print(f"   Log-likelihood: {result.log_likelihood:.4f}")
@@ -78,8 +79,8 @@ try:
     model.fit(n_iters=5)
     print(" model.fit executed successfully")
 
-    assert hasattr(model, 'baseline_hazard'), "Should have baseline_hazard attribute"
-    assert hasattr(model, 'risk_scores'), "Should have risk_scores attribute"
+    assert hasattr(model, "baseline_hazard"), "Should have baseline_hazard attribute"
+    assert hasattr(model, "risk_scores"), "Should have risk_scores attribute"
     print(f"   Baseline hazard length: {len(model.baseline_hazard)}")
     print(f"   Risk scores: {model.risk_scores}")
 
@@ -119,4 +120,3 @@ except Exception as e:
 
     traceback.print_exc()
     sys.exit(1)
-

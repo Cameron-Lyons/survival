@@ -1,5 +1,6 @@
 import os
 import sys
+
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -72,9 +73,9 @@ try:
         computation_type=0,
     )
     print(" survfitkm executed successfully")
-    assert hasattr(result, 'time'), "Should have time attribute"
-    assert hasattr(result, 'estimate'), "Should have estimate attribute"
-    assert hasattr(result, 'std_err'), "Should have std_err attribute"
+    assert hasattr(result, "time"), "Should have time attribute"
+    assert hasattr(result, "estimate"), "Should have estimate attribute"
+    assert hasattr(result, "std_err"), "Should have std_err attribute"
     assert len(result.time) > 0, "Should have time points"
     assert len(result.estimate) == len(result.time), "Estimate should match time length"
     print(f"   Time points: {len(result.time)}")
@@ -93,9 +94,9 @@ try:
         rho=0.0,
     )
     print(" survdiff2 executed successfully")
-    assert hasattr(result, 'observed'), "Should have observed attribute"
-    assert hasattr(result, 'expected'), "Should have expected attribute"
-    assert hasattr(result, 'chi_squared'), "Should have chi_squared attribute"
+    assert hasattr(result, "observed"), "Should have observed attribute"
+    assert hasattr(result, "expected"), "Should have expected attribute"
+    assert hasattr(result, "chi_squared"), "Should have chi_squared attribute"
     assert len(result.observed) > 0, "Should have observed values"
     print(f"   Observed: {result.observed}")
     print(f"   Expected: {result.expected}")

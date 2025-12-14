@@ -1,5 +1,6 @@
 import os
 import sys
+
 from typing import Any, Tuple
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -65,10 +66,10 @@ try:
         keep=keep,
     )
     print(" finegray executed successfully")
-    assert hasattr(result, 'row'), "Should have row attribute"
-    assert hasattr(result, 'start'), "Should have start attribute"
-    assert hasattr(result, 'end'), "Should have end attribute"
-    assert hasattr(result, 'wt'), "Should have wt attribute"
+    assert hasattr(result, "row"), "Should have row attribute"
+    assert hasattr(result, "start"), "Should have start attribute"
+    assert hasattr(result, "end"), "Should have end attribute"
+    assert hasattr(result, "wt"), "Should have wt attribute"
     assert len(result.row) > 0, "Should have rows"
     print(f"   Number of rows: {len(result.row)}")
     print(f"   First row: {result.row[0]}")
