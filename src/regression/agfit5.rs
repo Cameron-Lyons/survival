@@ -358,7 +358,7 @@ pub fn agfit5(
     }
 
     let standard_errors: Vec<f64> = (0..nvar2)
-        .map(|i| (variance_matrix[i][i] as f64).sqrt())
+        .map(|i| variance_matrix[i][i].sqrt())
         .collect();
 
     let p_values: Vec<f64> = (0..nvar2)
