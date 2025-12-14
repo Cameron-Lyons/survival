@@ -46,7 +46,7 @@ struct SurvFitAJInternal {
 }
 
 impl SurvFitAJInternal {
-    fn to_python_result(self) -> SurvFitAJ {
+    fn into_python_result(self) -> SurvFitAJ {
         let array2_to_vec = |arr: Array2<f64>| -> Vec<Vec<f64>> {
             arr.outer_iter().map(|row| row.to_vec()).collect()
         };
@@ -424,5 +424,5 @@ pub fn survfitaj(
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("survfitaj failed: {}", e)))?;
 
-    Ok(result.to_python_result())
+    Ok(result.into_python_result())
 }
