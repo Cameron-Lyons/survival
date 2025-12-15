@@ -71,8 +71,11 @@ jobs:
     - name: Install maturin
       run: pip install maturin
 
-    - name: Build and install Python module
-      run: maturin develop --release
+    - name: Build Python wheel
+      run: maturin build --release
+
+    - name: Install Python module
+      run: pip install target/wheels/survival-*.whl
 
     - name: Run Python tests
       run: python test/test_all.py
