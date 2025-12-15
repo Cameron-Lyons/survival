@@ -156,7 +156,10 @@ pub fn survdiff2_internal(
         while n < ntotal && input.strata[n] != 1 {
             n += 1;
         }
-        n += 1;
+        // Only increment past the stratum marker if we found one (didn't hit the end)
+        if n < ntotal {
+            n += 1;
+        }
         let _n_in_stratum = n - istart;
 
         if params.rho != 0.0 {
@@ -182,7 +185,12 @@ pub fn survdiff2_internal(
         }
 
         let mut i = n.saturating_sub(1);
-        while i >= istart {
+        loop {
+            // Exit if we've gone before the start of this stratum
+            if i < istart || (istart == 0 && n == 0) {
+                break;
+            }
+
             let current_time = input.time[i];
             let mut deaths = 0;
             let mut j = i;
@@ -196,13 +204,23 @@ pub fn survdiff2_internal(
                 *r = 0.0;
             }
 
-            while j >= istart && input.time[j] == current_time {
+            // Process all elements with the same time, going backwards
+            // Restructured to avoid usize underflow when j reaches 0
+            loop {
                 let k = (input.group[j] - 1) as usize;
                 output.risk[k] += 1.0;
                 deaths += input.status[j] as usize;
+
+                // Check if we can and should continue to the previous element
+                if j == istart {
+                    break;
+                }
+                if input.time[j - 1] != current_time {
+                    break;
+                }
                 j -= 1;
             }
-            j += 1;
+            // j now points to the first element of this time group
 
             let nrisk = (n - j) as f64;
             if deaths > 0 {
@@ -235,7 +253,11 @@ pub fn survdiff2_internal(
                 }
             }
 
-            i = j.saturating_sub(1);
+            // Exit if we've processed down to the start of the stratum
+            if j == istart {
+                break;
+            }
+            i = j - 1;
         }
 
         istart = n;

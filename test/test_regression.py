@@ -82,7 +82,7 @@ try:
     print(f"   Baseline hazard length: {len(model.baseline_hazard)}")
     print(f"   Risk scores: {model.risk_scores}")
 
-    coefficients = model.get_coefficients()
+    coefficients = model.coefficients
     print(f"   Coefficients: {coefficients}")
 
     new_covariates: list[list[float]] = [[1.0, 2.0], [2.0, 3.0]]
