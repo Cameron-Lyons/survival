@@ -341,11 +341,11 @@ pub fn perform_pyears_calculation(
 
     Python::attach(|py| {
         let dict = PyDict::new(py);
-        dict.set_item("pyears", pyears).unwrap();
-        dict.set_item("pn", pn).unwrap();
-        dict.set_item("pcount", pcount).unwrap();
-        dict.set_item("pexpect", pexpect).unwrap();
-        dict.set_item("offtable", offtable).unwrap();
+        dict.set_item("pyears", pyears)?;
+        dict.set_item("pn", pn)?;
+        dict.set_item("pcount", pcount)?;
+        dict.set_item("pexpect", pexpect)?;
+        dict.set_item("offtable", offtable)?;
         Ok(dict.into())
     })
 }

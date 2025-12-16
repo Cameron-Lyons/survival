@@ -127,22 +127,6 @@ pub(crate) fn coxscho(
     }
 }
 
-/// Calculate Schoenfeld residuals for Cox proportional hazards model.
-///
-/// Schoenfeld residuals are used to test the proportional hazards assumption.
-/// For each covariate, the residual at each event time is the difference between
-/// the observed covariate value and the expected value under the null hypothesis.
-///
-/// # Arguments
-/// * `y` - Survival data as [start_times..., stop_times..., event_indicators...]
-/// * `score` - Risk scores (exp(linear predictor))
-/// * `strata` - Stratum indicators (1 = end of stratum, 0 otherwise)
-/// * `covar` - Covariate matrix in column-major order
-/// * `nvar` - Number of covariates
-/// * `method` - Efron (1) or Breslow (0) method for ties
-///
-/// # Returns
-/// Schoenfeld residuals matrix in column-major order (only for event observations)
 #[pyfunction]
 #[pyo3(signature = (y, score, strata, covar, nvar, method=0))]
 pub fn schoenfeld_residuals(

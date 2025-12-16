@@ -481,20 +481,16 @@ fn perform_cox_regression_internal(
     ) {
         Ok(result) => Python::attach(|py| {
             let dict = PyDict::new(py);
-            dict.set_item("coefficients", result.coefficients).unwrap();
-            dict.set_item("standard_errors", result.standard_errors)
-                .unwrap();
-            dict.set_item("p_values", result.p_values).unwrap();
-            dict.set_item("confidence_intervals", result.confidence_intervals)
-                .unwrap();
-            dict.set_item("log_likelihood", result.log_likelihood)
-                .unwrap();
-            dict.set_item("score", result.score).unwrap();
-            dict.set_item("wald_test", result.wald_test).unwrap();
-            dict.set_item("iterations", result.iterations).unwrap();
-            dict.set_item("converged", result.converged).unwrap();
-            dict.set_item("variance_matrix", result.variance_matrix)
-                .unwrap();
+            dict.set_item("coefficients", result.coefficients)?;
+            dict.set_item("standard_errors", result.standard_errors)?;
+            dict.set_item("p_values", result.p_values)?;
+            dict.set_item("confidence_intervals", result.confidence_intervals)?;
+            dict.set_item("log_likelihood", result.log_likelihood)?;
+            dict.set_item("score", result.score)?;
+            dict.set_item("wald_test", result.wald_test)?;
+            dict.set_item("iterations", result.iterations)?;
+            dict.set_item("converged", result.converged)?;
+            dict.set_item("variance_matrix", result.variance_matrix)?;
             Ok(dict.into())
         }),
         Err(e) => Err(PyRuntimeError::new_err(format!(

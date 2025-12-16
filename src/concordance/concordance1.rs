@@ -203,15 +203,14 @@ pub fn perform_concordance1_calculation(
 
     Python::attach(|py| {
         let dict = PyDict::new(py);
-        dict.set_item("concordant", concordant).unwrap();
-        dict.set_item("discordant", discordant).unwrap();
-        dict.set_item("tied_x", tied_x).unwrap();
-        dict.set_item("tied_y", tied_y).unwrap();
-        dict.set_item("tied_xy", tied_xy).unwrap();
-        dict.set_item("concordance_index", concordance_index)
-            .unwrap();
-        dict.set_item("total_pairs", total_pairs).unwrap();
-        dict.set_item("counts", count).unwrap();
+        dict.set_item("concordant", concordant)?;
+        dict.set_item("discordant", discordant)?;
+        dict.set_item("tied_x", tied_x)?;
+        dict.set_item("tied_y", tied_y)?;
+        dict.set_item("tied_xy", tied_xy)?;
+        dict.set_item("concordance_index", concordance_index)?;
+        dict.set_item("total_pairs", total_pairs)?;
+        dict.set_item("counts", count)?;
         Ok(dict.into())
     })
 }

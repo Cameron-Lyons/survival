@@ -155,22 +155,6 @@ pub(crate) fn cox_score_residuals_internal(data: CoxScoreData, params: CoxScoreP
     resid
 }
 
-/// Calculate Cox score (dfbeta) residuals.
-///
-/// Score residuals measure the influence of each observation on the coefficient estimates.
-/// They are useful for identifying influential observations and assessing model fit.
-///
-/// # Arguments
-/// * `y` - Survival data as [time..., status...] (length 2*n)
-/// * `strata` - Stratum indicators for each observation
-/// * `covar` - Covariate matrix in row-major order (n * nvar)
-/// * `score` - Risk scores (exp(linear predictor))
-/// * `weights` - Observation weights
-/// * `nvar` - Number of covariates
-/// * `method` - Efron (1) or Breslow (0) method for ties
-///
-/// # Returns
-/// Score residuals matrix in row-major order (n * nvar)
 #[pyfunction]
 #[pyo3(signature = (y, strata, covar, score, weights, nvar, method=0))]
 pub fn cox_score_residuals(

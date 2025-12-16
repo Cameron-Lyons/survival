@@ -336,7 +336,7 @@ impl CoxPHModel {
 
         let times = time_points.unwrap_or_else(|| {
             let mut t = self.event_times.clone();
-            t.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             t.dedup();
             t
         });

@@ -6,7 +6,7 @@ fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     if x < cuts[0] || x >= cuts[cuts.len() - 1] {
         return None;
     }
-    match cuts.binary_search_by(|probe| probe.partial_cmp(&x).unwrap()) {
+    match cuts.binary_search_by(|probe| probe.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal)) {
         Ok(i) => {
             if i < cuts.len() - 1 {
                 Some(i)

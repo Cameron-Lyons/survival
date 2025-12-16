@@ -1,6 +1,5 @@
 use pyo3::prelude::*;
 
-/// Dataset for conditional logistic regression (matched case-control studies).
 #[pyclass]
 #[derive(Clone)]
 pub struct ClogitDataSet {
@@ -11,7 +10,6 @@ pub struct ClogitDataSet {
 
 #[pymethods]
 impl ClogitDataSet {
-    /// Create a new empty dataset.
     #[new]
     pub fn new() -> ClogitDataSet {
         ClogitDataSet {
@@ -21,24 +19,16 @@ impl ClogitDataSet {
         }
     }
 
-    /// Add an observation to the dataset.
-    ///
-    /// # Arguments
-    /// * `case_control_status` - 1 for case, 0 for control
-    /// * `stratum` - Matching stratum identifier
-    /// * `covariates` - Vector of covariate values
     pub fn add_observation(&mut self, case_control_status: u8, stratum: u8, covariates: Vec<f64>) {
         self.case_control_status.push(case_control_status);
         self.strata.push(stratum);
         self.covariates.push(covariates);
     }
 
-    /// Get the number of observations in the dataset.
     pub fn get_num_observations(&self) -> usize {
         self.case_control_status.len()
     }
 
-    /// Get the number of covariates.
     pub fn get_num_covariates(&self) -> usize {
         if self.covariates.is_empty() {
             0
@@ -61,11 +51,6 @@ impl ClogitDataSet {
     }
 }
 
-/// Conditional logistic regression for matched case-control studies.
-///
-/// This model is appropriate when cases are matched to controls on certain
-/// characteristics, creating strata. It estimates odds ratios while
-/// controlling for the matching variables.
 #[pyclass]
 pub struct ConditionalLogisticRegression {
     data: ClogitDataSet,
@@ -83,10 +68,6 @@ pub struct ConditionalLogisticRegression {
 
 #[pymethods]
 impl ConditionalLogisticRegression {
-    /// Create a new conditional logistic regression model.
-    ///
-    /// # Arguments
-    /// * `data` - The dataset with case-control status, strata, and covariates
     #[new]
     #[pyo3(signature = (data, max_iter=100, tol=1e-6))]
     pub fn new(data: ClogitDataSet, max_iter: u32, tol: f64) -> ConditionalLogisticRegression {
@@ -100,7 +81,6 @@ impl ConditionalLogisticRegression {
         }
     }
 
-    /// Fit the conditional logistic regression model using iterative reweighted least squares.
     pub fn fit(&mut self) {
         let num_covariates = self.data.get_num_covariates();
         if num_covariates == 0 {
@@ -147,13 +127,6 @@ impl ConditionalLogisticRegression {
         }
     }
 
-    /// Predict the odds for new covariate values.
-    ///
-    /// # Arguments
-    /// * `covariates` - Vector of covariate values
-    ///
-    /// # Returns
-    /// The predicted odds (exp(linear predictor))
     pub fn predict(&self, covariates: Vec<f64>) -> f64 {
         let exp_sum: f64 = self
             .coefficients
@@ -164,7 +137,6 @@ impl ConditionalLogisticRegression {
         exp_sum.exp()
     }
 
-    /// Get odds ratios (exp(coefficients)).
     pub fn odds_ratios(&self) -> Vec<f64> {
         self.coefficients.iter().map(|c| c.exp()).collect()
     }

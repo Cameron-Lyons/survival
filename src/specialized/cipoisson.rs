@@ -1,11 +1,5 @@
-#![allow(dead_code)]
 use pyo3::prelude::*;
 use statrs::distribution::{ContinuousCDF, Gamma, Normal};
-
-enum Method {
-    Exact,
-    Anscombe,
-}
 
 #[pyfunction]
 pub fn cipoisson_exact(k: u32, time: f64, p: f64) -> PyResult<(f64, f64)> {

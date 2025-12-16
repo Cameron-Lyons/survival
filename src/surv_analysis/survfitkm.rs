@@ -1,31 +1,22 @@
 use pyo3::prelude::*;
 
-/// Output from Kaplan-Meier survival estimation.
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct SurvFitKMOutput {
-    /// Unique event times
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Number at risk at each time point
     #[pyo3(get)]
     pub n_risk: Vec<f64>,
-    /// Number of events at each time point
     #[pyo3(get)]
     pub n_event: Vec<f64>,
-    /// Number censored at each time point
     #[pyo3(get)]
     pub n_censor: Vec<f64>,
-    /// Survival probability estimate
     #[pyo3(get)]
     pub estimate: Vec<f64>,
-    /// Standard error of the estimate
     #[pyo3(get)]
     pub std_err: Vec<f64>,
-    /// Lower confidence bound (95% CI)
     #[pyo3(get)]
     pub conf_lower: Vec<f64>,
-    /// Upper confidence bound (95% CI)
     #[pyo3(get)]
     pub conf_upper: Vec<f64>,
 }
@@ -73,7 +64,7 @@ pub fn survfitkm_internal(
             unique_times.push(t);
         }
     }
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let dtime = unique_times;
 
     let ntime = dtime.len();
@@ -120,8 +111,6 @@ pub fn survfitkm_internal(
         std_err[i] = (current_estimate * current_estimate * cumulative_variance).sqrt();
     }
 
-    // Calculate 95% confidence intervals using log transformation (more accurate for survival)
-    // CI: S(t) * exp(±z * se / S(t)) where z = 1.96 for 95% CI
     let z = 1.96;
     let conf_lower: Vec<f64> = estimate
         .iter()

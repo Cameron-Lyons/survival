@@ -214,12 +214,11 @@ pub fn perform_score_calculation(
 
     Python::attach(|py| {
         let dict = PyDict::new(py);
-        dict.set_item("residuals", residuals).unwrap();
-        dict.set_item("n_observations", n).unwrap();
-        dict.set_item("n_variables", nvar).unwrap();
-        dict.set_item("method", if method == 0 { "breslow" } else { "efron" })
-            .unwrap();
-        dict.set_item("summary_stats", summary_stats).unwrap();
+        dict.set_item("residuals", residuals)?;
+        dict.set_item("n_observations", n)?;
+        dict.set_item("n_variables", nvar)?;
+        dict.set_item("method", if method == 0 { "breslow" } else { "efron" })?;
+        dict.set_item("summary_stats", summary_stats)?;
         Ok(dict.into())
     })
 }

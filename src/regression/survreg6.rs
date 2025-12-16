@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![allow(clippy::redundant_closure)]
 use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;

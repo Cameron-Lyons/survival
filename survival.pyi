@@ -238,28 +238,219 @@ def finegray(
     keep: List[bool],
 ) -> FineGrayOutput: ...
 
-def perform_cox_regression_frailty(*args: Any, **kwargs: Any) -> Any: ...
-def perform_pyears_calculation(*args: Any, **kwargs: Any) -> Any: ...
-def perform_concordance1_calculation(*args: Any, **kwargs: Any) -> Any: ...
-def perform_concordance3_calculation(*args: Any, **kwargs: Any) -> Any: ...
-def perform_concordance_calculation(*args: Any, **kwargs: Any) -> Any: ...
-def perform_score_calculation(*args: Any, **kwargs: Any) -> Any: ...
-def perform_agscore3_calculation(*args: Any, **kwargs: Any) -> Any: ...
-def perform_pystep_calculation(*args: Any, **kwargs: Any) -> Any: ...
-def perform_pystep_simple_calculation(*args: Any, **kwargs: Any) -> Any: ...
-def collapse(*args: Any, **kwargs: Any) -> Any: ...
-def cox_callback(*args: Any, **kwargs: Any) -> Any: ...
-def coxcount1(*args: Any, **kwargs: Any) -> Any: ...
-def coxcount2(*args: Any, **kwargs: Any) -> Any: ...
-def norisk(*args: Any, **kwargs: Any) -> Any: ...
-def cipoisson(*args: Any, **kwargs: Any) -> Any: ...
-def cipoisson_exact(*args: Any, **kwargs: Any) -> Any: ...
-def cipoisson_anscombe(*args: Any, **kwargs: Any) -> Any: ...
-def concordance(*args: Any, **kwargs: Any) -> Any: ...
-def agexact(*args: Any, **kwargs: Any) -> Any: ...
-def agsurv4(*args: Any, **kwargs: Any) -> Any: ...
-def agsurv5(*args: Any, **kwargs: Any) -> Any: ...
-def agmart(*args: Any, **kwargs: Any) -> Any: ...
+def perform_cox_regression_frailty(
+    time: List[float],
+    event: List[int],
+    covariates: List[List[float]],
+    offset: Optional[List[float]] = None,
+    weights: Optional[List[float]] = None,
+    strata: Optional[List[int]] = None,
+    frail: Optional[List[int]] = None,
+    max_iter: Optional[int] = None,
+    eps: Optional[float] = None,
+) -> Dict[str, Any]: ...
+
+def perform_pyears_calculation(
+    n: int,
+    ny: int,
+    doevent: bool,
+    doexpect: bool,
+    edim: int,
+    efac: List[int],
+    edims: List[int],
+    ecut: List[float],
+    expect: List[float],
+    y: List[float],
+    wt: List[float],
+    data: List[float],
+    odim: int,
+    ofac: List[int],
+    odims: List[int],
+    ocut: List[float],
+) -> Dict[str, Any]: ...
+
+def perform_concordance1_calculation(
+    y: List[float],
+    wt: List[float],
+    indx: List[int],
+    ntree: int,
+    sortstop: List[int],
+    sortstart: List[int],
+) -> Dict[str, Any]: ...
+
+def perform_concordance3_calculation(
+    y: List[float],
+    wt: List[float],
+    indx: List[int],
+    ntree: int,
+    sortstop: List[int],
+    sortstart: List[int],
+    nvar: int,
+    covar: List[float],
+    need_residuals: bool,
+) -> Dict[str, Any]: ...
+
+def perform_concordance_calculation(
+    y: List[float],
+    wt: List[float],
+    indx: List[int],
+    ntree: int,
+    sortstop: List[int],
+    sortstart: Optional[List[int]] = None,
+    nvar: Optional[int] = None,
+    covar: Optional[List[float]] = None,
+    need_residuals: bool = False,
+) -> Dict[str, Any]: ...
+
+def perform_score_calculation(
+    time_data: List[float],
+    covariates: List[float],
+    strata: List[int],
+    score: List[float],
+    weights: List[float],
+    method: int,
+) -> Dict[str, Any]: ...
+
+def perform_agscore3_calculation(
+    time_data: List[float],
+    covariates: List[float],
+    strata: List[int],
+    score: List[float],
+    weights: List[float],
+    method: int,
+    sort1: List[int],
+) -> Dict[str, Any]: ...
+
+def perform_pystep_calculation(
+    edim: int,
+    data: List[float],
+    efac: List[int],
+    edims: List[int],
+    ecut: List[List[float]],
+    tmax: float,
+) -> Dict[str, Any]: ...
+
+def perform_pystep_simple_calculation(
+    odim: int,
+    data: List[float],
+    ofac: List[int],
+    odims: List[int],
+    ocut: List[List[float]],
+    timeleft: float,
+) -> Dict[str, Any]: ...
+
+def collapse(
+    y: List[float],
+    x: List[int],
+    istate: List[int],
+    id: List[int],
+    wt: List[float],
+    order: List[int],
+) -> Dict[str, Any]: ...
+
+def cox_callback(
+    time1: List[float],
+    time2: List[float],
+    status: List[int],
+    covar: List[float],
+    offset: List[float],
+    weights: List[float],
+    strata: List[int],
+    sort1: List[int],
+    sort2: List[int],
+    method: int,
+    eps: float,
+    tol_chol: float,
+    beta: List[float],
+) -> Dict[str, Any]: ...
+
+def coxcount1(
+    time1: List[float],
+    time2: List[float],
+    status: List[int],
+    strata: List[int],
+    sort1: List[int],
+    sort2: List[int],
+) -> Dict[str, Any]: ...
+
+def coxcount2(
+    time1: List[float],
+    time2: List[float],
+    status: List[int],
+    strata: List[int],
+    sort1: List[int],
+    sort2: List[int],
+) -> Dict[str, Any]: ...
+
+def norisk(
+    time1: List[float],
+    time2: List[float],
+    status: List[int],
+    sort1: List[int],
+    sort2: List[int],
+    strata: List[int],
+) -> List[int]: ...
+
+def cipoisson(k: int, time: float, p: float, method: str) -> Tuple[float, float]: ...
+def cipoisson_exact(k: int, time: float, p: float) -> Tuple[float, float]: ...
+def cipoisson_anscombe(k: int, time: float, p: float) -> Tuple[float, float]: ...
+
+def concordance(
+    y: List[float],
+    wt: List[float],
+    indx: List[int],
+    ntree: int,
+    sortstop: List[int],
+    sortstart: List[int],
+    strata: List[int],
+) -> Dict[str, Any]: ...
+
+def agexact(
+    maxiter: int,
+    nused: int,
+    nvar: int,
+    start: List[float],
+    stop: List[float],
+    event: List[int],
+    covar: List[float],
+    offset: List[float],
+    strata: List[int],
+    sort: List[int],
+    beta: List[float],
+    eps: float,
+    tol_chol: float,
+) -> Dict[str, Any]: ...
+
+def agsurv4(
+    y: List[float],
+    wt: List[float],
+    surv: List[float],
+    varh: List[float],
+    nrisk: List[float],
+    nevent: List[float],
+    ncensor: List[float],
+    strata: List[int],
+) -> Dict[str, Any]: ...
+
+def agsurv5(
+    y: List[float],
+    wt: List[float],
+    id: List[int],
+    cluster: List[int],
+    risk: List[float],
+    position: List[int],
+    strata: List[int],
+    se_type: int,
+) -> Dict[str, Any]: ...
+
+def agmart(
+    time: List[float],
+    status: List[int],
+    score: List[float],
+    weights: List[float],
+    strata: List[int],
+    method: int,
+) -> List[float]: ...
 
 def brier(
     predictions: List[float],

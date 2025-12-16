@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
-    match cuts.binary_search_by(|&cut| cut.partial_cmp(&x).unwrap()) {
+    match cuts.binary_search_by(|&cut| cut.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal)) {
         Ok(i) => {
             if i < cuts.len() - 1 {
                 Some(i)
@@ -208,11 +208,11 @@ pub fn perform_pystep_calculation(
 
     Python::attach(|py| {
         let dict = PyDict::new(py);
-        dict.set_item("time_step", time_step).unwrap();
-        dict.set_item("current_index", current_index).unwrap();
-        dict.set_item("next_index", next_index).unwrap();
-        dict.set_item("weight", weight).unwrap();
-        dict.set_item("updated_data", data_mut).unwrap();
+        dict.set_item("time_step", time_step)?;
+        dict.set_item("current_index", current_index)?;
+        dict.set_item("next_index", next_index)?;
+        dict.set_item("weight", weight)?;
+        dict.set_item("updated_data", data_mut)?;
         Ok(dict.into())
     })
 }
@@ -252,8 +252,8 @@ pub fn perform_pystep_simple_calculation(
 
     Python::attach(|py| {
         let dict = PyDict::new(py);
-        dict.set_item("time_step", time_step).unwrap();
-        dict.set_item("index", index).unwrap();
+        dict.set_item("time_step", time_step)?;
+        dict.set_item("index", index)?;
         Ok(dict.into())
     })
 }
