@@ -17,6 +17,7 @@ use concordance::concordance1::perform_concordance1_calculation;
 use concordance::concordance3::perform_concordance3_calculation;
 use concordance::concordance5::perform_concordance_calculation;
 use core::coxcount1::{CoxCountOutput, coxcount1, coxcount2};
+use core::coxscho::schoenfeld_residuals;
 use core::pspline::PSpline;
 use python::cox_py_callback::cox_callback;
 use python::pyears3b::perform_pyears_calculation;
@@ -24,12 +25,14 @@ use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculati
 use regression::aareg::{AaregOptions, aareg as aareg_function};
 use regression::agfit5::perform_cox_regression_frailty;
 use regression::blogit::LinkFunctionParams;
+use regression::clogit::{ClogitDataSet, ConditionalLogisticRegression};
 use regression::coxph::{CoxPHModel, Subject};
 use regression::survreg6::{DistributionType, SurvivalFit, survreg};
 use residuals::agmart::agmart;
 use residuals::coxmart::coxmart;
 use scoring::agscore2::perform_score_calculation;
 use scoring::agscore3::perform_agscore3_calculation;
+use scoring::coxscore2::cox_score_residuals;
 use specialized::brier::{brier, integrated_brier};
 use specialized::cch::{CchMethod, CohortData};
 use specialized::cipoisson::{cipoisson, cipoisson_anscombe, cipoisson_exact};
@@ -82,6 +85,8 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge2, &m)?)?;
     m.add_function(wrap_pyfunction!(tmerge3, &m)?)?;
     m.add_function(wrap_pyfunction!(survsplit, &m)?)?;
+    m.add_function(wrap_pyfunction!(schoenfeld_residuals, &m)?)?;
+    m.add_function(wrap_pyfunction!(cox_score_residuals, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -97,5 +102,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CchMethod>()?;
     m.add_class::<CohortData>()?;
     m.add_class::<SplitResult>()?;
+    m.add_class::<ClogitDataSet>()?;
+    m.add_class::<ConditionalLogisticRegression>()?;
     Ok(())
 }

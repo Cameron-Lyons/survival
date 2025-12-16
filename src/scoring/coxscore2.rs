@@ -1,4 +1,5 @@
-#[allow(dead_code)]
+use pyo3::prelude::*;
+
 pub(crate) struct CoxScoreData<'a> {
     pub y: &'a [f64],
     pub strata: &'a [i32],
@@ -7,15 +8,13 @@ pub(crate) struct CoxScoreData<'a> {
     pub weights: &'a [f64],
 }
 
-#[allow(dead_code)]
 pub(crate) struct CoxScoreParams {
     pub method: i32,
     pub n: usize,
     pub nvar: usize,
 }
 
-#[allow(dead_code)]
-pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) -> Vec<f64> {
+pub(crate) fn cox_score_residuals_internal(data: CoxScoreData, params: CoxScoreParams) -> Vec<f64> {
     let time = &data.y[0..params.n];
     let status = &data.y[params.n..2 * params.n];
     let mut resid = vec![0.0; params.n * params.nvar];
@@ -154,4 +153,67 @@ pub(crate) fn cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) ->
     }
 
     resid
+}
+
+/// Calculate Cox score (dfbeta) residuals.
+///
+/// Score residuals measure the influence of each observation on the coefficient estimates.
+/// They are useful for identifying influential observations and assessing model fit.
+///
+/// # Arguments
+/// * `y` - Survival data as [time..., status...] (length 2*n)
+/// * `strata` - Stratum indicators for each observation
+/// * `covar` - Covariate matrix in row-major order (n * nvar)
+/// * `score` - Risk scores (exp(linear predictor))
+/// * `weights` - Observation weights
+/// * `nvar` - Number of covariates
+/// * `method` - Efron (1) or Breslow (0) method for ties
+///
+/// # Returns
+/// Score residuals matrix in row-major order (n * nvar)
+#[pyfunction]
+#[pyo3(signature = (y, strata, covar, score, weights, nvar, method=0))]
+pub fn cox_score_residuals(
+    y: Vec<f64>,
+    strata: Vec<i32>,
+    covar: Vec<f64>,
+    score: Vec<f64>,
+    weights: Vec<f64>,
+    nvar: usize,
+    method: i32,
+) -> PyResult<Vec<f64>> {
+    let n = score.len();
+
+    if y.len() < 2 * n {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "y array must have length >= 2 * n (time, status)",
+        ));
+    }
+    if strata.len() < n {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "strata array length must match n",
+        ));
+    }
+    if covar.len() < n * nvar {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "covar array must have length >= n * nvar",
+        ));
+    }
+    if weights.len() < n {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "weights array length must match n",
+        ));
+    }
+
+    let data = CoxScoreData {
+        y: &y,
+        strata: &strata,
+        covar: &covar,
+        score: &score,
+        weights: &weights,
+    };
+
+    let params = CoxScoreParams { method, n, nvar };
+
+    Ok(cox_score_residuals_internal(data, params))
 }

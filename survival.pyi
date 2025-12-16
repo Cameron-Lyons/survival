@@ -84,12 +84,15 @@ class CoxPHModel:
     def add_subject(self, subject: Subject) -> None: ...
 
 class SurvFitKMOutput:
+    """Output from Kaplan-Meier survival estimation."""
     time: List[float]
     n_risk: List[float]
     n_event: List[float]
     n_censor: List[float]
     estimate: List[float]
     std_err: List[float]
+    conf_lower: List[float]
+    conf_upper: List[float]
 
 class FineGrayOutput:
     row: List[int]
@@ -153,6 +156,35 @@ class SplitResult:
     start: List[float]
     end: List[float]
     censor: List[bool]
+
+class ClogitDataSet:
+    """Dataset for conditional logistic regression (matched case-control studies)."""
+    def __init__(self) -> None: ...
+    def add_observation(
+        self,
+        case_control_status: int,
+        stratum: int,
+        covariates: List[float],
+    ) -> None: ...
+    def get_num_observations(self) -> int: ...
+    def get_num_covariates(self) -> int: ...
+
+class ConditionalLogisticRegression:
+    """Conditional logistic regression for matched case-control studies."""
+    coefficients: List[float]
+    max_iter: int
+    tol: float
+    iterations: int
+    converged: bool
+    def __init__(
+        self,
+        data: ClogitDataSet,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+    ) -> None: ...
+    def fit(self) -> None: ...
+    def predict(self, covariates: List[float]) -> float: ...
+    def odds_ratios(self) -> List[float]: ...
 
 def aareg(options: AaregOptions) -> Dict[str, Any]: ...
 
@@ -268,6 +300,58 @@ def survsplit(
     tstop: List[float],
     cut: List[float],
 ) -> SplitResult: ...
+
+def schoenfeld_residuals(
+    y: List[float],
+    score: List[float],
+    strata: List[int],
+    covar: List[float],
+    nvar: int,
+    method: int = 0,
+) -> List[float]:
+    """Calculate Schoenfeld residuals for Cox proportional hazards model.
+
+    Schoenfeld residuals are used to test the proportional hazards assumption.
+
+    Args:
+        y: Survival data as [start_times..., stop_times..., event_indicators...]
+        score: Risk scores (exp(linear predictor))
+        strata: Stratum indicators (1 = end of stratum, 0 otherwise)
+        covar: Covariate matrix in column-major order
+        nvar: Number of covariates
+        method: Efron (1) or Breslow (0) method for ties
+
+    Returns:
+        Schoenfeld residuals matrix in column-major order
+    """
+    ...
+
+def cox_score_residuals(
+    y: List[float],
+    strata: List[int],
+    covar: List[float],
+    score: List[float],
+    weights: List[float],
+    nvar: int,
+    method: int = 0,
+) -> List[float]:
+    """Calculate Cox score (dfbeta) residuals.
+
+    Score residuals measure the influence of each observation on coefficient estimates.
+
+    Args:
+        y: Survival data as [time..., status...] (length 2*n)
+        strata: Stratum indicators for each observation
+        covar: Covariate matrix in row-major order (n * nvar)
+        score: Risk scores (exp(linear predictor))
+        weights: Observation weights
+        nvar: Number of covariates
+        method: Efron (1) or Breslow (0) method for ties
+
+    Returns:
+        Score residuals matrix in row-major order (n * nvar)
+    """
+    ...
 
 def survfitaj(
     y: List[float],

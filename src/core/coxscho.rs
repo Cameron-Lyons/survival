@@ -1,18 +1,17 @@
-#[allow(dead_code)]
+use pyo3::prelude::*;
+
 pub(crate) struct CoxSchoInput<'a> {
     pub y: &'a [f64],
     pub score: &'a [f64],
     pub strata: &'a [i32],
 }
 
-#[allow(dead_code)]
 pub(crate) struct CoxSchoParams {
     pub nused: usize,
     pub nvar: usize,
     pub method: i32,
 }
 
-#[allow(dead_code)]
 pub(crate) fn coxscho(
     params: CoxSchoParams,
     input: CoxSchoInput,
@@ -126,4 +125,68 @@ pub(crate) fn coxscho(
             k += 1;
         }
     }
+}
+
+/// Calculate Schoenfeld residuals for Cox proportional hazards model.
+///
+/// Schoenfeld residuals are used to test the proportional hazards assumption.
+/// For each covariate, the residual at each event time is the difference between
+/// the observed covariate value and the expected value under the null hypothesis.
+///
+/// # Arguments
+/// * `y` - Survival data as [start_times..., stop_times..., event_indicators...]
+/// * `score` - Risk scores (exp(linear predictor))
+/// * `strata` - Stratum indicators (1 = end of stratum, 0 otherwise)
+/// * `covar` - Covariate matrix in column-major order
+/// * `nvar` - Number of covariates
+/// * `method` - Efron (1) or Breslow (0) method for ties
+///
+/// # Returns
+/// Schoenfeld residuals matrix in column-major order (only for event observations)
+#[pyfunction]
+#[pyo3(signature = (y, score, strata, covar, nvar, method=0))]
+pub fn schoenfeld_residuals(
+    y: Vec<f64>,
+    score: Vec<f64>,
+    strata: Vec<i32>,
+    covar: Vec<f64>,
+    nvar: usize,
+    method: i32,
+) -> PyResult<Vec<f64>> {
+    let nused = score.len();
+
+    if y.len() < 3 * nused {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "y array must have length >= 3 * n (start, stop, event)",
+        ));
+    }
+    if strata.len() < nused {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "strata array length must match score length",
+        ));
+    }
+    if covar.len() < nvar * nused {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "covar array must have length >= nvar * n",
+        ));
+    }
+
+    let mut covar_copy = covar.clone();
+    let mut work = vec![0.0; 3 * nvar];
+
+    let params = CoxSchoParams {
+        nused,
+        nvar,
+        method,
+    };
+
+    let input = CoxSchoInput {
+        y: &y,
+        score: &score,
+        strata: &strata,
+    };
+
+    coxscho(params, input, &mut covar_copy, &mut work);
+
+    Ok(covar_copy)
 }
