@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod tests {
+    use crate::matrix::chinv2::chinv2;
+    use crate::matrix::cholesky2::cholesky2;
     use crate::surv_analysis::survdiff2::{
         SurvDiffInput, SurvDiffOutput, SurvDiffParams, survdiff2_internal,
     };
@@ -313,7 +315,6 @@ mod tests {
         assert_eq!(total_obs, 0.0, "No observations expected when all censored");
     }
 
-    // NaN handling tests for survsplit
     #[test]
     fn test_survsplit_with_nan_start() {
         let tstart = vec![f64::NAN, 1.0, 2.0];
@@ -322,10 +323,8 @@ mod tests {
 
         let result = survsplit(tstart, tstop, cut);
 
-        // Should handle NaN without panicking
-        // NaN row (1) + row 1 split at 2.5 (2) + row 2 split at 2.5 (2) = 5
         assert_eq!(result.row.len(), 5);
-        assert!(result.start[0].is_nan()); // First row should preserve NaN
+        assert!(result.start[0].is_nan());
     }
 
     #[test]
@@ -336,8 +335,7 @@ mod tests {
 
         let result = survsplit(tstart, tstop, cut);
 
-        // Should handle NaN without panicking
-        assert!(result.end[0].is_nan()); // First row should preserve NaN
+        assert!(result.end[0].is_nan());
     }
 
     #[test]
@@ -346,7 +344,6 @@ mod tests {
         let tstop = vec![5.0, 6.0];
         let cut = vec![f64::NAN, 3.0, 4.0];
 
-        // Should not panic even with NaN in cuts
         let result = survsplit(tstart, tstop, cut);
         assert!(!result.row.is_empty());
     }
@@ -359,7 +356,6 @@ mod tests {
 
         let result = survsplit(tstart, tstop, cut);
 
-        // Should handle all NaN without panicking
         assert_eq!(result.row.len(), 2);
         assert!(result.start.iter().all(|x| x.is_nan()));
         assert!(result.end.iter().all(|x| x.is_nan()));
@@ -373,8 +369,66 @@ mod tests {
 
         let result = survsplit(tstart, tstop, cut);
 
-        // First observation: split at 2.0 and 4.0 -> 3 intervals
-        // Second observation: split at 2.0, 4.0, 6.0, 8.0 -> 5 intervals
         assert_eq!(result.row.len(), 8);
+    }
+
+    #[test]
+    fn test_cholesky2_identity() {
+        let mut matrix = vec![1.0, 0.0, 0.0, 1.0];
+        let rank = cholesky2(&mut matrix, 2, 1e-10);
+        assert_eq!(rank, 2);
+    }
+
+    #[test]
+    fn test_cholesky2_positive_definite() {
+        let mut matrix = vec![4.0, 2.0, 2.0, 5.0];
+        let rank = cholesky2(&mut matrix, 2, 1e-10);
+        assert_eq!(rank, 2);
+    }
+
+    #[test]
+    fn test_cholesky2_singular() {
+        let mut matrix = vec![1.0, 1.0, 1.0, 1.0];
+        let rank = cholesky2(&mut matrix, 2, 1e-10);
+        assert_eq!(rank, 1);
+    }
+
+    #[test]
+    fn test_cholesky2_3x3() {
+        let mut matrix = vec![4.0, 2.0, 1.0, 2.0, 5.0, 2.0, 1.0, 2.0, 6.0];
+        let rank = cholesky2(&mut matrix, 3, 1e-10);
+        assert_eq!(rank, 3);
+    }
+
+    #[test]
+    fn test_cholesky2_with_nan() {
+        let mut matrix = vec![f64::NAN, 0.0, 0.0, 1.0];
+        let rank = cholesky2(&mut matrix, 2, 1e-10);
+        assert!(rank <= 2);
+    }
+
+    #[test]
+    fn test_chinv2_identity() {
+        let mut matrix = vec![1.0, 0.0, 0.0, 1.0];
+        chinv2(&mut matrix, 2);
+        assert!((matrix[0] - 1.0).abs() < 1e-10);
+        assert!((matrix[3] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_chinv2_diagonal() {
+        let mut matrix = vec![2.0, 0.0, 0.0, 4.0];
+        chinv2(&mut matrix, 2);
+        assert!((matrix[0] - 0.5).abs() < 1e-10);
+        assert!((matrix[3] - 0.25).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_chinv2_zero_diagonal() {
+        let mut matrix = vec![0.0, 0.0, 0.0, 1.0];
+        chinv2(&mut matrix, 2);
+        assert_eq!(matrix[0], 0.0);
+        assert_eq!(matrix[1], 0.0);
+        assert_eq!(matrix[2], 0.0);
     }
 }

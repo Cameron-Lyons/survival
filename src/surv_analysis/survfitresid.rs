@@ -4,6 +4,19 @@ pub(crate) struct SurvivalResult {
     pub influence_auc: Option<Vec<Vec<f64>>>,
 }
 
+#[derive(Debug)]
+pub(crate) struct SurvfitResidError {
+    pub message: String,
+}
+
+impl std::fmt::Display for SurvfitResidError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for SurvfitResidError {}
+
 #[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn survfitresid(
@@ -17,11 +30,21 @@ pub(crate) fn survfitresid(
     otime: &[f64],
     starttime: f64,
     doauc: bool,
-) -> SurvivalResult {
-    let ncoly = if y.len().is_multiple_of(sort1.len()) {
+) -> Result<SurvivalResult, SurvfitResidError> {
+    let ncoly = if sort1.is_empty() {
+        return Err(SurvfitResidError {
+            message: "sort1 array cannot be empty".to_string(),
+        });
+    } else if y.len().is_multiple_of(sort1.len()) {
         y.len() / sort1.len()
     } else {
-        panic!("Invalid Y matrix dimensions");
+        return Err(SurvfitResidError {
+            message: format!(
+                "Invalid Y matrix dimensions: y.len()={} is not divisible by sort1.len()={}",
+                y.len(),
+                sort1.len()
+            ),
+        });
     };
     let nrowy = sort1.len();
     let (entry, etime, status) = if ncoly == 2 {
@@ -263,8 +286,8 @@ pub(crate) fn survfitresid(
         itime += 1;
     }
 
-    SurvivalResult {
+    Ok(SurvivalResult {
         influence_pstate,
         influence_auc,
-    }
+    })
 }
