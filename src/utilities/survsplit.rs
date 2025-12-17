@@ -60,7 +60,8 @@ pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> SplitResul
                 cuts_in_interval.push(c);
             }
         }
-        cuts_in_interval.sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        cuts_in_interval
+            .sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut current = current_start;
         let mut interval_num = 1;

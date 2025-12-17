@@ -18,7 +18,8 @@ pub fn agscore2(
     let tstop = &y[n..2 * n];
     let event = &y[2 * n..3 * n];
 
-    let covar_matrix = Array2::from_shape_vec((nvar, n), covar.to_vec()).unwrap();
+    let covar_matrix = Array2::from_shape_vec((nvar, n), covar.to_vec())
+        .expect("covar length must equal nvar * n");
 
     let mut resid_matrix = Array2::zeros((nvar, n));
 

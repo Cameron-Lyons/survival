@@ -3,6 +3,7 @@ mod tests {
     use crate::surv_analysis::survdiff2::{
         SurvDiffInput, SurvDiffOutput, SurvDiffParams, survdiff2_internal,
     };
+    use crate::utilities::survsplit::survsplit;
 
     #[test]
     fn test_survdiff2_standard() {
@@ -310,5 +311,70 @@ mod tests {
 
         let total_obs: f64 = obs.iter().sum();
         assert_eq!(total_obs, 0.0, "No observations expected when all censored");
+    }
+
+    // NaN handling tests for survsplit
+    #[test]
+    fn test_survsplit_with_nan_start() {
+        let tstart = vec![f64::NAN, 1.0, 2.0];
+        let tstop = vec![5.0, 3.0, 4.0];
+        let cut = vec![2.5];
+
+        let result = survsplit(tstart, tstop, cut);
+
+        // Should handle NaN without panicking
+        // NaN row (1) + row 1 split at 2.5 (2) + row 2 split at 2.5 (2) = 5
+        assert_eq!(result.row.len(), 5);
+        assert!(result.start[0].is_nan()); // First row should preserve NaN
+    }
+
+    #[test]
+    fn test_survsplit_with_nan_stop() {
+        let tstart = vec![1.0, 2.0, 3.0];
+        let tstop = vec![f64::NAN, 4.0, 5.0];
+        let cut = vec![3.5];
+
+        let result = survsplit(tstart, tstop, cut);
+
+        // Should handle NaN without panicking
+        assert!(result.end[0].is_nan()); // First row should preserve NaN
+    }
+
+    #[test]
+    fn test_survsplit_with_nan_in_cuts() {
+        let tstart = vec![1.0, 2.0];
+        let tstop = vec![5.0, 6.0];
+        let cut = vec![f64::NAN, 3.0, 4.0];
+
+        // Should not panic even with NaN in cuts
+        let result = survsplit(tstart, tstop, cut);
+        assert!(!result.row.is_empty());
+    }
+
+    #[test]
+    fn test_survsplit_all_nan() {
+        let tstart = vec![f64::NAN, f64::NAN];
+        let tstop = vec![f64::NAN, f64::NAN];
+        let cut = vec![1.0, 2.0];
+
+        let result = survsplit(tstart, tstop, cut);
+
+        // Should handle all NaN without panicking
+        assert_eq!(result.row.len(), 2);
+        assert!(result.start.iter().all(|x| x.is_nan()));
+        assert!(result.end.iter().all(|x| x.is_nan()));
+    }
+
+    #[test]
+    fn test_survsplit_normal_operation() {
+        let tstart = vec![0.0, 0.0];
+        let tstop = vec![5.0, 10.0];
+        let cut = vec![2.0, 4.0, 6.0, 8.0];
+
+        let result = survsplit(tstart, tstop, cut);
+
+        // First observation: split at 2.0 and 4.0 -> 3 intervals
+        // Second observation: split at 2.0, 4.0, 6.0, 8.0 -> 5 intervals
+        assert_eq!(result.row.len(), 8);
     }
 }
