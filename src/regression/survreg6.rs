@@ -214,6 +214,10 @@ pub enum DistributionType {
     Logistic,
     #[pyo3(name = "gaussian")]
     Gaussian,
+    #[pyo3(name = "weibull")]
+    Weibull,
+    #[pyo3(name = "lognormal")]
+    LogNormal,
 }
 
 #[pyfunction]
@@ -261,6 +265,10 @@ pub fn survreg(
         Some("logistic") | Some("Logistic") => DistributionType::Logistic,
         Some("gaussian") | Some("Gaussian") | Some("normal") | Some("Normal") => {
             DistributionType::Gaussian
+        }
+        Some("weibull") | Some("Weibull") => DistributionType::Weibull,
+        Some("lognormal") | Some("LogNormal") | Some("lognorm") | Some("LogNorm") => {
+            DistributionType::LogNormal
         }
         _ => DistributionType::ExtremeValue,
     };

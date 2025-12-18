@@ -1,15 +1,26 @@
 #![allow(dead_code)]
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use thiserror::Error;
 
 const SMALL: f64 = -200.0;
 const SPI: f64 = 2.506628274631001;
 const ROOT_2: f64 = std::f64::consts::SQRT_2;
+
+#[derive(Error, Debug)]
+pub enum DistributionError {
+    #[error(
+        "Invalid case {case} for {distribution} distribution. Valid cases are 1 (density) and 2 (CDF)"
+    )]
+    InvalidCase { case: i32, distribution: String },
+}
 
 #[derive(Clone, Copy)]
 pub enum SurvivalDist {
     ExtremeValue,
     Logistic,
     Gaussian,
+    Weibull,
+    LogNormal,
 }
 
 pub struct SurvivalLikelihood {
@@ -130,9 +141,9 @@ fn compute_exact(
     dist: SurvivalDist,
 ) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
     let (f, df, ddf) = match dist {
-        SurvivalDist::ExtremeValue => exvalue_d(z, 1),
-        SurvivalDist::Logistic => logistic_d(z, 1),
-        SurvivalDist::Gaussian => gauss_d(z, 1),
+        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 1)?,
+        SurvivalDist::Logistic => logistic_d(z, 1)?,
+        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 1)?,
     };
 
     if f <= 0.0 {
@@ -159,9 +170,9 @@ fn compute_right_censored(
     dist: SurvivalDist,
 ) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
     let (f, df, _ddf) = match dist {
-        SurvivalDist::ExtremeValue => exvalue_d(z, 2),
-        SurvivalDist::Logistic => logistic_d(z, 2),
-        SurvivalDist::Gaussian => gauss_d(z, 2),
+        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
+        SurvivalDist::Logistic => logistic_d(z, 2)?,
+        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
 
     if f <= 0.0 || f >= 1.0 {
@@ -186,9 +197,9 @@ fn compute_left_censored(
     dist: SurvivalDist,
 ) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
     let (f, df, _ddf) = match dist {
-        SurvivalDist::ExtremeValue => exvalue_d(z, 2),
-        SurvivalDist::Logistic => logistic_d(z, 2),
-        SurvivalDist::Gaussian => gauss_d(z, 2),
+        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
+        SurvivalDist::Logistic => logistic_d(z, 2)?,
+        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
 
     if f <= 0.0 || f >= 1.0 {
@@ -218,15 +229,15 @@ fn compute_interval_censored(
     let z2 = sz2 / sigma;
 
     let (f1, df1, _ddf1) = match dist {
-        SurvivalDist::ExtremeValue => exvalue_d(z, 2),
-        SurvivalDist::Logistic => logistic_d(z, 2),
-        SurvivalDist::Gaussian => gauss_d(z, 2),
+        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
+        SurvivalDist::Logistic => logistic_d(z, 2)?,
+        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
 
     let (f2, df2, _ddf2) = match dist {
-        SurvivalDist::ExtremeValue => exvalue_d(z2, 2),
-        SurvivalDist::Logistic => logistic_d(z2, 2),
-        SurvivalDist::Gaussian => gauss_d(z2, 2),
+        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z2, 2)?,
+        SurvivalDist::Logistic => logistic_d(z2, 2)?,
+        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z2, 2)?,
     };
 
     let diff = f2 - f1;
@@ -245,7 +256,7 @@ fn compute_interval_censored(
     }
 }
 
-fn logistic_d(z: f64, case: i32) -> (f64, f64, f64) {
+fn logistic_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
     let (w, sign) = if z > 0.0 {
         ((-z).exp(), -1.0)
     } else {
@@ -258,42 +269,51 @@ fn logistic_d(z: f64, case: i32) -> (f64, f64, f64) {
             let f = w / temp.powi(2);
             let df = sign * (1.0 - w) / temp;
             let ddf = (w.powi(2) - 4.0 * w + 1.0) / temp.powi(2);
-            (f, df, ddf)
+            Ok((f, df, ddf))
         }
         2 => {
             let f = w / temp;
             let df = w / temp.powi(2);
             let ddf = sign * df * (1.0 - w) / temp;
-            (f, df, ddf)
+            Ok((f, df, ddf))
         }
-        _ => panic!("Invalid case for logistic distribution"),
+        _ => Err(DistributionError::InvalidCase {
+            case,
+            distribution: "logistic".to_string(),
+        }),
     }
 }
 
-fn gauss_d(z: f64, case: i32) -> (f64, f64, f64) {
+fn gauss_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
     let f = (-z.powi(2) / 2.0).exp() / SPI;
     match case {
-        1 => (f, -z, z.powi(2) - 1.0),
+        1 => Ok((f, -z, z.powi(2) - 1.0)),
         2 => {
             let (f0, f1) = if z > 0.0 {
                 ((1.0 + erf(z / ROOT_2)) / 2.0, erfc(z / ROOT_2) / 2.0)
             } else {
                 (erfc(-z / ROOT_2) / 2.0, (1.0 + erf(-z / ROOT_2)) / 2.0)
             };
-            (f0, f1, -z * f)
+            Ok((f0, f1, -z * f))
         }
-        _ => panic!("Invalid case for Gaussian distribution"),
+        _ => Err(DistributionError::InvalidCase {
+            case,
+            distribution: "Gaussian".to_string(),
+        }),
     }
 }
 
-fn exvalue_d(z: f64, case: i32) -> (f64, f64, f64) {
+fn exvalue_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
     let w = z.clamp(-100.0, 100.0).exp();
     let temp = (-w).exp();
 
     match case {
-        1 => (w * temp, 1.0 - w, w * (w - 3.0) + 1.0),
-        2 => (1.0 - temp, temp, w * temp * (1.0 - w)),
-        _ => panic!("Invalid case for extreme value distribution"),
+        1 => Ok((w * temp, 1.0 - w, w * (w - 3.0) + 1.0)),
+        2 => Ok((1.0 - temp, temp, w * temp * (1.0 - w))),
+        _ => Err(DistributionError::InvalidCase {
+            case,
+            distribution: "extreme value".to_string(),
+        }),
     }
 }
 

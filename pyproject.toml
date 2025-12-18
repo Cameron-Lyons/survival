@@ -3,12 +3,18 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "survival"
+name = "survival-rs"
 version = "0.1.0"
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
+authors = [
+    {name = "Cameron Lyons", email = "cameron.lyons2@gmail.com"}
+]
+maintainers = [
+    {name = "Cameron Lyons", email = "cameron.lyons2@gmail.com"}
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -30,10 +36,13 @@ keywords = [
     "cox-regression",
     "statistics",
     "biostatistics",
+    "rust",
 ]
 
 [project.urls]
-Repository = "https://github.com/cameron/survival-rust"
+Repository = "https://github.com/Cameron-Lyons/survival-rust"
+Documentation = "https://github.com/Cameron-Lyons/survival-rust#readme"
+Issues = "https://github.com/Cameron-Lyons/survival-rust/issues"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

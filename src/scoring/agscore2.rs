@@ -10,7 +10,7 @@ pub fn agscore2(
     score: &[f64],
     weights: &[f64],
     method: i32,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, String> {
     let n = y.len() / 3;
     let nvar = covar.len() / n;
 
@@ -18,8 +18,12 @@ pub fn agscore2(
     let tstop = &y[n..2 * n];
     let event = &y[2 * n..3 * n];
 
-    let covar_matrix = Array2::from_shape_vec((nvar, n), covar.to_vec())
-        .expect("covar length must equal nvar * n");
+    let covar_matrix = Array2::from_shape_vec((nvar, n), covar.to_vec()).map_err(|e| {
+        format!(
+            "Failed to create covariate matrix with shape ({}, {}): {}",
+            nvar, n, e
+        )
+    })?;
 
     let mut resid_matrix = Array2::zeros((nvar, n));
 
@@ -145,7 +149,7 @@ pub fn agscore2(
         }
     }
 
-    resid_matrix.into_raw_vec_and_offset().0
+    Ok(resid_matrix.into_raw_vec_and_offset().0)
 }
 
 #[pyfunction]
@@ -192,7 +196,8 @@ pub fn perform_score_calculation(
         ));
     }
 
-    let residuals = agscore2(&time_data, &covariates, &strata, &score, &weights, method);
+    let residuals = agscore2(&time_data, &covariates, &strata, &score, &weights, method)
+        .map_err(PyRuntimeError::new_err)?;
 
     let nvar = covariates.len() / n;
     let mut summary_stats = Vec::new();

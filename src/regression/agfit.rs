@@ -1,5 +1,19 @@
 #![allow(dead_code)]
 use pyo3::prelude::*;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum SurvivalModelError {
+    #[error(
+        "Insufficient data: expected {expected_people} observations with {expected_vars} covariates, got {actual_people} observations with {actual_vars} covariates"
+    )]
+    InsufficientData {
+        expected_people: usize,
+        expected_vars: usize,
+        actual_people: usize,
+        actual_vars: usize,
+    },
+}
 
 struct SurvivalData {
     start_time: f64,
@@ -93,9 +107,14 @@ impl SurvivalModel {
             expect: vec![0.0; nused],
         }
     }
-    pub fn gfit5a(&mut self) {
+    pub fn gfit5a(&mut self) -> Result<(), SurvivalModelError> {
         if self.yy.len() != self.nused || self.covar.len() != self.nvar {
-            panic!("Insufficient data for the number of people or covariates specified");
+            return Err(SurvivalModelError::InsufficientData {
+                expected_people: self.nused,
+                expected_vars: self.nvar,
+                actual_people: self.yy.len(),
+                actual_vars: self.covar.len(),
+            });
         }
 
         self.means = vec![0.0; self.nvar];
@@ -116,6 +135,8 @@ impl SurvivalModel {
                 self.imat[i][j] = if i == j { 1.0 } else { 0.0 };
             }
         }
+
+        Ok(())
     }
     pub fn agfit5b(&mut self) {
         if self.maxiter == 0 || self.nused == 0 || self.nvar == 0 {

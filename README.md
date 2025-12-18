@@ -1,4 +1,7 @@
-# survival
+# survival-rs
+
+[![PyPI version](https://badge.fury.io/py/survival-rs.svg)](https://badge.fury.io/py/survival-rs)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A high-performance survival analysis library written in Rust, with a Python API powered by [PyO3](https://github.com/PyO3/pyo3) and [maturin](https://github.com/PyO3/maturin).
 
@@ -16,7 +19,15 @@ A high-performance survival analysis library written in Rust, with a Python API 
 
 ## Installation
 
-### Prerequisites
+### From PyPI (Recommended)
+
+```sh
+pip install survival-rs
+```
+
+### From Source
+
+#### Prerequisites
 
 - Python 3.12 or 3.13 (recommended: 3.12)
 - Rust toolchain (see [rustup.rs](https://rustup.rs/))
@@ -25,33 +36,28 @@ A high-performance survival analysis library written in Rust, with a Python API 
   - Arch Linux: `sudo pacman -S openblas`
   - Ubuntu/Debian: `sudo apt-get install libopenblas-dev`
   - Fedora: `sudo dnf install openblas-devel`
-  - macOS: Usually included with Xcode Command Line Tools
+  - macOS: `brew install openblas`
 
 Install maturin:
 ```sh
 pip install maturin
 ```
 
-Or via Homebrew:
-```sh
-brew install maturin
-```
-
-### Build and Install
+#### Build and Install
 
 Build the Python wheel:
 ```sh
-maturin build
+maturin build --release
 ```
 
 Install the wheel:
 ```sh
-pip3 install target/wheels/survival-0.1.0-*.whl --force-reinstall --break-system-packages
+pip install target/wheels/survival_rs-0.1.0-*.whl
 ```
 
 For development:
 ```sh
-maturin develop --skip-install
+maturin develop
 ```
 
 ## Usage
@@ -228,7 +234,7 @@ result = survreg(
     offsets=None,          # Optional: offset values
     initial_beta=None,     # Optional: initial coefficient values
     strata=None,           # Optional: stratification variable
-    distribution="extreme_value",  # "extreme_value", "logistic", or "gaussian"
+    distribution="weibull",  # "extreme_value", "logistic", "gaussian", "weibull", or "lognormal"
     max_iter=20,          # Optional: maximum iterations
     eps=1e-5,             # Optional: convergence tolerance
     tol_chol=1e-9,        # Optional: Cholesky tolerance
@@ -351,7 +357,7 @@ print(f"Variance matrix: {result.variance}")
 - `SurvFitKMOutput`: Output from Kaplan-Meier survival curve fitting
 - `FineGrayOutput`: Output from Fine-Gray competing risks model
 - `SurvivalFit`: Output from parametric survival regression
-- `DistributionType`: Distribution types for parametric models (extreme_value, logistic, gaussian)
+- `DistributionType`: Distribution types for parametric models (extreme_value, logistic, gaussian, weibull, lognormal)
 - `SurvDiffResult`: Output from survival difference tests (log-rank test)
 
 ### Functions
@@ -376,16 +382,30 @@ print(f"Variance matrix: {result.variance}")
 
 The `PSpline` class provides penalized spline smoothing:
 
+**Constructor Parameters:**
 - `x`: Covariate vector (list of floats)
 - `df`: Degrees of freedom (integer)
 - `theta`: Roughness penalty (float)
 - `eps`: Accuracy for degrees of freedom (float)
-- `method`: Penalty method for tuning parameter selection. Supported: `"GCV"`, `"UBRE"`. Any other value will result in an error.
+- `method`: Penalty method for tuning parameter selection. Supported methods:
+  - `"GCV"` - Generalized Cross-Validation
+  - `"UBRE"` - Unbiased Risk Estimator
+  - `"REML"` - Restricted Maximum Likelihood
+  - `"AIC"` - Akaike Information Criterion
+  - `"BIC"` - Bayesian Information Criterion
 - `boundary_knots`: Tuple of (min, max) for the spline basis
 - `intercept`: Whether to include an intercept in the basis
 - `penalty`: Whether to apply the penalty
 
-**Note:** Only "GCV" and "UBRE" are currently supported for the penalty method.
+**Methods:**
+- `fit()`: Fit the spline model, returns coefficients
+- `predict(new_x)`: Predict values at new x points
+
+**Properties:**
+- `coefficients`: Fitted coefficients (None if not fitted)
+- `fitted`: Whether the model has been fitted
+- `df`: Degrees of freedom
+- `eps`: Convergence tolerance
 
 ## Development
 

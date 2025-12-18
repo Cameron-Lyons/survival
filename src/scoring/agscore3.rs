@@ -11,7 +11,7 @@ pub fn agscore3(
     weights: &[f64],
     method: i32,
     sort1: &[i32],
-) -> Vec<f64> {
+) -> Result<Vec<f64>, String> {
     let n = y.len() / 3;
     let nvar = covar.len() / n;
 
@@ -19,8 +19,12 @@ pub fn agscore3(
     let tstop = &y[n..2 * n];
     let event = &y[2 * n..3 * n];
 
-    let covar_matrix =
-        ArrayView2::from_shape((nvar, n), covar).expect("covar length must equal nvar * n");
+    let covar_matrix = ArrayView2::from_shape((nvar, n), covar).map_err(|e| {
+        format!(
+            "Failed to create covariate view with shape ({}, {}): {}",
+            nvar, n, e
+        )
+    })?;
     let mut resid_matrix = Array2::zeros((nvar, n));
 
     let mut a = vec![0.0; nvar];
@@ -160,7 +164,7 @@ pub fn agscore3(
         i1 -= 1;
     }
 
-    resid_matrix.into_raw_vec_and_offset().0
+    Ok(resid_matrix.into_raw_vec_and_offset().0)
 }
 
 #[pyfunction]
@@ -222,7 +226,8 @@ pub fn perform_agscore3_calculation(
         &weights,
         method,
         &sort1,
-    );
+    )
+    .map_err(PyRuntimeError::new_err)?;
 
     let nvar = covariates.len() / n;
     let mut summary_stats = Vec::new();

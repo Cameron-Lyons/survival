@@ -2,6 +2,12 @@
 name = "survival"
 version = "0.1.0"
 edition = "2024"
+authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
+description = "A high-performance survival analysis library written in Rust with Python bindings"
+license = "MIT"
+repository = "https://github.com/Cameron-Lyons/survival-rust"
+keywords = ["survival-analysis", "statistics", "biostatistics", "cox-regression"]
+categories = ["science", "mathematics"]
 
 [lib]
 name = "survival"
@@ -11,9 +17,15 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.27.2", features = ["extension-module"] }
 ndarray = "0.17.1"
 numpy = "0.27.1"
-ndarray-linalg = { version = "0.18.0", features = ["openblas"] }
+ndarray-linalg = { version = "0.18.0", features = ["openblas-system"] }
 itertools = "0.14.0"
 libc = "0.2.178"
 ndarray-stats = "0.6.0"
 statrs = "0.18.0"
 thiserror = "2.0.17"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true

@@ -1,21 +1,45 @@
 use ndarray::{Array1, Array2};
 use ndarray_linalg::Solve;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum PSplineError {
+    #[error("Unsupported penalty method: {0}. Supported methods are: GCV, UBRE, REML, AIC, BIC")]
+    UnsupportedMethod(String),
+    #[error("Failed to create matrix with shape ({rows}, {cols}): {reason}")]
+    MatrixCreationError {
+        rows: usize,
+        cols: usize,
+        reason: String,
+    },
+    #[error("Failed to solve linear system: matrix may be singular or ill-conditioned")]
+    LinearSolveError,
+}
+
+impl From<PSplineError> for PyErr {
+    fn from(err: PSplineError) -> PyErr {
+        PyValueError::new_err(err.to_string())
+    }
+}
 
 #[pyclass]
 pub struct PSpline {
     x: Vec<f64>,
-    #[allow(dead_code)]
     df: u32,
     theta: f64,
     nterm: u32,
     degree: u32,
-    #[allow(dead_code)]
     eps: f64,
     method: String,
     boundary_knots: (f64, f64),
     intercept: bool,
     penalty: bool,
+    #[pyo3(get)]
+    coefficients: Option<Vec<f64>>,
+    #[pyo3(get)]
+    fitted: bool,
 }
 
 #[pymethods]
@@ -45,13 +69,49 @@ impl PSpline {
             boundary_knots,
             intercept,
             penalty,
+            coefficients: None,
+            fitted: false,
         }
     }
 
-    pub fn fit(&self) {
+    pub fn fit(&mut self) -> PyResult<Vec<f64>> {
         let basis = self.create_basis();
-        let penalized_basis = self.apply_penalty(basis);
-        let _coefficients = self.optimize_fit(penalized_basis);
+        let penalized_basis = self
+            .apply_penalty(basis)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let coefficients = self
+            .optimize_fit(penalized_basis)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        self.coefficients = Some(coefficients.clone());
+        self.fitted = true;
+        Ok(coefficients)
+    }
+
+    pub fn predict(&self, new_x: Vec<f64>) -> PyResult<Vec<f64>> {
+        let coefficients = self
+            .coefficients
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("Model not fitted. Call fit() first."))?;
+
+        let mut predictions = Vec::with_capacity(new_x.len());
+        for x_val in &new_x {
+            let mut pred = 0.0;
+            for (j, coef) in coefficients.iter().enumerate() {
+                pred += coef * self.basis_function(*x_val, j as u32);
+            }
+            predictions.push(pred);
+        }
+        Ok(predictions)
+    }
+
+    #[getter]
+    pub fn get_df(&self) -> u32 {
+        self.df
+    }
+
+    #[getter]
+    pub fn get_eps(&self) -> f64 {
+        self.eps
     }
     fn create_basis(&self) -> Vec<Vec<f64>> {
         let n = self.x.len();
@@ -100,13 +160,13 @@ impl PSpline {
         }
         knots
     }
-    fn apply_penalty(&self, basis: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
+    fn apply_penalty(&self, basis: Vec<Vec<f64>>) -> Result<Vec<Vec<f64>>, PSplineError> {
         let mut penalized_basis = basis.clone();
         if self.penalty {
             let mut penalty = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
             for i in 0..self.nterm {
                 for j in 0..self.nterm {
-                    penalty[i as usize][j as usize] = self.penalty_function(i, j);
+                    penalty[i as usize][j as usize] = self.penalty_function(i, j)?;
                 }
             }
             for i in 0..self.nterm {
@@ -119,14 +179,107 @@ impl PSpline {
                 }
             }
         }
-        penalized_basis
+        Ok(penalized_basis)
     }
-    fn penalty_function(&self, i: u32, j: u32) -> f64 {
+    fn penalty_function(&self, i: u32, j: u32) -> Result<f64, PSplineError> {
         match self.method.as_str() {
-            "GCV" => self.gcv(i, j),
-            "UBRE" => self.ubre(i, j),
-            _ => panic!("Method not implemented"),
+            "GCV" => Ok(self.gcv(i, j)),
+            "UBRE" => Ok(self.ubre(i, j)),
+            "REML" => Ok(self.reml(i, j)),
+            "AIC" => Ok(self.aic(i, j)),
+            "BIC" => Ok(self.bic(i, j)),
+            _ => Err(PSplineError::UnsupportedMethod(self.method.clone())),
         }
+    }
+
+    fn reml(&self, i: u32, j: u32) -> f64 {
+        if i == j {
+            return self.nterm as f64;
+        }
+
+        let mut df = 0.0;
+        let mut trace = 0.0;
+        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
+            }
+        }
+
+        let n = self.nterm as f64;
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                df += basis[k as usize][i as usize]
+                    * basis[l as usize][j as usize]
+                    * basis[k as usize][l as usize];
+                trace += basis[k as usize][i as usize]
+                    * basis[k as usize][l as usize]
+                    * basis[l as usize][j as usize];
+            }
+        }
+
+        let edf = trace / n;
+        df / (1.0 - edf).powi(2) + (n - edf).ln()
+    }
+
+    fn aic(&self, i: u32, j: u32) -> f64 {
+        if i == j {
+            return self.nterm as f64;
+        }
+
+        let mut df = 0.0;
+        let mut trace = 0.0;
+        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
+            }
+        }
+
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                df += basis[k as usize][i as usize]
+                    * basis[l as usize][j as usize]
+                    * basis[k as usize][l as usize];
+                trace += basis[k as usize][i as usize]
+                    * basis[k as usize][l as usize]
+                    * basis[l as usize][j as usize];
+            }
+        }
+
+        let n = self.nterm as f64;
+        let edf = trace / n;
+        df / (1.0 - edf).powi(2) + 2.0 * edf
+    }
+
+    fn bic(&self, i: u32, j: u32) -> f64 {
+        if i == j {
+            return self.nterm as f64;
+        }
+
+        let mut df = 0.0;
+        let mut trace = 0.0;
+        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
+            }
+        }
+
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                df += basis[k as usize][i as usize]
+                    * basis[l as usize][j as usize]
+                    * basis[k as usize][l as usize];
+                trace += basis[k as usize][i as usize]
+                    * basis[k as usize][l as usize]
+                    * basis[l as usize][j as usize];
+            }
+        }
+
+        let n = self.nterm as f64;
+        let edf = trace / n;
+        df / (1.0 - edf).powi(2) + n.ln() * edf
     }
     fn gcv(&self, i: u32, j: u32) -> f64 {
         if i == j {
@@ -178,7 +331,7 @@ impl PSpline {
         }
         df / (1.0 - trace / self.nterm as f64).powi(2)
     }
-    fn optimize_fit(&self, basis: Vec<Vec<f64>>) -> Vec<f64> {
+    fn optimize_fit(&self, basis: Vec<Vec<f64>>) -> Result<Vec<f64>, PSplineError> {
         let mut a = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
         let mut b = vec![0.0; self.nterm as usize];
         for i in 0..self.nterm {
@@ -197,15 +350,21 @@ impl PSpline {
         self.solve(a, b)
     }
 
-    fn solve(&self, a: Vec<Vec<f64>>, b: Vec<f64>) -> Vec<f64> {
+    fn solve(&self, a: Vec<Vec<f64>>, b: Vec<f64>) -> Result<Vec<f64>, PSplineError> {
         let n = a.len();
-        let a_array = Array2::from_shape_vec((n, n), a.into_iter().flatten().collect())
-            .expect("Failed to create matrix");
+        let a_array =
+            Array2::from_shape_vec((n, n), a.into_iter().flatten().collect()).map_err(|e| {
+                PSplineError::MatrixCreationError {
+                    rows: n,
+                    cols: n,
+                    reason: e.to_string(),
+                }
+            })?;
         let b_array = Array1::from_vec(b);
 
         let x = a_array
             .solve_into(b_array)
-            .expect("Failed to solve linear system");
-        x.to_vec()
+            .map_err(|_| PSplineError::LinearSolveError)?;
+        Ok(x.to_vec())
     }
 }

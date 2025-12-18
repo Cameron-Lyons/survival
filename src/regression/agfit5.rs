@@ -20,37 +20,11 @@ pub struct CoxResult {
 
 struct CoxState {
     covar: Vec<Vec<f64>>,
-    #[allow(dead_code)]
-    cmat: Vec<Vec<f64>>,
-    #[allow(dead_code)]
-    cmat2: Vec<Vec<f64>>,
     a: Vec<f64>,
-    #[allow(dead_code)]
-    oldbeta: Vec<f64>,
     a2: Vec<f64>,
     offset: Vec<f64>,
     weights: Vec<f64>,
     event: Vec<i32>,
-    #[allow(dead_code)]
-    start: Vec<f64>,
-    #[allow(dead_code)]
-    stop: Vec<f64>,
-    #[allow(dead_code)]
-    sort1: Vec<usize>,
-    #[allow(dead_code)]
-    sort2: Vec<usize>,
-    #[allow(dead_code)]
-    tmean: Vec<f64>,
-    #[allow(dead_code)]
-    ptype: i32,
-    #[allow(dead_code)]
-    pdiag: i32,
-    #[allow(dead_code)]
-    ipen: Vec<f64>,
-    #[allow(dead_code)]
-    upen: Vec<f64>,
-    #[allow(dead_code)]
-    zflag: Vec<i32>,
     frail: Vec<i32>,
     score: Vec<f64>,
     strata: Vec<i32>,
@@ -67,9 +41,9 @@ impl CoxState {
         offset2: &[f64],
         weights2: &[f64],
         strata: &[i32],
-        sort: &[i32],
-        ptype: i32,
-        pdiag: i32,
+        _sort: &[i32],
+        _ptype: i32,
+        _pdiag: i32,
         frail2: &[i32],
     ) -> Self {
         let mut covar = vec![vec![0.0; nused]; nvar];
@@ -83,27 +57,11 @@ impl CoxState {
 
         let mut state = CoxState {
             covar,
-            cmat: vec![vec![0.0; nvar + 1]; nvar + nfrail],
-            cmat2: vec![vec![0.0; nvar + 1]; nvar + nfrail],
             a: vec![0.0; 4 * (nvar + nfrail) + 5 * nused],
-            oldbeta: vec![0.0; nvar + nfrail],
             a2: vec![0.0; nvar + nfrail],
             offset: offset2.to_vec(),
             weights: weights2.to_vec(),
             event: yy[2 * nused..3 * nused].iter().map(|&x| x as i32).collect(),
-            start: yy[0..nused].to_vec(),
-            stop: yy[nused..2 * nused].to_vec(),
-            sort1: sort[0..nused].iter().map(|&x| (x - 1) as usize).collect(),
-            sort2: sort[nused..2 * nused]
-                .iter()
-                .map(|&x| (x - 1) as usize)
-                .collect(),
-            tmean: vec![0.0; nvar + nfrail],
-            ptype,
-            pdiag,
-            ipen: vec![0.0; nfrail.max(nvar * nvar)],
-            upen: vec![0.0; nfrail.max(nvar)],
-            zflag: vec![0; nvar.max(2)],
             frail: frail2.to_vec(),
             score: vec![0.0; nused],
             strata: strata.to_vec(),
