@@ -75,7 +75,7 @@ jobs:
       run: maturin build --release
 
     - name: Install Python module
-      run: pip install target/wheels/survival-*.whl
+      run: pip install target/wheels/survival_rs-*.whl
 
     - name: Run Python tests
       run: python test/test_all.py
