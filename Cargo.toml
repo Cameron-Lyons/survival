@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 license = "MIT"
-repository = "https://github.com/Cameron-Lyons/survival-rust"
+repository = "https://github.com/Cameron-Lyons/survival-rs"
 keywords = ["survival-analysis", "statistics", "biostatistics", "cox-regression"]
 categories = ["science", "mathematics"]
 

@@ -40,9 +40,9 @@ keywords = [
 ]
 
 [project.urls]
-Repository = "https://github.com/Cameron-Lyons/survival-rust"
-Documentation = "https://github.com/Cameron-Lyons/survival-rust#readme"
-Issues = "https://github.com/Cameron-Lyons/survival-rust/issues"
+Repository = "https://github.com/Cameron-Lyons/survival-rs"
+Documentation = "https://github.com/Cameron-Lyons/survival-rs#readme"
+Issues = "https://github.com/Cameron-Lyons/survival-rs/issues"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
