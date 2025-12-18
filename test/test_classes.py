@@ -44,7 +44,7 @@ try:
     )
     print(" PSpline created successfully")
 
-    assert pspline.fitted == False, "Model should not be fitted initially"
+    assert not pspline.fitted, "Model should not be fitted initially"
     assert pspline.coefficients is None, "Coefficients should be None before fitting"
     print("   Initial state: fitted=False, coefficients=None")
 
