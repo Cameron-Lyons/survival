@@ -41,6 +41,9 @@ use specialized::finegray::{FineGrayOutput, finegray};
 use specialized::norisk::norisk;
 use surv_analysis::agsurv4::agsurv4;
 use surv_analysis::agsurv5::agsurv5;
+use surv_analysis::nelson_aalen::{
+    NelsonAalenResult, StratifiedKMResult, nelson_aalen_estimator, stratified_kaplan_meier,
+};
 use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
 use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
 use surv_analysis::survfitkm::{SurvFitKMOutput, survfitkm};
@@ -49,7 +52,18 @@ use utilities::collapse::collapse;
 use utilities::survsplit::{SplitResult, survsplit};
 use utilities::tmerge::{tmerge, tmerge2, tmerge3};
 use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
+use validation::calibration::{
+    CalibrationResult, PredictionResult, RiskStratificationResult, TdAUCResult, calibration,
+    predict_cox, risk_stratification, td_auc,
+};
 use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
+use validation::logrank::{
+    LogRankResult, TrendTestResult, fleming_harrington_test, logrank_test, logrank_trend,
+};
+use validation::power::{
+    AccrualResult, SampleSizeResult, expected_events, power_survival, sample_size_survival,
+    sample_size_survival_freedman,
+};
 use validation::tests::{
     ProportionalityTest, TestResult, lrt_test, ph_test, score_test_py, wald_test_py,
 };
@@ -101,6 +115,19 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(wald_test_py, &m)?)?;
     m.add_function(wrap_pyfunction!(score_test_py, &m)?)?;
     m.add_function(wrap_pyfunction!(ph_test, &m)?)?;
+    m.add_function(wrap_pyfunction!(nelson_aalen_estimator, &m)?)?;
+    m.add_function(wrap_pyfunction!(stratified_kaplan_meier, &m)?)?;
+    m.add_function(wrap_pyfunction!(logrank_test, &m)?)?;
+    m.add_function(wrap_pyfunction!(fleming_harrington_test, &m)?)?;
+    m.add_function(wrap_pyfunction!(logrank_trend, &m)?)?;
+    m.add_function(wrap_pyfunction!(sample_size_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(sample_size_survival_freedman, &m)?)?;
+    m.add_function(wrap_pyfunction!(power_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(expected_events, &m)?)?;
+    m.add_function(wrap_pyfunction!(calibration, &m)?)?;
+    m.add_function(wrap_pyfunction!(predict_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(risk_stratification, &m)?)?;
+    m.add_function(wrap_pyfunction!(td_auc, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -122,5 +149,15 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CVResult>()?;
     m.add_class::<TestResult>()?;
     m.add_class::<ProportionalityTest>()?;
+    m.add_class::<NelsonAalenResult>()?;
+    m.add_class::<StratifiedKMResult>()?;
+    m.add_class::<LogRankResult>()?;
+    m.add_class::<TrendTestResult>()?;
+    m.add_class::<SampleSizeResult>()?;
+    m.add_class::<AccrualResult>()?;
+    m.add_class::<CalibrationResult>()?;
+    m.add_class::<PredictionResult>()?;
+    m.add_class::<RiskStratificationResult>()?;
+    m.add_class::<TdAUCResult>()?;
     Ok(())
 }
