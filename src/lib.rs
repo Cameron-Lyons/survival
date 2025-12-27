@@ -11,6 +11,7 @@ mod specialized;
 mod surv_analysis;
 mod tests;
 mod utilities;
+mod validation;
 
 use concordance::concordance::concordance as concordance_fn;
 use concordance::concordance1::perform_concordance1_calculation;
@@ -47,6 +48,8 @@ use utilities::agexact::agexact;
 use utilities::collapse::collapse;
 use utilities::survsplit::{SplitResult, survsplit};
 use utilities::tmerge::{tmerge, tmerge2, tmerge3};
+use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
+use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
 
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
@@ -87,6 +90,10 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survsplit, &m)?)?;
     m.add_function(wrap_pyfunction!(schoenfeld_residuals, &m)?)?;
     m.add_function(wrap_pyfunction!(cox_score_residuals, &m)?)?;
+    m.add_function(wrap_pyfunction!(bootstrap_cox_ci, &m)?)?;
+    m.add_function(wrap_pyfunction!(bootstrap_survreg_ci, &m)?)?;
+    m.add_function(wrap_pyfunction!(cv_cox_concordance, &m)?)?;
+    m.add_function(wrap_pyfunction!(cv_survreg_loglik, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -104,5 +111,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SplitResult>()?;
     m.add_class::<ClogitDataSet>()?;
     m.add_class::<ConditionalLogisticRegression>()?;
+    m.add_class::<BootstrapResult>()?;
+    m.add_class::<CVResult>()?;
     Ok(())
 }

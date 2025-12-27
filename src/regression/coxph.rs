@@ -374,4 +374,129 @@ impl CoxPHModel {
 
         Ok((times, survival_curves))
     }
+
+    pub fn hazard_ratios(&self) -> Vec<f64> {
+        self.coefficients
+            .column(0)
+            .iter()
+            .map(|&beta| beta.exp())
+            .collect()
+    }
+
+    #[pyo3(signature = (confidence_level = 0.95))]
+    pub fn hazard_ratios_with_ci(&self, confidence_level: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+        let coefs: Vec<f64> = self.coefficients.column(0).to_vec();
+        let n = coefs.len();
+
+        let z = if confidence_level >= 0.99 {
+            2.576
+        } else if confidence_level >= 0.95 {
+            1.96
+        } else {
+            1.645
+        };
+
+        let se = self.compute_standard_errors();
+
+        let mut hr = Vec::with_capacity(n);
+        let mut ci_lower = Vec::with_capacity(n);
+        let mut ci_upper = Vec::with_capacity(n);
+
+        for (i, &beta) in coefs.iter().enumerate() {
+            let se_i = se.get(i).copied().unwrap_or(0.1);
+            hr.push(beta.exp());
+            ci_lower.push((beta - z * se_i).exp());
+            ci_upper.push((beta + z * se_i).exp());
+        }
+
+        (hr, ci_lower, ci_upper)
+    }
+
+    fn compute_standard_errors(&self) -> Vec<f64> {
+        let n = self.event_times.len();
+        let nvar = self.coefficients.nrows();
+
+        if n == 0 || nvar == 0 {
+            return vec![0.1; nvar];
+        }
+
+        let mut fisher_diag = vec![0.0; nvar];
+
+        for i in 0..n {
+            if self.censoring[i] == 0 {
+                continue;
+            }
+
+            let risk_set_sum: f64 = (0..n)
+                .filter(|&j| self.event_times[j] >= self.event_times[i])
+                .map(|j| self.risk_scores.get(j).copied().unwrap_or(1.0))
+                .sum();
+
+            if risk_set_sum <= 0.0 {
+                continue;
+            }
+
+            for (k, fisher_k) in fisher_diag.iter_mut().enumerate() {
+                let mut weighted_cov = 0.0;
+                let mut weighted_cov_sq = 0.0;
+
+                for j in 0..n {
+                    if self.event_times[j] >= self.event_times[i] {
+                        let risk_j = self.risk_scores.get(j).copied().unwrap_or(1.0);
+                        let cov_jk = self.covariates.get([j, k]).copied().unwrap_or(0.0);
+                        weighted_cov += risk_j * cov_jk;
+                        weighted_cov_sq += risk_j * cov_jk * cov_jk;
+                    }
+                }
+
+                let mean_cov = weighted_cov / risk_set_sum;
+                let var_cov = weighted_cov_sq / risk_set_sum - mean_cov * mean_cov;
+                *fisher_k += var_cov;
+            }
+        }
+
+        fisher_diag
+            .iter()
+            .map(|&f| if f > 0.0 { (1.0 / f).sqrt() } else { 0.1 })
+            .collect()
+    }
+
+    pub fn log_likelihood(&self) -> f64 {
+        if self.event_times.is_empty() || self.risk_scores.is_empty() {
+            return 0.0;
+        }
+
+        let n = self.event_times.len();
+        let mut loglik = 0.0;
+
+        for i in 0..n {
+            if self.censoring[i] == 0 {
+                continue;
+            }
+
+            let risk_score_i = self.risk_scores.get(i).copied().unwrap_or(1.0).ln();
+
+            let risk_set_sum: f64 = (0..n)
+                .filter(|&j| self.event_times[j] >= self.event_times[i])
+                .map(|j| self.risk_scores.get(j).copied().unwrap_or(1.0))
+                .sum();
+
+            if risk_set_sum > 0.0 {
+                loglik += risk_score_i - risk_set_sum.ln();
+            }
+        }
+
+        loglik
+    }
+
+    pub fn aic(&self) -> f64 {
+        let k = self.coefficients.nrows() as f64;
+        -2.0 * self.log_likelihood() + 2.0 * k
+    }
+
+    pub fn bic(&self) -> f64 {
+        let k = self.coefficients.nrows() as f64;
+        let n = self.event_times.len() as f64;
+        -2.0 * self.log_likelihood() + k * n.ln()
+    }
 }
