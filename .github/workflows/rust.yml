@@ -36,9 +36,14 @@ jobs:
       - name: Install OpenBLAS (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          vcpkg install openblas:x64-windows
-          echo "OPENBLAS_DIR=C:/vcpkg/installed/x64-windows" >> $env:GITHUB_ENV
-          echo "C:/vcpkg/installed/x64-windows/bin" >> $env:GITHUB_PATH
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          cd C:\vcpkg
+          git pull
+          .\bootstrap-vcpkg.bat
+          .\vcpkg integrate install
+          .\vcpkg install openblas:x64-windows
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+          echo "C:\vcpkg\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
       - name: Set up Python
         uses: actions/setup-python@v5

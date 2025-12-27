@@ -93,8 +93,14 @@ jobs:
 
       - name: Install OpenBLAS
         run: |
-          vcpkg install openblas:x64-windows
-          echo "OPENBLAS_DIR=C:/vcpkg/installed/x64-windows" >> $env:GITHUB_ENV
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          cd C:\vcpkg
+          git pull
+          .\bootstrap-vcpkg.bat
+          .\vcpkg integrate install
+          .\vcpkg install openblas:x64-windows
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+          echo "C:\vcpkg\installed\x64-windows\bin" >> $env:GITHUB_PATH
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -102,7 +108,7 @@ jobs:
           target: x86_64-pc-windows-msvc
           args: --release --out dist
         env:
-          OPENBLAS_DIR: ${{ env.OPENBLAS_DIR }}
+          VCPKG_ROOT: C:\vcpkg
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
