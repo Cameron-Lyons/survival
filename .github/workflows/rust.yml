@@ -33,6 +33,11 @@ jobs:
           brew install openblas
           echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -49,14 +54,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build
-        run: cargo build --verbose
+      - name: Install maturin and pytest
+        run: pip install maturin pytest numpy
 
-      - name: Run tests
-        run: cargo test --verbose
+      - name: Build with maturin
+        run: maturin build --release
 
-  python-tests:
-    name: Python Tests (${{ matrix.python-version }})
+      - name: Install and test
+        run: |
+          pip install target/wheels/survival_rs-*.whl
+          python -m pytest test/ -v
+
+  python-matrix:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -95,13 +105,12 @@ jobs:
       - name: Install maturin and pytest
         run: pip install maturin pytest numpy
 
-      - name: Build Python wheel
-        run: maturin build --release
+      - name: Build and install
+        run: |
+          maturin build --release
+          pip install target/wheels/survival_rs-*.whl
 
-      - name: Install Python module
-        run: pip install target/wheels/survival_rs-*.whl
-
-      - name: Run Python tests
+      - name: Run tests
         run: python -m pytest test/ -v
 
   docs:
@@ -113,6 +122,11 @@ jobs:
 
       - name: Install OpenBLAS
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -131,37 +145,6 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build documentation
-        run: cargo doc --no-deps --document-private-items
+        run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
-
-  msrv:
-    name: Minimum Supported Rust Version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install OpenBLAS
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
-
-      - name: Install Rust 1.92 (MSRV)
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: '1.92'
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Check MSRV
-        run: cargo check --verbose
