@@ -8,14 +8,26 @@ A high-performance survival analysis library written in Rust, with a Python API 
 ## Features
 
 - Core survival analysis routines
-- Cox proportional hazards models
+- Cox proportional hazards models with frailty
 - Kaplan-Meier and Aalen-Johansen (multi-state) survival curves
+- Nelson-Aalen estimator
 - Parametric accelerated failure time models
+- Fine-Gray competing risks model
 - Penalized splines (P-splines) for smooth covariate effects
 - Concordance index calculations
 - Person-years calculations
 - Score calculations for survival models
-- Residual analysis
+- Residual analysis (martingale, Schoenfeld, score residuals)
+- Bootstrap confidence intervals
+- Cross-validation for model assessment
+- Statistical tests (log-rank, likelihood ratio, Wald, score, proportional hazards)
+- Sample size and power calculations
+- RMST (Restricted Mean Survival Time) analysis
+- Landmark analysis
+- Calibration and risk stratification
+- Time-dependent AUC
+- Conditional logistic regression
+- Time-splitting utilities
 
 ## Installation
 
@@ -29,8 +41,8 @@ pip install survival-rs
 
 #### Prerequisites
 
-- Python 3.12 or 3.13 (recommended: 3.12)
-- Rust toolchain (see [rustup.rs](https://rustup.rs/))
+- Python 3
+- Rust 1.92+ (required for edition 2024; see [rustup.rs](https://rustup.rs/))
 - [maturin](https://github.com/PyO3/maturin)
 - BLAS libraries (required at runtime):
   - Arch Linux: `sudo pacman -S openblas`
@@ -52,7 +64,7 @@ maturin build --release
 
 Install the wheel:
 ```sh
-pip install target/wheels/survival_rs-0.1.0-*.whl
+pip install target/wheels/survival_rs-*.whl
 ```
 
 For development:
@@ -294,7 +306,7 @@ subject = Subject(
     is_subcohort=True,
     stratum=0
 )
-model.add_subject(&subject)
+model.add_subject(subject)
 ```
 
 ### Cox Martingale Residuals
@@ -350,33 +362,154 @@ print(f"Variance matrix: {result.variance}")
 
 ### Classes
 
+**Core Models:**
 - `AaregOptions`: Configuration options for Aalen's additive regression model
 - `PSpline`: Penalized spline class for smooth covariate effects
 - `CoxPHModel`: Cox proportional hazards model class
 - `Subject`: Subject data structure for Cox PH models
+- `ConditionalLogisticRegression`: Conditional logistic regression model
+- `ClogitDataSet`: Dataset for conditional logistic regression
+
+**Survival Curves:**
 - `SurvFitKMOutput`: Output from Kaplan-Meier survival curve fitting
-- `FineGrayOutput`: Output from Fine-Gray competing risks model
+- `SurvFitAJ`: Output from Aalen-Johansen survival curve fitting
+- `NelsonAalenResult`: Output from Nelson-Aalen estimator
+- `StratifiedKMResult`: Output from stratified Kaplan-Meier
+
+**Parametric Models:**
 - `SurvivalFit`: Output from parametric survival regression
 - `DistributionType`: Distribution types for parametric models (extreme_value, logistic, gaussian, weibull, lognormal)
-- `SurvDiffResult`: Output from survival difference tests (log-rank test)
+- `FineGrayOutput`: Output from Fine-Gray competing risks model
+
+**Statistical Tests:**
+- `SurvDiffResult`: Output from survival difference tests
+- `LogRankResult`: Output from log-rank test
+- `TrendTestResult`: Output from trend tests
+- `TestResult`: General test result output
+- `ProportionalityTest`: Output from proportional hazards test
+
+**Validation:**
+- `BootstrapResult`: Output from bootstrap confidence interval calculations
+- `CVResult`: Output from cross-validation
+- `CalibrationResult`: Output from calibration analysis
+- `PredictionResult`: Output from prediction functions
+- `RiskStratificationResult`: Output from risk stratification
+- `TdAUCResult`: Output from time-dependent AUC calculation
+
+**RMST and Survival Metrics:**
+- `RMSTResult`: Output from RMST calculation
+- `RMSTComparisonResult`: Output from RMST comparison between groups
+- `MedianSurvivalResult`: Output from median survival calculation
+- `CumulativeIncidenceResult`: Output from cumulative incidence calculation
+- `NNTResult`: Number needed to treat result
+
+**Landmark Analysis:**
+- `LandmarkResult`: Output from landmark analysis
+- `ConditionalSurvivalResult`: Output from conditional survival calculation
+- `HazardRatioResult`: Output from hazard ratio calculation
+- `SurvivalAtTimeResult`: Output from survival at specific times
+- `LifeTableResult`: Output from life table calculation
+
+**Power and Sample Size:**
+- `SampleSizeResult`: Output from sample size calculations
+- `AccrualResult`: Output from accrual calculations
+
+**Utilities:**
+- `CoxCountOutput`: Output from Cox counting functions
+- `SplitResult`: Output from time-splitting
+- `LinkFunctionParams`: Link function parameters
+- `CchMethod`: Case-cohort method specification
+- `CohortData`: Cohort data structure
 
 ### Functions
 
+**Model Fitting:**
 - `aareg(options)`: Fit Aalen's additive regression model
-- `survfitkm(...)`: Fit Kaplan-Meier survival curves
 - `survreg(...)`: Fit parametric accelerated failure time models
+- `perform_cox_regression_frailty(...)`: Fit Cox proportional hazards model with frailty
+
+**Survival Curves:**
+- `survfitkm(...)`: Fit Kaplan-Meier survival curves
+- `survfitaj(...)`: Fit Aalen-Johansen survival curves (multi-state)
+- `nelson_aalen_estimator(...)`: Calculate Nelson-Aalen estimator
+- `stratified_kaplan_meier(...)`: Calculate stratified Kaplan-Meier curves
+- `agsurv4(...)`: Anderson-Gill survival calculations (version 4)
+- `agsurv5(...)`: Anderson-Gill survival calculations (version 5)
+
+**Statistical Tests:**
 - `survdiff2(...)`: Perform survival difference tests (log-rank, Wilcoxon, etc.)
+- `logrank_test(...)`: Perform log-rank test
+- `fleming_harrington_test(...)`: Perform Fleming-Harrington weighted test
+- `logrank_trend(...)`: Perform log-rank trend test
+- `lrt_test(...)`: Likelihood ratio test
+- `wald_test_py(...)`: Wald test
+- `score_test_py(...)`: Score test
+- `ph_test(...)`: Proportional hazards assumption test
+
+**Residuals:**
 - `coxmart(...)`: Calculate Cox martingale residuals
-- `finegray(...)`: Fine-Gray competing risks model data preparation
+- `agmart(...)`: Calculate Anderson-Gill martingale residuals
+- `schoenfeld_residuals(...)`: Calculate Schoenfeld residuals
+- `cox_score_residuals(...)`: Calculate Cox score residuals
+
+**Concordance:**
 - `perform_concordance1_calculation(...)`: Calculate concordance index (version 1)
 - `perform_concordance3_calculation(...)`: Calculate concordance index (version 3)
 - `perform_concordance_calculation(...)`: Calculate concordance index (version 5)
-- `perform_cox_regression_frailty(...)`: Fit Cox proportional hazards model with frailty
+- `concordance(...)`: General concordance calculation
+
+**Validation:**
+- `bootstrap_cox_ci(...)`: Bootstrap confidence intervals for Cox models
+- `bootstrap_survreg_ci(...)`: Bootstrap confidence intervals for parametric models
+- `cv_cox_concordance(...)`: Cross-validation for Cox model concordance
+- `cv_survreg_loglik(...)`: Cross-validation for parametric model log-likelihood
+- `calibration(...)`: Model calibration assessment
+- `predict_cox(...)`: Predictions from Cox models
+- `risk_stratification(...)`: Risk group stratification
+- `td_auc(...)`: Time-dependent AUC calculation
+- `brier(...)`: Calculate Brier score
+- `integrated_brier(...)`: Calculate integrated Brier score
+
+**RMST and Survival Metrics:**
+- `rmst(...)`: Calculate restricted mean survival time
+- `rmst_comparison(...)`: Compare RMST between groups
+- `survival_quantile(...)`: Calculate survival quantiles (median, etc.)
+- `cumulative_incidence(...)`: Calculate cumulative incidence
+- `number_needed_to_treat(...)`: Calculate NNT
+
+**Landmark Analysis:**
+- `landmark_analysis(...)`: Perform landmark analysis
+- `conditional_survival(...)`: Calculate conditional survival
+- `hazard_ratio(...)`: Calculate hazard ratios
+- `survival_at_times(...)`: Calculate survival at specific time points
+- `life_table(...)`: Generate life table
+
+**Power and Sample Size:**
+- `sample_size_survival(...)`: Calculate required sample size
+- `sample_size_survival_freedman(...)`: Sample size using Freedman's method
+- `power_survival(...)`: Calculate statistical power
+- `expected_events(...)`: Calculate expected number of events
+
+**Utilities:**
+- `finegray(...)`: Fine-Gray competing risks model data preparation
 - `perform_pyears_calculation(...)`: Calculate person-years of observation
 - `perform_pystep_calculation(...)`: Perform step calculations
 - `perform_pystep_simple_calculation(...)`: Perform simple step calculations
 - `perform_score_calculation(...)`: Calculate score statistics
 - `perform_agscore3_calculation(...)`: Calculate score statistics (version 3)
+- `survsplit(...)`: Split survival data at specified times
+- `tmerge(...)`: Merge time-dependent covariates
+- `tmerge2(...)`: Merge time-dependent covariates (version 2)
+- `tmerge3(...)`: Merge time-dependent covariates (version 3)
+- `collapse(...)`: Collapse survival data
+- `coxcount1(...)`: Cox counting process calculations
+- `coxcount2(...)`: Cox counting process calculations (version 2)
+- `agexact(...)`: Exact Anderson-Gill calculations
+- `norisk(...)`: No-risk calculations
+- `cipoisson(...)`: Poisson confidence intervals
+- `cipoisson_exact(...)`: Exact Poisson confidence intervals
+- `cipoisson_anscombe(...)`: Anscombe Poisson confidence intervals
+- `cox_callback(...)`: Cox model callback for iterative fitting
 
 ## PSpline Options
 
@@ -439,6 +572,8 @@ The codebase is organized with:
 - [ndarray-stats](https://github.com/rust-ndarray/ndarray-stats) - Statistical functions
 - [statrs](https://github.com/statrs-dev/statrs) - Statistical distributions
 - [thiserror](https://github.com/dtolnay/thiserror) - Error handling
+- [rayon](https://github.com/rayon-rs/rayon) - Parallel computation
+- [libc](https://github.com/rust-lang/libc) - C library bindings
 
 ## Compatibility
 
