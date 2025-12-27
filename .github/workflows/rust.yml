@@ -50,12 +50,16 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-py3.13-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-py3.13-
 
       - name: Install maturin
         run: pip install maturin numpy
+
+      - name: Clean old wheels
+        run: rm -rf target/wheels || true
+        shell: bash
 
       - name: Build with maturin
         run: maturin build --release --interpreter python
@@ -108,10 +112,12 @@ jobs:
           key: ${{ runner.os }}-cargo-py${{ matrix.python-version }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-py${{ matrix.python-version }}-
-            ${{ runner.os }}-cargo-
 
       - name: Install maturin
         run: pip install maturin numpy
+
+      - name: Clean old wheels
+        run: rm -rf target/wheels || true
 
       - name: Build and install
         run: |
