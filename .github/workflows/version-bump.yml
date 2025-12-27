@@ -1,0 +1,49 @@
+name: Version Bump
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.head_ref }}
+
+      - name: Check and bump version if needed
+        run: |
+          # Get current version
+          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Current version: $CURRENT"
+
+          # Check if version exists on PyPI
+          if curl -s "https://pypi.org/pypi/survival-rs/$CURRENT/json" | grep -q '"version"'; then
+            echo "Version $CURRENT exists on PyPI, bumping patch version"
+
+            # Bump patch version
+            IFS='.' read -r major minor patch <<< "$CURRENT"
+            NEW_VERSION="$major.$minor.$((patch + 1))"
+            echo "New version: $NEW_VERSION"
+
+            # Update Cargo.toml
+            sed -i "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
+
+            # Update pyproject.toml
+            sed -i "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" pyproject.toml
+
+            # Commit and push
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml pyproject.toml
+            git commit -m "Bump version to $NEW_VERSION"
+            git push
+          else
+            echo "Version $CURRENT is new, no bump needed"
+          fi
