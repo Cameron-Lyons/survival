@@ -134,8 +134,7 @@ pub fn cv_cox(
             });
 
             let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| train_time[i]).collect();
-            let sorted_status: Vec<i32> =
-                sorted_indices.iter().map(|&i| train_status[i]).collect();
+            let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| train_status[i]).collect();
             let sorted_weights: Vec<f64> =
                 sorted_indices.iter().map(|&i| train_weights[i]).collect();
 
