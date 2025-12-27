@@ -58,7 +58,7 @@ jobs:
         run: pip install maturin numpy
 
       - name: Build with maturin
-        run: maturin build --release
+        run: maturin build --release --interpreter python
 
       - name: Install wheel (Unix)
         if: matrix.os != 'windows-latest'
@@ -115,7 +115,7 @@ jobs:
 
       - name: Build and install
         run: |
-          maturin build --release
+          maturin build --release --interpreter python
           pip install target/wheels/survival_rs-*.whl
 
       - name: Run tests
