@@ -64,6 +64,15 @@ use validation::power::{
     AccrualResult, SampleSizeResult, expected_events, power_survival, sample_size_survival,
     sample_size_survival_freedman,
 };
+use validation::rmst::{
+    CumulativeIncidenceResult, MedianSurvivalResult, NNTResult, RMSTComparisonResult, RMSTResult,
+    cumulative_incidence, number_needed_to_treat, rmst, rmst_comparison, survival_quantile,
+};
+use validation::landmark::{
+    ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
+    SurvivalAtTimeResult, conditional_survival, hazard_ratio, landmark_analysis, life_table,
+    survival_at_times,
+};
 use validation::tests::{
     ProportionalityTest, TestResult, lrt_test, ph_test, score_test_py, wald_test_py,
 };
@@ -128,6 +137,16 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(predict_cox, &m)?)?;
     m.add_function(wrap_pyfunction!(risk_stratification, &m)?)?;
     m.add_function(wrap_pyfunction!(td_auc, &m)?)?;
+    m.add_function(wrap_pyfunction!(rmst, &m)?)?;
+    m.add_function(wrap_pyfunction!(rmst_comparison, &m)?)?;
+    m.add_function(wrap_pyfunction!(survival_quantile, &m)?)?;
+    m.add_function(wrap_pyfunction!(cumulative_incidence, &m)?)?;
+    m.add_function(wrap_pyfunction!(number_needed_to_treat, &m)?)?;
+    m.add_function(wrap_pyfunction!(landmark_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(conditional_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(hazard_ratio, &m)?)?;
+    m.add_function(wrap_pyfunction!(survival_at_times, &m)?)?;
+    m.add_function(wrap_pyfunction!(life_table, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -159,5 +178,15 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PredictionResult>()?;
     m.add_class::<RiskStratificationResult>()?;
     m.add_class::<TdAUCResult>()?;
+    m.add_class::<RMSTResult>()?;
+    m.add_class::<RMSTComparisonResult>()?;
+    m.add_class::<MedianSurvivalResult>()?;
+    m.add_class::<CumulativeIncidenceResult>()?;
+    m.add_class::<NNTResult>()?;
+    m.add_class::<LandmarkResult>()?;
+    m.add_class::<ConditionalSurvivalResult>()?;
+    m.add_class::<HazardRatioResult>()?;
+    m.add_class::<SurvivalAtTimeResult>()?;
+    m.add_class::<LifeTableResult>()?;
     Ok(())
 }

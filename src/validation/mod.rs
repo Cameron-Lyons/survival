@@ -1,6 +1,8 @@
 pub mod bootstrap;
 pub mod calibration;
 pub mod crossval;
+pub mod landmark;
 pub mod logrank;
 pub mod power;
+pub mod rmst;
 pub mod tests;
