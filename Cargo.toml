@@ -23,6 +23,7 @@ libc = "0.2.178"
 ndarray-stats = "0.6.0"
 statrs = "0.18.0"
 thiserror = "2.0.17"
+rayon = "1.11.0"
 
 [target.'cfg(not(windows))'.dependencies]
 ndarray-linalg = { version = "0.18.0", features = ["openblas-system"] }

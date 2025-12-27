@@ -1,5 +1,6 @@
 use ndarray::Array2;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -74,7 +75,7 @@ pub fn bootstrap_cox(
     covariates: &Array2<f64>,
     weights: Option<&[f64]>,
     config: &BootstrapConfig,
-) -> Result<BootstrapResult, Box<dyn std::error::Error>> {
+) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
     use ndarray::Array1;
 
@@ -129,69 +130,74 @@ pub fn bootstrap_cox(
     let (original_beta, _, _, _, _, _, _, _) = original_fit.results();
 
     let seed = config.seed.unwrap_or(42);
-    let mut bootstrap_coefs: Vec<Vec<f64>> = Vec::with_capacity(config.n_bootstrap);
 
-    for b in 0..config.n_bootstrap {
-        let indices = bootstrap_sample_indices(n, seed, b);
+    let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
+        .into_par_iter()
+        .filter_map(|b| {
+            let indices = bootstrap_sample_indices(n, seed, b);
 
-        let boot_time: Vec<f64> = indices.iter().map(|&i| sorted_time[i]).collect();
-        let boot_status: Vec<i32> = indices.iter().map(|&i| sorted_status[i]).collect();
-        let boot_weights: Vec<f64> = indices.iter().map(|&i| sorted_weights[i]).collect();
+            let boot_time: Vec<f64> = indices.iter().map(|&i| sorted_time[i]).collect();
+            let boot_status: Vec<i32> = indices.iter().map(|&i| sorted_status[i]).collect();
+            let boot_weights: Vec<f64> = indices.iter().map(|&i| sorted_weights[i]).collect();
 
-        let mut boot_covariates = Array2::zeros((n, nvar));
-        for (new_idx, &orig_idx) in indices.iter().enumerate() {
-            for var in 0..nvar {
-                boot_covariates[[new_idx, var]] = sorted_covariates[[orig_idx, var]];
-            }
-        }
-
-        let mut boot_indices: Vec<usize> = (0..n).collect();
-        boot_indices.sort_by(|&a, &b| {
-            boot_time[b]
-                .partial_cmp(&boot_time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let resorted_time: Vec<f64> = boot_indices.iter().map(|&i| boot_time[i]).collect();
-        let resorted_status: Vec<i32> = boot_indices.iter().map(|&i| boot_status[i]).collect();
-        let resorted_weights: Vec<f64> = boot_indices.iter().map(|&i| boot_weights[i]).collect();
-
-        let mut resorted_covariates = Array2::zeros((n, nvar));
-        for (new_idx, &orig_idx) in boot_indices.iter().enumerate() {
-            for var in 0..nvar {
-                resorted_covariates[[new_idx, var]] = boot_covariates[[orig_idx, var]];
-            }
-        }
-
-        let time_arr = Array1::from_vec(resorted_time);
-        let status_arr = Array1::from_vec(resorted_status);
-        let strata_arr = Array1::from_elem(n, 0i32);
-        let offset_arr = Array1::from_elem(n, 0.0);
-        let weights_arr = Array1::from_vec(resorted_weights);
-
-        match CoxFit::new(
-            time_arr,
-            status_arr,
-            resorted_covariates,
-            strata_arr,
-            offset_arr,
-            weights_arr,
-            CoxMethod::Breslow,
-            25,
-            1e-9,
-            1e-9,
-            vec![true; nvar],
-            initial_beta.clone(),
-        ) {
-            Ok(mut fit) => {
-                if fit.fit().is_ok() {
-                    let (beta, _, _, _, _, _, _, _) = fit.results();
-                    bootstrap_coefs.push(beta);
+            let mut boot_covariates = Array2::zeros((n, nvar));
+            for (new_idx, &orig_idx) in indices.iter().enumerate() {
+                for var in 0..nvar {
+                    boot_covariates[[new_idx, var]] = sorted_covariates[[orig_idx, var]];
                 }
             }
-            Err(_) => continue,
-        }
-    }
+
+            let mut boot_indices: Vec<usize> = (0..n).collect();
+            boot_indices.sort_by(|&a, &b| {
+                boot_time[b]
+                    .partial_cmp(&boot_time[a])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let resorted_time: Vec<f64> = boot_indices.iter().map(|&i| boot_time[i]).collect();
+            let resorted_status: Vec<i32> = boot_indices.iter().map(|&i| boot_status[i]).collect();
+            let resorted_weights: Vec<f64> =
+                boot_indices.iter().map(|&i| boot_weights[i]).collect();
+
+            let mut resorted_covariates = Array2::zeros((n, nvar));
+            for (new_idx, &orig_idx) in boot_indices.iter().enumerate() {
+                for var in 0..nvar {
+                    resorted_covariates[[new_idx, var]] = boot_covariates[[orig_idx, var]];
+                }
+            }
+
+            let time_arr = Array1::from_vec(resorted_time);
+            let status_arr = Array1::from_vec(resorted_status);
+            let strata_arr = Array1::from_elem(n, 0i32);
+            let offset_arr = Array1::from_elem(n, 0.0);
+            let weights_arr = Array1::from_vec(resorted_weights);
+
+            match CoxFit::new(
+                time_arr,
+                status_arr,
+                resorted_covariates,
+                strata_arr,
+                offset_arr,
+                weights_arr,
+                CoxMethod::Breslow,
+                25,
+                1e-9,
+                1e-9,
+                vec![true; nvar],
+                initial_beta.clone(),
+            ) {
+                Ok(mut fit) => {
+                    if fit.fit().is_ok() {
+                        let (beta, _, _, _, _, _, _, _) = fit.results();
+                        Some(beta)
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            }
+        })
+        .collect();
 
     let actual_n_bootstrap = bootstrap_coefs.len();
     if actual_n_bootstrap == 0 {
@@ -286,7 +292,7 @@ pub fn bootstrap_survreg(
     covariates: &Array2<f64>,
     distribution: &str,
     config: &BootstrapConfig,
-) -> Result<BootstrapResult, Box<dyn std::error::Error>> {
+) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::regression::survreg6::survreg;
 
     let n = time.len();
@@ -311,34 +317,36 @@ pub fn bootstrap_survreg(
     )?;
 
     let seed = config.seed.unwrap_or(42);
-    let mut bootstrap_coefs: Vec<Vec<f64>> = Vec::with_capacity(config.n_bootstrap);
+    let dist = distribution.to_string();
 
-    for b in 0..config.n_bootstrap {
-        let indices = bootstrap_sample_indices(n, seed, b);
+    let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
+        .into_par_iter()
+        .filter_map(|b| {
+            let indices = bootstrap_sample_indices(n, seed, b);
 
-        let boot_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
-        let boot_status: Vec<f64> = indices.iter().map(|&i| status[i]).collect();
-        let boot_covariates: Vec<Vec<f64>> = indices.iter().map(|&i| cov_vecs[i].clone()).collect();
+            let boot_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
+            let boot_status: Vec<f64> = indices.iter().map(|&i| status[i]).collect();
+            let boot_covariates: Vec<Vec<f64>> =
+                indices.iter().map(|&i| cov_vecs[i].clone()).collect();
 
-        match survreg(
-            boot_time,
-            boot_status,
-            boot_covariates,
-            None,
-            None,
-            None,
-            None,
-            Some(distribution),
-            Some(25),
-            Some(1e-5),
-            Some(1e-9),
-        ) {
-            Ok(result) => {
-                bootstrap_coefs.push(result.coefficients);
+            match survreg(
+                boot_time,
+                boot_status,
+                boot_covariates,
+                None,
+                None,
+                None,
+                None,
+                Some(&dist),
+                Some(25),
+                Some(1e-5),
+                Some(1e-9),
+            ) {
+                Ok(result) => Some(result.coefficients),
+                Err(_) => None,
             }
-            Err(_) => continue,
-        }
-    }
+        })
+        .collect();
 
     let actual_n_bootstrap = bootstrap_coefs.len();
     if actual_n_bootstrap == 0 {

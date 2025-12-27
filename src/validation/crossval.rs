@@ -1,5 +1,6 @@
 use ndarray::Array2;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -88,7 +89,7 @@ pub fn cv_cox(
     covariates: &Array2<f64>,
     weights: Option<&[f64]>,
     config: &CVConfig,
-) -> Result<CVResult, Box<dyn std::error::Error>> {
+) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
     use ndarray::Array1;
 
@@ -100,132 +101,137 @@ pub fn cv_cox(
 
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
 
-    let mut fold_scores = Vec::with_capacity(config.n_folds);
-    let mut fold_coefficients = Vec::with_capacity(config.n_folds);
+    let results: Vec<(f64, Vec<f64>)> = (0..config.n_folds)
+        .into_par_iter()
+        .map(|fold_idx| {
+            let test_indices = &folds[fold_idx];
+            let train_indices: Vec<usize> = folds
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != fold_idx)
+                .flat_map(|(_, f)| f.iter().copied())
+                .collect();
 
-    for fold_idx in 0..config.n_folds {
-        let test_indices = &folds[fold_idx];
-        let train_indices: Vec<usize> = folds
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != fold_idx)
-            .flat_map(|(_, f)| f.iter().copied())
-            .collect();
+            let train_n = train_indices.len();
+            let test_n = test_indices.len();
 
-        let train_n = train_indices.len();
-        let test_n = test_indices.len();
+            let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
+            let train_status: Vec<i32> = train_indices.iter().map(|&i| status[i]).collect();
+            let train_weights: Vec<f64> = train_indices.iter().map(|&i| weights[i]).collect();
 
-        let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
-        let train_status: Vec<i32> = train_indices.iter().map(|&i| status[i]).collect();
-        let train_weights: Vec<f64> = train_indices.iter().map(|&i| weights[i]).collect();
-
-        let mut train_covariates = Array2::zeros((train_n, nvar));
-        for (new_idx, &orig_idx) in train_indices.iter().enumerate() {
-            for var in 0..nvar {
-                train_covariates[[new_idx, var]] = covariates[[var, orig_idx]];
+            let mut train_covariates = Array2::zeros((train_n, nvar));
+            for (new_idx, &orig_idx) in train_indices.iter().enumerate() {
+                for var in 0..nvar {
+                    train_covariates[[new_idx, var]] = covariates[[var, orig_idx]];
+                }
             }
-        }
 
-        let mut sorted_indices: Vec<usize> = (0..train_n).collect();
-        sorted_indices.sort_by(|&a, &b| {
-            train_time[b]
-                .partial_cmp(&train_time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+            let mut sorted_indices: Vec<usize> = (0..train_n).collect();
+            sorted_indices.sort_by(|&a, &b| {
+                train_time[b]
+                    .partial_cmp(&train_time[a])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
-        let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| train_time[i]).collect();
-        let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| train_status[i]).collect();
-        let sorted_weights: Vec<f64> = sorted_indices.iter().map(|&i| train_weights[i]).collect();
+            let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| train_time[i]).collect();
+            let sorted_status: Vec<i32> =
+                sorted_indices.iter().map(|&i| train_status[i]).collect();
+            let sorted_weights: Vec<f64> =
+                sorted_indices.iter().map(|&i| train_weights[i]).collect();
 
-        let mut sorted_covariates = Array2::zeros((train_n, nvar));
-        for (new_idx, &orig_idx) in sorted_indices.iter().enumerate() {
-            for var in 0..nvar {
-                sorted_covariates[[new_idx, var]] = train_covariates[[orig_idx, var]];
+            let mut sorted_covariates = Array2::zeros((train_n, nvar));
+            for (new_idx, &orig_idx) in sorted_indices.iter().enumerate() {
+                for var in 0..nvar {
+                    sorted_covariates[[new_idx, var]] = train_covariates[[orig_idx, var]];
+                }
             }
-        }
 
-        let initial_beta: Vec<f64> = vec![0.0; nvar];
+            let initial_beta: Vec<f64> = vec![0.0; nvar];
 
-        let time_arr = Array1::from_vec(sorted_time);
-        let status_arr = Array1::from_vec(sorted_status);
-        let strata_arr = Array1::from_elem(train_n, 0i32);
-        let offset_arr = Array1::from_elem(train_n, 0.0);
-        let weights_arr = Array1::from_vec(sorted_weights);
+            let time_arr = Array1::from_vec(sorted_time);
+            let status_arr = Array1::from_vec(sorted_status);
+            let strata_arr = Array1::from_elem(train_n, 0i32);
+            let offset_arr = Array1::from_elem(train_n, 0.0);
+            let weights_arr = Array1::from_vec(sorted_weights);
 
-        let fit_result = match CoxFit::new(
-            time_arr,
-            status_arr,
-            sorted_covariates,
-            strata_arr,
-            offset_arr,
-            weights_arr,
-            CoxMethod::Breslow,
-            25,
-            1e-9,
-            1e-9,
-            vec![true; nvar],
-            initial_beta,
-        ) {
-            Ok(mut fit) => {
-                fit.fit()?;
-                fit.results()
+            let beta = match CoxFit::new(
+                time_arr,
+                status_arr,
+                sorted_covariates,
+                strata_arr,
+                offset_arr,
+                weights_arr,
+                CoxMethod::Breslow,
+                25,
+                1e-9,
+                1e-9,
+                vec![true; nvar],
+                initial_beta,
+            ) {
+                Ok(mut fit) => {
+                    if fit.fit().is_ok() {
+                        let (b, _, _, _, _, _, _, _) = fit.results();
+                        b
+                    } else {
+                        vec![0.0; nvar]
+                    }
+                }
+                Err(_) => vec![0.0; nvar],
+            };
+
+            let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
+            let test_status: Vec<i32> = test_indices.iter().map(|&i| status[i]).collect();
+
+            let mut test_covariates = Array2::zeros((nvar, test_n));
+            for (new_idx, &orig_idx) in test_indices.iter().enumerate() {
+                for var in 0..nvar {
+                    test_covariates[[var, new_idx]] = covariates[[var, orig_idx]];
+                }
             }
-            Err(e) => return Err(format!("Cox fit failed: {:?}", e).into()),
-        };
 
-        let (beta, _, _, _, _, _, _, _) = fit_result;
-        fold_coefficients.push(beta.clone());
-
-        let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
-        let test_status: Vec<i32> = test_indices.iter().map(|&i| status[i]).collect();
-        let _test_weights: Vec<f64> = test_indices.iter().map(|&i| weights[i]).collect();
-
-        let mut test_covariates = Array2::zeros((nvar, test_n));
-        for (new_idx, &orig_idx) in test_indices.iter().enumerate() {
-            for var in 0..nvar {
-                test_covariates[[var, new_idx]] = covariates[[var, orig_idx]];
+            let mut linear_predictor = vec![0.0; test_n];
+            for i in 0..test_n {
+                for var in 0..nvar {
+                    linear_predictor[i] += beta[var] * test_covariates[[var, i]];
+                }
             }
-        }
 
-        let mut linear_predictor = vec![0.0; test_n];
-        for i in 0..test_n {
-            for var in 0..nvar {
-                linear_predictor[i] += beta[var] * test_covariates[[var, i]];
-            }
-        }
+            let mut concordant = 0.0;
+            let mut discordant = 0.0;
+            let mut tied = 0.0;
 
-        let mut concordant = 0.0;
-        let mut discordant = 0.0;
-        let mut tied = 0.0;
-
-        for i in 0..test_n {
-            if test_status[i] == 0 {
-                continue;
-            }
-            for j in 0..test_n {
-                if i == j {
+            for i in 0..test_n {
+                if test_status[i] == 0 {
                     continue;
                 }
-                if test_time[j] > test_time[i] {
-                    if linear_predictor[i] > linear_predictor[j] {
-                        concordant += 1.0;
-                    } else if linear_predictor[i] < linear_predictor[j] {
-                        discordant += 1.0;
-                    } else {
-                        tied += 1.0;
+                for j in 0..test_n {
+                    if i == j {
+                        continue;
+                    }
+                    if test_time[j] > test_time[i] {
+                        if linear_predictor[i] > linear_predictor[j] {
+                            concordant += 1.0;
+                        } else if linear_predictor[i] < linear_predictor[j] {
+                            discordant += 1.0;
+                        } else {
+                            tied += 1.0;
+                        }
                     }
                 }
             }
-        }
 
-        let total = concordant + discordant + tied;
-        let c_index = if total > 0.0 {
-            (concordant + 0.5 * tied) / total
-        } else {
-            0.5
-        };
-        fold_scores.push(c_index);
-    }
+            let total = concordant + discordant + tied;
+            let c_index = if total > 0.0 {
+                (concordant + 0.5 * tied) / total
+            } else {
+                0.5
+            };
+
+            (c_index, beta)
+        })
+        .collect();
+
+    let (fold_scores, fold_coefficients): (Vec<f64>, Vec<Vec<f64>>) = results.into_iter().unzip();
 
     let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
     let variance = fold_scores
@@ -288,7 +294,7 @@ pub fn cv_survreg(
     covariates: &Array2<f64>,
     distribution: &str,
     config: &CVConfig,
-) -> Result<CVResult, Box<dyn std::error::Error>> {
+) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::regression::survreg6::survreg;
 
     let n = time.len();
@@ -299,61 +305,68 @@ pub fn cv_survreg(
         .collect();
 
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
+    let dist = distribution.to_string();
 
-    let mut fold_scores = Vec::with_capacity(config.n_folds);
-    let mut fold_coefficients = Vec::with_capacity(config.n_folds);
+    let results: Vec<(f64, Vec<f64>)> = (0..config.n_folds)
+        .into_par_iter()
+        .filter_map(|fold_idx| {
+            let test_indices = &folds[fold_idx];
+            let train_indices: Vec<usize> = folds
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != fold_idx)
+                .flat_map(|(_, f)| f.iter().copied())
+                .collect();
 
-    for fold_idx in 0..config.n_folds {
-        let test_indices = &folds[fold_idx];
-        let train_indices: Vec<usize> = folds
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != fold_idx)
-            .flat_map(|(_, f)| f.iter().copied())
-            .collect();
+            let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
+            let train_status: Vec<f64> = train_indices.iter().map(|&i| status[i]).collect();
+            let train_covariates: Vec<Vec<f64>> =
+                train_indices.iter().map(|&i| cov_vecs[i].clone()).collect();
 
-        let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
-        let train_status: Vec<f64> = train_indices.iter().map(|&i| status[i]).collect();
-        let train_covariates: Vec<Vec<f64>> =
-            train_indices.iter().map(|&i| cov_vecs[i].clone()).collect();
+            let fit_result = survreg(
+                train_time,
+                train_status,
+                train_covariates,
+                None,
+                None,
+                None,
+                None,
+                Some(&dist),
+                Some(25),
+                Some(1e-5),
+                Some(1e-9),
+            )
+            .ok()?;
 
-        let fit_result = survreg(
-            train_time,
-            train_status,
-            train_covariates,
-            None,
-            None,
-            None,
-            None,
-            Some(distribution),
-            Some(25),
-            Some(1e-5),
-            Some(1e-9),
-        )?;
+            let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
+            let test_status: Vec<f64> = test_indices.iter().map(|&i| status[i]).collect();
+            let test_covariates: Vec<Vec<f64>> =
+                test_indices.iter().map(|&i| cov_vecs[i].clone()).collect();
 
-        fold_coefficients.push(fit_result.coefficients.clone());
+            let test_fit = survreg(
+                test_time,
+                test_status,
+                test_covariates,
+                None,
+                None,
+                Some(fit_result.coefficients.clone()),
+                None,
+                Some(&dist),
+                Some(1),
+                Some(1e-5),
+                Some(1e-9),
+            )
+            .ok()?;
 
-        let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
-        let test_status: Vec<f64> = test_indices.iter().map(|&i| status[i]).collect();
-        let test_covariates: Vec<Vec<f64>> =
-            test_indices.iter().map(|&i| cov_vecs[i].clone()).collect();
+            Some((test_fit.log_likelihood, fit_result.coefficients))
+        })
+        .collect();
 
-        let test_fit = survreg(
-            test_time,
-            test_status,
-            test_covariates,
-            None,
-            None,
-            Some(fit_result.coefficients.clone()),
-            None,
-            Some(distribution),
-            Some(1),
-            Some(1e-5),
-            Some(1e-9),
-        )?;
-
-        fold_scores.push(test_fit.log_likelihood);
+    if results.is_empty() {
+        return Err("All CV folds failed".into());
     }
+
+    let (fold_scores, fold_coefficients): (Vec<f64>, Vec<Vec<f64>>) = results.into_iter().unzip();
 
     let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
     let variance = fold_scores

@@ -1,4 +1,38 @@
 use pyo3::prelude::*;
+use rayon::prelude::*;
+
+fn brier_internal(predictions: &[f64], outcomes: &[i32], weights: Option<&[f64]>) -> Option<f64> {
+    let n = predictions.len();
+    if n != outcomes.len() {
+        return None;
+    }
+
+    if n == 0 {
+        return Some(0.0);
+    }
+
+    let mut score = 0.0;
+    let mut total_weight = 0.0;
+
+    for i in 0..n {
+        let pred = predictions[i];
+        let obs = outcomes[i] as f64;
+        let w = weights.map_or(1.0, |ws| ws[i]);
+
+        if !(0.0..=1.0).contains(&pred) {
+            return None;
+        }
+
+        score += w * (pred - obs).powi(2);
+        total_weight += w;
+    }
+
+    if total_weight > 0.0 {
+        Some(score / total_weight)
+    } else {
+        Some(0.0)
+    }
+}
 
 #[pyfunction]
 #[pyo3(signature = (predictions, outcomes, weights=None))]
@@ -89,8 +123,7 @@ pub fn integrated_brier(
         }
     }
 
-    let mut integrated_score = 0.0;
-    let mut time_intervals = Vec::new();
+    let mut time_intervals = Vec::with_capacity(n_times);
 
     for i in 0..n_times {
         let interval_width = if i == 0 {
@@ -109,15 +142,29 @@ pub fn integrated_brier(
 
     let total_time: f64 = time_intervals.iter().sum();
 
-    for (t_idx, &interval) in time_intervals.iter().enumerate() {
-        let preds_at_t: Vec<f64> = predictions.iter().map(|row| row[t_idx]).collect();
-        let brier_at_t = brier(preds_at_t, outcomes.clone(), weights.clone())?;
-        integrated_score += brier_at_t * interval;
-    }
+    let weights_ref = weights.as_deref();
 
-    if total_time > 0.0 {
-        Ok(integrated_score / total_time)
-    } else {
-        Ok(0.0)
+    let result = time_intervals
+        .par_iter()
+        .enumerate()
+        .map(|(t_idx, &interval)| {
+            let preds_at_t: Vec<f64> = predictions.iter().map(|row| row[t_idx]).collect();
+            brier_internal(&preds_at_t, &outcomes, weights_ref)
+                .map(|score| score * interval)
+                .ok_or("invalid prediction value")
+        })
+        .try_reduce(|| 0.0, |a, b| Ok(a + b));
+
+    match result {
+        Ok(integrated_score) => {
+            if total_time > 0.0 {
+                Ok(integrated_score / total_time)
+            } else {
+                Ok(0.0)
+            }
+        }
+        Err(_) => Err(pyo3::exceptions::PyValueError::new_err(
+            "predictions must be between 0 and 1",
+        )),
     }
 }
