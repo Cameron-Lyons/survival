@@ -25,14 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64]
+        target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install OpenBLAS
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev pkg-config
 
       - uses: actions/setup-python@v5
         with:
@@ -83,6 +78,38 @@ jobs:
           name: wheels-macos-${{ matrix.target }}
           path: dist
 
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.target }}
+
+      - name: Install OpenBLAS
+        run: |
+          vcpkg install openblas:x64-windows
+          echo "OPENBLAS_DIR=C:/vcpkg/installed/x64-windows" >> $env:GITHUB_ENV
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64-pc-windows-msvc
+          args: --release --out dist
+        env:
+          OPENBLAS_DIR: ${{ env.OPENBLAS_DIR }}
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}
+          path: dist
+
   sdist:
     runs-on: ubuntu-latest
     steps:
@@ -104,7 +131,7 @@ jobs:
     name: Publish to TestPyPI
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
-    needs: [linux, macos, sdist]
+    needs: [linux, macos, windows, sdist]
     environment:
       name: testpypi
       url: https://test.pypi.org/project/survival-rs
@@ -125,7 +152,7 @@ jobs:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi')
-    needs: [linux, macos, sdist]
+    needs: [linux, macos, windows, sdist]
     environment:
       name: pypi
       url: https://pypi.org/project/survival-rs
