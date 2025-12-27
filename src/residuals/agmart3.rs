@@ -1,3 +1,17 @@
+// agmart3 computes martingale residuals using a two-pointer counting process approach.
+// This version is more flexible than agmart as it accepts pre-computed sort indices.
+//
+// Key differences from agmart:
+// - agmart3: Takes combined surv vector (tstart, tstop, event flattened) with sort indices.
+//   Uses two pointers (person1, person2) to efficiently track entries and exits.
+//   Handles complex sorting scenarios with custom sort orders (sort1 for entries, sort2 for exits).
+//   Suitable when the caller provides pre-computed optimal sort orders.
+//
+// - agmart: Takes separate vectors, iterates forward through events.
+//   Simpler API but less flexible for complex survival data structures.
+//
+// Both compute the same martingale residuals: observed - expected events.
+
 #[allow(dead_code)]
 pub(crate) struct Agmart3Input {
     pub surv: Vec<f64>,

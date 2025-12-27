@@ -320,7 +320,7 @@ pub fn proportional_hazards_test(
     }
 
     let mut sorted_indices: Vec<usize> = (0..n_events).collect();
-    sorted_indices.sort_by(|&a, &b| event_times[a].partial_cmp(&event_times[b]).unwrap());
+    sorted_indices.sort_by(|&a, &b| event_times[a].partial_cmp(&event_times[b]).unwrap_or(std::cmp::Ordering::Equal));
 
     let ranks: Vec<f64> = (1..=n_events).map(|r| r as f64).collect();
 

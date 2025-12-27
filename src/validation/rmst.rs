@@ -121,7 +121,7 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut unique_times: Vec<f64> = Vec::new();
     let mut n_events: Vec<f64> = Vec::new();
@@ -407,7 +407,7 @@ pub fn compute_survival_quantile(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut unique_times: Vec<f64> = Vec::new();
     let mut survival: Vec<f64> = Vec::new();
@@ -564,7 +564,7 @@ pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeI
     let n_event_types = event_types.len();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut unique_times: Vec<f64> = Vec::new();
     let mut n_risk_vec: Vec<usize> = Vec::new();
@@ -772,7 +772,7 @@ fn compute_survival_at_time(
 
     let n = filtered_time.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| filtered_time[a].partial_cmp(&filtered_time[b]).unwrap());
+    indices.sort_by(|&a, &b| filtered_time[a].partial_cmp(&filtered_time[b]).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut surv = 1.0;
     let mut var_sum = 0.0;

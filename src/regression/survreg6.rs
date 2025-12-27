@@ -40,7 +40,6 @@ fn survreg_original(
     let n = y.nrows();
     let ny = y.ncols();
     let nvar2 = nvar + nstrat;
-    let flag = 0;
 
     let mut imat = Array2::zeros((nvar2, nvar2));
     let mut jj = Array2::zeros((nvar2, nvar2));
@@ -122,6 +121,7 @@ fn survreg_original(
         if check_convergence(loglik, newlik, eps) && halving == 0 {
             loglik = newlik;
             beta = newbeta.clone();
+            iter += 1;
             break;
         }
 
@@ -144,6 +144,9 @@ fn survreg_original(
         iter += 1;
     }
 
+    let converged = iter < max_iter;
+    let convergence_flag = if converged { 0 } else { -1 };
+
     let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
 
     Ok(SurvivalFitInternal {
@@ -151,7 +154,7 @@ fn survreg_original(
         iterations: iter,
         variance_matrix: variance,
         log_likelihood: loglik,
-        convergence_flag: flag,
+        convergence_flag,
         score_vector: usave.to_vec(),
     })
 }
@@ -453,7 +456,6 @@ fn survreg_internal(
     let n = y.nrows();
     let ny = y.ncols();
     let nvar2 = nvar + nstrat;
-    let flag = 0;
 
     let mut imat = Array2::zeros((nvar2, nvar2));
     let mut jj = Array2::zeros((nvar2, nvar2));
@@ -535,6 +537,7 @@ fn survreg_internal(
         if check_convergence(loglik, newlik, eps) && halving == 0 {
             loglik = newlik;
             beta = newbeta.clone();
+            iter += 1;
             break;
         }
 
@@ -557,6 +560,9 @@ fn survreg_internal(
         iter += 1;
     }
 
+    let converged = iter < max_iter;
+    let convergence_flag = if converged { 0 } else { -1 };
+
     let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
 
     Ok(SurvivalFitInternal {
@@ -564,7 +570,7 @@ fn survreg_internal(
         iterations: iter,
         variance_matrix: variance,
         log_likelihood: loglik,
-        convergence_flag: flag,
+        convergence_flag,
         score_vector: usave.to_vec(),
     })
 }

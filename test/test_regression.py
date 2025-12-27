@@ -67,14 +67,19 @@ try:
     model = survival.CoxPHModel()
     print(" CoxPHModel created successfully")
 
-    covariates: list[list[float]] = [[1.0, 2.0], [2.0, 3.0], [1.5, 2.5]]
-    event_times: list[float] = [1.0, 2.0, 3.0]
-    censoring: list[int] = [1, 1, 0]
+    covariates: list[list[float]] = [
+        [0.5, 1.2], [1.8, 0.3], [0.2, 2.1], [2.5, 0.8],
+        [0.8, 1.5], [1.5, 0.5], [0.3, 1.8], [2.2, 1.1],
+        [1.0, 0.9], [0.7, 1.7], [2.0, 0.4], [1.2, 1.3],
+        [0.9, 2.0], [1.6, 0.7], [0.4, 1.4], [2.1, 1.0],
+    ]
+    event_times: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]
+    censoring: list[int] = [1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0]
 
     model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
     print(" CoxPHModel.new_with_data executed successfully")
 
-    model.fit(n_iters=5)
+    model.fit(n_iters=20)
     print(" model.fit executed successfully")
 
     assert hasattr(model, "baseline_hazard"), "Should have baseline_hazard attribute"

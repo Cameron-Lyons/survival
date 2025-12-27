@@ -96,12 +96,16 @@ impl CoxPHModel {
         }
     }
 
-    pub fn add_subject(&mut self, subject: &Subject) {
+    pub fn add_subject(&mut self, subject: &Subject) -> PyResult<()> {
         let n = self.event_times.len();
         let ncols = self.covariates.ncols();
 
         if ncols != subject.covariates.len() {
-            return;
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "covariate dimension mismatch: expected {}, got {}",
+                ncols,
+                subject.covariates.len()
+            )));
         }
 
         let mut new_covariates = Array2::<f64>::zeros((n + 1, ncols));
@@ -117,19 +121,24 @@ impl CoxPHModel {
         self.covariates = new_covariates;
         self.event_times.push(0.0);
         self.censoring.push(if subject.is_case { 1 } else { 0 });
+        Ok(())
     }
 
     #[pyo3(signature = (n_iters = 20))]
-    pub fn fit(&mut self, n_iters: u16) {
+    pub fn fit(&mut self, n_iters: u16) -> PyResult<()> {
         if self.event_times.is_empty() || self.covariates.nrows() == 0 {
-            return;
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "cannot fit model: no data provided",
+            ));
         }
 
         let n = self.event_times.len();
         let nvar = self.covariates.ncols();
 
         if nvar == 0 {
-            return;
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "cannot fit model: no covariates provided",
+            ));
         }
 
         let time_array = Array1::from_vec(self.event_times.clone());
@@ -146,7 +155,7 @@ impl CoxPHModel {
                 vec![0.0; nvar]
             };
 
-        let mut cox_fit = match CoxFit::new(
+        let mut cox_fit = CoxFit::new(
             time_array,
             status_array,
             self.covariates.clone(),
@@ -159,14 +168,12 @@ impl CoxPHModel {
             1e-9,
             vec![true; nvar],
             initial_beta,
-        ) {
-            Ok(fit) => fit,
-            Err(_) => return,
-        };
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit initialization failed: {}", e)))?;
 
-        if cox_fit.fit().is_err() {
-            return;
-        }
+        cox_fit
+            .fit()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e)))?;
 
         let (beta, _means, _u, _imat, _loglik, _sctest, _flag, _iter) = cox_fit.results();
 
@@ -183,6 +190,7 @@ impl CoxPHModel {
         }
 
         self.calculate_baseline_hazard();
+        Ok(())
     }
 
     fn calculate_baseline_hazard(&mut self) {
@@ -196,7 +204,7 @@ impl CoxPHModel {
         indices.sort_by(|&i, &j| {
             self.event_times[i]
                 .partial_cmp(&self.event_times[j])
-                .unwrap()
+                .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| self.censoring[j].cmp(&self.censoring[i]))
         });
 
@@ -511,7 +519,7 @@ impl CoxPHModel {
         }
 
         let mut unique_times: Vec<f64> = self.event_times.clone();
-        unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         unique_times.dedup();
 
         let mut risk_scores = Vec::new();

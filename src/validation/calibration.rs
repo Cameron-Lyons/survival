@@ -165,7 +165,7 @@ pub fn calibration_curve(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| predicted_risk[a].partial_cmp(&predicted_risk[b]).unwrap());
+    indices.sort_by(|&a, &b| predicted_risk[a].partial_cmp(&predicted_risk[b]).unwrap_or(std::cmp::Ordering::Equal));
 
     let group_size = n / n_groups;
     let remainder = n % n_groups;
@@ -444,7 +444,7 @@ pub fn stratify_risk(
     }
 
     let mut sorted_scores: Vec<f64> = risk_scores.to_vec();
-    sorted_scores.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut cutpoints = Vec::with_capacity(n_groups - 1);
     for g in 1..n_groups {
@@ -493,7 +493,7 @@ pub fn stratify_risk(
                 0.0
             } else {
                 let mut s = scores.clone();
-                s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 s[s.len() / 2]
             }
         })

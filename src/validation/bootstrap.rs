@@ -85,7 +85,7 @@ pub fn bootstrap_cox(
     let weights = weights.unwrap_or(&default_weights);
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap_or(std::cmp::Ordering::Equal));
 
     let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| status[i]).collect();
@@ -142,7 +142,7 @@ pub fn bootstrap_cox(
         }
 
         let mut boot_indices: Vec<usize> = (0..n).collect();
-        boot_indices.sort_by(|&a, &b| boot_time[b].partial_cmp(&boot_time[a]).unwrap());
+        boot_indices.sort_by(|&a, &b| boot_time[b].partial_cmp(&boot_time[a]).unwrap_or(std::cmp::Ordering::Equal));
 
         let resorted_time: Vec<f64> = boot_indices.iter().map(|&i| boot_time[i]).collect();
         let resorted_status: Vec<i32> = boot_indices.iter().map(|&i| boot_status[i]).collect();
@@ -219,7 +219,7 @@ pub fn bootstrap_cox(
 
     for var in 0..nvar {
         let mut var_coefs: Vec<f64> = bootstrap_coefs.iter().map(|c| c[var]).collect();
-        var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         ci_lower[var] = var_coefs[lower_percentile.min(actual_n_bootstrap - 1)];
         ci_upper[var] = var_coefs[upper_percentile.min(actual_n_bootstrap - 1)];
     }
@@ -377,7 +377,7 @@ pub fn bootstrap_survreg(
         if var_coefs.is_empty() {
             continue;
         }
-        var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         ci_lower[var] = var_coefs[lower_percentile.min(var_coefs.len() - 1)];
         ci_upper[var] = var_coefs[upper_percentile.min(var_coefs.len() - 1)];
     }

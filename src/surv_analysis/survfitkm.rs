@@ -1,3 +1,6 @@
+use crate::utilities::validation::{
+    clamp_probability, validate_length, validate_non_empty, validate_non_negative, validate_no_nan,
+};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -32,13 +35,38 @@ pub fn survfitkm(
     position: Option<Vec<i32>>,
     reverse: Option<bool>,
     computation_type: Option<i32>,
-) -> SurvFitKMOutput {
-    let weights = weights.unwrap_or_else(|| vec![1.0; time.len()]);
-    let position = position.unwrap_or_else(|| vec![0; time.len()]);
+) -> PyResult<SurvFitKMOutput> {
+    validate_non_empty(&time, "time")?;
+    validate_length(time.len(), status.len(), "status")?;
+    validate_non_negative(&time, "time")?;
+    validate_no_nan(&time, "time")?;
+    validate_no_nan(&status, "status")?;
+
+    let weights = match weights {
+        Some(w) => {
+            validate_length(time.len(), w.len(), "weights")?;
+            validate_non_negative(&w, "weights")?;
+            w
+        }
+        None => vec![1.0; time.len()],
+    };
+
+    let position = match position {
+        Some(p) => {
+            validate_length(time.len(), p.len(), "position")?;
+            p
+        }
+        None => vec![0; time.len()],
+    };
+
+    if let Some(ref entry) = entry_times {
+        validate_length(time.len(), entry.len(), "entry_times")?;
+    }
+
     let _reverse = reverse.unwrap_or(false);
     let _computation_type = computation_type.unwrap_or(0);
 
-    survfitkm_internal(
+    Ok(survfitkm_internal(
         &time,
         &status,
         &weights,
@@ -46,7 +74,7 @@ pub fn survfitkm(
         &position,
         _reverse,
         _computation_type,
-    )
+    ))
 }
 
 pub fn survfitkm_internal(
@@ -117,11 +145,11 @@ pub fn survfitkm_internal(
         .zip(std_err.iter())
         .map(|(&s, &se)| {
             if s <= 0.0 || s >= 1.0 || se <= 0.0 {
-                s
+                clamp_probability(s)
             } else {
                 let log_s = s.ln();
                 let log_se = se / s;
-                (log_s - z * log_se).exp().max(0.0)
+                clamp_probability((log_s - z * log_se).exp())
             }
         })
         .collect();
@@ -131,11 +159,11 @@ pub fn survfitkm_internal(
         .zip(std_err.iter())
         .map(|(&s, &se)| {
             if s <= 0.0 || s >= 1.0 || se <= 0.0 {
-                s
+                clamp_probability(s)
             } else {
                 let log_s = s.ln();
                 let log_se = se / s;
-                (log_s + z * log_se).exp().min(1.0)
+                clamp_probability((log_s + z * log_se).exp())
             }
         })
         .collect();

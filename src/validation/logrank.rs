@@ -186,11 +186,11 @@ pub fn weighted_logrank_test(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut at_risk: Vec<f64> = vec![0.0; n_groups];
     for &grp in group {
-        let g = unique_groups.iter().position(|&x| x == grp).unwrap();
+        let g = unique_groups.iter().position(|&x| x == grp).unwrap_or(0);
         at_risk[g] += 1.0;
     }
 
@@ -210,7 +210,7 @@ pub fn weighted_logrank_test(
 
         while i < n && time[indices[i]] == current_time {
             let idx = indices[i];
-            let g = unique_groups.iter().position(|&x| x == group[idx]).unwrap();
+            let g = unique_groups.iter().position(|&x| x == group[idx]).unwrap_or(0);
             removed[g] += 1.0;
             if status[idx] == 1 {
                 events_by_group[g] += 1.0;
@@ -370,11 +370,11 @@ pub fn logrank_trend_test(
     let scores = scores.unwrap_or(&default_scores);
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut at_risk: Vec<f64> = vec![0.0; n_groups];
     for &grp in group {
-        let g = unique_groups.iter().position(|&x| x == grp).unwrap();
+        let g = unique_groups.iter().position(|&x| x == grp).unwrap_or(0);
         at_risk[g] += 1.0;
     }
 
@@ -391,7 +391,7 @@ pub fn logrank_trend_test(
 
         while i < n && time[indices[i]] == current_time {
             let idx = indices[i];
-            let g = unique_groups.iter().position(|&x| x == group[idx]).unwrap();
+            let g = unique_groups.iter().position(|&x| x == group[idx]).unwrap_or(0);
             removed[g] += 1.0;
             if status[idx] == 1 {
                 events_by_group[g] += 1.0;

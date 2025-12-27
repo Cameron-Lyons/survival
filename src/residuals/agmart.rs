@@ -1,4 +1,18 @@
+use crate::utilities::validation::{validate_length, validate_non_empty};
 use pyo3::prelude::*;
+
+// agmart computes martingale residuals using a counting process formulation.
+// This is the standard version suitable for data that is already sorted by time.
+//
+// Key differences from agmart3:
+// - agmart: Takes separate start, stop, event, score, wt, strata vectors
+//   Uses an iterative approach moving forward through event times.
+//   Suitable for pre-sorted data with explicit left-truncation (start times).
+//
+// - agmart3: Takes a combined surv vector (tstart, tstop, event flattened),
+//   plus sort indices. Uses a two-pointer approach with separate
+//   sort orders for entries and exits. More flexible for complex
+//   sorting scenarios but requires pre-computed sort indices.
 
 struct AgmartInput {
     start: Vec<f64>,
@@ -110,6 +124,14 @@ pub fn agmart(
     wt: Vec<f64>,
     strata: Vec<i32>,
 ) -> PyResult<Vec<f64>> {
+    validate_non_empty(&start, "start")?;
+    validate_length(n, start.len(), "start")?;
+    validate_length(n, stop.len(), "stop")?;
+    validate_length(n, event.len(), "event")?;
+    validate_length(n, score.len(), "score")?;
+    validate_length(n, wt.len(), "wt")?;
+    validate_length(n, strata.len(), "strata")?;
+
     let input = AgmartInput {
         start,
         stop,
