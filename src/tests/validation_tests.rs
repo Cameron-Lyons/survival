@@ -304,7 +304,7 @@ mod tests {
         // This means U statistic is negative (decreasing hazard with group)
         assert!(result.trend_direction == "increasing" || result.trend_direction == "decreasing");
         // Just verify the test runs and gives a reasonable p-value
-        assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+        assert!((0.0..=1.0).contains(&result.p_value));
     }
 
     // ==================== HAZARD RATIO TESTS ====================
@@ -492,14 +492,14 @@ mod tests {
 
         // Predicted and observed should be between 0 and 1
         for &p in &result.predicted {
-            assert!(p >= 0.0 && p <= 1.0);
+            assert!((0.0..=1.0).contains(&p));
         }
         for &o in &result.observed {
-            assert!(o >= 0.0 && o <= 1.0);
+            assert!((0.0..=1.0).contains(&o));
         }
 
         // HL test should produce valid p-value
-        assert!(result.hosmer_lemeshow_pvalue >= 0.0 && result.hosmer_lemeshow_pvalue <= 1.0);
+        assert!((0.0..=1.0).contains(&result.hosmer_lemeshow_pvalue));
     }
 
     #[test]
