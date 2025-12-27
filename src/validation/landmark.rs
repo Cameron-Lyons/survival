@@ -39,11 +39,7 @@ impl LandmarkResult {
     }
 }
 
-pub fn compute_landmark(
-    time: &[f64],
-    status: &[i32],
-    landmark_time: f64,
-) -> LandmarkResult {
+pub fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> LandmarkResult {
     let n = time.len();
     let mut new_time = Vec::new();
     let mut new_status = Vec::new();
@@ -665,11 +661,7 @@ impl LifeTableResult {
     }
 }
 
-pub fn compute_life_table(
-    time: &[f64],
-    status: &[i32],
-    breaks: &[f64],
-) -> LifeTableResult {
+pub fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeTableResult {
     let n = time.len();
     let n_intervals = breaks.len().saturating_sub(1);
 
@@ -761,10 +753,6 @@ pub fn compute_life_table(
 }
 
 #[pyfunction]
-pub fn life_table(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    breaks: Vec<f64>,
-) -> PyResult<LifeTableResult> {
+pub fn life_table(time: Vec<f64>, status: Vec<i32>, breaks: Vec<f64>) -> PyResult<LifeTableResult> {
     Ok(compute_life_table(&time, &status, &breaks))
 }

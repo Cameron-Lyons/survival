@@ -20,14 +20,7 @@ pub struct RMSTResult {
 #[pymethods]
 impl RMSTResult {
     #[new]
-    fn new(
-        rmst: f64,
-        variance: f64,
-        se: f64,
-        ci_lower: f64,
-        ci_upper: f64,
-        tau: f64,
-    ) -> Self {
+    fn new(rmst: f64, variance: f64, se: f64, ci_lower: f64, ci_upper: f64, tau: f64) -> Self {
         Self {
             rmst,
             variance,
@@ -114,12 +107,7 @@ fn erf(x: f64) -> f64 {
     sign * y
 }
 
-pub fn compute_rmst(
-    time: &[f64],
-    status: &[i32],
-    tau: f64,
-    confidence_level: f64,
-) -> RMSTResult {
+pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f64) -> RMSTResult {
     let n = time.len();
     if n == 0 {
         return RMSTResult {
@@ -547,10 +535,7 @@ impl CumulativeIncidenceResult {
     }
 }
 
-pub fn compute_cumulative_incidence(
-    time: &[f64],
-    status: &[i32],
-) -> CumulativeIncidenceResult {
+pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeIncidenceResult {
     let n = time.len();
     if n == 0 {
         return CumulativeIncidenceResult {
@@ -729,7 +714,11 @@ pub fn compute_nnt(
     let arr_ci_lower = arr - z * arr_se;
     let arr_ci_upper = arr + z * arr_se;
 
-    let nnt = if arr.abs() > 1e-10 { 1.0 / arr } else { f64::INFINITY };
+    let nnt = if arr.abs() > 1e-10 {
+        1.0 / arr
+    } else {
+        f64::INFINITY
+    };
 
     let (nnt_ci_lower, nnt_ci_upper) = if arr_ci_lower > 0.0 && arr_ci_upper > 0.0 {
         (1.0 / arr_ci_upper, 1.0 / arr_ci_lower)
