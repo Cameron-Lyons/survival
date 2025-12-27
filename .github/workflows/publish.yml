@@ -44,8 +44,7 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist
           manylinux: auto
-          before-script-linux: |
-            yum install -y openblas-devel || apt-get update && apt-get install -y libopenblas-dev
+          before-script-linux: yum install -y openblas-devel
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
