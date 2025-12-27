@@ -1,5 +1,7 @@
 #![allow(clippy::redundant_closure)]
+use crate::regression::survregc1::{SurvivalDist, survregc1};
 use ndarray::{Array1, Array2, ArrayView1};
+use ndarray_linalg::{Cholesky, Solve, UPLO};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -156,31 +158,118 @@ fn survreg_original(
 
 #[allow(clippy::too_many_arguments)]
 fn calculate_likelihood(
-    _n: usize,
-    _nvar: usize,
-    _nstrat: usize,
-    _beta: &[f64],
-    _distribution: &DistributionType,
-    _strata: &[usize],
-    _offsets: &Array1<f64>,
-    _time1: &ArrayView1<f64>,
-    _time2: Option<&ArrayView1<f64>>,
-    _status: &ArrayView1<f64>,
-    _weights: &Array1<f64>,
-    _covariates: &Array2<f64>,
-    _imat: &mut Array2<f64>,
-    _jj: &mut Array2<f64>,
-    _u: &mut Array1<f64>,
+    n: usize,
+    nvar: usize,
+    nstrat: usize,
+    beta: &[f64],
+    distribution: &DistributionType,
+    strata: &[usize],
+    offsets: &Array1<f64>,
+    time1: &ArrayView1<f64>,
+    time2: Option<&ArrayView1<f64>>,
+    status: &ArrayView1<f64>,
+    weights: &Array1<f64>,
+    covariates: &Array2<f64>,
+    imat: &mut Array2<f64>,
+    jj: &mut Array2<f64>,
+    u: &mut Array1<f64>,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    Ok(0.0)
+    let dist = match distribution {
+        DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
+        DistributionType::Logistic => SurvivalDist::Logistic,
+        DistributionType::Gaussian => SurvivalDist::Gaussian,
+        DistributionType::Weibull => SurvivalDist::Weibull,
+        DistributionType::LogNormal => SurvivalDist::LogNormal,
+    };
+
+    let strat_vec: Vec<i32> = strata.iter().map(|&s| (s + 1) as i32).collect();
+    let strat_arr = Array1::from_vec(strat_vec);
+
+    let status_vec: Vec<i32> = status.iter().map(|&s| s as i32).collect();
+    let status_arr = Array1::from_vec(status_vec);
+
+    let beta_arr = Array1::from_vec(beta.to_vec());
+
+    let frail_arr = Array1::from_vec(vec![0i32; n]);
+
+    let nvar2 = nvar + nstrat;
+
+    let result = survregc1(
+        n,
+        nvar,
+        nstrat,
+        false,
+        &beta_arr.view(),
+        dist,
+        &strat_arr.view(),
+        &offsets.view(),
+        time1,
+        time2,
+        &status_arr.view(),
+        &weights.view(),
+        &covariates.view(),
+        0,
+        &frail_arr.view(),
+    )?;
+
+    for i in 0..nvar2.min(u.len()) {
+        if i < result.u.len() {
+            u[i] = result.u[i];
+        }
+    }
+
+    for i in 0..nvar2.min(imat.nrows()) {
+        for j in 0..nvar2.min(imat.ncols()) {
+            if i < result.imat.nrows() && j < result.imat.ncols() {
+                imat[[i, j]] = -result.imat[[i, j]];
+            }
+        }
+    }
+
+    for i in 0..nvar2.min(jj.nrows()) {
+        for j in 0..nvar2.min(jj.ncols()) {
+            if i < result.jj.nrows() && j < result.jj.ncols() {
+                jj[[i, j]] = result.jj[[i, j]];
+            }
+        }
+    }
+
+    Ok(result.loglik)
 }
 
 fn cholesky_solve(
-    _matrix: &Array2<f64>,
+    matrix: &Array2<f64>,
     vector: &Array1<f64>,
     _tol: f64,
 ) -> Result<Array1<f64>, Box<dyn std::error::Error>> {
-    Ok(Array1::zeros(vector.len()))
+    if matrix.nrows() == 0 || matrix.ncols() == 0 {
+        return Ok(Array1::zeros(vector.len()));
+    }
+
+    let max_val = matrix.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
+    if max_val < 1e-10 {
+        return Ok(Array1::zeros(vector.len()));
+    }
+
+    match matrix.cholesky(UPLO::Lower) {
+        Ok(chol) => chol
+            .solve(vector)
+            .map_err(|e| format!("Cholesky solve failed: {}", e).into()),
+        Err(_) => {
+            let n = matrix.nrows();
+            let mut reg_matrix = matrix.clone();
+            let ridge = max_val * 1e-6;
+            for i in 0..n {
+                reg_matrix[[i, i]] += ridge;
+            }
+            match reg_matrix.cholesky(UPLO::Lower) {
+                Ok(chol) => chol
+                    .solve(vector)
+                    .map_err(|e| format!("Cholesky solve failed: {}", e).into()),
+                Err(_) => Ok(Array1::zeros(vector.len())),
+            }
+        }
+    }
 }
 
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
@@ -198,11 +287,24 @@ fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) 
 
 fn calculate_variance_matrix(
     imat: Array2<f64>,
-    nvar2: usize,
-    tol_chol: f64,
+    _nvar2: usize,
+    _tol_chol: f64,
 ) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
-    cholesky_solve(&imat, &Array1::zeros(nvar2), tol_chol)?;
-    Ok(imat)
+    use ndarray_linalg::Inverse;
+
+    if imat.nrows() == 0 || imat.ncols() == 0 {
+        return Ok(imat);
+    }
+
+    let max_val = imat.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
+    if max_val < 1e-10 {
+        return Ok(imat);
+    }
+
+    match imat.inv() {
+        Ok(inv) => Ok(inv),
+        Err(_) => Ok(imat),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -255,7 +357,6 @@ pub fn survreg(
 
     let weights = weights.unwrap_or_else(|| vec![1.0; n]);
     let offsets = offsets.unwrap_or_else(|| vec![0.0; n]);
-    let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; nvar]);
     let strata = strata.unwrap_or_else(|| vec![0; n]);
     let max_iter = max_iter.unwrap_or(20);
     let eps = eps.unwrap_or(1e-5);
@@ -279,6 +380,8 @@ pub fn survreg(
         strata.iter().max().copied().unwrap_or(0) + 1
     };
 
+    let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; nvar + nstrat]);
+
     let y = {
         let mut y_data = Vec::new();
         for i in 0..n {
@@ -289,10 +392,12 @@ pub fn survreg(
     };
 
     let cov_array = if nvar > 0 {
-        Array2::from_shape_vec((n, nvar), covariates.into_iter().flatten().collect())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
+        let flat: Vec<f64> = covariates.into_iter().flatten().collect();
+        let temp = Array2::from_shape_vec((n, nvar), flat)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?;
+        temp.t().to_owned()
     } else {
-        Array2::zeros((n, 0))
+        Array2::zeros((0, n))
     };
 
     let weights_arr = Array1::from_vec(weights);

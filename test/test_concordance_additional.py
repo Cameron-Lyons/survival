@@ -26,24 +26,44 @@ try:
 
     print("\n=== Testing perform_concordance3_calculation ===")
     try:
-        time_data: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0]
-        weights: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+        # time_data should be 2*n elements: [times..., statuses...]
+        time_data: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 1.0, 0.0, 1.0, 0.0]
         indices: list[int] = [0, 1, 2, 3, 4]
-        result = survival.perform_concordance3_calculation(time_data, weights, indices)
+        weights: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+        time_weights: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+        sort_stop: list[int] = [0, 1, 2, 3, 4]
+        do_residuals: bool = False
+        result = survival.perform_concordance3_calculation(
+            time_data, indices, weights, time_weights, sort_stop, do_residuals
+        )
         print(" perform_concordance3_calculation executed successfully")
-        print(f"   Result: {result}")
+        print(f"   Result type: {type(result)}")
+        assert isinstance(result, dict), "Should return a dictionary"
+        assert "concordance_index" in result, "Should have 'concordance_index' key"
+        print(f"   Concordance index: {result['concordance_index']}")
     except Exception as e:
         print(f"  perform_concordance3_calculation: {e}")
 
     print("\n=== Testing perform_concordance_calculation (v5) ===")
     try:
+        # time_data should be 2*n elements: [times..., statuses...]
+        time_data_v5: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 1.0, 0.0, 1.0, 0.0]
+        predictor_values: list[int] = [0, 1, 2, 3, 4]
+        weights_v5: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+        time_weights_v5: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+        sort_stop_v5: list[int] = [0, 1, 2, 3, 4]
         result = survival.perform_concordance_calculation(
-            time_data=[1.0, 2.0, 3.0, 4.0, 5.0],
-            status_data=[1, 1, 0, 1, 0],
-            x_data=[1.0, 2.0, 3.0, 4.0, 5.0],
+            time_data=time_data_v5,
+            predictor_values=predictor_values,
+            weights=weights_v5,
+            time_weights=time_weights_v5,
+            sort_stop=sort_stop_v5,
         )
         print(" perform_concordance_calculation executed successfully")
-        print(f"   Result: {result}")
+        print(f"   Result type: {type(result)}")
+        assert isinstance(result, dict), "Should return a dictionary"
+        assert "concordance_index" in result, "Should have 'concordance_index' key"
+        print(f"   Concordance index: {result['concordance_index']}")
     except Exception as e:
         print(f"  perform_concordance_calculation: {e}")
 

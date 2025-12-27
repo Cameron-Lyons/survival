@@ -157,6 +157,7 @@ fn compute_z2(wt: f64, wsum: &[f64]) -> f64 {
 }
 
 #[pyfunction]
+#[pyo3(signature = (time_data, predictor_values, weights, time_weights, sort_stop, sort_start=None, do_residuals=None))]
 pub fn perform_concordance_calculation(
     time_data: Vec<f64>,
     predictor_values: Vec<i32>,
