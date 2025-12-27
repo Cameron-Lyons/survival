@@ -94,7 +94,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          manylinux: auto
+          manylinux: manylinux2014
           before-script-linux: yum install -y openblas-devel openssl-devel
 
       - name: Upload wheels
