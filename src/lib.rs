@@ -50,6 +50,9 @@ use utilities::survsplit::{SplitResult, survsplit};
 use utilities::tmerge::{tmerge, tmerge2, tmerge3};
 use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
 use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
+use validation::tests::{
+    ProportionalityTest, TestResult, lrt_test, ph_test, score_test_py, wald_test_py,
+};
 
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
@@ -94,6 +97,10 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bootstrap_survreg_ci, &m)?)?;
     m.add_function(wrap_pyfunction!(cv_cox_concordance, &m)?)?;
     m.add_function(wrap_pyfunction!(cv_survreg_loglik, &m)?)?;
+    m.add_function(wrap_pyfunction!(lrt_test, &m)?)?;
+    m.add_function(wrap_pyfunction!(wald_test_py, &m)?)?;
+    m.add_function(wrap_pyfunction!(score_test_py, &m)?)?;
+    m.add_function(wrap_pyfunction!(ph_test, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -113,5 +120,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ConditionalLogisticRegression>()?;
     m.add_class::<BootstrapResult>()?;
     m.add_class::<CVResult>()?;
+    m.add_class::<TestResult>()?;
+    m.add_class::<ProportionalityTest>()?;
     Ok(())
 }

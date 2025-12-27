@@ -499,4 +499,219 @@ impl CoxPHModel {
         let n = self.event_times.len() as f64;
         -2.0 * self.log_likelihood() + k * n.ln()
     }
+
+    pub fn cumulative_hazard(&self, covariates: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
+        let nrows = covariates.len();
+        let ncols = if nrows > 0 { covariates[0].len() } else { 0 };
+        let mut cov_array = Array2::<f64>::zeros((nrows, ncols));
+        for (row_idx, row) in covariates.iter().enumerate() {
+            for (col_idx, &val) in row.iter().enumerate() {
+                cov_array[[row_idx, col_idx]] = val;
+            }
+        }
+
+        let mut unique_times: Vec<f64> = self.event_times.clone();
+        unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        unique_times.dedup();
+
+        let mut risk_scores = Vec::new();
+        for row in cov_array.outer_iter() {
+            let risk = self.coefficients.column(0).dot(&row);
+            risk_scores.push(risk.exp());
+        }
+
+        let mut cumulative_hazards = Vec::new();
+        for risk_exp in &risk_scores {
+            let mut cum_haz = Vec::new();
+            for &t in &unique_times {
+                let baseline_haz = self
+                    .baseline_hazard
+                    .iter()
+                    .zip(&self.event_times)
+                    .filter(|&(_, et)| *et <= t)
+                    .map(|(h, _)| *h)
+                    .sum::<f64>();
+                cum_haz.push(baseline_haz * risk_exp);
+            }
+            cumulative_hazards.push(cum_haz);
+        }
+
+        (unique_times, cumulative_hazards)
+    }
+
+    #[pyo3(signature = (covariates, percentile = 0.5))]
+    pub fn predicted_survival_time(
+        &self,
+        covariates: Vec<Vec<f64>>,
+        percentile: f64,
+    ) -> Vec<Option<f64>> {
+        let (times, survival_curves) = match self.survival_curve(covariates, None) {
+            Ok(result) => result,
+            Err(_) => return vec![],
+        };
+
+        let target_survival = 1.0 - percentile;
+
+        survival_curves
+            .iter()
+            .map(|surv| {
+                for (i, &s) in surv.iter().enumerate() {
+                    if s <= target_survival {
+                        if i == 0 {
+                            return Some(times[0]);
+                        }
+                        let s0 = surv[i - 1];
+                        let s1 = s;
+                        let t0 = times[i - 1];
+                        let t1 = times[i];
+                        let frac = (s0 - target_survival) / (s0 - s1);
+                        return Some(t0 + frac * (t1 - t0));
+                    }
+                }
+                None
+            })
+            .collect()
+    }
+
+    pub fn restricted_mean_survival_time(&self, covariates: Vec<Vec<f64>>, tau: f64) -> Vec<f64> {
+        let (times, survival_curves) = match self.survival_curve(covariates, None) {
+            Ok(result) => result,
+            Err(_) => return vec![],
+        };
+
+        survival_curves
+            .iter()
+            .map(|surv| {
+                let mut rmst = 0.0;
+                let mut prev_time = 0.0;
+                let mut prev_surv = 1.0;
+
+                for (i, &t) in times.iter().enumerate() {
+                    if t > tau {
+                        rmst += prev_surv * (tau - prev_time);
+                        break;
+                    }
+                    rmst += prev_surv * (t - prev_time);
+                    prev_time = t;
+                    prev_surv = surv[i];
+
+                    if i == times.len() - 1 {
+                        rmst += prev_surv * (tau - t);
+                    }
+                }
+                rmst
+            })
+            .collect()
+    }
+
+    pub fn martingale_residuals(&self) -> Vec<f64> {
+        let n = self.event_times.len();
+        let mut residuals = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let status = self.censoring[i] as f64;
+            let cum_haz = self.baseline_hazard.get(i).copied().unwrap_or(0.0)
+                * self.risk_scores.get(i).copied().unwrap_or(1.0);
+            residuals.push(status - cum_haz);
+        }
+
+        residuals
+    }
+
+    pub fn deviance_residuals(&self) -> Vec<f64> {
+        let martingale = self.martingale_residuals();
+
+        martingale
+            .iter()
+            .zip(self.censoring.iter())
+            .map(|(&m, &d)| {
+                let sign = if m >= 0.0 { 1.0 } else { -1.0 };
+                let abs_term = -2.0 * (m - d as f64 + d as f64 * (d as f64 - m).ln().max(-100.0));
+                sign * abs_term.abs().sqrt()
+            })
+            .collect()
+    }
+
+    pub fn dfbeta(&self) -> Vec<Vec<f64>> {
+        let n = self.event_times.len();
+        let nvar = self.coefficients.nrows();
+
+        if n == 0 || nvar == 0 {
+            return vec![];
+        }
+
+        let martingale = self.martingale_residuals();
+        let mut dfbeta = vec![vec![0.0; nvar]; n];
+
+        for (i, (&mart_i, dfbeta_row)) in martingale.iter().zip(dfbeta.iter_mut()).enumerate() {
+            for (k, dfbeta_cell) in dfbeta_row.iter_mut().enumerate() {
+                let cov_ik = self.covariates.get([i, k]).copied().unwrap_or(0.0);
+                let risk_i = self.risk_scores.get(i).copied().unwrap_or(1.0);
+
+                let mut weighted_mean = 0.0;
+                let mut risk_sum = 0.0;
+
+                for j in 0..n {
+                    if self.event_times[j] >= self.event_times[i] {
+                        let risk_j = self.risk_scores.get(j).copied().unwrap_or(1.0);
+                        let cov_jk = self.covariates.get([j, k]).copied().unwrap_or(0.0);
+                        weighted_mean += risk_j * cov_jk;
+                        risk_sum += risk_j;
+                    }
+                }
+
+                if risk_sum > 0.0 {
+                    weighted_mean /= risk_sum;
+                }
+
+                *dfbeta_cell = mart_i * (cov_ik - weighted_mean) / risk_i.max(1e-10);
+            }
+        }
+
+        dfbeta
+    }
+
+    pub fn n_events(&self) -> usize {
+        self.censoring.iter().filter(|&&c| c == 1).count()
+    }
+
+    pub fn n_observations(&self) -> usize {
+        self.event_times.len()
+    }
+
+    pub fn summary(&self) -> String {
+        let nvar = self.coefficients.nrows();
+        let n_obs = self.n_observations();
+        let n_events = self.n_events();
+        let loglik = self.log_likelihood();
+        let aic = self.aic();
+
+        let mut result = String::new();
+        result.push_str("Cox Proportional Hazards Model\n");
+        result.push_str("================================\n");
+        result.push_str(&format!("n={}, events={}\n\n", n_obs, n_events));
+        result.push_str(&format!("Log-likelihood: {:.4}\n", loglik));
+        result.push_str(&format!("AIC: {:.4}\n\n", aic));
+
+        let hrs = self.hazard_ratios();
+        let (_, ci_lower, ci_upper) = self.hazard_ratios_with_ci(0.95);
+
+        result.push_str(&format!(
+            "{:<10} {:>10} {:>10} {:>10}\n",
+            "Variable", "HR", "CI_Lower", "CI_Upper"
+        ));
+        result.push_str(&format!("{:-<43}\n", ""));
+
+        for i in 0..nvar {
+            result.push_str(&format!(
+                "var{:<7} {:>10.4} {:>10.4} {:>10.4}\n",
+                i,
+                hrs.get(i).copied().unwrap_or(f64::NAN),
+                ci_lower.get(i).copied().unwrap_or(f64::NAN),
+                ci_upper.get(i).copied().unwrap_or(f64::NAN)
+            ));
+        }
+
+        result
+    }
 }
