@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 authors = [
     {name = "Cameron Lyons", email = "cameron.lyons2@gmail.com"}
 ]
@@ -24,8 +24,8 @@ classifiers = [
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
     "Topic :: Scientific/Engineering :: Mathematics",
