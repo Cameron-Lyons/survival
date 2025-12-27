@@ -70,7 +70,11 @@ pub fn nelson_aalen(
     let weights = weights.unwrap_or(&default_weights);
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut unique_times: Vec<f64> = Vec::new();
     let mut events_at_time: Vec<f64> = Vec::new();
@@ -317,7 +321,11 @@ fn kaplan_meier(
     let weights = weights.unwrap_or(&default_weights);
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut unique_times: Vec<f64> = Vec::new();
     let mut events_at_time: Vec<f64> = Vec::new();

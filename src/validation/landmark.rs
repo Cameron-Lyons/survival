@@ -136,7 +136,11 @@ pub fn compute_conditional_survival(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut surv_given = 1.0;
     let mut surv_target = 1.0;
@@ -335,7 +339,11 @@ pub fn compute_hazard_ratio(
     let g2 = unique_groups[1];
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut n1_at_risk = 0.0;
     let mut n2_at_risk = 0.0;
@@ -506,7 +514,11 @@ pub fn compute_survival_at_times(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut event_times: Vec<f64> = Vec::new();
     let mut survival_vals: Vec<f64> = Vec::new();

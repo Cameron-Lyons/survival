@@ -1,5 +1,5 @@
 use crate::utilities::validation::{
-    clamp_probability, validate_length, validate_non_empty, validate_non_negative, validate_no_nan,
+    clamp_probability, validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
 

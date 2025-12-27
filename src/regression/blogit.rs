@@ -3,7 +3,8 @@ use statrs::distribution::{ContinuousCDF, Normal};
 
 #[allow(dead_code)]
 fn probit(p: f64) -> f64 {
-    let normal = Normal::new(0.0, 1.0).expect("standard normal distribution parameters are always valid");
+    let normal =
+        Normal::new(0.0, 1.0).expect("standard normal distribution parameters are always valid");
     normal.inverse_cdf(p)
 }
 

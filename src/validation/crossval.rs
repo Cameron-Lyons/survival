@@ -127,7 +127,11 @@ pub fn cv_cox(
         }
 
         let mut sorted_indices: Vec<usize> = (0..train_n).collect();
-        sorted_indices.sort_by(|&a, &b| train_time[b].partial_cmp(&train_time[a]).unwrap_or(std::cmp::Ordering::Equal));
+        sorted_indices.sort_by(|&a, &b| {
+            train_time[b]
+                .partial_cmp(&train_time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| train_time[i]).collect();
         let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| train_status[i]).collect();

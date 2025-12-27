@@ -169,11 +169,16 @@ impl CoxPHModel {
             vec![true; nvar],
             initial_beta,
         )
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit initialization failed: {}", e)))?;
+        .map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Cox fit initialization failed: {}",
+                e
+            ))
+        })?;
 
-        cox_fit
-            .fit()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e)))?;
+        cox_fit.fit().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e))
+        })?;
 
         let (beta, _means, _u, _imat, _loglik, _sctest, _flag, _iter) = cox_fit.results();
 

@@ -1,5 +1,5 @@
-use pyo3::exceptions::PyValueError;
 use pyo3::PyErr;
+use pyo3::exceptions::PyValueError;
 use std::fmt;
 
 #[derive(Debug)]
@@ -60,11 +60,9 @@ impl fmt::Display for ValidationError {
                 "{} contains negative value {} at index {}",
                 field, value, index
             ),
-            ValidationError::InvalidStatus { index, value } => write!(
-                f,
-                "status must be 0 or 1, got {} at index {}",
-                value, index
-            ),
+            ValidationError::InvalidStatus { index, value } => {
+                write!(f, "status must be 0 or 1, got {} at index {}", value, index)
+            }
             ValidationError::NaNValue { field, index } => {
                 write!(f, "{} contains NaN at index {}", field, index)
             }
@@ -122,7 +120,10 @@ pub fn validate_non_negative(slice: &[f64], field: &'static str) -> Result<(), V
 pub fn validate_status_binary(slice: &[f64]) -> Result<(), ValidationError> {
     for (i, &val) in slice.iter().enumerate() {
         if val != 0.0 && val != 1.0 {
-            return Err(ValidationError::InvalidStatus { index: i, value: val });
+            return Err(ValidationError::InvalidStatus {
+                index: i,
+                value: val,
+            });
         }
     }
     Ok(())

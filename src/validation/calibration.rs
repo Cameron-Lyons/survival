@@ -165,7 +165,11 @@ pub fn calibration_curve(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| predicted_risk[a].partial_cmp(&predicted_risk[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        predicted_risk[a]
+            .partial_cmp(&predicted_risk[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let group_size = n / n_groups;
     let remainder = n % n_groups;
