@@ -1,6 +1,8 @@
 name: Publish to PyPI
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
@@ -15,19 +17,73 @@ on:
           - pypi
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  bump-version:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      bumped: ${{ steps.bump.outputs.bumped }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Get current version and check PyPI
+        id: bump
+        run: |
+          # Get current version
+          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Current version: $CURRENT"
+
+          # Check if version exists on PyPI
+          if curl -s "https://pypi.org/pypi/survival-rs/$CURRENT/json" | grep -q '"version"'; then
+            echo "Version $CURRENT exists on PyPI, bumping patch version"
+
+            # Bump patch version
+            IFS='.' read -r major minor patch <<< "$CURRENT"
+            NEW_VERSION="$major.$minor.$((patch + 1))"
+            echo "New version: $NEW_VERSION"
+
+            # Update Cargo.toml
+            sed -i "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
+
+            # Update pyproject.toml
+            sed -i "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" pyproject.toml
+
+            # Commit and push
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml pyproject.toml
+            git commit -m "Bump version to $NEW_VERSION [skip ci]"
+            git push
+
+            echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+            echo "bumped=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version $CURRENT is new, no bump needed"
+            echo "version=$CURRENT" >> $GITHUB_OUTPUT
+            echo "bumped=false" >> $GITHUB_OUTPUT
+          fi
+
   linux:
     runs-on: ubuntu-latest
+    needs: [bump-version]
+    if: always() && (needs.bump-version.result == 'success' || needs.bump-version.result == 'skipped')
     strategy:
       matrix:
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -49,11 +105,15 @@ jobs:
 
   macos:
     runs-on: macos-14
+    needs: [bump-version]
+    if: always() && (needs.bump-version.result == 'success' || needs.bump-version.result == 'skipped')
     strategy:
       matrix:
         target: [x86_64-apple-darwin, aarch64-apple-darwin]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -80,8 +140,12 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    needs: [bump-version]
+    if: always() && (needs.bump-version.result == 'success' || needs.bump-version.result == 'skipped')
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -101,8 +165,12 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
+    needs: [bump-version]
+    if: always() && (needs.bump-version.result == 'success' || needs.bump-version.result == 'skipped')
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -140,18 +208,41 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi')
+    if: github.event_name == 'push' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi')
     needs: [linux, macos, windows, sdist]
     environment:
       name: pypi
       url: https://pypi.org/project/survival-rs
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
+
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if version exists on PyPI
+        id: check
+        run: |
+          if curl -s "https://pypi.org/pypi/survival-rs/${{ steps.version.outputs.version }}/json" | grep -q '"version"'; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Version ${{ steps.version.outputs.version }} already exists on PyPI, skipping publish"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Version ${{ steps.version.outputs.version }} not found on PyPI, will publish"
+          fi
+
       - uses: actions/download-artifact@v4
+        if: steps.check.outputs.exists == 'false'
         with:
           path: dist
           merge-multiple: true
 
       - name: Publish to PyPI
+        if: steps.check.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
