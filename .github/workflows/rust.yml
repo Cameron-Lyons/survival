@@ -54,8 +54,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install maturin and pytest
-        run: pip install maturin pytest numpy
+      - name: Install maturin
+        run: pip install maturin numpy
 
       - name: Build with maturin
         run: maturin build --release
@@ -63,7 +63,7 @@ jobs:
       - name: Install and test
         run: |
           pip install target/wheels/survival_rs-*.whl
-          python -m pytest test/ -v
+          python test/test_all.py
 
   python-matrix:
     name: Python ${{ matrix.python-version }}
@@ -102,8 +102,8 @@ jobs:
             ${{ runner.os }}-cargo-py${{ matrix.python-version }}-
             ${{ runner.os }}-cargo-
 
-      - name: Install maturin and pytest
-        run: pip install maturin pytest numpy
+      - name: Install maturin
+        run: pip install maturin numpy
 
       - name: Build and install
         run: |
@@ -111,7 +111,7 @@ jobs:
           pip install target/wheels/survival_rs-*.whl
 
       - name: Run tests
-        run: python -m pytest test/ -v
+        run: python test/test_all.py
 
   docs:
     name: Documentation
