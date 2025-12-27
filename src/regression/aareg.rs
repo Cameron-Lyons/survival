@@ -386,11 +386,11 @@ fn perform_aalen_regression(
         if unique_times.is_empty() {
             unique_times.push(time);
             time_indices.push(i);
-        } else if let Some(&last_time) = unique_times.last() {
-            if (time - last_time).abs() > 1e-10 {
-                unique_times.push(time);
-                time_indices.push(i);
-            }
+        } else if let Some(&last_time) = unique_times.last()
+            && (time - last_time).abs() > 1e-10
+        {
+            unique_times.push(time);
+            time_indices.push(i);
         }
     }
 
