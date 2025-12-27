@@ -28,7 +28,7 @@ thiserror = "2.0.17"
 ndarray-linalg = { version = "0.18.0", features = ["openblas-system"] }
 
 [target.'cfg(windows)'.dependencies]
-ndarray-linalg = { version = "0.18.0", features = ["openblas-static"] }
+ndarray-linalg = { version = "0.18.0", features = ["intel-mkl-static"] }
 
 [profile.release]
 lto = true

@@ -33,12 +33,6 @@ jobs:
           brew install openblas
           echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
 
-      - name: Install build tools (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install -y cmake llvm
-          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

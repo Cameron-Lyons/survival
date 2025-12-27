@@ -87,9 +87,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install build tools
-        run: choco install -y cmake llvm
-
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
