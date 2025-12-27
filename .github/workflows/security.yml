@@ -1,7 +1,7 @@
 name: Security Audit
 
 on:
-  push:
+  pull_request:
     branches: [main]
 
 permissions:
