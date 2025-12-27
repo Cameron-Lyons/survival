@@ -84,7 +84,6 @@ class CoxPHModel:
     def add_subject(self, subject: Subject) -> None: ...
 
 class SurvFitKMOutput:
-    """Output from Kaplan-Meier survival estimation."""
     time: List[float]
     n_risk: List[float]
     n_event: List[float]
@@ -120,7 +119,6 @@ class SurvDiffResult:
     degrees_of_freedom: int
 
 class CchMethod:
-    """Case-cohort analysis method."""
     Prentice: "CchMethod"
     SelfPrentice: "CchMethod"
     LinYing: "CchMethod"
@@ -128,7 +126,6 @@ class CchMethod:
     IIBorgan: "CchMethod"
 
 class CohortData:
-    """Case-cohort data structure."""
     @staticmethod
     def new() -> "CohortData": ...
     def add_subject(self, subject: Subject) -> None: ...
@@ -136,7 +133,6 @@ class CohortData:
     def fit(self, method: CchMethod) -> CoxPHModel: ...
 
 class SurvFitAJ:
-    """Result of Aalen-Johansen multi-state survival estimation."""
     n_risk: List[List[float]]
     n_event: List[List[float]]
     n_censor: List[List[float]]
@@ -150,7 +146,6 @@ class SurvFitAJ:
     n_transition: List[List[float]]
 
 class SplitResult:
-    """Result of splitting survival data at time points."""
     row: List[int]
     interval: List[int]
     start: List[float]
@@ -158,7 +153,6 @@ class SplitResult:
     censor: List[bool]
 
 class ClogitDataSet:
-    """Dataset for conditional logistic regression (matched case-control studies)."""
     def __init__(self) -> None: ...
     def add_observation(
         self,
@@ -170,7 +164,6 @@ class ClogitDataSet:
     def get_num_covariates(self) -> int: ...
 
 class ConditionalLogisticRegression:
-    """Conditional logistic regression for matched case-control studies."""
     coefficients: List[float]
     max_iter: int
     tol: float
@@ -185,6 +178,195 @@ class ConditionalLogisticRegression:
     def fit(self) -> None: ...
     def predict(self, covariates: List[float]) -> float: ...
     def odds_ratios(self) -> List[float]: ...
+
+class BootstrapResult:
+    coefficients: List[float]
+    ci_lower: List[float]
+    ci_upper: List[float]
+    se: List[float]
+    n_bootstrap: int
+
+class CVResult:
+    scores: List[float]
+    mean_score: float
+    se_score: float
+    n_folds: int
+
+class TestResult:
+    statistic: float
+    p_value: float
+    df: int
+    test_type: str
+
+class ProportionalityTest:
+    variable_names: List[str]
+    chi_squared: List[float]
+    p_values: List[float]
+    global_chi_squared: float
+    global_p_value: float
+    global_df: int
+
+class NelsonAalenResult:
+    time: List[float]
+    cumulative_hazard: List[float]
+    variance: List[float]
+    ci_lower: List[float]
+    ci_upper: List[float]
+    n_risk: List[int]
+    n_events: List[int]
+    def survival(self) -> List[float]: ...
+
+class StratifiedKMResult:
+    strata: List[int]
+    times: List[List[float]]
+    survival: List[List[float]]
+    ci_lower: List[List[float]]
+    ci_upper: List[List[float]]
+    n_risk: List[List[int]]
+    n_events: List[List[int]]
+
+class LogRankResult:
+    statistic: float
+    p_value: float
+    df: int
+    observed: List[float]
+    expected: List[float]
+    variance: float
+    weight_type: str
+
+class TrendTestResult:
+    statistic: float
+    p_value: float
+    trend_direction: str
+
+class SampleSizeResult:
+    n_total: int
+    n_events: int
+    n_per_group: List[int]
+    power: float
+    alpha: float
+    hazard_ratio: float
+    method: str
+
+class AccrualResult:
+    n_total: int
+    accrual_time: float
+    followup_time: float
+    study_duration: float
+    expected_events: float
+
+class CalibrationResult:
+    risk_groups: List[float]
+    predicted: List[float]
+    observed: List[float]
+    n_per_group: List[int]
+    hosmer_lemeshow_stat: float
+    hosmer_lemeshow_pvalue: float
+    calibration_slope: float
+    calibration_intercept: float
+
+class PredictionResult:
+    linear_predictor: List[float]
+    risk_score: List[float]
+    survival_prob: List[List[float]]
+    times: List[float]
+
+class RiskStratificationResult:
+    risk_groups: List[int]
+    cutpoints: List[float]
+    group_sizes: List[int]
+    group_event_rates: List[float]
+    group_median_risk: List[float]
+
+class TdAUCResult:
+    times: List[float]
+    auc: List[float]
+    integrated_auc: float
+
+class RMSTResult:
+    rmst: float
+    variance: float
+    se: float
+    ci_lower: float
+    ci_upper: float
+    tau: float
+
+class RMSTComparisonResult:
+    rmst_diff: float
+    rmst_ratio: float
+    diff_se: float
+    diff_ci_lower: float
+    diff_ci_upper: float
+    ratio_ci_lower: float
+    ratio_ci_upper: float
+    p_value: float
+    rmst_group1: RMSTResult
+    rmst_group2: RMSTResult
+
+class MedianSurvivalResult:
+    median: Optional[float]
+    ci_lower: Optional[float]
+    ci_upper: Optional[float]
+    quantile: float
+
+class CumulativeIncidenceResult:
+    time: List[float]
+    cif: List[List[float]]
+    variance: List[List[float]]
+    event_types: List[int]
+    n_risk: List[int]
+
+class NNTResult:
+    nnt: float
+    nnt_ci_lower: float
+    nnt_ci_upper: float
+    absolute_risk_reduction: float
+    arr_ci_lower: float
+    arr_ci_upper: float
+    time_horizon: float
+
+class LandmarkResult:
+    landmark_time: float
+    n_at_risk: int
+    n_excluded: int
+    time: List[float]
+    status: List[int]
+    original_indices: List[int]
+
+class ConditionalSurvivalResult:
+    given_time: float
+    target_time: float
+    conditional_survival: float
+    ci_lower: float
+    ci_upper: float
+    n_at_risk: int
+
+class HazardRatioResult:
+    hazard_ratio: float
+    ci_lower: float
+    ci_upper: float
+    se_log_hr: float
+    z_statistic: float
+    p_value: float
+
+class SurvivalAtTimeResult:
+    time: float
+    survival: float
+    ci_lower: float
+    ci_upper: float
+    n_at_risk: int
+    n_events: int
+
+class LifeTableResult:
+    interval_start: List[float]
+    interval_end: List[float]
+    n_at_risk: List[float]
+    n_deaths: List[float]
+    n_censored: List[float]
+    n_effective: List[float]
+    hazard: List[float]
+    survival: List[float]
+    se_survival: List[float]
 
 def aareg(options: AaregOptions) -> Dict[str, Any]: ...
 
@@ -499,23 +681,7 @@ def schoenfeld_residuals(
     covar: List[float],
     nvar: int,
     method: int = 0,
-) -> List[float]:
-    """Calculate Schoenfeld residuals for Cox proportional hazards model.
-
-    Schoenfeld residuals are used to test the proportional hazards assumption.
-
-    Args:
-        y: Survival data as [start_times..., stop_times..., event_indicators...]
-        score: Risk scores (exp(linear predictor))
-        strata: Stratum indicators (1 = end of stratum, 0 otherwise)
-        covar: Covariate matrix in column-major order
-        nvar: Number of covariates
-        method: Efron (1) or Breslow (0) method for ties
-
-    Returns:
-        Schoenfeld residuals matrix in column-major order
-    """
-    ...
+) -> List[float]: ...
 
 def cox_score_residuals(
     y: List[float],
@@ -525,24 +691,7 @@ def cox_score_residuals(
     weights: List[float],
     nvar: int,
     method: int = 0,
-) -> List[float]:
-    """Calculate Cox score (dfbeta) residuals.
-
-    Score residuals measure the influence of each observation on coefficient estimates.
-
-    Args:
-        y: Survival data as [time..., status...] (length 2*n)
-        strata: Stratum indicators for each observation
-        covar: Covariate matrix in row-major order (n * nvar)
-        score: Risk scores (exp(linear predictor))
-        weights: Observation weights
-        nvar: Number of covariates
-        method: Efron (1) or Breslow (0) method for ties
-
-    Returns:
-        Score residuals matrix in row-major order (n * nvar)
-    """
-    ...
+) -> List[float]: ...
 
 def survfitaj(
     y: List[float],
@@ -563,3 +712,224 @@ def survfitaj(
     t0: float,
 ) -> SurvFitAJ: ...
 
+def bootstrap_cox_ci(
+    time: List[float],
+    status: List[int],
+    covariates: List[List[float]],
+    n_bootstrap: int = 1000,
+    confidence_level: float = 0.95,
+) -> BootstrapResult: ...
+
+def bootstrap_survreg_ci(
+    time: List[float],
+    status: List[int],
+    covariates: List[List[float]],
+    distribution: str = "weibull",
+    n_bootstrap: int = 1000,
+    confidence_level: float = 0.95,
+) -> BootstrapResult: ...
+
+def cv_cox_concordance(
+    time: List[float],
+    status: List[int],
+    covariates: List[List[float]],
+    n_folds: int = 5,
+) -> CVResult: ...
+
+def cv_survreg_loglik(
+    time: List[float],
+    status: List[int],
+    covariates: List[List[float]],
+    distribution: str = "weibull",
+    n_folds: int = 5,
+) -> CVResult: ...
+
+def lrt_test(
+    log_likelihood_null: float,
+    log_likelihood_full: float,
+    df: int,
+) -> TestResult: ...
+
+def wald_test_py(
+    coefficients: List[float],
+    variance_matrix: List[List[float]],
+) -> TestResult: ...
+
+def score_test_py(
+    score: List[float],
+    information_matrix: List[List[float]],
+) -> TestResult: ...
+
+def ph_test(
+    time: List[float],
+    status: List[int],
+    schoenfeld_residuals: List[List[float]],
+    variable_names: List[str],
+) -> ProportionalityTest: ...
+
+def nelson_aalen_estimator(
+    time: List[float],
+    status: List[int],
+    weights: Optional[List[float]] = None,
+    confidence_level: Optional[float] = None,
+) -> NelsonAalenResult: ...
+
+def stratified_kaplan_meier(
+    time: List[float],
+    status: List[int],
+    strata: List[int],
+    confidence_level: Optional[float] = None,
+) -> StratifiedKMResult: ...
+
+def logrank_test(
+    time: List[float],
+    status: List[int],
+    group: List[int],
+    weight_type: Optional[str] = None,
+) -> LogRankResult: ...
+
+def fleming_harrington_test(
+    time: List[float],
+    status: List[int],
+    group: List[int],
+    p: float,
+    q: float,
+) -> LogRankResult: ...
+
+def logrank_trend(
+    time: List[float],
+    status: List[int],
+    group: List[int],
+    scores: Optional[List[float]] = None,
+) -> TrendTestResult: ...
+
+def sample_size_survival(
+    hazard_ratio: float,
+    power: Optional[float] = None,
+    alpha: Optional[float] = None,
+    allocation_ratio: Optional[float] = None,
+    sided: Optional[int] = None,
+) -> SampleSizeResult: ...
+
+def sample_size_survival_freedman(
+    hazard_ratio: float,
+    prob_event: float,
+    power: Optional[float] = None,
+    alpha: Optional[float] = None,
+    allocation_ratio: Optional[float] = None,
+    sided: Optional[int] = None,
+) -> SampleSizeResult: ...
+
+def power_survival(
+    n_events: int,
+    hazard_ratio: float,
+    alpha: Optional[float] = None,
+    allocation_ratio: Optional[float] = None,
+    sided: Optional[int] = None,
+) -> float: ...
+
+def expected_events(
+    n_total: int,
+    hazard_control: float,
+    hazard_ratio: float,
+    accrual_time: float,
+    followup_time: float,
+    allocation_ratio: Optional[float] = None,
+    dropout_rate: Optional[float] = None,
+) -> AccrualResult: ...
+
+def calibration(
+    predicted_risk: List[float],
+    observed_event: List[int],
+    n_groups: Optional[int] = None,
+) -> CalibrationResult: ...
+
+def predict_cox(
+    coef: List[float],
+    x: List[List[float]],
+    baseline_hazard: List[float],
+    baseline_times: List[float],
+    pred_times: List[float],
+) -> PredictionResult: ...
+
+def risk_stratification(
+    risk_scores: List[float],
+    events: List[int],
+    n_groups: Optional[int] = None,
+) -> RiskStratificationResult: ...
+
+def td_auc(
+    time: List[float],
+    status: List[int],
+    risk_score: List[float],
+    eval_times: List[float],
+) -> TdAUCResult: ...
+
+def rmst(
+    time: List[float],
+    status: List[int],
+    tau: float,
+    confidence_level: Optional[float] = None,
+) -> RMSTResult: ...
+
+def rmst_comparison(
+    time: List[float],
+    status: List[int],
+    group: List[int],
+    tau: float,
+    confidence_level: Optional[float] = None,
+) -> RMSTComparisonResult: ...
+
+def survival_quantile(
+    time: List[float],
+    status: List[int],
+    quantile: Optional[float] = None,
+    confidence_level: Optional[float] = None,
+) -> MedianSurvivalResult: ...
+
+def cumulative_incidence(
+    time: List[float],
+    status: List[int],
+) -> CumulativeIncidenceResult: ...
+
+def number_needed_to_treat(
+    time: List[float],
+    status: List[int],
+    group: List[int],
+    time_horizon: float,
+    confidence_level: Optional[float] = None,
+) -> NNTResult: ...
+
+def landmark_analysis(
+    time: List[float],
+    status: List[int],
+    landmark_time: float,
+) -> LandmarkResult: ...
+
+def conditional_survival(
+    time: List[float],
+    status: List[int],
+    given_time: float,
+    target_time: float,
+    confidence_level: Optional[float] = None,
+) -> ConditionalSurvivalResult: ...
+
+def hazard_ratio(
+    time: List[float],
+    status: List[int],
+    group: List[int],
+    confidence_level: Optional[float] = None,
+) -> HazardRatioResult: ...
+
+def survival_at_times(
+    time: List[float],
+    status: List[int],
+    eval_times: List[float],
+    confidence_level: Optional[float] = None,
+) -> List[SurvivalAtTimeResult]: ...
+
+def life_table(
+    time: List[float],
+    status: List[int],
+    breaks: List[float],
+) -> LifeTableResult: ...
