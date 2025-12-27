@@ -723,10 +723,8 @@ pub fn compute_nnt(
     let (nnt_ci_lower, nnt_ci_upper) = if arr_ci_lower > 0.0 && arr_ci_upper > 0.0 {
         (1.0 / arr_ci_upper, 1.0 / arr_ci_lower)
     } else if arr_ci_lower < 0.0 && arr_ci_upper < 0.0 {
-        // Both bounds negative: NNT is negative (number needed to harm)
         (1.0 / arr_ci_lower, 1.0 / arr_ci_upper)
     } else {
-        // CI crosses zero: NNT is undefined
         (f64::NEG_INFINITY, f64::INFINITY)
     };
 
