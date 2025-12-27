@@ -1,7 +1,8 @@
 [package]
 name = "survival"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+rust-version = "1.92"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 license = "MIT"

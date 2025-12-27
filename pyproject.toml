@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "survival-rs"
-version = "0.1.0"
+version = "1.0.0"
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 readme = "README.md"
 license = { text = "MIT" }
@@ -16,7 +16,7 @@ maintainers = [
     {name = "Cameron Lyons", email = "cameron.lyons2@gmail.com"}
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Healthcare Industry",
     "License :: OSI Approved :: MIT License",

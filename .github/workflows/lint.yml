@@ -1,38 +1,29 @@
-name: Lint and Format Check
+name: Lint
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
-    name: Lint and Format Check
+  rust-lint:
+    name: Rust Lint & Format
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
+      - name: Install OpenBLAS
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
 
-      - name: Install ruff
-        run: pip install ruff
-
-      - name: Check Python formatting with ruff
-        run: ruff format test/ --check
-
-      - name: Lint Python code with ruff
-        run: ruff check test/
-
-      - name: Set up Rust
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchains: stable
+          components: rustfmt, clippy
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -43,14 +34,56 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-        continue-on-error: true
 
-      - name: Check Rust formatting
+      - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Run cargo clippy
+      - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Check for unused dependencies
+        run: |
+          cargo install cargo-machete || true
+          cargo machete || true
+
+  python-lint:
+    name: Python Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install linters
+        run: pip install ruff mypy
+
+      - name: Check formatting
+        run: ruff format test/ --check
+
+      - name: Lint code
+        run: ruff check test/
+
+      - name: Type check stubs
+        run: |
+          pip install numpy
+          mypy survival.pyi --ignore-missing-imports || true
+
+  typos:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for typos
+        uses: crate-ci/typos@master
+        with:
+          config: .typos.toml
+        continue-on-error: true

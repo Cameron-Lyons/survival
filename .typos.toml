@@ -1,0 +1,13 @@
+[default.extend-words]
+# Statistical terms that are not typos
+cdf = "cdf"
+nvar = "nvar"
+ser = "ser"
+aft = "aft"
+dof = "dof"
+
+[files]
+extend-exclude = [
+    "target/",
+    "*.lock",
+]
