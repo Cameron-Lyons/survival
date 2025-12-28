@@ -233,7 +233,7 @@ pub fn perform_cox_regression_frailty(
         max_iter,
         eps,
     };
-    perform_cox_regression_internal(time, event, covariates, config)
+    perform_cox_regression(time, event, covariates, config)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -389,7 +389,7 @@ struct CoxRegressionConfig {
     eps: Option<f64>,
 }
 
-fn perform_cox_regression_internal(
+fn perform_cox_regression(
     time: Vec<f64>,
     event: Vec<i32>,
     covariates: Vec<Vec<f64>>,

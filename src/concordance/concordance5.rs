@@ -1,6 +1,5 @@
-use pyo3::exceptions::PyRuntimeError;
+use super::common::{build_concordance_result, validate_extended_concordance_inputs};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
 struct FenwickTree {
     tree: Vec<f64>,
@@ -168,39 +167,14 @@ pub fn perform_concordance_calculation(
     do_residuals: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let n = weights.len();
-    if n == 0 {
-        return Err(PyRuntimeError::new_err("No observations provided"));
-    }
-
-    if time_data.len() != 2 * n {
-        return Err(PyRuntimeError::new_err(
-            "Time data should have 2*n elements (time, status)",
-        ));
-    }
-
-    if predictor_values.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Predictor values length does not match observations",
-        ));
-    }
-
-    if weights.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Weights length does not match observations",
-        ));
-    }
-
-    if time_weights.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Time weights length does not match observations",
-        ));
-    }
-
-    if sort_stop.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Sort stop length does not match observations",
-        ));
-    }
+    validate_extended_concordance_inputs(
+        time_data.len(),
+        n,
+        predictor_values.len(),
+        weights.len(),
+        time_weights.len(),
+        sort_stop.len(),
+    )?;
 
     let doresid = do_residuals.unwrap_or(false);
 
@@ -214,34 +188,8 @@ pub fn perform_concordance_calculation(
         doresid,
     );
 
-    let concordant = count[0];
-    let discordant = count[1];
-    let tied_x = count[2];
-    let tied_y = count[3];
-    let tied_xy = count[4];
-    let variance = count[5];
-
-    let total_pairs = concordant + discordant + tied_x + tied_y + tied_xy;
-    let concordance_index = if total_pairs > 0.0 {
-        (concordant + 0.5 * (tied_x + tied_y + tied_xy)) / total_pairs
-    } else {
-        0.0
-    };
-
     Python::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("concordant", concordant)?;
-        dict.set_item("discordant", discordant)?;
-        dict.set_item("tied_x", tied_x)?;
-        dict.set_item("tied_y", tied_y)?;
-        dict.set_item("tied_xy", tied_xy)?;
-        dict.set_item("variance", variance)?;
-        dict.set_item("concordance_index", concordance_index)?;
-        dict.set_item("total_pairs", total_pairs)?;
-        dict.set_item("information_matrix", imat)?;
-        if let Some(residuals) = resid {
-            dict.set_item("residuals", residuals)?;
-        }
-        Ok(dict.into())
+        build_concordance_result(py, &count, Some(&imat), resid.as_deref(), None)
+            .map(|d| d.into())
     })
 }

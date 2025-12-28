@@ -1,34 +1,5 @@
-use pyo3::exceptions::PyRuntimeError;
+use super::common::{build_concordance_result, validate_concordance_inputs};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
-
-#[allow(dead_code)]
-struct BinaryTree {
-    nwt: Vec<f64>,
-    twt: Vec<f64>,
-}
-
-impl BinaryTree {
-    #[allow(dead_code)]
-    fn new(ntree: usize) -> Self {
-        BinaryTree {
-            nwt: vec![0.0; ntree],
-            twt: vec![0.0; 2 * ntree],
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn addin(nwt: &mut [f64], twt: &mut [f64], index: usize, weight: f64) {
-    nwt[index] += weight;
-    let mut node_index = index;
-    while node_index != 0 {
-        let parent_index = (node_index - 1) / 2;
-        twt[parent_index] += weight;
-        node_index = parent_index;
-    }
-    twt[index] += weight;
-}
 
 fn walkup(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
     let mut wsum = [0.0; 3];
@@ -164,53 +135,13 @@ pub fn perform_concordance1_calculation(
     ntree: i32,
 ) -> PyResult<Py<PyAny>> {
     let n = weights.len();
-    if n == 0 {
-        return Err(PyRuntimeError::new_err("No observations provided"));
-    }
-
-    if time_data.len() != 2 * n {
-        return Err(PyRuntimeError::new_err(
-            "Time data should have 2*n elements (time, status)",
-        ));
-    }
-
-    if weights.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Weights length does not match observations",
-        ));
-    }
-
-    if indices.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Indices length does not match observations",
-        ));
-    }
+    validate_concordance_inputs(time_data.len(), n, indices.len(), weights.len())?;
 
     let count = concordance1(&time_data, &weights, &indices, ntree);
 
-    let concordant = count[0];
-    let discordant = count[1];
-    let tied_x = count[2];
-    let tied_y = count[3];
-    let tied_xy = count[4];
-
-    let total_pairs = concordant + discordant + tied_x + tied_y + tied_xy;
-    let concordance_index = if total_pairs > 0.0 {
-        (concordant + 0.5 * (tied_x + tied_y + tied_xy)) / total_pairs
-    } else {
-        0.0
-    };
-
     Python::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("concordant", concordant)?;
-        dict.set_item("discordant", discordant)?;
-        dict.set_item("tied_x", tied_x)?;
-        dict.set_item("tied_y", tied_y)?;
-        dict.set_item("tied_xy", tied_xy)?;
-        dict.set_item("concordance_index", concordance_index)?;
-        dict.set_item("total_pairs", total_pairs)?;
-        dict.set_item("counts", count)?;
+        let dict = build_concordance_result(py, &count, None, None, None)?;
+        dict.bind(py).set_item("counts", count.clone())?;
         Ok(dict.into())
     })
 }

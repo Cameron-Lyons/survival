@@ -30,8 +30,7 @@ pub struct SurvFitAJ {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
-struct SurvFitAJInternal {
+struct SurvFitAJComputed {
     pub n_risk: Array2<f64>,
     pub n_event: Array2<f64>,
     pub n_censor: Array2<f64>,
@@ -45,7 +44,7 @@ struct SurvFitAJInternal {
     pub n_transition: Array2<f64>,
 }
 
-impl SurvFitAJInternal {
+impl SurvFitAJComputed {
     fn into_python_result(self) -> SurvFitAJ {
         let array2_to_vec = |arr: Array2<f64>| -> Vec<Vec<f64>> {
             arr.outer_iter().map(|row| row.to_vec()).collect()
@@ -71,7 +70,7 @@ impl SurvFitAJInternal {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn survfitaj_internal(
+fn compute_survfitaj(
     y: &[f64],
     sort1: &[usize],
     sort2: &[usize],
@@ -88,7 +87,7 @@ fn survfitaj_internal(
     hindx: &Array2<usize>,
     trmat: &Array2<usize>,
     t0: f64,
-) -> Result<SurvFitAJInternal, Box<dyn Error>> {
+) -> Result<SurvFitAJComputed, Box<dyn Error>> {
     let ntime = utime.len();
     let _n = y.len() / 3;
     let nused = sort1.len();
@@ -357,7 +356,7 @@ fn survfitaj_internal(
         (None, None, None, None)
     };
 
-    Ok(SurvFitAJInternal {
+    Ok(SurvFitAJComputed {
         n_risk,
         n_event,
         n_censor,
@@ -404,7 +403,7 @@ pub fn survfitaj(
     )
     .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid trmat array: {}", e)))?;
 
-    let result = survfitaj_internal(
+    let result = compute_survfitaj(
         &y,
         &sort1,
         &sort2,

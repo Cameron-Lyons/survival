@@ -116,19 +116,6 @@ pub fn validate_non_negative(slice: &[f64], field: &'static str) -> Result<(), V
     Ok(())
 }
 
-#[allow(dead_code)]
-pub fn validate_status_binary(slice: &[f64]) -> Result<(), ValidationError> {
-    for (i, &val) in slice.iter().enumerate() {
-        if val != 0.0 && val != 1.0 {
-            return Err(ValidationError::InvalidStatus {
-                index: i,
-                value: val,
-            });
-        }
-    }
-    Ok(())
-}
-
 pub fn validate_no_nan(slice: &[f64], field: &'static str) -> Result<(), ValidationError> {
     for (i, &val) in slice.iter().enumerate() {
         if val.is_nan() {
@@ -138,45 +125,6 @@ pub fn validate_no_nan(slice: &[f64], field: &'static str) -> Result<(), Validat
     Ok(())
 }
 
-#[allow(dead_code)]
-pub fn validate_finite(slice: &[f64], field: &'static str) -> Result<(), ValidationError> {
-    for (i, &val) in slice.iter().enumerate() {
-        if val.is_nan() {
-            return Err(ValidationError::NaNValue { field, index: i });
-        }
-        if val.is_infinite() {
-            return Err(ValidationError::InfiniteValue { field, index: i });
-        }
-    }
-    Ok(())
-}
-
-#[allow(dead_code)]
-pub fn validate_survival_inputs(
-    time: &[f64],
-    status: &[f64],
-    weights: Option<&[f64]>,
-) -> Result<(), ValidationError> {
-    validate_non_empty(time, "time")?;
-    validate_length(time.len(), status.len(), "status")?;
-
-    if let Some(w) = weights {
-        validate_length(time.len(), w.len(), "weights")?;
-        validate_non_negative(w, "weights")?;
-    }
-
-    validate_non_negative(time, "time")?;
-    validate_no_nan(time, "time")?;
-    validate_no_nan(status, "status")?;
-
-    Ok(())
-}
-
 pub fn clamp_probability(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
-}
-
-#[allow(dead_code)]
-pub fn clamp_confidence_interval(lower: f64, upper: f64) -> (f64, f64) {
-    (clamp_probability(lower), clamp_probability(upper))
 }

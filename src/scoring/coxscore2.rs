@@ -14,7 +14,7 @@ pub(crate) struct CoxScoreParams {
     pub nvar: usize,
 }
 
-pub(crate) fn cox_score_residuals_internal(data: CoxScoreData, params: CoxScoreParams) -> Vec<f64> {
+pub(crate) fn compute_cox_score_residuals(data: CoxScoreData, params: CoxScoreParams) -> Vec<f64> {
     let time = &data.y[0..params.n];
     let status = &data.y[params.n..2 * params.n];
     let mut resid = vec![0.0; params.n * params.nvar];
@@ -199,5 +199,5 @@ pub fn cox_score_residuals(
 
     let params = CoxScoreParams { method, n, nvar };
 
-    Ok(cox_score_residuals_internal(data, params))
+    Ok(compute_cox_score_residuals(data, params))
 }

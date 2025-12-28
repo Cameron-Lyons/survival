@@ -1,4 +1,4 @@
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn chinv2(matrix: &mut [f64], n: usize) {
     assert_eq!(matrix.len(), n * n, "Matrix must be of size n x n");
 

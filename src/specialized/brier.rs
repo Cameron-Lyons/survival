@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-fn brier_internal(predictions: &[f64], outcomes: &[i32], weights: Option<&[f64]>) -> Option<f64> {
+fn compute_brier(predictions: &[f64], outcomes: &[i32], weights: Option<&[f64]>) -> Option<f64> {
     let n = predictions.len();
     if n != outcomes.len() {
         return None;
@@ -149,7 +149,7 @@ pub fn integrated_brier(
         .enumerate()
         .map(|(t_idx, &interval)| {
             let preds_at_t: Vec<f64> = predictions.iter().map(|row| row[t_idx]).collect();
-            brier_internal(&preds_at_t, &outcomes, weights_ref)
+            compute_brier(&preds_at_t, &outcomes, weights_ref)
                 .map(|score| score * interval)
                 .ok_or("invalid prediction value")
         })

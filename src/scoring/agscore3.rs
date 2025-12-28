@@ -1,7 +1,7 @@
+use super::common::{build_score_result, validate_scoring_inputs};
 use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
 pub fn agscore3(
     y: &[f64],
@@ -178,39 +178,14 @@ pub fn perform_agscore3_calculation(
     sort1: Vec<i32>,
 ) -> PyResult<Py<PyAny>> {
     let n = weights.len();
-    if n == 0 {
-        return Err(PyRuntimeError::new_err("No observations provided"));
-    }
-
-    if time_data.len() != 3 * n {
-        return Err(PyRuntimeError::new_err(
-            "Time data should have 3*n elements (start, stop, event)",
-        ));
-    }
-
-    if !covariates.len().is_multiple_of(n) {
-        return Err(PyRuntimeError::new_err(
-            "Covariates length should be divisible by number of observations",
-        ));
-    }
-
-    if strata.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Strata length does not match observations",
-        ));
-    }
-
-    if score.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Score length does not match observations",
-        ));
-    }
-
-    if weights.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Weights length does not match observations",
-        ));
-    }
+    validate_scoring_inputs(
+        n,
+        time_data.len(),
+        covariates.len(),
+        strata.len(),
+        score.len(),
+        weights.len(),
+    )?;
 
     if sort1.len() != n {
         return Err(PyRuntimeError::new_err(
@@ -230,31 +205,8 @@ pub fn perform_agscore3_calculation(
     .map_err(PyRuntimeError::new_err)?;
 
     let nvar = covariates.len() / n;
-    let mut summary_stats = Vec::new();
-
-    for i in 0..nvar {
-        let start_idx = i * n;
-        let end_idx = (i + 1) * n;
-        let var_residuals = &residuals[start_idx..end_idx];
-
-        let mean = var_residuals.iter().sum::<f64>() / n as f64;
-        let variance = var_residuals
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>()
-            / (n - 1) as f64;
-
-        summary_stats.push(mean);
-        summary_stats.push(variance);
-    }
 
     Python::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("residuals", residuals)?;
-        dict.set_item("n_observations", n)?;
-        dict.set_item("n_variables", nvar)?;
-        dict.set_item("method", if method == 0 { "breslow" } else { "efron" })?;
-        dict.set_item("summary_stats", summary_stats)?;
-        Ok(dict.into())
+        build_score_result(py, residuals, n, nvar, method).map(|d| d.into())
     })
 }

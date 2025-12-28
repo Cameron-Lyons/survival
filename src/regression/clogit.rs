@@ -48,10 +48,6 @@ impl ClogitDataSet {
     pub(crate) fn get_case_control_status(&self, id: usize) -> u8 {
         self.case_control_status[id]
     }
-    #[allow(dead_code)]
-    pub(crate) fn get_stratum(&self, id: usize) -> u8 {
-        self.strata[id]
-    }
     pub(crate) fn get_covariates(&self, id: usize) -> &Vec<f64> {
         &self.covariates[id]
     }
