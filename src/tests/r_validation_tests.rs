@@ -429,9 +429,7 @@ mod tests {
             0.95,
         );
 
-        let expected = [
-            0.9091, 0.8182, 0.7273, 0.6364, 0.5455, 0.4545, 0.3409,
-        ];
+        let expected = [0.9091, 0.8182, 0.7273, 0.6364, 0.5455, 0.4545, 0.3409];
 
         for (i, &exp) in expected.iter().enumerate() {
             if i < results.len() {
