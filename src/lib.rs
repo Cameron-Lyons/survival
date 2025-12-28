@@ -13,69 +13,71 @@ mod tests;
 mod utilities;
 mod validation;
 
-use concordance::concordance::concordance as concordance_fn;
-use concordance::concordance1::perform_concordance1_calculation;
-use concordance::concordance3::perform_concordance3_calculation;
-use concordance::concordance5::perform_concordance_calculation;
-use core::coxcount1::{CoxCountOutput, coxcount1, coxcount2};
-use core::coxscho::schoenfeld_residuals;
-use core::pspline::PSpline;
-use python::cox_py_callback::cox_callback;
-use python::pyears3b::perform_pyears_calculation;
-use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
-use regression::aareg::{AaregOptions, aareg as aareg_function};
-use regression::agfit5::perform_cox_regression_frailty;
-use regression::blogit::LinkFunctionParams;
-use regression::clogit::{ClogitDataSet, ConditionalLogisticRegression};
-use regression::coxph::{CoxPHModel, Subject};
-use regression::survreg6::{DistributionType, SurvivalFit, survreg};
-use residuals::agmart::agmart;
-use residuals::coxmart::coxmart;
-use scoring::agscore2::perform_score_calculation;
-use scoring::agscore3::perform_agscore3_calculation;
-use scoring::coxscore2::cox_score_residuals;
-use specialized::brier::{brier, integrated_brier};
-use specialized::cch::{CchMethod, CohortData};
-use specialized::cipoisson::{cipoisson, cipoisson_anscombe, cipoisson_exact};
-use specialized::finegray::{FineGrayOutput, finegray};
-use specialized::norisk::norisk;
-use surv_analysis::agsurv4::agsurv4;
-use surv_analysis::agsurv5::agsurv5;
-use surv_analysis::nelson_aalen::{
+pub use concordance::concordance::concordance as compute_concordance;
+pub use concordance::concordance1::perform_concordance1_calculation;
+pub use concordance::concordance3::perform_concordance3_calculation;
+pub use concordance::concordance5::perform_concordance_calculation;
+pub use core::coxcount1::{CoxCountOutput, coxcount1, coxcount2};
+pub use core::coxscho::schoenfeld_residuals;
+pub use core::pspline::PSpline;
+pub use regression::aareg::{AaregOptions, aareg};
+pub use regression::agfit5::perform_cox_regression_frailty;
+pub use regression::blogit::LinkFunctionParams;
+pub use regression::clogit::{ClogitDataSet, ConditionalLogisticRegression};
+pub use regression::coxph::{CoxPHModel, Subject};
+pub use regression::survreg6::{DistributionType, SurvivalFit, survreg};
+pub use residuals::agmart::agmart;
+pub use residuals::coxmart::coxmart;
+pub use scoring::agscore2::perform_score_calculation;
+pub use scoring::agscore3::perform_agscore3_calculation;
+pub use scoring::coxscore2::cox_score_residuals;
+pub use specialized::brier::{brier, integrated_brier};
+pub use specialized::cch::{CchMethod, CohortData};
+pub use specialized::cipoisson::{cipoisson, cipoisson_anscombe, cipoisson_exact};
+pub use specialized::finegray::{FineGrayOutput, finegray};
+pub use specialized::norisk::norisk;
+pub use surv_analysis::agsurv4::agsurv4;
+pub use surv_analysis::agsurv5::agsurv5;
+pub use surv_analysis::nelson_aalen::{
     NelsonAalenResult, StratifiedKMResult, nelson_aalen_estimator, stratified_kaplan_meier,
 };
-use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
-use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
-use surv_analysis::survfitkm::{SurvFitKMOutput, survfitkm};
-use utilities::agexact::agexact;
-use utilities::collapse::collapse;
-use utilities::survsplit::{SplitResult, survsplit};
-use utilities::tmerge::{tmerge, tmerge2, tmerge3};
-use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
-use validation::calibration::{
+pub use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
+pub use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
+pub use surv_analysis::survfitkm::{SurvFitKMOutput, survfitkm};
+pub use utilities::agexact::agexact;
+pub use utilities::collapse::collapse;
+pub use utilities::survsplit::{SplitResult, survsplit};
+pub use utilities::tmerge::{tmerge, tmerge2, tmerge3};
+pub use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
+pub use validation::calibration::{
     CalibrationResult, PredictionResult, RiskStratificationResult, TdAUCResult, calibration,
     predict_cox, risk_stratification, td_auc,
 };
-use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
-use validation::landmark::{
+pub use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
+pub use validation::landmark::{
     ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
     SurvivalAtTimeResult, conditional_survival, hazard_ratio, landmark_analysis, life_table,
     survival_at_times,
 };
-use validation::logrank::{
+pub use validation::logrank::{
     LogRankResult, TrendTestResult, fleming_harrington_test, logrank_test, logrank_trend,
 };
-use validation::power::{
+pub use validation::power::{
     AccrualResult, SampleSizeResult, expected_events, power_survival, sample_size_survival,
     sample_size_survival_freedman,
 };
-use validation::rmst::{
+pub use validation::rmst::{
     CumulativeIncidenceResult, MedianSurvivalResult, NNTResult, RMSTComparisonResult, RMSTResult,
     cumulative_incidence, number_needed_to_treat, rmst, rmst_comparison, survival_quantile,
 };
-use validation::tests::{
-    ProportionalityTest, TestResult, lrt_test, ph_test, score_test_py, wald_test_py,
-};
+pub use validation::tests::{ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test};
+
+use concordance::concordance::concordance as concordance_fn;
+use python::cox_py_callback::cox_callback;
+use python::pyears3b::perform_pyears_calculation;
+use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
+use regression::aareg::aareg as aareg_function;
+use validation::tests::{score_test_py, wald_test_py};
 
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
