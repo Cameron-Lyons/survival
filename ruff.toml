@@ -20,6 +20,9 @@ select = [
 ]
 ignore = []
 
+[lint.per-file-ignores]
+"test/*.py" = ["S101", "PT017", "S603", "S110"]
+
 [format]
 quote-style = "double"
 indent-style = "space"
