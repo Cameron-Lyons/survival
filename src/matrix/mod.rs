@@ -1,11 +1,2 @@
-pub mod cdecomp;
 pub mod chinv2;
-pub mod chinv3;
 pub mod cholesky2;
-pub mod cholesky3;
-pub mod cholexky5;
-pub mod chsolve2;
-pub mod chsolve3;
-pub mod chsolve5;
-pub mod dmatrix;
-pub mod gchol;

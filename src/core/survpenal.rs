@@ -1,5 +1,4 @@
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct PenaltyResult {
     pub new_coef: Vec<f64>,
     pub first_deriv: Vec<f64>,
@@ -9,7 +8,6 @@ pub(crate) struct PenaltyResult {
 }
 
 #[allow(non_snake_case)]
-#[allow(dead_code)]
 pub(crate) struct MatrixBuffers<'a> {
     pub hmat: &'a mut [f64],
     pub JJ: &'a mut [f64],
@@ -19,7 +17,6 @@ pub(crate) struct MatrixBuffers<'a> {
     pub beta: &'a mut [f64],
 }
 
-#[allow(dead_code)]
 pub(crate) struct PenaltyParams {
     pub whichcase: i32,
     pub nfrail: usize,
@@ -28,7 +25,6 @@ pub(crate) struct PenaltyParams {
     pub pdiag: i32,
 }
 
-#[allow(dead_code)]
 pub(crate) fn survpenal(
     params: PenaltyParams,
     matrices: MatrixBuffers,

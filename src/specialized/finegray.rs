@@ -24,10 +24,10 @@ pub fn finegray(
     extend: Vec<bool>,
     keep: Vec<bool>,
 ) -> FineGrayOutput {
-    finegray_internal(&tstart, &tstop, &ctime, &cprob, &extend, &keep)
+    compute_finegray(&tstart, &tstop, &ctime, &cprob, &extend, &keep)
 }
 
-pub(crate) fn finegray_internal(
+pub(crate) fn compute_finegray(
     tstart: &[f64],
     tstop: &[f64],
     ctime: &[f64],

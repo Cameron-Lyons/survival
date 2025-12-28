@@ -1,21 +1,18 @@
 use pyo3::prelude::*;
 use statrs::distribution::{ContinuousCDF, Normal};
 
-#[allow(dead_code)]
 fn probit(p: f64) -> f64 {
     let normal =
         Normal::new(0.0, 1.0).expect("standard normal distribution parameters are always valid");
     normal.inverse_cdf(p)
 }
 
-#[allow(dead_code)]
 fn cloglog(p: f64) -> f64 {
     (-(1.0 - p).ln()).ln()
 }
 
 #[pyclass]
 pub struct LinkFunctionParams {
-    #[allow(dead_code)]
     edge: f64,
 }
 

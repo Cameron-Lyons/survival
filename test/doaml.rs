@@ -2,9 +2,9 @@ use approx::assert_relative_eq;
 use ndarray::{Array1, Array2};
 use statrs::distribution::ChiSquared;
 use survival::regression::coxfit6::{CoxFit, CoxError, Method as CoxMethod};
-use survival::surv_analysis::survfitkm::survfitkm_internal;
-use survival::surv_analysis::survdiff2::{survdiff2_internal, SurvDiffInput, SurvDiffOutput, SurvDiffParams};
-use survival::residuals::coxmart::coxmart_internal;
+use survival::surv_analysis::survfitkm::compute_survfitkm;
+use survival::surv_analysis::survdiff2::{compute_survdiff, SurvDiffInput, SurvDiffOutput, SurvDiffParams};
+use survival::residuals::coxmart::compute_coxmart;
 
 #[derive(Debug, Clone)]
 struct SurvivalData {
@@ -98,7 +98,7 @@ impl SurvivalData {
             .unwrap_or_else(|| vec![1.0; n]);
         
         use survival::residuals::coxmart::{SurvivalData, Weights};
-        coxmart_internal(
+        compute_coxmart(
             n,
             0,
             SurvivalData {
@@ -138,7 +138,7 @@ impl SurvivalData {
             .unwrap_or_else(|| vec![1.0; n]);
         let position_vec: Vec<i32> = vec![0; n];
         
-        let result = survfitkm_internal(
+        let result = compute_survfitkm(
             &time_vec,
             &status_vec,
             &weights_vec,
@@ -200,7 +200,7 @@ impl SurvivalData {
             kaplan: &mut kaplan,
         };
         
-        survdiff2_internal(params, input, &mut output);
+        compute_survdiff(params, input, &mut output);
         
         let mut chi_sq = 0.0;
         let mut df = 0;

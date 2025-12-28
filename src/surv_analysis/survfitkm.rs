@@ -66,7 +66,7 @@ pub fn survfitkm(
     let _reverse = reverse.unwrap_or(false);
     let _computation_type = computation_type.unwrap_or(0);
 
-    Ok(survfitkm_internal(
+    Ok(compute_survfitkm(
         &time,
         &status,
         &weights,
@@ -77,7 +77,7 @@ pub fn survfitkm(
     ))
 }
 
-pub fn survfitkm_internal(
+pub fn compute_survfitkm(
     time: &[f64],
     status: &[f64],
     weights: &[f64],
@@ -178,19 +178,6 @@ pub fn survfitkm_internal(
         conf_lower,
         conf_upper,
     }
-}
-
-#[allow(dead_code)]
-fn process_entry_times(entry_times: Option<&[f64]>, position: &[i32]) -> Vec<f64> {
-    let mut entry_vec = Vec::new();
-    if let Some(entries) = entry_times {
-        for (&time, &pos) in entries.iter().zip(position) {
-            if pos & 1 != 0 {
-                entry_vec.push(time);
-            }
-        }
-    }
-    entry_vec
 }
 
 #[pymodule]

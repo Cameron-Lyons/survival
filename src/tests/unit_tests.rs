@@ -3,7 +3,7 @@ mod tests {
     use crate::matrix::chinv2::chinv2;
     use crate::matrix::cholesky2::cholesky2;
     use crate::surv_analysis::survdiff2::{
-        SurvDiffInput, SurvDiffOutput, SurvDiffParams, survdiff2_internal,
+        SurvDiffInput, SurvDiffOutput, SurvDiffParams, compute_survdiff,
     };
     use crate::utilities::survsplit::survsplit;
 
@@ -45,7 +45,7 @@ mod tests {
             kaplan: &mut kaplan,
         };
 
-        survdiff2_internal(params, input, &mut output);
+        compute_survdiff(params, input, &mut output);
 
         assert!(
             obs.iter().any(|&x| x > 0.0),
@@ -91,7 +91,7 @@ mod tests {
             kaplan: &mut kaplan,
         };
 
-        survdiff2_internal(params, input, &mut output);
+        compute_survdiff(params, input, &mut output);
 
         assert!(obs[0] > 0.0 || obs[1] > 0.0, "Should have observations");
     }
@@ -134,7 +134,7 @@ mod tests {
             kaplan: &mut kaplan,
         };
 
-        survdiff2_internal(params, input, &mut output);
+        compute_survdiff(params, input, &mut output);
     }
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
             kaplan: &mut kaplan,
         };
 
-        survdiff2_internal(params, input, &mut output);
+        compute_survdiff(params, input, &mut output);
 
         assert!(
             kaplan.iter().any(|&k| k > 0.0),
@@ -221,7 +221,7 @@ mod tests {
             kaplan: &mut kaplan,
         };
 
-        survdiff2_internal(params, input, &mut output);
+        compute_survdiff(params, input, &mut output);
 
         assert!(obs[0] > 0.0, "Group 1 should have observation");
         assert!(obs[1] > 0.0, "Group 2 should have observation");
@@ -265,7 +265,7 @@ mod tests {
             kaplan: &mut kaplan,
         };
 
-        survdiff2_internal(params, input, &mut output);
+        compute_survdiff(params, input, &mut output);
 
         let total_obs: f64 = obs.iter().sum();
         assert!(total_obs > 0.0, "Total observations should be positive");
@@ -309,7 +309,7 @@ mod tests {
             kaplan: &mut kaplan,
         };
 
-        survdiff2_internal(params, input, &mut output);
+        compute_survdiff(params, input, &mut output);
 
         let total_obs: f64 = obs.iter().sum();
         assert_eq!(total_obs, 0.0, "No observations expected when all censored");

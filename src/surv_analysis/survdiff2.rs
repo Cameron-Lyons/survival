@@ -76,7 +76,7 @@ pub fn survdiff2(
         kaplan: &mut kaplan,
     };
 
-    survdiff2_internal(params, input, &mut output);
+    compute_survdiff(params, input, &mut output);
 
     let mut chi_sq = 0.0;
     let mut df = 0;
@@ -105,7 +105,6 @@ pub fn survdiff2(
     })
 }
 
-#[allow(dead_code)]
 pub struct SurvDiffInput<'a> {
     pub time: &'a [f64],
     pub status: &'a [i32],
@@ -113,7 +112,6 @@ pub struct SurvDiffInput<'a> {
     pub strata: &'a [i32],
 }
 
-#[allow(dead_code)]
 pub struct SurvDiffOutput<'a> {
     pub obs: &'a mut [f64],
     pub exp: &'a mut [f64],
@@ -122,7 +120,6 @@ pub struct SurvDiffOutput<'a> {
     pub kaplan: &'a mut [f64],
 }
 
-#[allow(dead_code)]
 pub struct SurvDiffParams {
     pub nn: i32,
     pub nngroup: i32,
@@ -130,8 +127,7 @@ pub struct SurvDiffParams {
     pub rho: f64,
 }
 
-#[allow(dead_code)]
-pub fn survdiff2_internal(
+pub fn compute_survdiff(
     params: SurvDiffParams,
     input: SurvDiffInput,
     output: &mut SurvDiffOutput,

@@ -22,144 +22,6 @@ pub struct SurvivalFit {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
-fn survreg_original(
-    max_iter: usize,
-    nvar: usize,
-    y: &Array2<f64>,
-    covariates: &Array2<f64>,
-    weights: &Array1<f64>,
-    offsets: &Array1<f64>,
-    mut beta: Vec<f64>,
-    nstrat: usize,
-    strata: &[usize],
-    eps: f64,
-    tol_chol: f64,
-    distribution: DistributionType,
-) -> Result<SurvivalFitInternal, Box<dyn std::error::Error>> {
-    let n = y.nrows();
-    let ny = y.ncols();
-    let nvar2 = nvar + nstrat;
-
-    let mut imat = Array2::zeros((nvar2, nvar2));
-    let mut jj = Array2::zeros((nvar2, nvar2));
-    let mut u = Array1::zeros(nvar2);
-    let mut newbeta = beta.clone();
-    let mut usave = Array1::zeros(nvar2);
-
-    let time1_vec: Vec<f64> = y.column(0).iter().cloned().collect();
-    let status_vec: Vec<f64> = if ny == 2 {
-        y.column(1).iter().cloned().collect()
-    } else {
-        y.column(2).iter().cloned().collect()
-    };
-    let time2_vec: Option<Vec<f64>> = if ny == 3 {
-        Some(y.column(1).iter().cloned().collect())
-    } else {
-        None
-    };
-
-    let time1_arr = Array1::from_vec(time1_vec);
-    let status_arr = Array1::from_vec(status_vec);
-    let time2_arr = time2_vec.map(|v| Array1::from_vec(v));
-
-    let time1 = time1_arr.view();
-    let status = status_arr.view();
-    let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());
-
-    let mut loglik = calculate_likelihood(
-        n,
-        nvar,
-        nstrat,
-        &beta,
-        &distribution,
-        strata,
-        offsets,
-        &time1,
-        time2_view.as_ref(),
-        &status,
-        weights,
-        covariates,
-        &mut imat,
-        &mut jj,
-        &mut u,
-    )?;
-    usave.assign(&u);
-
-    let mut iter = 0;
-    let mut halving = 0;
-    while iter < max_iter {
-        let chol_result = cholesky_solve(&imat, &u, tol_chol);
-        let delta = match chol_result {
-            Ok(d) => d,
-            Err(_) => cholesky_solve(&jj, &u, tol_chol)?,
-        };
-
-        newbeta
-            .iter_mut()
-            .zip(beta.iter().zip(delta.iter()))
-            .for_each(|(nb, (b, d))| *nb = b + d);
-
-        let newlik = calculate_likelihood(
-            n,
-            nvar,
-            nstrat,
-            &newbeta,
-            &distribution,
-            strata,
-            offsets,
-            &time1,
-            time2_view.as_ref(),
-            &status,
-            weights,
-            covariates,
-            &mut imat,
-            &mut jj,
-            &mut u,
-        )?;
-
-        if check_convergence(loglik, newlik, eps) && halving == 0 {
-            loglik = newlik;
-            beta = newbeta.clone();
-            iter += 1;
-            break;
-        }
-
-        if newlik.is_nan() || newlik < loglik {
-            halving += 1;
-            newbeta
-                .iter_mut()
-                .zip(&beta)
-                .for_each(|(nb, b)| *nb = (*nb + 2.0 * b) / 3.0);
-
-            if halving == 1 {
-                adjust_strata(&mut newbeta, &beta, nvar, nstrat);
-            }
-        } else {
-            halving = 0;
-            loglik = newlik;
-            beta = newbeta.clone();
-        }
-
-        iter += 1;
-    }
-
-    let converged = iter < max_iter;
-    let convergence_flag = if converged { 0 } else { -1 };
-
-    let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
-
-    Ok(SurvivalFitInternal {
-        coefficients: beta,
-        iterations: iter,
-        variance_matrix: variance,
-        log_likelihood: loglik,
-        convergence_flag,
-        score_vector: usave.to_vec(),
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
 fn calculate_likelihood(
     n: usize,
     nvar: usize,
@@ -406,7 +268,7 @@ pub fn survreg(
     let weights_arr = Array1::from_vec(weights);
     let offsets_arr = Array1::from_vec(offsets);
 
-    let result = survreg_internal(
+    let result = compute_survreg(
         max_iter,
         nvar,
         &y,
@@ -439,7 +301,7 @@ pub fn survreg(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn survreg_internal(
+fn compute_survreg(
     max_iter: usize,
     nvar: usize,
     y: &Array2<f64>,
@@ -452,7 +314,7 @@ fn survreg_internal(
     eps: f64,
     tol_chol: f64,
     distribution: DistributionType,
-) -> Result<SurvivalFitInternal, Box<dyn std::error::Error>> {
+) -> Result<SurvivalFitComputed, Box<dyn std::error::Error>> {
     let n = y.nrows();
     let ny = y.ncols();
     let nvar2 = nvar + nstrat;
@@ -565,7 +427,7 @@ fn survreg_internal(
 
     let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
 
-    Ok(SurvivalFitInternal {
+    Ok(SurvivalFitComputed {
         coefficients: beta,
         iterations: iter,
         variance_matrix: variance,
@@ -575,7 +437,7 @@ fn survreg_internal(
     })
 }
 
-pub(crate) struct SurvivalFitInternal {
+pub(crate) struct SurvivalFitComputed {
     coefficients: Vec<f64>,
     iterations: usize,
     variance_matrix: Array2<f64>,

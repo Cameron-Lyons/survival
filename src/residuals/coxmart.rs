@@ -1,11 +1,9 @@
-#[allow(dead_code)]
 pub struct SurvivalData<'a> {
     pub time: &'a [f64],
     pub status: &'a [i32],
     pub strata: &'a mut [i32],
 }
 
-#[allow(dead_code)]
 pub struct Weights<'a> {
     pub score: &'a [f64],
     pub wt: &'a [f64],
@@ -64,13 +62,12 @@ pub fn coxmart(
         wt: &weights_vec,
     };
 
-    coxmart_internal(n, method_val, surv_data, weights_data, &mut expect);
+    compute_coxmart(n, method_val, surv_data, weights_data, &mut expect);
 
     Ok(expect)
 }
 
-#[allow(dead_code)]
-pub fn coxmart_internal(
+pub fn compute_coxmart(
     n: usize,
     method: i32,
     surv_data: SurvivalData,

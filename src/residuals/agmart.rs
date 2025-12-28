@@ -10,7 +10,7 @@ struct AgmartInput {
     strata: Vec<i32>,
 }
 
-fn agmart_internal(n: usize, method: i32, input: AgmartInput) -> Vec<f64> {
+fn compute_agmart(n: usize, method: i32, input: AgmartInput) -> Vec<f64> {
     let start_slice = &input.start;
     let stop_slice = &input.stop;
     let event_slice = &input.event;
@@ -127,5 +127,5 @@ pub fn agmart(
         wt,
         strata,
     };
-    Ok(agmart_internal(n, method, input))
+    Ok(compute_agmart(n, method, input))
 }

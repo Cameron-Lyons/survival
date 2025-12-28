@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#[cfg(test)]
 pub fn cholesky2(matrix: &mut [f64], n: usize, toler: f64) -> i32 {
     let mut eps = 0.0;
     let mut nonneg = 1;

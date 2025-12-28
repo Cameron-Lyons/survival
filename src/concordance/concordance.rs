@@ -2,11 +2,6 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-#[allow(dead_code)]
-struct ConcordanceResult {
-    count: Vec<f64>,
-}
-
 #[pyfunction]
 pub fn concordance(
     y: Vec<f64>,
@@ -94,23 +89,6 @@ pub fn concordance(
     })
 }
 
-#[allow(dead_code)]
-fn walkup(nwt: &[f64], twt: &[f64], index: usize, wsum: &mut [f64; 3], ntree: usize) {
-    wsum[0] = 0.0;
-    wsum[1] = 0.0;
-    wsum[2] = 0.0;
-
-    for i in 0..ntree {
-        if i < index {
-            wsum[1] += twt[i];
-        } else if i > index {
-            wsum[0] += nwt[i];
-        } else {
-            wsum[2] += nwt[i];
-        }
-    }
-}
-#[allow(dead_code)]
 fn addin(nwt: &mut [f64], twt: &mut [f64], x: usize, weight: f64) {
     nwt[x] += weight;
     let mut node_index = x;
