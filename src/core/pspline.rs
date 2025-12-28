@@ -3,7 +3,6 @@ use ndarray_linalg::Solve;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use thiserror::Error;
-
 #[derive(Error, Debug)]
 pub enum PSplineError {
     #[error("Unsupported penalty method: {0}. Supported methods are: GCV, UBRE, REML, AIC, BIC")]
@@ -17,13 +16,11 @@ pub enum PSplineError {
     #[error("Failed to solve linear system: matrix may be singular or ill-conditioned")]
     LinearSolveError,
 }
-
 impl From<PSplineError> for PyErr {
     fn from(err: PSplineError) -> PyErr {
         PyValueError::new_err(err.to_string())
     }
 }
-
 #[pyclass]
 pub struct PSpline {
     x: Vec<f64>,
@@ -41,7 +38,6 @@ pub struct PSpline {
     #[pyo3(get)]
     fitted: bool,
 }
-
 #[pymethods]
 impl PSpline {
     #[new]
@@ -73,7 +69,6 @@ impl PSpline {
             fitted: false,
         }
     }
-
     pub fn fit(&mut self) -> PyResult<Vec<f64>> {
         let basis = self.create_basis();
         let penalized_basis = self
@@ -86,13 +81,11 @@ impl PSpline {
         self.fitted = true;
         Ok(coefficients)
     }
-
     pub fn predict(&self, new_x: Vec<f64>) -> PyResult<Vec<f64>> {
         let coefficients = self
             .coefficients
             .as_ref()
             .ok_or_else(|| PyValueError::new_err("Model not fitted. Call fit() first."))?;
-
         let mut predictions = Vec::with_capacity(new_x.len());
         for x_val in &new_x {
             let mut pred = 0.0;
@@ -103,12 +96,10 @@ impl PSpline {
         }
         Ok(predictions)
     }
-
     #[getter]
     pub fn get_df(&self) -> u32 {
         self.df
     }
-
     #[getter]
     pub fn get_eps(&self) -> f64 {
         self.eps
@@ -191,12 +182,10 @@ impl PSpline {
             _ => Err(PSplineError::UnsupportedMethod(self.method.clone())),
         }
     }
-
     fn reml(&self, i: u32, j: u32) -> f64 {
         if i == j {
             return self.nterm as f64;
         }
-
         let mut df = 0.0;
         let mut trace = 0.0;
         let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
@@ -205,7 +194,6 @@ impl PSpline {
                 basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
             }
         }
-
         let n = self.nterm as f64;
         for k in 0..self.nterm {
             for l in 0..self.nterm {
@@ -217,16 +205,13 @@ impl PSpline {
                     * basis[l as usize][j as usize];
             }
         }
-
         let edf = trace / n;
         df / (1.0 - edf).powi(2) + (n - edf).ln()
     }
-
     fn aic(&self, i: u32, j: u32) -> f64 {
         if i == j {
             return self.nterm as f64;
         }
-
         let mut df = 0.0;
         let mut trace = 0.0;
         let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
@@ -235,7 +220,6 @@ impl PSpline {
                 basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
             }
         }
-
         for k in 0..self.nterm {
             for l in 0..self.nterm {
                 df += basis[k as usize][i as usize]
@@ -246,17 +230,14 @@ impl PSpline {
                     * basis[l as usize][j as usize];
             }
         }
-
         let n = self.nterm as f64;
         let edf = trace / n;
         df / (1.0 - edf).powi(2) + 2.0 * edf
     }
-
     fn bic(&self, i: u32, j: u32) -> f64 {
         if i == j {
             return self.nterm as f64;
         }
-
         let mut df = 0.0;
         let mut trace = 0.0;
         let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
@@ -265,7 +246,6 @@ impl PSpline {
                 basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
             }
         }
-
         for k in 0..self.nterm {
             for l in 0..self.nterm {
                 df += basis[k as usize][i as usize]
@@ -276,7 +256,6 @@ impl PSpline {
                     * basis[l as usize][j as usize];
             }
         }
-
         let n = self.nterm as f64;
         let edf = trace / n;
         df / (1.0 - edf).powi(2) + n.ln() * edf
@@ -285,7 +264,6 @@ impl PSpline {
         if i == j {
             return self.nterm as f64;
         }
-
         let mut df = 0.0;
         let mut trace = 0.0;
         let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
@@ -310,7 +288,6 @@ impl PSpline {
         if i == j {
             return self.nterm as f64;
         }
-
         let mut df = 0.0;
         let mut trace = 0.0;
         let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
@@ -349,7 +326,6 @@ impl PSpline {
         }
         self.solve(a, b)
     }
-
     fn solve(&self, a: Vec<Vec<f64>>, b: Vec<f64>) -> Result<Vec<f64>, PSplineError> {
         let n = a.len();
         let a_array =
@@ -361,7 +337,6 @@ impl PSpline {
                 }
             })?;
         let b_array = Array1::from_vec(b);
-
         let x = a_array
             .solve_into(b_array)
             .map_err(|_| PSplineError::LinearSolveError)?;

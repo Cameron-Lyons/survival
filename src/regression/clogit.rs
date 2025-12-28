@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-
 #[pyclass]
 #[derive(Clone)]
 pub struct ClogitDataSet {
@@ -7,13 +6,11 @@ pub struct ClogitDataSet {
     strata: Vec<u8>,
     covariates: Vec<Vec<f64>>,
 }
-
 impl Default for ClogitDataSet {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[pymethods]
 impl ClogitDataSet {
     #[new]
@@ -24,17 +21,14 @@ impl ClogitDataSet {
             covariates: Vec::new(),
         }
     }
-
     pub fn add_observation(&mut self, case_control_status: u8, stratum: u8, covariates: Vec<f64>) {
         self.case_control_status.push(case_control_status);
         self.strata.push(stratum);
         self.covariates.push(covariates);
     }
-
     pub fn get_num_observations(&self) -> usize {
         self.case_control_status.len()
     }
-
     pub fn get_num_covariates(&self) -> usize {
         if self.covariates.is_empty() {
             0
@@ -43,7 +37,6 @@ impl ClogitDataSet {
         }
     }
 }
-
 impl ClogitDataSet {
     pub(crate) fn get_case_control_status(&self, id: usize) -> u8 {
         self.case_control_status[id]
@@ -52,7 +45,6 @@ impl ClogitDataSet {
         &self.covariates[id]
     }
 }
-
 #[pyclass]
 pub struct ConditionalLogisticRegression {
     data: ClogitDataSet,
@@ -67,7 +59,6 @@ pub struct ConditionalLogisticRegression {
     #[pyo3(get)]
     converged: bool,
 }
-
 #[pymethods]
 impl ConditionalLogisticRegression {
     #[new]
@@ -82,7 +73,6 @@ impl ConditionalLogisticRegression {
             converged: false,
         }
     }
-
     pub fn fit(&mut self) {
         let num_covariates = self.data.get_num_covariates();
         if num_covariates == 0 {
@@ -92,7 +82,6 @@ impl ConditionalLogisticRegression {
         let mut old_coefficients = vec![0.0; num_covariates];
         self.iterations = 0;
         self.converged = false;
-
         while self.iterations < self.max_iter {
             for covariate_idx in 0..num_covariates {
                 let mut numerator = 0.0;
@@ -128,7 +117,6 @@ impl ConditionalLogisticRegression {
             }
         }
     }
-
     pub fn predict(&self, covariates: Vec<f64>) -> f64 {
         let exp_sum: f64 = self
             .coefficients
@@ -138,7 +126,6 @@ impl ConditionalLogisticRegression {
             .sum();
         exp_sum.exp()
     }
-
     pub fn odds_ratios(&self) -> Vec<f64> {
         self.coefficients.iter().map(|c| c.exp()).collect()
     }

@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-
 mod concordance;
 mod core;
 mod matrix;
@@ -12,7 +11,6 @@ mod surv_analysis;
 mod tests;
 mod utilities;
 mod validation;
-
 pub use concordance::concordance::concordance as compute_concordance;
 pub use concordance::concordance1::perform_concordance1_calculation;
 pub use concordance::concordance3::perform_concordance3_calculation;
@@ -73,14 +71,12 @@ pub use validation::rmst::{
 pub use validation::tests::{
     ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test,
 };
-
 use concordance::concordance::concordance as concordance_fn;
 use python::cox_py_callback::cox_callback;
 use python::pyears3b::perform_pyears_calculation;
 use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
 use regression::aareg::aareg as aareg_function;
 use validation::tests::{score_test_py, wald_test_py};
-
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perform_cox_regression_frailty, &m)?)?;

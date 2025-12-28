@@ -2,7 +2,6 @@ use super::common::{build_score_result, validate_scoring_inputs};
 use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-
 pub fn agscore3(
     y: &[f64],
     covar: &[f64],
@@ -14,11 +13,9 @@ pub fn agscore3(
 ) -> Result<Vec<f64>, String> {
     let n = y.len() / 3;
     let nvar = covar.len() / n;
-
     let tstart = &y[0..n];
     let tstop = &y[n..2 * n];
     let event = &y[2 * n..3 * n];
-
     let covar_matrix = ArrayView2::from_shape((nvar, n), covar).map_err(|e| {
         format!(
             "Failed to create covariate view with shape ({}, {}): {}",
@@ -26,7 +23,6 @@ pub fn agscore3(
         )
     })?;
     let mut resid_matrix = Array2::zeros((nvar, n));
-
     let mut a = vec![0.0; nvar];
     let mut a2 = vec![0.0; nvar];
     let mut mean = vec![0.0; nvar];
@@ -34,17 +30,14 @@ pub fn agscore3(
     let mut mh2 = vec![0.0; nvar];
     let mut mh3 = vec![0.0; nvar];
     let mut xhaz = vec![0.0; nvar];
-
     let mut cumhaz = 0.0;
     let mut denom = 0.0;
     let mut current_stratum = *strata.last().unwrap_or(&0);
     let mut i1 = n - 1;
     let sort1: Vec<usize> = sort1.iter().map(|&x| (x - 1) as usize).collect();
-
     let mut person = n - 1;
     while person > 0 {
         let dtime = tstop[person];
-
         if strata[person] != current_stratum {
             while i1 > 0 && sort1[i1] > person {
                 let k = sort1[i1];
@@ -53,7 +46,6 @@ pub fn agscore3(
                 }
                 i1 -= 1;
             }
-
             cumhaz = 0.0;
             denom = 0.0;
             a.iter_mut().for_each(|x| *x = 0.0);
@@ -65,10 +57,8 @@ pub fn agscore3(
                 if strata[k] != current_stratum {
                     break;
                 }
-
                 let risk = score[k] * weights[k];
                 denom -= risk;
-
                 for j in 0..nvar {
                     resid_matrix[[j, k]] -= score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]);
                     a[j] -= risk * covar_matrix[[j, k]];
@@ -76,29 +66,24 @@ pub fn agscore3(
                 i1 -= 1;
             }
         }
-
         let mut e_denom = 0.0;
         let mut deaths = 0.0;
         let mut meanwt = 0.0;
         a2.iter_mut().for_each(|x| *x = 0.0);
-
         let mut processed = 0;
         while person > 0 && tstop[person] == dtime {
             if strata[person] != current_stratum {
                 break;
             }
-
             for j in 0..nvar {
                 resid_matrix[[j, person]] =
                     (covar_matrix[[j, person]] * cumhaz - xhaz[j]) * score[person];
             }
-
             let risk = score[person] * weights[person];
             denom += risk;
             for j in 0..nvar {
                 a[j] += risk * covar_matrix[[j, person]];
             }
-
             if event[person] > 0.5 {
                 deaths += 1.0;
                 e_denom += risk;
@@ -107,20 +92,16 @@ pub fn agscore3(
                     a2[j] += risk * covar_matrix[[j, person]];
                 }
             }
-
             person -= 1;
             processed += 1;
         }
-
         if deaths > 0.0 {
             if deaths < 2.0 || method == 0 {
                 let hazard = meanwt / denom;
                 cumhaz += hazard;
-
                 for j in 0..nvar {
                     mean[j] = a[j] / denom;
                     xhaz[j] += mean[j] * hazard;
-
                     for k in person + 1..=person + processed {
                         resid_matrix[[j, k]] += covar_matrix[[j, k]] - mean[j];
                     }
@@ -130,13 +111,11 @@ pub fn agscore3(
                 mh2.iter_mut().for_each(|x| *x = 0.0);
                 mh3.iter_mut().for_each(|x| *x = 0.0);
                 meanwt /= deaths;
-
                 for dd in 0..deaths as i32 {
                     let downwt = dd as f64 / deaths;
                     let d2 = denom - downwt * e_denom;
                     let hazard = meanwt / d2;
                     cumhaz += hazard;
-
                     for j in 0..nvar {
                         mean[j] = (a[j] - downwt * a2[j]) / d2;
                         xhaz[j] += mean[j] * hazard;
@@ -145,7 +124,6 @@ pub fn agscore3(
                         mh3[j] += mean[j] / deaths;
                     }
                 }
-
                 for k in person + 1..=person + processed {
                     for j in 0..nvar {
                         resid_matrix[[j, k]] += (covar_matrix[[j, k]] - mh3[j])
@@ -155,7 +133,6 @@ pub fn agscore3(
             }
         }
     }
-
     while i1 > 0 {
         let k = sort1[i1];
         for j in 0..nvar {
@@ -163,10 +140,8 @@ pub fn agscore3(
         }
         i1 -= 1;
     }
-
     Ok(resid_matrix.into_raw_vec_and_offset().0)
 }
-
 #[pyfunction]
 pub fn perform_agscore3_calculation(
     time_data: Vec<f64>,
@@ -186,13 +161,11 @@ pub fn perform_agscore3_calculation(
         score.len(),
         weights.len(),
     )?;
-
     if sort1.len() != n {
         return Err(PyRuntimeError::new_err(
             "Sort1 length does not match observations",
         ));
     }
-
     let residuals = agscore3(
         &time_data,
         &covariates,
@@ -203,8 +176,6 @@ pub fn perform_agscore3_calculation(
         &sort1,
     )
     .map_err(PyRuntimeError::new_err)?;
-
     let nvar = covariates.len() / n;
-
     Python::attach(|py| build_score_result(py, residuals, n, nvar, method).map(|d| d.into()))
 }

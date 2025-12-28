@@ -3,21 +3,17 @@ pub struct SurvivalData<'a> {
     pub status: &'a [i32],
     pub strata: &'a mut [i32],
 }
-
 pub struct Weights<'a> {
     pub score: &'a [f64],
     pub wt: &'a [f64],
 }
-
 #[pymodule]
 #[pyo3(name = "coxmart")]
 fn coxmart_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(coxmart, &m)?)?;
     Ok(())
 }
-
 use pyo3::prelude::*;
-
 #[pyfunction]
 pub fn coxmart(
     time: Vec<f64>,
@@ -33,11 +29,9 @@ pub fn coxmart(
             "time, status, and score must have the same length",
         ));
     }
-
     let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
     let mut strata_vec = strata.unwrap_or_else(|| vec![0; n]);
     let method_val = method.unwrap_or(0);
-
     if weights_vec.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "weights must have the same length as time",
@@ -48,25 +42,19 @@ pub fn coxmart(
             "strata must have the same length as time",
         ));
     }
-
     let mut expect = vec![0.0; n];
-
     let surv_data = SurvivalData {
         time: &time,
         status: &status,
         strata: &mut strata_vec,
     };
-
     let weights_data = Weights {
         score: &score,
         wt: &weights_vec,
     };
-
     compute_coxmart(n, method_val, surv_data, weights_data, &mut expect);
-
     Ok(expect)
 }
-
 pub fn compute_coxmart(
     n: usize,
     method: i32,
@@ -77,9 +65,7 @@ pub fn compute_coxmart(
     if n == 0 {
         return;
     }
-
     surv_data.strata[n - 1] = 1;
-
     let mut denom = 0.0;
     for i in (0..n).rev() {
         if surv_data.strata[i] == 1 {
@@ -93,14 +79,12 @@ pub fn compute_coxmart(
         };
         expect[i] = if condition { denom } else { 0.0 };
     }
-
     let mut deaths = 0;
     let mut wtsum = 0.0;
     let mut e_denom = 0.0;
     let mut hazard = 0.0;
     let mut lastone = 0;
     let mut current_denom = 0.0;
-
     for i in 0..n {
         if expect[i] != 0.0 {
             current_denom = expect[i];
@@ -109,10 +93,8 @@ pub fn compute_coxmart(
         deaths += surv_data.status[i];
         wtsum += surv_data.status[i] as f64 * weights.wt[i];
         e_denom += weights.score[i] * surv_data.status[i] as f64 * weights.wt[i];
-
         let is_last =
             surv_data.strata[i] == 1 || (i < n - 1 && surv_data.time[i + 1] != surv_data.time[i]);
-
         if is_last {
             if deaths < 2 || method == 0 {
                 hazard += wtsum / current_denom;
@@ -139,18 +121,15 @@ pub fn compute_coxmart(
                     }
                 }
             }
-
             lastone = i + 1;
             deaths = 0;
             wtsum = 0.0;
             e_denom = 0.0;
         }
-
         if surv_data.strata[i] == 1 {
             hazard = 0.0;
         }
     }
-
     #[allow(clippy::needless_range_loop)]
     for j in lastone..n {
         expect[j] -= weights.score[j] * hazard;

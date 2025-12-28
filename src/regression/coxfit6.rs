@@ -4,7 +4,6 @@ use ndarray_linalg::cholesky::CholeskyInto;
 use ndarray_linalg::{Inverse, Solve};
 use rayon::prelude::*;
 use thiserror::Error;
-
 #[derive(Error, Debug)]
 pub enum CoxError {
     #[error("Cholesky decomposition failed")]
@@ -14,13 +13,11 @@ pub enum CoxError {
     #[error("Non-finite values encountered during iteration")]
     NonFinite,
 }
-
 #[derive(Debug, Clone, Copy)]
 pub enum Method {
     Breslow,
     Efron,
 }
-
 pub type CoxFitResults = (
     Vec<f64>,
     Vec<f64>,
@@ -31,7 +28,6 @@ pub type CoxFitResults = (
     i32,
     usize,
 );
-
 pub struct CoxFit {
     time: Array1<f64>,
     status: Array1<i32>,
@@ -53,7 +49,6 @@ pub struct CoxFit {
     flag: i32,
     iter: usize,
 }
-
 impl CoxFit {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -72,7 +67,6 @@ impl CoxFit {
     ) -> Result<Self, CoxError> {
         let nvar = covar.ncols();
         let _nused = covar.nrows();
-
         let mut cox = Self {
             time,
             status,
@@ -94,16 +88,13 @@ impl CoxFit {
             flag: 0,
             iter: 0,
         };
-
         cox.scale_center(doscale)?;
         Ok(cox)
     }
-
     fn scale_center(&mut self, doscale: Vec<bool>) -> Result<(), CoxError> {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let total_weight: f64 = self.weights.sum();
-
         let means: Vec<f64> = (0..nvar)
             .into_par_iter()
             .map(|i| {
@@ -118,9 +109,6 @@ impl CoxFit {
                 }
             })
             .collect();
-
-        self.means = means.clone();
-
         let scales: Vec<f64> = (0..nvar)
             .into_par_iter()
             .map(|i| {
@@ -139,9 +127,6 @@ impl CoxFit {
                 }
             })
             .collect();
-
-        self.scale = scales.clone();
-
         for i in 0..nvar {
             if doscale[i] {
                 let mean = means[i];
@@ -151,7 +136,8 @@ impl CoxFit {
                 }
             }
         }
-
+        self.means = means;
+        self.scale = scales;
         let new_beta: Vec<f64> = self
             .beta
             .par_iter()
@@ -159,39 +145,32 @@ impl CoxFit {
             .map(|(&b, &s)| b / s)
             .collect();
         self.beta = new_beta;
-
         Ok(())
     }
-
     fn iterate(&mut self, beta: &[f64]) -> Result<f64, CoxError> {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let method = self.method;
-
         self.u.fill(0.0);
         self.imat.fill(0.0);
         let mut a = vec![0.0; nvar];
         let mut a2 = vec![0.0; nvar];
         let mut cmat = Array2::zeros((nvar, nvar));
         let mut cmat2 = Array2::zeros((nvar, nvar));
-
         let mut loglik = 0.0;
         let mut person = nused as isize - 1;
-
         while person >= 0 {
             let person_idx = person as usize;
             if self.strata[person_idx] == 1 {
                 a.fill(0.0);
                 cmat.fill(0.0);
             }
-
             let dtime = self.time[person_idx];
             let mut ndead = 0;
             let mut deadwt = 0.0;
             let mut denom2 = 0.0;
             let mut _nrisk = 0;
             let mut denom = 0.0;
-
             while person >= 0 && self.time[person as usize] == dtime {
                 let person_i = person as usize;
                 _nrisk += 1;
@@ -201,7 +180,6 @@ impl CoxFit {
                         .enumerate()
                         .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person_i, i)]);
                 let risk = zbeta.exp() * self.weights[person_i];
-
                 if self.status[person_i] == 0 {
                     denom += risk;
                     #[allow(clippy::needless_range_loop)]
@@ -217,7 +195,6 @@ impl CoxFit {
                     deadwt += self.weights[person_i];
                     denom2 += risk;
                     loglik += self.weights[person_i] * zbeta;
-
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar {
                         self.u[i] += self.weights[person_i] * self.covar[(person_i, i)];
@@ -228,25 +205,21 @@ impl CoxFit {
                         }
                     }
                 }
-
                 person -= 1;
                 if person >= 0 && self.strata[person as usize] == 1 {
                     break;
                 }
             }
-
             if ndead > 0 {
                 match method {
                     Method::Breslow => {
                         denom += denom2;
                         loglik -= deadwt * denom.ln();
-
                         #[allow(clippy::needless_range_loop)]
                         for i in 0..nvar {
                             a[i] += a2[i];
                             let temp = a[i] / denom;
                             self.u[i] -= deadwt * temp;
-
                             for j in 0..=i {
                                 cmat[(i, j)] += cmat2[(i, j)];
                                 let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
@@ -263,12 +236,10 @@ impl CoxFit {
                             let _kf = k as f64;
                             denom += denom2 / ndead as f64;
                             loglik -= wtave * denom.ln();
-
                             for i in 0..nvar {
                                 a[i] += a2[i] / ndead as f64;
                                 let temp = a[i] / denom;
                                 self.u[i] -= wtave * temp;
-
                                 for j in 0..=i {
                                     cmat[(i, j)] += cmat2[(i, j)] / ndead as f64;
                                     let val = wtave * (cmat[(i, j)] - temp * a[j]) / denom;
@@ -281,43 +252,34 @@ impl CoxFit {
                         }
                     }
                 }
-
                 a2.fill(0.0);
                 cmat2.fill(0.0);
             }
         }
-
         Ok(loglik)
     }
-
     pub fn fit(&mut self) -> Result<(), CoxError> {
         let nvar = self.beta.len();
         let mut newbeta = vec![0.0; nvar];
         let mut a = vec![0.0; nvar];
         let mut halving = 0;
         let mut _notfinite;
-
         let beta_copy = self.beta.clone();
         self.loglik[0] = self.iterate(&beta_copy)?;
         self.loglik[1] = self.loglik[0];
-
         a.copy_from_slice(&self.u);
         self.flag = Self::cholesky(&mut self.imat, self.toler)?;
         Self::chsolve(&self.imat, &mut a)?;
-
         self.sctest = a.iter().zip(&self.u).map(|(ai, ui)| ai * ui).sum();
-
         if self.max_iter == 0 || !self.loglik[0].is_finite() {
             Self::chinv(&mut self.imat)?;
             self.rescale_params();
             return Ok(());
         }
-
         newbeta.copy_from_slice(&self.beta);
         for i in 0..nvar {
             newbeta[i] += a[i];
         }
-
         self.loglik[1] = self.loglik[0];
         for iter in 1..=self.max_iter {
             self.iter = iter;
@@ -328,7 +290,6 @@ impl CoxFit {
                     f64::NAN
                 }
             };
-
             _notfinite = !newlk.is_finite();
             if !_notfinite {
                 for i in 0..nvar {
@@ -344,7 +305,6 @@ impl CoxFit {
                     }
                 }
             }
-
             if !_notfinite && ((self.loglik[1] - newlk).abs() / newlk.abs() <= self.eps) {
                 self.loglik[1] = newlk;
                 Self::chinv(&mut self.imat)?;
@@ -354,7 +314,6 @@ impl CoxFit {
                 }
                 return Ok(());
             }
-
             if _notfinite || newlk < self.loglik[1] {
                 halving += 1;
                 for (newbeta_elem, beta_elem) in newbeta.iter_mut().zip(self.beta.iter()).take(nvar)
@@ -377,16 +336,13 @@ impl CoxFit {
                 }
             }
         }
-
         let beta_final = self.beta.clone();
         self.loglik[1] = self.iterate(&beta_final)?;
         Self::chinv(&mut self.imat)?;
         self.rescale_params();
         self.flag = 1000;
-
         Ok(())
     }
-
     fn rescale_params(&mut self) {
         let nvar = self.beta.len();
         for i in 0..nvar {
@@ -397,7 +353,6 @@ impl CoxFit {
             }
         }
     }
-
     fn cholesky(mat: &mut Array2<f64>, toler: f64) -> Result<i32, CoxError> {
         let n = mat.nrows();
         #[allow(clippy::needless_range_loop)]
@@ -406,7 +361,6 @@ impl CoxFit {
                 mat[(i, j)] = mat[(j, i)];
             }
         }
-
         let mat_clone3 = mat.clone();
         match mat_clone3.cholesky_into(ndarray_linalg::UPLO::Lower) {
             Ok(_) => Ok(n as i32),
@@ -421,7 +375,6 @@ impl CoxFit {
             }
         }
     }
-
     fn chsolve(chol: &Array2<f64>, a: &mut [f64]) -> Result<(), CoxError> {
         let _n = chol.nrows();
         let b = Array1::from_vec(a.to_vec());
@@ -431,7 +384,6 @@ impl CoxFit {
         a.copy_from_slice(&result.to_vec());
         Ok(())
     }
-
     fn chinv(mat: &mut Array2<f64>) -> Result<(), CoxError> {
         let mat_clone = mat.clone();
         let chol = match mat_clone.cholesky_into(ndarray_linalg::UPLO::Lower) {
@@ -445,7 +397,6 @@ impl CoxFit {
         *mat = inv;
         Ok(())
     }
-
     pub fn results(self) -> CoxFitResults {
         (
             self.beta,

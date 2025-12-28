@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct RMSTResult {
@@ -16,7 +15,6 @@ pub struct RMSTResult {
     #[pyo3(get)]
     pub tau: f64,
 }
-
 #[pymethods]
 impl RMSTResult {
     #[new]
@@ -31,7 +29,6 @@ impl RMSTResult {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct RMSTComparisonResult {
@@ -56,7 +53,6 @@ pub struct RMSTComparisonResult {
     #[pyo3(get)]
     pub rmst_group2: RMSTResult,
 }
-
 #[pymethods]
 impl RMSTComparisonResult {
     #[new]
@@ -87,11 +83,9 @@ impl RMSTComparisonResult {
         }
     }
 }
-
 fn norm_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / std::f64::consts::SQRT_2))
 }
-
 fn erf(x: f64) -> f64 {
     let a1 = 0.254829592;
     let a2 = -0.284496736;
@@ -99,14 +93,12 @@ fn erf(x: f64) -> f64 {
     let a4 = -1.453152027;
     let a5 = 1.061405429;
     let p = 0.3275911;
-
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
     let t = 1.0 / (1.0 + p * x);
     let y = 1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * (-x * x).exp();
     sign * y
 }
-
 pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f64) -> RMSTResult {
     let n = time.len();
     if n == 0 {
@@ -119,30 +111,24 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
             tau,
         };
     }
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
         time[a]
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let mut unique_times: Vec<f64> = Vec::new();
     let mut n_events: Vec<f64> = Vec::new();
     let mut n_risk: Vec<f64> = Vec::new();
-
     let mut total_at_risk = n as f64;
     let mut i = 0;
-
     while i < n {
         let current_time = time[indices[i]];
         if current_time > tau {
             break;
         }
-
         let mut events = 0.0;
         let mut removed = 0.0;
-
         while i < n && time[indices[i]] == current_time {
             removed += 1.0;
             if status[indices[i]] == 1 {
@@ -150,16 +136,13 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
             }
             i += 1;
         }
-
         if events > 0.0 {
             unique_times.push(current_time);
             n_events.push(events);
             n_risk.push(total_at_risk);
         }
-
         total_at_risk -= removed;
     }
-
     let m = unique_times.len();
     if m == 0 {
         return RMSTResult {
@@ -171,29 +154,23 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
             tau,
         };
     }
-
     let mut survival = Vec::with_capacity(m);
     let mut surv = 1.0;
     for j in 0..m {
         surv *= 1.0 - n_events[j] / n_risk[j];
         survival.push(surv);
     }
-
     let mut rmst = 0.0;
     let mut prev_time = 0.0;
-
     for j in 0..m {
         let prev_surv = if j == 0 { 1.0 } else { survival[j - 1] };
         rmst += prev_surv * (unique_times[j] - prev_time);
         prev_time = unique_times[j];
     }
-
     let last_surv = survival[m - 1];
     rmst += last_surv * (tau - prev_time);
-
     let mut variance = 0.0;
     let mut cum_area_after: Vec<f64> = vec![0.0; m];
-
     for j in (0..m).rev() {
         let area_to_tau = if j == m - 1 {
             survival[j] * (tau - unique_times[j])
@@ -202,7 +179,6 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
         };
         cum_area_after[j] = area_to_tau;
     }
-
     for j in 0..m {
         let d = n_events[j];
         let y = n_risk[j];
@@ -211,9 +187,7 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
             variance += d * area * area / (y * (y - d));
         }
     }
-
     let se = variance.sqrt();
-
     let z = if confidence_level >= 0.99 {
         2.576
     } else if confidence_level >= 0.95 {
@@ -223,10 +197,8 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
     } else {
         1.28
     };
-
     let ci_lower = (rmst - z * se).max(0.0);
     let ci_upper = rmst + z * se;
-
     RMSTResult {
         rmst,
         variance,
@@ -236,7 +208,6 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
         tau,
     }
 }
-
 pub fn compare_rmst(
     time: &[f64],
     status: &[i32],
@@ -247,7 +218,6 @@ pub fn compare_rmst(
     let mut unique_groups: Vec<i32> = group.to_vec();
     unique_groups.sort();
     unique_groups.dedup();
-
     if unique_groups.len() < 2 {
         let result = compute_rmst(time, status, tau, confidence_level);
         return RMSTComparisonResult {
@@ -263,15 +233,12 @@ pub fn compare_rmst(
             rmst_group2: result,
         };
     }
-
     let g1 = unique_groups[0];
     let g2 = unique_groups[1];
-
     let mut time1 = Vec::new();
     let mut status1 = Vec::new();
     let mut time2 = Vec::new();
     let mut status2 = Vec::new();
-
     for i in 0..time.len() {
         if group[i] == g1 {
             time1.push(time[i]);
@@ -281,16 +248,13 @@ pub fn compare_rmst(
             status2.push(status[i]);
         }
     }
-
     let (rmst1, rmst2) = rayon::join(
         || compute_rmst(&time1, &status1, tau, confidence_level),
         || compute_rmst(&time2, &status2, tau, confidence_level),
     );
-
     let diff = rmst1.rmst - rmst2.rmst;
     let diff_var = rmst1.variance + rmst2.variance;
     let diff_se = diff_var.sqrt();
-
     let z = if confidence_level >= 0.99 {
         2.576
     } else if confidence_level >= 0.95 {
@@ -300,16 +264,13 @@ pub fn compare_rmst(
     } else {
         1.28
     };
-
     let diff_ci_lower = diff - z * diff_se;
     let diff_ci_upper = diff + z * diff_se;
-
     let ratio = if rmst2.rmst > 0.0 {
         rmst1.rmst / rmst2.rmst
     } else {
         f64::INFINITY
     };
-
     let (ratio_ci_lower, ratio_ci_upper) = if rmst1.rmst > 0.0 && rmst2.rmst > 0.0 {
         let log_ratio = ratio.ln();
         let log_ratio_var =
@@ -322,10 +283,8 @@ pub fn compare_rmst(
     } else {
         (0.0, f64::INFINITY)
     };
-
     let z_stat = if diff_se > 0.0 { diff / diff_se } else { 0.0 };
     let p_value = 2.0 * (1.0 - norm_cdf(z_stat.abs()));
-
     RMSTComparisonResult {
         rmst_diff: diff,
         rmst_ratio: ratio,
@@ -339,7 +298,6 @@ pub fn compare_rmst(
         rmst_group2: rmst2,
     }
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, tau, confidence_level=None))]
 pub fn rmst(
@@ -351,7 +309,6 @@ pub fn rmst(
     let conf = confidence_level.unwrap_or(0.95);
     Ok(compute_rmst(&time, &status, tau, conf))
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, group, tau, confidence_level=None))]
 pub fn rmst_comparison(
@@ -364,7 +321,6 @@ pub fn rmst_comparison(
     let conf = confidence_level.unwrap_or(0.95);
     Ok(compare_rmst(&time, &status, &group, tau, conf))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct MedianSurvivalResult {
@@ -377,7 +333,6 @@ pub struct MedianSurvivalResult {
     #[pyo3(get)]
     pub quantile: f64,
 }
-
 #[pymethods]
 impl MedianSurvivalResult {
     #[new]
@@ -395,7 +350,6 @@ impl MedianSurvivalResult {
         }
     }
 }
-
 pub fn compute_survival_quantile(
     time: &[f64],
     status: &[i32],
@@ -411,23 +365,19 @@ pub fn compute_survival_quantile(
             quantile,
         };
     }
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
         time[a]
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let mut unique_times: Vec<f64> = Vec::new();
     let mut survival: Vec<f64> = Vec::new();
     let mut ci_lower_vec: Vec<f64> = Vec::new();
     let mut ci_upper_vec: Vec<f64> = Vec::new();
-
     let mut total_at_risk = n as f64;
     let mut surv = 1.0;
     let mut var_sum = 0.0;
-
     let z = if confidence_level >= 0.99 {
         2.576
     } else if confidence_level >= 0.95 {
@@ -437,14 +387,11 @@ pub fn compute_survival_quantile(
     } else {
         1.28
     };
-
     let mut i = 0;
     while i < n {
         let current_time = time[indices[i]];
-
         let mut events = 0.0;
         let mut removed = 0.0;
-
         while i < n && time[indices[i]] == current_time {
             removed += 1.0;
             if status[indices[i]] == 1 {
@@ -452,43 +399,34 @@ pub fn compute_survival_quantile(
             }
             i += 1;
         }
-
         if events > 0.0 && total_at_risk > 0.0 {
             surv *= 1.0 - events / total_at_risk;
             if total_at_risk > events {
                 var_sum += events / (total_at_risk * (total_at_risk - events));
             }
-
             let se = surv * var_sum.sqrt();
             let lower = (surv - z * se).clamp(0.0, 1.0);
             let upper = (surv + z * se).clamp(0.0, 1.0);
-
             unique_times.push(current_time);
             survival.push(surv);
             ci_lower_vec.push(lower);
             ci_upper_vec.push(upper);
         }
-
         total_at_risk -= removed;
     }
-
     let target = 1.0 - quantile;
-
     let median = survival
         .iter()
         .position(|&s| s <= target)
         .map(|idx| unique_times[idx]);
-
     let ci_lower = ci_upper_vec
         .iter()
         .position(|&s| s <= target)
         .map(|idx| unique_times[idx]);
-
     let ci_upper = ci_lower_vec
         .iter()
         .position(|&s| s <= target)
         .map(|idx| unique_times[idx]);
-
     MedianSurvivalResult {
         median,
         ci_lower,
@@ -496,7 +434,6 @@ pub fn compute_survival_quantile(
         quantile,
     }
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, quantile=None, confidence_level=None))]
 pub fn survival_quantile(
@@ -509,7 +446,6 @@ pub fn survival_quantile(
     let conf = confidence_level.unwrap_or(0.95);
     Ok(compute_survival_quantile(&time, &status, q, conf))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct CumulativeIncidenceResult {
@@ -524,7 +460,6 @@ pub struct CumulativeIncidenceResult {
     #[pyo3(get)]
     pub n_risk: Vec<usize>,
 }
-
 #[pymethods]
 impl CumulativeIncidenceResult {
     #[new]
@@ -544,7 +479,6 @@ impl CumulativeIncidenceResult {
         }
     }
 }
-
 pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeIncidenceResult {
     let n = time.len();
     if n == 0 {
@@ -556,11 +490,9 @@ pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeI
             n_risk: vec![],
         };
     }
-
     let mut event_types: Vec<i32> = status.iter().filter(|&&s| s > 0).copied().collect();
     event_types.sort();
     event_types.dedup();
-
     if event_types.is_empty() {
         return CumulativeIncidenceResult {
             time: vec![],
@@ -570,29 +502,22 @@ pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeI
             n_risk: vec![],
         };
     }
-
     let n_event_types = event_types.len();
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
         time[a]
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let mut unique_times: Vec<f64> = Vec::new();
     let mut n_risk_vec: Vec<usize> = Vec::new();
     let mut events_by_type: Vec<Vec<f64>> = vec![Vec::new(); n_event_types];
-
     let mut total_at_risk = n;
     let mut i = 0;
-
     while i < n {
         let current_time = time[indices[i]];
-
         let mut event_counts = vec![0.0; n_event_types];
         let mut removed = 0usize;
-
         while i < n && time[indices[i]] == current_time {
             let s = status[indices[i]];
             removed += 1;
@@ -601,7 +526,6 @@ pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeI
             }
             i += 1;
         }
-
         let has_events = event_counts.iter().any(|&c| c > 0.0);
         if has_events {
             unique_times.push(current_time);
@@ -610,22 +534,16 @@ pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeI
                 events_by_type[k].push(count);
             }
         }
-
         total_at_risk -= removed;
     }
-
     let m = unique_times.len();
     let mut cif: Vec<Vec<f64>> = vec![Vec::with_capacity(m); n_event_types];
     let mut variance: Vec<Vec<f64>> = vec![Vec::with_capacity(m); n_event_types];
-
     let mut km_survival = 1.0;
     let mut cum_cif = vec![0.0; n_event_types];
-
     for j in 0..m {
         let y = n_risk_vec[j] as f64;
-
         let total_events: f64 = events_by_type.iter().map(|ev| ev[j]).sum();
-
         for k in 0..n_event_types {
             let d_k = events_by_type[k][j];
             if y > 0.0 {
@@ -634,12 +552,10 @@ pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeI
             cif[k].push(cum_cif[k]);
             variance[k].push(0.0);
         }
-
         if y > 0.0 {
             km_survival *= 1.0 - total_events / y;
         }
     }
-
     CumulativeIncidenceResult {
         time: unique_times,
         cif,
@@ -648,7 +564,6 @@ pub fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeI
         n_risk: n_risk_vec,
     }
 }
-
 #[pyfunction]
 pub fn cumulative_incidence(
     time: Vec<f64>,
@@ -656,7 +571,6 @@ pub fn cumulative_incidence(
 ) -> PyResult<CumulativeIncidenceResult> {
     Ok(compute_cumulative_incidence(&time, &status))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct NNTResult {
@@ -675,7 +589,6 @@ pub struct NNTResult {
     #[pyo3(get)]
     pub time_horizon: f64,
 }
-
 #[pymethods]
 impl NNTResult {
     #[new]
@@ -699,7 +612,6 @@ impl NNTResult {
         }
     }
 }
-
 pub fn compute_nnt(
     time: &[f64],
     status: &[i32],
@@ -709,11 +621,9 @@ pub fn compute_nnt(
 ) -> NNTResult {
     let surv1 = compute_survival_at_time(time, status, group, 0, time_horizon);
     let surv2 = compute_survival_at_time(time, status, group, 1, time_horizon);
-
     let risk1 = 1.0 - surv1.0;
     let risk2 = 1.0 - surv2.0;
     let arr = risk2 - risk1;
-
     let z = if confidence_level >= 0.99 {
         2.576
     } else if confidence_level >= 0.95 {
@@ -723,17 +633,14 @@ pub fn compute_nnt(
     } else {
         1.28
     };
-
     let arr_se = (surv1.1 + surv2.1).sqrt();
     let arr_ci_lower = arr - z * arr_se;
     let arr_ci_upper = arr + z * arr_se;
-
     let nnt = if arr.abs() > 1e-10 {
         1.0 / arr
     } else {
         f64::INFINITY
     };
-
     let (nnt_ci_lower, nnt_ci_upper) = if arr_ci_lower > 0.0 && arr_ci_upper > 0.0 {
         (1.0 / arr_ci_upper, 1.0 / arr_ci_lower)
     } else if arr_ci_lower < 0.0 && arr_ci_upper < 0.0 {
@@ -741,7 +648,6 @@ pub fn compute_nnt(
     } else {
         (f64::NEG_INFINITY, f64::INFINITY)
     };
-
     NNTResult {
         nnt,
         nnt_ci_lower,
@@ -752,7 +658,6 @@ pub fn compute_nnt(
         time_horizon,
     }
 }
-
 fn compute_survival_at_time(
     time: &[f64],
     status: &[i32],
@@ -763,27 +668,21 @@ fn compute_survival_at_time(
     let mut unique_groups: Vec<i32> = group.to_vec();
     unique_groups.sort();
     unique_groups.dedup();
-
     if unique_groups.len() <= target_group as usize {
         return (1.0, 0.0);
     }
-
     let g = unique_groups[target_group as usize];
-
     let mut filtered_time = Vec::new();
     let mut filtered_status = Vec::new();
-
     for i in 0..time.len() {
         if group[i] == g {
             filtered_time.push(time[i]);
             filtered_status.push(status[i]);
         }
     }
-
     if filtered_time.is_empty() {
         return (1.0, 0.0);
     }
-
     let n = filtered_time.len();
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
@@ -791,21 +690,17 @@ fn compute_survival_at_time(
             .partial_cmp(&filtered_time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let mut surv = 1.0;
     let mut var_sum = 0.0;
     let mut total_at_risk = n as f64;
     let mut i = 0;
-
     while i < n {
         let current_time = filtered_time[indices[i]];
         if current_time > t {
             break;
         }
-
         let mut events = 0.0;
         let mut removed = 0.0;
-
         while i < n && filtered_time[indices[i]] == current_time {
             removed += 1.0;
             if filtered_status[indices[i]] == 1 {
@@ -813,21 +708,17 @@ fn compute_survival_at_time(
             }
             i += 1;
         }
-
         if events > 0.0 && total_at_risk > 0.0 {
             surv *= 1.0 - events / total_at_risk;
             if total_at_risk > events {
                 var_sum += events / (total_at_risk * (total_at_risk - events));
             }
         }
-
         total_at_risk -= removed;
     }
-
     let variance = surv * surv * var_sum;
     (surv, variance)
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, group, time_horizon, confidence_level=None))]
 pub fn number_needed_to_treat(

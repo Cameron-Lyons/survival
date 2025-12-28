@@ -4,7 +4,6 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
-
 #[pyclass]
 #[derive(Clone)]
 pub struct AaregOptions {
@@ -39,7 +38,6 @@ pub struct AaregOptions {
     #[pyo3(get, set)]
     y: bool,
 }
-
 #[pymethods]
 impl AaregOptions {
     #[new]
@@ -63,7 +61,6 @@ impl AaregOptions {
         }
     }
 }
-
 #[pyclass]
 #[derive(Clone)]
 pub struct AaregResult {
@@ -84,7 +81,6 @@ pub struct AaregResult {
     #[pyo3(get, set)]
     diagnostics: Option<Diagnostics>,
 }
-
 #[pyclass]
 #[derive(Clone)]
 struct ConfidenceInterval {
@@ -93,7 +89,6 @@ struct ConfidenceInterval {
     #[pyo3(get, set)]
     upper_bound: f64,
 }
-
 #[pyclass]
 #[derive(Clone)]
 struct FitDetails {
@@ -114,7 +109,6 @@ struct FitDetails {
     #[pyo3(get, set)]
     warnings: Vec<String>,
 }
-
 #[pyclass]
 #[derive(Clone)]
 struct Diagnostics {
@@ -135,7 +129,6 @@ struct Diagnostics {
     #[pyo3(get, set)]
     additional_measures: Option<Vec<f64>>,
 }
-
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
 enum AaregError {
@@ -148,7 +141,6 @@ enum AaregError {
     InternalError(String),
     GenericError(String),
 }
-
 impl fmt::Display for AaregError {
     #[allow(clippy::too_many_arguments)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -163,19 +155,16 @@ impl fmt::Display for AaregError {
         }
     }
 }
-
 impl From<pyo3::PyErr> for AaregError {
     fn from(err: pyo3::PyErr) -> AaregError {
         AaregError::GenericError(err.to_string())
     }
 }
-
 impl From<AaregError> for PyErr {
     fn from(err: AaregError) -> PyErr {
         PyRuntimeError::new_err(format!("Aareg error: {}", err))
     }
 }
-
 #[pyfunction]
 #[pyo3(name = "aareg")]
 pub fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
@@ -184,29 +173,20 @@ pub fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
         options.data.clone().into_iter().flatten().collect(),
     )
     .map_err(|e| AaregError::DataError(e.to_string()))?;
-
     let (response_name, covariate_names) = parse_formula(&options.formula)?;
-
     let subset_data = apply_subset(&data_array, &options.subset)?;
-
     let weighted_data = apply_weights(&subset_data, options.weights.clone())?;
-
     let filtered_data = handle_missing_data(&weighted_data, options.na_action.clone())?;
-
     let (y, x) = prepare_data_for_regression(
         &filtered_data,
         &response_name,
         &covariate_names,
         &options.variable_names,
     )?;
-
     let regression_result = perform_aalen_regression(&y, &x, &options)?;
-
     let processed_result = post_process_results(regression_result, &options)?;
-
     Ok(processed_result)
 }
-
 fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     let mut formula_parts = formula.splitn(2, '~');
     let response = formula_parts
@@ -226,7 +206,6 @@ fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
         .collect();
     Ok((response, covariates))
 }
-
 fn apply_subset(
     data: &Array2<f64>,
     subset: &Option<Vec<usize>>,
@@ -244,7 +223,6 @@ fn apply_subset(
         None => Ok(data.clone()),
     }
 }
-
 fn apply_weights(data: &Array2<f64>, weights: Option<Vec<f64>>) -> Result<Array2<f64>, AaregError> {
     match weights {
         Some(w) => {
@@ -260,7 +238,6 @@ fn apply_weights(data: &Array2<f64>, weights: Option<Vec<f64>>) -> Result<Array2
         None => Ok(data.clone()),
     }
 }
-
 fn handle_missing_data(
     data: &Array2<f64>,
     na_action: Option<String>,
@@ -282,7 +259,6 @@ fn handle_missing_data(
                 .filter(|(_, row)| !row.iter().any(|x| x.is_nan()))
                 .map(|(i, _)| i)
                 .collect();
-
             if not_nan_rows.is_empty() {
                 Err(AaregError::InputError(
                     "All rows contain NaN values".to_string(),
@@ -298,7 +274,6 @@ fn handle_missing_data(
         None => Ok(data.clone()),
     }
 }
-
 fn prepare_data_for_regression(
     data: &Array2<f64>,
     response_name: &String,
@@ -309,11 +284,9 @@ fn prepare_data_for_regression(
     for (i, name) in variable_names.iter().enumerate() {
         name_to_index.insert(name.clone(), i);
     }
-
     let response_index = name_to_index.get(response_name).ok_or_else(|| {
         AaregError::FormulaError(format!("Response variable '{}' not found.", response_name))
     })?;
-
     let mut covariate_indices = Vec::new();
     for cov_name in covariate_names {
         let idx = name_to_index.get(cov_name).ok_or_else(|| {
@@ -321,13 +294,10 @@ fn prepare_data_for_regression(
         })?;
         covariate_indices.push(*idx);
     }
-
     let y = data.column(*response_index).to_owned();
     let x = data.select(Axis(1), &covariate_indices);
-
     Ok((y, x))
 }
-
 fn perform_aalen_regression(
     y: &Array1<f64>,
     x: &Array2<f64>,
@@ -335,19 +305,16 @@ fn perform_aalen_regression(
 ) -> Result<AaregResult, AaregError> {
     let n = y.len();
     let p = x.ncols();
-
     if n == 0 || p == 0 {
         return Err(AaregError::DataError(
             "Empty dataset or no covariates".to_string(),
         ));
     }
-
     if n < p {
         return Err(AaregError::DataError(
             "More covariates than observations".to_string(),
         ));
     }
-
     if let Some(nmin) = options.nmin
         && n < nmin
     {
@@ -356,32 +323,25 @@ fn perform_aalen_regression(
             n, nmin
         )));
     }
-
     let mut design_matrix = Array2::zeros((n, p + 1));
     design_matrix.column_mut(0).fill(1.0);
     for j in 0..p {
         design_matrix.column_mut(j + 1).assign(&x.column(j));
     }
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(std::cmp::Ordering::Equal));
-
     let sorted_times: Vec<f64> = indices.iter().map(|&i| y[i]).collect();
-
     let mut sorted_design = Array2::zeros((n, p + 1));
     for (new_idx, &old_idx) in indices.iter().enumerate() {
         for (j, col) in sorted_design.row_mut(new_idx).iter_mut().enumerate() {
             *col = design_matrix[[old_idx, j]];
         }
     }
-
     let mut cumulative_coefficients = vec![0.0; p + 1];
     let mut standard_errors = vec![0.0; p + 1];
     let mut p_values = vec![1.0; p + 1];
-
     let mut unique_times: Vec<f64> = Vec::new();
     let mut time_indices = Vec::new();
-
     for (i, &time) in sorted_times.iter().enumerate() {
         if unique_times.is_empty() {
             unique_times.push(time);
@@ -393,20 +353,15 @@ fn perform_aalen_regression(
             time_indices.push(i);
         }
     }
-
     let num_unique_times = unique_times.len();
-
     let mut warnings = Vec::new();
     let mut converged = true;
     let mut iterations = 0;
     let max_iterations = 100;
-
     for t_idx in 0..num_unique_times {
         let current_time = unique_times[t_idx];
         let event_idx = time_indices[t_idx];
-
         let at_risk: Vec<usize> = (event_idx..n).collect();
-
         if at_risk.len() < p + 1 {
             warnings.push(format!(
                 "Insufficient observations at risk at time {:.3}",
@@ -414,33 +369,25 @@ fn perform_aalen_regression(
             ));
             continue;
         }
-
         let at_risk_design = sorted_design.select(Axis(0), &at_risk);
-
         let xtx = at_risk_design.t().dot(&at_risk_design);
-
         let d_n = vec![1.0; at_risk.len()];
         let xt_dn = at_risk_design.t().dot(&Array1::from_vec(d_n.clone()));
-
         let beta_increment = xtx.solve_into(xt_dn).map_err(|_| {
             AaregError::CalculationError("Failed to solve linear system".to_string())
         })?;
-
         for (cum_coef, &inc) in cumulative_coefficients
             .iter_mut()
             .zip(beta_increment.iter())
         {
             *cum_coef += inc;
         }
-
         let residuals = at_risk_design.dot(&beta_increment) - &Array1::from_vec(d_n);
         let residual_variance = residuals.dot(&residuals) / (at_risk.len() as f64 - p as f64 - 1.0);
-
         for se in standard_errors.iter_mut() {
             let se_val: f64 = *se;
             *se = (se_val.powi(2) + residual_variance).sqrt();
         }
-
         iterations += 1;
         if iterations >= max_iterations {
             converged = false;
@@ -448,9 +395,7 @@ fn perform_aalen_regression(
             break;
         }
     }
-
     let coefficients = cumulative_coefficients.clone();
-
     for ((p_val, &coef), &se) in p_values
         .iter_mut()
         .zip(coefficients.iter())
@@ -461,7 +406,6 @@ fn perform_aalen_regression(
             *p_val = 2.0 * (1.0 - normal_cdf(z_stat.abs()));
         }
     }
-
     let confidence_intervals: Vec<ConfidenceInterval> = coefficients
         .iter()
         .zip(standard_errors.iter())
@@ -473,7 +417,6 @@ fn perform_aalen_regression(
             }
         })
         .collect();
-
     let mean_y = y.mean().unwrap_or(0.0);
     let total_ss: f64 = y.iter().map(|&yi| (yi - mean_y).powi(2)).sum();
     let predicted = design_matrix.dot(&Array1::from_vec(coefficients.clone()));
@@ -487,13 +430,11 @@ fn perform_aalen_regression(
     } else {
         0.0
     };
-
     let residuals: Vec<f64> = y
         .iter()
         .zip(predicted.iter())
         .map(|(&yi, &pi)| yi - pi)
         .collect();
-
     Ok(AaregResult {
         coefficients,
         standard_errors,
@@ -523,11 +464,9 @@ fn perform_aalen_regression(
         }),
     })
 }
-
 fn normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / 2.0_f64.sqrt()))
 }
-
 fn erf(x: f64) -> f64 {
     let a1 = 0.254829592;
     let a2 = -0.284496736;
@@ -535,16 +474,12 @@ fn erf(x: f64) -> f64 {
     let a4 = -1.453152027;
     let a5 = 1.061405429;
     let p = 0.3275911;
-
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
-
     let t = 1.0 / (1.0 + p * x);
     let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-
     sign * y
 }
-
 fn post_process_results(
     mut regression_result: AaregResult,
     options: &AaregOptions,

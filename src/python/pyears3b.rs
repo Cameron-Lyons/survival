@@ -2,7 +2,6 @@ use itertools::izip;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-
 #[allow(clippy::too_many_arguments)]
 pub fn pyears3b(
     n: usize,
@@ -38,7 +37,6 @@ pub fn pyears3b(
         let event = &y[n..2 * n];
         (&[] as &[f64], stop, event)
     };
-
     let mut ecut_slices = Vec::with_capacity(edim);
     let mut ecut_ptr = ecut;
     for j in 0..edim {
@@ -56,7 +54,6 @@ pub fn pyears3b(
             ecut_slices.push(&[]);
         }
     }
-
     let mut ocut_slices = Vec::with_capacity(odim);
     let mut ocut_ptr = ocut;
     for j in 0..odim {
@@ -68,7 +65,6 @@ pub fn pyears3b(
             ocut_slices.push(&[]);
         }
     }
-
     let mut eps = 0.0;
     for i in 0..n {
         let timeleft = if start.is_empty() {
@@ -92,13 +88,10 @@ pub fn pyears3b(
         }
     }
     eps *= 1e-8;
-
     *offtable = 0.0;
-
     for i in 0..n {
         let mut data = vec![0.0; odim];
         let mut data2 = vec![0.0; edim];
-
         for j in 0..odim {
             if ofac[j] == 1 || start.is_empty() {
                 data[j] = odata[j * n + i];
@@ -106,7 +99,6 @@ pub fn pyears3b(
                 data[j] = odata[j * n + i] + start[i];
             }
         }
-
         for j in 0..edim {
             if efac[j] == 1 || start.is_empty() {
                 data2[j] = edata[j * n + i];
@@ -114,55 +106,44 @@ pub fn pyears3b(
                 data2[j] = edata[j * n + i] + start[i];
             }
         }
-
         let mut timeleft = if start.is_empty() {
             stop[i]
         } else {
             stop[i] - start[i]
         };
-
         let mut cumhaz = 0.0;
         if timeleft <= eps && doevent == 1 {
             let (_, _idx, _, _) =
                 pystep(odim, &mut data.clone(), ofac, odims, &ocut_slices, timeleft);
         }
-
         while timeleft > eps {
             let mut data_current = data.clone();
             let (thiscell, idx, _idx2, _lwt) =
                 pystep(odim, &mut data_current, ofac, odims, &ocut_slices, timeleft);
-
             data.copy_from_slice(&data_current);
-
             pyears[idx] += thiscell * weight[i];
             pn[idx] += 1.0;
-
             if doevent == 1 && !event.is_empty() && event[i] > 0.0 {
                 pcount[idx] += weight[i];
             }
-
             let mut etime = thiscell;
             let mut hazard = 0.0;
             let mut temp = 0.0;
             let mut data2_current = data2.clone();
-
             while etime > 0.0 {
                 let (et2, edx, edx2, elwt) =
                     pystep(edim, &mut data2_current, efac, edims, &ecut_slices, etime);
-
                 let lambda = if elwt < 1.0 {
                     elwt * expect[edx] + (1.0 - elwt) * expect[edx2]
                 } else {
                     expect[edx]
                 };
-
                 if method == 0 {
                     let neg_hazard: f64 = -hazard;
                     let neg_lambda_et2: f64 = -lambda * et2;
                     temp += neg_hazard.exp() * (1.0 - neg_lambda_et2.exp()) / lambda;
                 }
                 hazard += lambda * et2;
-
                 for j in 0..edim {
                     if efac[j] != 1 {
                         data2_current[j] += et2;
@@ -170,7 +151,6 @@ pub fn pyears3b(
                 }
                 etime -= et2;
             }
-
             if method == 1 {
                 pexpect[idx] += hazard * weight[i];
             } else {
@@ -178,12 +158,10 @@ pub fn pyears3b(
                 pexpect[idx] += neg_cumhaz.exp() * temp * weight[i];
             }
             cumhaz += hazard;
-
             timeleft -= thiscell;
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {
     let mut index = 0;
@@ -194,7 +172,6 @@ fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {
     }
     index
 }
-
 fn pystep(
     edim: usize,
     data: &mut [f64],
@@ -206,7 +183,6 @@ fn pystep(
     let mut et2 = tmax;
     let mut wt = 1.0;
     let mut limiting_dim = None;
-
     for j in 0..edim {
         if efac[j] != 0 {
             continue;
@@ -214,7 +190,6 @@ fn pystep(
         let cuts = ecut[j];
         let current = data[j];
         let pos = cuts.partition_point(|&x| x <= current);
-
         if pos < cuts.len() {
             let next_cut = cuts[pos];
             let delta = (next_cut - current).max(0.0);
@@ -224,11 +199,9 @@ fn pystep(
             }
         }
     }
-
     et2 = et2.min(tmax);
     let mut indices_current = vec![0; edim];
     let mut indices_next = vec![0; edim];
-
     for j in 0..edim {
         if efac[j] == 0 {
             data[j] += et2;
@@ -241,10 +214,8 @@ fn pystep(
             indices_next[j] = indices_current[j];
         }
     }
-
     let indx = column_major_index(&indices_current, edims);
     let indx2 = column_major_index(&indices_next, edims);
-
     if let Some(dim) = limiting_dim {
         let current = data[dim] - et2;
         let cuts = ecut[dim];
@@ -263,10 +234,8 @@ fn pystep(
         };
         wt = wt.clamp(0.0, 1.0);
     }
-
     (et2, indx, indx2, wt)
 }
-
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn perform_pyears_calculation(
@@ -291,15 +260,12 @@ pub fn perform_pyears_calculation(
     if n == 0 {
         return Err(PyRuntimeError::new_err("No observations provided"));
     }
-
     let ny = ny.unwrap_or(2);
     let doevent = do_event.unwrap_or(1);
-
     let mut total_observed = 1;
     for &dim in &observed_dims {
         total_observed *= dim;
     }
-
     let _total_expected = {
         let mut result = 1;
         for &dim in &expected_dims {
@@ -307,13 +273,11 @@ pub fn perform_pyears_calculation(
         }
         result
     };
-
     let mut pyears = vec![0.0; total_observed];
     let mut pn = vec![0.0; total_observed];
     let mut pcount = vec![0.0; total_observed];
     let mut pexpect = vec![0.0; total_observed];
     let mut offtable = 0.0;
-
     pyears3b(
         n,
         ny,
@@ -338,7 +302,6 @@ pub fn perform_pyears_calculation(
         &mut pexpect,
         &mut offtable,
     );
-
     Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("pyears", pyears)?;
