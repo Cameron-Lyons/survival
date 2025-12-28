@@ -16,6 +16,12 @@ pub struct CohortData {
     subjects: Vec<Subject>,
 }
 
+impl Default for CohortData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[pymethods]
 impl CohortData {
     #[staticmethod]
