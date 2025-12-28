@@ -244,11 +244,6 @@ pub fn compare_rmst(
     tau: f64,
     confidence_level: f64,
 ) -> RMSTComparisonResult {
-    let mut time1 = Vec::new();
-    let mut status1 = Vec::new();
-    let mut time2 = Vec::new();
-    let mut status2 = Vec::new();
-
     let mut unique_groups: Vec<i32> = group.to_vec();
     unique_groups.sort();
     unique_groups.dedup();
@@ -272,6 +267,11 @@ pub fn compare_rmst(
     let g1 = unique_groups[0];
     let g2 = unique_groups[1];
 
+    let mut time1 = Vec::new();
+    let mut status1 = Vec::new();
+    let mut time2 = Vec::new();
+    let mut status2 = Vec::new();
+
     for i in 0..time.len() {
         if group[i] == g1 {
             time1.push(time[i]);
@@ -282,8 +282,10 @@ pub fn compare_rmst(
         }
     }
 
-    let rmst1 = compute_rmst(&time1, &status1, tau, confidence_level);
-    let rmst2 = compute_rmst(&time2, &status2, tau, confidence_level);
+    let (rmst1, rmst2) = rayon::join(
+        || compute_rmst(&time1, &status1, tau, confidence_level),
+        || compute_rmst(&time2, &status2, tau, confidence_level),
+    );
 
     let diff = rmst1.rmst - rmst2.rmst;
     let diff_var = rmst1.variance + rmst2.variance;

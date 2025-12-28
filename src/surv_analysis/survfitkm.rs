@@ -2,6 +2,7 @@ use crate::utilities::validation::{
     clamp_probability, validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -96,30 +97,39 @@ pub fn compute_survfitkm(
     let dtime = unique_times;
 
     let ntime = dtime.len();
+
+    let time_stats: Vec<(f64, f64)> = dtime
+        .par_iter()
+        .map(|&t| {
+            (0..time.len())
+                .into_par_iter()
+                .filter(|&j| (time[j] - t).abs() < 1e-9)
+                .map(|j| {
+                    if status[j] > 0.0 {
+                        (weights[j], 0.0)
+                    } else if position[j] & 2 != 0 {
+                        (0.0, 1.0)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                })
+                .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
+        })
+        .collect();
+
     let mut n_risk = vec![0.0; ntime];
     let mut n_event = vec![0.0; ntime];
     let mut n_censor = vec![0.0; ntime];
     let mut estimate = vec![1.0; ntime];
     let mut std_err = vec![0.0; ntime];
 
-    let mut current_risk = weights.iter().sum();
+    let mut current_risk: f64 = weights.iter().sum();
     let mut current_estimate = 1.0;
     let mut cumulative_variance = 0.0;
 
-    for (i, &t) in dtime.iter().enumerate().rev() {
-        let mut censored = 0.0;
-        let mut weighted_events = 0.0;
+    for i in (0..ntime).rev() {
+        let (weighted_events, censored) = time_stats[i];
         let weighted_risk = current_risk;
-
-        for (j, (&time_j, &status_j)) in time.iter().zip(status).enumerate() {
-            if (time_j - t).abs() < 1e-9 {
-                if status_j > 0.0 {
-                    weighted_events += weights[j];
-                } else if position[j] & 2 != 0 {
-                    censored += 1.0;
-                }
-            }
-        }
 
         if i < ntime - 1 {
             current_risk -= weighted_events + censored;
@@ -140,33 +150,22 @@ pub fn compute_survfitkm(
     }
 
     let z = 1.96;
-    let conf_lower: Vec<f64> = estimate
-        .iter()
-        .zip(std_err.iter())
+    let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = estimate
+        .par_iter()
+        .zip(std_err.par_iter())
         .map(|(&s, &se)| {
             if s <= 0.0 || s >= 1.0 || se <= 0.0 {
-                clamp_probability(s)
+                (clamp_probability(s), clamp_probability(s))
             } else {
                 let log_s = s.ln();
                 let log_se = se / s;
-                clamp_probability((log_s - z * log_se).exp())
+                (
+                    clamp_probability((log_s - z * log_se).exp()),
+                    clamp_probability((log_s + z * log_se).exp()),
+                )
             }
         })
-        .collect();
-
-    let conf_upper: Vec<f64> = estimate
-        .iter()
-        .zip(std_err.iter())
-        .map(|(&s, &se)| {
-            if s <= 0.0 || s >= 1.0 || se <= 0.0 {
-                clamp_probability(s)
-            } else {
-                let log_s = s.ln();
-                let log_se = se / s;
-                clamp_probability((log_s + z * log_se).exp())
-            }
-        })
-        .collect();
+        .unzip();
 
     SurvFitKMOutput {
         time: dtime,
