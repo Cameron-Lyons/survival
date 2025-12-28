@@ -43,3 +43,6 @@ Issues = "https://github.com/Cameron-Lyons/survival-rs/issues"
 features = ["pyo3/extension-module"]
 module-name = "survival"
 strip = true
+
+[tool.ruff.lint.per-file-ignores]
+"test/*.py" = ["S101", "PT017", "S110", "S603"]

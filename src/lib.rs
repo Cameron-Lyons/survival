@@ -12,12 +12,17 @@ mod tests;
 mod utilities;
 mod validation;
 pub use concordance::concordance::concordance as compute_concordance;
+use concordance::concordance::concordance as concordance_fn;
 pub use concordance::concordance1::perform_concordance1_calculation;
 pub use concordance::concordance3::perform_concordance3_calculation;
 pub use concordance::concordance5::perform_concordance_calculation;
 pub use core::coxcount1::{CoxCountOutput, coxcount1, coxcount2};
 pub use core::coxscho::schoenfeld_residuals;
 pub use core::pspline::PSpline;
+use python::cox_py_callback::cox_callback;
+use python::pyears3b::perform_pyears_calculation;
+use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
+use regression::aareg::aareg as aareg_function;
 pub use regression::aareg::{AaregOptions, aareg};
 pub use regression::agfit5::perform_cox_regression_frailty;
 pub use regression::blogit::LinkFunctionParams;
@@ -71,11 +76,6 @@ pub use validation::rmst::{
 pub use validation::tests::{
     ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test,
 };
-use concordance::concordance::concordance as concordance_fn;
-use python::cox_py_callback::cox_callback;
-use python::pyears3b::perform_pyears_calculation;
-use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
-use regression::aareg::aareg as aareg_function;
 use validation::tests::{score_test_py, wald_test_py};
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {

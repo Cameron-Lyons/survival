@@ -15,13 +15,12 @@ pub fn agscore2(
     let tstart = &y[0..n];
     let tstop = &y[n..2 * n];
     let event = &y[2 * n..3 * n];
-    let covar_matrix: ArrayView2<f64> =
-        ArrayView2::from_shape((nvar, n), covar).map_err(|e| {
-            format!(
-                "Failed to create covariate matrix view with shape ({}, {}): {}",
-                nvar, n, e
-            )
-        })?;
+    let covar_matrix: ArrayView2<f64> = ArrayView2::from_shape((nvar, n), covar).map_err(|e| {
+        format!(
+            "Failed to create covariate matrix view with shape ({}, {}): {}",
+            nvar, n, e
+        )
+    })?;
     let mut resid_matrix = Array2::zeros((nvar, n));
     let mut a = vec![0.0; nvar];
     let mut a2 = vec![0.0; nvar];

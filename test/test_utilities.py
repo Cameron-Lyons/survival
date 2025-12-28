@@ -13,11 +13,11 @@ try:
     y: list[float] = [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0]
     x: list[int] = [1, 1, 1, 1]
     istate: list[int] = [0, 0, 0, 0]
-    id: list[int] = [1, 1, 2, 2]
+    subject_id: list[int] = [1, 1, 2, 2]
     wt: list[float] = [1.0, 1.0, 1.0, 1.0]
     order: list[int] = [0, 1, 2, 3]
 
-    result = survival.collapse(y, x, istate, id, wt, order)
+    result = survival.collapse(y, x, istate, subject_id, wt, order)
     print(" collapse executed successfully")
     print(f"   Result type: {type(result)}")
     assert isinstance(result, dict), "Should return a dictionary"
