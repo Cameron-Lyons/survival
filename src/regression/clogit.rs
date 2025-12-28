@@ -8,6 +8,12 @@ pub struct ClogitDataSet {
     covariates: Vec<Vec<f64>>,
 }
 
+impl Default for ClogitDataSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[pymethods]
 impl ClogitDataSet {
     #[new]
