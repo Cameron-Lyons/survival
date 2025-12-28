@@ -127,11 +127,7 @@ pub struct SurvDiffParams {
     pub rho: f64,
 }
 
-pub fn compute_survdiff(
-    params: SurvDiffParams,
-    input: SurvDiffInput,
-    output: &mut SurvDiffOutput,
-) {
+pub fn compute_survdiff(params: SurvDiffParams, input: SurvDiffInput, output: &mut SurvDiffOutput) {
     let ntotal = params.nn as usize;
     let ngroup = params.nngroup as usize;
     let mut istart = 0;

@@ -176,7 +176,5 @@ pub fn perform_score_calculation(
 
     let nvar = covariates.len() / n;
 
-    Python::attach(|py| {
-        build_score_result(py, residuals, n, nvar, method).map(|d| d.into())
-    })
+    Python::attach(|py| build_score_result(py, residuals, n, nvar, method).map(|d| d.into()))
 }
