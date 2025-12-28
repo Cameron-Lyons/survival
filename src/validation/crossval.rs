@@ -1,7 +1,6 @@
 use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct CVResult {
@@ -14,7 +13,6 @@ pub struct CVResult {
     #[pyo3(get)]
     pub fold_coefficients: Vec<Vec<f64>>,
 }
-
 #[pymethods]
 impl CVResult {
     #[new]
@@ -32,13 +30,11 @@ impl CVResult {
         }
     }
 }
-
 pub struct CVConfig {
     pub n_folds: usize,
     pub shuffle: bool,
     pub seed: Option<u64>,
 }
-
 impl Default for CVConfig {
     fn default() -> Self {
         Self {
@@ -48,7 +44,6 @@ impl Default for CVConfig {
         }
     }
 }
-
 fn simple_shuffle(indices: &mut [usize], seed: u64) {
     let n = indices.len();
     for i in (1..n).rev() {
@@ -58,31 +53,24 @@ fn simple_shuffle(indices: &mut [usize], seed: u64) {
         indices.swap(i, j);
     }
 }
-
 fn create_folds(n: usize, n_folds: usize, shuffle: bool, seed: Option<u64>) -> Vec<Vec<usize>> {
     let mut indices: Vec<usize> = (0..n).collect();
-
     if shuffle {
         let seed = seed.unwrap_or(42);
         simple_shuffle(&mut indices, seed);
     }
-
     let fold_size = n / n_folds;
     let remainder = n % n_folds;
-
     let mut folds = Vec::with_capacity(n_folds);
     let mut start = 0;
-
     for i in 0..n_folds {
         let extra = if i < remainder { 1 } else { 0 };
         let end = start + fold_size + extra;
         folds.push(indices[start..end].to_vec());
         start = end;
     }
-
     folds
 }
-
 pub fn cv_cox(
     time: &[f64],
     status: &[i32],
@@ -92,15 +80,11 @@ pub fn cv_cox(
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
     use ndarray::Array1;
-
     let n = time.len();
     let nvar = covariates.nrows();
-
     let default_weights: Vec<f64> = vec![1.0; n];
     let weights = weights.unwrap_or(&default_weights);
-
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
-
     let results: Vec<(f64, Vec<f64>)> = (0..config.n_folds)
         .into_par_iter()
         .map(|fold_idx| {
@@ -111,48 +95,39 @@ pub fn cv_cox(
                 .filter(|(i, _)| *i != fold_idx)
                 .flat_map(|(_, f)| f.iter().copied())
                 .collect();
-
             let train_n = train_indices.len();
             let test_n = test_indices.len();
-
             let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
             let train_status: Vec<i32> = train_indices.iter().map(|&i| status[i]).collect();
             let train_weights: Vec<f64> = train_indices.iter().map(|&i| weights[i]).collect();
-
             let mut train_covariates = Array2::zeros((train_n, nvar));
             for (new_idx, &orig_idx) in train_indices.iter().enumerate() {
                 for var in 0..nvar {
                     train_covariates[[new_idx, var]] = covariates[[var, orig_idx]];
                 }
             }
-
             let mut sorted_indices: Vec<usize> = (0..train_n).collect();
             sorted_indices.sort_by(|&a, &b| {
                 train_time[b]
                     .partial_cmp(&train_time[a])
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-
             let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| train_time[i]).collect();
             let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| train_status[i]).collect();
             let sorted_weights: Vec<f64> =
                 sorted_indices.iter().map(|&i| train_weights[i]).collect();
-
             let mut sorted_covariates = Array2::zeros((train_n, nvar));
             for (new_idx, &orig_idx) in sorted_indices.iter().enumerate() {
                 for var in 0..nvar {
                     sorted_covariates[[new_idx, var]] = train_covariates[[orig_idx, var]];
                 }
             }
-
             let initial_beta: Vec<f64> = vec![0.0; nvar];
-
             let time_arr = Array1::from_vec(sorted_time);
             let status_arr = Array1::from_vec(sorted_status);
             let strata_arr = Array1::from_elem(train_n, 0i32);
             let offset_arr = Array1::from_elem(train_n, 0.0);
             let weights_arr = Array1::from_vec(sorted_weights);
-
             let beta = match CoxFit::new(
                 time_arr,
                 status_arr,
@@ -177,28 +152,23 @@ pub fn cv_cox(
                 }
                 Err(_) => vec![0.0; nvar],
             };
-
             let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
             let test_status: Vec<i32> = test_indices.iter().map(|&i| status[i]).collect();
-
             let mut test_covariates = Array2::zeros((nvar, test_n));
             for (new_idx, &orig_idx) in test_indices.iter().enumerate() {
                 for var in 0..nvar {
                     test_covariates[[var, new_idx]] = covariates[[var, orig_idx]];
                 }
             }
-
             let mut linear_predictor = vec![0.0; test_n];
             for i in 0..test_n {
                 for var in 0..nvar {
                     linear_predictor[i] += beta[var] * test_covariates[[var, i]];
                 }
             }
-
             let mut concordant = 0.0;
             let mut discordant = 0.0;
             let mut tied = 0.0;
-
             for i in 0..test_n {
                 if test_status[i] == 0 {
                     continue;
@@ -218,20 +188,16 @@ pub fn cv_cox(
                     }
                 }
             }
-
             let total = concordant + discordant + tied;
             let c_index = if total > 0.0 {
                 (concordant + 0.5 * tied) / total
             } else {
                 0.5
             };
-
             (c_index, beta)
         })
         .collect();
-
     let (fold_scores, fold_coefficients): (Vec<f64>, Vec<Vec<f64>>) = results.into_iter().unzip();
-
     let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
     let variance = fold_scores
         .iter()
@@ -239,7 +205,6 @@ pub fn cv_cox(
         .sum::<f64>()
         / (fold_scores.len() - 1) as f64;
     let std_score = variance.sqrt();
-
     Ok(CVResult {
         fold_scores,
         mean_score,
@@ -247,7 +212,6 @@ pub fn cv_cox(
         fold_coefficients,
     })
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, weights=None, n_folds=None, shuffle=None, seed=None))]
 pub fn cv_cox_concordance(
@@ -265,7 +229,6 @@ pub fn cv_cox_concordance(
     } else {
         0
     };
-
     let cov_array = if nvar > 0 {
         let flat: Vec<f64> = covariates.into_iter().flatten().collect();
         let temp = Array2::from_shape_vec((n, nvar), flat)
@@ -274,19 +237,15 @@ pub fn cv_cox_concordance(
     } else {
         Array2::zeros((0, n))
     };
-
     let config = CVConfig {
         n_folds: n_folds.unwrap_or(5),
         shuffle: shuffle.unwrap_or(true),
         seed,
     };
-
     let weights_ref = weights.as_deref();
-
     cv_cox(&time, &status, &cov_array, weights_ref, &config)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
 }
-
 pub fn cv_survreg(
     time: &[f64],
     status: &[f64],
@@ -295,17 +254,13 @@ pub fn cv_survreg(
     config: &CVConfig,
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::regression::survreg6::survreg;
-
     let n = time.len();
     let nvar = covariates.ncols();
-
     let cov_vecs: Vec<Vec<f64>> = (0..n)
         .map(|i| (0..nvar).map(|j| covariates[[j, i]]).collect())
         .collect();
-
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
     let dist = distribution.to_string();
-
     let results: Vec<(f64, Vec<f64>)> = (0..config.n_folds)
         .into_par_iter()
         .filter_map(|fold_idx| {
@@ -316,12 +271,10 @@ pub fn cv_survreg(
                 .filter(|(i, _)| *i != fold_idx)
                 .flat_map(|(_, f)| f.iter().copied())
                 .collect();
-
             let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
             let train_status: Vec<f64> = train_indices.iter().map(|&i| status[i]).collect();
             let train_covariates: Vec<Vec<f64>> =
                 train_indices.iter().map(|&i| cov_vecs[i].clone()).collect();
-
             let fit_result = survreg(
                 train_time,
                 train_status,
@@ -336,12 +289,10 @@ pub fn cv_survreg(
                 Some(1e-9),
             )
             .ok()?;
-
             let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
             let test_status: Vec<f64> = test_indices.iter().map(|&i| status[i]).collect();
             let test_covariates: Vec<Vec<f64>> =
                 test_indices.iter().map(|&i| cov_vecs[i].clone()).collect();
-
             let test_fit = survreg(
                 test_time,
                 test_status,
@@ -356,17 +307,13 @@ pub fn cv_survreg(
                 Some(1e-9),
             )
             .ok()?;
-
             Some((test_fit.log_likelihood, fit_result.coefficients))
         })
         .collect();
-
     if results.is_empty() {
         return Err("All CV folds failed".into());
     }
-
     let (fold_scores, fold_coefficients): (Vec<f64>, Vec<Vec<f64>>) = results.into_iter().unzip();
-
     let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
     let variance = fold_scores
         .iter()
@@ -374,7 +321,6 @@ pub fn cv_survreg(
         .sum::<f64>()
         / (fold_scores.len() - 1) as f64;
     let std_score = variance.sqrt();
-
     Ok(CVResult {
         fold_scores,
         mean_score,
@@ -382,7 +328,6 @@ pub fn cv_survreg(
         fold_coefficients,
     })
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, distribution=None, n_folds=None, shuffle=None, seed=None))]
 pub fn cv_survreg_loglik(
@@ -400,7 +345,6 @@ pub fn cv_survreg_loglik(
     } else {
         0
     };
-
     let cov_array = if nvar > 0 {
         let flat: Vec<f64> = covariates.into_iter().flatten().collect();
         let temp = Array2::from_shape_vec((n, nvar), flat)
@@ -409,15 +353,12 @@ pub fn cv_survreg_loglik(
     } else {
         Array2::zeros((0, n))
     };
-
     let config = CVConfig {
         n_folds: n_folds.unwrap_or(5),
         shuffle: shuffle.unwrap_or(true),
         seed,
     };
-
     let dist = distribution.unwrap_or("weibull");
-
     cv_survreg(&time, &status, &cov_array, dist, &config)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
 }

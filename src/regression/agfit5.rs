@@ -3,7 +3,6 @@ use ndarray_linalg::{Inverse, Solve};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-
 #[derive(Debug)]
 pub struct CoxResult {
     pub coefficients: Vec<f64>,
@@ -17,7 +16,6 @@ pub struct CoxResult {
     pub converged: bool,
     pub variance_matrix: Vec<Vec<f64>>,
 }
-
 struct CoxState {
     covar: Vec<Vec<f64>>,
     a: Vec<f64>,
@@ -29,7 +27,6 @@ struct CoxState {
     score: Vec<f64>,
     strata: Vec<i32>,
 }
-
 impl CoxState {
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -54,7 +51,6 @@ impl CoxState {
                 k += 1;
             }
         }
-
         let mut state = CoxState {
             covar,
             a: vec![0.0; 4 * (nvar + nfrail) + 5 * nused],
@@ -66,28 +62,23 @@ impl CoxState {
             score: vec![0.0; nused],
             strata: strata.to_vec(),
         };
-
         for i in 0..nvar {
             let mean = state.covar[i].iter().sum::<f64>() / nused as f64;
             for val in &mut state.covar[i] {
                 *val -= mean;
             }
         }
-
         state
     }
-
     #[allow(clippy::too_many_arguments)]
     fn update(&mut self, beta: &mut [f64], u: &mut [f64], imat: &mut [f64], loglik: &mut f64) {
         let nvar = beta.len();
         let nfrail = self.frail.len();
         let nvar2 = nvar + nfrail;
-
         self.a.iter_mut().for_each(|x| *x = 0.0);
         self.a2.iter_mut().for_each(|x| *x = 0.0);
         u.iter_mut().for_each(|x| *x = 0.0);
         imat.iter_mut().for_each(|x| *x = 0.0);
-
         for person in 0..self.weights.len() {
             let mut zbeta = self.offset[person];
             for (i, beta_val) in beta.iter().enumerate().take(nvar) {
@@ -98,15 +89,12 @@ impl CoxState {
             }
             self.score[person] = zbeta;
         }
-
         *loglik = 0.0;
         let mut istrat = 0;
         let _indx2 = 0;
-
         while istrat < self.strata.len() {
             let _denom = 0.0;
             let mut risk_sum = 0.0;
-
             for person in istrat..self.weights.len() {
                 if self.strata[person] != self.strata[istrat] {
                     break;
@@ -115,16 +103,13 @@ impl CoxState {
                 risk_sum += self.weights[person] * risk_score;
                 let _ = self.weights[person] * risk_score * risk_score;
             }
-
             for person in istrat..self.weights.len() {
                 if self.strata[person] != self.strata[istrat] {
                     break;
                 }
-
                 if self.event[person] == 1 {
                     *loglik += self.weights[person] * self.score[person];
                     *loglik -= self.weights[person] * risk_sum.ln();
-
                     for (i, u_elem) in u.iter_mut().enumerate().take(nvar) {
                         let mut temp = 0.0;
                         for j in person..self.weights.len() {
@@ -134,7 +119,6 @@ impl CoxState {
                         }
                         *u_elem += self.weights[person] * (self.covar[i][person] - temp / risk_sum);
                     }
-
                     if nfrail > 0 {
                         let mut temp = 0.0;
                         for j in person..self.weights.len() {
@@ -146,7 +130,6 @@ impl CoxState {
                         u[nvar] +=
                             self.weights[person] * (self.frail[person] as f64 - temp / risk_sum);
                     }
-
                     for i in 0..nvar {
                         for j in i..nvar {
                             let mut temp = 0.0;
@@ -164,7 +147,6 @@ impl CoxState {
                                     - (self.a[i] * self.a[j]) / (risk_sum * risk_sum));
                         }
                     }
-
                     if nfrail > 0 {
                         for i in 0..nvar {
                             let mut temp = 0.0;
@@ -181,7 +163,6 @@ impl CoxState {
                                 * (temp / risk_sum
                                     - (self.a[i] * self.a[nvar]) / (risk_sum * risk_sum));
                         }
-
                         let mut temp = 0.0;
                         for k in person..self.weights.len() {
                             if self.strata[k] == self.strata[person] {
@@ -196,7 +177,6 @@ impl CoxState {
                                 - (self.a[nvar] * self.a[nvar]) / (risk_sum * risk_sum));
                     }
                 }
-
                 if person < self.weights.len() - 1 && self.strata[person + 1] == self.strata[person]
                 {
                     let risk_score = self.score[person].exp();
@@ -204,14 +184,12 @@ impl CoxState {
                     let _ = self.weights[person] * risk_score * risk_score;
                 }
             }
-
             while istrat < self.strata.len() {
                 istrat += 1;
             }
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn perform_cox_regression_frailty(
@@ -235,7 +213,6 @@ pub fn perform_cox_regression_frailty(
     };
     perform_cox_regression(time, event, covariates, config)
 }
-
 #[allow(clippy::too_many_arguments)]
 pub fn agfit5(
     nused: usize,
@@ -256,33 +233,25 @@ pub fn agfit5(
     let mut state = CoxState::new(
         nused, nvar, nfrail, yy, covar, offset, weights, strata, sort, ptype, pdiag, frail,
     );
-
     let nvar2 = nvar + nfrail;
     let mut beta = vec![0.0; nvar2];
     let mut u = vec![0.0; nvar2];
     let mut imat = vec![0.0; nvar2 * nvar2];
     let mut loglik = 0.0;
-
     let mut iter = 0;
     let mut converged = false;
-
     while iter < max_iter {
         let old_loglik = loglik;
-
         state.update(&mut beta, &mut u, &mut imat, &mut loglik);
-
         if (loglik - old_loglik).abs() < eps {
             converged = true;
             break;
         }
-
         let mut imat_array = Array2::from_shape_vec((nvar2, nvar2), imat.clone())?;
         let u_array = Array1::from_vec(u.clone());
-
         for i in 0..nvar2 {
             imat_array[[i, i]] += 1e-8;
         }
-
         match imat_array.solve_into(u_array) {
             Ok(delta) => {
                 for i in 0..nvar2 {
@@ -293,15 +262,11 @@ pub fn agfit5(
                 return Err("Failed to solve linear system".into());
             }
         }
-
         iter += 1;
     }
-
     state.update(&mut beta, &mut u, &mut imat, &mut loglik);
-
     let mut variance_matrix = vec![vec![0.0; nvar2]; nvar2];
     let imat_array = Array2::from_shape_vec((nvar2, nvar2), imat)?;
-
     match imat_array.inv() {
         Ok(inv_imat) => {
             for i in 0..nvar2 {
@@ -314,9 +279,7 @@ pub fn agfit5(
             return Err("Failed to invert information matrix".into());
         }
     }
-
     let standard_errors: Vec<f64> = (0..nvar2).map(|i| variance_matrix[i][i].sqrt()).collect();
-
     let p_values: Vec<f64> = (0..nvar2)
         .map(|i| {
             if standard_errors[i] > 0.0 {
@@ -327,7 +290,6 @@ pub fn agfit5(
             }
         })
         .collect();
-
     let confidence_intervals: Vec<(f64, f64)> = (0..nvar2)
         .map(|i| {
             let se = standard_errors[i];
@@ -335,15 +297,12 @@ pub fn agfit5(
             (coef - 1.96 * se, coef + 1.96 * se)
         })
         .collect();
-
     let score: f64 = u.iter().map(|&x| x * x).sum();
-
     let wald_test: f64 = beta
         .iter()
         .zip(standard_errors.iter())
         .map(|(&coef, &se)| if se > 0.0 { (coef / se).powi(2) } else { 0.0 })
         .sum();
-
     Ok(CoxResult {
         coefficients: beta,
         standard_errors,
@@ -357,11 +316,9 @@ pub fn agfit5(
         variance_matrix,
     })
 }
-
 fn normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / 2.0_f64.sqrt()))
 }
-
 fn erf(x: f64) -> f64 {
     let a1 = 0.254829592;
     let a2 = -0.284496736;
@@ -369,16 +326,12 @@ fn erf(x: f64) -> f64 {
     let a4 = -1.453152027;
     let a5 = 1.061405429;
     let p = 0.3275911;
-
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
-
     let t = 1.0 / (1.0 + p * x);
     let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-
     sign * y
 }
-
 #[derive(Clone, Default)]
 struct CoxRegressionConfig {
     offset: Option<Vec<f64>>,
@@ -388,7 +341,6 @@ struct CoxRegressionConfig {
     max_iter: Option<i32>,
     eps: Option<f64>,
 }
-
 fn perform_cox_regression(
     time: Vec<f64>,
     event: Vec<i32>,

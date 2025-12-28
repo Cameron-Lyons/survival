@@ -1,17 +1,14 @@
 use pyo3::prelude::*;
-
 pub(crate) struct CoxSchoInput<'a> {
     pub y: &'a [f64],
     pub score: &'a [f64],
     pub strata: &'a [i32],
 }
-
 pub(crate) struct CoxSchoParams {
     pub nused: usize,
     pub nvar: usize,
     pub method: i32,
 }
-
 pub(crate) fn coxscho(
     params: CoxSchoParams,
     input: CoxSchoInput,
@@ -29,11 +26,9 @@ pub(crate) fn coxscho(
         work.len() >= 3 * params.nvar,
         "work array must be at least 3 * nvar in length"
     );
-
     let start = &input.y[0..params.nused];
     let stop = &input.y[params.nused..2 * params.nused];
     let event = &input.y[2 * params.nused..3 * params.nused];
-
     let mut covar_cols = Vec::with_capacity(params.nvar);
     let mut remaining = covar;
     for _ in 0..params.nvar {
@@ -41,28 +36,23 @@ pub(crate) fn coxscho(
         covar_cols.push(col);
         remaining = rest;
     }
-
     let (a, rest) = work.split_at_mut(params.nvar);
     let (a2, mean) = rest.split_at_mut(params.nvar);
-
     let mut person = 0;
     while person < params.nused {
         if event[person] != 1.0 {
             person += 1;
             continue;
         }
-
         let time = stop[person];
         let mut deaths = 0.0;
         let mut denom = 0.0;
         let mut efron_wt = 0.0;
-
         #[allow(clippy::needless_range_loop)]
         for i in 0..params.nvar {
             a[i] = 0.0;
             a2[i] = 0.0;
         }
-
         let mut k = person;
         while k < params.nused {
             if start[k] < time {
@@ -72,7 +62,6 @@ pub(crate) fn coxscho(
                 for i in 0..params.nvar {
                     a[i] += weight * covar_cols[i][k];
                 }
-
                 if stop[k] == time && event[k] == 1.0 {
                     deaths += 1.0;
                     efron_wt += weight;
@@ -82,13 +71,11 @@ pub(crate) fn coxscho(
                     }
                 }
             }
-
             if input.strata[k] == 1 {
                 break;
             }
             k += 1;
         }
-
         #[allow(clippy::needless_range_loop)]
         for i in 0..params.nvar {
             mean[i] = 0.0;
@@ -109,7 +96,6 @@ pub(crate) fn coxscho(
                 }
             }
         }
-
         let mut k = person;
         while k < params.nused && stop[k] == time {
             if event[k] == 1.0 {
@@ -126,7 +112,6 @@ pub(crate) fn coxscho(
         }
     }
 }
-
 #[pyfunction]
 #[pyo3(signature = (y, score, strata, covar, nvar, method=0))]
 pub fn schoenfeld_residuals(
@@ -138,7 +123,6 @@ pub fn schoenfeld_residuals(
     method: i32,
 ) -> PyResult<Vec<f64>> {
     let nused = score.len();
-
     if y.len() < 3 * nused {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "y array must have length >= 3 * n (start, stop, event)",
@@ -154,23 +138,18 @@ pub fn schoenfeld_residuals(
             "covar array must have length >= nvar * n",
         ));
     }
-
     let mut covar_copy = covar.clone();
     let mut work = vec![0.0; 3 * nvar];
-
     let params = CoxSchoParams {
         nused,
         nvar,
         method,
     };
-
     let input = CoxSchoInput {
         y: &y,
         score: &score,
         strata: &strata,
     };
-
     coxscho(params, input, &mut covar_copy, &mut work);
-
     Ok(covar_copy)
 }

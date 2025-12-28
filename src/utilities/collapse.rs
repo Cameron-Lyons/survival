@@ -1,6 +1,5 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-
 #[pyfunction]
 pub fn collapse(
     y: Vec<f64>,
@@ -16,26 +15,21 @@ pub fn collapse(
     let id_slice = &id;
     let wt_slice = &wt;
     let order_slice = &order;
-
     let n = id_slice.len();
     assert_eq!(y_slice.len(), 3 * n, "y must have 3 columns");
     assert_eq!(x_slice.len(), n, "x length mismatch");
     assert_eq!(istate_slice.len(), n, "istate length mismatch");
     assert_eq!(wt_slice.len(), n, "wt length mismatch");
     assert_eq!(order_slice.len(), n, "order length mismatch");
-
     let time1 = &y_slice[0..n];
     let time2 = &y_slice[n..2 * n];
     let status = &y_slice[2 * n..3 * n];
-
     let mut i1 = Vec::new();
     let mut i2 = Vec::new();
-
     let mut i = 0;
     while i < n {
         let start_pos = i;
         let mut k1 = order_slice[start_pos] as usize;
-
         let mut k = i + 1;
         while k < n {
             let k2 = order_slice[k] as usize;
@@ -52,17 +46,14 @@ pub fn collapse(
             i += 1;
             k += 1;
         }
-
         i1.push((k1 + 1) as i32);
         i2.push((order_slice[start_pos] as usize + 1) as i32);
         i += 1;
     }
-
     let mut matrix = Vec::new();
     for (start, end) in i2.iter().zip(i1.iter()) {
         matrix.push(vec![*start, *end]);
     }
-
     Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("matrix", matrix)?;

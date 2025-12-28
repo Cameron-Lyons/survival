@@ -6,7 +6,6 @@ pub(crate) struct PenaltyResult {
     pub loglik_penalty: f64,
     pub flags: Vec<i32>,
 }
-
 #[allow(non_snake_case)]
 pub(crate) struct MatrixBuffers<'a> {
     pub hmat: &'a mut [f64],
@@ -16,7 +15,6 @@ pub(crate) struct MatrixBuffers<'a> {
     pub u: &'a mut [f64],
     pub beta: &'a mut [f64],
 }
-
 pub(crate) struct PenaltyParams {
     pub whichcase: i32,
     pub nfrail: usize,
@@ -24,7 +22,6 @@ pub(crate) struct PenaltyParams {
     pub ptype: i32,
     pub pdiag: i32,
 }
-
 pub(crate) fn survpenal(
     params: PenaltyParams,
     matrices: MatrixBuffers,
@@ -33,15 +30,12 @@ pub(crate) fn survpenal(
     dense_penalty: impl Fn(&[f64]) -> PenaltyResult,
 ) {
     let matrix_cols = params.nvar + params.nfrail;
-
     if params.ptype == 1 || params.ptype == 3 {
         let sparse_coef = &matrices.beta[..params.nfrail];
         let result = sparse_penalty(sparse_coef);
         *penalty += result.loglik_penalty;
-
         if params.whichcase == 0 {
             matrices.beta[..params.nfrail].copy_from_slice(&result.new_coef);
-
             if result.flags.iter().any(|&f| f > 0) {
                 for i in 0..params.nfrail {
                     matrices.hdiag[i] = 1.0;
@@ -61,20 +55,16 @@ pub(crate) fn survpenal(
             }
         }
     }
-
     if params.ptype > 1 {
         let dense_coef = &matrices.beta[params.nfrail..(params.nfrail + params.nvar)];
         let result = dense_penalty(dense_coef);
         *penalty += result.loglik_penalty;
-
         if params.whichcase == 0 {
             matrices.beta[params.nfrail..(params.nfrail + params.nvar)]
                 .copy_from_slice(&result.new_coef);
-
             for (i, val) in result.first_deriv.iter().enumerate() {
                 matrices.u[params.nfrail + i] += val;
             }
-
             if params.pdiag == 0 {
                 for i in 0..params.nvar {
                     let idx = i * matrix_cols + (params.nfrail + i);
@@ -92,13 +82,11 @@ pub(crate) fn survpenal(
                     }
                 }
             }
-
             for i in 0..params.nvar {
                 if result.flags[i] == 1 {
                     matrices.u[params.nfrail + i] = 0.0;
                     let diag_idx = i * matrix_cols + (params.nfrail + i);
                     matrices.hmat[diag_idx] = 1.0;
-
                     for j in 0..i {
                         let off_idx = i * matrix_cols + (params.nfrail + j);
                         matrices.hmat[off_idx] = 0.0;

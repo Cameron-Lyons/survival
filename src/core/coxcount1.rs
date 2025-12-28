@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-
 #[pyclass]
 pub struct CoxCountOutput {
     #[pyo3(get)]
@@ -11,7 +10,6 @@ pub struct CoxCountOutput {
     #[pyo3(get)]
     pub status: Vec<i32>,
 }
-
 #[pyfunction]
 pub fn coxcount1(
     time: Vec<f64>,
@@ -26,7 +24,6 @@ pub fn coxcount1(
     let mut nrow = 0;
     let mut _stratastart = 0;
     let mut nrisk = 0;
-
     let mut i = 0;
     while i < n {
         if strata_slice[i] == 1 {
@@ -34,7 +31,6 @@ pub fn coxcount1(
             nrisk = 0;
         }
         nrisk += 1;
-
         if status_slice[i] == 1.0 {
             let dtime = time_slice[i];
             let mut j = i + 1;
@@ -52,20 +48,16 @@ pub fn coxcount1(
         }
         i += 1;
     }
-
     let mut time_vec = Vec::with_capacity(ntime);
     let mut nrisk_vec = Vec::with_capacity(ntime);
     let mut index_vec = Vec::with_capacity(nrow);
     let mut status_vec = Vec::with_capacity(nrow);
-
     let mut _stratastart = 0;
     let mut i = 0;
-
     while i < n {
         if strata_slice[i] == 1 {
             _stratastart = i;
         }
-
         if status_slice[i] == 1.0 {
             let dtime = time_slice[i];
             let mut j = i + 1;
@@ -76,24 +68,20 @@ pub fn coxcount1(
             {
                 j += 1;
             }
-
             for k in _stratastart..i {
                 status_vec.push(0);
                 index_vec.push((k + 1) as i32);
             }
-
             for k in i..j {
                 status_vec.push(1);
                 index_vec.push((k + 1) as i32);
             }
-
             time_vec.push(dtime);
             nrisk_vec.push((j - _stratastart) as i32);
             i = j - 1;
         }
         i += 1;
     }
-
     Python::attach(|py| {
         Py::new(
             py,
@@ -106,7 +94,6 @@ pub fn coxcount1(
         )
     })
 }
-
 #[pyfunction]
 pub fn coxcount2(
     time1: Vec<f64>,
@@ -128,25 +115,20 @@ pub fn coxcount2(
     let mut j = 0;
     let mut i = 0;
     let mut nrisk = 0;
-
     while i < n {
         let iptr = sort2_slice[i];
         if strata_slice[i] == 1 {
             nrisk = 0;
             j = i;
         }
-
         if status_slice[iptr] == 1.0 {
             let dtime = time2_slice[iptr];
-
             while j < i && time1_slice[sort1_slice[j]] >= dtime {
                 nrisk -= 1;
                 j += 1;
             }
-
             nrisk += 1;
             i += 1;
-
             while i < n
                 && strata_slice[i] == 0
                 && (time2_slice[sort2_slice[i]] - dtime).abs() < f64::EPSILON
@@ -154,7 +136,6 @@ pub fn coxcount2(
                 nrisk += 1;
                 i += 1;
             }
-
             nrow += nrisk;
             ntime += 1;
         } else {
@@ -162,17 +143,14 @@ pub fn coxcount2(
             i += 1;
         }
     }
-
     let mut time_vec = Vec::with_capacity(ntime);
     let mut nrisk_vec = Vec::with_capacity(ntime);
     let mut index_vec = Vec::with_capacity(nrow);
     let mut status_vec = Vec::with_capacity(nrow);
-
     let mut atrisk = vec![None; n];
     let mut who = Vec::with_capacity(n);
     let mut j = 0;
     let mut i = 0;
-
     while i < n {
         let iptr = sort2_slice[i];
         if strata_slice[i] == 1 {
@@ -180,7 +158,6 @@ pub fn coxcount2(
             who.clear();
             j = i;
         }
-
         if status_slice[iptr] == 0.0 {
             if atrisk[iptr].is_none() {
                 atrisk[iptr] = Some(who.len());
@@ -189,7 +166,6 @@ pub fn coxcount2(
             i += 1;
         } else {
             let dtime = time2_slice[iptr];
-
             while j < i {
                 let jptr = sort1_slice[j];
                 if time1_slice[jptr] >= dtime {
@@ -208,12 +184,10 @@ pub fn coxcount2(
                     break;
                 }
             }
-
             for &k in &who {
                 status_vec.push(0);
                 index_vec.push((k + 1) as i32);
             }
-
             let mut events = vec![iptr];
             i += 1;
             while i < n
@@ -223,22 +197,18 @@ pub fn coxcount2(
                 events.push(sort2_slice[i]);
                 i += 1;
             }
-
             for &k in &events {
                 status_vec.push(1);
                 index_vec.push((k + 1) as i32);
-
                 if atrisk[k].is_none() {
                     atrisk[k] = Some(who.len());
                     who.push(k);
                 }
             }
-
             time_vec.push(dtime);
             nrisk_vec.push(who.len() as i32);
         }
     }
-
     Python::attach(|py| {
         Py::new(
             py,

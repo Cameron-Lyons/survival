@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct TestResult {
@@ -12,7 +11,6 @@ pub struct TestResult {
     #[pyo3(get)]
     pub test_name: String,
 }
-
 #[pymethods]
 impl TestResult {
     #[new]
@@ -24,7 +22,6 @@ impl TestResult {
             test_name,
         }
     }
-
     fn __repr__(&self) -> String {
         format!(
             "{}(statistic={:.4}, df={}, p_value={:.4})",
@@ -32,21 +29,16 @@ impl TestResult {
         )
     }
 }
-
 fn chi2_sf(x: f64, df: usize) -> f64 {
     if x <= 0.0 || df == 0 {
         return 1.0;
     }
-
     let k = df as f64 / 2.0;
     let x_half = x / 2.0;
-
     let ln_gamma_k = ln_gamma(k);
     let regularized_gamma = lower_incomplete_gamma(k, x_half) / ln_gamma_k.exp();
-
     1.0 - regularized_gamma
 }
-
 fn ln_gamma(x: f64) -> f64 {
     let coeffs = [
         76.18009172947146,
@@ -56,38 +48,30 @@ fn ln_gamma(x: f64) -> f64 {
         0.1208650973866179e-2,
         -0.5395239384953e-5,
     ];
-
     let y = x;
     let tmp = x + 5.5;
     let tmp = tmp - (x + 0.5) * tmp.ln();
-
     let mut ser = 1.000000000190015;
     for (j, &c) in coeffs.iter().enumerate() {
         ser += c / (y + 1.0 + j as f64);
     }
-
     -tmp + (2.5066282746310005 * ser / x).ln()
 }
-
 fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
     if x < 0.0 || a <= 0.0 {
         return 0.0;
     }
-
     if x < a + 1.0 {
         gamma_series(a, x)
     } else {
         ln_gamma(a).exp() - gamma_continued_fraction(a, x)
     }
 }
-
 fn gamma_series(a: f64, x: f64) -> f64 {
     let eps = 1e-10;
     let max_iter = 100;
-
     let mut sum = 1.0 / a;
     let mut term = sum;
-
     for n in 1..max_iter {
         term *= x / (a + n as f64);
         sum += term;
@@ -95,19 +79,15 @@ fn gamma_series(a: f64, x: f64) -> f64 {
             break;
         }
     }
-
     sum * (-x + a * x.ln() - ln_gamma(a)).exp()
 }
-
 fn gamma_continued_fraction(a: f64, x: f64) -> f64 {
     let eps = 1e-10;
     let max_iter = 100;
-
     let mut b = x + 1.0 - a;
     let mut c = 1.0 / 1e-30;
     let mut d = 1.0 / b;
     let mut h = d;
-
     for i in 1..max_iter {
         let an = -(i as f64) * (i as f64 - a);
         b += 2.0;
@@ -126,14 +106,11 @@ fn gamma_continued_fraction(a: f64, x: f64) -> f64 {
             break;
         }
     }
-
     (-x + a * x.ln() - ln_gamma(a)).exp() * h
 }
-
 pub fn likelihood_ratio_test(loglik_full: f64, loglik_reduced: f64, df: usize) -> TestResult {
     let statistic = 2.0 * (loglik_full - loglik_reduced);
     let p_value = chi2_sf(statistic, df);
-
     TestResult {
         statistic,
         df,
@@ -141,20 +118,16 @@ pub fn likelihood_ratio_test(loglik_full: f64, loglik_reduced: f64, df: usize) -
         test_name: "LikelihoodRatioTest".to_string(),
     }
 }
-
 pub fn wald_test(coefficients: &[f64], std_errors: &[f64]) -> TestResult {
     let n = coefficients.len();
     let mut statistic = 0.0;
-
     for i in 0..n {
         if std_errors[i] > 0.0 {
             let z = coefficients[i] / std_errors[i];
             statistic += z * z;
         }
     }
-
     let p_value = chi2_sf(statistic, n);
-
     TestResult {
         statistic,
         df: n,
@@ -162,21 +135,16 @@ pub fn wald_test(coefficients: &[f64], std_errors: &[f64]) -> TestResult {
         test_name: "WaldTest".to_string(),
     }
 }
-
 pub fn score_test(score_vector: &[f64], information_matrix: &[Vec<f64>]) -> TestResult {
     let n = score_vector.len();
-
     let inv_info = invert_matrix(information_matrix);
-
     let mut statistic = 0.0;
     for i in 0..n {
         for j in 0..n {
             statistic += score_vector[i] * inv_info[i][j] * score_vector[j];
         }
     }
-
     let p_value = chi2_sf(statistic, n);
-
     TestResult {
         statistic,
         df: n,
@@ -184,19 +152,16 @@ pub fn score_test(score_vector: &[f64], information_matrix: &[Vec<f64>]) -> Test
         test_name: "ScoreTest".to_string(),
     }
 }
-
 fn invert_matrix(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let n = matrix.len();
     if n == 0 {
         return vec![];
     }
-
     let mut aug: Vec<Vec<f64>> = matrix.to_vec();
     for i in 0..n {
         aug[i].extend(vec![0.0; n]);
         aug[i][n + i] = 1.0;
     }
-
     for i in 0..n {
         let mut max_row = i;
         for k in (i + 1)..n {
@@ -205,16 +170,13 @@ fn invert_matrix(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
             }
         }
         aug.swap(i, max_row);
-
         if aug[i][i].abs() < 1e-10 {
             continue;
         }
-
         let pivot = aug[i][i];
         for val in aug[i].iter_mut().take(2 * n) {
             *val /= pivot;
         }
-
         for k in 0..n {
             if k != i {
                 let factor = aug[k][i];
@@ -225,15 +187,12 @@ fn invert_matrix(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
             }
         }
     }
-
     aug.iter().map(|row| row[n..].to_vec()).collect()
 }
-
 #[pyfunction]
 pub fn lrt_test(loglik_full: f64, loglik_reduced: f64, df: usize) -> PyResult<TestResult> {
     Ok(likelihood_ratio_test(loglik_full, loglik_reduced, df))
 }
-
 #[pyfunction]
 pub fn wald_test_py(coefficients: Vec<f64>, std_errors: Vec<f64>) -> PyResult<TestResult> {
     if coefficients.len() != std_errors.len() {
@@ -243,7 +202,6 @@ pub fn wald_test_py(coefficients: Vec<f64>, std_errors: Vec<f64>) -> PyResult<Te
     }
     Ok(wald_test(&coefficients, &std_errors))
 }
-
 #[pyfunction]
 pub fn score_test_py(
     score_vector: Vec<f64>,
@@ -256,7 +214,6 @@ pub fn score_test_py(
     }
     Ok(score_test(&score_vector, &information_matrix))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct ProportionalityTest {
@@ -273,7 +230,6 @@ pub struct ProportionalityTest {
     #[pyo3(get)]
     pub global_p_value: f64,
 }
-
 #[pymethods]
 impl ProportionalityTest {
     #[new]
@@ -295,7 +251,6 @@ impl ProportionalityTest {
         }
     }
 }
-
 pub fn proportional_hazards_test(
     schoenfeld_residuals: &[Vec<f64>],
     event_times: &[f64],
@@ -307,7 +262,6 @@ pub fn proportional_hazards_test(
     } else {
         0
     };
-
     if n_events == 0 || n_vars == 0 {
         return ProportionalityTest {
             variable_names: vec![],
@@ -318,20 +272,16 @@ pub fn proportional_hazards_test(
             global_p_value: 1.0,
         };
     }
-
     let mut sorted_indices: Vec<usize> = (0..n_events).collect();
     sorted_indices.sort_by(|&a, &b| {
         event_times[a]
             .partial_cmp(&event_times[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let ranks: Vec<f64> = (1..=n_events).map(|r| r as f64).collect();
-
     let mut chi2_values = Vec::with_capacity(n_vars);
     let mut p_values = Vec::with_capacity(n_vars);
     let mut global_chi2 = 0.0;
-
     for var in 0..n_vars {
         let residuals: Vec<f64> = sorted_indices
             .iter()
@@ -341,14 +291,11 @@ pub fn proportional_hazards_test(
                     .and_then(|row| row.get(var).copied())
             })
             .collect();
-
         let mean_rank = (n_events as f64 + 1.0) / 2.0;
         let mean_resid: f64 = residuals.iter().sum::<f64>() / n_events as f64;
-
         let mut cov = 0.0;
         let mut var_rank = 0.0;
         let mut var_resid = 0.0;
-
         for i in 0..n_events {
             let r_diff = ranks[i] - mean_rank;
             let resid_diff = residuals[i] - mean_resid;
@@ -356,23 +303,18 @@ pub fn proportional_hazards_test(
             var_rank += r_diff * r_diff;
             var_resid += resid_diff * resid_diff;
         }
-
         let correlation = if var_rank > 0.0 && var_resid > 0.0 {
             cov / (var_rank.sqrt() * var_resid.sqrt())
         } else {
             0.0
         };
-
         let chi2 = correlation * correlation * (n_events - 2) as f64;
         let p_value = chi2_sf(chi2, 1);
-
         chi2_values.push(chi2);
         p_values.push(p_value);
         global_chi2 += chi2;
     }
-
     let global_p_value = chi2_sf(global_chi2, n_vars);
-
     ProportionalityTest {
         variable_names: (0..n_vars).map(|i| format!("var{}", i)).collect(),
         chi2_values,
@@ -382,7 +324,6 @@ pub fn proportional_hazards_test(
         global_p_value,
     }
 }
-
 #[pyfunction]
 pub fn ph_test(
     schoenfeld_residuals: Vec<Vec<f64>>,

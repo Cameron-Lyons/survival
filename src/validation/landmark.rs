@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct LandmarkResult {
@@ -16,7 +15,6 @@ pub struct LandmarkResult {
     #[pyo3(get)]
     pub original_indices: Vec<usize>,
 }
-
 #[pymethods]
 impl LandmarkResult {
     #[new]
@@ -38,14 +36,12 @@ impl LandmarkResult {
         }
     }
 }
-
 pub fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> LandmarkResult {
     let n = time.len();
     let mut new_time = Vec::new();
     let mut new_status = Vec::new();
     let mut original_indices = Vec::new();
     let mut n_excluded = 0usize;
-
     for i in 0..n {
         if time[i] > landmark_time {
             new_time.push(time[i] - landmark_time);
@@ -55,9 +51,7 @@ pub fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> Lan
             n_excluded += 1;
         }
     }
-
     let n_at_risk = new_time.len();
-
     LandmarkResult {
         landmark_time,
         n_at_risk,
@@ -67,7 +61,6 @@ pub fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> Lan
         original_indices,
     }
 }
-
 #[pyfunction]
 pub fn landmark_analysis(
     time: Vec<f64>,
@@ -76,7 +69,6 @@ pub fn landmark_analysis(
 ) -> PyResult<LandmarkResult> {
     Ok(compute_landmark(&time, &status, landmark_time))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct ConditionalSurvivalResult {
@@ -93,7 +85,6 @@ pub struct ConditionalSurvivalResult {
     #[pyo3(get)]
     pub n_at_risk: usize,
 }
-
 #[pymethods]
 impl ConditionalSurvivalResult {
     #[new]
@@ -115,7 +106,6 @@ impl ConditionalSurvivalResult {
         }
     }
 }
-
 pub fn compute_conditional_survival(
     time: &[f64],
     status: &[i32],
@@ -134,14 +124,12 @@ pub fn compute_conditional_survival(
             n_at_risk: 0,
         };
     }
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
         time[a]
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let mut surv_given = 1.0;
     let mut surv_target = 1.0;
     let mut var_given = 0.0;
@@ -149,13 +137,10 @@ pub fn compute_conditional_survival(
     let mut total_at_risk = n as f64;
     let mut n_at_given = 0usize;
     let mut i = 0;
-
     while i < n {
         let current_time = time[indices[i]];
-
         let mut events = 0.0;
         let mut removed = 0.0;
-
         while i < n && time[indices[i]] == current_time {
             removed += 1.0;
             if status[indices[i]] == 1 {
@@ -163,17 +148,14 @@ pub fn compute_conditional_survival(
             }
             i += 1;
         }
-
         if events > 0.0 && total_at_risk > 0.0 {
             let hazard = events / total_at_risk;
-
             if current_time <= given_time {
                 surv_given *= 1.0 - hazard;
                 if total_at_risk > events {
                     var_given += events / (total_at_risk * (total_at_risk - events));
                 }
             }
-
             if current_time <= target_time {
                 surv_target *= 1.0 - hazard;
                 if total_at_risk > events {
@@ -181,20 +163,16 @@ pub fn compute_conditional_survival(
                 }
             }
         }
-
         if current_time <= given_time {
             n_at_given = (total_at_risk - removed) as usize;
         }
-
         total_at_risk -= removed;
     }
-
     let conditional = if surv_given > 0.0 {
         surv_target / surv_given
     } else {
         0.0
     };
-
     let z = if confidence_level >= 0.99 {
         2.576
     } else if confidence_level >= 0.95 {
@@ -204,17 +182,14 @@ pub fn compute_conditional_survival(
     } else {
         1.28
     };
-
     let var_conditional = if surv_given > 0.0 {
         conditional * conditional * (var_target - var_given).abs()
     } else {
         0.0
     };
     let se = var_conditional.sqrt();
-
     let ci_lower = (conditional - z * se).clamp(0.0, 1.0);
     let ci_upper = (conditional + z * se).clamp(0.0, 1.0);
-
     ConditionalSurvivalResult {
         given_time,
         target_time,
@@ -224,7 +199,6 @@ pub fn compute_conditional_survival(
         n_at_risk: n_at_given,
     }
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, given_time, target_time, confidence_level=None))]
 pub fn conditional_survival(
@@ -243,7 +217,6 @@ pub fn conditional_survival(
         conf,
     ))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct HazardRatioResult {
@@ -260,7 +233,6 @@ pub struct HazardRatioResult {
     #[pyo3(get)]
     pub p_value: f64,
 }
-
 #[pymethods]
 impl HazardRatioResult {
     #[new]
@@ -282,11 +254,9 @@ impl HazardRatioResult {
         }
     }
 }
-
 fn norm_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / std::f64::consts::SQRT_2))
 }
-
 fn erf(x: f64) -> f64 {
     let a1 = 0.254829592;
     let a2 = -0.284496736;
@@ -294,14 +264,12 @@ fn erf(x: f64) -> f64 {
     let a4 = -1.453152027;
     let a5 = 1.061405429;
     let p = 0.3275911;
-
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
     let t = 1.0 / (1.0 + p * x);
     let y = 1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * (-x * x).exp();
     sign * y
 }
-
 pub fn compute_hazard_ratio(
     time: &[f64],
     status: &[i32],
@@ -319,11 +287,9 @@ pub fn compute_hazard_ratio(
             p_value: 1.0,
         };
     }
-
     let mut unique_groups: Vec<i32> = group.to_vec();
     unique_groups.sort();
     unique_groups.dedup();
-
     if unique_groups.len() < 2 {
         return HazardRatioResult {
             hazard_ratio: 1.0,
@@ -334,17 +300,14 @@ pub fn compute_hazard_ratio(
             p_value: 1.0,
         };
     }
-
     let g1 = unique_groups[0];
     let g2 = unique_groups[1];
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
         time[a]
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let mut n1_at_risk = 0.0;
     let mut n2_at_risk = 0.0;
     for &grp in group {
@@ -354,19 +317,15 @@ pub fn compute_hazard_ratio(
             n2_at_risk += 1.0;
         }
     }
-
     let mut sum_o_e: f64 = 0.0;
     let mut sum_var: f64 = 0.0;
-
     let mut i = 0;
     while i < n {
         let current_time = time[indices[i]];
-
         let mut d1 = 0.0;
         let mut d2 = 0.0;
         let mut r1 = 0.0;
         let mut r2 = 0.0;
-
         while i < n && time[indices[i]] == current_time {
             let idx = indices[i];
             if group[idx] == g1 {
@@ -382,35 +341,28 @@ pub fn compute_hazard_ratio(
             }
             i += 1;
         }
-
         let d = d1 + d2;
         let y = n1_at_risk + n2_at_risk;
-
         if d > 0.0 && y > 1.0 {
             let e1 = d * n1_at_risk / y;
             sum_o_e += d1 - e1;
-
             let v = d * n1_at_risk * n2_at_risk * (y - d) / (y * y * (y - 1.0));
             sum_var += v;
         }
-
         n1_at_risk -= r1;
         n2_at_risk -= r2;
     }
-
     let log_hr: f64 = if sum_var > 0.0 {
         sum_o_e / sum_var
     } else {
         0.0
     };
     let hazard_ratio = log_hr.exp();
-
     let se_log_hr: f64 = if sum_var > 0.0 {
         1.0 / sum_var.sqrt()
     } else {
         0.0
     };
-
     let z: f64 = if confidence_level >= 0.99 {
         2.576
     } else if confidence_level >= 0.95 {
@@ -420,17 +372,14 @@ pub fn compute_hazard_ratio(
     } else {
         1.28
     };
-
     let ci_lower = (log_hr - z * se_log_hr).exp();
     let ci_upper = (log_hr + z * se_log_hr).exp();
-
     let z_statistic: f64 = if se_log_hr > 0.0 {
         log_hr / se_log_hr
     } else {
         0.0
     };
     let p_value = 2.0 * (1.0 - norm_cdf(z_statistic.abs()));
-
     HazardRatioResult {
         hazard_ratio,
         ci_lower,
@@ -440,7 +389,6 @@ pub fn compute_hazard_ratio(
         p_value,
     }
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, group, confidence_level=None))]
 pub fn hazard_ratio(
@@ -452,7 +400,6 @@ pub fn hazard_ratio(
     let conf = confidence_level.unwrap_or(0.95);
     Ok(compute_hazard_ratio(&time, &status, &group, conf))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct SurvivalAtTimeResult {
@@ -469,7 +416,6 @@ pub struct SurvivalAtTimeResult {
     #[pyo3(get)]
     pub n_events: usize,
 }
-
 #[pymethods]
 impl SurvivalAtTimeResult {
     #[new]
@@ -491,7 +437,6 @@ impl SurvivalAtTimeResult {
         }
     }
 }
-
 pub fn compute_survival_at_times(
     time: &[f64],
     status: &[i32],
@@ -512,32 +457,26 @@ pub fn compute_survival_at_times(
             })
             .collect();
     }
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
         time[a]
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let mut event_times: Vec<f64> = Vec::new();
     let mut survival_vals: Vec<f64> = Vec::new();
     let mut var_vals: Vec<f64> = Vec::new();
     let mut n_risk_vals: Vec<usize> = Vec::new();
     let mut cum_events: Vec<usize> = Vec::new();
-
     let mut surv = 1.0;
     let mut var_sum = 0.0;
     let mut total_at_risk = n as f64;
     let mut total_events = 0usize;
     let mut i = 0;
-
     while i < n {
         let current_time = time[indices[i]];
-
         let mut events = 0.0;
         let mut removed = 0.0;
-
         while i < n && time[indices[i]] == current_time {
             removed += 1.0;
             if status[indices[i]] == 1 {
@@ -546,23 +485,19 @@ pub fn compute_survival_at_times(
             }
             i += 1;
         }
-
         if events > 0.0 && total_at_risk > 0.0 {
             surv *= 1.0 - events / total_at_risk;
             if total_at_risk > events {
                 var_sum += events / (total_at_risk * (total_at_risk - events));
             }
-
             event_times.push(current_time);
             survival_vals.push(surv);
             var_vals.push(surv * surv * var_sum);
             n_risk_vals.push(total_at_risk as usize);
             cum_events.push(total_events);
         }
-
         total_at_risk -= removed;
     }
-
     let z = if confidence_level >= 0.99 {
         2.576
     } else if confidence_level >= 0.95 {
@@ -572,9 +507,7 @@ pub fn compute_survival_at_times(
     } else {
         1.28
     };
-
     let mut results = Vec::with_capacity(eval_times.len());
-
     for &t in eval_times {
         let (survival, var, n_risk, n_ev) = if event_times.is_empty() || t < event_times[0] {
             (1.0, 0.0, n, 0)
@@ -591,11 +524,9 @@ pub fn compute_survival_at_times(
                 )
             }
         };
-
         let se = var.sqrt();
         let ci_lower = (survival - z * se).clamp(0.0, 1.0);
         let ci_upper = (survival + z * se).clamp(0.0, 1.0);
-
         results.push(SurvivalAtTimeResult {
             time: t,
             survival,
@@ -605,10 +536,8 @@ pub fn compute_survival_at_times(
             n_events: n_ev,
         });
     }
-
     results
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, eval_times, confidence_level=None))]
 pub fn survival_at_times(
@@ -620,7 +549,6 @@ pub fn survival_at_times(
     let conf = confidence_level.unwrap_or(0.95);
     Ok(compute_survival_at_times(&time, &status, &eval_times, conf))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct LifeTableResult {
@@ -643,7 +571,6 @@ pub struct LifeTableResult {
     #[pyo3(get)]
     pub se_survival: Vec<f64>,
 }
-
 #[pymethods]
 impl LifeTableResult {
     #[new]
@@ -672,11 +599,9 @@ impl LifeTableResult {
         }
     }
 }
-
 pub fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeTableResult {
     let n = time.len();
     let n_intervals = breaks.len().saturating_sub(1);
-
     if n == 0 || n_intervals == 0 {
         return LifeTableResult {
             interval_start: vec![],
@@ -690,17 +615,14 @@ pub fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeT
             se_survival: vec![],
         };
     }
-
     let mut interval_start = Vec::with_capacity(n_intervals);
     let mut interval_end = Vec::with_capacity(n_intervals);
     let mut n_deaths = vec![0.0; n_intervals];
     let mut n_censored = vec![0.0; n_intervals];
-
     for i in 0..n_intervals {
         interval_start.push(breaks[i]);
         interval_end.push(breaks[i + 1]);
     }
-
     for i in 0..n {
         let t = time[i];
         for j in 0..n_intervals {
@@ -714,18 +636,15 @@ pub fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeT
             }
         }
     }
-
     let mut n_at_risk = Vec::with_capacity(n_intervals);
     let mut remaining = n as f64;
     for j in 0..n_intervals {
         n_at_risk.push(remaining);
         remaining -= n_deaths[j] + n_censored[j];
     }
-
     let n_effective: Vec<f64> = (0..n_intervals)
         .map(|j| n_at_risk[j] - n_censored[j] / 2.0)
         .collect();
-
     let hazard: Vec<f64> = (0..n_intervals)
         .map(|j| {
             if n_effective[j] > 0.0 {
@@ -735,22 +654,18 @@ pub fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeT
             }
         })
         .collect();
-
     let mut survival = Vec::with_capacity(n_intervals);
     let mut se_survival = Vec::with_capacity(n_intervals);
     let mut surv = 1.0;
     let mut var_sum = 0.0;
-
     for j in 0..n_intervals {
         surv *= 1.0 - hazard[j];
         survival.push(surv);
-
         if n_effective[j] > 0.0 && n_effective[j] > n_deaths[j] {
             var_sum += n_deaths[j] / (n_effective[j] * (n_effective[j] - n_deaths[j]));
         }
         se_survival.push(surv * var_sum.sqrt());
     }
-
     LifeTableResult {
         interval_start,
         interval_end,
@@ -763,7 +678,6 @@ pub fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeT
         se_survival,
     }
 }
-
 #[pyfunction]
 pub fn life_table(time: Vec<f64>, status: Vec<i32>, breaks: Vec<f64>) -> PyResult<LifeTableResult> {
     Ok(compute_life_table(&time, &status, &breaks))

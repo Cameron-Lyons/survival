@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-
 #[pyfunction]
 pub fn norisk(
     time1: Vec<f64>,
@@ -21,17 +20,14 @@ pub fn norisk(
     assert_eq!(sort1_slice.len(), n);
     assert_eq!(sort2_slice.len(), n);
     assert!(strata_slice.iter().all(|&s| s >= 0 && s <= n as i32));
-
     let mut notused = vec![0; n];
     let mut ndeath = 0;
     let mut istrat = 0;
     let mut j = 0;
-
     #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         let p2 = sort2_slice[i] as usize;
         let dtime = time2_slice[p2];
-
         if i == strata_slice.get(istrat).copied().unwrap_or(n as i32) as usize {
             while j < i {
                 let p1 = sort1_slice[j] as usize;
@@ -47,19 +43,16 @@ pub fn norisk(
                 j += 1;
             }
         }
-
         ndeath += status_slice[p2];
         if j < n {
             let p1 = sort1_slice[j] as usize;
             notused[p1] = ndeath;
         }
     }
-
     while j < n {
         let p1 = sort1_slice[j] as usize;
         notused[p1] = if ndeath > notused[p1] { 1 } else { 0 };
         j += 1;
     }
-
     Ok(notused)
 }

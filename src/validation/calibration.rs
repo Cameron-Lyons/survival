@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct CalibrationResult {
@@ -20,7 +19,6 @@ pub struct CalibrationResult {
     #[pyo3(get)]
     pub calibration_intercept: f64,
 }
-
 #[pymethods]
 impl CalibrationResult {
     #[new]
@@ -47,21 +45,18 @@ impl CalibrationResult {
         }
     }
 }
-
+#[inline]
 fn chi2_sf(x: f64, df: usize) -> f64 {
     if x <= 0.0 || df == 0 {
         return 1.0;
     }
-
     let k = df as f64 / 2.0;
     let x_half = x / 2.0;
-
     let ln_gamma_k = ln_gamma(k);
     let regularized_gamma = lower_incomplete_gamma(k, x_half) / ln_gamma_k.exp();
-
     1.0 - regularized_gamma
 }
-
+#[inline]
 fn ln_gamma(x: f64) -> f64 {
     let coeffs = [
         76.18009172947146,
@@ -71,38 +66,32 @@ fn ln_gamma(x: f64) -> f64 {
         0.1208650973866179e-2,
         -0.5395239384953e-5,
     ];
-
     let y = x;
     let tmp = x + 5.5;
     let tmp = tmp - (x + 0.5) * tmp.ln();
-
     let mut ser = 1.000000000190015;
     for (j, &c) in coeffs.iter().enumerate() {
         ser += c / (y + 1.0 + j as f64);
     }
-
     -tmp + (2.5066282746310005 * ser / x).ln()
 }
-
+#[inline]
 fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
     if x < 0.0 || a <= 0.0 {
         return 0.0;
     }
-
     if x < a + 1.0 {
         gamma_series(a, x)
     } else {
         ln_gamma(a).exp() - gamma_continued_fraction(a, x)
     }
 }
-
+#[inline]
 fn gamma_series(a: f64, x: f64) -> f64 {
     let eps = 1e-10;
     let max_iter = 100;
-
     let mut sum = 1.0 / a;
     let mut term = sum;
-
     for n in 1..max_iter {
         term *= x / (a + n as f64);
         sum += term;
@@ -110,19 +99,16 @@ fn gamma_series(a: f64, x: f64) -> f64 {
             break;
         }
     }
-
     sum * (-x + a * x.ln() - ln_gamma(a)).exp()
 }
-
+#[inline]
 fn gamma_continued_fraction(a: f64, x: f64) -> f64 {
     let eps = 1e-10;
     let max_iter = 100;
-
     let mut b = x + 1.0 - a;
     let mut c = 1.0 / 1e-30;
     let mut d = 1.0 / b;
     let mut h = d;
-
     for i in 1..max_iter {
         let an = -(i as f64) * (i as f64 - a);
         b += 2.0;
@@ -141,10 +127,8 @@ fn gamma_continued_fraction(a: f64, x: f64) -> f64 {
             break;
         }
     }
-
     (-x + a * x.ln() - ln_gamma(a)).exp() * h
 }
-
 pub fn calibration_curve(
     predicted_risk: &[f64],
     observed_event: &[i32],
@@ -163,72 +147,57 @@ pub fn calibration_curve(
             calibration_intercept: 0.0,
         };
     }
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
         predicted_risk[a]
             .partial_cmp(&predicted_risk[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
     let group_size = n / n_groups;
     let remainder = n % n_groups;
-
     let mut risk_groups = Vec::with_capacity(n_groups);
     let mut predicted = Vec::with_capacity(n_groups);
     let mut observed = Vec::with_capacity(n_groups);
     let mut n_per_group = Vec::with_capacity(n_groups);
-
     let mut start = 0;
     for g in 0..n_groups {
         let extra = if g < remainder { 1 } else { 0 };
         let end = start + group_size + extra;
-
         if end <= start {
             continue;
         }
-
         let group_indices: Vec<usize> = indices[start..end].to_vec();
         let n_in_group = group_indices.len();
-
         let sum_pred: f64 = group_indices.iter().map(|&i| predicted_risk[i]).sum();
         let sum_obs: f64 = group_indices
             .iter()
             .map(|&i| observed_event[i] as f64)
             .sum();
-
         let mean_pred = sum_pred / n_in_group as f64;
         let mean_obs = sum_obs / n_in_group as f64;
-
         let mid_idx = group_indices[n_in_group / 2];
         risk_groups.push(predicted_risk[mid_idx]);
         predicted.push(mean_pred);
         observed.push(mean_obs);
         n_per_group.push(n_in_group);
-
         start = end;
     }
-
     let mut hl_stat = 0.0;
     for g in 0..risk_groups.len() {
         let n_g = n_per_group[g] as f64;
         let o_g = observed[g] * n_g;
         let e_g = predicted[g] * n_g;
-
         if e_g > 0.0 && e_g < n_g {
             hl_stat += (o_g - e_g).powi(2) / (e_g * (1.0 - predicted[g]));
         }
     }
-
     let df = if risk_groups.len() > 2 {
         risk_groups.len() - 2
     } else {
         1
     };
     let hl_pvalue = chi2_sf(hl_stat, df);
-
     let (slope, intercept) = calibration_regression(&predicted, &observed);
-
     CalibrationResult {
         risk_groups,
         predicted,
@@ -240,30 +209,24 @@ pub fn calibration_curve(
         calibration_intercept: intercept,
     }
 }
-
+#[inline]
 fn calibration_regression(predicted: &[f64], observed: &[f64]) -> (f64, f64) {
     let n = predicted.len();
     if n < 2 {
         return (1.0, 0.0);
     }
-
     let mean_x: f64 = predicted.iter().sum::<f64>() / n as f64;
     let mean_y: f64 = observed.iter().sum::<f64>() / n as f64;
-
     let mut ss_xy = 0.0;
     let mut ss_xx = 0.0;
-
     for i in 0..n {
         ss_xy += (predicted[i] - mean_x) * (observed[i] - mean_y);
         ss_xx += (predicted[i] - mean_x).powi(2);
     }
-
     let slope = if ss_xx > 0.0 { ss_xy / ss_xx } else { 1.0 };
     let intercept = mean_y - slope * mean_x;
-
     (slope, intercept)
 }
-
 #[pyfunction]
 #[pyo3(signature = (predicted_risk, observed_event, n_groups=None))]
 pub fn calibration(
@@ -278,7 +241,6 @@ pub fn calibration(
         n_groups,
     ))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct PredictionResult {
@@ -291,7 +253,6 @@ pub struct PredictionResult {
     #[pyo3(get)]
     pub times: Vec<f64>,
 }
-
 #[pymethods]
 impl PredictionResult {
     #[new]
@@ -309,7 +270,6 @@ impl PredictionResult {
         }
     }
 }
-
 pub fn predict_survival(
     coef: &[f64],
     x: &[Vec<f64>],
@@ -319,11 +279,9 @@ pub fn predict_survival(
 ) -> PredictionResult {
     let n = x.len();
     let n_times = pred_times.len();
-
     let mut linear_predictor = Vec::with_capacity(n);
     let mut risk_score = Vec::with_capacity(n);
     let mut survival_prob = Vec::with_capacity(n);
-
     let cumhaz: Vec<f64> = baseline_hazard
         .iter()
         .scan(0.0, |acc, &h| {
@@ -331,14 +289,11 @@ pub fn predict_survival(
             Some(*acc)
         })
         .collect();
-
     for xi in x {
         let lp: f64 = coef.iter().zip(xi).map(|(&c, &xij)| c * xij).sum();
         let rs = lp.exp();
-
         linear_predictor.push(lp);
         risk_score.push(rs);
-
         let mut surv_at_times = Vec::with_capacity(n_times);
         for &t in pred_times {
             let ch = interpolate_cumhaz(baseline_times, &cumhaz, t);
@@ -346,7 +301,6 @@ pub fn predict_survival(
         }
         survival_prob.push(surv_at_times);
     }
-
     PredictionResult {
         linear_predictor,
         risk_score,
@@ -354,30 +308,25 @@ pub fn predict_survival(
         times: pred_times.to_vec(),
     }
 }
-
+#[inline]
 fn interpolate_cumhaz(times: &[f64], cumhaz: &[f64], t: f64) -> f64 {
     if times.is_empty() {
         return 0.0;
     }
-
     if t <= times[0] {
         return 0.0;
     }
-
     if t >= times[times.len() - 1] {
         return cumhaz[cumhaz.len() - 1];
     }
-
     for i in 1..times.len() {
         if times[i] >= t {
             let frac = (t - times[i - 1]) / (times[i] - times[i - 1]);
             return cumhaz[i - 1] + frac * (cumhaz[i] - cumhaz[i - 1]);
         }
     }
-
     cumhaz[cumhaz.len() - 1]
 }
-
 #[pyfunction]
 #[pyo3(signature = (coef, x, baseline_hazard, baseline_times, pred_times))]
 pub fn predict_cox(
@@ -395,7 +344,6 @@ pub fn predict_cox(
         &pred_times,
     ))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct RiskStratificationResult {
@@ -410,7 +358,6 @@ pub struct RiskStratificationResult {
     #[pyo3(get)]
     pub group_median_risk: Vec<f64>,
 }
-
 #[pymethods]
 impl RiskStratificationResult {
     #[new]
@@ -430,7 +377,6 @@ impl RiskStratificationResult {
         }
     }
 }
-
 pub fn stratify_risk(
     risk_scores: &[f64],
     events: &[i32],
@@ -446,16 +392,13 @@ pub fn stratify_risk(
             group_median_risk: vec![],
         };
     }
-
     let mut sorted_scores: Vec<f64> = risk_scores.to_vec();
     sorted_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
     let mut cutpoints = Vec::with_capacity(n_groups - 1);
     for g in 1..n_groups {
         let idx = (g * n / n_groups).min(n - 1);
         cutpoints.push(sorted_scores[idx]);
     }
-
     let mut risk_groups = Vec::with_capacity(n);
     for &score in risk_scores {
         let mut group = 0;
@@ -466,11 +409,9 @@ pub fn stratify_risk(
         }
         risk_groups.push(group);
     }
-
     let mut group_sizes = vec![0usize; n_groups];
     let mut group_events = vec![0usize; n_groups];
     let mut group_scores: Vec<Vec<f64>> = vec![Vec::new(); n_groups];
-
     for i in 0..n {
         let g = risk_groups[i];
         group_sizes[g] += 1;
@@ -479,7 +420,6 @@ pub fn stratify_risk(
         }
         group_scores[g].push(risk_scores[i]);
     }
-
     let group_event_rates: Vec<f64> = (0..n_groups)
         .map(|g| {
             if group_sizes[g] > 0 {
@@ -489,7 +429,6 @@ pub fn stratify_risk(
             }
         })
         .collect();
-
     let group_median_risk: Vec<f64> = group_scores
         .iter()
         .map(|scores| {
@@ -502,7 +441,6 @@ pub fn stratify_risk(
             }
         })
         .collect();
-
     RiskStratificationResult {
         risk_groups,
         cutpoints,
@@ -511,7 +449,6 @@ pub fn stratify_risk(
         group_median_risk,
     }
 }
-
 #[pyfunction]
 #[pyo3(signature = (risk_scores, events, n_groups=None))]
 pub fn risk_stratification(
@@ -522,7 +459,6 @@ pub fn risk_stratification(
     let n_groups = n_groups.unwrap_or(3);
     Ok(stratify_risk(&risk_scores, &events, n_groups))
 }
-
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct TdAUCResult {
@@ -533,7 +469,6 @@ pub struct TdAUCResult {
     #[pyo3(get)]
     pub integrated_auc: f64,
 }
-
 #[pymethods]
 impl TdAUCResult {
     #[new]
@@ -545,7 +480,6 @@ impl TdAUCResult {
         }
     }
 }
-
 pub fn time_dependent_auc(
     time: &[f64],
     status: &[i32],
@@ -560,13 +494,10 @@ pub fn time_dependent_auc(
             integrated_auc: 0.0,
         };
     }
-
     let mut auc_values = Vec::with_capacity(eval_times.len());
-
     for &t in eval_times {
         let mut concordant = 0.0;
         let mut discordant = 0.0;
-
         for i in 0..n {
             if time[i] <= t && status[i] == 1 {
                 for j in 0..n {
@@ -583,12 +514,10 @@ pub fn time_dependent_auc(
                 }
             }
         }
-
         let total = concordant + discordant;
         let auc = if total > 0.0 { concordant / total } else { 0.5 };
         auc_values.push(auc);
     }
-
     let integrated = if auc_values.len() > 1 {
         let mut sum = 0.0;
         let mut weight_sum = 0.0;
@@ -607,14 +536,12 @@ pub fn time_dependent_auc(
     } else {
         0.5
     };
-
     TdAUCResult {
         times: eval_times.to_vec(),
         auc: auc_values,
         integrated_auc: integrated,
     }
 }
-
 #[pyfunction]
 #[pyo3(signature = (time, status, risk_score, eval_times))]
 pub fn td_auc(

@@ -1,7 +1,6 @@
 #![allow(clippy::explicit_counter_loop)]
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-
 #[pyfunction]
 pub fn concordance(
     y: Vec<f64>,
@@ -16,19 +15,15 @@ pub fn concordance(
     let mut nwt = vec![0.0; n];
     let mut twt = vec![0.0; n];
     let mut count = vec![0.0; 5];
-
     for val in &x {
         ntree = ntree.max(*val as usize + 1);
     }
-
     let mut utime = 0;
     let i2 = 0;
     let mut i = 0;
-
     while i < n {
         let ii = sortstop[i];
         let current_time = y[ii];
-
         if (sortstart.as_ref().is_some()
             && i2 < n
             && y[sortstart.as_ref().unwrap()[i2]] >= current_time)
@@ -43,7 +38,6 @@ pub fn concordance(
             let xsave = x[ii];
             let adjtimewt = timewt[utime];
             utime += 1;
-
             while i + ndeath < n && y[sortstop[i + ndeath]] == current_time {
                 let jj = sortstop[i + ndeath];
                 if x[jj] == xsave {
@@ -67,28 +61,23 @@ pub fn concordance(
                 _dwt2 += wt[jj] * adjtimewt;
                 ndeath += 1;
             }
-
             count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
-
             #[allow(clippy::needless_range_loop)]
             for j in i..(i + ndeath) {
                 let jj = sortstop[j];
                 addin(&mut nwt, &mut twt, x[jj] as usize, wt[jj]);
             }
-
             i += ndeath;
         }
     }
-
     count[3] -= count[4];
-
     Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("count", count)?;
         Ok(dict.into())
     })
 }
-
+#[inline]
 fn addin(nwt: &mut [f64], twt: &mut [f64], x: usize, weight: f64) {
     nwt[x] += weight;
     let mut node_index = x;

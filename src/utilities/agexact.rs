@@ -1,7 +1,6 @@
 use itertools::Itertools;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn agexact(
@@ -28,15 +27,12 @@ pub fn agexact(
     let n = nused as usize;
     let nvar_usize = nvar as usize;
     let p = nvar_usize;
-
     let (cmat, rest) = work.split_at_mut(p * p);
     let (a, rest) = rest.split_at_mut(p);
     let (newbeta, rest) = rest.split_at_mut(p);
     let (score, newvar) = rest.split_at_mut(n);
-
     let _index = &mut work2[0..n];
     let atrisk = &mut work2[n..2 * n];
-
     #[allow(clippy::needless_range_loop)]
     for i in 0..nvar_usize {
         if nocenter[i] == 0 {
@@ -55,7 +51,6 @@ pub fn agexact(
             }
         }
     }
-
     #[allow(clippy::needless_range_loop)]
     for person in 0..n {
         let mut zbeta = 0.0;
@@ -65,14 +60,12 @@ pub fn agexact(
         }
         score[person] = (zbeta + offset[person]).exp();
     }
-
     if loglik.len() < 2 {
         loglik.resize(2, 0.0);
     }
     loglik[1] = 0.0;
     u.fill(0.0);
     imat.fill(0.0);
-
     let mut person = 0;
     while person < n {
         if event[person] == 0 {
@@ -82,7 +75,6 @@ pub fn agexact(
             let mut deaths = 0;
             let mut nrisk = 0;
             let mut k = person;
-
             while k < n {
                 if stop[k] == time {
                     deaths += event[k];
@@ -96,11 +88,9 @@ pub fn agexact(
                 }
                 k += 1;
             }
-
             let mut denom = 0.0;
             a.fill(0.0);
             cmat.fill(0.0);
-
             if deaths == 1 {
                 #[allow(clippy::needless_range_loop)]
                 for l in 0..nrisk {
@@ -119,8 +109,7 @@ pub fn agexact(
                     }
                 }
             } else {
-                let combinations = init_doloop(0, nrisk, deaths as usize);
-                for indices in combinations {
+                for indices in iter_combinations(0, nrisk, deaths as usize) {
                     newvar.fill(0.0);
                     let mut weight = 1.0;
                     for &idx in &indices {
@@ -142,7 +131,6 @@ pub fn agexact(
                     }
                 }
             }
-
             loglik[1] -= denom.ln();
             #[allow(clippy::needless_range_loop)]
             for i in 0..nvar_usize {
@@ -154,7 +142,6 @@ pub fn agexact(
                     imat[j * p + i] += term;
                 }
             }
-
             let mut k = person;
             while k < n && stop[k] == time {
                 if event[k] == 1 {
@@ -172,13 +159,11 @@ pub fn agexact(
             }
         }
     }
-
     loglik[0] = loglik[1];
     let mut a_copy = a.to_vec();
     let _ = cholesky2(&mut imat[..p * p], p, tol_chol);
     chsolve2(&mut imat[..p * p], p, &mut a_copy);
     let sctest = a_copy.iter().zip(u.iter()).map(|(a, u)| a * u).sum::<f64>();
-
     if maxiter == 0 {
         chinv2(&mut imat[..p * p], p);
         #[allow(clippy::needless_range_loop)]
@@ -207,13 +192,11 @@ pub fn agexact(
         let mut halving = false;
         let mut newbeta_vec = newbeta.to_vec();
         let mut newlk = 0.0;
-
         while iter < maxiter {
             iter += 1;
             newlk = 0.0;
             u.fill(0.0);
             imat.fill(0.0);
-
             #[allow(clippy::needless_range_loop)]
             for person in 0..n {
                 let mut zbeta = 0.0;
@@ -223,7 +206,6 @@ pub fn agexact(
                 }
                 score[person] = (zbeta + offset[person]).exp();
             }
-
             let mut person = 0;
             while person < n {
                 if event[person] == 0 {
@@ -233,7 +215,6 @@ pub fn agexact(
                     let mut deaths = 0;
                     let mut nrisk = 0;
                     let mut k = person;
-
                     while k < n {
                         if stop[k] == time {
                             deaths += event[k];
@@ -247,11 +228,9 @@ pub fn agexact(
                         }
                         k += 1;
                     }
-
                     let mut denom = 0.0;
                     a.fill(0.0);
                     cmat.fill(0.0);
-
                     if deaths == 1 {
                         #[allow(clippy::needless_range_loop)]
                         for l in 0..nrisk {
@@ -269,8 +248,7 @@ pub fn agexact(
                             }
                         }
                     } else {
-                        let combinations = init_doloop(0, nrisk, deaths as usize);
-                        for indices in combinations {
+                        for indices in iter_combinations(0, nrisk, deaths as usize) {
                             newvar.fill(0.0);
                             let mut weight = 1.0;
                             for &idx in &indices {
@@ -292,7 +270,6 @@ pub fn agexact(
                             }
                         }
                     }
-
                     newlk -= denom.ln();
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar_usize {
@@ -304,7 +281,6 @@ pub fn agexact(
                             imat[j * p + i] += term;
                         }
                     }
-
                     let mut k = person;
                     while k < n && stop[k] == time {
                         if event[k] == 1 {
@@ -322,7 +298,6 @@ pub fn agexact(
                     }
                 }
             }
-
             if (1.0 - (loglik[1] / newlk)).abs() <= eps && !halving {
                 loglik[1] = newlk;
                 chinv2(&mut imat[..p * p], p);
@@ -352,7 +327,6 @@ pub fn agexact(
                 if iter == maxiter {
                     break;
                 }
-
                 if newlk < loglik[1] {
                     halving = true;
                     #[allow(clippy::needless_range_loop)]
@@ -365,7 +339,6 @@ pub fn agexact(
                     let _flag_check = cholesky2(&mut imat[..p * p], p, tol_chol);
                     let mut u_copy = u.to_vec();
                     chsolve2(&mut imat[..p * p], p, &mut u_copy);
-
                     beta[..nvar_usize].copy_from_slice(&newbeta_vec[..nvar_usize]);
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar_usize {
@@ -374,7 +347,6 @@ pub fn agexact(
                 }
             }
         }
-
         loglik[1] = newlk;
         chinv2(&mut imat[..p * p], p);
         #[allow(clippy::needless_range_loop)]
@@ -386,7 +358,6 @@ pub fn agexact(
         }
         beta.copy_from_slice(&newbeta_vec);
         let final_flag = 1000;
-
         Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("maxiter", maxiter)?;
@@ -402,12 +373,15 @@ pub fn agexact(
         })
     }
 }
-
-#[allow(clippy::too_many_arguments)]
-fn init_doloop(start: usize, end: usize, k: usize) -> Vec<Vec<usize>> {
-    (start..end).combinations(k).collect()
+#[inline]
+fn iter_combinations(
+    start: usize,
+    end: usize,
+    k: usize,
+) -> itertools::Combinations<std::ops::Range<usize>> {
+    (start..end).combinations(k)
 }
-
+#[inline]
 fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
     #[allow(clippy::needless_range_loop)]
     for i in 0..n {
@@ -433,7 +407,7 @@ fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
     }
     0
 }
-
+#[inline]
 fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
     #[allow(clippy::needless_range_loop)]
     for i in 0..n {
@@ -444,7 +418,6 @@ fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
         }
         b[i] = sum / chol[i * n + i];
     }
-
     for i in (0..n).rev() {
         let mut sum = b[i];
         for j in (i + 1)..n {
@@ -453,7 +426,7 @@ fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
         b[i] = sum / chol[i * n + i];
     }
 }
-
+#[inline]
 fn chinv2(chol: &mut [f64], n: usize) {
     #[allow(clippy::needless_range_loop)]
     for i in 0..n {
@@ -466,7 +439,6 @@ fn chinv2(chol: &mut [f64], n: usize) {
             chol[j * n + i] = -sum * chol[j * n + j];
         }
     }
-
     #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         for j in i..n {
