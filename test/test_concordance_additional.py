@@ -26,7 +26,6 @@ try:
 
     print("\n=== Testing perform_concordance3_calculation ===")
     try:
-        # time_data should be 2*n elements: [times..., statuses...]
         time_data: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 1.0, 0.0, 1.0, 0.0]
         indices: list[int] = [0, 1, 2, 3, 4]
         weights: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
@@ -46,7 +45,6 @@ try:
 
     print("\n=== Testing perform_concordance_calculation (v5) ===")
     try:
-        # time_data should be 2*n elements: [times..., statuses...]
         time_data_v5: list[float] = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 1.0, 0.0, 1.0, 0.0]
         predictor_values: list[int] = [0, 1, 2, 3, 4]
         weights_v5: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
