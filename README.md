@@ -1,7 +1,7 @@
 # survival-rs
 
 [![Crates.io](https://img.shields.io/crates/v/survival.svg)](https://crates.io/crates/survival)
-[![PyPI version](https://badge.fury.io/py/survival-rs.svg)](https://badge.fury.io/py/survival-rs)
+[![PyPI version](https://img.shields.io/pypi/v/survival-rs.svg)](https://pypi.org/project/survival-rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A high-performance survival analysis library written in Rust, with a Python API powered by [PyO3](https://github.com/PyO3/pyo3) and [maturin](https://github.com/PyO3/maturin).
@@ -42,8 +42,8 @@ pip install survival-rs
 
 #### Prerequisites
 
-- Python 3
-- Rust 1.92+ (required for edition 2024; see [rustup.rs](https://rustup.rs/))
+- Python 3.9+
+- Rust (see [rustup.rs](https://rustup.rs/))
 - [maturin](https://github.com/PyO3/maturin)
 - BLAS libraries (required at runtime):
   - Arch Linux: `sudo pacman -S openblas`

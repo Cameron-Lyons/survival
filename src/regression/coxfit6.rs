@@ -2,6 +2,7 @@
 use ndarray::{Array1, Array2};
 use ndarray_linalg::cholesky::CholeskyInto;
 use ndarray_linalg::{Inverse, Solve};
+use rayon::prelude::*;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -100,47 +101,64 @@ impl CoxFit {
 
     fn scale_center(&mut self, doscale: Vec<bool>) -> Result<(), CoxError> {
         let nvar = self.covar.ncols();
+        let nused = self.covar.nrows();
         let total_weight: f64 = self.weights.sum();
 
+        let means: Vec<f64> = (0..nvar)
+            .into_par_iter()
+            .map(|i| {
+                if !doscale[i] {
+                    0.0
+                } else {
+                    let mut mean = 0.0;
+                    for (person, &w) in self.weights.iter().enumerate() {
+                        mean += w * self.covar[(person, i)];
+                    }
+                    mean / total_weight
+                }
+            })
+            .collect();
+
+        self.means = means.clone();
+
+        let scales: Vec<f64> = (0..nvar)
+            .into_par_iter()
+            .map(|i| {
+                if !doscale[i] {
+                    1.0
+                } else {
+                    let mean = means[i];
+                    let abs_sum: f64 = (0..nused)
+                        .map(|person| self.weights[person] * (self.covar[(person, i)] - mean).abs())
+                        .sum();
+                    if abs_sum > 0.0 {
+                        total_weight / abs_sum
+                    } else {
+                        1.0
+                    }
+                }
+            })
+            .collect();
+
+        self.scale = scales.clone();
+
         for i in 0..nvar {
-            if !doscale[i] {
-                self.scale[i] = 1.0;
-                self.means[i] = 0.0;
-                continue;
-            }
-
-            let mut mean = 0.0;
-            for (person, &w) in self.weights.iter().enumerate() {
-                mean += w * self.covar[(person, i)];
-            }
-            mean /= total_weight;
-            self.means[i] = mean;
-
-            for mut row in self.covar.rows_mut() {
-                row[i] -= mean;
-            }
-
-            let mut abs_sum = 0.0;
-            for (person, &w) in self.weights.iter().enumerate() {
-                abs_sum += w * self.covar[(person, i)].abs();
-            }
-
-            self.scale[i] = if abs_sum > 0.0 {
-                total_weight / abs_sum
-            } else {
-                1.0
-            };
-
-            let scale_val = self.scale[i];
-            for mut row in self.covar.rows_mut() {
-                row[i] *= scale_val;
+            if doscale[i] {
+                let mean = means[i];
+                let scale_val = scales[i];
+                for person in 0..nused {
+                    self.covar[(person, i)] = (self.covar[(person, i)] - mean) * scale_val;
+                }
             }
         }
 
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..nvar {
-            self.beta[i] /= self.scale[i];
-        }
+        let new_beta: Vec<f64> = self
+            .beta
+            .par_iter()
+            .zip(self.scale.par_iter())
+            .map(|(&b, &s)| b / s)
+            .collect();
+        self.beta = new_beta;
 
         Ok(())
     }

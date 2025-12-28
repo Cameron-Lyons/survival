@@ -1,6 +1,7 @@
 use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 #[derive(Clone)]
 #[pyclass]
@@ -276,18 +277,19 @@ impl CoxPHModel {
     pub fn predict(&self, covariates: Vec<Vec<f64>>) -> Vec<f64> {
         let nrows = covariates.len();
         let ncols = if nrows > 0 { covariates[0].len() } else { 0 };
-        let mut cov_array = Array2::<f64>::zeros((nrows, ncols));
-        for (row_idx, row) in covariates.iter().enumerate() {
-            for (col_idx, &val) in row.iter().enumerate() {
-                cov_array[[row_idx, col_idx]] = val;
-            }
-        }
-        let mut risk_scores = Vec::new();
-        for row in cov_array.outer_iter() {
-            let risk_score = self.coefficients.column(0).dot(&row);
-            risk_scores.push(risk_score);
-        }
-        risk_scores
+
+        covariates
+            .par_iter()
+            .map(|row| {
+                let mut risk_score = 0.0;
+                for (col_idx, &val) in row.iter().enumerate().take(ncols) {
+                    if col_idx < self.coefficients.nrows() {
+                        risk_score += self.coefficients[[col_idx, 0]] * val;
+                    }
+                }
+                risk_score
+            })
+            .collect()
     }
 
     #[getter]
@@ -354,36 +356,38 @@ impl CoxPHModel {
             t
         });
 
-        let mut risk_scores = Vec::new();
-        for row in cov_array.outer_iter() {
-            let risk = self.coefficients.column(0).dot(&row);
-            risk_scores.push(risk.exp());
-        }
+        let risk_scores: Vec<f64> = (0..nrows)
+            .into_par_iter()
+            .map(|row_idx| {
+                let mut risk = 0.0;
+                for col_idx in 0..ncols {
+                    risk += self.coefficients[[col_idx, 0]] * cov_array[[row_idx, col_idx]];
+                }
+                risk.exp()
+            })
+            .collect();
 
-        let mut cum_baseline_haz = Vec::new();
-        let mut cum = 0.0;
-        for &haz in &self.baseline_hazard {
-            cum += haz;
-            cum_baseline_haz.push(cum);
-        }
-
-        let mut survival_curves = Vec::new();
-        for risk_exp in &risk_scores {
-            let mut surv = Vec::new();
-            for &t in &times {
-                let baseline_haz = self
-                    .baseline_hazard
+        let baseline_hazards: Vec<f64> = times
+            .iter()
+            .map(|&t| {
+                self.baseline_hazard
                     .iter()
                     .zip(&self.event_times)
                     .filter(|&(_, et)| *et <= t)
                     .map(|(h, _)| *h)
-                    .sum::<f64>();
+                    .sum::<f64>()
+            })
+            .collect();
 
-                let s = (-baseline_haz * risk_exp).exp();
-                surv.push(s);
-            }
-            survival_curves.push(surv);
-        }
+        let survival_curves: Vec<Vec<f64>> = risk_scores
+            .par_iter()
+            .map(|&risk_exp| {
+                baseline_hazards
+                    .iter()
+                    .map(|&bh| (-bh * risk_exp).exp())
+                    .collect()
+            })
+            .collect();
 
         Ok((times, survival_curves))
     }
@@ -433,38 +437,47 @@ impl CoxPHModel {
             return vec![0.1; nvar];
         }
 
-        let mut fisher_diag = vec![0.0; nvar];
+        let event_indices: Vec<usize> = (0..n).filter(|&i| self.censoring[i] == 1).collect();
 
-        for i in 0..n {
-            if self.censoring[i] == 0 {
-                continue;
-            }
+        let fisher_contributions: Vec<Vec<f64>> = event_indices
+            .par_iter()
+            .filter_map(|&i| {
+                let risk_set_sum: f64 = (0..n)
+                    .filter(|&j| self.event_times[j] >= self.event_times[i])
+                    .map(|j| self.risk_scores.get(j).copied().unwrap_or(1.0))
+                    .sum();
 
-            let risk_set_sum: f64 = (0..n)
-                .filter(|&j| self.event_times[j] >= self.event_times[i])
-                .map(|j| self.risk_scores.get(j).copied().unwrap_or(1.0))
-                .sum();
-
-            if risk_set_sum <= 0.0 {
-                continue;
-            }
-
-            for (k, fisher_k) in fisher_diag.iter_mut().enumerate() {
-                let mut weighted_cov = 0.0;
-                let mut weighted_cov_sq = 0.0;
-
-                for j in 0..n {
-                    if self.event_times[j] >= self.event_times[i] {
-                        let risk_j = self.risk_scores.get(j).copied().unwrap_or(1.0);
-                        let cov_jk = self.covariates.get([j, k]).copied().unwrap_or(0.0);
-                        weighted_cov += risk_j * cov_jk;
-                        weighted_cov_sq += risk_j * cov_jk * cov_jk;
-                    }
+                if risk_set_sum <= 0.0 {
+                    return None;
                 }
 
-                let mean_cov = weighted_cov / risk_set_sum;
-                let var_cov = weighted_cov_sq / risk_set_sum - mean_cov * mean_cov;
-                *fisher_k += var_cov;
+                let contrib: Vec<f64> = (0..nvar)
+                    .map(|k| {
+                        let mut weighted_cov = 0.0;
+                        let mut weighted_cov_sq = 0.0;
+
+                        for j in 0..n {
+                            if self.event_times[j] >= self.event_times[i] {
+                                let risk_j = self.risk_scores.get(j).copied().unwrap_or(1.0);
+                                let cov_jk = self.covariates.get([j, k]).copied().unwrap_or(0.0);
+                                weighted_cov += risk_j * cov_jk;
+                                weighted_cov_sq += risk_j * cov_jk * cov_jk;
+                            }
+                        }
+
+                        let mean_cov = weighted_cov / risk_set_sum;
+                        weighted_cov_sq / risk_set_sum - mean_cov * mean_cov
+                    })
+                    .collect();
+
+                Some(contrib)
+            })
+            .collect();
+
+        let mut fisher_diag = vec![0.0; nvar];
+        for contrib in fisher_contributions {
+            for (k, &val) in contrib.iter().enumerate() {
+                fisher_diag[k] += val;
             }
         }
 
@@ -480,26 +493,26 @@ impl CoxPHModel {
         }
 
         let n = self.event_times.len();
-        let mut loglik = 0.0;
 
-        for i in 0..n {
-            if self.censoring[i] == 0 {
-                continue;
-            }
+        let event_indices: Vec<usize> = (0..n).filter(|&i| self.censoring[i] == 1).collect();
 
-            let risk_score_i = self.risk_scores.get(i).copied().unwrap_or(1.0).ln();
+        event_indices
+            .par_iter()
+            .map(|&i| {
+                let risk_score_i = self.risk_scores.get(i).copied().unwrap_or(1.0).ln();
 
-            let risk_set_sum: f64 = (0..n)
-                .filter(|&j| self.event_times[j] >= self.event_times[i])
-                .map(|j| self.risk_scores.get(j).copied().unwrap_or(1.0))
-                .sum();
+                let risk_set_sum: f64 = (0..n)
+                    .filter(|&j| self.event_times[j] >= self.event_times[i])
+                    .map(|j| self.risk_scores.get(j).copied().unwrap_or(1.0))
+                    .sum();
 
-            if risk_set_sum > 0.0 {
-                loglik += risk_score_i - risk_set_sum.ln();
-            }
-        }
-
-        loglik
+                if risk_set_sum > 0.0 {
+                    risk_score_i - risk_set_sum.ln()
+                } else {
+                    0.0
+                }
+            })
+            .sum()
     }
 
     pub fn aic(&self) -> f64 {
@@ -527,27 +540,33 @@ impl CoxPHModel {
         unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         unique_times.dedup();
 
-        let mut risk_scores = Vec::new();
-        for row in cov_array.outer_iter() {
-            let risk = self.coefficients.column(0).dot(&row);
-            risk_scores.push(risk.exp());
-        }
+        let risk_scores: Vec<f64> = (0..nrows)
+            .into_par_iter()
+            .map(|row_idx| {
+                let mut risk = 0.0;
+                for col_idx in 0..ncols {
+                    risk += self.coefficients[[col_idx, 0]] * cov_array[[row_idx, col_idx]];
+                }
+                risk.exp()
+            })
+            .collect();
 
-        let mut cumulative_hazards = Vec::new();
-        for risk_exp in &risk_scores {
-            let mut cum_haz = Vec::new();
-            for &t in &unique_times {
-                let baseline_haz = self
-                    .baseline_hazard
+        let baseline_hazards: Vec<f64> = unique_times
+            .iter()
+            .map(|&t| {
+                self.baseline_hazard
                     .iter()
                     .zip(&self.event_times)
                     .filter(|&(_, et)| *et <= t)
                     .map(|(h, _)| *h)
-                    .sum::<f64>();
-                cum_haz.push(baseline_haz * risk_exp);
-            }
-            cumulative_hazards.push(cum_haz);
-        }
+                    .sum::<f64>()
+            })
+            .collect();
+
+        let cumulative_hazards: Vec<Vec<f64>> = risk_scores
+            .par_iter()
+            .map(|&risk_exp| baseline_hazards.iter().map(|&bh| bh * risk_exp).collect())
+            .collect();
 
         (unique_times, cumulative_hazards)
     }
@@ -654,34 +673,38 @@ impl CoxPHModel {
         }
 
         let martingale = self.martingale_residuals();
-        let mut dfbeta = vec![vec![0.0; nvar]; n];
 
-        for (i, (&mart_i, dfbeta_row)) in martingale.iter().zip(dfbeta.iter_mut()).enumerate() {
-            for (k, dfbeta_cell) in dfbeta_row.iter_mut().enumerate() {
-                let cov_ik = self.covariates.get([i, k]).copied().unwrap_or(0.0);
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mart_i = martingale[i];
                 let risk_i = self.risk_scores.get(i).copied().unwrap_or(1.0);
 
-                let mut weighted_mean = 0.0;
-                let mut risk_sum = 0.0;
+                (0..nvar)
+                    .map(|k| {
+                        let cov_ik = self.covariates.get([i, k]).copied().unwrap_or(0.0);
 
-                for j in 0..n {
-                    if self.event_times[j] >= self.event_times[i] {
-                        let risk_j = self.risk_scores.get(j).copied().unwrap_or(1.0);
-                        let cov_jk = self.covariates.get([j, k]).copied().unwrap_or(0.0);
-                        weighted_mean += risk_j * cov_jk;
-                        risk_sum += risk_j;
-                    }
-                }
+                        let mut weighted_mean = 0.0;
+                        let mut risk_sum = 0.0;
 
-                if risk_sum > 0.0 {
-                    weighted_mean /= risk_sum;
-                }
+                        for j in 0..n {
+                            if self.event_times[j] >= self.event_times[i] {
+                                let risk_j = self.risk_scores.get(j).copied().unwrap_or(1.0);
+                                let cov_jk = self.covariates.get([j, k]).copied().unwrap_or(0.0);
+                                weighted_mean += risk_j * cov_jk;
+                                risk_sum += risk_j;
+                            }
+                        }
 
-                *dfbeta_cell = mart_i * (cov_ik - weighted_mean) / risk_i.max(1e-10);
-            }
-        }
+                        if risk_sum > 0.0 {
+                            weighted_mean /= risk_sum;
+                        }
 
-        dfbeta
+                        mart_i * (cov_ik - weighted_mean) / risk_i.max(1e-10)
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     pub fn n_events(&self) -> usize {
