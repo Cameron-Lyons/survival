@@ -154,13 +154,7 @@ pub fn perform_concordance3_calculation(
     );
 
     Python::attach(|py| {
-        build_concordance_result(
-            py,
-            &count,
-            Some(&imat),
-            resid_opt.as_deref(),
-            Some(n),
-        )
-        .map(|d| d.into())
+        build_concordance_result(py, &count, Some(&imat), resid_opt.as_deref(), Some(n))
+            .map(|d| d.into())
     })
 }

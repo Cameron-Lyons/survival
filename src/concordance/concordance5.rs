@@ -189,7 +189,6 @@ pub fn perform_concordance_calculation(
     );
 
     Python::attach(|py| {
-        build_concordance_result(py, &count, Some(&imat), resid.as_deref(), None)
-            .map(|d| d.into())
+        build_concordance_result(py, &count, Some(&imat), resid.as_deref(), None).map(|d| d.into())
     })
 }
