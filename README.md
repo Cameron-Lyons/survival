@@ -1,5 +1,6 @@
 # survival-rs
 
+[![Crates.io](https://img.shields.io/crates/v/survival.svg)](https://crates.io/crates/survival)
 [![PyPI version](https://badge.fury.io/py/survival-rs.svg)](https://badge.fury.io/py/survival-rs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
