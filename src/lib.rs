@@ -70,7 +70,9 @@ pub use validation::rmst::{
     CumulativeIncidenceResult, MedianSurvivalResult, NNTResult, RMSTComparisonResult, RMSTResult,
     cumulative_incidence, number_needed_to_treat, rmst, rmst_comparison, survival_quantile,
 };
-pub use validation::tests::{ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test};
+pub use validation::tests::{
+    ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test,
+};
 
 use concordance::concordance::concordance as concordance_fn;
 use python::cox_py_callback::cox_callback;
