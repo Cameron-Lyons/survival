@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install OpenBLAS (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -32,9 +32,9 @@ jobs:
           echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: '3.14'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,9 +48,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-py3.13-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-py3.14-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-py3.13-
+            ${{ runner.os }}-cargo-py3.14-
 
       - name: Install maturin
         run: pip install maturin numpy
@@ -130,15 +130,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install OpenBLAS
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: '3.14'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
