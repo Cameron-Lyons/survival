@@ -2,7 +2,6 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// Validates common concordance input parameters
 pub fn validate_concordance_inputs(
     time_data_len: usize,
     n: usize,
@@ -34,7 +33,6 @@ pub fn validate_concordance_inputs(
     Ok(())
 }
 
-/// Extended validation for concordance3/5 style inputs
 pub fn validate_extended_concordance_inputs(
     time_data_len: usize,
     n: usize,
@@ -60,7 +58,6 @@ pub fn validate_extended_concordance_inputs(
     Ok(())
 }
 
-/// Builds a concordance result PyDict from count array
 pub fn build_concordance_result(
     py: Python<'_>,
     count: &[f64],
@@ -110,8 +107,6 @@ pub fn build_concordance_result(
     Ok(dict.into())
 }
 
-/// Walk up a binary tree structure and compute weight sums
-/// Returns [sum_greater, sum_less, sum_equal]
 pub fn walkup_binary_tree(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
     let mut sums = [0.0; 3];
     if index >= ntree {
@@ -147,7 +142,6 @@ pub fn walkup_binary_tree(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) 
     sums
 }
 
-/// Add weight to binary tree structure
 pub fn add_to_binary_tree(nwt: &mut [f64], twt: &mut [f64], index: usize, wt: f64) {
     nwt[index] += wt;
     let mut current = index;

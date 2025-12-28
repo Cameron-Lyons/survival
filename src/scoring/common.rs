@@ -2,7 +2,6 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// Validates common scoring input parameters for agscore functions
 pub fn validate_scoring_inputs(
     n: usize,
     time_data_len: usize,
@@ -48,7 +47,6 @@ pub fn validate_scoring_inputs(
     Ok(())
 }
 
-/// Computes summary statistics (mean and variance) for each variable's residuals
 pub fn compute_summary_stats(residuals: &[f64], n: usize, nvar: usize) -> Vec<f64> {
     let mut summary_stats = Vec::with_capacity(nvar * 2);
 
@@ -75,7 +73,6 @@ pub fn compute_summary_stats(residuals: &[f64], n: usize, nvar: usize) -> Vec<f6
     summary_stats
 }
 
-/// Builds a score result PyDict with residuals and summary statistics
 pub fn build_score_result(
     py: Python<'_>,
     residuals: Vec<f64>,
