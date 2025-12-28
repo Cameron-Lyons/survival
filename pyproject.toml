@@ -47,6 +47,5 @@ Issues = "https://github.com/Cameron-Lyons/survival-rs/issues"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-python-source = "."
 module-name = "survival"
 strip = true

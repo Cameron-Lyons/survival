@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.14'
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libssl-dev
@@ -57,7 +57,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.14'
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libssl-dev
@@ -85,7 +85,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.14'
 
       - name: Install OpenBLAS
         run: |
@@ -115,7 +115,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.14'
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
