@@ -7,11 +7,21 @@ cat("Generating expected values from R survival package...\n")
 cat("survival package version:", as.character(packageVersion("survival")), "\n")
 cat("R version:", R.version.string, "\n\n")
 
+clean_na <- function(x) {
+  if (is.list(x)) {
+    return(lapply(x, clean_na))
+  }
+  if (is.numeric(x)) {
+    x[is.na(x) | is.nan(x)] <- NA
+    x[abs(x) < 1e-14] <- 0
+  }
+  return(x)
+}
+
 results <- list(
   metadata = list(
     survival_version = as.character(packageVersion("survival")),
     r_version = R.version.string,
-    generated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
     note = "These values were generated using the R survival package. Regenerate with: Rscript generate_r_expected_values.R"
   )
 )
@@ -338,20 +348,25 @@ cat("Processing concordance calculations...\n")
 conc_aml <- concordance(cox_breslow)
 conc_counts <- as.vector(conc_aml$count)
 names(conc_counts) <- names(conc_aml$count)
+get_count <- function(name) {
+  val <- conc_counts[name]
+  if (is.na(val)) 0L else as.integer(val)
+}
 results$concordance <- list(
   aml_coxph = list(
     concordance = as.numeric(conc_aml$concordance),
-    n_concordant = as.integer(conc_counts["concordant"]),
-    n_discordant = as.integer(conc_counts["discordant"]),
-    n_tied_risk = as.integer(conc_counts["tied.risk"]),
-    n_tied_time = as.integer(conc_counts["tied.time"])
+    n_concordant = get_count("concordant"),
+    n_discordant = get_count("discordant"),
+    n_tied_risk = get_count("tied.risk"),
+    n_tied_time = get_count("tied.time")
   )
 )
 
 output_file <- "r_expected_values.json"
 cat("\nWriting results to", output_file, "...\n")
 
-json_output <- toJSON(results, pretty = TRUE, auto_unbox = TRUE, digits = 10)
+results <- clean_na(results)
+json_output <- toJSON(results, pretty = TRUE, auto_unbox = TRUE, digits = 10, na = "null")
 writeLines(json_output, output_file)
 
 cat("Done! Generated", output_file, "\n")

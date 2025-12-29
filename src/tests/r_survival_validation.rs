@@ -1,7 +1,7 @@
 //! Comprehensive R survival package validation tests
 //!
 //! These tests validate that survival-rs produces results matching the
-//! R survival package by Terry Therneau (https://github.com/therneau/survival).
+//! R survival package by Terry Therneau (<https://github.com/therneau/survival>).
 //!
 //! Expected values were computed using R 4.3+ with survival package version 3.5+.
 //! The R code used to generate each expected value is included in comments.
