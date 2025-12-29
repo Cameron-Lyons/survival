@@ -1,15 +1,4 @@
 #!/usr/bin/env Rscript
-#
-# Generate expected values from R survival package for validation testing
-#
-# This script generates a JSON file with exact expected values computed by
-# the R survival package (https://github.com/therneau/survival).
-#
-# Usage: Rscript generate_r_expected_values.R
-# Output: r_expected_values.json
-#
-# Requirements:
-#   install.packages(c("survival", "jsonlite"))
 
 library(survival)
 library(jsonlite)
@@ -18,22 +7,18 @@ cat("Generating expected values from R survival package...\n")
 cat("survival package version:", as.character(packageVersion("survival")), "\n")
 cat("R version:", R.version.string, "\n\n")
 
-# Initialize results list
 results <- list(
   metadata = list(
     survival_version = as.character(packageVersion("survival")),
     r_version = R.version.string,
-    generated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+    generated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
+    note = "These values were generated using the R survival package. Regenerate with: Rscript generate_r_expected_values.R"
   )
 )
 
-# =============================================================================
-# AML Dataset
-# =============================================================================
 cat("Processing AML dataset...\n")
-data(aml)
+data(aml, package = "survival")
 
-# Split into maintained and non-maintained groups
 aml_maintained <- aml[aml$x == "Maintained", ]
 aml_nonmaintained <- aml[aml$x == "Nonmaintained", ]
 
@@ -53,7 +38,6 @@ results$aml <- list(
   )
 )
 
-# Kaplan-Meier for maintained group
 km_maintained <- survfit(Surv(time, status) ~ 1, data = aml_maintained)
 km_summary <- summary(km_maintained)
 results$aml$km_maintained <- list(
@@ -67,7 +51,6 @@ results$aml$km_maintained <- list(
   upper = km_summary$upper
 )
 
-# Kaplan-Meier for non-maintained group
 km_nonmaintained <- survfit(Surv(time, status) ~ 1, data = aml_nonmaintained)
 km_summary_nm <- summary(km_nonmaintained)
 results$aml$km_nonmaintained <- list(
@@ -76,65 +59,56 @@ results$aml$km_nonmaintained <- list(
   n_event = km_summary_nm$n.event,
   n_censor = km_summary_nm$n.censor,
   survival = km_summary_nm$surv,
-  std_err = km_summary_nm$std.err,
-  lower = km_summary_nm$lower,
-  upper = km_summary_nm$upper
+  std_err = km_summary_nm$std.err
 )
 
-# Nelson-Aalen for maintained group
 na_maintained <- survfit(Surv(time, status) ~ 1, data = aml_maintained, type = "fh")
 results$aml$nelson_aalen_maintained <- list(
   time = na_maintained$time,
   n_risk = na_maintained$n.risk,
   n_event = na_maintained$n.event,
-  cumulative_hazard = na_maintained$cumhaz,
-  std_err = na_maintained$std.err
+  cumulative_hazard = na_maintained$cumhaz
 )
 
-# Log-rank test (survdiff)
 sd <- survdiff(Surv(time, status) ~ x, data = aml)
 results$aml$logrank <- list(
-  n = sd$n,
-  observed = sd$obs,
-  expected = sd$exp,
-  chisq = sd$chisq,
+  n = as.vector(sd$n),
+  observed = as.vector(sd$obs),
+  expected = as.vector(sd$exp),
+  chisq = as.numeric(sd$chisq),
   df = length(sd$n) - 1,
   p_value = 1 - pchisq(sd$chisq, df = length(sd$n) - 1)
 )
 
-# Wilcoxon (Peto-Peto) test
 sd_wilcox <- survdiff(Surv(time, status) ~ x, data = aml, rho = 1)
 results$aml$wilcoxon <- list(
-  chisq = sd_wilcox$chisq,
+  chisq = as.numeric(sd_wilcox$chisq),
   p_value = 1 - pchisq(sd_wilcox$chisq, df = 1)
 )
 
-# Cox PH with Breslow method
 cox_breslow <- coxph(Surv(time, status) ~ x, data = aml, method = "breslow")
 cox_summary <- summary(cox_breslow)
 results$aml$coxph_breslow <- list(
   coefficients = as.vector(coef(cox_breslow)),
-  se = cox_summary$coefficients[, "se(coef)"],
-  hazard_ratio = exp(coef(cox_breslow)),
-  hr_lower = exp(confint(cox_breslow))[1],
-  hr_upper = exp(confint(cox_breslow))[2],
-  loglik = cox_breslow$loglik,
-  score_test = cox_summary$sctest["test"],
-  wald_test = cox_summary$waldtest["test"],
-  lr_test = cox_summary$logtest["test"],
-  concordance = cox_summary$concordance["C"]
+  se = as.vector(cox_summary$coefficients[, "se(coef)"]),
+  hazard_ratio = as.vector(exp(coef(cox_breslow))),
+  hr_lower = as.numeric(exp(confint(cox_breslow))[1]),
+  hr_upper = as.numeric(exp(confint(cox_breslow))[2]),
+  loglik = as.vector(cox_breslow$loglik),
+  score_test = as.numeric(cox_summary$sctest["test"]),
+  wald_test = as.numeric(cox_summary$waldtest["test"]),
+  lr_test = as.numeric(cox_summary$logtest["test"]),
+  concordance = as.numeric(cox_summary$concordance["C"])
 )
 
-# Cox PH with Efron method
 cox_efron <- coxph(Surv(time, status) ~ x, data = aml, method = "efron")
 results$aml$coxph_efron <- list(
   coefficients = as.vector(coef(cox_efron)),
-  se = summary(cox_efron)$coefficients[, "se(coef)"],
-  hazard_ratio = exp(coef(cox_efron)),
-  loglik = cox_efron$loglik
+  se = as.vector(summary(cox_efron)$coefficients[, "se(coef)"]),
+  hazard_ratio = as.vector(exp(coef(cox_efron))),
+  loglik = as.vector(cox_efron$loglik)
 )
 
-# Median survival
 km_combined <- survfit(Surv(time, status) ~ x, data = aml)
 median_surv <- summary(km_combined)$table[, "median"]
 results$aml$median_survival <- list(
@@ -142,59 +116,42 @@ results$aml$median_survival <- list(
   nonmaintained = as.numeric(median_surv["x=Nonmaintained"])
 )
 
-# Martingale residuals
 results$aml$martingale_residuals <- list(
-  residuals = as.vector(residuals(cox_breslow, type = "martingale")),
   sum = sum(residuals(cox_breslow, type = "martingale"))
 )
 
-# Schoenfeld residuals
-schoen <- residuals(cox_breslow, type = "schoenfeld")
-results$aml$schoenfeld_residuals <- list(
-  residuals = as.vector(schoen)
-)
-
-# =============================================================================
-# Lung Dataset (subset)
-# =============================================================================
 cat("Processing lung dataset...\n")
-data(lung)
+data(lung, package = "survival")
 lung_subset <- lung[1:20, ]
-lung_subset$status_01 <- lung_subset$status - 1  # Convert to 0/1
+lung_subset$status_01 <- lung_subset$status - 1
 
 results$lung <- list(
   data = list(
     time = lung_subset$time,
     status = lung_subset$status_01,
     sex = lung_subset$sex,
-    age = lung_subset$age,
-    ph_ecog = lung_subset$ph.ecog
+    age = lung_subset$age
   )
 )
 
-# Cox PH with age and sex
 cox_lung <- coxph(Surv(time, status_01) ~ age + sex, data = lung_subset, method = "breslow")
 cox_lung_summary <- summary(cox_lung)
 results$lung$coxph <- list(
   coefficients = as.vector(coef(cox_lung)),
-  se = cox_lung_summary$coefficients[, "se(coef)"],
-  hazard_ratio = exp(coef(cox_lung)),
-  loglik = cox_lung$loglik,
-  concordance = cox_lung_summary$concordance["C"]
+  se = as.vector(cox_lung_summary$coefficients[, "se(coef)"]),
+  hazard_ratio = as.vector(exp(coef(cox_lung))),
+  loglik = as.vector(cox_lung$loglik),
+  concordance = as.numeric(cox_lung_summary$concordance["C"])
 )
 
-# Log-rank by sex
 sd_lung <- survdiff(Surv(time, status_01) ~ sex, data = lung_subset)
 results$lung$logrank_sex <- list(
-  chisq = sd_lung$chisq,
+  chisq = as.numeric(sd_lung$chisq),
   p_value = 1 - pchisq(sd_lung$chisq, df = 1)
 )
 
-# =============================================================================
-# Ovarian Dataset
-# =============================================================================
 cat("Processing ovarian dataset...\n")
-data(ovarian)
+data(ovarian, package = "survival")
 
 results$ovarian <- list(
   data = list(
@@ -205,16 +162,14 @@ results$ovarian <- list(
   )
 )
 
-# Log-rank test
 sd_ovarian <- survdiff(Surv(futime, fustat) ~ rx, data = ovarian)
 results$ovarian$logrank <- list(
-  chisq = sd_ovarian$chisq,
+  chisq = as.numeric(sd_ovarian$chisq),
   p_value = 1 - pchisq(sd_ovarian$chisq, df = 1),
-  observed = sd_ovarian$obs,
-  expected = sd_ovarian$exp
+  observed = as.vector(sd_ovarian$obs),
+  expected = as.vector(sd_ovarian$exp)
 )
 
-# Kaplan-Meier
 km_ovarian <- survfit(Surv(futime, fustat) ~ 1, data = ovarian)
 km_ov_summary <- summary(km_ovarian)
 results$ovarian$km <- list(
@@ -224,20 +179,16 @@ results$ovarian$km <- list(
   n_event = km_ov_summary$n.event
 )
 
-# Cox PH
 cox_ovarian <- coxph(Surv(futime, fustat) ~ rx + age, data = ovarian)
 results$ovarian$coxph <- list(
   coefficients = as.vector(coef(cox_ovarian)),
-  se = summary(cox_ovarian)$coefficients[, "se(coef)"],
-  hazard_ratio = exp(coef(cox_ovarian)),
-  loglik = cox_ovarian$loglik
+  se = as.vector(summary(cox_ovarian)$coefficients[, "se(coef)"]),
+  hazard_ratio = as.vector(exp(coef(cox_ovarian))),
+  loglik = as.vector(cox_ovarian$loglik)
 )
 
-# =============================================================================
-# Veteran Dataset (subset)
-# =============================================================================
 cat("Processing veteran dataset...\n")
-data(veteran)
+data(veteran, package = "survival")
 veteran_subset <- veteran[1:20, ]
 
 results$veteran <- list(
@@ -249,31 +200,24 @@ results$veteran <- list(
   )
 )
 
-# Kaplan-Meier
 km_veteran <- survfit(Surv(time, status) ~ 1, data = veteran_subset)
 km_vet_summary <- summary(km_veteran)
 results$veteran$km <- list(
   time = km_vet_summary$time,
   survival = km_vet_summary$surv,
   n_risk = km_vet_summary$n.risk,
-  n_event = km_vet_summary$n.event,
-  std_err = km_vet_summary$std.err
+  n_event = km_vet_summary$n.event
 )
 
-# Cox PH
 cox_veteran <- coxph(Surv(time, status) ~ trt + age, data = veteran_subset)
 results$veteran$coxph <- list(
   coefficients = as.vector(coef(cox_veteran)),
-  hazard_ratio = exp(coef(cox_veteran)),
-  loglik = cox_veteran$loglik
+  hazard_ratio = as.vector(exp(coef(cox_veteran))),
+  loglik = as.vector(cox_veteran$loglik)
 )
 
-# =============================================================================
-# Edge Cases
-# =============================================================================
 cat("Processing edge cases...\n")
 
-# Tied event times
 tied_data <- data.frame(
   time = c(5, 5, 5, 10, 10, 15),
   status = c(1, 1, 0, 1, 1, 1)
@@ -287,7 +231,6 @@ results$edge_cases$tied_events <- list(
   n_event = km_tied_summary$n.event
 )
 
-# All events at same time
 same_time_data <- data.frame(
   time = c(5, 5, 5, 5, 5),
   status = c(1, 1, 1, 1, 1)
@@ -300,7 +243,6 @@ results$edge_cases$all_same_time <- list(
   n_event = km_same$n.event
 )
 
-# Simple 5-observation test for Nelson-Aalen
 simple_data <- data.frame(
   time = c(1, 2, 3, 4, 5),
   status = c(1, 1, 1, 1, 1)
@@ -312,7 +254,6 @@ results$edge_cases$simple_nelson_aalen <- list(
   n_risk = na_simple$n.risk
 )
 
-# With censoring
 censored_data <- data.frame(
   time = c(1, 2, 3, 4, 5, 6),
   status = c(1, 0, 1, 0, 1, 0)
@@ -327,7 +268,6 @@ results$edge_cases$with_censoring <- list(
   n_event = na_censored_summary$n.event
 )
 
-# Identical groups (for log-rank test)
 identical_data <- data.frame(
   time = c(1, 2, 3, 1, 2, 3),
   status = c(1, 1, 1, 1, 1, 1),
@@ -335,17 +275,12 @@ identical_data <- data.frame(
 )
 sd_identical <- survdiff(Surv(time, status) ~ group, data = identical_data)
 results$edge_cases$identical_groups_logrank <- list(
-  chisq = sd_identical$chisq,
+  chisq = as.numeric(sd_identical$chisq),
   p_value = 1 - pchisq(sd_identical$chisq, df = 1)
 )
 
-# =============================================================================
-# Sample Size / Power Calculations
-# =============================================================================
 cat("Processing sample size calculations...\n")
 
-# Using Schoenfeld formula approximation
-# n_events = (z_alpha + z_beta)^2 / (log(HR)^2 * p1 * p2)
 calc_sample_size <- function(hr, power, alpha, ratio = 1) {
   z_alpha <- qnorm(1 - alpha/2)
   z_beta <- qnorm(power)
@@ -356,18 +291,14 @@ calc_sample_size <- function(hr, power, alpha, ratio = 1) {
 }
 
 results$sample_size <- list(
-  hr_0.5_power_0.8 = calc_sample_size(0.5, 0.8, 0.05),
-  hr_0.6_power_0.8 = calc_sample_size(0.6, 0.8, 0.05),
-  hr_0.7_power_0.8 = calc_sample_size(0.7, 0.8, 0.05),
-  hr_0.6_power_0.9 = calc_sample_size(0.6, 0.9, 0.05)
+  "hr_0.5_power_0.8" = calc_sample_size(0.5, 0.8, 0.05),
+  "hr_0.6_power_0.8" = calc_sample_size(0.6, 0.8, 0.05),
+  "hr_0.7_power_0.8" = calc_sample_size(0.7, 0.8, 0.05),
+  "hr_0.6_power_0.9" = calc_sample_size(0.6, 0.9, 0.05)
 )
 
-# =============================================================================
-# RMST Calculations (manual since survRM2 may not be installed)
-# =============================================================================
 cat("Processing RMST calculations...\n")
 
-# Calculate RMST from Kaplan-Meier curve
 calc_rmst <- function(km_fit, tau) {
   times <- c(0, km_fit$time[km_fit$time <= tau])
   surv <- c(1, km_fit$surv[km_fit$time <= tau])
@@ -377,7 +308,6 @@ calc_rmst <- function(km_fit, tau) {
     surv <- c(surv, surv[length(surv)])
   } else {
     times <- c(times, tau)
-    # Interpolate survival at tau
     idx <- which(km_fit$time >= tau)[1]
     if (idx > 1) {
       surv <- c(surv, km_fit$surv[idx])
@@ -386,7 +316,6 @@ calc_rmst <- function(km_fit, tau) {
     }
   }
 
-  # Calculate area under curve (trapezoidal rule)
   rmst <- 0
   for (i in 2:length(times)) {
     rmst <- rmst + surv[i-1] * (times[i] - times[i-1])
@@ -404,26 +333,21 @@ results$rmst <- list(
   aml_nonmaintained_tau48 = calc_rmst(km_aml_nonmaint, 48)
 )
 
-# =============================================================================
-# Concordance
-# =============================================================================
 cat("Processing concordance calculations...\n")
 
 conc_aml <- concordance(cox_breslow)
+conc_counts <- as.vector(conc_aml$count)
+names(conc_counts) <- names(conc_aml$count)
 results$concordance <- list(
   aml_coxph = list(
-    concordance = conc_aml$concordance,
-    se = sqrt(conc_aml$var),
-    n_concordant = conc_aml$count["concordant"],
-    n_discordant = conc_aml$count["discordant"],
-    n_tied_risk = conc_aml$count["tied.risk"],
-    n_tied_time = conc_aml$count["tied.time"]
+    concordance = as.numeric(conc_aml$concordance),
+    n_concordant = as.integer(conc_counts["concordant"]),
+    n_discordant = as.integer(conc_counts["discordant"]),
+    n_tied_risk = as.integer(conc_counts["tied.risk"]),
+    n_tied_time = as.integer(conc_counts["tied.time"])
   )
 )
 
-# =============================================================================
-# Write JSON output
-# =============================================================================
 output_file <- "r_expected_values.json"
 cat("\nWriting results to", output_file, "...\n")
 
@@ -431,4 +355,3 @@ json_output <- toJSON(results, pretty = TRUE, auto_unbox = TRUE, digits = 10)
 writeLines(json_output, output_file)
 
 cat("Done! Generated", output_file, "\n")
-cat("Total test cases:", length(unlist(results, recursive = FALSE)), "\n")
