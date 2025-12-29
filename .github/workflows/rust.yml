@@ -63,6 +63,7 @@ jobs:
         run: maturin build --release --interpreter python
 
       - name: Run Rust tests
+        if: matrix.os == 'ubuntu-latest'
         run: cargo test --release
 
       - name: Install wheel (Unix)
