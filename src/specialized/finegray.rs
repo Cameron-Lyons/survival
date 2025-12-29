@@ -49,8 +49,8 @@ pub(crate) fn compute_finegray(
                 j
             };
             let j_start = j_initial + 1;
-            for j in j_start..ncut {
-                if keep[j] {
+            for &k in keep.iter().take(ncut).skip(j_start) {
+                if k {
                     extra += 1;
                 }
             }
