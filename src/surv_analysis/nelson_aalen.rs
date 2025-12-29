@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use rayon::prelude::*;
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct NelsonAalenResult {
@@ -64,11 +65,19 @@ pub fn nelson_aalen(
     let default_weights: Vec<f64> = vec![1.0; n];
     let weights = weights.unwrap_or(&default_weights);
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n > 10000 {
+        indices.par_sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
     let mut unique_times: Vec<f64> = Vec::new();
     let mut events_at_time: Vec<f64> = Vec::new();
     let mut at_risk: Vec<f64> = Vec::new();
@@ -225,21 +234,26 @@ pub fn stratified_km(
     let mut all_ci_upper = Vec::new();
     let mut all_n_risk = Vec::new();
     let mut all_n_events = Vec::new();
-    for &stratum in &unique_strata {
-        let mask: Vec<bool> = strata.iter().map(|&s| s == stratum).collect();
-        let stratum_time: Vec<f64> = time
-            .iter()
-            .zip(&mask)
-            .filter(|&(_, m)| *m)
-            .map(|(&t, _)| t)
-            .collect();
-        let stratum_status: Vec<i32> = status
-            .iter()
-            .zip(&mask)
-            .filter(|&(_, m)| *m)
-            .map(|(&s, _)| s)
-            .collect();
-        let result = kaplan_meier(&stratum_time, &stratum_status, None, confidence_level);
+    let stratum_results: Vec<_> = unique_strata
+        .par_iter()
+        .map(|&stratum| {
+            let mask: Vec<bool> = strata.iter().map(|&s| s == stratum).collect();
+            let stratum_time: Vec<f64> = time
+                .iter()
+                .zip(&mask)
+                .filter(|&(_, m)| *m)
+                .map(|(&t, _)| t)
+                .collect();
+            let stratum_status: Vec<i32> = status
+                .iter()
+                .zip(&mask)
+                .filter(|&(_, m)| *m)
+                .map(|(&s, _)| s)
+                .collect();
+            kaplan_meier(&stratum_time, &stratum_status, None, confidence_level)
+        })
+        .collect();
+    for result in stratum_results {
         all_times.push(result.time);
         all_survival.push(result.survival);
         all_ci_lower.push(result.ci_lower);
@@ -286,11 +300,19 @@ fn kaplan_meier(
     let default_weights: Vec<f64> = vec![1.0; n];
     let weights = weights.unwrap_or(&default_weights);
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n > 10000 {
+        indices.par_sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
     let mut unique_times: Vec<f64> = Vec::new();
     let mut events_at_time: Vec<f64> = Vec::new();
     let mut at_risk: Vec<f64> = Vec::new();

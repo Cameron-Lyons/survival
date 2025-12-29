@@ -384,8 +384,8 @@ impl CoxPHModel {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         let mut cumulative_risk = vec![0.0; n];
-        let mut cumulative_weighted_cov = vec![vec![0.0; nvar]; n];
-        let mut cumulative_weighted_cov_sq = vec![vec![0.0; nvar]; n];
+        let mut cumulative_weighted_cov = vec![0.0; n * nvar];
+        let mut cumulative_weighted_cov_sq = vec![0.0; n * nvar];
         let mut running_risk = 0.0;
         let mut running_weighted_cov = vec![0.0; nvar];
         let mut running_weighted_cov_sq = vec![0.0; nvar];
@@ -398,8 +398,9 @@ impl CoxPHModel {
                 running_weighted_cov_sq[k] += risk_j * cov_jk * cov_jk;
             }
             cumulative_risk[pos] = running_risk;
-            cumulative_weighted_cov[pos] = running_weighted_cov.clone();
-            cumulative_weighted_cov_sq[pos] = running_weighted_cov_sq.clone();
+            let base = pos * nvar;
+            cumulative_weighted_cov[base..base + nvar].copy_from_slice(&running_weighted_cov);
+            cumulative_weighted_cov_sq[base..base + nvar].copy_from_slice(&running_weighted_cov_sq);
         }
         let mut index_to_pos = vec![0usize; n];
         for (pos, &idx) in sorted_indices.iter().enumerate() {
@@ -414,10 +415,11 @@ impl CoxPHModel {
                 if risk_set_sum <= 0.0 {
                     return None;
                 }
+                let base = pos * nvar;
                 let contrib: Vec<f64> = (0..nvar)
                     .map(|k| {
-                        let weighted_cov = cumulative_weighted_cov[pos][k];
-                        let weighted_cov_sq = cumulative_weighted_cov_sq[pos][k];
+                        let weighted_cov = cumulative_weighted_cov[base + k];
+                        let weighted_cov_sq = cumulative_weighted_cov_sq[base + k];
                         let mean_cov = weighted_cov / risk_set_sum;
                         weighted_cov_sq / risk_set_sum - mean_cov * mean_cov
                     })

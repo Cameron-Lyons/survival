@@ -24,9 +24,8 @@ pub fn norisk(
     let mut ndeath = 0;
     let mut istrat = 0;
     let mut j = 0;
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..n {
-        let p2 = sort2_slice[i] as usize;
+    for (i, &sort2_i) in sort2_slice.iter().enumerate() {
+        let p2 = sort2_i as usize;
         let dtime = time2_slice[p2];
         if i == strata_slice.get(istrat).copied().unwrap_or(n as i32) as usize {
             while j < i {

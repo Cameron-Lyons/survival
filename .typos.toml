@@ -1,5 +1,4 @@
 [default.extend-words]
-# Statistical terms that are not typos
 cdf = "cdf"
 nvar = "nvar"
 ser = "ser"

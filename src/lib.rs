@@ -11,8 +11,8 @@ mod surv_analysis;
 mod tests;
 mod utilities;
 mod validation;
-pub use concordance::concordance::concordance as compute_concordance;
-use concordance::concordance::concordance as concordance_fn;
+pub use concordance::basic::concordance as compute_concordance;
+use concordance::basic::concordance as concordance_fn;
 pub use concordance::concordance1::perform_concordance1_calculation;
 pub use concordance::concordance3::perform_concordance3_calculation;
 pub use concordance::concordance5::perform_concordance_calculation;
@@ -59,8 +59,8 @@ pub use validation::calibration::{
 pub use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
 pub use validation::landmark::{
     ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
-    SurvivalAtTimeResult, conditional_survival, hazard_ratio, landmark_analysis, life_table,
-    survival_at_times,
+    SurvivalAtTimeResult, conditional_survival, hazard_ratio, landmark_analysis,
+    landmark_analysis_batch, life_table, survival_at_times,
 };
 pub use validation::logrank::{
     LogRankResult, TrendTestResult, fleming_harrington_test, logrank_test, logrank_trend,
@@ -143,6 +143,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cumulative_incidence, &m)?)?;
     m.add_function(wrap_pyfunction!(number_needed_to_treat, &m)?)?;
     m.add_function(wrap_pyfunction!(landmark_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(landmark_analysis_batch, &m)?)?;
     m.add_function(wrap_pyfunction!(conditional_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(hazard_ratio, &m)?)?;
     m.add_function(wrap_pyfunction!(survival_at_times, &m)?)?;

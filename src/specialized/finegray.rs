@@ -39,12 +39,11 @@ pub(crate) fn compute_finegray(
     assert_eq!(cprob.len(), ncut);
     assert_eq!(keep.len(), ncut);
     let mut extra = 0;
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..n {
-        if extend[i] && !tstart[i].is_nan() && !tstop[i].is_nan() {
+    for (&ext, (&ts, &te)) in extend.iter().zip(tstart.iter().zip(tstop.iter())) {
+        if ext && !ts.is_nan() && !te.is_nan() {
             let j_initial = {
                 let mut j = 0;
-                while j < ncut && ctime[j] < tstop[i] {
+                while j < ncut && ctime[j] < te {
                     j += 1;
                 }
                 j
@@ -63,12 +62,9 @@ pub(crate) fn compute_finegray(
     let mut end = Vec::with_capacity(total);
     let mut wt = Vec::with_capacity(total);
     let mut add = Vec::with_capacity(total);
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..n {
-        let original_start = tstart[i];
-        let original_end = tstop[i];
+    for (i, ((&original_start, &original_end), &ext)) in tstart.iter().zip(tstop.iter()).zip(extend.iter()).enumerate() {
         let is_valid = !original_start.is_nan() && !original_end.is_nan();
-        let is_extended = extend[i] && is_valid;
+        let is_extended = ext && is_valid;
         let (current_end, temp_wt, j_initial) = if is_extended {
             let mut j = 0;
             while j < ncut && ctime[j] < original_end {

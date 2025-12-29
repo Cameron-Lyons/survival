@@ -39,8 +39,8 @@ pub fn agscore2(
         let mut e_denom = 0.0;
         let mut deaths = 0.0;
         let mut meanwt = 0.0;
-        a.iter_mut().for_each(|x| *x = 0.0);
-        a2.iter_mut().for_each(|x| *x = 0.0);
+        a.fill(0.0);
+        a2.fill(0.0);
         let mut k = person;
         while k < n && strata[k] == strata[person] {
             if tstart[k] < time {
@@ -86,9 +86,9 @@ pub fn agscore2(
             let meanwt_norm = meanwt / deaths;
             let mut temp1 = 0.0;
             let mut temp2 = 0.0;
-            mh1.iter_mut().for_each(|x| *x = 0.0);
-            mh2.iter_mut().for_each(|x| *x = 0.0);
-            mh3.iter_mut().for_each(|x| *x = 0.0);
+            mh1.fill(0.0);
+            mh2.fill(0.0);
+            mh3.fill(0.0);
             for dd in 0..deaths as usize {
                 let downwt = dd as f64 / deaths;
                 let d2 = denom - downwt * e_denom;

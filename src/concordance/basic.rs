@@ -1,6 +1,7 @@
 #![allow(clippy::explicit_counter_loop)]
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use rayon::prelude::*;
 #[pyfunction]
 pub fn concordance(
     y: Vec<f64>,
@@ -43,16 +44,36 @@ pub fn concordance(
                 if x[jj] == xsave {
                     count[2] += 1.0;
                 } else {
-                    #[allow(clippy::needless_range_loop)]
-                    for k in 0..i {
-                        let kk = sortstop[k];
-                        if x[kk] != x[jj] {
-                            if (x[kk] < x[jj] && y[kk] > current_time)
-                                || (x[kk] > x[jj] && y[kk] < current_time)
-                            {
-                                count[0] += 1.0;
-                            } else {
-                                count[1] += 1.0;
+                    if i > 1000 {
+                        let (concordant, discordant): (f64, f64) = (0..i)
+                            .into_par_iter()
+                            .map(|k| {
+                                let kk = sortstop[k];
+                                if x[kk] != x[jj] {
+                                    if (x[kk] < x[jj] && y[kk] > current_time)
+                                        || (x[kk] > x[jj] && y[kk] < current_time)
+                                    {
+                                        (1.0, 0.0)
+                                    } else {
+                                        (0.0, 1.0)
+                                    }
+                                } else {
+                                    (0.0, 0.0)
+                                }
+                            })
+                            .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+                        count[0] += concordant;
+                        count[1] += discordant;
+                    } else {
+                        for &kk in &sortstop[..i] {
+                            if x[kk] != x[jj] {
+                                if (x[kk] < x[jj] && y[kk] > current_time)
+                                    || (x[kk] > x[jj] && y[kk] < current_time)
+                                {
+                                    count[0] += 1.0;
+                                } else {
+                                    count[1] += 1.0;
+                                }
                             }
                         }
                     }
@@ -62,9 +83,7 @@ pub fn concordance(
                 ndeath += 1;
             }
             count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
-            #[allow(clippy::needless_range_loop)]
-            for j in i..(i + ndeath) {
-                let jj = sortstop[j];
+            for &jj in &sortstop[i..i + ndeath] {
                 addin(&mut nwt, &mut twt, x[jj] as usize, wt[jj]);
             }
             i += ndeath;

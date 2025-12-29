@@ -85,12 +85,13 @@ pub fn compute_survfitkm(
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let mut event_times = Vec::new();
-    let mut n_risk_vec = Vec::new();
-    let mut n_event_vec = Vec::new();
-    let mut n_censor_vec = Vec::new();
-    let mut estimate_vec = Vec::new();
-    let mut std_err_vec = Vec::new();
+    let estimated_events = (n / 10).max(16);
+    let mut event_times = Vec::with_capacity(estimated_events);
+    let mut n_risk_vec = Vec::with_capacity(estimated_events);
+    let mut n_event_vec = Vec::with_capacity(estimated_events);
+    let mut n_censor_vec = Vec::with_capacity(estimated_events);
+    let mut estimate_vec = Vec::with_capacity(estimated_events);
+    let mut std_err_vec = Vec::with_capacity(estimated_events);
     let mut current_risk: f64 = weights.iter().sum();
     let mut current_estimate = 1.0;
     let mut cumulative_variance = 0.0;

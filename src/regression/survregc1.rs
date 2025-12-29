@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use thiserror::Error;
+
+type SurvregDerivatives = (f64, f64, f64, f64, f64, f64);
+
 const SMALL: f64 = -200.0;
 const SPI: f64 = 2.506628274631001;
 const ROOT_2: f64 = std::f64::consts::SQRT_2;
@@ -117,13 +120,12 @@ pub fn survregc1(
     }
     Ok(result)
 }
-#[allow(clippy::type_complexity)]
 fn compute_exact(
     z: f64,
     sz: f64,
     sigma: f64,
     dist: SurvivalDist,
-) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
     let (f, df, ddf) = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 1)?,
         SurvivalDist::Logistic => logistic_d(z, 1)?,
@@ -143,13 +145,12 @@ fn compute_exact(
         Ok((g, dg, ddg, dsig - 1.0, ddsig, dsg))
     }
 }
-#[allow(clippy::type_complexity)]
 fn compute_right_censored(
     z: f64,
     sz: f64,
     sigma: f64,
     dist: SurvivalDist,
-) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
     let (f, df, _ddf) = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic => logistic_d(z, 2)?,
@@ -168,13 +169,12 @@ fn compute_right_censored(
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
-#[allow(clippy::type_complexity)]
 fn compute_left_censored(
     z: f64,
     sz: f64,
     sigma: f64,
     dist: SurvivalDist,
-) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
     let (f, df, _ddf) = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic => logistic_d(z, 2)?,
@@ -193,7 +193,6 @@ fn compute_left_censored(
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
-#[allow(clippy::type_complexity)]
 fn compute_interval_censored(
     z: f64,
     sz: f64,
@@ -201,7 +200,7 @@ fn compute_interval_censored(
     eta: f64,
     sigma: f64,
     dist: SurvivalDist,
-) -> Result<(f64, f64, f64, f64, f64, f64), Box<dyn std::error::Error>> {
+) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
     let sz2 = time2 - eta;
     let z2 = sz2 / sigma;
     let (f1, df1, _ddf1) = match dist {
@@ -301,7 +300,6 @@ fn erf(x: f64) -> f64 {
 fn erfc(x: f64) -> f64 {
     1.0 - erf(x)
 }
-#[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
 fn update_derivatives(
     res: &mut SurvivalLikelihood,

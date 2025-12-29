@@ -1,6 +1,7 @@
 use itertools::Itertools;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use rayon::prelude::*;
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn agexact(
@@ -33,32 +34,68 @@ pub fn agexact(
     let (score, newvar) = rest.split_at_mut(n);
     let _index = &mut work2[0..n];
     let atrisk = &mut work2[n..2 * n];
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..nvar_usize {
-        if nocenter[i] == 0 {
-            means[i] = 0.0;
-        } else {
-            let mut sum = 0.0;
-            #[allow(clippy::needless_range_loop)]
-            for j in 0..n {
-                sum += covar[i * n + j];
+    if nvar_usize > 4 {
+        let mean_updates: Vec<(usize, f64)> = (0..nvar_usize)
+            .into_par_iter()
+            .filter_map(|i| {
+                if nocenter[i] == 0 {
+                    Some((i, 0.0))
+                } else {
+                    let sum: f64 = (0..n).map(|j| covar[i * n + j]).sum();
+                    Some((i, sum / n as f64))
+                }
+            })
+            .collect();
+        for (i, mean_val) in mean_updates {
+            means[i] = mean_val;
+            if nocenter[i] != 0 {
+                for j in 0..n {
+                    covar[i * n + j] -= mean_val;
+                }
             }
-            means[i] = sum / n as f64;
-            let mean_val = means[i];
-            #[allow(clippy::needless_range_loop)]
-            for j in 0..n {
-                covar[i * n + j] -= mean_val;
+        }
+    } else {
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..nvar_usize {
+            if nocenter[i] == 0 {
+                means[i] = 0.0;
+            } else {
+                let mut sum = 0.0;
+                #[allow(clippy::needless_range_loop)]
+                for j in 0..n {
+                    sum += covar[i * n + j];
+                }
+                means[i] = sum / n as f64;
+                let mean_val = means[i];
+                #[allow(clippy::needless_range_loop)]
+                for j in 0..n {
+                    covar[i * n + j] -= mean_val;
+                }
             }
         }
     }
-    #[allow(clippy::needless_range_loop)]
-    for person in 0..n {
-        let mut zbeta = 0.0;
+    if n > 1000 {
+        let scores: Vec<f64> = (0..n)
+            .into_par_iter()
+            .map(|person| {
+                let mut zbeta = 0.0;
+                for i in 0..nvar_usize {
+                    zbeta += beta[i] * covar[i * n + person];
+                }
+                (zbeta + offset[person]).exp()
+            })
+            .collect();
+        score.copy_from_slice(&scores);
+    } else {
         #[allow(clippy::needless_range_loop)]
-        for i in 0..nvar_usize {
-            zbeta += beta[i] * covar[i * n + person];
+        for person in 0..n {
+            let mut zbeta = 0.0;
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..nvar_usize {
+                zbeta += beta[i] * covar[i * n + person];
+            }
+            score[person] = (zbeta + offset[person]).exp();
         }
-        score[person] = (zbeta + offset[person]).exp();
     }
     if loglik.len() < 2 {
         loglik.resize(2, 0.0);
