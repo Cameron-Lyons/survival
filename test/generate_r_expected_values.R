@@ -89,9 +89,9 @@ results$aml$wilcoxon <- list(
 cox_breslow <- coxph(Surv(time, status) ~ x, data = aml, method = "breslow")
 cox_summary <- summary(cox_breslow)
 results$aml$coxph_breslow <- list(
-  coefficients = as.vector(coef(cox_breslow)),
-  se = as.vector(cox_summary$coefficients[, "se(coef)"]),
-  hazard_ratio = as.vector(exp(coef(cox_breslow))),
+  coefficients = I(as.vector(coef(cox_breslow))),
+  se = I(as.vector(cox_summary$coefficients[, "se(coef)"])),
+  hazard_ratio = I(as.vector(exp(coef(cox_breslow)))),
   hr_lower = as.numeric(exp(confint(cox_breslow))[1]),
   hr_upper = as.numeric(exp(confint(cox_breslow))[2]),
   loglik = as.vector(cox_breslow$loglik),
@@ -103,9 +103,9 @@ results$aml$coxph_breslow <- list(
 
 cox_efron <- coxph(Surv(time, status) ~ x, data = aml, method = "efron")
 results$aml$coxph_efron <- list(
-  coefficients = as.vector(coef(cox_efron)),
-  se = as.vector(summary(cox_efron)$coefficients[, "se(coef)"]),
-  hazard_ratio = as.vector(exp(coef(cox_efron))),
+  coefficients = I(as.vector(coef(cox_efron))),
+  se = I(as.vector(summary(cox_efron)$coefficients[, "se(coef)"])),
+  hazard_ratio = I(as.vector(exp(coef(cox_efron)))),
   loglik = as.vector(cox_efron$loglik)
 )
 
@@ -237,10 +237,10 @@ same_time_data <- data.frame(
 )
 km_same <- survfit(Surv(time, status) ~ 1, data = same_time_data)
 results$edge_cases$all_same_time <- list(
-  time = km_same$time,
-  survival = km_same$surv,
-  n_risk = km_same$n.risk,
-  n_event = km_same$n.event
+  time = I(km_same$time),
+  survival = I(km_same$surv),
+  n_risk = I(km_same$n.risk),
+  n_event = I(km_same$n.event)
 )
 
 simple_data <- data.frame(
