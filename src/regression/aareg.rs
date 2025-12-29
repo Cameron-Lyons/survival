@@ -189,9 +189,7 @@ fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     let mut formula_parts = formula.splitn(2, '~');
     let response = formula_parts
         .next()
-        .ok_or_else(|| {
-            AaregError::Formula("Formula is missing a response variable.".to_string())
-        })?
+        .ok_or_else(|| AaregError::Formula("Formula is missing a response variable.".to_string()))?
         .trim()
         .to_string();
     let covariates_str = formula_parts
@@ -258,9 +256,7 @@ fn handle_missing_data(
                 .map(|(i, _)| i)
                 .collect();
             if not_nan_rows.is_empty() {
-                Err(AaregError::Input(
-                    "All rows contain NaN values".to_string(),
-                ))
+                Err(AaregError::Input("All rows contain NaN values".to_string()))
             } else {
                 Ok(data.select(Axis(0), &not_nan_rows))
             }
@@ -287,9 +283,9 @@ fn prepare_data_for_regression(
     })?;
     let mut covariate_indices = Vec::new();
     for cov_name in covariate_names {
-        let idx = name_to_index.get(cov_name).ok_or_else(|| {
-            AaregError::Formula(format!("Covariate '{}' not found.", cov_name))
-        })?;
+        let idx = name_to_index
+            .get(cov_name)
+            .ok_or_else(|| AaregError::Formula(format!("Covariate '{}' not found.", cov_name)))?;
         covariate_indices.push(*idx);
     }
     let y = data.column(*response_index).to_owned();
@@ -371,9 +367,9 @@ fn perform_aalen_regression(
         let xtx = at_risk_design.t().dot(&at_risk_design);
         let d_n = vec![1.0; at_risk.len()];
         let xt_dn = at_risk_design.t().dot(&Array1::from_vec(d_n.clone()));
-        let beta_increment = xtx.solve_into(xt_dn).map_err(|_| {
-            AaregError::Calculation("Failed to solve linear system".to_string())
-        })?;
+        let beta_increment = xtx
+            .solve_into(xt_dn)
+            .map_err(|_| AaregError::Calculation("Failed to solve linear system".to_string()))?;
         for (cum_coef, &inc) in cumulative_coefficients
             .iter_mut()
             .zip(beta_increment.iter())
