@@ -80,10 +80,10 @@ mod tests {
         let (time, status) = aml_maintained();
         let results = compute_survival_at_times(&time, &status, &[9.0, 13.0, 18.0, 23.0], 0.95);
 
-        assert!(approx_eq(results[0].survival, 0.9090909, STANDARD_TOL));
-        assert!(approx_eq(results[1].survival, 0.8181818, STANDARD_TOL));
-        assert!(approx_eq(results[2].survival, 0.7272727, STANDARD_TOL));
-        assert!(approx_eq(results[3].survival, 0.6363636, STANDARD_TOL));
+        assert!(approx_eq(results[0].survival, 0.90909090909, STANDARD_TOL));
+        assert!(approx_eq(results[1].survival, 0.81818181818, STANDARD_TOL));
+        assert!(approx_eq(results[2].survival, 0.71590909091, STANDARD_TOL));
+        assert!(approx_eq(results[3].survival, 0.61363636364, STANDARD_TOL));
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
             0.95,
         );
 
-        let expected = [0.9091, 0.8182, 0.7273, 0.6364, 0.5455, 0.4545, 0.3409];
+        let expected = [0.9091, 0.8182, 0.7159, 0.6136, 0.4909, 0.3682, 0.1841];
 
         for (i, &exp) in expected.iter().enumerate() {
             if i < results.len() {

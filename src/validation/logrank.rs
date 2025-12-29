@@ -72,10 +72,11 @@ fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
     if x < 0.0 || a <= 0.0 {
         return 0.0;
     }
+    let gamma_a = ln_gamma(a).exp();
     if x < a + 1.0 {
         gamma_series(a, x)
     } else {
-        ln_gamma(a).exp() - gamma_continued_fraction(a, x)
+        gamma_a * (1.0 - gamma_continued_fraction(a, x))
     }
 }
 fn gamma_series(a: f64, x: f64) -> f64 {
