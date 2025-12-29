@@ -7,7 +7,12 @@ authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 license = "MIT"
 repository = "https://github.com/Cameron-Lyons/survival-rs"
-keywords = ["survival-analysis", "statistics", "biostatistics", "cox-regression"]
+keywords = [
+  "survival-analysis",
+  "statistics",
+  "biostatistics",
+  "cox-regression",
+]
 categories = ["science", "mathematics"]
 
 [lib]
@@ -20,7 +25,7 @@ ndarray = "0.17.1"
 numpy = "0.27.1"
 itertools = "0.14.0"
 libc = "0.2.178"
-ndarray-stats = "0.6.0"
+ndarray-stats = "0.7.0"
 statrs = "0.18.0"
 thiserror = "2.0.17"
 rayon = "1.11.0"
@@ -30,6 +35,10 @@ ndarray-linalg = { version = "0.18.0", features = ["openblas-system"] }
 
 [target.'cfg(windows)'.dependencies]
 ndarray-linalg = { version = "0.18.0", features = ["intel-mkl-static"] }
+
+[dev-dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.148"
 
 [profile.release]
 lto = true
