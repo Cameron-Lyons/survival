@@ -86,23 +86,19 @@ data = [
     [3.0, 0.0, 2.5],
 ]
 variable_names = ["time", "event", "covariate1"]
+
+# Create options with required parameters (formula, data, variable_names)
 options = AaregOptions(
     formula="time + event ~ covariate1",
     data=data,
     variable_names=variable_names,
-    weights=None,
-    subset=None,
-    na_action=None,
-    qrtol=1e-8,
-    nmin=None,
-    dfbeta=False,
-    taper=0.0,
-    test=[],
-    cluster=None,
-    model=False,
-    x=False,
-    y=False,
 )
+
+# Optional: modify default values via setters
+# options.weights = [1.0, 1.0, 1.0]
+# options.qrtol = 1e-8
+# options.dfbeta = True
+
 result = aareg(options)
 print(result)
 ```
@@ -480,6 +476,7 @@ print(f"Variance matrix: {result.variance}")
 
 **Landmark Analysis:**
 - `landmark_analysis(...)`: Perform landmark analysis
+- `landmark_analysis_batch(...)`: Perform batch landmark analysis at multiple time points
 - `conditional_survival(...)`: Calculate conditional survival
 - `hazard_ratio(...)`: Calculate hazard ratios
 - `survival_at_times(...)`: Calculate survival at specific time points
@@ -567,14 +564,11 @@ The codebase is organized with:
 
 - [PyO3](https://github.com/PyO3/pyo3) - Python bindings
 - [ndarray](https://github.com/rust-ndarray/ndarray) - N-dimensional arrays
-- [numpy](https://github.com/PyO3/rust-numpy) - NumPy integration
 - [ndarray-linalg](https://github.com/rust-ndarray/ndarray-linalg) - Linear algebra
 - [itertools](https://github.com/rust-itertools/itertools) - Iterator utilities
-- [ndarray-stats](https://github.com/rust-ndarray/ndarray-stats) - Statistical functions
 - [statrs](https://github.com/statrs-dev/statrs) - Statistical distributions
 - [thiserror](https://github.com/dtolnay/thiserror) - Error handling
 - [rayon](https://github.com/rayon-rs/rayon) - Parallel computation
-- [libc](https://github.com/rust-lang/libc) - C library bindings
 
 ## Compatibility
 
@@ -583,4 +577,4 @@ The codebase is organized with:
 
 ## License
 
-See [LICENSE](LICENSE).
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
