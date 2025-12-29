@@ -1,7 +1,9 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+
+type CoxCallbackResult = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<i32>);
+
 #[pyfunction]
-#[allow(clippy::type_complexity)]
 pub fn cox_callback(
     which: i32,
     mut coef: Vec<f64>,
@@ -10,7 +12,7 @@ pub fn cox_callback(
     mut penalty: Vec<f64>,
     mut flag: Vec<i32>,
     fexpr: &Bound<PyAny>,
-) -> PyResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<i32>)> {
+) -> PyResult<CoxCallbackResult> {
     let py = fexpr.py();
     let coef_vec: Vec<f64> = coef.to_vec();
     let coef_list = PyList::new(py, &coef_vec)?;

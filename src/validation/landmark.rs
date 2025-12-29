@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use rayon::prelude::*;
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct LandmarkResult {
@@ -68,6 +69,24 @@ pub fn landmark_analysis(
     landmark_time: f64,
 ) -> PyResult<LandmarkResult> {
     Ok(compute_landmark(&time, &status, landmark_time))
+}
+pub fn compute_landmarks_parallel(
+    time: &[f64],
+    status: &[i32],
+    landmark_times: &[f64],
+) -> Vec<LandmarkResult> {
+    landmark_times
+        .par_iter()
+        .map(|&lt| compute_landmark(time, status, lt))
+        .collect()
+}
+#[pyfunction]
+pub fn landmark_analysis_batch(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    landmark_times: Vec<f64>,
+) -> PyResult<Vec<LandmarkResult>> {
+    Ok(compute_landmarks_parallel(&time, &status, &landmark_times))
 }
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -507,35 +526,71 @@ pub fn compute_survival_at_times(
     } else {
         1.28
     };
-    let mut results = Vec::with_capacity(eval_times.len());
-    for &t in eval_times {
-        let (survival, var, n_risk, n_ev) = if event_times.is_empty() || t < event_times[0] {
-            (1.0, 0.0, n, 0)
-        } else {
-            let idx = event_times.partition_point(|&et| et <= t);
-            if idx == 0 {
+    let results: Vec<SurvivalAtTimeResult> = if eval_times.len() > 100 {
+        eval_times
+            .par_iter()
+            .map(|&t| {
+                let (survival, var, n_risk, n_ev) = if event_times.is_empty() || t < event_times[0]
+                {
+                    (1.0, 0.0, n, 0)
+                } else {
+                    let idx = event_times.partition_point(|&et| et <= t);
+                    if idx == 0 {
+                        (1.0, 0.0, n, 0)
+                    } else {
+                        (
+                            survival_vals[idx - 1],
+                            var_vals[idx - 1],
+                            n_risk_vals[idx - 1],
+                            cum_events[idx - 1],
+                        )
+                    }
+                };
+                let se = var.sqrt();
+                let ci_lower = (survival - z * se).clamp(0.0, 1.0);
+                let ci_upper = (survival + z * se).clamp(0.0, 1.0);
+                SurvivalAtTimeResult {
+                    time: t,
+                    survival,
+                    ci_lower,
+                    ci_upper,
+                    n_at_risk: n_risk,
+                    n_events: n_ev,
+                }
+            })
+            .collect()
+    } else {
+        let mut results = Vec::with_capacity(eval_times.len());
+        for &t in eval_times {
+            let (survival, var, n_risk, n_ev) = if event_times.is_empty() || t < event_times[0] {
                 (1.0, 0.0, n, 0)
             } else {
-                (
-                    survival_vals[idx - 1],
-                    var_vals[idx - 1],
-                    n_risk_vals[idx - 1],
-                    cum_events[idx - 1],
-                )
-            }
-        };
-        let se = var.sqrt();
-        let ci_lower = (survival - z * se).clamp(0.0, 1.0);
-        let ci_upper = (survival + z * se).clamp(0.0, 1.0);
-        results.push(SurvivalAtTimeResult {
-            time: t,
-            survival,
-            ci_lower,
-            ci_upper,
-            n_at_risk: n_risk,
-            n_events: n_ev,
-        });
-    }
+                let idx = event_times.partition_point(|&et| et <= t);
+                if idx == 0 {
+                    (1.0, 0.0, n, 0)
+                } else {
+                    (
+                        survival_vals[idx - 1],
+                        var_vals[idx - 1],
+                        n_risk_vals[idx - 1],
+                        cum_events[idx - 1],
+                    )
+                }
+            };
+            let se = var.sqrt();
+            let ci_lower = (survival - z * se).clamp(0.0, 1.0);
+            let ci_upper = (survival + z * se).clamp(0.0, 1.0);
+            results.push(SurvivalAtTimeResult {
+                time: t,
+                survival,
+                ci_lower,
+                ci_upper,
+                n_at_risk: n_risk,
+                n_events: n_ev,
+            });
+        }
+        results
+    };
     results
 }
 #[pyfunction]

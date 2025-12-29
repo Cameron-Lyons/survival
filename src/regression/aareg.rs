@@ -130,34 +130,32 @@ struct Diagnostics {
     additional_measures: Option<Vec<f64>>,
 }
 #[derive(Debug)]
-#[allow(clippy::enum_variant_names)]
 enum AaregError {
-    DataError(String),
-    FormulaError(String),
-    WeightsError(String),
-    CalculationError(String),
-    InputError(String),
+    Data(String),
+    Formula(String),
+    Weights(String),
+    Calculation(String),
+    Input(String),
     #[allow(dead_code)]
-    InternalError(String),
-    GenericError(String),
+    Internal(String),
+    Generic(String),
 }
 impl fmt::Display for AaregError {
-    #[allow(clippy::too_many_arguments)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AaregError::DataError(msg) => write!(f, "Data Error: {}", msg),
-            AaregError::FormulaError(msg) => write!(f, "Formula Error: {}", msg),
-            AaregError::WeightsError(msg) => write!(f, "Weights Error: {}", msg),
-            AaregError::CalculationError(msg) => write!(f, "Calculation Error: {}", msg),
-            AaregError::InputError(msg) => write!(f, "Input Error: {}", msg),
-            AaregError::InternalError(msg) => write!(f, "Internal Error: {}", msg),
-            AaregError::GenericError(msg) => write!(f, "Generic Error: {}", msg),
+            AaregError::Data(msg) => write!(f, "Data Error: {}", msg),
+            AaregError::Formula(msg) => write!(f, "Formula Error: {}", msg),
+            AaregError::Weights(msg) => write!(f, "Weights Error: {}", msg),
+            AaregError::Calculation(msg) => write!(f, "Calculation Error: {}", msg),
+            AaregError::Input(msg) => write!(f, "Input Error: {}", msg),
+            AaregError::Internal(msg) => write!(f, "Internal Error: {}", msg),
+            AaregError::Generic(msg) => write!(f, "Generic Error: {}", msg),
         }
     }
 }
 impl From<pyo3::PyErr> for AaregError {
     fn from(err: pyo3::PyErr) -> AaregError {
-        AaregError::GenericError(err.to_string())
+        AaregError::Generic(err.to_string())
     }
 }
 impl From<AaregError> for PyErr {
@@ -172,7 +170,7 @@ pub fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
         (options.data.len(), options.data[0].len()),
         options.data.clone().into_iter().flatten().collect(),
     )
-    .map_err(|e| AaregError::DataError(e.to_string()))?;
+    .map_err(|e| AaregError::Data(e.to_string()))?;
     let (response_name, covariate_names) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&data_array, &options.subset)?;
     let weighted_data = apply_weights(&subset_data, options.weights.clone())?;
@@ -192,13 +190,13 @@ fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     let response = formula_parts
         .next()
         .ok_or_else(|| {
-            AaregError::FormulaError("Formula is missing a response variable.".to_string())
+            AaregError::Formula("Formula is missing a response variable.".to_string())
         })?
         .trim()
         .to_string();
     let covariates_str = formula_parts
         .next()
-        .ok_or_else(|| AaregError::FormulaError("Formula is missing covariates.".to_string()))?
+        .ok_or_else(|| AaregError::Formula("Formula is missing covariates.".to_string()))?
         .trim();
     let covariates = covariates_str
         .split('+')
@@ -213,7 +211,7 @@ fn apply_subset(
     match subset {
         Some(s) => {
             if s.iter().any(|&i| i >= data.nrows()) {
-                return Err(AaregError::DataError(
+                return Err(AaregError::Data(
                     "Subset indices are out of bounds".to_string(),
                 ));
             }
@@ -227,7 +225,7 @@ fn apply_weights(data: &Array2<f64>, weights: Option<Vec<f64>>) -> Result<Array2
     match weights {
         Some(w) => {
             if w.len() != data.nrows() {
-                return Err(AaregError::WeightsError(
+                return Err(AaregError::Weights(
                     "Weights length does not match number of observations".to_string(),
                 ));
             }
@@ -245,7 +243,7 @@ fn handle_missing_data(
     match na_action.as_deref() {
         Some("Fail") => {
             if data.iter().any(|x| x.is_nan()) {
-                Err(AaregError::InputError(
+                Err(AaregError::Input(
                     "Invalid input: missing values in data".to_string(),
                 ))
             } else {
@@ -260,14 +258,14 @@ fn handle_missing_data(
                 .map(|(i, _)| i)
                 .collect();
             if not_nan_rows.is_empty() {
-                Err(AaregError::InputError(
+                Err(AaregError::Input(
                     "All rows contain NaN values".to_string(),
                 ))
             } else {
                 Ok(data.select(Axis(0), &not_nan_rows))
             }
         }
-        Some(other) => Err(AaregError::InputError(format!(
+        Some(other) => Err(AaregError::Input(format!(
             "Invalid na_action '{}'. Expected 'Fail' or 'Exclude'.",
             other
         ))),
@@ -285,12 +283,12 @@ fn prepare_data_for_regression(
         name_to_index.insert(name.clone(), i);
     }
     let response_index = name_to_index.get(response_name).ok_or_else(|| {
-        AaregError::FormulaError(format!("Response variable '{}' not found.", response_name))
+        AaregError::Formula(format!("Response variable '{}' not found.", response_name))
     })?;
     let mut covariate_indices = Vec::new();
     for cov_name in covariate_names {
         let idx = name_to_index.get(cov_name).ok_or_else(|| {
-            AaregError::FormulaError(format!("Covariate '{}' not found.", cov_name))
+            AaregError::Formula(format!("Covariate '{}' not found.", cov_name))
         })?;
         covariate_indices.push(*idx);
     }
@@ -306,19 +304,19 @@ fn perform_aalen_regression(
     let n = y.len();
     let p = x.ncols();
     if n == 0 || p == 0 {
-        return Err(AaregError::DataError(
+        return Err(AaregError::Data(
             "Empty dataset or no covariates".to_string(),
         ));
     }
     if n < p {
-        return Err(AaregError::DataError(
+        return Err(AaregError::Data(
             "More covariates than observations".to_string(),
         ));
     }
     if let Some(nmin) = options.nmin
         && n < nmin
     {
-        return Err(AaregError::DataError(format!(
+        return Err(AaregError::Data(format!(
             "Number of observations ({}) is less than minimum required ({})",
             n, nmin
         )));
@@ -374,7 +372,7 @@ fn perform_aalen_regression(
         let d_n = vec![1.0; at_risk.len()];
         let xt_dn = at_risk_design.t().dot(&Array1::from_vec(d_n.clone()));
         let beta_increment = xtx.solve_into(xt_dn).map_err(|_| {
-            AaregError::CalculationError("Failed to solve linear system".to_string())
+            AaregError::Calculation("Failed to solve linear system".to_string())
         })?;
         for (cum_coef, &inc) in cumulative_coefficients
             .iter_mut()

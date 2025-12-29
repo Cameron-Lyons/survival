@@ -185,10 +185,11 @@ impl CoxFit {
                     denom += risk;
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar {
-                        a[i] += risk * self.covar[(person_i, i)];
+                        let covar_i = self.covar[(person_i, i)];
+                        let risk_covar_i = risk * covar_i;
+                        a[i] += risk_covar_i;
                         for j in 0..=i {
-                            cmat[(i, j)] +=
-                                risk * self.covar[(person_i, i)] * self.covar[(person_i, j)];
+                            cmat[(i, j)] += risk_covar_i * self.covar[(person_i, j)];
                         }
                     }
                 } else {
@@ -198,11 +199,12 @@ impl CoxFit {
                     loglik += self.weights[person_i] * zbeta;
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar {
-                        self.u[i] += self.weights[person_i] * self.covar[(person_i, i)];
-                        a2[i] += risk * self.covar[(person_i, i)];
+                        let covar_i = self.covar[(person_i, i)];
+                        self.u[i] += self.weights[person_i] * covar_i;
+                        let risk_covar_i = risk * covar_i;
+                        a2[i] += risk_covar_i;
                         for j in 0..=i {
-                            cmat2[(i, j)] +=
-                                risk * self.covar[(person_i, i)] * self.covar[(person_i, j)];
+                            cmat2[(i, j)] += risk_covar_i * self.covar[(person_i, j)];
                         }
                     }
                 }

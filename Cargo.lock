@@ -686,15 +686,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -904,30 +895,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ndarray-stats"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b6e54a8b65764f71827a90ca1d56965ec0c67f069f996477bd493402a901d1f"
-dependencies = [
- "indexmap",
- "itertools 0.13.0",
- "ndarray",
- "noisy_float",
- "num-integer",
- "num-traits",
- "rand",
-]
-
-[[package]]
-name = "noisy_float"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "978fe6e6ebc0bf53de533cd456ca2d9de13de13856eda1518a285d7705a213af"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "num-bigint"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -978,22 +945,6 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
-]
-
-[[package]]
-name = "numpy"
-version = "0.27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7aac2e6a6e4468ffa092ad43c39b81c79196c2bb773b8db4085f695efe3bba17"
-dependencies = [
- "libc",
- "ndarray",
- "num-complex",
- "num-integer",
- "num-traits",
- "pyo3",
- "pyo3-build-config",
- "rustc-hash",
 ]
 
 [[package]]
@@ -1428,12 +1379,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc-hash"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
-
-[[package]]
 name = "rustix"
 version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1693,12 +1638,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "survival"
 version = "1.0.11"
 dependencies = [
- "itertools 0.14.0",
- "libc",
+ "itertools",
  "ndarray",
  "ndarray-linalg",
- "ndarray-stats",
- "numpy",
  "pyo3",
  "rayon",
  "serde",

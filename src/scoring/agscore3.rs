@@ -48,8 +48,8 @@ pub fn agscore3(
             }
             cumhaz = 0.0;
             denom = 0.0;
-            a.iter_mut().for_each(|x| *x = 0.0);
-            xhaz.iter_mut().for_each(|x| *x = 0.0);
+            a.fill(0.0);
+            xhaz.fill(0.0);
             current_stratum = strata[person];
         } else {
             while i1 > 0 && tstart[sort1[i1]] >= dtime {
@@ -69,7 +69,7 @@ pub fn agscore3(
         let mut e_denom = 0.0;
         let mut deaths = 0.0;
         let mut meanwt = 0.0;
-        a2.iter_mut().for_each(|x| *x = 0.0);
+        a2.fill(0.0);
         let mut processed = 0;
         while person > 0 && tstop[person] == dtime {
             if strata[person] != current_stratum {
@@ -107,9 +107,9 @@ pub fn agscore3(
                     }
                 }
             } else {
-                mh1.iter_mut().for_each(|x| *x = 0.0);
-                mh2.iter_mut().for_each(|x| *x = 0.0);
-                mh3.iter_mut().for_each(|x| *x = 0.0);
+                mh1.fill(0.0);
+                mh2.fill(0.0);
+                mh3.fill(0.0);
                 meanwt /= deaths;
                 for dd in 0..deaths as i32 {
                     let downwt = dd as f64 / deaths;

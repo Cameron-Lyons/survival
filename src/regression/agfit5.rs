@@ -75,10 +75,10 @@ impl CoxState {
         let nvar = beta.len();
         let nfrail = self.frail.len();
         let nvar2 = nvar + nfrail;
-        self.a.iter_mut().for_each(|x| *x = 0.0);
-        self.a2.iter_mut().for_each(|x| *x = 0.0);
-        u.iter_mut().for_each(|x| *x = 0.0);
-        imat.iter_mut().for_each(|x| *x = 0.0);
+        self.a.fill(0.0);
+        self.a2.fill(0.0);
+        u.fill(0.0);
+        imat.fill(0.0);
         for person in 0..self.weights.len() {
             let mut zbeta = self.offset[person];
             for (i, beta_val) in beta.iter().enumerate().take(nvar) {

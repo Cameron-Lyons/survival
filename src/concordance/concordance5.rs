@@ -1,5 +1,6 @@
 use super::common::{build_concordance_result, validate_extended_concordance_inputs};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 struct FenwickTree {
     tree: Vec<f64>,
 }
@@ -89,24 +90,48 @@ pub fn concordance5(
                 }
                 ndeath += 1;
             }
-            #[allow(clippy::needless_range_loop)]
-            for j in i..(i + ndeath) {
-                let jj = sortstop[j];
-                if y[n + jj] == 1.0 {
-                    let wsum = walkup(&nwt, &fenwick, x[jj] as usize);
-                    count[0] += wt[jj] * wsum[0] * adjtimewt;
-                    count[1] += wt[jj] * wsum[1] * adjtimewt;
-                    count[2] += wt[jj] * wsum[2] * adjtimewt;
+            if ndeath > 100 {
+                let results: Vec<_> = (i..(i + ndeath))
+                    .into_par_iter()
+                    .filter_map(|j| {
+                        let jj = sortstop[j];
+                        if y[n + jj] == 1.0 {
+                            let wsum = walkup(&nwt, &fenwick, x[jj] as usize);
+                            let c0 = wt[jj] * wsum[0] * adjtimewt;
+                            let c1 = wt[jj] * wsum[1] * adjtimewt;
+                            let c2 = wt[jj] * wsum[2] * adjtimewt;
+                            let z2_val = compute_z2(wt[jj], &wsum);
+                            Some((jj, wsum, c0, c1, c2, z2_val))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for (jj, wsum, c0, c1, c2, z2_val) in results {
+                    count[0] += c0;
+                    count[1] += c1;
+                    count[2] += c2;
                     imat[jj] += wsum[1] * adjtimewt;
                     imat[n + jj] += wsum[0] * adjtimewt;
                     imat[2 * n + jj] += wsum[2] * adjtimewt;
-                    z2 += compute_z2(wt[jj], &wsum);
+                    z2 += z2_val;
+                }
+            } else {
+                for &jj in &sortstop[i..i + ndeath] {
+                    if y[n + jj] == 1.0 {
+                        let wsum = walkup(&nwt, &fenwick, x[jj] as usize);
+                        count[0] += wt[jj] * wsum[0] * adjtimewt;
+                        count[1] += wt[jj] * wsum[1] * adjtimewt;
+                        count[2] += wt[jj] * wsum[2] * adjtimewt;
+                        imat[jj] += wsum[1] * adjtimewt;
+                        imat[n + jj] += wsum[0] * adjtimewt;
+                        imat[2 * n + jj] += wsum[2] * adjtimewt;
+                        z2 += compute_z2(wt[jj], &wsum);
+                    }
                 }
             }
             count[4] += (ndeath as f64) * (ndeath as f64 - 1.0) / 2.0;
-            #[allow(clippy::needless_range_loop)]
-            for j in i..(i + ndeath) {
-                let jj = sortstop[j];
+            for &jj in &sortstop[i..i + ndeath] {
                 addin(&mut nwt, &mut fenwick, x[jj] as usize, wt[jj]);
             }
             i += ndeath;

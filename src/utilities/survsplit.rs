@@ -47,12 +47,11 @@ pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> SplitResul
             result.censor.push(false);
             continue;
         }
-        let mut cuts_in_interval = Vec::new();
-        for &c in &cut {
-            if c > current_start && c < current_stop {
-                cuts_in_interval.push(c);
-            }
-        }
+        let mut cuts_in_interval: Vec<f64> = cut
+            .iter()
+            .copied()
+            .filter(|&c| c > current_start && c < current_stop)
+            .collect();
         cuts_in_interval
             .sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mut current = current_start;

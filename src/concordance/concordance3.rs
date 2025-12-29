@@ -4,6 +4,7 @@ use super::common::{
     walkup_binary_tree,
 };
 use pyo3::prelude::*;
+use rayon::prelude::*;
 fn compute_z2(wt: f64, wsum: &[f64]) -> f64 {
     wt * (wsum[0] * (wt + 2.0 * (wsum[1] + wsum[2]))
         + wsum[1] * (wt + 2.0 * (wsum[0] + wsum[2]))
@@ -69,9 +70,8 @@ pub fn concordance3(
                 add_to_binary_tree(dnwt, dtwt, x[jj] as usize, adjtimewt * wt[jj]);
                 j += 1;
             }
-            #[allow(clippy::needless_range_loop)]
-            for j in i..(i + ndeath) {
-                let jj = sortstop[j] as usize;
+            for &sort_j in &sortstop[i..i + ndeath] {
+                let jj = sort_j as usize;
                 let wsum_death = walkup_binary_tree(dnwt, dtwt, x[jj] as usize, ntree);
                 imat[jj] -= wsum_death[1];
                 imat[n + jj] -= wsum_death[0];
@@ -81,27 +81,41 @@ pub fn concordance3(
                 add_to_binary_tree(nwt_main, twt, x[jj] as usize, wt[jj]);
             }
             if doresid {
-                let mut event_idx = 0;
-                #[allow(clippy::needless_range_loop)]
-                for j in i..(i + ndeath) {
-                    let jj = sortstop[j] as usize;
+                for (event_idx, &sort_j) in sortstop[i..i + ndeath].iter().enumerate() {
+                    let jj = sort_j as usize;
                     let wsum = walkup_binary_tree(nwt_main, twt, x[jj] as usize, ntree);
                     resid[event_idx * 3] = wsum[0];
                     resid[event_idx * 3 + 1] = wsum[1];
                     resid[event_idx * 3 + 2] = wsum[2];
-                    event_idx += 1;
                 }
             }
             count[5] += dwt * adjtimewt * z2 / twt[0];
             i += ndeath;
         }
     }
-    for &sort_idx in sortstop.iter().take(n) {
-        let ii = sort_idx as usize;
-        let wsum = walkup_binary_tree(dnwt, dtwt, x[ii] as usize, ntree);
-        imat[ii] += wsum[1];
-        imat[n + ii] += wsum[0];
-        imat[2 * n + ii] += wsum[2];
+    if n > 1000 {
+        let updates: Vec<_> = sortstop
+            .par_iter()
+            .take(n)
+            .map(|&sort_idx| {
+                let ii = sort_idx as usize;
+                let wsum = walkup_binary_tree(dnwt, dtwt, x[ii] as usize, ntree);
+                (ii, wsum)
+            })
+            .collect();
+        for (ii, wsum) in updates {
+            imat[ii] += wsum[1];
+            imat[n + ii] += wsum[0];
+            imat[2 * n + ii] += wsum[2];
+        }
+    } else {
+        for &sort_idx in sortstop.iter().take(n) {
+            let ii = sort_idx as usize;
+            let wsum = walkup_binary_tree(dnwt, dtwt, x[ii] as usize, ntree);
+            imat[ii] += wsum[1];
+            imat[n + ii] += wsum[0];
+            imat[2 * n + ii] += wsum[2];
+        }
     }
     let resid_opt = if doresid { Some(resid) } else { None };
     (count, imat, resid_opt)
