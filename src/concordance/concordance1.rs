@@ -98,7 +98,11 @@ pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64>
         if twt[0] > 0.0 {
             count[4] += ndeath * vss / twt[0];
         }
-        i = j;
+        if j == i {
+            i -= 1;
+        } else {
+            i = j;
+        }
     }
     count
 }
