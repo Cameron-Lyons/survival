@@ -62,6 +62,9 @@ jobs:
       - name: Build with maturin
         run: maturin build --release --interpreter python
 
+      - name: Run Rust tests
+        run: cargo test --release
+
       - name: Install wheel (Unix)
         if: matrix.os != 'windows-latest'
         run: pip install target/wheels/survival_rs-*.whl
@@ -72,7 +75,7 @@ jobs:
           $wheel = Get-ChildItem -Path target/wheels -Filter "survival_rs-*.whl" | Select-Object -First 1
           pip install $wheel.FullName
 
-      - name: Run tests
+      - name: Run Python tests
         run: python test/test_all.py
 
   python-matrix:
@@ -85,13 +88,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install OpenBLAS
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -122,8 +125,43 @@ jobs:
           maturin build --release --interpreter python
           pip install target/wheels/survival_rs-*.whl
 
-      - name: Run tests
+      - name: Run Rust tests
+        run: cargo test --release
+
+      - name: Run Python tests
         run: python test/test_all.py
+
+  r-validation:
+    name: R Survival Package Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.2'
+
+      - name: Install R dependencies
+        run: |
+          install.packages(c("survival", "jsonlite"), repos = "https://cloud.r-project.org")
+        shell: Rscript {0}
+
+      - name: Regenerate expected values
+        run: |
+          cd test
+          Rscript generate_r_expected_values.R
+
+      - name: Check for differences
+        run: |
+          if git diff --exit-code test/r_expected_values.json; then
+            echo "✓ R expected values are up to date"
+          else
+            echo "✗ R expected values have changed!"
+            echo "Please run 'Rscript test/generate_r_expected_values.R' and commit the changes"
+            exit 1
+          fi
 
   docs:
     name: Documentation

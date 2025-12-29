@@ -1706,7 +1706,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "survival"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "itertools 0.14.0",
  "libc",
@@ -1716,6 +1716,8 @@ dependencies = [
  "numpy",
  "pyo3",
  "rayon",
+ "serde",
+ "serde_json",
  "statrs",
  "thiserror 2.0.17",
 ]
