@@ -62,7 +62,12 @@ pub(crate) fn compute_finegray(
     let mut end = Vec::with_capacity(total);
     let mut wt = Vec::with_capacity(total);
     let mut add = Vec::with_capacity(total);
-    for (i, ((&original_start, &original_end), &ext)) in tstart.iter().zip(tstop.iter()).zip(extend.iter()).enumerate() {
+    for (i, ((&original_start, &original_end), &ext)) in tstart
+        .iter()
+        .zip(tstop.iter())
+        .zip(extend.iter())
+        .enumerate()
+    {
         let is_valid = !original_start.is_nan() && !original_end.is_nan();
         let is_extended = ext && is_valid;
         let (current_end, temp_wt, j_initial) = if is_extended {
