@@ -23,21 +23,16 @@ mod tests {
         (a - b).abs() / max_abs < rel_tol
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct RExpectedValues {
         metadata: Metadata,
         aml: AmlData,
         lung: LungData,
         ovarian: OvarianData,
-        veteran: VeteranData,
         edge_cases: EdgeCases,
-        sample_size: SampleSizeData,
         rmst: RmstData,
-        concordance: ConcordanceData,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct Metadata {
         survival_version: String,
@@ -45,31 +40,25 @@ mod tests {
         generated_at: String,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct AmlData {
         maintained: DataGroup,
         nonmaintained: DataGroup,
         combined: CombinedDataGroup,
         km_maintained: KaplanMeierResult,
-        km_nonmaintained: KaplanMeierResult,
         nelson_aalen_maintained: NelsonAalenResult,
         logrank: LogRankResult,
         wilcoxon: WilcoxonResult,
         coxph_breslow: CoxphResult,
         coxph_efron: CoxphEfronResult,
-        median_survival: MedianSurvival,
-        martingale_residuals: MartingaleResiduals,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct DataGroup {
         time: Vec<f64>,
         status: Vec<i32>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct CombinedDataGroup {
         time: Vec<f64>,
@@ -77,92 +66,49 @@ mod tests {
         group: Vec<i32>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct KaplanMeierResult {
         time: Vec<f64>,
-        n_risk: Vec<i32>,
-        n_event: Vec<i32>,
-        n_censor: Option<Vec<i32>>,
         survival: Vec<f64>,
-        std_err: Vec<f64>,
-        lower: Option<Vec<f64>>,
-        upper: Option<Vec<f64>>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct NelsonAalenResult {
         time: Vec<f64>,
-        n_risk: Vec<i32>,
-        n_event: Vec<i32>,
         cumulative_hazard: Vec<f64>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct LogRankResult {
-        n: Vec<i32>,
-        observed: Vec<f64>,
-        expected: Vec<f64>,
         chisq: f64,
         df: i32,
         p_value: f64,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct WilcoxonResult {
         chisq: f64,
-        p_value: f64,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct CoxphResult {
         coefficients: Vec<f64>,
-        se: Vec<f64>,
         hazard_ratio: Vec<f64>,
-        hr_lower: f64,
-        hr_upper: f64,
         loglik: Vec<f64>,
-        score_test: f64,
-        wald_test: f64,
-        lr_test: f64,
-        concordance: f64,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct CoxphEfronResult {
         coefficients: Vec<f64>,
-        se: Vec<f64>,
-        hazard_ratio: Vec<f64>,
         loglik: Vec<f64>,
     }
 
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct MedianSurvival {
-        maintained: f64,
-        nonmaintained: f64,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct MartingaleResiduals {
-        sum: f64,
-    }
-
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct LungData {
         data: LungDataFields,
-        coxph: LungCoxph,
         logrank_sex: LogRankSexResult,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct LungDataFields {
         time: Vec<f64>,
@@ -171,182 +117,69 @@ mod tests {
         age: Vec<f64>,
     }
 
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct LungCoxph {
-        coefficients: Vec<f64>,
-        se: Vec<f64>,
-        hazard_ratio: Vec<f64>,
-        loglik: Vec<f64>,
-        concordance: f64,
-    }
-
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct LogRankSexResult {
         chisq: f64,
-        p_value: f64,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct OvarianData {
         data: OvarianDataFields,
         logrank: OvarianLogrank,
         km: OvarianKm,
-        coxph: OvarianCoxph,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct OvarianDataFields {
         time: Vec<f64>,
         status: Vec<i32>,
         rx: Vec<i32>,
-        age: Vec<f64>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct OvarianLogrank {
         chisq: f64,
-        p_value: f64,
-        observed: Vec<f64>,
-        expected: Vec<f64>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct OvarianKm {
-        time: Vec<f64>,
         survival: Vec<f64>,
-        n_risk: Vec<i32>,
-        n_event: Vec<i32>,
     }
 
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct OvarianCoxph {
-        coefficients: Vec<f64>,
-        se: Vec<f64>,
-        hazard_ratio: Vec<f64>,
-        loglik: Vec<f64>,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct VeteranData {
-        data: VeteranDataFields,
-        km: VeteranKm,
-        coxph: VeteranCoxph,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct VeteranDataFields {
-        time: Vec<f64>,
-        status: Vec<i32>,
-        trt: Vec<i32>,
-        age: Vec<f64>,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct VeteranKm {
-        time: Vec<f64>,
-        survival: Vec<f64>,
-        n_risk: Vec<i32>,
-        n_event: Vec<i32>,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct VeteranCoxph {
-        coefficients: Vec<f64>,
-        hazard_ratio: Vec<f64>,
-        loglik: Vec<f64>,
-    }
-
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct EdgeCases {
         tied_events: EdgeCaseKm,
-        all_same_time: EdgeCaseKm,
         simple_nelson_aalen: SimpleNelsonAalen,
         with_censoring: WithCensoring,
         identical_groups_logrank: IdenticalGroupsLogrank,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct EdgeCaseKm {
         time: Vec<f64>,
         survival: Vec<f64>,
-        n_risk: Vec<i32>,
-        n_event: Vec<i32>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct SimpleNelsonAalen {
-        time: Vec<f64>,
         cumulative_hazard: Vec<f64>,
-        n_risk: Vec<i32>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct WithCensoring {
         time: Vec<f64>,
         cumulative_hazard: Vec<f64>,
-        survival: Vec<f64>,
-        n_risk: Vec<i32>,
-        n_event: Vec<i32>,
     }
 
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct IdenticalGroupsLogrank {
         chisq: f64,
-        p_value: f64,
     }
 
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct SampleSizeData {
-        #[serde(rename = "hr_0.5_power_0.8")]
-        hr_05_power_08: i32,
-        #[serde(rename = "hr_0.6_power_0.8")]
-        hr_06_power_08: i32,
-        #[serde(rename = "hr_0.7_power_0.8")]
-        hr_07_power_08: i32,
-        #[serde(rename = "hr_0.6_power_0.9")]
-        hr_06_power_09: i32,
-    }
-
-    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct RmstData {
         aml_maintained_tau30: f64,
-        aml_maintained_tau48: f64,
         aml_nonmaintained_tau30: f64,
-        aml_nonmaintained_tau48: f64,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct ConcordanceData {
-        aml_coxph: ConcordanceResult,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct ConcordanceResult {
-        concordance: f64,
-        n_concordant: i32,
-        n_discordant: i32,
-        n_tied_risk: i32,
-        n_tied_time: i32,
     }
 
     fn load_expected_values() -> RExpectedValues {
