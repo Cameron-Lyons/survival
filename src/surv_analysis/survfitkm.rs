@@ -2,7 +2,6 @@ use crate::utilities::validation::{
     clamp_probability, validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
-use rayon::prelude::*;
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct SurvFitKMOutput {
@@ -75,65 +74,66 @@ pub fn compute_survfitkm(
     status: &[f64],
     weights: &[f64],
     _entry_times: Option<&[f64]>,
-    position: &[i32],
+    _position: &[i32],
     _reverse: bool,
     _computation_type: i32,
 ) -> SurvFitKMOutput {
-    let mut dtime: Vec<f64> = time
-        .iter()
-        .zip(status)
-        .filter_map(|(&t, &s)| if s > 0.0 { Some(t) } else { None })
-        .collect();
-    dtime.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    dtime.dedup();
-    let ntime = dtime.len();
-    let time_stats: Vec<(f64, f64)> = dtime
-        .par_iter()
-        .map(|&t| {
-            (0..time.len())
-                .into_par_iter()
-                .filter(|&j| (time[j] - t).abs() < 1e-9)
-                .map(|j| {
-                    if status[j] > 0.0 {
-                        (weights[j], 0.0)
-                    } else if position[j] & 2 != 0 {
-                        (0.0, 1.0)
-                    } else {
-                        (0.0, 0.0)
-                    }
-                })
-                .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
-        })
-        .collect();
-    let mut n_risk = vec![0.0; ntime];
-    let mut n_event = vec![0.0; ntime];
-    let mut n_censor = vec![0.0; ntime];
-    let mut estimate = vec![1.0; ntime];
-    let mut std_err = vec![0.0; ntime];
+    let n = time.len();
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut event_times = Vec::new();
+    let mut n_risk_vec = Vec::new();
+    let mut n_event_vec = Vec::new();
+    let mut n_censor_vec = Vec::new();
+    let mut estimate_vec = Vec::new();
+    let mut std_err_vec = Vec::new();
     let mut current_risk: f64 = weights.iter().sum();
     let mut current_estimate = 1.0;
     let mut cumulative_variance = 0.0;
-    for i in (0..ntime).rev() {
-        let (weighted_events, censored) = time_stats[i];
-        let weighted_risk = current_risk;
-        if i < ntime - 1 {
-            current_risk -= weighted_events + censored;
+    let mut i = 0;
+    while i < n {
+        let current_time = time[indices[i]];
+        let mut weighted_events = 0.0;
+        let mut weighted_censor = 0.0;
+        let mut j = i;
+        while j < n && (time[indices[j]] - current_time).abs() < 1e-9 {
+            let idx = indices[j];
+            if status[idx] > 0.0 {
+                weighted_events += weights[idx];
+            } else {
+                weighted_censor += weights[idx];
+            }
+            j += 1;
         }
-        n_risk[i] = weighted_risk;
-        n_event[i] = weighted_events;
-        n_censor[i] = censored;
-        if weighted_risk > 0.0 && weighted_events > 0.0 {
-            let hazard = weighted_events / weighted_risk;
-            current_estimate *= 1.0 - hazard;
-            cumulative_variance += hazard / (weighted_risk - weighted_events);
+        if weighted_events > 0.0 {
+            let risk_at_time = current_risk;
+            event_times.push(current_time);
+            n_risk_vec.push(risk_at_time);
+            n_event_vec.push(weighted_events);
+            n_censor_vec.push(weighted_censor);
+            if risk_at_time > 0.0 {
+                let hazard = weighted_events / risk_at_time;
+                current_estimate *= 1.0 - hazard;
+                if risk_at_time > weighted_events {
+                    cumulative_variance +=
+                        weighted_events / (risk_at_time * (risk_at_time - weighted_events));
+                }
+            }
+            estimate_vec.push(current_estimate);
+            let se = current_estimate * cumulative_variance.sqrt();
+            std_err_vec.push(se);
         }
-        estimate[i] = current_estimate;
-        std_err[i] = (current_estimate * current_estimate * cumulative_variance).sqrt();
+        current_risk -= weighted_events + weighted_censor;
+        i = j;
     }
     let z = 1.96;
-    let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = estimate
-        .par_iter()
-        .zip(std_err.par_iter())
+    let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = estimate_vec
+        .iter()
+        .zip(std_err_vec.iter())
         .map(|(&s, &se)| {
             if s <= 0.0 || s >= 1.0 || se <= 0.0 {
                 (clamp_probability(s), clamp_probability(s))
@@ -148,12 +148,12 @@ pub fn compute_survfitkm(
         })
         .unzip();
     SurvFitKMOutput {
-        time: dtime,
-        n_risk,
-        n_event,
-        n_censor,
-        estimate,
-        std_err,
+        time: event_times,
+        n_risk: n_risk_vec,
+        n_event: n_event_vec,
+        n_censor: n_censor_vec,
+        estimate: estimate_vec,
+        std_err: std_err_vec,
         conf_lower,
         conf_upper,
     }

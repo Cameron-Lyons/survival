@@ -184,8 +184,12 @@ pub fn compute_survdiff(params: SurvDiffParams, input: SurvDiffInput, output: &m
                 for (k, risk_val) in output.risk.iter().take(ngroup).enumerate() {
                     let exp_index = koff + k;
                     output.exp[exp_index] += wt * (deaths as f64) * risk_val / nrisk;
-                    let obs_index = koff + k;
-                    output.obs[obs_index] += (input.status[i] as f64) * wt;
+                }
+                for ti in j..=i {
+                    if input.status[ti] == 1 {
+                        let obs_index = koff + (input.group[ti] - 1) as usize;
+                        output.obs[obs_index] += wt;
+                    }
                 }
                 if nrisk > 1.0 {
                     let wt_sq = wt * wt;

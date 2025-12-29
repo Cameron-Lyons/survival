@@ -158,19 +158,20 @@ impl CoxFit {
         let mut cmat = Array2::zeros((nvar, nvar));
         let mut cmat2 = Array2::zeros((nvar, nvar));
         let mut loglik = 0.0;
+        let mut denom = 0.0;
         let mut person = nused as isize - 1;
         while person >= 0 {
             let person_idx = person as usize;
             if self.strata[person_idx] == 1 {
                 a.fill(0.0);
                 cmat.fill(0.0);
+                denom = 0.0;
             }
             let dtime = self.time[person_idx];
             let mut ndead = 0;
             let mut deadwt = 0.0;
             let mut denom2 = 0.0;
             let mut _nrisk = 0;
-            let mut denom = 0.0;
             while person >= 0 && self.time[person as usize] == dtime {
                 let person_i = person as usize;
                 _nrisk += 1;
@@ -385,12 +386,12 @@ impl CoxFit {
         Ok(())
     }
     fn chinv(mat: &mut Array2<f64>) -> Result<(), CoxError> {
-        let mat_clone = mat.clone();
-        let chol = match mat_clone.cholesky_into(ndarray_linalg::UPLO::Lower) {
-            Ok(chol) => chol,
-            Err(_) => return Err(CoxError::MatrixInversion),
-        };
-        let inv = match chol.inv() {
+        let n = mat.nrows();
+        let mut mat_reg = mat.clone();
+        for i in 0..n {
+            mat_reg[(i, i)] += 1e-10;
+        }
+        let inv = match mat_reg.inv() {
             Ok(inv) => inv,
             Err(_) => return Err(CoxError::MatrixInversion),
         };

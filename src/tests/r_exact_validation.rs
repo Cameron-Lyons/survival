@@ -37,7 +37,7 @@ mod tests {
     struct Metadata {
         survival_version: String,
         r_version: String,
-        generated_at: String,
+        note: String,
     }
 
     #[derive(Debug, Deserialize)]
@@ -280,17 +280,18 @@ mod tests {
 
         let result = nelson_aalen(&aml.maintained.time, &aml.maintained.status, None, 0.95);
 
-        for (i, &r_cumhaz) in aml
-            .nelson_aalen_maintained
-            .cumulative_hazard
-            .iter()
-            .enumerate()
-        {
-            if i < result.cumulative_hazard.len() {
+        for (i, &our_time) in result.time.iter().enumerate() {
+            if let Some(pos) = aml
+                .nelson_aalen_maintained
+                .time
+                .iter()
+                .position(|&t| (t - our_time).abs() < 0.01)
+            {
+                let r_cumhaz = aml.nelson_aalen_maintained.cumulative_hazard[pos];
                 assert!(
                     rel_approx_eq(result.cumulative_hazard[i], r_cumhaz, STANDARD_TOL),
                     "Nelson-Aalen cumhaz at time {}: expected {}, got {}",
-                    aml.nelson_aalen_maintained.time[i],
+                    our_time,
                     r_cumhaz,
                     result.cumulative_hazard[i]
                 );
@@ -304,14 +305,26 @@ mod tests {
         let aml = &expected.aml;
 
         let n = aml.combined.time.len();
+
+        let mut indices: Vec<usize> = (0..n).collect();
+        indices.sort_by(|&a, &b| {
+            aml.combined.time[a]
+                .partial_cmp(&aml.combined.time[b])
+                .unwrap()
+        });
+
+        let time: Vec<f64> = indices.iter().map(|&i| aml.combined.time[i]).collect();
+        let status: Vec<i32> = indices.iter().map(|&i| aml.combined.status[i]).collect();
+        let group: Vec<i32> = indices.iter().map(|&i| aml.combined.group[i]).collect();
+
         let mut covar = Array2::<f64>::zeros((n, 1));
         for i in 0..n {
-            covar[[i, 0]] = aml.combined.group[i] as f64;
+            covar[[i, 0]] = group[i] as f64;
         }
 
         let mut cox_fit = CoxFit::new(
-            Array1::from_vec(aml.combined.time.clone()),
-            Array1::from_vec(aml.combined.status.clone()),
+            Array1::from_vec(time),
+            Array1::from_vec(status),
             covar,
             Array1::zeros(n),
             Array1::zeros(n),
@@ -363,14 +376,26 @@ mod tests {
         let aml = &expected.aml;
 
         let n = aml.combined.time.len();
+
+        let mut indices: Vec<usize> = (0..n).collect();
+        indices.sort_by(|&a, &b| {
+            aml.combined.time[a]
+                .partial_cmp(&aml.combined.time[b])
+                .unwrap()
+        });
+
+        let time: Vec<f64> = indices.iter().map(|&i| aml.combined.time[i]).collect();
+        let status: Vec<i32> = indices.iter().map(|&i| aml.combined.status[i]).collect();
+        let group: Vec<i32> = indices.iter().map(|&i| aml.combined.group[i]).collect();
+
         let mut covar = Array2::<f64>::zeros((n, 1));
         for i in 0..n {
-            covar[[i, 0]] = aml.combined.group[i] as f64;
+            covar[[i, 0]] = group[i] as f64;
         }
 
         let mut cox_fit = CoxFit::new(
-            Array1::from_vec(aml.combined.time.clone()),
-            Array1::from_vec(aml.combined.status.clone()),
+            Array1::from_vec(time),
+            Array1::from_vec(status),
             covar,
             Array1::zeros(n),
             Array1::zeros(n),
@@ -666,8 +691,8 @@ mod tests {
             "r_version should not be empty"
         );
         assert!(
-            !expected.metadata.generated_at.is_empty(),
-            "generated_at should not be empty"
+            !expected.metadata.note.is_empty(),
+            "note should not be empty"
         );
 
         assert_eq!(expected.aml.maintained.time.len(), 11);
