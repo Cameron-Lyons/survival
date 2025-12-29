@@ -43,37 +43,35 @@ pub fn concordance(
                 let jj = sortstop[i + ndeath];
                 if x[jj] == xsave {
                     count[2] += 1.0;
-                } else {
-                    if i > 1000 {
-                        let (concordant, discordant): (f64, f64) = (0..i)
-                            .into_par_iter()
-                            .map(|k| {
-                                let kk = sortstop[k];
-                                if x[kk] != x[jj] {
-                                    if (x[kk] < x[jj] && y[kk] > current_time)
-                                        || (x[kk] > x[jj] && y[kk] < current_time)
-                                    {
-                                        (1.0, 0.0)
-                                    } else {
-                                        (0.0, 1.0)
-                                    }
-                                } else {
-                                    (0.0, 0.0)
-                                }
-                            })
-                            .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
-                        count[0] += concordant;
-                        count[1] += discordant;
-                    } else {
-                        for &kk in &sortstop[..i] {
+                } else if i > 1000 {
+                    let (concordant, discordant): (f64, f64) = (0..i)
+                        .into_par_iter()
+                        .map(|k| {
+                            let kk = sortstop[k];
                             if x[kk] != x[jj] {
                                 if (x[kk] < x[jj] && y[kk] > current_time)
                                     || (x[kk] > x[jj] && y[kk] < current_time)
                                 {
-                                    count[0] += 1.0;
+                                    (1.0, 0.0)
                                 } else {
-                                    count[1] += 1.0;
+                                    (0.0, 1.0)
                                 }
+                            } else {
+                                (0.0, 0.0)
+                            }
+                        })
+                        .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+                    count[0] += concordant;
+                    count[1] += discordant;
+                } else {
+                    for &kk in &sortstop[..i] {
+                        if x[kk] != x[jj] {
+                            if (x[kk] < x[jj] && y[kk] > current_time)
+                                || (x[kk] > x[jj] && y[kk] < current_time)
+                            {
+                                count[0] += 1.0;
+                            } else {
+                                count[1] += 1.0;
                             }
                         }
                     }
