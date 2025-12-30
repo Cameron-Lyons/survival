@@ -27,9 +27,9 @@ pub fn cholesky_solve(
                 reg_matrix[[i, i]] += ridge;
             }
             match reg_matrix.cholesky(UPLO::Lower) {
-                Ok(chol) => chol
-                    .solve(vector)
-                    .map_err(|e| format!("Cholesky solve failed after regularization: {}", e).into()),
+                Ok(chol) => chol.solve(vector).map_err(|e| {
+                    format!("Cholesky solve failed after regularization: {}", e).into()
+                }),
                 Err(_) => Ok(Array1::zeros(vector.len())),
             }
         }

@@ -1,4 +1,4 @@
-use crate::utilities::validation::{validate_length, ValidationError};
+use crate::utilities::validation::{ValidationError, validate_length};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
