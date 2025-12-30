@@ -2,8 +2,9 @@
 #![allow(clippy::redundant_closure)]
 use crate::core::survpenal::{self, MatrixBuffers, PenaltyParams, PenaltyResult};
 use crate::regression::survregc1::SurvivalDist;
+use crate::utilities::matrix::cholesky_solve_with_fallback;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
-use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
+use ndarray_linalg::Inverse;
 #[derive(Debug)]
 pub struct SurvivalResult {
     pub coefficients: Vec<f64>,
@@ -90,19 +91,7 @@ pub fn survreg(
     loglik += penalty_val;
     let mut iter = 0;
     while iter < max_iter {
-        let delta = match hmat.cholesky(UPLO::Lower) {
-            Ok(chol) => chol
-                .solve(&u)
-                .map_err(|_| "Cholesky solve failed".to_string())?,
-            Err(_) => {
-                let jj_chol = jj
-                    .cholesky(UPLO::Lower)
-                    .map_err(|_| "Cholesky decomposition failed".to_string())?;
-                jj_chol
-                    .solve(&u)
-                    .map_err(|_| "Cholesky solve failed".to_string())?
-            }
-        };
+        let delta = cholesky_solve_with_fallback(&hmat, &jj, &u, tol_chol)?;
         newbeta
             .iter_mut()
             .zip(beta.iter().zip(delta.iter()))

@@ -1,6 +1,12 @@
+use crate::utilities::validation::{validate_length, ValidationError};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+
+fn validation_err_to_pyresult<T>(result: Result<T, ValidationError>) -> PyResult<T> {
+    result.map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
 pub fn validate_concordance_inputs(
     time_data_len: usize,
     n: usize,
@@ -10,23 +16,12 @@ pub fn validate_concordance_inputs(
     if n == 0 {
         return Err(PyRuntimeError::new_err("No observations provided"));
     }
-    if time_data_len != 2 * n {
-        return Err(PyRuntimeError::new_err(
-            "Time data should have 2*n elements (time, status)",
-        ));
-    }
-    if indices_len != n {
-        return Err(PyRuntimeError::new_err(
-            "Indices length does not match observations",
-        ));
-    }
-    if weights_len != n {
-        return Err(PyRuntimeError::new_err(
-            "Weights length does not match observations",
-        ));
-    }
+    validation_err_to_pyresult(validate_length(2 * n, time_data_len, "time_data"))?;
+    validation_err_to_pyresult(validate_length(n, indices_len, "indices"))?;
+    validation_err_to_pyresult(validate_length(n, weights_len, "weights"))?;
     Ok(())
 }
+
 pub fn validate_extended_concordance_inputs(
     time_data_len: usize,
     n: usize,
@@ -36,16 +31,8 @@ pub fn validate_extended_concordance_inputs(
     sort_stop_len: usize,
 ) -> PyResult<()> {
     validate_concordance_inputs(time_data_len, n, indices_len, weights_len)?;
-    if time_weights_len != n {
-        return Err(PyRuntimeError::new_err(
-            "Time weights length does not match observations",
-        ));
-    }
-    if sort_stop_len != n {
-        return Err(PyRuntimeError::new_err(
-            "Sort stop length does not match observations",
-        ));
-    }
+    validation_err_to_pyresult(validate_length(n, time_weights_len, "time_weights"))?;
+    validation_err_to_pyresult(validate_length(n, sort_stop_len, "sort_stop"))?;
     Ok(())
 }
 pub fn build_concordance_result(
