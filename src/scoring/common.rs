@@ -1,6 +1,12 @@
+use crate::utilities::validation::{validate_length, ValidationError};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+
+fn validation_err_to_pyresult<T>(result: Result<T, ValidationError>) -> PyResult<T> {
+    result.map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
 pub fn validate_scoring_inputs(
     n: usize,
     time_data_len: usize,
@@ -12,31 +18,15 @@ pub fn validate_scoring_inputs(
     if n == 0 {
         return Err(PyRuntimeError::new_err("No observations provided"));
     }
-    if time_data_len != 3 * n {
-        return Err(PyRuntimeError::new_err(
-            "Time data should have 3*n elements (start, stop, event)",
-        ));
-    }
+    validation_err_to_pyresult(validate_length(3 * n, time_data_len, "time_data"))?;
     if !covariates_len.is_multiple_of(n) {
         return Err(PyRuntimeError::new_err(
             "Covariates length should be divisible by number of observations",
         ));
     }
-    if strata_len != n {
-        return Err(PyRuntimeError::new_err(
-            "Strata length does not match observations",
-        ));
-    }
-    if score_len != n {
-        return Err(PyRuntimeError::new_err(
-            "Score length does not match observations",
-        ));
-    }
-    if weights_len != n {
-        return Err(PyRuntimeError::new_err(
-            "Weights length does not match observations",
-        ));
-    }
+    validation_err_to_pyresult(validate_length(n, strata_len, "strata"))?;
+    validation_err_to_pyresult(validate_length(n, score_len, "score"))?;
+    validation_err_to_pyresult(validate_length(n, weights_len, "weights"))?;
     Ok(())
 }
 pub fn compute_summary_stats(residuals: &[f64], n: usize, nvar: usize) -> Vec<f64> {

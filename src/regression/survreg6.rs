@@ -1,7 +1,7 @@
 #![allow(clippy::redundant_closure)]
 use crate::regression::survregc1::{SurvivalDist, survregc1};
+use crate::utilities::matrix::cholesky_solve;
 use ndarray::{Array1, Array2, ArrayView1};
-use ndarray_linalg::{Cholesky, Solve, UPLO};
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -88,38 +88,6 @@ fn calculate_likelihood(
         }
     }
     Ok(result.loglik)
-}
-fn cholesky_solve(
-    matrix: &Array2<f64>,
-    vector: &Array1<f64>,
-    _tol: f64,
-) -> Result<Array1<f64>, Box<dyn std::error::Error>> {
-    if matrix.nrows() == 0 || matrix.ncols() == 0 {
-        return Ok(Array1::zeros(vector.len()));
-    }
-    let max_val = matrix.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
-    if max_val < 1e-10 {
-        return Ok(Array1::zeros(vector.len()));
-    }
-    match matrix.cholesky(UPLO::Lower) {
-        Ok(chol) => chol
-            .solve(vector)
-            .map_err(|e| format!("Cholesky solve failed: {}", e).into()),
-        Err(_) => {
-            let n = matrix.nrows();
-            let mut reg_matrix = matrix.clone();
-            let ridge = max_val * 1e-6;
-            for i in 0..n {
-                reg_matrix[[i, i]] += ridge;
-            }
-            match reg_matrix.cholesky(UPLO::Lower) {
-                Ok(chol) => chol
-                    .solve(vector)
-                    .map_err(|e| format!("Cholesky solve failed: {}", e).into()),
-                Err(_) => Ok(Array1::zeros(vector.len())),
-            }
-        }
-    }
 }
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
