@@ -28,14 +28,7 @@ python3 test/test_all.py
 
 ## Prerequisites
 
-Before running tests, you must:
-
-1. **Install BLAS libraries** (required for the module to run):
-   - On Arch Linux: `sudo pacman -S openblas`
-   - On Ubuntu/Debian: `sudo apt-get install libopenblas-dev`
-   - On Fedora: `sudo dnf install openblas-devel`
-
-2. **Build and install the Python module** - You have two options:
+Before running tests, you must **build and install the Python module** - You have two options:
 
    ### Option 1: Development Mode (Recommended)
    ```bash
@@ -76,7 +69,7 @@ Before running tests, you must:
 python3 test/test_all.py
 ```
 
-**Note:** The tests will fail with "No module named 'survival'" if the module hasn't been built yet, or with "undefined symbol: cblas_sgemm" if BLAS libraries are missing. Both are expected - just install the prerequisites first.
+**Note:** The tests will fail with "No module named 'survival'" if the module hasn't been built yet. This is expected - just build and install the module first.
 
 ## Note
 

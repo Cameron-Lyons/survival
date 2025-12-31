@@ -21,16 +21,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Install OpenBLAS (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
-
-      - name: Install OpenBLAS (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew install openblas
-          echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -90,9 +80,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-
-      - name: Install OpenBLAS
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -170,9 +157,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-
-      - name: Install OpenBLAS
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
 
       - name: Set up Python
         uses: actions/setup-python@v6

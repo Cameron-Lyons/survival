@@ -9,19 +9,7 @@ def setup_survival_import() -> Any:
         import survival
 
         return survival
-    except ImportError as e:
-        error_msg: str = str(e)
-        if (
-            "cblas" in error_msg.lower()
-            or "blas" in error_msg.lower()
-            or "undefined symbol" in error_msg.lower()
-        ):
-            raise ImportError(
-                f"Failed to import survival module: {error_msg}\n"
-                "This usually means BLAS libraries are missing.\n"
-                "Install BLAS: sudo pacman -S openblas (Arch) or "
-                "sudo apt-get install libopenblas-dev (Ubuntu/Debian)"
-            ) from e
+    except ImportError:
         pass
 
     test_dir: str = os.path.dirname(__file__)
@@ -46,19 +34,7 @@ def setup_survival_import() -> Any:
                     import survival
 
                     return survival
-                except ImportError as import_err:
-                    error_msg: str = str(import_err)
-                    if (
-                        "cblas" in error_msg.lower()
-                        or "blas" in error_msg.lower()
-                        or "undefined symbol" in error_msg.lower()
-                    ):
-                        raise ImportError(
-                            f"Failed to import survival module: {error_msg}\n"
-                            "This usually means BLAS libraries are missing.\n"
-                            "Install BLAS: sudo pacman -S openblas (Arch) or "
-                            "sudo apt-get install libopenblas-dev (Ubuntu/Debian)"
-                        ) from import_err
+                except ImportError:
                     raise
             except Exception as e:
                 if isinstance(e, ImportError):

@@ -1,5 +1,5 @@
+use crate::utilities::matrix::lu_solve;
 use ndarray::{Array1, Array2};
-use ndarray_linalg::Solve;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use thiserror::Error;
@@ -337,9 +337,7 @@ impl PSpline {
                 }
             })?;
         let b_array = Array1::from_vec(b);
-        let x = a_array
-            .solve_into(b_array)
-            .map_err(|_| PSplineError::LinearSolveError)?;
+        let x = lu_solve(&a_array, &b_array).ok_or(PSplineError::LinearSolveError)?;
         Ok(x.to_vec())
     }
 }
