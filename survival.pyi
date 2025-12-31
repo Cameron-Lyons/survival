@@ -1,42 +1,41 @@
-from typing import Optional, List, Tuple, Dict, Any
-from typing_extensions import Protocol
+from typing import Any
 
 class AaregOptions:
     def __init__(
         self,
         formula: str,
-        data: List[List[float]],
-        variable_names: List[str],
-        weights: Optional[List[float]] = None,
-        subset: Optional[List[int]] = None,
-        na_action: Optional[str] = None,
+        data: list[list[float]],
+        variable_names: list[str],
+        weights: list[float] | None = None,
+        subset: list[int] | None = None,
+        na_action: str | None = None,
         qrtol: float = 1e-8,
-        nmin: Optional[int] = None,
+        nmin: int | None = None,
         dfbeta: bool = False,
         taper: float = 0.0,
-        test: List[str] = ...,
-        cluster: Optional[List[int]] = None,
+        test: list[str] = ...,
+        cluster: list[int] | None = None,
         model: bool = False,
         x: bool = False,
         y: bool = False,
     ) -> None: ...
 
 class PSpline:
-    coefficients: Optional[List[float]]
+    coefficients: list[float] | None
     fitted: bool
     def __init__(
         self,
-        x: List[float],
+        x: list[float],
         df: int,
         theta: float,
         eps: float,
         method: str,
-        boundary_knots: Tuple[float, float],
+        boundary_knots: tuple[float, float],
         intercept: bool,
         penalty: bool,
     ) -> None: ...
-    def fit(self) -> List[float]: ...
-    def predict(self, new_x: List[float]) -> List[float]: ...
+    def fit(self) -> list[float]: ...
+    def predict(self, new_x: list[float]) -> list[float]: ...
     @property
     def df(self) -> int: ...
     @property
@@ -54,96 +53,96 @@ class LinkFunctionParams:
 
 class Subject:
     id: int
-    covariates: List[float]
+    covariates: list[float]
     is_case: bool
     is_subcohort: bool
     stratum: int
     def __init__(
         self,
         id: int,
-        covariates: List[float],
+        covariates: list[float],
         is_case: bool,
         is_subcohort: bool,
         stratum: int,
     ) -> None: ...
 
 class CoxPHModel:
-    baseline_hazard: List[float]
-    risk_scores: List[float]
-    event_times: List[float]
-    censoring: List[int]
+    baseline_hazard: list[float]
+    risk_scores: list[float]
+    event_times: list[float]
+    censoring: list[int]
     def __init__(self) -> None: ...
     @staticmethod
     def new_with_data(
-        covariates: List[List[float]],
-        event_times: List[float],
-        censoring: List[int],
+        covariates: list[list[float]],
+        event_times: list[float],
+        censoring: list[int],
     ) -> "CoxPHModel": ...
     def fit(self, n_iters: int = 20) -> None: ...
-    def predict(self, covariates: List[List[float]]) -> List[float]: ...
-    def get_coefficients(self) -> List[List[float]]: ...
+    def predict(self, covariates: list[list[float]]) -> list[float]: ...
+    def get_coefficients(self) -> list[list[float]]: ...
     def brier_score(self) -> float: ...
     def survival_curve(
         self,
-        covariates: List[List[float]],
-        time_points: Optional[List[float]] = None,
-    ) -> Tuple[List[float], List[List[float]]]: ...
+        covariates: list[list[float]],
+        time_points: list[float] | None = None,
+    ) -> tuple[list[float], list[list[float]]]: ...
     def add_subject(self, subject: Subject) -> None: ...
-    def hazard_ratios(self) -> List[float]: ...
+    def hazard_ratios(self) -> list[float]: ...
     def hazard_ratios_with_ci(
         self, confidence_level: float = 0.95
-    ) -> Tuple[List[float], List[float], List[float]]: ...
+    ) -> tuple[list[float], list[float], list[float]]: ...
     def log_likelihood(self) -> float: ...
     def aic(self) -> float: ...
     def bic(self) -> float: ...
     def cumulative_hazard(
-        self, covariates: List[List[float]]
-    ) -> Tuple[List[float], List[List[float]]]: ...
+        self, covariates: list[list[float]]
+    ) -> tuple[list[float], list[list[float]]]: ...
     def predicted_survival_time(
-        self, covariates: List[List[float]], percentile: float = 0.5
-    ) -> List[Optional[float]]: ...
+        self, covariates: list[list[float]], percentile: float = 0.5
+    ) -> list[float | None]: ...
     def restricted_mean_survival_time(
-        self, covariates: List[List[float]], tau: float
-    ) -> List[float]: ...
-    def martingale_residuals(self) -> List[float]: ...
-    def deviance_residuals(self) -> List[float]: ...
-    def dfbeta(self) -> List[List[float]]: ...
+        self, covariates: list[list[float]], tau: float
+    ) -> list[float]: ...
+    def martingale_residuals(self) -> list[float]: ...
+    def deviance_residuals(self) -> list[float]: ...
+    def dfbeta(self) -> list[list[float]]: ...
     def n_events(self) -> int: ...
     def n_observations(self) -> int: ...
     def summary(self) -> str: ...
 
 class SurvFitKMOutput:
-    time: List[float]
-    n_risk: List[float]
-    n_event: List[float]
-    n_censor: List[float]
-    estimate: List[float]
-    std_err: List[float]
-    conf_lower: List[float]
-    conf_upper: List[float]
+    time: list[float]
+    n_risk: list[float]
+    n_event: list[float]
+    n_censor: list[float]
+    estimate: list[float]
+    std_err: list[float]
+    conf_lower: list[float]
+    conf_upper: list[float]
 
 class FineGrayOutput:
-    row: List[int]
-    start: List[float]
-    end: List[float]
-    wt: List[float]
-    add: List[int]
+    row: list[int]
+    start: list[float]
+    end: list[float]
+    wt: list[float]
+    add: list[int]
 
 class SurvivalFit:
-    coefficients: List[float]
+    coefficients: list[float]
     iterations: int
-    variance_matrix: List[List[float]]
+    variance_matrix: list[list[float]]
     log_likelihood: float
     convergence_flag: int
-    score_vector: List[float]
+    score_vector: list[float]
 
 class DistributionType:
     pass
 
 class SurvDiffResult:
-    observed: List[float]
-    expected: List[float]
-    variance: List[List[float]]
+    observed: list[float]
+    expected: list[float]
+    variance: list[list[float]]
     chi_squared: float
     degrees_of_freedom: int
 
@@ -162,24 +161,24 @@ class CohortData:
     def fit(self, method: "CchMethod") -> CoxPHModel: ...
 
 class SurvFitAJ:
-    n_risk: List[List[float]]
-    n_event: List[List[float]]
-    n_censor: List[List[float]]
-    pstate: List[List[float]]
-    cumhaz: List[List[float]]
-    std_err: Optional[List[List[float]]]
-    std_chaz: Optional[List[List[float]]]
-    std_auc: Optional[List[List[float]]]
-    influence: Optional[List[List[float]]]
-    n_enter: Optional[List[List[float]]]
-    n_transition: List[List[float]]
+    n_risk: list[list[float]]
+    n_event: list[list[float]]
+    n_censor: list[list[float]]
+    pstate: list[list[float]]
+    cumhaz: list[list[float]]
+    std_err: list[list[float]] | None
+    std_chaz: list[list[float]] | None
+    std_auc: list[list[float]] | None
+    influence: list[list[float]] | None
+    n_enter: list[list[float]] | None
+    n_transition: list[list[float]]
 
 class SplitResult:
-    row: List[int]
-    interval: List[int]
-    start: List[float]
-    end: List[float]
-    censor: List[bool]
+    row: list[int]
+    interval: list[int]
+    start: list[float]
+    end: list[float]
+    censor: list[bool]
 
 class ClogitDataSet:
     def __init__(self) -> None: ...
@@ -187,13 +186,13 @@ class ClogitDataSet:
         self,
         case_control_status: int,
         stratum: int,
-        covariates: List[float],
+        covariates: list[float],
     ) -> None: ...
     def get_num_observations(self) -> int: ...
     def get_num_covariates(self) -> int: ...
 
 class ConditionalLogisticRegression:
-    coefficients: List[float]
+    coefficients: list[float]
     max_iter: int
     tol: float
     iterations: int
@@ -205,18 +204,18 @@ class ConditionalLogisticRegression:
         tol: float = 1e-6,
     ) -> None: ...
     def fit(self) -> None: ...
-    def predict(self, covariates: List[float]) -> float: ...
-    def odds_ratios(self) -> List[float]: ...
+    def predict(self, covariates: list[float]) -> float: ...
+    def odds_ratios(self) -> list[float]: ...
 
 class BootstrapResult:
-    coefficients: List[float]
-    ci_lower: List[float]
-    ci_upper: List[float]
-    se: List[float]
+    coefficients: list[float]
+    ci_lower: list[float]
+    ci_upper: list[float]
+    se: list[float]
     n_bootstrap: int
 
 class CVResult:
-    scores: List[float]
+    scores: list[float]
     mean_score: float
     se_score: float
     n_folds: int
@@ -228,38 +227,38 @@ class TestResult:
     test_type: str
 
 class ProportionalityTest:
-    variable_names: List[str]
-    chi_squared: List[float]
-    p_values: List[float]
+    variable_names: list[str]
+    chi_squared: list[float]
+    p_values: list[float]
     global_chi_squared: float
     global_p_value: float
     global_df: int
 
 class NelsonAalenResult:
-    time: List[float]
-    cumulative_hazard: List[float]
-    variance: List[float]
-    ci_lower: List[float]
-    ci_upper: List[float]
-    n_risk: List[int]
-    n_events: List[int]
-    def survival(self) -> List[float]: ...
+    time: list[float]
+    cumulative_hazard: list[float]
+    variance: list[float]
+    ci_lower: list[float]
+    ci_upper: list[float]
+    n_risk: list[int]
+    n_events: list[int]
+    def survival(self) -> list[float]: ...
 
 class StratifiedKMResult:
-    strata: List[int]
-    times: List[List[float]]
-    survival: List[List[float]]
-    ci_lower: List[List[float]]
-    ci_upper: List[List[float]]
-    n_risk: List[List[int]]
-    n_events: List[List[int]]
+    strata: list[int]
+    times: list[list[float]]
+    survival: list[list[float]]
+    ci_lower: list[list[float]]
+    ci_upper: list[list[float]]
+    n_risk: list[list[int]]
+    n_events: list[list[int]]
 
 class LogRankResult:
     statistic: float
     p_value: float
     df: int
-    observed: List[float]
-    expected: List[float]
+    observed: list[float]
+    expected: list[float]
     variance: float
     weight_type: str
 
@@ -271,7 +270,7 @@ class TrendTestResult:
 class SampleSizeResult:
     n_total: int
     n_events: int
-    n_per_group: List[int]
+    n_per_group: list[int]
     power: float
     alpha: float
     hazard_ratio: float
@@ -285,31 +284,31 @@ class AccrualResult:
     expected_events: float
 
 class CalibrationResult:
-    risk_groups: List[float]
-    predicted: List[float]
-    observed: List[float]
-    n_per_group: List[int]
+    risk_groups: list[float]
+    predicted: list[float]
+    observed: list[float]
+    n_per_group: list[int]
     hosmer_lemeshow_stat: float
     hosmer_lemeshow_pvalue: float
     calibration_slope: float
     calibration_intercept: float
 
 class PredictionResult:
-    linear_predictor: List[float]
-    risk_score: List[float]
-    survival_prob: List[List[float]]
-    times: List[float]
+    linear_predictor: list[float]
+    risk_score: list[float]
+    survival_prob: list[list[float]]
+    times: list[float]
 
 class RiskStratificationResult:
-    risk_groups: List[int]
-    cutpoints: List[float]
-    group_sizes: List[int]
-    group_event_rates: List[float]
-    group_median_risk: List[float]
+    risk_groups: list[int]
+    cutpoints: list[float]
+    group_sizes: list[int]
+    group_event_rates: list[float]
+    group_median_risk: list[float]
 
 class TdAUCResult:
-    times: List[float]
-    auc: List[float]
+    times: list[float]
+    auc: list[float]
     integrated_auc: float
 
 class RMSTResult:
@@ -333,17 +332,17 @@ class RMSTComparisonResult:
     rmst_group2: RMSTResult
 
 class MedianSurvivalResult:
-    median: Optional[float]
-    ci_lower: Optional[float]
-    ci_upper: Optional[float]
+    median: float | None
+    ci_lower: float | None
+    ci_upper: float | None
     quantile: float
 
 class CumulativeIncidenceResult:
-    time: List[float]
-    cif: List[List[float]]
-    variance: List[List[float]]
-    event_types: List[int]
-    n_risk: List[int]
+    time: list[float]
+    cif: list[list[float]]
+    variance: list[list[float]]
+    event_types: list[int]
+    n_risk: list[int]
 
 class NNTResult:
     nnt: float
@@ -358,9 +357,9 @@ class LandmarkResult:
     landmark_time: float
     n_at_risk: int
     n_excluded: int
-    time: List[float]
-    status: List[int]
-    original_indices: List[int]
+    time: list[float]
+    status: list[int]
+    original_indices: list[int]
 
 class ConditionalSurvivalResult:
     given_time: float
@@ -387,79 +386,79 @@ class SurvivalAtTimeResult:
     n_events: int
 
 class LifeTableResult:
-    interval_start: List[float]
-    interval_end: List[float]
-    n_at_risk: List[float]
-    n_deaths: List[float]
-    n_censored: List[float]
-    n_effective: List[float]
-    hazard: List[float]
-    survival: List[float]
-    se_survival: List[float]
+    interval_start: list[float]
+    interval_end: list[float]
+    n_at_risk: list[float]
+    n_deaths: list[float]
+    n_censored: list[float]
+    n_effective: list[float]
+    hazard: list[float]
+    survival: list[float]
+    se_survival: list[float]
 
-def aareg(options: AaregOptions) -> Dict[str, Any]: ...
+def aareg(options: AaregOptions) -> dict[str, Any]: ...
 
 def survfitkm(
-    time: List[float],
-    status: List[float],
-    weights: Optional[List[float]] = None,
-    entry_times: Optional[List[float]] = None,
-    position: Optional[List[int]] = None,
-    reverse: Optional[bool] = None,
-    computation_type: Optional[int] = None,
+    time: list[float],
+    status: list[float],
+    weights: list[float] | None = None,
+    entry_times: list[float] | None = None,
+    position: list[int] | None = None,
+    reverse: bool | None = None,
+    computation_type: int | None = None,
 ) -> SurvFitKMOutput: ...
 
 def survreg(
-    time: List[float],
-    status: List[float],
-    covariates: List[List[float]],
-    weights: Optional[List[float]] = None,
-    offsets: Optional[List[float]] = None,
-    initial_beta: Optional[List[float]] = None,
-    strata: Optional[List[int]] = None,
-    distribution: Optional[str] = None,
-    max_iter: Optional[int] = None,
-    eps: Optional[float] = None,
-    tol_chol: Optional[float] = None,
+    time: list[float],
+    status: list[float],
+    covariates: list[list[float]],
+    weights: list[float] | None = None,
+    offsets: list[float] | None = None,
+    initial_beta: list[float] | None = None,
+    strata: list[int] | None = None,
+    distribution: str | None = None,
+    max_iter: int | None = None,
+    eps: float | None = None,
+    tol_chol: float | None = None,
 ) -> SurvivalFit: ...
 
 def survdiff2(
-    time: List[float],
-    status: List[int],
-    group: List[int],
-    strata: Optional[List[int]] = None,
-    rho: Optional[float] = None,
+    time: list[float],
+    status: list[int],
+    group: list[int],
+    strata: list[int] | None = None,
+    rho: float | None = None,
 ) -> SurvDiffResult: ...
 
 def coxmart(
-    time: List[float],
-    status: List[int],
-    score: List[float],
-    weights: Optional[List[float]] = None,
-    strata: Optional[List[int]] = None,
-    method: Optional[int] = None,
-) -> List[float]: ...
+    time: list[float],
+    status: list[int],
+    score: list[float],
+    weights: list[float] | None = None,
+    strata: list[int] | None = None,
+    method: int | None = None,
+) -> list[float]: ...
 
 def finegray(
-    tstart: List[float],
-    tstop: List[float],
-    ctime: List[float],
-    cprob: List[float],
-    extend: List[bool],
-    keep: List[bool],
+    tstart: list[float],
+    tstop: list[float],
+    ctime: list[float],
+    cprob: list[float],
+    extend: list[bool],
+    keep: list[bool],
 ) -> FineGrayOutput: ...
 
 def perform_cox_regression_frailty(
-    time: List[float],
-    event: List[int],
-    covariates: List[List[float]],
-    offset: Optional[List[float]] = None,
-    weights: Optional[List[float]] = None,
-    strata: Optional[List[int]] = None,
-    frail: Optional[List[int]] = None,
-    max_iter: Optional[int] = None,
-    eps: Optional[float] = None,
-) -> Dict[str, Any]: ...
+    time: list[float],
+    event: list[int],
+    covariates: list[list[float]],
+    offset: list[float] | None = None,
+    weights: list[float] | None = None,
+    strata: list[int] | None = None,
+    frail: list[int] | None = None,
+    max_iter: int | None = None,
+    eps: float | None = None,
+) -> dict[str, Any]: ...
 
 def perform_pyears_calculation(
     n: int,
@@ -467,308 +466,308 @@ def perform_pyears_calculation(
     doevent: bool,
     doexpect: bool,
     edim: int,
-    efac: List[int],
-    edims: List[int],
-    ecut: List[float],
-    expect: List[float],
-    y: List[float],
-    wt: List[float],
-    data: List[float],
+    efac: list[int],
+    edims: list[int],
+    ecut: list[float],
+    expect: list[float],
+    y: list[float],
+    wt: list[float],
+    data: list[float],
     odim: int,
-    ofac: List[int],
-    odims: List[int],
-    ocut: List[float],
-) -> Dict[str, Any]: ...
+    ofac: list[int],
+    odims: list[int],
+    ocut: list[float],
+) -> dict[str, Any]: ...
 
 def perform_concordance1_calculation(
-    y: List[float],
-    wt: List[float],
-    indx: List[int],
+    y: list[float],
+    wt: list[float],
+    indx: list[int],
     ntree: int,
-    sortstop: List[int],
-    sortstart: List[int],
-) -> Dict[str, Any]: ...
+    sortstop: list[int],
+    sortstart: list[int],
+) -> dict[str, Any]: ...
 
 def perform_concordance3_calculation(
-    y: List[float],
-    wt: List[float],
-    indx: List[int],
+    y: list[float],
+    wt: list[float],
+    indx: list[int],
     ntree: int,
-    sortstop: List[int],
-    sortstart: List[int],
+    sortstop: list[int],
+    sortstart: list[int],
     nvar: int,
-    covar: List[float],
+    covar: list[float],
     need_residuals: bool,
-) -> Dict[str, Any]: ...
+) -> dict[str, Any]: ...
 
 def perform_concordance_calculation(
-    y: List[float],
-    wt: List[float],
-    indx: List[int],
+    y: list[float],
+    wt: list[float],
+    indx: list[int],
     ntree: int,
-    sortstop: List[int],
-    sortstart: Optional[List[int]] = None,
-    nvar: Optional[int] = None,
-    covar: Optional[List[float]] = None,
+    sortstop: list[int],
+    sortstart: list[int] | None = None,
+    nvar: int | None = None,
+    covar: list[float] | None = None,
     need_residuals: bool = False,
-) -> Dict[str, Any]: ...
+) -> dict[str, Any]: ...
 
 def perform_score_calculation(
-    time_data: List[float],
-    covariates: List[float],
-    strata: List[int],
-    score: List[float],
-    weights: List[float],
+    time_data: list[float],
+    covariates: list[float],
+    strata: list[int],
+    score: list[float],
+    weights: list[float],
     method: int,
-) -> Dict[str, Any]: ...
+) -> dict[str, Any]: ...
 
 def perform_agscore3_calculation(
-    time_data: List[float],
-    covariates: List[float],
-    strata: List[int],
-    score: List[float],
-    weights: List[float],
+    time_data: list[float],
+    covariates: list[float],
+    strata: list[int],
+    score: list[float],
+    weights: list[float],
     method: int,
-    sort1: List[int],
-) -> Dict[str, Any]: ...
+    sort1: list[int],
+) -> dict[str, Any]: ...
 
 def perform_pystep_calculation(
     edim: int,
-    data: List[float],
-    efac: List[int],
-    edims: List[int],
-    ecut: List[List[float]],
+    data: list[float],
+    efac: list[int],
+    edims: list[int],
+    ecut: list[list[float]],
     tmax: float,
-) -> Dict[str, Any]: ...
+) -> dict[str, Any]: ...
 
 def perform_pystep_simple_calculation(
     odim: int,
-    data: List[float],
-    ofac: List[int],
-    odims: List[int],
-    ocut: List[List[float]],
+    data: list[float],
+    ofac: list[int],
+    odims: list[int],
+    ocut: list[list[float]],
     timeleft: float,
-) -> Dict[str, Any]: ...
+) -> dict[str, Any]: ...
 
 def collapse(
-    y: List[float],
-    x: List[int],
-    istate: List[int],
-    id: List[int],
-    wt: List[float],
-    order: List[int],
-) -> Dict[str, Any]: ...
+    y: list[float],
+    x: list[int],
+    istate: list[int],
+    id: list[int],
+    wt: list[float],
+    order: list[int],
+) -> dict[str, Any]: ...
 
 def cox_callback(
-    time1: List[float],
-    time2: List[float],
-    status: List[int],
-    covar: List[float],
-    offset: List[float],
-    weights: List[float],
-    strata: List[int],
-    sort1: List[int],
-    sort2: List[int],
+    time1: list[float],
+    time2: list[float],
+    status: list[int],
+    covar: list[float],
+    offset: list[float],
+    weights: list[float],
+    strata: list[int],
+    sort1: list[int],
+    sort2: list[int],
     method: int,
     eps: float,
     tol_chol: float,
-    beta: List[float],
-) -> Dict[str, Any]: ...
+    beta: list[float],
+) -> dict[str, Any]: ...
 
 def coxcount1(
-    time1: List[float],
-    time2: List[float],
-    status: List[int],
-    strata: List[int],
-    sort1: List[int],
-    sort2: List[int],
-) -> Dict[str, Any]: ...
+    time1: list[float],
+    time2: list[float],
+    status: list[int],
+    strata: list[int],
+    sort1: list[int],
+    sort2: list[int],
+) -> dict[str, Any]: ...
 
 def coxcount2(
-    time1: List[float],
-    time2: List[float],
-    status: List[int],
-    strata: List[int],
-    sort1: List[int],
-    sort2: List[int],
-) -> Dict[str, Any]: ...
+    time1: list[float],
+    time2: list[float],
+    status: list[int],
+    strata: list[int],
+    sort1: list[int],
+    sort2: list[int],
+) -> dict[str, Any]: ...
 
 def norisk(
-    time1: List[float],
-    time2: List[float],
-    status: List[int],
-    sort1: List[int],
-    sort2: List[int],
-    strata: List[int],
-) -> List[int]: ...
+    time1: list[float],
+    time2: list[float],
+    status: list[int],
+    sort1: list[int],
+    sort2: list[int],
+    strata: list[int],
+) -> list[int]: ...
 
-def cipoisson(k: int, time: float, p: float, method: str) -> Tuple[float, float]: ...
-def cipoisson_exact(k: int, time: float, p: float) -> Tuple[float, float]: ...
-def cipoisson_anscombe(k: int, time: float, p: float) -> Tuple[float, float]: ...
+def cipoisson(k: int, time: float, p: float, method: str) -> tuple[float, float]: ...
+def cipoisson_exact(k: int, time: float, p: float) -> tuple[float, float]: ...
+def cipoisson_anscombe(k: int, time: float, p: float) -> tuple[float, float]: ...
 
 def concordance(
-    y: List[float],
-    wt: List[float],
-    indx: List[int],
+    y: list[float],
+    wt: list[float],
+    indx: list[int],
     ntree: int,
-    sortstop: List[int],
-    sortstart: List[int],
-    strata: List[int],
-) -> Dict[str, Any]: ...
+    sortstop: list[int],
+    sortstart: list[int],
+    strata: list[int],
+) -> dict[str, Any]: ...
 
 def agexact(
     maxiter: int,
     nused: int,
     nvar: int,
-    start: List[float],
-    stop: List[float],
-    event: List[int],
-    covar: List[float],
-    offset: List[float],
-    strata: List[int],
-    sort: List[int],
-    beta: List[float],
+    start: list[float],
+    stop: list[float],
+    event: list[int],
+    covar: list[float],
+    offset: list[float],
+    strata: list[int],
+    sort: list[int],
+    beta: list[float],
     eps: float,
     tol_chol: float,
-) -> Dict[str, Any]: ...
+) -> dict[str, Any]: ...
 
 def agsurv4(
-    y: List[float],
-    wt: List[float],
-    surv: List[float],
-    varh: List[float],
-    nrisk: List[float],
-    nevent: List[float],
-    ncensor: List[float],
-    strata: List[int],
-) -> Dict[str, Any]: ...
+    y: list[float],
+    wt: list[float],
+    surv: list[float],
+    varh: list[float],
+    nrisk: list[float],
+    nevent: list[float],
+    ncensor: list[float],
+    strata: list[int],
+) -> dict[str, Any]: ...
 
 def agsurv5(
-    y: List[float],
-    wt: List[float],
-    id: List[int],
-    cluster: List[int],
-    risk: List[float],
-    position: List[int],
-    strata: List[int],
+    y: list[float],
+    wt: list[float],
+    id: list[int],
+    cluster: list[int],
+    risk: list[float],
+    position: list[int],
+    strata: list[int],
     se_type: int,
-) -> Dict[str, Any]: ...
+) -> dict[str, Any]: ...
 
 def agmart(
-    time: List[float],
-    status: List[int],
-    score: List[float],
-    weights: List[float],
-    strata: List[int],
+    time: list[float],
+    status: list[int],
+    score: list[float],
+    weights: list[float],
+    strata: list[int],
     method: int,
-) -> List[float]: ...
+) -> list[float]: ...
 
 def brier(
-    predictions: List[float],
-    outcomes: List[int],
-    weights: Optional[List[float]] = None,
+    predictions: list[float],
+    outcomes: list[int],
+    weights: list[float] | None = None,
 ) -> float: ...
 
 def integrated_brier(
-    predictions: List[List[float]],
-    outcomes: List[int],
-    times: List[float],
-    weights: Optional[List[float]] = None,
+    predictions: list[list[float]],
+    outcomes: list[int],
+    times: list[float],
+    weights: list[float] | None = None,
 ) -> float: ...
 
 def tmerge(
-    id: List[int],
-    time1: List[float],
-    newx: List[float],
-    nid: List[int],
-    ntime: List[float],
-    x: List[float],
-) -> List[float]: ...
+    id: list[int],
+    time1: list[float],
+    newx: list[float],
+    nid: list[int],
+    ntime: list[float],
+    x: list[float],
+) -> list[float]: ...
 
 def tmerge2(
-    id: List[int],
-    time1: List[float],
-    nid: List[int],
-    ntime: List[float],
-) -> List[int]: ...
+    id: list[int],
+    time1: list[float],
+    nid: list[int],
+    ntime: list[float],
+) -> list[int]: ...
 
 def tmerge3(
-    id: List[int],
-    miss: List[bool],
-) -> List[int]: ...
+    id: list[int],
+    miss: list[bool],
+) -> list[int]: ...
 
 def survsplit(
-    tstart: List[float],
-    tstop: List[float],
-    cut: List[float],
+    tstart: list[float],
+    tstop: list[float],
+    cut: list[float],
 ) -> SplitResult: ...
 
 def schoenfeld_residuals(
-    y: List[float],
-    score: List[float],
-    strata: List[int],
-    covar: List[float],
+    y: list[float],
+    score: list[float],
+    strata: list[int],
+    covar: list[float],
     nvar: int,
     method: int = 0,
-) -> List[float]: ...
+) -> list[float]: ...
 
 def cox_score_residuals(
-    y: List[float],
-    strata: List[int],
-    covar: List[float],
-    score: List[float],
-    weights: List[float],
+    y: list[float],
+    strata: list[int],
+    covar: list[float],
+    score: list[float],
+    weights: list[float],
     nvar: int,
     method: int = 0,
-) -> List[float]: ...
+) -> list[float]: ...
 
 def survfitaj(
-    y: List[float],
-    sort1: List[int],
-    sort2: List[int],
-    utime: List[float],
-    cstate: List[int],
-    wt: List[float],
-    grp: List[int],
+    y: list[float],
+    sort1: list[int],
+    sort2: list[int],
+    utime: list[float],
+    cstate: list[int],
+    wt: list[float],
+    grp: list[int],
     ngrp: int,
-    p0: List[float],
-    i0: List[float],
+    p0: list[float],
+    i0: list[float],
     sefit: int,
     entry: bool,
-    position: List[int],
-    hindx: List[List[int]],
-    trmat: List[List[int]],
+    position: list[int],
+    hindx: list[list[int]],
+    trmat: list[list[int]],
     t0: float,
 ) -> SurvFitAJ: ...
 
 def bootstrap_cox_ci(
-    time: List[float],
-    status: List[int],
-    covariates: List[List[float]],
+    time: list[float],
+    status: list[int],
+    covariates: list[list[float]],
     n_bootstrap: int = 1000,
     confidence_level: float = 0.95,
 ) -> BootstrapResult: ...
 
 def bootstrap_survreg_ci(
-    time: List[float],
-    status: List[int],
-    covariates: List[List[float]],
+    time: list[float],
+    status: list[int],
+    covariates: list[list[float]],
     distribution: str = "weibull",
     n_bootstrap: int = 1000,
     confidence_level: float = 0.95,
 ) -> BootstrapResult: ...
 
 def cv_cox_concordance(
-    time: List[float],
-    status: List[int],
-    covariates: List[List[float]],
+    time: list[float],
+    status: list[int],
+    covariates: list[list[float]],
     n_folds: int = 5,
 ) -> CVResult: ...
 
 def cv_survreg_loglik(
-    time: List[float],
-    status: List[int],
-    covariates: List[List[float]],
+    time: list[float],
+    status: list[int],
+    covariates: list[list[float]],
     distribution: str = "weibull",
     n_folds: int = 5,
 ) -> CVResult: ...
@@ -780,81 +779,81 @@ def lrt_test(
 ) -> TestResult: ...
 
 def wald_test_py(
-    coefficients: List[float],
-    variance_matrix: List[List[float]],
+    coefficients: list[float],
+    variance_matrix: list[list[float]],
 ) -> TestResult: ...
 
 def score_test_py(
-    score: List[float],
-    information_matrix: List[List[float]],
+    score: list[float],
+    information_matrix: list[list[float]],
 ) -> TestResult: ...
 
 def ph_test(
-    time: List[float],
-    status: List[int],
-    schoenfeld_residuals: List[List[float]],
-    variable_names: List[str],
+    time: list[float],
+    status: list[int],
+    schoenfeld_residuals: list[list[float]],
+    variable_names: list[str],
 ) -> ProportionalityTest: ...
 
 def nelson_aalen_estimator(
-    time: List[float],
-    status: List[int],
-    weights: Optional[List[float]] = None,
-    confidence_level: Optional[float] = None,
+    time: list[float],
+    status: list[int],
+    weights: list[float] | None = None,
+    confidence_level: float | None = None,
 ) -> NelsonAalenResult: ...
 
 def stratified_kaplan_meier(
-    time: List[float],
-    status: List[int],
-    strata: List[int],
-    confidence_level: Optional[float] = None,
+    time: list[float],
+    status: list[int],
+    strata: list[int],
+    confidence_level: float | None = None,
 ) -> StratifiedKMResult: ...
 
 def logrank_test(
-    time: List[float],
-    status: List[int],
-    group: List[int],
-    weight_type: Optional[str] = None,
+    time: list[float],
+    status: list[int],
+    group: list[int],
+    weight_type: str | None = None,
 ) -> LogRankResult: ...
 
 def fleming_harrington_test(
-    time: List[float],
-    status: List[int],
-    group: List[int],
+    time: list[float],
+    status: list[int],
+    group: list[int],
     p: float,
     q: float,
 ) -> LogRankResult: ...
 
 def logrank_trend(
-    time: List[float],
-    status: List[int],
-    group: List[int],
-    scores: Optional[List[float]] = None,
+    time: list[float],
+    status: list[int],
+    group: list[int],
+    scores: list[float] | None = None,
 ) -> TrendTestResult: ...
 
 def sample_size_survival(
     hazard_ratio: float,
-    power: Optional[float] = None,
-    alpha: Optional[float] = None,
-    allocation_ratio: Optional[float] = None,
-    sided: Optional[int] = None,
+    power: float | None = None,
+    alpha: float | None = None,
+    allocation_ratio: float | None = None,
+    sided: int | None = None,
 ) -> SampleSizeResult: ...
 
 def sample_size_survival_freedman(
     hazard_ratio: float,
     prob_event: float,
-    power: Optional[float] = None,
-    alpha: Optional[float] = None,
-    allocation_ratio: Optional[float] = None,
-    sided: Optional[int] = None,
+    power: float | None = None,
+    alpha: float | None = None,
+    allocation_ratio: float | None = None,
+    sided: int | None = None,
 ) -> SampleSizeResult: ...
 
 def power_survival(
     n_events: int,
     hazard_ratio: float,
-    alpha: Optional[float] = None,
-    allocation_ratio: Optional[float] = None,
-    sided: Optional[int] = None,
+    alpha: float | None = None,
+    allocation_ratio: float | None = None,
+    sided: int | None = None,
 ) -> float: ...
 
 def expected_events(
@@ -863,102 +862,102 @@ def expected_events(
     hazard_ratio: float,
     accrual_time: float,
     followup_time: float,
-    allocation_ratio: Optional[float] = None,
-    dropout_rate: Optional[float] = None,
+    allocation_ratio: float | None = None,
+    dropout_rate: float | None = None,
 ) -> AccrualResult: ...
 
 def calibration(
-    predicted_risk: List[float],
-    observed_event: List[int],
-    n_groups: Optional[int] = None,
+    predicted_risk: list[float],
+    observed_event: list[int],
+    n_groups: int | None = None,
 ) -> CalibrationResult: ...
 
 def predict_cox(
-    coef: List[float],
-    x: List[List[float]],
-    baseline_hazard: List[float],
-    baseline_times: List[float],
-    pred_times: List[float],
+    coef: list[float],
+    x: list[list[float]],
+    baseline_hazard: list[float],
+    baseline_times: list[float],
+    pred_times: list[float],
 ) -> PredictionResult: ...
 
 def risk_stratification(
-    risk_scores: List[float],
-    events: List[int],
-    n_groups: Optional[int] = None,
+    risk_scores: list[float],
+    events: list[int],
+    n_groups: int | None = None,
 ) -> RiskStratificationResult: ...
 
 def td_auc(
-    time: List[float],
-    status: List[int],
-    risk_score: List[float],
-    eval_times: List[float],
+    time: list[float],
+    status: list[int],
+    risk_score: list[float],
+    eval_times: list[float],
 ) -> TdAUCResult: ...
 
 def rmst(
-    time: List[float],
-    status: List[int],
+    time: list[float],
+    status: list[int],
     tau: float,
-    confidence_level: Optional[float] = None,
+    confidence_level: float | None = None,
 ) -> RMSTResult: ...
 
 def rmst_comparison(
-    time: List[float],
-    status: List[int],
-    group: List[int],
+    time: list[float],
+    status: list[int],
+    group: list[int],
     tau: float,
-    confidence_level: Optional[float] = None,
+    confidence_level: float | None = None,
 ) -> RMSTComparisonResult: ...
 
 def survival_quantile(
-    time: List[float],
-    status: List[int],
-    quantile: Optional[float] = None,
-    confidence_level: Optional[float] = None,
+    time: list[float],
+    status: list[int],
+    quantile: float | None = None,
+    confidence_level: float | None = None,
 ) -> MedianSurvivalResult: ...
 
 def cumulative_incidence(
-    time: List[float],
-    status: List[int],
+    time: list[float],
+    status: list[int],
 ) -> CumulativeIncidenceResult: ...
 
 def number_needed_to_treat(
-    time: List[float],
-    status: List[int],
-    group: List[int],
+    time: list[float],
+    status: list[int],
+    group: list[int],
     time_horizon: float,
-    confidence_level: Optional[float] = None,
+    confidence_level: float | None = None,
 ) -> NNTResult: ...
 
 def landmark_analysis(
-    time: List[float],
-    status: List[int],
+    time: list[float],
+    status: list[int],
     landmark_time: float,
 ) -> LandmarkResult: ...
 
 def conditional_survival(
-    time: List[float],
-    status: List[int],
+    time: list[float],
+    status: list[int],
     given_time: float,
     target_time: float,
-    confidence_level: Optional[float] = None,
+    confidence_level: float | None = None,
 ) -> ConditionalSurvivalResult: ...
 
 def hazard_ratio(
-    time: List[float],
-    status: List[int],
-    group: List[int],
-    confidence_level: Optional[float] = None,
+    time: list[float],
+    status: list[int],
+    group: list[int],
+    confidence_level: float | None = None,
 ) -> HazardRatioResult: ...
 
 def survival_at_times(
-    time: List[float],
-    status: List[int],
-    eval_times: List[float],
-    confidence_level: Optional[float] = None,
-) -> List[SurvivalAtTimeResult]: ...
+    time: list[float],
+    status: list[int],
+    eval_times: list[float],
+    confidence_level: float | None = None,
+) -> list[SurvivalAtTimeResult]: ...
 
 def life_table(
-    time: List[float],
-    status: List[int],
-    breaks: List[float],
+    time: list[float],
+    status: list[int],
+    breaks: list[float],
 ) -> LifeTableResult: ...

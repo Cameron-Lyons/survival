@@ -1,15 +1,24 @@
-use faer::{Side, prelude::*};
+use faer::{linalg::solvers::DenseSolveCore, prelude::*};
 use ndarray::{Array1, Array2};
 
-/// Convert ndarray Array2 to faer Mat
 fn ndarray_to_faer(arr: &Array2<f64>) -> Mat<f64> {
     let (rows, cols) = arr.dim();
     Mat::from_fn(rows, cols, |i, j| arr[[i, j]])
 }
 
-/// Convert faer Col to ndarray Array1
 fn faer_col_to_ndarray(col: faer::ColRef<f64>) -> Array1<f64> {
-    Array1::from_iter((0..col.nrows()).map(|i| col.read(i)))
+    Array1::from_iter((0..col.nrows()).map(|i| col[i]))
+}
+
+fn faer_mat_to_ndarray(mat: faer::MatRef<f64>) -> Array2<f64> {
+    let (rows, cols) = (mat.nrows(), mat.ncols());
+    let mut result = Array2::zeros((rows, cols));
+    for i in 0..rows {
+        for j in 0..cols {
+            result[[i, j]] = mat[(i, j)];
+        }
+    }
+    result
 }
 
 pub fn cholesky_solve(
@@ -26,39 +35,23 @@ pub fn cholesky_solve(
         return Ok(Array1::zeros(vector.len()));
     }
 
-    let mat = ndarray_to_faer(matrix);
-    let b: Col<f64> = Col::from_fn(vector.len(), |i| vector[i]);
-
-    // Try Cholesky decomposition
-    match mat.cholesky(Side::Lower) {
-        Ok(chol) => {
-            let x = chol.solve(&b);
-            Ok(faer_col_to_ndarray(x.as_ref()))
-        }
-        Err(_) => {
-            // Add ridge regularization and retry
+    match lu_solve(matrix, vector) {
+        Some(result) => Ok(result),
+        None => {
             let n = matrix.nrows();
             let ridge = max_val * 1e-6;
-            let reg_mat = Mat::from_fn(n, n, |i, j| {
-                if i == j {
-                    mat.read(i, j) + ridge
-                } else {
-                    mat.read(i, j)
-                }
-            });
-
-            match reg_mat.cholesky(Side::Lower) {
-                Ok(chol) => {
-                    let x = chol.solve(&b);
-                    Ok(faer_col_to_ndarray(x.as_ref()))
-                }
-                Err(_) => Ok(Array1::zeros(vector.len())),
+            let mut reg_matrix = matrix.clone();
+            for i in 0..n {
+                reg_matrix[[i, i]] += ridge;
+            }
+            match lu_solve(&reg_matrix, vector) {
+                Some(result) => Ok(result),
+                None => Ok(Array1::zeros(vector.len())),
             }
         }
     }
 }
 
-/// Solve a linear system Ax = b using LU decomposition
 pub fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
     if matrix.nrows() == 0 || matrix.ncols() == 0 {
         return Some(Array1::zeros(vector.len()));
@@ -68,11 +61,10 @@ pub fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64
     let b: Col<f64> = Col::from_fn(vector.len(), |i| vector[i]);
 
     let lu = mat.partial_piv_lu();
-    let x = lu.solve(&b);
+    let x: Col<f64> = lu.solve(&b);
     Some(faer_col_to_ndarray(x.as_ref()))
 }
 
-/// Compute the inverse of a matrix using LU decomposition
 pub fn matrix_inverse(matrix: &Array2<f64>) -> Option<Array2<f64>> {
     if matrix.nrows() == 0 || matrix.ncols() == 0 {
         return Some(matrix.clone());
@@ -80,22 +72,30 @@ pub fn matrix_inverse(matrix: &Array2<f64>) -> Option<Array2<f64>> {
 
     let mat = ndarray_to_faer(matrix);
     let lu = mat.partial_piv_lu();
-    let inv = lu.inverse();
+    let inv: Mat<f64> = lu.inverse();
 
-    let (rows, cols) = (inv.nrows(), inv.ncols());
-    let mut result = Array2::zeros((rows, cols));
-    for i in 0..rows {
-        for j in 0..cols {
-            result[[i, j]] = inv.read(i, j);
-        }
-    }
-    Some(result)
+    Some(faer_mat_to_ndarray(inv.as_ref()))
 }
 
-/// Check if Cholesky decomposition is possible (matrix is positive definite)
 pub fn cholesky_check(matrix: &Array2<f64>) -> bool {
-    let mat = ndarray_to_faer(matrix);
-    mat.cholesky(Side::Lower).is_ok()
+    let n = matrix.nrows();
+    if n == 0 {
+        return true;
+    }
+
+    for i in 0..n {
+        if matrix[[i, i]] <= 0.0 {
+            return false;
+        }
+        for j in 0..i {
+            if (matrix[[i, j]] - matrix[[j, i]]).abs() > 1e-10 {
+                return false;
+            }
+        }
+    }
+
+    let b = Array1::from_elem(n, 1.0);
+    lu_solve(matrix, &b).is_some()
 }
 
 #[cfg(test)]
@@ -125,7 +125,6 @@ mod tests {
         let matrix = arr2(&[[2.0, 1.0], [1.0, 3.0]]);
         let vector = Array1::from_vec(vec![3.0, 4.0]);
         let result = lu_solve(&matrix, &vector).unwrap();
-        // Verify Ax = b
         let ax0 = 2.0 * result[0] + 1.0 * result[1];
         let ax1 = 1.0 * result[0] + 3.0 * result[1];
         assert!((ax0 - 3.0).abs() < 1e-10);

@@ -1,18 +1,30 @@
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
-use thiserror::Error;
+use std::fmt;
 
 type SurvregDerivatives = (f64, f64, f64, f64, f64, f64);
 
 const SMALL: f64 = -200.0;
 const SPI: f64 = 2.506628274631001;
 const ROOT_2: f64 = std::f64::consts::SQRT_2;
-#[derive(Error, Debug)]
+
+#[derive(Debug)]
 pub enum DistributionError {
-    #[error(
-        "Invalid case {case} for {distribution} distribution. Valid cases are 1 (density) and 2 (CDF)"
-    )]
     InvalidCase { case: i32, distribution: String },
 }
+
+impl fmt::Display for DistributionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DistributionError::InvalidCase { case, distribution } => write!(
+                f,
+                "Invalid case {} for {} distribution. Valid cases are 1 (density) and 2 (CDF)",
+                case, distribution
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DistributionError {}
 #[derive(Clone, Copy)]
 pub enum SurvivalDist {
     ExtremeValue,
