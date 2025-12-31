@@ -1,6 +1,6 @@
 [package]
 name = "survival"
-version = "1.0.19"
+version = "1.0.20"
 edition = "2024"
 rust-version = "1.92"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
