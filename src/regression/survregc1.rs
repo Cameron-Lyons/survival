@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use thiserror::Error;
 
