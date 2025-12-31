@@ -36,24 +36,6 @@ pub fn cholesky_solve(
     }
 }
 
-pub fn cholesky_solve_with_fallback(
-    primary: &Array2<f64>,
-    fallback: &Array2<f64>,
-    vector: &Array1<f64>,
-    tol: f64,
-) -> Result<Array1<f64>, Box<dyn std::error::Error>> {
-    match cholesky_solve(primary, vector, tol) {
-        Ok(result) => {
-            if result.iter().all(|&x| x == 0.0) {
-                cholesky_solve(fallback, vector, tol)
-            } else {
-                Ok(result)
-            }
-        }
-        Err(_) => cholesky_solve(fallback, vector, tol),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

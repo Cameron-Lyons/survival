@@ -161,11 +161,13 @@ fn compute_survfitaj(
         cumhaz.row_mut(i).assign(&chaz);
     }
     let (std_err, std_auc, std_chaz, influence) = if sefit > 0 {
-        let u = u.as_mut().unwrap();
-        let mut std_err: Option<Array2<f64>> = Some(Array2::zeros((ntime, nstate)));
-        let mut std_auc: Option<Array2<f64>> = Some(Array2::zeros((ntime, nstate)));
-        let mut std_chaz: Option<Array2<f64>> = Some(Array2::zeros((ntime, nhaz)));
-        let mut influence: Option<Array2<f64>> = if sefit > 1 {
+        let Some(u) = u.as_mut() else {
+            return Err("Internal error: u should be Some when sefit > 0".into());
+        };
+        let mut std_err_arr: Array2<f64> = Array2::zeros((ntime, nstate));
+        let mut std_auc_arr: Array2<f64> = Array2::zeros((ntime, nstate));
+        let mut std_chaz_arr: Array2<f64> = Array2::zeros((ntime, nhaz));
+        let mut influence_arr: Option<Array2<f64>> = if sefit > 1 {
             Some(Array2::zeros((ngrp * nstate, ntime)))
         } else {
             None
@@ -297,14 +299,14 @@ fn compute_survfitaj(
                 se2[jk] = c.column(jk).mapv(|x: f64| x.powi(2)).sum().sqrt();
             }
             for j in 0..nstate {
-                std_err.as_mut().unwrap()[[i, j]] = se1[j];
-                std_auc.as_mut().unwrap()[[i, j]] = se3[j];
+                std_err_arr[[i, j]] = se1[j];
+                std_auc_arr[[i, j]] = se3[j];
             }
             for jk in 0..nhaz {
-                std_chaz.as_mut().unwrap()[[i, jk]] = se2[jk];
+                std_chaz_arr[[i, jk]] = se2[jk];
             }
-            if sefit > 1 {
-                let mut influence_slice = influence.as_mut().unwrap().slice_mut(s![.., i]);
+            if let Some(ref mut influence_data) = influence_arr {
+                let mut influence_slice = influence_data.slice_mut(s![.., i]);
                 for j in 0..nstate {
                     for g in 0..ngrp {
                         influence_slice[[g + j * ngrp]] = u[[g, j]];
@@ -312,7 +314,12 @@ fn compute_survfitaj(
                 }
             }
         }
-        (std_err, std_auc, std_chaz, influence)
+        (
+            Some(std_err_arr),
+            Some(std_auc_arr),
+            Some(std_chaz_arr),
+            influence_arr,
+        )
     } else {
         (None, None, None, None)
     };

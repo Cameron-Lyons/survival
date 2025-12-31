@@ -25,11 +25,11 @@ pub fn concordance(
     while i < n {
         let ii = sortstop[i];
         let current_time = y[ii];
-        if (sortstart.as_ref().is_some()
-            && i2 < n
-            && y[sortstart.as_ref().unwrap()[i2]] >= current_time)
-            || y[ii] == 0.0
-        {
+        let should_skip = match sortstart.as_ref() {
+            Some(ss) if i2 < n => y[ss[i2]] >= current_time,
+            _ => false,
+        };
+        if should_skip || y[ii] == 0.0 {
             addin(&mut nwt, &mut twt, x[ii] as usize, wt[ii]);
             i += 1;
         } else {

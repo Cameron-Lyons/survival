@@ -172,8 +172,9 @@ pub fn coxcount2(
                     if let Some(pos) = atrisk[jptr]
                         && pos < who.len()
                     {
-                        let last = who.pop().unwrap();
-                        if pos < who.len() {
+                        if let Some(last) = who.pop()
+                            && pos < who.len()
+                        {
                             who[pos] = last;
                             atrisk[last] = Some(pos);
                         }

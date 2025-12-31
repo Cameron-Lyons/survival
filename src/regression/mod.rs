@@ -5,5 +5,4 @@ pub mod clogit;
 pub mod coxfit6;
 pub mod coxph;
 pub mod survreg6;
-pub mod survreg7;
 pub mod survregc1;

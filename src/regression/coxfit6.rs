@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use ndarray::{Array1, Array2};
 use ndarray_linalg::cholesky::CholeskyInto;
 use ndarray_linalg::{Inverse, Solve};
@@ -10,12 +9,11 @@ pub enum CoxError {
     CholeskyDecomposition,
     #[error("Matrix inversion failed")]
     MatrixInversion,
-    #[error("Non-finite values encountered during iteration")]
-    NonFinite,
 }
 #[derive(Debug, Clone, Copy)]
 pub enum Method {
     Breslow,
+    #[allow(dead_code)] // Used in tests (r_survival_validation, r_exact_validation)
     Efron,
 }
 pub type CoxFitResults = (
