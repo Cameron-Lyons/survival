@@ -34,9 +34,6 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libssl-dev
-
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -58,9 +55,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
-
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libssl-dev
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -87,18 +81,11 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install OpenBLAS
-        run: |
-          brew install openblas
-          echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
-
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-        env:
-          OPENBLAS_DIR: ${{ env.OPENBLAS_DIR }}
 
       - name: Upload wheels
         uses: actions/upload-artifact@v6

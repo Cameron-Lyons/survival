@@ -45,11 +45,6 @@ pip install survival-rs
 - Python 3.9+
 - Rust (see [rustup.rs](https://rustup.rs/))
 - [maturin](https://github.com/PyO3/maturin)
-- BLAS libraries (required at runtime):
-  - Arch Linux: `sudo pacman -S openblas`
-  - Ubuntu/Debian: `sudo apt-get install libopenblas-dev`
-  - Fedora: `sudo dnf install openblas-devel`
-  - macOS: `brew install openblas`
 
 Install maturin:
 ```sh
@@ -564,7 +559,7 @@ The codebase is organized with:
 
 - [PyO3](https://github.com/PyO3/pyo3) - Python bindings
 - [ndarray](https://github.com/rust-ndarray/ndarray) - N-dimensional arrays
-- [ndarray-linalg](https://github.com/rust-ndarray/ndarray-linalg) - Linear algebra
+- [faer](https://github.com/sarah-ek/faer-rs) - Pure-Rust linear algebra
 - [itertools](https://github.com/rust-itertools/itertools) - Iterator utilities
 - [statrs](https://github.com/statrs-dev/statrs) - Statistical distributions
 - [thiserror](https://github.com/dtolnay/thiserror) - Error handling

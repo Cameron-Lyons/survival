@@ -105,7 +105,7 @@ fn calculate_variance_matrix(
     _nvar2: usize,
     _tol_chol: f64,
 ) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
-    use ndarray_linalg::Inverse;
+    use crate::utilities::matrix::matrix_inverse;
     if imat.nrows() == 0 || imat.ncols() == 0 {
         return Ok(imat);
     }
@@ -113,9 +113,9 @@ fn calculate_variance_matrix(
     if max_val < 1e-10 {
         return Ok(imat);
     }
-    match imat.inv() {
-        Ok(inv) => Ok(inv),
-        Err(_) => Ok(imat),
+    match matrix_inverse(&imat) {
+        Some(inv) => Ok(inv),
+        None => Ok(imat),
     }
 }
 #[derive(Debug, Clone, Copy)]

@@ -1,5 +1,5 @@
+use crate::utilities::matrix::lu_solve;
 use ndarray::{Array1, Array2, Axis};
-use ndarray_linalg::Solve;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -367,9 +367,8 @@ fn perform_aalen_regression(
         let xtx = at_risk_design.t().dot(&at_risk_design);
         let d_n = vec![1.0; at_risk.len()];
         let xt_dn = at_risk_design.t().dot(&Array1::from_vec(d_n.clone()));
-        let beta_increment = xtx
-            .solve_into(xt_dn)
-            .map_err(|_| AaregError::Calculation("Failed to solve linear system".to_string()))?;
+        let beta_increment = lu_solve(&xtx, &xt_dn)
+            .ok_or_else(|| AaregError::Calculation("Failed to solve linear system".to_string()))?;
         for (cum_coef, &inc) in cumulative_coefficients
             .iter_mut()
             .zip(beta_increment.iter())

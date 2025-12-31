@@ -1,5 +1,5 @@
+use crate::utilities::matrix::{lu_solve, matrix_inverse};
 use ndarray::{Array1, Array2};
-use ndarray_linalg::{Inverse, Solve};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -252,13 +252,13 @@ pub fn agfit5(
         for i in 0..nvar2 {
             imat_array[[i, i]] += 1e-8;
         }
-        match imat_array.solve_into(u_array) {
-            Ok(delta) => {
+        match lu_solve(&imat_array, &u_array) {
+            Some(delta) => {
                 for i in 0..nvar2 {
                     beta[i] += delta[i];
                 }
             }
-            Err(_) => {
+            None => {
                 return Err("Failed to solve linear system".into());
             }
         }
@@ -267,15 +267,15 @@ pub fn agfit5(
     state.update(&mut beta, &mut u, &mut imat, &mut loglik);
     let mut variance_matrix = vec![vec![0.0; nvar2]; nvar2];
     let imat_array = Array2::from_shape_vec((nvar2, nvar2), imat)?;
-    match imat_array.inv() {
-        Ok(inv_imat) => {
+    match matrix_inverse(&imat_array) {
+        Some(inv_imat) => {
             for i in 0..nvar2 {
                 for j in 0..nvar2 {
                     variance_matrix[i][j] = inv_imat[[i, j]];
                 }
             }
         }
-        Err(_) => {
+        None => {
             return Err("Failed to invert information matrix".into());
         }
     }

@@ -1,6 +1,5 @@
+use crate::utilities::matrix::{cholesky_check, lu_solve, matrix_inverse};
 use ndarray::{Array1, Array2};
-use ndarray_linalg::cholesky::CholeskyInto;
-use ndarray_linalg::{Inverse, Solve};
 use rayon::prelude::*;
 use thiserror::Error;
 #[derive(Error, Debug)]
@@ -362,26 +361,21 @@ impl CoxFit {
                 mat[(i, j)] = mat[(j, i)];
             }
         }
-        let mat_clone3 = mat.clone();
-        match mat_clone3.cholesky_into(ndarray_linalg::UPLO::Lower) {
-            Ok(_) => Ok(n as i32),
-            Err(_) => {
-                #[allow(clippy::needless_range_loop)]
-                for i in 0..n {
-                    if mat[(i, i)] < toler {
-                        return Ok(i as i32);
-                    }
+        if cholesky_check(mat) {
+            Ok(n as i32)
+        } else {
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..n {
+                if mat[(i, i)] < toler {
+                    return Ok(i as i32);
                 }
-                Err(CoxError::CholeskyDecomposition)
             }
+            Err(CoxError::CholeskyDecomposition)
         }
     }
     fn chsolve(chol: &Array2<f64>, a: &mut [f64]) -> Result<(), CoxError> {
-        let _n = chol.nrows();
         let b = Array1::from_vec(a.to_vec());
-        let result = chol
-            .solve(&b)
-            .map_err(|_| CoxError::CholeskyDecomposition)?;
+        let result = lu_solve(chol, &b).ok_or(CoxError::CholeskyDecomposition)?;
         a.copy_from_slice(&result.to_vec());
         Ok(())
     }
@@ -391,10 +385,7 @@ impl CoxFit {
         for i in 0..n {
             mat_reg[(i, i)] += 1e-10;
         }
-        let inv = match mat_reg.inv() {
-            Ok(inv) => inv,
-            Err(_) => return Err(CoxError::MatrixInversion),
-        };
+        let inv = matrix_inverse(&mat_reg).ok_or(CoxError::MatrixInversion)?;
         *mat = inv;
         Ok(())
     }
