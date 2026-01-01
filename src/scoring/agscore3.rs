@@ -1,8 +1,9 @@
-use super::common::{build_score_result, validate_scoring_inputs};
+use super::common::{
+    apply_deltas_add, apply_deltas_set, build_score_result, validate_scoring_inputs,
+};
 use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 pub fn agscore3(
     y: &[f64],
@@ -52,31 +53,11 @@ pub fn agscore3(
                 i1 -= 1;
             }
 
-            if exit_indices.len() > 500 {
-                let updates: Vec<(usize, Vec<f64>)> = exit_indices
-                    .par_iter()
-                    .map(|&k| {
-                        let mut deltas = vec![0.0; nvar];
-                        for j in 0..nvar {
-                            deltas[j] = -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]);
-                        }
-                        (k, deltas)
-                    })
-                    .collect();
-
-                for (k, deltas) in updates {
-                    for j in 0..nvar {
-                        resid_matrix[[j, k]] += deltas[j];
-                    }
-                }
-            } else {
-                for k in exit_indices {
-                    for j in 0..nvar {
-                        resid_matrix[[j, k]] -=
-                            score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]);
-                    }
-                }
-            }
+            apply_deltas_add(&exit_indices, nvar, &mut resid_matrix, |k| {
+                (0..nvar)
+                    .map(|j| -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]))
+                    .collect()
+            });
 
             cumhaz = 0.0;
             denom = 0.0;
@@ -99,31 +80,11 @@ pub fn agscore3(
                 i1 -= 1;
             }
 
-            if exit_indices.len() > 500 {
-                let updates: Vec<(usize, Vec<f64>)> = exit_indices
-                    .par_iter()
-                    .map(|&k| {
-                        let mut deltas = vec![0.0; nvar];
-                        for j in 0..nvar {
-                            deltas[j] = -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]);
-                        }
-                        (k, deltas)
-                    })
-                    .collect();
-
-                for (k, deltas) in updates {
-                    for j in 0..nvar {
-                        resid_matrix[[j, k]] += deltas[j];
-                    }
-                }
-            } else {
-                for k in exit_indices {
-                    for j in 0..nvar {
-                        resid_matrix[[j, k]] -=
-                            score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]);
-                    }
-                }
-            }
+            apply_deltas_add(&exit_indices, nvar, &mut resid_matrix, |k| {
+                (0..nvar)
+                    .map(|j| -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]))
+                    .collect()
+            });
         }
 
         let mut e_denom = 0.0;
@@ -155,32 +116,11 @@ pub fn agscore3(
             person -= 1;
         }
 
-        let processed = processed_indices.len();
-
-        if processed > 500 {
-            let init_updates: Vec<(usize, Vec<f64>)> = processed_indices
-                .par_iter()
-                .map(|&p| {
-                    let mut deltas = vec![0.0; nvar];
-                    for j in 0..nvar {
-                        deltas[j] = (covar_matrix[[j, p]] * cumhaz - xhaz[j]) * score[p];
-                    }
-                    (p, deltas)
-                })
-                .collect();
-
-            for (p, deltas) in init_updates {
-                for j in 0..nvar {
-                    resid_matrix[[j, p]] = deltas[j];
-                }
-            }
-        } else {
-            for &p in &processed_indices {
-                for j in 0..nvar {
-                    resid_matrix[[j, p]] = (covar_matrix[[j, p]] * cumhaz - xhaz[j]) * score[p];
-                }
-            }
-        }
+        apply_deltas_set(&processed_indices, nvar, &mut resid_matrix, |p| {
+            (0..nvar)
+                .map(|j| (covar_matrix[[j, p]] * cumhaz - xhaz[j]) * score[p])
+                .collect()
+        });
 
         if deaths > 0.0 {
             if deaths < 2.0 || method == 0 {
@@ -191,30 +131,9 @@ pub fn agscore3(
                     xhaz[j] += mean[j] * hazard;
                 }
 
-                if processed > 500 {
-                    let updates: Vec<(usize, Vec<f64>)> = processed_indices
-                        .par_iter()
-                        .map(|&p| {
-                            let mut deltas = vec![0.0; nvar];
-                            for j in 0..nvar {
-                                deltas[j] = covar_matrix[[j, p]] - mean[j];
-                            }
-                            (p, deltas)
-                        })
-                        .collect();
-
-                    for (p, deltas) in updates {
-                        for j in 0..nvar {
-                            resid_matrix[[j, p]] += deltas[j];
-                        }
-                    }
-                } else {
-                    for &p in &processed_indices {
-                        for j in 0..nvar {
-                            resid_matrix[[j, p]] += covar_matrix[[j, p]] - mean[j];
-                        }
-                    }
-                }
+                apply_deltas_add(&processed_indices, nvar, &mut resid_matrix, |p| {
+                    (0..nvar).map(|j| covar_matrix[[j, p]] - mean[j]).collect()
+                });
             } else {
                 mh1.fill(0.0);
                 mh2.fill(0.0);
@@ -235,32 +154,14 @@ pub fn agscore3(
                     }
                 }
 
-                if processed > 500 {
-                    let updates: Vec<(usize, Vec<f64>)> = processed_indices
-                        .par_iter()
-                        .map(|&p| {
-                            let mut deltas = vec![0.0; nvar];
-                            for j in 0..nvar {
-                                deltas[j] = (covar_matrix[[j, p]] - mh3[j])
-                                    + score[p] * (covar_matrix[[j, p]] * mh1[j] - mh2[j]);
-                            }
-                            (p, deltas)
+                apply_deltas_add(&processed_indices, nvar, &mut resid_matrix, |p| {
+                    (0..nvar)
+                        .map(|j| {
+                            (covar_matrix[[j, p]] - mh3[j])
+                                + score[p] * (covar_matrix[[j, p]] * mh1[j] - mh2[j])
                         })
-                        .collect();
-
-                    for (p, deltas) in updates {
-                        for j in 0..nvar {
-                            resid_matrix[[j, p]] += deltas[j];
-                        }
-                    }
-                } else {
-                    for &p in &processed_indices {
-                        for j in 0..nvar {
-                            resid_matrix[[j, p]] += (covar_matrix[[j, p]] - mh3[j])
-                                + score[p] * (covar_matrix[[j, p]] * mh1[j] - mh2[j]);
-                        }
-                    }
-                }
+                        .collect()
+                });
             }
         }
     }
@@ -271,30 +172,11 @@ pub fn agscore3(
         i1 -= 1;
     }
 
-    if final_indices.len() > 500 {
-        let updates: Vec<(usize, Vec<f64>)> = final_indices
-            .par_iter()
-            .map(|&k| {
-                let mut deltas = vec![0.0; nvar];
-                for j in 0..nvar {
-                    deltas[j] = -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]);
-                }
-                (k, deltas)
-            })
-            .collect();
-
-        for (k, deltas) in updates {
-            for j in 0..nvar {
-                resid_matrix[[j, k]] += deltas[j];
-            }
-        }
-    } else {
-        for k in final_indices {
-            for j in 0..nvar {
-                resid_matrix[[j, k]] -= score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]);
-            }
-        }
-    }
+    apply_deltas_add(&final_indices, nvar, &mut resid_matrix, |k| {
+        (0..nvar)
+            .map(|j| -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]))
+            .collect()
+    });
 
     Ok(resid_matrix.into_raw_vec_and_offset().0)
 }

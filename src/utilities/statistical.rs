@@ -19,6 +19,12 @@ pub fn erf(x: f64) -> f64 {
 
 #[inline]
 #[allow(dead_code)]
+pub fn erfc(x: f64) -> f64 {
+    1.0 - erf(x)
+}
+
+#[inline]
+#[allow(dead_code)]
 pub fn normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / SQRT_2))
 }

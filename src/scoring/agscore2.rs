@@ -1,8 +1,7 @@
-use super::common::{build_score_result, validate_scoring_inputs};
+use super::common::{apply_deltas_add, build_score_result, validate_scoring_inputs};
 use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 pub fn agscore2(
     y: &[f64],
@@ -70,55 +69,26 @@ pub fn agscore2(
             k += 1;
         }
 
-        let num_at_risk = at_risk_indices.len();
-
         if deaths < 2.0 || method == 0 {
             let hazard = meanwt / denom;
             for i in 0..nvar {
                 mean[i] = a[i] / denom;
             }
 
-            if num_at_risk > 500 {
-                let updates: Vec<(usize, Vec<f64>)> = at_risk_indices
-                    .par_iter()
-                    .filter_map(|&k| {
-                        if tstart[k] < time {
-                            let risk = score[k];
-                            let mut deltas = vec![0.0; nvar];
-                            for i in 0..nvar {
-                                let diff = covar_matrix[[i, k]] - mean[i];
-                                deltas[i] -= diff * risk * hazard;
-                                if tstop[k] == time && event[k] == 1.0 {
-                                    deltas[i] += diff;
-                                }
-                            }
-                            Some((k, deltas))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                for (k, deltas) in updates {
-                    for i in 0..nvar {
-                        resid_matrix[[i, k]] += deltas[i];
-                    }
-                }
-            } else {
-                for &k in &at_risk_indices {
-                    let risk = score[k];
-                    for i in 0..nvar {
+            apply_deltas_add(&at_risk_indices, nvar, &mut resid_matrix, |k| {
+                let risk = score[k];
+                let is_event = tstop[k] == time && event[k] == 1.0;
+                (0..nvar)
+                    .map(|i| {
                         let diff = covar_matrix[[i, k]] - mean[i];
-                        resid_matrix[[i, k]] -= diff * risk * hazard;
-                    }
-                    if tstop[k] == time && event[k] == 1.0 {
-                        for i in 0..nvar {
-                            let diff = covar_matrix[[i, k]] - mean[i];
-                            resid_matrix[[i, k]] += diff;
+                        let mut delta = -diff * risk * hazard;
+                        if is_event {
+                            delta += diff;
                         }
-                    }
-                }
-            }
+                        delta
+                    })
+                    .collect()
+            });
         } else {
             let meanwt_norm = meanwt / deaths;
             let mut temp1 = 0.0;
@@ -141,54 +111,20 @@ pub fn agscore2(
                 }
             }
 
-            if num_at_risk > 500 {
-                let updates: Vec<(usize, Vec<f64>)> = at_risk_indices
-                    .par_iter()
-                    .filter_map(|&k| {
-                        if tstart[k] < time {
-                            let risk = score[k];
-                            let mut deltas = vec![0.0; nvar];
-                            if tstop[k] == time && event[k] == 1.0 {
-                                for i in 0..nvar {
-                                    deltas[i] += covar_matrix[[i, k]] - mh3[i];
-                                    deltas[i] -= risk * covar_matrix[[i, k]] * temp2;
-                                    deltas[i] += risk * mh2[i];
-                                }
-                            } else {
-                                for i in 0..nvar {
-                                    let term = risk * (covar_matrix[[i, k]] * temp1 - mh1[i]);
-                                    deltas[i] -= term;
-                                }
-                            }
-                            Some((k, deltas))
+            apply_deltas_add(&at_risk_indices, nvar, &mut resid_matrix, |k| {
+                let risk = score[k];
+                let is_event = tstop[k] == time && event[k] == 1.0;
+                (0..nvar)
+                    .map(|i| {
+                        if is_event {
+                            (covar_matrix[[i, k]] - mh3[i]) - risk * covar_matrix[[i, k]] * temp2
+                                + risk * mh2[i]
                         } else {
-                            None
+                            -risk * (covar_matrix[[i, k]] * temp1 - mh1[i])
                         }
                     })
-                    .collect();
-
-                for (k, deltas) in updates {
-                    for i in 0..nvar {
-                        resid_matrix[[i, k]] += deltas[i];
-                    }
-                }
-            } else {
-                for &k in &at_risk_indices {
-                    let risk = score[k];
-                    if tstop[k] == time && event[k] == 1.0 {
-                        for i in 0..nvar {
-                            resid_matrix[[i, k]] += covar_matrix[[i, k]] - mh3[i];
-                            resid_matrix[[i, k]] -= risk * covar_matrix[[i, k]] * temp2;
-                            resid_matrix[[i, k]] += risk * mh2[i];
-                        }
-                    } else {
-                        for i in 0..nvar {
-                            let term = risk * (covar_matrix[[i, k]] * temp1 - mh1[i]);
-                            resid_matrix[[i, k]] -= term;
-                        }
-                    }
-                }
-            }
+                    .collect()
+            });
         }
 
         while person < n && tstop[person] == time {

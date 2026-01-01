@@ -1,5 +1,6 @@
 use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct CalibrationResult {
@@ -411,30 +412,31 @@ pub fn time_dependent_auc(
             integrated_auc: 0.0,
         };
     }
-    let mut auc_values = Vec::with_capacity(eval_times.len());
-    for &t in eval_times {
-        let mut concordant = 0.0;
-        let mut discordant = 0.0;
-        for i in 0..n {
-            if time[i] <= t && status[i] == 1 {
-                for j in 0..n {
-                    if time[j] > t {
-                        if risk_score[i] > risk_score[j] {
-                            concordant += 1.0;
-                        } else if risk_score[i] < risk_score[j] {
-                            discordant += 1.0;
+    let auc_values: Vec<f64> = eval_times
+        .par_iter()
+        .map(|&t| {
+            let (concordant, discordant) = (0..n)
+                .filter(|&i| time[i] <= t && status[i] == 1)
+                .flat_map(|i| {
+                    (0..n).filter_map(move |j| {
+                        if time[j] > t {
+                            Some(if risk_score[i] > risk_score[j] {
+                                (1.0, 0.0)
+                            } else if risk_score[i] < risk_score[j] {
+                                (0.0, 1.0)
+                            } else {
+                                (0.5, 0.5)
+                            })
                         } else {
-                            concordant += 0.5;
-                            discordant += 0.5;
+                            None
                         }
-                    }
-                }
-            }
-        }
-        let total = concordant + discordant;
-        let auc = if total > 0.0 { concordant / total } else { 0.5 };
-        auc_values.push(auc);
-    }
+                    })
+                })
+                .fold((0.0, 0.0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
+            let total = concordant + discordant;
+            if total > 0.0 { concordant / total } else { 0.5 }
+        })
+        .collect();
     let integrated = if auc_values.len() > 1 {
         let mut sum = 0.0;
         let mut weight_sum = 0.0;

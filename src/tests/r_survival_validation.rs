@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
+    use crate::regression::coxfit6::{CoxFit, CoxFitBuilder, Method as CoxMethod};
     use crate::residuals::coxmart::compute_coxmart;
     use crate::surv_analysis::nelson_aalen::nelson_aalen;
     use crate::surv_analysis::survdiff2::{
@@ -109,25 +109,19 @@ mod tests {
 
         let time_arr = Array1::from_vec(time);
         let status_arr = Array1::from_vec(status);
-        let strata = Array1::zeros(n);
-        let offset = Array1::zeros(n);
-        let weights = Array1::from_elem(n, 1.0);
 
-        let mut cox_fit = CoxFit::new(
-            time_arr,
-            status_arr,
-            covar,
-            strata,
-            offset,
-            weights,
-            CoxMethod::Breslow,
-            25,
-            1e-9,
-            1e-9,
-            vec![true],
-            vec![0.0],
-        )
-        .expect("Cox fit initialization failed");
+        let mut cox_fit = CoxFitBuilder::new(time_arr, status_arr, covar)
+            .strata(Array1::zeros(n))
+            .offset(Array1::zeros(n))
+            .weights(Array1::from_elem(n, 1.0))
+            .method(CoxMethod::Breslow)
+            .max_iter(25)
+            .eps(1e-9)
+            .toler(1e-9)
+            .doscale(vec![true])
+            .initial_beta(vec![0.0])
+            .build()
+            .expect("Cox fit initialization failed");
 
         cox_fit.fit().expect("Cox fit failed");
 

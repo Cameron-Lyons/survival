@@ -76,6 +76,7 @@ pub fn build_concordance_result(
     }
     Ok(dict.into())
 }
+#[inline]
 pub fn walkup_binary_tree(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
     let mut sums = [0.0; 3];
     if index >= ntree {
@@ -104,6 +105,7 @@ pub fn walkup_binary_tree(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) 
     }
     sums
 }
+#[inline]
 pub fn add_to_binary_tree(nwt: &mut [f64], twt: &mut [f64], index: usize, wt: f64) {
     nwt[index] += wt;
     let mut current = index;
