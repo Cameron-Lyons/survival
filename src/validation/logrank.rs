@@ -1,3 +1,4 @@
+use crate::utilities::numpy_utils::{extract_vec_f64, extract_vec_i32};
 use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
@@ -177,11 +178,14 @@ fn weight_name(weight_type: &WeightType) -> String {
 #[pyfunction]
 #[pyo3(signature = (time, status, group, weight_type=None))]
 pub fn logrank_test(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
+    time: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
+    group: &Bound<'_, PyAny>,
     weight_type: Option<&str>,
 ) -> PyResult<LogRankResult> {
+    let time = extract_vec_f64(time)?;
+    let status = extract_vec_i32(status)?;
+    let group = extract_vec_i32(group)?;
     let wt = match weight_type {
         Some("wilcoxon") | Some("Wilcoxon") => WeightType::Wilcoxon,
         Some("tarone-ware") | Some("TaroneWare") => WeightType::TaroneWare,
@@ -193,12 +197,15 @@ pub fn logrank_test(
 #[pyfunction]
 #[pyo3(signature = (time, status, group, p, q))]
 pub fn fleming_harrington_test(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
+    time: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
+    group: &Bound<'_, PyAny>,
     p: f64,
     q: f64,
 ) -> PyResult<LogRankResult> {
+    let time = extract_vec_f64(time)?;
+    let status = extract_vec_i32(status)?;
+    let group = extract_vec_i32(group)?;
     Ok(weighted_logrank_test(
         &time,
         &status,
@@ -325,11 +332,14 @@ pub fn logrank_trend_test(
 #[pyfunction]
 #[pyo3(signature = (time, status, group, scores=None))]
 pub fn logrank_trend(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
+    time: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
+    group: &Bound<'_, PyAny>,
     scores: Option<Vec<f64>>,
 ) -> PyResult<TrendTestResult> {
+    let time = extract_vec_f64(time)?;
+    let status = extract_vec_i32(status)?;
+    let group = extract_vec_i32(group)?;
     let scores_ref = scores.as_deref();
     Ok(logrank_trend_test(&time, &status, &group, scores_ref))
 }

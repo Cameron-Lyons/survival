@@ -12,6 +12,7 @@ This directory contains tests for the Python bindings of the survival-rs library
 - `test_concordance_additional.py` - Concordance tests
 - `test_regression.py` - Tests for regression models (survreg, coxmart, CoxPHModel, Subject)
 - `test_edge_cases.py` - Tests for edge cases and boundary conditions
+- `test_array_inputs.py` - Tests for different input types (numpy arrays, pandas Series, polars Series)
 - `test_all.py` - Runner script to execute all tests
 
 ## Running Tests

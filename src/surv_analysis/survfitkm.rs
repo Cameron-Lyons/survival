@@ -1,7 +1,65 @@
+use crate::utilities::numpy_utils::{
+    extract_optional_vec_f64, extract_optional_vec_i32, extract_vec_f64,
+};
 use crate::utilities::validation::{
     clamp_probability, validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
+
+#[derive(Debug, Clone, Default)]
+#[pyclass]
+pub struct SurvfitKMOptions {
+    #[pyo3(get, set)]
+    pub weights: Option<Vec<f64>>,
+    #[pyo3(get, set)]
+    pub entry_times: Option<Vec<f64>>,
+    #[pyo3(get, set)]
+    pub position: Option<Vec<i32>>,
+    #[pyo3(get, set)]
+    pub reverse: Option<bool>,
+    #[pyo3(get, set)]
+    pub computation_type: Option<i32>,
+}
+
+#[pymethods]
+impl SurvfitKMOptions {
+    #[new]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_weights(mut self_: PyRefMut<'_, Self>, weights: Vec<f64>) -> PyRefMut<'_, Self> {
+        self_.weights = Some(weights);
+        self_
+    }
+
+    pub fn with_entry_times(
+        mut self_: PyRefMut<'_, Self>,
+        entry_times: Vec<f64>,
+    ) -> PyRefMut<'_, Self> {
+        self_.entry_times = Some(entry_times);
+        self_
+    }
+
+    pub fn with_position(mut self_: PyRefMut<'_, Self>, position: Vec<i32>) -> PyRefMut<'_, Self> {
+        self_.position = Some(position);
+        self_
+    }
+
+    pub fn with_reverse(mut self_: PyRefMut<'_, Self>, reverse: bool) -> PyRefMut<'_, Self> {
+        self_.reverse = Some(reverse);
+        self_
+    }
+
+    pub fn with_computation_type(
+        mut self_: PyRefMut<'_, Self>,
+        computation_type: i32,
+    ) -> PyRefMut<'_, Self> {
+        self_.computation_type = Some(computation_type);
+        self_
+    }
+}
+
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct SurvFitKMOutput {
@@ -26,20 +84,25 @@ pub struct SurvFitKMOutput {
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (time, status, weights=None, entry_times=None, position=None, reverse=None, computation_type=None))]
 pub fn survfitkm(
-    time: Vec<f64>,
-    status: Vec<f64>,
-    weights: Option<Vec<f64>>,
-    entry_times: Option<Vec<f64>>,
-    position: Option<Vec<i32>>,
+    time: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
+    weights: Option<&Bound<'_, PyAny>>,
+    entry_times: Option<&Bound<'_, PyAny>>,
+    position: Option<&Bound<'_, PyAny>>,
     reverse: Option<bool>,
     computation_type: Option<i32>,
 ) -> PyResult<SurvFitKMOutput> {
+    let time = extract_vec_f64(time)?;
+    let status = extract_vec_f64(status)?;
+    let weights_opt = extract_optional_vec_f64(weights)?;
+    let entry_times_opt = extract_optional_vec_f64(entry_times)?;
+    let position_opt = extract_optional_vec_i32(position)?;
     validate_non_empty(&time, "time")?;
     validate_length(time.len(), status.len(), "status")?;
     validate_non_negative(&time, "time")?;
     validate_no_nan(&time, "time")?;
     validate_no_nan(&status, "status")?;
-    let weights = match weights {
+    let weights = match weights_opt {
         Some(w) => {
             validate_length(time.len(), w.len(), "weights")?;
             validate_non_negative(&w, "weights")?;
@@ -47,14 +110,14 @@ pub fn survfitkm(
         }
         None => vec![1.0; time.len()],
     };
-    let position = match position {
+    let position = match position_opt {
         Some(p) => {
             validate_length(time.len(), p.len(), "position")?;
             p
         }
         None => vec![0; time.len()],
     };
-    if let Some(ref entry) = entry_times {
+    if let Some(ref entry) = entry_times_opt {
         validate_length(time.len(), entry.len(), "entry_times")?;
     }
     let _reverse = reverse.unwrap_or(false);
@@ -63,7 +126,7 @@ pub fn survfitkm(
         &time,
         &status,
         &weights,
-        entry_times.as_deref(),
+        entry_times_opt.as_deref(),
         &position,
         _reverse,
         _computation_type,
@@ -159,10 +222,55 @@ pub fn compute_survfitkm(
         conf_upper,
     }
 }
+#[pyfunction]
+pub fn survfitkm_with_options(
+    time: Vec<f64>,
+    status: Vec<f64>,
+    options: Option<&SurvfitKMOptions>,
+) -> PyResult<SurvFitKMOutput> {
+    let opts = options.cloned().unwrap_or_default();
+    validate_non_empty(&time, "time")?;
+    validate_length(time.len(), status.len(), "status")?;
+    validate_non_negative(&time, "time")?;
+    validate_no_nan(&time, "time")?;
+    validate_no_nan(&status, "status")?;
+    let weights = match opts.weights {
+        Some(w) => {
+            validate_length(time.len(), w.len(), "weights")?;
+            validate_non_negative(&w, "weights")?;
+            w
+        }
+        None => vec![1.0; time.len()],
+    };
+    let position = match opts.position {
+        Some(p) => {
+            validate_length(time.len(), p.len(), "position")?;
+            p
+        }
+        None => vec![0; time.len()],
+    };
+    if let Some(ref entry) = opts.entry_times {
+        validate_length(time.len(), entry.len(), "entry_times")?;
+    }
+    let reverse = opts.reverse.unwrap_or(false);
+    let computation_type = opts.computation_type.unwrap_or(0);
+    Ok(compute_survfitkm(
+        &time,
+        &status,
+        &weights,
+        opts.entry_times.as_deref(),
+        &position,
+        reverse,
+        computation_type,
+    ))
+}
+
 #[pymodule]
 #[pyo3(name = "survfitkm")]
 fn survfitkm_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
+    m.add_function(wrap_pyfunction!(survfitkm_with_options, &m)?)?;
     m.add_class::<SurvFitKMOutput>()?;
+    m.add_class::<SurvfitKMOptions>()?;
     Ok(())
 }

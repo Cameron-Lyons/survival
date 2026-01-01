@@ -46,7 +46,9 @@ pub use surv_analysis::nelson_aalen::{
 };
 pub use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
 pub use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
-pub use surv_analysis::survfitkm::{SurvFitKMOutput, survfitkm};
+pub use surv_analysis::survfitkm::{
+    SurvFitKMOutput, SurvfitKMOptions, survfitkm, survfitkm_with_options,
+};
 pub use utilities::agexact::agexact;
 pub use utilities::collapse::collapse;
 pub use utilities::survsplit::{SplitResult, survsplit};
@@ -104,6 +106,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agmart, &m)?)?;
     m.add_function(wrap_pyfunction!(coxmart, &m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
+    m.add_function(wrap_pyfunction!(survfitkm_with_options, &m)?)?;
     m.add_function(wrap_pyfunction!(survfitaj, &m)?)?;
     m.add_function(wrap_pyfunction!(survdiff2, &m)?)?;
     m.add_function(wrap_pyfunction!(finegray, &m)?)?;
@@ -155,6 +158,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CoxPHModel>()?;
     m.add_class::<Subject>()?;
     m.add_class::<SurvFitKMOutput>()?;
+    m.add_class::<SurvfitKMOptions>()?;
     m.add_class::<SurvFitAJ>()?;
     m.add_class::<FineGrayOutput>()?;
     m.add_class::<SurvivalFit>()?;
