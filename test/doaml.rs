@@ -2,7 +2,7 @@ use approx::assert_relative_eq;
 use ndarray::{Array1, Array2};
 use statrs::distribution::ChiSquared;
 use survival::regression::coxfit6::{CoxFit, CoxError, Method as CoxMethod};
-use survival::surv_analysis::survfitkm::compute_survfitkm;
+use survival::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
 use survival::surv_analysis::survdiff2::{compute_survdiff, SurvDiffInput, SurvDiffOutput, SurvDiffParams};
 use survival::residuals::coxmart::compute_coxmart;
 
@@ -144,8 +144,7 @@ impl SurvivalData {
             &weights_vec,
             None,
             &position_vec,
-            false,
-            0,
+            &KaplanMeierConfig::default(),
         );
         
         KaplanMeier {

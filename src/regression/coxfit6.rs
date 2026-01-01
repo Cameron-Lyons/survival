@@ -1,7 +1,60 @@
+use crate::constants::{CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, RIDGE_REGULARIZATION};
 use crate::utilities::matrix::{cholesky_check, lu_solve, matrix_inverse};
 use ndarray::{Array1, Array2};
 use rayon::prelude::*;
 use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct CoxFitConfig {
+    pub method: Method,
+
+    pub max_iter: usize,
+
+    pub eps: f64,
+
+    pub toler: f64,
+}
+
+impl Default for CoxFitConfig {
+    fn default() -> Self {
+        Self {
+            method: Method::Breslow,
+            max_iter: DEFAULT_MAX_ITER,
+            eps: CONVERGENCE_EPSILON,
+            toler: CHOLESKY_TOL,
+        }
+    }
+}
+
+impl CoxFitConfig {
+    #[allow(dead_code)]
+    pub fn new(
+        method: Option<Method>,
+        max_iter: Option<usize>,
+        eps: Option<f64>,
+        toler: Option<f64>,
+    ) -> Self {
+        Self {
+            method: method.unwrap_or(Method::Breslow),
+            max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
+            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            toler: toler.unwrap_or(CHOLESKY_TOL),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn breslow() -> Self {
+        Self::default()
+    }
+
+    #[allow(dead_code)]
+    pub fn efron() -> Self {
+        Self {
+            method: Method::Efron,
+            ..Self::default()
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum CoxError {
@@ -22,7 +75,7 @@ impl std::error::Error for CoxError {}
 #[derive(Debug, Clone, Copy)]
 pub enum Method {
     Breslow,
-    #[allow(dead_code)] // Used in tests (r_survival_validation, r_exact_validation)
+    #[allow(dead_code)]
     Efron,
 }
 pub type CoxFitResults = (
@@ -167,6 +220,45 @@ impl CoxFitBuilder {
 }
 impl CoxFit {
     #[allow(clippy::too_many_arguments)]
+    pub fn with_config(
+        time: Array1<f64>,
+        status: Array1<i32>,
+        covar: Array2<f64>,
+        strata: Array1<i32>,
+        offset: Array1<f64>,
+        weights: Array1<f64>,
+        config: CoxFitConfig,
+        doscale: Vec<bool>,
+        initial_beta: Vec<f64>,
+    ) -> Result<Self, CoxError> {
+        let nvar = covar.ncols();
+        let _nused = covar.nrows();
+        let mut cox = Self {
+            time,
+            status,
+            covar,
+            strata,
+            offset,
+            weights,
+            method: config.method,
+            max_iter: config.max_iter,
+            eps: config.eps,
+            toler: config.toler,
+            scale: vec![1.0; nvar],
+            means: vec![0.0; nvar],
+            beta: initial_beta,
+            u: vec![0.0; nvar],
+            imat: Array2::zeros((nvar, nvar)),
+            loglik: [0.0; 2],
+            sctest: 0.0,
+            flag: 0,
+            iter: 0,
+        };
+        cox.scale_center(doscale)?;
+        Ok(cox)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         time: Array1<f64>,
         status: Array1<i32>,
@@ -181,31 +273,23 @@ impl CoxFit {
         doscale: Vec<bool>,
         initial_beta: Vec<f64>,
     ) -> Result<Self, CoxError> {
-        let nvar = covar.ncols();
-        let _nused = covar.nrows();
-        let mut cox = Self {
+        let config = CoxFitConfig {
+            method,
+            max_iter,
+            eps,
+            toler,
+        };
+        Self::with_config(
             time,
             status,
             covar,
             strata,
             offset,
             weights,
-            method,
-            max_iter,
-            eps,
-            toler,
-            scale: vec![1.0; nvar],
-            means: vec![0.0; nvar],
-            beta: initial_beta,
-            u: vec![0.0; nvar],
-            imat: Array2::zeros((nvar, nvar)),
-            loglik: [0.0; 2],
-            sctest: 0.0,
-            flag: 0,
-            iter: 0,
-        };
-        cox.scale_center(doscale)?;
-        Ok(cox)
+            config,
+            doscale,
+            initial_beta,
+        )
     }
     fn scale_center(&mut self, doscale: Vec<bool>) -> Result<(), CoxError> {
         let nvar = self.covar.ncols();
@@ -502,7 +586,7 @@ impl CoxFit {
         let n = mat.nrows();
         let mut mat_reg = mat.clone();
         for i in 0..n {
-            mat_reg[(i, i)] += 1e-10;
+            mat_reg[(i, i)] += RIDGE_REGULARIZATION;
         }
         let inv = matrix_inverse(&mat_reg).ok_or(CoxError::MatrixInversion)?;
         *mat = inv;

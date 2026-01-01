@@ -1,3 +1,4 @@
+use crate::constants::TIME_EPSILON;
 use crate::utilities::numpy_utils::{
     extract_optional_vec_f64, extract_optional_vec_i32, extract_vec_f64,
 };
@@ -62,6 +63,56 @@ impl SurvfitKMOptions {
 
 #[derive(Debug, Clone)]
 #[pyclass]
+pub struct KaplanMeierConfig {
+    #[pyo3(get, set)]
+    pub reverse: bool,
+
+    #[pyo3(get, set)]
+    pub computation_type: i32,
+
+    #[pyo3(get, set)]
+    pub conf_level: f64,
+}
+
+#[pymethods]
+impl KaplanMeierConfig {
+    #[new]
+    #[pyo3(signature = (reverse=None, computation_type=None, conf_level=None))]
+    fn new(reverse: Option<bool>, computation_type: Option<i32>, conf_level: Option<f64>) -> Self {
+        Self {
+            reverse: reverse.unwrap_or(false),
+            computation_type: computation_type.unwrap_or(0),
+            conf_level: conf_level.unwrap_or(0.95),
+        }
+    }
+}
+
+impl Default for KaplanMeierConfig {
+    fn default() -> Self {
+        Self {
+            reverse: false,
+            computation_type: 0,
+            conf_level: 0.95,
+        }
+    }
+}
+
+impl KaplanMeierConfig {
+    pub fn create(
+        reverse: Option<bool>,
+        computation_type: Option<i32>,
+        conf_level: Option<f64>,
+    ) -> Self {
+        Self {
+            reverse: reverse.unwrap_or(false),
+            computation_type: computation_type.unwrap_or(0),
+            conf_level: conf_level.unwrap_or(0.95),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
 pub struct SurvFitKMOutput {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -80,8 +131,8 @@ pub struct SurvFitKMOutput {
     #[pyo3(get)]
     pub conf_upper: Vec<f64>,
 }
+
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (time, status, weights=None, entry_times=None, position=None, reverse=None, computation_type=None))]
 pub fn survfitkm(
     time: &Bound<'_, PyAny>,
@@ -97,6 +148,11 @@ pub fn survfitkm(
     let weights_opt = extract_optional_vec_f64(weights)?;
     let entry_times_opt = extract_optional_vec_f64(entry_times)?;
     let position_opt = extract_optional_vec_i32(position)?;
+    let config = KaplanMeierConfig {
+        reverse: reverse.unwrap_or(false),
+        computation_type: computation_type.unwrap_or(0),
+        conf_level: 0.95,
+    };
     validate_non_empty(&time, "time")?;
     validate_length(time.len(), status.len(), "status")?;
     validate_non_negative(&time, "time")?;
@@ -120,26 +176,23 @@ pub fn survfitkm(
     if let Some(ref entry) = entry_times_opt {
         validate_length(time.len(), entry.len(), "entry_times")?;
     }
-    let _reverse = reverse.unwrap_or(false);
-    let _computation_type = computation_type.unwrap_or(0);
     Ok(compute_survfitkm(
         &time,
         &status,
         &weights,
         entry_times_opt.as_deref(),
         &position,
-        _reverse,
-        _computation_type,
+        &config,
     ))
 }
+
 pub fn compute_survfitkm(
     time: &[f64],
     status: &[f64],
     weights: &[f64],
     _entry_times: Option<&[f64]>,
     _position: &[i32],
-    _reverse: bool,
-    _computation_type: i32,
+    config: &KaplanMeierConfig,
 ) -> SurvFitKMOutput {
     let n = time.len();
     let mut indices: Vec<usize> = (0..n).collect();
@@ -159,12 +212,16 @@ pub fn compute_survfitkm(
     let mut current_estimate = 1.0;
     let mut cumulative_variance = 0.0;
     let mut i = 0;
+
+    let _reverse = config.reverse;
+    let _computation_type = config.computation_type;
+
     while i < n {
         let current_time = time[indices[i]];
         let mut weighted_events = 0.0;
         let mut weighted_censor = 0.0;
         let mut j = i;
-        while j < n && (time[indices[j]] - current_time).abs() < 1e-9 {
+        while j < n && (time[indices[j]] - current_time).abs() < TIME_EPSILON {
             let idx = indices[j];
             if status[idx] > 0.0 {
                 weighted_events += weights[idx];
@@ -194,7 +251,10 @@ pub fn compute_survfitkm(
         current_risk -= weighted_events + weighted_censor;
         i = j;
     }
-    let z = 1.96;
+
+    let alpha = 1.0 - config.conf_level;
+    let z = normal_quantile(1.0 - alpha / 2.0);
+
     let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = estimate_vec
         .iter()
         .zip(std_err_vec.iter())
@@ -222,6 +282,7 @@ pub fn compute_survfitkm(
         conf_upper,
     }
 }
+
 #[pyfunction]
 pub fn survfitkm_with_options(
     time: Vec<f64>,
@@ -252,17 +313,46 @@ pub fn survfitkm_with_options(
     if let Some(ref entry) = opts.entry_times {
         validate_length(time.len(), entry.len(), "entry_times")?;
     }
-    let reverse = opts.reverse.unwrap_or(false);
-    let computation_type = opts.computation_type.unwrap_or(0);
+    let config = KaplanMeierConfig {
+        reverse: opts.reverse.unwrap_or(false),
+        computation_type: opts.computation_type.unwrap_or(0),
+        conf_level: 0.95,
+    };
     Ok(compute_survfitkm(
         &time,
         &status,
         &weights,
         opts.entry_times.as_deref(),
         &position,
-        reverse,
-        computation_type,
+        &config,
     ))
+}
+
+fn normal_quantile(p: f64) -> f64 {
+    if p <= 0.0 || p >= 1.0 {
+        return if p <= 0.0 {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+    }
+
+    let t = if p < 0.5 {
+        (-2.0 * p.ln()).sqrt()
+    } else {
+        (-2.0 * (1.0 - p).ln()).sqrt()
+    };
+
+    let c0 = 2.515517;
+    let c1 = 0.802853;
+    let c2 = 0.010328;
+    let d1 = 1.432788;
+    let d2 = 0.189269;
+    let d3 = 0.001308;
+
+    let result = t - (c0 + c1 * t + c2 * t * t) / (1.0 + d1 * t + d2 * t * t + d3 * t * t * t);
+
+    if p < 0.5 { -result } else { result }
 }
 
 #[pymodule]
@@ -272,5 +362,51 @@ fn survfitkm_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfitkm_with_options, &m)?)?;
     m.add_class::<SurvFitKMOutput>()?;
     m.add_class::<SurvfitKMOptions>()?;
+    m.add_class::<KaplanMeierConfig>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_kaplan_meier_config_default() {
+        let config = KaplanMeierConfig::default();
+        assert!(!config.reverse);
+        assert_eq!(config.computation_type, 0);
+        assert!((config.conf_level - 0.95).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_kaplan_meier_config_create() {
+        let config = KaplanMeierConfig::create(Some(true), Some(1), Some(0.99));
+        assert!(config.reverse);
+        assert_eq!(config.computation_type, 1);
+        assert!((config.conf_level - 0.99).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_normal_quantile() {
+        assert!((normal_quantile(0.5)).abs() < 0.01);
+        let q_025 = normal_quantile(0.025);
+        let q_975 = normal_quantile(0.975);
+        assert!((q_025 + q_975).abs() < 0.01);
+        assert!((q_975 - 1.96).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_compute_survfitkm_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1.0, 0.0, 1.0, 0.0, 1.0];
+        let weights = vec![1.0; 5];
+        let position = vec![0; 5];
+        let config = KaplanMeierConfig::default();
+
+        let result = compute_survfitkm(&time, &status, &weights, None, &position, &config);
+
+        assert!(!result.time.is_empty());
+        assert!(!result.estimate.is_empty());
+        assert!((result.estimate[0] - 1.0).abs() < 1e-10 || result.estimate[0] < 1.0);
+    }
 }

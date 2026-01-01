@@ -6,7 +6,7 @@ mod tests {
     use crate::surv_analysis::survdiff2::{
         SurvDiffInput, SurvDiffOutput, SurvDiffParams, compute_survdiff,
     };
-    use crate::surv_analysis::survfitkm::compute_survfitkm;
+    use crate::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
     use crate::validation::logrank::{WeightType, weighted_logrank_test};
     use crate::validation::rmst::compute_rmst;
     use ndarray::{Array1, Array2};
@@ -263,7 +263,14 @@ mod tests {
         let weights = vec![1.0; time.len()];
         let position = vec![0i32; time.len()];
 
-        let result = compute_survfitkm(&time, &status_f64, &weights, None, &position, false, 0);
+        let result = compute_survfitkm(
+            &time,
+            &status_f64,
+            &weights,
+            None,
+            &position,
+            &KaplanMeierConfig::default(),
+        );
 
         let expected_times = [9.0, 13.0, 18.0, 23.0, 31.0, 34.0, 48.0];
         let expected_survival = [0.909, 0.818, 0.716, 0.614, 0.491, 0.368, 0.184];
@@ -288,7 +295,14 @@ mod tests {
         let weights = vec![1.0; 5];
         let position = vec![0i32; 5];
 
-        let result = compute_survfitkm(&time, &status, &weights, None, &position, false, 0);
+        let result = compute_survfitkm(
+            &time,
+            &status,
+            &weights,
+            None,
+            &position,
+            &KaplanMeierConfig::default(),
+        );
 
         assert!(
             result.time.is_empty(),
@@ -303,7 +317,14 @@ mod tests {
         let weights = vec![1.0; 6];
         let position = vec![0i32; 6];
 
-        let result = compute_survfitkm(&time, &status, &weights, None, &position, false, 0);
+        let result = compute_survfitkm(
+            &time,
+            &status,
+            &weights,
+            None,
+            &position,
+            &KaplanMeierConfig::default(),
+        );
 
         assert_eq!(result.time.len(), 3, "Expected 3 unique event times");
 
@@ -671,7 +692,14 @@ mod tests {
         let weights = vec![1.0, 2.0, 1.0, 2.0, 1.0];
         let position = vec![0i32; 5];
 
-        let result = compute_survfitkm(&time, &status, &weights, None, &position, false, 0);
+        let result = compute_survfitkm(
+            &time,
+            &status,
+            &weights,
+            None,
+            &position,
+            &KaplanMeierConfig::default(),
+        );
 
         for i in 1..result.estimate.len() {
             assert!(
@@ -832,7 +860,14 @@ mod tests {
         let weights = vec![1.0; time.len()];
         let position = vec![0i32; time.len()];
 
-        let result = compute_survfitkm(&time, &status_f64, &weights, None, &position, false, 0);
+        let result = compute_survfitkm(
+            &time,
+            &status_f64,
+            &weights,
+            None,
+            &position,
+            &KaplanMeierConfig::default(),
+        );
 
         for i in 0..result.estimate.len() {
             assert!(

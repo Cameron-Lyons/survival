@@ -1,8 +1,9 @@
 use pyo3::prelude::*;
 mod concordance;
+mod constants;
 mod core;
 mod matrix;
-mod python;
+mod pybridge;
 mod regression;
 mod residuals;
 mod scoring;
@@ -11,24 +12,26 @@ mod surv_analysis;
 mod tests;
 mod utilities;
 mod validation;
+
 pub use concordance::basic::concordance as compute_concordance;
 use concordance::basic::concordance as concordance_fn;
 pub use concordance::concordance1::perform_concordance1_calculation;
 pub use concordance::concordance3::perform_concordance3_calculation;
 pub use concordance::concordance5::perform_concordance_calculation;
+pub use constants::*;
 pub use core::coxcount1::{CoxCountOutput, coxcount1, coxcount2};
 pub use core::coxscho::schoenfeld_residuals;
 pub use core::pspline::PSpline;
-use python::cox_py_callback::cox_callback;
-use python::pyears3b::perform_pyears_calculation;
-use python::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
+use pybridge::cox_py_callback::cox_callback;
+use pybridge::pyears3b::perform_pyears_calculation;
+use pybridge::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
 use regression::aareg::aareg as aareg_function;
 pub use regression::aareg::{AaregOptions, aareg};
 pub use regression::agfit5::perform_cox_regression_frailty;
 pub use regression::blogit::LinkFunctionParams;
 pub use regression::clogit::{ClogitDataSet, ConditionalLogisticRegression};
 pub use regression::coxph::{CoxPHModel, Subject};
-pub use regression::survreg6::{DistributionType, SurvivalFit, survreg};
+pub use regression::survreg6::{DistributionType, SurvivalFit, SurvregConfig, survreg};
 pub use residuals::agmart::agmart;
 pub use residuals::coxmart::coxmart;
 pub use scoring::agscore2::perform_score_calculation;
@@ -47,7 +50,7 @@ pub use surv_analysis::nelson_aalen::{
 pub use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
 pub use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
 pub use surv_analysis::survfitkm::{
-    SurvFitKMOutput, SurvfitKMOptions, survfitkm, survfitkm_with_options,
+    KaplanMeierConfig, SurvFitKMOutput, SurvfitKMOptions, survfitkm, survfitkm_with_options,
 };
 pub use utilities::agexact::agexact;
 pub use utilities::collapse::collapse;
@@ -159,9 +162,11 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Subject>()?;
     m.add_class::<SurvFitKMOutput>()?;
     m.add_class::<SurvfitKMOptions>()?;
+    m.add_class::<KaplanMeierConfig>()?;
     m.add_class::<SurvFitAJ>()?;
     m.add_class::<FineGrayOutput>()?;
     m.add_class::<SurvivalFit>()?;
+    m.add_class::<SurvregConfig>()?;
     m.add_class::<DistributionType>()?;
     m.add_class::<SurvDiffResult>()?;
     m.add_class::<CchMethod>()?;

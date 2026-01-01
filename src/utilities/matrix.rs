@@ -1,3 +1,5 @@
+use crate::constants::{NEAR_ZERO_MATRIX, RIDGE_REGULARIZATION};
+use crate::utilities::validation::MatrixError;
 use faer::{linalg::solvers::DenseSolveCore, prelude::*};
 use ndarray::{Array1, Array2};
 
@@ -25,34 +27,37 @@ pub fn cholesky_solve(
     matrix: &Array2<f64>,
     vector: &Array1<f64>,
     _tol: f64,
-) -> Result<Array1<f64>, Box<dyn std::error::Error>> {
+) -> Result<Array1<f64>, MatrixError> {
     if matrix.nrows() == 0 || matrix.ncols() == 0 {
-        return Ok(Array1::zeros(vector.len()));
+        if vector.is_empty() {
+            return Ok(Array1::zeros(0));
+        }
+        return Err(MatrixError::EmptyMatrix);
     }
 
     let max_val = matrix.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
-    if max_val < 1e-10 {
-        return Ok(Array1::zeros(vector.len()));
+    if max_val < NEAR_ZERO_MATRIX {
+        return Err(MatrixError::SingularMatrix);
     }
 
-    match lu_solve(matrix, vector) {
+    match lu_solve_internal(matrix, vector) {
         Some(result) => Ok(result),
         None => {
             let n = matrix.nrows();
-            let ridge = max_val * 1e-6;
+            let ridge = max_val * RIDGE_REGULARIZATION;
             let mut reg_matrix = matrix.clone();
             for i in 0..n {
                 reg_matrix[[i, i]] += ridge;
             }
-            match lu_solve(&reg_matrix, vector) {
+            match lu_solve_internal(&reg_matrix, vector) {
                 Some(result) => Ok(result),
-                None => Ok(Array1::zeros(vector.len())),
+                None => Err(MatrixError::SingularMatrix),
             }
         }
     }
 }
 
-pub fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
+fn lu_solve_internal(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
     if matrix.nrows() == 0 || matrix.ncols() == 0 {
         return Some(Array1::zeros(vector.len()));
     }
@@ -63,6 +68,10 @@ pub fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64
     let lu = mat.partial_piv_lu();
     let x: Col<f64> = lu.solve(&b);
     Some(faer_col_to_ndarray(x.as_ref()))
+}
+
+pub fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
+    lu_solve_internal(matrix, vector)
 }
 
 pub fn matrix_inverse(matrix: &Array2<f64>) -> Option<Array2<f64>> {
@@ -88,7 +97,7 @@ pub fn cholesky_check(matrix: &Array2<f64>) -> bool {
             return false;
         }
         for j in 0..i {
-            if (matrix[[i, j]] - matrix[[j, i]]).abs() > 1e-10 {
+            if (matrix[[i, j]] - matrix[[j, i]]).abs() > crate::constants::SYMMETRY_TOL {
                 return false;
             }
         }
@@ -118,6 +127,14 @@ mod tests {
         let vector: Array1<f64> = Array1::zeros(0);
         let result = cholesky_solve(&matrix, &vector, 1e-9).unwrap();
         assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_cholesky_solve_near_zero_matrix() {
+        let matrix = arr2(&[[1e-15, 0.0], [0.0, 1e-15]]);
+        let vector = Array1::from_vec(vec![1.0, 2.0]);
+        let result = cholesky_solve(&matrix, &vector, 1e-9);
+        assert!(matches!(result, Err(MatrixError::SingularMatrix)));
     }
 
     #[test]

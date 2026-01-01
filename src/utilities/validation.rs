@@ -1,6 +1,52 @@
 use pyo3::PyErr;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use std::fmt;
+
+#[derive(Debug, Clone)]
+pub enum MatrixError {
+    SingularMatrix,
+    CholeskyFailed,
+    DimensionMismatch { expected: usize, got: usize },
+    EmptyMatrix,
+}
+
+impl fmt::Display for MatrixError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MatrixError::SingularMatrix => {
+                write!(
+                    f,
+                    "matrix is singular or nearly singular and cannot be solved"
+                )
+            }
+            MatrixError::CholeskyFailed => {
+                write!(
+                    f,
+                    "Cholesky decomposition failed: matrix is not positive definite"
+                )
+            }
+            MatrixError::DimensionMismatch { expected, got } => {
+                write!(
+                    f,
+                    "matrix dimension mismatch: expected {}, got {}",
+                    expected, got
+                )
+            }
+            MatrixError::EmptyMatrix => {
+                write!(f, "matrix is empty when non-empty matrix was expected")
+            }
+        }
+    }
+}
+
+impl std::error::Error for MatrixError {}
+
+impl From<MatrixError> for PyErr {
+    fn from(err: MatrixError) -> PyErr {
+        PyRuntimeError::new_err(err.to_string())
+    }
+}
+
 #[derive(Debug)]
 pub enum ValidationError {
     LengthMismatch {
