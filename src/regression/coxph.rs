@@ -1,4 +1,4 @@
-use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
+use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -132,34 +132,26 @@ impl CoxPHModel {
         let status_array: Array1<i32> =
             Array1::from_vec(self.censoring.iter().map(|&x| x as i32).collect());
         let strata = Array1::zeros(n);
-        let offset = Array1::zeros(n);
-        let weights = Array1::from_elem(n, 1.0);
         let initial_beta: Vec<f64> =
             if self.coefficients.nrows() == nvar && self.coefficients.ncols() > 0 {
                 self.coefficients.column(0).to_vec()
             } else {
                 vec![0.0; nvar]
             };
-        let mut cox_fit = CoxFit::new(
-            time_array,
-            status_array,
-            self.covariates.clone(),
-            strata,
-            offset,
-            weights,
-            CoxMethod::Breslow,
-            n_iters as usize,
-            1e-5,
-            1e-9,
-            vec![true; nvar],
-            initial_beta,
-        )
-        .map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "Cox fit initialization failed: {}",
-                e
-            ))
-        })?;
+        let mut cox_fit = CoxFitBuilder::new(time_array, status_array, self.covariates.clone())
+            .strata(strata)
+            .method(CoxMethod::Breslow)
+            .max_iter(n_iters as usize)
+            .eps(1e-5)
+            .toler(1e-9)
+            .initial_beta(initial_beta)
+            .build()
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Cox fit initialization failed: {}",
+                    e
+                ))
+            })?;
         cox_fit.fit().map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e))
         })?;

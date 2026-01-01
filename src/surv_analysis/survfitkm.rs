@@ -2,6 +2,61 @@ use crate::utilities::validation::{
     clamp_probability, validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
+
+#[derive(Debug, Clone, Default)]
+#[pyclass]
+pub struct SurvfitKMOptions {
+    #[pyo3(get, set)]
+    pub weights: Option<Vec<f64>>,
+    #[pyo3(get, set)]
+    pub entry_times: Option<Vec<f64>>,
+    #[pyo3(get, set)]
+    pub position: Option<Vec<i32>>,
+    #[pyo3(get, set)]
+    pub reverse: Option<bool>,
+    #[pyo3(get, set)]
+    pub computation_type: Option<i32>,
+}
+
+#[pymethods]
+impl SurvfitKMOptions {
+    #[new]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_weights(mut self_: PyRefMut<'_, Self>, weights: Vec<f64>) -> PyRefMut<'_, Self> {
+        self_.weights = Some(weights);
+        self_
+    }
+
+    pub fn with_entry_times(
+        mut self_: PyRefMut<'_, Self>,
+        entry_times: Vec<f64>,
+    ) -> PyRefMut<'_, Self> {
+        self_.entry_times = Some(entry_times);
+        self_
+    }
+
+    pub fn with_position(mut self_: PyRefMut<'_, Self>, position: Vec<i32>) -> PyRefMut<'_, Self> {
+        self_.position = Some(position);
+        self_
+    }
+
+    pub fn with_reverse(mut self_: PyRefMut<'_, Self>, reverse: bool) -> PyRefMut<'_, Self> {
+        self_.reverse = Some(reverse);
+        self_
+    }
+
+    pub fn with_computation_type(
+        mut self_: PyRefMut<'_, Self>,
+        computation_type: i32,
+    ) -> PyRefMut<'_, Self> {
+        self_.computation_type = Some(computation_type);
+        self_
+    }
+}
+
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct SurvFitKMOutput {
@@ -159,10 +214,31 @@ pub fn compute_survfitkm(
         conf_upper,
     }
 }
+
+#[pyfunction]
+pub fn survfitkm_with_options(
+    time: Vec<f64>,
+    status: Vec<f64>,
+    options: Option<&SurvfitKMOptions>,
+) -> PyResult<SurvFitKMOutput> {
+    let opts = options.cloned().unwrap_or_default();
+    survfitkm(
+        time,
+        status,
+        opts.weights,
+        opts.entry_times,
+        opts.position,
+        opts.reverse,
+        opts.computation_type,
+    )
+}
+
 #[pymodule]
 #[pyo3(name = "survfitkm")]
 fn survfitkm_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
+    m.add_function(wrap_pyfunction!(survfitkm_with_options, &m)?)?;
     m.add_class::<SurvFitKMOutput>()?;
+    m.add_class::<SurvfitKMOptions>()?;
     Ok(())
 }

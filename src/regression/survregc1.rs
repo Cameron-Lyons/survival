@@ -1,3 +1,4 @@
+use crate::utilities::statistical::{erf, erfc};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use std::fmt;
 
@@ -294,22 +295,6 @@ fn exvalue_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
             distribution: "extreme value".to_string(),
         }),
     }
-}
-fn erf(x: f64) -> f64 {
-    let a1 = 0.254829592;
-    let a2 = -0.284496736;
-    let a3 = 1.421413741;
-    let a4 = -1.453152027;
-    let a5 = 1.061405429;
-    let p = 0.3275911;
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let x = x.abs();
-    let t = 1.0 / (1.0 + p * x);
-    let y = 1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-    sign * y
-}
-fn erfc(x: f64) -> f64 {
-    1.0 - erf(x)
 }
 #[allow(clippy::too_many_arguments)]
 fn update_derivatives(

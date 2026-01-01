@@ -1,7 +1,69 @@
 use crate::utilities::validation::{ValidationError, validate_length};
+use ndarray::Array2;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use rayon::prelude::*;
+
+const PARALLEL_THRESHOLD: usize = 500;
+
+#[inline]
+pub fn apply_deltas_add<F>(
+    indices: &[usize],
+    nvar: usize,
+    matrix: &mut Array2<f64>,
+    compute_deltas: F,
+) where
+    F: Fn(usize) -> Vec<f64> + Sync + Send,
+{
+    if indices.len() > PARALLEL_THRESHOLD {
+        let updates: Vec<(usize, Vec<f64>)> = indices
+            .par_iter()
+            .map(|&idx| (idx, compute_deltas(idx)))
+            .collect();
+        for (idx, deltas) in updates {
+            for j in 0..nvar {
+                matrix[[j, idx]] += deltas[j];
+            }
+        }
+    } else {
+        for &idx in indices {
+            let deltas = compute_deltas(idx);
+            for j in 0..nvar {
+                matrix[[j, idx]] += deltas[j];
+            }
+        }
+    }
+}
+
+#[inline]
+pub fn apply_deltas_set<F>(
+    indices: &[usize],
+    nvar: usize,
+    matrix: &mut Array2<f64>,
+    compute_deltas: F,
+) where
+    F: Fn(usize) -> Vec<f64> + Sync + Send,
+{
+    if indices.len() > PARALLEL_THRESHOLD {
+        let updates: Vec<(usize, Vec<f64>)> = indices
+            .par_iter()
+            .map(|&idx| (idx, compute_deltas(idx)))
+            .collect();
+        for (idx, deltas) in updates {
+            for j in 0..nvar {
+                matrix[[j, idx]] = deltas[j];
+            }
+        }
+    } else {
+        for &idx in indices {
+            let deltas = compute_deltas(idx);
+            for j in 0..nvar {
+                matrix[[j, idx]] = deltas[j];
+            }
+        }
+    }
+}
 
 fn validation_err_to_pyresult<T>(result: Result<T, ValidationError>) -> PyResult<T> {
     result.map_err(|e| PyRuntimeError::new_err(e.to_string()))

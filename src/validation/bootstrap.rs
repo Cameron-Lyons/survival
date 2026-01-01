@@ -71,7 +71,7 @@ pub fn bootstrap_cox(
     weights: Option<&[f64]>,
     config: &BootstrapConfig,
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
+    use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
@@ -92,26 +92,16 @@ pub fn bootstrap_cox(
             sorted_covariates[[new_idx, var]] = covariates[[var, orig_idx]];
         }
     }
-    let initial_beta: Vec<f64> = vec![0.0; nvar];
     let time_arr = Array1::from_vec(sorted_time.clone());
     let status_arr = Array1::from_vec(sorted_status.clone());
-    let strata_arr = Array1::from_elem(n, 0i32);
-    let offset_arr = Array1::from_elem(n, 0.0);
     let weights_arr = Array1::from_vec(sorted_weights.clone());
-    let mut original_fit = CoxFit::new(
-        time_arr,
-        status_arr,
-        sorted_covariates.clone(),
-        strata_arr,
-        offset_arr,
-        weights_arr,
-        CoxMethod::Breslow,
-        25,
-        1e-9,
-        1e-9,
-        vec![true; nvar],
-        initial_beta.clone(),
-    )?;
+    let mut original_fit = CoxFitBuilder::new(time_arr, status_arr, sorted_covariates.clone())
+        .weights(weights_arr)
+        .method(CoxMethod::Breslow)
+        .max_iter(25)
+        .eps(1e-9)
+        .toler(1e-9)
+        .build()?;
     original_fit.fit()?;
     let (original_beta, _, _, _, _, _, _, _) = original_fit.results();
     let seed = config.seed.unwrap_or(42);
@@ -146,23 +136,15 @@ pub fn bootstrap_cox(
             }
             let time_arr = Array1::from_vec(resorted_time);
             let status_arr = Array1::from_vec(resorted_status);
-            let strata_arr = Array1::from_elem(n, 0i32);
-            let offset_arr = Array1::from_elem(n, 0.0);
             let weights_arr = Array1::from_vec(resorted_weights);
-            match CoxFit::new(
-                time_arr,
-                status_arr,
-                resorted_covariates,
-                strata_arr,
-                offset_arr,
-                weights_arr,
-                CoxMethod::Breslow,
-                25,
-                1e-9,
-                1e-9,
-                vec![true; nvar],
-                initial_beta.clone(),
-            ) {
+            match CoxFitBuilder::new(time_arr, status_arr, resorted_covariates)
+                .weights(weights_arr)
+                .method(CoxMethod::Breslow)
+                .max_iter(25)
+                .eps(1e-9)
+                .toler(1e-9)
+                .build()
+            {
                 Ok(mut fit) => {
                     if fit.fit().is_ok() {
                         let (beta, _, _, _, _, _, _, _) = fit.results();
