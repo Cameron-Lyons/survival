@@ -1,14 +1,24 @@
 use crate::utilities::matrix::{cholesky_check, lu_solve, matrix_inverse};
 use ndarray::{Array1, Array2};
 use rayon::prelude::*;
-use thiserror::Error;
-#[derive(Error, Debug)]
+use std::fmt;
+
+#[derive(Debug)]
 pub enum CoxError {
-    #[error("Cholesky decomposition failed")]
     CholeskyDecomposition,
-    #[error("Matrix inversion failed")]
     MatrixInversion,
 }
+
+impl fmt::Display for CoxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CoxError::CholeskyDecomposition => write!(f, "Cholesky decomposition failed"),
+            CoxError::MatrixInversion => write!(f, "Matrix inversion failed"),
+        }
+    }
+}
+
+impl std::error::Error for CoxError {}
 #[derive(Debug, Clone, Copy)]
 pub enum Method {
     Breslow,

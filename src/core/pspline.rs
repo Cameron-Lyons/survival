@@ -2,20 +2,45 @@ use crate::utilities::matrix::lu_solve;
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use thiserror::Error;
-#[derive(Error, Debug)]
+use std::fmt;
+
+#[derive(Debug)]
 pub enum PSplineError {
-    #[error("Unsupported penalty method: {0}. Supported methods are: GCV, UBRE, REML, AIC, BIC")]
     UnsupportedMethod(String),
-    #[error("Failed to create matrix with shape ({rows}, {cols}): {reason}")]
     MatrixCreationError {
         rows: usize,
         cols: usize,
         reason: String,
     },
-    #[error("Failed to solve linear system: matrix may be singular or ill-conditioned")]
     LinearSolveError,
 }
+
+impl fmt::Display for PSplineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PSplineError::UnsupportedMethod(method) => write!(
+                f,
+                "Unsupported penalty method: {}. Supported methods are: GCV, UBRE, REML, AIC, BIC",
+                method
+            ),
+            PSplineError::MatrixCreationError { rows, cols, reason } => {
+                write!(
+                    f,
+                    "Failed to create matrix with shape ({}, {}): {}",
+                    rows, cols, reason
+                )
+            }
+            PSplineError::LinearSolveError => {
+                write!(
+                    f,
+                    "Failed to solve linear system: matrix may be singular or ill-conditioned"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PSplineError {}
 impl From<PSplineError> for PyErr {
     fn from(err: PSplineError) -> PyErr {
         PyValueError::new_err(err.to_string())

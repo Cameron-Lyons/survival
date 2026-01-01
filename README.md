@@ -561,8 +561,6 @@ The codebase is organized with:
 - [ndarray](https://github.com/rust-ndarray/ndarray) - N-dimensional arrays
 - [faer](https://github.com/sarah-ek/faer-rs) - Pure-Rust linear algebra
 - [itertools](https://github.com/rust-itertools/itertools) - Iterator utilities
-- [statrs](https://github.com/statrs-dev/statrs) - Statistical distributions
-- [thiserror](https://github.com/dtolnay/thiserror) - Error handling
 - [rayon](https://github.com/rayon-rs/rayon) - Parallel computation
 
 ## Compatibility

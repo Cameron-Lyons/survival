@@ -1,9 +1,8 @@
+use crate::utilities::statistical::normal_inverse_cdf;
 use pyo3::prelude::*;
-use statrs::distribution::{ContinuousCDF, Normal};
+
 fn probit(p: f64) -> f64 {
-    let normal =
-        Normal::new(0.0, 1.0).expect("standard normal distribution parameters are always valid");
-    normal.inverse_cdf(p)
+    normal_inverse_cdf(p)
 }
 fn cloglog(p: f64) -> f64 {
     (-(1.0 - p).ln()).ln()

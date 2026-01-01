@@ -1,6 +1,6 @@
 [package]
 name = "survival"
-version = "1.0.20"
+version = "1.0.21"
 edition = "2024"
 rust-version = "1.92"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
@@ -23,10 +23,8 @@ crate-type = ["cdylib", "rlib"]
 pyo3 = { version = "0.27.2", features = ["extension-module"] }
 ndarray = "0.17.1"
 itertools = "0.14.0"
-statrs = "0.18.0"
-thiserror = "2.0.17"
 rayon = "1.11.0"
-faer = "0.20"
+faer = "0.23.2"
 
 [dev-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
