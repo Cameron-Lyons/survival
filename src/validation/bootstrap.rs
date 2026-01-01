@@ -239,12 +239,29 @@ pub fn bootstrap_survreg(
     distribution: &str,
     config: &BootstrapConfig,
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::survreg6::survreg;
+    use crate::regression::survreg6::{DistributionType, survreg};
     let n = time.len();
     let nvar = covariates.ncols();
     let cov_vecs: Vec<Vec<f64>> = (0..n)
         .map(|i| (0..nvar).map(|j| covariates[[j, i]]).collect())
         .collect();
+
+    let dist_type = match distribution {
+        "logistic" | "Logistic" => DistributionType::Logistic,
+        "gaussian" | "Gaussian" | "normal" | "Normal" => DistributionType::Gaussian,
+        "weibull" | "Weibull" => DistributionType::Weibull,
+        "lognormal" | "LogNormal" | "lognorm" | "LogNorm" => DistributionType::LogNormal,
+        _ => DistributionType::ExtremeValue,
+    };
+
+    let dist_str = match dist_type {
+        DistributionType::Weibull => "weibull",
+        DistributionType::ExtremeValue => "extreme_value",
+        DistributionType::Gaussian => "gaussian",
+        DistributionType::Logistic => "logistic",
+        DistributionType::LogNormal => "lognormal",
+    };
+
     let original = survreg(
         time.to_vec(),
         status.to_vec(),
@@ -253,13 +270,12 @@ pub fn bootstrap_survreg(
         None,
         None,
         None,
-        Some(distribution),
+        Some(dist_str),
         Some(25),
         Some(1e-5),
         Some(1e-9),
     )?;
     let seed = config.seed.unwrap_or(42);
-    let dist = distribution.to_string();
     let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {
@@ -276,7 +292,7 @@ pub fn bootstrap_survreg(
                 None,
                 None,
                 None,
-                Some(&dist),
+                Some(dist_str),
                 Some(25),
                 Some(1e-5),
                 Some(1e-9),

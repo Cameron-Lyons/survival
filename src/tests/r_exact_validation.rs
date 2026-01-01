@@ -2,7 +2,7 @@
 mod tests {
     use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
     use crate::surv_analysis::nelson_aalen::nelson_aalen;
-    use crate::surv_analysis::survfitkm::compute_survfitkm;
+    use crate::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
     use crate::validation::logrank::{WeightType, weighted_logrank_test};
     use crate::validation::rmst::compute_rmst;
     use ndarray::{Array1, Array2};
@@ -256,8 +256,7 @@ mod tests {
             &weights,
             None,
             &position,
-            false,
-            0,
+            &KaplanMeierConfig::default(),
         );
 
         for (i, &r_surv) in aml.km_maintained.survival.iter().enumerate() {
@@ -521,8 +520,7 @@ mod tests {
             &weights,
             None,
             &position,
-            false,
-            0,
+            &KaplanMeierConfig::default(),
         );
 
         for (i, &r_surv) in ovarian.km.survival.iter().take(5).enumerate() {
@@ -598,7 +596,14 @@ mod tests {
         let weights = vec![1.0; 6];
         let position = vec![0i32; 6];
 
-        let result = compute_survfitkm(&time, &status_f64, &weights, None, &position, false, 0);
+        let result = compute_survfitkm(
+            &time,
+            &status_f64,
+            &weights,
+            None,
+            &position,
+            &KaplanMeierConfig::default(),
+        );
 
         assert_eq!(
             result.time.len(),

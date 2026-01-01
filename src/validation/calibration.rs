@@ -471,3 +471,55 @@ pub fn td_auc(
 ) -> PyResult<TdAUCResult> {
     Ok(time_dependent_auc(&time, &status, &risk_score, &eval_times))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calibration_result_new() {
+        let result = CalibrationResult::new(
+            vec![0.1, 0.5],
+            vec![0.1, 0.5],
+            vec![0.0, 1.0],
+            vec![5, 5],
+            1.5,
+            0.5,
+            0.9,
+            0.1,
+        );
+        assert_eq!(result.risk_groups.len(), 2);
+        assert!((result.hosmer_lemeshow_stat - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_calibration_curve_empty() {
+        let result = calibration_curve(&[], &[], 5);
+        assert!(result.risk_groups.is_empty());
+        assert!((result.hosmer_lemeshow_pvalue - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_calibration_curve_basic() {
+        let predicted = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+        let observed = vec![0, 0, 0, 0, 1, 0, 1, 1, 1, 1];
+        let result = calibration_curve(&predicted, &observed, 2);
+        assert_eq!(result.risk_groups.len(), 2);
+        assert_eq!(result.n_per_group.len(), 2);
+    }
+
+    #[test]
+    fn test_time_dependent_auc_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 0, 1];
+        let risk_score = vec![0.8, 0.6, 0.7, 0.3, 0.5];
+        let eval_times = vec![2.5, 4.5];
+
+        let result = time_dependent_auc(&time, &status, &risk_score, &eval_times);
+        assert_eq!(result.times.len(), 2);
+        assert_eq!(result.auc.len(), 2);
+        for auc in &result.auc {
+            assert!(*auc >= 0.0 && *auc <= 1.0);
+        }
+    }
+}

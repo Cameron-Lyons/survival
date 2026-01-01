@@ -1,6 +1,6 @@
 use crate::utilities::validation::{ValidationError, validate_length};
 use ndarray::Array2;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
@@ -66,7 +66,7 @@ pub fn apply_deltas_set<F>(
 }
 
 fn validation_err_to_pyresult<T>(result: Result<T, ValidationError>) -> PyResult<T> {
-    result.map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    result.map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 pub fn validate_scoring_inputs(
@@ -78,11 +78,11 @@ pub fn validate_scoring_inputs(
     weights_len: usize,
 ) -> PyResult<()> {
     if n == 0 {
-        return Err(PyRuntimeError::new_err("No observations provided"));
+        return Err(PyValueError::new_err("No observations provided"));
     }
     validation_err_to_pyresult(validate_length(3 * n, time_data_len, "time_data"))?;
     if !covariates_len.is_multiple_of(n) {
-        return Err(PyRuntimeError::new_err(
+        return Err(PyValueError::new_err(
             "Covariates length should be divisible by number of observations",
         ));
     }

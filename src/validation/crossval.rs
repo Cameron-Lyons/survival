@@ -252,7 +252,6 @@ pub fn cv_survreg(
         .map(|i| (0..nvar).map(|j| covariates[[j, i]]).collect())
         .collect();
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
-    let dist = distribution.to_string();
     let results: Vec<(f64, Vec<f64>)> = (0..config.n_folds)
         .into_par_iter()
         .filter_map(|fold_idx| {
@@ -275,7 +274,7 @@ pub fn cv_survreg(
                 None,
                 None,
                 None,
-                Some(&dist),
+                Some(distribution),
                 Some(25),
                 Some(1e-5),
                 Some(1e-9),
@@ -293,7 +292,7 @@ pub fn cv_survreg(
                 None,
                 Some(fit_result.coefficients.clone()),
                 None,
-                Some(&dist),
+                Some(distribution),
                 Some(1),
                 Some(1e-5),
                 Some(1e-9),

@@ -1,8 +1,72 @@
 #![allow(clippy::redundant_closure)]
+use crate::constants::{CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, NEAR_ZERO_MATRIX};
 use crate::regression::survregc1::{SurvivalDist, survregc1};
 use crate::utilities::matrix::cholesky_solve;
 use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct SurvregConfig {
+    #[pyo3(get, set)]
+    pub max_iter: usize,
+
+    #[pyo3(get, set)]
+    pub eps: f64,
+
+    #[pyo3(get, set)]
+    pub tol_chol: f64,
+
+    #[pyo3(get, set)]
+    pub distribution: DistributionType,
+}
+
+#[pymethods]
+impl SurvregConfig {
+    #[new]
+    #[pyo3(signature = (distribution=None, max_iter=None, eps=None, tol_chol=None))]
+    fn new(
+        distribution: Option<DistributionType>,
+        max_iter: Option<usize>,
+        eps: Option<f64>,
+        tol_chol: Option<f64>,
+    ) -> Self {
+        Self {
+            distribution: distribution.unwrap_or(DistributionType::ExtremeValue),
+            max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
+            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
+        }
+    }
+}
+
+impl Default for SurvregConfig {
+    fn default() -> Self {
+        Self {
+            max_iter: DEFAULT_MAX_ITER,
+            eps: CONVERGENCE_EPSILON,
+            tol_chol: CHOLESKY_TOL,
+            distribution: DistributionType::ExtremeValue,
+        }
+    }
+}
+
+impl SurvregConfig {
+    pub fn create(
+        distribution: Option<DistributionType>,
+        max_iter: Option<usize>,
+        eps: Option<f64>,
+        tol_chol: Option<f64>,
+    ) -> Self {
+        Self {
+            distribution: distribution.unwrap_or(DistributionType::ExtremeValue),
+            max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
+            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct SurvivalFit {
@@ -110,7 +174,7 @@ fn calculate_variance_matrix(
         return Ok(imat);
     }
     let max_val = imat.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
-    if max_val < 1e-10 {
+    if max_val < NEAR_ZERO_MATRIX {
         return Ok(imat);
     }
     match matrix_inverse(&imat) {
@@ -118,7 +182,7 @@ fn calculate_variance_matrix(
         None => Ok(imat),
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass]
 pub enum DistributionType {
     #[pyo3(name = "extreme_value")]
@@ -209,6 +273,7 @@ impl SurvregOptions {
 }
 
 #[pyfunction]
+#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survreg(
     time: Vec<f64>,
@@ -223,6 +288,15 @@ pub fn survreg(
     eps: Option<f64>,
     tol_chol: Option<f64>,
 ) -> PyResult<SurvivalFit> {
+    let dist_type = distribution.map(|s| match s {
+        "weibull" => DistributionType::Weibull,
+        "exponential" | "extreme_value" => DistributionType::ExtremeValue,
+        "gaussian" | "normal" => DistributionType::Gaussian,
+        "logistic" => DistributionType::Logistic,
+        "lognormal" => DistributionType::LogNormal,
+        _ => DistributionType::ExtremeValue,
+    });
+    let config = SurvregConfig::create(dist_type, max_iter, eps, tol_chol);
     let n = time.len();
     if status.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -242,20 +316,6 @@ pub fn survreg(
     let weights = weights.unwrap_or_else(|| vec![1.0; n]);
     let offsets = offsets.unwrap_or_else(|| vec![0.0; n]);
     let strata = strata.unwrap_or_else(|| vec![0; n]);
-    let max_iter = max_iter.unwrap_or(20);
-    let eps = eps.unwrap_or(1e-5);
-    let tol_chol = tol_chol.unwrap_or(1e-9);
-    let dist_type = match distribution {
-        Some("logistic") | Some("Logistic") => DistributionType::Logistic,
-        Some("gaussian") | Some("Gaussian") | Some("normal") | Some("Normal") => {
-            DistributionType::Gaussian
-        }
-        Some("weibull") | Some("Weibull") => DistributionType::Weibull,
-        Some("lognormal") | Some("LogNormal") | Some("lognorm") | Some("LogNorm") => {
-            DistributionType::LogNormal
-        }
-        _ => DistributionType::ExtremeValue,
-    };
     let nstrat = if strata.is_empty() {
         1
     } else {
@@ -281,7 +341,7 @@ pub fn survreg(
     let weights_arr = Array1::from_vec(weights);
     let offsets_arr = Array1::from_vec(offsets);
     let result = compute_survreg(
-        max_iter,
+        config.max_iter,
         nvar,
         &y,
         &cov_array,
@@ -290,9 +350,9 @@ pub fn survreg(
         initial_beta,
         nstrat,
         &strata,
-        eps,
-        tol_chol,
-        dist_type,
+        config.eps,
+        config.tol_chol,
+        config.distribution,
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
     let variance_matrix = result
@@ -471,4 +531,40 @@ fn survreg_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DistributionType>()?;
     m.add_class::<SurvregOptions>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_survreg_config_default() {
+        let config = SurvregConfig::default();
+        assert_eq!(config.max_iter, 30);
+        assert!((config.eps - 1e-6).abs() < 1e-10);
+        assert!((config.tol_chol - 1e-10).abs() < 1e-15);
+        assert_eq!(config.distribution, DistributionType::ExtremeValue);
+    }
+
+    #[test]
+    fn test_survreg_config_create() {
+        let config = SurvregConfig::create(
+            Some(DistributionType::Gaussian),
+            Some(50),
+            Some(1e-8),
+            Some(1e-12),
+        );
+        assert_eq!(config.max_iter, 50);
+        assert!((config.eps - 1e-8).abs() < 1e-15);
+        assert_eq!(config.distribution, DistributionType::Gaussian);
+    }
+
+    #[test]
+    fn test_distribution_type_variants() {
+        let _ = DistributionType::ExtremeValue;
+        let _ = DistributionType::Weibull;
+        let _ = DistributionType::Gaussian;
+        let _ = DistributionType::Logistic;
+        let _ = DistributionType::LogNormal;
+    }
 }

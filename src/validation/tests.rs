@@ -1,4 +1,6 @@
+use crate::utilities::matrix::matrix_inverse;
 use crate::utilities::statistical::chi2_sf;
+use ndarray::Array2;
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -59,11 +61,32 @@ pub fn wald_test(coefficients: &[f64], std_errors: &[f64]) -> TestResult {
 }
 pub fn score_test(score_vector: &[f64], information_matrix: &[Vec<f64>]) -> TestResult {
     let n = score_vector.len();
-    let inv_info = invert_matrix(information_matrix);
+    if n == 0 {
+        return TestResult {
+            statistic: 0.0,
+            df: 0,
+            p_value: 1.0,
+            test_name: "ScoreTest".to_string(),
+        };
+    }
+
+    let mat = vec_to_array2(information_matrix);
+    let inv_info = match matrix_inverse(&mat) {
+        Some(inv) => inv,
+        None => {
+            return TestResult {
+                statistic: f64::NAN,
+                df: n,
+                p_value: f64::NAN,
+                test_name: "ScoreTest".to_string(),
+            };
+        }
+    };
+
     let mut statistic = 0.0;
     for i in 0..n {
         for j in 0..n {
-            statistic += score_vector[i] * inv_info[i][j] * score_vector[j];
+            statistic += score_vector[i] * inv_info[[i, j]] * score_vector[j];
         }
     }
     let p_value = chi2_sf(statistic, n);
@@ -74,42 +97,20 @@ pub fn score_test(score_vector: &[f64], information_matrix: &[Vec<f64>]) -> Test
         test_name: "ScoreTest".to_string(),
     }
 }
-fn invert_matrix(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
+
+fn vec_to_array2(matrix: &[Vec<f64>]) -> Array2<f64> {
     let n = matrix.len();
     if n == 0 {
-        return vec![];
+        return Array2::zeros((0, 0));
     }
-    let mut aug: Vec<Vec<f64>> = matrix.to_vec();
-    for i in 0..n {
-        aug[i].extend(vec![0.0; n]);
-        aug[i][n + i] = 1.0;
-    }
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k][i].abs() > aug[max_row][i].abs() {
-                max_row = k;
-            }
-        }
-        aug.swap(i, max_row);
-        if aug[i][i].abs() < 1e-10 {
-            continue;
-        }
-        let pivot = aug[i][i];
-        for val in aug[i].iter_mut().take(2 * n) {
-            *val /= pivot;
-        }
-        for k in 0..n {
-            if k != i {
-                let factor = aug[k][i];
-                let aug_i_clone: Vec<f64> = aug[i].clone();
-                for (j, aug_kj) in aug[k].iter_mut().enumerate().take(2 * n) {
-                    *aug_kj -= factor * aug_i_clone[j];
-                }
-            }
+    let m = matrix[0].len();
+    let mut arr = Array2::zeros((n, m));
+    for (i, row) in matrix.iter().enumerate() {
+        for (j, &val) in row.iter().enumerate() {
+            arr[[i, j]] = val;
         }
     }
-    aug.iter().map(|row| row[n..].to_vec()).collect()
+    arr
 }
 #[pyfunction]
 pub fn lrt_test(loglik_full: f64, loglik_reduced: f64, df: usize) -> PyResult<TestResult> {

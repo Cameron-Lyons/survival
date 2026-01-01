@@ -666,3 +666,33 @@ impl CoxPHModel {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_subject_new() {
+        let subject = Subject::new(1, vec![1.0, 2.0], true, false, 0);
+        assert_eq!(subject.id, 1);
+        assert_eq!(subject.covariates, vec![1.0, 2.0]);
+        assert!(subject.is_case);
+        assert!(!subject.is_subcohort);
+        assert_eq!(subject.stratum, 0);
+    }
+
+    #[test]
+    fn test_coxph_model_default() {
+        let model = CoxPHModel::new();
+        assert!(model.baseline_hazard.is_empty());
+        assert!(model.risk_scores.is_empty());
+        assert!(model.event_times.is_empty());
+    }
+
+    #[test]
+    fn test_coxph_model_getters() {
+        let model = CoxPHModel::new();
+        assert_eq!(model.n_observations(), 0);
+        assert_eq!(model.n_events(), 0);
+    }
+}
