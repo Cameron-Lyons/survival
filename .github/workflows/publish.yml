@@ -111,7 +111,7 @@ jobs:
           args: --release --out dist
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-windows-x64
           path: dist
@@ -186,7 +186,7 @@ jobs:
             echo "Version ${{ steps.version.outputs.version }} not found on PyPI, will publish"
           fi
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: steps.check.outputs.exists == 'false'
         with:
           path: dist
