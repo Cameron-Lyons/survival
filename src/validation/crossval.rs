@@ -1,3 +1,4 @@
+use crate::utilities::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
 use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -203,14 +204,17 @@ pub fn cv_cox(
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, weights=None, n_folds=None, shuffle=None, seed=None))]
 pub fn cv_cox_concordance(
-    time: Vec<f64>,
-    status: Vec<i32>,
+    time: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
     covariates: Vec<Vec<f64>>,
-    weights: Option<Vec<f64>>,
+    weights: Option<&Bound<'_, PyAny>>,
     n_folds: Option<usize>,
     shuffle: Option<bool>,
     seed: Option<u64>,
 ) -> PyResult<CVResult> {
+    let time = extract_vec_f64(time)?;
+    let status = extract_vec_i32(status)?;
+    let weights = extract_optional_vec_f64(weights)?;
     let n = time.len();
     let nvar = if !covariates.is_empty() {
         covariates[0].len()
@@ -319,14 +323,16 @@ pub fn cv_survreg(
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, distribution=None, n_folds=None, shuffle=None, seed=None))]
 pub fn cv_survreg_loglik(
-    time: Vec<f64>,
-    status: Vec<f64>,
+    time: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
     covariates: Vec<Vec<f64>>,
     distribution: Option<&str>,
     n_folds: Option<usize>,
     shuffle: Option<bool>,
     seed: Option<u64>,
 ) -> PyResult<CVResult> {
+    let time = extract_vec_f64(time)?;
+    let status = extract_vec_f64(status)?;
     let n = time.len();
     let nvar = if !covariates.is_empty() {
         covariates[0].len()
