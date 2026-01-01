@@ -5,6 +5,8 @@ use super::common::{
 };
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+#[inline]
 fn compute_z2(wt: f64, wsum: &[f64]) -> f64 {
     wt * (wsum[0] * (wt + 2.0 * (wsum[1] + wsum[2]))
         + wsum[1] * (wt + 2.0 * (wsum[0] + wsum[2]))

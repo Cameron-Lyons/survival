@@ -56,6 +56,115 @@ pub struct CoxFit {
     flag: i32,
     iter: usize,
 }
+
+pub struct CoxFitBuilder {
+    time: Array1<f64>,
+    status: Array1<i32>,
+    covar: Array2<f64>,
+    strata: Option<Array1<i32>>,
+    offset: Option<Array1<f64>>,
+    weights: Option<Array1<f64>>,
+    method: Method,
+    max_iter: usize,
+    eps: f64,
+    toler: f64,
+    doscale: Option<Vec<bool>>,
+    initial_beta: Option<Vec<f64>>,
+}
+
+impl CoxFitBuilder {
+    pub fn new(time: Array1<f64>, status: Array1<i32>, covar: Array2<f64>) -> Self {
+        Self {
+            time,
+            status,
+            covar,
+            strata: None,
+            offset: None,
+            weights: None,
+            method: Method::Breslow,
+            max_iter: 25,
+            eps: 1e-9,
+            toler: 1e-9,
+            doscale: None,
+            initial_beta: None,
+        }
+    }
+
+    pub fn strata(mut self, strata: Array1<i32>) -> Self {
+        self.strata = Some(strata);
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn offset(mut self, offset: Array1<f64>) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    pub fn weights(mut self, weights: Array1<f64>) -> Self {
+        self.weights = Some(weights);
+        self
+    }
+
+    pub fn method(mut self, method: Method) -> Self {
+        self.method = method;
+        self
+    }
+
+    pub fn max_iter(mut self, max_iter: usize) -> Self {
+        self.max_iter = max_iter;
+        self
+    }
+
+    pub fn eps(mut self, eps: f64) -> Self {
+        self.eps = eps;
+        self
+    }
+
+    pub fn toler(mut self, toler: f64) -> Self {
+        self.toler = toler;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn doscale(mut self, doscale: Vec<bool>) -> Self {
+        self.doscale = Some(doscale);
+        self
+    }
+
+    pub fn initial_beta(mut self, initial_beta: Vec<f64>) -> Self {
+        self.initial_beta = Some(initial_beta);
+        self
+    }
+
+    pub fn build(self) -> Result<CoxFit, CoxError> {
+        let nused = self.covar.nrows();
+        let nvar = self.covar.ncols();
+
+        let strata = self.strata.unwrap_or_else(|| Array1::from_elem(nused, 0));
+        let offset = self.offset.unwrap_or_else(|| Array1::from_elem(nused, 0.0));
+        let weights = self
+            .weights
+            .unwrap_or_else(|| Array1::from_elem(nused, 1.0));
+        let doscale = self.doscale.unwrap_or_else(|| vec![true; nvar]);
+        let initial_beta = self.initial_beta.unwrap_or_else(|| vec![0.0; nvar]);
+
+        CoxFit::new(
+            self.time,
+            self.status,
+            self.covar,
+            strata,
+            offset,
+            weights,
+            self.method,
+            self.max_iter,
+            self.eps,
+            self.toler,
+            doscale,
+            initial_beta,
+        )
+    }
+}
 impl CoxFit {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -384,9 +493,9 @@ impl CoxFit {
         }
     }
     fn chsolve(chol: &Array2<f64>, a: &mut [f64]) -> Result<(), CoxError> {
-        let b = Array1::from_vec(a.to_vec());
+        let b = Array1::from_iter(a.iter().copied());
         let result = lu_solve(chol, &b).ok_or(CoxError::CholeskyDecomposition)?;
-        a.copy_from_slice(&result.to_vec());
+        a.copy_from_slice(result.as_slice().unwrap_or(&[]));
         Ok(())
     }
     fn chinv(mat: &mut Array2<f64>) -> Result<(), CoxError> {

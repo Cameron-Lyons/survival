@@ -132,6 +132,82 @@ pub enum DistributionType {
     #[pyo3(name = "lognormal")]
     LogNormal,
 }
+
+#[derive(Debug, Clone, Default)]
+#[pyclass]
+pub struct SurvregOptions {
+    #[pyo3(get, set)]
+    pub weights: Option<Vec<f64>>,
+    #[pyo3(get, set)]
+    pub offsets: Option<Vec<f64>>,
+    #[pyo3(get, set)]
+    pub initial_beta: Option<Vec<f64>>,
+    #[pyo3(get, set)]
+    pub strata: Option<Vec<usize>>,
+    #[pyo3(get, set)]
+    pub distribution: Option<String>,
+    #[pyo3(get, set)]
+    pub max_iter: Option<usize>,
+    #[pyo3(get, set)]
+    pub eps: Option<f64>,
+    #[pyo3(get, set)]
+    pub tol_chol: Option<f64>,
+}
+
+#[pymethods]
+impl SurvregOptions {
+    #[new]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_weights(mut self_: PyRefMut<'_, Self>, weights: Vec<f64>) -> PyRefMut<'_, Self> {
+        self_.weights = Some(weights);
+        self_
+    }
+
+    pub fn with_offsets(mut self_: PyRefMut<'_, Self>, offsets: Vec<f64>) -> PyRefMut<'_, Self> {
+        self_.offsets = Some(offsets);
+        self_
+    }
+
+    pub fn with_initial_beta(
+        mut self_: PyRefMut<'_, Self>,
+        initial_beta: Vec<f64>,
+    ) -> PyRefMut<'_, Self> {
+        self_.initial_beta = Some(initial_beta);
+        self_
+    }
+
+    pub fn with_strata(mut self_: PyRefMut<'_, Self>, strata: Vec<usize>) -> PyRefMut<'_, Self> {
+        self_.strata = Some(strata);
+        self_
+    }
+
+    pub fn with_distribution(
+        mut self_: PyRefMut<'_, Self>,
+        distribution: String,
+    ) -> PyRefMut<'_, Self> {
+        self_.distribution = Some(distribution);
+        self_
+    }
+
+    pub fn with_max_iter(mut self_: PyRefMut<'_, Self>, max_iter: usize) -> PyRefMut<'_, Self> {
+        self_.max_iter = Some(max_iter);
+        self_
+    }
+
+    pub fn with_eps(mut self_: PyRefMut<'_, Self>, eps: f64) -> PyRefMut<'_, Self> {
+        self_.eps = Some(eps);
+        self_
+    }
+
+    pub fn with_tol_chol(mut self_: PyRefMut<'_, Self>, tol_chol: f64) -> PyRefMut<'_, Self> {
+        self_.tol_chol = Some(tol_chol);
+        self_
+    }
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn survreg(
@@ -322,7 +398,7 @@ fn compute_survreg(
         )?;
         if check_convergence(loglik, newlik, eps) && halving == 0 {
             loglik = newlik;
-            beta = newbeta.clone();
+            std::mem::swap(&mut beta, &mut newbeta);
             iter += 1;
             break;
         }
@@ -338,7 +414,7 @@ fn compute_survreg(
         } else {
             halving = 0;
             loglik = newlik;
-            beta = newbeta.clone();
+            std::mem::swap(&mut beta, &mut newbeta);
         }
         iter += 1;
     }
@@ -362,11 +438,37 @@ pub(crate) struct SurvivalFitComputed {
     convergence_flag: i32,
     score_vector: Vec<f64>,
 }
+
+#[pyfunction]
+pub fn survreg_with_options(
+    time: Vec<f64>,
+    status: Vec<f64>,
+    covariates: Vec<Vec<f64>>,
+    options: Option<&SurvregOptions>,
+) -> PyResult<SurvivalFit> {
+    let opts = options.cloned().unwrap_or_default();
+    survreg(
+        time,
+        status,
+        covariates,
+        opts.weights,
+        opts.offsets,
+        opts.initial_beta,
+        opts.strata,
+        opts.distribution.as_deref(),
+        opts.max_iter,
+        opts.eps,
+        opts.tol_chol,
+    )
+}
+
 #[pymodule]
 #[pyo3(name = "survreg")]
 fn survreg_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survreg, &m)?)?;
+    m.add_function(wrap_pyfunction!(survreg_with_options, &m)?)?;
     m.add_class::<SurvivalFit>()?;
     m.add_class::<DistributionType>()?;
+    m.add_class::<SurvregOptions>()?;
     Ok(())
 }

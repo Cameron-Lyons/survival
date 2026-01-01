@@ -79,7 +79,7 @@ pub fn cv_cox(
     weights: Option<&[f64]>,
     config: &CVConfig,
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
+    use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
@@ -123,26 +123,17 @@ pub fn cv_cox(
                     sorted_covariates[[new_idx, var]] = train_covariates[[orig_idx, var]];
                 }
             }
-            let initial_beta: Vec<f64> = vec![0.0; nvar];
             let time_arr = Array1::from_vec(sorted_time);
             let status_arr = Array1::from_vec(sorted_status);
-            let strata_arr = Array1::from_elem(train_n, 0i32);
-            let offset_arr = Array1::from_elem(train_n, 0.0);
             let weights_arr = Array1::from_vec(sorted_weights);
-            let beta = match CoxFit::new(
-                time_arr,
-                status_arr,
-                sorted_covariates,
-                strata_arr,
-                offset_arr,
-                weights_arr,
-                CoxMethod::Breslow,
-                25,
-                1e-9,
-                1e-9,
-                vec![true; nvar],
-                initial_beta,
-            ) {
+            let beta = match CoxFitBuilder::new(time_arr, status_arr, sorted_covariates)
+                .weights(weights_arr)
+                .method(CoxMethod::Breslow)
+                .max_iter(25)
+                .eps(1e-9)
+                .toler(1e-9)
+                .build()
+            {
                 Ok(mut fit) => {
                     if fit.fit().is_ok() {
                         let (b, _, _, _, _, _, _, _) = fit.results();
@@ -171,14 +162,11 @@ pub fn cv_cox(
             let mut discordant = 0.0;
             let mut tied = 0.0;
             for i in 0..test_n {
-                if test_status[i] == 0 {
+                if test_status[i] != 1 {
                     continue;
                 }
                 for j in 0..test_n {
-                    if i == j {
-                        continue;
-                    }
-                    if test_time[j] > test_time[i] {
+                    if i != j && test_time[j] > test_time[i] {
                         if linear_predictor[i] > linear_predictor[j] {
                             concordant += 1.0;
                         } else if linear_predictor[i] < linear_predictor[j] {

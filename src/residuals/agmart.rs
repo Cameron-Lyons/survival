@@ -17,10 +17,6 @@ fn compute_agmart(n: usize, method: i32, input: AgmartInput) -> Vec<f64> {
     let strata_slice = &input.strata;
     let mut resid = vec![0.0; n];
     let nused = n;
-    let mut local_strata = strata_slice.to_vec();
-    if nused > 0 {
-        local_strata[nused - 1] = 1;
-    }
     for i in 0..nused {
         resid[i] = event_slice[i] as f64;
     }
@@ -45,7 +41,7 @@ fn compute_agmart(n: usize, method: i32, input: AgmartInput) -> Vec<f64> {
                     e_denom += score_slice[k] * wt_slice[k];
                 }
             }
-            if local_strata[k] == 1 {
+            if strata_slice[k] == 1 || k == nused - 1 {
                 break;
             }
             k += 1;
@@ -77,7 +73,7 @@ fn compute_agmart(n: usize, method: i32, input: AgmartInput) -> Vec<f64> {
             if stop_slice[k] == time {
                 person += 1;
             }
-            if local_strata[k] == 1 {
+            if strata_slice[k] == 1 || k == nused - 1 {
                 break;
             }
             k += 1;

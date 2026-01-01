@@ -63,6 +63,93 @@ pub struct PSpline {
     #[pyo3(get)]
     fitted: bool,
 }
+
+#[pyclass]
+pub struct PSplineBuilder {
+    x: Vec<f64>,
+    df: u32,
+    theta: f64,
+    eps: f64,
+    method: String,
+    boundary_knots: Option<(f64, f64)>,
+    intercept: bool,
+    penalty: bool,
+}
+
+#[pymethods]
+impl PSplineBuilder {
+    #[new]
+    pub fn new(x: Vec<f64>) -> Self {
+        Self {
+            x,
+            df: 4,
+            theta: 1.0,
+            eps: 1e-5,
+            method: "GCV".to_string(),
+            boundary_knots: None,
+            intercept: true,
+            penalty: true,
+        }
+    }
+
+    pub fn df(mut self_: PyRefMut<'_, Self>, df: u32) -> PyRefMut<'_, Self> {
+        self_.df = df;
+        self_
+    }
+
+    pub fn theta(mut self_: PyRefMut<'_, Self>, theta: f64) -> PyRefMut<'_, Self> {
+        self_.theta = theta;
+        self_
+    }
+
+    pub fn eps(mut self_: PyRefMut<'_, Self>, eps: f64) -> PyRefMut<'_, Self> {
+        self_.eps = eps;
+        self_
+    }
+
+    pub fn method(mut self_: PyRefMut<'_, Self>, method: String) -> PyRefMut<'_, Self> {
+        self_.method = method;
+        self_
+    }
+
+    pub fn boundary_knots(
+        mut self_: PyRefMut<'_, Self>,
+        lower: f64,
+        upper: f64,
+    ) -> PyRefMut<'_, Self> {
+        self_.boundary_knots = Some((lower, upper));
+        self_
+    }
+
+    pub fn intercept(mut self_: PyRefMut<'_, Self>, intercept: bool) -> PyRefMut<'_, Self> {
+        self_.intercept = intercept;
+        self_
+    }
+
+    pub fn penalty(mut self_: PyRefMut<'_, Self>, penalty: bool) -> PyRefMut<'_, Self> {
+        self_.penalty = penalty;
+        self_
+    }
+
+    pub fn build(&self) -> PyResult<PSpline> {
+        let boundary_knots = self.boundary_knots.unwrap_or_else(|| {
+            let min = self.x.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max = self.x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            (min, max)
+        });
+
+        Ok(PSpline::new(
+            self.x.clone(),
+            self.df,
+            self.theta,
+            self.eps,
+            self.method.clone(),
+            boundary_knots,
+            self.intercept,
+            self.penalty,
+        ))
+    }
+}
 #[pymethods]
 impl PSpline {
     #[new]
@@ -102,9 +189,9 @@ impl PSpline {
         let coefficients = self
             .optimize_fit(penalized_basis)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        self.coefficients = Some(coefficients.clone());
         self.fitted = true;
-        Ok(coefficients)
+        self.coefficients = Some(coefficients);
+        Ok(self.coefficients.as_ref().unwrap().clone())
     }
     pub fn predict(&self, new_x: Vec<f64>) -> PyResult<Vec<f64>> {
         let coefficients = self
@@ -177,25 +264,26 @@ impl PSpline {
         knots
     }
     fn apply_penalty(&self, basis: Vec<Vec<f64>>) -> Result<Vec<Vec<f64>>, PSplineError> {
-        let mut penalized_basis = basis.clone();
-        if self.penalty {
-            let mut penalty = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
-            for i in 0..self.nterm {
-                for j in 0..self.nterm {
-                    penalty[i as usize][j as usize] = self.penalty_function(i, j)?;
-                }
+        if !self.penalty {
+            return Ok(basis);
+        }
+        let mut penalty = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
+        for i in 0..self.nterm {
+            for j in 0..self.nterm {
+                penalty[i as usize][j as usize] = self.penalty_function(i, j)?;
             }
-            for i in 0..self.nterm {
-                for j in 0..self.nterm {
-                    for k in 0..self.nterm {
-                        penalized_basis[i as usize][j as usize] -= self.theta
-                            * penalty[i as usize][k as usize]
-                            * basis[k as usize][j as usize];
-                    }
+        }
+        let mut result = basis.clone();
+        for i in 0..self.nterm {
+            for j in 0..self.nterm {
+                for k in 0..self.nterm {
+                    result[i as usize][j as usize] -= self.theta
+                        * penalty[i as usize][k as usize]
+                        * basis[k as usize][j as usize];
                 }
             }
         }
-        Ok(penalized_basis)
+        Ok(result)
     }
     fn penalty_function(&self, i: u32, j: u32) -> Result<f64, PSplineError> {
         match self.method.as_str() {
