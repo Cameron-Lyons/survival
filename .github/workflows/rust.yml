@@ -42,8 +42,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-py3.14-
 
-      - name: Install maturin
-        run: pip install maturin numpy
+      - name: Install maturin and test dependencies
+        run: pip install maturin numpy pandas polars
 
       - name: Clean old wheels
         run: rm -rf target/wheels || true
@@ -102,8 +102,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-py${{ matrix.python-version }}-
 
-      - name: Install maturin
-        run: pip install maturin numpy
+      - name: Install maturin and test dependencies
+        run: pip install maturin numpy pandas polars
 
       - name: Clean old wheels
         run: rm -rf target/wheels || true

@@ -145,9 +145,9 @@ print(f"   Passed - RMST: {result.rmst:.4f}")
 
 print("\n2. Testing rmst_comparison...")
 result = survival.rmst_comparison(time_data, status_data, group_data, tau=6.0)
-assert hasattr(result, "difference"), "Should have difference"
+assert hasattr(result, "rmst_diff"), "Should have rmst_diff"
 assert hasattr(result, "p_value"), "Should have p_value"
-print(f"   Passed - difference: {result.difference:.4f}, p-value: {result.p_value:.4f}")
+print(f"   Passed - rmst_diff: {result.rmst_diff:.4f}, p-value: {result.p_value:.4f}")
 
 
 print("\n=== Testing hazard_ratio ===")
