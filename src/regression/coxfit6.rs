@@ -327,12 +327,37 @@ impl CoxFit {
                 }
             })
             .collect();
-        for i in 0..nvar {
-            if doscale[i] {
-                let mean = means[i];
-                let scale_val = scales[i];
-                for person in 0..nused {
-                    self.covar[(person, i)] = (self.covar[(person, i)] - mean) * scale_val;
+        // Parallelize covariate scaling for large datasets
+        if nused > 500 && nvar > 1 {
+            use std::sync::atomic::{AtomicPtr, Ordering};
+            let covar_ptr = AtomicPtr::new(self.covar.as_mut_ptr());
+            let covar_stride = self.covar.strides();
+            let row_stride = covar_stride[0];
+            let col_stride = covar_stride[1];
+
+            (0..nvar).into_par_iter().for_each(|i| {
+                if doscale[i] {
+                    let mean = means[i];
+                    let scale_val = scales[i];
+                    let base_ptr = covar_ptr.load(Ordering::Relaxed);
+                    // SAFETY: Each column i is independent, no overlap between parallel iterations
+                    for person in 0..nused {
+                        unsafe {
+                            let offset = person as isize * row_stride + i as isize * col_stride;
+                            let ptr = base_ptr.offset(offset);
+                            *ptr = (*ptr - mean) * scale_val;
+                        }
+                    }
+                }
+            });
+        } else {
+            for i in 0..nvar {
+                if doscale[i] {
+                    let mean = means[i];
+                    let scale_val = scales[i];
+                    for person in 0..nused {
+                        self.covar[(person, i)] = (self.covar[(person, i)] - mean) * scale_val;
+                    }
                 }
             }
         }
@@ -359,6 +384,33 @@ impl CoxFit {
         let mut cmat2 = Array2::zeros((nvar, nvar));
         let mut loglik = 0.0;
         let mut denom = 0.0;
+
+        // Pre-compute all zbeta and risk values in parallel for large datasets
+        let (zbeta_vals, risk_vals): (Vec<f64>, Vec<f64>) = if nused > 500 {
+            (0..nused)
+                .into_par_iter()
+                .map(|p| {
+                    let zb = self.offset[p]
+                        + beta
+                            .iter()
+                            .enumerate()
+                            .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(p, i)]);
+                    (zb, zb.exp() * self.weights[p])
+                })
+                .unzip()
+        } else {
+            (0..nused)
+                .map(|p| {
+                    let zb = self.offset[p]
+                        + beta
+                            .iter()
+                            .enumerate()
+                            .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(p, i)]);
+                    (zb, zb.exp() * self.weights[p])
+                })
+                .unzip()
+        };
+
         let mut person = nused as isize - 1;
         while person >= 0 {
             let person_idx = person as usize;
@@ -375,12 +427,8 @@ impl CoxFit {
             while person >= 0 && self.time[person as usize] == dtime {
                 let person_i = person as usize;
                 _nrisk += 1;
-                let zbeta = self.offset[person_i]
-                    + beta
-                        .iter()
-                        .enumerate()
-                        .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person_i, i)]);
-                let risk = zbeta.exp() * self.weights[person_i];
+                let zbeta = zbeta_vals[person_i];
+                let risk = risk_vals[person_i];
                 if self.status[person_i] == 0 {
                     denom += risk;
                     #[allow(clippy::needless_range_loop)]

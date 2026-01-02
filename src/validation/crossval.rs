@@ -152,31 +152,59 @@ pub fn cv_cox(
                     test_covariates[[var, new_idx]] = covariates[[var, orig_idx]];
                 }
             }
-            let mut linear_predictor = vec![0.0; test_n];
-            for i in 0..test_n {
-                for var in 0..nvar {
-                    linear_predictor[i] += beta[var] * test_covariates[[var, i]];
-                }
-            }
-            let mut concordant = 0.0;
-            let mut discordant = 0.0;
-            let mut tied = 0.0;
-            for i in 0..test_n {
-                if test_status[i] != 1 {
-                    continue;
-                }
-                for j in 0..test_n {
-                    if i != j && test_time[j] > test_time[i] {
-                        if linear_predictor[i] > linear_predictor[j] {
-                            concordant += 1.0;
-                        } else if linear_predictor[i] < linear_predictor[j] {
-                            discordant += 1.0;
-                        } else {
-                            tied += 1.0;
+            let linear_predictor: Vec<f64> = (0..test_n)
+                .map(|i| {
+                    (0..nvar)
+                        .map(|var| beta[var] * test_covariates[[var, i]])
+                        .sum()
+                })
+                .collect();
+
+            // Parallelize C-index calculation for large test sets
+            let (concordant, discordant, tied) = if test_n > 100 {
+                (0..test_n)
+                    .into_par_iter()
+                    .filter(|&i| test_status[i] == 1)
+                    .map(|i| {
+                        let mut c = 0.0;
+                        let mut d = 0.0;
+                        let mut t = 0.0;
+                        for j in 0..test_n {
+                            if i != j && test_time[j] > test_time[i] {
+                                if linear_predictor[i] > linear_predictor[j] {
+                                    c += 1.0;
+                                } else if linear_predictor[i] < linear_predictor[j] {
+                                    d += 1.0;
+                                } else {
+                                    t += 1.0;
+                                }
+                            }
+                        }
+                        (c, d, t)
+                    })
+                    .reduce(|| (0.0, 0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2))
+            } else {
+                let mut concordant = 0.0;
+                let mut discordant = 0.0;
+                let mut tied = 0.0;
+                for i in 0..test_n {
+                    if test_status[i] != 1 {
+                        continue;
+                    }
+                    for j in 0..test_n {
+                        if i != j && test_time[j] > test_time[i] {
+                            if linear_predictor[i] > linear_predictor[j] {
+                                concordant += 1.0;
+                            } else if linear_predictor[i] < linear_predictor[j] {
+                                discordant += 1.0;
+                            } else {
+                                tied += 1.0;
+                            }
                         }
                     }
                 }
-            }
+                (concordant, discordant, tied)
+            };
             let total = concordant + discordant + tied;
             let c_index = if total > 0.0 {
                 (concordant + 0.5 * tied) / total
