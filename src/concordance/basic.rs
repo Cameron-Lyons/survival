@@ -3,6 +3,27 @@ use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
+/// Compute concordance statistics for survival predictions.
+///
+/// Parameters
+/// ----------
+/// y : array-like
+///     Survival times.
+/// x : array-like
+///     Predicted risk scores (integer-coded).
+/// wt : array-like
+///     Observation weights.
+/// timewt : array-like
+///     Time-dependent weights.
+/// sortstart : array-like, optional
+///     Start-time sort indices for left-truncated data.
+/// sortstop : array-like
+///     Stop-time sort indices.
+///
+/// Returns
+/// -------
+/// dict
+///     Dictionary with concordance counts: concordant, discordant, tied_risk, tied_time, pairs.
 #[pyfunction]
 pub fn concordance(
     y: Vec<f64>,

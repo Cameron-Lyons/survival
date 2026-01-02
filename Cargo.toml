@@ -38,3 +38,13 @@ codegen-units = 1
 opt-level = 3
 strip = true
 panic = "abort"
+
+[profile.release-native]
+inherits = "release"
+# Enable native CPU features for maximum SIMD performance
+# Build with: cargo build --profile release-native
+# Note: binaries won't be portable to other CPUs
+
+[profile.bench]
+inherits = "release"
+debug = true

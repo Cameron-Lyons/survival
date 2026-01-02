@@ -22,9 +22,16 @@ pub fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
             }
         }
     }
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "Expected numpy array, pandas Series, polars Series, or list of floats",
-    ))
+    let type_name = obj
+        .get_type()
+        .name()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+        "Cannot convert '{}' to float array. Expected: numpy array, pandas Series, polars Series, or list of floats. \
+         Tip: For pandas/polars, ensure the column contains numeric data.",
+        type_name
+    )))
 }
 
 #[allow(clippy::collapsible_if)]
@@ -59,9 +66,16 @@ pub fn extract_vec_i32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
             }
         }
     }
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "Expected numpy array, pandas Series, polars Series, or list of integers",
-    ))
+    let type_name = obj
+        .get_type()
+        .name()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+        "Cannot convert '{}' to integer array. Expected: numpy array (int32/int64), pandas Series, polars Series, or list of integers. \
+         Tip: For status/group columns, ensure values are integers (0, 1, etc.).",
+        type_name
+    )))
 }
 
 pub fn extract_optional_vec_f64(obj: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Vec<f64>>> {
@@ -127,7 +141,14 @@ pub fn extract_2d_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f64>>> {
             return Ok(result);
         }
     }
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "Expected 2D array, DataFrame, or list of lists",
-    ))
+    let type_name = obj
+        .get_type()
+        .name()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+        "Cannot convert '{}' to 2D float array. Expected: 2D numpy array, pandas DataFrame, or list of lists. \
+         Tip: For covariates, provide as [[x1_obs1, x2_obs1], [x1_obs2, x2_obs2], ...].",
+        type_name
+    )))
 }
