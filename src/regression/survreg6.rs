@@ -332,7 +332,8 @@ pub fn survreg(
     if status.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "Length mismatch: time has {} elements but status has {}. Both must have the same length.",
-            n, status.len()
+            n,
+            status.len()
         )));
     }
     let nvar = if !covariates.is_empty() {
@@ -344,7 +345,10 @@ pub fn survreg(
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "Length mismatch: time has {} observations but covariates has {} rows. \
              Covariates should be a list of {} rows, each with {} covariate values.",
-            n, covariates.len(), n, nvar
+            n,
+            covariates.len(),
+            n,
+            nvar
         )));
     }
     let weights = weights.unwrap_or_else(|| vec![1.0; n]);

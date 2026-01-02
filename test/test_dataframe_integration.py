@@ -17,12 +17,14 @@ survival = setup_survival_import()
 # Try importing optional dependencies
 try:
     import pandas as pd
+
     HAS_PANDAS = True
 except ImportError:
     HAS_PANDAS = False
 
 try:
     import polars as pl
+
     HAS_POLARS = True
 except ImportError:
     HAS_POLARS = False
@@ -82,9 +84,7 @@ class TestSurvfitKM:
     @pytest.mark.skipif(not HAS_PANDAS, reason="pandas not installed")
     def test_with_pandas_weights(self, survival_data):
         df = pd.DataFrame(survival_data)
-        result = survival.survfitkm(
-            df["time"], df["status"].astype(float), weights=df["weights"]
-        )
+        result = survival.survfitkm(df["time"], df["status"].astype(float), weights=df["weights"])
         assert hasattr(result, "estimate")
 
 
@@ -142,9 +142,7 @@ class TestCrossValidation:
     def test_cv_cox_with_numpy(self, covariate_data):
         time = np.array(covariate_data["time"])
         status = np.array(covariate_data["status"], dtype=np.int32)
-        result = survival.cv_cox_concordance(
-            time, status, covariate_data["covariates"], n_folds=2
-        )
+        result = survival.cv_cox_concordance(time, status, covariate_data["covariates"], n_folds=2)
         assert hasattr(result, "mean_score")
 
     @pytest.mark.skipif(not HAS_PANDAS, reason="pandas not installed")
@@ -160,9 +158,7 @@ class TestNelsonAalen:
     """Test Nelson-Aalen estimator with different input types."""
 
     def test_with_lists(self, survival_data):
-        result = survival.nelson_aalen_estimator(
-            survival_data["time"], survival_data["status"]
-        )
+        result = survival.nelson_aalen_estimator(survival_data["time"], survival_data["status"])
         assert hasattr(result, "cumulative_hazard")
         assert len(result.cumulative_hazard) > 0
 
