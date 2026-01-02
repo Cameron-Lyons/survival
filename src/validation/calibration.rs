@@ -1,3 +1,4 @@
+use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_SMALL};
 use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -198,7 +199,6 @@ pub fn predict_survival(
     let n = x.len();
     let n_times = pred_times.len();
 
-    // Pre-compute cumulative hazard once
     let cumhaz: Vec<f64> = baseline_hazard
         .iter()
         .scan(0.0, |acc, &h| {
@@ -207,8 +207,7 @@ pub fn predict_survival(
         })
         .collect();
 
-    // Parallelize prediction for large datasets
-    let results: Vec<(f64, f64, Vec<f64>)> = if n > 100 {
+    let results: Vec<(f64, f64, Vec<f64>)> = if n > PARALLEL_THRESHOLD_SMALL {
         x.par_iter()
             .map(|xi| {
                 let lp: f64 = coef.iter().zip(xi).map(|(&c, &xij)| c * xij).sum();
@@ -269,14 +268,12 @@ fn interpolate_cumhaz(times: &[f64], cumhaz: &[f64], t: f64) -> f64 {
     if t >= times[n - 1] {
         return cumhaz[n - 1];
     }
-    // Binary search for the interval containing t - O(log n) instead of O(n)
     let i = match times
         .binary_search_by(|probe| probe.partial_cmp(&t).unwrap_or(std::cmp::Ordering::Equal))
     {
-        Ok(idx) => return cumhaz[idx], // Exact match
-        Err(idx) => idx,               // idx is insertion point
+        Ok(idx) => return cumhaz[idx],
+        Err(idx) => idx,
     };
-    // Interpolate between times[i-1] and times[i]
     if i == 0 {
         return 0.0;
     }
@@ -386,8 +383,7 @@ pub fn stratify_risk(
         })
         .collect();
 
-    // Parallelize group median calculation for large groups
-    let group_median_risk: Vec<f64> = if n > 1000 {
+    let group_median_risk: Vec<f64> = if n > PARALLEL_THRESHOLD_LARGE {
         group_scores
             .par_iter()
             .map(|scores| {

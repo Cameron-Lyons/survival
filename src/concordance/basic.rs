@@ -1,4 +1,5 @@
 #![allow(clippy::explicit_counter_loop)]
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
@@ -43,7 +44,7 @@ pub fn concordance(
                 let jj = sortstop[i + ndeath];
                 if x[jj] == xsave {
                     count[2] += 1.0;
-                } else if i > 1000 {
+                } else if i > PARALLEL_THRESHOLD_LARGE {
                     let (concordant, discordant): (f64, f64) = (0..i)
                         .into_par_iter()
                         .map(|k| {

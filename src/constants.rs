@@ -15,6 +15,19 @@ pub const DEFAULT_MAX_ITER: usize = 30;
 pub const DEFAULT_CONFIDENCE_LEVEL: f64 = 0.95;
 pub const DEFAULT_BOOTSTRAP_SAMPLES: usize = 1000;
 
+pub const PARALLEL_THRESHOLD_SMALL: usize = 100;
+pub const PARALLEL_THRESHOLD_MEDIUM: usize = 500;
+pub const PARALLEL_THRESHOLD_LARGE: usize = 1000;
+pub const PARALLEL_THRESHOLD_XLARGE: usize = 10000;
+
+pub const COX_MAX_ITER: usize = 25;
+pub const ITERATIVE_MAX_ITER: usize = 100;
+
+pub const EXP_CLAMP_MIN: f64 = -100.0;
+pub const EXP_CLAMP_MAX: f64 = 100.0;
+
+pub const CONVERGENCE_FLAG: i32 = 1000;
+
 #[cfg(test)]
 pub const TEST_STRICT_TOL: f64 = 1e-4;
 

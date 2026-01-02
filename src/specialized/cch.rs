@@ -32,14 +32,15 @@ impl CohortData {
     pub fn get_subject(&self, id: usize) -> Subject {
         self.subjects[id].clone()
     }
-    pub fn fit(&self, _method: CchMethod) -> PyResult<CoxPHModel> {
+    #[pyo3(signature = (_method, max_iter=100))]
+    pub fn fit(&self, _method: CchMethod, max_iter: u16) -> PyResult<CoxPHModel> {
         let mut model = CoxPHModel::new();
         for subject in &self.subjects {
             if subject.is_subcohort {
                 model.add_subject(subject)?;
             }
         }
-        model.fit(100)?;
+        model.fit(max_iter)?;
         Ok(model)
     }
 }

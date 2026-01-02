@@ -1,3 +1,4 @@
+use crate::constants::{COX_MAX_ITER, PARALLEL_THRESHOLD_SMALL};
 use crate::utilities::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
 use ndarray::Array2;
 use pyo3::prelude::*;
@@ -129,7 +130,7 @@ pub fn cv_cox(
             let beta = match CoxFitBuilder::new(time_arr, status_arr, sorted_covariates)
                 .weights(weights_arr)
                 .method(CoxMethod::Breslow)
-                .max_iter(25)
+                .max_iter(COX_MAX_ITER)
                 .eps(1e-9)
                 .toler(1e-9)
                 .build()
@@ -160,8 +161,7 @@ pub fn cv_cox(
                 })
                 .collect();
 
-            // Parallelize C-index calculation for large test sets
-            let (concordant, discordant, tied) = if test_n > 100 {
+            let (concordant, discordant, tied) = if test_n > PARALLEL_THRESHOLD_SMALL {
                 (0..test_n)
                     .into_par_iter()
                     .filter(|&i| test_status[i] == 1)
@@ -303,7 +303,7 @@ pub fn cv_survreg(
                 None,
                 None,
                 Some(distribution),
-                Some(25),
+                Some(COX_MAX_ITER),
                 Some(1e-5),
                 Some(1e-9),
             )

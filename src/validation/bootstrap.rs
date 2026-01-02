@@ -1,6 +1,8 @@
+use crate::constants::{COX_MAX_ITER, DEFAULT_BOOTSTRAP_SAMPLES};
 use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct BootstrapResult {
@@ -42,27 +44,17 @@ pub struct BootstrapConfig {
 impl Default for BootstrapConfig {
     fn default() -> Self {
         Self {
-            n_bootstrap: 1000,
+            n_bootstrap: DEFAULT_BOOTSTRAP_SAMPLES,
             confidence_level: 0.95,
             seed: None,
         }
     }
 }
-#[inline]
-fn simple_rng(seed: u64, index: usize) -> u64 {
-    let mut state = seed.wrapping_add(index as u64);
-    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-    state
-}
+
 #[inline]
 fn bootstrap_sample_indices(n: usize, seed: u64, iteration: usize) -> Vec<usize> {
-    let mut indices = Vec::with_capacity(n);
-    for i in 0..n {
-        let rng_val = simple_rng(seed.wrapping_add(iteration as u64), i);
-        indices.push((rng_val as usize) % n);
-    }
-    indices
+    let mut rng = fastrand::Rng::with_seed(seed.wrapping_add(iteration as u64));
+    (0..n).map(|_| rng.usize(..n)).collect()
 }
 pub fn bootstrap_cox(
     time: &[f64],
@@ -98,7 +90,7 @@ pub fn bootstrap_cox(
     let mut original_fit = CoxFitBuilder::new(time_arr, status_arr, sorted_covariates.clone())
         .weights(weights_arr)
         .method(CoxMethod::Breslow)
-        .max_iter(25)
+        .max_iter(COX_MAX_ITER)
         .eps(1e-9)
         .toler(1e-9)
         .build()?;
@@ -140,7 +132,7 @@ pub fn bootstrap_cox(
             match CoxFitBuilder::new(time_arr, status_arr, resorted_covariates)
                 .weights(weights_arr)
                 .method(CoxMethod::Breslow)
-                .max_iter(25)
+                .max_iter(COX_MAX_ITER)
                 .eps(1e-9)
                 .toler(1e-9)
                 .build()
@@ -182,14 +174,20 @@ pub fn bootstrap_cox(
     let alpha = 1.0 - config.confidence_level;
     let lower_percentile = (alpha / 2.0 * actual_n_bootstrap as f64) as usize;
     let upper_percentile = ((1.0 - alpha / 2.0) * actual_n_bootstrap as f64) as usize;
-    let mut ci_lower = vec![0.0; nvar];
-    let mut ci_upper = vec![0.0; nvar];
-    for var in 0..nvar {
-        let mut var_coefs: Vec<f64> = bootstrap_coefs.iter().map(|c| c[var]).collect();
-        var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        ci_lower[var] = var_coefs[lower_percentile.min(actual_n_bootstrap - 1)];
-        ci_upper[var] = var_coefs[upper_percentile.min(actual_n_bootstrap - 1)];
-    }
+
+    let ci_results: Vec<(f64, f64)> = (0..nvar)
+        .into_par_iter()
+        .map(|var| {
+            let mut var_coefs: Vec<f64> = bootstrap_coefs.iter().map(|c| c[var]).collect();
+            var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            (
+                var_coefs[lower_percentile.min(actual_n_bootstrap - 1)],
+                var_coefs[upper_percentile.min(actual_n_bootstrap - 1)],
+            )
+        })
+        .collect();
+
+    let (ci_lower, ci_upper): (Vec<f64>, Vec<f64>) = ci_results.into_iter().unzip();
     Ok(BootstrapResult {
         coefficients: original_beta,
         std_errors,
@@ -224,7 +222,7 @@ pub fn bootstrap_cox_ci(
         Array2::zeros((0, n))
     };
     let config = BootstrapConfig {
-        n_bootstrap: n_bootstrap.unwrap_or(1000),
+        n_bootstrap: n_bootstrap.unwrap_or(DEFAULT_BOOTSTRAP_SAMPLES),
         confidence_level: confidence_level.unwrap_or(0.95),
         seed,
     };
@@ -271,7 +269,7 @@ pub fn bootstrap_survreg(
         None,
         None,
         Some(dist_str),
-        Some(25),
+        Some(COX_MAX_ITER),
         Some(1e-5),
         Some(1e-9),
     )?;
@@ -293,7 +291,7 @@ pub fn bootstrap_survreg(
                 None,
                 None,
                 Some(dist_str),
-                Some(25),
+                Some(COX_MAX_ITER),
                 Some(1e-5),
                 Some(1e-9),
             ) {
@@ -332,20 +330,26 @@ pub fn bootstrap_survreg(
     let alpha = 1.0 - config.confidence_level;
     let lower_percentile = (alpha / 2.0 * actual_n_bootstrap as f64) as usize;
     let upper_percentile = ((1.0 - alpha / 2.0) * actual_n_bootstrap as f64) as usize;
-    let mut ci_lower = vec![0.0; ncoef];
-    let mut ci_upper = vec![0.0; ncoef];
-    for var in 0..ncoef {
-        let mut var_coefs: Vec<f64> = bootstrap_coefs
-            .iter()
-            .filter_map(|c| c.get(var).copied())
-            .collect();
-        if var_coefs.is_empty() {
-            continue;
-        }
-        var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        ci_lower[var] = var_coefs[lower_percentile.min(var_coefs.len() - 1)];
-        ci_upper[var] = var_coefs[upper_percentile.min(var_coefs.len() - 1)];
-    }
+
+    let ci_results: Vec<(f64, f64)> = (0..ncoef)
+        .into_par_iter()
+        .map(|var| {
+            let mut var_coefs: Vec<f64> = bootstrap_coefs
+                .iter()
+                .filter_map(|c| c.get(var).copied())
+                .collect();
+            if var_coefs.is_empty() {
+                return (0.0, 0.0);
+            }
+            var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            (
+                var_coefs[lower_percentile.min(var_coefs.len() - 1)],
+                var_coefs[upper_percentile.min(var_coefs.len() - 1)],
+            )
+        })
+        .collect();
+
+    let (ci_lower, ci_upper): (Vec<f64>, Vec<f64>) = ci_results.into_iter().unzip();
     Ok(BootstrapResult {
         coefficients: original.coefficients,
         std_errors,
@@ -380,7 +384,7 @@ pub fn bootstrap_survreg_ci(
         Array2::zeros((0, n))
     };
     let config = BootstrapConfig {
-        n_bootstrap: n_bootstrap.unwrap_or(1000),
+        n_bootstrap: n_bootstrap.unwrap_or(DEFAULT_BOOTSTRAP_SAMPLES),
         confidence_level: confidence_level.unwrap_or(0.95),
         seed,
     };

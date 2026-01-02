@@ -1,3 +1,4 @@
+use crate::constants::ITERATIVE_MAX_ITER;
 use std::f64::consts::SQRT_2;
 
 #[inline]
@@ -187,7 +188,7 @@ pub fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
 #[inline]
 pub fn gamma_series(a: f64, x: f64) -> f64 {
     let eps = 1e-10;
-    let max_iter = 100;
+    let max_iter = ITERATIVE_MAX_ITER;
     let mut sum = 1.0 / a;
     let mut term = sum;
     for n in 1..max_iter {
@@ -203,7 +204,7 @@ pub fn gamma_series(a: f64, x: f64) -> f64 {
 #[inline]
 pub fn gamma_continued_fraction(a: f64, x: f64) -> f64 {
     let eps = 1e-10;
-    let max_iter = 100;
+    let max_iter = ITERATIVE_MAX_ITER;
     let mut b = x + 1.0 - a;
     let mut c = 1.0 / 1e-30;
     let mut d = 1.0 / b;

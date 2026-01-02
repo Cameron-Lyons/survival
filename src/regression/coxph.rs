@@ -1,3 +1,4 @@
+use crate::constants::EXP_CLAMP_MIN;
 use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
@@ -590,7 +591,7 @@ impl CoxPHModel {
             .zip(self.censoring.iter())
             .map(|(&m, &d)| {
                 let sign = if m >= 0.0 { 1.0 } else { -1.0 };
-                let abs_term = -2.0 * (m - d as f64 + d as f64 * (d as f64 - m).ln().max(-100.0));
+                let abs_term = -2.0 * (m - d as f64 + d as f64 * (d as f64 - m).ln().max(EXP_CLAMP_MIN));
                 sign * abs_term.abs().sqrt()
             })
             .collect()

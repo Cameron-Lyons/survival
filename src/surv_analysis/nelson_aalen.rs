@@ -1,3 +1,4 @@
+use crate::constants::PARALLEL_THRESHOLD_XLARGE;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
@@ -65,7 +66,7 @@ pub fn nelson_aalen(
     let default_weights: Vec<f64> = vec![1.0; n];
     let weights = weights.unwrap_or(&default_weights);
     let mut indices: Vec<usize> = (0..n).collect();
-    if n > 10000 {
+    if n > PARALLEL_THRESHOLD_XLARGE {
         indices.par_sort_by(|&a, &b| {
             time[a]
                 .partial_cmp(&time[b])
@@ -300,7 +301,7 @@ fn kaplan_meier(
     let default_weights: Vec<f64> = vec![1.0; n];
     let weights = weights.unwrap_or(&default_weights);
     let mut indices: Vec<usize> = (0..n).collect();
-    if n > 10000 {
+    if n > PARALLEL_THRESHOLD_XLARGE {
         indices.par_sort_by(|&a, &b| {
             time[a]
                 .partial_cmp(&time[b])

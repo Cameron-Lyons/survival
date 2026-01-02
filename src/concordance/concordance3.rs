@@ -3,6 +3,7 @@ use super::common::{
     add_to_binary_tree, build_concordance_result, validate_extended_concordance_inputs,
     walkup_binary_tree,
 };
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -95,7 +96,7 @@ pub fn concordance3(
             i += ndeath;
         }
     }
-    if n > 1000 {
+    if n > PARALLEL_THRESHOLD_LARGE {
         let updates: Vec<_> = sortstop
             .par_iter()
             .take(n)

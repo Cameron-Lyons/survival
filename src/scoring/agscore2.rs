@@ -3,6 +3,7 @@ use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
+#[inline]
 pub fn agscore2(
     y: &[f64],
     covar: &[f64],

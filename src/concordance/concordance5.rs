@@ -1,15 +1,18 @@
 use super::common::{build_concordance_result, validate_extended_concordance_inputs};
+use crate::constants::PARALLEL_THRESHOLD_SMALL;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 struct FenwickTree {
     tree: Vec<f64>,
 }
 impl FenwickTree {
+    #[inline]
     fn new(size: usize) -> Self {
         FenwickTree {
             tree: vec![0.0; size + 1],
         }
     }
+    #[inline]
     fn update(&mut self, index: usize, value: f64) {
         let mut idx = index + 1;
         while idx < self.tree.len() {
@@ -17,6 +20,7 @@ impl FenwickTree {
             idx += idx & (!idx + 1);
         }
     }
+    #[inline]
     fn prefix_sum(&self, index: usize) -> f64 {
         let mut sum = 0.0;
         let mut idx = index + 1;
@@ -26,14 +30,17 @@ impl FenwickTree {
         }
         sum
     }
+    #[inline]
     fn total(&self) -> f64 {
         self.prefix_sum(self.tree.len() - 2)
     }
 }
+#[inline]
 fn addin(nwt: &mut [f64], fenwick: &mut FenwickTree, x: usize, weight: f64) {
     nwt[x] += weight;
     fenwick.update(x, weight);
 }
+#[inline]
 fn walkup(nwt: &[f64], fenwick: &FenwickTree, x: usize) -> [f64; 3] {
     let sum_less = fenwick.prefix_sum(x.saturating_sub(1));
     let sum_greater = fenwick.total() - fenwick.prefix_sum(x);
@@ -92,7 +99,7 @@ pub fn concordance5(
                 }
                 ndeath += 1;
             }
-            if ndeath > 100 {
+            if ndeath > PARALLEL_THRESHOLD_SMALL {
                 let results: Vec<_> = (i..(i + ndeath))
                     .into_par_iter()
                     .filter_map(|j| {
@@ -146,6 +153,7 @@ pub fn concordance5(
     }
     (count, imat, resid)
 }
+#[inline]
 fn compute_z2(wt: f64, wsum: &[f64]) -> f64 {
     let total = wsum[0] + wsum[1] + wsum[2];
     if total == 0.0 {

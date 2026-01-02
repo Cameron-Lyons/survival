@@ -38,11 +38,14 @@ pub struct AaregOptions {
     x: bool,
     #[pyo3(get, set)]
     y: bool,
+    #[pyo3(get, set)]
+    max_iter: u32,
 }
 #[pymethods]
 impl AaregOptions {
     #[new]
-    fn new(formula: String, data: Vec<Vec<f64>>, variable_names: Vec<String>) -> Self {
+    #[pyo3(signature = (formula, data, variable_names, max_iter=100))]
+    fn new(formula: String, data: Vec<Vec<f64>>, variable_names: Vec<String>, max_iter: u32) -> Self {
         AaregOptions {
             formula,
             data,
@@ -59,6 +62,7 @@ impl AaregOptions {
             model: false,
             x: false,
             y: false,
+            max_iter,
         }
     }
 }
@@ -351,8 +355,8 @@ fn perform_aalen_regression(
     let num_unique_times = unique_times.len();
     let mut warnings = Vec::new();
     let mut converged = true;
-    let mut iterations = 0;
-    let max_iterations = 100;
+    let mut iterations = 0u32;
+    let max_iterations = options.max_iter;
     for t_idx in 0..num_unique_times {
         let current_time = unique_times[t_idx];
         let event_idx = time_indices[t_idx];
