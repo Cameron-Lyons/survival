@@ -16,12 +16,10 @@ from helpers import setup_survival_import
 survival = setup_survival_import()
 print("Successfully imported survival module")
 
-# Test data
 time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
 status_data = [1, 1, 0, 1, 0, 1, 1, 0]
 group_data = [0, 0, 0, 0, 1, 1, 1, 1]
 
-# Try importing optional dependencies
 try:
     import pandas as pd
 
@@ -41,14 +39,12 @@ except ImportError:
 
 print("\n=== Testing survfitkm consistency across input types ===")
 
-# Test with lists
 print("\n1. Testing survfitkm with Python lists...")
 result_list = survival.survfitkm(time_data, [float(s) for s in status_data])
 assert hasattr(result_list, "estimate"), "Should have estimate attribute"
 assert len(result_list.estimate) > 0, "Should have estimates"
 print(f"   Passed - {len(result_list.estimate)} estimates")
 
-# Test with numpy arrays
 print("\n2. Testing survfitkm with NumPy arrays...")
 time_np = np.array(time_data)
 status_np = np.array(status_data, dtype=np.float64)
@@ -57,9 +53,8 @@ assert hasattr(result_np, "estimate"), "Should have estimate attribute"
 assert len(result_np.estimate) > 0, "Should have estimates"
 print(f"   Passed - {len(result_np.estimate)} estimates")
 
-# Verify consistency between list and numpy
 assert len(result_list.estimate) == len(result_np.estimate), "Results should have same length"
-for i, (v1, v2) in enumerate(zip(result_list.estimate, result_np.estimate)):
+for i, (v1, v2) in enumerate(zip(result_list.estimate, result_np.estimate, strict=True)):
     assert abs(v1 - v2) < 1e-10, f"Results differ at index {i}: {v1} vs {v2}"
 print("   Consistency check passed - list and numpy results identical")
 
@@ -69,8 +64,7 @@ if HAS_PANDAS:
     result_pd = survival.survfitkm(df["time"], df["status"])
     assert hasattr(result_pd, "estimate"), "Should have estimate attribute"
     assert len(result_pd.estimate) > 0, "Should have estimates"
-    # Verify consistency
-    for i, (v1, v2) in enumerate(zip(result_list.estimate, result_pd.estimate)):
+    for i, (v1, v2) in enumerate(zip(result_list.estimate, result_pd.estimate, strict=True)):
         assert abs(v1 - v2) < 1e-10, f"Pandas results differ at index {i}"
     print("   Passed - pandas results identical to list results")
 
@@ -80,22 +74,19 @@ if HAS_POLARS:
     result_pl = survival.survfitkm(df["time"], df["status"])
     assert hasattr(result_pl, "estimate"), "Should have estimate attribute"
     assert len(result_pl.estimate) > 0, "Should have estimates"
-    # Verify consistency
-    for i, (v1, v2) in enumerate(zip(result_list.estimate, result_pl.estimate)):
+    for i, (v1, v2) in enumerate(zip(result_list.estimate, result_pl.estimate, strict=True)):
         assert abs(v1 - v2) < 1e-10, f"Polars results differ at index {i}"
     print("   Passed - polars results identical to list results")
 
 
 print("\n=== Testing logrank_test consistency ===")
 
-# Test with lists
 print("\n1. Testing logrank_test with Python lists...")
 result_list = survival.logrank_test(time_data, status_data, group_data)
 assert hasattr(result_list, "statistic"), "Should have statistic"
 assert hasattr(result_list, "p_value"), "Should have p_value"
 print(f"   Passed - statistic: {result_list.statistic:.4f}, p-value: {result_list.p_value:.4f}")
 
-# Test with numpy arrays
 print("\n2. Testing logrank_test with NumPy arrays...")
 time_np = np.array(time_data)
 status_np = np.array(status_data, dtype=np.int32)
@@ -104,9 +95,8 @@ result_np = survival.logrank_test(time_np, status_np, group_np)
 assert hasattr(result_np, "statistic"), "Should have statistic"
 assert abs(result_list.statistic - result_np.statistic) < 1e-10, "Statistics should match"
 assert abs(result_list.p_value - result_np.p_value) < 1e-10, "P-values should match"
-print(f"   Passed - results identical to list input")
+print("   Passed - results identical to list input")
 
-# Test with int64 arrays (auto-conversion)
 print("\n3. Testing logrank_test with NumPy int64 arrays...")
 status_np64 = np.array(status_data, dtype=np.int64)
 group_np64 = np.array(group_data, dtype=np.int64)
