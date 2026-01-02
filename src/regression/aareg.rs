@@ -45,7 +45,12 @@ pub struct AaregOptions {
 impl AaregOptions {
     #[new]
     #[pyo3(signature = (formula, data, variable_names, max_iter=100))]
-    fn new(formula: String, data: Vec<Vec<f64>>, variable_names: Vec<String>, max_iter: u32) -> Self {
+    fn new(
+        formula: String,
+        data: Vec<Vec<f64>>,
+        variable_names: Vec<String>,
+        max_iter: u32,
+    ) -> Self {
         AaregOptions {
             formula,
             data,
