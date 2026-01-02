@@ -197,9 +197,8 @@ pub fn predict_survival(
 ) -> PredictionResult {
     let n = x.len();
     let n_times = pred_times.len();
-    let mut linear_predictor = Vec::with_capacity(n);
-    let mut risk_score = Vec::with_capacity(n);
-    let mut survival_prob = Vec::with_capacity(n);
+
+    // Pre-compute cumulative hazard once
     let cumhaz: Vec<f64> = baseline_hazard
         .iter()
         .scan(0.0, |acc, &h| {
@@ -207,18 +206,50 @@ pub fn predict_survival(
             Some(*acc)
         })
         .collect();
-    for xi in x {
-        let lp: f64 = coef.iter().zip(xi).map(|(&c, &xij)| c * xij).sum();
-        let rs = lp.exp();
+
+    // Parallelize prediction for large datasets
+    let results: Vec<(f64, f64, Vec<f64>)> = if n > 100 {
+        x.par_iter()
+            .map(|xi| {
+                let lp: f64 = coef.iter().zip(xi).map(|(&c, &xij)| c * xij).sum();
+                let rs = lp.exp();
+                let surv_at_times: Vec<f64> = pred_times
+                    .iter()
+                    .map(|&t| {
+                        let ch = interpolate_cumhaz(baseline_times, &cumhaz, t);
+                        (-ch * rs).exp()
+                    })
+                    .collect();
+                (lp, rs, surv_at_times)
+            })
+            .collect()
+    } else {
+        x.iter()
+            .map(|xi| {
+                let lp: f64 = coef.iter().zip(xi).map(|(&c, &xij)| c * xij).sum();
+                let rs = lp.exp();
+                let surv_at_times: Vec<f64> = pred_times
+                    .iter()
+                    .map(|&t| {
+                        let ch = interpolate_cumhaz(baseline_times, &cumhaz, t);
+                        (-ch * rs).exp()
+                    })
+                    .collect();
+                (lp, rs, surv_at_times)
+            })
+            .collect()
+    };
+
+    let mut linear_predictor = Vec::with_capacity(n);
+    let mut risk_score = Vec::with_capacity(n);
+    let mut survival_prob = Vec::with_capacity(n_times);
+
+    for (lp, rs, surv) in results {
         linear_predictor.push(lp);
         risk_score.push(rs);
-        let mut surv_at_times = Vec::with_capacity(n_times);
-        for &t in pred_times {
-            let ch = interpolate_cumhaz(baseline_times, &cumhaz, t);
-            surv_at_times.push((-ch * rs).exp());
-        }
-        survival_prob.push(surv_at_times);
+        survival_prob.push(surv);
     }
+
     PredictionResult {
         linear_predictor,
         risk_score,
@@ -234,16 +265,23 @@ fn interpolate_cumhaz(times: &[f64], cumhaz: &[f64], t: f64) -> f64 {
     if t <= times[0] {
         return 0.0;
     }
-    if t >= times[times.len() - 1] {
-        return cumhaz[cumhaz.len() - 1];
+    let n = times.len();
+    if t >= times[n - 1] {
+        return cumhaz[n - 1];
     }
-    for i in 1..times.len() {
-        if times[i] >= t {
-            let frac = (t - times[i - 1]) / (times[i] - times[i - 1]);
-            return cumhaz[i - 1] + frac * (cumhaz[i] - cumhaz[i - 1]);
-        }
+    // Binary search for the interval containing t - O(log n) instead of O(n)
+    let i = match times
+        .binary_search_by(|probe| probe.partial_cmp(&t).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        Ok(idx) => return cumhaz[idx], // Exact match
+        Err(idx) => idx,               // idx is insertion point
+    };
+    // Interpolate between times[i-1] and times[i]
+    if i == 0 {
+        return 0.0;
     }
-    cumhaz[cumhaz.len() - 1]
+    let frac = (t - times[i - 1]) / (times[i] - times[i - 1]);
+    cumhaz[i - 1] + frac * (cumhaz[i] - cumhaz[i - 1])
 }
 #[pyfunction]
 #[pyo3(signature = (coef, x, baseline_hazard, baseline_times, pred_times))]
@@ -347,18 +385,35 @@ pub fn stratify_risk(
             }
         })
         .collect();
-    let group_median_risk: Vec<f64> = group_scores
-        .iter()
-        .map(|scores| {
-            if scores.is_empty() {
-                0.0
-            } else {
-                let mut s = scores.clone();
-                s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                s[s.len() / 2]
-            }
-        })
-        .collect();
+
+    // Parallelize group median calculation for large groups
+    let group_median_risk: Vec<f64> = if n > 1000 {
+        group_scores
+            .par_iter()
+            .map(|scores| {
+                if scores.is_empty() {
+                    0.0
+                } else {
+                    let mut s = scores.clone();
+                    s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    s[s.len() / 2]
+                }
+            })
+            .collect()
+    } else {
+        group_scores
+            .iter()
+            .map(|scores| {
+                if scores.is_empty() {
+                    0.0
+                } else {
+                    let mut s = scores.clone();
+                    s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    s[s.len() / 2]
+                }
+            })
+            .collect()
+    };
     RiskStratificationResult {
         risk_groups,
         cutpoints,
