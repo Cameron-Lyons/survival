@@ -155,6 +155,23 @@ pub fn nelson_aalen(
         n_events: n_events_vec,
     }
 }
+/// Compute Nelson-Aalen cumulative hazard estimate.
+///
+/// Parameters
+/// ----------
+/// time : array-like
+///     Survival/censoring times.
+/// status : array-like
+///     Event indicator (1=event, 0=censored).
+/// weights : array-like, optional
+///     Case weights.
+/// confidence_level : float, optional
+///     Confidence level (default 0.95).
+///
+/// Returns
+/// -------
+/// NelsonAalenResult
+///     Object with: time, cumulative_hazard, std_err, conf_lower, conf_upper, n_risk, n_events.
 #[pyfunction]
 #[pyo3(signature = (time, status, weights=None, confidence_level=None))]
 pub fn nelson_aalen_estimator(

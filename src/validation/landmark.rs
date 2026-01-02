@@ -394,6 +394,23 @@ pub fn compute_hazard_ratio(
         p_value,
     }
 }
+/// Compute hazard ratio between two groups.
+///
+/// Parameters
+/// ----------
+/// time : array-like
+///     Survival/censoring times.
+/// status : array-like
+///     Event indicator (1=event, 0=censored).
+/// group : array-like
+///     Group indicator (0 or 1).
+/// confidence_level : float, optional
+///     Confidence level (default 0.95).
+///
+/// Returns
+/// -------
+/// HazardRatioResult
+///     Object with: hazard_ratio, std_err, conf_lower, conf_upper, p_value.
 #[pyfunction]
 #[pyo3(signature = (time, status, group, confidence_level=None))]
 pub fn hazard_ratio(

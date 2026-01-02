@@ -196,6 +196,29 @@ pub fn bootstrap_cox(
         bootstrap_samples: bootstrap_coefs,
     })
 }
+/// Compute bootstrap confidence intervals for Cox regression coefficients.
+///
+/// Parameters
+/// ----------
+/// time : array-like
+///     Survival/censoring times.
+/// status : array-like
+///     Event indicator (1=event, 0=censored).
+/// covariates : list of lists
+///     Covariate matrix (n_obs x n_vars).
+/// weights : array-like, optional
+///     Case weights.
+/// n_bootstrap : int, optional
+///     Number of bootstrap samples (default 1000).
+/// confidence_level : float, optional
+///     Confidence level for intervals (default 0.95).
+/// seed : int, optional
+///     Random seed for reproducibility.
+///
+/// Returns
+/// -------
+/// BootstrapResult
+///     Object with: coefficients, std_errors, ci_lower, ci_upper, bootstrap_samples.
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, weights=None, n_bootstrap=None, confidence_level=None, seed=None))]
 pub fn bootstrap_cox_ci(

@@ -283,6 +283,23 @@ pub fn compare_rmst(
         rmst_group2: rmst2,
     }
 }
+/// Compute Restricted Mean Survival Time (RMST).
+///
+/// Parameters
+/// ----------
+/// time : array-like
+///     Survival/censoring times.
+/// status : array-like
+///     Event indicator (1=event, 0=censored).
+/// tau : float
+///     Time horizon for restriction.
+/// confidence_level : float, optional
+///     Confidence level (default 0.95).
+///
+/// Returns
+/// -------
+/// RMSTResult
+///     Object with: rmst (estimate), std_err, conf_lower, conf_upper.
 #[pyfunction]
 #[pyo3(signature = (time, status, tau, confidence_level=None))]
 pub fn rmst(
@@ -294,6 +311,26 @@ pub fn rmst(
     let conf = confidence_level.unwrap_or(0.95);
     Ok(compute_rmst(&time, &status, tau, conf))
 }
+
+/// Compare RMST between two groups.
+///
+/// Parameters
+/// ----------
+/// time : array-like
+///     Survival/censoring times.
+/// status : array-like
+///     Event indicator (1=event, 0=censored).
+/// group : array-like
+///     Group indicator (0 or 1).
+/// tau : float
+///     Time horizon for restriction.
+/// confidence_level : float, optional
+///     Confidence level (default 0.95).
+///
+/// Returns
+/// -------
+/// RMSTComparisonResult
+///     Object with: difference, std_err, conf_lower, conf_upper, p_value, rmst_group1, rmst_group2.
 #[pyfunction]
 #[pyo3(signature = (time, status, group, tau, confidence_level=None))]
 pub fn rmst_comparison(

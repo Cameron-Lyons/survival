@@ -272,6 +272,37 @@ impl SurvregOptions {
     }
 }
 
+/// Fit a parametric survival regression model.
+///
+/// Parameters
+/// ----------
+/// time : array-like
+///     Survival/censoring times.
+/// status : array-like
+///     Event indicator (1=event, 0=censored).
+/// covariates : list of lists
+///     Covariate matrix (n_obs x n_vars).
+/// weights : array-like, optional
+///     Case weights.
+/// offsets : array-like, optional
+///     Offset terms for the linear predictor.
+/// initial_beta : array-like, optional
+///     Starting values for coefficients.
+/// strata : array-like, optional
+///     Stratum indicators for stratified analysis.
+/// distribution : str, optional
+///     Error distribution: "weibull" (default), "lognormal", "loglogistic", "gaussian", "exponential".
+/// max_iter : int, optional
+///     Maximum iterations (default 30).
+/// eps : float, optional
+///     Convergence tolerance (default 1e-6).
+/// tol_chol : float, optional
+///     Cholesky tolerance (default 1e-10).
+///
+/// Returns
+/// -------
+/// SurvivalFit
+///     Object with: coefficients, std_errors, variance_matrix, log_likelihood, convergence info.
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None))]
 #[allow(clippy::too_many_arguments)]
@@ -299,9 +330,10 @@ pub fn survreg(
     let config = SurvregConfig::create(dist_type, max_iter, eps, tol_chol);
     let n = time.len();
     if status.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and status must have the same length",
-        ));
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Length mismatch: time has {} elements but status has {}. Both must have the same length.",
+            n, status.len()
+        )));
     }
     let nvar = if !covariates.is_empty() {
         covariates[0].len()
@@ -309,9 +341,11 @@ pub fn survreg(
         0
     };
     if !covariates.is_empty() && covariates.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "covariates must have the same number of rows as time",
-        ));
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Length mismatch: time has {} observations but covariates has {} rows. \
+             Covariates should be a list of {} rows, each with {} covariate values.",
+            n, covariates.len(), n, nvar
+        )));
     }
     let weights = weights.unwrap_or_else(|| vec![1.0; n]);
     let offsets = offsets.unwrap_or_else(|| vec![0.0; n]);

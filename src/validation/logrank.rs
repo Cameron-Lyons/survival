@@ -175,6 +175,28 @@ fn weight_name(weight_type: &WeightType) -> String {
         WeightType::FlemingHarrington { p, q } => format!("FlemingHarrington(p={}, q={})", p, q),
     }
 }
+/// Perform log-rank test comparing survival between groups.
+///
+/// Parameters
+/// ----------
+/// time : array-like
+///     Survival/censoring times. Accepts numpy, pandas, polars, or lists.
+/// status : array-like
+///     Event indicator (1=event, 0=censored).
+/// group : array-like
+///     Group membership indicator (integer-coded).
+/// weight_type : str, optional
+///     Weight function: "logrank" (default), "wilcoxon", "tarone-ware", or "peto-peto".
+///
+/// Returns
+/// -------
+/// LogRankResult
+///     Object with: chi_square (test statistic), p_value, observed/expected counts per group.
+///
+/// Examples
+/// --------
+/// >>> result = survival.logrank_test(time, status, group)
+/// >>> print(f"p-value: {result.p_value:.4f}")
 #[pyfunction]
 #[pyo3(signature = (time, status, group, weight_type=None))]
 pub fn logrank_test(
