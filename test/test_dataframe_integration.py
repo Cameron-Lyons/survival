@@ -6,8 +6,9 @@ Tests that all major functions correctly accept different array-like inputs.
 
 import os
 import sys
-import pytest
+
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 from helpers import setup_survival_import
