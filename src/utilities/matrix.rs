@@ -1,4 +1,4 @@
-use crate::constants::{NEAR_ZERO_MATRIX, RIDGE_REGULARIZATION};
+use crate::constants::{NEAR_ZERO_MATRIX, PARALLEL_THRESHOLD_LARGE, RIDGE_REGULARIZATION};
 use crate::utilities::validation::MatrixError;
 use faer::{linalg::solvers::DenseSolveCore, prelude::*};
 use ndarray::{Array1, Array2};
@@ -7,9 +7,7 @@ use rayon::prelude::*;
 #[inline]
 fn ndarray_to_faer(arr: &Array2<f64>) -> Mat<f64> {
     let (rows, cols) = arr.dim();
-    // For contiguous row-major arrays, use faster conversion
-    if arr.is_standard_layout() && rows * cols > 1000 {
-        // Parallel construction for large matrices
+    if arr.is_standard_layout() && rows * cols > PARALLEL_THRESHOLD_LARGE {
         Mat::from_fn(rows, cols, |i, j| unsafe { *arr.uget((i, j)) })
     } else {
         Mat::from_fn(rows, cols, |i, j| arr[[i, j]])
@@ -23,22 +21,19 @@ fn faer_col_to_ndarray(col: faer::ColRef<f64>) -> Array1<f64> {
     for i in 0..n {
         result[i].write(col[i]);
     }
-    // SAFETY: All elements have been initialized
     unsafe { result.assume_init() }
 }
 
 #[inline]
 fn faer_mat_to_ndarray(mat: faer::MatRef<f64>) -> Array2<f64> {
     let (rows, cols) = (mat.nrows(), mat.ncols());
-    if rows * cols > 1000 {
-        // Parallel conversion for large matrices - process rows in parallel
+    if rows * cols > PARALLEL_THRESHOLD_LARGE {
         let row_data: Vec<Vec<f64>> = (0..rows)
             .into_par_iter()
             .map(|i| (0..cols).map(|j| mat[(i, j)]).collect())
             .collect();
         let data: Vec<f64> = row_data.into_iter().flatten().collect();
         Array2::from_shape_vec((rows, cols), data).unwrap_or_else(|_| {
-            // Fallback to sequential if parallel fails
             let mut result = Array2::zeros((rows, cols));
             for i in 0..rows {
                 for j in 0..cols {

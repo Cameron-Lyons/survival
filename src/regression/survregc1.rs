@@ -1,5 +1,7 @@
+use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, PARALLEL_THRESHOLD_MEDIUM};
 use crate::utilities::statistical::{erf, erfc};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use rayon::prelude::*;
 use std::fmt;
 
 type SurvregDerivatives = (f64, f64, f64, f64, f64, f64);
@@ -44,6 +46,127 @@ pub struct SurvivalLikelihood {
 }
 #[allow(clippy::too_many_arguments)]
 pub fn survregc1(
+    n: usize,
+    nvar: usize,
+    nstrat: usize,
+    whichcase: bool,
+    beta: &ArrayView1<f64>,
+    dist: SurvivalDist,
+    strat: &ArrayView1<i32>,
+    offset: &ArrayView1<f64>,
+    time1: &ArrayView1<f64>,
+    time2: Option<&ArrayView1<f64>>,
+    status: &ArrayView1<i32>,
+    wt: &ArrayView1<f64>,
+    covar: &ArrayView2<f64>,
+    nf: usize,
+    frail: &ArrayView1<i32>,
+) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
+    let nvar2 = nvar + nstrat;
+    let nvar3 = nvar2 + nf;
+
+    if n < PARALLEL_THRESHOLD_MEDIUM || whichcase {
+        return survregc1_sequential(
+            n, nvar, nstrat, whichcase, beta, dist, strat, offset, time1, time2, status, wt, covar,
+            nf, frail,
+        );
+    }
+
+    let time2_slice = time2.map(|t| t.as_slice().unwrap());
+
+    type PersonResult = (usize, usize, usize, f64, f64, f64, SurvregDerivatives);
+    let partial_results: Result<Vec<PersonResult>, Box<dyn std::error::Error + Send + Sync>> = (0
+        ..n)
+        .into_par_iter()
+        .map(|person| {
+            let strata_idx = if nstrat > 1 {
+                (strat[person] - 1) as usize
+            } else {
+                0
+            };
+            let sigma = if nstrat > 1 {
+                beta[nvar + nf + strata_idx].exp()
+            } else {
+                beta[nvar + nf].exp()
+            };
+
+            let mut eta = offset[person];
+            for i in 0..nvar {
+                eta += beta[i + nf] * covar[[i, person]];
+            }
+
+            let fgrp = if nf > 0 {
+                (frail[person] - 1) as usize
+            } else {
+                0
+            };
+            if nf > 0 {
+                eta += beta[fgrp];
+            }
+
+            let sz = time1[person] - eta;
+            let z = sz / sigma;
+
+            let derivs: SurvregDerivatives = match status[person] {
+                1 => compute_exact(z, sz, sigma, dist),
+                0 => compute_right_censored(z, sz, sigma, dist),
+                2 => compute_left_censored(z, sz, sigma, dist),
+                3 => {
+                    let time2_val = time2_slice.ok_or_else(|| {
+                        Box::<dyn std::error::Error + Send + Sync>::from(
+                            "Missing time2 for interval censored data",
+                        )
+                    })?[person];
+                    compute_interval_censored(z, sz, time2_val, eta, sigma, dist)
+                }
+                _ => Err("Invalid status value".into()),
+            }
+            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))?;
+
+            Ok((person, fgrp, strata_idx, sigma, sz, wt[person], derivs))
+        })
+        .collect();
+
+    let partial_results =
+        partial_results.map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+
+    let mut result = SurvivalLikelihood {
+        loglik: 0.0,
+        u: Array1::zeros(nvar3),
+        imat: Array2::zeros((nvar2, nvar3)),
+        jj: Array2::zeros((nvar2, nvar3)),
+        fdiag: Array1::zeros(nf),
+        jdiag: Array1::zeros(nf),
+    };
+
+    for (person, fgrp, strata_idx, sigma, sz, w, (g, dg, ddg, dsig, ddsig, dsg)) in partial_results
+    {
+        result.loglik += g * w;
+        update_derivatives(
+            &mut result,
+            person,
+            fgrp,
+            nf,
+            nvar,
+            nstrat,
+            strata_idx,
+            covar,
+            w,
+            dg,
+            ddg,
+            dsig,
+            ddsig,
+            dsg,
+            sigma,
+            sz,
+        );
+    }
+
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn survregc1_sequential(
     n: usize,
     nvar: usize,
     nstrat: usize,
@@ -132,6 +255,7 @@ pub fn survregc1(
     }
     Ok(result)
 }
+#[inline]
 fn compute_exact(
     z: f64,
     sz: f64,
@@ -157,6 +281,7 @@ fn compute_exact(
         Ok((g, dg, ddg, dsig - 1.0, ddsig, dsg))
     }
 }
+#[inline]
 fn compute_right_censored(
     z: f64,
     sz: f64,
@@ -181,6 +306,7 @@ fn compute_right_censored(
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
+#[inline]
 fn compute_left_censored(
     z: f64,
     sz: f64,
@@ -205,6 +331,7 @@ fn compute_left_censored(
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
+#[inline]
 fn compute_interval_censored(
     z: f64,
     sz: f64,
@@ -240,6 +367,7 @@ fn compute_interval_censored(
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
+#[inline]
 fn logistic_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
     let (w, sign) = if z > 0.0 {
         ((-z).exp(), -1.0)
@@ -266,6 +394,7 @@ fn logistic_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
         }),
     }
 }
+#[inline]
 fn gauss_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
     let f = (-z.powi(2) / 2.0).exp() / SPI;
     match case {
@@ -284,8 +413,9 @@ fn gauss_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
         }),
     }
 }
+#[inline]
 fn exvalue_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
-    let w = z.clamp(-100.0, 100.0).exp();
+    let w = z.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
     let temp = (-w).exp();
     match case {
         1 => Ok((w * temp, 1.0 - w, w * (w - 3.0) + 1.0)),

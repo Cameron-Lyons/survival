@@ -1,3 +1,4 @@
+use crate::constants::PARALLEL_THRESHOLD_SMALL;
 use crate::utilities::statistical::normal_cdf as norm_cdf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -511,7 +512,7 @@ pub fn compute_survival_at_times(
     } else {
         1.28
     };
-    let results: Vec<SurvivalAtTimeResult> = if eval_times.len() > 100 {
+    let results: Vec<SurvivalAtTimeResult> = if eval_times.len() > PARALLEL_THRESHOLD_SMALL {
         eval_times
             .par_iter()
             .map(|&t| {

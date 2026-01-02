@@ -1,4 +1,7 @@
-use crate::constants::{CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, RIDGE_REGULARIZATION};
+use crate::constants::{
+    CHOLESKY_TOL, CONVERGENCE_EPSILON, CONVERGENCE_FLAG, COX_MAX_ITER, DEFAULT_MAX_ITER,
+    PARALLEL_THRESHOLD_MEDIUM, RIDGE_REGULARIZATION,
+};
 use crate::utilities::matrix::{cholesky_check, lu_solve, matrix_inverse};
 use ndarray::{Array1, Array2};
 use rayon::prelude::*;
@@ -135,9 +138,9 @@ impl CoxFitBuilder {
             offset: None,
             weights: None,
             method: Method::Breslow,
-            max_iter: 25,
-            eps: 1e-9,
-            toler: 1e-9,
+            max_iter: COX_MAX_ITER,
+            eps: CONVERGENCE_EPSILON,
+            toler: CONVERGENCE_EPSILON,
             doscale: None,
             initial_beta: None,
         }
@@ -327,8 +330,7 @@ impl CoxFit {
                 }
             })
             .collect();
-        // Parallelize covariate scaling for large datasets
-        if nused > 500 && nvar > 1 {
+        if nused > PARALLEL_THRESHOLD_MEDIUM && nvar > 1 {
             use std::sync::atomic::{AtomicPtr, Ordering};
             let covar_ptr = AtomicPtr::new(self.covar.as_mut_ptr());
             let covar_stride = self.covar.strides();
@@ -340,7 +342,6 @@ impl CoxFit {
                     let mean = means[i];
                     let scale_val = scales[i];
                     let base_ptr = covar_ptr.load(Ordering::Relaxed);
-                    // SAFETY: Each column i is independent, no overlap between parallel iterations
                     for person in 0..nused {
                         unsafe {
                             let offset = person as isize * row_stride + i as isize * col_stride;
@@ -385,8 +386,7 @@ impl CoxFit {
         let mut loglik = 0.0;
         let mut denom = 0.0;
 
-        // Pre-compute all zbeta and risk values in parallel for large datasets
-        let (zbeta_vals, risk_vals): (Vec<f64>, Vec<f64>) = if nused > 500 {
+        let (zbeta_vals, risk_vals): (Vec<f64>, Vec<f64>) = if nused > PARALLEL_THRESHOLD_MEDIUM {
             (0..nused)
                 .into_par_iter()
                 .map(|p| {
@@ -591,7 +591,7 @@ impl CoxFit {
         self.loglik[1] = self.iterate(&beta_final)?;
         Self::chinv(&mut self.imat)?;
         self.rescale_params();
-        self.flag = 1000;
+        self.flag = CONVERGENCE_FLAG;
         Ok(())
     }
     fn rescale_params(&mut self) {

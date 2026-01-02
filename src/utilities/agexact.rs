@@ -1,3 +1,4 @@
+use crate::constants::{CONVERGENCE_FLAG, PARALLEL_THRESHOLD_LARGE};
 use itertools::Itertools;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -74,7 +75,7 @@ pub fn agexact(
             }
         }
     }
-    if n > 1000 {
+    if n > PARALLEL_THRESHOLD_LARGE {
         let scores: Vec<f64> = (0..n)
             .into_par_iter()
             .map(|person| {
@@ -394,7 +395,7 @@ pub fn agexact(
             }
         }
         beta.copy_from_slice(&newbeta_vec);
-        let final_flag = 1000;
+        let final_flag = CONVERGENCE_FLAG;
         Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("maxiter", maxiter)?;

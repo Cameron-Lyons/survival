@@ -1,4 +1,4 @@
-use crate::constants::TIME_EPSILON;
+use crate::constants::{PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON};
 use crate::utilities::numpy_utils::{
     extract_optional_vec_f64, extract_optional_vec_i32, extract_vec_f64,
 };
@@ -6,6 +6,7 @@ use crate::utilities::validation::{
     clamp_probability, validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Default)]
 #[pyclass]
@@ -196,11 +197,19 @@ pub fn compute_survfitkm(
 ) -> SurvFitKMOutput {
     let n = time.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n > PARALLEL_THRESHOLD_XLARGE {
+        indices.par_sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
     let estimated_events = (n / 10).max(16);
     let mut event_times = Vec::with_capacity(estimated_events);
     let mut n_risk_vec = Vec::with_capacity(estimated_events);

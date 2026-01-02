@@ -1,11 +1,10 @@
+use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
 use crate::utilities::validation::{ValidationError, validate_length};
 use ndarray::Array2;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
-
-const PARALLEL_THRESHOLD: usize = 500;
 
 #[inline]
 pub fn apply_deltas_add<F>(
@@ -16,7 +15,7 @@ pub fn apply_deltas_add<F>(
 ) where
     F: Fn(usize) -> Vec<f64> + Sync + Send,
 {
-    if indices.len() > PARALLEL_THRESHOLD {
+    if indices.len() > PARALLEL_THRESHOLD_MEDIUM {
         let updates: Vec<(usize, Vec<f64>)> = indices
             .par_iter()
             .map(|&idx| (idx, compute_deltas(idx)))
@@ -45,7 +44,7 @@ pub fn apply_deltas_set<F>(
 ) where
     F: Fn(usize) -> Vec<f64> + Sync + Send,
 {
-    if indices.len() > PARALLEL_THRESHOLD {
+    if indices.len() > PARALLEL_THRESHOLD_MEDIUM {
         let updates: Vec<(usize, Vec<f64>)> = indices
             .par_iter()
             .map(|&idx| (idx, compute_deltas(idx)))
@@ -92,25 +91,47 @@ pub fn validate_scoring_inputs(
     Ok(())
 }
 pub fn compute_summary_stats(residuals: &[f64], n: usize, nvar: usize) -> Vec<f64> {
-    let mut summary_stats = Vec::with_capacity(nvar * 2);
-    for i in 0..nvar {
-        let start_idx = i * n;
-        let end_idx = (i + 1) * n;
-        let var_residuals = &residuals[start_idx..end_idx];
-        let mean = var_residuals.iter().sum::<f64>() / n as f64;
-        let variance = if n > 1 {
-            var_residuals
-                .iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>()
-                / (n - 1) as f64
-        } else {
-            0.0
-        };
-        summary_stats.push(mean);
-        summary_stats.push(variance);
+    if n > PARALLEL_THRESHOLD_MEDIUM && nvar > 1 {
+        (0..nvar)
+            .into_par_iter()
+            .flat_map(|i| {
+                let start_idx = i * n;
+                let end_idx = (i + 1) * n;
+                let var_residuals = &residuals[start_idx..end_idx];
+                let mean = var_residuals.iter().sum::<f64>() / n as f64;
+                let variance = if n > 1 {
+                    var_residuals
+                        .iter()
+                        .map(|&x| (x - mean).powi(2))
+                        .sum::<f64>()
+                        / (n - 1) as f64
+                } else {
+                    0.0
+                };
+                vec![mean, variance]
+            })
+            .collect()
+    } else {
+        let mut summary_stats = Vec::with_capacity(nvar * 2);
+        for i in 0..nvar {
+            let start_idx = i * n;
+            let end_idx = (i + 1) * n;
+            let var_residuals = &residuals[start_idx..end_idx];
+            let mean = var_residuals.iter().sum::<f64>() / n as f64;
+            let variance = if n > 1 {
+                var_residuals
+                    .iter()
+                    .map(|&x| (x - mean).powi(2))
+                    .sum::<f64>()
+                    / (n - 1) as f64
+            } else {
+                0.0
+            };
+            summary_stats.push(mean);
+            summary_stats.push(variance);
+        }
+        summary_stats
     }
-    summary_stats
 }
 pub fn build_score_result(
     py: Python<'_>,
