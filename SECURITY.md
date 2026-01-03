@@ -9,7 +9,7 @@
    
    ## Reporting a Vulnerability
   
-   Please report security vulnerabilities by opening a [private security advisory](https://github.com/Cameron-Lyons/survival-rs/security/advisories/new) on GitHub.
+   Please report security vulnerabilities by opening a [private security advisory](https://github.com/Cameron-Lyons/survival/security/advisories/new) on GitHub.
   
    Include:
    - Description of the vulnerability

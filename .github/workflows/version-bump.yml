@@ -22,7 +22,7 @@ jobs:
           CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "Current version: $CURRENT"
 
-          if curl -s "https://pypi.org/pypi/survival-rs/$CURRENT/json" | grep -q '"version"'; then
+          if curl -s "https://pypi.org/pypi/survival/$CURRENT/json" | grep -q '"version"'; then
             echo "Version $CURRENT exists on PyPI, bumping patch version"
 
             IFS='.' read -r major minor patch <<< "$CURRENT"

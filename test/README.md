@@ -1,6 +1,6 @@
 # Python Binding Tests
 
-This directory contains tests for the Python bindings of the survival-rs library.
+This directory contains tests for the Python bindings of the survival library.
 
 ## Test Files
 

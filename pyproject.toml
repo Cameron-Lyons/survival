@@ -3,7 +3,7 @@ requires = ["maturin>=1.0"]
 build-backend = "maturin"
 
 [project]
-name = "survival-rs"
+name = "survival"
 version = "1.1.5"
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 readme = "README.md"
@@ -35,9 +35,9 @@ keywords = [
 ]
 
 [project.urls]
-Repository = "https://github.com/Cameron-Lyons/survival-rs"
-Documentation = "https://github.com/Cameron-Lyons/survival-rs#readme"
-Issues = "https://github.com/Cameron-Lyons/survival-rs/issues"
+Repository = "https://github.com/Cameron-Lyons/survival"
+Documentation = "https://github.com/Cameron-Lyons/survival#readme"
+Issues = "https://github.com/Cameron-Lyons/survival/issues"
 
 [project.optional-dependencies]
 dev = [
