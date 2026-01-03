@@ -411,7 +411,8 @@ pub fn survfitaj(
         trmat: &trmat_array,
         t0,
     };
-    let result = compute_survfitaj(&data, &fit_params)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("survfitaj failed: {}", e)))?;
+    let result = compute_survfitaj(&data, &fit_params).map_err(|e| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!("survfitaj failed: {}", e))
+    })?;
     Ok(result.into_python_result())
 }

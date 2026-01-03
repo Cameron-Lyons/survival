@@ -54,7 +54,18 @@ struct CoxState {
 }
 impl CoxState {
     fn new(data: &CoxModelData<'_>, _params: &CoxFitParams) -> Self {
-        let CoxModelData { nused, nvar, nfrail, yy, covar: covar2, offset: offset2, weights: weights2, strata, sort: _sort, frail: frail2 } = *data;
+        let CoxModelData {
+            nused,
+            nvar,
+            nfrail,
+            yy,
+            covar: covar2,
+            offset: offset2,
+            weights: weights2,
+            strata,
+            sort: _sort,
+            frail: frail2,
+        } = *data;
         let mut covar = vec![vec![0.0; nused]; nvar];
         let mut k = 0;
         for covar_row in covar.iter_mut().take(nvar) {
