@@ -83,24 +83,46 @@ pub struct SurvivalFit {
     #[pyo3(get)]
     pub score_vector: Vec<f64>,
 }
-#[allow(clippy::too_many_arguments)]
-fn calculate_likelihood(
+struct LikelihoodInput<'a> {
     n: usize,
     nvar: usize,
     nstrat: usize,
-    beta: &[f64],
-    distribution: &DistributionType,
-    strata: &[usize],
-    offsets: &Array1<f64>,
-    time1: &ArrayView1<f64>,
-    time2: Option<&ArrayView1<f64>>,
-    status: &ArrayView1<f64>,
-    weights: &Array1<f64>,
-    covariates: &Array2<f64>,
-    imat: &mut Array2<f64>,
-    jj: &mut Array2<f64>,
-    u: &mut Array1<f64>,
+    beta: &'a [f64],
+    distribution: &'a DistributionType,
+    strata: &'a [usize],
+    offsets: &'a Array1<f64>,
+    time1: &'a ArrayView1<'a, f64>,
+    time2: Option<&'a ArrayView1<'a, f64>>,
+    status: &'a ArrayView1<'a, f64>,
+    weights: &'a Array1<f64>,
+    covariates: &'a Array2<f64>,
+}
+
+struct LikelihoodOutput<'a> {
+    imat: &'a mut Array2<f64>,
+    jj: &'a mut Array2<f64>,
+    u: &'a mut Array1<f64>,
+}
+
+fn calculate_likelihood(
+    input: &LikelihoodInput<'_>,
+    output: &mut LikelihoodOutput<'_>,
 ) -> Result<f64, Box<dyn std::error::Error>> {
+    let n = input.n;
+    let nvar = input.nvar;
+    let nstrat = input.nstrat;
+    let beta = input.beta;
+    let distribution = input.distribution;
+    let strata = input.strata;
+    let offsets = input.offsets;
+    let time1 = input.time1;
+    let time2 = input.time2;
+    let status = input.status;
+    let weights = input.weights;
+    let covariates = input.covariates;
+    let imat = &mut *output.imat;
+    let jj = &mut *output.jj;
+    let u = &mut *output.u;
     let dist = match distribution {
         DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
         DistributionType::Logistic => SurvivalDist::Logistic,
@@ -447,23 +469,26 @@ fn compute_survreg(
     let time1 = time1_arr.view();
     let status = status_arr.view();
     let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());
-    let mut loglik = calculate_likelihood(
+    let input = LikelihoodInput {
         n,
         nvar,
         nstrat,
-        &beta,
-        &distribution,
+        beta: &beta,
+        distribution: &distribution,
         strata,
         offsets,
-        &time1,
-        time2_view.as_ref(),
-        &status,
+        time1: &time1,
+        time2: time2_view.as_ref(),
+        status: &status,
         weights,
         covariates,
-        &mut imat,
-        &mut jj,
-        &mut u,
-    )?;
+    };
+    let mut output = LikelihoodOutput {
+        imat: &mut imat,
+        jj: &mut jj,
+        u: &mut u,
+    };
+    let mut loglik = calculate_likelihood(&input, &mut output)?;
     usave.assign(&u);
     let mut iter = 0;
     let mut halving = 0;
@@ -477,23 +502,26 @@ fn compute_survreg(
             .iter_mut()
             .zip(beta.iter().zip(delta.iter()))
             .for_each(|(nb, (b, d))| *nb = b + d);
-        let newlik = calculate_likelihood(
+        let new_input = LikelihoodInput {
             n,
             nvar,
             nstrat,
-            &newbeta,
-            &distribution,
+            beta: &newbeta,
+            distribution: &distribution,
             strata,
             offsets,
-            &time1,
-            time2_view.as_ref(),
-            &status,
+            time1: &time1,
+            time2: time2_view.as_ref(),
+            status: &status,
             weights,
             covariates,
-            &mut imat,
-            &mut jj,
-            &mut u,
-        )?;
+        };
+        let mut new_output = LikelihoodOutput {
+            imat: &mut imat,
+            jj: &mut jj,
+            u: &mut u,
+        };
+        let newlik = calculate_likelihood(&new_input, &mut new_output)?;
         if check_convergence(loglik, newlik, eps) && halving == 0 {
             loglik = newlik;
             std::mem::swap(&mut beta, &mut newbeta);

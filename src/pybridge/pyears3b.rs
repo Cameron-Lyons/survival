@@ -2,6 +2,32 @@ use itertools::izip;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+
+pub struct PyearsExpectedParams<'a> {
+    pub dim: usize,
+    pub fac: &'a [i32],
+    pub dims: &'a [usize],
+    pub cut: &'a [f64],
+    pub rates: &'a [f64],
+    pub data: &'a [f64],
+}
+
+pub struct PyearsObservedParams<'a> {
+    pub dim: usize,
+    pub fac: &'a [i32],
+    pub dims: &'a [usize],
+    pub cut: &'a [f64],
+    pub data: &'a [f64],
+}
+
+pub struct PyearsOutput<'a> {
+    pub pyears: &'a mut [f64],
+    pub pn: &'a mut [f64],
+    pub pcount: &'a mut [f64],
+    pub pexpect: &'a mut [f64],
+    pub offtable: &'a mut f64,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn pyears3b(
     n: usize,
@@ -9,24 +35,14 @@ pub fn pyears3b(
     doevent: i32,
     y: &[f64],
     weight: &[f64],
-    edim: usize,
-    efac: &[i32],
-    edims: &[usize],
-    ecut: &[f64],
-    expect: &[f64],
-    edata: &[f64],
-    odim: usize,
-    ofac: &[i32],
-    odims: &[usize],
-    ocut: &[f64],
+    expected: PyearsExpectedParams<'_>,
+    observed: PyearsObservedParams<'_>,
     method: i32,
-    odata: &[f64],
-    pyears: &mut [f64],
-    pn: &mut [f64],
-    pcount: &mut [f64],
-    pexpect: &mut [f64],
-    offtable: &mut f64,
+    output: &mut PyearsOutput<'_>,
 ) {
+    let PyearsExpectedParams { dim: edim, fac: efac, dims: edims, cut: ecut, rates: expect, data: edata } = expected;
+    let PyearsObservedParams { dim: odim, fac: ofac, dims: odims, cut: ocut, data: odata } = observed;
+    let PyearsOutput { pyears, pn, pcount, pexpect, offtable } = output;
     let (start, stop, event) = if ny == 3 || (ny == 2 && doevent == 0) {
         let start = &y[0..n];
         let stop = &y[n..2 * n];
@@ -88,7 +104,7 @@ pub fn pyears3b(
         }
     }
     eps *= 1e-8;
-    *offtable = 0.0;
+    **offtable = 0.0;
     for i in 0..n {
         let mut data = vec![0.0; odim];
         let mut data2 = vec![0.0; edim];
@@ -162,7 +178,6 @@ pub fn pyears3b(
         }
     }
 }
-#[allow(clippy::too_many_arguments)]
 fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {
     let mut index = 0;
     let mut stride = 1;
@@ -278,30 +293,29 @@ pub fn perform_pyears_calculation(
     let mut pcount = vec![0.0; total_observed];
     let mut pexpect = vec![0.0; total_observed];
     let mut offtable = 0.0;
-    pyears3b(
-        n,
-        ny,
-        doevent,
-        &time_data,
-        &weights,
-        expected_dim,
-        &expected_factors,
-        &expected_dims,
-        &expected_cuts,
-        &expected_rates,
-        &expected_data,
-        observed_dim,
-        &observed_factors,
-        &observed_dims,
-        &observed_cuts,
-        method,
-        &observed_data,
-        &mut pyears,
-        &mut pn,
-        &mut pcount,
-        &mut pexpect,
-        &mut offtable,
-    );
+    let expected = PyearsExpectedParams {
+        dim: expected_dim,
+        fac: &expected_factors,
+        dims: &expected_dims,
+        cut: &expected_cuts,
+        rates: &expected_rates,
+        data: &expected_data,
+    };
+    let observed = PyearsObservedParams {
+        dim: observed_dim,
+        fac: &observed_factors,
+        dims: &observed_dims,
+        cut: &observed_cuts,
+        data: &observed_data,
+    };
+    let mut output = PyearsOutput {
+        pyears: &mut pyears,
+        pn: &mut pn,
+        pcount: &mut pcount,
+        pexpect: &mut pexpect,
+        offtable: &mut offtable,
+    };
+    pyears3b(n, ny, doevent, &time_data, &weights, expected, observed, method, &mut output);
     Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("pyears", pyears)?;

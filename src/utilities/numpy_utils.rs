@@ -93,18 +93,18 @@ pub fn extract_optional_vec_i32(obj: Option<&Bound<'_, PyAny>>) -> PyResult<Opti
 }
 
 #[allow(dead_code)]
-pub fn array_f64_to_vec(arr: PyReadonlyArray1<'_, f64>) -> Vec<f64> {
-    arr.as_slice().unwrap().to_vec()
+pub fn array_f64_to_vec(arr: PyReadonlyArray1<'_, f64>) -> PyResult<Vec<f64>> {
+    Ok(arr.as_slice()?.to_vec())
 }
 
 #[allow(dead_code)]
-pub fn array_i32_to_vec(arr: PyReadonlyArray1<'_, i32>) -> Vec<i32> {
-    arr.as_slice().unwrap().to_vec()
+pub fn array_i32_to_vec(arr: PyReadonlyArray1<'_, i32>) -> PyResult<Vec<i32>> {
+    Ok(arr.as_slice()?.to_vec())
 }
 
 #[allow(dead_code)]
-pub fn array_i64_to_vec(arr: PyReadonlyArray1<'_, i64>) -> Vec<i64> {
-    arr.as_slice().unwrap().to_vec()
+pub fn array_i64_to_vec(arr: PyReadonlyArray1<'_, i64>) -> PyResult<Vec<i64>> {
+    Ok(arr.as_slice()?.to_vec())
 }
 
 #[allow(dead_code)]

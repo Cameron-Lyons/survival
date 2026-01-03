@@ -63,25 +63,49 @@ impl SurvFitAJComputed {
         }
     }
 }
-#[allow(clippy::too_many_arguments)]
+
+pub struct SurvFitAJData<'a> {
+    pub y: &'a [f64],
+    pub sort1: &'a [usize],
+    pub sort2: &'a [usize],
+    pub utime: &'a [f64],
+    pub cstate: &'a [usize],
+    pub wt: &'a [f64],
+    pub grp: &'a [usize],
+    pub position: &'a [usize],
+}
+
+pub struct SurvFitAJParams<'a> {
+    pub ngrp: usize,
+    pub p0: &'a [f64],
+    pub i0: &'a [f64],
+    pub sefit: i32,
+    pub entry: bool,
+    pub hindx: &'a Array2<usize>,
+    pub trmat: &'a Array2<usize>,
+    pub t0: f64,
+}
+
 fn compute_survfitaj(
-    y: &[f64],
-    sort1: &[usize],
-    sort2: &[usize],
-    utime: &[f64],
-    cstate: &[usize],
-    wt: &[f64],
-    grp: &[usize],
-    ngrp: usize,
-    p0: &[f64],
-    i0: &[f64],
-    sefit: i32,
-    entry: bool,
-    position: &[usize],
-    hindx: &Array2<usize>,
-    trmat: &Array2<usize>,
-    t0: f64,
+    data: &SurvFitAJData<'_>,
+    params: &SurvFitAJParams<'_>,
 ) -> Result<SurvFitAJComputed, Box<dyn Error>> {
+    let y = data.y;
+    let sort1 = data.sort1;
+    let sort2 = data.sort2;
+    let utime = data.utime;
+    let cstate = data.cstate;
+    let wt = data.wt;
+    let grp = data.grp;
+    let position = data.position;
+    let ngrp = params.ngrp;
+    let p0 = params.p0;
+    let i0 = params.i0;
+    let sefit = params.sefit;
+    let entry = params.entry;
+    let hindx = params.hindx;
+    let trmat = params.trmat;
+    let t0 = params.t0;
     let ntime = utime.len();
     let _n = y.len() / 3;
     let nused = sort1.len();
@@ -367,24 +391,27 @@ pub fn survfitaj(
         trmat.into_iter().flatten().collect(),
     )
     .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid trmat array: {}", e)))?;
-    let result = compute_survfitaj(
-        &y,
-        &sort1,
-        &sort2,
-        &utime,
-        &cstate,
-        &wt,
-        &grp,
+    let data = SurvFitAJData {
+        y: &y,
+        sort1: &sort1,
+        sort2: &sort2,
+        utime: &utime,
+        cstate: &cstate,
+        wt: &wt,
+        grp: &grp,
+        position: &position,
+    };
+    let fit_params = SurvFitAJParams {
         ngrp,
-        &p0,
-        &i0,
+        p0: &p0,
+        i0: &i0,
         sefit,
         entry,
-        &position,
-        &hindx_array,
-        &trmat_array,
+        hindx: &hindx_array,
+        trmat: &trmat_array,
         t0,
-    )
-    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("survfitaj failed: {}", e)))?;
+    };
+    let result = compute_survfitaj(&data, &fit_params)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("survfitaj failed: {}", e)))?;
     Ok(result.into_python_result())
 }
