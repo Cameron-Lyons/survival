@@ -50,7 +50,7 @@ Before running tests, you must **build and install the Python module** - You hav
    ```
    Then install the wheel:
    ```bash
-   pip install target/wheels/survival_rs-*.whl --force-reinstall
+   pip install target/wheels/survival-*.whl --force-reinstall
    ```
    Or the tests will automatically extract and use the wheel if pip is not available.
 
