@@ -58,12 +58,12 @@ jobs:
 
       - name: Install wheel (Unix)
         if: matrix.os != 'windows-latest'
-        run: pip install target/wheels/survival_rs-*.whl
+        run: pip install target/wheels/survival-*.whl
 
       - name: Install wheel (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          $wheel = Get-ChildItem -Path target/wheels -Filter "survival_rs-*.whl" | Select-Object -First 1
+          $wheel = Get-ChildItem -Path target/wheels -Filter "survival-*.whl" | Select-Object -First 1
           pip install $wheel.FullName
 
       - name: Run Python tests
@@ -111,7 +111,7 @@ jobs:
       - name: Build and install
         run: |
           maturin build --release --interpreter python
-          pip install target/wheels/survival_rs-*.whl
+          pip install target/wheels/survival-*.whl
 
       - name: Run Rust tests
         run: cargo test --release
