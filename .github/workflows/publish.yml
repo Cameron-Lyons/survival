@@ -142,7 +142,7 @@ jobs:
     needs: [linux-x86, linux-arm, macos, windows, sdist]
     environment:
       name: testpypi
-      url: https://test.pypi.org/project/survival-rs
+      url: https://test.pypi.org/project/survival
     permissions:
       id-token: write
     steps:
@@ -163,7 +163,7 @@ jobs:
     needs: [linux-x86, linux-arm, macos, windows, sdist]
     environment:
       name: pypi
-      url: https://pypi.org/project/survival-rs
+      url: https://pypi.org/project/survival
     steps:
       - uses: actions/checkout@v6
         with:
@@ -178,7 +178,7 @@ jobs:
       - name: Check if version exists on PyPI
         id: check
         run: |
-          if curl -s "https://pypi.org/pypi/survival-rs/${{ steps.version.outputs.version }}/json" | grep -q '"version"'; then
+          if curl -s "https://pypi.org/pypi/survival/${{ steps.version.outputs.version }}/json" | grep -q '"version"'; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "Version ${{ steps.version.outputs.version }} already exists on PyPI, skipping publish"
           else

@@ -1,7 +1,7 @@
-# survival-rs
+# survival
 
 [![Crates.io](https://img.shields.io/crates/v/survival.svg)](https://crates.io/crates/survival)
-[![PyPI version](https://img.shields.io/pypi/v/survival-rs.svg)](https://pypi.org/project/survival-rs/)
+[![PyPI version](https://img.shields.io/pypi/v/survival.svg)](https://pypi.org/project/survival/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A high-performance survival analysis library written in Rust, with a Python API powered by [PyO3](https://github.com/PyO3/pyo3) and [maturin](https://github.com/PyO3/maturin).
@@ -35,7 +35,7 @@ A high-performance survival analysis library written in Rust, with a Python API 
 ### From PyPI (Recommended)
 
 ```sh
-pip install survival-rs
+pip install survival
 ```
 
 ### From Source
@@ -60,7 +60,7 @@ maturin build --release
 
 Install the wheel:
 ```sh
-pip install target/wheels/survival_rs-*.whl
+pip install target/wheels/survival-*.whl
 ```
 
 For development:
