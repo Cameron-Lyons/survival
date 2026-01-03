@@ -3,29 +3,72 @@ use itertools::Itertools;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
-#[allow(clippy::too_many_arguments)]
+
+pub struct AgexactData {
+    pub start: Vec<f64>,
+    pub stop: Vec<f64>,
+    pub event: Vec<i32>,
+    pub covar: Vec<f64>,
+    pub offset: Vec<f64>,
+    pub strata: Vec<i32>,
+    pub nocenter: Vec<i32>,
+}
+
+pub struct AgexactState {
+    pub means: Vec<f64>,
+    pub beta: Vec<f64>,
+    pub u: Vec<f64>,
+    pub imat: Vec<f64>,
+    pub loglik: Vec<f64>,
+    pub work: Vec<f64>,
+    pub work2: Vec<i32>,
+}
+
+pub struct AgexactParams {
+    pub maxiter: i32,
+    pub nused: i32,
+    pub nvar: i32,
+    pub eps: f64,
+    pub tol_chol: f64,
+}
+
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn agexact(
-    mut maxiter: i32,
+    maxiter: i32,
     nused: i32,
     nvar: i32,
     start: Vec<f64>,
     stop: Vec<f64>,
     event: Vec<i32>,
-    mut covar: Vec<f64>,
+    covar: Vec<f64>,
     offset: Vec<f64>,
     strata: Vec<i32>,
-    mut means: Vec<f64>,
-    mut beta: Vec<f64>,
-    mut u: Vec<f64>,
-    mut imat: Vec<f64>,
-    mut loglik: Vec<f64>,
-    mut work: Vec<f64>,
-    mut work2: Vec<i32>,
+    means: Vec<f64>,
+    beta: Vec<f64>,
+    u: Vec<f64>,
+    imat: Vec<f64>,
+    loglik: Vec<f64>,
+    work: Vec<f64>,
+    work2: Vec<i32>,
     eps: f64,
     tol_chol: f64,
     nocenter: Vec<i32>,
 ) -> PyResult<Py<PyDict>> {
+    let data = AgexactData { start, stop, event, covar, offset, strata, nocenter };
+    let state = AgexactState { means, beta, u, imat, loglik, work, work2 };
+    let params = AgexactParams { maxiter, nused, nvar, eps, tol_chol };
+    agexact_impl(data, state, params)
+}
+
+fn agexact_impl(
+    data: AgexactData,
+    state: AgexactState,
+    params: AgexactParams,
+) -> PyResult<Py<PyDict>> {
+    let AgexactData { start, stop, event, mut covar, offset, strata, nocenter } = data;
+    let AgexactState { mut means, mut beta, mut u, mut imat, mut loglik, mut work, mut work2 } = state;
+    let AgexactParams { mut maxiter, nused, nvar, eps, tol_chol } = params;
     let n = nused as usize;
     let nvar_usize = nvar as usize;
     let p = nvar_usize;

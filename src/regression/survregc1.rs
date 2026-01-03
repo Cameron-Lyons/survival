@@ -44,6 +44,24 @@ pub struct SurvivalLikelihood {
     pub fdiag: Array1<f64>,
     pub jdiag: Array1<f64>,
 }
+
+#[derive(Clone, Copy)]
+pub struct SurvregDimensions {
+    #[allow(dead_code)]
+    pub n: usize,
+    pub nvar: usize,
+    pub nstrat: usize,
+    pub nf: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct Derivatives {
+    pub dg: f64,
+    pub ddg: f64,
+    pub dsig: f64,
+    pub ddsig: f64,
+    pub dsg: f64,
+}
 #[allow(clippy::too_many_arguments)]
 pub fn survregc1(
     n: usize,
@@ -72,7 +90,13 @@ pub fn survregc1(
         );
     }
 
-    let time2_slice = time2.map(|t| t.as_slice().unwrap());
+    let time2_slice = match time2 {
+        Some(t) => Some(
+            t.as_slice()
+                .ok_or_else(|| "time2 array must be contiguous in memory".to_string())?,
+        ),
+        None => None,
+    };
 
     type PersonResult = (usize, usize, usize, f64, f64, f64, SurvregDerivatives);
     let partial_results: Result<Vec<PersonResult>, Box<dyn std::error::Error + Send + Sync>> = (0
@@ -139,27 +163,12 @@ pub fn survregc1(
         jdiag: Array1::zeros(nf),
     };
 
-    for (person, fgrp, strata_idx, sigma, sz, w, (g, dg, ddg, dsig, ddsig, dsg)) in partial_results
+    let dims = SurvregDimensions { n, nvar, nstrat, nf };
+    for (person, fgrp, strata_idx, _sigma, _sz, w, (g, dg, ddg, dsig, ddsig, dsg)) in partial_results
     {
         result.loglik += g * w;
-        update_derivatives(
-            &mut result,
-            person,
-            fgrp,
-            nf,
-            nvar,
-            nstrat,
-            strata_idx,
-            covar,
-            w,
-            dg,
-            ddg,
-            dsig,
-            ddsig,
-            dsg,
-            sigma,
-            sz,
-        );
+        let derivs = Derivatives { dg, ddg, dsig, ddsig, dsg };
+        update_derivatives(&mut result, person, fgrp, strata_idx, dims, covar, w, derivs);
     }
 
     Ok(result)
@@ -185,6 +194,7 @@ fn survregc1_sequential(
 ) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
     let nvar2 = nvar + nstrat;
     let nvar3 = nvar2 + nf;
+    let dims = SurvregDimensions { n, nvar, nstrat, nf };
     let mut result = SurvivalLikelihood {
         loglik: 0.0,
         u: Array1::zeros(nvar3),
@@ -234,24 +244,8 @@ fn survregc1_sequential(
             continue;
         }
         let w = wt[person];
-        update_derivatives(
-            &mut result,
-            person,
-            fgrp,
-            nf,
-            nvar,
-            nstrat,
-            strata,
-            covar,
-            w,
-            dg,
-            ddg,
-            dsig,
-            ddsig,
-            dsg,
-            sigma,
-            sz,
-        );
+        let derivs = Derivatives { dg, ddg, dsig, ddsig, dsg };
+        update_derivatives(&mut result, person, fgrp, strata, dims, covar, w, derivs);
     }
     Ok(result)
 }
@@ -431,20 +425,15 @@ fn update_derivatives(
     res: &mut SurvivalLikelihood,
     person: usize,
     fgrp: usize,
-    nf: usize,
-    nvar: usize,
-    nstrat: usize,
     strata: usize,
+    dims: SurvregDimensions,
     covar: &ArrayView2<f64>,
     w: f64,
-    dg: f64,
-    ddg: f64,
-    dsig: f64,
-    ddsig: f64,
-    dsg: f64,
-    _sigma: f64,
-    _sz: f64,
+    derivs: Derivatives,
 ) {
+    let Derivatives { dg, ddg, dsig, ddsig, dsg } = derivs;
+    let SurvregDimensions { nvar, nstrat, nf, .. } = dims;
+
     if nf > 0 {
         res.u[fgrp] += dg * w;
         res.fdiag[fgrp] -= ddg * w;

@@ -190,8 +190,8 @@ impl PSpline {
             .optimize_fit(penalized_basis)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         self.fitted = true;
-        self.coefficients = Some(coefficients);
-        Ok(self.coefficients.as_ref().unwrap().clone())
+        self.coefficients = Some(coefficients.clone());
+        Ok(coefficients)
     }
     pub fn predict(&self, new_x: Vec<f64>) -> PyResult<Vec<f64>> {
         let coefficients = self

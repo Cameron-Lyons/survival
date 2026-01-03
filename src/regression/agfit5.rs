@@ -4,6 +4,7 @@ use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+
 #[derive(Debug)]
 pub struct CoxResult {
     pub coefficients: Vec<f64>,
@@ -17,6 +18,29 @@ pub struct CoxResult {
     pub converged: bool,
     pub variance_matrix: Vec<Vec<f64>>,
 }
+
+pub struct CoxModelData<'a> {
+    pub nused: usize,
+    pub nvar: usize,
+    pub nfrail: usize,
+    pub yy: &'a [f64],
+    pub covar: &'a [f64],
+    pub offset: &'a [f64],
+    pub weights: &'a [f64],
+    pub strata: &'a [i32],
+    pub sort: &'a [i32],
+    pub frail: &'a [i32],
+}
+
+pub struct CoxFitParams {
+    #[allow(dead_code)]
+    pub ptype: i32,
+    #[allow(dead_code)]
+    pub pdiag: i32,
+    pub max_iter: i32,
+    pub eps: f64,
+}
+
 struct CoxState {
     covar: Vec<Vec<f64>>,
     a: Vec<f64>,
@@ -29,21 +53,8 @@ struct CoxState {
     strata: Vec<i32>,
 }
 impl CoxState {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        nused: usize,
-        nvar: usize,
-        nfrail: usize,
-        yy: &[f64],
-        covar2: &[f64],
-        offset2: &[f64],
-        weights2: &[f64],
-        strata: &[i32],
-        _sort: &[i32],
-        _ptype: i32,
-        _pdiag: i32,
-        frail2: &[i32],
-    ) -> Self {
+    fn new(data: &CoxModelData<'_>, _params: &CoxFitParams) -> Self {
+        let CoxModelData { nused, nvar, nfrail, yy, covar: covar2, offset: offset2, weights: weights2, strata, sort: _sort, frail: frail2 } = *data;
         let mut covar = vec![vec![0.0; nused]; nvar];
         let mut k = 0;
         for covar_row in covar.iter_mut().take(nvar) {
@@ -71,7 +82,7 @@ impl CoxState {
         }
         state
     }
-    #[allow(clippy::too_many_arguments)]
+
     fn update(&mut self, beta: &mut [f64], u: &mut [f64], imat: &mut [f64], loglik: &mut f64) {
         let nvar = beta.len();
         let nfrail = self.frail.len();
@@ -214,37 +225,22 @@ pub fn perform_cox_regression_frailty(
     };
     perform_cox_regression(time, event, covariates, config)
 }
-#[allow(clippy::too_many_arguments)]
 pub fn agfit5(
-    nused: usize,
-    nvar: usize,
-    nfrail: usize,
-    yy: &[f64],
-    covar: &[f64],
-    offset: &[f64],
-    weights: &[f64],
-    strata: &[i32],
-    sort: &[i32],
-    ptype: i32,
-    pdiag: i32,
-    frail: &[i32],
-    max_iter: i32,
-    eps: f64,
+    data: &CoxModelData<'_>,
+    params: &CoxFitParams,
 ) -> Result<CoxResult, Box<dyn std::error::Error>> {
-    let mut state = CoxState::new(
-        nused, nvar, nfrail, yy, covar, offset, weights, strata, sort, ptype, pdiag, frail,
-    );
-    let nvar2 = nvar + nfrail;
+    let mut state = CoxState::new(data, params);
+    let nvar2 = data.nvar + data.nfrail;
     let mut beta = vec![0.0; nvar2];
     let mut u = vec![0.0; nvar2];
     let mut imat = vec![0.0; nvar2 * nvar2];
     let mut loglik = 0.0;
     let mut iter = 0;
     let mut converged = false;
-    while iter < max_iter {
+    while iter < params.max_iter {
         let old_loglik = loglik;
         state.update(&mut beta, &mut u, &mut imat, &mut loglik);
-        if (loglik - old_loglik).abs() < eps {
+        if (loglik - old_loglik).abs() < params.eps {
             converged = true;
             break;
         }
@@ -370,10 +366,25 @@ fn perform_cox_regression(
     }
     let sort: Vec<i32> = (1..=nused as i32).collect();
     let nfrail = if frail.iter().any(|&x| x != 0) { 1 } else { 0 };
-    match agfit5(
-        nused, nvar, nfrail, &yy, &covar, &offset, &weights, &strata, &sort, 0, 0, &frail,
-        max_iter, eps,
-    ) {
+    let model_data = CoxModelData {
+        nused,
+        nvar,
+        nfrail,
+        yy: &yy,
+        covar: &covar,
+        offset: &offset,
+        weights: &weights,
+        strata: &strata,
+        sort: &sort,
+        frail: &frail,
+    };
+    let fit_params = CoxFitParams {
+        ptype: 0,
+        pdiag: 0,
+        max_iter,
+        eps,
+    };
+    match agfit5(&model_data, &fit_params) {
         Ok(result) => Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("coefficients", result.coefficients)?;

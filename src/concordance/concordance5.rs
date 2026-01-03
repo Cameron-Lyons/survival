@@ -1,40 +1,8 @@
 use super::common::{build_concordance_result, validate_extended_concordance_inputs};
 use crate::constants::PARALLEL_THRESHOLD_SMALL;
+use crate::utilities::fenwick::FenwickTree;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-struct FenwickTree {
-    tree: Vec<f64>,
-}
-impl FenwickTree {
-    #[inline]
-    fn new(size: usize) -> Self {
-        FenwickTree {
-            tree: vec![0.0; size + 1],
-        }
-    }
-    #[inline]
-    fn update(&mut self, index: usize, value: f64) {
-        let mut idx = index + 1;
-        while idx < self.tree.len() {
-            self.tree[idx] += value;
-            idx += idx & (!idx + 1);
-        }
-    }
-    #[inline]
-    fn prefix_sum(&self, index: usize) -> f64 {
-        let mut sum = 0.0;
-        let mut idx = index + 1;
-        while idx > 0 {
-            sum += self.tree[idx];
-            idx -= idx & (!idx + 1);
-        }
-        sum
-    }
-    #[inline]
-    fn total(&self) -> f64 {
-        self.prefix_sum(self.tree.len() - 2)
-    }
-}
 #[inline]
 fn addin(nwt: &mut [f64], fenwick: &mut FenwickTree, x: usize, weight: f64) {
     nwt[x] += weight;

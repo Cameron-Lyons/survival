@@ -3,27 +3,8 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[inline]
-fn walkup(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
-    let mut wsum = [0.0; 3];
-    if index >= ntree {
-        return wsum;
-    }
-    wsum[2] = nwt[index];
-    let mut child = 2 * index + 1;
-    if child < ntree {
-        wsum[0] += twt[child];
-    }
-    child += 1;
-    if child < ntree {
-        wsum[0] += twt[child];
-    }
-    let mut current = index;
-    while current > 0 {
-        let parent = (current - 1) / 2;
-        wsum[1] += twt[parent] - twt[current];
-        current = parent;
-    }
-    wsum
+fn node_weight(nwt: &[f64], index: usize, ntree: usize) -> f64 {
+    if index >= ntree { 0.0 } else { nwt[index] }
 }
 
 pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64> {
@@ -69,8 +50,7 @@ pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64>
                         }
 
                         let index = indx[j_idx] as usize;
-                        let wsum = walkup(&twt[ntree..], &twt, index, ntree);
-                        local_count2 += wt[j_idx] * wsum[2];
+                        local_count2 += wt[j_idx] * node_weight(&twt[ntree..], index, ntree);
 
                         let mut child = 2 * index + 1;
                         if child < ntree {
@@ -119,8 +99,7 @@ pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64>
                         count[3] += wt[j_idx] * wt[k_idx];
                     }
 
-                    let wsum = walkup(&twt[ntree..], &twt, index, ntree);
-                    count[2] += wt[j_idx] * wsum[2];
+                    count[2] += wt[j_idx] * node_weight(&twt[ntree..], index, ntree);
 
                     let mut child = 2 * index + 1;
                     if child < ntree {
