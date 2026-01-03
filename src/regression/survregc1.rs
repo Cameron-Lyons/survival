@@ -163,12 +163,33 @@ pub fn survregc1(
         jdiag: Array1::zeros(nf),
     };
 
-    let dims = SurvregDimensions { n, nvar, nstrat, nf };
-    for (person, fgrp, strata_idx, _sigma, _sz, w, (g, dg, ddg, dsig, ddsig, dsg)) in partial_results
+    let dims = SurvregDimensions {
+        n,
+        nvar,
+        nstrat,
+        nf,
+    };
+    for (person, fgrp, strata_idx, _sigma, _sz, w, (g, dg, ddg, dsig, ddsig, dsg)) in
+        partial_results
     {
         result.loglik += g * w;
-        let derivs = Derivatives { dg, ddg, dsig, ddsig, dsg };
-        update_derivatives(&mut result, person, fgrp, strata_idx, dims, covar, w, derivs);
+        let derivs = Derivatives {
+            dg,
+            ddg,
+            dsig,
+            ddsig,
+            dsg,
+        };
+        update_derivatives(
+            &mut result,
+            person,
+            fgrp,
+            strata_idx,
+            dims,
+            covar,
+            w,
+            derivs,
+        );
     }
 
     Ok(result)
@@ -194,7 +215,12 @@ fn survregc1_sequential(
 ) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
     let nvar2 = nvar + nstrat;
     let nvar3 = nvar2 + nf;
-    let dims = SurvregDimensions { n, nvar, nstrat, nf };
+    let dims = SurvregDimensions {
+        n,
+        nvar,
+        nstrat,
+        nf,
+    };
     let mut result = SurvivalLikelihood {
         loglik: 0.0,
         u: Array1::zeros(nvar3),
@@ -244,7 +270,13 @@ fn survregc1_sequential(
             continue;
         }
         let w = wt[person];
-        let derivs = Derivatives { dg, ddg, dsig, ddsig, dsg };
+        let derivs = Derivatives {
+            dg,
+            ddg,
+            dsig,
+            ddsig,
+            dsg,
+        };
         update_derivatives(&mut result, person, fgrp, strata, dims, covar, w, derivs);
     }
     Ok(result)
@@ -431,8 +463,16 @@ fn update_derivatives(
     w: f64,
     derivs: Derivatives,
 ) {
-    let Derivatives { dg, ddg, dsig, ddsig, dsg } = derivs;
-    let SurvregDimensions { nvar, nstrat, nf, .. } = dims;
+    let Derivatives {
+        dg,
+        ddg,
+        dsig,
+        ddsig,
+        dsg,
+    } = derivs;
+    let SurvregDimensions {
+        nvar, nstrat, nf, ..
+    } = dims;
 
     if nf > 0 {
         res.u[fgrp] += dg * w;

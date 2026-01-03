@@ -55,9 +55,31 @@ pub fn agexact(
     tol_chol: f64,
     nocenter: Vec<i32>,
 ) -> PyResult<Py<PyDict>> {
-    let data = AgexactData { start, stop, event, covar, offset, strata, nocenter };
-    let state = AgexactState { means, beta, u, imat, loglik, work, work2 };
-    let params = AgexactParams { maxiter, nused, nvar, eps, tol_chol };
+    let data = AgexactData {
+        start,
+        stop,
+        event,
+        covar,
+        offset,
+        strata,
+        nocenter,
+    };
+    let state = AgexactState {
+        means,
+        beta,
+        u,
+        imat,
+        loglik,
+        work,
+        work2,
+    };
+    let params = AgexactParams {
+        maxiter,
+        nused,
+        nvar,
+        eps,
+        tol_chol,
+    };
     agexact_impl(data, state, params)
 }
 
@@ -66,9 +88,31 @@ fn agexact_impl(
     state: AgexactState,
     params: AgexactParams,
 ) -> PyResult<Py<PyDict>> {
-    let AgexactData { start, stop, event, mut covar, offset, strata, nocenter } = data;
-    let AgexactState { mut means, mut beta, mut u, mut imat, mut loglik, mut work, mut work2 } = state;
-    let AgexactParams { mut maxiter, nused, nvar, eps, tol_chol } = params;
+    let AgexactData {
+        start,
+        stop,
+        event,
+        mut covar,
+        offset,
+        strata,
+        nocenter,
+    } = data;
+    let AgexactState {
+        mut means,
+        mut beta,
+        mut u,
+        mut imat,
+        mut loglik,
+        mut work,
+        mut work2,
+    } = state;
+    let AgexactParams {
+        mut maxiter,
+        nused,
+        nvar,
+        eps,
+        tol_chol,
+    } = params;
     let n = nused as usize;
     let nvar_usize = nvar as usize;
     let p = nvar_usize;

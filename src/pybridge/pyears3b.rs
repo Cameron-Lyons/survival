@@ -40,9 +40,28 @@ pub fn pyears3b(
     method: i32,
     output: &mut PyearsOutput<'_>,
 ) {
-    let PyearsExpectedParams { dim: edim, fac: efac, dims: edims, cut: ecut, rates: expect, data: edata } = expected;
-    let PyearsObservedParams { dim: odim, fac: ofac, dims: odims, cut: ocut, data: odata } = observed;
-    let PyearsOutput { pyears, pn, pcount, pexpect, offtable } = output;
+    let PyearsExpectedParams {
+        dim: edim,
+        fac: efac,
+        dims: edims,
+        cut: ecut,
+        rates: expect,
+        data: edata,
+    } = expected;
+    let PyearsObservedParams {
+        dim: odim,
+        fac: ofac,
+        dims: odims,
+        cut: ocut,
+        data: odata,
+    } = observed;
+    let PyearsOutput {
+        pyears,
+        pn,
+        pcount,
+        pexpect,
+        offtable,
+    } = output;
     let (start, stop, event) = if ny == 3 || (ny == 2 && doevent == 0) {
         let start = &y[0..n];
         let stop = &y[n..2 * n];
@@ -315,7 +334,17 @@ pub fn perform_pyears_calculation(
         pexpect: &mut pexpect,
         offtable: &mut offtable,
     };
-    pyears3b(n, ny, doevent, &time_data, &weights, expected, observed, method, &mut output);
+    pyears3b(
+        n,
+        ny,
+        doevent,
+        &time_data,
+        &weights,
+        expected,
+        observed,
+        method,
+        &mut output,
+    );
     Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("pyears", pyears)?;
