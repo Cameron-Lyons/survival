@@ -146,8 +146,6 @@ enum AaregError {
     Weights(String),
     Calculation(String),
     Input(String),
-    #[allow(dead_code)]
-    Internal(String),
     Generic(String),
 }
 impl fmt::Display for AaregError {
@@ -158,7 +156,6 @@ impl fmt::Display for AaregError {
             AaregError::Weights(msg) => write!(f, "Weights Error: {}", msg),
             AaregError::Calculation(msg) => write!(f, "Calculation Error: {}", msg),
             AaregError::Input(msg) => write!(f, "Input Error: {}", msg),
-            AaregError::Internal(msg) => write!(f, "Internal Error: {}", msg),
             AaregError::Generic(msg) => write!(f, "Generic Error: {}", msg),
         }
     }

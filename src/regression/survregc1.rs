@@ -47,8 +47,6 @@ pub struct SurvivalLikelihood {
 
 #[derive(Clone, Copy)]
 pub struct SurvregDimensions {
-    #[allow(dead_code)]
-    pub n: usize,
     pub nvar: usize,
     pub nstrat: usize,
     pub nf: usize,
@@ -164,7 +162,6 @@ pub fn survregc1(
     };
 
     let dims = SurvregDimensions {
-        n,
         nvar,
         nstrat,
         nf,
@@ -216,7 +213,6 @@ fn survregc1_sequential(
     let nvar2 = nvar + nstrat;
     let nvar3 = nvar2 + nf;
     let dims = SurvregDimensions {
-        n,
         nvar,
         nstrat,
         nf,
