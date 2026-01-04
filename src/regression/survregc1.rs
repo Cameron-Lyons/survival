@@ -161,11 +161,7 @@ pub fn survregc1(
         jdiag: Array1::zeros(nf),
     };
 
-    let dims = SurvregDimensions {
-        nvar,
-        nstrat,
-        nf,
-    };
+    let dims = SurvregDimensions { nvar, nstrat, nf };
     for (person, fgrp, strata_idx, _sigma, _sz, w, (g, dg, ddg, dsig, ddsig, dsg)) in
         partial_results
     {
@@ -212,11 +208,7 @@ fn survregc1_sequential(
 ) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
     let nvar2 = nvar + nstrat;
     let nvar3 = nvar2 + nf;
-    let dims = SurvregDimensions {
-        nvar,
-        nstrat,
-        nf,
-    };
+    let dims = SurvregDimensions { nvar, nstrat, nf };
     let mut result = SurvivalLikelihood {
         loglik: 0.0,
         u: Array1::zeros(nvar3),

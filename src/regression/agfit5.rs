@@ -385,10 +385,7 @@ fn perform_cox_regression(
         sort: &sort,
         frail: &frail,
     };
-    let fit_params = CoxFitParams {
-        max_iter,
-        eps,
-    };
+    let fit_params = CoxFitParams { max_iter, eps };
     match agfit5(&model_data, &fit_params) {
         Ok(result) => Python::attach(|py| {
             let dict = PyDict::new(py);
