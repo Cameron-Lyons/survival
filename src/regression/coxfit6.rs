@@ -29,7 +29,6 @@ impl Default for CoxFitConfig {
     }
 }
 
-
 #[derive(Debug)]
 pub enum CoxError {
     CholeskyDecomposition,
