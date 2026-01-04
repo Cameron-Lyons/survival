@@ -14,7 +14,6 @@ mod utilities;
 mod validation;
 
 pub use concordance::basic::concordance as compute_concordance;
-use concordance::basic::concordance as concordance_fn;
 pub use concordance::concordance1::perform_concordance1_calculation;
 pub use concordance::concordance3::perform_concordance3_calculation;
 pub use concordance::concordance5::perform_concordance_calculation;
@@ -25,7 +24,6 @@ pub use core::pspline::PSpline;
 use pybridge::cox_py_callback::cox_callback;
 use pybridge::pyears3b::perform_pyears_calculation;
 use pybridge::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
-use regression::aareg::aareg as aareg_function;
 pub use regression::aareg::{AaregOptions, aareg};
 pub use regression::agfit5::perform_cox_regression_frailty;
 pub use regression::blogit::LinkFunctionParams;
@@ -93,7 +91,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perform_agscore3_calculation, &m)?)?;
     m.add_function(wrap_pyfunction!(perform_pystep_calculation, &m)?)?;
     m.add_function(wrap_pyfunction!(perform_pystep_simple_calculation, &m)?)?;
-    m.add_function(wrap_pyfunction!(aareg_function, &m)?)?;
+    m.add_function(wrap_pyfunction!(aareg, &m)?)?;
     m.add_function(wrap_pyfunction!(collapse, &m)?)?;
     m.add_function(wrap_pyfunction!(cox_callback, &m)?)?;
     m.add_function(wrap_pyfunction!(coxcount1, &m)?)?;
@@ -102,7 +100,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cipoisson, &m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_exact, &m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_anscombe, &m)?)?;
-    m.add_function(wrap_pyfunction!(concordance_fn, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_concordance, &m)?)?;
     m.add_function(wrap_pyfunction!(agexact, &m)?)?;
     m.add_function(wrap_pyfunction!(agsurv4, &m)?)?;
     m.add_function(wrap_pyfunction!(agsurv5, &m)?)?;

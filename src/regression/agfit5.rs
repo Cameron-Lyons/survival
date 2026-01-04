@@ -33,10 +33,6 @@ pub struct CoxModelData<'a> {
 }
 
 pub struct CoxFitParams {
-    #[allow(dead_code)]
-    pub ptype: i32,
-    #[allow(dead_code)]
-    pub pdiag: i32,
     pub max_iter: i32,
     pub eps: f64,
 }
@@ -390,8 +386,6 @@ fn perform_cox_regression(
         frail: &frail,
     };
     let fit_params = CoxFitParams {
-        ptype: 0,
-        pdiag: 0,
         max_iter,
         eps,
     };

@@ -29,35 +29,6 @@ impl Default for CoxFitConfig {
     }
 }
 
-impl CoxFitConfig {
-    #[allow(dead_code)]
-    pub fn new(
-        method: Option<Method>,
-        max_iter: Option<usize>,
-        eps: Option<f64>,
-        toler: Option<f64>,
-    ) -> Self {
-        Self {
-            method: method.unwrap_or(Method::Breslow),
-            max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
-            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
-            toler: toler.unwrap_or(CHOLESKY_TOL),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn breslow() -> Self {
-        Self::default()
-    }
-
-    #[allow(dead_code)]
-    pub fn efron() -> Self {
-        Self {
-            method: Method::Efron,
-            ..Self::default()
-        }
-    }
-}
 
 #[derive(Debug)]
 pub enum CoxError {
