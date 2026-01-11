@@ -5,4 +5,5 @@ pub mod landmark;
 pub mod logrank;
 pub mod power;
 pub mod rmst;
+pub mod survobrien;
 pub mod tests;

@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 mod concordance;
 mod constants;
 mod core;
+mod datasets;
 mod matrix;
 mod pybridge;
 mod regression;
@@ -52,7 +53,10 @@ pub use surv_analysis::survfitkm::{
 };
 pub use utilities::agexact::agexact;
 pub use utilities::collapse::collapse;
+pub use utilities::surv2data::{Surv2DataResult, surv2data};
+pub use utilities::survcondense::{CondenseResult, survcondense};
 pub use utilities::survsplit::{SplitResult, survsplit};
+pub use utilities::timeline::{IntervalResult, TimelineResult, from_timeline, to_timeline};
 pub use utilities::tmerge::{tmerge, tmerge2, tmerge3};
 pub use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
 pub use validation::calibration::{
@@ -72,6 +76,7 @@ pub use validation::power::{
     AccrualResult, SampleSizeResult, expected_events, power_survival, sample_size_survival,
     sample_size_survival_freedman,
 };
+pub use validation::survobrien::{SurvObrienResult, survobrien};
 pub use validation::rmst::{
     CumulativeIncidenceResult, MedianSurvivalResult, NNTResult, RMSTComparisonResult, RMSTResult,
     cumulative_incidence, number_needed_to_treat, rmst, rmst_comparison, survival_quantile,
@@ -118,6 +123,11 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge2, &m)?)?;
     m.add_function(wrap_pyfunction!(tmerge3, &m)?)?;
     m.add_function(wrap_pyfunction!(survsplit, &m)?)?;
+    m.add_function(wrap_pyfunction!(survcondense, &m)?)?;
+    m.add_function(wrap_pyfunction!(surv2data, &m)?)?;
+    m.add_function(wrap_pyfunction!(to_timeline, &m)?)?;
+    m.add_function(wrap_pyfunction!(from_timeline, &m)?)?;
+    m.add_function(wrap_pyfunction!(survobrien, &m)?)?;
     m.add_function(wrap_pyfunction!(schoenfeld_residuals, &m)?)?;
     m.add_function(wrap_pyfunction!(cox_score_residuals, &m)?)?;
     m.add_function(wrap_pyfunction!(bootstrap_cox_ci, &m)?)?;
@@ -170,6 +180,11 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CchMethod>()?;
     m.add_class::<CohortData>()?;
     m.add_class::<SplitResult>()?;
+    m.add_class::<CondenseResult>()?;
+    m.add_class::<Surv2DataResult>()?;
+    m.add_class::<TimelineResult>()?;
+    m.add_class::<IntervalResult>()?;
+    m.add_class::<SurvObrienResult>()?;
     m.add_class::<ClogitDataSet>()?;
     m.add_class::<ConditionalLogisticRegression>()?;
     m.add_class::<BootstrapResult>()?;
@@ -196,5 +211,38 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HazardRatioResult>()?;
     m.add_class::<SurvivalAtTimeResult>()?;
     m.add_class::<LifeTableResult>()?;
+
+    // Dataset loaders
+    m.add_function(wrap_pyfunction!(datasets::load_lung, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_aml, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_veteran, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_ovarian, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_colon, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_pbc, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_cgd, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_bladder, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_heart, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_kidney, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_rats, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_stanford2, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_udca, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_myeloid, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_flchain, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_transplant, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_mgus, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_mgus2, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_diabetic, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_retinopathy, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_gbsg, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_rotterdam, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_logan, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_nwtco, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_solder, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_tobin, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_rats2, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_nafld, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_cgd0, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_pbcseq, &m)?)?;
+
     Ok(())
 }
