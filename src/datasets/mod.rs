@@ -50,36 +50,34 @@ enum ColType {
 
 /// Helper function to parse CSV and return as Python dict
 fn csv_to_dict(py: Python<'_>, csv_data: &str, schema: &[(&str, ColType)]) -> PyResult<Py<PyDict>> {
-    let (headers, rows) = parse_csv(csv_data)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    let (headers, rows) =
+        parse_csv(csv_data).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
 
     let dict = PyDict::new(py);
 
     for (col_name, col_type) in schema {
-        let idx = headers.iter().position(|h| h == *col_name)
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
-                format!("Column '{}' not found in CSV", col_name)
-            ))?;
+        let idx = headers.iter().position(|h| h == *col_name).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Column '{}' not found in CSV",
+                col_name
+            ))
+        })?;
 
         match col_type {
             ColType::Float => {
-                let values: Vec<Option<f64>> = rows.iter()
-                    .map(|row| parse_f64(&row[idx]))
-                    .collect();
+                let values: Vec<Option<f64>> =
+                    rows.iter().map(|row| parse_f64(&row[idx])).collect();
                 let list = PyList::new(py, values.iter().map(|v| v.map(|x| x)))?;
                 dict.set_item(*col_name, list)?;
             }
             ColType::Int => {
-                let values: Vec<Option<i32>> = rows.iter()
-                    .map(|row| parse_i32(&row[idx]))
-                    .collect();
+                let values: Vec<Option<i32>> =
+                    rows.iter().map(|row| parse_i32(&row[idx])).collect();
                 let list = PyList::new(py, values.iter().map(|v| v.map(|x| x)))?;
                 dict.set_item(*col_name, list)?;
             }
             ColType::Str => {
-                let values: Vec<&str> = rows.iter()
-                    .map(|row| row[idx].as_str())
-                    .collect();
+                let values: Vec<&str> = rows.iter().map(|row| row[idx].as_str()).collect();
                 let list = PyList::new(py, values)?;
                 dict.set_item(*col_name, list)?;
             }

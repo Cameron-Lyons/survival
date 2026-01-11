@@ -59,16 +59,15 @@ pub fn surv2data(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        match id[a].cmp(&id[b]) {
-            std::cmp::Ordering::Equal => {
-                time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal)
-            }
-            other => other,
-        }
+    indices.sort_by(|&a, &b| match id[a].cmp(&id[b]) {
+        std::cmp::Ordering::Equal => time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal),
+        other => other,
     });
 
-    let mut subject_event: std::collections::HashMap<i32, (f64, i32)> = std::collections::HashMap::new();
+    let mut subject_event: std::collections::HashMap<i32, (f64, i32)> =
+        std::collections::HashMap::new();
     if let (Some(etimes), Some(estatus)) = (&event_time, &event_status) {
         for i in 0..n {
             let subj_id = id[i];

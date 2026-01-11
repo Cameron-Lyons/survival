@@ -76,11 +76,11 @@ pub use validation::power::{
     AccrualResult, SampleSizeResult, expected_events, power_survival, sample_size_survival,
     sample_size_survival_freedman,
 };
-pub use validation::survobrien::{SurvObrienResult, survobrien};
 pub use validation::rmst::{
     CumulativeIncidenceResult, MedianSurvivalResult, NNTResult, RMSTComparisonResult, RMSTResult,
     cumulative_incidence, number_needed_to_treat, rmst, rmst_comparison, survival_quantile,
 };
+pub use validation::survobrien::{SurvObrienResult, survobrien};
 pub use validation::tests::{
     ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test,
 };

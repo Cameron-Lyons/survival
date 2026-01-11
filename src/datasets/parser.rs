@@ -10,7 +10,8 @@ pub fn parse_csv(data: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> 
     let mut lines = data.lines().peekable();
 
     let header_line = lines.next().ok_or("Empty CSV")?;
-    let headers: Vec<String> = header_line.split(',')
+    let headers: Vec<String> = header_line
+        .split(',')
         .map(|s| s.trim().trim_matches('"').to_string())
         .collect();
 
@@ -28,7 +29,9 @@ pub fn parse_csv(data: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> 
         if cols.len() != num_cols {
             return Err(format!(
                 "Column count mismatch: expected {}, got {} in line: {}",
-                num_cols, cols.len(), trimmed
+                num_cols,
+                cols.len(),
+                trimmed
             ));
         }
         rows.push(cols);
@@ -96,7 +99,9 @@ pub fn parse_i32(s: &str) -> Option<i32> {
     if s.is_empty() || s.eq_ignore_ascii_case("na") || s.eq_ignore_ascii_case("nan") {
         None
     } else {
-        s.parse().ok().or_else(|| s.parse::<f64>().ok().map(|f| f as i32))
+        s.parse()
+            .ok()
+            .or_else(|| s.parse::<f64>().ok().map(|f| f as i32))
     }
 }
 

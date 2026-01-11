@@ -141,11 +141,7 @@ pub fn to_timeline(
 /// # Returns
 /// IntervalResult with (time1, time2) intervals for each state change
 #[pyfunction]
-pub fn from_timeline(
-    id: Vec<i32>,
-    states: Vec<Vec<i32>>,
-    time_points: Vec<f64>,
-) -> IntervalResult {
+pub fn from_timeline(id: Vec<i32>, states: Vec<Vec<i32>>, time_points: Vec<f64>) -> IntervalResult {
     if id.is_empty() || states.is_empty() || time_points.is_empty() {
         return IntervalResult {
             id: Vec::new(),
