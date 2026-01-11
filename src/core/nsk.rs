@@ -146,8 +146,8 @@ impl NaturalSplineKnot {
 
         for i in 0..basis_result.n_rows {
             let mut pred = 0.0;
-            for j in 0..basis_result.n_cols {
-                pred += basis_result.basis[i * basis_result.n_cols + j] * coef[j];
+            for (j, &c) in coef.iter().enumerate().take(basis_result.n_cols) {
+                pred += basis_result.basis[i * basis_result.n_cols + j] * c;
             }
             predictions.push(pred);
         }

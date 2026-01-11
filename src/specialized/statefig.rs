@@ -66,10 +66,10 @@ pub fn statefig(
 
     let mut edges = Vec::new();
     for ((from, to), count) in &transitions {
-        if let (Some(&from_idx), Some(&to_idx)) = (state_idx.get(from), state_idx.get(to)) {
-            if *count > 0 {
-                edges.push((from_idx, to_idx, *count));
-            }
+        if let (Some(&from_idx), Some(&to_idx)) = (state_idx.get(from), state_idx.get(to))
+            && *count > 0
+        {
+            edges.push((from_idx, to_idx, *count));
         }
     }
 
@@ -102,7 +102,7 @@ fn compute_default_layout(n_states: usize, edges: &[(usize, usize, usize)]) -> V
     state_scores.sort_by(|a, b| b.1.cmp(&a.1));
 
     let n_cols = (n_states as f64).sqrt().ceil() as usize;
-    let n_rows = (n_states + n_cols - 1) / n_cols;
+    let n_rows = n_states.div_ceil(n_cols);
 
     let mut layout = Vec::new();
     let mut remaining = n_states;

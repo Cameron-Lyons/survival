@@ -156,17 +156,17 @@ pub fn survcheck(
                 }
             }
 
-            if let Some(ps) = prev_state {
-                if let Some(pe) = prev_end {
-                    if (t1 - pe).abs() < 1e-10 && istate_val != ps {
-                        flags[idx] = 3;
-                        teleport_ids.insert(subj_id);
-                        messages.push(format!(
-                            "Subject {}: teleport from state {} to {} at time {} (observation {})",
-                            subj_id, ps, istate_val, t1, idx
-                        ));
-                    }
-                }
+            if let Some(ps) = prev_state
+                && let Some(pe) = prev_end
+                && (t1 - pe).abs() < 1e-10
+                && istate_val != ps
+            {
+                flags[idx] = 3;
+                teleport_ids.insert(subj_id);
+                messages.push(format!(
+                    "Subject {}: teleport from state {} to {} at time {} (observation {})",
+                    subj_id, ps, istate_val, t1, idx
+                ));
             }
 
             let trans_key = format!("{} -> {}", istate_val, state);
@@ -227,7 +227,7 @@ pub fn survcheck_simple(time: Vec<f64>, status: Vec<i32>) -> PyResult<SurvCheckR
     }
 
     for (i, &s) in status.iter().enumerate() {
-        if s < 0 || s > 1 {
+        if !(0..=1).contains(&s) {
             if flags[i] == 0 {
                 flags[i] = 4;
                 invalid_count += 1;

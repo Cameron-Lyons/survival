@@ -112,10 +112,8 @@ fn find_interval(breaks: &[f64], value: f64) -> i32 {
             if value >= breaks[i] && value <= breaks[i + 1] {
                 return i as i32;
             }
-        } else {
-            if value >= breaks[i] && value < breaks[i + 1] {
-                return i as i32;
-            }
+        } else if value >= breaks[i] && value < breaks[i + 1] {
+            return i as i32;
         }
     }
 
@@ -135,6 +133,7 @@ fn find_interval(breaks: &[f64], value: f64) -> i32 {
 /// # Returns
 /// * Tuple of (new_start, new_stop, interval_codes, original_indices)
 #[pyfunction]
+#[allow(clippy::type_complexity)]
 pub fn tcut_expand(
     start: Vec<f64>,
     stop: Vec<f64>,
