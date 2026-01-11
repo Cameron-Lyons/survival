@@ -124,9 +124,7 @@ fn compute_survobrien(
     let mut total_variance = 0.0;
 
     for &stratum in &unique_strata {
-        let stratum_indices: Vec<usize> = (0..n)
-            .filter(|&i| strata[i] == stratum)
-            .collect();
+        let stratum_indices: Vec<usize> = (0..n).filter(|&i| strata[i] == stratum).collect();
 
         if stratum_indices.is_empty() {
             continue;
@@ -166,11 +164,11 @@ fn compute_survobrien(
 
                 let n_at_risk = at_risk_values.len();
                 if n_at_risk > 0 {
-                    at_risk_values.sort_by(|a, b| {
-                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                    at_risk_values
+                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-                    let mut ranks: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+                    let mut ranks: std::collections::HashMap<usize, f64> =
+                        std::collections::HashMap::new();
                     let mut k = 0;
                     while k < n_at_risk {
                         let current_value = at_risk_values[k].1;

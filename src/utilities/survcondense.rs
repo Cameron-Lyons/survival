@@ -29,7 +29,7 @@ pub struct CondenseResult {
 /// Condense a survival dataset by merging adjacent censored intervals
 ///
 /// Merges consecutive intervals for the same subject where:
-/// - The intervals are adjacent (time2[i] == time1[i+1])
+/// - The intervals are adjacent (time2\[i\] == time1\[i+1\])
 /// - All intermediate intervals are censored (status=0)
 /// - The final interval inherits the status of the last merged interval
 ///
@@ -62,13 +62,11 @@ pub fn survcondense(
 
     // Create indices sorted by (id, time1)
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        match id[a].cmp(&id[b]) {
-            std::cmp::Ordering::Equal => {
-                time1[a].partial_cmp(&time1[b]).unwrap_or(std::cmp::Ordering::Equal)
-            }
-            other => other,
-        }
+    indices.sort_by(|&a, &b| match id[a].cmp(&id[b]) {
+        std::cmp::Ordering::Equal => time1[a]
+            .partial_cmp(&time1[b])
+            .unwrap_or(std::cmp::Ordering::Equal),
+        other => other,
     });
 
     let mut result = CondenseResult {
