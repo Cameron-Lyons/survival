@@ -1,4 +1,4 @@
-use itertools::izip;
+use super::column_major_index;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -197,15 +197,7 @@ pub fn pyears3b(
         }
     }
 }
-fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {
-    let mut index = 0;
-    let mut stride = 1;
-    for (&i, &dim) in izip!(indices, dims) {
-        index += i * stride;
-        stride *= dim;
-    }
-    index
-}
+
 fn pystep(
     edim: usize,
     data: &mut [f64],

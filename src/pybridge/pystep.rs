@@ -1,6 +1,8 @@
+use super::column_major_index;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+
 fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     match cuts.binary_search_by(|&cut| cut.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal)) {
         Ok(i) => {
@@ -18,15 +20,6 @@ fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
             }
         }
     }
-}
-fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {
-    let mut index = 0;
-    let mut stride = 1;
-    for (&i, &dim) in indices.iter().zip(dims.iter()) {
-        index += i * stride;
-        stride *= dim;
-    }
-    index
 }
 pub fn pystep(
     edim: usize,

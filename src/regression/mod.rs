@@ -4,5 +4,6 @@ pub mod blogit;
 pub mod clogit;
 pub mod coxfit6;
 pub mod coxph;
+pub mod ridge;
 pub mod survreg6;
 pub mod survregc1;
