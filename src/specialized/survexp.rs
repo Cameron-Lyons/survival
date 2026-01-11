@@ -135,7 +135,11 @@ fn compute_hakulinen(
                 });
 
             let surv = if count > 0.0 { total_surv / count } else { 0.0 };
-            let cumhaz = if count > 0.0 { total_cumhaz / count } else { 0.0 };
+            let cumhaz = if count > 0.0 {
+                total_cumhaz / count
+            } else {
+                0.0
+            };
             (surv, cumhaz, count)
         })
         .collect();
@@ -344,16 +348,7 @@ mod tests {
         let year = vec![2000.0, 2000.0, 2000.0];
         let sex = vec![0, 1, 0];
 
-        let result = survexp(
-            time,
-            age,
-            year,
-            &rt,
-            Some(sex),
-            None,
-            Some("hakulinen"),
-        )
-        .unwrap();
+        let result = survexp(time, age, year, &rt, Some(sex), None, Some("hakulinen")).unwrap();
 
         assert_eq!(result.n, 3);
         assert!(!result.time.is_empty());

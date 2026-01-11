@@ -43,11 +43,7 @@ pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResul
         let min_val = time.iter().cloned().fold(f64::INFINITY, f64::min);
         let max_val = time.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let range = max_val - min_val;
-        if range > 0.0 {
-            range * 1e-8
-        } else {
-            1e-8
-        }
+        if range > 0.0 { range * 1e-8 } else { 1e-8 }
     });
 
     let mut indices: Vec<usize> = (0..n).collect();
@@ -68,8 +64,11 @@ pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResul
         while j < n {
             let current_val = adjusted_time[indices[j]];
             if (current_val - base_val).abs() <= tol {
-                adjusted_time[indices[j]] = base_val;
-                adjusted_indices.push(indices[j]);
+                // Only count as adjusted if the value actually changes
+                if current_val != base_val {
+                    adjusted_time[indices[j]] = base_val;
+                    adjusted_indices.push(indices[j]);
+                }
                 j += 1;
             } else {
                 break;

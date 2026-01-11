@@ -61,17 +61,15 @@ pub fn tcut(
             }
             l
         }
-        None => {
-            (0..n_intervals)
-                .map(|i| {
-                    if i == n_intervals - 1 {
-                        format!("[{}, {}]", sorted_breaks[i], sorted_breaks[i + 1])
-                    } else {
-                        format!("[{}, {})", sorted_breaks[i], sorted_breaks[i + 1])
-                    }
-                })
-                .collect()
-        }
+        None => (0..n_intervals)
+            .map(|i| {
+                if i == n_intervals - 1 {
+                    format!("[{}, {}]", sorted_breaks[i], sorted_breaks[i + 1])
+                } else {
+                    format!("[{}, {})", sorted_breaks[i], sorted_breaks[i + 1])
+                }
+            })
+            .collect(),
     };
 
     let mut codes = Vec::with_capacity(value.len());

@@ -271,7 +271,11 @@ fn find_interval(cutpoints: &[f64], value: f64) -> usize {
         return 0;
     }
 
-    match cutpoints.binary_search_by(|probe| probe.partial_cmp(&value).unwrap_or(std::cmp::Ordering::Equal)) {
+    match cutpoints.binary_search_by(|probe| {
+        probe
+            .partial_cmp(&value)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         Ok(i) => {
             if i >= cutpoints.len() - 1 {
                 cutpoints.len() - 2

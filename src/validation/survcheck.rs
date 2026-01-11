@@ -205,10 +205,7 @@ pub fn survcheck(
 
 /// Simplified check for standard (non-multi-state) survival data
 #[pyfunction]
-pub fn survcheck_simple(
-    time: Vec<f64>,
-    status: Vec<i32>,
-) -> PyResult<SurvCheckResult> {
+pub fn survcheck_simple(time: Vec<f64>, status: Vec<i32>) -> PyResult<SurvCheckResult> {
     let n = time.len();
 
     if status.len() != n {

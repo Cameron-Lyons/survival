@@ -227,8 +227,16 @@ pub fn yates_contrast(
     }
 
     let z = 1.96;
-    let lower: Vec<f64> = means.iter().zip(ses.iter()).map(|(&m, &s)| m - z * s).collect();
-    let upper: Vec<f64> = means.iter().zip(ses.iter()).map(|(&m, &s)| m + z * s).collect();
+    let lower: Vec<f64> = means
+        .iter()
+        .zip(ses.iter())
+        .map(|(&m, &s)| m - z * s)
+        .collect();
+    let upper: Vec<f64> = means
+        .iter()
+        .zip(ses.iter())
+        .map(|(&m, &s)| m + z * s)
+        .collect();
 
     Ok(YatesResult {
         levels,
@@ -271,15 +279,10 @@ pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResul
             let diff = yates_result.means[i] - yates_result.means[j];
             difference.push(diff);
 
-            let se_diff =
-                (yates_result.se[i].powi(2) + yates_result.se[j].powi(2)).sqrt();
+            let se_diff = (yates_result.se[i].powi(2) + yates_result.se[j].powi(2)).sqrt();
             se.push(se_diff);
 
-            let z = if se_diff > 0.0 {
-                diff / se_diff
-            } else {
-                0.0
-            };
+            let z = if se_diff > 0.0 { diff / se_diff } else { 0.0 };
             z_scores.push(z);
 
             let p = 2.0 * (1.0 - normal_cdf(z.abs()));
