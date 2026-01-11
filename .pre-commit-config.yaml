@@ -20,16 +20,16 @@ repos:
         types: [rust]
         pass_filenames: false
 
-      - id: cargo-check
-        name: cargo check
-        entry: cargo check --all-targets
+      - id: cargo-doc
+        name: cargo doc
+        entry: bash -c 'RUSTDOCFLAGS="-D warnings" cargo doc --no-deps'
         language: system
         types: [rust]
         pass_filenames: false
 
-  # Python formatting (if ruff is available)
+  # Python formatting and linting
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.6
+    rev: v0.9.2
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
@@ -39,10 +39,10 @@ repos:
 
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: '\.rs$'  # cargo fmt handles Rust files
+        exclude: '\.rs$'
       - id: end-of-file-fixer
         exclude: '\.rs$'
       - id: check-yaml
