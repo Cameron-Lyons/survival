@@ -211,8 +211,8 @@ fn compute_survobrien(
                 }
             }
 
-            for k in i..j {
-                at_risk[k] = false;
+            for item in at_risk.iter_mut().take(j).skip(i) {
+                *item = false;
             }
 
             i = j;

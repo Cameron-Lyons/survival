@@ -1,9 +1,9 @@
-/// Simple CSV parser for embedded survival datasets
-///
-/// Handles:
-/// - Header row detection
-/// - NA/missing value handling
-/// - Numeric and string columns
+//! Simple CSV parser for embedded survival datasets
+//!
+//! Handles:
+//! - Header row detection
+//! - NA/missing value handling
+//! - Numeric and string columns
 
 /// Parse CSV data into rows of string values
 pub fn parse_csv(data: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
