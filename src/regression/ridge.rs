@@ -156,10 +156,7 @@ pub fn ridge_fit(
 
     let (beta, info_diag) = fit_unpenalized(&scaled_x, n_obs, n_vars, &time, &status, &wt)?;
 
-    let penalized_info: Vec<f64> = info_diag
-        .iter()
-        .map(|&i| i + penalty.theta)
-        .collect();
+    let penalized_info: Vec<f64> = info_diag.iter().map(|&i| i + penalty.theta).collect();
 
     let penalized_beta: Vec<f64> = beta
         .iter()
@@ -170,7 +167,13 @@ pub fn ridge_fit(
 
     let std_err: Vec<f64> = penalized_info
         .iter()
-        .map(|&pi| if pi > 0.0 { 1.0 / pi.sqrt() } else { f64::INFINITY })
+        .map(|&pi| {
+            if pi > 0.0 {
+                1.0 / pi.sqrt()
+            } else {
+                f64::INFINITY
+            }
+        })
         .collect();
 
     let df: f64 = info_diag
@@ -179,7 +182,16 @@ pub fn ridge_fit(
         .map(|(&i, &pi)| i / pi)
         .sum();
 
-    let gcv = compute_gcv(&scaled_x, n_obs, n_vars, &time, &status, &wt, &penalized_beta, df);
+    let gcv = compute_gcv(
+        &scaled_x,
+        n_obs,
+        n_vars,
+        &time,
+        &status,
+        &wt,
+        &penalized_beta,
+        df,
+    );
 
     let final_beta = if let Some(ref sf) = scale_factors {
         penalized_beta
@@ -357,9 +369,8 @@ pub fn ridge_cv(
         .map(|&theta| {
             let fold_scores: Vec<f64> = (0..folds)
                 .filter_map(|fold| {
-                    let train_idx: Vec<usize> = (0..n_obs)
-                        .filter(|&i| fold_assign[i] != fold)
-                        .collect();
+                    let train_idx: Vec<usize> =
+                        (0..n_obs).filter(|&i| fold_assign[i] != fold).collect();
 
                     if train_idx.is_empty() {
                         return None;

@@ -50,7 +50,7 @@ jobs:
         shell: bash
 
       - name: Build with maturin
-        run: maturin build --release --interpreter python
+        run: maturin build --release --interpreter python --features extension-module
 
       - name: Run Rust tests
         if: matrix.os == 'ubuntu-latest'
@@ -110,7 +110,7 @@ jobs:
 
       - name: Build and install
         run: |
-          maturin build --release --interpreter python
+          maturin build --release --interpreter python --features extension-module
           pip install target/wheels/survival-*.whl
 
       - name: Run Rust tests

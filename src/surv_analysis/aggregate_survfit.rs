@@ -151,16 +151,9 @@ fn interpolate_step(times: &[f64], values: &[f64], at: f64) -> f64 {
         return 1.0;
     }
 
-    let idx = times
-        .iter()
-        .position(|&t| t > at)
-        .unwrap_or(times.len());
+    let idx = times.iter().position(|&t| t > at).unwrap_or(times.len());
 
-    if idx == 0 {
-        1.0
-    } else {
-        values[idx - 1]
-    }
+    if idx == 0 { 1.0 } else { values[idx - 1] }
 }
 
 fn z_score(conf_level: f64) -> f64 {
@@ -194,8 +187,9 @@ pub fn aggregate_survfit_by_group(
     for (_group, indices) in grouped {
         let group_times: Vec<Vec<f64>> = indices.iter().map(|&i| times[i].clone()).collect();
         let group_survs: Vec<Vec<f64>> = indices.iter().map(|&i| survs[i].clone()).collect();
-        let group_weights: Option<Vec<f64>> =
-            weights.as_ref().map(|w| indices.iter().map(|&i| w[i]).collect());
+        let group_weights: Option<Vec<f64>> = weights
+            .as_ref()
+            .map(|w| indices.iter().map(|&i| w[i]).collect());
 
         let result = aggregate_survfit(group_times, group_survs, None, group_weights, None)?;
         results.push(result);
