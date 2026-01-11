@@ -50,8 +50,7 @@ enum ColType {
 
 /// Helper function to parse CSV and return as Python dict
 fn csv_to_dict(py: Python<'_>, csv_data: &str, schema: &[(&str, ColType)]) -> PyResult<Py<PyDict>> {
-    let (headers, rows) =
-        parse_csv(csv_data).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    let (headers, rows) = parse_csv(csv_data).map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     let dict = PyDict::new(py);
 

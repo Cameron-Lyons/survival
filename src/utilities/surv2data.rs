@@ -71,9 +71,9 @@ pub fn surv2data(
     if let (Some(etimes), Some(estatus)) = (&event_time, &event_status) {
         for i in 0..n {
             let subj_id = id[i];
-            if !subject_event.contains_key(&subj_id) {
-                subject_event.insert(subj_id, (etimes[i], estatus[i]));
-            }
+            subject_event
+                .entry(subj_id)
+                .or_insert((etimes[i], estatus[i]));
         }
     }
 
@@ -107,12 +107,10 @@ pub fn surv2data(
 
             let t2 = if k + 1 < subject_times.len() {
                 subject_times[k + 1].0
+            } else if subj_event_time > t1 {
+                subj_event_time
             } else {
-                if subj_event_time > t1 {
-                    subj_event_time
-                } else {
-                    t1
-                }
+                t1
             };
 
             if t2 <= t1 {
