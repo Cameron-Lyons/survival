@@ -79,10 +79,8 @@ pub fn rttright(
     let mut cumulative_censored_weight = 0.0;
 
     for i in 0..n {
-        if i > 0 {
-            if sorted_status[i - 1] == 0 {
-                cumulative_censored_weight += sorted_weights[i - 1];
-            }
+        if i > 0 && sorted_status[i - 1] == 0 {
+            cumulative_censored_weight += sorted_weights[i - 1];
         }
 
         if sorted_status[i] == 1 {

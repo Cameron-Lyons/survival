@@ -320,6 +320,7 @@ fn fit_unpenalized(
     Ok((final_beta, info_diag))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_gcv(
     _x: &[f64],
     n_obs: usize,

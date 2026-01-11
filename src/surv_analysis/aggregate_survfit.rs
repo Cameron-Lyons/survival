@@ -99,10 +99,10 @@ pub fn aggregate_survfit(
         for (j, &eval_t) in all_times.iter().enumerate() {
             interpolated_survs[i][j] = interpolate_step(t, s, eval_t);
 
-            if let Some(ref ses) = std_errs {
-                if i < ses.len() {
-                    interpolated_ses[i][j] = interpolate_step(t, &ses[i], eval_t);
-                }
+            if let Some(ref ses) = std_errs
+                && i < ses.len()
+            {
+                interpolated_ses[i][j] = interpolate_step(t, &ses[i], eval_t);
             }
         }
     }
