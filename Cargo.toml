@@ -21,7 +21,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pyo3 = { version = "0.27.2", features = ["extension-module"] }
-numpy = "0.27"
+numpy = "0.27.1"
 ndarray = { version = "0.17.1", features = ["rayon"] }
 itertools = "0.14.0"
 rayon = "1.11.0"
@@ -30,7 +30,7 @@ fastrand = "2.3.0"
 
 [dev-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 
 [profile.release]
 lto = true
