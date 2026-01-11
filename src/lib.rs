@@ -51,13 +51,26 @@ pub use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
 pub use surv_analysis::survfitkm::{
     KaplanMeierConfig, SurvFitKMOutput, SurvfitKMOptions, survfitkm, survfitkm_with_options,
 };
+pub use utilities::aeq_surv::{AeqSurvResult, aeq_surv};
 pub use utilities::agexact::agexact;
+pub use utilities::cluster::{ClusterResult, cluster, cluster_str};
 pub use utilities::collapse::collapse;
+pub use utilities::neardate::{NearDateResult, neardate, neardate_str};
+pub use utilities::rttright::{RttrightResult, rttright, rttright_stratified};
+pub use utilities::strata::{StrataResult, strata, strata_str};
 pub use utilities::surv2data::{Surv2DataResult, surv2data};
 pub use utilities::survcondense::{CondenseResult, survcondense};
 pub use utilities::survsplit::{SplitResult, survsplit};
+pub use utilities::tcut::{TcutResult, tcut, tcut_expand};
 pub use utilities::timeline::{IntervalResult, TimelineResult, from_timeline, to_timeline};
 pub use utilities::tmerge::{tmerge, tmerge2, tmerge3};
+pub use core::nsk::{NaturalSplineKnot, SplineBasisResult, nsk};
+pub use regression::ridge::{RidgePenalty, RidgeResult, ridge_cv, ridge_fit};
+pub use specialized::ratetable::{DimType, RateDimension, RateTable, create_simple_ratetable};
+pub use specialized::statefig::{StateFigData, statefig, statefig_matplotlib_code, statefig_transition_matrix, statefig_validate};
+pub use specialized::survexp::{SurvExpResult, survexp, survexp_individual};
+pub use surv_analysis::aggregate_survfit::{AggregateSurvfitResult, aggregate_survfit, aggregate_survfit_by_group};
+pub use surv_analysis::pseudo::{PseudoResult, pseudo, pseudo_fast};
 pub use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
 pub use validation::calibration::{
     CalibrationResult, PredictionResult, RiskStratificationResult, TdAUCResult, calibration,
@@ -81,9 +94,12 @@ pub use validation::rmst::{
     cumulative_incidence, number_needed_to_treat, rmst, rmst_comparison, survival_quantile,
 };
 pub use validation::survobrien::{SurvObrienResult, survobrien};
+pub use validation::royston::{RoystonResult, royston, royston_from_model};
+pub use validation::survcheck::{SurvCheckResult, survcheck, survcheck_simple};
 pub use validation::tests::{
     ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test,
 };
+pub use validation::yates::{YatesPairwiseResult, YatesResult, yates, yates_contrast, yates_pairwise};
 use validation::tests::{score_test_py, wald_test_py};
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
@@ -162,6 +178,43 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hazard_ratio, &m)?)?;
     m.add_function(wrap_pyfunction!(survival_at_times, &m)?)?;
     m.add_function(wrap_pyfunction!(life_table, &m)?)?;
+    // New utility functions
+    m.add_function(wrap_pyfunction!(aeq_surv, &m)?)?;
+    m.add_function(wrap_pyfunction!(cluster, &m)?)?;
+    m.add_function(wrap_pyfunction!(cluster_str, &m)?)?;
+    m.add_function(wrap_pyfunction!(strata, &m)?)?;
+    m.add_function(wrap_pyfunction!(strata_str, &m)?)?;
+    m.add_function(wrap_pyfunction!(neardate, &m)?)?;
+    m.add_function(wrap_pyfunction!(neardate_str, &m)?)?;
+    m.add_function(wrap_pyfunction!(tcut, &m)?)?;
+    m.add_function(wrap_pyfunction!(tcut_expand, &m)?)?;
+    m.add_function(wrap_pyfunction!(rttright, &m)?)?;
+    m.add_function(wrap_pyfunction!(rttright_stratified, &m)?)?;
+    // New specialized functions
+    m.add_function(wrap_pyfunction!(survexp, &m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_individual, &m)?)?;
+    m.add_function(wrap_pyfunction!(create_simple_ratetable, &m)?)?;
+    m.add_function(wrap_pyfunction!(statefig, &m)?)?;
+    m.add_function(wrap_pyfunction!(statefig_matplotlib_code, &m)?)?;
+    m.add_function(wrap_pyfunction!(statefig_transition_matrix, &m)?)?;
+    m.add_function(wrap_pyfunction!(statefig_validate, &m)?)?;
+    // New survival analysis functions
+    m.add_function(wrap_pyfunction!(pseudo, &m)?)?;
+    m.add_function(wrap_pyfunction!(pseudo_fast, &m)?)?;
+    m.add_function(wrap_pyfunction!(aggregate_survfit, &m)?)?;
+    m.add_function(wrap_pyfunction!(aggregate_survfit_by_group, &m)?)?;
+    // New validation functions
+    m.add_function(wrap_pyfunction!(survcheck, &m)?)?;
+    m.add_function(wrap_pyfunction!(survcheck_simple, &m)?)?;
+    m.add_function(wrap_pyfunction!(royston, &m)?)?;
+    m.add_function(wrap_pyfunction!(royston_from_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(yates, &m)?)?;
+    m.add_function(wrap_pyfunction!(yates_contrast, &m)?)?;
+    m.add_function(wrap_pyfunction!(yates_pairwise, &m)?)?;
+    // New regression/core functions
+    m.add_function(wrap_pyfunction!(ridge_fit, &m)?)?;
+    m.add_function(wrap_pyfunction!(ridge_cv, &m)?)?;
+    m.add_function(wrap_pyfunction!(nsk, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -211,6 +264,32 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HazardRatioResult>()?;
     m.add_class::<SurvivalAtTimeResult>()?;
     m.add_class::<LifeTableResult>()?;
+    // New utility classes
+    m.add_class::<AeqSurvResult>()?;
+    m.add_class::<ClusterResult>()?;
+    m.add_class::<StrataResult>()?;
+    m.add_class::<NearDateResult>()?;
+    m.add_class::<TcutResult>()?;
+    m.add_class::<RttrightResult>()?;
+    // New specialized classes
+    m.add_class::<RateTable>()?;
+    m.add_class::<RateDimension>()?;
+    m.add_class::<DimType>()?;
+    m.add_class::<SurvExpResult>()?;
+    m.add_class::<StateFigData>()?;
+    // New survival analysis classes
+    m.add_class::<PseudoResult>()?;
+    m.add_class::<AggregateSurvfitResult>()?;
+    // New validation classes
+    m.add_class::<SurvCheckResult>()?;
+    m.add_class::<RoystonResult>()?;
+    m.add_class::<YatesResult>()?;
+    m.add_class::<YatesPairwiseResult>()?;
+    // New regression/core classes
+    m.add_class::<RidgePenalty>()?;
+    m.add_class::<RidgeResult>()?;
+    m.add_class::<NaturalSplineKnot>()?;
+    m.add_class::<SplineBasisResult>()?;
 
     // Dataset loaders
     m.add_function(wrap_pyfunction!(datasets::load_lung, &m)?)?;
