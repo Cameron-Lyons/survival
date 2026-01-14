@@ -39,6 +39,9 @@ const RATS2_CSV: &str = include_str!("data/rats2.csv");
 const NAFLD_CSV: &str = include_str!("data/nafld.csv");
 const CGDRAW_CSV: &str = include_str!("data/cgd0.csv");
 const PBCSEQ_CSV: &str = include_str!("data/pbcseq.csv");
+const HOEL_CSV: &str = include_str!("data/hoel.csv");
+const MYELOMA_CSV: &str = include_str!("data/myeloma.csv");
+const RHDNASE_CSV: &str = include_str!("data/rhDNase.csv");
 
 /// Column type specification
 #[derive(Clone, Copy)]
@@ -874,4 +877,82 @@ pub fn load_pbcseq(py: Python<'_>) -> PyResult<Py<PyDict>> {
         ("stage", ColType::Int),
     ];
     csv_to_dict(py, PBCSEQ_CSV, SCHEMA)
+}
+
+/// Hoel (1972) data on causes of death in RFM mice
+///
+/// Data from a radiation experiment on RFM mice. Each mouse was followed until
+/// death and the cause of death was recorded.
+///
+/// Variables:
+/// - time: time to death in days
+/// - status: 1=died, 0=censored
+/// - cause: cause of death (1=thymic lymphoma, 2=reticulum cell sarcoma,
+///          3=other causes, 4=lung tumour, 0=censored)
+#[pyfunction]
+pub fn load_hoel(py: Python<'_>) -> PyResult<Py<PyDict>> {
+    const SCHEMA: &[(&str, ColType)] = &[
+        ("time", ColType::Int),
+        ("status", ColType::Int),
+        ("cause", ColType::Int),
+    ];
+    csv_to_dict(py, HOEL_CSV, SCHEMA)
+}
+
+/// Multiple Myeloma Data
+///
+/// Survival of multiple myeloma patients, used in Krall, Uthoff, and Harley (1975).
+///
+/// Variables:
+/// - time: survival time in months from diagnosis
+/// - status: 1=died, 0=censored
+/// - hgb: hemoglobin at diagnosis
+/// - bun: blood urea nitrogen at diagnosis
+/// - ca: serum calcium at diagnosis
+/// - protein: proteinuria at diagnosis
+/// - pcells: percent of plasma cells in bone marrow
+/// - age: age in years
+#[pyfunction]
+pub fn load_myeloma(py: Python<'_>) -> PyResult<Py<PyDict>> {
+    const SCHEMA: &[(&str, ColType)] = &[
+        ("time", ColType::Int),
+        ("status", ColType::Int),
+        ("hgb", ColType::Float),
+        ("bun", ColType::Int),
+        ("ca", ColType::Int),
+        ("protein", ColType::Int),
+        ("pcells", ColType::Int),
+        ("age", ColType::Int),
+    ];
+    csv_to_dict(py, MYELOMA_CSV, SCHEMA)
+}
+
+/// rhDNase clinical trial data
+///
+/// Data from a randomized trial of recombinant human deoxyribonuclease (rhDNase)
+/// for treatment of cystic fibrosis. The endpoint was time to first pulmonary
+/// exacerbation requiring intravenous (IV) antibiotic therapy.
+///
+/// Variables:
+/// - id: patient id
+/// - inst: institution
+/// - trt: treatment (0=placebo, 1=rhDNase)
+/// - fev: baseline forced expiratory volume (FEV) as percent predicted
+/// - entry: entry time (0 for all)
+/// - fev.last: FEV at last observation
+/// - ivstart: start of IV therapy (days from entry), NA if no event
+/// - ivstop: end of IV therapy (days from entry), NA if no event
+#[pyfunction]
+pub fn load_rhdnase(py: Python<'_>) -> PyResult<Py<PyDict>> {
+    const SCHEMA: &[(&str, ColType)] = &[
+        ("id", ColType::Int),
+        ("inst", ColType::Int),
+        ("trt", ColType::Int),
+        ("fev", ColType::Float),
+        ("entry", ColType::Int),
+        ("fev.last", ColType::Float),
+        ("ivstart", ColType::Str),
+        ("ivstop", ColType::Str),
+    ];
+    csv_to_dict(py, RHDNASE_CSV, SCHEMA)
 }

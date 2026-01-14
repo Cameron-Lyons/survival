@@ -31,10 +31,16 @@ pub use regression::agfit5::perform_cox_regression_frailty;
 pub use regression::blogit::LinkFunctionParams;
 pub use regression::clogit::{ClogitDataSet, ConditionalLogisticRegression};
 pub use regression::coxph::{CoxPHModel, Subject};
+pub use regression::coxph_detail::{CoxphDetail, CoxphDetailRow, coxph_detail};
 pub use regression::ridge::{RidgePenalty, RidgeResult, ridge_cv, ridge_fit};
+pub use regression::survreg_predict::{
+    SurvregPrediction, SurvregQuantilePrediction, predict_survreg, predict_survreg_quantile,
+};
 pub use regression::survreg6::{DistributionType, SurvivalFit, SurvregConfig, survreg};
 pub use residuals::agmart::agmart;
 pub use residuals::coxmart::coxmart;
+pub use residuals::survfit_resid::{SurvfitResiduals, residuals_survfit};
+pub use residuals::survreg_resid::{SurvregResiduals, dfbeta_survreg, residuals_survreg};
 pub use scoring::agscore2::perform_score_calculation;
 pub use scoring::agscore3::perform_agscore3_calculation;
 pub use scoring::coxscore2::cox_score_residuals;
@@ -43,11 +49,20 @@ pub use specialized::cch::{CchMethod, CohortData};
 pub use specialized::cipoisson::{cipoisson, cipoisson_anscombe, cipoisson_exact};
 pub use specialized::finegray::{FineGrayOutput, finegray};
 pub use specialized::norisk::norisk;
-pub use specialized::ratetable::{DimType, RateDimension, RateTable, create_simple_ratetable};
+pub use specialized::pyears_summary::{
+    PyearsCell, PyearsSummary, pyears_by_cell, pyears_ci, summary_pyears,
+};
+pub use specialized::ratetable::{
+    DimType, RateDimension, RateTable, RatetableDateResult, create_simple_ratetable, days_to_date,
+    is_ratetable, ratetable_date,
+};
 pub use specialized::statefig::{
     StateFigData, statefig, statefig_matplotlib_code, statefig_transition_matrix, statefig_validate,
 };
 pub use specialized::survexp::{SurvExpResult, survexp, survexp_individual};
+pub use specialized::survexp_us::{
+    ExpectedSurvivalResult, compute_expected_survival, survexp_mn, survexp_us, survexp_usr,
+};
 pub use surv_analysis::aggregate_survfit::{
     AggregateSurvfitResult, aggregate_survfit, aggregate_survfit_by_group,
 };
@@ -58,6 +73,10 @@ pub use surv_analysis::nelson_aalen::{
 };
 pub use surv_analysis::pseudo::{PseudoResult, pseudo, pseudo_fast};
 pub use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
+pub use surv_analysis::survfit_matrix::{
+    SurvfitMatrixResult, basehaz, survfit_from_cumhaz, survfit_from_hazard, survfit_from_matrix,
+    survfit_multistate,
+};
 pub use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
 pub use surv_analysis::survfitkm::{
     KaplanMeierConfig, SurvFitKMOutput, SurvfitKMOptions, survfitkm, survfitkm_with_options,
@@ -67,6 +86,10 @@ pub use utilities::agexact::agexact;
 pub use utilities::cluster::{ClusterResult, cluster, cluster_str};
 pub use utilities::collapse::collapse;
 pub use utilities::neardate::{NearDateResult, neardate, neardate_str};
+pub use utilities::reliability::{
+    ReliabilityResult, ReliabilityScale, conditional_reliability, failure_probability,
+    hazard_to_reliability, mean_residual_life, reliability, reliability_inverse,
+};
 pub use utilities::rttright::{RttrightResult, rttright, rttright_stratified};
 pub use utilities::strata::{StrataResult, strata, strata_str};
 pub use utilities::surv2data::{Surv2DataResult, surv2data};
@@ -75,6 +98,7 @@ pub use utilities::survsplit::{SplitResult, survsplit};
 pub use utilities::tcut::{TcutResult, tcut, tcut_expand};
 pub use utilities::timeline::{IntervalResult, TimelineResult, from_timeline, to_timeline};
 pub use utilities::tmerge::{tmerge, tmerge2, tmerge3};
+pub use validation::anova::{AnovaCoxphResult, AnovaRow, anova_coxph, anova_coxph_single};
 pub use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
 pub use validation::calibration::{
     CalibrationResult, PredictionResult, RiskStratificationResult, TdAUCResult, calibration,
@@ -221,6 +245,22 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ridge_fit, &m)?)?;
     m.add_function(wrap_pyfunction!(ridge_cv, &m)?)?;
     m.add_function(wrap_pyfunction!(nsk, &m)?)?;
+    // ANOVA functions
+    m.add_function(wrap_pyfunction!(anova_coxph, &m)?)?;
+    m.add_function(wrap_pyfunction!(anova_coxph_single, &m)?)?;
+    // Reliability functions
+    m.add_function(wrap_pyfunction!(reliability, &m)?)?;
+    m.add_function(wrap_pyfunction!(reliability_inverse, &m)?)?;
+    m.add_function(wrap_pyfunction!(hazard_to_reliability, &m)?)?;
+    m.add_function(wrap_pyfunction!(failure_probability, &m)?)?;
+    m.add_function(wrap_pyfunction!(conditional_reliability, &m)?)?;
+    m.add_function(wrap_pyfunction!(mean_residual_life, &m)?)?;
+    // Survfit matrix functions
+    m.add_function(wrap_pyfunction!(survfit_from_hazard, &m)?)?;
+    m.add_function(wrap_pyfunction!(survfit_from_cumhaz, &m)?)?;
+    m.add_function(wrap_pyfunction!(survfit_from_matrix, &m)?)?;
+    m.add_function(wrap_pyfunction!(survfit_multistate, &m)?)?;
+    m.add_function(wrap_pyfunction!(basehaz, &m)?)?;
     m.add_class::<AaregOptions>()?;
     m.add_class::<PSpline>()?;
     m.add_class::<CoxCountOutput>()?;
@@ -296,6 +336,14 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RidgeResult>()?;
     m.add_class::<NaturalSplineKnot>()?;
     m.add_class::<SplineBasisResult>()?;
+    // ANOVA classes
+    m.add_class::<AnovaCoxphResult>()?;
+    m.add_class::<AnovaRow>()?;
+    // Reliability classes
+    m.add_class::<ReliabilityResult>()?;
+    m.add_class::<ReliabilityScale>()?;
+    // Survfit matrix classes
+    m.add_class::<SurvfitMatrixResult>()?;
 
     // Dataset loaders
     m.add_function(wrap_pyfunction!(datasets::load_lung, &m)?)?;
@@ -328,6 +376,45 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(datasets::load_nafld, &m)?)?;
     m.add_function(wrap_pyfunction!(datasets::load_cgd0, &m)?)?;
     m.add_function(wrap_pyfunction!(datasets::load_pbcseq, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_hoel, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_myeloma, &m)?)?;
+    m.add_function(wrap_pyfunction!(datasets::load_rhdnase, &m)?)?;
+
+    // New survreg functions
+    m.add_function(wrap_pyfunction!(residuals_survreg, &m)?)?;
+    m.add_function(wrap_pyfunction!(dfbeta_survreg, &m)?)?;
+    m.add_function(wrap_pyfunction!(residuals_survfit, &m)?)?;
+    m.add_function(wrap_pyfunction!(predict_survreg, &m)?)?;
+    m.add_function(wrap_pyfunction!(predict_survreg_quantile, &m)?)?;
+    m.add_function(wrap_pyfunction!(coxph_detail, &m)?)?;
+
+    // Ratetable utilities
+    m.add_function(wrap_pyfunction!(is_ratetable, &m)?)?;
+    m.add_function(wrap_pyfunction!(ratetable_date, &m)?)?;
+    m.add_function(wrap_pyfunction!(days_to_date, &m)?)?;
+
+    // Pyears summary functions
+    m.add_function(wrap_pyfunction!(summary_pyears, &m)?)?;
+    m.add_function(wrap_pyfunction!(pyears_by_cell, &m)?)?;
+    m.add_function(wrap_pyfunction!(pyears_ci, &m)?)?;
+
+    // US mortality rate tables
+    m.add_function(wrap_pyfunction!(survexp_us, &m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_mn, &m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_usr, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_expected_survival, &m)?)?;
+
+    // New classes
+    m.add_class::<SurvregResiduals>()?;
+    m.add_class::<SurvfitResiduals>()?;
+    m.add_class::<SurvregPrediction>()?;
+    m.add_class::<SurvregQuantilePrediction>()?;
+    m.add_class::<CoxphDetail>()?;
+    m.add_class::<CoxphDetailRow>()?;
+    m.add_class::<RatetableDateResult>()?;
+    m.add_class::<PyearsSummary>()?;
+    m.add_class::<PyearsCell>()?;
+    m.add_class::<ExpectedSurvivalResult>()?;
 
     Ok(())
 }
