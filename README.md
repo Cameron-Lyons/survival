@@ -350,6 +350,57 @@ print(f"Degrees of freedom: {result.degrees_of_freedom}")
 print(f"Variance matrix: {result.variance}")
 ```
 
+### Built-in Datasets
+
+The library includes 30 classic survival analysis datasets:
+
+```python
+from survival import load_lung, load_aml, load_veteran
+
+# Load the lung cancer dataset
+lung = load_lung()
+print(f"Columns: {lung['columns']}")
+print(f"Number of rows: {len(lung['data'])}")
+
+# Load the acute myelogenous leukemia dataset
+aml = load_aml()
+
+# Load the veteran's lung cancer dataset
+veteran = load_veteran()
+```
+
+**Available datasets:**
+- `load_lung()` - NCCTG Lung Cancer Data
+- `load_aml()` - Acute Myelogenous Leukemia Survival Data
+- `load_veteran()` - Veterans' Administration Lung Cancer Study
+- `load_ovarian()` - Ovarian Cancer Survival Data
+- `load_colon()` - Colon Cancer Data
+- `load_pbc()` - Primary Biliary Cholangitis Data
+- `load_cgd()` - Chronic Granulomatous Disease Data
+- `load_bladder()` - Bladder Cancer Recurrences
+- `load_heart()` - Stanford Heart Transplant Data
+- `load_kidney()` - Kidney Catheter Data
+- `load_rats()` - Rat Treatment Data
+- `load_stanford2()` - Stanford Heart Transplant Data (Extended)
+- `load_udca()` - UDCA Clinical Trial Data
+- `load_myeloid()` - Acute Myeloid Leukemia Clinical Trial
+- `load_flchain()` - Free Light Chain Data
+- `load_transplant()` - Liver Transplant Data
+- `load_mgus()` - Monoclonal Gammopathy Data
+- `load_mgus2()` - Monoclonal Gammopathy Data (Updated)
+- `load_diabetic()` - Diabetic Retinopathy Data
+- `load_retinopathy()` - Retinopathy Data
+- `load_gbsg()` - German Breast Cancer Study Group Data
+- `load_rotterdam()` - Rotterdam Tumor Bank Data
+- `load_logan()` - Logan Unemployment Data
+- `load_nwtco()` - National Wilms Tumor Study Data
+- `load_solder()` - Solder Joint Data
+- `load_tobin()` - Tobin's Tobit Data
+- `load_rats2()` - Rat Tumorigenesis Data
+- `load_nafld()` - Non-Alcoholic Fatty Liver Disease Data
+- `load_cgd0()` - CGD Baseline Data
+- `load_pbcseq()` - PBC Sequential Data
+
 ## API Reference
 
 ### Classes
@@ -364,12 +415,15 @@ print(f"Variance matrix: {result.variance}")
 
 **Survival Curves:**
 - `SurvFitKMOutput`: Output from Kaplan-Meier survival curve fitting
+- `SurvfitKMOptions`: Options for Kaplan-Meier fitting
+- `KaplanMeierConfig`: Configuration for Kaplan-Meier
 - `SurvFitAJ`: Output from Aalen-Johansen survival curve fitting
 - `NelsonAalenResult`: Output from Nelson-Aalen estimator
 - `StratifiedKMResult`: Output from stratified Kaplan-Meier
 
 **Parametric Models:**
 - `SurvivalFit`: Output from parametric survival regression
+- `SurvregConfig`: Configuration for parametric survival regression
 - `DistributionType`: Distribution types for parametric models (extreme_value, logistic, gaussian, weibull, lognormal)
 - `FineGrayOutput`: Output from Fine-Gray competing risks model
 
@@ -379,6 +433,7 @@ print(f"Variance matrix: {result.variance}")
 - `TrendTestResult`: Output from trend tests
 - `TestResult`: General test result output
 - `ProportionalityTest`: Output from proportional hazards test
+- `SurvObrienResult`: Output from O'Brien transformation
 
 **Validation:**
 - `BootstrapResult`: Output from bootstrap confidence interval calculations
@@ -409,6 +464,10 @@ print(f"Variance matrix: {result.variance}")
 **Utilities:**
 - `CoxCountOutput`: Output from Cox counting functions
 - `SplitResult`: Output from time-splitting
+- `CondenseResult`: Output from data condensing
+- `Surv2DataResult`: Output from survival-to-data conversion
+- `TimelineResult`: Output from timeline conversion
+- `IntervalResult`: Output from interval calculations
 - `LinkFunctionParams`: Link function parameters
 - `CchMethod`: Case-cohort method specification
 - `CohortData`: Cohort data structure
@@ -422,6 +481,7 @@ print(f"Variance matrix: {result.variance}")
 
 **Survival Curves:**
 - `survfitkm(...)`: Fit Kaplan-Meier survival curves
+- `survfitkm_with_options(...)`: Fit Kaplan-Meier with configuration options
 - `survfitaj(...)`: Fit Aalen-Johansen survival curves (multi-state)
 - `nelson_aalen_estimator(...)`: Calculate Nelson-Aalen estimator
 - `stratified_kaplan_meier(...)`: Calculate stratified Kaplan-Meier curves
@@ -437,6 +497,7 @@ print(f"Variance matrix: {result.variance}")
 - `wald_test_py(...)`: Wald test
 - `score_test_py(...)`: Score test
 - `ph_test(...)`: Proportional hazards assumption test
+- `survobrien(...)`: O'Brien transformation for survival data
 
 **Residuals:**
 - `coxmart(...)`: Calculate Cox martingale residuals
@@ -448,7 +509,7 @@ print(f"Variance matrix: {result.variance}")
 - `perform_concordance1_calculation(...)`: Calculate concordance index (version 1)
 - `perform_concordance3_calculation(...)`: Calculate concordance index (version 3)
 - `perform_concordance_calculation(...)`: Calculate concordance index (version 5)
-- `concordance(...)`: General concordance calculation
+- `compute_concordance(...)`: General concordance calculation
 
 **Validation:**
 - `bootstrap_cox_ci(...)`: Bootstrap confidence intervals for Cox models
@@ -491,6 +552,10 @@ print(f"Variance matrix: {result.variance}")
 - `perform_score_calculation(...)`: Calculate score statistics
 - `perform_agscore3_calculation(...)`: Calculate score statistics (version 3)
 - `survsplit(...)`: Split survival data at specified times
+- `survcondense(...)`: Condense survival data by collapsing adjacent intervals
+- `surv2data(...)`: Convert survival objects to data format
+- `to_timeline(...)`: Convert data to timeline format
+- `from_timeline(...)`: Convert from timeline format to intervals
 - `tmerge(...)`: Merge time-dependent covariates
 - `tmerge2(...)`: Merge time-dependent covariates (version 2)
 - `tmerge3(...)`: Merge time-dependent covariates (version 3)
