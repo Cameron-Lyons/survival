@@ -6,6 +6,7 @@ pub mod fenwick;
 pub mod matrix;
 pub mod neardate;
 pub mod numpy_utils;
+pub mod reliability;
 pub mod rttright;
 pub mod statistical;
 pub mod strata;

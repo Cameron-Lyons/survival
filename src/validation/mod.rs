@@ -1,3 +1,4 @@
+pub mod anova;
 pub mod bootstrap;
 pub mod calibration;
 pub mod crossval;

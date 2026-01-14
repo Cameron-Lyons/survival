@@ -3,6 +3,54 @@ use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+    let n = mat.len();
+    if n == 0 {
+        return None;
+    }
+    for row in mat {
+        if row.len() != n {
+            return None;
+        }
+    }
+    let mut aug: Vec<Vec<f64>> = mat
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mut new_row = row.clone();
+            new_row.extend(vec![0.0; n]);
+            new_row[n + i] = 1.0;
+            new_row
+        })
+        .collect();
+    for i in 0..n {
+        let mut max_row = i;
+        for k in (i + 1)..n {
+            if aug[k][i].abs() > aug[max_row][i].abs() {
+                max_row = k;
+            }
+        }
+        aug.swap(i, max_row);
+        if aug[i][i].abs() < 1e-12 {
+            return None;
+        }
+        let pivot = aug[i][i];
+        for val in aug[i].iter_mut().take(2 * n) {
+            *val /= pivot;
+        }
+        for k in 0..n {
+            if k != i {
+                let factor = aug[k][i];
+                let aug_i_clone: Vec<f64> = aug[i].iter().take(2 * n).copied().collect();
+                for (j, aug_i_val) in aug_i_clone.iter().enumerate() {
+                    aug[k][j] -= factor * aug_i_val;
+                }
+            }
+        }
+    }
+    Some(aug.into_iter().map(|row| row[n..].to_vec()).collect())
+}
 #[derive(Clone)]
 #[pyclass]
 pub struct Subject {
@@ -633,6 +681,72 @@ impl CoxPHModel {
     }
     pub fn n_events(&self) -> usize {
         self.censoring.iter().filter(|&&c| c == 1).count()
+    }
+    pub fn vcov(&self) -> Vec<Vec<f64>> {
+        let nvar = self.coefficients.nrows();
+        if nvar == 0 {
+            return vec![];
+        }
+        let fisher_info = self.compute_fisher_information();
+        if fisher_info.is_empty() {
+            return vec![vec![0.0; nvar]; nvar];
+        }
+        invert_matrix(&fisher_info).unwrap_or_else(|| vec![vec![0.0; nvar]; nvar])
+    }
+    pub fn std_errors(&self) -> Vec<f64> {
+        self.compute_standard_errors()
+    }
+    fn compute_fisher_information(&self) -> Vec<Vec<f64>> {
+        let n = self.event_times.len();
+        let nvar = self.coefficients.nrows();
+        if n == 0 || nvar == 0 {
+            return vec![];
+        }
+        let mut sorted_indices: Vec<usize> = (0..n).collect();
+        sorted_indices.sort_by(|&i, &j| {
+            self.event_times[j]
+                .partial_cmp(&self.event_times[i])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut risk_sum = 0.0;
+        let mut weighted_cov = vec![0.0; nvar];
+        let mut weighted_cov_outer = vec![vec![0.0; nvar]; nvar];
+        let mut fisher = vec![vec![0.0; nvar]; nvar];
+        let mut index_to_pos = vec![0usize; n];
+        for (pos, &idx) in sorted_indices.iter().enumerate() {
+            index_to_pos[idx] = pos;
+        }
+        let mut cumulative_data: Vec<(f64, Vec<f64>, Vec<Vec<f64>>)> = Vec::with_capacity(n);
+        for &idx in &sorted_indices {
+            let risk_i = self.risk_scores.get(idx).copied().unwrap_or(1.0);
+            risk_sum += risk_i;
+            for k in 0..nvar {
+                let cov_ik = self.covariates.get([idx, k]).copied().unwrap_or(0.0);
+                weighted_cov[k] += risk_i * cov_ik;
+                for (l, outer_row) in weighted_cov_outer[k].iter_mut().enumerate() {
+                    let cov_il = self.covariates.get([idx, l]).copied().unwrap_or(0.0);
+                    *outer_row += risk_i * cov_ik * cov_il;
+                }
+            }
+            cumulative_data.push((risk_sum, weighted_cov.clone(), weighted_cov_outer.clone()));
+        }
+        for (i, &censor) in self.censoring.iter().enumerate() {
+            if censor != 1 {
+                continue;
+            }
+            let pos = index_to_pos[i];
+            let (rs, wc, wco) = &cumulative_data[pos];
+            if *rs <= 0.0 {
+                continue;
+            }
+            for k in 0..nvar {
+                for l in 0..nvar {
+                    let info_kl = wco[k][l] / rs - (wc[k] / rs) * (wc[l] / rs);
+                    fisher[k][l] += info_kl;
+                }
+            }
+        }
+        fisher
     }
     pub fn n_observations(&self) -> usize {
         self.event_times.len()

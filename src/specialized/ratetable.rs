@@ -332,6 +332,127 @@ pub fn create_simple_ratetable(
     RateTable::new(dimensions, rates, Some("Simple rate table".to_string()))
 }
 
+#[pyfunction]
+pub fn is_ratetable(ndim: usize, has_rates: bool, has_dims: bool) -> bool {
+    ndim > 0 && has_rates && has_dims
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct RatetableDateResult {
+    #[pyo3(get)]
+    pub days: f64,
+    #[pyo3(get)]
+    pub years: f64,
+    #[pyo3(get)]
+    pub origin_year: i32,
+}
+
+#[pymethods]
+impl RatetableDateResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "RatetableDateResult(days={:.1}, years={:.4}, origin={})",
+            self.days, self.years, self.origin_year
+        )
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (year, month=1, day=1, origin_year=1960))]
+pub fn ratetable_date(
+    year: i32,
+    month: u32,
+    day: u32,
+    origin_year: i32,
+) -> PyResult<RatetableDateResult> {
+    if !(1..=12).contains(&month) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "month must be between 1 and 12",
+        ));
+    }
+    if !(1..=31).contains(&day) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "day must be between 1 and 31",
+        ));
+    }
+
+    let days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+    fn is_leap_year(y: i32) -> bool {
+        (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+    }
+
+    fn days_in_year(y: i32) -> f64 {
+        if is_leap_year(y) { 366.0 } else { 365.0 }
+    }
+
+    let mut total_days: f64 = 0.0;
+
+    for y in origin_year..year {
+        total_days += days_in_year(y);
+    }
+
+    for m in 1..month {
+        let mut d = days_per_month[(m - 1) as usize] as f64;
+        if m == 2 && is_leap_year(year) {
+            d += 1.0;
+        }
+        total_days += d;
+    }
+
+    total_days += (day - 1) as f64;
+
+    let years = total_days / 365.25;
+
+    Ok(RatetableDateResult {
+        days: total_days,
+        years,
+        origin_year,
+    })
+}
+
+#[pyfunction]
+pub fn days_to_date(days: f64, origin_year: i32) -> PyResult<(i32, u32, u32)> {
+    fn is_leap_year(y: i32) -> bool {
+        (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+    }
+
+    fn days_in_year(y: i32) -> i32 {
+        if is_leap_year(y) { 366 } else { 365 }
+    }
+
+    let days_per_month_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let days_per_month_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+    let mut remaining_days = days as i32;
+    let mut year = origin_year;
+
+    while remaining_days >= days_in_year(year) {
+        remaining_days -= days_in_year(year);
+        year += 1;
+    }
+
+    let days_per_month = if is_leap_year(year) {
+        &days_per_month_leap
+    } else {
+        &days_per_month_normal
+    };
+
+    let mut month = 1u32;
+    for &d in days_per_month.iter() {
+        if remaining_days < d {
+            break;
+        }
+        remaining_days -= d;
+        month += 1;
+    }
+
+    let day = (remaining_days + 1) as u32;
+
+    Ok((year, month, day))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
