@@ -2,6 +2,18 @@ use crate::constants::ITERATIVE_MAX_ITER;
 use std::f64::consts::SQRT_2;
 
 #[inline]
+pub fn sample_normal(rng: &mut fastrand::Rng) -> f64 {
+    let u1: f64 = rng.f64().max(1e-10);
+    let u2: f64 = rng.f64();
+    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+}
+
+#[inline]
+pub fn probit(p: f64) -> f64 {
+    normal_inverse_cdf(p)
+}
+
+#[inline]
 pub fn erf(x: f64) -> f64 {
     let a1 = 0.254829592;
     let a2 = -0.284496736;
