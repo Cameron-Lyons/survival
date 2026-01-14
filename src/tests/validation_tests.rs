@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::surv_analysis::nelson_aalen::{nelson_aalen, stratified_km};
+    use crate::tests::common::{LOOSE_TOL, STRICT_TOL, approx_eq};
     use crate::validation::calibration::{calibration_curve, stratify_risk, time_dependent_auc};
     use crate::validation::landmark::{
         compute_conditional_survival, compute_hazard_ratio, compute_landmark, compute_life_table,
@@ -11,11 +12,8 @@ mod tests {
     use crate::validation::rmst::{
         compare_rmst, compute_cumulative_incidence, compute_rmst, compute_survival_quantile,
     };
-    const TOLERANCE: f64 = 1e-4;
-    const LOOSE_TOLERANCE: f64 = 1e-2;
-    fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
-        (a - b).abs() < tol || (a.is_nan() && b.is_nan())
-    }
+    const TOLERANCE: f64 = STRICT_TOL;
+    const LOOSE_TOLERANCE: f64 = LOOSE_TOL;
     #[test]
     fn test_nelson_aalen_simple() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];

@@ -3,25 +3,14 @@ mod tests {
     use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
     use crate::surv_analysis::nelson_aalen::nelson_aalen;
     use crate::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
+    use crate::tests::common::{LOOSE_TOL, STANDARD_TOL, rel_approx_eq};
     use crate::validation::logrank::{WeightType, weighted_logrank_test};
     use crate::validation::rmst::compute_rmst;
     use ndarray::{Array1, Array2};
     use serde::Deserialize;
     use std::fs;
 
-    const STANDARD_TOL: f64 = 1e-3;
-    const STAT_TOL: f64 = 0.05;
-
-    fn rel_approx_eq(a: f64, b: f64, rel_tol: f64) -> bool {
-        if a.is_nan() && b.is_nan() {
-            return true;
-        }
-        let max_abs = a.abs().max(b.abs());
-        if max_abs < 1e-10 {
-            return true;
-        }
-        (a - b).abs() / max_abs < rel_tol
-    }
+    const STAT_TOL: f64 = LOOSE_TOL;
 
     #[derive(Debug, Deserialize)]
     struct RExpectedValues {
