@@ -75,14 +75,6 @@ fn parse_csv_line(line: &str) -> Vec<String> {
     result
 }
 
-/// Extract a column by index from parsed rows
-#[allow(dead_code)]
-pub fn extract_column(rows: &[Vec<String>], index: usize) -> Vec<String> {
-    rows.iter()
-        .map(|row| row.get(index).cloned().unwrap_or_default())
-        .collect()
-}
-
 /// Parse a string value to f64, treating NA as NaN
 pub fn parse_f64(s: &str) -> Option<f64> {
     let s = s.trim();

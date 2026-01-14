@@ -1,79 +1,14 @@
 #[cfg(test)]
 mod tests {
     use crate::surv_analysis::nelson_aalen::{nelson_aalen, stratified_km};
+    use crate::tests::common::{
+        LOOSE_TOL, STANDARD_TOL, STRICT_TOL, aml_combined, aml_maintained, aml_nonmaintained,
+        approx_eq, lung_subset, ovarian_data,
+    };
     use crate::validation::landmark::{compute_hazard_ratio, compute_survival_at_times};
     use crate::validation::logrank::{WeightType, weighted_logrank_test};
     use crate::validation::power::sample_size_logrank;
     use crate::validation::rmst::compute_rmst;
-
-    const STRICT_TOL: f64 = 1e-4;
-    const STANDARD_TOL: f64 = 0.01;
-    const LOOSE_TOL: f64 = 0.05;
-
-    fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
-        (a - b).abs() < tol
-    }
-
-    #[allow(dead_code)]
-    fn rel_approx_eq(a: f64, b: f64, rel_tol: f64) -> bool {
-        if b.abs() < 1e-10 {
-            a.abs() < rel_tol
-        } else {
-            ((a - b) / b).abs() < rel_tol
-        }
-    }
-    fn aml_maintained() -> (Vec<f64>, Vec<i32>) {
-        (
-            vec![
-                9.0, 13.0, 13.0, 18.0, 23.0, 28.0, 31.0, 34.0, 45.0, 48.0, 161.0,
-            ],
-            vec![1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0],
-        )
-    }
-    fn aml_nonmaintained() -> (Vec<f64>, Vec<i32>) {
-        (
-            vec![
-                5.0, 5.0, 8.0, 8.0, 12.0, 16.0, 23.0, 27.0, 30.0, 33.0, 43.0, 45.0,
-            ],
-            vec![1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1],
-        )
-    }
-    fn aml_combined() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
-        let (t1, s1) = aml_maintained();
-        let (t2, s2) = aml_nonmaintained();
-        let mut time = t1.clone();
-        time.extend(t2.clone());
-        let mut status = s1.clone();
-        status.extend(s2.clone());
-        let mut group = vec![1; t1.len()];
-        group.extend(vec![0; t2.len()]);
-        (time, status, group)
-    }
-    fn lung_subset() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
-        (
-            vec![
-                306.0, 455.0, 1010.0, 210.0, 883.0, 1022.0, 310.0, 361.0, 218.0, 166.0, 170.0,
-                654.0, 728.0, 71.0, 567.0, 144.0, 613.0, 707.0, 61.0, 88.0,
-            ],
-            vec![1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1],
-            vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-        )
-    }
-    fn ovarian_data() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
-        (
-            vec![
-                59.0, 115.0, 156.0, 421.0, 431.0, 448.0, 464.0, 475.0, 477.0, 563.0, 638.0, 744.0,
-                769.0, 770.0, 803.0, 855.0, 1040.0, 1106.0, 1129.0, 1206.0, 268.0, 329.0, 353.0,
-                365.0, 377.0, 506.0,
-            ],
-            vec![
-                1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0,
-            ],
-            vec![
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
-            ],
-        )
-    }
 
     #[test]
     fn test_r_aml_kaplan_meier_maintained() {
