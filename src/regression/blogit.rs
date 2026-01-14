@@ -1,9 +1,5 @@
-use crate::utilities::statistical::normal_inverse_cdf;
+use crate::utilities::statistical::probit;
 use pyo3::prelude::*;
-
-fn probit(p: f64) -> f64 {
-    normal_inverse_cdf(p)
-}
 fn cloglog(p: f64) -> f64 {
     (-(1.0 - p).ln()).ln()
 }

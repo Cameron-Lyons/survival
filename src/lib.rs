@@ -1,13 +1,23 @@
 use pyo3::prelude::*;
+mod bayesian;
+mod causal;
 mod concordance;
 mod constants;
 mod core;
 mod datasets;
+mod interval;
+mod joint;
 mod matrix;
+mod missing;
+mod ml;
 mod pybridge;
+mod qol;
+mod recurrent;
 mod regression;
+mod relative;
 mod residuals;
 mod scoring;
+mod spatial;
 mod specialized;
 mod surv_analysis;
 mod tests;
@@ -131,6 +141,66 @@ use validation::tests::{score_test_py, wald_test_py};
 pub use validation::yates::{
     YatesPairwiseResult, YatesResult, yates, yates_contrast, yates_pairwise,
 };
+
+pub use bayesian::bayesian_cox::{BayesianCoxResult, bayesian_cox, bayesian_cox_predict_survival};
+pub use bayesian::bayesian_parametric::{
+    BayesianParametricResult, bayesian_parametric, bayesian_parametric_predict,
+};
+pub use causal::g_computation::{GComputationResult, g_computation, g_computation_survival_curves};
+pub use causal::ipcw::{
+    IPCWResult, compute_ipcw_weights, ipcw_kaplan_meier, ipcw_treatment_effect,
+};
+pub use causal::msm::{MSMResult, compute_longitudinal_iptw, marginal_structural_model};
+pub use causal::target_trial::{
+    TargetTrialResult, sequential_trial_emulation, target_trial_emulation,
+};
+pub use interval::interval_censoring::{
+    IntervalCensoredResult, IntervalDistribution, TurnbullResult, interval_censored_regression,
+    npmle_interval, turnbull_estimator,
+};
+pub use joint::dynamic_prediction::{
+    DynamicPredictionResult, dynamic_auc, dynamic_brier_score, dynamic_prediction,
+    landmarking_analysis,
+};
+pub use joint::joint_model::{AssociationStructure, JointModelResult, joint_model};
+pub use missing::multiple_imputation::{
+    ImputationMethod, MultipleImputationResult, analyze_missing_pattern,
+    multiple_imputation_survival,
+};
+pub use missing::pattern_mixture::{
+    PatternMixtureResult, SensitivityAnalysisType, pattern_mixture_model, sensitivity_analysis,
+    tipping_point_analysis,
+};
+pub use ml::gradient_boost::{GradientBoostSurvival, gradient_boost_survival};
+pub use ml::survival_forest::{SurvivalForest, survival_forest};
+pub use qol::qaly::{
+    QALYResult, incremental_cost_effectiveness, qaly_calculation, qaly_comparison,
+};
+pub use qol::qtwist::{QTWISTResult, qtwist_analysis, qtwist_comparison, qtwist_sensitivity};
+pub use recurrent::gap_time::{GapTimeResult, gap_time_model, pwp_gap_time};
+pub use recurrent::joint_frailty::{FrailtyDistribution, JointFrailtyResult, joint_frailty_model};
+pub use recurrent::marginal_models::{
+    MarginalMethod, MarginalModelResult, andersen_gill, marginal_recurrent_model, wei_lin_weissfeld,
+};
+pub use regression::cure_models::{
+    CureDistribution, MixtureCureResult, PromotionTimeCureResult, mixture_cure_model,
+    promotion_time_cure_model,
+};
+pub use regression::elastic_net::{
+    ElasticNetCoxPath, ElasticNetCoxResult, elastic_net_cox, elastic_net_cox_cv,
+    elastic_net_cox_path,
+};
+pub use relative::net_survival::{
+    NetSurvivalMethod, NetSurvivalResult, crude_probability_of_death, net_survival,
+};
+pub use relative::relative_survival::{
+    ExcessHazardModelResult, RelativeSurvivalResult, excess_hazard_regression, relative_survival,
+};
+pub use spatial::spatial_frailty::{
+    SpatialCorrelationStructure, SpatialFrailtyResult, compute_spatial_smoothed_rates,
+    moran_i_test, spatial_frailty_model,
+};
+
 #[pymodule]
 fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perform_cox_regression_frailty, &m)?)?;
@@ -415,6 +485,118 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyearsSummary>()?;
     m.add_class::<PyearsCell>()?;
     m.add_class::<ExpectedSurvivalResult>()?;
+
+    // Bayesian functions
+    m.add_function(wrap_pyfunction!(bayesian_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(bayesian_cox_predict_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(bayesian_parametric, &m)?)?;
+    m.add_function(wrap_pyfunction!(bayesian_parametric_predict, &m)?)?;
+    m.add_class::<BayesianCoxResult>()?;
+    m.add_class::<BayesianParametricResult>()?;
+
+    // Causal inference functions
+    m.add_function(wrap_pyfunction!(g_computation, &m)?)?;
+    m.add_function(wrap_pyfunction!(g_computation_survival_curves, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_ipcw_weights, &m)?)?;
+    m.add_function(wrap_pyfunction!(ipcw_kaplan_meier, &m)?)?;
+    m.add_function(wrap_pyfunction!(ipcw_treatment_effect, &m)?)?;
+    m.add_function(wrap_pyfunction!(marginal_structural_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_longitudinal_iptw, &m)?)?;
+    m.add_function(wrap_pyfunction!(target_trial_emulation, &m)?)?;
+    m.add_function(wrap_pyfunction!(sequential_trial_emulation, &m)?)?;
+    m.add_class::<GComputationResult>()?;
+    m.add_class::<IPCWResult>()?;
+    m.add_class::<MSMResult>()?;
+    m.add_class::<TargetTrialResult>()?;
+
+    // Interval censoring functions
+    m.add_function(wrap_pyfunction!(interval_censored_regression, &m)?)?;
+    m.add_function(wrap_pyfunction!(turnbull_estimator, &m)?)?;
+    m.add_function(wrap_pyfunction!(npmle_interval, &m)?)?;
+    m.add_class::<IntervalCensoredResult>()?;
+    m.add_class::<TurnbullResult>()?;
+    m.add_class::<IntervalDistribution>()?;
+
+    // Joint modeling functions
+    m.add_function(wrap_pyfunction!(joint_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(dynamic_prediction, &m)?)?;
+    m.add_function(wrap_pyfunction!(dynamic_auc, &m)?)?;
+    m.add_function(wrap_pyfunction!(dynamic_brier_score, &m)?)?;
+    m.add_function(wrap_pyfunction!(landmarking_analysis, &m)?)?;
+    m.add_class::<JointModelResult>()?;
+    m.add_class::<DynamicPredictionResult>()?;
+    m.add_class::<AssociationStructure>()?;
+
+    // Missing data functions
+    m.add_function(wrap_pyfunction!(multiple_imputation_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(analyze_missing_pattern, &m)?)?;
+    m.add_function(wrap_pyfunction!(pattern_mixture_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(sensitivity_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(tipping_point_analysis, &m)?)?;
+    m.add_class::<MultipleImputationResult>()?;
+    m.add_class::<PatternMixtureResult>()?;
+    m.add_class::<ImputationMethod>()?;
+    m.add_class::<SensitivityAnalysisType>()?;
+
+    // Machine learning functions
+    m.add_function(wrap_pyfunction!(survival_forest, &m)?)?;
+    m.add_function(wrap_pyfunction!(gradient_boost_survival, &m)?)?;
+    m.add_class::<SurvivalForest>()?;
+    m.add_class::<GradientBoostSurvival>()?;
+
+    // Quality of life functions
+    m.add_function(wrap_pyfunction!(qaly_calculation, &m)?)?;
+    m.add_function(wrap_pyfunction!(qaly_comparison, &m)?)?;
+    m.add_function(wrap_pyfunction!(incremental_cost_effectiveness, &m)?)?;
+    m.add_function(wrap_pyfunction!(qtwist_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(qtwist_comparison, &m)?)?;
+    m.add_function(wrap_pyfunction!(qtwist_sensitivity, &m)?)?;
+    m.add_class::<QALYResult>()?;
+    m.add_class::<QTWISTResult>()?;
+
+    // Recurrent events functions
+    m.add_function(wrap_pyfunction!(gap_time_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(pwp_gap_time, &m)?)?;
+    m.add_function(wrap_pyfunction!(joint_frailty_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(andersen_gill, &m)?)?;
+    m.add_function(wrap_pyfunction!(marginal_recurrent_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(wei_lin_weissfeld, &m)?)?;
+    m.add_class::<GapTimeResult>()?;
+    m.add_class::<JointFrailtyResult>()?;
+    m.add_class::<MarginalModelResult>()?;
+    m.add_class::<FrailtyDistribution>()?;
+    m.add_class::<MarginalMethod>()?;
+
+    // Cure model functions
+    m.add_function(wrap_pyfunction!(mixture_cure_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(promotion_time_cure_model, &m)?)?;
+    m.add_class::<MixtureCureResult>()?;
+    m.add_class::<PromotionTimeCureResult>()?;
+    m.add_class::<CureDistribution>()?;
+
+    // Elastic net functions
+    m.add_function(wrap_pyfunction!(elastic_net_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(elastic_net_cox_cv, &m)?)?;
+    m.add_function(wrap_pyfunction!(elastic_net_cox_path, &m)?)?;
+    m.add_class::<ElasticNetCoxResult>()?;
+    m.add_class::<ElasticNetCoxPath>()?;
+
+    // Relative survival functions
+    m.add_function(wrap_pyfunction!(relative_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(net_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(crude_probability_of_death, &m)?)?;
+    m.add_function(wrap_pyfunction!(excess_hazard_regression, &m)?)?;
+    m.add_class::<RelativeSurvivalResult>()?;
+    m.add_class::<NetSurvivalResult>()?;
+    m.add_class::<ExcessHazardModelResult>()?;
+    m.add_class::<NetSurvivalMethod>()?;
+
+    // Spatial frailty functions
+    m.add_function(wrap_pyfunction!(spatial_frailty_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_spatial_smoothed_rates, &m)?)?;
+    m.add_function(wrap_pyfunction!(moran_i_test, &m)?)?;
+    m.add_class::<SpatialFrailtyResult>()?;
+    m.add_class::<SpatialCorrelationStructure>()?;
 
     Ok(())
 }

@@ -5,6 +5,8 @@ pub mod clogit;
 pub mod coxfit6;
 pub mod coxph;
 pub mod coxph_detail;
+pub mod cure_models;
+pub mod elastic_net;
 pub mod ridge;
 pub mod survreg6;
 pub mod survreg_predict;

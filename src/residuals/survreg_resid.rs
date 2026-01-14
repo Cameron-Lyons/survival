@@ -1,3 +1,4 @@
+use crate::utilities::statistical::normal_cdf;
 use pyo3::prelude::*;
 
 #[allow(dead_code)]
@@ -74,28 +75,11 @@ fn logistic_pdf(z: f64) -> f64 {
 }
 
 fn gaussian_cdf(z: f64) -> f64 {
-    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
+    normal_cdf(z)
 }
 
 fn gaussian_pdf(z: f64) -> f64 {
     (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
-}
-
-fn erf(x: f64) -> f64 {
-    let a1 = 0.254829592;
-    let a2 = -0.284496736;
-    let a3 = 1.421413741;
-    let a4 = -1.453152027;
-    let a5 = 1.061405429;
-    let p = 0.3275911;
-
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let x = x.abs();
-
-    let t = 1.0 / (1.0 + p * x);
-    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-
-    sign * y
 }
 
 #[allow(dead_code)]
