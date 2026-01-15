@@ -138,6 +138,9 @@ pub use validation::tests::{
     ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test,
 };
 use validation::tests::{score_test_py, wald_test_py};
+pub use validation::uno_c_index::{
+    ConcordanceComparisonResult, UnoCIndexResult, compare_uno_c_indices, uno_c_index,
+};
 pub use validation::yates::{
     YatesPairwiseResult, YatesResult, yates, yates_contrast, yates_pairwise,
 };
@@ -311,6 +314,8 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(yates, &m)?)?;
     m.add_function(wrap_pyfunction!(yates_contrast, &m)?)?;
     m.add_function(wrap_pyfunction!(yates_pairwise, &m)?)?;
+    m.add_function(wrap_pyfunction!(uno_c_index, &m)?)?;
+    m.add_function(wrap_pyfunction!(compare_uno_c_indices, &m)?)?;
     // New regression/core functions
     m.add_function(wrap_pyfunction!(ridge_fit, &m)?)?;
     m.add_function(wrap_pyfunction!(ridge_cv, &m)?)?;
@@ -401,6 +406,8 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RoystonResult>()?;
     m.add_class::<YatesResult>()?;
     m.add_class::<YatesPairwiseResult>()?;
+    m.add_class::<UnoCIndexResult>()?;
+    m.add_class::<ConcordanceComparisonResult>()?;
     // New regression/core classes
     m.add_class::<RidgePenalty>()?;
     m.add_class::<RidgeResult>()?;
