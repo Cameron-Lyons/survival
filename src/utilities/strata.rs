@@ -1,37 +1,25 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::hash::Hash;
 
-/// Result of stratification variable creation
 #[derive(Debug, Clone)]
 #[pyclass]
 pub struct StrataResult {
-    /// Strata codes for each observation (0-indexed)
     #[pyo3(get)]
     pub strata: Vec<i32>,
-    /// Labels for each stratum level
     #[pyo3(get)]
     pub levels: Vec<String>,
-    /// Count of observations in each stratum
     #[pyo3(get)]
     pub counts: Vec<usize>,
-    /// Number of strata
     #[pyo3(get)]
     pub n_strata: usize,
 }
 
-/// Create stratification variable from one or more factors.
-///
-/// This function creates a combined stratification variable from one or more
-/// input vectors. In survival analysis, stratification allows fitting separate
-/// baseline hazards for each stratum while assuming common covariate effects.
-///
-/// # Arguments
-/// * `variables` - Vector of vectors, each representing a stratifying variable
-///
-/// # Returns
-/// * `StrataResult` containing combined strata codes and level information
-#[pyfunction]
-pub fn strata(variables: Vec<Vec<i64>>) -> PyResult<StrataResult> {
+fn strata_internal<T, F>(variables: &[Vec<T>], format_label: F) -> Result<StrataResult, String>
+where
+    T: Clone + Eq + Hash,
+    F: Fn(&[T]) -> String,
+{
     if variables.is_empty() {
         return Ok(StrataResult {
             strata: vec![],
@@ -44,12 +32,12 @@ pub fn strata(variables: Vec<Vec<i64>>) -> PyResult<StrataResult> {
     let n = variables[0].len();
     for (i, var) in variables.iter().enumerate() {
         if var.len() != n {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            return Err(format!(
                 "Variable {} has length {} but expected {}",
                 i,
                 var.len(),
                 n
-            )));
+            ));
         }
     }
 
@@ -62,22 +50,16 @@ pub fn strata(variables: Vec<Vec<i64>>) -> PyResult<StrataResult> {
         });
     }
 
-    let mut strata_map: HashMap<Vec<i64>, i32> = HashMap::new();
+    let mut strata_map: HashMap<Vec<T>, i32> = HashMap::new();
     let mut strata = Vec::with_capacity(n);
     let mut levels = Vec::new();
     let mut current_stratum_id = 0i32;
 
     for i in 0..n {
-        let key: Vec<i64> = variables.iter().map(|var| var[i]).collect();
+        let key: Vec<T> = variables.iter().map(|var| var[i].clone()).collect();
         let stratum_id = *strata_map.entry(key.clone()).or_insert_with(|| {
             let id = current_stratum_id;
-            let label = key
-                .iter()
-                .enumerate()
-                .map(|(j, v)| format!("v{}={}", j + 1, v))
-                .collect::<Vec<_>>()
-                .join(", ");
-            levels.push(label);
+            levels.push(format_label(&key));
             current_stratum_id += 1;
             id
         });
@@ -85,7 +67,6 @@ pub fn strata(variables: Vec<Vec<i64>>) -> PyResult<StrataResult> {
     }
 
     let n_strata = strata_map.len();
-
     let mut counts = vec![0usize; n_strata];
     for &s in &strata {
         counts[s as usize] += 1;
@@ -99,69 +80,22 @@ pub fn strata(variables: Vec<Vec<i64>>) -> PyResult<StrataResult> {
     })
 }
 
-/// Create stratification variable from string factors
+#[pyfunction]
+pub fn strata(variables: Vec<Vec<i64>>) -> PyResult<StrataResult> {
+    strata_internal(&variables, |key| {
+        key.iter()
+            .enumerate()
+            .map(|(j, v)| format!("v{}={}", j + 1, v))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
+    .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+}
+
 #[pyfunction]
 pub fn strata_str(variables: Vec<Vec<String>>) -> PyResult<StrataResult> {
-    if variables.is_empty() {
-        return Ok(StrataResult {
-            strata: vec![],
-            levels: vec![],
-            counts: vec![],
-            n_strata: 0,
-        });
-    }
-
-    let n = variables[0].len();
-    for (i, var) in variables.iter().enumerate() {
-        if var.len() != n {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Variable {} has length {} but expected {}",
-                i,
-                var.len(),
-                n
-            )));
-        }
-    }
-
-    if n == 0 {
-        return Ok(StrataResult {
-            strata: vec![],
-            levels: vec![],
-            counts: vec![],
-            n_strata: 0,
-        });
-    }
-
-    let mut strata_map: HashMap<Vec<String>, i32> = HashMap::new();
-    let mut strata = Vec::with_capacity(n);
-    let mut levels = Vec::new();
-    let mut current_stratum_id = 0i32;
-
-    for i in 0..n {
-        let key: Vec<String> = variables.iter().map(|var| var[i].clone()).collect();
-        let stratum_id = *strata_map.entry(key.clone()).or_insert_with(|| {
-            let id = current_stratum_id;
-            let label = key.join(", ");
-            levels.push(label);
-            current_stratum_id += 1;
-            id
-        });
-        strata.push(stratum_id);
-    }
-
-    let n_strata = strata_map.len();
-
-    let mut counts = vec![0usize; n_strata];
-    for &s in &strata {
-        counts[s as usize] += 1;
-    }
-
-    Ok(StrataResult {
-        strata,
-        levels,
-        counts,
-        n_strata,
-    })
+    strata_internal(&variables, |key| key.join(", "))
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
 }
 
 #[cfg(test)]
