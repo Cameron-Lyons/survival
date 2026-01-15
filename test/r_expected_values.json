@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "survival_version": "3.8.3",
+    "survival_version": "3.8.6",
     "r_version": "R version 4.5.2 (2025-10-31)",
     "note": "These values were generated using the R survival package. Regenerate with: Rscript generate_r_expected_values.R"
   },
