@@ -1,12 +1,3 @@
-#![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::needless_range_loop,
-    clippy::too_many_arguments
-)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -246,6 +237,7 @@ fn bootstrap_qaly_ci(
     horizon=None,
     n_bootstrap=1000
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn qaly_comparison(
     time_treated: Vec<f64>,
     status_treated: Vec<i32>,
@@ -386,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_icer() {
-        let (icer, nmb, cost_effective) =
+        let (icer, _nmb, cost_effective) =
             incremental_cost_effectiveness(10.0, 8.0, 50000.0, 30000.0, Some(50000.0)).unwrap();
 
         assert_eq!(icer, 10000.0);

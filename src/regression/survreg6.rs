@@ -154,37 +154,35 @@ fn calculate_likelihood(
         0,
         &frail_arr.view(),
     )?;
-    for i in 0..nvar2.min(u.len()) {
-        if i < result.u.len() {
-            u[i] = result.u[i];
-        }
-    }
-    for i in 0..nvar2.min(imat.nrows()) {
-        for j in 0..nvar2.min(imat.ncols()) {
-            if i < result.imat.nrows() && j < result.imat.ncols() {
-                imat[[i, j]] = -result.imat[[i, j]];
-            }
-        }
-    }
-    for i in 0..nvar2.min(jj.nrows()) {
-        for j in 0..nvar2.min(jj.ncols()) {
-            if i < result.jj.nrows() && j < result.jj.ncols() {
-                jj[[i, j]] = result.jj[[i, j]];
-            }
-        }
-    }
+    let copy_len = nvar2.min(u.len()).min(result.u.len());
+    u.iter_mut()
+        .zip(result.u.iter())
+        .take(copy_len)
+        .for_each(|(dest, &src)| *dest = src);
+
+    let copy_rows = nvar2.min(imat.nrows()).min(result.imat.nrows());
+    let copy_cols = nvar2.min(imat.ncols()).min(result.imat.ncols());
+    imat.slice_mut(ndarray::s![..copy_rows, ..copy_cols])
+        .assign(&(-&result.imat.slice(ndarray::s![..copy_rows, ..copy_cols])));
+
+    let copy_rows_jj = nvar2.min(jj.nrows()).min(result.jj.nrows());
+    let copy_cols_jj = nvar2.min(jj.ncols()).min(result.jj.ncols());
+    jj.slice_mut(ndarray::s![..copy_rows_jj, ..copy_cols_jj])
+        .assign(&result.jj.slice(ndarray::s![..copy_rows_jj, ..copy_cols_jj]));
     Ok(result.loglik)
 }
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
 }
 fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) {
-    for i in 0..nstrat {
-        let idx = nvar + i;
-        if beta[idx] - newbeta[idx] > 1.1 {
-            newbeta[idx] = beta[idx] - 1.1;
-        }
-    }
+    newbeta[nvar..nvar + nstrat]
+        .iter_mut()
+        .zip(&beta[nvar..nvar + nstrat])
+        .for_each(|(nb, &b)| {
+            if b - *nb > 1.1 {
+                *nb = b - 1.1;
+            }
+        });
 }
 fn calculate_variance_matrix(
     imat: Array2<f64>,
@@ -400,20 +398,20 @@ pub fn survreg(
     };
     let weights_arr = Array1::from_vec(weights);
     let offsets_arr = Array1::from_vec(offsets);
-    let result = compute_survreg(
-        config.max_iter,
+    let result = compute_survreg(ComputeSurvregInput {
+        max_iter: config.max_iter,
         nvar,
-        &y,
-        &cov_array,
-        &weights_arr,
-        &offsets_arr,
-        initial_beta,
+        y: &y,
+        covariates: &cov_array,
+        weights: &weights_arr,
+        offsets: &offsets_arr,
+        beta: initial_beta,
         nstrat,
-        &strata,
-        config.eps,
-        config.tol_chol,
-        config.distribution,
-    )
+        strata: &strata,
+        eps: config.eps,
+        tol_chol: config.tol_chol,
+        distribution: config.distribution,
+    })
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
     let variance_matrix = result
         .variance_matrix
@@ -429,21 +427,23 @@ pub fn survreg(
         score_vector: result.score_vector,
     })
 }
-#[allow(clippy::too_many_arguments)]
 fn compute_survreg(
-    max_iter: usize,
-    nvar: usize,
-    y: &Array2<f64>,
-    covariates: &Array2<f64>,
-    weights: &Array1<f64>,
-    offsets: &Array1<f64>,
-    mut beta: Vec<f64>,
-    nstrat: usize,
-    strata: &[usize],
-    eps: f64,
-    tol_chol: f64,
-    distribution: DistributionType,
+    input: ComputeSurvregInput<'_>,
 ) -> Result<SurvivalFitComputed, Box<dyn std::error::Error>> {
+    let ComputeSurvregInput {
+        max_iter,
+        nvar,
+        y,
+        covariates,
+        weights,
+        offsets,
+        mut beta,
+        nstrat,
+        strata,
+        eps,
+        tol_chol,
+        distribution,
+    } = input;
     let n = y.nrows();
     let ny = y.ncols();
     let nvar2 = nvar + nstrat;
@@ -563,6 +563,21 @@ pub(crate) struct SurvivalFitComputed {
     log_likelihood: f64,
     convergence_flag: i32,
     score_vector: Vec<f64>,
+}
+
+struct ComputeSurvregInput<'a> {
+    max_iter: usize,
+    nvar: usize,
+    y: &'a Array2<f64>,
+    covariates: &'a Array2<f64>,
+    weights: &'a Array1<f64>,
+    offsets: &'a Array1<f64>,
+    beta: Vec<f64>,
+    nstrat: usize,
+    strata: &'a [usize],
+    eps: f64,
+    tol_chol: f64,
+    distribution: DistributionType,
 }
 
 #[pyfunction]

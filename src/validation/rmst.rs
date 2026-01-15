@@ -753,3 +753,148 @@ pub fn number_needed_to_treat(
     let conf = confidence_level.unwrap_or(0.95);
     Ok(compute_nnt(&time, &status, &group, time_horizon, conf))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_rmst_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 0, 1, 0];
+        let tau = 5.0;
+
+        let result = compute_rmst(&time, &status, tau, 0.95);
+
+        assert!(result.rmst > 0.0);
+        assert!(result.rmst <= tau);
+        assert!(result.se >= 0.0);
+        assert!(result.ci_lower <= result.rmst);
+        assert!(result.ci_upper >= result.rmst);
+        assert_eq!(result.tau, tau);
+    }
+
+    #[test]
+    fn test_compute_rmst_empty() {
+        let time: Vec<f64> = vec![];
+        let status: Vec<i32> = vec![];
+
+        let result = compute_rmst(&time, &status, 5.0, 0.95);
+
+        assert_eq!(result.rmst, 0.0);
+        assert_eq!(result.variance, 0.0);
+    }
+
+    #[test]
+    fn test_compute_rmst_no_events() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![0, 0, 0];
+
+        let result = compute_rmst(&time, &status, 5.0, 0.95);
+
+        assert_eq!(result.rmst, 5.0);
+    }
+
+    #[test]
+    fn test_compare_rmst_two_groups() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 1.5, 2.5, 3.5, 4.5];
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 0];
+        let group = vec![0, 0, 0, 0, 1, 1, 1, 1];
+
+        let result = compare_rmst(&time, &status, &group, 5.0, 0.95);
+
+        assert!(result.rmst_group1.rmst > 0.0);
+        assert!(result.rmst_group2.rmst > 0.0);
+        assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+    }
+
+    #[test]
+    fn test_compare_rmst_single_group() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 1, 0];
+        let group = vec![0, 0, 0];
+
+        let result = compare_rmst(&time, &status, &group, 5.0, 0.95);
+
+        assert_eq!(result.rmst_diff, 0.0);
+        assert_eq!(result.rmst_ratio, 1.0);
+    }
+
+    #[test]
+    fn test_survival_quantile_median() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1, 1, 1, 1, 1, 1];
+
+        let result = compute_survival_quantile(&time, &status, 0.5, 0.95);
+
+        assert!(result.median.is_some());
+        assert_eq!(result.quantile, 0.5);
+    }
+
+    #[test]
+    fn test_survival_quantile_empty() {
+        let time: Vec<f64> = vec![];
+        let status: Vec<i32> = vec![];
+
+        let result = compute_survival_quantile(&time, &status, 0.5, 0.95);
+
+        assert!(result.median.is_none());
+    }
+
+    #[test]
+    fn test_cumulative_incidence_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 2, 1, 0, 2];
+
+        let result = compute_cumulative_incidence(&time, &status);
+
+        assert!(!result.time.is_empty());
+        assert_eq!(result.event_types.len(), 2);
+        assert_eq!(result.cif.len(), 2);
+    }
+
+    #[test]
+    fn test_cumulative_incidence_empty() {
+        let time: Vec<f64> = vec![];
+        let status: Vec<i32> = vec![];
+
+        let result = compute_cumulative_incidence(&time, &status);
+
+        assert!(result.time.is_empty());
+        assert!(result.cif.is_empty());
+    }
+
+    #[test]
+    fn test_cumulative_incidence_no_events() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![0, 0, 0];
+
+        let result = compute_cumulative_incidence(&time, &status);
+
+        assert!(result.event_types.is_empty());
+    }
+
+    #[test]
+    fn test_compute_nnt_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 0, 1, 1, 1, 1, 0];
+        let group = vec![0, 0, 0, 0, 1, 1, 1, 1];
+
+        let result = compute_nnt(&time, &status, &group, 5.0, 0.95);
+
+        assert!(result.nnt.is_finite() || result.nnt.is_infinite());
+        assert_eq!(result.time_horizon, 5.0);
+    }
+
+    #[test]
+    fn test_rmst_result_new() {
+        let result = RMSTResult::new(3.5, 0.25, 0.5, 2.5, 4.5, 5.0);
+
+        assert_eq!(result.rmst, 3.5);
+        assert_eq!(result.variance, 0.25);
+        assert_eq!(result.se, 0.5);
+        assert_eq!(result.ci_lower, 2.5);
+        assert_eq!(result.ci_upper, 4.5);
+        assert_eq!(result.tau, 5.0);
+    }
+}

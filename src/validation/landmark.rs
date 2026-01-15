@@ -740,3 +740,96 @@ pub fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeT
 pub fn life_table(time: Vec<f64>, status: Vec<i32>, breaks: Vec<f64>) -> PyResult<LifeTableResult> {
     Ok(compute_life_table(&time, &status, &breaks))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_landmark_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 0, 1];
+        let landmark_time = 2.0;
+
+        let result = compute_landmark(&time, &status, landmark_time);
+
+        assert_eq!(result.landmark_time, 2.0);
+        assert_eq!(result.n_at_risk, 3);
+        assert_eq!(result.n_excluded, 2);
+        assert_eq!(result.time.len(), 3);
+    }
+
+    #[test]
+    fn test_compute_landmark_all_excluded() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 1, 1];
+        let landmark_time = 5.0;
+
+        let result = compute_landmark(&time, &status, landmark_time);
+
+        assert_eq!(result.n_at_risk, 0);
+        assert_eq!(result.n_excluded, 3);
+    }
+
+    #[test]
+    fn test_compute_landmark_none_excluded() {
+        let time = vec![5.0, 6.0, 7.0];
+        let status = vec![1, 0, 1];
+        let landmark_time = 1.0;
+
+        let result = compute_landmark(&time, &status, landmark_time);
+
+        assert_eq!(result.n_at_risk, 3);
+        assert_eq!(result.n_excluded, 0);
+        assert_eq!(result.time[0], 4.0);
+    }
+
+    #[test]
+    fn test_compute_landmarks_parallel() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 0, 1];
+        let landmarks = vec![1.0, 2.0, 3.0];
+
+        let results = compute_landmarks_parallel(&time, &status, &landmarks);
+
+        assert_eq!(results.len(), 3);
+        assert!(results[0].n_at_risk >= results[1].n_at_risk);
+        assert!(results[1].n_at_risk >= results[2].n_at_risk);
+    }
+
+    #[test]
+    fn test_compute_life_table_basic() {
+        let time = vec![1.5, 2.5, 3.5, 4.5, 5.5];
+        let status = vec![1, 1, 0, 1, 0];
+        let breaks = vec![0.0, 2.0, 4.0, 6.0];
+
+        let result = compute_life_table(&time, &status, &breaks);
+
+        assert_eq!(result.interval_start.len(), 3);
+        assert_eq!(result.survival.len(), 3);
+        assert!(result.survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
+    }
+
+    #[test]
+    fn test_compute_life_table_no_events() {
+        let time = vec![1.5, 3.5, 5.5];
+        let status = vec![0, 0, 0];
+        let breaks = vec![0.0, 2.0, 4.0, 6.0];
+
+        let result = compute_life_table(&time, &status, &breaks);
+
+        assert_eq!(result.interval_start.len(), 3);
+        assert!(result.n_deaths.iter().all(|&d| d == 0.0));
+        assert!(result.survival.iter().all(|&s| s == 1.0));
+    }
+
+    #[test]
+    fn test_landmark_result_new() {
+        let result = LandmarkResult::new(2.0, 5, 3, vec![1.0, 2.0], vec![1, 0], vec![3, 4]);
+
+        assert_eq!(result.landmark_time, 2.0);
+        assert_eq!(result.n_at_risk, 5);
+        assert_eq!(result.n_excluded, 3);
+        assert_eq!(result.time.len(), 2);
+    }
+}

@@ -1,13 +1,3 @@
-#![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop,
-    clippy::len_zero
-)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -75,8 +65,6 @@ fn fit_outcome_model(time: &[f64], status: &[i32], x: &[f64], n: usize, p: usize
             for j in 0..p {
                 eta += x[i * p + j] * beta[j];
             }
-            let exp_eta = eta.clamp(-700.0, 700.0).exp();
-
             let log_t = time[i].max(1e-10).ln();
             let z = (log_t - scale.ln() - eta) * shape;
 
@@ -124,6 +112,7 @@ fn predict_survival(model: &OutcomeModel, x_row: &[f64], time_points: &[f64]) ->
 
 #[pyfunction]
 #[pyo3(signature = (time, status, treatment, x_confounders, n_obs, n_vars, tau=None, n_bootstrap=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn g_computation(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -263,6 +252,7 @@ fn compute_rmst(time_points: &[f64], survival: &[f64], tau: f64) -> f64 {
     rmst
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bootstrap_se(
     time: &[f64],
     status: &[i32],
@@ -405,7 +395,7 @@ mod tests {
 
         let result = g_computation(time, status, treatment, x, 6, 1, Some(5.0), Some(10)).unwrap();
 
-        assert!(result.survival_treated.len() > 0);
-        assert!(result.survival_control.len() > 0);
+        assert!(!result.survival_treated.is_empty());
+        assert!(!result.survival_control.is_empty());
     }
 }

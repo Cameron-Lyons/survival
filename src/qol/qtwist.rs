@@ -1,12 +1,3 @@
-#![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::needless_range_loop,
-    clippy::too_many_arguments
-)]
-
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -45,6 +36,7 @@ pub struct QTWISTResult {
     utility_rel=0.5,
     tau=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn qtwist_analysis(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -133,6 +125,7 @@ pub fn qtwist_analysis(
     tau=None,
     n_bootstrap=1000
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn qtwist_comparison(
     time_treated: Vec<f64>,
     status_treated: Vec<i32>,
@@ -263,6 +256,7 @@ pub fn qtwist_comparison(
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn qtwist_sensitivity(
     time: Vec<f64>,
     status: Vec<i32>,

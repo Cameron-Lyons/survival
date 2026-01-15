@@ -175,17 +175,21 @@ impl CoxFitBuilder {
         let doscale = self.doscale.unwrap_or_else(|| vec![true; nvar]);
         let initial_beta = self.initial_beta.unwrap_or_else(|| vec![0.0; nvar]);
 
-        CoxFit::new(
+        let config = CoxFitConfig {
+            method: self.method,
+            max_iter: self.max_iter,
+            eps: self.eps,
+            toler: self.toler,
+        };
+
+        CoxFit::with_config(
             self.time,
             self.status,
             self.covar,
             strata,
             offset,
             weights,
-            self.method,
-            self.max_iter,
-            self.eps,
-            self.toler,
+            config,
             doscale,
             initial_beta,
         )
@@ -231,7 +235,7 @@ impl CoxFit {
         Ok(cox)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub fn new(
         time: Array1<f64>,
         status: Array1<i32>,
@@ -565,12 +569,16 @@ impl CoxFit {
         Ok(())
     }
     fn rescale_params(&mut self) {
-        let nvar = self.beta.len();
-        for i in 0..nvar {
-            self.beta[i] *= self.scale[i];
-            self.u[i] /= self.scale[i];
-            for j in 0..nvar {
-                self.imat[(i, j)] *= self.scale[i] * self.scale[j];
+        for (i, (&scale_i, (beta, u))) in self
+            .scale
+            .iter()
+            .zip(self.beta.iter_mut().zip(self.u.iter_mut()))
+            .enumerate()
+        {
+            *beta *= scale_i;
+            *u /= scale_i;
+            for (j, &scale_j) in self.scale.iter().enumerate() {
+                self.imat[(i, j)] *= scale_i * scale_j;
             }
         }
     }
@@ -601,11 +609,11 @@ impl CoxFit {
         Ok(())
     }
     fn chinv(mat: &mut Array2<f64>) -> Result<(), CoxError> {
-        let n = mat.nrows();
         let mut mat_reg = mat.clone();
-        for i in 0..n {
-            mat_reg[(i, i)] += RIDGE_REGULARIZATION;
-        }
+        mat_reg
+            .diag_mut()
+            .iter_mut()
+            .for_each(|d| *d += RIDGE_REGULARIZATION);
         let inv = matrix_inverse(&mat_reg).ok_or(CoxError::MatrixInversion)?;
         *mat = inv;
         Ok(())
@@ -621,5 +629,86 @@ impl CoxFit {
             self.flag,
             self.iter,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cox_fit_config_default() {
+        let config = CoxFitConfig::default();
+
+        assert!(matches!(config.method, Method::Breslow));
+        assert!(config.max_iter > 0);
+        assert!(config.eps > 0.0);
+        assert!(config.toler > 0.0);
+    }
+
+    #[test]
+    fn test_cox_fit_builder_basic() {
+        let time = Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        let status = Array1::from_vec(vec![1, 0, 1, 0, 1]);
+        let covar = Array2::from_shape_vec((5, 1), vec![0.5, 1.0, 0.3, 0.8, 0.6]).unwrap();
+
+        let builder = CoxFitBuilder::new(time, status, covar);
+        let result = builder.build();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cox_fit_builder_with_options() {
+        let time = Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        let status = Array1::from_vec(vec![1, 0, 1, 0, 1]);
+        let covar = Array2::from_shape_vec((5, 1), vec![0.5, 1.0, 0.3, 0.8, 0.6]).unwrap();
+        let weights = Array1::from_vec(vec![1.0, 1.0, 1.0, 1.0, 1.0]);
+
+        let builder = CoxFitBuilder::new(time, status, covar)
+            .weights(weights)
+            .max_iter(50)
+            .eps(1e-8);
+        let result = builder.build();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cox_fit_and_results() {
+        let time = Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        let status = Array1::from_vec(vec![1, 0, 1, 0, 1, 0, 1, 0]);
+        let covar =
+            Array2::from_shape_vec((8, 1), vec![0.5, 1.0, 0.3, 0.8, 0.6, 0.4, 0.9, 0.2]).unwrap();
+
+        let builder = CoxFitBuilder::new(time, status, covar);
+        let mut cox = builder.build().unwrap();
+
+        let fit_result = cox.fit();
+        assert!(fit_result.is_ok());
+
+        let (beta, _means, _u, _imat, loglik, _sctest, _flag, _iter) = cox.results();
+
+        assert_eq!(beta.len(), 1);
+        assert!(loglik[0].is_finite());
+        assert!(loglik[1].is_finite());
+    }
+
+    #[test]
+    fn test_cox_error_display() {
+        let chol_err = CoxError::CholeskyDecomposition;
+        let inv_err = CoxError::MatrixInversion;
+
+        assert_eq!(format!("{}", chol_err), "Cholesky decomposition failed");
+        assert_eq!(format!("{}", inv_err), "Matrix inversion failed");
+    }
+
+    #[test]
+    fn test_method_variants() {
+        let breslow = Method::Breslow;
+        let efron = Method::Efron;
+
+        assert!(matches!(breslow, Method::Breslow));
+        assert!(matches!(efron, Method::Efron));
     }
 }

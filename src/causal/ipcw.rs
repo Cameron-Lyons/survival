@@ -1,17 +1,4 @@
-#![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop,
-    clippy::manual_contains,
-    clippy::if_same_then_else,
-    clippy::manual_range_contains
-)]
-
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -112,7 +99,7 @@ pub fn compute_ipcw_weights(
 
     let mut censoring_probs = vec![1.0; n_obs];
 
-    for (t_idx, &t) in unique_times.iter().enumerate() {
+    for &t in &unique_times {
         let at_risk: Vec<usize> = (0..n_obs).filter(|&i| time[i] >= t).collect();
 
         if at_risk.is_empty() {
@@ -140,7 +127,7 @@ pub fn compute_ipcw_weights(
             })
             .collect();
 
-        let has_events = y_risk.iter().any(|&y| y == 1);
+        let has_events = y_risk.contains(&1);
         if !has_events {
             continue;
         }
@@ -224,6 +211,7 @@ fn compute_km_censoring(time: &[f64], status: &[i32], n: usize) -> Vec<f64> {
 
 #[pyfunction]
 #[pyo3(signature = (time, status, treatment, outcome, x_confounders, n_obs, n_vars, tau=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn ipcw_treatment_effect(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -252,9 +240,7 @@ pub fn ipcw_treatment_effect(
     let mut n_control = 0.0;
 
     for i in 0..n_obs {
-        let contrib = if time[i] <= tau_val && status[i] == 1 {
-            outcome[i] * ipcw.weights[i]
-        } else if time[i] > tau_val {
+        let contrib = if (time[i] <= tau_val && status[i] == 1) || time[i] > tau_val {
             outcome[i] * ipcw.weights[i]
         } else {
             continue;
@@ -338,7 +324,6 @@ pub fn ipcw_kaplan_meier(
         let mut var_sum = 0.0;
 
         for i in 0..n_obs {
-            let at_risk = if time[i] >= t { 1.0 } else { 0.0 };
             let w = ipcw.weights[i];
 
             denom += w;
@@ -390,6 +375,6 @@ mod tests {
         let status = vec![1, 0, 1, 0];
         let km = compute_km_censoring(&time, &status, 4);
         assert_eq!(km.len(), 4);
-        assert!(km.iter().all(|&s| s <= 1.0 && s >= 0.0));
+        assert!(km.iter().all(|&s| (0.0..=1.0).contains(&s)));
     }
 }
