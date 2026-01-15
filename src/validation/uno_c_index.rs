@@ -504,7 +504,7 @@ mod tests {
 
         let result = uno_c_index_core(&time, &status, &risk_score, None);
 
-        assert!(result.c_index >= 0.0 && result.c_index <= 1.0);
+        assert!((0.0..=1.0).contains(&result.c_index));
         assert!(result.c_index > 0.9);
         assert!(result.std_error >= 0.0);
         assert!(result.ci_lower <= result.c_index);
@@ -519,7 +519,7 @@ mod tests {
 
         let result = uno_c_index_core(&time, &status, &risk_score, None);
 
-        assert!(result.c_index >= 0.0 && result.c_index <= 1.0);
+        assert!((0.0..=1.0).contains(&result.c_index));
     }
 
     #[test]
@@ -543,7 +543,7 @@ mod tests {
 
         let result = uno_c_index_core(&time, &status, &risk_score, None);
 
-        assert!(result.c_index >= 0.0 && result.c_index <= 1.0);
+        assert!((0.0..=1.0).contains(&result.c_index));
     }
 
     #[test]
@@ -561,10 +561,10 @@ mod tests {
 
         let result = compare_uno_c_indices_core(&time, &status, &risk_score_1, &risk_score_2, None);
 
-        assert!(result.c_index_1 >= 0.0 && result.c_index_1 <= 1.0);
-        assert!(result.c_index_2 >= 0.0 && result.c_index_2 <= 1.0);
+        assert!((0.0..=1.0).contains(&result.c_index_1));
+        assert!((0.0..=1.0).contains(&result.c_index_2));
         assert!((result.difference - (result.c_index_1 - result.c_index_2)).abs() < 1e-10);
-        assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+        assert!((0.0..=1.0).contains(&result.p_value));
     }
 
     #[test]
@@ -577,7 +577,7 @@ mod tests {
         assert!(!times.is_empty());
         assert_eq!(times.len(), values.len());
         for &v in &values {
-            assert!(v >= 0.0 && v <= 1.0);
+            assert!((0.0..=1.0).contains(&v));
         }
         for i in 1..values.len() {
             assert!(values[i] <= values[i - 1] + 1e-10);
