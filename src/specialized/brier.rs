@@ -1,6 +1,18 @@
+use crate::utilities::simd::{sum_f64, weighted_squared_diff_sum};
 use pyo3::prelude::*;
 use rayon::prelude::*;
-fn compute_brier(predictions: &[f64], outcomes: &[i32], weights: Option<&[f64]>) -> Option<f64> {
+
+const SIMD_THRESHOLD: usize = 64;
+
+fn validate_predictions(predictions: &[f64]) -> bool {
+    predictions.iter().all(|&p| (0.0..=1.0).contains(&p))
+}
+
+pub fn compute_brier(
+    predictions: &[f64],
+    outcomes: &[i32],
+    weights: Option<&[f64]>,
+) -> Option<f64> {
     let n = predictions.len();
     if n != outcomes.len() {
         return None;
@@ -8,24 +20,99 @@ fn compute_brier(predictions: &[f64], outcomes: &[i32], weights: Option<&[f64]>)
     if n == 0 {
         return Some(0.0);
     }
-    let mut score = 0.0;
-    let mut total_weight = 0.0;
-    for i in 0..n {
-        let pred = predictions[i];
-        let obs = outcomes[i] as f64;
-        let w = weights.map_or(1.0, |ws| ws[i]);
-        if !(0.0..=1.0).contains(&pred) {
-            return None;
-        }
-        score += w * (pred - obs).powi(2);
-        total_weight += w;
+
+    if !validate_predictions(predictions) {
+        return None;
     }
-    if total_weight > 0.0 {
-        Some(score / total_weight)
+
+    let outcomes_f64: Vec<f64> = outcomes.iter().map(|&x| x as f64).collect();
+
+    if n >= SIMD_THRESHOLD {
+        match weights {
+            Some(w) => {
+                let score = weighted_squared_diff_sum(predictions, &outcomes_f64, w);
+                let total_weight = sum_f64(w);
+                if total_weight > 0.0 {
+                    Some(score / total_weight)
+                } else {
+                    Some(0.0)
+                }
+            }
+            None => {
+                let score = crate::utilities::simd::squared_diff_sum(predictions, &outcomes_f64);
+                Some(score / n as f64)
+            }
+        }
     } else {
-        Some(0.0)
+        let mut score = 0.0;
+        let mut total_weight = 0.0;
+        for i in 0..n {
+            let pred = predictions[i];
+            let obs = outcomes_f64[i];
+            let w = weights.map_or(1.0, |ws| ws[i]);
+            score += w * (pred - obs).powi(2);
+            total_weight += w;
+        }
+        if total_weight > 0.0 {
+            Some(score / total_weight)
+        } else {
+            Some(0.0)
+        }
     }
 }
+
+#[allow(dead_code)]
+pub fn compute_brier_f64(
+    predictions: &[f64],
+    outcomes: &[f64],
+    weights: Option<&[f64]>,
+) -> Option<f64> {
+    let n = predictions.len();
+    if n != outcomes.len() {
+        return None;
+    }
+    if n == 0 {
+        return Some(0.0);
+    }
+
+    if !validate_predictions(predictions) {
+        return None;
+    }
+
+    if n >= SIMD_THRESHOLD {
+        match weights {
+            Some(w) => {
+                let score = weighted_squared_diff_sum(predictions, outcomes, w);
+                let total_weight = sum_f64(w);
+                if total_weight > 0.0 {
+                    Some(score / total_weight)
+                } else {
+                    Some(0.0)
+                }
+            }
+            None => {
+                let score = crate::utilities::simd::squared_diff_sum(predictions, outcomes);
+                Some(score / n as f64)
+            }
+        }
+    } else {
+        let mut score = 0.0;
+        let mut total_weight = 0.0;
+        for i in 0..n {
+            let pred = predictions[i];
+            let obs = outcomes[i];
+            let w = weights.map_or(1.0, |ws| ws[i]);
+            score += w * (pred - obs).powi(2);
+            total_weight += w;
+        }
+        if total_weight > 0.0 {
+            Some(score / total_weight)
+        } else {
+            Some(0.0)
+        }
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (predictions, outcomes, weights=None))]
 pub fn brier(
@@ -42,36 +129,65 @@ pub fn brier(
     if n == 0 {
         return Ok(0.0);
     }
-    let weights = if let Some(w) = weights {
-        if w.len() != n {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "weights must have the same length as predictions",
-            ));
-        }
-        w
-    } else {
-        vec![1.0; n]
-    };
-    let mut score = 0.0;
-    let mut total_weight = 0.0;
-    for i in 0..n {
-        let pred = predictions[i];
-        let obs = outcomes[i] as f64;
-        let w = weights[i];
-        if !(0.0..=1.0).contains(&pred) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "predictions must be between 0 and 1",
-            ));
-        }
-        score += w * (pred - obs).powi(2);
-        total_weight += w;
+
+    if !validate_predictions(&predictions) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "predictions must be between 0 and 1",
+        ));
     }
-    if total_weight > 0.0 {
-        Ok(score / total_weight)
+
+    let outcomes_f64: Vec<f64> = outcomes.iter().map(|&x| x as f64).collect();
+
+    if n >= SIMD_THRESHOLD {
+        match weights {
+            Some(ref w) => {
+                if w.len() != n {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "weights must have the same length as predictions",
+                    ));
+                }
+                let score = weighted_squared_diff_sum(&predictions, &outcomes_f64, w);
+                let total_weight = sum_f64(w);
+                if total_weight > 0.0 {
+                    Ok(score / total_weight)
+                } else {
+                    Ok(0.0)
+                }
+            }
+            None => {
+                let score = crate::utilities::simd::squared_diff_sum(&predictions, &outcomes_f64);
+                Ok(score / n as f64)
+            }
+        }
     } else {
-        Ok(0.0)
+        let weights = if let Some(w) = weights {
+            if w.len() != n {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "weights must have the same length as predictions",
+                ));
+            }
+            w
+        } else {
+            vec![1.0; n]
+        };
+
+        let mut score = 0.0;
+        let mut total_weight = 0.0;
+        for i in 0..n {
+            let pred = predictions[i];
+            let obs = outcomes_f64[i];
+            let w = weights[i];
+            score += w * (pred - obs).powi(2);
+            total_weight += w;
+        }
+        if total_weight > 0.0 {
+            Ok(score / total_weight)
+        } else {
+            Ok(0.0)
+        }
     }
 }
+
 #[pyfunction]
 #[pyo3(signature = (predictions, outcomes, times, weights=None))]
 pub fn integrated_brier(
