@@ -25,7 +25,7 @@ mod utilities;
 mod validation;
 
 pub use concordance::basic::concordance as compute_concordance;
-pub use concordance::concordance1::perform_concordance1_calculation;
+pub use concordance::concordance1::{concordance1, perform_concordance1_calculation};
 pub use concordance::concordance3::perform_concordance3_calculation;
 pub use concordance::concordance5::perform_concordance_calculation;
 pub use constants::*;
@@ -54,7 +54,7 @@ pub use residuals::survreg_resid::{SurvregResiduals, dfbeta_survreg, residuals_s
 pub use scoring::agscore2::perform_score_calculation;
 pub use scoring::agscore3::perform_agscore3_calculation;
 pub use scoring::coxscore2::cox_score_residuals;
-pub use specialized::brier::{brier, integrated_brier};
+pub use specialized::brier::{brier, compute_brier, integrated_brier};
 pub use specialized::cch::{CchMethod, CohortData};
 pub use specialized::cipoisson::{cipoisson, cipoisson_anscombe, cipoisson_exact};
 pub use specialized::finegray::{FineGrayOutput, finegray};
@@ -79,7 +79,8 @@ pub use surv_analysis::aggregate_survfit::{
 pub use surv_analysis::agsurv4::agsurv4;
 pub use surv_analysis::agsurv5::agsurv5;
 pub use surv_analysis::nelson_aalen::{
-    NelsonAalenResult, StratifiedKMResult, nelson_aalen_estimator, stratified_kaplan_meier,
+    NelsonAalenResult, StratifiedKMResult, nelson_aalen, nelson_aalen_estimator,
+    stratified_kaplan_meier,
 };
 pub use surv_analysis::pseudo::{PseudoResult, pseudo, pseudo_fast};
 pub use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
@@ -89,7 +90,8 @@ pub use surv_analysis::survfit_matrix::{
 };
 pub use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
 pub use surv_analysis::survfitkm::{
-    KaplanMeierConfig, SurvFitKMOutput, SurvfitKMOptions, survfitkm, survfitkm_with_options,
+    KaplanMeierConfig, SurvFitKMOutput, SurvfitKMOptions, compute_survfitkm, survfitkm,
+    survfitkm_with_options,
 };
 pub use utilities::aeq_surv::{AeqSurvResult, aeq_surv};
 pub use utilities::agexact::agexact;
@@ -125,7 +127,8 @@ pub use validation::landmark::{
     landmark_analysis_batch, life_table, survival_at_times,
 };
 pub use validation::logrank::{
-    LogRankResult, TrendTestResult, fleming_harrington_test, logrank_test, logrank_trend,
+    LogRankResult, TrendTestResult, WeightType, fleming_harrington_test, logrank_test,
+    logrank_trend, weighted_logrank_test,
 };
 pub use validation::power::{
     AccrualResult, SampleSizeResult, expected_events, power_survival, sample_size_survival,
@@ -133,8 +136,9 @@ pub use validation::power::{
 };
 pub use validation::rmst::{
     ChangepointInfo, CumulativeIncidenceResult, MedianSurvivalResult, NNTResult,
-    RMSTComparisonResult, RMSTOptimalThresholdResult, RMSTResult, cumulative_incidence,
-    number_needed_to_treat, rmst, rmst_comparison, rmst_optimal_threshold, survival_quantile,
+    RMSTComparisonResult, RMSTOptimalThresholdResult, RMSTResult, compute_rmst,
+    cumulative_incidence, number_needed_to_treat, rmst, rmst_comparison, rmst_optimal_threshold,
+    survival_quantile,
 };
 pub use validation::royston::{RoystonResult, royston, royston_from_model};
 pub use validation::survcheck::{SurvCheckResult, survcheck, survcheck_simple};

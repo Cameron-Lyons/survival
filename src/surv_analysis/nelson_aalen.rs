@@ -1,4 +1,5 @@
 use crate::constants::PARALLEL_THRESHOLD_XLARGE;
+use crate::utilities::simd::sum_f64;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
@@ -84,7 +85,7 @@ pub fn nelson_aalen(
     let mut at_risk: Vec<f64> = Vec::new();
     let mut n_events_vec: Vec<usize> = Vec::new();
     let mut n_risk_vec: Vec<usize> = Vec::new();
-    let mut total_weight: f64 = weights.iter().sum();
+    let mut total_weight: f64 = sum_f64(weights);
     let mut total_count = n;
     let mut i = 0;
     while i < n {
@@ -336,7 +337,7 @@ fn kaplan_meier(
     let mut at_risk: Vec<f64> = Vec::new();
     let mut n_events_vec: Vec<usize> = Vec::new();
     let mut n_risk_vec: Vec<usize> = Vec::new();
-    let mut total_weight: f64 = weights.iter().sum();
+    let mut total_weight: f64 = sum_f64(weights);
     let mut total_count = n;
     let mut i = 0;
     while i < n {
