@@ -11,5 +11,6 @@ pub mod royston;
 pub mod survcheck;
 pub mod survobrien;
 pub mod tests;
+pub mod time_dependent_auc;
 pub mod uno_c_index;
 pub mod yates;
