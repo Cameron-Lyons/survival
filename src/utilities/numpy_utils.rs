@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, clippy::collapsible_if)]
 use numpy::{PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
