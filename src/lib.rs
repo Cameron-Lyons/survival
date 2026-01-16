@@ -147,6 +147,10 @@ pub use validation::tests::{
     ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test,
 };
 use validation::tests::{score_test_py, wald_test_py};
+pub use validation::time_dependent_auc::{
+    CumulativeDynamicAUCResult, TimeDepAUCResult, cumulative_dynamic_auc,
+    cumulative_dynamic_auc_core, time_dependent_auc, time_dependent_auc_core,
+};
 pub use validation::uno_c_index::{
     ConcordanceComparisonResult, UnoCIndexResult, compare_uno_c_indices, uno_c_index,
 };
@@ -329,6 +333,8 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(yates_pairwise, &m)?)?;
     m.add_function(wrap_pyfunction!(uno_c_index, &m)?)?;
     m.add_function(wrap_pyfunction!(compare_uno_c_indices, &m)?)?;
+    m.add_function(wrap_pyfunction!(time_dependent_auc, &m)?)?;
+    m.add_function(wrap_pyfunction!(cumulative_dynamic_auc, &m)?)?;
     // New regression/core functions
     m.add_function(wrap_pyfunction!(ridge_fit, &m)?)?;
     m.add_function(wrap_pyfunction!(ridge_cv, &m)?)?;
@@ -426,6 +432,8 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<YatesPairwiseResult>()?;
     m.add_class::<UnoCIndexResult>()?;
     m.add_class::<ConcordanceComparisonResult>()?;
+    m.add_class::<TimeDepAUCResult>()?;
+    m.add_class::<CumulativeDynamicAUCResult>()?;
     // New regression/core classes
     m.add_class::<RidgePenalty>()?;
     m.add_class::<RidgeResult>()?;
