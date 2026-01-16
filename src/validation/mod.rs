@@ -2,6 +2,7 @@ pub mod anova;
 pub mod bootstrap;
 pub mod calibration;
 pub mod crossval;
+pub mod d_calibration;
 pub mod landmark;
 pub mod logrank;
 pub mod power;

@@ -115,6 +115,10 @@ pub use validation::calibration::{
     predict_cox, risk_stratification, td_auc,
 };
 pub use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
+pub use validation::d_calibration::{
+    CalibrationPlotData, DCalibrationResult, OneCalibrationResult, calibration_plot, d_calibration,
+    one_calibration,
+};
 pub use validation::landmark::{
     ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
     SurvivalAtTimeResult, conditional_survival, hazard_ratio, landmark_analysis,
@@ -270,6 +274,9 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(predict_cox, &m)?)?;
     m.add_function(wrap_pyfunction!(risk_stratification, &m)?)?;
     m.add_function(wrap_pyfunction!(td_auc, &m)?)?;
+    m.add_function(wrap_pyfunction!(d_calibration, &m)?)?;
+    m.add_function(wrap_pyfunction!(one_calibration, &m)?)?;
+    m.add_function(wrap_pyfunction!(calibration_plot, &m)?)?;
     m.add_function(wrap_pyfunction!(rmst, &m)?)?;
     m.add_function(wrap_pyfunction!(rmst_comparison, &m)?)?;
     m.add_function(wrap_pyfunction!(survival_quantile, &m)?)?;
@@ -375,6 +382,9 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PredictionResult>()?;
     m.add_class::<RiskStratificationResult>()?;
     m.add_class::<TdAUCResult>()?;
+    m.add_class::<DCalibrationResult>()?;
+    m.add_class::<OneCalibrationResult>()?;
+    m.add_class::<CalibrationPlotData>()?;
     m.add_class::<RMSTResult>()?;
     m.add_class::<RMSTComparisonResult>()?;
     m.add_class::<MedianSurvivalResult>()?;
