@@ -1,6 +1,6 @@
 [package]
 name = "survival"
-version = "1.1.17"
+version = "1.1.18"
 edition = "2024"
 rust-version = "1.92"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
@@ -22,7 +22,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 pyo3 = "0.27.2"
 numpy = "0.27.1"
-ndarray = { version = "0.17.1", features = ["rayon"] }
+ndarray = { version = "0.17.2", features = ["rayon"] }
 itertools = "0.14.0"
 rayon = "1.11.0"
 faer = "0.23.2"
