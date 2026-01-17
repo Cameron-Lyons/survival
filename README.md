@@ -586,7 +586,7 @@ The `PSpline` class provides penalized spline smoothing:
   - `"BIC"` - Bayesian Information Criterion
 - `boundary_knots`: Tuple of (min, max) for the spline basis
 - `intercept`: Whether to include an intercept in the basis
-- `penalty`: Whether to apply the penalty
+- `penalty`: Whether or not to apply the penalty
 
 **Methods:**
 - `fit()`: Fit the spline model, returns coefficients
