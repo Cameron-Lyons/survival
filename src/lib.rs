@@ -156,8 +156,8 @@ pub use validation::time_dependent_auc::{
     cumulative_dynamic_auc_core, time_dependent_auc, time_dependent_auc_core,
 };
 pub use validation::uno_c_index::{
-    CIndexDecompositionResult, ConcordanceComparisonResult, UnoCIndexResult, c_index_decomposition,
-    compare_uno_c_indices, uno_c_index,
+    CIndexDecompositionResult, ConcordanceComparisonResult, GonenHellerResult, UnoCIndexResult,
+    c_index_decomposition, compare_uno_c_indices, gonen_heller_concordance, uno_c_index,
 };
 pub use validation::yates::{
     YatesPairwiseResult, YatesResult, yates, yates_contrast, yates_pairwise,
@@ -342,6 +342,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(uno_c_index, &m)?)?;
     m.add_function(wrap_pyfunction!(compare_uno_c_indices, &m)?)?;
     m.add_function(wrap_pyfunction!(c_index_decomposition, &m)?)?;
+    m.add_function(wrap_pyfunction!(gonen_heller_concordance, &m)?)?;
     m.add_function(wrap_pyfunction!(time_dependent_auc, &m)?)?;
     m.add_function(wrap_pyfunction!(cumulative_dynamic_auc, &m)?)?;
     m.add_function(wrap_pyfunction!(rcll, &m)?)?;
@@ -447,6 +448,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<UnoCIndexResult>()?;
     m.add_class::<ConcordanceComparisonResult>()?;
     m.add_class::<CIndexDecompositionResult>()?;
+    m.add_class::<GonenHellerResult>()?;
     m.add_class::<TimeDepAUCResult>()?;
     m.add_class::<CumulativeDynamicAUCResult>()?;
     m.add_class::<RCLLResult>()?;
