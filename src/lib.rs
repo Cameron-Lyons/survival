@@ -134,6 +134,9 @@ pub use validation::power::{
     AccrualResult, SampleSizeResult, expected_events, power_survival, sample_size_survival,
     sample_size_survival_freedman,
 };
+pub use validation::rcll::{
+    RCLLResult, compute_rcll, compute_rcll_single_time, rcll, rcll_single_time,
+};
 pub use validation::rmst::{
     ChangepointInfo, CumulativeIncidenceResult, MedianSurvivalResult, NNTResult,
     RMSTComparisonResult, RMSTOptimalThresholdResult, RMSTResult, compute_rmst,
@@ -335,6 +338,8 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compare_uno_c_indices, &m)?)?;
     m.add_function(wrap_pyfunction!(time_dependent_auc, &m)?)?;
     m.add_function(wrap_pyfunction!(cumulative_dynamic_auc, &m)?)?;
+    m.add_function(wrap_pyfunction!(rcll, &m)?)?;
+    m.add_function(wrap_pyfunction!(rcll_single_time, &m)?)?;
     // New regression/core functions
     m.add_function(wrap_pyfunction!(ridge_fit, &m)?)?;
     m.add_function(wrap_pyfunction!(ridge_cv, &m)?)?;
@@ -434,6 +439,7 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ConcordanceComparisonResult>()?;
     m.add_class::<TimeDepAUCResult>()?;
     m.add_class::<CumulativeDynamicAUCResult>()?;
+    m.add_class::<RCLLResult>()?;
     // New regression/core classes
     m.add_class::<RidgePenalty>()?;
     m.add_class::<RidgeResult>()?;
