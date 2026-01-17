@@ -118,8 +118,9 @@ pub use validation::calibration::{
 };
 pub use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
 pub use validation::d_calibration::{
-    CalibrationPlotData, DCalibrationResult, OneCalibrationResult, calibration_plot, d_calibration,
-    one_calibration,
+    BrierCalibrationResult, CalibrationPlotData, DCalibrationResult, MultiTimeCalibrationResult,
+    OneCalibrationResult, SmoothedCalibrationCurve, brier_calibration, calibration_plot,
+    d_calibration, multi_time_calibration, one_calibration, smoothed_calibration,
 };
 pub use validation::landmark::{
     ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
@@ -289,6 +290,9 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(d_calibration, &m)?)?;
     m.add_function(wrap_pyfunction!(one_calibration, &m)?)?;
     m.add_function(wrap_pyfunction!(calibration_plot, &m)?)?;
+    m.add_function(wrap_pyfunction!(brier_calibration, &m)?)?;
+    m.add_function(wrap_pyfunction!(multi_time_calibration, &m)?)?;
+    m.add_function(wrap_pyfunction!(smoothed_calibration, &m)?)?;
     m.add_function(wrap_pyfunction!(rmst, &m)?)?;
     m.add_function(wrap_pyfunction!(rmst_comparison, &m)?)?;
     m.add_function(wrap_pyfunction!(rmst_optimal_threshold, &m)?)?;
@@ -402,6 +406,9 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DCalibrationResult>()?;
     m.add_class::<OneCalibrationResult>()?;
     m.add_class::<CalibrationPlotData>()?;
+    m.add_class::<BrierCalibrationResult>()?;
+    m.add_class::<MultiTimeCalibrationResult>()?;
+    m.add_class::<SmoothedCalibrationCurve>()?;
     m.add_class::<RMSTResult>()?;
     m.add_class::<RMSTComparisonResult>()?;
     m.add_class::<RMSTOptimalThresholdResult>()?;
