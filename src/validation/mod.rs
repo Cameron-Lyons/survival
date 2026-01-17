@@ -6,6 +6,7 @@ pub mod d_calibration;
 pub mod landmark;
 pub mod logrank;
 pub mod power;
+pub mod rcll;
 pub mod rmst;
 pub mod royston;
 pub mod survcheck;
