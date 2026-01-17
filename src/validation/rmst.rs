@@ -1,5 +1,6 @@
 use crate::utilities::statistical::normal_cdf as norm_cdf;
 use pyo3::prelude::*;
+use std::fmt;
 
 fn chi_squared_cdf(x: f64, df: f64) -> f64 {
     if x <= 0.0 {
@@ -91,21 +92,26 @@ fn ln_gamma(x: f64) -> f64 {
     -tmp + ((2.5066282746310005 * ser) / x).ln()
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(str, get_all)]
 pub struct RMSTResult {
-    #[pyo3(get)]
     pub rmst: f64,
-    #[pyo3(get)]
     pub variance: f64,
-    #[pyo3(get)]
     pub se: f64,
-    #[pyo3(get)]
     pub ci_lower: f64,
-    #[pyo3(get)]
     pub ci_upper: f64,
-    #[pyo3(get)]
     pub tau: f64,
 }
+
+impl fmt::Display for RMSTResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "RMSTResult(rmst={:.4}, se={:.4}, ci=[{:.4}, {:.4}], tau={:.2})",
+            self.rmst, self.se, self.ci_lower, self.ci_upper, self.tau
+        )
+    }
+}
+
 #[pymethods]
 impl RMSTResult {
     #[new]

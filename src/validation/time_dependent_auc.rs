@@ -1,24 +1,28 @@
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use std::fmt;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(str, get_all)]
 pub struct TimeDepAUCResult {
-    #[pyo3(get)]
     pub auc: f64,
-    #[pyo3(get)]
     pub time: f64,
-    #[pyo3(get)]
     pub n_cases: usize,
-    #[pyo3(get)]
     pub n_controls: usize,
-    #[pyo3(get)]
     pub std_error: f64,
-    #[pyo3(get)]
     pub ci_lower: f64,
-    #[pyo3(get)]
     pub ci_upper: f64,
+}
+
+impl fmt::Display for TimeDepAUCResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TimeDepAUCResult(auc={:.4}, time={:.2}, n_cases={}, n_controls={})",
+            self.auc, self.time, self.n_cases, self.n_controls
+        )
+    }
 }
 
 #[pymethods]
@@ -47,20 +51,26 @@ impl TimeDepAUCResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(str, get_all)]
 pub struct CumulativeDynamicAUCResult {
-    #[pyo3(get)]
     pub times: Vec<f64>,
-    #[pyo3(get)]
     pub auc: Vec<f64>,
-    #[pyo3(get)]
     pub mean_auc: f64,
-    #[pyo3(get)]
     pub integrated_auc: f64,
-    #[pyo3(get)]
     pub n_cases: Vec<usize>,
-    #[pyo3(get)]
     pub n_controls: Vec<usize>,
+}
+
+impl fmt::Display for CumulativeDynamicAUCResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CumulativeDynamicAUCResult(n_times={}, mean_auc={:.4}, integrated_auc={:.4})",
+            self.times.len(),
+            self.mean_auc,
+            self.integrated_auc
+        )
+    }
 }
 
 #[pymethods]

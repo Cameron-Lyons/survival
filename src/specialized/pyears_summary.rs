@@ -1,7 +1,8 @@
 use pyo3::prelude::*;
+use std::fmt;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(str)]
 pub struct PyearsSummary {
     #[pyo3(get)]
     pub total_person_years: f64,
@@ -23,15 +24,18 @@ pub struct PyearsSummary {
     pub sir: f64,
 }
 
-#[pymethods]
-impl PyearsSummary {
-    fn __repr__(&self) -> String {
-        format!(
+impl fmt::Display for PyearsSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
             "PyearsSummary(person_years={:.2}, events={:.0}, expected={:.2}, SMR={:.3})",
             self.total_person_years, self.total_events, self.total_expected, self.smr
         )
     }
+}
 
+#[pymethods]
+impl PyearsSummary {
     pub fn to_table(&self) -> String {
         let mut table = String::new();
         table.push_str("Person-Years Summary\n");
@@ -117,7 +121,7 @@ pub fn summary_pyears(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(str)]
 pub struct PyearsCell {
     #[pyo3(get)]
     pub person_years: f64,
@@ -133,10 +137,10 @@ pub struct PyearsCell {
     pub smr: f64,
 }
 
-#[pymethods]
-impl PyearsCell {
-    fn __repr__(&self) -> String {
-        format!(
+impl fmt::Display for PyearsCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
             "PyearsCell(py={:.2}, events={:.0}, expected={:.2})",
             self.person_years, self.events, self.expected
         )

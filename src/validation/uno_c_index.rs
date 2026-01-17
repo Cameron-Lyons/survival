@@ -1,30 +1,31 @@
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use std::fmt;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(str, get_all)]
 pub struct UnoCIndexResult {
-    #[pyo3(get)]
     pub c_index: f64,
-    #[pyo3(get)]
     pub concordant: f64,
-    #[pyo3(get)]
     pub discordant: f64,
-    #[pyo3(get)]
     pub tied_risk: f64,
-    #[pyo3(get)]
     pub comparable_pairs: f64,
-    #[pyo3(get)]
     pub variance: f64,
-    #[pyo3(get)]
     pub std_error: f64,
-    #[pyo3(get)]
     pub ci_lower: f64,
-    #[pyo3(get)]
     pub ci_upper: f64,
-    #[pyo3(get)]
     pub tau: f64,
+}
+
+impl fmt::Display for UnoCIndexResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "UnoCIndexResult(c_index={:.4}, se={:.4}, ci=[{:.4}, {:.4}])",
+            self.c_index, self.std_error, self.ci_lower, self.ci_upper
+        )
+    }
 }
 
 #[pymethods]

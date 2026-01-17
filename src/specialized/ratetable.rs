@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::fmt;
 
 /// Type of dimension in a rate table
 #[derive(Debug, Clone, PartialEq)]
@@ -338,7 +339,7 @@ pub fn is_ratetable(ndim: usize, has_rates: bool, has_dims: bool) -> bool {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(str)]
 pub struct RatetableDateResult {
     #[pyo3(get)]
     pub days: f64,
@@ -348,10 +349,10 @@ pub struct RatetableDateResult {
     pub origin_year: i32,
 }
 
-#[pymethods]
-impl RatetableDateResult {
-    fn __repr__(&self) -> String {
-        format!(
+impl fmt::Display for RatetableDateResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
             "RatetableDateResult(days={:.1}, years={:.4}, origin={})",
             self.days, self.years, self.origin_year
         )
