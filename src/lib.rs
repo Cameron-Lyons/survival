@@ -196,8 +196,10 @@ pub use missing::pattern_mixture::{
     PatternMixtureResult, SensitivityAnalysisType, pattern_mixture_model, sensitivity_analysis,
     tipping_point_analysis,
 };
-pub use ml::gradient_boost::{GradientBoostSurvival, gradient_boost_survival};
-pub use ml::survival_forest::{SurvivalForest, survival_forest};
+pub use ml::gradient_boost::{
+    GBSurvLoss, GradientBoostSurvival, GradientBoostSurvivalConfig, gradient_boost_survival,
+};
+pub use ml::survival_forest::{SplitRule, SurvivalForest, SurvivalForestConfig, survival_forest};
 pub use qol::qaly::{
     QALYResult, incremental_cost_effectiveness, qaly_calculation, qaly_comparison,
 };
@@ -227,7 +229,7 @@ pub use spatial::spatial_frailty::{
 };
 
 #[pymodule]
-fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perform_cox_regression_frailty, &m)?)?;
     m.add_function(wrap_pyfunction!(perform_pyears_calculation, &m)?)?;
     m.add_function(wrap_pyfunction!(perform_concordance1_calculation, &m)?)?;
@@ -601,7 +603,11 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survival_forest, &m)?)?;
     m.add_function(wrap_pyfunction!(gradient_boost_survival, &m)?)?;
     m.add_class::<SurvivalForest>()?;
+    m.add_class::<SurvivalForestConfig>()?;
+    m.add_class::<SplitRule>()?;
     m.add_class::<GradientBoostSurvival>()?;
+    m.add_class::<GradientBoostSurvivalConfig>()?;
+    m.add_class::<GBSurvLoss>()?;
 
     // Quality of life functions
     m.add_function(wrap_pyfunction!(qaly_calculation, &m)?)?;
