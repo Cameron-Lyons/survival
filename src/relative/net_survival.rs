@@ -4,9 +4,7 @@
     unused_mut,
     unused_assignments,
     non_camel_case_types,
-    clippy::needless_range_loop,
-    clippy::len_zero,
-    clippy::manual_clamp
+    clippy::needless_range_loop
 )]
 
 use pyo3::prelude::*;
@@ -262,7 +260,7 @@ fn ederer_ii_estimator(
 
         let excess_haz = if net_surv > 0.0 { -net_surv.ln() } else { 0.0 };
 
-        net_survival.push(net_surv.max(0.0).min(2.0));
+        net_survival.push(net_surv.clamp(0.0, 2.0));
         cumulative_excess_hazard.push(excess_haz);
         net_survival_se.push((net_surv * net_surv * var_term).sqrt());
         n_at_risk.push(at_risk);
@@ -356,7 +354,7 @@ fn ederer_i_estimator(
 
         let excess_haz = if net_surv > 0.0 { -net_surv.ln() } else { 0.0 };
 
-        net_survival.push(net_surv.max(0.0).min(2.0));
+        net_survival.push(net_surv.clamp(0.0, 2.0));
         cumulative_excess_hazard.push(excess_haz);
         net_survival_se.push((net_surv * net_surv * var_term).sqrt());
         n_at_risk.push(at_risk);
@@ -459,7 +457,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.time_points.len() > 0);
+        assert!(!result.time_points.is_empty());
         assert!(result.net_survival.iter().all(|&s| s >= 0.0));
     }
 }

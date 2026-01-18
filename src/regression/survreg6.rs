@@ -1,4 +1,3 @@
-#![allow(clippy::redundant_closure)]
 use crate::constants::{CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, NEAR_ZERO_MATRIX};
 use crate::regression::survregc1::{SurvivalDist, survregc1};
 use crate::utilities::matrix::cholesky_solve;
@@ -465,7 +464,7 @@ fn compute_survreg(
     };
     let time1_arr = Array1::from_vec(time1_vec);
     let status_arr = Array1::from_vec(status_vec);
-    let time2_arr = time2_vec.map(|v| Array1::from_vec(v));
+    let time2_arr = time2_vec.map(Array1::from_vec);
     let time1 = time1_arr.view();
     let status = status_arr.view();
     let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());

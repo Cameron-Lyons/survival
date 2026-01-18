@@ -1,4 +1,4 @@
-#![allow(dead_code, clippy::collapsible_if)]
+#![allow(dead_code)]
 use numpy::{PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
@@ -11,17 +11,16 @@ impl<'py> ZeroCopyF64<'py> {
         if let Ok(arr) = obj.extract::<PyReadonlyArray1<'py, f64>>() {
             return Ok(Self { _array: arr });
         }
-        if let Ok(values) = obj.getattr("values") {
-            if let Ok(arr) = values.extract::<PyReadonlyArray1<'py, f64>>() {
-                return Ok(Self { _array: arr });
-            }
+        if let Ok(values) = obj.getattr("values")
+            && let Ok(arr) = values.extract::<PyReadonlyArray1<'py, f64>>()
+        {
+            return Ok(Self { _array: arr });
         }
-        if let Ok(to_numpy) = obj.getattr("to_numpy") {
-            if let Ok(arr_obj) = to_numpy.call0() {
-                if let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'py, f64>>() {
-                    return Ok(Self { _array: arr });
-                }
-            }
+        if let Ok(to_numpy) = obj.getattr("to_numpy")
+            && let Ok(arr_obj) = to_numpy.call0()
+            && let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'py, f64>>()
+        {
+            return Ok(Self { _array: arr });
         }
         let type_name = obj
             .get_type()
@@ -62,17 +61,16 @@ impl<'py> ZeroCopyI64<'py> {
         if let Ok(arr) = obj.extract::<PyReadonlyArray1<'py, i64>>() {
             return Ok(Self { _array: arr });
         }
-        if let Ok(values) = obj.getattr("values") {
-            if let Ok(arr) = values.extract::<PyReadonlyArray1<'py, i64>>() {
-                return Ok(Self { _array: arr });
-            }
+        if let Ok(values) = obj.getattr("values")
+            && let Ok(arr) = values.extract::<PyReadonlyArray1<'py, i64>>()
+        {
+            return Ok(Self { _array: arr });
         }
-        if let Ok(to_numpy) = obj.getattr("to_numpy") {
-            if let Ok(arr_obj) = to_numpy.call0() {
-                if let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'py, i64>>() {
-                    return Ok(Self { _array: arr });
-                }
-            }
+        if let Ok(to_numpy) = obj.getattr("to_numpy")
+            && let Ok(arr_obj) = to_numpy.call0()
+            && let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'py, i64>>()
+        {
+            return Ok(Self { _array: arr });
         }
         let type_name = obj
             .get_type()
@@ -105,33 +103,32 @@ impl<'py> ZeroCopyI64<'py> {
 }
 
 pub fn try_borrow_f64<'py>(obj: &Bound<'py, PyAny>) -> Option<PyReadonlyArray1<'py, f64>> {
-    if let Ok(arr) = obj.extract::<PyReadonlyArray1<'py, f64>>() {
-        if arr.as_slice().is_ok() {
-            return Some(arr);
-        }
+    if let Ok(arr) = obj.extract::<PyReadonlyArray1<'py, f64>>()
+        && arr.as_slice().is_ok()
+    {
+        return Some(arr);
     }
     None
 }
 
 pub fn try_borrow_i64<'py>(obj: &Bound<'py, PyAny>) -> Option<PyReadonlyArray1<'py, i64>> {
-    if let Ok(arr) = obj.extract::<PyReadonlyArray1<'py, i64>>() {
-        if arr.as_slice().is_ok() {
-            return Some(arr);
-        }
+    if let Ok(arr) = obj.extract::<PyReadonlyArray1<'py, i64>>()
+        && arr.as_slice().is_ok()
+    {
+        return Some(arr);
     }
     None
 }
 
 pub fn try_borrow_i32<'py>(obj: &Bound<'py, PyAny>) -> Option<PyReadonlyArray1<'py, i32>> {
-    if let Ok(arr) = obj.extract::<PyReadonlyArray1<'py, i32>>() {
-        if arr.as_slice().is_ok() {
-            return Some(arr);
-        }
+    if let Ok(arr) = obj.extract::<PyReadonlyArray1<'py, i32>>()
+        && arr.as_slice().is_ok()
+    {
+        return Some(arr);
     }
     None
 }
 
-#[allow(clippy::collapsible_if)]
 pub fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     if let Ok(arr) = obj.extract::<PyReadonlyArray1<'_, f64>>() {
         return Ok(arr.as_slice()?.to_vec());
@@ -139,17 +136,16 @@ pub fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     if let Ok(list) = obj.extract::<Vec<f64>>() {
         return Ok(list);
     }
-    if let Ok(values) = obj.getattr("values") {
-        if let Ok(arr) = values.extract::<PyReadonlyArray1<'_, f64>>() {
-            return Ok(arr.as_slice()?.to_vec());
-        }
+    if let Ok(values) = obj.getattr("values")
+        && let Ok(arr) = values.extract::<PyReadonlyArray1<'_, f64>>()
+    {
+        return Ok(arr.as_slice()?.to_vec());
     }
-    if let Ok(to_numpy) = obj.getattr("to_numpy") {
-        if let Ok(arr_obj) = to_numpy.call0() {
-            if let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, f64>>() {
-                return Ok(arr.as_slice()?.to_vec());
-            }
-        }
+    if let Ok(to_numpy) = obj.getattr("to_numpy")
+        && let Ok(arr_obj) = to_numpy.call0()
+        && let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, f64>>()
+    {
+        return Ok(arr.as_slice()?.to_vec());
     }
     let type_name = obj
         .get_type()
@@ -163,7 +159,6 @@ pub fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     )))
 }
 
-#[allow(clippy::collapsible_if)]
 pub fn extract_vec_i32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
     if let Ok(arr) = obj.extract::<PyReadonlyArray1<'_, i32>>() {
         return Ok(arr.as_slice()?.to_vec());
@@ -177,23 +172,27 @@ pub fn extract_vec_i32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
     if let Ok(list) = obj.extract::<Vec<i64>>() {
         return Ok(list.into_iter().map(|x| x as i32).collect());
     }
-    if let Ok(values) = obj.getattr("values") {
-        if let Ok(arr) = values.extract::<PyReadonlyArray1<'_, i32>>() {
-            return Ok(arr.as_slice()?.to_vec());
-        }
-        if let Ok(arr) = values.extract::<PyReadonlyArray1<'_, i64>>() {
-            return Ok(arr.as_slice()?.iter().map(|&x| x as i32).collect());
-        }
+    if let Ok(values) = obj.getattr("values")
+        && let Ok(arr) = values.extract::<PyReadonlyArray1<'_, i32>>()
+    {
+        return Ok(arr.as_slice()?.to_vec());
     }
-    if let Ok(to_numpy) = obj.getattr("to_numpy") {
-        if let Ok(arr_obj) = to_numpy.call0() {
-            if let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, i32>>() {
-                return Ok(arr.as_slice()?.to_vec());
-            }
-            if let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, i64>>() {
-                return Ok(arr.as_slice()?.iter().map(|&x| x as i32).collect());
-            }
-        }
+    if let Ok(values) = obj.getattr("values")
+        && let Ok(arr) = values.extract::<PyReadonlyArray1<'_, i64>>()
+    {
+        return Ok(arr.as_slice()?.iter().map(|&x| x as i32).collect());
+    }
+    if let Ok(to_numpy) = obj.getattr("to_numpy")
+        && let Ok(arr_obj) = to_numpy.call0()
+        && let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, i32>>()
+    {
+        return Ok(arr.as_slice()?.to_vec());
+    }
+    if let Ok(to_numpy) = obj.getattr("to_numpy")
+        && let Ok(arr_obj) = to_numpy.call0()
+        && let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, i64>>()
+    {
+        return Ok(arr.as_slice()?.iter().map(|&x| x as i32).collect());
     }
     let type_name = obj
         .get_type()

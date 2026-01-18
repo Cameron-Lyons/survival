@@ -5,9 +5,7 @@
     unused_assignments,
     clippy::too_many_arguments,
     clippy::needless_range_loop,
-    clippy::upper_case_acronyms,
-    clippy::collapsible_else_if,
-    clippy::collapsible_if
+    clippy::upper_case_acronyms
 )]
 
 use pyo3::prelude::*;
@@ -374,10 +372,8 @@ fn predict_regression_tree(node: &RegressionTreeNode, x_row: &[f64]) -> f64 {
                 if let Some(ref left) = node.left {
                     return predict_regression_tree(left, x_row);
                 }
-            } else {
-                if let Some(ref right) = node.right {
-                    return predict_regression_tree(right, x_row);
-                }
+            } else if let Some(ref right) = node.right {
+                return predict_regression_tree(right, x_row);
             }
             node.prediction
         }
@@ -560,10 +556,10 @@ impl GradientBoostSurvival {
 }
 
 fn update_feature_importance(node: &RegressionTreeNode, importance: &mut [f64]) {
-    if let Some(var) = node.split_var {
-        if var < importance.len() {
-            importance[var] += node.n_samples as f64;
-        }
+    if let Some(var) = node.split_var
+        && var < importance.len()
+    {
+        importance[var] += node.n_samples as f64;
     }
 
     if let Some(ref left) = node.left {

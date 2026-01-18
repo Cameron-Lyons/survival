@@ -1,4 +1,3 @@
-#![allow(clippy::explicit_counter_loop)]
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
