@@ -43,6 +43,9 @@ pub use regression::blogit::LinkFunctionParams;
 pub use regression::clogit::{ClogitDataSet, ConditionalLogisticRegression};
 pub use regression::coxph::{CoxPHModel, Subject};
 pub use regression::coxph_detail::{CoxphDetail, CoxphDetailRow, coxph_detail};
+pub use regression::finegray_regression::{
+    CompetingRisksCIF, FineGrayResult, competing_risks_cif, finegray_regression,
+};
 pub use regression::ridge::{RidgePenalty, RidgeResult, ridge_cv, ridge_fit};
 pub use regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, predict_survreg, predict_survreg_quantile,
@@ -254,6 +257,8 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfitaj, &m)?)?;
     m.add_function(wrap_pyfunction!(survdiff2, &m)?)?;
     m.add_function(wrap_pyfunction!(finegray, &m)?)?;
+    m.add_function(wrap_pyfunction!(finegray_regression, &m)?)?;
+    m.add_function(wrap_pyfunction!(competing_risks_cif, &m)?)?;
     m.add_function(wrap_pyfunction!(survreg, &m)?)?;
     m.add_function(wrap_pyfunction!(brier, &m)?)?;
     m.add_function(wrap_pyfunction!(integrated_brier, &m)?)?;
@@ -379,6 +384,8 @@ fn survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<KaplanMeierConfig>()?;
     m.add_class::<SurvFitAJ>()?;
     m.add_class::<FineGrayOutput>()?;
+    m.add_class::<FineGrayResult>()?;
+    m.add_class::<CompetingRisksCIF>()?;
     m.add_class::<SurvivalFit>()?;
     m.add_class::<SurvregConfig>()?;
     m.add_class::<DistributionType>()?;
