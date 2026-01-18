@@ -138,6 +138,7 @@ impl fmt::Display for CompetingRisksCIF {
 #[pymethods]
 impl CompetingRisksCIF {
     #[new]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         times: Vec<f64>,
         cif: Vec<f64>,
@@ -481,6 +482,7 @@ pub fn finegray_regression_core(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_log_likelihood(
     event_indices: &[usize],
     beta: &[f64],
@@ -506,9 +508,7 @@ fn compute_log_likelihood(
 
         let mut sum_exp_eta = 0.0;
         for j in 0..n {
-            let in_risk_set = if status[j] == 0 {
-                time[j] >= t_i
-            } else if status[j] == event_type {
+            let in_risk_set = if status[j] == 0 || status[j] == event_type {
                 time[j] >= t_i
             } else {
                 true
@@ -538,6 +538,7 @@ fn compute_log_likelihood(
     ll
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_gradient_hessian(
     event_indices: &[usize],
     beta: &[f64],
@@ -570,9 +571,7 @@ fn compute_gradient_hessian(
         let mut s2 = vec![vec![0.0; p]; p];
 
         for j in 0..n {
-            let in_risk_set = if status[j] == 0 {
-                time[j] >= t_i
-            } else if status[j] == event_type {
+            let in_risk_set = if status[j] == 0 || status[j] == event_type {
                 time[j] >= t_i
             } else {
                 true
