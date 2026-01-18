@@ -7,6 +7,7 @@ pub mod coxph;
 pub mod coxph_detail;
 pub mod cure_models;
 pub mod elastic_net;
+pub mod finegray_regression;
 pub mod ridge;
 pub mod survreg6;
 pub mod survreg_predict;
