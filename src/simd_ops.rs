@@ -1,4 +1,4 @@
-use wide::f64x4;
+use wide::{CmpGt, CmpLt, f64x4};
 
 pub fn dot_product_simd(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len().min(b.len());
@@ -204,6 +204,123 @@ pub fn covariance_simd(x: &[f64], y: &[f64]) -> f64 {
     let centered_y = subtract_scalar_simd(&y[..n], mean_y);
 
     dot_product_simd(&centered_x, &centered_y) / (n - 1) as f64
+}
+
+pub struct PairwiseCounts {
+    pub concordant: usize,
+    pub discordant: usize,
+    pub tied: usize,
+    pub valid_pairs: usize,
+}
+
+pub fn count_concordant_pairs_simd(
+    risk_i: f64,
+    time_i: f64,
+    risk_scores: &[f64],
+    times: &[f64],
+    skip_idx: usize,
+) -> PairwiseCounts {
+    let n = risk_scores.len().min(times.len());
+    let chunks = n / 4;
+    let remainder = n % 4;
+
+    let risk_i_vec = f64x4::splat(risk_i);
+    let time_i_vec = f64x4::splat(time_i);
+
+    let mut concordant = 0usize;
+    let mut discordant = 0usize;
+    let mut tied = 0usize;
+    let mut valid_pairs = 0usize;
+
+    for chunk in 0..chunks {
+        let idx = chunk * 4;
+
+        if idx <= skip_idx && skip_idx < idx + 4 {
+            for j in idx..idx + 4 {
+                if j == skip_idx || times[j] <= time_i {
+                    continue;
+                }
+                valid_pairs += 1;
+                if risk_i > risk_scores[j] {
+                    concordant += 1;
+                } else if risk_i < risk_scores[j] {
+                    discordant += 1;
+                } else {
+                    tied += 1;
+                }
+            }
+            continue;
+        }
+
+        let times_j = f64x4::new([times[idx], times[idx + 1], times[idx + 2], times[idx + 3]]);
+        let risks_j = f64x4::new([
+            risk_scores[idx],
+            risk_scores[idx + 1],
+            risk_scores[idx + 2],
+            risk_scores[idx + 3],
+        ]);
+
+        let valid_mask = times_j.simd_gt(time_i_vec);
+        let concordant_mask = risk_i_vec.simd_gt(risks_j);
+        let discordant_mask = risk_i_vec.simd_lt(risks_j);
+
+        let valid_arr = valid_mask.to_array();
+        let conc_arr = concordant_mask.to_array();
+        let disc_arr = discordant_mask.to_array();
+
+        for k in 0..4 {
+            if valid_arr[k].to_bits() != 0 {
+                valid_pairs += 1;
+                if conc_arr[k].to_bits() != 0 {
+                    concordant += 1;
+                } else if disc_arr[k].to_bits() != 0 {
+                    discordant += 1;
+                } else {
+                    tied += 1;
+                }
+            }
+        }
+    }
+
+    let base = chunks * 4;
+    for j in base..base + remainder {
+        if j == skip_idx || times[j] <= time_i {
+            continue;
+        }
+        valid_pairs += 1;
+        if risk_i > risk_scores[j] {
+            concordant += 1;
+        } else if risk_i < risk_scores[j] {
+            discordant += 1;
+        } else {
+            tied += 1;
+        }
+    }
+
+    PairwiseCounts {
+        concordant,
+        discordant,
+        tied,
+        valid_pairs,
+    }
+}
+
+pub fn weighted_concordance_simd(
+    risk_i: f64,
+    time_i: f64,
+    weight: f64,
+    risk_scores: &[f64],
+    times: &[f64],
+    skip_idx: usize,
+) -> (f64, f64, f64, f64) {
+    let counts = count_concordant_pairs_simd(risk_i, time_i, risk_scores, times, skip_idx);
+
+    (
+        counts.concordant as f64 * weight,
+        counts.discordant as f64 * weight,
+        counts.tied as f64 * weight,
+        counts.valid_pairs as f64 * weight,
+    )
 }
 
 #[cfg(test)]
