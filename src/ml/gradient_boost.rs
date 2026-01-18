@@ -365,6 +365,77 @@ fn build_regression_tree(
     }
 }
 
+fn fit_gradient_boost_inner(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    status: &[i32],
+    config: &GradientBoostSurvivalConfig,
+) -> GradientBoostSurvival {
+    let mut unique_times: Vec<f64> = time.to_vec();
+    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.dedup();
+
+    let mut predictions = vec![0.0; n_obs];
+    let mut trees = Vec::with_capacity(config.n_estimators);
+    let mut train_loss = Vec::with_capacity(config.n_estimators);
+    let mut feature_importance = vec![0.0; n_vars];
+
+    let base_seed = config.seed.unwrap_or(42);
+
+    for iter in 0..config.n_estimators {
+        let mut rng = fastrand::Rng::with_seed(base_seed.wrapping_add(iter as u64));
+
+        let sample_size = (n_obs as f64 * config.subsample).ceil() as usize;
+        let indices: Vec<usize> = if config.subsample < 1.0 {
+            (0..sample_size).map(|_| rng.usize(0..n_obs)).collect()
+        } else {
+            (0..n_obs).collect()
+        };
+
+        let (gradient, hessian) = match config.loss {
+            GBSurvLoss::CoxPH => compute_cox_gradient_hessian(time, status, &predictions, &indices),
+            _ => compute_cox_gradient_hessian(time, status, &predictions, &indices),
+        };
+
+        let tree = build_regression_tree(
+            x, n_obs, n_vars, &gradient, &hessian, &indices, config, 0, &mut rng,
+        );
+
+        update_feature_importance(&tree, &mut feature_importance);
+
+        for i in 0..n_obs {
+            let x_row: Vec<f64> = (0..n_vars).map(|j| x[i * n_vars + j]).collect();
+            predictions[i] += config.learning_rate * predict_regression_tree(&tree, &x_row);
+        }
+
+        let loss = compute_cox_loss(time, status, &predictions);
+        train_loss.push(loss);
+
+        trees.push(tree);
+    }
+
+    let total_importance: f64 = feature_importance.iter().sum();
+    if total_importance > 0.0 {
+        for imp in &mut feature_importance {
+            *imp /= total_importance;
+        }
+    }
+
+    let baseline_hazard = compute_baseline_hazard(time, status, &predictions, &unique_times);
+
+    GradientBoostSurvival {
+        trees,
+        learning_rate: config.learning_rate,
+        baseline_hazard,
+        unique_times,
+        feature_importance,
+        train_loss,
+        n_vars,
+    }
+}
+
 fn predict_regression_tree(node: &RegressionTreeNode, x_row: &[f64]) -> f64 {
     match (&node.split_var, &node.split_value) {
         (Some(var), Some(val)) => {
@@ -403,6 +474,7 @@ impl GradientBoostSurvival {
     #[staticmethod]
     #[pyo3(signature = (x, n_obs, n_vars, time, status, config))]
     pub fn fit(
+        py: Python<'_>,
         x: Vec<f64>,
         n_obs: usize,
         n_vars: usize,
@@ -421,69 +493,8 @@ impl GradientBoostSurvival {
             ));
         }
 
-        let mut unique_times: Vec<f64> = time.clone();
-        unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        unique_times.dedup();
-
-        let mut predictions = vec![0.0; n_obs];
-        let mut trees = Vec::with_capacity(config.n_estimators);
-        let mut train_loss = Vec::with_capacity(config.n_estimators);
-        let mut feature_importance = vec![0.0; n_vars];
-
-        let base_seed = config.seed.unwrap_or(42);
-
-        for iter in 0..config.n_estimators {
-            let mut rng = fastrand::Rng::with_seed(base_seed.wrapping_add(iter as u64));
-
-            let sample_size = (n_obs as f64 * config.subsample).ceil() as usize;
-            let indices: Vec<usize> = if config.subsample < 1.0 {
-                (0..sample_size).map(|_| rng.usize(0..n_obs)).collect()
-            } else {
-                (0..n_obs).collect()
-            };
-
-            let (gradient, hessian) = match config.loss {
-                GBSurvLoss::CoxPH => {
-                    compute_cox_gradient_hessian(&time, &status, &predictions, &indices)
-                }
-                _ => compute_cox_gradient_hessian(&time, &status, &predictions, &indices),
-            };
-
-            let tree = build_regression_tree(
-                &x, n_obs, n_vars, &gradient, &hessian, &indices, config, 0, &mut rng,
-            );
-
-            update_feature_importance(&tree, &mut feature_importance);
-
-            for i in 0..n_obs {
-                let x_row: Vec<f64> = (0..n_vars).map(|j| x[i * n_vars + j]).collect();
-                predictions[i] += config.learning_rate * predict_regression_tree(&tree, &x_row);
-            }
-
-            let loss = compute_cox_loss(&time, &status, &predictions);
-            train_loss.push(loss);
-
-            trees.push(tree);
-        }
-
-        let total_importance: f64 = feature_importance.iter().sum();
-        if total_importance > 0.0 {
-            for imp in &mut feature_importance {
-                *imp /= total_importance;
-            }
-        }
-
-        let baseline_hazard = compute_baseline_hazard(&time, &status, &predictions, &unique_times);
-
-        Ok(GradientBoostSurvival {
-            trees,
-            learning_rate: config.learning_rate,
-            baseline_hazard,
-            unique_times,
-            feature_importance,
-            train_loss,
-            n_vars,
-        })
+        let config = config.clone();
+        Ok(py.detach(move || fit_gradient_boost_inner(&x, n_obs, n_vars, &time, &status, &config)))
     }
 
     #[pyo3(signature = (x_new, n_new))]
@@ -552,6 +563,45 @@ impl GradientBoostSurvival {
     #[getter]
     pub fn get_n_estimators(&self) -> usize {
         self.trees.len()
+    }
+
+    #[pyo3(signature = (x_new, n_new, percentile=0.5))]
+    pub fn predict_survival_time(
+        &self,
+        x_new: Vec<f64>,
+        n_new: usize,
+        percentile: f64,
+    ) -> PyResult<Vec<Option<f64>>> {
+        if !(0.0..=1.0).contains(&percentile) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "percentile must be between 0 and 1",
+            ));
+        }
+
+        let survival = self.predict_survival(x_new, n_new)?;
+
+        let times: Vec<Option<f64>> = survival
+            .par_iter()
+            .map(|surv| {
+                for (i, &s) in surv.iter().enumerate() {
+                    if s <= percentile && i < self.unique_times.len() {
+                        return Some(self.unique_times[i]);
+                    }
+                }
+                None
+            })
+            .collect();
+
+        Ok(times)
+    }
+
+    #[pyo3(signature = (x_new, n_new))]
+    pub fn predict_median_survival_time(
+        &self,
+        x_new: Vec<f64>,
+        n_new: usize,
+    ) -> PyResult<Vec<Option<f64>>> {
+        self.predict_survival_time(x_new, n_new, 0.5)
     }
 }
 
@@ -638,6 +688,7 @@ fn compute_baseline_hazard(
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, config=None))]
 pub fn gradient_boost_survival(
+    py: Python<'_>,
     x: Vec<f64>,
     n_obs: usize,
     n_vars: usize,
@@ -661,7 +712,7 @@ pub fn gradient_boost_survival(
         .unwrap()
     });
 
-    GradientBoostSurvival::fit(x, n_obs, n_vars, time, status, &cfg)
+    GradientBoostSurvival::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }
 
 #[cfg(test)]
@@ -693,21 +744,20 @@ mod tests {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let status = vec![1, 1, 0, 1, 0, 1];
 
-        let config = GradientBoostSurvivalConfig::new(
-            5,
-            0.1,
-            2,
-            2,
-            1,
-            1.0,
-            None,
-            GBSurvLoss::CoxPH,
-            0.0,
-            Some(42),
-        )
-        .unwrap();
+        let config = GradientBoostSurvivalConfig {
+            n_estimators: 5,
+            learning_rate: 0.1,
+            max_depth: 2,
+            min_samples_split: 2,
+            min_samples_leaf: 1,
+            subsample: 1.0,
+            max_features: None,
+            loss: GBSurvLoss::CoxPH,
+            dropout_rate: 0.0,
+            seed: Some(42),
+        };
 
-        let model = GradientBoostSurvival::fit(x, 6, 2, time, status, &config).unwrap();
+        let model = fit_gradient_boost_inner(&x, 6, 2, &time, &status, &config);
         assert_eq!(model.get_n_estimators(), 5);
     }
 }

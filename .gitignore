@@ -23,3 +23,5 @@ Cargo.lock
 *.swp
 *.swo
 *~
+python/survival/*.so
+.venv/
