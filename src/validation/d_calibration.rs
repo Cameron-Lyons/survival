@@ -1,3 +1,4 @@
+use crate::simd_ops::{dot_product_simd, mean_simd, subtract_scalar_simd, sum_of_squares_simd};
 use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
 
@@ -642,18 +643,14 @@ fn compute_calibration_slope_intercept(predicted: &[f64], observed: &[f64]) -> (
         return (1.0, 0.0);
     }
 
-    let mean_pred: f64 = predicted.iter().sum::<f64>() / n as f64;
-    let mean_obs: f64 = observed.iter().sum::<f64>() / n as f64;
+    let mean_pred = mean_simd(predicted);
+    let mean_obs = mean_simd(observed);
 
-    let mut numerator = 0.0;
-    let mut denominator = 0.0;
+    let centered_pred = subtract_scalar_simd(predicted, mean_pred);
+    let centered_obs = subtract_scalar_simd(observed, mean_obs);
 
-    for i in 0..n {
-        let x_diff = predicted[i] - mean_pred;
-        let y_diff = observed[i] - mean_obs;
-        numerator += x_diff * y_diff;
-        denominator += x_diff * x_diff;
-    }
+    let numerator = dot_product_simd(&centered_pred, &centered_obs);
+    let denominator = sum_of_squares_simd(&centered_pred);
 
     let slope = if denominator > 1e-10 {
         numerator / denominator

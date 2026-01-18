@@ -17,6 +17,7 @@ mod regression;
 mod relative;
 mod residuals;
 mod scoring;
+pub mod simd_ops;
 mod spatial;
 mod specialized;
 mod surv_analysis;

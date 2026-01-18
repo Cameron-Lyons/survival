@@ -131,6 +131,68 @@ mod concordance_bench {
     }
 }
 
+mod simd_bench {
+    use survival::simd_ops::{dot_product_simd, sum_simd, variance_simd};
+
+    fn generate_data(n: usize) -> Vec<f64> {
+        (0..n).map(|i| (i as f64) * 0.1 + 0.5).collect()
+    }
+
+    fn sum_scalar(values: &[f64]) -> f64 {
+        values.iter().sum()
+    }
+
+    fn dot_product_scalar(a: &[f64], b: &[f64]) -> f64 {
+        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    }
+
+    fn variance_scalar(values: &[f64]) -> f64 {
+        if values.len() < 2 {
+            return 0.0;
+        }
+        let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
+        values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64
+    }
+
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
+    fn sum_scalar_bench(bencher: divan::Bencher, n: usize) {
+        let data = generate_data(n);
+        bencher.bench_local(|| sum_scalar(&data));
+    }
+
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
+    fn sum_simd_bench(bencher: divan::Bencher, n: usize) {
+        let data = generate_data(n);
+        bencher.bench_local(|| sum_simd(&data));
+    }
+
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
+    fn dot_product_scalar_bench(bencher: divan::Bencher, n: usize) {
+        let a = generate_data(n);
+        let b = generate_data(n);
+        bencher.bench_local(|| dot_product_scalar(&a, &b));
+    }
+
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
+    fn dot_product_simd_bench(bencher: divan::Bencher, n: usize) {
+        let a = generate_data(n);
+        let b = generate_data(n);
+        bencher.bench_local(|| dot_product_simd(&a, &b));
+    }
+
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
+    fn variance_scalar_bench(bencher: divan::Bencher, n: usize) {
+        let data = generate_data(n);
+        bencher.bench_local(|| variance_scalar(&data));
+    }
+
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
+    fn variance_simd_bench(bencher: divan::Bencher, n: usize) {
+        let data = generate_data(n);
+        bencher.bench_local(|| variance_simd(&data));
+    }
+}
+
 fn main() {
     divan::main();
 }
