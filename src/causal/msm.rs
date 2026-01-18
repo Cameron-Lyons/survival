@@ -4,9 +4,7 @@
     unused_mut,
     unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
-    clippy::len_zero,
-    clippy::manual_range_contains
+    clippy::needless_range_loop
 )]
 
 use pyo3::prelude::*;
@@ -423,7 +421,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.coefficients.len() > 0);
-        assert!(result.hazard_ratios.len() > 0);
+        assert!(!result.coefficients.is_empty());
+        assert!(!result.hazard_ratios.is_empty());
     }
 }

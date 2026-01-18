@@ -4,9 +4,7 @@
     unused_mut,
     unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
-    clippy::len_zero,
-    clippy::collapsible_if
+    clippy::needless_range_loop
 )]
 
 use crate::utilities::statistical::sample_normal;
@@ -119,10 +117,8 @@ pub fn dynamic_prediction(
 
                     let mut cum_hazard = 0.0;
                     for (t_idx, &bt) in baseline_times.iter().enumerate() {
-                        if bt > landmark_time && bt <= t {
-                            if t_idx < baseline_hazard.len() {
-                                cum_hazard += baseline_hazard[t_idx] * eta.exp();
-                            }
+                        if bt > landmark_time && bt <= t && t_idx < baseline_hazard.len() {
+                            cum_hazard += baseline_hazard[t_idx] * eta.exp();
                         }
                     }
 
@@ -514,6 +510,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.survival_mean.len() > 0);
+        assert!(!result.survival_mean.is_empty());
     }
 }

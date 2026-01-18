@@ -5,8 +5,7 @@
     unused_assignments,
     clippy::too_many_arguments,
     clippy::needless_range_loop,
-    clippy::type_complexity,
-    clippy::collapsible_if
+    clippy::type_complexity
 )]
 
 use pyo3::prelude::*;
@@ -553,14 +552,13 @@ pub fn tipping_point_analysis(
 
         let current_coef = coef[coef_index];
 
-        if let Some(prev) = prev_coef {
-            if (prev < target_value && current_coef >= target_value)
-                || (prev > target_value && current_coef <= target_value)
-            {
-                let frac = (target_value - prev) / (current_coef - prev);
-                let tipping_delta = prev_delta.unwrap() + frac * delta_step;
-                return Ok(Some(tipping_delta));
-            }
+        if let Some(prev) = prev_coef
+            && ((prev < target_value && current_coef >= target_value)
+                || (prev > target_value && current_coef <= target_value))
+        {
+            let frac = (target_value - prev) / (current_coef - prev);
+            let tipping_delta = prev_delta.unwrap() + frac * delta_step;
+            return Ok(Some(tipping_delta));
         }
 
         prev_coef = Some(current_coef);

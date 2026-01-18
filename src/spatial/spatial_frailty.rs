@@ -4,9 +4,7 @@
     unused_mut,
     unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
-    clippy::manual_swap,
-    clippy::manual_range_contains
+    clippy::needless_range_loop
 )]
 
 use crate::utilities::statistical::normal_cdf;
@@ -305,9 +303,7 @@ fn invert_matrix(a: &[f64], n: usize) -> Vec<f64> {
         }
 
         for j in 0..(2 * n) {
-            let temp = aug[i * 2 * n + j];
-            aug[i * 2 * n + j] = aug[max_row * 2 * n + j];
-            aug[max_row * 2 * n + j] = temp;
+            aug.swap(i * 2 * n + j, max_row * 2 * n + j);
         }
 
         let pivot = aug[i * 2 * n + i];
@@ -704,7 +700,7 @@ mod tests {
 
         let (moran_i, z_score, p_value) = moran_i_test(values, adjacency, 4).unwrap();
 
-        assert!(moran_i >= -1.0 && moran_i <= 1.0);
-        assert!(p_value >= 0.0 && p_value <= 1.0);
+        assert!((-1.0..=1.0).contains(&moran_i));
+        assert!((0.0..=1.0).contains(&p_value));
     }
 }

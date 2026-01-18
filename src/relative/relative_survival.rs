@@ -5,10 +5,7 @@
     unused_assignments,
     unused_parens,
     clippy::needless_range_loop,
-    clippy::len_zero,
-    clippy::too_many_arguments,
-    clippy::manual_range_contains,
-    clippy::manual_clamp
+    clippy::too_many_arguments
 )]
 
 use pyo3::prelude::*;
@@ -410,12 +407,12 @@ mod tests {
 
         let result = relative_survival(time, status, expected_hazard, age, None).unwrap();
 
-        assert!(result.time_points.len() > 0);
+        assert!(!result.time_points.is_empty());
         assert!(
             result
                 .relative_survival
                 .iter()
-                .all(|&s| s >= 0.0 && s <= 2.0)
+                .all(|&s| (0.0..=2.0).contains(&s))
         );
     }
 }

@@ -6,10 +6,7 @@
     dead_code,
     clippy::too_many_arguments,
     clippy::needless_range_loop,
-    clippy::type_complexity,
-    clippy::let_and_return,
-    clippy::collapsible_if,
-    clippy::collapsible_else_if
+    clippy::type_complexity
 )]
 
 use pyo3::prelude::*;
@@ -217,8 +214,7 @@ fn log_rank_split_score(
         return f64::NEG_INFINITY;
     }
 
-    let chi_sq = (d_left - expected_left).powi(2) / variance;
-    chi_sq
+    (d_left - expected_left).powi(2) / variance
 }
 
 fn find_best_split(
@@ -327,10 +323,10 @@ fn build_tree(
         return TreeNode::new_leaf(&node_times, &node_status, all_times);
     }
 
-    if let Some(max_d) = config.max_depth {
-        if depth >= max_d {
-            return TreeNode::new_leaf(&node_times, &node_status, all_times);
-        }
+    if let Some(max_d) = config.max_depth
+        && depth >= max_d
+    {
+        return TreeNode::new_leaf(&node_times, &node_status, all_times);
     }
 
     let mtry = config
@@ -402,10 +398,8 @@ fn predict_tree<'a>(node: &'a TreeNode, x_row: &[f64]) -> &'a [f64] {
                 if let Some(ref left) = node.left {
                     return predict_tree(left, x_row);
                 }
-            } else {
-                if let Some(ref right) = node.right {
-                    return predict_tree(right, x_row);
-                }
+            } else if let Some(ref right) = node.right {
+                return predict_tree(right, x_row);
             }
             &node.chf
         }

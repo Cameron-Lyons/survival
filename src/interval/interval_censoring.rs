@@ -5,8 +5,6 @@
     unused_assignments,
     clippy::too_many_arguments,
     clippy::needless_range_loop,
-    clippy::len_zero,
-    clippy::manual_range_contains,
     clippy::type_complexity
 )]
 
@@ -521,8 +519,8 @@ mod tests {
         let right = vec![2.0, 3.0, 5.0, 4.0, f64::INFINITY];
 
         let result = turnbull_estimator(left, right, 100, 1e-4).unwrap();
-        assert!(result.time_points.len() > 0);
-        assert!(result.survival.iter().all(|&s| s >= 0.0 && s <= 1.0));
+        assert!(!result.time_points.is_empty());
+        assert!(result.survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
     }
 
     #[test]

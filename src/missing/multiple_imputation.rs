@@ -4,9 +4,7 @@
     unused_mut,
     unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
-    clippy::manual_range_contains,
-    clippy::manual_swap
+    clippy::needless_range_loop
 )]
 
 use pyo3::prelude::*;
@@ -604,9 +602,7 @@ fn solve_linear_system(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
         }
 
         for j in 0..(n + 1) {
-            let temp = aug[i * (n + 1) + j];
-            aug[i * (n + 1) + j] = aug[max_row * (n + 1) + j];
-            aug[max_row * (n + 1) + j] = temp;
+            aug.swap(i * (n + 1) + j, max_row * (n + 1) + j);
         }
 
         let pivot = aug[i * (n + 1) + i];
@@ -751,7 +747,7 @@ mod tests {
             pooled
                 .fraction_missing_info
                 .iter()
-                .all(|&f| f >= 0.0 && f <= 1.0)
+                .all(|&f| (0.0..=1.0).contains(&f))
         );
     }
 }
