@@ -1,4 +1,5 @@
 use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_SMALL};
+use crate::simd_ops::{dot_product_simd, mean_simd, subtract_scalar_simd, sum_of_squares_simd};
 use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -134,14 +135,15 @@ fn calibration_regression(predicted: &[f64], observed: &[f64]) -> (f64, f64) {
     if n < 2 {
         return (1.0, 0.0);
     }
-    let mean_x: f64 = predicted.iter().sum::<f64>() / n as f64;
-    let mean_y: f64 = observed.iter().sum::<f64>() / n as f64;
-    let mut ss_xy = 0.0;
-    let mut ss_xx = 0.0;
-    for i in 0..n {
-        ss_xy += (predicted[i] - mean_x) * (observed[i] - mean_y);
-        ss_xx += (predicted[i] - mean_x).powi(2);
-    }
+    let mean_x = mean_simd(predicted);
+    let mean_y = mean_simd(observed);
+
+    let centered_x = subtract_scalar_simd(predicted, mean_x);
+    let centered_y = subtract_scalar_simd(observed, mean_y);
+
+    let ss_xy = dot_product_simd(&centered_x, &centered_y);
+    let ss_xx = sum_of_squares_simd(&centered_x);
+
     let slope = if ss_xx > 0.0 { ss_xy / ss_xx } else { 1.0 };
     let intercept = mean_y - slope * mean_x;
     (slope, intercept)
