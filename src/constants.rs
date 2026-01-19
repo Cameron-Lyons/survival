@@ -8,9 +8,31 @@ pub const CONVERGENCE_EPSILON: f64 = 1e-6;
 pub const STRICT_EPSILON: f64 = 1e-5;
 pub const CLOGIT_TOLERANCE: f64 = 1e-6;
 pub const DIVISION_FLOOR: f64 = 1e-10;
+pub const GAUSSIAN_ELIMINATION_TOL: f64 = 1e-12;
 pub const DEFAULT_MAX_ITER: usize = 30;
 pub const DEFAULT_CONFIDENCE_LEVEL: f64 = 0.95;
 pub const DEFAULT_BOOTSTRAP_SAMPLES: usize = 1000;
+
+pub const Z_SCORE_80: f64 = 1.28;
+pub const Z_SCORE_90: f64 = 1.645;
+pub const Z_SCORE_95: f64 = 1.96;
+pub const Z_SCORE_99: f64 = 2.576;
+
+pub const TIED_PAIR_WEIGHT: f64 = 0.5;
+pub const DEFAULT_CONCORDANCE: f64 = 0.5;
+
+#[inline]
+pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
+    if confidence_level >= 0.99 {
+        Z_SCORE_99
+    } else if confidence_level >= 0.95 {
+        Z_SCORE_95
+    } else if confidence_level >= 0.90 {
+        Z_SCORE_90
+    } else {
+        Z_SCORE_80
+    }
+}
 
 pub const PARALLEL_THRESHOLD_SMALL: usize = 100;
 pub const PARALLEL_THRESHOLD_MEDIUM: usize = 500;

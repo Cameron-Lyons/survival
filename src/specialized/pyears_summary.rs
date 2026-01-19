@@ -1,3 +1,4 @@
+use crate::constants::z_score_for_confidence;
 use pyo3::prelude::*;
 use std::fmt;
 
@@ -190,13 +191,7 @@ pub fn pyears_ci(observed: f64, expected: f64, conf_level: f64) -> PyResult<(f64
         f64::NAN
     };
 
-    let z = if conf_level >= 0.99 {
-        2.576
-    } else if conf_level >= 0.95 {
-        1.96
-    } else {
-        1.645
-    };
+    let z = z_score_for_confidence(conf_level);
 
     let se_log = if observed > 0.0 {
         1.0 / observed.sqrt()

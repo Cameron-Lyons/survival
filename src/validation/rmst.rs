@@ -1,3 +1,4 @@
+use crate::constants::z_score_for_confidence;
 use crate::utilities::statistical::normal_cdf as norm_cdf;
 use pyo3::prelude::*;
 use std::fmt;
@@ -269,15 +270,7 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
         }
     }
     let se = variance.sqrt();
-    let z = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
+    let z = z_score_for_confidence(confidence_level);
     let ci_lower = (rmst - z * se).max(0.0);
     let ci_upper = rmst + z * se;
     RMSTResult {
@@ -336,15 +329,7 @@ pub fn compare_rmst(
     let diff = rmst1.rmst - rmst2.rmst;
     let diff_var = rmst1.variance + rmst2.variance;
     let diff_se = diff_var.sqrt();
-    let z = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
+    let z = z_score_for_confidence(confidence_level);
     let diff_ci_lower = diff - z * diff_se;
     let diff_ci_upper = diff + z * diff_se;
     let ratio = if rmst2.rmst > 0.0 {
@@ -496,15 +481,7 @@ pub fn compute_survival_quantile(
     let mut total_at_risk = n as f64;
     let mut surv = 1.0;
     let mut var_sum = 0.0;
-    let z = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
+    let z = z_score_for_confidence(confidence_level);
     let mut i = 0;
     while i < n {
         let current_time = time[indices[i]];
@@ -742,15 +719,7 @@ pub fn compute_nnt(
     let risk1 = 1.0 - surv1.0;
     let risk2 = 1.0 - surv2.0;
     let arr = risk2 - risk1;
-    let z = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
+    let z = z_score_for_confidence(confidence_level);
     let arr_se = (surv1.1 + surv2.1).sqrt();
     let arr_ci_lower = arr - z * arr_se;
     let arr_ci_upper = arr + z * arr_se;

@@ -1,4 +1,4 @@
-use crate::constants::PARALLEL_THRESHOLD_XLARGE;
+use crate::constants::{PARALLEL_THRESHOLD_XLARGE, z_score_for_confidence};
 use crate::utilities::simd::sum_f64;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -130,15 +130,7 @@ pub fn nelson_aalen(
         cumulative_hazard.push(cum_h);
         variance.push(cum_var);
     }
-    let z = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
+    let z = z_score_for_confidence(confidence_level);
     let mut ci_lower = Vec::with_capacity(m);
     let mut ci_upper = Vec::with_capacity(m);
     for j in 0..m {
@@ -383,15 +375,7 @@ fn kaplan_meier(
         survival.push(surv);
         greenwood_var.push(surv * surv * var_sum);
     }
-    let z = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
+    let z = z_score_for_confidence(confidence_level);
     let mut ci_lower = Vec::with_capacity(m);
     let mut ci_upper = Vec::with_capacity(m);
     for j in 0..m {

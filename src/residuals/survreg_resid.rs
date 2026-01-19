@@ -1,11 +1,9 @@
 use crate::utilities::statistical::normal_cdf;
 use pyo3::prelude::*;
 
-#[allow(dead_code)]
 type DistFn = fn(f64) -> f64;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum SurvregResidType {
     Response,
     Deviance,
@@ -15,7 +13,6 @@ pub enum SurvregResidType {
     Ldcase,
     Ldresp,
     Ldshape,
-    Matrix,
 }
 
 impl SurvregResidType {
@@ -29,7 +26,6 @@ impl SurvregResidType {
             "ldcase" => Some(SurvregResidType::Ldcase),
             "ldresp" => Some(SurvregResidType::Ldresp),
             "ldshape" => Some(SurvregResidType::Ldshape),
-            "matrix" => Some(SurvregResidType::Matrix),
             _ => None,
         }
     }
@@ -80,26 +76,6 @@ fn gaussian_cdf(z: f64) -> f64 {
 
 fn gaussian_pdf(z: f64) -> f64 {
     (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
-}
-
-#[allow(dead_code)]
-pub fn compute_standardized_residuals(
-    time: &[f64],
-    _status: &[i32],
-    linear_pred: &[f64],
-    scale: f64,
-    _distribution: &str,
-) -> Vec<f64> {
-    let n = time.len();
-    let mut residuals = Vec::with_capacity(n);
-
-    for i in 0..n {
-        let y = time[i].ln();
-        let z = (y - linear_pred[i]) / scale;
-        residuals.push(z);
-    }
-
-    residuals
 }
 
 pub fn compute_response_residuals(time: &[f64], linear_pred: &[f64]) -> Vec<f64> {
@@ -304,7 +280,7 @@ pub fn residuals_survreg(
 
     let residuals = match resid_type {
         SurvregResidType::Response => compute_response_residuals(&time, &linear_pred),
-        SurvregResidType::Deviance => {
+        SurvregResidType::Deviance | SurvregResidType::Dfbeta | SurvregResidType::Dfbetas => {
             compute_deviance_residuals_survreg(&time, &status, &linear_pred, scale, &distribution)
         }
         SurvregResidType::Working => {
@@ -313,7 +289,6 @@ pub fn residuals_survreg(
         SurvregResidType::Ldcase | SurvregResidType::Ldresp | SurvregResidType::Ldshape => {
             compute_ldcase(&time, &status, &linear_pred, scale, &distribution)
         }
-        _ => compute_deviance_residuals_survreg(&time, &status, &linear_pred, scale, &distribution),
     };
 
     Ok(SurvregResiduals {

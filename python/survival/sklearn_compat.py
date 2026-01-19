@@ -62,7 +62,57 @@ def _validate_survival_data(
     return X, time, status
 
 
-class CoxPHEstimator(BaseEstimator, RegressorMixin):
+def _compute_concordance_index(
+    time: NDArray[np.float64],
+    status: NDArray[np.int32],
+    risk_scores: NDArray[np.float64],
+) -> float:
+    """Compute concordance index (C-index) for survival predictions."""
+    n = len(time)
+    concordant = 0.0
+    comparable = 0.0
+
+    for i in range(n):
+        if status[i] == 0:
+            continue
+        for j in range(n):
+            if i == j:
+                continue
+            if time[i] < time[j]:
+                comparable += 1.0
+                if risk_scores[i] > risk_scores[j]:
+                    concordant += 1.0
+                elif risk_scores[i] == risk_scores[j]:
+                    concordant += 0.5
+
+    return concordant / comparable if comparable > 0 else 0.5
+
+
+class SurvivalScoreMixin:
+    """Mixin providing concordance index scoring for survival models."""
+
+    def score(self, X: ArrayLike, y: ArrayLike) -> float:
+        """Return the concordance index on the given test data.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Test samples.
+        y : array-like of shape (n_samples, 2)
+            True target values.
+
+        Returns
+        -------
+        score : float
+            Concordance index (C-index), between 0 and 1.
+        """
+        check_is_fitted(self)
+        X, time, status = _validate_survival_data(X, y)
+        risk_scores = self.predict(X)
+        return _compute_concordance_index(time, status, risk_scores)
+
+
+class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
     """Scikit-learn compatible Cox Proportional Hazards model.
 
     Parameters
@@ -187,28 +237,8 @@ class CoxPHEstimator(BaseEstimator, RegressorMixin):
         result = self.model_.predicted_survival_time(X.tolist(), 0.5)
         return np.array([t if t is not None else np.nan for t in result])
 
-    def score(self, X: ArrayLike, y: ArrayLike) -> float:
-        """Return the concordance index on the given test data.
 
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Test samples.
-        y : array-like of shape (n_samples, 2)
-            True target values.
-
-        Returns
-        -------
-        score : float
-            Concordance index (C-index), between 0 and 1.
-        """
-        check_is_fitted(self)
-        X, time, status = _validate_survival_data(X, y)
-        risk_scores = self.predict(X)
-        return _compute_concordance_index(time, status, risk_scores)
-
-
-class GradientBoostSurvivalEstimator(BaseEstimator, RegressorMixin):
+class GradientBoostSurvivalEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
     """Scikit-learn compatible Gradient Boosting Survival model.
 
     Parameters
@@ -367,28 +397,8 @@ class GradientBoostSurvivalEstimator(BaseEstimator, RegressorMixin):
         result = self.model_.predict_median_survival_time(x_flat, X.shape[0])
         return np.array([t if t is not None else np.nan for t in result])
 
-    def score(self, X: ArrayLike, y: ArrayLike) -> float:
-        """Return the concordance index on the given test data.
 
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Test samples.
-        y : array-like of shape (n_samples, 2)
-            True target values.
-
-        Returns
-        -------
-        score : float
-            Concordance index (C-index), between 0 and 1.
-        """
-        check_is_fitted(self)
-        X, time, status = _validate_survival_data(X, y)
-        risk_scores = self.predict(X)
-        return _compute_concordance_index(time, status, risk_scores)
-
-
-class SurvivalForestEstimator(BaseEstimator, RegressorMixin):
+class SurvivalForestEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
     """Scikit-learn compatible Random Survival Forest model.
 
     Parameters
@@ -544,26 +554,6 @@ class SurvivalForestEstimator(BaseEstimator, RegressorMixin):
         x_flat = X.flatten().tolist()
         result = self.model_.predict_median_survival_time(x_flat, X.shape[0])
         return np.array([t if t is not None else np.nan for t in result])
-
-    def score(self, X: ArrayLike, y: ArrayLike) -> float:
-        """Return the concordance index on the given test data.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Test samples.
-        y : array-like of shape (n_samples, 2)
-            True target values.
-
-        Returns
-        -------
-        score : float
-            Concordance index (C-index), between 0 and 1.
-        """
-        check_is_fitted(self)
-        X, time, status = _validate_survival_data(X, y)
-        risk_scores = self.predict(X)
-        return _compute_concordance_index(time, status, risk_scores)
 
 
 class AFTEstimator(BaseEstimator, RegressorMixin):
@@ -793,32 +783,6 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         """
         check_is_fitted(self)
         return np.exp(self.coef_)
-
-
-def _compute_concordance_index(
-    time: NDArray[np.float64],
-    status: NDArray[np.int32],
-    risk_scores: NDArray[np.float64],
-) -> float:
-    """Compute concordance index (C-index) for survival predictions."""
-    n = len(time)
-    concordant = 0.0
-    comparable = 0.0
-
-    for i in range(n):
-        if status[i] == 0:
-            continue
-        for j in range(n):
-            if i == j:
-                continue
-            if time[i] < time[j]:
-                comparable += 1.0
-                if risk_scores[i] > risk_scores[j]:
-                    concordant += 1.0
-                elif risk_scores[i] == risk_scores[j]:
-                    concordant += 0.5
-
-    return concordant / comparable if comparable > 0 else 0.5
 
 
 def iter_chunks(X: ArrayLike, batch_size: int = 1000) -> Iterator[tuple[int, NDArray[np.float64]]]:

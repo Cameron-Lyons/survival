@@ -1,4 +1,4 @@
-use crate::constants::PARALLEL_THRESHOLD_SMALL;
+use crate::constants::{PARALLEL_THRESHOLD_SMALL, z_score_for_confidence};
 use crate::utilities::statistical::normal_cdf as norm_cdf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -194,15 +194,7 @@ pub fn compute_conditional_survival(
     } else {
         0.0
     };
-    let z = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
+    let z = z_score_for_confidence(confidence_level);
     let var_conditional = if surv_given > 0.0 {
         conditional * conditional * (var_target - var_given).abs()
     } else {
@@ -520,15 +512,7 @@ pub fn compute_survival_at_times(
         }
         total_at_risk -= removed;
     }
-    let z = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
+    let z = z_score_for_confidence(confidence_level);
     let results: Vec<SurvivalAtTimeResult> = if eval_times.len() > PARALLEL_THRESHOLD_SMALL {
         eval_times
             .par_iter()
