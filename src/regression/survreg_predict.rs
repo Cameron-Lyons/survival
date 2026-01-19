@@ -1,15 +1,10 @@
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum SurvregPredictType {
     Response,
-    Link,
     Lp,
-    Linear,
     Terms,
-    Quantile,
-    Uquantile,
 }
 
 impl SurvregPredictType {
@@ -18,8 +13,6 @@ impl SurvregPredictType {
             "response" => Some(SurvregPredictType::Response),
             "link" | "lp" | "linear" => Some(SurvregPredictType::Lp),
             "terms" => Some(SurvregPredictType::Terms),
-            "quantile" => Some(SurvregPredictType::Quantile),
-            "uquantile" => Some(SurvregPredictType::Uquantile),
             _ => None,
         }
     }
@@ -246,12 +239,8 @@ pub fn predict_survreg(
     let linear_pred = compute_linear_predictor(&covariates, &coefficients, offset.as_deref());
 
     let predictions = match pred_type {
-        SurvregPredictType::Lp | SurvregPredictType::Linear | SurvregPredictType::Link => {
-            linear_pred.clone()
-        }
+        SurvregPredictType::Lp | SurvregPredictType::Terms => linear_pred.clone(),
         SurvregPredictType::Response => compute_response_prediction(&linear_pred, &distribution),
-        SurvregPredictType::Terms => linear_pred.clone(),
-        _ => compute_response_prediction(&linear_pred, &distribution),
     };
 
     let se = if se_fit {

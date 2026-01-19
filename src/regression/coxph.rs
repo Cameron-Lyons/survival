@@ -1,4 +1,4 @@
-use crate::constants::EXP_CLAMP_MIN;
+use crate::constants::{EXP_CLAMP_MIN, z_score_for_confidence};
 use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
@@ -393,13 +393,7 @@ impl CoxPHModel {
     pub fn hazard_ratios_with_ci(&self, confidence_level: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         let coefs: Vec<f64> = self.coefficients.column(0).to_vec();
         let n = coefs.len();
-        let z = if confidence_level >= 0.99 {
-            2.576
-        } else if confidence_level >= 0.95 {
-            1.96
-        } else {
-            1.645
-        };
+        let z = z_score_for_confidence(confidence_level);
         let se = self.compute_standard_errors();
         let mut hr = Vec::with_capacity(n);
         let mut ci_lower = Vec::with_capacity(n);
