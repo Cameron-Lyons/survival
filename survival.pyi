@@ -961,3 +961,232 @@ def life_table(
     status: list[int],
     breaks: list[float],
 ) -> LifeTableResult: ...
+
+class ConformalCalibrationResult:
+    conformity_scores: list[float]
+    ipcw_weights: list[float] | None
+    quantile_threshold: float
+    coverage_level: float
+    n_calibration: int
+    n_effective: float
+
+class ConformalPredictionResult:
+    lower_predictive_bound: list[float]
+    predicted_time: list[float]
+    coverage_level: float
+
+class ConformalDiagnostics:
+    empirical_coverage: float
+    expected_coverage: float
+    coverage_ci_lower: float
+    coverage_ci_upper: float
+    mean_lpb: float
+    median_lpb: float
+
+class DoublyRobustConformalResult:
+    lower_predictive_bound: list[float]
+    predicted_time: list[float]
+    coverage_level: float
+    quantile_threshold: float
+    imputed_censoring_times: list[float]
+    censoring_probs: list[float]
+    n_imputed: int
+    n_effective: float
+
+class TwoSidedConformalResult:
+    lower_bound: list[float]
+    upper_bound: list[float]
+    predicted_time: list[float]
+    is_two_sided: list[bool]
+    coverage_level: float
+    n_two_sided: int
+    n_one_sided: int
+
+class TwoSidedCalibrationResult:
+    lower_quantile: float
+    upper_quantile: float
+    censoring_score_threshold: float
+    coverage_level: float
+    n_uncensored: int
+    n_censored: int
+
+class ConformalSurvivalDistribution:
+    time_points: list[float]
+    survival_lower: list[list[float]]
+    survival_upper: list[list[float]]
+    survival_median: list[list[float]]
+    coverage_level: float
+    n_subjects: int
+
+class BootstrapConformalResult:
+    lower_bound: list[float]
+    upper_bound: list[float]
+    predicted_time: list[float]
+    coverage_level: float
+    n_bootstrap: int
+    bootstrap_quantile_lower: float
+    bootstrap_quantile_upper: float
+
+class CQRConformalResult:
+    lower_bound: list[float]
+    upper_bound: list[float]
+    predicted_quantile_lower: list[float]
+    predicted_quantile_upper: list[float]
+    coverage_level: float
+    quantile_lower: float
+    quantile_upper: float
+
+class ConformalCalibrationPlot:
+    coverage_levels: list[float]
+    empirical_coverages: list[float]
+    ci_lower: list[float]
+    ci_upper: list[float]
+    n_test: int
+
+class ConformalWidthAnalysis:
+    mean_width: float
+    median_width: float
+    std_width: float
+    min_width: float
+    max_width: float
+    quantile_25: float
+    quantile_75: float
+    width_by_predicted: list[tuple[float, float]]
+
+class CoverageSelectionResult:
+    optimal_coverage: float
+    coverage_candidates: list[float]
+    mean_widths: list[float]
+    empirical_coverages: list[float]
+    efficiency_scores: list[float]
+
+def conformal_calibrate(
+    time: list[float],
+    status: list[int],
+    predicted: list[float],
+    coverage_level: float | None = None,
+    use_ipcw: bool | None = None,
+) -> ConformalCalibrationResult: ...
+
+def conformal_predict(
+    quantile_threshold: float,
+    predicted_new: list[float],
+    coverage_level: float | None = None,
+) -> ConformalPredictionResult: ...
+
+def conformal_survival_from_predictions(
+    time_calib: list[float],
+    status_calib: list[int],
+    predicted_calib: list[float],
+    predicted_new: list[float],
+    coverage_level: float | None = None,
+    use_ipcw: bool | None = None,
+) -> ConformalPredictionResult: ...
+
+def conformal_coverage_test(
+    time_test: list[float],
+    status_test: list[int],
+    lpb: list[float],
+    coverage_level: float | None = None,
+) -> ConformalDiagnostics: ...
+
+def doubly_robust_conformal_calibrate(
+    time: list[float],
+    status: list[int],
+    predicted: list[float],
+    coverage_level: float | None = None,
+    cutoff: float | None = None,
+    seed: int | None = None,
+    trim: float | None = None,
+) -> DoublyRobustConformalResult: ...
+
+def doubly_robust_conformal_survival(
+    time_calib: list[float],
+    status_calib: list[int],
+    predicted_calib: list[float],
+    predicted_new: list[float],
+    coverage_level: float | None = None,
+    cutoff: float | None = None,
+    seed: int | None = None,
+    trim: float | None = None,
+) -> DoublyRobustConformalResult: ...
+
+def two_sided_conformal_calibrate(
+    time: list[float],
+    status: list[int],
+    predicted: list[float],
+    coverage_level: float | None = None,
+) -> TwoSidedCalibrationResult: ...
+
+def two_sided_conformal_predict(
+    calibration: TwoSidedCalibrationResult,
+    predicted_new: list[float],
+    censoring_scores_new: list[float] | None = None,
+) -> TwoSidedConformalResult: ...
+
+def two_sided_conformal_survival(
+    time_calib: list[float],
+    status_calib: list[int],
+    predicted_calib: list[float],
+    predicted_new: list[float],
+    coverage_level: float | None = None,
+) -> TwoSidedConformalResult: ...
+
+def conformalized_survival_distribution(
+    time_points: list[float],
+    survival_probs_calib: list[list[float]],
+    time_calib: list[float],
+    status_calib: list[int],
+    survival_probs_new: list[list[float]],
+    coverage_level: float | None = None,
+) -> ConformalSurvivalDistribution: ...
+
+def bootstrap_conformal_survival(
+    time: list[float],
+    status: list[int],
+    predicted: list[float],
+    predicted_new: list[float],
+    coverage_level: float | None = None,
+    n_bootstrap: int | None = None,
+    seed: int | None = None,
+) -> BootstrapConformalResult: ...
+
+def cqr_conformal_survival(
+    time: list[float],
+    status: list[int],
+    predicted: list[float],
+    predicted_new: list[float],
+    coverage_level: float | None = None,
+    bandwidth: float | None = None,
+) -> CQRConformalResult: ...
+
+def conformal_calibration_plot(
+    time_test: list[float],
+    status_test: list[int],
+    lower_bounds: list[list[float]],
+    upper_bounds: list[list[float]] | None = None,
+    n_levels: int | None = None,
+) -> ConformalCalibrationPlot: ...
+
+def conformal_width_analysis(
+    lower_bounds: list[float],
+    upper_bounds: list[float],
+    predicted: list[float],
+) -> ConformalWidthAnalysis: ...
+
+def conformal_coverage_cv(
+    time: list[float],
+    status: list[int],
+    predicted: list[float],
+    n_folds: int | None = None,
+    coverage_candidates: list[float] | None = None,
+    seed: int | None = None,
+) -> CoverageSelectionResult: ...
+
+def conformal_survival_parallel(
+    time: list[float],
+    status: list[int],
+    predicted: list[float],
+    predicted_new: list[float],
+    coverage_level: float | None = None,
+) -> ConformalPredictionResult: ...
