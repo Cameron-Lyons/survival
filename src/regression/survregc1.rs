@@ -35,6 +35,7 @@ pub enum SurvivalDist {
     Gaussian,
     Weibull,
     LogNormal,
+    LogLogistic,
 }
 pub struct SurvivalLikelihood {
     pub loglik: f64,
@@ -185,7 +186,20 @@ pub fn survregc1(
         );
     }
 
+    symmetrize_matrix(&mut result.imat);
+    symmetrize_matrix(&mut result.jj);
+
     Ok(result)
+}
+
+fn symmetrize_matrix(mat: &mut Array2<f64>) {
+    let n = mat.nrows().min(mat.ncols());
+    for i in 0..n {
+        for j in 0..i {
+            let val = mat[[i, j]];
+            mat[[j, i]] = val;
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -267,6 +281,10 @@ fn survregc1_sequential(
         };
         update_derivatives(&mut result, person, fgrp, strata, dims, covar, w, derivs);
     }
+
+    symmetrize_matrix(&mut result.imat);
+    symmetrize_matrix(&mut result.jj);
+
     Ok(result)
 }
 #[inline]
@@ -278,7 +296,7 @@ fn compute_exact(
 ) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
     let (f, df, ddf) = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 1)?,
-        SurvivalDist::Logistic => logistic_d(z, 1)?,
+        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 1)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 1)?,
     };
     if f <= 0.0 {
@@ -302,21 +320,23 @@ fn compute_right_censored(
     sigma: f64,
     dist: SurvivalDist,
 ) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    let (f, df, _ddf) = match dist {
+    let (f, _df, _ddf) = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
-        SurvivalDist::Logistic => logistic_d(z, 2)?,
+        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
-    if f <= 0.0 || f >= 1.0 {
+    let surv = 1.0 - f;
+    if surv <= 0.0 || surv >= 1.0 {
         Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
     } else {
-        let g = f.ln();
-        let temp = df / (f * sigma);
+        let g = surv.ln();
+        let exp_z = (-g).max(1e-300);
+        let temp = exp_z / sigma;
         let dg = temp;
         let dsig = temp * sz;
-        let ddg = -dg.powi(2);
-        let dsg = -sz * dg.powi(2);
-        let ddsig = -sz.powi(2) * dg.powi(2);
+        let ddg = -temp / sigma;
+        let dsg = -sz * temp / sigma;
+        let ddsig = -temp * sz * (z + 1.0);
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
@@ -329,7 +349,7 @@ fn compute_left_censored(
 ) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
     let (f, df, _ddf) = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
-        SurvivalDist::Logistic => logistic_d(z, 2)?,
+        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
     if f <= 0.0 || f >= 1.0 {
@@ -358,12 +378,12 @@ fn compute_interval_censored(
     let z2 = sz2 / sigma;
     let (f1, df1, _ddf1) = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
-        SurvivalDist::Logistic => logistic_d(z, 2)?,
+        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
     let (f2, df2, _ddf2) = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z2, 2)?,
-        SurvivalDist::Logistic => logistic_d(z2, 2)?,
+        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z2, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z2, 2)?,
     };
     let diff = f2 - f1;
@@ -495,5 +515,348 @@ fn update_derivatives(
             res.imat[[k, fgrp]] -= dsg * w;
             res.jj[[k, fgrp]] += dsig * dg * w;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    #[test]
+    fn test_survival_dist_variants() {
+        let _ = SurvivalDist::ExtremeValue;
+        let _ = SurvivalDist::Logistic;
+        let _ = SurvivalDist::Gaussian;
+        let _ = SurvivalDist::Weibull;
+        let _ = SurvivalDist::LogNormal;
+        let _ = SurvivalDist::LogLogistic;
+    }
+
+    #[test]
+    fn test_symmetrize_matrix() {
+        let mut mat = Array2::zeros((3, 3));
+        mat[[0, 0]] = 1.0;
+        mat[[1, 0]] = 2.0;
+        mat[[1, 1]] = 3.0;
+        mat[[2, 0]] = 4.0;
+        mat[[2, 1]] = 5.0;
+        mat[[2, 2]] = 6.0;
+
+        symmetrize_matrix(&mut mat);
+
+        assert!((mat[[0, 1]] - 2.0).abs() < 1e-10);
+        assert!((mat[[0, 2]] - 4.0).abs() < 1e-10);
+        assert!((mat[[1, 2]] - 5.0).abs() < 1e-10);
+        assert!((mat[[1, 0]] - mat[[0, 1]]).abs() < 1e-10);
+        assert!((mat[[2, 0]] - mat[[0, 2]]).abs() < 1e-10);
+        assert!((mat[[2, 1]] - mat[[1, 2]]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_symmetrize_matrix_empty() {
+        let mut mat = Array2::zeros((0, 0));
+        symmetrize_matrix(&mut mat);
+        assert_eq!(mat.nrows(), 0);
+    }
+
+    #[test]
+    fn test_symmetrize_matrix_single() {
+        let mut mat = Array2::from_elem((1, 1), 5.0);
+        symmetrize_matrix(&mut mat);
+        assert!((mat[[0, 0]] - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_exvalue_d_density() {
+        let result = exvalue_d(0.0, 1);
+        assert!(result.is_ok());
+        let (f, df, ddf) = result.unwrap();
+        assert!(f > 0.0);
+        assert!((df - 0.0).abs() < 1e-10);
+        assert!(ddf.is_finite());
+    }
+
+    #[test]
+    fn test_exvalue_d_survival() {
+        let result = exvalue_d(0.0, 2);
+        assert!(result.is_ok());
+        let (f, df, _ddf) = result.unwrap();
+        assert!(f > 0.0 && f < 1.0);
+        assert!(df > 0.0);
+    }
+
+    #[test]
+    fn test_gauss_d_density() {
+        let result = gauss_d(0.0, 1);
+        assert!(result.is_ok());
+        let (f, df, ddf) = result.unwrap();
+        assert!(f > 0.0);
+        assert!((df - 0.0).abs() < 1e-10);
+        assert!(ddf.is_finite());
+    }
+
+    #[test]
+    fn test_gauss_d_survival() {
+        let result = gauss_d(0.0, 2);
+        assert!(result.is_ok());
+        let (f, _df, _ddf) = result.unwrap();
+        assert!((f - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_logistic_d_density() {
+        let result = logistic_d(0.0, 1);
+        assert!(result.is_ok());
+        let (f, df, ddf) = result.unwrap();
+        assert!(f > 0.0);
+        assert!((df - 0.0).abs() < 1e-10);
+        assert!(ddf.is_finite());
+    }
+
+    #[test]
+    fn test_logistic_d_survival() {
+        let result = logistic_d(0.0, 2);
+        assert!(result.is_ok());
+        let (f, _df, _ddf) = result.unwrap();
+        assert!((f - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_compute_exact_weibull() {
+        let result = compute_exact(0.0, 0.0, 1.0, SurvivalDist::Weibull);
+        assert!(result.is_ok());
+        let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
+        assert!(g.is_finite());
+        assert!(dg.is_finite());
+        assert!(ddg.is_finite());
+        assert!(dsig.is_finite());
+        assert!(ddsig.is_finite());
+        assert!(dsg.is_finite());
+    }
+
+    #[test]
+    fn test_compute_exact_lognormal() {
+        let result = compute_exact(0.0, 0.0, 1.0, SurvivalDist::LogNormal);
+        assert!(result.is_ok());
+        let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
+        assert!(g.is_finite());
+        assert!(dg.is_finite());
+        assert!(ddg.is_finite());
+        assert!(dsig.is_finite());
+        assert!(ddsig.is_finite());
+        assert!(dsg.is_finite());
+    }
+
+    #[test]
+    fn test_compute_exact_loglogistic() {
+        let result = compute_exact(0.0, 0.0, 1.0, SurvivalDist::LogLogistic);
+        assert!(result.is_ok());
+        let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
+        assert!(g.is_finite());
+        assert!(dg.is_finite());
+        assert!(ddg.is_finite());
+        assert!(dsig.is_finite());
+        assert!(ddsig.is_finite());
+        assert!(dsg.is_finite());
+    }
+
+    #[test]
+    fn test_compute_right_censored_weibull() {
+        let result = compute_right_censored(0.0, 0.0, 1.0, SurvivalDist::Weibull);
+        assert!(result.is_ok());
+        let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
+        assert!(g.is_finite());
+        assert!(g < 0.0);
+        assert!(dg.is_finite());
+        assert!(ddg.is_finite());
+        assert!(dsig.is_finite());
+        assert!(ddsig.is_finite());
+        assert!(dsg.is_finite());
+    }
+
+    #[test]
+    fn test_compute_right_censored_lognormal() {
+        let result = compute_right_censored(0.0, 0.0, 1.0, SurvivalDist::LogNormal);
+        assert!(result.is_ok());
+        let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
+        assert!(g.is_finite());
+    }
+
+    #[test]
+    fn test_compute_right_censored_loglogistic() {
+        let result = compute_right_censored(0.0, 0.0, 1.0, SurvivalDist::LogLogistic);
+        assert!(result.is_ok());
+        let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
+        assert!(g.is_finite());
+    }
+
+    #[test]
+    fn test_compute_left_censored_weibull() {
+        let result = compute_left_censored(0.0, 0.0, 1.0, SurvivalDist::Weibull);
+        assert!(result.is_ok());
+        let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
+        assert!(g.is_finite());
+    }
+
+    #[test]
+    fn test_survregc1_basic() {
+        let n = 5;
+        let nvar = 1;
+        let nstrat = 1;
+        let beta = Array1::from_vec(vec![0.0, 0.0]);
+        let strat = Array1::from_vec(vec![1i32; n]);
+        let offset = Array1::from_vec(vec![0.0; n]);
+        let time1 = Array1::from_vec(vec![0.0, 0.5, 1.0, 1.5, 2.0]);
+        let status = Array1::from_vec(vec![1i32, 1, 1, 1, 1]);
+        let wt = Array1::from_vec(vec![1.0; n]);
+        let covar = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let frail = Array1::from_vec(vec![0i32; n]);
+
+        let result = survregc1(
+            n,
+            nvar,
+            nstrat,
+            false,
+            &beta.view(),
+            SurvivalDist::Weibull,
+            &strat.view(),
+            &offset.view(),
+            &time1.view(),
+            None,
+            &status.view(),
+            &wt.view(),
+            &covar.view(),
+            0,
+            &frail.view(),
+        );
+
+        assert!(result.is_ok());
+        let lik = result.unwrap();
+        assert!(lik.loglik.is_finite());
+        assert_eq!(lik.u.len(), nvar + nstrat);
+        assert_eq!(lik.imat.nrows(), nvar + nstrat);
+    }
+
+    #[test]
+    fn test_survregc1_with_censoring() {
+        let n = 6;
+        let nvar = 1;
+        let nstrat = 1;
+        let beta = Array1::from_vec(vec![0.5, 0.0]);
+        let strat = Array1::from_vec(vec![1i32; n]);
+        let offset = Array1::from_vec(vec![0.0; n]);
+        let time1 = Array1::from_vec(vec![0.0, 0.5, 1.0, 1.5, 2.0, 2.5]);
+        let status = Array1::from_vec(vec![1i32, 0, 1, 0, 1, 0]);
+        let wt = Array1::from_vec(vec![1.0; n]);
+        let covar = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let frail = Array1::from_vec(vec![0i32; n]);
+
+        let result = survregc1(
+            n,
+            nvar,
+            nstrat,
+            false,
+            &beta.view(),
+            SurvivalDist::Weibull,
+            &strat.view(),
+            &offset.view(),
+            &time1.view(),
+            None,
+            &status.view(),
+            &wt.view(),
+            &covar.view(),
+            0,
+            &frail.view(),
+        );
+
+        assert!(result.is_ok());
+        let lik = result.unwrap();
+        assert!(lik.loglik.is_finite());
+    }
+
+    #[test]
+    fn test_survregc1_lognormal() {
+        let n = 5;
+        let nvar = 1;
+        let nstrat = 1;
+        let beta = Array1::from_vec(vec![0.0, 0.0]);
+        let strat = Array1::from_vec(vec![1i32; n]);
+        let offset = Array1::from_vec(vec![0.0; n]);
+        let time1 = Array1::from_vec(vec![0.0, 0.5, 1.0, 1.5, 2.0]);
+        let status = Array1::from_vec(vec![1i32, 1, 1, 1, 1]);
+        let wt = Array1::from_vec(vec![1.0; n]);
+        let covar = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let frail = Array1::from_vec(vec![0i32; n]);
+
+        let result = survregc1(
+            n,
+            nvar,
+            nstrat,
+            false,
+            &beta.view(),
+            SurvivalDist::LogNormal,
+            &strat.view(),
+            &offset.view(),
+            &time1.view(),
+            None,
+            &status.view(),
+            &wt.view(),
+            &covar.view(),
+            0,
+            &frail.view(),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_survregc1_loglogistic() {
+        let n = 5;
+        let nvar = 1;
+        let nstrat = 1;
+        let beta = Array1::from_vec(vec![0.0, 0.0]);
+        let strat = Array1::from_vec(vec![1i32; n]);
+        let offset = Array1::from_vec(vec![0.0; n]);
+        let time1 = Array1::from_vec(vec![0.0, 0.5, 1.0, 1.5, 2.0]);
+        let status = Array1::from_vec(vec![1i32, 1, 1, 1, 1]);
+        let wt = Array1::from_vec(vec![1.0; n]);
+        let covar = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let frail = Array1::from_vec(vec![0i32; n]);
+
+        let result = survregc1(
+            n,
+            nvar,
+            nstrat,
+            false,
+            &beta.view(),
+            SurvivalDist::LogLogistic,
+            &strat.view(),
+            &offset.view(),
+            &time1.view(),
+            None,
+            &status.view(),
+            &wt.view(),
+            &covar.view(),
+            0,
+            &frail.view(),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_survival_likelihood_fields() {
+        let lik = SurvivalLikelihood {
+            loglik: -10.0,
+            u: Array1::zeros(2),
+            imat: Array2::zeros((2, 2)),
+            jj: Array2::zeros((2, 2)),
+            fdiag: Array1::zeros(0),
+            jdiag: Array1::zeros(0),
+        };
+        assert!((lik.loglik - (-10.0)).abs() < 1e-10);
+        assert_eq!(lik.u.len(), 2);
+        assert_eq!(lik.imat.nrows(), 2);
     }
 }

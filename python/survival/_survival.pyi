@@ -13,12 +13,12 @@ class SplitRule:
     LogRankScore: SplitRule
 
 class DistributionType:
+    ExtremeValue: DistributionType
     Weibull: DistributionType
-    Exponential: DistributionType
     Gaussian: DistributionType
     Logistic: DistributionType
-    Lognormal: DistributionType
-    Loglogistic: DistributionType
+    LogNormal: DistributionType
+    LogLogistic: DistributionType
 
 class DimType:
     Age: DimType
