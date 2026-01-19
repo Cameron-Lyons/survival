@@ -120,6 +120,18 @@ pub use validation::calibration::{
     CalibrationResult, PredictionResult, RiskStratificationResult, TdAUCResult, calibration,
     predict_cox, risk_stratification, td_auc,
 };
+pub use validation::conformal::{
+    BootstrapConformalResult, CQRConformalResult, ConformalCalibrationPlot,
+    ConformalCalibrationResult, ConformalDiagnostics, ConformalPredictionResult,
+    ConformalSurvivalDistribution, ConformalWidthAnalysis, CoverageSelectionResult,
+    DoublyRobustConformalResult, TwoSidedCalibrationResult, TwoSidedConformalResult,
+    bootstrap_conformal_survival, conformal_calibrate, conformal_calibration_plot,
+    conformal_coverage_cv, conformal_coverage_test, conformal_predict,
+    conformal_survival_from_predictions, conformal_survival_parallel, conformal_width_analysis,
+    conformalized_survival_distribution, cqr_conformal_survival, doubly_robust_conformal_calibrate,
+    doubly_robust_conformal_survival, two_sided_conformal_calibrate, two_sided_conformal_predict,
+    two_sided_conformal_survival,
+};
 pub use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
 pub use validation::d_calibration::{
     BrierCalibrationResult, CalibrationPlotData, DCalibrationResult, MultiTimeCalibrationResult,
@@ -662,6 +674,35 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(moran_i_test, &m)?)?;
     m.add_class::<SpatialFrailtyResult>()?;
     m.add_class::<SpatialCorrelationStructure>()?;
+
+    m.add_function(wrap_pyfunction!(conformal_calibrate, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_predict, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_survival_from_predictions, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_coverage_test, &m)?)?;
+    m.add_function(wrap_pyfunction!(doubly_robust_conformal_calibrate, &m)?)?;
+    m.add_function(wrap_pyfunction!(doubly_robust_conformal_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(two_sided_conformal_calibrate, &m)?)?;
+    m.add_function(wrap_pyfunction!(two_sided_conformal_predict, &m)?)?;
+    m.add_function(wrap_pyfunction!(two_sided_conformal_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformalized_survival_distribution, &m)?)?;
+    m.add_function(wrap_pyfunction!(bootstrap_conformal_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(cqr_conformal_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_calibration_plot, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_width_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_coverage_cv, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_survival_parallel, &m)?)?;
+    m.add_class::<ConformalCalibrationResult>()?;
+    m.add_class::<ConformalPredictionResult>()?;
+    m.add_class::<ConformalDiagnostics>()?;
+    m.add_class::<DoublyRobustConformalResult>()?;
+    m.add_class::<TwoSidedCalibrationResult>()?;
+    m.add_class::<TwoSidedConformalResult>()?;
+    m.add_class::<ConformalSurvivalDistribution>()?;
+    m.add_class::<BootstrapConformalResult>()?;
+    m.add_class::<CQRConformalResult>()?;
+    m.add_class::<ConformalCalibrationPlot>()?;
+    m.add_class::<ConformalWidthAnalysis>()?;
+    m.add_class::<CoverageSelectionResult>()?;
 
     Ok(())
 }
