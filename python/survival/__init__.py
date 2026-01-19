@@ -1,7 +1,9 @@
 from survival._survival import *  # noqa: F401, F403
 from survival.sklearn_compat import (  # noqa: F401
+    AFTEstimator,
     CoxPHEstimator,
     GradientBoostSurvivalEstimator,
+    StreamingAFTEstimator,
     StreamingCoxPHEstimator,
     StreamingGradientBoostSurvivalEstimator,
     StreamingMixin,

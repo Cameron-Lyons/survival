@@ -272,6 +272,9 @@ pub fn bootstrap_survreg(
         "gaussian" | "Gaussian" | "normal" | "Normal" => DistributionType::Gaussian,
         "weibull" | "Weibull" => DistributionType::Weibull,
         "lognormal" | "LogNormal" | "lognorm" | "LogNorm" => DistributionType::LogNormal,
+        "loglogistic" | "LogLogistic" | "log_logistic" | "log-logistic" => {
+            DistributionType::LogLogistic
+        }
         _ => DistributionType::ExtremeValue,
     };
 
@@ -281,6 +284,7 @@ pub fn bootstrap_survreg(
         DistributionType::Gaussian => "gaussian",
         DistributionType::Logistic => "logistic",
         DistributionType::LogNormal => "lognormal",
+        DistributionType::LogLogistic => "loglogistic",
     };
 
     let original = survreg(
