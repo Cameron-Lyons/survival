@@ -208,6 +208,7 @@ pub use missing::pattern_mixture::{
     PatternMixtureResult, SensitivityAnalysisType, pattern_mixture_model, sensitivity_analysis,
     tipping_point_analysis,
 };
+pub use ml::deep_surv::{Activation, DeepSurv, DeepSurvConfig, deep_surv};
 pub use ml::gradient_boost::{
     GBSurvLoss, GradientBoostSurvival, GradientBoostSurvivalConfig, gradient_boost_survival,
 };
@@ -614,12 +615,16 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     // Machine learning functions
     m.add_function(wrap_pyfunction!(survival_forest, &m)?)?;
     m.add_function(wrap_pyfunction!(gradient_boost_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(deep_surv, &m)?)?;
     m.add_class::<SurvivalForest>()?;
     m.add_class::<SurvivalForestConfig>()?;
     m.add_class::<SplitRule>()?;
     m.add_class::<GradientBoostSurvival>()?;
     m.add_class::<GradientBoostSurvivalConfig>()?;
     m.add_class::<GBSurvLoss>()?;
+    m.add_class::<DeepSurv>()?;
+    m.add_class::<DeepSurvConfig>()?;
+    m.add_class::<Activation>()?;
 
     // Quality of life functions
     m.add_function(wrap_pyfunction!(qaly_calculation, &m)?)?;

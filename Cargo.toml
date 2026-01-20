@@ -29,6 +29,7 @@ faer = "0.23.2"
 fastrand = "2.3.0"
 pulp = "0.22.2"
 wide = "1.1.1"
+burn = { version = "0.20.0", features = ["autodiff", "ndarray"] }
 
 [features]
 default = []
