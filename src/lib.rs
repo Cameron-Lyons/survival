@@ -213,6 +213,7 @@ pub use ml::gradient_boost::{
     GBSurvLoss, GradientBoostSurvival, GradientBoostSurvivalConfig, gradient_boost_survival,
 };
 pub use ml::survival_forest::{SplitRule, SurvivalForest, SurvivalForestConfig, survival_forest};
+pub use ml::survtrace::{SurvTrace, SurvTraceActivation, SurvTraceConfig, survtrace};
 pub use qol::qaly::{
     QALYResult, incremental_cost_effectiveness, qaly_calculation, qaly_comparison,
 };
@@ -616,6 +617,7 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survival_forest, &m)?)?;
     m.add_function(wrap_pyfunction!(gradient_boost_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(deep_surv, &m)?)?;
+    m.add_function(wrap_pyfunction!(survtrace, &m)?)?;
     m.add_class::<SurvivalForest>()?;
     m.add_class::<SurvivalForestConfig>()?;
     m.add_class::<SplitRule>()?;
@@ -625,6 +627,9 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DeepSurv>()?;
     m.add_class::<DeepSurvConfig>()?;
     m.add_class::<Activation>()?;
+    m.add_class::<SurvTrace>()?;
+    m.add_class::<SurvTraceConfig>()?;
+    m.add_class::<SurvTraceActivation>()?;
 
     // Quality of life functions
     m.add_function(wrap_pyfunction!(qaly_calculation, &m)?)?;
