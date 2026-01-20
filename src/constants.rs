@@ -55,3 +55,6 @@ pub const TEST_STANDARD_TOL: f64 = 1e-3;
 
 #[cfg(test)]
 pub const TEST_LOOSE_TOL: f64 = 1e-2;
+
+pub const DEFAULT_CONFORMAL_COVERAGE: f64 = 0.9;
+pub const DEFAULT_IPCW_TRIM: f64 = 0.01;

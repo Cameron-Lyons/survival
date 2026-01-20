@@ -1,6 +1,7 @@
 pub mod anova;
 pub mod bootstrap;
 pub mod calibration;
+pub mod conformal;
 pub mod crossval;
 pub mod d_calibration;
 pub mod landmark;
