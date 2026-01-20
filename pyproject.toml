@@ -52,7 +52,7 @@ test = [
   "pytest==9.0.2",
   "numpy==2.4.1",
   "pandas==2.3.3",
-  "polars==1.36.1",
+  "polars==1.37.1",
 ]
 sklearn = [
   "scikit-learn>=1.0.0",
