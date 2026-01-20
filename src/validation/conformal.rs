@@ -1695,10 +1695,10 @@ mod tests {
         let weights = vec![1.0, 1.0, 1.0, 1.0, 1.0];
 
         let q50 = weighted_quantile(&values, &weights, 0.5);
-        assert!(q50 >= 2.0 && q50 <= 3.5);
+        assert!((2.0..=3.5).contains(&q50));
 
         let q90 = weighted_quantile(&values, &weights, 0.9);
-        assert!(q90 >= 4.0 && q90 <= 5.0);
+        assert!((4.0..=5.0).contains(&q90));
     }
 
     #[test]
@@ -1707,7 +1707,7 @@ mod tests {
         let weights = vec![1.0, 2.0, 1.0];
 
         let q50 = weighted_quantile(&values, &weights, 0.5);
-        assert!(q50 >= 1.5 && q50 <= 2.5);
+        assert!((1.5..=2.5).contains(&q50));
     }
 
     #[test]
@@ -1772,8 +1772,12 @@ mod tests {
 
         assert_eq!(result.lower_predictive_bound.len(), 3);
         assert_eq!(result.predicted_time.len(), 3);
-        for i in 0..3 {
-            assert!(result.lower_predictive_bound[i] <= predicted_new[i]);
+        for (lower, pred) in result
+            .lower_predictive_bound
+            .iter()
+            .zip(predicted_new.iter())
+        {
+            assert!(lower <= pred);
         }
     }
 
@@ -1837,7 +1841,12 @@ mod tests {
 
         assert!(!model.unique_times.is_empty());
         assert_eq!(model.unique_times.len(), model.survival_probs.len());
-        assert!(model.survival_probs.iter().all(|&s| s >= 0.0 && s <= 1.0));
+        assert!(
+            model
+                .survival_probs
+                .iter()
+                .all(|&s| (0.0..=1.0).contains(&s))
+        );
     }
 
     #[test]
@@ -1913,9 +1922,13 @@ mod tests {
 
         assert_eq!(result.lower_predictive_bound.len(), 3);
         assert_eq!(result.predicted_time.len(), 3);
-        for i in 0..3 {
-            assert!(result.lower_predictive_bound[i] <= predicted_new[i]);
-            assert!(result.lower_predictive_bound[i] >= 0.0);
+        for (lower, pred) in result
+            .lower_predictive_bound
+            .iter()
+            .zip(predicted_new.iter())
+        {
+            assert!(lower <= pred);
+            assert!(*lower >= 0.0);
         }
     }
 
@@ -2022,11 +2035,11 @@ mod tests {
         assert_eq!(result.upper_bound.len(), 3);
         assert_eq!(result.is_two_sided.len(), 3);
 
-        for i in 0..3 {
-            assert!(result.lower_bound[i] <= predicted_new[i]);
+        for (i, pred) in predicted_new.iter().enumerate() {
+            assert!(result.lower_bound[i] <= *pred);
             assert!(result.lower_bound[i] >= 0.0);
             if result.is_two_sided[i] {
-                assert!(result.upper_bound[i] >= predicted_new[i]);
+                assert!(result.upper_bound[i] >= *pred);
                 assert!(result.upper_bound[i].is_finite());
             }
         }
@@ -2052,9 +2065,9 @@ mod tests {
         assert_eq!(result.upper_bound.len(), 3);
         assert_eq!(result.n_two_sided + result.n_one_sided, 3);
 
-        for i in 0..3 {
-            assert!(result.lower_bound[i] <= predicted_new[i]);
-            assert!(result.lower_bound[i] >= 0.0);
+        for (lower, pred) in result.lower_bound.iter().zip(predicted_new.iter()) {
+            assert!(lower <= pred);
+            assert!(*lower >= 0.0);
         }
     }
 
@@ -2224,9 +2237,13 @@ mod tests {
                 .unwrap();
 
         assert_eq!(result.lower_predictive_bound.len(), 3);
-        for i in 0..3 {
-            assert!(result.lower_predictive_bound[i] <= predicted_new[i]);
-            assert!(result.lower_predictive_bound[i] >= 0.0);
+        for (lower, pred) in result
+            .lower_predictive_bound
+            .iter()
+            .zip(predicted_new.iter())
+        {
+            assert!(lower <= pred);
+            assert!(*lower >= 0.0);
         }
     }
 

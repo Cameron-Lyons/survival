@@ -12,6 +12,12 @@ class SplitRule:
     LogRank: SplitRule
     LogRankScore: SplitRule
 
+class Activation:
+    ReLU: Activation
+    SELU: Activation
+    Tanh: Activation
+    def __init__(self, name: str) -> None: ...
+
 class DistributionType:
     ExtremeValue: DistributionType
     Weibull: DistributionType
@@ -133,6 +139,64 @@ class SurvivalForest:
         status: list[int],
         config: SurvivalForestConfig,
     ) -> SurvivalForest: ...
+    def predict_risk(self, x_new: list[float], n_new: int) -> list[float]: ...
+    def predict_survival(self, x_new: list[float], n_new: int) -> list[list[float]]: ...
+    def predict_cumulative_hazard(self, x_new: list[float], n_new: int) -> list[list[float]]: ...
+    def predict_survival_time(
+        self, x_new: list[float], n_new: int, percentile: float = 0.5
+    ) -> list[float | None]: ...
+    def predict_median_survival_time(
+        self, x_new: list[float], n_new: int
+    ) -> list[float | None]: ...
+
+class DeepSurvConfig:
+    hidden_layers: list[int]
+    activation: Activation
+    dropout_rate: float
+    learning_rate: float
+    batch_size: int
+    n_epochs: int
+    l2_reg: float
+    seed: int | None
+    early_stopping_patience: int | None
+    validation_fraction: float
+
+    def __init__(
+        self,
+        hidden_layers: list[int] | None = None,
+        activation: Activation | None = None,
+        dropout_rate: float = 0.2,
+        learning_rate: float = 0.001,
+        batch_size: int = 256,
+        n_epochs: int = 100,
+        l2_reg: float = 0.0001,
+        seed: int | None = None,
+        early_stopping_patience: int | None = None,
+        validation_fraction: float = 0.1,
+    ) -> None: ...
+
+class DeepSurv:
+    @property
+    def n_features(self) -> int: ...
+    @property
+    def hidden_layers(self) -> list[int]: ...
+    @property
+    def unique_times(self) -> list[float]: ...
+    @property
+    def baseline_hazard(self) -> list[float]: ...
+    @property
+    def train_loss(self) -> list[float]: ...
+    @property
+    def val_loss(self) -> list[float]: ...
+    @staticmethod
+    def fit(
+        x: list[float],
+        n: int,
+        p: int,
+        time: list[float],
+        status: list[int],
+        config: DeepSurvConfig,
+    ) -> DeepSurv: ...
     def predict_risk(self, x_new: list[float], n_new: int) -> list[float]: ...
     def predict_survival(self, x_new: list[float], n_new: int) -> list[list[float]]: ...
     def predict_cumulative_hazard(self, x_new: list[float], n_new: int) -> list[list[float]]: ...
@@ -625,6 +689,14 @@ def survival_forest(
     status: list[int],
     config: SurvivalForestConfig | None = None,
 ) -> SurvivalForest: ...
+def deep_surv(
+    x: list[float],
+    n: int,
+    p: int,
+    time: list[float],
+    status: list[int],
+    config: DeepSurvConfig | None = None,
+) -> DeepSurv: ...
 def load_lung() -> dict[str, list[Any]]: ...
 def load_aml() -> dict[str, list[Any]]: ...
 def load_veteran() -> dict[str, list[Any]]: ...
