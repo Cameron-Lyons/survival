@@ -18,6 +18,8 @@ use burn::{
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::utils::{compute_duration_bins, linear_forward, tensor_to_vec_f32};
+
 type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
 
@@ -547,12 +549,6 @@ fn compute_nll_logistic_hazard_gradient(
     gradients
 }
 
-fn tensor_to_vec_f32<B: burn::prelude::Backend>(t: Tensor<B, 2>) -> Vec<f32> {
-    let [rows, cols] = t.dims();
-    let data = t.into_data();
-    data.to_vec().unwrap_or_else(|_| vec![0.0; rows * cols])
-}
-
 #[derive(Clone)]
 #[allow(dead_code)]
 struct StoredWeights {
@@ -867,18 +863,6 @@ fn apply_transformer_layer_cpu(
     residual2
 }
 
-fn linear_forward(x: &[f64], w: &[f32], b: &[f32], in_dim: usize, out_dim: usize) -> Vec<f64> {
-    let mut result = Vec::with_capacity(out_dim);
-    for j in 0..out_dim {
-        let mut sum = if !b.is_empty() { b[j] as f64 } else { 0.0 };
-        for k in 0..in_dim.min(x.len()) {
-            sum += x[k] * w[j * in_dim + k] as f64;
-        }
-        result.push(sum);
-    }
-    result
-}
-
 fn erf_approx(x: f64) -> f64 {
     let a1 = 0.254829592;
     let a2 = -0.284496736;
@@ -919,35 +903,6 @@ fn layer_norm_cpu(x: &[f64], gamma: &[f32], beta: &[f32], eps: f32) -> Vec<f64> 
             (xi - mean) / std * g + b
         })
         .collect()
-}
-
-fn compute_duration_bins(times: &[f64], num_durations: usize) -> (Vec<usize>, Vec<f64>) {
-    let mut sorted_times: Vec<f64> = times.to_vec();
-    sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    let n = sorted_times.len();
-    let mut cuts = Vec::with_capacity(num_durations + 1);
-    cuts.push(0.0);
-
-    for i in 1..num_durations {
-        let idx = (i * n / num_durations).min(n - 1);
-        cuts.push(sorted_times[idx]);
-    }
-    cuts.push(sorted_times[n - 1] * 1.001);
-
-    let duration_bins: Vec<usize> = times
-        .iter()
-        .map(|&t| {
-            for (bin, window) in cuts.windows(2).enumerate() {
-                if t >= window[0] && t < window[1] {
-                    return bin;
-                }
-            }
-            num_durations - 1
-        })
-        .collect();
-
-    (duration_bins, cuts)
 }
 
 fn fit_survtrace_inner(

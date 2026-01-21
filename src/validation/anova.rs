@@ -187,18 +187,6 @@ pub fn anova_coxph_single(
     )
 }
 
-#[allow(dead_code)]
-pub fn compute_anova_lrt(loglik1: f64, loglik2: f64, df1: usize, df2: usize) -> (f64, f64, usize) {
-    let chisq = 2.0 * (loglik2 - loglik1).abs();
-    let df_diff = df2.abs_diff(df1);
-    let p_value = if df_diff > 0 {
-        chi2_sf(chisq, df_diff)
-    } else {
-        1.0
-    };
-    (chisq, p_value, df_diff)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,13 +201,5 @@ mod tests {
         assert!(result.rows[0].chisq.is_none());
         assert!(result.rows[1].chisq.is_some());
         assert!((result.rows[1].chisq.unwrap() - 10.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_compute_anova_lrt() {
-        let (chisq, p_value, df) = compute_anova_lrt(-100.0, -95.0, 0, 1);
-        assert!((chisq - 10.0).abs() < 1e-10);
-        assert_eq!(df, 1);
-        assert!(p_value < 0.01);
     }
 }

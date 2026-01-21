@@ -61,58 +61,6 @@ pub fn compute_brier(
     }
 }
 
-#[allow(dead_code)]
-pub fn compute_brier_f64(
-    predictions: &[f64],
-    outcomes: &[f64],
-    weights: Option<&[f64]>,
-) -> Option<f64> {
-    let n = predictions.len();
-    if n != outcomes.len() {
-        return None;
-    }
-    if n == 0 {
-        return Some(0.0);
-    }
-
-    if !validate_predictions(predictions) {
-        return None;
-    }
-
-    if n >= SIMD_THRESHOLD {
-        match weights {
-            Some(w) => {
-                let score = weighted_squared_diff_sum(predictions, outcomes, w);
-                let total_weight = sum_f64(w);
-                if total_weight > 0.0 {
-                    Some(score / total_weight)
-                } else {
-                    Some(0.0)
-                }
-            }
-            None => {
-                let score = crate::utilities::simd::squared_diff_sum(predictions, outcomes);
-                Some(score / n as f64)
-            }
-        }
-    } else {
-        let mut score = 0.0;
-        let mut total_weight = 0.0;
-        for i in 0..n {
-            let pred = predictions[i];
-            let obs = outcomes[i];
-            let w = weights.map_or(1.0, |ws| ws[i]);
-            score += w * (pred - obs).powi(2);
-            total_weight += w;
-        }
-        if total_weight > 0.0 {
-            Some(score / total_weight)
-        } else {
-            Some(0.0)
-        }
-    }
-}
-
 #[pyfunction]
 #[pyo3(signature = (predictions, outcomes, weights=None))]
 pub fn brier(
