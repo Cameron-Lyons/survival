@@ -26,10 +26,9 @@ pub fn agsurv4(
                 let mut guess: f64 = 0.5;
                 let mut inc = 0.25;
                 let death_count = ndeath_slice[i] as usize;
-                let range = j..(j + death_count);
                 for _ in 0..35 {
                     let mut sumt = 0.0;
-                    for k in range.clone() {
+                    for k in j..(j + death_count) {
                         let term = wt_slice[k] * risk_slice[k] / (1.0 - guess.powf(risk_slice[k]));
                         sumt += term;
                     }

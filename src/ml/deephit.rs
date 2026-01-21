@@ -314,8 +314,8 @@ impl<B: burn::prelude::Backend> DeepHitNetwork<B> {
         let total_outputs = self.num_risks * self.num_durations;
         let mut combined_data = vec![0.0f32; batch_size * total_outputs];
 
-        for (risk_idx, out) in all_outputs.iter().enumerate() {
-            let out_data = out.clone().into_data();
+        for (risk_idx, out) in all_outputs.into_iter().enumerate() {
+            let out_data = out.into_data();
             let out_vec: Vec<f32> = out_data.to_vec().unwrap_or_default();
 
             for i in 0..batch_size {
@@ -367,33 +367,6 @@ fn softmax_pmf(
     }
 
     pmf
-}
-
-#[allow(dead_code)]
-fn compute_survival_from_pmf(
-    pmf: &[f32],
-    num_risks: usize,
-    num_durations: usize,
-    batch_size: usize,
-) -> Vec<f32> {
-    let total_outputs = num_risks * num_durations;
-    let mut survival = vec![1.0f32; batch_size * num_durations];
-
-    for i in 0..batch_size {
-        let pmf_start = i * total_outputs;
-
-        for t in 0..num_durations {
-            let mut total_pmf_up_to_t = 0.0f32;
-            for risk in 0..num_risks {
-                for tau in 0..=t {
-                    total_pmf_up_to_t += pmf[pmf_start + risk * num_durations + tau];
-                }
-            }
-            survival[i * num_durations + t] = (1.0 - total_pmf_up_to_t).max(0.0);
-        }
-    }
-
-    survival
 }
 
 fn compute_nll_loss(
@@ -556,7 +529,6 @@ fn compute_combined_gradient(
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct StoredWeights {
     shared_weights: Vec<Vec<f32>>,
     shared_biases: Vec<Vec<f32>>,
@@ -804,7 +776,7 @@ fn fit_deephit_inner(
             let x_data = burn::tensor::TensorData::new(x_batch, [batch_size, n_features]);
             let x_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_data, &device);
 
-            let logits = model.forward(x_tensor.clone(), true);
+            let logits = model.forward(x_tensor, true);
             let logits_vec: Vec<f32> = tensor_to_vec_f32(logits.clone().inner());
 
             let pmf = softmax_pmf(
@@ -924,7 +896,6 @@ fn fit_deephit_inner(
 
 #[derive(Debug, Clone)]
 #[pyclass]
-#[allow(dead_code)]
 pub struct DeepHit {
     weights: StoredWeights,
     config: DeepHitConfig,
@@ -1017,7 +988,7 @@ impl DeepHit {
         n_new: usize,
         risk_idx: Option<usize>,
     ) -> PyResult<Vec<Vec<f64>>> {
-        let pmf_all = self.predict_pmf(x_new.clone(), n_new, None)?;
+        let pmf_all = self.predict_pmf(x_new, n_new, None)?;
 
         if let Some(risk) = risk_idx {
             if risk >= self.weights.num_risks {
@@ -1107,6 +1078,11 @@ impl DeepHit {
     #[getter]
     pub fn get_n_features(&self) -> usize {
         self.weights.n_features
+    }
+
+    #[getter]
+    pub fn get_config(&self) -> DeepHitConfig {
+        self.config.clone()
     }
 }
 
@@ -1271,16 +1247,5 @@ mod tests {
         let loss = compute_nll_loss(&pmf, &durations, &events, 1, 3, &indices);
         assert!(loss.is_finite());
         assert!(loss >= 0.0);
-    }
-
-    #[test]
-    fn test_survival_from_pmf() {
-        let pmf = vec![0.1f32, 0.1, 0.1, 0.1, 0.1, 0.1];
-        let survival = compute_survival_from_pmf(&pmf, 2, 3, 1);
-
-        assert_eq!(survival.len(), 3);
-        for i in 1..survival.len() {
-            assert!(survival[i] <= survival[i - 1]);
-        }
     }
 }

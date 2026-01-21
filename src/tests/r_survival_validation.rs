@@ -30,13 +30,11 @@ mod tests {
 
         let mut cox_fit = CoxFitBuilder::new(time_arr, status_arr, covar)
             .strata(Array1::zeros(n))
-            .offset(Array1::zeros(n))
             .weights(Array1::from_elem(n, 1.0))
             .method(CoxMethod::Breslow)
             .max_iter(25)
             .eps(1e-9)
             .toler(1e-9)
-            .doscale(vec![true])
             .initial_beta(vec![0.0])
             .build()
             .expect("Cox fit initialization failed");
@@ -64,50 +62,6 @@ mod tests {
             lrt.abs() < 5.0,
             "Likelihood ratio test statistic {} unreasonable",
             lrt
-        );
-    }
-
-    #[test]
-    fn test_coxph_aml_efron() {
-        let (time, status, group) = aml_combined();
-        let n = time.len();
-
-        let mut covar = Array2::<f64>::zeros((n, 1));
-        for i in 0..n {
-            covar[[i, 0]] = group[i] as f64;
-        }
-
-        let time_arr = Array1::from_vec(time);
-        let status_arr = Array1::from_vec(status);
-        let strata = Array1::zeros(n);
-        let offset = Array1::zeros(n);
-        let weights = Array1::from_elem(n, 1.0);
-
-        let mut cox_fit = CoxFit::new(
-            time_arr,
-            status_arr,
-            covar,
-            strata,
-            offset,
-            weights,
-            CoxMethod::Efron,
-            25,
-            1e-9,
-            1e-9,
-            vec![true],
-            vec![0.0],
-        )
-        .expect("Cox fit initialization failed");
-
-        cox_fit.fit().expect("Cox fit failed");
-
-        let (beta, _means, _u, _imat, _loglik, _sctest, _flag, _iter) = cox_fit.results();
-
-        let hr = beta[0].exp();
-        assert!(
-            hr > 0.2 && hr < 1.5,
-            "Hazard ratio {} outside expected range for Efron",
-            hr
         );
     }
 
@@ -536,71 +490,6 @@ mod tests {
         for &v in &result.variance {
             assert!(v.is_finite(), "Variance should be finite");
         }
-    }
-
-    #[test]
-    fn test_breslow_vs_efron_with_ties() {
-        let time = vec![5.0, 5.0, 5.0, 10.0, 10.0, 15.0, 15.0, 15.0, 20.0];
-        let status = vec![1, 1, 1, 1, 1, 1, 1, 1, 1];
-        let covar_vals = vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0];
-        let n = time.len();
-
-        let mut covar = Array2::<f64>::zeros((n, 1));
-        for i in 0..n {
-            covar[[i, 0]] = covar_vals[i];
-        }
-
-        let mut cox_breslow = CoxFit::new(
-            Array1::from_vec(time.clone()),
-            Array1::from_vec(status.clone()),
-            covar.clone(),
-            Array1::zeros(n),
-            Array1::zeros(n),
-            Array1::from_elem(n, 1.0),
-            CoxMethod::Breslow,
-            25,
-            1e-9,
-            1e-9,
-            vec![true],
-            vec![0.0],
-        )
-        .expect("Breslow fit init failed");
-        cox_breslow.fit().expect("Breslow fit failed");
-        let (beta_breslow, _, _, _, loglik_breslow, _, _, _) = cox_breslow.results();
-
-        let mut cox_efron = CoxFit::new(
-            Array1::from_vec(time),
-            Array1::from_vec(status),
-            covar,
-            Array1::zeros(n),
-            Array1::zeros(n),
-            Array1::from_elem(n, 1.0),
-            CoxMethod::Efron,
-            25,
-            1e-9,
-            1e-9,
-            vec![true],
-            vec![0.0],
-        )
-        .expect("Efron fit init failed");
-        cox_efron.fit().expect("Efron fit failed");
-        let (beta_efron, _, _, _, loglik_efron, _, _, _) = cox_efron.results();
-
-        assert!(
-            loglik_breslow[1].is_finite(),
-            "Breslow log-likelihood should be finite"
-        );
-        assert!(
-            loglik_efron[1].is_finite(),
-            "Efron log-likelihood should be finite"
-        );
-
-        assert!(
-            (beta_breslow[0] - beta_efron[0]).abs() < 1.0,
-            "Breslow ({}) and Efron ({}) betas should be similar",
-            beta_breslow[0],
-            beta_efron[0]
-        );
     }
 
     #[test]

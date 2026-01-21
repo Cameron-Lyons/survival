@@ -18,7 +18,9 @@ use burn::{
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use super::utils::{compute_duration_bins, linear_forward, tensor_to_vec_f32};
+use super::utils::{
+    compute_duration_bins, gelu_cpu, layer_norm_cpu, linear_forward, tensor_to_vec_f32,
+};
 
 type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
@@ -550,7 +552,6 @@ fn compute_nll_logistic_hazard_gradient(
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct StoredWeights {
     cat_embeddings: Vec<Vec<f32>>,
     cat_embedding_dims: Vec<(usize, usize)>,
@@ -563,7 +564,6 @@ struct StoredWeights {
     num_cat_features: usize,
     num_num_features: usize,
     num_events: usize,
-    num_durations: usize,
 }
 
 #[derive(Clone)]
@@ -738,7 +738,6 @@ fn extract_weights(
         num_cat_features: model.num_cat_features,
         num_num_features: model.num_num_features,
         num_events: model.num_events,
-        num_durations: config.num_durations,
     }
 }
 
@@ -863,48 +862,6 @@ fn apply_transformer_layer_cpu(
     residual2
 }
 
-fn erf_approx(x: f64) -> f64 {
-    let a1 = 0.254829592;
-    let a2 = -0.284496736;
-    let a3 = 1.421413741;
-    let a4 = -1.453152027;
-    let a5 = 1.061405429;
-    let p = 0.3275911;
-
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let x = x.abs();
-
-    let t = 1.0 / (1.0 + p * x);
-    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-
-    sign * y
-}
-
-fn gelu_cpu(x: f64) -> f64 {
-    let sqrt_2 = std::f64::consts::SQRT_2;
-    x * 0.5 * (1.0 + erf_approx(x / sqrt_2))
-}
-
-fn layer_norm_cpu(x: &[f64], gamma: &[f32], beta: &[f32], eps: f32) -> Vec<f64> {
-    let n = x.len();
-    let mean: f64 = x.iter().sum::<f64>() / n as f64;
-    let var: f64 = x.iter().map(|&xi| (xi - mean).powi(2)).sum::<f64>() / n as f64;
-    let std = (var + eps as f64).sqrt();
-
-    x.iter()
-        .enumerate()
-        .map(|(i, &xi)| {
-            let g = if i < gamma.len() {
-                gamma[i] as f64
-            } else {
-                1.0
-            };
-            let b = if i < beta.len() { beta[i] as f64 } else { 0.0 };
-            (xi - mean) / std * g + b
-        })
-        .collect()
-}
-
 fn fit_survtrace_inner(
     x_cat: Option<&[i64]>,
     x_num: &[f64],
@@ -1000,7 +957,7 @@ fn fit_survtrace_inner(
                 None
             };
 
-            let outputs = model.forward(x_cat_tensor.clone(), x_num_tensor.clone(), true);
+            let outputs = model.forward(x_cat_tensor, x_num_tensor, true);
 
             let mut total_loss = 0.0;
             let mut all_grads: Vec<Vec<f32>> = Vec::new();
