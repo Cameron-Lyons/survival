@@ -1,5 +1,35 @@
 use burn::prelude::Backend;
 use burn::tensor::Tensor;
+use std::f64::consts::SQRT_2;
+
+#[inline]
+pub fn gelu_cpu(x: f64) -> f64 {
+    x * 0.5 * (1.0 + crate::utilities::statistical::erf(x / SQRT_2))
+}
+
+#[inline]
+pub fn layer_norm_cpu(x: &[f64], gamma: &[f32], beta: &[f32], eps: f32) -> Vec<f64> {
+    let n = x.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mean: f64 = x.iter().sum::<f64>() / n as f64;
+    let var: f64 = x.iter().map(|&xi| (xi - mean).powi(2)).sum::<f64>() / n as f64;
+    let std = (var + eps as f64).sqrt();
+
+    x.iter()
+        .enumerate()
+        .map(|(i, &xi)| {
+            let g = if i < gamma.len() {
+                gamma[i] as f64
+            } else {
+                1.0
+            };
+            let b = if i < beta.len() { beta[i] as f64 } else { 0.0 };
+            (xi - mean) / std * g + b
+        })
+        .collect()
+}
 
 pub fn tensor_to_vec_f32<B: Backend>(t: Tensor<B, 2>) -> Vec<f32> {
     let [rows, cols] = t.dims();
@@ -7,6 +37,7 @@ pub fn tensor_to_vec_f32<B: Backend>(t: Tensor<B, 2>) -> Vec<f32> {
     data.to_vec().unwrap_or_else(|_| vec![0.0; rows * cols])
 }
 
+#[inline]
 pub fn linear_forward(x: &[f64], w: &[f32], b: &[f32], in_dim: usize, out_dim: usize) -> Vec<f64> {
     let mut result = vec![0.0f64; out_dim];
     for j in 0..out_dim {
@@ -19,6 +50,7 @@ pub fn linear_forward(x: &[f64], w: &[f32], b: &[f32], in_dim: usize, out_dim: u
     result
 }
 
+#[inline]
 pub fn relu_vec(x: &mut [f64]) {
     for v in x.iter_mut() {
         *v = v.max(0.0);

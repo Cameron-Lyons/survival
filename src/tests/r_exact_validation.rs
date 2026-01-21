@@ -39,7 +39,6 @@ mod tests {
         logrank: LogRankResult,
         wilcoxon: WilcoxonResult,
         coxph_breslow: CoxphResult,
-        coxph_efron: CoxphEfronResult,
     }
 
     #[derive(Debug, Deserialize)]
@@ -83,12 +82,6 @@ mod tests {
     struct CoxphResult {
         coefficients: Vec<f64>,
         hazard_ratio: Vec<f64>,
-        loglik: Vec<f64>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct CoxphEfronResult {
-        coefficients: Vec<f64>,
         loglik: Vec<f64>,
     }
 
@@ -354,66 +347,6 @@ mod tests {
             rel_approx_eq(loglik[1], r_loglik_final, STAT_TOL),
             "Cox log-likelihood: expected {}, got {}",
             r_loglik_final,
-            loglik[1]
-        );
-    }
-
-    #[test]
-    fn test_aml_coxph_efron_exact() {
-        let expected = load_expected_values();
-        let aml = &expected.aml;
-
-        let n = aml.combined.time.len();
-
-        let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            aml.combined.time[a]
-                .partial_cmp(&aml.combined.time[b])
-                .unwrap()
-        });
-
-        let time: Vec<f64> = indices.iter().map(|&i| aml.combined.time[i]).collect();
-        let status: Vec<i32> = indices.iter().map(|&i| aml.combined.status[i]).collect();
-        let group: Vec<i32> = indices.iter().map(|&i| aml.combined.group[i]).collect();
-
-        let mut covar = Array2::<f64>::zeros((n, 1));
-        for i in 0..n {
-            covar[[i, 0]] = group[i] as f64;
-        }
-
-        let mut cox_fit = CoxFit::new(
-            Array1::from_vec(time),
-            Array1::from_vec(status),
-            covar,
-            Array1::zeros(n),
-            Array1::zeros(n),
-            Array1::from_elem(n, 1.0),
-            CoxMethod::Efron,
-            25,
-            1e-9,
-            1e-9,
-            vec![true],
-            vec![0.0],
-        )
-        .expect("Cox fit init failed");
-
-        cox_fit.fit().expect("Cox fit failed");
-        let (beta, _means, _u, _imat, loglik, _sctest, _flag, _iter) = cox_fit.results();
-
-        let r_coef = aml.coxph_efron.coefficients[0];
-        let r_loglik = aml.coxph_efron.loglik[1];
-
-        assert!(
-            rel_approx_eq(beta[0].abs(), r_coef.abs(), STAT_TOL),
-            "Efron coefficient: expected {}, got {}",
-            r_coef,
-            beta[0]
-        );
-
-        assert!(
-            rel_approx_eq(loglik[1], r_loglik, STAT_TOL),
-            "Efron log-likelihood: expected {}, got {}",
-            r_loglik,
             loglik[1]
         );
     }

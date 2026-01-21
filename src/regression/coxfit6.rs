@@ -48,8 +48,6 @@ impl std::error::Error for CoxError {}
 #[derive(Debug, Clone, Copy)]
 pub enum Method {
     Breslow,
-    #[allow(dead_code)]
-    Efron,
 }
 pub type CoxFitResults = (
     Vec<f64>,
@@ -121,12 +119,6 @@ impl CoxFitBuilder {
         self
     }
 
-    #[allow(dead_code)]
-    pub fn offset(mut self, offset: Array1<f64>) -> Self {
-        self.offset = Some(offset);
-        self
-    }
-
     pub fn weights(mut self, weights: Array1<f64>) -> Self {
         self.weights = Some(weights);
         self
@@ -149,12 +141,6 @@ impl CoxFitBuilder {
 
     pub fn toler(mut self, toler: f64) -> Self {
         self.toler = toler;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn doscale(mut self, doscale: Vec<bool>) -> Self {
-        self.doscale = Some(doscale);
         self
     }
 
@@ -436,44 +422,20 @@ impl CoxFit {
                 }
             }
             if ndead > 0 {
-                match method {
-                    Method::Breslow => {
-                        denom += denom2;
-                        loglik -= deadwt * denom.ln();
-                        #[allow(clippy::needless_range_loop)]
-                        for i in 0..nvar {
-                            a[i] += a2[i];
-                            let temp = a[i] / denom;
-                            self.u[i] -= deadwt * temp;
-                            for j in 0..=i {
-                                cmat[(i, j)] += cmat2[(i, j)];
-                                let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
-                                self.imat[(j, i)] += val;
-                                if i != j {
-                                    self.imat[(i, j)] += val;
-                                }
-                            }
-                        }
-                    }
-                    Method::Efron => {
-                        let wtave = deadwt / ndead as f64;
-                        for k in 0..ndead {
-                            let _kf = k as f64;
-                            denom += denom2 / ndead as f64;
-                            loglik -= wtave * denom.ln();
-                            for i in 0..nvar {
-                                a[i] += a2[i] / ndead as f64;
-                                let temp = a[i] / denom;
-                                self.u[i] -= wtave * temp;
-                                for j in 0..=i {
-                                    cmat[(i, j)] += cmat2[(i, j)] / ndead as f64;
-                                    let val = wtave * (cmat[(i, j)] - temp * a[j]) / denom;
-                                    self.imat[(j, i)] += val;
-                                    if i != j {
-                                        self.imat[(i, j)] += val;
-                                    }
-                                }
-                            }
+                let _ = method;
+                denom += denom2;
+                loglik -= deadwt * denom.ln();
+                #[allow(clippy::needless_range_loop)]
+                for i in 0..nvar {
+                    a[i] += a2[i];
+                    let temp = a[i] / denom;
+                    self.u[i] -= deadwt * temp;
+                    for j in 0..=i {
+                        cmat[(i, j)] += cmat2[(i, j)];
+                        let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
+                        self.imat[(j, i)] += val;
+                        if i != j {
+                            self.imat[(i, j)] += val;
                         }
                     }
                 }
@@ -706,9 +668,6 @@ mod tests {
     #[test]
     fn test_method_variants() {
         let breslow = Method::Breslow;
-        let efron = Method::Efron;
-
         assert!(matches!(breslow, Method::Breslow));
-        assert!(matches!(efron, Method::Efron));
     }
 }
