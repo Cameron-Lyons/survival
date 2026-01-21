@@ -1199,7 +1199,7 @@ mod tests {
         assert!((sum - 1.0).abs() < 0.01);
 
         for &p in &pmf {
-            assert!(p >= 0.0 && p <= 1.0);
+            assert!((0.0..=1.0).contains(&p));
         }
     }
 
