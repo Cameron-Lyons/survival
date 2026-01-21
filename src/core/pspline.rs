@@ -133,8 +133,8 @@ impl PSplineBuilder {
 
     pub fn build(&self) -> PyResult<PSpline> {
         let boundary_knots = self.boundary_knots.unwrap_or_else(|| {
-            let min = self.x.iter().cloned().fold(f64::INFINITY, f64::min);
-            let max = self.x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min = self.x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = self.x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
             (min, max)
         });
 
@@ -216,6 +216,9 @@ impl PSpline {
     pub fn get_eps(&self) -> f64 {
         self.eps
     }
+}
+
+impl PSpline {
     fn create_basis(&self) -> Vec<Vec<f64>> {
         let n = self.x.len();
         let mut basis = vec![vec![0.0; self.nterm as usize]; n];
@@ -267,47 +270,55 @@ impl PSpline {
         if !self.penalty {
             return Ok(basis);
         }
-        let mut penalty = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
+
+        let n = self.nterm as usize;
+        let penalty_basis = self.compute_penalty_basis();
+
+        let mut penalty = vec![vec![0.0; n]; n];
         for i in 0..self.nterm {
             for j in 0..self.nterm {
-                penalty[i as usize][j as usize] = self.penalty_function(i, j)?;
+                penalty[i as usize][j as usize] = self.penalty_function(i, j, &penalty_basis)?;
             }
         }
-        let mut result = basis.clone();
-        for i in 0..self.nterm {
-            for j in 0..self.nterm {
-                for k in 0..self.nterm {
-                    result[i as usize][j as usize] -= self.theta
-                        * penalty[i as usize][k as usize]
-                        * basis[k as usize][j as usize];
-                }
+
+        let basis_arr = Array2::from_shape_fn((n, n), |(i, j)| basis[i][j]);
+        let penalty_arr = Array2::from_shape_fn((n, n), |(i, j)| penalty[i][j]);
+        let result_arr = &basis_arr - self.theta * penalty_arr.dot(&basis_arr);
+
+        let mut result = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                result[i][j] = result_arr[[i, j]];
             }
         }
         Ok(result)
     }
-    fn penalty_function(&self, i: u32, j: u32) -> Result<f64, PSplineError> {
+
+    fn compute_penalty_basis(&self) -> Vec<Vec<f64>> {
+        let n = self.nterm as usize;
+        let mut basis = vec![vec![0.0; n]; n];
+        for k in 0..self.nterm {
+            for l in 0..self.nterm {
+                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
+            }
+        }
+        basis
+    }
+
+    fn penalty_function(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> Result<f64, PSplineError> {
         match self.method.as_str() {
-            "GCV" => Ok(self.gcv(i, j)),
-            "UBRE" => Ok(self.ubre(i, j)),
-            "REML" => Ok(self.reml(i, j)),
-            "AIC" => Ok(self.aic(i, j)),
-            "BIC" => Ok(self.bic(i, j)),
+            "GCV" => Ok(self.gcv(i, j, basis)),
+            "UBRE" => Ok(self.ubre(i, j, basis)),
+            "REML" => Ok(self.reml(i, j, basis)),
+            "AIC" => Ok(self.aic(i, j, basis)),
+            "BIC" => Ok(self.bic(i, j, basis)),
             _ => Err(PSplineError::UnsupportedMethod(self.method.clone())),
         }
     }
-    fn reml(&self, i: u32, j: u32) -> f64 {
-        if i == j {
-            return self.nterm as f64;
-        }
+
+    fn compute_df_trace(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> (f64, f64) {
         let mut df = 0.0;
         let mut trace = 0.0;
-        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
-            }
-        }
-        let n = self.nterm as f64;
         for k in 0..self.nterm {
             for l in 0..self.nterm {
                 df += basis[k as usize][i as usize]
@@ -318,107 +329,52 @@ impl PSpline {
                     * basis[l as usize][j as usize];
             }
         }
+        (df, trace)
+    }
+
+    fn reml(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
+        if i == j {
+            return self.nterm as f64;
+        }
+        let (df, trace) = self.compute_df_trace(i, j, basis);
+        let n = self.nterm as f64;
         let edf = trace / n;
         df / (1.0 - edf).powi(2) + (n - edf).ln()
     }
-    fn aic(&self, i: u32, j: u32) -> f64 {
+
+    fn aic(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
         if i == j {
             return self.nterm as f64;
         }
-        let mut df = 0.0;
-        let mut trace = 0.0;
-        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
-            }
-        }
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                df += basis[k as usize][i as usize]
-                    * basis[l as usize][j as usize]
-                    * basis[k as usize][l as usize];
-                trace += basis[k as usize][i as usize]
-                    * basis[k as usize][l as usize]
-                    * basis[l as usize][j as usize];
-            }
-        }
+        let (df, trace) = self.compute_df_trace(i, j, basis);
         let n = self.nterm as f64;
         let edf = trace / n;
         df / (1.0 - edf).powi(2) + 2.0 * edf
     }
-    fn bic(&self, i: u32, j: u32) -> f64 {
+
+    fn bic(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
         if i == j {
             return self.nterm as f64;
         }
-        let mut df = 0.0;
-        let mut trace = 0.0;
-        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
-            }
-        }
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                df += basis[k as usize][i as usize]
-                    * basis[l as usize][j as usize]
-                    * basis[k as usize][l as usize];
-                trace += basis[k as usize][i as usize]
-                    * basis[k as usize][l as usize]
-                    * basis[l as usize][j as usize];
-            }
-        }
+        let (df, trace) = self.compute_df_trace(i, j, basis);
         let n = self.nterm as f64;
         let edf = trace / n;
         df / (1.0 - edf).powi(2) + n.ln() * edf
     }
-    fn gcv(&self, i: u32, j: u32) -> f64 {
+
+    fn gcv(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
         if i == j {
             return self.nterm as f64;
         }
-        let mut df = 0.0;
-        let mut trace = 0.0;
-        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
-            }
-        }
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                df += basis[k as usize][i as usize]
-                    * basis[l as usize][j as usize]
-                    * basis[k as usize][l as usize];
-                trace += basis[k as usize][i as usize]
-                    * basis[k as usize][l as usize]
-                    * basis[l as usize][j as usize];
-            }
-        }
+        let (df, trace) = self.compute_df_trace(i, j, basis);
         df / (1.0 - trace / self.nterm as f64).powi(2)
     }
-    fn ubre(&self, i: u32, j: u32) -> f64 {
+
+    fn ubre(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
         if i == j {
             return self.nterm as f64;
         }
-        let mut df = 0.0;
-        let mut trace = 0.0;
-        let mut basis = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
-            }
-        }
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                df += basis[k as usize][i as usize]
-                    * basis[l as usize][j as usize]
-                    * basis[k as usize][l as usize];
-                trace += basis[k as usize][i as usize]
-                    * basis[k as usize][l as usize]
-                    * basis[l as usize][j as usize];
-            }
-        }
+        let (df, trace) = self.compute_df_trace(i, j, basis);
         df / (1.0 - trace / self.nterm as f64).powi(2)
     }
     fn optimize_fit(&self, basis: Vec<Vec<f64>>) -> Result<Vec<f64>, PSplineError> {

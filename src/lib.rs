@@ -209,6 +209,7 @@ pub use missing::pattern_mixture::{
     tipping_point_analysis,
 };
 pub use ml::deep_surv::{Activation, DeepSurv, DeepSurvConfig, deep_surv};
+pub use ml::deephit::{DeepHit, DeepHitConfig, deephit};
 pub use ml::gradient_boost::{
     GBSurvLoss, GradientBoostSurvival, GradientBoostSurvivalConfig, gradient_boost_survival,
 };
@@ -617,6 +618,7 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survival_forest, &m)?)?;
     m.add_function(wrap_pyfunction!(gradient_boost_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(deep_surv, &m)?)?;
+    m.add_function(wrap_pyfunction!(deephit, &m)?)?;
     m.add_function(wrap_pyfunction!(survtrace, &m)?)?;
     m.add_class::<SurvivalForest>()?;
     m.add_class::<SurvivalForestConfig>()?;
@@ -627,6 +629,8 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DeepSurv>()?;
     m.add_class::<DeepSurvConfig>()?;
     m.add_class::<Activation>()?;
+    m.add_class::<DeepHit>()?;
+    m.add_class::<DeepHitConfig>()?;
     m.add_class::<SurvTrace>()?;
     m.add_class::<SurvTraceConfig>()?;
     m.add_class::<SurvTraceActivation>()?;

@@ -21,6 +21,8 @@ use burn::{
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::utils::tensor_to_vec_f32;
+
 type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
 
@@ -215,12 +217,6 @@ impl<B: burn::prelude::Backend> DeepSurvNetwork<B> {
 
         self.output.forward(current)
     }
-}
-
-fn tensor_to_vec_f32<B: burn::prelude::Backend>(t: Tensor<B, 2>) -> Vec<f32> {
-    let [rows, cols] = t.dims();
-    let data = t.into_data();
-    data.to_vec().unwrap_or_else(|_| vec![0.0; rows * cols])
 }
 
 fn compute_cox_gradient_cpu(
@@ -547,15 +543,15 @@ fn fit_deep_surv_inner(
                 .flat_map(|&i| (0..n_vars).map(move |j| x[i * n_vars + j] as f32))
                 .collect();
 
-            let x_data = burn::tensor::TensorData::new(x_batch.clone(), [batch_size, n_vars]);
+            let x_data = burn::tensor::TensorData::new(x_batch, [batch_size, n_vars]);
             let x_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_data, &device);
 
-            let risk_scores = model.forward(x_tensor.clone(), activation);
+            let risk_scores = model.forward(x_tensor, activation);
             let risk_vec: Vec<f32> = tensor_to_vec_f32(risk_scores.clone().inner());
 
             let gradients = compute_cox_gradient_cpu(&risk_vec, time, status, &batch_indices);
 
-            let grad_data = burn::tensor::TensorData::new(gradients.clone(), [batch_size, 1]);
+            let grad_data = burn::tensor::TensorData::new(gradients, [batch_size, 1]);
             let grad_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(grad_data, &device);
 
             let pseudo_loss = (risk_scores * grad_tensor).mean();
@@ -582,7 +578,7 @@ fn fit_deep_surv_inner(
                 .flat_map(|&i| (0..n_vars).map(move |j| x[i * n_vars + j] as f32))
                 .collect();
 
-            let x_val_data = burn::tensor::TensorData::new(x_val.clone(), [n_val, n_vars]);
+            let x_val_data = burn::tensor::TensorData::new(x_val, [n_val, n_vars]);
             let x_val_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_val_data, &device);
 
             let val_risk = model.forward_inference(x_val_tensor, activation);

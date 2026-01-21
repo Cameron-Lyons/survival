@@ -298,7 +298,7 @@ impl CoxPHModel {
     pub fn get_coefficients(&self) -> Vec<Vec<f64>> {
         let mut result = Vec::new();
         for col in self.coefficients.columns() {
-            result.push(col.iter().cloned().collect());
+            result.push(col.iter().copied().collect());
         }
         result
     }

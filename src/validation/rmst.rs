@@ -992,7 +992,7 @@ pub fn compute_rmst_optimal_threshold(
         }
     }
     event_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let max_followup = time.iter().cloned().fold(0.0_f64, f64::max);
+    let max_followup = time.iter().fold(0.0_f64, |a, &b| a.max(b));
     if event_times.is_empty() {
         let rmst_result = compute_rmst(time, status, max_followup, confidence_level);
         return RMSTOptimalThresholdResult {

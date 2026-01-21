@@ -40,8 +40,8 @@ pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResul
     }
 
     let tol = tolerance.unwrap_or_else(|| {
-        let min_val = time.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max_val = time.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let min_val = time.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max_val = time.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
         let range = max_val - min_val;
         if range > 0.0 { range * 1e-8 } else { 1e-8 }
     });

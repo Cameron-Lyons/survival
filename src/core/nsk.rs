@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 /// Natural spline with knot heights as basis coefficients.
 ///
@@ -83,8 +84,8 @@ impl NaturalSplineKnot {
 
         // Determine boundary knots from data if not specified
         let (bk_low, bk_high) = if self.boundary_knots.0.is_infinite() {
-            let min_x = x.iter().cloned().fold(f64::INFINITY, f64::min);
-            let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min_x = x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max_x = x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
             (min_x, max_x)
         } else {
             self.boundary_knots
@@ -98,19 +99,15 @@ impl NaturalSplineKnot {
         };
 
         let mut all_knots = vec![bk_low];
-        all_knots.extend(interior_knots.iter().cloned());
+        all_knots.extend(interior_knots.iter().copied());
         all_knots.push(bk_high);
 
         let n_basis = all_knots.len();
 
-        let mut basis = vec![0.0; n * n_basis];
-
-        for (i, &xi) in x.iter().enumerate() {
-            let basis_vals = natural_spline_basis_at_point(xi, &all_knots);
-            for (j, &val) in basis_vals.iter().enumerate() {
-                basis[i * n_basis + j] = val;
-            }
-        }
+        let basis: Vec<f64> = x
+            .par_iter()
+            .flat_map(|&xi| natural_spline_basis_at_point(xi, &all_knots))
+            .collect();
 
         let transformed_basis = transform_to_knot_heights(&basis, n, n_basis, &all_knots);
 
@@ -205,7 +202,7 @@ fn compute_quantile_knots(x: &[f64], n_knots: usize, low: f64, high: f64) -> Vec
         return vec![];
     }
 
-    let mut sorted: Vec<f64> = x.iter().cloned().filter(|&v| v > low && v < high).collect();
+    let mut sorted: Vec<f64> = x.iter().copied().filter(|&v| v > low && v < high).collect();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     if sorted.is_empty() {

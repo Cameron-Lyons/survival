@@ -147,15 +147,10 @@ pub fn pyears3b(
             stop[i] - start[i]
         };
         let mut cumhaz = 0.0;
-        if timeleft <= eps && doevent == 1 {
-            let (_, _idx, _, _) =
-                pystep(odim, &mut data.clone(), ofac, odims, &ocut_slices, timeleft);
-        }
+        let mut data2_current = vec![0.0; edim];
         while timeleft > eps {
-            let mut data_current = data.clone();
             let (thiscell, idx, _idx2, _lwt) =
-                pystep(odim, &mut data_current, ofac, odims, &ocut_slices, timeleft);
-            data.copy_from_slice(&data_current);
+                pystep(odim, &mut data, ofac, odims, &ocut_slices, timeleft);
             pyears[idx] += thiscell * weight[i];
             pn[idx] += 1.0;
             if doevent == 1 && !event.is_empty() && event[i] > 0.0 {
@@ -164,7 +159,7 @@ pub fn pyears3b(
             let mut etime = thiscell;
             let mut hazard = 0.0;
             let mut temp = 0.0;
-            let mut data2_current = data2.clone();
+            data2_current.copy_from_slice(&data2);
             while etime > 0.0 {
                 let (et2, edx, edx2, elwt) =
                     pystep(edim, &mut data2_current, efac, edims, &ecut_slices, etime);

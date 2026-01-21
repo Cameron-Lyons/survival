@@ -419,7 +419,7 @@ pub fn survreg(
     let variance_matrix = result
         .variance_matrix
         .outer_iter()
-        .map(|row| row.iter().cloned().collect())
+        .map(|row| row.iter().copied().collect())
         .collect();
     Ok(SurvivalFit {
         coefficients: result.coefficients,
@@ -457,9 +457,9 @@ fn compute_survreg(
     let mut usave = Array1::zeros(nvar2);
     let time1_vec: Vec<f64> = y.column(0).iter().map(|&t| t.ln()).collect();
     let status_vec: Vec<f64> = if ny == 2 {
-        y.column(1).iter().cloned().collect()
+        y.column(1).iter().copied().collect()
     } else {
-        y.column(2).iter().cloned().collect()
+        y.column(2).iter().copied().collect()
     };
     let time2_vec: Option<Vec<f64>> = if ny == 3 {
         Some(y.column(1).iter().map(|&t| t.ln()).collect())
