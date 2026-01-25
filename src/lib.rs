@@ -193,8 +193,10 @@ pub use causal::target_trial::{
     TargetTrialResult, sequential_trial_emulation, target_trial_emulation,
 };
 pub use interpretability::survshap::{
-    AggregationMethod, SurvShapConfig, SurvShapExplanation, SurvShapResult, aggregate_survshap,
-    survshap, survshap_from_model,
+    AggregationMethod, BootstrapSurvShapResult, FeatureImportance, PermutationImportanceResult,
+    ShapInteractionResult, SurvShapConfig, SurvShapExplanation, SurvShapResult, aggregate_survshap,
+    compute_shap_interactions, permutation_importance, survshap, survshap_bootstrap,
+    survshap_from_model,
 };
 pub use interval::interval_censoring::{
     IntervalCensoredResult, IntervalDistribution, TurnbullResult, interval_censored_regression,
@@ -701,11 +703,18 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     // Interpretability functions (SurvSHAP)
     m.add_function(wrap_pyfunction!(survshap, &m)?)?;
     m.add_function(wrap_pyfunction!(survshap_from_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(survshap_bootstrap, &m)?)?;
     m.add_function(wrap_pyfunction!(aggregate_survshap, &m)?)?;
+    m.add_function(wrap_pyfunction!(permutation_importance, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_shap_interactions, &m)?)?;
     m.add_class::<SurvShapConfig>()?;
     m.add_class::<SurvShapResult>()?;
     m.add_class::<SurvShapExplanation>()?;
     m.add_class::<AggregationMethod>()?;
+    m.add_class::<BootstrapSurvShapResult>()?;
+    m.add_class::<PermutationImportanceResult>()?;
+    m.add_class::<ShapInteractionResult>()?;
+    m.add_class::<FeatureImportance>()?;
 
     m.add_function(wrap_pyfunction!(conformal_calibrate, &m)?)?;
     m.add_function(wrap_pyfunction!(conformal_predict, &m)?)?;
