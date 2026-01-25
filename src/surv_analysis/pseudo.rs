@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::utilities::statistical::normal_cdf;
+
 /// Result of pseudo-value computation
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -238,8 +240,6 @@ pub fn pseudo_fast(
     eval_times: Option<Vec<f64>>,
     type_: Option<&str>,
 ) -> PyResult<PseudoResult> {
-    // For now, delegate to the standard implementation
-    // A truly optimized version would use IJ residuals directly
     pseudo(time, status, eval_times, type_)
 }
 
@@ -258,11 +258,8 @@ mod tests {
         assert!(!result.time.is_empty());
         assert_eq!(result.pseudo.len(), 5);
 
-        // Pseudo-values should average to approximately the KM estimate
-        // Note: Individual pseudo-values can be outside [0,1], but average should be reasonable
         for t_idx in 0..result.time.len() {
             let avg: f64 = result.pseudo.iter().map(|p| p[t_idx]).sum::<f64>() / 5.0;
-            // Average should be finite and roughly in a reasonable range
             assert!(avg.is_finite());
         }
     }
@@ -296,12 +293,390 @@ mod tests {
         let result = pseudo(time, status, None, Some("cumhaz")).unwrap();
 
         assert_eq!(result.type_, "cumhaz");
-        // Cumulative hazard pseudo-values should be non-negative
         for p in &result.pseudo {
             for &val in p {
-                // Pseudo-values can be negative, but on average should be positive
                 assert!(val.is_finite());
             }
         }
     }
+
+    #[test]
+    fn test_pseudo_gee_regression() {
+        let pseudo_values = vec![vec![0.8], vec![0.7], vec![0.6], vec![0.5], vec![0.4]];
+        let covariates = vec![
+            vec![1.0, 0.5],
+            vec![1.0, 1.0],
+            vec![1.0, 1.5],
+            vec![1.0, 2.0],
+            vec![1.0, 2.5],
+        ];
+
+        let config = GEEConfig::new(
+            "independence".to_string(),
+            "identity".to_string(),
+            100,
+            1e-6,
+        );
+        let result = pseudo_gee_regression(pseudo_values, covariates, None, Some(config)).unwrap();
+
+        assert_eq!(result.coefficients.len(), 2);
+        assert_eq!(result.std_errors.len(), 2);
+    }
+}
+
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct GEEConfig {
+    #[pyo3(get, set)]
+    pub correlation_structure: String,
+    #[pyo3(get, set)]
+    pub link_function: String,
+    #[pyo3(get, set)]
+    pub max_iter: usize,
+    #[pyo3(get, set)]
+    pub tol: f64,
+}
+
+#[pymethods]
+impl GEEConfig {
+    #[new]
+    #[pyo3(signature = (correlation_structure="independence".to_string(), link_function="identity".to_string(), max_iter=100, tol=1e-6))]
+    pub fn new(
+        correlation_structure: String,
+        link_function: String,
+        max_iter: usize,
+        tol: f64,
+    ) -> Self {
+        Self {
+            correlation_structure,
+            link_function,
+            max_iter,
+            tol,
+        }
+    }
+}
+
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct GEEResult {
+    #[pyo3(get)]
+    pub coefficients: Vec<f64>,
+    #[pyo3(get)]
+    pub std_errors: Vec<f64>,
+    #[pyo3(get)]
+    pub z_values: Vec<f64>,
+    #[pyo3(get)]
+    pub p_values: Vec<f64>,
+    #[pyo3(get)]
+    pub confidence_intervals: Vec<(f64, f64)>,
+    #[pyo3(get)]
+    pub qic: f64,
+    #[pyo3(get)]
+    pub n_iterations: usize,
+    #[pyo3(get)]
+    pub converged: bool,
+}
+
+#[pymethods]
+impl GEEResult {
+    #[new]
+    pub fn new(
+        coefficients: Vec<f64>,
+        std_errors: Vec<f64>,
+        z_values: Vec<f64>,
+        p_values: Vec<f64>,
+        confidence_intervals: Vec<(f64, f64)>,
+        qic: f64,
+        n_iterations: usize,
+        converged: bool,
+    ) -> Self {
+        Self {
+            coefficients,
+            std_errors,
+            z_values,
+            p_values,
+            confidence_intervals,
+            qic,
+            n_iterations,
+            converged,
+        }
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (pseudo_values, covariates, cluster_id=None, config=None))]
+pub fn pseudo_gee_regression(
+    pseudo_values: Vec<Vec<f64>>,
+    covariates: Vec<Vec<f64>>,
+    cluster_id: Option<Vec<usize>>,
+    config: Option<GEEConfig>,
+) -> PyResult<GEEResult> {
+    let config = config.unwrap_or_else(|| {
+        GEEConfig::new(
+            "independence".to_string(),
+            "identity".to_string(),
+            100,
+            1e-6,
+        )
+    });
+
+    let n = pseudo_values.len();
+    if n == 0 || covariates.is_empty() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Input data must be non-empty",
+        ));
+    }
+
+    let n_times = pseudo_values[0].len();
+    let p = covariates[0].len();
+
+    let cluster_id = cluster_id.unwrap_or_else(|| (0..n).collect());
+
+    let y: Vec<f64> = pseudo_values
+        .iter()
+        .flat_map(|pv| pv.iter().cloned())
+        .collect();
+    let n_obs = y.len();
+
+    let mut x: Vec<Vec<f64>> = Vec::with_capacity(n_obs);
+    for i in 0..n {
+        for _ in 0..n_times {
+            x.push(covariates[i].clone());
+        }
+    }
+
+    let mut beta: Vec<f64> = vec![0.0; p];
+    let mut converged = false;
+    let mut n_iterations = 0;
+
+    for iter in 0..config.max_iter {
+        n_iterations = iter + 1;
+
+        let eta: Vec<f64> = x
+            .iter()
+            .map(|xi| xi.iter().zip(beta.iter()).map(|(x, b)| x * b).sum())
+            .collect();
+
+        let mu: Vec<f64> = apply_link_inverse(&eta, &config.link_function);
+
+        let residuals: Vec<f64> = y.iter().zip(mu.iter()).map(|(y, m)| y - m).collect();
+
+        let link_deriv: Vec<f64> = compute_link_derivative(&mu, &config.link_function);
+
+        let mut xtx = vec![vec![0.0; p]; p];
+        let mut xty = vec![0.0; p];
+
+        for i in 0..n_obs {
+            let w = link_deriv[i].powi(2);
+            for j in 0..p {
+                xty[j] += x[i][j] * residuals[i] * w;
+                for k in 0..p {
+                    xtx[j][k] += x[i][j] * x[i][k] * w;
+                }
+            }
+        }
+
+        let xtx_inv = invert_matrix(&xtx);
+        let delta: Vec<f64> = (0..p)
+            .map(|j| xtx_inv[j].iter().zip(xty.iter()).map(|(a, b)| a * b).sum())
+            .collect();
+
+        let delta_norm: f64 = delta.iter().map(|d| d * d).sum::<f64>().sqrt();
+        if delta_norm < config.tol {
+            converged = true;
+            break;
+        }
+
+        for k in 0..p {
+            beta[k] += delta[k];
+        }
+    }
+
+    let eta: Vec<f64> = x
+        .iter()
+        .map(|xi| xi.iter().zip(beta.iter()).map(|(x, b)| x * b).sum())
+        .collect();
+    let mu: Vec<f64> = apply_link_inverse(&eta, &config.link_function);
+    let residuals: Vec<f64> = y.iter().zip(mu.iter()).map(|(y, m)| y - m).collect();
+
+    let sandwich_variance =
+        compute_sandwich_variance(&x, &residuals, &cluster_id, n_times, p, &config);
+
+    let std_errors: Vec<f64> = (0..p).map(|k| sandwich_variance[k][k].sqrt()).collect();
+
+    let z_values: Vec<f64> = beta
+        .iter()
+        .zip(std_errors.iter())
+        .map(|(b, se)| if *se > 0.0 { b / se } else { f64::NAN })
+        .collect();
+
+    let p_values: Vec<f64> = z_values
+        .iter()
+        .map(|z| {
+            if z.is_finite() {
+                2.0 * (1.0 - normal_cdf(z.abs()))
+            } else {
+                f64::NAN
+            }
+        })
+        .collect();
+
+    let confidence_intervals: Vec<(f64, f64)> = beta
+        .iter()
+        .zip(std_errors.iter())
+        .map(|(b, se)| (b - 1.96 * se, b + 1.96 * se))
+        .collect();
+
+    let rss: f64 = residuals.iter().map(|r| r * r).sum();
+    let qic = n_obs as f64 * (rss / n_obs as f64).ln() + 2.0 * p as f64;
+
+    Ok(GEEResult {
+        coefficients: beta,
+        std_errors,
+        z_values,
+        p_values,
+        confidence_intervals,
+        qic,
+        n_iterations,
+        converged,
+    })
+}
+
+fn apply_link_inverse(eta: &[f64], link: &str) -> Vec<f64> {
+    match link {
+        "identity" => eta.to_vec(),
+        "log" => eta.iter().map(|e| e.exp()).collect(),
+        "logit" => eta.iter().map(|e| 1.0 / (1.0 + (-e).exp())).collect(),
+        "cloglog" => eta.iter().map(|e| 1.0 - (-e.exp()).exp()).collect(),
+        _ => eta.to_vec(),
+    }
+}
+
+fn compute_link_derivative(mu: &[f64], link: &str) -> Vec<f64> {
+    match link {
+        "identity" => vec![1.0; mu.len()],
+        "log" => mu.iter().map(|m| 1.0 / m.max(1e-10)).collect(),
+        "logit" => mu
+            .iter()
+            .map(|m| 1.0 / (m.max(1e-10) * (1.0 - m).max(1e-10)))
+            .collect(),
+        "cloglog" => mu
+            .iter()
+            .map(|m| {
+                let m = m.clamp(1e-10, 1.0 - 1e-10);
+                1.0 / ((1.0 - m) * (-(1.0 - m).ln()))
+            })
+            .collect(),
+        _ => vec![1.0; mu.len()],
+    }
+}
+
+fn compute_sandwich_variance(
+    x: &[Vec<f64>],
+    residuals: &[f64],
+    cluster_id: &[usize],
+    n_times: usize,
+    p: usize,
+    _config: &GEEConfig,
+) -> Vec<Vec<f64>> {
+    let n_obs = x.len();
+
+    let mut xtx = vec![vec![0.0; p]; p];
+    for i in 0..n_obs {
+        for j in 0..p {
+            for k in 0..p {
+                xtx[j][k] += x[i][j] * x[i][k];
+            }
+        }
+    }
+    let xtx_inv = invert_matrix(&xtx);
+
+    let mut meat = vec![vec![0.0; p]; p];
+    let max_cluster = *cluster_id.iter().max().unwrap_or(&0);
+
+    for c in 0..=max_cluster {
+        let mut score = vec![0.0; p];
+
+        for i in 0..n_obs / n_times {
+            if cluster_id[i] == c {
+                for t in 0..n_times {
+                    let idx = i * n_times + t;
+                    for j in 0..p {
+                        score[j] += x[idx][j] * residuals[idx];
+                    }
+                }
+            }
+        }
+
+        for j in 0..p {
+            for k in 0..p {
+                meat[j][k] += score[j] * score[k];
+            }
+        }
+    }
+
+    let mut result = vec![vec![0.0; p]; p];
+    for i in 0..p {
+        for j in 0..p {
+            for k in 0..p {
+                for l in 0..p {
+                    result[i][j] += xtx_inv[i][k] * meat[k][l] * xtx_inv[l][j];
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn invert_matrix(m: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = m.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let mut aug = vec![vec![0.0; 2 * n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            aug[i][j] = m[i][j];
+        }
+        aug[i][n + i] = 1.0;
+    }
+
+    for i in 0..n {
+        let mut max_row = i;
+        for k in (i + 1)..n {
+            if aug[k][i].abs() > aug[max_row][i].abs() {
+                max_row = k;
+            }
+        }
+        aug.swap(i, max_row);
+
+        let pivot = aug[i][i];
+        if pivot.abs() < 1e-10 {
+            continue;
+        }
+
+        for j in 0..(2 * n) {
+            aug[i][j] /= pivot;
+        }
+
+        for k in 0..n {
+            if k != i {
+                let factor = aug[k][i];
+                for j in 0..(2 * n) {
+                    aug[k][j] -= factor * aug[i][j];
+                }
+            }
+        }
+    }
+
+    let mut result = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            result[i][j] = aug[i][n + j];
+        }
+    }
+
+    result
 }

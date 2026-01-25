@@ -348,7 +348,6 @@ mod tests {
         assert_eq!(result.levels.len(), 2);
         assert_eq!(result.means.len(), 2);
 
-        // Group A mean should be 1.5, Group B mean should be 3.0
         let a_idx = result.levels.iter().position(|l| l == "A").unwrap();
         let b_idx = result.levels.iter().position(|l| l == "B").unwrap();
 
@@ -360,17 +359,16 @@ mod tests {
     fn test_yates_weighted() {
         let predictions = vec![1.0, 2.0, 3.0];
         let factor = vec!["A".to_string(), "A".to_string(), "A".to_string()];
-        let weights = vec![1.0, 2.0, 1.0]; // More weight on middle value
+        let weights = vec![1.0, 2.0, 1.0];
 
         let result = yates(predictions, factor, Some(weights), None).unwrap();
 
-        // Weighted mean: (1*1 + 2*2 + 1*3) / 4 = 8/4 = 2.0
         assert!((result.means[0] - 2.0).abs() < 0.01);
     }
 
     #[test]
     fn test_yates_contrast() {
-        let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0]; // 3x2 matrix
+        let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let coef = vec![0.5, 1.0];
         let factor_levels = vec![0.0, 1.0];
 
@@ -393,7 +391,7 @@ mod tests {
 
         let pairwise = yates_pairwise(&result).unwrap();
 
-        assert_eq!(pairwise.level1.len(), 3); // 3 pairs
-        assert_eq!(pairwise.difference[0], -1.0); // A - B
+        assert_eq!(pairwise.level1.len(), 3);
+        assert_eq!(pairwise.difference[0], -1.0);
     }
 }

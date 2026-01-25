@@ -30,10 +30,12 @@ fastrand = "2.3.0"
 pulp = "0.22.2"
 wide = "1.1.1"
 burn = { version = "0.20.1", features = ["autodiff", "ndarray"] }
+num_cpus = "1.16"
 
 [features]
 default = []
 extension-module = ["pyo3/extension-module"]
+cuda = []
 
 [dev-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }

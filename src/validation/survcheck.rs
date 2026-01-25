@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn test_survcheck_overlap() {
         let id = vec![1, 1];
-        let time1 = vec![0.0, 5.0]; // Second starts before first ends
+        let time1 = vec![0.0, 5.0];
         let time2 = vec![10.0, 15.0];
         let status = vec![0, 1];
 
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn test_survcheck_gap() {
         let id = vec![1, 1];
-        let time1 = vec![0.0, 15.0]; // Gap between 10 and 15
+        let time1 = vec![0.0, 15.0];
         let time2 = vec![10.0, 20.0];
         let status = vec![0, 1];
 

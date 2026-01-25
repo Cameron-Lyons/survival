@@ -445,7 +445,6 @@ mod tests {
         let penalty = RidgePenalty::new(2.0, None).unwrap();
         let beta = vec![1.0, 2.0, 3.0];
         let value = penalty.penalty_value(beta);
-        // theta/2 * (1 + 4 + 9) = 1.0 * 14 = 14.0
         assert!((value - 14.0).abs() < 1e-10);
     }
 

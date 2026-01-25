@@ -48,12 +48,21 @@ pub use regression::finegray_regression::{
     CompetingRisksCIF, FineGrayResult, competing_risks_cif, finegray_regression,
 };
 pub use regression::ridge::{RidgePenalty, RidgeResult, ridge_cv, ridge_fit};
+pub use regression::spline_hazard::{
+    FlexibleParametricResult, HazardSplineResult, RestrictedCubicSplineResult, SplineConfig,
+    flexible_parametric_model, predict_hazard_spline, restricted_cubic_spline,
+};
 pub use regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, predict_survreg, predict_survreg_quantile,
 };
 pub use regression::survreg6::{DistributionType, SurvivalFit, SurvregConfig, survreg};
 pub use residuals::agmart::agmart;
 pub use residuals::coxmart::coxmart;
+pub use residuals::diagnostics::{
+    DfbetaResult, GofTestResult, LeverageResult, ModelInfluenceResult, OutlierDetectionResult,
+    SchoenfeldSmoothResult, dfbeta_cox, goodness_of_fit_cox, leverage_cox, model_influence_cox,
+    outlier_detection_cox, smooth_schoenfeld,
+};
 pub use residuals::survfit_resid::{SurvfitResiduals, residuals_survfit};
 pub use residuals::survreg_resid::{SurvregResiduals, dfbeta_survreg, residuals_survreg};
 pub use scoring::agscore2::perform_score_calculation;
@@ -62,7 +71,15 @@ pub use scoring::coxscore2::cox_score_residuals;
 pub use specialized::brier::{brier, compute_brier, integrated_brier};
 pub use specialized::cch::{CchMethod, CohortData};
 pub use specialized::cipoisson::{cipoisson, cipoisson_anscombe, cipoisson_exact};
+pub use specialized::drift_detection::{
+    DriftConfig, DriftReport, FeatureDriftResult, PerformanceDriftResult, detect_drift,
+    monitor_performance,
+};
 pub use specialized::finegray::{FineGrayOutput, finegray};
+pub use specialized::model_cards::{
+    FairnessAuditResult, ModelCard, ModelPerformanceMetrics, SubgroupPerformance,
+    create_model_card, fairness_audit,
+};
 pub use specialized::norisk::norisk;
 pub use specialized::pyears_summary::{
     PyearsCell, PyearsSummary, pyears_by_cell, pyears_ci, summary_pyears,
@@ -78,16 +95,34 @@ pub use specialized::survexp::{SurvExpResult, survexp, survexp_individual};
 pub use specialized::survexp_us::{
     ExpectedSurvivalResult, compute_expected_survival, survexp_mn, survexp_us, survexp_usr,
 };
+pub use specialized::warranty_analysis::{
+    ReliabilityGrowthResult, RenewalResult, WarrantyConfig, WarrantyResult, reliability_growth,
+    renewal_analysis, warranty_analysis,
+};
 pub use surv_analysis::aggregate_survfit::{
     AggregateSurvfitResult, aggregate_survfit, aggregate_survfit_by_group,
 };
 pub use surv_analysis::agsurv4::agsurv4;
 pub use surv_analysis::agsurv5::agsurv5;
+pub use surv_analysis::illness_death::{
+    IllnessDeathConfig, IllnessDeathPrediction, IllnessDeathResult, IllnessDeathType,
+    TransitionHazard, fit_illness_death, predict_illness_death,
+};
+pub use surv_analysis::multi_state::{
+    MarkovMSMResult, MultiStateConfig, MultiStateResult, TransitionIntensityResult,
+    estimate_transition_intensities, fit_markov_msm, fit_multi_state_model,
+};
 pub use surv_analysis::nelson_aalen::{
     NelsonAalenResult, StratifiedKMResult, nelson_aalen, nelson_aalen_estimator,
     stratified_kaplan_meier,
 };
-pub use surv_analysis::pseudo::{PseudoResult, pseudo, pseudo_fast};
+pub use surv_analysis::pseudo::{
+    GEEConfig, GEEResult, PseudoResult, pseudo, pseudo_fast, pseudo_gee_regression,
+};
+pub use surv_analysis::semi_markov::{
+    SemiMarkovConfig, SemiMarkovPrediction, SemiMarkovResult, SojournDistribution,
+    SojournTimeParams, fit_semi_markov, predict_semi_markov,
+};
 pub use surv_analysis::survdiff2::{SurvDiffResult, survdiff2};
 pub use surv_analysis::survfit_matrix::{
     SurvfitMatrixResult, basehaz, survfit_from_cumhaz, survfit_from_hazard, survfit_from_matrix,
@@ -122,8 +157,9 @@ pub use utilities::tmerge::{tmerge, tmerge2, tmerge3};
 pub use validation::anova::{AnovaCoxphResult, AnovaRow, anova_coxph, anova_coxph_single};
 pub use validation::bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
 pub use validation::calibration::{
-    CalibrationResult, PredictionResult, RiskStratificationResult, TdAUCResult, calibration,
-    predict_cox, risk_stratification, td_auc,
+    AdvancedCalibrationResult, CalibrationResult, PredictionResult, RiskStratificationResult,
+    TdAUCResult, TimeDependentCalibrationResult, advanced_calibration_metrics, calibration,
+    predict_cox, risk_stratification, td_auc, time_dependent_calibration,
 };
 pub use validation::conformal::{
     BootstrapConformalResult, CQRConformalResult, CVPlusCalibrationResult, CVPlusConformalResult,
@@ -147,6 +183,18 @@ pub use validation::d_calibration::{
     OneCalibrationResult, SmoothedCalibrationCurve, brier_calibration, calibration_plot,
     d_calibration, multi_time_calibration, one_calibration, smoothed_calibration,
 };
+pub use validation::decision_curve::{
+    ClinicalUtilityResult, DecisionCurveResult, ModelComparisonResult,
+    clinical_utility_at_threshold, compare_decision_curves, decision_curve_analysis,
+};
+pub use validation::fairness::{
+    FairnessMetrics, RobustnessResult, SubgroupAnalysisResult, assess_model_robustness,
+    compute_fairness_metrics, subgroup_analysis,
+};
+pub use validation::hyperparameter::{
+    BenchmarkResult, HyperparameterResult, HyperparameterSearchConfig, NestedCVResult,
+    SearchStrategy, benchmark_models, hyperparameter_search, nested_cross_validation,
+};
 pub use validation::landmark::{
     ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
     SurvivalAtTimeResult, conditional_survival, hazard_ratio, landmark_analysis,
@@ -156,12 +204,24 @@ pub use validation::logrank::{
     LogRankResult, TrendTestResult, WeightType, fleming_harrington_test, logrank_test,
     logrank_trend, weighted_logrank_test,
 };
+pub use validation::meta_analysis::{
+    MetaAnalysisConfig, MetaAnalysisResult, MetaForestPlotData, PublicationBiasResult,
+    generate_forest_plot_data, publication_bias_tests, survival_meta_analysis,
+};
+pub use validation::model_selection::{
+    CrossValidatedScore, ModelSelectionCriteria, SurvivalModelComparison, compare_models,
+    compute_cv_score, compute_model_selection_criteria,
+};
 pub use validation::power::{
     AccrualResult, SampleSizeResult, expected_events, power_survival, sample_size_survival,
     sample_size_survival_freedman,
 };
 pub use validation::rcll::{
     RCLLResult, compute_rcll, compute_rcll_single_time, rcll, rcll_single_time,
+};
+pub use validation::reporting::{
+    CalibrationCurveData, ForestPlotData, KaplanMeierPlotData, ROCPlotData, SurvivalReport,
+    calibration_plot_data, forest_plot_data, generate_survival_report, km_plot_data, roc_plot_data,
 };
 pub use validation::rmst::{
     ChangepointInfo, CumulativeIncidenceResult, MedianSurvivalResult, NNTResult,
@@ -180,6 +240,14 @@ pub use validation::time_dependent_auc::{
     CumulativeDynamicAUCResult, TimeDepAUCResult, cumulative_dynamic_auc,
     cumulative_dynamic_auc_core, time_dependent_auc, time_dependent_auc_core,
 };
+pub use validation::uncertainty::{
+    BayesianBootstrapConfig, BayesianBootstrapResult, CalibrationUncertaintyResult,
+    ConformalSurvivalConfig, ConformalSurvivalResult, EnsembleUncertaintyResult,
+    JackknifePlusConfig, JackknifePlusResult, MCDropoutConfig, QuantileRegressionResult,
+    UncertaintyResult, bayesian_bootstrap_survival, calibrate_prediction_intervals,
+    conformal_survival, ensemble_uncertainty, jackknife_plus_survival, mc_dropout_uncertainty,
+    quantile_regression_intervals,
+};
 pub use validation::uno_c_index::{
     CIndexDecompositionResult, ConcordanceComparisonResult, GonenHellerResult, UnoCIndexResult,
     c_index_decomposition, compare_uno_c_indices, gonen_heller_concordance, uno_c_index,
@@ -189,10 +257,35 @@ pub use validation::yates::{
 };
 
 pub use bayesian::bayesian_cox::{BayesianCoxResult, bayesian_cox, bayesian_cox_predict_survival};
+pub use bayesian::bayesian_extensions::{
+    BayesianModelAveragingConfig, BayesianModelAveragingResult, DirichletProcessConfig,
+    DirichletProcessResult, HorseshoeConfig, HorseshoeResult, SpikeSlabConfig, SpikeSlabResult,
+    bayesian_model_averaging_cox, dirichlet_process_survival, horseshoe_cox, spike_slab_cox,
+};
 pub use bayesian::bayesian_parametric::{
     BayesianParametricResult, bayesian_parametric, bayesian_parametric_predict,
 };
+pub use causal::causal_forest::{
+    CausalForestConfig, CausalForestResult, CausalForestSurvival, causal_forest_survival,
+};
+pub use causal::counterfactual_survival::{
+    CounterfactualSurvivalConfig, CounterfactualSurvivalResult, TVSurvCausConfig, TVSurvCausResult,
+    estimate_counterfactual_survival, estimate_tv_survcaus,
+};
+pub use causal::dependent_censoring::{
+    CopulaCensoringConfig, CopulaCensoringResult, CopulaType, MNARSurvivalConfig,
+    MNARSurvivalResult, SensitivityBoundsConfig, SensitivityBoundsResult, copula_censoring_model,
+    mnar_sensitivity_survival, sensitivity_bounds_survival,
+};
+pub use causal::double_ml::{
+    CATEResult, DoubleMLConfig, DoubleMLResult, double_ml_cate, double_ml_survival,
+};
 pub use causal::g_computation::{GComputationResult, g_computation, g_computation_survival_curves};
+pub use causal::instrumental_variable::{
+    GEstimationConfig, GEstimationResult, IVCoxConfig, IVCoxResult, MediationSurvivalConfig,
+    MediationSurvivalResult, RDSurvivalConfig, RDSurvivalResult, g_estimation_aft, iv_cox,
+    mediation_survival, rd_survival,
+};
 pub use causal::ipcw::{
     IPCWResult, compute_ipcw_weights, ipcw_kaplan_meier, ipcw_treatment_effect,
 };
@@ -200,9 +293,22 @@ pub use causal::msm::{MSMResult, compute_longitudinal_iptw, marginal_structural_
 pub use causal::target_trial::{
     TargetTrialResult, sequential_trial_emulation, target_trial_emulation,
 };
+pub use causal::tmle::{TMLEConfig, TMLEResult, TMLESurvivalResult, tmle_ate, tmle_survival};
+pub use interpretability::ale_plots::{
+    ALE2DResult, ALEResult, compute_ale, compute_ale_2d, compute_time_varying_ale,
+};
 pub use interpretability::changepoints::{
     AllChangepointsResult, Changepoint, ChangepointConfig, ChangepointMethod, ChangepointResult,
     CostFunction, detect_changepoints, detect_changepoints_single_series,
+};
+pub use interpretability::friedman_h::{
+    FeatureImportanceResult as FriedmanFeatureImportanceResult, FriedmanHResult,
+    compute_all_pairwise_interactions, compute_feature_importance_decomposition,
+    compute_friedman_h,
+};
+pub use interpretability::ice_curves::{
+    DICEResult, ICEResult, cluster_ice_curves, compute_dice, compute_ice, compute_survival_ice,
+    detect_heterogeneity,
 };
 pub use interpretability::local_global::{
     FeatureViewAnalysis, LocalGlobalConfig, LocalGlobalResult, LocalGlobalSummary,
@@ -227,8 +333,10 @@ pub use interval::interval_censoring::{
     npmle_interval, turnbull_estimator,
 };
 pub use joint::dynamic_prediction::{
-    DynamicPredictionResult, dynamic_auc, dynamic_brier_score, dynamic_prediction,
-    landmarking_analysis,
+    DynamicCIndexResult, DynamicPredictionResult, IPCWAUCResult, SuperLandmarkResult,
+    TimeDependentROCResult, TimeVaryingAUCResult, dynamic_auc, dynamic_brier_score,
+    dynamic_c_index, dynamic_prediction, ipcw_auc, landmarking_analysis, super_landmark_model,
+    time_dependent_roc, time_varying_auc,
 };
 pub use joint::joint_model::{AssociationStructure, JointModelResult, joint_model};
 pub use missing::multiple_imputation::{
@@ -239,22 +347,88 @@ pub use missing::pattern_mixture::{
     PatternMixtureResult, SensitivityAnalysisType, pattern_mixture_model, sensitivity_analysis,
     tipping_point_analysis,
 };
+pub use ml::active_learning::{
+    ActiveLearningConfig, ActiveLearningResult, AdaptiveDesignResult, LogrankPowerResult,
+    LogrankSampleSizeResult, QBCResult, active_learning_selection, group_sequential_analysis,
+    power_logrank, query_by_committee, sample_size_logrank,
+};
+pub use ml::adversarial_robustness::{
+    AdversarialAttackConfig, AdversarialAttackResult, AdversarialDefenseConfig, AdversarialExample,
+    AttackType, DefenseType, RobustSurvivalModel, RobustnessEvaluation,
+    adversarial_training_survival, evaluate_robustness, generate_adversarial_examples,
+};
+pub use ml::attention_cox::{AttentionCoxConfig, AttentionCoxModel, fit_attention_cox};
 pub use ml::contrastive_surv::{
     ContrastiveSurv, ContrastiveSurvConfig, ContrastiveSurvResult, SurvivalLossType,
     contrastive_surv,
 };
+pub use ml::cox_time::{CoxTimeConfig, CoxTimeModel, fit_cox_time};
+pub use ml::deep_pamm::{DeepPAMMConfig, DeepPAMMModel, fit_deep_pamm};
 pub use ml::deep_surv::{Activation, DeepSurv, DeepSurvConfig, deep_surv};
 pub use ml::deephit::{DeepHit, DeepHitConfig, deephit};
+pub use ml::differential_privacy::{
+    DPConfig, DPCoxResult, DPHistogramResult, DPSurvivalResult, LocalDPResult, dp_cox_regression,
+    dp_histogram, dp_kaplan_meier, local_dp_mean,
+};
+pub use ml::distributionally_robust::{
+    DROSurvivalConfig, DROSurvivalResult, RobustnessAnalysis, UncertaintySet, dro_survival,
+    robustness_analysis,
+};
 pub use ml::dynamic_deephit::{
     DynamicDeepHit, DynamicDeepHitConfig, TemporalType, dynamic_deephit,
 };
+pub use ml::dysurv::{
+    DySurvConfig, DySurvModel, DynamicRiskResult, dynamic_risk_prediction, fit_dysurv,
+};
+pub use ml::ensemble_surv::{
+    BlendingResult, ComponentwiseBoostingConfig, ComponentwiseBoostingResult, StackingConfig,
+    StackingResult, SuperLearnerConfig, SuperLearnerResult, blending_survival,
+    componentwise_boosting, stacking_survival, super_learner_survival,
+};
+pub use ml::federated_learning::{
+    FederatedConfig, FederatedSurvivalResult, PrivacyAccountant, SecureAggregationResult,
+    federated_cox, secure_aggregate,
+};
 pub use ml::galee::{GALEE, GALEEConfig, GALEEResult, UnimodalConstraint, galee};
+pub use ml::gpu_acceleration::{
+    BatchPredictionResult, ComputeBackend, DeviceInfo, GPUConfig, ParallelCoxResult,
+    batch_predict_survival, benchmark_compute_backend, get_available_devices, is_gpu_available,
+    parallel_cox_regression, parallel_matrix_operations,
+};
 pub use ml::gradient_boost::{
     GBSurvLoss, GradientBoostSurvival, GradientBoostSurvivalConfig, gradient_boost_survival,
 };
+pub use ml::graph_surv::{GraphSurvConfig, GraphSurvModel, fit_graph_surv};
+pub use ml::knowledge_distillation::{
+    DistillationConfig, DistillationResult, DistilledSurvivalModel, PruningResult,
+    distill_survival_model, prune_survival_model,
+};
+pub use ml::multimodal_surv::{
+    FusionStrategy, MultimodalSurvConfig, MultimodalSurvModel, fit_multimodal_surv,
+};
+pub use ml::neural_mtlr::{NeuralMTLRConfig, NeuralMTLRModel, fit_neural_mtlr};
+pub use ml::neural_ode_surv::{NeuralODESurvConfig, NeuralODESurvModel, fit_neural_ode_surv};
+pub use ml::recurrent_surv::{
+    LongitudinalSurvConfig, LongitudinalSurvModel, RecurrentSurvConfig, RecurrentSurvModel,
+    fit_longitudinal_surv, fit_recurrent_surv,
+};
+pub use ml::state_space_surv::{MambaSurvConfig, MambaSurvModel, fit_mamba_surv};
+pub use ml::streaming_survival::{
+    ConceptDriftDetector, StreamingCoxConfig, StreamingCoxModel, StreamingKaplanMeier,
+};
 pub use ml::survival_forest::{SplitRule, SurvivalForest, SurvivalForestConfig, survival_forest};
+pub use ml::survival_transformer::{
+    SurvivalTransformerConfig, SurvivalTransformerModel, fit_survival_transformer,
+};
 pub use ml::survtrace::{SurvTrace, SurvTraceActivation, SurvTraceConfig, survtrace};
+pub use ml::temporal_fusion::{
+    TFTConfig, TemporalFusionTransformer, fit_temporal_fusion_transformer,
+};
 pub use ml::tracer::{Tracer, TracerConfig, tracer};
+pub use ml::transfer_learning::{
+    DomainAdaptationResult, PretrainedSurvivalModel, TransferLearningConfig, TransferStrategy,
+    TransferredModel, compute_domain_distance, pretrain_survival_model, transfer_survival_model,
+};
 pub use qol::qaly::{
     QALYResult, incremental_cost_effectiveness, qaly_calculation, qaly_comparison,
 };
@@ -269,8 +443,11 @@ pub use regression::cause_specific_cox::{
     cause_specific_cox_all,
 };
 pub use regression::cure_models::{
-    CureDistribution, MixtureCureResult, PromotionTimeCureResult, mixture_cure_model,
-    promotion_time_cure_model,
+    BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
+    CureModelComparisonResult, MixtureCureResult, NonMixtureCureConfig, NonMixtureCureResult,
+    NonMixtureType, PromotionTimeCureResult, bounded_cumulative_hazard_model, compare_cure_models,
+    mixture_cure_model, non_mixture_cure_model, predict_bounded_cumulative_hazard,
+    predict_non_mixture_survival, promotion_time_cure_model,
 };
 pub use regression::elastic_net::{
     ElasticNetCoxPath, ElasticNetCoxResult, elastic_net_cox, elastic_net_cox_cv,
@@ -279,15 +456,39 @@ pub use regression::elastic_net::{
 pub use regression::fast_cox::{
     FastCoxConfig, FastCoxPath, FastCoxResult, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
 };
+pub use regression::functional_survival::{
+    BasisType, FunctionalPCAResult, FunctionalSurvivalConfig, FunctionalSurvivalResult,
+    fpca_survival, functional_cox,
+};
+pub use regression::high_dimensional::{
+    GroupLassoConfig, GroupLassoResult, SISConfig, SISResult, SparseBoostingConfig,
+    SparseBoostingResult, StabilitySelectionConfig, StabilitySelectionResult, group_lasso_cox,
+    sis_cox, sparse_boosting_cox, stability_selection_cox,
+};
 pub use regression::joint_competing::{
     CauseResult, CorrelationType, JointCompetingRisksConfig, JointCompetingRisksResult,
     joint_competing_risks,
+};
+pub use regression::longitudinal_survival::{
+    JointLongSurvResult, JointModelConfig, LandmarkAnalysisResult, LongDynamicPredResult,
+    TimeVaryingCoxResult, joint_longitudinal_model, landmark_cox_analysis,
+    longitudinal_dynamic_pred, time_varying_cox,
+};
+pub use regression::recurrent_events::{
+    AndersonGillResult, NegativeBinomialFrailtyConfig, NegativeBinomialFrailtyResult, PWPConfig,
+    PWPResult, PWPTimescale, WLWConfig, WLWResult, anderson_gill_model, negative_binomial_frailty,
+    pwp_model, wlw_model,
 };
 pub use relative::net_survival::{
     NetSurvivalMethod, NetSurvivalResult, crude_probability_of_death, net_survival,
 };
 pub use relative::relative_survival::{
     ExcessHazardModelResult, RelativeSurvivalResult, excess_hazard_regression, relative_survival,
+};
+pub use spatial::network_survival::{
+    CentralityType, DiffusionSurvivalConfig, DiffusionSurvivalResult, NetworkHeterogeneityResult,
+    NetworkSurvivalConfig, NetworkSurvivalResult, diffusion_survival_model,
+    network_heterogeneity_survival, network_survival_model,
 };
 pub use spatial::spatial_frailty::{
     SpatialCorrelationStructure, SpatialFrailtyResult, compute_spatial_smoothed_rates,
@@ -320,6 +521,20 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agsurv5, &m)?)?;
     m.add_function(wrap_pyfunction!(agmart, &m)?)?;
     m.add_function(wrap_pyfunction!(coxmart, &m)?)?;
+
+    m.add_function(wrap_pyfunction!(dfbeta_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(leverage_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(smooth_schoenfeld, &m)?)?;
+    m.add_function(wrap_pyfunction!(outlier_detection_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(model_influence_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(goodness_of_fit_cox, &m)?)?;
+    m.add_class::<DfbetaResult>()?;
+    m.add_class::<LeverageResult>()?;
+    m.add_class::<SchoenfeldSmoothResult>()?;
+    m.add_class::<OutlierDetectionResult>()?;
+    m.add_class::<ModelInfluenceResult>()?;
+    m.add_class::<GofTestResult>()?;
+
     m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_with_options, &m)?)?;
     m.add_function(wrap_pyfunction!(survfitaj, &m)?)?;
@@ -380,7 +595,6 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hazard_ratio, &m)?)?;
     m.add_function(wrap_pyfunction!(survival_at_times, &m)?)?;
     m.add_function(wrap_pyfunction!(life_table, &m)?)?;
-    // New utility functions
     m.add_function(wrap_pyfunction!(aeq_surv, &m)?)?;
     m.add_function(wrap_pyfunction!(cluster, &m)?)?;
     m.add_function(wrap_pyfunction!(cluster_str, &m)?)?;
@@ -392,7 +606,6 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tcut_expand, &m)?)?;
     m.add_function(wrap_pyfunction!(rttright, &m)?)?;
     m.add_function(wrap_pyfunction!(rttright_stratified, &m)?)?;
-    // New specialized functions
     m.add_function(wrap_pyfunction!(survexp, &m)?)?;
     m.add_function(wrap_pyfunction!(survexp_individual, &m)?)?;
     m.add_function(wrap_pyfunction!(create_simple_ratetable, &m)?)?;
@@ -400,12 +613,28 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(statefig_matplotlib_code, &m)?)?;
     m.add_function(wrap_pyfunction!(statefig_transition_matrix, &m)?)?;
     m.add_function(wrap_pyfunction!(statefig_validate, &m)?)?;
-    // New survival analysis functions
+
+    m.add_function(wrap_pyfunction!(create_model_card, &m)?)?;
+    m.add_function(wrap_pyfunction!(fairness_audit, &m)?)?;
+    m.add_class::<ModelCard>()?;
+    m.add_class::<ModelPerformanceMetrics>()?;
+    m.add_class::<SubgroupPerformance>()?;
+    m.add_class::<FairnessAuditResult>()?;
+
+    m.add_function(wrap_pyfunction!(detect_drift, &m)?)?;
+    m.add_function(wrap_pyfunction!(monitor_performance, &m)?)?;
+    m.add_class::<DriftConfig>()?;
+    m.add_class::<DriftReport>()?;
+    m.add_class::<FeatureDriftResult>()?;
+    m.add_class::<PerformanceDriftResult>()?;
+
     m.add_function(wrap_pyfunction!(pseudo, &m)?)?;
     m.add_function(wrap_pyfunction!(pseudo_fast, &m)?)?;
+    m.add_function(wrap_pyfunction!(pseudo_gee_regression, &m)?)?;
+    m.add_class::<GEEConfig>()?;
+    m.add_class::<GEEResult>()?;
     m.add_function(wrap_pyfunction!(aggregate_survfit, &m)?)?;
     m.add_function(wrap_pyfunction!(aggregate_survfit_by_group, &m)?)?;
-    // New validation functions
     m.add_function(wrap_pyfunction!(survcheck, &m)?)?;
     m.add_function(wrap_pyfunction!(survcheck_simple, &m)?)?;
     m.add_function(wrap_pyfunction!(royston, &m)?)?;
@@ -421,21 +650,17 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cumulative_dynamic_auc, &m)?)?;
     m.add_function(wrap_pyfunction!(rcll, &m)?)?;
     m.add_function(wrap_pyfunction!(rcll_single_time, &m)?)?;
-    // New regression/core functions
     m.add_function(wrap_pyfunction!(ridge_fit, &m)?)?;
     m.add_function(wrap_pyfunction!(ridge_cv, &m)?)?;
     m.add_function(wrap_pyfunction!(nsk, &m)?)?;
-    // ANOVA functions
     m.add_function(wrap_pyfunction!(anova_coxph, &m)?)?;
     m.add_function(wrap_pyfunction!(anova_coxph_single, &m)?)?;
-    // Reliability functions
     m.add_function(wrap_pyfunction!(reliability, &m)?)?;
     m.add_function(wrap_pyfunction!(reliability_inverse, &m)?)?;
     m.add_function(wrap_pyfunction!(hazard_to_reliability, &m)?)?;
     m.add_function(wrap_pyfunction!(failure_probability, &m)?)?;
     m.add_function(wrap_pyfunction!(conditional_reliability, &m)?)?;
     m.add_function(wrap_pyfunction!(mean_residual_life, &m)?)?;
-    // Survfit matrix functions
     m.add_function(wrap_pyfunction!(survfit_from_hazard, &m)?)?;
     m.add_function(wrap_pyfunction!(survfit_from_cumhaz, &m)?)?;
     m.add_function(wrap_pyfunction!(survfit_from_matrix, &m)?)?;
@@ -500,23 +725,19 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HazardRatioResult>()?;
     m.add_class::<SurvivalAtTimeResult>()?;
     m.add_class::<LifeTableResult>()?;
-    // New utility classes
     m.add_class::<AeqSurvResult>()?;
     m.add_class::<ClusterResult>()?;
     m.add_class::<StrataResult>()?;
     m.add_class::<NearDateResult>()?;
     m.add_class::<TcutResult>()?;
     m.add_class::<RttrightResult>()?;
-    // New specialized classes
     m.add_class::<RateTable>()?;
     m.add_class::<RateDimension>()?;
     m.add_class::<DimType>()?;
     m.add_class::<SurvExpResult>()?;
     m.add_class::<StateFigData>()?;
-    // New survival analysis classes
     m.add_class::<PseudoResult>()?;
     m.add_class::<AggregateSurvfitResult>()?;
-    // New validation classes
     m.add_class::<SurvCheckResult>()?;
     m.add_class::<RoystonResult>()?;
     m.add_class::<YatesResult>()?;
@@ -528,21 +749,16 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TimeDepAUCResult>()?;
     m.add_class::<CumulativeDynamicAUCResult>()?;
     m.add_class::<RCLLResult>()?;
-    // New regression/core classes
     m.add_class::<RidgePenalty>()?;
     m.add_class::<RidgeResult>()?;
     m.add_class::<NaturalSplineKnot>()?;
     m.add_class::<SplineBasisResult>()?;
-    // ANOVA classes
     m.add_class::<AnovaCoxphResult>()?;
     m.add_class::<AnovaRow>()?;
-    // Reliability classes
     m.add_class::<ReliabilityResult>()?;
     m.add_class::<ReliabilityScale>()?;
-    // Survfit matrix classes
     m.add_class::<SurvfitMatrixResult>()?;
 
-    // Dataset loaders
     m.add_function(wrap_pyfunction!(datasets::load_lung, &m)?)?;
     m.add_function(wrap_pyfunction!(datasets::load_aml, &m)?)?;
     m.add_function(wrap_pyfunction!(datasets::load_veteran, &m)?)?;
@@ -577,7 +793,6 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(datasets::load_myeloma, &m)?)?;
     m.add_function(wrap_pyfunction!(datasets::load_rhdnase, &m)?)?;
 
-    // New survreg functions
     m.add_function(wrap_pyfunction!(residuals_survreg, &m)?)?;
     m.add_function(wrap_pyfunction!(dfbeta_survreg, &m)?)?;
     m.add_function(wrap_pyfunction!(residuals_survfit, &m)?)?;
@@ -585,23 +800,19 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(predict_survreg_quantile, &m)?)?;
     m.add_function(wrap_pyfunction!(coxph_detail, &m)?)?;
 
-    // Ratetable utilities
     m.add_function(wrap_pyfunction!(is_ratetable, &m)?)?;
     m.add_function(wrap_pyfunction!(ratetable_date, &m)?)?;
     m.add_function(wrap_pyfunction!(days_to_date, &m)?)?;
 
-    // Pyears summary functions
     m.add_function(wrap_pyfunction!(summary_pyears, &m)?)?;
     m.add_function(wrap_pyfunction!(pyears_by_cell, &m)?)?;
     m.add_function(wrap_pyfunction!(pyears_ci, &m)?)?;
 
-    // US mortality rate tables
     m.add_function(wrap_pyfunction!(survexp_us, &m)?)?;
     m.add_function(wrap_pyfunction!(survexp_mn, &m)?)?;
     m.add_function(wrap_pyfunction!(survexp_usr, &m)?)?;
     m.add_function(wrap_pyfunction!(compute_expected_survival, &m)?)?;
 
-    // New classes
     m.add_class::<SurvregResiduals>()?;
     m.add_class::<SurvfitResiduals>()?;
     m.add_class::<SurvregPrediction>()?;
@@ -613,7 +824,6 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyearsCell>()?;
     m.add_class::<ExpectedSurvivalResult>()?;
 
-    // Bayesian functions
     m.add_function(wrap_pyfunction!(bayesian_cox, &m)?)?;
     m.add_function(wrap_pyfunction!(bayesian_cox_predict_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(bayesian_parametric, &m)?)?;
@@ -621,7 +831,19 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BayesianCoxResult>()?;
     m.add_class::<BayesianParametricResult>()?;
 
-    // Causal inference functions
+    m.add_function(wrap_pyfunction!(dirichlet_process_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(bayesian_model_averaging_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(spike_slab_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(horseshoe_cox, &m)?)?;
+    m.add_class::<DirichletProcessConfig>()?;
+    m.add_class::<DirichletProcessResult>()?;
+    m.add_class::<BayesianModelAveragingConfig>()?;
+    m.add_class::<BayesianModelAveragingResult>()?;
+    m.add_class::<SpikeSlabConfig>()?;
+    m.add_class::<SpikeSlabResult>()?;
+    m.add_class::<HorseshoeConfig>()?;
+    m.add_class::<HorseshoeResult>()?;
+
     m.add_function(wrap_pyfunction!(g_computation, &m)?)?;
     m.add_function(wrap_pyfunction!(g_computation_survival_curves, &m)?)?;
     m.add_function(wrap_pyfunction!(compute_ipcw_weights, &m)?)?;
@@ -636,7 +858,48 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MSMResult>()?;
     m.add_class::<TargetTrialResult>()?;
 
-    // Interval censoring functions
+    m.add_function(wrap_pyfunction!(estimate_counterfactual_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_tv_survcaus, &m)?)?;
+    m.add_class::<CounterfactualSurvivalConfig>()?;
+    m.add_class::<CounterfactualSurvivalResult>()?;
+    m.add_class::<TVSurvCausConfig>()?;
+    m.add_class::<TVSurvCausResult>()?;
+
+    m.add_function(wrap_pyfunction!(tmle_ate, &m)?)?;
+    m.add_function(wrap_pyfunction!(tmle_survival, &m)?)?;
+    m.add_class::<TMLEConfig>()?;
+    m.add_class::<TMLEResult>()?;
+    m.add_class::<TMLESurvivalResult>()?;
+
+    m.add_function(wrap_pyfunction!(causal_forest_survival, &m)?)?;
+    m.add_class::<CausalForestConfig>()?;
+    m.add_class::<CausalForestSurvival>()?;
+    m.add_class::<CausalForestResult>()?;
+
+    m.add_function(wrap_pyfunction!(iv_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(rd_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(mediation_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(g_estimation_aft, &m)?)?;
+    m.add_class::<IVCoxConfig>()?;
+    m.add_class::<IVCoxResult>()?;
+    m.add_class::<RDSurvivalConfig>()?;
+    m.add_class::<RDSurvivalResult>()?;
+    m.add_class::<MediationSurvivalConfig>()?;
+    m.add_class::<MediationSurvivalResult>()?;
+    m.add_class::<GEstimationConfig>()?;
+    m.add_class::<GEstimationResult>()?;
+
+    m.add_function(wrap_pyfunction!(copula_censoring_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(sensitivity_bounds_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(mnar_sensitivity_survival, &m)?)?;
+    m.add_class::<CopulaType>()?;
+    m.add_class::<CopulaCensoringConfig>()?;
+    m.add_class::<CopulaCensoringResult>()?;
+    m.add_class::<SensitivityBoundsConfig>()?;
+    m.add_class::<SensitivityBoundsResult>()?;
+    m.add_class::<MNARSurvivalConfig>()?;
+    m.add_class::<MNARSurvivalResult>()?;
+
     m.add_function(wrap_pyfunction!(interval_censored_regression, &m)?)?;
     m.add_function(wrap_pyfunction!(turnbull_estimator, &m)?)?;
     m.add_function(wrap_pyfunction!(npmle_interval, &m)?)?;
@@ -644,17 +907,25 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TurnbullResult>()?;
     m.add_class::<IntervalDistribution>()?;
 
-    // Joint modeling functions
     m.add_function(wrap_pyfunction!(joint_model, &m)?)?;
     m.add_function(wrap_pyfunction!(dynamic_prediction, &m)?)?;
     m.add_function(wrap_pyfunction!(dynamic_auc, &m)?)?;
     m.add_function(wrap_pyfunction!(dynamic_brier_score, &m)?)?;
     m.add_function(wrap_pyfunction!(landmarking_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(time_varying_auc, &m)?)?;
+    m.add_function(wrap_pyfunction!(dynamic_c_index, &m)?)?;
+    m.add_function(wrap_pyfunction!(ipcw_auc, &m)?)?;
+    m.add_function(wrap_pyfunction!(super_landmark_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(time_dependent_roc, &m)?)?;
     m.add_class::<JointModelResult>()?;
     m.add_class::<DynamicPredictionResult>()?;
     m.add_class::<AssociationStructure>()?;
+    m.add_class::<TimeVaryingAUCResult>()?;
+    m.add_class::<DynamicCIndexResult>()?;
+    m.add_class::<IPCWAUCResult>()?;
+    m.add_class::<SuperLandmarkResult>()?;
+    m.add_class::<TimeDependentROCResult>()?;
 
-    // Missing data functions
     m.add_function(wrap_pyfunction!(multiple_imputation_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(analyze_missing_pattern, &m)?)?;
     m.add_function(wrap_pyfunction!(pattern_mixture_model, &m)?)?;
@@ -665,7 +936,6 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ImputationMethod>()?;
     m.add_class::<SensitivityAnalysisType>()?;
 
-    // Machine learning functions
     m.add_function(wrap_pyfunction!(survival_forest, &m)?)?;
     m.add_function(wrap_pyfunction!(gradient_boost_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(deep_surv, &m)?)?;
@@ -703,7 +973,227 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<GALEEResult>()?;
     m.add_class::<UnimodalConstraint>()?;
 
-    // Quality of life functions
+    m.add_function(wrap_pyfunction!(fit_cox_time, &m)?)?;
+    m.add_class::<CoxTimeConfig>()?;
+    m.add_class::<CoxTimeModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_neural_mtlr, &m)?)?;
+    m.add_class::<NeuralMTLRConfig>()?;
+    m.add_class::<NeuralMTLRModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_survival_transformer, &m)?)?;
+    m.add_class::<SurvivalTransformerConfig>()?;
+    m.add_class::<SurvivalTransformerModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_recurrent_surv, &m)?)?;
+    m.add_function(wrap_pyfunction!(fit_longitudinal_surv, &m)?)?;
+    m.add_class::<RecurrentSurvConfig>()?;
+    m.add_class::<RecurrentSurvModel>()?;
+    m.add_class::<LongitudinalSurvConfig>()?;
+    m.add_class::<LongitudinalSurvModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_dysurv, &m)?)?;
+    m.add_function(wrap_pyfunction!(dynamic_risk_prediction, &m)?)?;
+    m.add_class::<DySurvConfig>()?;
+    m.add_class::<DySurvModel>()?;
+    m.add_class::<DynamicRiskResult>()?;
+
+    m.add_function(wrap_pyfunction!(fit_deep_pamm, &m)?)?;
+    m.add_class::<DeepPAMMConfig>()?;
+    m.add_class::<DeepPAMMModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_neural_ode_surv, &m)?)?;
+    m.add_class::<NeuralODESurvConfig>()?;
+    m.add_class::<NeuralODESurvModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_attention_cox, &m)?)?;
+    m.add_class::<AttentionCoxConfig>()?;
+    m.add_class::<AttentionCoxModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_multimodal_surv, &m)?)?;
+    m.add_class::<FusionStrategy>()?;
+    m.add_class::<MultimodalSurvConfig>()?;
+    m.add_class::<MultimodalSurvModel>()?;
+
+    m.add_function(wrap_pyfunction!(mc_dropout_uncertainty, &m)?)?;
+    m.add_function(wrap_pyfunction!(ensemble_uncertainty, &m)?)?;
+    m.add_function(wrap_pyfunction!(quantile_regression_intervals, &m)?)?;
+    m.add_function(wrap_pyfunction!(calibrate_prediction_intervals, &m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(bayesian_bootstrap_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(jackknife_plus_survival, &m)?)?;
+    m.add_class::<MCDropoutConfig>()?;
+    m.add_class::<UncertaintyResult>()?;
+    m.add_class::<EnsembleUncertaintyResult>()?;
+    m.add_class::<QuantileRegressionResult>()?;
+    m.add_class::<CalibrationUncertaintyResult>()?;
+    m.add_class::<ConformalSurvivalConfig>()?;
+    m.add_class::<ConformalSurvivalResult>()?;
+    m.add_class::<BayesianBootstrapConfig>()?;
+    m.add_class::<BayesianBootstrapResult>()?;
+    m.add_class::<JackknifePlusConfig>()?;
+    m.add_class::<JackknifePlusResult>()?;
+
+    m.add_function(wrap_pyfunction!(advanced_calibration_metrics, &m)?)?;
+    m.add_function(wrap_pyfunction!(time_dependent_calibration, &m)?)?;
+    m.add_class::<AdvancedCalibrationResult>()?;
+    m.add_class::<TimeDependentCalibrationResult>()?;
+
+    m.add_function(wrap_pyfunction!(survival_meta_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(generate_forest_plot_data, &m)?)?;
+    m.add_function(wrap_pyfunction!(publication_bias_tests, &m)?)?;
+    m.add_class::<MetaAnalysisConfig>()?;
+    m.add_class::<MetaAnalysisResult>()?;
+    m.add_class::<MetaForestPlotData>()?;
+    m.add_class::<PublicationBiasResult>()?;
+
+    m.add_function(wrap_pyfunction!(flexible_parametric_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(restricted_cubic_spline, &m)?)?;
+    m.add_function(wrap_pyfunction!(predict_hazard_spline, &m)?)?;
+    m.add_class::<SplineConfig>()?;
+    m.add_class::<FlexibleParametricResult>()?;
+    m.add_class::<RestrictedCubicSplineResult>()?;
+    m.add_class::<HazardSplineResult>()?;
+
+    m.add_function(wrap_pyfunction!(compute_fairness_metrics, &m)?)?;
+    m.add_function(wrap_pyfunction!(assess_model_robustness, &m)?)?;
+    m.add_function(wrap_pyfunction!(subgroup_analysis, &m)?)?;
+    m.add_class::<FairnessMetrics>()?;
+    m.add_class::<RobustnessResult>()?;
+    m.add_class::<SubgroupAnalysisResult>()?;
+
+    m.add_function(wrap_pyfunction!(hyperparameter_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(benchmark_models, &m)?)?;
+    m.add_function(wrap_pyfunction!(nested_cross_validation, &m)?)?;
+    m.add_class::<SearchStrategy>()?;
+    m.add_class::<HyperparameterSearchConfig>()?;
+    m.add_class::<HyperparameterResult>()?;
+    m.add_class::<BenchmarkResult>()?;
+    m.add_class::<NestedCVResult>()?;
+
+    m.add_function(wrap_pyfunction!(compute_model_selection_criteria, &m)?)?;
+    m.add_function(wrap_pyfunction!(compare_models, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_cv_score, &m)?)?;
+    m.add_class::<ModelSelectionCriteria>()?;
+    m.add_class::<SurvivalModelComparison>()?;
+    m.add_class::<CrossValidatedScore>()?;
+
+    m.add_function(wrap_pyfunction!(pretrain_survival_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(transfer_survival_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_domain_distance, &m)?)?;
+    m.add_class::<TransferStrategy>()?;
+    m.add_class::<TransferLearningConfig>()?;
+    m.add_class::<PretrainedSurvivalModel>()?;
+    m.add_class::<TransferredModel>()?;
+    m.add_class::<DomainAdaptationResult>()?;
+
+    m.add_function(wrap_pyfunction!(fit_graph_surv, &m)?)?;
+    m.add_class::<GraphSurvConfig>()?;
+    m.add_class::<GraphSurvModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_mamba_surv, &m)?)?;
+    m.add_class::<MambaSurvConfig>()?;
+    m.add_class::<MambaSurvModel>()?;
+
+    m.add_function(wrap_pyfunction!(fit_temporal_fusion_transformer, &m)?)?;
+    m.add_class::<TFTConfig>()?;
+    m.add_class::<TemporalFusionTransformer>()?;
+
+    m.add_function(wrap_pyfunction!(double_ml_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(double_ml_cate, &m)?)?;
+    m.add_class::<DoubleMLConfig>()?;
+    m.add_class::<DoubleMLResult>()?;
+    m.add_class::<CATEResult>()?;
+
+    m.add_function(wrap_pyfunction!(decision_curve_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(clinical_utility_at_threshold, &m)?)?;
+    m.add_function(wrap_pyfunction!(compare_decision_curves, &m)?)?;
+    m.add_class::<DecisionCurveResult>()?;
+    m.add_class::<ClinicalUtilityResult>()?;
+
+    m.add_function(wrap_pyfunction!(warranty_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(renewal_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(reliability_growth, &m)?)?;
+    m.add_class::<WarrantyConfig>()?;
+    m.add_class::<WarrantyResult>()?;
+    m.add_class::<RenewalResult>()?;
+    m.add_class::<ReliabilityGrowthResult>()?;
+
+    m.add_function(wrap_pyfunction!(distill_survival_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(prune_survival_model, &m)?)?;
+    m.add_class::<DistillationConfig>()?;
+    m.add_class::<DistilledSurvivalModel>()?;
+    m.add_class::<DistillationResult>()?;
+    m.add_class::<PruningResult>()?;
+    m.add_class::<ModelComparisonResult>()?;
+
+    m.add_function(wrap_pyfunction!(federated_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(secure_aggregate, &m)?)?;
+    m.add_class::<FederatedConfig>()?;
+    m.add_class::<FederatedSurvivalResult>()?;
+    m.add_class::<SecureAggregationResult>()?;
+    m.add_class::<PrivacyAccountant>()?;
+
+    m.add_class::<StreamingCoxConfig>()?;
+    m.add_class::<StreamingCoxModel>()?;
+    m.add_class::<StreamingKaplanMeier>()?;
+    m.add_class::<ConceptDriftDetector>()?;
+
+    m.add_function(wrap_pyfunction!(dp_kaplan_meier, &m)?)?;
+    m.add_function(wrap_pyfunction!(dp_cox_regression, &m)?)?;
+    m.add_function(wrap_pyfunction!(dp_histogram, &m)?)?;
+    m.add_function(wrap_pyfunction!(local_dp_mean, &m)?)?;
+    m.add_class::<DPConfig>()?;
+    m.add_class::<DPSurvivalResult>()?;
+    m.add_class::<DPCoxResult>()?;
+    m.add_class::<DPHistogramResult>()?;
+    m.add_class::<LocalDPResult>()?;
+
+    m.add_function(wrap_pyfunction!(super_learner_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(stacking_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(componentwise_boosting, &m)?)?;
+    m.add_function(wrap_pyfunction!(blending_survival, &m)?)?;
+    m.add_class::<SuperLearnerConfig>()?;
+    m.add_class::<SuperLearnerResult>()?;
+    m.add_class::<StackingConfig>()?;
+    m.add_class::<StackingResult>()?;
+    m.add_class::<ComponentwiseBoostingConfig>()?;
+    m.add_class::<ComponentwiseBoostingResult>()?;
+    m.add_class::<BlendingResult>()?;
+
+    m.add_function(wrap_pyfunction!(active_learning_selection, &m)?)?;
+    m.add_function(wrap_pyfunction!(query_by_committee, &m)?)?;
+    m.add_function(wrap_pyfunction!(sample_size_logrank, &m)?)?;
+    m.add_function(wrap_pyfunction!(power_logrank, &m)?)?;
+    m.add_function(wrap_pyfunction!(group_sequential_analysis, &m)?)?;
+    m.add_class::<ActiveLearningConfig>()?;
+    m.add_class::<ActiveLearningResult>()?;
+    m.add_class::<QBCResult>()?;
+    m.add_class::<LogrankSampleSizeResult>()?;
+    m.add_class::<LogrankPowerResult>()?;
+    m.add_class::<AdaptiveDesignResult>()?;
+
+    m.add_function(wrap_pyfunction!(joint_longitudinal_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(landmark_cox_analysis, &m)?)?;
+    m.add_function(wrap_pyfunction!(longitudinal_dynamic_pred, &m)?)?;
+    m.add_function(wrap_pyfunction!(time_varying_cox, &m)?)?;
+    m.add_class::<JointModelConfig>()?;
+    m.add_class::<JointLongSurvResult>()?;
+    m.add_class::<LandmarkAnalysisResult>()?;
+    m.add_class::<LongDynamicPredResult>()?;
+    m.add_class::<TimeVaryingCoxResult>()?;
+
+    m.add_function(wrap_pyfunction!(km_plot_data, &m)?)?;
+    m.add_function(wrap_pyfunction!(forest_plot_data, &m)?)?;
+    m.add_function(wrap_pyfunction!(calibration_plot_data, &m)?)?;
+    m.add_function(wrap_pyfunction!(generate_survival_report, &m)?)?;
+    m.add_function(wrap_pyfunction!(roc_plot_data, &m)?)?;
+    m.add_class::<KaplanMeierPlotData>()?;
+    m.add_class::<ForestPlotData>()?;
+    m.add_class::<CalibrationCurveData>()?;
+    m.add_class::<SurvivalReport>()?;
+    m.add_class::<ROCPlotData>()?;
+
     m.add_function(wrap_pyfunction!(qaly_calculation, &m)?)?;
     m.add_function(wrap_pyfunction!(qaly_comparison, &m)?)?;
     m.add_function(wrap_pyfunction!(incremental_cost_effectiveness, &m)?)?;
@@ -713,7 +1203,6 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<QALYResult>()?;
     m.add_class::<QTWISTResult>()?;
 
-    // Recurrent events functions
     m.add_function(wrap_pyfunction!(gap_time_model, &m)?)?;
     m.add_function(wrap_pyfunction!(pwp_gap_time, &m)?)?;
     m.add_function(wrap_pyfunction!(joint_frailty_model, &m)?)?;
@@ -726,21 +1215,29 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FrailtyDistribution>()?;
     m.add_class::<MarginalMethod>()?;
 
-    // Cure model functions
     m.add_function(wrap_pyfunction!(mixture_cure_model, &m)?)?;
     m.add_function(wrap_pyfunction!(promotion_time_cure_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(bounded_cumulative_hazard_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(non_mixture_cure_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(compare_cure_models, &m)?)?;
+    m.add_function(wrap_pyfunction!(predict_bounded_cumulative_hazard, &m)?)?;
+    m.add_function(wrap_pyfunction!(predict_non_mixture_survival, &m)?)?;
     m.add_class::<MixtureCureResult>()?;
     m.add_class::<PromotionTimeCureResult>()?;
     m.add_class::<CureDistribution>()?;
+    m.add_class::<BoundedCumulativeHazardConfig>()?;
+    m.add_class::<BoundedCumulativeHazardResult>()?;
+    m.add_class::<NonMixtureType>()?;
+    m.add_class::<NonMixtureCureConfig>()?;
+    m.add_class::<NonMixtureCureResult>()?;
+    m.add_class::<CureModelComparisonResult>()?;
 
-    // Elastic net functions
     m.add_function(wrap_pyfunction!(elastic_net_cox, &m)?)?;
     m.add_function(wrap_pyfunction!(elastic_net_cox_cv, &m)?)?;
     m.add_function(wrap_pyfunction!(elastic_net_cox_path, &m)?)?;
     m.add_class::<ElasticNetCoxResult>()?;
     m.add_class::<ElasticNetCoxPath>()?;
 
-    // Fast Cox functions (skglm-style optimization)
     m.add_function(wrap_pyfunction!(fast_cox, &m)?)?;
     m.add_function(wrap_pyfunction!(fast_cox_path, &m)?)?;
     m.add_function(wrap_pyfunction!(fast_cox_cv, &m)?)?;
@@ -749,21 +1246,44 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FastCoxPath>()?;
     m.add_class::<ScreeningRule>()?;
 
-    // Cause-specific Cox functions
+    m.add_function(wrap_pyfunction!(group_lasso_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_boosting_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(sis_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(stability_selection_cox, &m)?)?;
+    m.add_class::<GroupLassoConfig>()?;
+    m.add_class::<GroupLassoResult>()?;
+    m.add_class::<SparseBoostingConfig>()?;
+    m.add_class::<SparseBoostingResult>()?;
+    m.add_class::<SISConfig>()?;
+    m.add_class::<SISResult>()?;
+    m.add_class::<StabilitySelectionConfig>()?;
+    m.add_class::<StabilitySelectionResult>()?;
+
     m.add_function(wrap_pyfunction!(cause_specific_cox, &m)?)?;
     m.add_function(wrap_pyfunction!(cause_specific_cox_all, &m)?)?;
     m.add_class::<CauseSpecificCoxConfig>()?;
     m.add_class::<CauseSpecificCoxResult>()?;
     m.add_class::<CensoringType>()?;
 
-    // Joint competing risks functions
     m.add_function(wrap_pyfunction!(joint_competing_risks, &m)?)?;
     m.add_class::<JointCompetingRisksConfig>()?;
     m.add_class::<JointCompetingRisksResult>()?;
     m.add_class::<CauseResult>()?;
     m.add_class::<CorrelationType>()?;
 
-    // Extended Aalen-Johansen functions
+    m.add_function(wrap_pyfunction!(pwp_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(wlw_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(negative_binomial_frailty, &m)?)?;
+    m.add_function(wrap_pyfunction!(anderson_gill_model, &m)?)?;
+    m.add_class::<PWPConfig>()?;
+    m.add_class::<PWPResult>()?;
+    m.add_class::<PWPTimescale>()?;
+    m.add_class::<WLWConfig>()?;
+    m.add_class::<WLWResult>()?;
+    m.add_class::<NegativeBinomialFrailtyConfig>()?;
+    m.add_class::<NegativeBinomialFrailtyResult>()?;
+    m.add_class::<AndersonGillResult>()?;
+
     m.add_function(wrap_pyfunction!(survfitaj_extended, &m)?)?;
     m.add_class::<AalenJohansenExtendedConfig>()?;
     m.add_class::<AalenJohansenExtendedResult>()?;
@@ -771,7 +1291,30 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TransitionType>()?;
     m.add_class::<VarianceEstimator>()?;
 
-    // Relative survival functions
+    m.add_function(wrap_pyfunction!(estimate_transition_intensities, &m)?)?;
+    m.add_function(wrap_pyfunction!(fit_multi_state_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(fit_markov_msm, &m)?)?;
+    m.add_class::<MultiStateConfig>()?;
+    m.add_class::<MultiStateResult>()?;
+    m.add_class::<TransitionIntensityResult>()?;
+    m.add_class::<MarkovMSMResult>()?;
+
+    m.add_function(wrap_pyfunction!(fit_semi_markov, &m)?)?;
+    m.add_function(wrap_pyfunction!(predict_semi_markov, &m)?)?;
+    m.add_class::<SemiMarkovConfig>()?;
+    m.add_class::<SemiMarkovResult>()?;
+    m.add_class::<SemiMarkovPrediction>()?;
+    m.add_class::<SojournDistribution>()?;
+    m.add_class::<SojournTimeParams>()?;
+
+    m.add_function(wrap_pyfunction!(fit_illness_death, &m)?)?;
+    m.add_function(wrap_pyfunction!(predict_illness_death, &m)?)?;
+    m.add_class::<IllnessDeathConfig>()?;
+    m.add_class::<IllnessDeathResult>()?;
+    m.add_class::<IllnessDeathPrediction>()?;
+    m.add_class::<IllnessDeathType>()?;
+    m.add_class::<TransitionHazard>()?;
+
     m.add_function(wrap_pyfunction!(relative_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(net_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(crude_probability_of_death, &m)?)?;
@@ -781,14 +1324,22 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ExcessHazardModelResult>()?;
     m.add_class::<NetSurvivalMethod>()?;
 
-    // Spatial frailty functions
     m.add_function(wrap_pyfunction!(spatial_frailty_model, &m)?)?;
     m.add_function(wrap_pyfunction!(compute_spatial_smoothed_rates, &m)?)?;
     m.add_function(wrap_pyfunction!(moran_i_test, &m)?)?;
     m.add_class::<SpatialFrailtyResult>()?;
     m.add_class::<SpatialCorrelationStructure>()?;
 
-    // Interpretability functions (SurvSHAP)
+    m.add_function(wrap_pyfunction!(network_survival_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(diffusion_survival_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(network_heterogeneity_survival, &m)?)?;
+    m.add_class::<CentralityType>()?;
+    m.add_class::<NetworkSurvivalConfig>()?;
+    m.add_class::<NetworkSurvivalResult>()?;
+    m.add_class::<DiffusionSurvivalConfig>()?;
+    m.add_class::<DiffusionSurvivalResult>()?;
+    m.add_class::<NetworkHeterogeneityResult>()?;
+
     m.add_function(wrap_pyfunction!(survshap, &m)?)?;
     m.add_function(wrap_pyfunction!(survshap_from_model, &m)?)?;
     m.add_function(wrap_pyfunction!(survshap_bootstrap, &m)?)?;
@@ -804,14 +1355,12 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ShapInteractionResult>()?;
     m.add_class::<FeatureImportance>()?;
 
-    // Time-varying feature detection functions
     m.add_function(wrap_pyfunction!(detect_time_varying_features, &m)?)?;
     m.add_class::<TimeVaryingTestConfig>()?;
     m.add_class::<TimeVaryingTestResult>()?;
     m.add_class::<TimeVaryingAnalysis>()?;
     m.add_class::<TimeVaryingTestType>()?;
 
-    // Changepoint detection functions
     m.add_function(wrap_pyfunction!(detect_changepoints, &m)?)?;
     m.add_function(wrap_pyfunction!(detect_changepoints_single_series, &m)?)?;
     m.add_class::<ChangepointConfig>()?;
@@ -821,7 +1370,6 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChangepointMethod>()?;
     m.add_class::<CostFunction>()?;
 
-    // Variable grouping functions
     m.add_function(wrap_pyfunction!(group_variables, &m)?)?;
     m.add_class::<VariableGroupingConfig>()?;
     m.add_class::<VariableGroupingResult>()?;
@@ -829,13 +1377,35 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<GroupingMethod>()?;
     m.add_class::<LinkageType>()?;
 
-    // Local/global view analysis functions
     m.add_function(wrap_pyfunction!(analyze_local_global, &m)?)?;
     m.add_class::<LocalGlobalConfig>()?;
     m.add_class::<LocalGlobalResult>()?;
     m.add_class::<LocalGlobalSummary>()?;
     m.add_class::<FeatureViewAnalysis>()?;
     m.add_class::<ViewRecommendation>()?;
+
+    m.add_function(wrap_pyfunction!(compute_ale, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_ale_2d, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_time_varying_ale, &m)?)?;
+    m.add_class::<ALEResult>()?;
+    m.add_class::<ALE2DResult>()?;
+
+    m.add_function(wrap_pyfunction!(compute_friedman_h, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_all_pairwise_interactions, &m)?)?;
+    m.add_function(wrap_pyfunction!(
+        compute_feature_importance_decomposition,
+        &m
+    )?)?;
+    m.add_class::<FriedmanHResult>()?;
+    m.add_class::<FriedmanFeatureImportanceResult>()?;
+
+    m.add_function(wrap_pyfunction!(compute_ice, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_dice, &m)?)?;
+    m.add_function(wrap_pyfunction!(compute_survival_ice, &m)?)?;
+    m.add_function(wrap_pyfunction!(detect_heterogeneity, &m)?)?;
+    m.add_function(wrap_pyfunction!(cluster_ice_curves, &m)?)?;
+    m.add_class::<ICEResult>()?;
+    m.add_class::<DICEResult>()?;
 
     m.add_function(wrap_pyfunction!(conformal_calibrate, &m)?)?;
     m.add_function(wrap_pyfunction!(conformal_predict, &m)?)?;
@@ -879,6 +1449,44 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MondrianConformalResult>()?;
     m.add_class::<MondrianCalibrationResult>()?;
     m.add_class::<MondrianDiagnostics>()?;
+
+    m.add_function(wrap_pyfunction!(fpca_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(functional_cox, &m)?)?;
+    m.add_class::<BasisType>()?;
+    m.add_class::<FunctionalSurvivalConfig>()?;
+    m.add_class::<FunctionalPCAResult>()?;
+    m.add_class::<FunctionalSurvivalResult>()?;
+
+    m.add_function(wrap_pyfunction!(dro_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(robustness_analysis, &m)?)?;
+    m.add_class::<UncertaintySet>()?;
+    m.add_class::<DROSurvivalConfig>()?;
+    m.add_class::<DROSurvivalResult>()?;
+    m.add_class::<RobustnessAnalysis>()?;
+
+    m.add_function(wrap_pyfunction!(generate_adversarial_examples, &m)?)?;
+    m.add_function(wrap_pyfunction!(adversarial_training_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_robustness, &m)?)?;
+    m.add_class::<AttackType>()?;
+    m.add_class::<DefenseType>()?;
+    m.add_class::<AdversarialAttackConfig>()?;
+    m.add_class::<AdversarialDefenseConfig>()?;
+    m.add_class::<AdversarialExample>()?;
+    m.add_class::<AdversarialAttackResult>()?;
+    m.add_class::<RobustSurvivalModel>()?;
+    m.add_class::<RobustnessEvaluation>()?;
+
+    m.add_function(wrap_pyfunction!(get_available_devices, &m)?)?;
+    m.add_function(wrap_pyfunction!(is_gpu_available, &m)?)?;
+    m.add_function(wrap_pyfunction!(parallel_cox_regression, &m)?)?;
+    m.add_function(wrap_pyfunction!(batch_predict_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(parallel_matrix_operations, &m)?)?;
+    m.add_function(wrap_pyfunction!(benchmark_compute_backend, &m)?)?;
+    m.add_class::<ComputeBackend>()?;
+    m.add_class::<GPUConfig>()?;
+    m.add_class::<DeviceInfo>()?;
+    m.add_class::<ParallelCoxResult>()?;
+    m.add_class::<BatchPredictionResult>()?;
 
     Ok(())
 }

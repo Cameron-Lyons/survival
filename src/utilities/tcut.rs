@@ -237,9 +237,9 @@ mod tests {
         let breaks = vec![0.0, 10.0, 20.0, 30.0];
 
         let result = tcut(values, breaks, None).unwrap();
-        assert_eq!(result.codes[0], -1); // Below range
-        assert_eq!(result.codes[1], -1); // Above range
-        assert_eq!(result.codes[2], 1); // In range
+        assert_eq!(result.codes[0], -1);
+        assert_eq!(result.codes[1], -1);
+        assert_eq!(result.codes[2], 1);
     }
 
     #[test]
@@ -250,8 +250,6 @@ mod tests {
 
         let (new_start, new_stop, codes, indices) = tcut_expand(start, stop, cuts).unwrap();
 
-        // First interval [0, 25) should be split at 10 and 20
-        // Second interval [5, 15) should be split at 10
         assert!(new_start.len() > 2);
         assert_eq!(new_start.len(), new_stop.len());
         assert_eq!(new_start.len(), codes.len());

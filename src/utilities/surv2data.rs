@@ -142,7 +142,6 @@ mod tests {
 
     #[test]
     fn test_surv2data_basic() {
-        // Subject 1: observations at times 0, 5, 10, event at time 15
         let id = vec![1, 1, 1];
         let time = vec![0.0, 5.0, 10.0];
         let event_time = Some(vec![15.0, 15.0, 15.0]);
@@ -165,8 +164,6 @@ mod tests {
 
         let result = surv2data(id, time, event_time, event_status);
 
-        // Subject 1: [0,5), [5,10) with event
-        // Subject 2: [0,3), [3,8) censored
         assert_eq!(result.id.len(), 4);
     }
 
@@ -177,9 +174,6 @@ mod tests {
 
         let result = surv2data(id, time, None, None);
 
-        // Without event info, each observation creates an interval to the next
-        // Last observation has no next, so we get 2 intervals from 3 observations
-        // Actually, with infinity as default event time, we get 3 intervals
         assert!(result.id.len() >= 2);
         assert_eq!(result.time1[0], 0.0);
         assert_eq!(result.time2[0], 5.0);

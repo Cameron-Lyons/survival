@@ -207,7 +207,6 @@ mod tests {
 
         let result = royston(lp, time, status).unwrap();
 
-        // D should be positive if higher lp means higher hazard
         assert!(result.d.is_finite());
         assert!(result.se > 0.0);
         assert!(result.r_squared_d >= 0.0 && result.r_squared_d <= 1.0);
@@ -216,33 +215,28 @@ mod tests {
 
     #[test]
     fn test_royston_perfect_separation() {
-        // Perfect separation: all high lp subjects have events first
         let lp = vec![1.0, 0.9, 0.8, 0.7, -0.7, -0.8, -0.9, -1.0];
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let status = vec![1, 1, 1, 1, 1, 1, 1, 1];
 
         let result = royston(lp, time, status).unwrap();
 
-        // Should have high D value
         assert!(result.d > 1.0);
     }
 
     #[test]
     fn test_royston_no_separation() {
-        // No separation: lp is constant
         let lp = vec![0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let status = vec![1, 1, 1, 1, 1, 1, 1, 1];
 
         let result = royston(lp, time, status).unwrap();
 
-        // D should be close to 0
         assert!(result.d.abs() < 0.1);
     }
 
     #[test]
     fn test_normal_inverse_cdf() {
-        // Test known values
         assert!((normal_inverse_cdf(0.5) - 0.0).abs() < 0.001);
         assert!((normal_inverse_cdf(0.975) - 1.96).abs() < 0.01);
         assert!((normal_inverse_cdf(0.025) - (-1.96)).abs() < 0.01);

@@ -116,7 +116,6 @@ mod tests {
         let vars = vec![vec![1, 1, 2, 2], vec![1, 2, 1, 2]];
         let result = strata(vars).unwrap();
         assert_eq!(result.n_strata, 4);
-        // Each combination is unique
         assert_eq!(result.counts, vec![1, 1, 1, 1]);
     }
 

@@ -1,6 +1,6 @@
 use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_SMALL};
 use crate::simd_ops::{dot_product_simd, mean_simd, subtract_scalar_simd, sum_of_squares_simd};
-use crate::utilities::statistical::chi2_sf;
+use crate::utilities::statistical::{chi2_sf, normal_cdf};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
@@ -525,9 +525,344 @@ pub fn td_auc(
     Ok(time_dependent_auc(&time, &status, &risk_score, &eval_times))
 }
 
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct AdvancedCalibrationResult {
+    #[pyo3(get)]
+    pub ici: f64,
+    #[pyo3(get)]
+    pub e50: f64,
+    #[pyo3(get)]
+    pub e90: f64,
+    #[pyo3(get)]
+    pub emax: f64,
+    #[pyo3(get)]
+    pub calibration_in_the_large: f64,
+    #[pyo3(get)]
+    pub calibration_slope: f64,
+    #[pyo3(get)]
+    pub calibration_intercept: f64,
+    #[pyo3(get)]
+    pub spiegelhalter_z: f64,
+    #[pyo3(get)]
+    pub spiegelhalter_p: f64,
+}
+
+#[pymethods]
+impl AdvancedCalibrationResult {
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        ici: f64,
+        e50: f64,
+        e90: f64,
+        emax: f64,
+        calibration_in_the_large: f64,
+        calibration_slope: f64,
+        calibration_intercept: f64,
+        spiegelhalter_z: f64,
+        spiegelhalter_p: f64,
+    ) -> Self {
+        Self {
+            ici,
+            e50,
+            e90,
+            emax,
+            calibration_in_the_large,
+            calibration_slope,
+            calibration_intercept,
+            spiegelhalter_z,
+            spiegelhalter_p,
+        }
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (predicted_risk, observed_outcome, n_spline_knots=None))]
+pub fn advanced_calibration_metrics(
+    predicted_risk: Vec<f64>,
+    observed_outcome: Vec<i32>,
+    n_spline_knots: Option<usize>,
+) -> PyResult<AdvancedCalibrationResult> {
+    let n = predicted_risk.len();
+
+    if n == 0 || observed_outcome.len() != n {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "predicted_risk and observed_outcome must have the same non-zero length",
+        ));
+    }
+
+    let n_knots = n_spline_knots.unwrap_or(5);
+
+    let observed: Vec<f64> = observed_outcome.iter().map(|&x| x as f64).collect();
+
+    let mean_pred: f64 = predicted_risk.iter().sum::<f64>() / n as f64;
+    let mean_obs: f64 = observed.iter().sum::<f64>() / n as f64;
+    let calibration_in_the_large = mean_obs - mean_pred;
+
+    let (slope, intercept) = linear_regression(&predicted_risk, &observed);
+
+    let smoothed = loess_smooth(&predicted_risk, &observed, n_knots);
+
+    let mut errors: Vec<f64> = predicted_risk
+        .iter()
+        .zip(smoothed.iter())
+        .map(|(p, s)| (p - s).abs())
+        .collect();
+
+    let ici = errors.iter().sum::<f64>() / n as f64;
+
+    errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let e50_idx = (n as f64 * 0.5).floor() as usize;
+    let e90_idx = (n as f64 * 0.9).floor() as usize;
+
+    let e50 = errors[e50_idx.min(n - 1)];
+    let e90 = errors[e90_idx.min(n - 1)];
+    let emax = errors.last().cloned().unwrap_or(0.0);
+
+    let (spiegelhalter_z, spiegelhalter_p) = spiegelhalter_test(&predicted_risk, &observed_outcome);
+
+    Ok(AdvancedCalibrationResult {
+        ici,
+        e50,
+        e90,
+        emax,
+        calibration_in_the_large,
+        calibration_slope: slope,
+        calibration_intercept: intercept,
+        spiegelhalter_z,
+        spiegelhalter_p,
+    })
+}
+
+fn linear_regression(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let n = x.len() as f64;
+    let sum_x: f64 = x.iter().sum();
+    let sum_y: f64 = y.iter().sum();
+    let sum_xy: f64 = x.iter().zip(y.iter()).map(|(xi, yi)| xi * yi).sum();
+    let sum_xx: f64 = x.iter().map(|xi| xi * xi).sum();
+
+    let denom = n * sum_xx - sum_x * sum_x;
+    if denom.abs() < 1e-10 {
+        return (1.0, 0.0);
+    }
+
+    let slope = (n * sum_xy - sum_x * sum_y) / denom;
+    let intercept = (sum_y - slope * sum_x) / n;
+
+    (slope, intercept)
+}
+
+fn loess_smooth(x: &[f64], y: &[f64], n_points: usize) -> Vec<f64> {
+    let n = x.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let span = (n_points as f64 / n as f64).clamp(0.1, 1.0);
+    let window = (span * n as f64).ceil() as usize;
+
+    let mut smoothed = vec![0.0; n];
+
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| x[a].partial_cmp(&x[b]).unwrap_or(std::cmp::Ordering::Equal));
+
+    for i in 0..n {
+        let xi = x[i];
+
+        let mut distances: Vec<(usize, f64)> = (0..n).map(|j| (j, (x[j] - xi).abs())).collect();
+        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let max_dist = distances[window.min(n) - 1].1.max(1e-10);
+
+        let mut sum_w = 0.0;
+        let mut sum_wy = 0.0;
+
+        for &(j, dist) in distances.iter().take(window) {
+            let u = dist / max_dist;
+            let w = if u < 1.0 {
+                (1.0 - u.powi(3)).powi(3)
+            } else {
+                0.0
+            };
+            sum_w += w;
+            sum_wy += w * y[j];
+        }
+
+        smoothed[i] = if sum_w > 0.0 { sum_wy / sum_w } else { y[i] };
+    }
+
+    smoothed
+}
+
+fn spiegelhalter_test(predicted: &[f64], observed: &[i32]) -> (f64, f64) {
+    let n = predicted.len();
+    if n == 0 {
+        return (0.0, 1.0);
+    }
+
+    let mut sum_term = 0.0;
+    let mut var_term = 0.0;
+
+    for i in 0..n {
+        let p = predicted[i].clamp(0.001, 0.999);
+        let o = observed[i] as f64;
+
+        sum_term += (o - p) * (1.0 - 2.0 * p);
+        var_term += (1.0 - 2.0 * p).powi(2) * p * (1.0 - p);
+    }
+
+    let z = if var_term > 0.0 {
+        sum_term / var_term.sqrt()
+    } else {
+        0.0
+    };
+
+    let p_value = 2.0 * (1.0 - normal_cdf(z.abs()));
+
+    (z, p_value)
+}
+
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct TimeDependentCalibrationResult {
+    #[pyo3(get)]
+    pub time_points: Vec<f64>,
+    #[pyo3(get)]
+    pub ici: Vec<f64>,
+    #[pyo3(get)]
+    pub e50: Vec<f64>,
+    #[pyo3(get)]
+    pub e90: Vec<f64>,
+    #[pyo3(get)]
+    pub calibration_slope: Vec<f64>,
+    #[pyo3(get)]
+    pub calibration_intercept: Vec<f64>,
+}
+
+#[pymethods]
+impl TimeDependentCalibrationResult {
+    #[new]
+    pub fn new(
+        time_points: Vec<f64>,
+        ici: Vec<f64>,
+        e50: Vec<f64>,
+        e90: Vec<f64>,
+        calibration_slope: Vec<f64>,
+        calibration_intercept: Vec<f64>,
+    ) -> Self {
+        Self {
+            time_points,
+            ici,
+            e50,
+            e90,
+            calibration_slope,
+            calibration_intercept,
+        }
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, event, predicted_survival, eval_times))]
+pub fn time_dependent_calibration(
+    time: Vec<f64>,
+    event: Vec<i32>,
+    predicted_survival: Vec<Vec<f64>>,
+    eval_times: Vec<f64>,
+) -> PyResult<TimeDependentCalibrationResult> {
+    let n = time.len();
+    let n_times = eval_times.len();
+
+    if n == 0 || predicted_survival.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Input data must be non-empty",
+        ));
+    }
+
+    let mut ici_vec = vec![0.0; n_times];
+    let mut e50_vec = vec![0.0; n_times];
+    let mut e90_vec = vec![0.0; n_times];
+    let mut slope_vec = vec![1.0; n_times];
+    let mut intercept_vec = vec![0.0; n_times];
+
+    for (t_idx, &eval_t) in eval_times.iter().enumerate() {
+        let mut pred_at_t = Vec::new();
+        let mut obs_at_t = Vec::new();
+
+        for i in 0..n {
+            if t_idx < predicted_survival[i].len() {
+                let pred = predicted_survival[i][t_idx];
+                let observed = if time[i] > eval_t {
+                    1
+                } else if event[i] == 1 {
+                    0
+                } else {
+                    1
+                };
+
+                pred_at_t.push(1.0 - pred);
+                obs_at_t.push(observed);
+            }
+        }
+
+        if !pred_at_t.is_empty() {
+            let result = advanced_calibration_metrics(pred_at_t, obs_at_t, Some(5))?;
+            ici_vec[t_idx] = result.ici;
+            e50_vec[t_idx] = result.e50;
+            e90_vec[t_idx] = result.e90;
+            slope_vec[t_idx] = result.calibration_slope;
+            intercept_vec[t_idx] = result.calibration_intercept;
+        }
+    }
+
+    Ok(TimeDependentCalibrationResult {
+        time_points: eval_times,
+        ici: ici_vec,
+        e50: e50_vec,
+        e90: e90_vec,
+        calibration_slope: slope_vec,
+        calibration_intercept: intercept_vec,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_advanced_calibration_metrics() {
+        let predicted = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+        let observed = vec![0, 0, 0, 0, 1, 0, 1, 1, 1, 1];
+
+        let result = advanced_calibration_metrics(predicted, observed, None).unwrap();
+
+        assert!(result.ici >= 0.0);
+        assert!(result.e50 >= 0.0);
+        assert!(result.e90 >= 0.0);
+        assert!(result.emax >= 0.0);
+        assert!(result.spiegelhalter_p >= 0.0 && result.spiegelhalter_p <= 1.0);
+    }
+
+    #[test]
+    fn test_time_dependent_calibration() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 0, 1, 0, 1];
+        let predicted_survival = vec![
+            vec![0.9, 0.8, 0.7],
+            vec![0.95, 0.9, 0.85],
+            vec![0.85, 0.75, 0.65],
+            vec![0.92, 0.88, 0.82],
+            vec![0.88, 0.78, 0.68],
+        ];
+        let eval_times = vec![1.5, 2.5, 3.5];
+
+        let result =
+            time_dependent_calibration(time, event, predicted_survival, eval_times).unwrap();
+
+        assert_eq!(result.time_points.len(), 3);
+        assert_eq!(result.ici.len(), 3);
+    }
 
     #[test]
     fn test_calibration_result_new() {

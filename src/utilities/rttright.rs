@@ -225,12 +225,10 @@ mod tests {
 
         let result = rttright(time, status, None).unwrap();
 
-        // Events should have positive weights
         assert!(result.weights[0] > 0.0);
         assert!(result.weights[2] > 0.0);
         assert!(result.weights[4] > 0.0);
 
-        // Censored should have zero weight
         assert_eq!(result.weights[1], 0.0);
         assert_eq!(result.weights[3], 0.0);
     }
@@ -242,7 +240,6 @@ mod tests {
 
         let result = rttright(time, status, None).unwrap();
 
-        // All should have weight 1.0 (no redistribution needed)
         for w in &result.weights {
             assert!((*w - 1.0).abs() < 1e-10);
         }

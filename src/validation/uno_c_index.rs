@@ -1,7 +1,5 @@
-use crate::constants::{
-    HARTLEY_A1, HARTLEY_B1, HARTLEY_B2, HARTLEY_B3, HARTLEY_B4, HARTLEY_B5, HARTLEY_NORM,
-    PARALLEL_THRESHOLD_LARGE,
-};
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::utilities::statistical::normal_cdf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::fmt;
@@ -329,15 +327,6 @@ impl ConcordanceComparisonResult {
             ci_upper,
         }
     }
-}
-
-fn normal_cdf(x: f64) -> f64 {
-    let t = 1.0 / (1.0 + HARTLEY_A1 * x.abs());
-    let d = HARTLEY_NORM * (-x * x / 2.0).exp();
-    let p = d
-        * t
-        * (HARTLEY_B1 + t * (HARTLEY_B2 + t * (HARTLEY_B3 + t * (HARTLEY_B4 + t * HARTLEY_B5))));
-    if x > 0.0 { 1.0 - p } else { p }
 }
 
 pub fn compare_uno_c_indices_core(

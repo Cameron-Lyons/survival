@@ -64,7 +64,6 @@ pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResul
         while j < n {
             let current_val = adjusted_time[indices[j]];
             if (current_val - base_val).abs() <= tol {
-                // Only count as adjusted if the value actually changes
                 if current_val != base_val {
                     adjusted_time[indices[j]] = base_val;
                     adjusted_indices.push(indices[j]);
@@ -118,6 +117,6 @@ mod tests {
     fn test_aeq_surv_all_same() {
         let time = vec![1.0, 1.0, 1.0, 1.0];
         let result = aeq_surv(time, None).unwrap();
-        assert_eq!(result.adjusted_count, 0); // Already exactly tied
+        assert_eq!(result.adjusted_count, 0);
     }
 }

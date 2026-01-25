@@ -1,4 +1,10 @@
+pub mod causal_forest;
+pub mod counterfactual_survival;
+pub mod dependent_censoring;
+pub mod double_ml;
 pub mod g_computation;
+pub mod instrumental_variable;
 pub mod ipcw;
 pub mod msm;
 pub mod target_trial;
+pub mod tmle;

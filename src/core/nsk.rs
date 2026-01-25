@@ -82,7 +82,6 @@ impl NaturalSplineKnot {
             });
         }
 
-        // Determine boundary knots from data if not specified
         let (bk_low, bk_high) = if self.boundary_knots.0.is_infinite() {
             let min_x = x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
             let max_x = x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
@@ -309,7 +308,6 @@ mod tests {
         let x = vec![0.0, 2.5, 5.0, 7.5, 10.0];
         let basis_result = spline.basis(x.clone()).unwrap();
 
-        // Use some coefficients
         let coef = vec![1.0; basis_result.n_cols];
         let predictions = spline.predict(x, coef).unwrap();
 
@@ -318,8 +316,8 @@ mod tests {
 
     #[test]
     fn test_truncated_power() {
-        assert_eq!(truncated_power(5.0, 3.0, 2), 4.0); // (5-3)^2 = 4
-        assert_eq!(truncated_power(2.0, 3.0, 2), 0.0); // x < knot
-        assert_eq!(truncated_power(3.0, 3.0, 2), 0.0); // x = knot
+        assert_eq!(truncated_power(5.0, 3.0, 2), 4.0);
+        assert_eq!(truncated_power(2.0, 3.0, 2), 0.0);
+        assert_eq!(truncated_power(3.0, 3.0, 2), 0.0);
     }
 }
