@@ -5,6 +5,7 @@ mod concordance;
 mod constants;
 mod core;
 mod datasets;
+mod interpretability;
 mod interval;
 mod joint;
 mod matrix;
@@ -191,6 +192,10 @@ pub use causal::msm::{MSMResult, compute_longitudinal_iptw, marginal_structural_
 pub use causal::target_trial::{
     TargetTrialResult, sequential_trial_emulation, target_trial_emulation,
 };
+pub use interpretability::survshap::{
+    AggregationMethod, SurvShapConfig, SurvShapExplanation, SurvShapResult, aggregate_survshap,
+    survshap, survshap_from_model,
+};
 pub use interval::interval_censoring::{
     IntervalCensoredResult, IntervalDistribution, TurnbullResult, interval_censored_regression,
     npmle_interval, turnbull_estimator,
@@ -215,6 +220,7 @@ pub use ml::gradient_boost::{
 };
 pub use ml::survival_forest::{SplitRule, SurvivalForest, SurvivalForestConfig, survival_forest};
 pub use ml::survtrace::{SurvTrace, SurvTraceActivation, SurvTraceConfig, survtrace};
+pub use ml::tracer::{Tracer, TracerConfig, tracer};
 pub use qol::qaly::{
     QALYResult, incremental_cost_effectiveness, qaly_calculation, qaly_comparison,
 };
@@ -634,6 +640,9 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SurvTrace>()?;
     m.add_class::<SurvTraceConfig>()?;
     m.add_class::<SurvTraceActivation>()?;
+    m.add_function(wrap_pyfunction!(tracer, &m)?)?;
+    m.add_class::<Tracer>()?;
+    m.add_class::<TracerConfig>()?;
 
     // Quality of life functions
     m.add_function(wrap_pyfunction!(qaly_calculation, &m)?)?;
@@ -688,6 +697,15 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(moran_i_test, &m)?)?;
     m.add_class::<SpatialFrailtyResult>()?;
     m.add_class::<SpatialCorrelationStructure>()?;
+
+    // Interpretability functions (SurvSHAP)
+    m.add_function(wrap_pyfunction!(survshap, &m)?)?;
+    m.add_function(wrap_pyfunction!(survshap_from_model, &m)?)?;
+    m.add_function(wrap_pyfunction!(aggregate_survshap, &m)?)?;
+    m.add_class::<SurvShapConfig>()?;
+    m.add_class::<SurvShapResult>()?;
+    m.add_class::<SurvShapExplanation>()?;
+    m.add_class::<AggregationMethod>()?;
 
     m.add_function(wrap_pyfunction!(conformal_calibrate, &m)?)?;
     m.add_function(wrap_pyfunction!(conformal_predict, &m)?)?;
