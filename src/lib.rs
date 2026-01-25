@@ -94,6 +94,10 @@ pub use surv_analysis::survfit_matrix::{
     survfit_multistate,
 };
 pub use surv_analysis::survfitaj::{SurvFitAJ, survfitaj};
+pub use surv_analysis::survfitaj_extended::{
+    AalenJohansenExtendedConfig, AalenJohansenExtendedResult, TransitionMatrix, TransitionType,
+    VarianceEstimator, survfitaj_extended,
+};
 pub use surv_analysis::survfitkm::{
     KaplanMeierConfig, SurvFitKMOutput, SurvfitKMOptions, compute_survfitkm, survfitkm,
     survfitkm_with_options,
@@ -122,16 +126,20 @@ pub use validation::calibration::{
     predict_cox, risk_stratification, td_auc,
 };
 pub use validation::conformal::{
-    BootstrapConformalResult, CQRConformalResult, ConformalCalibrationPlot,
-    ConformalCalibrationResult, ConformalDiagnostics, ConformalPredictionResult,
-    ConformalSurvivalDistribution, ConformalWidthAnalysis, CoverageSelectionResult,
-    DoublyRobustConformalResult, TwoSidedCalibrationResult, TwoSidedConformalResult,
+    BootstrapConformalResult, CQRConformalResult, CVPlusCalibrationResult, CVPlusConformalResult,
+    ConformalCalibrationPlot, ConformalCalibrationResult, ConformalDiagnostics,
+    ConformalPredictionResult, ConformalSurvivalDistribution, ConformalWidthAnalysis,
+    CovariateShiftConformalResult, CoverageSelectionResult, DoublyRobustConformalResult,
+    MondrianCalibrationResult, MondrianConformalResult, MondrianDiagnostics,
+    TwoSidedCalibrationResult, TwoSidedConformalResult, WeightDiagnostics,
     bootstrap_conformal_survival, conformal_calibrate, conformal_calibration_plot,
     conformal_coverage_cv, conformal_coverage_test, conformal_predict,
     conformal_survival_from_predictions, conformal_survival_parallel, conformal_width_analysis,
-    conformalized_survival_distribution, cqr_conformal_survival, doubly_robust_conformal_calibrate,
-    doubly_robust_conformal_survival, two_sided_conformal_calibrate, two_sided_conformal_predict,
-    two_sided_conformal_survival,
+    conformalized_survival_distribution, covariate_shift_conformal_survival,
+    cqr_conformal_survival, cvplus_conformal_calibrate, cvplus_conformal_survival,
+    doubly_robust_conformal_calibrate, doubly_robust_conformal_survival,
+    mondrian_conformal_calibrate, mondrian_conformal_predict, mondrian_conformal_survival,
+    two_sided_conformal_calibrate, two_sided_conformal_predict, two_sided_conformal_survival,
 };
 pub use validation::crossval::{CVResult, cv_cox_concordance, cv_survreg_loglik};
 pub use validation::d_calibration::{
@@ -192,11 +200,27 @@ pub use causal::msm::{MSMResult, compute_longitudinal_iptw, marginal_structural_
 pub use causal::target_trial::{
     TargetTrialResult, sequential_trial_emulation, target_trial_emulation,
 };
+pub use interpretability::changepoints::{
+    AllChangepointsResult, Changepoint, ChangepointConfig, ChangepointMethod, ChangepointResult,
+    CostFunction, detect_changepoints, detect_changepoints_single_series,
+};
+pub use interpretability::local_global::{
+    FeatureViewAnalysis, LocalGlobalConfig, LocalGlobalResult, LocalGlobalSummary,
+    ViewRecommendation, analyze_local_global,
+};
 pub use interpretability::survshap::{
     AggregationMethod, BootstrapSurvShapResult, FeatureImportance, PermutationImportanceResult,
     ShapInteractionResult, SurvShapConfig, SurvShapExplanation, SurvShapResult, aggregate_survshap,
     compute_shap_interactions, permutation_importance, survshap, survshap_bootstrap,
     survshap_from_model,
+};
+pub use interpretability::time_varying::{
+    TimeVaryingAnalysis, TimeVaryingTestConfig, TimeVaryingTestResult, TimeVaryingTestType,
+    detect_time_varying_features,
+};
+pub use interpretability::variable_groups::{
+    FeatureGroup, GroupingMethod, LinkageType, VariableGroupingConfig, VariableGroupingResult,
+    group_variables,
 };
 pub use interval::interval_censoring::{
     IntervalCensoredResult, IntervalDistribution, TurnbullResult, interval_censored_regression,
@@ -215,8 +239,16 @@ pub use missing::pattern_mixture::{
     PatternMixtureResult, SensitivityAnalysisType, pattern_mixture_model, sensitivity_analysis,
     tipping_point_analysis,
 };
+pub use ml::contrastive_surv::{
+    ContrastiveSurv, ContrastiveSurvConfig, ContrastiveSurvResult, SurvivalLossType,
+    contrastive_surv,
+};
 pub use ml::deep_surv::{Activation, DeepSurv, DeepSurvConfig, deep_surv};
 pub use ml::deephit::{DeepHit, DeepHitConfig, deephit};
+pub use ml::dynamic_deephit::{
+    DynamicDeepHit, DynamicDeepHitConfig, TemporalType, dynamic_deephit,
+};
+pub use ml::galee::{GALEE, GALEEConfig, GALEEResult, UnimodalConstraint, galee};
 pub use ml::gradient_boost::{
     GBSurvLoss, GradientBoostSurvival, GradientBoostSurvivalConfig, gradient_boost_survival,
 };
@@ -232,6 +264,10 @@ pub use recurrent::joint_frailty::{FrailtyDistribution, JointFrailtyResult, join
 pub use recurrent::marginal_models::{
     MarginalMethod, MarginalModelResult, andersen_gill, marginal_recurrent_model, wei_lin_weissfeld,
 };
+pub use regression::cause_specific_cox::{
+    CauseSpecificCoxConfig, CauseSpecificCoxResult, CensoringType, cause_specific_cox,
+    cause_specific_cox_all,
+};
 pub use regression::cure_models::{
     CureDistribution, MixtureCureResult, PromotionTimeCureResult, mixture_cure_model,
     promotion_time_cure_model,
@@ -239,6 +275,13 @@ pub use regression::cure_models::{
 pub use regression::elastic_net::{
     ElasticNetCoxPath, ElasticNetCoxResult, elastic_net_cox, elastic_net_cox_cv,
     elastic_net_cox_path,
+};
+pub use regression::fast_cox::{
+    FastCoxConfig, FastCoxPath, FastCoxResult, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
+};
+pub use regression::joint_competing::{
+    CauseResult, CorrelationType, JointCompetingRisksConfig, JointCompetingRisksResult,
+    joint_competing_risks,
 };
 pub use relative::net_survival::{
     NetSurvivalMethod, NetSurvivalResult, crude_probability_of_death, net_survival,
@@ -645,6 +688,20 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tracer, &m)?)?;
     m.add_class::<Tracer>()?;
     m.add_class::<TracerConfig>()?;
+    m.add_function(wrap_pyfunction!(dynamic_deephit, &m)?)?;
+    m.add_class::<DynamicDeepHit>()?;
+    m.add_class::<DynamicDeepHitConfig>()?;
+    m.add_class::<TemporalType>()?;
+    m.add_function(wrap_pyfunction!(contrastive_surv, &m)?)?;
+    m.add_class::<ContrastiveSurv>()?;
+    m.add_class::<ContrastiveSurvConfig>()?;
+    m.add_class::<ContrastiveSurvResult>()?;
+    m.add_class::<SurvivalLossType>()?;
+    m.add_function(wrap_pyfunction!(galee, &m)?)?;
+    m.add_class::<GALEE>()?;
+    m.add_class::<GALEEConfig>()?;
+    m.add_class::<GALEEResult>()?;
+    m.add_class::<UnimodalConstraint>()?;
 
     // Quality of life functions
     m.add_function(wrap_pyfunction!(qaly_calculation, &m)?)?;
@@ -683,6 +740,37 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ElasticNetCoxResult>()?;
     m.add_class::<ElasticNetCoxPath>()?;
 
+    // Fast Cox functions (skglm-style optimization)
+    m.add_function(wrap_pyfunction!(fast_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(fast_cox_path, &m)?)?;
+    m.add_function(wrap_pyfunction!(fast_cox_cv, &m)?)?;
+    m.add_class::<FastCoxConfig>()?;
+    m.add_class::<FastCoxResult>()?;
+    m.add_class::<FastCoxPath>()?;
+    m.add_class::<ScreeningRule>()?;
+
+    // Cause-specific Cox functions
+    m.add_function(wrap_pyfunction!(cause_specific_cox, &m)?)?;
+    m.add_function(wrap_pyfunction!(cause_specific_cox_all, &m)?)?;
+    m.add_class::<CauseSpecificCoxConfig>()?;
+    m.add_class::<CauseSpecificCoxResult>()?;
+    m.add_class::<CensoringType>()?;
+
+    // Joint competing risks functions
+    m.add_function(wrap_pyfunction!(joint_competing_risks, &m)?)?;
+    m.add_class::<JointCompetingRisksConfig>()?;
+    m.add_class::<JointCompetingRisksResult>()?;
+    m.add_class::<CauseResult>()?;
+    m.add_class::<CorrelationType>()?;
+
+    // Extended Aalen-Johansen functions
+    m.add_function(wrap_pyfunction!(survfitaj_extended, &m)?)?;
+    m.add_class::<AalenJohansenExtendedConfig>()?;
+    m.add_class::<AalenJohansenExtendedResult>()?;
+    m.add_class::<TransitionMatrix>()?;
+    m.add_class::<TransitionType>()?;
+    m.add_class::<VarianceEstimator>()?;
+
     // Relative survival functions
     m.add_function(wrap_pyfunction!(relative_survival, &m)?)?;
     m.add_function(wrap_pyfunction!(net_survival, &m)?)?;
@@ -716,6 +804,39 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ShapInteractionResult>()?;
     m.add_class::<FeatureImportance>()?;
 
+    // Time-varying feature detection functions
+    m.add_function(wrap_pyfunction!(detect_time_varying_features, &m)?)?;
+    m.add_class::<TimeVaryingTestConfig>()?;
+    m.add_class::<TimeVaryingTestResult>()?;
+    m.add_class::<TimeVaryingAnalysis>()?;
+    m.add_class::<TimeVaryingTestType>()?;
+
+    // Changepoint detection functions
+    m.add_function(wrap_pyfunction!(detect_changepoints, &m)?)?;
+    m.add_function(wrap_pyfunction!(detect_changepoints_single_series, &m)?)?;
+    m.add_class::<ChangepointConfig>()?;
+    m.add_class::<ChangepointResult>()?;
+    m.add_class::<Changepoint>()?;
+    m.add_class::<AllChangepointsResult>()?;
+    m.add_class::<ChangepointMethod>()?;
+    m.add_class::<CostFunction>()?;
+
+    // Variable grouping functions
+    m.add_function(wrap_pyfunction!(group_variables, &m)?)?;
+    m.add_class::<VariableGroupingConfig>()?;
+    m.add_class::<VariableGroupingResult>()?;
+    m.add_class::<FeatureGroup>()?;
+    m.add_class::<GroupingMethod>()?;
+    m.add_class::<LinkageType>()?;
+
+    // Local/global view analysis functions
+    m.add_function(wrap_pyfunction!(analyze_local_global, &m)?)?;
+    m.add_class::<LocalGlobalConfig>()?;
+    m.add_class::<LocalGlobalResult>()?;
+    m.add_class::<LocalGlobalSummary>()?;
+    m.add_class::<FeatureViewAnalysis>()?;
+    m.add_class::<ViewRecommendation>()?;
+
     m.add_function(wrap_pyfunction!(conformal_calibrate, &m)?)?;
     m.add_function(wrap_pyfunction!(conformal_predict, &m)?)?;
     m.add_function(wrap_pyfunction!(conformal_survival_from_predictions, &m)?)?;
@@ -744,6 +865,20 @@ fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ConformalCalibrationPlot>()?;
     m.add_class::<ConformalWidthAnalysis>()?;
     m.add_class::<CoverageSelectionResult>()?;
+
+    m.add_function(wrap_pyfunction!(covariate_shift_conformal_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(cvplus_conformal_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(cvplus_conformal_calibrate, &m)?)?;
+    m.add_function(wrap_pyfunction!(mondrian_conformal_survival, &m)?)?;
+    m.add_function(wrap_pyfunction!(mondrian_conformal_calibrate, &m)?)?;
+    m.add_function(wrap_pyfunction!(mondrian_conformal_predict, &m)?)?;
+    m.add_class::<CovariateShiftConformalResult>()?;
+    m.add_class::<WeightDiagnostics>()?;
+    m.add_class::<CVPlusConformalResult>()?;
+    m.add_class::<CVPlusCalibrationResult>()?;
+    m.add_class::<MondrianConformalResult>()?;
+    m.add_class::<MondrianCalibrationResult>()?;
+    m.add_class::<MondrianDiagnostics>()?;
 
     Ok(())
 }

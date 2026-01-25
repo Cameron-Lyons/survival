@@ -1,4 +1,7 @@
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::constants::{
+    HARTLEY_A1, HARTLEY_B1, HARTLEY_B2, HARTLEY_B3, HARTLEY_B4, HARTLEY_B5, HARTLEY_NORM,
+    PARALLEL_THRESHOLD_LARGE,
+};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::fmt;
@@ -329,10 +332,11 @@ impl ConcordanceComparisonResult {
 }
 
 fn normal_cdf(x: f64) -> f64 {
-    let t = 1.0 / (1.0 + 0.2316419 * x.abs());
-    let d = 0.3989423 * (-x * x / 2.0).exp();
-    let p =
-        d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    let t = 1.0 / (1.0 + HARTLEY_A1 * x.abs());
+    let d = HARTLEY_NORM * (-x * x / 2.0).exp();
+    let p = d
+        * t
+        * (HARTLEY_B1 + t * (HARTLEY_B2 + t * (HARTLEY_B3 + t * (HARTLEY_B4 + t * HARTLEY_B5))));
     if x > 0.0 { 1.0 - p } else { p }
 }
 

@@ -1,5 +1,8 @@
+pub mod contrastive_surv;
 pub mod deep_surv;
 pub mod deephit;
+pub mod dynamic_deephit;
+pub mod galee;
 pub mod gradient_boost;
 pub mod survival_forest;
 pub mod survtrace;

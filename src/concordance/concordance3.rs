@@ -2,7 +2,7 @@ use super::common::{
     add_to_binary_tree, build_concordance_result, validate_extended_concordance_inputs,
     walkup_binary_tree,
 };
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::constants::{CONCORDANCE_COUNT_SIZE_EXTENDED, PARALLEL_THRESHOLD_LARGE};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -31,7 +31,7 @@ pub fn concordance3(
     let twt = second;
     let dnwt = third;
     let dtwt = fourth;
-    let mut count = vec![0.0; 6];
+    let mut count = vec![0.0; CONCORDANCE_COUNT_SIZE_EXTENDED];
     let mut imat = vec![0.0; 5 * n];
     let mut resid = if doresid {
         vec![0.0; 3 * nevent]

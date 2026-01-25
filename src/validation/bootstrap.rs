@@ -153,32 +153,36 @@ pub fn bootstrap_cox(
     if actual_n_bootstrap == 0 {
         return Err("All bootstrap iterations failed".into());
     }
-    let mut means = vec![0.0; nvar];
+
+    let mut transposed: Vec<Vec<f64>> = vec![Vec::with_capacity(actual_n_bootstrap); nvar];
     for coefs in &bootstrap_coefs {
         for (i, &c) in coefs.iter().enumerate() {
-            means[i] += c;
+            transposed[i].push(c);
         }
     }
-    for m in &mut means {
-        *m /= actual_n_bootstrap as f64;
-    }
-    let mut std_errors = vec![0.0; nvar];
-    for coefs in &bootstrap_coefs {
-        for (i, &c) in coefs.iter().enumerate() {
-            std_errors[i] += (c - means[i]).powi(2);
-        }
-    }
-    for se in &mut std_errors {
-        *se = (*se / (actual_n_bootstrap - 1) as f64).sqrt();
-    }
+
+    let means: Vec<f64> = transposed
+        .iter()
+        .map(|col| col.iter().sum::<f64>() / actual_n_bootstrap as f64)
+        .collect();
+
+    let std_errors: Vec<f64> = transposed
+        .iter()
+        .zip(means.iter())
+        .map(|(col, &mean)| {
+            let variance = col.iter().map(|&c| (c - mean).powi(2)).sum::<f64>()
+                / (actual_n_bootstrap - 1) as f64;
+            variance.sqrt()
+        })
+        .collect();
+
     let alpha = 1.0 - config.confidence_level;
     let lower_percentile = (alpha / 2.0 * actual_n_bootstrap as f64) as usize;
     let upper_percentile = ((1.0 - alpha / 2.0) * actual_n_bootstrap as f64) as usize;
 
-    let ci_results: Vec<(f64, f64)> = (0..nvar)
+    let ci_results: Vec<(f64, f64)> = transposed
         .into_par_iter()
-        .map(|var| {
-            let mut var_coefs: Vec<f64> = bootstrap_coefs.iter().map(|c| c[var]).collect();
+        .map(|mut var_coefs| {
             var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             (
                 var_coefs[lower_percentile.min(actual_n_bootstrap - 1)],

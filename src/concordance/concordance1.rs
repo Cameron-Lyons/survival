@@ -1,4 +1,5 @@
 use super::common::{build_concordance_result, validate_concordance_inputs};
+use crate::constants::CONCORDANCE_COUNT_SIZE;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -10,7 +11,7 @@ fn node_weight(nwt: &[f64], index: usize, ntree: usize) -> f64 {
 pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64> {
     let n = wt.len();
     let ntree = ntree as usize;
-    let mut count = vec![0.0; 5];
+    let mut count = vec![0.0; CONCORDANCE_COUNT_SIZE];
     let mut twt = vec![0.0; 2 * ntree];
     let (time, status) = (&y[0..n], &y[n..2 * n]);
     let mut vss = 0.0;

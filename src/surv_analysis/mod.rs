@@ -6,4 +6,5 @@ pub mod pseudo;
 pub mod survdiff2;
 pub mod survfit_matrix;
 pub mod survfitaj;
+pub mod survfitaj_extended;
 pub mod survfitkm;

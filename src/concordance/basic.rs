@@ -1,4 +1,4 @@
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::constants::{CONCORDANCE_COUNT_SIZE, PARALLEL_THRESHOLD_LARGE};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
@@ -36,7 +36,7 @@ pub fn concordance(
     let mut ntree = 0;
     let mut nwt = vec![0.0; n];
     let mut twt = vec![0.0; n];
-    let mut count = vec![0.0; 5];
+    let mut count = vec![0.0; CONCORDANCE_COUNT_SIZE];
     for val in &x {
         ntree = ntree.max(*val as usize + 1);
     }

@@ -1,4 +1,7 @@
-use crate::constants::{CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, NEAR_ZERO_MATRIX};
+use crate::constants::{
+    CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX,
+    STEP_DOUBLE_FACTOR, STEP_HALVE_FACTOR,
+};
 use crate::regression::survregc1::{SurvivalDist, survregc1};
 use crate::utilities::matrix::cholesky_solve;
 use ndarray::{Array1, Array2, ArrayView1};
@@ -536,13 +539,13 @@ fn compute_survreg(
         }
         if newlik.is_nan() || newlik < loglik {
             halving += 1;
-            if halving > 10 {
-                step_factor *= 0.5;
+            if halving > MAX_HALVING_ITERATIONS {
+                step_factor *= STEP_HALVE_FACTOR;
                 halving = 0;
             }
         } else {
             halving = 0;
-            step_factor = 1.0f64.min(step_factor * 2.0);
+            step_factor = 1.0f64.min(step_factor * STEP_DOUBLE_FACTOR);
             loglik = newlik;
             usave.assign(&u);
             std::mem::swap(&mut beta, &mut newbeta);

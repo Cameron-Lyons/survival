@@ -702,40 +702,52 @@ impl CoxPHModel {
                 .partial_cmp(&self.event_times[i])
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        let mut risk_sum = 0.0;
-        let mut weighted_cov = vec![0.0; nvar];
-        let mut weighted_cov_outer = vec![vec![0.0; nvar]; nvar];
         let mut fisher = vec![vec![0.0; nvar]; nvar];
         let mut index_to_pos = vec![0usize; n];
         for (pos, &idx) in sorted_indices.iter().enumerate() {
             index_to_pos[idx] = pos;
         }
-        let mut cumulative_data: Vec<(f64, Vec<f64>, Vec<Vec<f64>>)> = Vec::with_capacity(n);
-        for &idx in &sorted_indices {
+        let mut cumulative_risk_sum = vec![0.0; n];
+        let mut cumulative_weighted_cov = vec![0.0; n * nvar];
+        let mut cumulative_weighted_outer = vec![0.0; n * nvar * nvar];
+
+        let mut risk_sum = 0.0;
+        let mut weighted_cov = vec![0.0; nvar];
+        let mut weighted_outer = vec![0.0; nvar * nvar];
+
+        for (pos, &idx) in sorted_indices.iter().enumerate() {
             let risk_i = self.risk_scores.get(idx).copied().unwrap_or(1.0);
             risk_sum += risk_i;
             for k in 0..nvar {
                 let cov_ik = self.covariates.get([idx, k]).copied().unwrap_or(0.0);
                 weighted_cov[k] += risk_i * cov_ik;
-                for (l, outer_row) in weighted_cov_outer[k].iter_mut().enumerate() {
+                for l in 0..nvar {
                     let cov_il = self.covariates.get([idx, l]).copied().unwrap_or(0.0);
-                    *outer_row += risk_i * cov_ik * cov_il;
+                    weighted_outer[k * nvar + l] += risk_i * cov_ik * cov_il;
                 }
             }
-            cumulative_data.push((risk_sum, weighted_cov.clone(), weighted_cov_outer.clone()));
+            cumulative_risk_sum[pos] = risk_sum;
+            cumulative_weighted_cov[pos * nvar..(pos + 1) * nvar].copy_from_slice(&weighted_cov);
+            cumulative_weighted_outer[pos * nvar * nvar..(pos + 1) * nvar * nvar]
+                .copy_from_slice(&weighted_outer);
         }
         for (i, &censor) in self.censoring.iter().enumerate() {
             if censor != 1 {
                 continue;
             }
             let pos = index_to_pos[i];
-            let (rs, wc, wco) = &cumulative_data[pos];
-            if *rs <= 0.0 {
+            let rs = cumulative_risk_sum[pos];
+            if rs <= 0.0 {
                 continue;
             }
+            let wc_start = pos * nvar;
+            let wco_start = pos * nvar * nvar;
             for k in 0..nvar {
+                let wc_k = cumulative_weighted_cov[wc_start + k];
                 for l in 0..nvar {
-                    let info_kl = wco[k][l] / rs - (wc[k] / rs) * (wc[l] / rs);
+                    let wc_l = cumulative_weighted_cov[wc_start + l];
+                    let wco_kl = cumulative_weighted_outer[wco_start + k * nvar + l];
+                    let info_kl = wco_kl / rs - (wc_k / rs) * (wc_l / rs);
                     fisher[k][l] += info_kl;
                 }
             }
