@@ -212,7 +212,6 @@ mod tests {
         assert_eq!(result.n_curves, 2);
         assert!(!result.time.is_empty());
 
-        // Average should be between the two curves
         for s in &result.surv {
             assert!(*s >= 0.7 && *s <= 0.95);
         }
@@ -222,11 +221,10 @@ mod tests {
     fn test_aggregate_survfit_weighted() {
         let times = vec![vec![1.0, 2.0], vec![1.0, 2.0]];
         let survs = vec![vec![0.9, 0.8], vec![0.8, 0.6]];
-        let weights = vec![0.75, 0.25]; // More weight on first curve
+        let weights = vec![0.75, 0.25];
 
         let result = aggregate_survfit(times, survs, None, Some(weights), None).unwrap();
 
-        // Result should be closer to first curve due to higher weight
         assert!(result.surv[0] > 0.85);
     }
 

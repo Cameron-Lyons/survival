@@ -244,7 +244,6 @@ mod tests {
 
     #[test]
     fn test_survobrien_basic() {
-        // Simple test case
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 0, 1, 0];
         let covariate = vec![10.0, 20.0, 15.0, 30.0, 25.0];
@@ -252,7 +251,6 @@ mod tests {
 
         let result = compute_survobrien(&time, &status, &covariate, &strata);
 
-        // Should have a valid test statistic
         assert!(result.statistic >= 0.0);
         assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
         assert_eq!(result.df, 1);

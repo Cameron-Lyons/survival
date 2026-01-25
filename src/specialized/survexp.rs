@@ -328,11 +328,9 @@ mod tests {
     use crate::specialized::ratetable::create_simple_ratetable;
 
     fn create_test_ratetable() -> RateTable {
-        // Simple rate table for testing
-        let age_breaks = vec![0.0, 36500.0, 73000.0]; // 0-100, 100-200 years in days
+        let age_breaks = vec![0.0, 36500.0, 73000.0];
         let year_breaks = vec![1990.0, 2020.0];
 
-        // Rates per day (very simplified)
         let rates_male = vec![0.00001, 0.00005];
         let rates_female = vec![0.000008, 0.00004];
 
@@ -344,7 +342,7 @@ mod tests {
         let rt = create_test_ratetable();
 
         let time = vec![365.0, 730.0, 1095.0];
-        let age = vec![18250.0, 21900.0, 25550.0]; // ~50, 60, 70 years in days
+        let age = vec![18250.0, 21900.0, 25550.0];
         let year = vec![2000.0, 2000.0, 2000.0];
         let sex = vec![0, 1, 0];
 
@@ -352,7 +350,6 @@ mod tests {
 
         assert_eq!(result.n, 3);
         assert!(!result.time.is_empty());
-        // Expected survival should be between 0 and 1
         for s in &result.surv {
             assert!(*s >= 0.0 && *s <= 1.0);
         }

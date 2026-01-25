@@ -1,8 +1,11 @@
 pub mod aggregate_survfit;
 pub mod agsurv4;
 pub mod agsurv5;
+pub mod illness_death;
+pub mod multi_state;
 pub mod nelson_aalen;
 pub mod pseudo;
+pub mod semi_markov;
 pub mod survdiff2;
 pub mod survfit_matrix;
 pub mod survfitaj;

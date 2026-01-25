@@ -198,7 +198,7 @@ mod tests {
         let result = to_timeline(id, time1, time2, status, None);
 
         assert_eq!(result.id, vec![1, 2]);
-        assert!(result.time_points.len() >= 3); // At least 0, 5, 10
+        assert!(result.time_points.len() >= 3);
     }
 
     #[test]
@@ -209,7 +209,7 @@ mod tests {
 
         let result = from_timeline(id, states, time_points);
 
-        assert_eq!(result.id.len(), 4); // 2 subjects x 2 intervals each
+        assert_eq!(result.id.len(), 4);
     }
 
     #[test]

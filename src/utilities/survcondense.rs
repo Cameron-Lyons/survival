@@ -60,7 +60,6 @@ pub fn survcondense(
         };
     }
 
-    // Create indices sorted by (id, time1)
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| match id[a].cmp(&id[b]) {
         std::cmp::Ordering::Equal => time1[a]
@@ -127,8 +126,6 @@ mod tests {
 
     #[test]
     fn test_survcondense_basic() {
-        // Subject 1: intervals [0,5), [5,10), [10,15) all censored
-        // Should merge into [0,15)
         let id = vec![1, 1, 1];
         let time1 = vec![0.0, 5.0, 10.0];
         let time2 = vec![5.0, 10.0, 15.0];
@@ -145,8 +142,6 @@ mod tests {
 
     #[test]
     fn test_survcondense_with_event() {
-        // Subject 1: [0,5) censored, [5,10) event
-        // Should merge into [0,10) with event
         let id = vec![1, 1];
         let time1 = vec![0.0, 5.0];
         let time2 = vec![5.0, 10.0];
@@ -162,8 +157,6 @@ mod tests {
 
     #[test]
     fn test_survcondense_event_stops_merge() {
-        // Subject 1: [0,5) event, [5,10) censored
-        // Should NOT merge - event stops the chain
         let id = vec![1, 1];
         let time1 = vec![0.0, 5.0];
         let time2 = vec![5.0, 10.0];

@@ -275,7 +275,7 @@ mod tests {
     fn test_statefig_with_layout() {
         let states = vec!["A".to_string(), "B".to_string(), "C".to_string()];
         let transitions = HashMap::new();
-        let layout = vec![1, 2]; // 1 state in first row, 2 in second
+        let layout = vec![1, 2];
 
         let result = statefig(states, transitions, Some(layout.clone())).unwrap();
 

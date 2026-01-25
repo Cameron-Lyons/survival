@@ -1,5 +1,5 @@
 use crate::constants::z_score_for_confidence;
-use crate::utilities::statistical::normal_cdf as norm_cdf;
+use crate::utilities::statistical::{lower_incomplete_gamma, normal_cdf as norm_cdf};
 use pyo3::prelude::*;
 use std::fmt;
 
@@ -7,91 +7,9 @@ fn chi_squared_cdf(x: f64, df: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
-    incomplete_gamma(df / 2.0, x / 2.0)
+    lower_incomplete_gamma(df / 2.0, x / 2.0)
 }
 
-fn incomplete_gamma(a: f64, x: f64) -> f64 {
-    if x < 0.0 || a <= 0.0 {
-        return 0.0;
-    }
-    if x == 0.0 {
-        return 0.0;
-    }
-    let gln = ln_gamma(a);
-    if x < a + 1.0 {
-        gamma_series(a, x, gln)
-    } else {
-        1.0 - gamma_continued_fraction(a, x, gln)
-    }
-}
-
-fn gamma_series(a: f64, x: f64, gln: f64) -> f64 {
-    let max_iter = 100;
-    let eps = 3.0e-7;
-    if x <= 0.0 {
-        return 0.0;
-    }
-    let mut ap = a;
-    let mut sum = 1.0 / a;
-    let mut del = sum;
-    for _ in 0..max_iter {
-        ap += 1.0;
-        del *= x / ap;
-        sum += del;
-        if del.abs() < sum.abs() * eps {
-            return sum * (-x + a * x.ln() - gln).exp();
-        }
-    }
-    sum * (-x + a * x.ln() - gln).exp()
-}
-
-fn gamma_continued_fraction(a: f64, x: f64, gln: f64) -> f64 {
-    let max_iter = 100;
-    let eps = 3.0e-7;
-    let fpmin = 1.0e-30;
-    let mut b = x + 1.0 - a;
-    let mut c = 1.0 / fpmin;
-    let mut d = 1.0 / b;
-    let mut h = d;
-    for i in 1..=max_iter {
-        let an = -(i as f64) * ((i as f64) - a);
-        b += 2.0;
-        d = an * d + b;
-        if d.abs() < fpmin {
-            d = fpmin;
-        }
-        c = b + an / c;
-        if c.abs() < fpmin {
-            c = fpmin;
-        }
-        d = 1.0 / d;
-        let del = d * c;
-        h *= del;
-        if (del - 1.0).abs() < eps {
-            break;
-        }
-    }
-    (-x + a * x.ln() - gln).exp() * h
-}
-
-fn ln_gamma(x: f64) -> f64 {
-    let coeffs = [
-        76.18009172947146,
-        -86.50532032941677,
-        24.01409824083091,
-        -1.231739572450155,
-        0.1208650973866179e-2,
-        -0.5395239384953e-5,
-    ];
-    let y = x;
-    let tmp = x + 5.5;
-    let tmp = tmp - (x + 0.5) * tmp.ln();
-    let mut ser = 1.000000000190015;
-    for (j, &c) in coeffs.iter().enumerate() {
-        ser += c / (y + 1.0 + j as f64);
-    }
-    -tmp + ((2.5066282746310005 * ser) / x).ln()
-}
 #[derive(Debug, Clone)]
 #[pyclass(str, get_all)]
 pub struct RMSTResult {

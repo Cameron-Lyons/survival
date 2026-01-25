@@ -8,6 +8,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::utilities::statistical::{ln_gamma, lower_incomplete_gamma};
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass]
 pub enum TimeVaryingTestType {
@@ -291,28 +293,6 @@ fn beta_cf(a: f64, b: f64, x: f64) -> f64 {
     h
 }
 
-fn ln_gamma(x: f64) -> f64 {
-    let cof = [
-        76.18009172947146,
-        -86.50532032941677,
-        24.01409824083091,
-        -1.231739572450155,
-        0.1208650973866179e-2,
-        -0.5395239384953e-5,
-    ];
-
-    let y = x;
-    let mut tmp = x + 5.5;
-    tmp -= (x + 0.5) * tmp.ln();
-    let mut ser = 1.000000000190015;
-
-    for (j, &c) in cof.iter().enumerate() {
-        ser += c / (y + 1.0 + j as f64);
-    }
-
-    -tmp + (2.5066282746310005 * ser / x).ln()
-}
-
 fn compute_variance_test(
     shap_values: &[f64],
     time_points: &[f64],
@@ -386,66 +366,7 @@ fn chi_squared_cdf(x: f64, df: f64) -> f64 {
     if x <= 0.0 || df <= 0.0 {
         return 0.0;
     }
-    incomplete_gamma(df / 2.0, x / 2.0)
-}
-
-fn incomplete_gamma(a: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x < a + 1.0 {
-        gamma_series(a, x)
-    } else {
-        1.0 - gamma_cf(a, x)
-    }
-}
-
-fn gamma_series(a: f64, x: f64) -> f64 {
-    let gln = ln_gamma(a);
-    let mut ap = a;
-    let mut sum = 1.0 / a;
-    let mut del = sum;
-
-    for _ in 0..100 {
-        ap += 1.0;
-        del *= x / ap;
-        sum += del;
-        if del.abs() < sum.abs() * 1e-10 {
-            break;
-        }
-    }
-
-    sum * (-x + a * x.ln() - gln).exp()
-}
-
-fn gamma_cf(a: f64, x: f64) -> f64 {
-    let gln = ln_gamma(a);
-    let mut b = x + 1.0 - a;
-    let mut c = 1.0 / 1e-30;
-    let mut d = 1.0 / b;
-    let mut h = d;
-
-    for i in 1..=100 {
-        let i = i as f64;
-        let an = -i * (i - a);
-        b += 2.0;
-        d = an * d + b;
-        if d.abs() < 1e-30 {
-            d = 1e-30;
-        }
-        c = b + an / c;
-        if c.abs() < 1e-30 {
-            c = 1e-30;
-        }
-        d = 1.0 / d;
-        let del = d * c;
-        h *= del;
-        if (del - 1.0).abs() < 1e-10 {
-            break;
-        }
-    }
-
-    (-x + a * x.ln() - gln).exp() * h
+    lower_incomplete_gamma(df / 2.0, x / 2.0)
 }
 
 fn compute_breakpoint_test(

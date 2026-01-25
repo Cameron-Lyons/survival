@@ -87,7 +87,6 @@ impl RateTable {
         rates: Vec<f64>,
         summary: Option<String>,
     ) -> PyResult<Self> {
-        // Calculate expected shape
         let shape: Vec<usize> = dimensions
             .iter()
             .map(|d| {
@@ -463,7 +462,6 @@ mod tests {
         let age_breaks = vec![0.0, 365.0, 3650.0, 36500.0];
         let year_breaks = vec![1990.0, 2000.0, 2010.0];
 
-        // 3 age intervals x 2 year intervals = 6 rates per sex
         let rates_male = vec![0.001, 0.0008, 0.0005, 0.0004, 0.0003, 0.0002];
         let rates_female = vec![0.0008, 0.0006, 0.0004, 0.0003, 0.0002, 0.00015];
 

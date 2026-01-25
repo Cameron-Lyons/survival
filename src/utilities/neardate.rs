@@ -177,7 +177,6 @@ pub fn neardate_str(
         ));
     }
 
-    // Build index of reference observations by ID
     let mut ref_by_id: HashMap<String, Vec<(usize, f64)>> = HashMap::new();
     for (idx, (id, &date)) in id2.iter().zip(date2.iter()).enumerate() {
         ref_by_id.entry(id.clone()).or_default().push((idx, date));
@@ -231,9 +230,6 @@ mod tests {
 
         let result = neardate(id1, date1, id2, date2, Some("closest"), None).unwrap();
         assert_eq!(result.n_matched, 3);
-        // For id=1, date=5: closest is date2[1]=10 (idx 1)
-        // For id=1, date=15: closest is date2[1]=10 or date2[2]=20
-        // For id=2, date=10: closest is date2[3]=5 or date2[4]=15
     }
 
     #[test]
@@ -245,7 +241,6 @@ mod tests {
 
         let result = neardate(id1, date1, id2, date2, Some("prior"), None).unwrap();
         assert_eq!(result.n_matched, 1);
-        // Should match date2[0]=10 (the largest value <= 15)
         assert_eq!(result.indices[0], Some(0));
     }
 
@@ -258,7 +253,6 @@ mod tests {
 
         let result = neardate(id1, date1, id2, date2, Some("after"), None).unwrap();
         assert_eq!(result.n_matched, 1);
-        // Should match date2[1]=20 (the smallest value >= 15)
         assert_eq!(result.indices[0], Some(1));
     }
 
@@ -266,7 +260,7 @@ mod tests {
     fn test_neardate_no_match() {
         let id1 = vec![1];
         let date1 = vec![10.0];
-        let id2 = vec![2]; // Different ID
+        let id2 = vec![2];
         let date2 = vec![10.0];
 
         let result = neardate(id1, date1, id2, date2, None, None).unwrap();
