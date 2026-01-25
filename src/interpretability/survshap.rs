@@ -1,4 +1,5 @@
 #![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
 
 use pyo3::Py;
 use pyo3::prelude::*;
@@ -74,6 +75,33 @@ impl SurvShapConfig {
 
 #[derive(Debug, Clone)]
 #[pyclass]
+pub struct FeatureImportance {
+    #[pyo3(get)]
+    pub feature_idx: usize,
+    #[pyo3(get)]
+    pub importance: f64,
+    #[pyo3(get)]
+    pub importance_std: Option<f64>,
+}
+
+#[pymethods]
+impl FeatureImportance {
+    fn __repr__(&self) -> String {
+        match self.importance_std {
+            Some(std) => format!(
+                "FeatureImportance(idx={}, importance={:.4} ± {:.4})",
+                self.feature_idx, self.importance, std
+            ),
+            None => format!(
+                "FeatureImportance(idx={}, importance={:.4})",
+                self.feature_idx, self.importance
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
 pub struct SurvShapResult {
     #[pyo3(get)]
     pub shap_values: Vec<Vec<Vec<f64>>>,
@@ -128,6 +156,173 @@ impl SurvShapResult {
             .collect();
         Ok(result)
     }
+
+    fn get_shap_at_time(&self, time_idx: usize) -> PyResult<Vec<Vec<f64>>> {
+        let n_samples = self.shap_values.len();
+        if n_samples == 0 {
+            return Ok(Vec::new());
+        }
+        let n_times = self.time_points.len();
+        if time_idx >= n_times {
+            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>(
+                "time_idx out of bounds",
+            ));
+        }
+        let n_features = self.shap_values[0].len();
+        let result: Vec<Vec<f64>> = self
+            .shap_values
+            .iter()
+            .map(|sample| (0..n_features).map(|f| sample[f][time_idx]).collect())
+            .collect();
+        Ok(result)
+    }
+
+    #[pyo3(signature = (method=AggregationMethod::Mean, top_k=None))]
+    fn feature_ranking(
+        &self,
+        method: AggregationMethod,
+        top_k: Option<usize>,
+    ) -> PyResult<Vec<FeatureImportance>> {
+        let n_samples = self.shap_values.len();
+        if n_samples == 0 {
+            return Ok(Vec::new());
+        }
+        let n_features = self.shap_values[0].len();
+        let n_times = self.time_points.len();
+
+        let importance = aggregate_shap_values(
+            &self.shap_values,
+            &self.time_points,
+            method,
+            n_features,
+            n_times,
+        );
+
+        let mut stds = vec![0.0; n_features];
+        for f in 0..n_features {
+            let sample_importances: Vec<f64> = self
+                .shap_values
+                .iter()
+                .map(|sample| {
+                    let shap_t = &sample[f];
+                    match method {
+                        AggregationMethod::Mean => {
+                            shap_t.iter().map(|v| v.abs()).sum::<f64>() / n_times as f64
+                        }
+                        AggregationMethod::MaxAbsolute => {
+                            shap_t.iter().map(|v| v.abs()).fold(0.0, f64::max)
+                        }
+                        AggregationMethod::Integral => {
+                            if n_times < 2 {
+                                shap_t.first().copied().unwrap_or(0.0).abs()
+                            } else {
+                                let mut integral = 0.0;
+                                for i in 1..n_times {
+                                    let dt = self.time_points[i] - self.time_points[i - 1];
+                                    let avg = (shap_t[i].abs() + shap_t[i - 1].abs()) / 2.0;
+                                    integral += avg * dt;
+                                }
+                                integral
+                            }
+                        }
+                        AggregationMethod::TimeWeighted => {
+                            let total_time = self.time_points.last().unwrap_or(&1.0)
+                                - self.time_points.first().unwrap_or(&0.0);
+                            if total_time <= 0.0 {
+                                shap_t.iter().map(|v| v.abs()).sum::<f64>() / n_times as f64
+                            } else {
+                                let mut weighted_sum = 0.0;
+                                for (i, &t) in self.time_points.iter().enumerate() {
+                                    let weight = 1.0 - (t - self.time_points[0]) / total_time;
+                                    weighted_sum += shap_t[i].abs() * weight;
+                                }
+                                weighted_sum / n_times as f64
+                            }
+                        }
+                    }
+                })
+                .collect();
+
+            let mean = importance[f];
+            let variance: f64 = sample_importances
+                .iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>()
+                / n_samples as f64;
+            stds[f] = variance.sqrt();
+        }
+
+        let mut ranking: Vec<FeatureImportance> = (0..n_features)
+            .map(|f| FeatureImportance {
+                feature_idx: f,
+                importance: importance[f],
+                importance_std: Some(stds[f]),
+            })
+            .collect();
+
+        ranking.sort_by(|a, b| {
+            b.importance
+                .partial_cmp(&a.importance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        if let Some(k) = top_k {
+            ranking.truncate(k);
+        }
+
+        Ok(ranking)
+    }
+
+    fn mean_absolute_shap(&self) -> Vec<f64> {
+        let n_samples = self.shap_values.len();
+        if n_samples == 0 {
+            return Vec::new();
+        }
+        let n_features = self.shap_values[0].len();
+        let n_times = self.time_points.len();
+
+        (0..n_features)
+            .map(|f| {
+                let total: f64 = self
+                    .shap_values
+                    .iter()
+                    .flat_map(|sample| sample[f].iter())
+                    .map(|v| v.abs())
+                    .sum();
+                total / (n_samples * n_times) as f64
+            })
+            .collect()
+    }
+
+    fn check_additivity(&self, predictions: Vec<f64>, tolerance: f64) -> PyResult<Vec<bool>> {
+        let n_samples = self.shap_values.len();
+        let n_times = self.time_points.len();
+
+        if predictions.len() != n_samples * n_times {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "predictions length must equal n_samples * n_times",
+            ));
+        }
+
+        let n_features = if n_samples > 0 {
+            self.shap_values[0].len()
+        } else {
+            0
+        };
+
+        let mut results = Vec::with_capacity(n_samples * n_times);
+
+        for i in 0..n_samples {
+            for t in 0..n_times {
+                let shap_sum: f64 = (0..n_features).map(|f| self.shap_values[i][f][t]).sum();
+                let reconstructed = self.base_value[t] + shap_sum;
+                let actual = predictions[i * n_times + t];
+                results.push((reconstructed - actual).abs() <= tolerance);
+            }
+        }
+
+        Ok(results)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +349,162 @@ impl SurvShapExplanation {
             "SurvShapExplanation(features={}, time_points={})",
             n_features, n_times
         )
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct BootstrapSurvShapResult {
+    #[pyo3(get)]
+    pub shap_values_mean: Vec<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub shap_values_std: Vec<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub shap_values_lower: Vec<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub shap_values_upper: Vec<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub base_value: Vec<f64>,
+    #[pyo3(get)]
+    pub time_points: Vec<f64>,
+    #[pyo3(get)]
+    pub n_bootstrap: usize,
+    #[pyo3(get)]
+    pub confidence_level: f64,
+}
+
+#[pymethods]
+impl BootstrapSurvShapResult {
+    fn __repr__(&self) -> String {
+        let n_samples = self.shap_values_mean.len();
+        let n_features = if n_samples > 0 {
+            self.shap_values_mean[0].len()
+        } else {
+            0
+        };
+        let n_times = self.time_points.len();
+        format!(
+            "BootstrapSurvShapResult(samples={}, features={}, time_points={}, n_bootstrap={}, confidence={:.0}%)",
+            n_samples,
+            n_features,
+            n_times,
+            self.n_bootstrap,
+            self.confidence_level * 100.0
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct PermutationImportanceResult {
+    #[pyo3(get)]
+    pub importance: Vec<f64>,
+    #[pyo3(get)]
+    pub importance_std: Vec<f64>,
+    #[pyo3(get)]
+    pub baseline_score: f64,
+    #[pyo3(get)]
+    pub n_repeats: usize,
+}
+
+#[pymethods]
+impl PermutationImportanceResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "PermutationImportanceResult(n_features={}, n_repeats={}, baseline={:.4})",
+            self.importance.len(),
+            self.n_repeats,
+            self.baseline_score
+        )
+    }
+
+    fn feature_ranking(&self, top_k: Option<usize>) -> Vec<FeatureImportance> {
+        let mut ranking: Vec<FeatureImportance> = self
+            .importance
+            .iter()
+            .zip(self.importance_std.iter())
+            .enumerate()
+            .map(|(idx, (&imp, &std))| FeatureImportance {
+                feature_idx: idx,
+                importance: imp,
+                importance_std: Some(std),
+            })
+            .collect();
+
+        ranking.sort_by(|a, b| {
+            b.importance
+                .partial_cmp(&a.importance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        if let Some(k) = top_k {
+            ranking.truncate(k);
+        }
+
+        ranking
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct ShapInteractionResult {
+    #[pyo3(get)]
+    pub interaction_values: Vec<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub time_points: Vec<f64>,
+    #[pyo3(get)]
+    pub aggregated_interactions: Option<Vec<Vec<f64>>>,
+}
+
+#[pymethods]
+impl ShapInteractionResult {
+    fn __repr__(&self) -> String {
+        let n_features = self.interaction_values.len();
+        let n_times = self.time_points.len();
+        format!(
+            "ShapInteractionResult(features={}, time_points={})",
+            n_features, n_times
+        )
+    }
+
+    fn get_interaction(&self, feature_i: usize, feature_j: usize) -> PyResult<Vec<f64>> {
+        let n_features = self.interaction_values.len();
+        if feature_i >= n_features || feature_j >= n_features {
+            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>(
+                "feature index out of bounds",
+            ));
+        }
+        Ok(self.interaction_values[feature_i][feature_j].clone())
+    }
+
+    #[allow(clippy::needless_range_loop)]
+    fn top_interactions(&self, top_k: usize) -> Vec<(usize, usize, f64)> {
+        let n_features = self.interaction_values.len();
+        let mut interactions: Vec<(usize, usize, f64)> = Vec::new();
+
+        if let Some(ref agg) = self.aggregated_interactions {
+            for i in 0..n_features {
+                for j in (i + 1)..n_features {
+                    interactions.push((i, j, agg[i][j]));
+                }
+            }
+        } else {
+            let n_times = self.time_points.len();
+            for i in 0..n_features {
+                for j in (i + 1)..n_features {
+                    let mean_interaction: f64 = self.interaction_values[i][j]
+                        .iter()
+                        .map(|v| v.abs())
+                        .sum::<f64>()
+                        / n_times as f64;
+                    interactions.push((i, j, mean_interaction));
+                }
+            }
+        }
+
+        interactions.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        interactions.truncate(top_k);
+        interactions
     }
 }
 
@@ -369,6 +720,74 @@ fn evaluate_coalition_predictions(
     }
 }
 
+fn compute_shap_inner(
+    x_explain: &[f64],
+    x_background: &[f64],
+    predictions_explain: &[f64],
+    predictions_background: &[f64],
+    time_points: &[f64],
+    n_explain: usize,
+    n_background: usize,
+    n_features: usize,
+    n_coalitions: usize,
+    seed: u64,
+    parallel: bool,
+) -> (Vec<Vec<Vec<f64>>>, Vec<f64>) {
+    let n_times = time_points.len();
+
+    let (coalitions, coalition_sizes) = sample_coalitions(n_features, n_coalitions, seed);
+    let kernel_weights = compute_shapley_kernel_weights(n_features, &coalition_sizes);
+
+    let coalition_preds = evaluate_coalition_predictions(
+        x_explain,
+        x_background,
+        predictions_explain,
+        predictions_background,
+        &coalitions,
+        n_explain,
+        n_background,
+        n_features,
+        n_times,
+        parallel,
+    );
+
+    let base_value: Vec<f64> = (0..n_times)
+        .map(|t| {
+            predictions_background
+                .iter()
+                .skip(t)
+                .step_by(n_times)
+                .sum::<f64>()
+                / n_background as f64
+        })
+        .collect();
+
+    let mut shap_values = vec![vec![vec![0.0; n_times]; n_features]; n_explain];
+
+    for sample_idx in 0..n_explain {
+        for t in 0..n_times {
+            let n_coal = coalitions.len();
+            let mut x_matrix = vec![0.0; n_coal * n_features];
+            let mut y = vec![0.0; n_coal];
+
+            for (c_idx, coalition) in coalitions.iter().enumerate() {
+                for (f_idx, &included) in coalition.iter().enumerate() {
+                    x_matrix[c_idx * n_features + f_idx] = if included { 1.0 } else { 0.0 };
+                }
+                y[c_idx] = coalition_preds[c_idx][sample_idx * n_times + t] - base_value[t];
+            }
+
+            let shap_t = weighted_least_squares(&x_matrix, &y, &kernel_weights, n_coal, n_features);
+
+            for (f_idx, &val) in shap_t.iter().enumerate() {
+                shap_values[sample_idx][f_idx][t] = val;
+            }
+        }
+    }
+
+    (shap_values, base_value)
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     x_explain,
@@ -421,56 +840,20 @@ pub fn survshap(
     let cfg = config.unwrap_or(&default_config);
 
     let seed = cfg.seed.unwrap_or(42);
-    let (coalitions, coalition_sizes) = sample_coalitions(n_features, cfg.n_coalitions, seed);
-    let kernel_weights = compute_shapley_kernel_weights(n_features, &coalition_sizes);
 
-    let coalition_preds = evaluate_coalition_predictions(
+    let (shap_values, base_value) = compute_shap_inner(
         &x_explain,
         &x_background,
         &predictions_explain,
         &predictions_background,
-        &coalitions,
+        &time_points,
         n_explain,
         n_background,
         n_features,
-        n_times,
+        cfg.n_coalitions,
+        seed,
         cfg.parallel,
     );
-
-    let base_value: Vec<f64> = (0..n_times)
-        .map(|t| {
-            predictions_background
-                .iter()
-                .skip(t)
-                .step_by(n_times)
-                .sum::<f64>()
-                / n_background as f64
-        })
-        .collect();
-
-    let mut shap_values = vec![vec![vec![0.0; n_times]; n_features]; n_explain];
-
-    for sample_idx in 0..n_explain {
-        for t in 0..n_times {
-            let n_coalitions = coalitions.len();
-            let mut x_matrix = vec![0.0; n_coalitions * n_features];
-            let mut y = vec![0.0; n_coalitions];
-
-            for (c_idx, coalition) in coalitions.iter().enumerate() {
-                for (f_idx, &included) in coalition.iter().enumerate() {
-                    x_matrix[c_idx * n_features + f_idx] = if included { 1.0 } else { 0.0 };
-                }
-                y[c_idx] = coalition_preds[c_idx][sample_idx * n_times + t] - base_value[t];
-            }
-
-            let shap_t =
-                weighted_least_squares(&x_matrix, &y, &kernel_weights, n_coalitions, n_features);
-
-            for (f_idx, &val) in shap_t.iter().enumerate() {
-                shap_values[sample_idx][f_idx][t] = val;
-            }
-        }
-    }
 
     let aggregated_importance = aggregation_method.map(|method| {
         aggregate_shap_values(&shap_values, &time_points, method, n_features, n_times)
@@ -481,6 +864,384 @@ pub fn survshap(
         base_value,
         time_points,
         aggregated_importance,
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x_explain,
+    x_background,
+    predictions_explain,
+    predictions_background,
+    time_points,
+    n_explain,
+    n_background,
+    n_features,
+    n_bootstrap=100,
+    confidence_level=0.95,
+    config=None
+))]
+pub fn survshap_bootstrap(
+    x_explain: Vec<f64>,
+    x_background: Vec<f64>,
+    predictions_explain: Vec<f64>,
+    predictions_background: Vec<f64>,
+    time_points: Vec<f64>,
+    n_explain: usize,
+    n_background: usize,
+    n_features: usize,
+    n_bootstrap: usize,
+    confidence_level: f64,
+    config: Option<&SurvShapConfig>,
+) -> PyResult<BootstrapSurvShapResult> {
+    let n_times = time_points.len();
+
+    if x_explain.len() != n_explain * n_features {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x_explain length must equal n_explain * n_features",
+        ));
+    }
+    if x_background.len() != n_background * n_features {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x_background length must equal n_background * n_features",
+        ));
+    }
+    if predictions_explain.len() != n_explain * n_times {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "predictions_explain length must equal n_explain * n_times",
+        ));
+    }
+    if predictions_background.len() != n_background * n_times {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "predictions_background length must equal n_background * n_times",
+        ));
+    }
+    if !(0.0..1.0).contains(&confidence_level) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "confidence_level must be between 0 and 1",
+        ));
+    }
+
+    let default_config = SurvShapConfig::new(2048, 100, None, true)?;
+    let cfg = config.unwrap_or(&default_config);
+    let base_seed = cfg.seed.unwrap_or(42);
+
+    let x_bg_ref = &x_background;
+    let preds_bg_ref = &predictions_background;
+    let x_exp_ref = &x_explain;
+    let preds_exp_ref = &predictions_explain;
+    let time_pts_ref = &time_points;
+
+    let bootstrap_results: Vec<(Vec<Vec<Vec<f64>>>, Vec<f64>)> = (0..n_bootstrap)
+        .into_par_iter()
+        .map(|b| {
+            let seed = base_seed.wrapping_add(b as u64);
+            let mut rng = fastrand::Rng::with_seed(seed);
+
+            let bg_indices: Vec<usize> = (0..n_background)
+                .map(|_| rng.usize(0..n_background))
+                .collect();
+
+            let sampled_x_bg: Vec<f64> = bg_indices
+                .iter()
+                .flat_map(|&idx| (0..n_features).map(move |f| x_bg_ref[idx * n_features + f]))
+                .collect();
+
+            let sampled_preds_bg: Vec<f64> = bg_indices
+                .iter()
+                .flat_map(|&idx| (0..n_times).map(move |t| preds_bg_ref[idx * n_times + t]))
+                .collect();
+
+            compute_shap_inner(
+                x_exp_ref,
+                &sampled_x_bg,
+                preds_exp_ref,
+                &sampled_preds_bg,
+                time_pts_ref,
+                n_explain,
+                n_background,
+                n_features,
+                cfg.n_coalitions,
+                seed,
+                false,
+            )
+        })
+        .collect();
+
+    let mut shap_values_mean = vec![vec![vec![0.0; n_times]; n_features]; n_explain];
+    let mut shap_values_std = vec![vec![vec![0.0; n_times]; n_features]; n_explain];
+    let mut shap_values_lower = vec![vec![vec![0.0; n_times]; n_features]; n_explain];
+    let mut shap_values_upper = vec![vec![vec![0.0; n_times]; n_features]; n_explain];
+
+    let alpha = 1.0 - confidence_level;
+    let lower_idx = ((alpha / 2.0) * n_bootstrap as f64).floor() as usize;
+    let upper_idx = ((1.0 - alpha / 2.0) * n_bootstrap as f64).ceil() as usize;
+
+    for i in 0..n_explain {
+        for f in 0..n_features {
+            for t in 0..n_times {
+                let mut values: Vec<f64> = bootstrap_results
+                    .iter()
+                    .map(|(shap, _)| shap[i][f][t])
+                    .collect();
+
+                let mean = values.iter().sum::<f64>() / n_bootstrap as f64;
+                let variance =
+                    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n_bootstrap as f64;
+
+                values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+                shap_values_mean[i][f][t] = mean;
+                shap_values_std[i][f][t] = variance.sqrt();
+                shap_values_lower[i][f][t] = values[lower_idx.min(n_bootstrap - 1)];
+                shap_values_upper[i][f][t] = values[upper_idx.min(n_bootstrap - 1)];
+            }
+        }
+    }
+
+    let base_value: Vec<f64> = (0..n_times)
+        .map(|t| preds_bg_ref.iter().skip(t).step_by(n_times).sum::<f64>() / n_background as f64)
+        .collect();
+
+    Ok(BootstrapSurvShapResult {
+        shap_values_mean,
+        shap_values_std,
+        shap_values_lower,
+        shap_values_upper,
+        base_value,
+        time_points,
+        n_bootstrap,
+        confidence_level,
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    predictions,
+    time_points,
+    times,
+    events,
+    n_samples,
+    n_features,
+    n_repeats=10,
+    seed=None,
+    parallel=true
+))]
+pub fn permutation_importance(
+    predictions: Vec<f64>,
+    time_points: Vec<f64>,
+    times: Vec<f64>,
+    events: Vec<i32>,
+    n_samples: usize,
+    n_features: usize,
+    n_repeats: usize,
+    seed: Option<u64>,
+    parallel: bool,
+) -> PyResult<PermutationImportanceResult> {
+    let n_times = time_points.len();
+
+    if predictions.len() != n_samples * n_times {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "predictions length must equal n_samples * n_times",
+        ));
+    }
+    if times.len() != n_samples || events.len() != n_samples {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "times and events must have length n_samples",
+        ));
+    }
+
+    let baseline_score =
+        compute_concordance_index(&predictions, &times, &events, n_samples, n_times);
+
+    let base_seed = seed.unwrap_or(42);
+
+    let compute_feature_importance = |feature_idx: usize| -> (f64, f64) {
+        let mut scores = Vec::with_capacity(n_repeats);
+
+        for r in 0..n_repeats {
+            let mut rng =
+                fastrand::Rng::with_seed(base_seed + feature_idx as u64 * 1000 + r as u64);
+
+            let mut perm_indices: Vec<usize> = (0..n_samples).collect();
+            for i in (1..n_samples).rev() {
+                let j = rng.usize(0..=i);
+                perm_indices.swap(i, j);
+            }
+
+            let mut permuted_preds = predictions.clone();
+            for (new_idx, &orig_idx) in perm_indices.iter().enumerate() {
+                for t in 0..n_times {
+                    permuted_preds[new_idx * n_times + t] = predictions[orig_idx * n_times + t];
+                }
+            }
+
+            let score =
+                compute_concordance_index(&permuted_preds, &times, &events, n_samples, n_times);
+            scores.push(baseline_score - score);
+        }
+
+        let mean = scores.iter().sum::<f64>() / n_repeats as f64;
+        let variance = scores.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / n_repeats as f64;
+        (mean, variance.sqrt())
+    };
+
+    let results: Vec<(f64, f64)> = if parallel {
+        (0..n_features)
+            .into_par_iter()
+            .map(compute_feature_importance)
+            .collect()
+    } else {
+        (0..n_features).map(compute_feature_importance).collect()
+    };
+
+    let importance: Vec<f64> = results.iter().map(|(m, _)| *m).collect();
+    let importance_std: Vec<f64> = results.iter().map(|(_, s)| *s).collect();
+
+    Ok(PermutationImportanceResult {
+        importance,
+        importance_std,
+        baseline_score,
+        n_repeats,
+    })
+}
+
+fn compute_concordance_index(
+    predictions: &[f64],
+    times: &[f64],
+    events: &[i32],
+    n_samples: usize,
+    n_times: usize,
+) -> f64 {
+    let risk_scores: Vec<f64> = (0..n_samples)
+        .map(|i| {
+            predictions[i * n_times..(i + 1) * n_times]
+                .iter()
+                .sum::<f64>()
+                / n_times as f64
+        })
+        .collect();
+
+    let mut concordant = 0.0;
+    let mut discordant = 0.0;
+
+    for i in 0..n_samples {
+        if events[i] == 0 {
+            continue;
+        }
+        for j in 0..n_samples {
+            if i == j || times[j] < times[i] {
+                continue;
+            }
+            if risk_scores[i] < risk_scores[j] {
+                concordant += 1.0;
+            } else if risk_scores[i] > risk_scores[j] {
+                discordant += 1.0;
+            } else {
+                concordant += 0.5;
+                discordant += 0.5;
+            }
+        }
+    }
+
+    let total = concordant + discordant;
+    if total > 0.0 { concordant / total } else { 0.5 }
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    shap_values,
+    time_points,
+    n_features,
+    aggregation_method=None
+))]
+pub fn compute_shap_interactions(
+    shap_values: Vec<Vec<Vec<f64>>>,
+    time_points: Vec<f64>,
+    n_features: usize,
+    aggregation_method: Option<AggregationMethod>,
+) -> PyResult<ShapInteractionResult> {
+    let n_samples = shap_values.len();
+    let n_times = time_points.len();
+
+    if n_samples == 0 || n_features == 0 || n_times == 0 {
+        return Ok(ShapInteractionResult {
+            interaction_values: vec![vec![vec![0.0; n_times]; n_features]; n_features],
+            time_points,
+            aggregated_interactions: None,
+        });
+    }
+
+    let mut interaction_values = vec![vec![vec![0.0; n_times]; n_features]; n_features];
+
+    for t in 0..n_times {
+        for i in 0..n_features {
+            for j in 0..n_features {
+                let mut covariance = 0.0;
+                let mean_i: f64 =
+                    shap_values.iter().map(|s| s[i][t]).sum::<f64>() / n_samples as f64;
+                let mean_j: f64 =
+                    shap_values.iter().map(|s| s[j][t]).sum::<f64>() / n_samples as f64;
+
+                for sample in &shap_values {
+                    covariance += (sample[i][t] - mean_i) * (sample[j][t] - mean_j);
+                }
+                covariance /= n_samples as f64;
+
+                interaction_values[i][j][t] = covariance;
+            }
+        }
+    }
+
+    let aggregated_interactions = aggregation_method.map(|method| {
+        let mut agg = vec![vec![0.0; n_features]; n_features];
+        for i in 0..n_features {
+            for j in 0..n_features {
+                let values = &interaction_values[i][j];
+                agg[i][j] = match method {
+                    AggregationMethod::Mean => {
+                        values.iter().map(|v| v.abs()).sum::<f64>() / n_times as f64
+                    }
+                    AggregationMethod::MaxAbsolute => {
+                        values.iter().map(|v| v.abs()).fold(0.0, f64::max)
+                    }
+                    AggregationMethod::Integral => {
+                        if n_times < 2 {
+                            values.first().copied().unwrap_or(0.0).abs()
+                        } else {
+                            let mut integral = 0.0;
+                            for k in 1..n_times {
+                                let dt = time_points[k] - time_points[k - 1];
+                                let avg = (values[k].abs() + values[k - 1].abs()) / 2.0;
+                                integral += avg * dt;
+                            }
+                            integral
+                        }
+                    }
+                    AggregationMethod::TimeWeighted => {
+                        let total_time = time_points.last().unwrap_or(&1.0)
+                            - time_points.first().unwrap_or(&0.0);
+                        if total_time <= 0.0 {
+                            values.iter().map(|v| v.abs()).sum::<f64>() / n_times as f64
+                        } else {
+                            let mut weighted_sum = 0.0;
+                            for (k, &t) in time_points.iter().enumerate() {
+                                let weight = 1.0 - (t - time_points[0]) / total_time;
+                                weighted_sum += values[k].abs() * weight;
+                            }
+                            weighted_sum / n_times as f64
+                        }
+                    }
+                };
+            }
+        }
+        agg
+    });
+
+    Ok(ShapInteractionResult {
+        interaction_values,
+        time_points,
+        aggregated_interactions,
     })
 }
 
@@ -806,16 +1567,16 @@ mod tests {
         )
         .unwrap();
 
-        for t in 0..n_times {
+        for (t, &pred) in predictions_explain.iter().enumerate().take(n_times) {
             let shap_sum: f64 = (0..n_features).map(|f| result.shap_values[0][f][t]).sum();
             let reconstructed = result.base_value[t] + shap_sum;
-            let error = (reconstructed - predictions_explain[t]).abs();
+            let error = (reconstructed - pred).abs();
             assert!(
                 error < 0.5,
                 "Additivity check failed at t={}: reconstructed={}, actual={}, error={}",
                 t,
                 reconstructed,
-                predictions_explain[t],
+                pred,
                 error
             );
         }
@@ -826,5 +1587,110 @@ mod tests {
         assert!(SurvShapConfig::new(1, 100, None, true).is_err());
         assert!(SurvShapConfig::new(100, 0, None, true).is_err());
         assert!(SurvShapConfig::new(100, 50, Some(42), false).is_ok());
+    }
+
+    #[test]
+    fn test_feature_ranking() {
+        let n_explain = 3;
+        let n_features = 4;
+        let n_times = 3;
+
+        let mut shap_values = vec![vec![vec![0.0; n_times]; n_features]; n_explain];
+        for sample in shap_values.iter_mut() {
+            for (f, feature) in sample.iter_mut().enumerate() {
+                for (t, val) in feature.iter_mut().enumerate() {
+                    *val = (f + 1) as f64 * 0.1 + (t as f64) * 0.01;
+                }
+            }
+        }
+
+        let result = SurvShapResult {
+            shap_values,
+            base_value: vec![0.5; n_times],
+            time_points: vec![1.0, 2.0, 3.0],
+            aggregated_importance: None,
+        };
+
+        let ranking = result
+            .feature_ranking(AggregationMethod::Mean, Some(2))
+            .unwrap();
+        assert_eq!(ranking.len(), 2);
+        assert_eq!(ranking[0].feature_idx, 3);
+        assert_eq!(ranking[1].feature_idx, 2);
+    }
+
+    #[test]
+    fn test_bootstrap_survshap() {
+        let n_explain = 2;
+        let n_background = 5;
+        let n_features = 2;
+        let n_times = 3;
+
+        let x_explain: Vec<f64> = vec![0.1, 0.2, 0.3, 0.4];
+        let x_background: Vec<f64> = (0..(n_background * n_features))
+            .map(|i| (i as f64) * 0.1)
+            .collect();
+
+        let predictions_explain: Vec<f64> = vec![0.9, 0.8, 0.7, 0.85, 0.75, 0.65];
+        let predictions_background: Vec<f64> = (0..(n_background * n_times))
+            .map(|i| 0.9 - (i as f64) * 0.02)
+            .collect();
+
+        let time_points: Vec<f64> = vec![1.0, 2.0, 3.0];
+
+        let config = SurvShapConfig::new(50, n_background, Some(42), false).unwrap();
+
+        let result = survshap_bootstrap(
+            x_explain,
+            x_background,
+            predictions_explain,
+            predictions_background,
+            time_points,
+            n_explain,
+            n_background,
+            n_features,
+            10,
+            0.95,
+            Some(&config),
+        )
+        .unwrap();
+
+        assert_eq!(result.shap_values_mean.len(), n_explain);
+        assert_eq!(result.shap_values_std.len(), n_explain);
+        assert_eq!(result.shap_values_lower.len(), n_explain);
+        assert_eq!(result.shap_values_upper.len(), n_explain);
+        assert_eq!(result.n_bootstrap, 10);
+        assert!((result.confidence_level - 0.95).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_shap_interactions() {
+        let shap_values = vec![
+            vec![vec![0.1, 0.2, 0.3], vec![0.2, 0.3, 0.4]],
+            vec![vec![0.15, 0.25, 0.35], vec![0.25, 0.35, 0.45]],
+        ];
+        let time_points = vec![1.0, 2.0, 3.0];
+
+        let result =
+            compute_shap_interactions(shap_values, time_points, 2, Some(AggregationMethod::Mean))
+                .unwrap();
+
+        assert_eq!(result.interaction_values.len(), 2);
+        assert_eq!(result.interaction_values[0].len(), 2);
+        assert_eq!(result.interaction_values[0][0].len(), 3);
+        assert!(result.aggregated_interactions.is_some());
+
+        let top = result.top_interactions(1);
+        assert_eq!(top.len(), 1);
+    }
+
+    #[test]
+    fn test_concordance_index() {
+        let predictions = vec![0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1];
+        let times = vec![10.0, 5.0, 15.0];
+        let events = vec![1, 1, 0];
+
+        let c_index = compute_concordance_index(&predictions, &times, &events, 3, 3);
+        assert!((0.0..=1.0).contains(&c_index));
     }
 }
