@@ -1,13 +1,16 @@
 pub mod aareg;
 pub mod agfit5;
 pub mod blogit;
+pub mod cause_specific_cox;
 pub mod clogit;
 pub mod coxfit6;
 pub mod coxph;
 pub mod coxph_detail;
 pub mod cure_models;
 pub mod elastic_net;
+pub mod fast_cox;
 pub mod finegray_regression;
+pub mod joint_competing;
 pub mod ridge;
 pub mod survreg6;
 pub mod survreg_predict;

@@ -198,6 +198,23 @@ impl SurvShapResult {
             n_times,
         );
 
+        let time_diffs: Vec<f64> = if n_times >= 2 {
+            self.time_points.windows(2).map(|w| w[1] - w[0]).collect()
+        } else {
+            Vec::new()
+        };
+
+        let total_time =
+            self.time_points.last().unwrap_or(&1.0) - self.time_points.first().unwrap_or(&0.0);
+        let time_weights: Vec<f64> = if total_time > 0.0 {
+            self.time_points
+                .iter()
+                .map(|&t| 1.0 - (t - self.time_points[0]) / total_time)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let mut stds = vec![0.0; n_features];
         for f in 0..n_features {
             let sample_importances: Vec<f64> = self
@@ -217,23 +234,19 @@ impl SurvShapResult {
                                 shap_t.first().copied().unwrap_or(0.0).abs()
                             } else {
                                 let mut integral = 0.0;
-                                for i in 1..n_times {
-                                    let dt = self.time_points[i] - self.time_points[i - 1];
-                                    let avg = (shap_t[i].abs() + shap_t[i - 1].abs()) / 2.0;
-                                    integral += avg * dt;
+                                for i in 0..time_diffs.len() {
+                                    let avg = (shap_t[i + 1].abs() + shap_t[i].abs()) / 2.0;
+                                    integral += avg * time_diffs[i];
                                 }
                                 integral
                             }
                         }
                         AggregationMethod::TimeWeighted => {
-                            let total_time = self.time_points.last().unwrap_or(&1.0)
-                                - self.time_points.first().unwrap_or(&0.0);
                             if total_time <= 0.0 {
                                 shap_t.iter().map(|v| v.abs()).sum::<f64>() / n_times as f64
                             } else {
                                 let mut weighted_sum = 0.0;
-                                for (i, &t) in self.time_points.iter().enumerate() {
-                                    let weight = 1.0 - (t - self.time_points[0]) / total_time;
+                                for (i, &weight) in time_weights.iter().enumerate() {
                                     weighted_sum += shap_t[i].abs() * weight;
                                 }
                                 weighted_sum / n_times as f64
@@ -977,24 +990,27 @@ pub fn survshap_bootstrap(
     let lower_idx = ((alpha / 2.0) * n_bootstrap as f64).floor() as usize;
     let upper_idx = ((1.0 - alpha / 2.0) * n_bootstrap as f64).ceil() as usize;
 
+    let mut values_buffer = vec![0.0; n_bootstrap];
     for i in 0..n_explain {
         for f in 0..n_features {
             for t in 0..n_times {
-                let mut values: Vec<f64> = bootstrap_results
+                for (b, (shap, _)) in bootstrap_results.iter().enumerate() {
+                    values_buffer[b] = shap[i][f][t];
+                }
+
+                let mean = values_buffer.iter().sum::<f64>() / n_bootstrap as f64;
+                let variance = values_buffer
                     .iter()
-                    .map(|(shap, _)| shap[i][f][t])
-                    .collect();
+                    .map(|v| (v - mean).powi(2))
+                    .sum::<f64>()
+                    / n_bootstrap as f64;
 
-                let mean = values.iter().sum::<f64>() / n_bootstrap as f64;
-                let variance =
-                    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n_bootstrap as f64;
-
-                values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                values_buffer.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
                 shap_values_mean[i][f][t] = mean;
                 shap_values_std[i][f][t] = variance.sqrt();
-                shap_values_lower[i][f][t] = values[lower_idx.min(n_bootstrap - 1)];
-                shap_values_upper[i][f][t] = values[upper_idx.min(n_bootstrap - 1)];
+                shap_values_lower[i][f][t] = values_buffer[lower_idx.min(n_bootstrap - 1)];
+                shap_values_upper[i][f][t] = values_buffer[upper_idx.min(n_bootstrap - 1)];
             }
         }
     }
@@ -1174,14 +1190,19 @@ pub fn compute_shap_interactions(
 
     let mut interaction_values = vec![vec![vec![0.0; n_times]; n_features]; n_features];
 
+    let mut means = vec![vec![0.0; n_times]; n_features];
+    for i in 0..n_features {
+        for t in 0..n_times {
+            means[i][t] = shap_values.iter().map(|s| s[i][t]).sum::<f64>() / n_samples as f64;
+        }
+    }
+
     for t in 0..n_times {
         for i in 0..n_features {
-            for j in 0..n_features {
+            for j in i..n_features {
                 let mut covariance = 0.0;
-                let mean_i: f64 =
-                    shap_values.iter().map(|s| s[i][t]).sum::<f64>() / n_samples as f64;
-                let mean_j: f64 =
-                    shap_values.iter().map(|s| s[j][t]).sum::<f64>() / n_samples as f64;
+                let mean_i = means[i][t];
+                let mean_j = means[j][t];
 
                 for sample in &shap_values {
                     covariance += (sample[i][t] - mean_i) * (sample[j][t] - mean_j);
@@ -1189,11 +1210,29 @@ pub fn compute_shap_interactions(
                 covariance /= n_samples as f64;
 
                 interaction_values[i][j][t] = covariance;
+                if i != j {
+                    interaction_values[j][i][t] = covariance;
+                }
             }
         }
     }
 
     let aggregated_interactions = aggregation_method.map(|method| {
+        let time_diffs: Vec<f64> = if n_times >= 2 {
+            time_points.windows(2).map(|w| w[1] - w[0]).collect()
+        } else {
+            Vec::new()
+        };
+        let total_time = time_points.last().unwrap_or(&1.0) - time_points.first().unwrap_or(&0.0);
+        let time_weights: Vec<f64> = if total_time > 0.0 {
+            time_points
+                .iter()
+                .map(|&t| 1.0 - (t - time_points[0]) / total_time)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let mut agg = vec![vec![0.0; n_features]; n_features];
         for i in 0..n_features {
             for j in 0..n_features {
@@ -1210,23 +1249,19 @@ pub fn compute_shap_interactions(
                             values.first().copied().unwrap_or(0.0).abs()
                         } else {
                             let mut integral = 0.0;
-                            for k in 1..n_times {
-                                let dt = time_points[k] - time_points[k - 1];
-                                let avg = (values[k].abs() + values[k - 1].abs()) / 2.0;
-                                integral += avg * dt;
+                            for k in 0..time_diffs.len() {
+                                let avg = (values[k + 1].abs() + values[k].abs()) / 2.0;
+                                integral += avg * time_diffs[k];
                             }
                             integral
                         }
                     }
                     AggregationMethod::TimeWeighted => {
-                        let total_time = time_points.last().unwrap_or(&1.0)
-                            - time_points.first().unwrap_or(&0.0);
                         if total_time <= 0.0 {
                             values.iter().map(|v| v.abs()).sum::<f64>() / n_times as f64
                         } else {
                             let mut weighted_sum = 0.0;
-                            for (k, &t) in time_points.iter().enumerate() {
-                                let weight = 1.0 - (t - time_points[0]) / total_time;
+                            for (k, &weight) in time_weights.iter().enumerate() {
                                 weighted_sum += values[k].abs() * weight;
                             }
                             weighted_sum / n_times as f64
@@ -1257,6 +1292,22 @@ fn aggregate_shap_values(
         return vec![0.0; n_features];
     }
 
+    let time_diffs: Vec<f64> = if n_times >= 2 {
+        time_points.windows(2).map(|w| w[1] - w[0]).collect()
+    } else {
+        Vec::new()
+    };
+
+    let total_time = time_points.last().unwrap_or(&1.0) - time_points.first().unwrap_or(&0.0);
+    let time_weights: Vec<f64> = if total_time > 0.0 {
+        time_points
+            .iter()
+            .map(|&t| 1.0 - (t - time_points[0]) / total_time)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let mut importance = vec![0.0; n_features];
 
     for f in 0..n_features {
@@ -1277,23 +1328,19 @@ fn aggregate_shap_values(
                         shap_t.first().copied().unwrap_or(0.0).abs()
                     } else {
                         let mut integral = 0.0;
-                        for i in 1..n_times {
-                            let dt = time_points[i] - time_points[i - 1];
-                            let avg = (shap_t[i].abs() + shap_t[i - 1].abs()) / 2.0;
-                            integral += avg * dt;
+                        for i in 0..time_diffs.len() {
+                            let avg = (shap_t[i + 1].abs() + shap_t[i].abs()) / 2.0;
+                            integral += avg * time_diffs[i];
                         }
                         integral
                     }
                 }
                 AggregationMethod::TimeWeighted => {
-                    let total_time =
-                        time_points.last().unwrap_or(&1.0) - time_points.first().unwrap_or(&0.0);
                     if total_time <= 0.0 {
                         shap_t.iter().map(|v| v.abs()).sum::<f64>() / n_times as f64
                     } else {
                         let mut weighted_sum = 0.0;
-                        for (i, &t) in time_points.iter().enumerate() {
-                            let weight = 1.0 - (t - time_points[0]) / total_time;
+                        for (i, &weight) in time_weights.iter().enumerate() {
                             weighted_sum += shap_t[i].abs() * weight;
                         }
                         weighted_sum / n_times as f64

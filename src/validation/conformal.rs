@@ -1,7 +1,10 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::constants::{DEFAULT_CONFORMAL_COVERAGE, DEFAULT_IPCW_TRIM};
+use crate::constants::{
+    DEFAULT_CONFORMAL_COVERAGE, DEFAULT_IPCW_TRIM, DEFAULT_MIN_GROUP_SIZE, DEFAULT_WEIGHT_TRIM,
+    MAX_WEIGHT_RATIO,
+};
 
 #[derive(Debug, Clone)]
 #[pyclass]
@@ -53,14 +56,15 @@ fn weighted_quantile(values: &[f64], weights: &[f64], q: f64) -> f64 {
         return f64::NAN;
     }
 
-    let mut indexed: Vec<(f64, f64)> = values
-        .iter()
-        .zip(weights.iter())
-        .map(|(&v, &w)| (v, w))
-        .collect();
-    indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let n = values.len();
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| {
+        values[a]
+            .partial_cmp(&values[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    let total_weight: f64 = indexed.iter().map(|(_, w)| w).sum();
+    let total_weight: f64 = weights.iter().sum();
     if total_weight <= 0.0 {
         return f64::NAN;
     }
@@ -68,20 +72,22 @@ fn weighted_quantile(values: &[f64], weights: &[f64], q: f64) -> f64 {
     let target = q * total_weight;
     let mut cumulative = 0.0;
 
-    for i in 0..indexed.len() {
+    for i in 0..n {
+        let idx = indices[i];
         let prev_cumulative = cumulative;
-        cumulative += indexed[i].1;
+        cumulative += weights[idx];
 
         if cumulative >= target {
             if i == 0 || (cumulative - target).abs() < 1e-10 {
-                return indexed[i].0;
+                return values[idx];
             }
-            let fraction = (target - prev_cumulative) / indexed[i].1;
-            return indexed[i - 1].0 + fraction * (indexed[i].0 - indexed[i - 1].0);
+            let prev_idx = indices[i - 1];
+            let fraction = (target - prev_cumulative) / weights[idx];
+            return values[prev_idx] + fraction * (values[idx] - values[prev_idx]);
         }
     }
 
-    indexed.last().map(|(v, _)| *v).unwrap_or(f64::NAN)
+    values[indices[n - 1]]
 }
 
 fn compute_km_censoring_survival(time: &[f64], status: &[i32]) -> Vec<f64> {
@@ -1685,6 +1691,532 @@ pub fn conformal_survival_parallel(
     })
 }
 
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct WeightDiagnostics {
+    #[pyo3(get)]
+    pub effective_sample_size: f64,
+    #[pyo3(get)]
+    pub min_weight: f64,
+    #[pyo3(get)]
+    pub max_weight: f64,
+    #[pyo3(get)]
+    pub weight_variance: f64,
+    #[pyo3(get)]
+    pub n_trimmed: usize,
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct CovariateShiftConformalResult {
+    #[pyo3(get)]
+    pub lower_predictive_bound: Vec<f64>,
+    #[pyo3(get)]
+    pub predicted_time: Vec<f64>,
+    #[pyo3(get)]
+    pub coverage_level: f64,
+    #[pyo3(get)]
+    pub quantile_threshold: f64,
+    #[pyo3(get)]
+    pub combined_weights: Vec<f64>,
+    #[pyo3(get)]
+    pub weight_diagnostics: WeightDiagnostics,
+    #[pyo3(get)]
+    pub n_calibration: usize,
+    #[pyo3(get)]
+    pub n_effective: f64,
+}
+
+fn compute_weight_diagnostics(weights: &[f64], n_trimmed: usize) -> WeightDiagnostics {
+    if weights.is_empty() {
+        return WeightDiagnostics {
+            effective_sample_size: 0.0,
+            min_weight: 0.0,
+            max_weight: 0.0,
+            weight_variance: 0.0,
+            n_trimmed,
+        };
+    }
+
+    let sum_weights: f64 = weights.iter().sum();
+    let sum_sq_weights: f64 = weights.iter().map(|w| w * w).sum();
+    let effective_sample_size = if sum_sq_weights > 0.0 {
+        sum_weights * sum_weights / sum_sq_weights
+    } else {
+        weights.len() as f64
+    };
+
+    let min_weight = weights.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_weight = weights.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+    let mean_weight = sum_weights / weights.len() as f64;
+    let weight_variance = weights
+        .iter()
+        .map(|&w| (w - mean_weight).powi(2))
+        .sum::<f64>()
+        / weights.len() as f64;
+
+    WeightDiagnostics {
+        effective_sample_size,
+        min_weight,
+        max_weight,
+        weight_variance,
+        n_trimmed,
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, status, predicted, importance_weights, predicted_new, coverage_level=None, use_ipcw=None, weight_trim=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn covariate_shift_conformal_survival(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    predicted: Vec<f64>,
+    importance_weights: Vec<f64>,
+    predicted_new: Vec<f64>,
+    coverage_level: Option<f64>,
+    use_ipcw: Option<bool>,
+    weight_trim: Option<f64>,
+) -> PyResult<CovariateShiftConformalResult> {
+    let n = time.len();
+    if n == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Input arrays cannot be empty",
+        ));
+    }
+    if status.len() != n || predicted.len() != n || importance_weights.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time, status, predicted, and importance_weights must have the same length",
+        ));
+    }
+
+    let coverage = coverage_level.unwrap_or(DEFAULT_CONFORMAL_COVERAGE);
+    if !(0.0..1.0).contains(&coverage) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "coverage_level must be between 0 and 1",
+        ));
+    }
+
+    let use_ipcw_flag = use_ipcw.unwrap_or(true);
+    let trim = weight_trim.unwrap_or(DEFAULT_WEIGHT_TRIM);
+
+    let censoring_surv = if use_ipcw_flag {
+        compute_km_censoring_survival(&time, &status)
+    } else {
+        vec![1.0; n]
+    };
+
+    let mut scores = Vec::with_capacity(n);
+    let mut combined_weights = Vec::with_capacity(n);
+    let mut n_trimmed = 0usize;
+
+    for i in 0..n {
+        if status[i] == 1 {
+            let score = time[i] - predicted[i];
+            scores.push(score);
+
+            let ipcw_weight = if use_ipcw_flag {
+                1.0 / censoring_surv[i].max(trim)
+            } else {
+                1.0
+            };
+
+            let mut combined = importance_weights[i] * ipcw_weight;
+
+            let max_combined =
+                importance_weights.iter().cloned().fold(0.0_f64, f64::max) * MAX_WEIGHT_RATIO;
+            if combined > max_combined && max_combined > 0.0 {
+                combined = max_combined;
+                n_trimmed += 1;
+            }
+            if combined < trim {
+                combined = trim;
+                n_trimmed += 1;
+            }
+
+            combined_weights.push(combined);
+        }
+    }
+
+    let n_uncensored = scores.len();
+    if n_uncensored == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "No uncensored observations in calibration set",
+        ));
+    }
+
+    let quantile_level = (1.0 - coverage) * (1.0 + 1.0 / n_uncensored as f64);
+    let quantile_level = quantile_level.min(1.0);
+
+    let quantile_threshold = weighted_quantile(&scores, &combined_weights, quantile_level);
+
+    let weight_diagnostics = compute_weight_diagnostics(&combined_weights, n_trimmed);
+
+    let lower_predictive_bound: Vec<f64> = predicted_new
+        .iter()
+        .map(|&p| (p - quantile_threshold).max(0.0))
+        .collect();
+
+    Ok(CovariateShiftConformalResult {
+        lower_predictive_bound,
+        predicted_time: predicted_new,
+        coverage_level: coverage,
+        quantile_threshold,
+        combined_weights,
+        weight_diagnostics: weight_diagnostics.clone(),
+        n_calibration: n_uncensored,
+        n_effective: weight_diagnostics.effective_sample_size,
+    })
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct CVPlusCalibrationResult {
+    #[pyo3(get)]
+    pub conformity_scores: Vec<f64>,
+    #[pyo3(get)]
+    pub quantile_threshold: f64,
+    #[pyo3(get)]
+    pub coverage_level: f64,
+    #[pyo3(get)]
+    pub n_calibration: usize,
+    #[pyo3(get)]
+    pub adjustment_factor: f64,
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct CVPlusConformalResult {
+    #[pyo3(get)]
+    pub lower_predictive_bound: Vec<f64>,
+    #[pyo3(get)]
+    pub predicted_time: Vec<f64>,
+    #[pyo3(get)]
+    pub coverage_level: f64,
+    #[pyo3(get)]
+    pub quantile_threshold: f64,
+    #[pyo3(get)]
+    pub loo_scores: Vec<f64>,
+    #[pyo3(get)]
+    pub n_calibration: usize,
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, status, predicted_loo, coverage_level=None))]
+pub fn cvplus_conformal_calibrate(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    predicted_loo: Vec<f64>,
+    coverage_level: Option<f64>,
+) -> PyResult<CVPlusCalibrationResult> {
+    let n = time.len();
+    if n == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Input arrays cannot be empty",
+        ));
+    }
+    if status.len() != n || predicted_loo.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time, status, and predicted_loo must have the same length",
+        ));
+    }
+
+    let coverage = coverage_level.unwrap_or(DEFAULT_CONFORMAL_COVERAGE);
+    if !(0.0..1.0).contains(&coverage) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "coverage_level must be between 0 and 1",
+        ));
+    }
+
+    let mut scores = Vec::with_capacity(n);
+    for i in 0..n {
+        if status[i] == 1 {
+            let score = time[i] - predicted_loo[i];
+            scores.push(score);
+        }
+    }
+
+    let n_uncensored = scores.len();
+    if n_uncensored == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "No uncensored observations in calibration set",
+        ));
+    }
+
+    let adjustment_factor = (n_uncensored as f64 + 1.0) / n_uncensored as f64;
+    let quantile_level = (1.0 - coverage) * adjustment_factor;
+    let quantile_level = quantile_level.min(1.0);
+
+    let weights: Vec<f64> = vec![1.0; n_uncensored];
+    let quantile_threshold = weighted_quantile(&scores, &weights, quantile_level);
+
+    Ok(CVPlusCalibrationResult {
+        conformity_scores: scores,
+        quantile_threshold,
+        coverage_level: coverage,
+        n_calibration: n_uncensored,
+        adjustment_factor,
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, status, predicted_loo, predicted_new, coverage_level=None))]
+pub fn cvplus_conformal_survival(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    predicted_loo: Vec<f64>,
+    predicted_new: Vec<f64>,
+    coverage_level: Option<f64>,
+) -> PyResult<CVPlusConformalResult> {
+    let calib_result = cvplus_conformal_calibrate(time, status, predicted_loo, coverage_level)?;
+
+    let lower_predictive_bound: Vec<f64> = predicted_new
+        .iter()
+        .map(|&p| (p - calib_result.quantile_threshold).max(0.0))
+        .collect();
+
+    Ok(CVPlusConformalResult {
+        lower_predictive_bound,
+        predicted_time: predicted_new,
+        coverage_level: calib_result.coverage_level,
+        quantile_threshold: calib_result.quantile_threshold,
+        loo_scores: calib_result.conformity_scores,
+        n_calibration: calib_result.n_calibration,
+    })
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct MondrianDiagnostics {
+    #[pyo3(get)]
+    pub group_labels: Vec<i32>,
+    #[pyo3(get)]
+    pub group_sizes: Vec<usize>,
+    #[pyo3(get)]
+    pub group_thresholds: Vec<f64>,
+    #[pyo3(get)]
+    pub n_small_groups: usize,
+    #[pyo3(get)]
+    pub global_threshold: f64,
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct MondrianCalibrationResult {
+    #[pyo3(get)]
+    pub group_thresholds: std::collections::HashMap<i32, f64>,
+    #[pyo3(get)]
+    pub global_threshold: f64,
+    #[pyo3(get)]
+    pub coverage_level: f64,
+    #[pyo3(get)]
+    pub group_sizes: std::collections::HashMap<i32, usize>,
+    #[pyo3(get)]
+    pub min_group_size: usize,
+    #[pyo3(get)]
+    pub diagnostics: MondrianDiagnostics,
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
+pub struct MondrianConformalResult {
+    #[pyo3(get)]
+    pub lower_predictive_bound: Vec<f64>,
+    #[pyo3(get)]
+    pub predicted_time: Vec<f64>,
+    #[pyo3(get)]
+    pub coverage_level: f64,
+    #[pyo3(get)]
+    pub applied_thresholds: Vec<f64>,
+    #[pyo3(get)]
+    pub group_labels_used: Vec<i32>,
+    #[pyo3(get)]
+    pub used_global_fallback: Vec<bool>,
+    #[pyo3(get)]
+    pub diagnostics: MondrianDiagnostics,
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, status, predicted, group_labels, coverage_level=None, min_group_size=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn mondrian_conformal_calibrate(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    predicted: Vec<f64>,
+    group_labels: Vec<i32>,
+    coverage_level: Option<f64>,
+    min_group_size: Option<usize>,
+) -> PyResult<MondrianCalibrationResult> {
+    let n = time.len();
+    if n == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Input arrays cannot be empty",
+        ));
+    }
+    if status.len() != n || predicted.len() != n || group_labels.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time, status, predicted, and group_labels must have the same length",
+        ));
+    }
+
+    let coverage = coverage_level.unwrap_or(DEFAULT_CONFORMAL_COVERAGE);
+    if !(0.0..1.0).contains(&coverage) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "coverage_level must be between 0 and 1",
+        ));
+    }
+
+    let min_size = min_group_size.unwrap_or(DEFAULT_MIN_GROUP_SIZE);
+
+    let mut group_scores: std::collections::HashMap<i32, Vec<f64>> =
+        std::collections::HashMap::new();
+    let mut all_scores = Vec::new();
+
+    for i in 0..n {
+        if status[i] == 1 {
+            let score = time[i] - predicted[i];
+            all_scores.push(score);
+            group_scores.entry(group_labels[i]).or_default().push(score);
+        }
+    }
+
+    if all_scores.is_empty() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "No uncensored observations in calibration set",
+        ));
+    }
+
+    let n_all = all_scores.len();
+    let global_q_level = (1.0 - coverage) * (n_all as f64 + 1.0) / n_all as f64;
+    let global_q_level = global_q_level.min(1.0);
+    let global_weights: Vec<f64> = vec![1.0; n_all];
+    let global_threshold = weighted_quantile(&all_scores, &global_weights, global_q_level);
+
+    let mut group_thresholds: std::collections::HashMap<i32, f64> =
+        std::collections::HashMap::new();
+    let mut group_sizes: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+    let mut n_small_groups = 0usize;
+
+    let mut diag_group_labels = Vec::new();
+    let mut diag_group_sizes = Vec::new();
+    let mut diag_group_thresholds = Vec::new();
+
+    for (&group, scores) in &group_scores {
+        let size = scores.len();
+        group_sizes.insert(group, size);
+        diag_group_labels.push(group);
+        diag_group_sizes.push(size);
+
+        if size >= min_size {
+            let q_level = (1.0 - coverage) * (size as f64 + 1.0) / size as f64;
+            let q_level = q_level.min(1.0);
+            let weights: Vec<f64> = vec![1.0; size];
+            let threshold = weighted_quantile(scores, &weights, q_level);
+            group_thresholds.insert(group, threshold);
+            diag_group_thresholds.push(threshold);
+        } else {
+            group_thresholds.insert(group, global_threshold);
+            diag_group_thresholds.push(global_threshold);
+            n_small_groups += 1;
+        }
+    }
+
+    let diagnostics = MondrianDiagnostics {
+        group_labels: diag_group_labels,
+        group_sizes: diag_group_sizes,
+        group_thresholds: diag_group_thresholds,
+        n_small_groups,
+        global_threshold,
+    };
+
+    Ok(MondrianCalibrationResult {
+        group_thresholds,
+        global_threshold,
+        coverage_level: coverage,
+        group_sizes,
+        min_group_size: min_size,
+        diagnostics,
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (calibration, predicted_new, group_labels_new))]
+pub fn mondrian_conformal_predict(
+    calibration: &MondrianCalibrationResult,
+    predicted_new: Vec<f64>,
+    group_labels_new: Vec<i32>,
+) -> PyResult<MondrianConformalResult> {
+    let n_new = predicted_new.len();
+    if n_new == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "predicted_new cannot be empty",
+        ));
+    }
+    if group_labels_new.len() != n_new {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "predicted_new and group_labels_new must have the same length",
+        ));
+    }
+
+    let mut lower_predictive_bound = Vec::with_capacity(n_new);
+    let mut applied_thresholds = Vec::with_capacity(n_new);
+    let mut used_global_fallback = Vec::with_capacity(n_new);
+
+    for i in 0..n_new {
+        let group = group_labels_new[i];
+        let (threshold, used_fallback) = if let Some(&t) = calibration.group_thresholds.get(&group)
+        {
+            let size = calibration.group_sizes.get(&group).copied().unwrap_or(0);
+            if size >= calibration.min_group_size {
+                (t, false)
+            } else {
+                (calibration.global_threshold, true)
+            }
+        } else {
+            (calibration.global_threshold, true)
+        };
+
+        lower_predictive_bound.push((predicted_new[i] - threshold).max(0.0));
+        applied_thresholds.push(threshold);
+        used_global_fallback.push(used_fallback);
+    }
+
+    Ok(MondrianConformalResult {
+        lower_predictive_bound,
+        predicted_time: predicted_new,
+        coverage_level: calibration.coverage_level,
+        applied_thresholds,
+        group_labels_used: group_labels_new,
+        used_global_fallback,
+        diagnostics: calibration.diagnostics.clone(),
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, status, predicted, group_labels, predicted_new, group_labels_new, coverage_level=None, min_group_size=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn mondrian_conformal_survival(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    predicted: Vec<f64>,
+    group_labels: Vec<i32>,
+    predicted_new: Vec<f64>,
+    group_labels_new: Vec<i32>,
+    coverage_level: Option<f64>,
+    min_group_size: Option<usize>,
+) -> PyResult<MondrianConformalResult> {
+    let calibration = mondrian_conformal_calibrate(
+        time,
+        status,
+        predicted,
+        group_labels,
+        coverage_level,
+        min_group_size,
+    )?;
+
+    mondrian_conformal_predict(&calibration, predicted_new, group_labels_new)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2252,5 +2784,232 @@ mod tests {
         let indices = bootstrap_sample_indices(10, 42);
         assert_eq!(indices.len(), 10);
         assert!(indices.iter().all(|&i| i < 10));
+    }
+
+    #[test]
+    fn test_covariate_shift_conformal_survival() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 1, 1, 1];
+        let predicted = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let importance_weights = vec![1.0, 1.0, 1.0, 1.0, 1.0];
+        let predicted_new = vec![2.5, 4.0];
+
+        let result = covariate_shift_conformal_survival(
+            time,
+            status,
+            predicted,
+            importance_weights,
+            predicted_new.clone(),
+            Some(0.9),
+            Some(false),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.lower_predictive_bound.len(), 2);
+        assert_eq!(result.predicted_time.len(), 2);
+        assert_eq!(result.n_calibration, 5);
+        for lower in result.lower_predictive_bound.iter() {
+            assert!(*lower >= 0.0);
+            assert!(lower.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_covariate_shift_with_different_weights() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 1, 1, 1];
+        let predicted = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let importance_weights = vec![0.5, 1.0, 1.5, 1.0, 0.5];
+        let predicted_new = vec![3.0];
+
+        let result = covariate_shift_conformal_survival(
+            time,
+            status,
+            predicted,
+            importance_weights,
+            predicted_new,
+            Some(0.9),
+            Some(true),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.combined_weights.len(), 5);
+        assert!(result.weight_diagnostics.effective_sample_size > 0.0);
+        assert!(result.weight_diagnostics.min_weight > 0.0);
+    }
+
+    #[test]
+    fn test_covariate_shift_empty_input() {
+        let result = covariate_shift_conformal_survival(
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![1.0],
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cvplus_conformal_calibrate() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 1, 1, 1];
+        let predicted_loo = vec![1.2, 1.8, 3.1, 4.1, 4.9];
+
+        let result = cvplus_conformal_calibrate(time, status, predicted_loo, Some(0.9)).unwrap();
+
+        assert_eq!(result.n_calibration, 5);
+        assert!((result.coverage_level - 0.9).abs() < 1e-10);
+        assert!(result.quantile_threshold.is_finite());
+        assert!(result.adjustment_factor > 1.0);
+    }
+
+    #[test]
+    fn test_cvplus_conformal_survival() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 1, 1, 1];
+        let predicted_loo = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let predicted_new = vec![2.5, 4.0];
+
+        let result = cvplus_conformal_survival(
+            time,
+            status,
+            predicted_loo,
+            predicted_new.clone(),
+            Some(0.9),
+        )
+        .unwrap();
+
+        assert_eq!(result.lower_predictive_bound.len(), 2);
+        assert_eq!(result.n_calibration, 5);
+        for lower in result.lower_predictive_bound.iter() {
+            assert!(*lower >= 0.0);
+            assert!(lower.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_cvplus_empty_input() {
+        let result = cvplus_conformal_calibrate(vec![], vec![], vec![], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cvplus_all_censored() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![0, 0, 0];
+        let predicted_loo = vec![1.0, 2.0, 3.0];
+
+        let result = cvplus_conformal_calibrate(time, status, predicted_loo, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mondrian_conformal_calibrate() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1, 1, 1, 1, 1, 1];
+        let predicted = vec![1.1, 1.9, 3.2, 3.8, 5.1, 6.2];
+        let group_labels = vec![0, 0, 0, 1, 1, 1];
+
+        let result =
+            mondrian_conformal_calibrate(time, status, predicted, group_labels, Some(0.9), Some(2))
+                .unwrap();
+
+        assert_eq!(result.group_thresholds.len(), 2);
+        assert_eq!(result.group_sizes.len(), 2);
+        assert!(result.global_threshold.is_finite());
+    }
+
+    #[test]
+    fn test_mondrian_conformal_survival() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1, 1, 1, 1, 1, 1];
+        let predicted = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let group_labels = vec![0, 0, 0, 1, 1, 1];
+        let predicted_new = vec![2.5, 5.0];
+        let group_labels_new = vec![0, 1];
+
+        let result = mondrian_conformal_survival(
+            time,
+            status,
+            predicted,
+            group_labels,
+            predicted_new.clone(),
+            group_labels_new,
+            Some(0.9),
+            Some(2),
+        )
+        .unwrap();
+
+        assert_eq!(result.lower_predictive_bound.len(), 2);
+        assert_eq!(result.applied_thresholds.len(), 2);
+        for lower in result.lower_predictive_bound.iter() {
+            assert!(*lower >= 0.0);
+            assert!(lower.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_mondrian_conformal_predict() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+        let predicted = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let group_labels = vec![0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
+
+        let calibration =
+            mondrian_conformal_calibrate(time, status, predicted, group_labels, Some(0.9), Some(3))
+                .unwrap();
+
+        let predicted_new = vec![3.0, 7.0];
+        let group_labels_new = vec![0, 1];
+
+        let result =
+            mondrian_conformal_predict(&calibration, predicted_new, group_labels_new).unwrap();
+
+        assert_eq!(result.lower_predictive_bound.len(), 2);
+        assert_eq!(result.used_global_fallback.len(), 2);
+    }
+
+    #[test]
+    fn test_mondrian_small_group_fallback() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+        let predicted = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let group_labels = vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 1];
+
+        let calibration =
+            mondrian_conformal_calibrate(time, status, predicted, group_labels, Some(0.9), Some(5))
+                .unwrap();
+
+        assert!(calibration.diagnostics.n_small_groups > 0);
+
+        let result = mondrian_conformal_predict(&calibration, vec![9.5], vec![1]).unwrap();
+        assert!(result.used_global_fallback[0]);
+    }
+
+    #[test]
+    fn test_mondrian_empty_input() {
+        let result = mondrian_conformal_calibrate(vec![], vec![], vec![], vec![], None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mondrian_new_group_fallback() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 1, 1, 1];
+        let predicted = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let group_labels = vec![0, 0, 0, 0, 0];
+
+        let calibration =
+            mondrian_conformal_calibrate(time, status, predicted, group_labels, Some(0.9), Some(3))
+                .unwrap();
+
+        let result = mondrian_conformal_predict(&calibration, vec![3.0], vec![99]).unwrap();
+        assert!(result.used_global_fallback[0]);
     }
 }

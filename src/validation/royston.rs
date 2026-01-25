@@ -1,3 +1,4 @@
+use crate::constants::{ROYSTON_KAPPA_FACTOR, ROYSTON_VARIANCE_FACTOR};
 use crate::utilities::statistical::{normal_cdf, normal_inverse_cdf};
 use pyo3::prelude::*;
 
@@ -116,7 +117,7 @@ pub fn royston(
         0.0
     };
 
-    let kappa = (8.0 / std::f64::consts::PI).sqrt();
+    let kappa = (ROYSTON_KAPPA_FACTOR / std::f64::consts::PI).sqrt();
 
     let d = kappa * correlation;
 
@@ -126,9 +127,9 @@ pub fn royston(
     let p_value = 2.0 * (1.0 - normal_cdf(z.abs()));
 
     let d_sq = d.powi(2);
-    let r_squared_d = d_sq / (d_sq + std::f64::consts::PI.powi(2) / 6.0);
+    let r_squared_d = d_sq / (d_sq + std::f64::consts::PI.powi(2) / ROYSTON_VARIANCE_FACTOR);
 
-    let r_squared_ko = 1.0 - (-d_sq * std::f64::consts::PI / 6.0).exp();
+    let r_squared_ko = 1.0 - (-d_sq * std::f64::consts::PI / ROYSTON_VARIANCE_FACTOR).exp();
 
     Ok(RoystonResult {
         d,

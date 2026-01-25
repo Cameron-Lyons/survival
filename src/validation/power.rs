@@ -1,3 +1,4 @@
+use crate::constants::{DEFAULT_ALLOCATION_RATIO, DEFAULT_ALPHA, DEFAULT_POWER, DEFAULT_SIDED};
 use crate::utilities::statistical::{normal_cdf as norm_cdf, normal_inverse_cdf as norm_ppf};
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
@@ -123,10 +124,10 @@ pub fn sample_size_survival(
     allocation_ratio: Option<f64>,
     sided: Option<usize>,
 ) -> PyResult<SampleSizeResult> {
-    let power = power.unwrap_or(0.8);
-    let alpha = alpha.unwrap_or(0.05);
-    let allocation_ratio = allocation_ratio.unwrap_or(1.0);
-    let sided = sided.unwrap_or(2);
+    let power = power.unwrap_or(DEFAULT_POWER);
+    let alpha = alpha.unwrap_or(DEFAULT_ALPHA);
+    let allocation_ratio = allocation_ratio.unwrap_or(DEFAULT_ALLOCATION_RATIO);
+    let sided = sided.unwrap_or(DEFAULT_SIDED);
     if hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "hazard_ratio must be positive and not equal to 1",
@@ -150,10 +151,10 @@ pub fn sample_size_survival_freedman(
     allocation_ratio: Option<f64>,
     sided: Option<usize>,
 ) -> PyResult<SampleSizeResult> {
-    let power = power.unwrap_or(0.8);
-    let alpha = alpha.unwrap_or(0.05);
-    let allocation_ratio = allocation_ratio.unwrap_or(1.0);
-    let sided = sided.unwrap_or(2);
+    let power = power.unwrap_or(DEFAULT_POWER);
+    let alpha = alpha.unwrap_or(DEFAULT_ALPHA);
+    let allocation_ratio = allocation_ratio.unwrap_or(DEFAULT_ALLOCATION_RATIO);
+    let sided = sided.unwrap_or(DEFAULT_SIDED);
     if hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "hazard_ratio must be positive and not equal to 1",
@@ -182,9 +183,9 @@ pub fn power_survival(
     allocation_ratio: Option<f64>,
     sided: Option<usize>,
 ) -> PyResult<f64> {
-    let alpha = alpha.unwrap_or(0.05);
-    let allocation_ratio = allocation_ratio.unwrap_or(1.0);
-    let sided = sided.unwrap_or(2);
+    let alpha = alpha.unwrap_or(DEFAULT_ALPHA);
+    let allocation_ratio = allocation_ratio.unwrap_or(DEFAULT_ALLOCATION_RATIO);
+    let sided = sided.unwrap_or(DEFAULT_SIDED);
     if hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "hazard_ratio must be positive and not equal to 1",

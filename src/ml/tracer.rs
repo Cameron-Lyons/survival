@@ -1388,39 +1388,32 @@ fn fit_tracer_inner(
 
             let total_size = batch_size * max_seq_len * n_features;
 
-            let x_batch: Vec<f32> = batch_indices
-                .iter()
-                .flat_map(|&i| {
-                    (0..max_seq_len * n_features).map(move |j| {
-                        x.get(i * max_seq_len * n_features + j)
-                            .copied()
-                            .unwrap_or(0.0) as f32
+            let stride = max_seq_len * n_features;
+            let (x_batch, mask_batch, time_delta_batch): (Vec<f32>, Vec<f32>, Vec<f32>) =
+                batch_indices
+                    .par_iter()
+                    .map(|&i| {
+                        let start = i * stride;
+                        let x_slice: Vec<f32> = (0..stride)
+                            .map(|j| x.get(start + j).copied().unwrap_or(0.0) as f32)
+                            .collect();
+                        let mask_slice: Vec<f32> = (0..stride)
+                            .map(|j| mask.get(start + j).copied().unwrap_or(1.0) as f32)
+                            .collect();
+                        let time_delta_slice: Vec<f32> = (0..stride)
+                            .map(|j| time_delta.get(start + j).copied().unwrap_or(0.0) as f32)
+                            .collect();
+                        (x_slice, mask_slice, time_delta_slice)
                     })
-                })
-                .collect();
-
-            let mask_batch: Vec<f32> = batch_indices
-                .iter()
-                .flat_map(|&i| {
-                    (0..max_seq_len * n_features).map(move |j| {
-                        mask.get(i * max_seq_len * n_features + j)
-                            .copied()
-                            .unwrap_or(1.0) as f32
-                    })
-                })
-                .collect();
-
-            let time_delta_batch: Vec<f32> = batch_indices
-                .iter()
-                .flat_map(|&i| {
-                    (0..max_seq_len * n_features).map(move |j| {
-                        time_delta
-                            .get(i * max_seq_len * n_features + j)
-                            .copied()
-                            .unwrap_or(0.0) as f32
-                    })
-                })
-                .collect();
+                    .reduce(
+                        || (Vec::new(), Vec::new(), Vec::new()),
+                        |(mut x_acc, mut m_acc, mut t_acc), (x_i, m_i, t_i)| {
+                            x_acc.extend(x_i);
+                            m_acc.extend(m_i);
+                            t_acc.extend(t_i);
+                            (x_acc, m_acc, t_acc)
+                        },
+                    );
 
             let seq_lengths_batch: Vec<usize> = batch_indices
                 .iter()

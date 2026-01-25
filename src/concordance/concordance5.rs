@@ -1,5 +1,5 @@
 use super::common::{build_concordance_result, validate_extended_concordance_inputs};
-use crate::constants::PARALLEL_THRESHOLD_SMALL;
+use crate::constants::{CONCORDANCE_COUNT_SIZE_EXTENDED, PARALLEL_THRESHOLD_SMALL};
 use crate::utilities::fenwick::FenwickTree;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -31,7 +31,7 @@ pub fn concordance5(
     }
     let mut nwt = vec![0.0; ntree];
     let mut fenwick = FenwickTree::new(ntree);
-    let mut count = vec![0.0; 6];
+    let mut count = vec![0.0; CONCORDANCE_COUNT_SIZE_EXTENDED];
     let mut imat = vec![0.0; 3 * n];
     let resid = if doresid {
         let nevent = y[n..].iter().filter(|&&v| v == 1.0).count();

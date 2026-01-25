@@ -58,28 +58,32 @@ pub fn relu_vec(x: &mut [f64]) {
 }
 
 pub fn compute_duration_bins(times: &[f64], num_durations: usize) -> (Vec<usize>, Vec<f64>) {
-    let mut sorted_times: Vec<f64> = times.to_vec();
-    sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = times.len();
+    let mut sorted_indices: Vec<usize> = (0..n).collect();
+    sorted_indices.sort_by(|&a, &b| {
+        times[a]
+            .partial_cmp(&times[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    let n = sorted_times.len();
     let mut cuts = Vec::with_capacity(num_durations + 1);
     cuts.push(0.0);
 
     for i in 1..num_durations {
         let idx = (i * n / num_durations).min(n - 1);
-        cuts.push(sorted_times[idx]);
+        cuts.push(times[sorted_indices[idx]]);
     }
-    cuts.push(sorted_times[n - 1] * 1.001);
+    cuts.push(times[sorted_indices[n - 1]] * 1.001);
 
     let duration_bins: Vec<usize> = times
         .iter()
         .map(|&t| {
-            for (bin, window) in cuts.windows(2).enumerate() {
-                if t >= window[0] && t < window[1] {
-                    return bin;
-                }
+            match cuts[1..]
+                .binary_search_by(|cut| cut.partial_cmp(&t).unwrap_or(std::cmp::Ordering::Equal))
+            {
+                Ok(idx) => (idx + 1).min(num_durations - 1),
+                Err(idx) => idx.min(num_durations - 1),
             }
-            num_durations - 1
         })
         .collect();
 
