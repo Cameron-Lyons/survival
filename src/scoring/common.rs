@@ -149,3 +149,56 @@ pub fn build_score_result(
     dict.set_item("summary_stats", summary_stats)?;
     Ok(dict.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    #[test]
+    fn apply_deltas_add_accumulates() {
+        let mut matrix = Array2::from_elem((1, 3), 1.0);
+        apply_deltas_add(&[0, 1, 2], 1, &mut matrix, |idx| vec![idx as f64]);
+        assert_eq!(matrix[[0, 0]], 1.0);
+        assert_eq!(matrix[[0, 1]], 2.0);
+        assert_eq!(matrix[[0, 2]], 3.0);
+    }
+
+    #[test]
+    fn apply_deltas_set_overwrites() {
+        let mut matrix = Array2::from_elem((1, 3), 10.0);
+        apply_deltas_set(&[0, 1, 2], 1, &mut matrix, |idx| vec![idx as f64]);
+        assert_eq!(matrix[[0, 0]], 0.0);
+        assert_eq!(matrix[[0, 1]], 1.0);
+        assert_eq!(matrix[[0, 2]], 2.0);
+    }
+
+    #[test]
+    fn compute_summary_stats_known_values() {
+        let residuals = vec![1.0, 2.0, 3.0];
+        let stats = compute_summary_stats(&residuals, 3, 1);
+        assert_eq!(stats.len(), 2);
+        assert!((stats[0] - 2.0).abs() < 1e-12);
+        assert!((stats[1] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn compute_summary_stats_single_observation() {
+        let residuals = vec![5.0];
+        let stats = compute_summary_stats(&residuals, 1, 1);
+        assert_eq!(stats.len(), 2);
+        assert!((stats[0] - 5.0).abs() < 1e-12);
+        assert_eq!(stats[1], 0.0);
+    }
+
+    #[test]
+    fn compute_summary_stats_two_variables() {
+        let residuals = vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0];
+        let stats = compute_summary_stats(&residuals, 3, 2);
+        assert_eq!(stats.len(), 4);
+        assert!((stats[0] - 2.0).abs() < 1e-12);
+        assert!((stats[1] - 1.0).abs() < 1e-12);
+        assert!((stats[2] - 20.0).abs() < 1e-12);
+        assert!((stats[3] - 100.0).abs() < 1e-12);
+    }
+}

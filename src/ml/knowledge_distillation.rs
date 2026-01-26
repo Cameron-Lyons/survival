@@ -508,4 +508,105 @@ mod tests {
         let corr = compute_correlation(&x, &y);
         assert!((corr - 1.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn test_correlation_negative() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![5.0, 4.0, 3.0, 2.0, 1.0];
+        let corr = compute_correlation(&x, &y);
+        assert!((corr - (-1.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_softmax_temperature() {
+        let logits = vec![1.0, 2.0, 3.0];
+        let cold = softmax_with_temperature(&logits, 0.1);
+        let hot = softmax_with_temperature(&logits, 10.0);
+
+        assert!(cold[2] > hot[2]);
+
+        let cold_sum: f64 = cold.iter().sum();
+        let hot_sum: f64 = hot.iter().sum();
+        assert!((cold_sum - 1.0).abs() < 1e-6);
+        assert!((hot_sum - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_kl_divergence_identical() {
+        let p = vec![0.25, 0.25, 0.25, 0.25];
+        let kl = kl_divergence(&p, &p);
+        assert!(kl.abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_kl_divergence_different() {
+        let p = vec![0.9, 0.1];
+        let q = vec![0.5, 0.5];
+        let kl = kl_divergence(&p, &q);
+        assert!(kl > 0.0);
+    }
+
+    #[test]
+    fn test_distill_survival_model() {
+        let covariates = vec![
+            vec![0.1, 0.2],
+            vec![0.3, 0.4],
+            vec![0.5, 0.6],
+            vec![0.7, 0.8],
+            vec![0.9, 1.0],
+        ];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 0, 1, 0, 1];
+        let teacher_preds = vec![
+            vec![0.1, 0.2, 0.3],
+            vec![0.2, 0.3, 0.4],
+            vec![0.3, 0.4, 0.5],
+            vec![0.4, 0.5, 0.6],
+            vec![0.5, 0.6, 0.7],
+        ];
+
+        let config = DistillationConfig::new(3.0, 0.5, 16, 1, 0.01, 10, 32, Some(42)).unwrap();
+        let (model, result) =
+            distill_survival_model(covariates.clone(), time, event, teacher_preds, Some(config))
+                .unwrap();
+
+        assert!(result.compression_ratio > 0.0);
+        assert!(!result.training_loss.is_empty());
+        assert!(result.student_c_index >= 0.0 && result.student_c_index <= 1.0);
+
+        let preds = model.predict(covariates.clone()).unwrap();
+        assert_eq!(preds.len(), 5);
+
+        let risks = model.predict_risk(covariates).unwrap();
+        assert_eq!(risks.len(), 5);
+    }
+
+    #[test]
+    fn test_distill_empty_input() {
+        let result = distill_survival_model(vec![], vec![], vec![], vec![], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prune_survival_model() {
+        let weights = vec![
+            vec![0.5, -0.3, 0.01, -0.02, 0.8],
+            vec![-0.1, 0.7, 0.02, -0.01, 0.4],
+        ];
+        let predictions = vec![0.5, 0.3, 0.7, 0.2, 0.9];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 0, 1, 1, 0];
+
+        let result = prune_survival_model(weights, predictions, time, event, 0.5).unwrap();
+
+        assert!(result.sparsity >= 0.0 && result.sparsity <= 1.0);
+        assert!(result.pruned_params <= result.original_params);
+        assert!(!result.pruned_weights.is_empty());
+    }
+
+    #[test]
+    fn test_prune_empty_input() {
+        let result = prune_survival_model(vec![], vec![], vec![], vec![], 0.5);
+        assert!(result.is_err());
+    }
 }

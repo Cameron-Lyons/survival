@@ -590,4 +590,137 @@ mod tests {
         assert!((accountant.get_epsilon() - 0.3).abs() < 1e-10);
         assert!((accountant.remaining_budget(1.0) - 0.7).abs() < 1e-10);
     }
+
+    #[test]
+    fn test_federated_config_invalid_clients() {
+        let result = FederatedConfig::new(10, 0, 1.0, 5, 0.01, "fedavg", false, 1.0, 1.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_federated_config_invalid_fraction() {
+        let result = FederatedConfig::new(10, 5, 0.0, 5, 0.01, "fedavg", false, 1.0, 1.0);
+        assert!(result.is_err());
+
+        let result = FederatedConfig::new(10, 5, 1.5, 5, 0.01, "fedavg", false, 1.0, 1.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_federated_cox_empty_clients() {
+        let config = FederatedConfig::new(5, 2, 1.0, 3, 0.01, "fedavg", false, 1.0, 1.0).unwrap();
+        let result = federated_cox(vec![], vec![], vec![], config, Some(42));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_federated_cox_fedprox() {
+        let client_times = vec![vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![2.0, 3.0, 4.0, 5.0, 6.0]];
+        let client_events = vec![vec![1, 0, 1, 0, 1], vec![1, 1, 0, 1, 0]];
+        let client_covariates = vec![
+            vec![
+                vec![0.5, 0.2],
+                vec![0.3, 0.8],
+                vec![0.7, 0.1],
+                vec![0.2, 0.9],
+                vec![0.8, 0.4],
+            ],
+            vec![
+                vec![0.1, 0.6],
+                vec![0.9, 0.3],
+                vec![0.4, 0.7],
+                vec![0.6, 0.2],
+                vec![0.2, 0.8],
+            ],
+        ];
+
+        let config = FederatedConfig::new(5, 2, 1.0, 3, 0.01, "fedprox", false, 1.0, 1.0).unwrap();
+        let result = federated_cox(
+            client_times,
+            client_events,
+            client_covariates,
+            config,
+            Some(42),
+        )
+        .unwrap();
+
+        assert_eq!(result.global_weights.len(), 2);
+        assert_eq!(result.round_metrics.len(), 5);
+    }
+
+    #[test]
+    fn test_federated_cox_predict_risk() {
+        let client_times = vec![vec![1.0, 2.0, 3.0, 4.0, 5.0]];
+        let client_events = vec![vec![1, 0, 1, 0, 1]];
+        let client_covariates = vec![vec![
+            vec![0.5, 0.2],
+            vec![0.3, 0.8],
+            vec![0.7, 0.1],
+            vec![0.2, 0.9],
+            vec![0.8, 0.4],
+        ]];
+
+        let config = FederatedConfig::new(10, 1, 1.0, 5, 0.01, "fedavg", false, 1.0, 1.0).unwrap();
+        let result = federated_cox(
+            client_times,
+            client_events,
+            client_covariates,
+            config,
+            Some(42),
+        )
+        .unwrap();
+
+        let test_covariates = vec![vec![0.5, 0.5], vec![0.1, 0.9]];
+        let risks = result.predict_risk(test_covariates);
+        assert_eq!(risks.len(), 2);
+        assert!(risks.iter().all(|&r| r > 0.0));
+    }
+
+    #[test]
+    fn test_federated_cox_predict_survival() {
+        let client_times = vec![vec![1.0, 2.0, 3.0, 4.0, 5.0]];
+        let client_events = vec![vec![1, 0, 1, 0, 1]];
+        let client_covariates = vec![vec![
+            vec![0.5, 0.2],
+            vec![0.3, 0.8],
+            vec![0.7, 0.1],
+            vec![0.2, 0.9],
+            vec![0.8, 0.4],
+        ]];
+
+        let config = FederatedConfig::new(5, 1, 1.0, 3, 0.01, "fedavg", false, 1.0, 1.0).unwrap();
+        let result = federated_cox(
+            client_times,
+            client_events,
+            client_covariates,
+            config,
+            Some(42),
+        )
+        .unwrap();
+
+        let test_covariates = vec![vec![0.5, 0.5]];
+        let baseline = vec![0.01, 0.02, 0.03];
+        let survival = result.predict_survival(test_covariates, baseline);
+        assert_eq!(survival.len(), 1);
+        assert_eq!(survival[0].len(), 3);
+        assert!(survival[0].iter().all(|&s| (0.0..=1.0).contains(&s)));
+    }
+
+    #[test]
+    fn test_secure_aggregate_empty() {
+        let result = secure_aggregate(vec![], 0.5, Some(42));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_privacy_accountant_budget_exhausted() {
+        let mut accountant = PrivacyAccountant::new(1e-5);
+        accountant.add_query(0.5);
+        accountant.add_query(0.5);
+        accountant.add_query(0.5);
+
+        assert!((accountant.get_epsilon() - 1.5).abs() < 1e-10);
+        assert!((accountant.remaining_budget(1.0) - 0.0).abs() < 1e-10);
+        assert_eq!(accountant.queries.len(), 3);
+    }
 }

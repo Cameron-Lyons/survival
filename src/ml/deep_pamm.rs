@@ -370,4 +370,87 @@ mod tests {
         let basis = compute_bspline_basis(0.5, &knots, 2);
         assert!(!basis.is_empty());
     }
+
+    #[test]
+    fn test_fit_deep_pamm() {
+        let covariates = vec![
+            vec![0.1, 0.2],
+            vec![0.3, 0.4],
+            vec![0.5, 0.6],
+            vec![0.7, 0.8],
+            vec![0.9, 1.0],
+        ];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 0, 1, 0, 1];
+
+        let config =
+            DeepPAMMConfig::new(Some(vec![32, 16]), 10, 3, 5, 0.1, 0.001, 32, 50, Some(42))
+                .unwrap();
+        let model = fit_deep_pamm(covariates, time, event, Some(config)).unwrap();
+
+        let intervals = model.get_time_intervals();
+        assert!(!intervals.is_empty());
+    }
+
+    #[test]
+    fn test_fit_deep_pamm_empty_input() {
+        let result = fit_deep_pamm(vec![], vec![], vec![], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deep_pamm_predict_hazard() {
+        let covariates = vec![
+            vec![0.1, 0.2],
+            vec![0.3, 0.4],
+            vec![0.5, 0.6],
+            vec![0.7, 0.8],
+            vec![0.9, 1.0],
+        ];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 0, 1, 0, 1];
+
+        let model = fit_deep_pamm(covariates.clone(), time, event, None).unwrap();
+
+        let test_times = vec![1.0, 2.0, 3.0];
+        let hazards = model
+            .predict_hazard(covariates.clone(), test_times.clone())
+            .unwrap();
+        assert_eq!(hazards.len(), 5);
+        assert_eq!(hazards[0].len(), 3);
+        assert!(hazards.iter().all(|h| h.iter().all(|&v| v > 0.0)));
+    }
+
+    #[test]
+    fn test_deep_pamm_predict_survival() {
+        let covariates = vec![vec![0.1, 0.2], vec![0.3, 0.4], vec![0.5, 0.6]];
+        let time = vec![1.0, 2.0, 3.0];
+        let event = vec![1, 0, 1];
+
+        let model = fit_deep_pamm(covariates.clone(), time, event, None).unwrap();
+
+        let test_times = vec![0.5, 1.0, 1.5, 2.0, 2.5];
+        let survival = model
+            .predict_survival(covariates.clone(), test_times.clone())
+            .unwrap();
+        assert_eq!(survival.len(), 3);
+        assert_eq!(survival[0].len(), 5);
+
+        for s in &survival {
+            for i in 1..s.len() {
+                assert!(s[i] <= s[i - 1] + 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn test_deep_pamm_empty_covariates_predict() {
+        let covariates = vec![vec![0.1, 0.2], vec![0.3, 0.4]];
+        let time = vec![1.0, 2.0];
+        let event = vec![1, 0];
+
+        let model = fit_deep_pamm(covariates, time, event, None).unwrap();
+        let result = model.predict_hazard(vec![], vec![1.0]).unwrap();
+        assert!(result.is_empty());
+    }
 }

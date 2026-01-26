@@ -629,4 +629,108 @@ mod tests {
         assert_eq!(result.perturbed_values.len(), 100);
         assert!((result.estimated_mean - 50.0).abs() < 30.0);
     }
+
+    #[test]
+    fn test_dp_config_invalid_epsilon() {
+        let result = DPConfig::new(0.0, 1e-5, 1.0, "gaussian", None);
+        assert!(result.is_err());
+
+        let result = DPConfig::new(-1.0, 1e-5, 1.0, "gaussian", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dp_config_invalid_delta() {
+        let result = DPConfig::new(1.0, 1.0, 1.0, "gaussian", None);
+        assert!(result.is_err());
+
+        let result = DPConfig::new(1.0, -0.1, 1.0, "gaussian", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dp_kaplan_meier_laplace() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 0, 1, 0, 1];
+        let config = DPConfig::new(1.0, 1e-5, 1.0, "laplace", None).unwrap();
+
+        let result = dp_kaplan_meier(time, event, config, Some(42)).unwrap();
+        assert_eq!(result.survival_curve.len(), 5);
+        assert_eq!(result.time_points.len(), 5);
+        assert!(
+            result
+                .survival_curve
+                .iter()
+                .all(|&s| (0.0..=1.0).contains(&s))
+        );
+    }
+
+    #[test]
+    fn test_dp_kaplan_meier_mismatched_lengths() {
+        let time = vec![1.0, 2.0, 3.0];
+        let event = vec![1, 0];
+        let config = DPConfig::new(1.0, 1e-5, 1.0, "gaussian", None).unwrap();
+
+        let result = dp_kaplan_meier(time, event, config, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dp_cox_regression_predict_risk() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let event = vec![1, 0, 1, 0, 1, 1];
+        let covariates = vec![
+            vec![0.5, 0.2],
+            vec![0.3, 0.8],
+            vec![0.7, 0.1],
+            vec![0.2, 0.9],
+            vec![0.8, 0.4],
+            vec![0.1, 0.6],
+        ];
+        let config = DPConfig::new(2.0, 1e-5, 1.0, "gaussian", None).unwrap();
+
+        let result =
+            dp_cox_regression(time, event, covariates.clone(), config, 50, Some(42)).unwrap();
+        let risks = result.predict_risk(covariates);
+        assert_eq!(risks.len(), 6);
+        assert!(risks.iter().all(|&r| r > 0.0));
+    }
+
+    #[test]
+    fn test_dp_histogram_empty_values() {
+        let config = DPConfig::new(1.0, 1e-5, 1.0, "laplace", None).unwrap();
+        let result = dp_histogram(vec![], 10, config, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dp_histogram_zero_bins() {
+        let config = DPConfig::new(1.0, 1e-5, 1.0, "laplace", None).unwrap();
+        let result = dp_histogram(vec![1.0, 2.0], 0, config, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dp_histogram_normalized() {
+        let values: Vec<f64> = (0..100).map(|i| i as f64).collect();
+        let config = DPConfig::new(1.0, 1e-5, 1.0, "laplace", Some((0.0, 100.0))).unwrap();
+
+        let result = dp_histogram(values, 10, config, Some(42)).unwrap();
+        let normalized = result.normalized();
+        assert_eq!(normalized.len(), 10);
+        let total: f64 = normalized.iter().sum();
+        assert!((total - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_local_dp_mean_empty() {
+        let result = local_dp_mean(vec![], 1.0, (0.0, 1.0), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_local_dp_mean_invalid_epsilon() {
+        let result = local_dp_mean(vec![1.0, 2.0], -1.0, (0.0, 10.0), None);
+        assert!(result.is_err());
+    }
 }

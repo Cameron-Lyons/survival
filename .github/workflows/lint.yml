@@ -84,7 +84,6 @@ jobs:
         uses: crate-ci/typos@master
         with:
           config: .typos.toml
-        continue-on-error: true
 
   veto:
     name: Veto

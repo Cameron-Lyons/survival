@@ -377,4 +377,99 @@ mod tests {
         assert_eq!(km.len(), 4);
         assert!(km.iter().all(|&s| (0.0..=1.0).contains(&s)));
     }
+
+    #[test]
+    fn test_ipcw_weights_dimension_mismatch() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 0];
+        let x = vec![1.0, 0.5, 0.0];
+        let result = compute_ipcw_weights(time, status, x, 3, 1, true, Some(0.01));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ipcw_weights_x_dimension_mismatch() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 0, 1];
+        let x = vec![1.0, 0.5];
+        let result = compute_ipcw_weights(time, status, x, 3, 1, true, Some(0.01));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ipcw_weights_all_events() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 1, 1, 1];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5];
+
+        let result = compute_ipcw_weights(time, status, x, 5, 1, true, Some(0.01)).unwrap();
+        assert_eq!(result.weights.len(), 5);
+        assert!(result.weights.iter().all(|&w| w > 0.0));
+        assert!(result.n_effective > 0.0);
+    }
+
+    #[test]
+    fn test_ipcw_weights_unstabilized() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 0, 1];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5];
+
+        let stabilized = compute_ipcw_weights(
+            time.clone(),
+            status.clone(),
+            x.clone(),
+            5,
+            1,
+            true,
+            Some(0.01),
+        )
+        .unwrap();
+        let unstabilized = compute_ipcw_weights(time, status, x, 5, 1, false, Some(0.01)).unwrap();
+
+        assert_eq!(stabilized.weights.len(), unstabilized.weights.len());
+    }
+
+    #[test]
+    fn test_ipcw_treatment_effect_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let outcome = vec![2.0, 1.0, 2.5, 1.5, 3.0, 0.5, 2.2, 1.3, 2.8, 0.8];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.3, 0.7, 0.2, 0.8, 0.4];
+
+        let result =
+            ipcw_treatment_effect(time, status, treatment, outcome, x, 10, 1, None).unwrap();
+
+        assert_eq!(result.weights.len(), 10);
+        assert_eq!(result.censoring_probs.len(), 10);
+        assert!(result.treatment_effect.is_finite());
+        assert!(result.std_error >= 0.0);
+        assert!(result.ci_lower <= result.ci_upper);
+    }
+
+    #[test]
+    fn test_ipcw_kaplan_meier_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.3, 0.7, 0.2];
+        let time_points = vec![2.0, 4.0, 6.0, 8.0];
+
+        let (tp, survival, ci_width) =
+            ipcw_kaplan_meier(time, status, x, 8, 1, time_points).unwrap();
+
+        assert_eq!(tp.len(), 4);
+        assert_eq!(survival.len(), 4);
+        assert_eq!(ci_width.len(), 4);
+        assert!(survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
+        assert!(ci_width.iter().all(|&c| c >= 0.0));
+    }
+
+    #[test]
+    fn test_km_censoring_all_censored() {
+        let time = vec![1.0, 2.0, 3.0, 4.0];
+        let status = vec![0, 0, 0, 0];
+        let km = compute_km_censoring(&time, &status, 4);
+        assert_eq!(km.len(), 4);
+        assert!(km.iter().all(|&s| s <= 1.0));
+    }
 }

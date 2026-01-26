@@ -383,3 +383,81 @@ pub fn cv_survreg_loglik(
     cv_survreg(&time, &status, &cov_array, dist, &config)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    fn make_test_data(n: usize) -> (Vec<f64>, Vec<i32>, Array2<f64>) {
+        let time: Vec<f64> = (1..=n as i64).map(|i| i as f64).collect();
+        let status: Vec<i32> = (0..n).map(|i| if i % 3 == 0 { 1 } else { 0 }).collect();
+        let mut covariates = Array2::zeros((1, n));
+        for i in 0..n {
+            covariates[[0, i]] = (i as f64) / (n as f64);
+        }
+        (time, status, covariates)
+    }
+
+    #[test]
+    fn cv_cox_k3() {
+        let (time, status, covariates) = make_test_data(30);
+        let config = CVConfig {
+            n_folds: 3,
+            shuffle: true,
+            seed: Some(42),
+        };
+        let result = cv_cox(&time, &status, &covariates, None, &config).unwrap();
+        assert_eq!(result.fold_scores.len(), 3);
+    }
+
+    #[test]
+    fn cv_cox_k5() {
+        let (time, status, covariates) = make_test_data(30);
+        let config = CVConfig {
+            n_folds: 5,
+            shuffle: true,
+            seed: Some(42),
+        };
+        let result = cv_cox(&time, &status, &covariates, None, &config).unwrap();
+        assert_eq!(result.fold_scores.len(), 5);
+    }
+
+    #[test]
+    fn cv_cox_reproducibility() {
+        let (time, status, covariates) = make_test_data(30);
+        let config = CVConfig {
+            n_folds: 5,
+            shuffle: true,
+            seed: Some(123),
+        };
+        let result1 = cv_cox(&time, &status, &covariates, None, &config).unwrap();
+        let result2 = cv_cox(&time, &status, &covariates, None, &config).unwrap();
+        for i in 0..result1.fold_scores.len() {
+            assert!((result1.fold_scores[i] - result2.fold_scores[i]).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn cv_cox_different_seeds() {
+        let (time, status, covariates) = make_test_data(30);
+        let config1 = CVConfig {
+            n_folds: 5,
+            shuffle: true,
+            seed: Some(42),
+        };
+        let config2 = CVConfig {
+            n_folds: 5,
+            shuffle: true,
+            seed: Some(999),
+        };
+        let result1 = cv_cox(&time, &status, &covariates, None, &config1).unwrap();
+        let result2 = cv_cox(&time, &status, &covariates, None, &config2).unwrap();
+        let all_same = result1
+            .fold_scores
+            .iter()
+            .zip(&result2.fold_scores)
+            .all(|(a, b)| (a - b).abs() < 1e-10);
+        assert!(!all_same);
+    }
+}

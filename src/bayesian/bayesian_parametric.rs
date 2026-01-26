@@ -146,7 +146,7 @@ fn lognormal_log_lik(time: f64, status: i32, mu: f64, sigma: f64) -> f64 {
     let z = (log_t - mu) / sigma;
 
     if status == 1 {
-        -0.5 * z * z - log_t.ln() - sigma.ln() - 0.5 * (2.0 * std::f64::consts::PI).ln()
+        -0.5 * z * z - log_t - sigma.ln() - 0.5 * (2.0 * std::f64::consts::PI).ln()
     } else {
         (1.0 - normal_cdf(z)).max(1e-300).ln()
     }
@@ -568,5 +568,334 @@ mod tests {
         let result = bayesian_parametric(time, status, x, 5, 1, &config).unwrap();
         assert_eq!(result.beta_mean.len(), 1);
         assert!(result.shape_mean > 0.0);
+    }
+
+    #[test]
+    fn test_lognormal_log_lik() {
+        let ll_event = lognormal_log_lik(5.0, 1, 1.0, 0.5);
+        assert!(ll_event.is_finite());
+
+        let ll_censored = lognormal_log_lik(5.0, 0, 1.0, 0.5);
+        assert!(ll_censored.is_finite());
+        assert!(ll_censored <= 0.0);
+
+        let ll_invalid = lognormal_log_lik(-1.0, 1, 1.0, 0.5);
+        assert_eq!(ll_invalid, f64::NEG_INFINITY);
+
+        let ll_bad_sigma = lognormal_log_lik(5.0, 1, 1.0, -0.5);
+        assert_eq!(ll_bad_sigma, f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_loglogistic_log_lik() {
+        let ll_event = loglogistic_log_lik(5.0, 1, 3.0, 1.5);
+        assert!(ll_event.is_finite());
+
+        let ll_censored = loglogistic_log_lik(5.0, 0, 3.0, 1.5);
+        assert!(ll_censored.is_finite());
+        assert!(ll_censored <= 0.0);
+
+        let ll_invalid = loglogistic_log_lik(-1.0, 1, 3.0, 1.5);
+        assert_eq!(ll_invalid, f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_exponential_log_lik() {
+        let ll_event = exponential_log_lik(5.0, 1, 0.5);
+        assert!(ll_event.is_finite());
+
+        let ll_censored = exponential_log_lik(5.0, 0, 0.5);
+        assert!(ll_censored.is_finite());
+        assert!((ll_censored - (-0.5 * 5.0)).abs() < 1e-10);
+
+        let ll_invalid_time = exponential_log_lik(-1.0, 1, 0.5);
+        assert_eq!(ll_invalid_time, f64::NEG_INFINITY);
+
+        let ll_invalid_rate = exponential_log_lik(5.0, 1, -0.5);
+        assert_eq!(ll_invalid_rate, f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_weibull_log_lik_edge_cases() {
+        let ll_zero_time = weibull_log_lik(0.0, 1, 3.0, 1.5);
+        assert_eq!(ll_zero_time, f64::NEG_INFINITY);
+
+        let ll_zero_scale = weibull_log_lik(5.0, 1, 0.0, 1.5);
+        assert_eq!(ll_zero_scale, f64::NEG_INFINITY);
+
+        let ll_zero_shape = weibull_log_lik(5.0, 1, 3.0, 0.0);
+        assert_eq!(ll_zero_shape, f64::NEG_INFINITY);
+
+        let ll_censored = weibull_log_lik(5.0, 0, 3.0, 1.5);
+        assert!(ll_censored.is_finite());
+        assert!(ll_censored <= 0.0);
+    }
+
+    #[test]
+    fn test_bayesian_parametric_lognormal() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config = BayesianParametricConfig::new(
+            BayesianDistribution::LogNormal,
+            2.5,
+            1.0,
+            1.0,
+            200,
+            100,
+            2,
+            Some(42),
+        );
+
+        let result = bayesian_parametric(time, status, x, 10, 1, &config).unwrap();
+        assert_eq!(result.beta_mean.len(), 1);
+        assert!(result.shape_mean > 0.0);
+        assert!(result.shape_sd > 0.0);
+        assert!(result.dic.is_finite());
+        assert!(result.waic.is_finite());
+    }
+
+    #[test]
+    fn test_bayesian_parametric_loglogistic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config = BayesianParametricConfig::new(
+            BayesianDistribution::LogLogistic,
+            2.5,
+            1.0,
+            1.0,
+            200,
+            100,
+            2,
+            Some(42),
+        );
+
+        let result = bayesian_parametric(time, status, x, 10, 1, &config).unwrap();
+        assert_eq!(result.beta_mean.len(), 1);
+        assert!(result.shape_mean > 0.0);
+        assert_eq!(result.acceleration_factor_mean.len(), 1);
+        assert!(result.acceleration_factor_mean[0] > 0.0);
+    }
+
+    #[test]
+    fn test_bayesian_parametric_exponential() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config = BayesianParametricConfig::new(
+            BayesianDistribution::Exponential,
+            2.5,
+            1.0,
+            1.0,
+            200,
+            100,
+            2,
+            Some(42),
+        );
+
+        let result = bayesian_parametric(time, status, x, 10, 1, &config).unwrap();
+        assert_eq!(result.beta_mean.len(), 1);
+        assert!(result.shape_mean > 0.0);
+    }
+
+    #[test]
+    fn test_bayesian_parametric_output_dimensions_multi_covariate() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let x = vec![
+            1.0, 0.2, 0.5, 0.8, 0.0, 0.5, 1.0, 0.3, 0.5, 0.9, 0.0, 0.7, 1.0, 0.1, 0.5, 0.6, 0.0,
+            0.4, 0.0, 0.8,
+        ];
+        let n_vars = 2;
+        let n_samples = 200;
+        let n_chains = 2;
+
+        let config = BayesianParametricConfig::new(
+            BayesianDistribution::Weibull,
+            2.5,
+            1.0,
+            1.0,
+            n_samples,
+            100,
+            n_chains,
+            Some(42),
+        );
+
+        let result = bayesian_parametric(time, status, x, 10, n_vars, &config).unwrap();
+        assert_eq!(result.beta_mean.len(), n_vars);
+        assert_eq!(result.beta_sd.len(), n_vars);
+        assert_eq!(result.beta_lower.len(), n_vars);
+        assert_eq!(result.beta_upper.len(), n_vars);
+        assert_eq!(result.acceleration_factor_mean.len(), n_vars);
+        assert_eq!(result.acceleration_factor_lower.len(), n_vars);
+        assert_eq!(result.acceleration_factor_upper.len(), n_vars);
+        assert_eq!(result.beta_samples.len(), n_samples * n_chains);
+        assert_eq!(result.shape_samples.len(), n_samples * n_chains);
+        assert_eq!(result.log_posterior.len(), n_samples * n_chains);
+
+        for j in 0..n_vars {
+            assert!(result.beta_sd[j] >= 0.0);
+            assert!(result.beta_lower[j] <= result.beta_upper[j]);
+            assert!(result.acceleration_factor_mean[j] > 0.0);
+            assert!(result.acceleration_factor_lower[j] > 0.0);
+            assert!(result.acceleration_factor_upper[j] > 0.0);
+            assert!(result.acceleration_factor_lower[j] <= result.acceleration_factor_upper[j]);
+        }
+
+        assert!(result.shape_sd >= 0.0);
+        assert!(result.shape_lower <= result.shape_upper);
+        assert!(result.shape_lower > 0.0);
+    }
+
+    #[test]
+    fn test_bayesian_parametric_invalid_x_length() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 0, 1];
+        let x = vec![1.0, 2.0];
+
+        let config = BayesianParametricConfig::new(
+            BayesianDistribution::Weibull,
+            2.5,
+            1.0,
+            1.0,
+            100,
+            50,
+            2,
+            Some(42),
+        );
+
+        let result = bayesian_parametric(time, status, x, 3, 1, &config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bayesian_parametric_credible_intervals_bracket_mean() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config = BayesianParametricConfig::new(
+            BayesianDistribution::Weibull,
+            2.5,
+            1.0,
+            1.0,
+            500,
+            250,
+            2,
+            Some(42),
+        );
+
+        let result = bayesian_parametric(time, status, x, 10, 1, &config).unwrap();
+
+        assert!(
+            result.beta_lower[0] <= result.beta_mean[0],
+            "beta_lower={} > beta_mean={}",
+            result.beta_lower[0],
+            result.beta_mean[0]
+        );
+        assert!(
+            result.beta_upper[0] >= result.beta_mean[0],
+            "beta_upper={} < beta_mean={}",
+            result.beta_upper[0],
+            result.beta_mean[0]
+        );
+        assert!(
+            result.shape_lower <= result.shape_mean,
+            "shape_lower={} > shape_mean={}",
+            result.shape_lower,
+            result.shape_mean
+        );
+        assert!(
+            result.shape_upper >= result.shape_mean,
+            "shape_upper={} < shape_mean={}",
+            result.shape_upper,
+            result.shape_mean
+        );
+    }
+
+    #[test]
+    fn test_bayesian_parametric_predict_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let x = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config = BayesianParametricConfig::new(
+            BayesianDistribution::Weibull,
+            2.5,
+            1.0,
+            1.0,
+            200,
+            100,
+            2,
+            Some(42),
+        );
+
+        let result = bayesian_parametric(time, status, x, 10, 1, &config).unwrap();
+
+        let x_new = vec![0.5, 1.0];
+        let time_points = vec![1.0, 3.0, 5.0, 7.0, 10.0];
+
+        let (surv_mean, surv_lower, surv_upper) = bayesian_parametric_predict(
+            &result,
+            x_new,
+            2,
+            1,
+            time_points,
+            &BayesianDistribution::Weibull,
+        )
+        .unwrap();
+
+        assert_eq!(surv_mean.len(), 2);
+        assert_eq!(surv_lower.len(), 2);
+        assert_eq!(surv_upper.len(), 2);
+        assert_eq!(surv_mean[0].len(), 5);
+
+        for i in 0..2 {
+            for t in 0..5 {
+                assert!(
+                    surv_mean[i][t] >= 0.0 && surv_mean[i][t] <= 1.0,
+                    "survival out of [0,1]: {}",
+                    surv_mean[i][t]
+                );
+                assert!(surv_lower[i][t] <= surv_upper[i][t]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_bayesian_distribution_parsing() {
+        assert_eq!(
+            BayesianDistribution::new("weibull").unwrap(),
+            BayesianDistribution::Weibull
+        );
+        assert_eq!(
+            BayesianDistribution::new("lognormal").unwrap(),
+            BayesianDistribution::LogNormal
+        );
+        assert_eq!(
+            BayesianDistribution::new("log_normal").unwrap(),
+            BayesianDistribution::LogNormal
+        );
+        assert_eq!(
+            BayesianDistribution::new("loglogistic").unwrap(),
+            BayesianDistribution::LogLogistic
+        );
+        assert_eq!(
+            BayesianDistribution::new("log_logistic").unwrap(),
+            BayesianDistribution::LogLogistic
+        );
+        assert_eq!(
+            BayesianDistribution::new("exponential").unwrap(),
+            BayesianDistribution::Exponential
+        );
+        assert_eq!(
+            BayesianDistribution::new("exp").unwrap(),
+            BayesianDistribution::Exponential
+        );
+        assert!(BayesianDistribution::new("unknown").is_err());
     }
 }

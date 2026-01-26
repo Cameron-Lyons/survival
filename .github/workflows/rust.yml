@@ -43,7 +43,7 @@ jobs:
             ${{ runner.os }}-cargo-py3.14-
 
       - name: Install maturin and test dependencies
-        run: pip install maturin numpy pandas polars
+        run: pip install maturin numpy pandas polars pytest
 
       - name: Clean old wheels
         run: rm -rf target/wheels || true
@@ -56,6 +56,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo test --release
 
+      - name: Run doctests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --doc
+
       - name: Install wheel (Unix)
         if: matrix.os != 'windows-latest'
         run: pip install target/wheels/survival-*.whl
@@ -67,7 +71,7 @@ jobs:
           pip install $wheel.FullName
 
       - name: Run Python tests
-        run: python test/test_all.py
+        run: python -m pytest test/ -v
 
   python-matrix:
     name: Python ${{ matrix.python-version }}
@@ -75,7 +79,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.14']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
 
     steps:
       - name: Checkout code
@@ -103,7 +107,7 @@ jobs:
             ${{ runner.os }}-cargo-py${{ matrix.python-version }}-
 
       - name: Install maturin and test dependencies
-        run: pip install maturin numpy pandas polars
+        run: pip install maturin numpy pandas polars pytest
 
       - name: Clean old wheels
         run: rm -rf target/wheels || true
@@ -117,7 +121,7 @@ jobs:
         run: cargo test --release
 
       - name: Run Python tests
-        run: python test/test_all.py
+        run: python -m pytest test/ -v
 
   r-validation:
     name: R Survival Package Validation

@@ -631,4 +631,222 @@ mod tests {
         assert_eq!(result.posterior_mean.len(), 2);
         assert_eq!(result.hazard_ratio_mean.len(), 2);
     }
+
+    #[test]
+    fn test_log_prior_all_types() {
+        let beta = vec![0.5, -0.3, 0.2];
+        let scale = 2.5;
+
+        let lp_normal = log_prior(&beta, &PriorType::Normal, scale);
+        assert!(lp_normal < 0.0);
+
+        let lp_laplace = log_prior(&beta, &PriorType::Laplace, scale);
+        assert!(lp_laplace < 0.0);
+
+        let lp_cauchy = log_prior(&beta, &PriorType::Cauchy, scale);
+        assert!(lp_cauchy < 0.0);
+
+        let lp_horseshoe = log_prior(&beta, &PriorType::Horseshoe, scale);
+        assert!(lp_horseshoe < 0.0);
+
+        let lp_flat = log_prior(&beta, &PriorType::Flat, scale);
+        assert!((lp_flat - 0.0).abs() < 1e-10);
+
+        let zero_beta = vec![0.0, 0.0, 0.0];
+        let lp_zero = log_prior(&zero_beta, &PriorType::Normal, scale);
+        assert!((lp_zero - 0.0).abs() < 1e-10);
+        assert!(lp_zero >= lp_normal);
+    }
+
+    #[test]
+    fn test_log_prior_gradient_all_types() {
+        let beta = vec![0.5, -0.3];
+        let scale = 2.5;
+
+        let grad_normal = log_prior_gradient(&beta, &PriorType::Normal, scale);
+        assert_eq!(grad_normal.len(), 2);
+        assert!(grad_normal[0] < 0.0);
+        assert!(grad_normal[1] > 0.0);
+
+        let grad_laplace = log_prior_gradient(&beta, &PriorType::Laplace, scale);
+        assert_eq!(grad_laplace.len(), 2);
+        assert!(grad_laplace[0] < 0.0);
+        assert!(grad_laplace[1] > 0.0);
+
+        let grad_cauchy = log_prior_gradient(&beta, &PriorType::Cauchy, scale);
+        assert_eq!(grad_cauchy.len(), 2);
+
+        let grad_horseshoe = log_prior_gradient(&beta, &PriorType::Horseshoe, scale);
+        assert_eq!(grad_horseshoe.len(), 2);
+        for i in 0..2 {
+            assert!((grad_cauchy[i] - grad_horseshoe[i]).abs() < 1e-10);
+        }
+
+        let grad_flat = log_prior_gradient(&beta, &PriorType::Flat, scale);
+        assert!(grad_flat.iter().all(|&g| g.abs() < 1e-10));
+    }
+
+    #[test]
+    fn test_bayesian_cox_laplace_prior() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let covariates = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config =
+            BayesianCoxConfig::new(PriorType::Laplace, 1.0, 200, 100, 2, 0.8, Some(42)).unwrap();
+
+        let result = bayesian_cox(covariates, 10, 1, time, event, &config).unwrap();
+        assert_eq!(result.posterior_mean.len(), 1);
+        assert_eq!(result.posterior_sd.len(), 1);
+        assert!(result.posterior_sd[0] > 0.0);
+        assert_eq!(result.credible_lower.len(), 1);
+        assert_eq!(result.credible_upper.len(), 1);
+        assert!(result.credible_lower[0] <= result.posterior_mean[0]);
+        assert!(result.credible_upper[0] >= result.posterior_mean[0]);
+    }
+
+    #[test]
+    fn test_bayesian_cox_flat_prior() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let covariates = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config =
+            BayesianCoxConfig::new(PriorType::Flat, 2.5, 200, 100, 2, 0.8, Some(42)).unwrap();
+
+        let result = bayesian_cox(covariates, 10, 1, time, event, &config).unwrap();
+        assert_eq!(result.posterior_mean.len(), 1);
+        assert!(result.hazard_ratio_mean[0] > 0.0);
+        assert!(result.hazard_ratio_lower[0] > 0.0);
+        assert!(result.hazard_ratio_upper[0] > 0.0);
+        assert!(result.hazard_ratio_lower[0] <= result.hazard_ratio_mean[0]);
+        assert!(result.hazard_ratio_upper[0] >= result.hazard_ratio_mean[0]);
+    }
+
+    #[test]
+    fn test_bayesian_cox_output_dimensions_multi_covariate() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let covariates = vec![
+            1.0, 0.2, 0.5, 0.5, 0.8, 0.3, 0.0, 0.5, 1.0, 1.0, 0.9, 0.1, 0.5, 0.3, 0.7, 0.5, 1.0,
+            0.6, 1.0, 0.4, 0.0, 0.7, 0.0, 0.2, 0.0, 0.9, 0.5, 0.8, 0.0, 0.0,
+        ];
+        let n_vars = 3;
+
+        let config =
+            BayesianCoxConfig::new(PriorType::Normal, 2.5, 200, 100, 2, 0.8, Some(42)).unwrap();
+
+        let result = bayesian_cox(covariates, 10, n_vars, time, event, &config).unwrap();
+        assert_eq!(result.posterior_mean.len(), n_vars);
+        assert_eq!(result.posterior_sd.len(), n_vars);
+        assert_eq!(result.credible_lower.len(), n_vars);
+        assert_eq!(result.credible_upper.len(), n_vars);
+        assert_eq!(result.hazard_ratio_mean.len(), n_vars);
+        assert_eq!(result.hazard_ratio_lower.len(), n_vars);
+        assert_eq!(result.hazard_ratio_upper.len(), n_vars);
+        assert_eq!(result.rhat.len(), n_vars);
+        assert_eq!(result.n_eff.len(), n_vars);
+        assert_eq!(result.samples.len(), 200 * 2);
+
+        for j in 0..n_vars {
+            assert!(result.posterior_sd[j] >= 0.0);
+            assert!(result.credible_lower[j] <= result.credible_upper[j]);
+            assert!(result.rhat[j] > 0.0);
+            assert!(result.n_eff[j] > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_bayesian_cox_invalid_x_length() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 0, 1];
+        let x = vec![1.0, 2.0];
+
+        let config =
+            BayesianCoxConfig::new(PriorType::Normal, 2.5, 100, 50, 2, 0.8, Some(42)).unwrap();
+
+        let result = bayesian_cox(x, 3, 1, time, status, &config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bayesian_cox_config_invalid_prior_scale() {
+        let result = BayesianCoxConfig::new(PriorType::Normal, 0.0, 100, 50, 2, 0.8, Some(42));
+        assert!(result.is_err());
+
+        let result = BayesianCoxConfig::new(PriorType::Normal, -1.0, 100, 50, 2, 0.8, Some(42));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bayesian_cox_predict_survival_basic() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let covariates = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config =
+            BayesianCoxConfig::new(PriorType::Normal, 2.5, 200, 100, 2, 0.8, Some(42)).unwrap();
+
+        let result = bayesian_cox(covariates, 10, 1, time, event, &config).unwrap();
+
+        let x_new = vec![0.5, 1.0];
+        let baseline_hazard = vec![0.01, 0.02, 0.03, 0.05, 0.08];
+        let time_points = vec![1.0, 3.0, 5.0, 7.0, 10.0];
+
+        let (surv_mean, surv_lower, surv_upper) =
+            bayesian_cox_predict_survival(&result, x_new, 2, 1, baseline_hazard, time_points)
+                .unwrap();
+
+        assert_eq!(surv_mean.len(), 2);
+        assert_eq!(surv_lower.len(), 2);
+        assert_eq!(surv_upper.len(), 2);
+        assert_eq!(surv_mean[0].len(), 5);
+
+        for i in 0..2 {
+            for t in 0..5 {
+                assert!(surv_mean[i][t] >= 0.0 && surv_mean[i][t] <= 1.0);
+                assert!(surv_lower[i][t] <= surv_upper[i][t]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_likelihood_basic() {
+        let x = vec![1.0, 0.0, 1.0, 0.0];
+        let time = vec![1.0, 2.0, 3.0, 4.0];
+        let status = vec![1, 1, 0, 1];
+        let beta = vec![0.0];
+
+        let ll = log_likelihood(&x, 4, 1, &time, &status, &beta);
+        assert!(ll.is_finite());
+        assert!(ll <= 0.0);
+    }
+
+    #[test]
+    fn test_log_likelihood_gradient_finite() {
+        let x = vec![1.0, 0.0, 1.0, 0.0];
+        let time = vec![1.0, 2.0, 3.0, 4.0];
+        let status = vec![1, 1, 0, 1];
+        let beta = vec![0.5];
+
+        let grad = log_likelihood_gradient(&x, 4, 1, &time, &status, &beta);
+        assert_eq!(grad.len(), 1);
+        assert!(grad[0].is_finite());
+    }
+
+    #[test]
+    fn test_bayesian_cox_horseshoe_prior() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let covariates = vec![1.0, 0.5, 0.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.0, 0.0];
+
+        let config =
+            BayesianCoxConfig::new(PriorType::Horseshoe, 1.0, 200, 100, 2, 0.8, Some(42)).unwrap();
+
+        let result = bayesian_cox(covariates, 10, 1, time, event, &config).unwrap();
+        assert_eq!(result.posterior_mean.len(), 1);
+        assert!(result.waic.is_finite());
+        assert!(result.loo.is_finite());
+        assert!((result.waic - result.loo).abs() < 1e-10);
+    }
 }

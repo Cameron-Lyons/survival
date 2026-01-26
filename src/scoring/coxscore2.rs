@@ -323,3 +323,107 @@ pub fn cox_score_residuals(
     let params = CoxScoreParams { method, n, nvar };
     Ok(compute_cox_score_residuals(data, params))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_stratum_output_length() {
+        let n = 4;
+        let nvar = 1;
+        let y = vec![1.0, 2.0, 3.0, 4.0, 1.0, 0.0, 1.0, 0.0];
+        let strata = vec![0, 0, 0, 0];
+        let covar = vec![0.5, 1.0, 1.5, 2.0];
+        let score = vec![1.0, 1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+        let data = CoxScoreData {
+            y: &y,
+            strata: &strata,
+            covar: &covar,
+            score: &score,
+            weights: &weights,
+        };
+        let params = CoxScoreParams { method: 0, n, nvar };
+        let result = compute_cox_score_residuals(data, params);
+        assert_eq!(result.len(), n * nvar);
+    }
+
+    #[test]
+    fn multiple_strata_output_length() {
+        let n = 4;
+        let nvar = 1;
+        let y = vec![1.0, 2.0, 3.0, 4.0, 1.0, 0.0, 1.0, 0.0];
+        let strata = vec![0, 0, 1, 1];
+        let covar = vec![0.5, 1.0, 1.5, 2.0];
+        let score = vec![1.0, 1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+        let data = CoxScoreData {
+            y: &y,
+            strata: &strata,
+            covar: &covar,
+            score: &score,
+            weights: &weights,
+        };
+        let params = CoxScoreParams { method: 0, n, nvar };
+        let result = compute_cox_score_residuals(data, params);
+        assert_eq!(result.len(), n * nvar);
+    }
+
+    #[test]
+    fn breslow_vs_efron() {
+        let n = 4;
+        let nvar = 1;
+        let y = vec![1.0, 1.0, 2.0, 3.0, 1.0, 1.0, 0.0, 0.0];
+        let strata = vec![0, 0, 0, 0];
+        let covar = vec![1.0, 2.0, 3.0, 4.0];
+        let score = vec![1.0, 1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+        let data_b = CoxScoreData {
+            y: &y,
+            strata: &strata,
+            covar: &covar,
+            score: &score,
+            weights: &weights,
+        };
+        let params_b = CoxScoreParams { method: 0, n, nvar };
+        let breslow = compute_cox_score_residuals(data_b, params_b);
+        let data_e = CoxScoreData {
+            y: &y,
+            strata: &strata,
+            covar: &covar,
+            score: &score,
+            weights: &weights,
+        };
+        let params_e = CoxScoreParams { method: 1, n, nvar };
+        let efron = compute_cox_score_residuals(data_e, params_e);
+        let differs = breslow
+            .iter()
+            .zip(efron.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-15);
+        assert!(differs);
+    }
+
+    #[test]
+    fn no_events_all_zero() {
+        let n = 4;
+        let nvar = 1;
+        let y = vec![1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0];
+        let strata = vec![0, 0, 0, 0];
+        let covar = vec![0.5, 1.0, 1.5, 2.0];
+        let score = vec![1.0, 1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+        let data = CoxScoreData {
+            y: &y,
+            strata: &strata,
+            covar: &covar,
+            score: &score,
+            weights: &weights,
+        };
+        let params = CoxScoreParams { method: 0, n, nvar };
+        let result = compute_cox_score_residuals(data, params);
+        for &r in &result {
+            assert_eq!(r, 0.0);
+        }
+    }
+}

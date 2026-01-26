@@ -80,3 +80,57 @@ pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> SplitResul
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_cuts() {
+        let result = survsplit(vec![0.0, 5.0], vec![10.0, 15.0], vec![]);
+        assert_eq!(result.row.len(), 2);
+        assert_eq!(result.start, vec![0.0, 5.0]);
+        assert_eq!(result.end, vec![10.0, 15.0]);
+    }
+
+    #[test]
+    fn single_cut_splits_interval() {
+        let result = survsplit(vec![0.0], vec![10.0], vec![5.0]);
+        assert_eq!(result.row.len(), 2);
+        assert_eq!(result.start, vec![0.0, 5.0]);
+        assert_eq!(result.end, vec![5.0, 10.0]);
+        assert_eq!(result.censor, vec![true, false]);
+    }
+
+    #[test]
+    fn multiple_cuts() {
+        let result = survsplit(vec![0.0], vec![10.0], vec![3.0, 7.0]);
+        assert_eq!(result.row.len(), 3);
+        assert_eq!(result.start, vec![0.0, 3.0, 7.0]);
+        assert_eq!(result.end, vec![3.0, 7.0, 10.0]);
+    }
+
+    #[test]
+    fn cut_outside_interval() {
+        let result = survsplit(vec![0.0], vec![5.0], vec![10.0]);
+        assert_eq!(result.row.len(), 1);
+        assert_eq!(result.start, vec![0.0]);
+        assert_eq!(result.end, vec![5.0]);
+    }
+
+    #[test]
+    fn nan_handling() {
+        let result = survsplit(vec![f64::NAN], vec![f64::NAN], vec![5.0]);
+        assert_eq!(result.row.len(), 1);
+        assert!(result.start[0].is_nan());
+        assert!(result.end[0].is_nan());
+    }
+
+    #[test]
+    fn multiple_observations() {
+        let result = survsplit(vec![0.0, 0.0, 0.0], vec![10.0, 5.0, 8.0], vec![3.0, 7.0]);
+        assert_eq!(result.row.iter().filter(|&&r| r == 1).count(), 3);
+        assert_eq!(result.row.iter().filter(|&&r| r == 2).count(), 2);
+        assert_eq!(result.row.iter().filter(|&&r| r == 3).count(), 3);
+    }
+}

@@ -448,4 +448,120 @@ mod tests {
         assert!(normal_cdf(3.0) > 0.99);
         assert!(normal_cdf(-3.0) < 0.01);
     }
+
+    #[test]
+    fn test_double_ml_survival_basic() {
+        let covariates = vec![
+            vec![1.0, 0.5],
+            vec![0.0, 1.0],
+            vec![1.5, 0.3],
+            vec![0.2, 0.8],
+            vec![1.1, 0.6],
+            vec![0.3, 1.2],
+            vec![0.9, 0.4],
+            vec![0.5, 0.9],
+            vec![1.3, 0.7],
+            vec![0.1, 1.1],
+        ];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let outcome = vec![2.0, 1.0, 2.5, 1.5, 3.0, 0.5, 2.2, 1.3, 2.8, 0.8];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+
+        let config = DoubleMLConfig::new(2, 1, None, 0.01, Some(42)).unwrap();
+        let result =
+            double_ml_survival(covariates, treatment, outcome, time, event, Some(config)).unwrap();
+
+        assert!(result.ate.is_finite());
+        assert!(result.se >= 0.0);
+        assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0);
+        assert!(result.ci_lower <= result.ate);
+        assert!(result.ci_upper >= result.ate);
+        assert_eq!(result.n_obs, 10);
+        assert!(!result.scores.is_empty());
+    }
+
+    #[test]
+    fn test_double_ml_survival_empty_input() {
+        let result = double_ml_survival(vec![], vec![], vec![], vec![], vec![], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_double_ml_survival_dimension_mismatch() {
+        let covariates = vec![vec![1.0], vec![2.0]];
+        let treatment = vec![1, 0, 1];
+        let outcome = vec![1.0, 2.0];
+        let time = vec![1.0, 2.0];
+        let event = vec![1, 0];
+        let result = double_ml_survival(covariates, treatment, outcome, time, event, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_double_ml_multiple_reps() {
+        let covariates = vec![
+            vec![1.0],
+            vec![2.0],
+            vec![3.0],
+            vec![4.0],
+            vec![5.0],
+            vec![6.0],
+            vec![7.0],
+            vec![8.0],
+            vec![9.0],
+            vec![10.0],
+        ];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let outcome = vec![2.0, 1.0, 2.5, 1.5, 3.0, 0.5, 2.2, 1.3, 2.8, 0.8];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+
+        let config = DoubleMLConfig::new(2, 3, None, 0.01, Some(42)).unwrap();
+        let result =
+            double_ml_survival(covariates, treatment, outcome, time, event, Some(config)).unwrap();
+
+        assert_eq!(result.scores.len(), 30);
+    }
+
+    #[test]
+    fn test_double_ml_cate_basic() {
+        let n = 40;
+        let covariates: Vec<Vec<f64>> = (0..n).map(|i| vec![i as f64 / n as f64]).collect();
+        let treatment: Vec<i32> = (0..n).map(|i| i % 2).collect();
+        let outcome: Vec<f64> = (0..n).map(|i| 1.0 + 0.5 * (i % 2) as f64).collect();
+        let time: Vec<f64> = (0..n).map(|i| (i + 1) as f64).collect();
+        let event: Vec<i32> = (0..n).map(|i| if i % 3 == 0 { 0 } else { 1 }).collect();
+        let group_variable: Vec<i32> = (0..n).map(|i| if i < n / 2 { 0 } else { 1 }).collect();
+
+        let result = double_ml_cate(
+            covariates,
+            treatment,
+            outcome,
+            time,
+            event,
+            group_variable,
+            None,
+        )
+        .unwrap();
+
+        assert!(!result.group_labels.is_empty());
+        assert_eq!(result.cate_estimates.len(), result.group_labels.len());
+        assert_eq!(result.cate_se.len(), result.group_labels.len());
+        assert_eq!(result.group_sizes.len(), result.group_labels.len());
+    }
+
+    #[test]
+    fn test_create_folds_odd_n() {
+        let mut rng = fastrand::Rng::new();
+        rng.seed(123);
+        let folds = create_folds(7, 3, &mut rng);
+        assert_eq!(folds.len(), 3);
+        let total: usize = folds.iter().map(|f| f.len()).sum();
+        assert_eq!(total, 7);
+
+        let mut all_indices: Vec<usize> = folds.into_iter().flatten().collect();
+        all_indices.sort();
+        assert_eq!(all_indices, (0..7).collect::<Vec<_>>());
+    }
 }

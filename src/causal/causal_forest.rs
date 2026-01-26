@@ -537,4 +537,151 @@ mod tests {
         let effect = compute_treatment_effect(&outcomes, &treatment, &indices);
         assert!((effect - 2.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn test_config_honesty_fraction_boundary() {
+        let result = CausalForestConfig::new(10, 5, 2, 4, None, true, 0.0, None);
+        assert!(result.is_err());
+
+        let result = CausalForestConfig::new(10, 5, 2, 4, None, true, 1.0, None);
+        assert!(result.is_err());
+
+        let result = CausalForestConfig::new(10, 5, 2, 4, None, true, 0.5, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_treatment_effect_all_treated() {
+        let outcomes = vec![1.0, 2.0, 3.0];
+        let treatment = vec![1, 1, 1];
+        let indices = vec![0, 1, 2];
+
+        let effect = compute_treatment_effect(&outcomes, &treatment, &indices);
+        assert!((effect - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_treatment_effect_all_control() {
+        let outcomes = vec![1.0, 2.0, 3.0];
+        let treatment = vec![0, 0, 0];
+        let indices = vec![0, 1, 2];
+
+        let effect = compute_treatment_effect(&outcomes, &treatment, &indices);
+        assert!((effect - (-2.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_causal_forest_survival_basic() {
+        let covariates = vec![
+            vec![1.0, 0.5],
+            vec![0.0, 1.0],
+            vec![1.5, 0.3],
+            vec![0.2, 0.8],
+            vec![1.1, 0.6],
+            vec![0.3, 1.2],
+            vec![0.9, 0.4],
+            vec![0.5, 0.9],
+            vec![1.3, 0.7],
+            vec![0.1, 1.1],
+            vec![0.7, 0.2],
+            vec![0.4, 1.3],
+            vec![1.2, 0.8],
+            vec![0.6, 0.5],
+            vec![0.8, 1.0],
+            vec![1.4, 0.1],
+            vec![0.3, 0.6],
+            vec![1.0, 1.2],
+            vec![0.5, 0.3],
+            vec![0.2, 0.7],
+        ];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let time = vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5,
+            8.5, 9.5, 10.5,
+        ];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+
+        let config = CausalForestConfig::new(5, 3, 2, 4, None, false, 0.5, Some(42)).unwrap();
+        let (_forest, result) =
+            causal_forest_survival(covariates, treatment, time, event, 5.0, Some(config)).unwrap();
+
+        assert_eq!(result.cate_estimates.len(), 20);
+        assert_eq!(result.cate_se.len(), 20);
+        assert_eq!(result.feature_importance.len(), 2);
+        assert!(result.ate.is_finite());
+        assert!(result.ate_se >= 0.0);
+
+        let importance_sum: f64 = result.feature_importance.iter().sum();
+        if importance_sum > 0.0 {
+            assert!((importance_sum - 1.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_causal_forest_empty_input() {
+        let result = causal_forest_survival(vec![], vec![], vec![], vec![], 5.0, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_causal_forest_dimension_mismatch() {
+        let covariates = vec![vec![1.0], vec![2.0]];
+        let treatment = vec![1, 0, 1];
+        let time = vec![1.0, 2.0];
+        let event = vec![1, 0];
+        let result = causal_forest_survival(covariates, treatment, time, event, 5.0, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_causal_forest_predict_cate_and_variance() {
+        let covariates = vec![
+            vec![1.0, 0.5],
+            vec![0.0, 1.0],
+            vec![1.5, 0.3],
+            vec![0.2, 0.8],
+            vec![1.1, 0.6],
+            vec![0.3, 1.2],
+            vec![0.9, 0.4],
+            vec![0.5, 0.9],
+            vec![1.3, 0.7],
+            vec![0.1, 1.1],
+            vec![0.7, 0.2],
+            vec![0.4, 1.3],
+            vec![1.2, 0.8],
+            vec![0.6, 0.5],
+            vec![0.8, 1.0],
+            vec![1.4, 0.1],
+            vec![0.3, 0.6],
+            vec![1.0, 1.2],
+            vec![0.5, 0.3],
+            vec![0.2, 0.7],
+        ];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let time = vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5,
+            8.5, 9.5, 10.5,
+        ];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+
+        let config = CausalForestConfig::new(5, 3, 2, 4, None, false, 0.5, Some(42)).unwrap();
+        let (forest, _) = causal_forest_survival(
+            covariates.clone(),
+            treatment,
+            time,
+            event,
+            5.0,
+            Some(config),
+        )
+        .unwrap();
+
+        let new_data = vec![vec![0.5, 0.5], vec![1.0, 1.0]];
+        let preds = forest.predict_cate(new_data.clone()).unwrap();
+        assert_eq!(preds.len(), 2);
+        assert!(preds.iter().all(|p| p.is_finite()));
+
+        let vars = forest.predict_variance(new_data).unwrap();
+        assert_eq!(vars.len(), 2);
+        assert!(vars.iter().all(|&v| v >= 0.0));
+    }
 }

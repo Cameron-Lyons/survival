@@ -398,4 +398,74 @@ mod tests {
         assert!(!result.survival_treated.is_empty());
         assert!(!result.survival_control.is_empty());
     }
+
+    #[test]
+    fn test_g_computation_dimension_mismatch() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 1, 0, 1];
+        let treatment = vec![1, 0, 1];
+        let x = vec![0.5, 0.3, 0.7];
+        let result = g_computation(time, status, treatment, x, 3, 1, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_g_computation_x_dimension_mismatch() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 1, 0];
+        let treatment = vec![1, 0, 1];
+        let x = vec![0.5, 0.3];
+        let result = g_computation(time, status, treatment, x, 3, 1, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_g_computation_output_properties() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let x = vec![0.5, 0.3, 0.7, 0.2, 0.8, 0.4, 0.6, 0.1, 0.9, 0.35];
+
+        let result = g_computation(time, status, treatment, x, 10, 1, Some(8.0), Some(10)).unwrap();
+
+        assert_eq!(result.survival_treated.len(), result.survival_control.len());
+        assert_eq!(result.survival_treated.len(), result.time_points.len());
+        assert!(result.ate.is_finite());
+        assert!(result.ate_se >= 0.0);
+        assert!(result.ate_ci_lower <= result.ate);
+        assert!(result.ate_ci_upper >= result.ate);
+        assert!(result.rmst_treated >= 0.0);
+        assert!(result.rmst_control >= 0.0);
+        assert!(result.rmst_difference.is_finite());
+    }
+
+    #[test]
+    fn test_g_computation_survival_curves() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1, 1, 0, 1, 0, 1];
+        let treatment = vec![1, 0, 1, 0, 1, 0];
+        let x = vec![0.5, 0.3, 0.7, 0.2, 0.8, 0.4];
+        let time_points = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+
+        let (tp, surv_t, surv_c) =
+            g_computation_survival_curves(time, status, treatment, x, 6, 1, time_points).unwrap();
+
+        assert_eq!(tp.len(), 5);
+        assert_eq!(surv_t.len(), 5);
+        assert_eq!(surv_c.len(), 5);
+    }
+
+    #[test]
+    fn test_rmst_empty() {
+        let rmst = compute_rmst(&[], &[], 5.0);
+        assert_eq!(rmst, 0.0);
+    }
+
+    #[test]
+    fn test_rmst_constant_survival() {
+        let time_points = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let survival = vec![1.0, 1.0, 1.0, 1.0, 1.0];
+        let rmst = compute_rmst(&time_points, &survival, 5.0);
+        assert!((rmst - 5.0).abs() < 1e-6);
+    }
 }
