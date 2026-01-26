@@ -41,7 +41,7 @@ impl DPConfig {
                 "epsilon must be positive",
             ));
         }
-        if delta < 0.0 || delta >= 1.0 {
+        if !(0.0..1.0).contains(&delta) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "delta must be in [0, 1)",
             ));
@@ -586,7 +586,12 @@ mod tests {
 
         let result = dp_kaplan_meier(time, event, config, Some(42)).unwrap();
         assert!(!result.survival_curve.is_empty());
-        assert!(result.survival_curve.iter().all(|&s| s >= 0.0 && s <= 1.0));
+        assert!(
+            result
+                .survival_curve
+                .iter()
+                .all(|&s| (0.0..=1.0).contains(&s))
+        );
     }
 
     #[test]

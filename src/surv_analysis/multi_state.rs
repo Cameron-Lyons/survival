@@ -269,10 +269,11 @@ pub fn fit_multi_state_model(
         let dt = eval_times[t_idx] - eval_times[t_idx - 1];
 
         let mut transition_probs = vec![vec![0.0; n_states]; n_states];
-        for i in 0..n_states {
-            transition_probs[i][i] = 1.0;
+        for (i, row) in transition_probs.iter_mut().enumerate().take(n_states) {
+            row[i] = 1.0;
         }
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n_states {
             for j in 0..n_states {
                 if i != j && config.transition_matrix[i][j] {
@@ -300,8 +301,8 @@ pub fn fit_multi_state_model(
 
         let sum: f64 = state_probs[t_idx].iter().sum();
         if sum > 0.0 {
-            for j in 0..n_states {
-                state_probs[t_idx][j] /= sum;
+            for prob in state_probs[t_idx].iter_mut() {
+                *prob /= sum;
             }
         }
     }
@@ -472,8 +473,7 @@ pub fn fit_markov_msm(
                     generator_matrix[i][j] = transition_counts[i][j] / total_time[i];
                 }
             }
-            generator_matrix[i][i] =
-                -generator_matrix[i].iter().sum::<f64>() + generator_matrix[i][i];
+            generator_matrix[i][i] -= generator_matrix[i].iter().sum::<f64>();
         }
     }
 
@@ -525,6 +525,7 @@ pub fn fit_markov_msm(
     })
 }
 
+#[allow(clippy::needless_range_loop)]
 fn matrix_exponential(q: &[Vec<f64>], t: f64) -> Vec<Vec<f64>> {
     let n = q.len();
     let mut result = vec![vec![0.0; n]; n];
@@ -640,7 +641,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.time_points.len() > 0);
+        assert!(!result.time_points.is_empty());
         assert!(result.intensities.contains_key("0->1"));
     }
 

@@ -197,6 +197,7 @@ fn copula_cdf(u: f64, v: f64, theta: f64, copula_type: &CopulaType) -> f64 {
 
 fn probit(p: f64) -> f64 {
     let p = p.clamp(1e-10, 1.0 - 1e-10);
+    #[allow(clippy::excessive_precision)]
     let a = [
         -3.969683028665376e1,
         2.209460984245205e2,

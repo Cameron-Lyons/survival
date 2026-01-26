@@ -266,7 +266,7 @@ pub fn super_learner_survival(
 
     let mut cv_predictions: Vec<Vec<f64>> = vec![vec![0.0; n]; n_models];
 
-    for (_fold_idx, test_indices) in folds.iter().enumerate() {
+    for test_indices in folds.iter() {
         let train_indices: Vec<usize> = (0..n).filter(|i| !test_indices.contains(i)).collect();
 
         for m in 0..n_models {
@@ -665,6 +665,7 @@ pub fn componentwise_boosting(
         let mut best_score = f64::NEG_INFINITY;
         let mut best_update = 0.0;
 
+        #[allow(clippy::needless_range_loop)]
         for j in 0..n_features {
             let mut gradient = 0.0;
             let mut hessian = 0.0;
@@ -719,10 +720,10 @@ pub fn componentwise_boosting(
             rounds_without_improvement += 1;
         }
 
-        if let Some(patience) = config.early_stopping_rounds {
-            if rounds_without_improvement >= patience {
-                break;
-            }
+        if let Some(patience) = config.early_stopping_rounds
+            && rounds_without_improvement >= patience
+        {
+            break;
         }
     }
 

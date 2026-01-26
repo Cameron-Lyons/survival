@@ -195,6 +195,7 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
         .collect();
 
     let mut cov_matrix = vec![vec![0.0; n_points]; n_points];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n_points {
         for j in 0..n_points {
             let cov: f64 = centered.iter().map(|c| c[i] * c[j]).sum::<f64>() / n_curves as f64;
@@ -218,21 +219,21 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
                 }
             }
 
-            for prev in 0..k {
+            for eigenvector in eigenvectors.iter().take(k) {
                 let dot: f64 = new_v
                     .iter()
-                    .zip(eigenvectors[prev].iter())
+                    .zip(eigenvector.iter())
                     .map(|(&a, &b)| a * b)
                     .sum();
-                for i in 0..n_points {
-                    new_v[i] -= dot * eigenvectors[prev][i];
+                for (nv, &ev) in new_v.iter_mut().zip(eigenvector.iter()) {
+                    *nv -= dot * ev;
                 }
             }
 
             let norm: f64 = new_v.iter().map(|&x| x * x).sum::<f64>().sqrt();
             if norm > 1e-10 {
-                for i in 0..n_points {
-                    new_v[i] /= norm;
+                for nv in new_v.iter_mut() {
+                    *nv /= norm;
                 }
             }
 
@@ -340,10 +341,10 @@ pub fn functional_cox(
             } else {
                 vec![0.0; n_functional]
             };
-            if let Some(ref sc) = scalar_covariates {
-                if i < sc.len() {
-                    cov.extend(sc[i].iter());
-                }
+            if let Some(ref sc) = scalar_covariates
+                && i < sc.len()
+            {
+                cov.extend(sc[i].iter());
             }
             cov
         })
@@ -397,6 +398,7 @@ pub fn functional_cox(
             }
         }
 
+        #[allow(clippy::needless_range_loop)]
         for j in 0..n_params {
             hessian[j][j] -= config.regularization;
         }

@@ -333,12 +333,12 @@ pub fn fit_semi_markov(
     }
 
     let mut transition_probs: HashMap<String, f64> = HashMap::new();
-    for from in 0..config.n_states {
+    for (from, &state_count) in state_counts.iter().enumerate().take(config.n_states) {
         for to in 0..config.n_states {
             let key = format!("{}_{}", from, to);
             let count = *transition_counts.get(&key).unwrap_or(&0);
-            let prob = if state_counts[from] > 0 {
-                count as f64 / state_counts[from] as f64
+            let prob = if state_count > 0 {
+                count as f64 / state_count as f64
             } else {
                 0.0
             };
@@ -456,6 +456,7 @@ pub fn fit_semi_markov(
         if t == 0.0 {
             probs[0] = 1.0;
         } else {
+            #[allow(clippy::needless_range_loop)]
             for state in 0..config.n_states {
                 if config.absorbing_states.contains(&state) {
                     let mut absorb_prob = 0.0;
@@ -592,11 +593,11 @@ pub fn predict_semi_markov(
         probs[current_state] = conditional_survival;
 
         let exit_prob = 1.0 - conditional_survival;
-        for to_state in 0..n_states {
+        for (to_state, prob) in probs.iter_mut().enumerate().take(n_states) {
             if to_state != current_state {
                 let key = format!("{}_{}", current_state, to_state);
                 let trans_prob = *model.transition_probs.get(&key).unwrap_or(&0.0);
-                probs[to_state] = exit_prob * trans_prob;
+                *prob = exit_prob * trans_prob;
             }
         }
 

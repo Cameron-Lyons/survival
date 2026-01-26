@@ -268,9 +268,8 @@ impl StreamingKaplanMeier {
             ));
         }
 
-        for i in 0..n {
-            let t = time[i];
-            let e = event[i] as f64;
+        for (&t, &e) in time.iter().zip(event.iter()) {
+            let e = e as f64;
 
             let pos = self.time_points.iter().position(|&x| (x - t).abs() < 1e-10);
 
@@ -476,7 +475,7 @@ mod tests {
         km.partial_fit(time, event).unwrap();
 
         let surv = km.predict_survival(2.5);
-        assert!(surv >= 0.0 && surv <= 1.0);
+        assert!((0.0..=1.0).contains(&surv));
     }
 
     #[test]

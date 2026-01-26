@@ -782,6 +782,7 @@ fn gamma_fn(x: f64) -> f64 {
     }
     let x = x - 1.0;
     let g = 7;
+    #[allow(clippy::excessive_precision)]
     let c = [
         0.99999999999980993,
         676.5203681218851,

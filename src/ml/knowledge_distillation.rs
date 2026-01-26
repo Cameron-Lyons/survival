@@ -52,7 +52,7 @@ impl DistillationConfig {
                 "temperature must be positive",
             ));
         }
-        if alpha < 0.0 || alpha > 1.0 {
+        if !(0.0..=1.0).contains(&alpha) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "alpha must be between 0 and 1",
             ));
@@ -266,6 +266,7 @@ pub fn distill_survival_model(
     for _epoch in 0..config.n_epochs {
         let mut epoch_loss = 0.0;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             let teacher_soft =
                 softmax_with_temperature(&teacher_predictions[i], config.temperature);
@@ -341,6 +342,7 @@ fn compute_c_index(predictions: &[f64], time: &[f64], event: &[i32]) -> f64 {
     let mut concordant = 0.0;
     let mut discordant = 0.0;
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         if event[i] != 1 {
             continue;
@@ -376,9 +378,9 @@ fn compute_correlation(x: &[f64], y: &[f64]) -> f64 {
     let mut var_x = 0.0;
     let mut var_y = 0.0;
 
-    for i in 0..x.len() {
-        let dx = x[i] - mean_x;
-        let dy = y[i] - mean_y;
+    for (&xi, &yi) in x.iter().zip(y.iter()) {
+        let dx = xi - mean_x;
+        let dy = yi - mean_y;
         cov += dx * dy;
         var_x += dx * dx;
         var_y += dy * dy;
