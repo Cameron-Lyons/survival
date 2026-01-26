@@ -891,10 +891,10 @@ pub fn bayesian_bootstrap_survival(
     let n_times = eval_times.len();
     let mut posterior_samples: Vec<Vec<f64>> = vec![vec![0.0; n_times]; config.n_bootstrap];
 
-    for b in 0..config.n_bootstrap {
+    for sample in posterior_samples.iter_mut() {
         let weights = generate_dirichlet_weights(n, &mut rng);
         let survival = weighted_kaplan_meier(&time, &event, &weights, &eval_times);
-        posterior_samples[b] = survival;
+        *sample = survival;
     }
 
     let mean_survival = (0..n_times)

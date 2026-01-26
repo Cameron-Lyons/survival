@@ -306,6 +306,7 @@ impl LogrankSampleSizeResult {
     }
 }
 
+#[allow(clippy::excessive_precision)]
 fn standard_normal_quantile(p: f64) -> f64 {
     if p <= 0.0 || p >= 1.0 {
         return f64::NAN;

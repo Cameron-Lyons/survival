@@ -596,11 +596,7 @@ fn trim_and_fill(effects: &[f64], std_errors: &[f64]) -> (usize, f64) {
     let n_positive = deviations.iter().filter(|&&d| d > 0.0).count();
     let n_negative = deviations.iter().filter(|&&d| d < 0.0).count();
 
-    let n_missing = if n_positive > n_negative {
-        n_positive - n_negative
-    } else {
-        0
-    };
+    let n_missing = n_positive.saturating_sub(n_negative);
 
     let mut augmented_effects = effects.to_vec();
     let mut augmented_variances = variances.clone();

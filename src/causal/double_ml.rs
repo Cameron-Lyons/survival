@@ -114,11 +114,13 @@ fn fit_nuisance_model(
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     for j in 0..n_features {
         xtx[j][j] += 0.01;
     }
 
     let mut beta = vec![0.0; n_features];
+    #[allow(clippy::needless_range_loop)]
     for j in 0..n_features {
         if xtx[j][j].abs() > 1e-10 {
             beta[j] = xty[j] / xtx[j][j];

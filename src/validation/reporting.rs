@@ -673,7 +673,12 @@ mod tests {
 
         let result = km_plot_data(time, event, 0.95, Some("Test".to_string())).unwrap();
         assert!(!result.time_points.is_empty());
-        assert!(result.survival_prob.iter().all(|&s| s >= 0.0 && s <= 1.0));
+        assert!(
+            result
+                .survival_prob
+                .iter()
+                .all(|&s| (0.0..=1.0).contains(&s))
+        );
     }
 
     #[test]

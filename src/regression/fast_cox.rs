@@ -335,17 +335,6 @@ fn compute_gradient_hessian_diag_fast(
     (gradient, hessian_diag)
 }
 
-#[allow(dead_code)]
-fn compute_max_gradient(gradient: &[f64], active_set: Option<&[usize]>) -> f64 {
-    match active_set {
-        Some(indices) => indices
-            .iter()
-            .map(|&i| gradient[i].abs())
-            .fold(0.0, f64::max),
-        None => gradient.iter().map(|g| g.abs()).fold(0.0, f64::max),
-    }
-}
-
 fn apply_strong_screening(
     gradient: &[f64],
     lambda: f64,

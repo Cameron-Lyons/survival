@@ -694,12 +694,12 @@ mod tests {
         .unwrap();
 
         let surv = result.get_survival_probability(1.0);
-        assert!(surv >= 0.0 && surv <= 1.0);
+        assert!((0.0..=1.0).contains(&surv));
 
         let illness = result.get_illness_probability(1.0);
-        assert!(illness >= 0.0 && illness <= 1.0);
+        assert!((0.0..=1.0).contains(&illness));
 
         let death = result.get_death_probability(1.0);
-        assert!(death >= 0.0 && death <= 1.0);
+        assert!((0.0..=1.0).contains(&death));
     }
 }

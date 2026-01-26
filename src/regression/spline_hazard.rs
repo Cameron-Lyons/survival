@@ -182,6 +182,7 @@ pub fn flexible_parametric_model(
     }
 
     let mut eta: Vec<f64> = vec![0.0; n];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         for j in 0..n_spline.min(spline_basis[i].len()) {
             eta[i] += gamma[j] * spline_basis[i][j];
@@ -278,8 +279,8 @@ fn compute_bspline_basis(x: &[f64], knots: &[f64], degree: usize) -> Vec<Vec<f64
     let mut basis: Vec<Vec<f64>> = vec![vec![0.0; n_basis]; n];
 
     for (i, &xi) in x.iter().enumerate() {
-        for j in 0..n_basis {
-            basis[i][j] = bspline_basis_value(xi, j, degree, &extended_knots);
+        for (j, basis_val) in basis[i].iter_mut().enumerate().take(n_basis) {
+            *basis_val = bspline_basis_value(xi, j, degree, &extended_knots);
         }
     }
 
@@ -499,15 +500,16 @@ pub fn predict_hazard_spline(
     let mut cumulative_hazard = vec![0.0; n_times];
     let mut survival = vec![1.0; n_times];
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n_times {
         let mut log_hazard = cov_contribution;
 
-        for j in 0..model_result
+        for (coef, &basis_val) in model_result
             .spline_coefficients
-            .len()
-            .min(spline_basis[i].len())
+            .iter()
+            .zip(spline_basis[i].iter())
         {
-            log_hazard += model_result.spline_coefficients[j] * spline_basis[i][j];
+            log_hazard += coef * basis_val;
         }
 
         hazard[i] = log_hazard.exp();

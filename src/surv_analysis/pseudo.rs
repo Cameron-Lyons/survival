@@ -380,6 +380,7 @@ pub struct GEEResult {
 #[pymethods]
 impl GEEResult {
     #[new]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         coefficients: Vec<f64>,
         std_errors: Vec<f64>,
@@ -439,9 +440,9 @@ pub fn pseudo_gee_regression(
     let n_obs = y.len();
 
     let mut x: Vec<Vec<f64>> = Vec::with_capacity(n_obs);
-    for i in 0..n {
+    for cov in covariates.iter() {
         for _ in 0..n_times {
-            x.push(covariates[i].clone());
+            x.push(cov.clone());
         }
     }
 
@@ -582,10 +583,10 @@ fn compute_sandwich_variance(
     let n_obs = x.len();
 
     let mut xtx = vec![vec![0.0; p]; p];
-    for i in 0..n_obs {
+    for xi in x.iter() {
         for j in 0..p {
             for k in 0..p {
-                xtx[j][k] += x[i][j] * x[i][k];
+                xtx[j][k] += xi[j] * xi[k];
             }
         }
     }
@@ -597,6 +598,7 @@ fn compute_sandwich_variance(
     for c in 0..=max_cluster {
         let mut score = vec![0.0; p];
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n_obs / n_times {
             if cluster_id[i] == c {
                 for t in 0..n_times {
@@ -657,15 +659,16 @@ fn invert_matrix(m: &[Vec<f64>]) -> Vec<Vec<f64>> {
             continue;
         }
 
-        for j in 0..(2 * n) {
-            aug[i][j] /= pivot;
+        for val in aug[i].iter_mut() {
+            *val /= pivot;
         }
 
-        for k in 0..n {
+        let row_i = aug[i].clone();
+        for (k, row_k) in aug.iter_mut().enumerate() {
             if k != i {
-                let factor = aug[k][i];
-                for j in 0..(2 * n) {
-                    aug[k][j] -= factor * aug[i][j];
+                let factor = row_k[i];
+                for (val, &ri) in row_k.iter_mut().zip(row_i.iter()) {
+                    *val -= factor * ri;
                 }
             }
         }
