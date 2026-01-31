@@ -46,12 +46,12 @@ Issues = "https://github.com/Cameron-Lyons/survival/issues"
 dev = [
   "pre-commit==4.5.1",
   "pytest==9.0.2",
-  "numpy==2.4.0",
+  "numpy==2.4.1",
 ]
 test = [
   "pytest==9.0.2",
-  "numpy==2.4.0",
-  "pandas==2.3.3",
+  "numpy==2.4.1",
+  "pandas==3.0.0",
   "polars==1.37.1",
 ]
 sklearn = [
