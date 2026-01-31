@@ -1,42 +1,31 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(__file__))
+from helpers import setup_survival_import
 
-try:
-    from helpers import setup_survival_import
+survival = setup_survival_import()
 
-    survival = setup_survival_import()
-    print(" Successfully imported survival module")
 
-    print("\n=== Testing Edge Cases and Error Handling ===")
-
-    print("\n--- survfitkm validation tests ---")
-
-    try:
+def test_survfitkm_empty_input():
+    with pytest.raises(ValueError, match=".*"):
         survival.survfitkm(time=[], status=[])
-        print(" FAIL: Should have raised error for empty input")
-        sys.exit(1)
-    except ValueError as e:
-        print(f" Empty input validation: OK ({e})")
 
-    try:
+
+def test_survfitkm_length_mismatch():
+    with pytest.raises(ValueError, match=".*"):
         survival.survfitkm(time=[1.0, 2.0], status=[1.0])
-        print(" FAIL: Should have raised error for length mismatch")
-        sys.exit(1)
-    except ValueError as e:
-        print(f" Length mismatch validation: OK ({e})")
 
-    try:
+
+def test_survfitkm_negative_time():
+    with pytest.raises(ValueError, match=".*"):
         survival.survfitkm(time=[-1.0, 2.0], status=[1.0, 0.0])
-        print(" FAIL: Should have raised error for negative time")
-        sys.exit(1)
-    except ValueError as e:
-        print(f" Negative time validation: OK ({e})")
 
-    print("\n--- agmart validation tests ---")
 
-    try:
+def test_agmart_length_mismatch():
+    with pytest.raises(ValueError, match=".*"):
         survival.agmart(
             n=3,
             method=0,
@@ -47,22 +36,15 @@ try:
             wt=[1.0, 1.0, 1.0],
             strata=[0, 0, 0],
         )
-        print(" FAIL: Should have raised error for length mismatch")
-        sys.exit(1)
-    except ValueError as e:
-        print(f" Length mismatch (start) validation: OK ({e})")
 
-    print("\n--- CoxPHModel validation tests ---")
 
+def test_coxph_model_empty_fit():
     model = survival.CoxPHModel()
-
-    try:
+    with pytest.raises(ValueError, match=".*"):
         model.fit(n_iters=10)
-        print(" FAIL: Should have raised error for no data")
-        sys.exit(1)
-    except ValueError as e:
-        print(f" Empty model fit validation: OK ({e})")
 
+
+def test_coxph_model_covariate_dimension_mismatch():
     subject = survival.Subject(
         id=1,
         covariates=[1.0, 2.0, 3.0],
@@ -76,15 +58,11 @@ try:
     censoring = [1, 0]
     model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
 
-    try:
+    with pytest.raises(ValueError, match=".*"):
         model.add_subject(subject)
-        print(" FAIL: Should have raised error for dimension mismatch")
-        sys.exit(1)
-    except ValueError as e:
-        print(f" Covariate dimension mismatch validation: OK ({e})")
 
-    print("\n--- survdiff2 edge cases ---")
 
+def test_survdiff2_with_strata():
     result = survival.survdiff2(
         time=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         status=[1, 0, 1, 0, 1, 0],
@@ -92,35 +70,21 @@ try:
         strata=[0, 0, 0, 0, 0, 0],
         rho=0.0,
     )
-    print(f" Two groups: chi_squared={result.chi_squared:.4f}")
+    assert hasattr(result, "chi_squared")
 
-    print("\n--- All censored edge case ---")
 
+def test_all_censored():
     result = survival.survfitkm(
         time=[1.0, 2.0, 3.0, 4.0],
         status=[0.0, 0.0, 0.0, 0.0],
     )
-    print(f" All censored: estimate[0]={result.estimate[0] if result.estimate else 'empty'}")
-    assert all(e == 1.0 for e in result.estimate), "All censored should have estimate=1.0"
-    print(" All censored survival estimate correct")
+    assert all(e == 1.0 for e in result.estimate)
 
-    print("\n--- Single observation ---")
 
+def test_single_observation():
     result = survival.survfitkm(
         time=[5.0],
         status=[1.0],
     )
-    print(f" Single observation: time={result.time}, estimate={result.estimate}")
-
-    print("\n All edge case tests passed!")
-
-except ImportError as e:
-    print(f" Failed to import survival module: {e}")
-    print("Make sure to build the project first with: maturin build")
-    sys.exit(1)
-except Exception as e:
-    print(f" Error in edge case tests: {e}")
-    import traceback
-
-    traceback.print_exc()
-    sys.exit(1)
+    assert hasattr(result, "time")
+    assert hasattr(result, "estimate")

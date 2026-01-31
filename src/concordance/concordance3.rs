@@ -122,6 +122,70 @@ pub fn concordance3(
     let resid_opt = if doresid { Some(resid) } else { None };
     (count, imat, resid_opt)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::CONCORDANCE_COUNT_SIZE_EXTENDED;
+
+    #[test]
+    fn basic_three_observations() {
+        let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 1.0];
+        let x = vec![0, 1, 2];
+        let wt = vec![1.0, 1.0, 1.0];
+        let timewt = vec![1.0, 1.0, 1.0];
+        let sortstop = vec![0, 1, 2];
+        let (count, _imat, _resid) = concordance3(&y, &x, &wt, &timewt, &sortstop, false);
+        assert_eq!(count.len(), CONCORDANCE_COUNT_SIZE_EXTENDED);
+    }
+
+    #[test]
+    fn doresid_true_returns_some() {
+        let y = vec![1.0, 2.0, 1.0, 1.0];
+        let x = vec![0, 1];
+        let wt = vec![1.0, 1.0];
+        let timewt = vec![1.0, 1.0];
+        let sortstop = vec![0, 1];
+        let (_count, _imat, resid) = concordance3(&y, &x, &wt, &timewt, &sortstop, true);
+        assert!(resid.is_some());
+    }
+
+    #[test]
+    fn doresid_false_returns_none() {
+        let y = vec![1.0, 2.0, 1.0, 1.0];
+        let x = vec![0, 1];
+        let wt = vec![1.0, 1.0];
+        let timewt = vec![1.0, 1.0];
+        let sortstop = vec![0, 1];
+        let (_count, _imat, resid) = concordance3(&y, &x, &wt, &timewt, &sortstop, false);
+        assert!(resid.is_none());
+    }
+
+    #[test]
+    fn imat_length_5n() {
+        let n = 3;
+        let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 1.0];
+        let x = vec![0, 1, 2];
+        let wt = vec![1.0, 1.0, 1.0];
+        let timewt = vec![1.0, 1.0, 1.0];
+        let sortstop = vec![0, 1, 2];
+        let (_count, imat, _resid) = concordance3(&y, &x, &wt, &timewt, &sortstop, false);
+        assert_eq!(imat.len(), 5 * n);
+    }
+
+    #[test]
+    fn single_observation_event() {
+        let y = vec![1.0, 1.0];
+        let x = vec![0];
+        let wt = vec![1.0];
+        let timewt = vec![1.0];
+        let sortstop = vec![0];
+        let (count, imat, _resid) = concordance3(&y, &x, &wt, &timewt, &sortstop, false);
+        assert_eq!(count.len(), CONCORDANCE_COUNT_SIZE_EXTENDED);
+        assert_eq!(imat.len(), 5);
+    }
+}
+
 #[pyfunction]
 pub fn perform_concordance3_calculation(
     time_data: Vec<f64>,

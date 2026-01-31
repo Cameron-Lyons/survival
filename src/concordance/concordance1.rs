@@ -184,3 +184,74 @@ pub fn perform_concordance1_calculation(
         Ok(dict.into())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::CONCORDANCE_COUNT_SIZE;
+
+    #[test]
+    fn single_observation_event() {
+        let y = vec![1.0, 1.0];
+        let wt = vec![1.0];
+        let indx = vec![0];
+        let ntree = 1;
+        let result = concordance1(&y, &wt, &indx, ntree);
+        assert_eq!(result.len(), CONCORDANCE_COUNT_SIZE);
+    }
+
+    #[test]
+    fn two_events_concordant() {
+        let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 0.0];
+        let wt = vec![1.0, 1.0, 1.0];
+        let indx = vec![0, 1, 2];
+        let ntree = 4;
+        let result = concordance1(&y, &wt, &indx, ntree);
+        assert_eq!(result.len(), CONCORDANCE_COUNT_SIZE);
+        assert!(result[0] > 0.0 || result[1] > 0.0);
+    }
+
+    #[test]
+    fn two_events_discordant() {
+        let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 0.0];
+        let wt = vec![1.0, 1.0, 1.0];
+        let indx = vec![2, 1, 0];
+        let ntree = 4;
+        let result = concordance1(&y, &wt, &indx, ntree);
+        assert_eq!(result.len(), CONCORDANCE_COUNT_SIZE);
+    }
+
+    #[test]
+    fn tied_times_both_events() {
+        let y = vec![1.0, 1.0, 1.0, 1.0];
+        let wt = vec![1.0, 1.0];
+        let indx = vec![0, 1];
+        let ntree = 2;
+        let result = concordance1(&y, &wt, &indx, ntree);
+        assert_eq!(result.len(), CONCORDANCE_COUNT_SIZE);
+        assert!(result[3] >= 0.0);
+    }
+
+    #[test]
+    fn all_censored() {
+        let y = vec![1.0, 2.0, 0.0, 0.0];
+        let wt = vec![1.0, 1.0];
+        let indx = vec![0, 1];
+        let ntree = 2;
+        let result = concordance1(&y, &wt, &indx, ntree);
+        assert_eq!(result.len(), CONCORDANCE_COUNT_SIZE);
+        for &c in &result[..4] {
+            assert!(c.abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn uniform_weights_result_length() {
+        let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 0.0];
+        let wt = vec![1.0, 1.0, 1.0];
+        let indx = vec![0, 1, 2];
+        let ntree = 4;
+        let result = concordance1(&y, &wt, &indx, ntree);
+        assert_eq!(result.len(), CONCORDANCE_COUNT_SIZE);
+    }
+}

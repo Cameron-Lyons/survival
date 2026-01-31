@@ -589,4 +589,148 @@ mod tests {
         assert!(result.n_clones > 0);
         assert!(result.hazard_ratio > 0.0);
     }
+
+    #[test]
+    fn test_target_trial_dimension_mismatch() {
+        let time = vec![10.0, 20.0, 30.0];
+        let status = vec![1, 0, 1, 0];
+        let treatment_time = vec![Some(5.0), None, Some(10.0)];
+        let x_baseline = vec![0.5, 0.3, 0.7];
+
+        let config = TrialEmulationConfig::new(0.0, None, false, true, 0.01, 10);
+
+        let result = target_trial_emulation(
+            time,
+            status,
+            treatment_time,
+            x_baseline.clone(),
+            x_baseline,
+            3,
+            1,
+            1,
+            &config,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_target_trial_output_properties() {
+        let time = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0];
+        let status = vec![1, 0, 1, 0, 1, 0, 1, 0];
+        let treatment_time = vec![
+            Some(5.0),
+            None,
+            Some(10.0),
+            None,
+            Some(2.0),
+            None,
+            Some(8.0),
+            None,
+        ];
+        let x_baseline = vec![0.5, 0.3, 0.7, 0.2, 0.8, 0.4, 0.6, 0.1];
+
+        let config = TrialEmulationConfig::new(7.0, Some(100.0), false, true, 0.01, 10);
+
+        let result = target_trial_emulation(
+            time,
+            status,
+            treatment_time,
+            x_baseline.clone(),
+            x_baseline,
+            8,
+            1,
+            1,
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(result.n_eligible, 8);
+        assert_eq!(result.n_clones, result.n_treated + result.n_control);
+        assert!(result.hazard_ratio > 0.0);
+        assert!(result.hr_ci_lower > 0.0);
+        assert!(result.hr_ci_upper > 0.0);
+        assert!(result.hr_ci_lower <= result.hazard_ratio);
+        assert!(result.hr_ci_upper >= result.hazard_ratio);
+        assert!(result.rd_ci_lower <= result.risk_difference);
+        assert!(result.rd_ci_upper >= result.risk_difference);
+        assert_eq!(result.survival_treated.len(), 100);
+        assert_eq!(result.survival_control.len(), 100);
+        assert_eq!(result.time_points.len(), 100);
+    }
+
+    #[test]
+    fn test_target_trial_no_treatment() {
+        let time = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0];
+        let status = vec![1, 0, 1, 0, 1, 0];
+        let treatment_time = vec![None, None, None, None, None, None];
+        let x_baseline = vec![0.5, 0.3, 0.7, 0.2, 0.8, 0.4];
+
+        let config = TrialEmulationConfig::new(0.0, None, false, true, 0.01, 10);
+
+        let result = target_trial_emulation(
+            time,
+            status,
+            treatment_time,
+            x_baseline.clone(),
+            x_baseline,
+            6,
+            1,
+            1,
+            &config,
+        )
+        .unwrap();
+
+        assert!(result.n_clones > 0);
+    }
+
+    #[test]
+    fn test_target_trial_config_infinity_followup() {
+        let config = TrialEmulationConfig::new(0.0, None, true, true, 0.01, 200);
+        assert!(config.max_followup.is_infinite());
+    }
+
+    #[test]
+    fn test_target_trial_with_clone_censoring() {
+        let time = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0];
+        let status = vec![1, 0, 1, 0, 1, 0];
+        let treatment_time = vec![Some(5.0), None, Some(10.0), None, Some(2.0), None];
+        let x_baseline = vec![0.5, 0.3, 0.7, 0.2, 0.8, 0.4];
+
+        let config_with = TrialEmulationConfig::new(7.0, Some(100.0), true, true, 0.01, 10);
+        let config_without = TrialEmulationConfig::new(7.0, Some(100.0), false, true, 0.01, 10);
+
+        let result_with = target_trial_emulation(
+            time.clone(),
+            status.clone(),
+            treatment_time.clone(),
+            x_baseline.clone(),
+            x_baseline.clone(),
+            6,
+            1,
+            1,
+            &config_with,
+        )
+        .unwrap();
+
+        let result_without = target_trial_emulation(
+            time,
+            status,
+            treatment_time,
+            x_baseline.clone(),
+            x_baseline,
+            6,
+            1,
+            1,
+            &config_without,
+        )
+        .unwrap();
+
+        assert_eq!(result_with.n_clones, result_without.n_clones);
+    }
+
+    #[test]
+    fn test_rmst_empty_input() {
+        let rmst = compute_rmst(&[], &[], 5.0);
+        assert_eq!(rmst, 0.0);
+    }
 }

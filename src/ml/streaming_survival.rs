@@ -519,4 +519,119 @@ mod tests {
         let survival = model.predict_survival(test_cov, 3.0).unwrap();
         assert!(survival[0] >= 0.0 && survival[0] <= 1.0);
     }
+
+    #[test]
+    fn test_streaming_cox_feature_mismatch() {
+        let mut model = StreamingCoxModel::new(2, None);
+        let covariates = vec![vec![1.0, 0.5, 0.3]];
+        let time = vec![1.0];
+        let event = vec![1];
+
+        let result = model.partial_fit(covariates, time, event);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_streaming_cox_invalid_input() {
+        let mut model = StreamingCoxModel::new(2, None);
+        let result = model.partial_fit(vec![], vec![], vec![]);
+        assert!(result.is_err());
+
+        let result = model.partial_fit(vec![vec![1.0, 0.5]], vec![1.0, 2.0], vec![1]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_streaming_cox_incremental_updates() {
+        let mut model = StreamingCoxModel::new(2, None);
+
+        let cov1 = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
+        let time1 = vec![1.0, 2.0, 3.0];
+        let event1 = vec![1, 0, 1];
+        model.partial_fit(cov1, time1, event1).unwrap();
+        assert_eq!(model.get_n_samples_seen(), 3);
+
+        let cov2 = vec![vec![0.5, 0.5], vec![0.2, 0.8]];
+        let time2 = vec![4.0, 5.0];
+        let event2 = vec![1, 0];
+        model.partial_fit(cov2, time2, event2).unwrap();
+        assert_eq!(model.get_n_samples_seen(), 5);
+    }
+
+    #[test]
+    fn test_streaming_km_decreasing_survival() {
+        let mut km = StreamingKaplanMeier::new(100);
+
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 1, 1, 1, 1];
+        km.partial_fit(time, event).unwrap();
+
+        let s1 = km.predict_survival(1.5);
+        let s2 = km.predict_survival(3.5);
+        let s3 = km.predict_survival(5.5);
+        assert!(s1 >= s2);
+        assert!(s2 >= s3);
+    }
+
+    #[test]
+    fn test_streaming_km_empty_predict() {
+        let km = StreamingKaplanMeier::new(100);
+        let surv = km.predict_survival(5.0);
+        assert!((surv - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_streaming_km_get_curve() {
+        let mut km = StreamingKaplanMeier::new(100);
+        let time = vec![1.0, 2.0, 3.0];
+        let event = vec![1, 0, 1];
+        km.partial_fit(time, event).unwrap();
+
+        let (times, probs) = km.get_survival_curve();
+        assert_eq!(times.len(), probs.len());
+        assert!(!times.is_empty());
+    }
+
+    #[test]
+    fn test_streaming_km_input_mismatch() {
+        let mut km = StreamingKaplanMeier::new(100);
+        let result = km.partial_fit(vec![1.0, 2.0], vec![1]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_concept_drift_reset() {
+        let mut detector = ConceptDriftDetector::new(10, 2.0);
+
+        for i in 0..20 {
+            detector.update(-10.0 + i as f64 * 0.1);
+        }
+
+        detector.reset();
+        assert!(!detector.is_drift_detected());
+        assert_eq!(detector.n_samples_seen, 0);
+    }
+
+    #[test]
+    fn test_streaming_cox_with_custom_config() {
+        let config = StreamingCoxConfig::new(0.05, 0.01, 16, 500, 0.95, 5);
+        let mut model = StreamingCoxModel::new(3, Some(config));
+
+        let covariates = vec![
+            vec![1.0, 0.0, 0.5],
+            vec![0.0, 1.0, 0.3],
+            vec![0.5, 0.5, 0.8],
+            vec![0.3, 0.7, 0.2],
+            vec![0.8, 0.2, 0.6],
+            vec![0.6, 0.4, 0.4],
+        ];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let event = vec![1, 1, 0, 1, 1, 0];
+
+        model.partial_fit(covariates.clone(), time, event).unwrap();
+
+        let coeffs = model.get_coefficients();
+        assert_eq!(coeffs.len(), 3);
+        assert_eq!(model.get_n_events_seen(), 4);
+    }
 }

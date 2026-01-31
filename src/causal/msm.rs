@@ -424,4 +424,130 @@ mod tests {
         assert!(!result.coefficients.is_empty());
         assert!(!result.hazard_ratios.is_empty());
     }
+
+    #[test]
+    fn test_msm_dimension_mismatch() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 0, 1, 1];
+        let treatment = vec![1, 0, 1];
+        let x_outcome = vec![0.5, 0.3, 0.7];
+        let x_propensity = vec![1.0, 0.5, 1.0];
+
+        let result = marginal_structural_model(
+            time,
+            status,
+            treatment,
+            x_outcome,
+            x_propensity,
+            3,
+            1,
+            1,
+            true,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_msm_output_properties() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let x_outcome: Vec<f64> = vec![0.5, 0.3, 0.7, 0.2, 0.8, 0.4, 0.6, 0.1, 0.9, 0.35];
+        let x_propensity: Vec<f64> = x_outcome.clone();
+
+        let result = marginal_structural_model(
+            time,
+            status,
+            treatment,
+            x_outcome,
+            x_propensity,
+            10,
+            1,
+            1,
+            true,
+            Some(0.05),
+        )
+        .unwrap();
+
+        assert_eq!(result.coefficients.len(), 2);
+        assert_eq!(result.std_errors.len(), 2);
+        assert_eq!(result.hazard_ratios.len(), 2);
+        assert_eq!(result.hr_ci_lower.len(), 2);
+        assert_eq!(result.hr_ci_upper.len(), 2);
+        assert!(result.hazard_ratios.iter().all(|&hr| hr > 0.0));
+        for i in 0..2 {
+            assert!(result.hr_ci_lower[i] <= result.hazard_ratios[i]);
+            assert!(result.hr_ci_upper[i] >= result.hazard_ratios[i]);
+        }
+        assert!(result.effective_n > 0.0);
+        assert_eq!(result.weights.len(), 10);
+    }
+
+    #[test]
+    fn test_msm_unstabilized_weights() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1, 1, 0, 1, 0, 1];
+        let treatment = vec![1, 0, 1, 0, 1, 0];
+        let x_outcome = vec![0.5, 0.3, 0.7, 0.2, 0.8, 0.4];
+        let x_propensity = vec![0.5, 0.3, 0.7, 0.2, 0.8, 0.4];
+
+        let result = marginal_structural_model(
+            time,
+            status,
+            treatment,
+            x_outcome,
+            x_propensity,
+            6,
+            1,
+            1,
+            false,
+            Some(0.05),
+        )
+        .unwrap();
+
+        assert!(result.weights.iter().all(|&w| w > 0.0));
+    }
+
+    #[test]
+    fn test_longitudinal_iptw_basic() {
+        let n_obs = 6;
+        let n_times = 3;
+        let n_vars = 1;
+
+        let treatment_history = vec![0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0];
+        let x_time_varying: Vec<f64> = (0..n_obs * n_times * n_vars)
+            .map(|i| 0.1 * i as f64)
+            .collect();
+
+        let result = compute_longitudinal_iptw(
+            treatment_history,
+            x_time_varying,
+            n_obs,
+            n_times,
+            n_vars,
+            true,
+            Some(0.05),
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), n_obs);
+        assert!(result.iter().all(|&w| w > 0.0 && w.is_finite()));
+    }
+
+    #[test]
+    fn test_longitudinal_iptw_dimension_mismatch() {
+        let result =
+            compute_longitudinal_iptw(vec![0, 1, 0], vec![0.5, 0.3, 0.7], 3, 2, 1, true, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_iptw_weights_extreme_propensity() {
+        let treatment = vec![1, 0, 1, 0];
+        let propensity = vec![0.99, 0.01, 0.95, 0.05];
+        let weights = compute_iptw_weights(&treatment, &propensity, false, 0.01);
+        assert_eq!(weights.len(), 4);
+        assert!(weights.iter().all(|&w| w > 0.0 && w.is_finite()));
+    }
 }

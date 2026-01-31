@@ -503,4 +503,133 @@ mod tests {
     fn test_normal_cdf() {
         assert!((normal_cdf(0.0) - 0.5).abs() < 0.01);
     }
+
+    #[test]
+    fn test_tmle_ate_dimension_mismatch() {
+        let covariates = vec![vec![1.0], vec![2.0]];
+        let treatment = vec![0, 1, 0];
+        let outcome = vec![1.0, 2.0];
+        let result = tmle_ate(covariates, treatment, outcome, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tmle_ate_empty_input() {
+        let result = tmle_ate(vec![], vec![], vec![], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tmle_ate_output_properties() {
+        let covariates = vec![
+            vec![1.0, 0.5],
+            vec![0.0, 1.0],
+            vec![1.5, 0.3],
+            vec![0.2, 0.8],
+            vec![1.1, 0.6],
+            vec![0.3, 1.2],
+            vec![0.9, 0.4],
+            vec![0.5, 0.9],
+            vec![1.3, 0.7],
+            vec![0.1, 1.1],
+        ];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let outcome = vec![2.0, 1.0, 2.5, 1.5, 3.0, 0.5, 2.2, 1.3, 2.8, 0.8];
+
+        let result = tmle_ate(covariates, treatment, outcome, None).unwrap();
+        assert!(result.se >= 0.0);
+        assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0);
+        assert!(result.ci_lower <= result.ate);
+        assert!(result.ci_upper >= result.ate);
+        assert_eq!(result.n_obs, 10);
+        assert_eq!(result.influence_function.len(), 10);
+        assert!(result.ate.is_finite());
+    }
+
+    #[test]
+    fn test_tmle_ate_custom_config() {
+        let covariates = vec![
+            vec![1.0],
+            vec![2.0],
+            vec![3.0],
+            vec![4.0],
+            vec![5.0],
+            vec![6.0],
+        ];
+        let treatment = vec![1, 0, 1, 0, 1, 0];
+        let outcome = vec![3.0, 1.0, 4.0, 2.0, 5.0, 1.5];
+
+        let config = TMLEConfig::new(2, 0.05, 200, 1e-8, Some(42)).unwrap();
+        let result = tmle_ate(covariates, treatment, outcome, Some(config)).unwrap();
+        assert!(result.ate.is_finite());
+        assert!(result.se.is_finite());
+    }
+
+    #[test]
+    fn test_tmle_survival_basic() {
+        let covariates = vec![
+            vec![1.0, 0.5],
+            vec![0.0, 1.0],
+            vec![1.5, 0.3],
+            vec![0.2, 0.8],
+            vec![1.1, 0.6],
+            vec![0.3, 1.2],
+            vec![0.9, 0.4],
+            vec![0.5, 0.9],
+            vec![1.3, 0.7],
+            vec![0.1, 1.1],
+        ];
+        let treatment = vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let event = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+
+        let result = tmle_survival(covariates, treatment, time, event, None, None).unwrap();
+        assert!(!result.survival_diff.is_empty());
+        assert!(!result.time_points.is_empty());
+        assert_eq!(result.survival_diff.len(), result.time_points.len());
+        assert_eq!(result.se.len(), result.time_points.len());
+        assert_eq!(result.ci_lower.len(), result.time_points.len());
+        assert_eq!(result.ci_upper.len(), result.time_points.len());
+        assert!(result.rmst_se >= 0.0);
+    }
+
+    #[test]
+    fn test_tmle_survival_custom_time_points() {
+        let covariates = vec![
+            vec![1.0],
+            vec![2.0],
+            vec![3.0],
+            vec![4.0],
+            vec![5.0],
+            vec![6.0],
+        ];
+        let treatment = vec![1, 0, 1, 0, 1, 0];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let event = vec![1, 0, 1, 1, 0, 1];
+        let time_points = vec![1.0, 3.0, 5.0];
+
+        let result =
+            tmle_survival(covariates, treatment, time, event, Some(time_points), None).unwrap();
+        assert_eq!(result.time_points.len(), 3);
+        assert_eq!(result.survival_diff.len(), 3);
+    }
+
+    #[test]
+    fn test_tmle_survival_dimension_mismatch() {
+        let covariates = vec![vec![1.0], vec![2.0]];
+        let treatment = vec![1, 0, 1];
+        let time = vec![1.0, 2.0];
+        let event = vec![1, 0];
+        let result = tmle_survival(covariates, treatment, time, event, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_valid_creation() {
+        let config = TMLEConfig::new(5, 0.01, 100, 1e-6, Some(42)).unwrap();
+        assert_eq!(config.n_folds, 5);
+        assert_eq!(config.trimming, 0.01);
+        assert_eq!(config.max_iter, 100);
+        assert_eq!(config.seed, Some(42));
+    }
 }

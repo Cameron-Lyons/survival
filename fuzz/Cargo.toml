@@ -1,0 +1,37 @@
+[package]
+name = "survival-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.survival]
+path = ".."
+
+[[bin]]
+name = "fuzz_kaplan_meier"
+path = "fuzz_targets/fuzz_kaplan_meier.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_nelson_aalen"
+path = "fuzz_targets/fuzz_nelson_aalen.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_concordance"
+path = "fuzz_targets/fuzz_concordance.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_brier"
+path = "fuzz_targets/fuzz_brier.rs"
+doc = false
+
+[workspace]
+members = ["."]

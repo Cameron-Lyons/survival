@@ -403,3 +403,111 @@ pub fn stratified_kaplan_meier(
     let conf = confidence_level.unwrap_or(0.95);
     Ok(stratified_km(&time, &status, &strata, conf))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nelson_aalen_empty_input() {
+        let result = nelson_aalen(&[], &[], None, 0.95);
+        assert!(result.time.is_empty());
+        assert!(result.cumulative_hazard.is_empty());
+        assert!(result.variance.is_empty());
+        assert!(result.ci_lower.is_empty());
+        assert!(result.ci_upper.is_empty());
+        assert!(result.n_risk.is_empty());
+        assert!(result.n_events.is_empty());
+    }
+
+    #[test]
+    fn nelson_aalen_single_event() {
+        let result = nelson_aalen(&[1.0], &[1], None, 0.95);
+        assert_eq!(result.cumulative_hazard.len(), 1);
+        assert!((result.cumulative_hazard[0] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn nelson_aalen_monotonically_increasing() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 1, 1, 1];
+        let result = nelson_aalen(&time, &status, None, 0.95);
+        for i in 1..result.cumulative_hazard.len() {
+            assert!(result.cumulative_hazard[i] >= result.cumulative_hazard[i - 1]);
+        }
+    }
+
+    #[test]
+    fn nelson_aalen_ci_bounds() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 0, 1];
+        let result = nelson_aalen(&time, &status, None, 0.95);
+        for i in 0..result.cumulative_hazard.len() {
+            assert!(result.ci_lower[i] <= result.cumulative_hazard[i]);
+            assert!(result.cumulative_hazard[i] <= result.ci_upper[i]);
+        }
+    }
+
+    #[test]
+    fn nelson_aalen_all_censored() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![0, 0, 0];
+        let result = nelson_aalen(&time, &status, None, 0.95);
+        assert!(result.time.is_empty());
+        assert!(result.cumulative_hazard.is_empty());
+    }
+
+    #[test]
+    fn nelson_aalen_custom_weights() {
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 1, 1];
+        let weights = vec![2.0, 1.0, 1.0];
+        let result = nelson_aalen(&time, &status, Some(&weights), 0.95);
+        assert_eq!(result.cumulative_hazard.len(), 3);
+        assert!(result.cumulative_hazard[0] > 0.0);
+    }
+
+    #[test]
+    fn stratified_km_empty_input() {
+        let result = stratified_km(&[], &[], &[], 0.95);
+        assert!(result.strata.is_empty());
+        assert!(result.times.is_empty());
+        assert!(result.survival.is_empty());
+    }
+
+    #[test]
+    fn stratified_km_two_strata() {
+        let time = vec![1.0, 2.0, 3.0, 4.0];
+        let status = vec![1, 1, 1, 1];
+        let strata = vec![0, 0, 1, 1];
+        let result = stratified_km(&time, &status, &strata, 0.95);
+        assert_eq!(result.strata.len(), 2);
+    }
+
+    #[test]
+    fn stratified_km_survival_in_range() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1, 0, 1, 1, 0, 1];
+        let strata = vec![0, 0, 0, 1, 1, 1];
+        let result = stratified_km(&time, &status, &strata, 0.95);
+        for surv_vec in &result.survival {
+            for &s in surv_vec {
+                assert!((0.0..=1.0).contains(&s));
+            }
+        }
+    }
+
+    #[test]
+    fn stratified_km_ci_bounds() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1, 0, 1, 1, 0, 1];
+        let strata = vec![0, 0, 0, 1, 1, 1];
+        let result = stratified_km(&time, &status, &strata, 0.95);
+        for k in 0..result.survival.len() {
+            for i in 0..result.survival[k].len() {
+                assert!(result.ci_lower[k][i] <= result.survival[k][i]);
+                assert!(result.survival[k][i] <= result.ci_upper[k][i]);
+            }
+        }
+    }
+}

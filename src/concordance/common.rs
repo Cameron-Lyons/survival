@@ -116,3 +116,72 @@ pub fn add_to_binary_tree(nwt: &mut [f64], twt: &mut [f64], index: usize, wt: f6
     }
     twt[0] += wt;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walkup_binary_tree_index_ge_ntree_returns_zeros() {
+        let nwt = vec![0.0; 4];
+        let twt = vec![0.0; 4];
+        let result = walkup_binary_tree(&nwt, &twt, 5, 4);
+        assert!(result[0].abs() < 1e-10);
+        assert!(result[1].abs() < 1e-10);
+        assert!(result[2].abs() < 1e-10);
+    }
+
+    #[test]
+    fn walkup_binary_tree_root_node_small_tree() {
+        let ntree = 3;
+        let mut nwt = vec![0.0; ntree];
+        let mut twt = vec![0.0; ntree];
+        nwt[0] = 1.0;
+        twt[0] = 3.0;
+        twt[1] = 1.5;
+        twt[2] = 1.5;
+        let result = walkup_binary_tree(&nwt, &twt, 0, ntree);
+        assert!((result[0] - 1.5).abs() < 1e-10);
+        assert!((result[1] - 1.5).abs() < 1e-10);
+        assert!((result[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn add_to_binary_tree_single_add() {
+        let ntree = 4;
+        let mut nwt = vec![0.0; ntree];
+        let mut twt = vec![0.0; ntree];
+        add_to_binary_tree(&mut nwt, &mut twt, 2, 5.0);
+        assert!((nwt[2] - 5.0).abs() < 1e-10);
+        assert!((twt[0] - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn add_to_binary_tree_multiple_adds() {
+        let ntree = 7;
+        let mut nwt = vec![0.0; ntree];
+        let mut twt = vec![0.0; ntree];
+        add_to_binary_tree(&mut nwt, &mut twt, 3, 2.0);
+        add_to_binary_tree(&mut nwt, &mut twt, 4, 3.0);
+        assert!((nwt[3] - 2.0).abs() < 1e-10);
+        assert!((nwt[4] - 3.0).abs() < 1e-10);
+        assert!((twt[1] - 5.0).abs() < 1e-10);
+        assert!((twt[0] - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn walkup_binary_tree_after_adds() {
+        let ntree = 7;
+        let mut nwt = vec![0.0; ntree];
+        let mut twt = vec![0.0; ntree];
+        add_to_binary_tree(&mut nwt, &mut twt, 3, 2.0);
+        add_to_binary_tree(&mut nwt, &mut twt, 4, 3.0);
+        add_to_binary_tree(&mut nwt, &mut twt, 5, 1.0);
+        let result = walkup_binary_tree(&nwt, &twt, 4, ntree);
+        assert!((result[2] - 3.0).abs() < 1e-10);
+        assert!(result[0] > 0.0);
+        assert!(result[1] > 0.0);
+        assert!((result[0] - 7.0).abs() < 1e-10);
+        assert!((result[1] - 5.0).abs() < 1e-10);
+    }
+}

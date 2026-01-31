@@ -1,0 +1,74 @@
+name: Benchmarks
+
+on:
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run benchmarks (PR)
+        run: cargo bench 2>&1 | tee pr-bench.txt
+
+      - name: Checkout base branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          clean: false
+
+      - name: Run benchmarks (base)
+        run: cargo bench 2>&1 | tee base-bench.txt
+
+      - name: Compare benchmarks
+        id: compare
+        run: |
+          echo "## Benchmark Results" > bench-comment.md
+          echo "" >> bench-comment.md
+          echo "<details><summary>Base branch</summary>" >> bench-comment.md
+          echo "" >> bench-comment.md
+          echo '```' >> bench-comment.md
+          cat base-bench.txt >> bench-comment.md
+          echo '```' >> bench-comment.md
+          echo "</details>" >> bench-comment.md
+          echo "" >> bench-comment.md
+          echo "<details><summary>PR branch</summary>" >> bench-comment.md
+          echo "" >> bench-comment.md
+          echo '```' >> bench-comment.md
+          cat pr-bench.txt >> bench-comment.md
+          echo '```' >> bench-comment.md
+          echo "</details>" >> bench-comment.md
+
+      - name: Post benchmark results
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: bench-comment.md
+          header: benchmarks

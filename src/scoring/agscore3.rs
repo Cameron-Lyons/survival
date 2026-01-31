@@ -219,3 +219,36 @@ pub fn perform_agscore3_calculation(
     let nvar = covariates.len() / n;
     Python::attach(|py| build_score_result(py, residuals, n, nvar, method).map(|d| d.into()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic_output_length() {
+        let n = 3;
+        let nvar = 1;
+        let y = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0];
+        let covar = vec![0.5, 1.0, 1.5];
+        let strata = vec![0, 0, 0];
+        let score = vec![1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0];
+        let sort1 = vec![1, 2, 3];
+        let result = agscore3(&y, &covar, &strata, &score, &weights, 0, &sort1).unwrap();
+        assert_eq!(result.len(), n * nvar);
+    }
+
+    #[test]
+    fn two_covariates_output_length() {
+        let n = 3;
+        let nvar = 2;
+        let y = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0];
+        let covar = vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+        let strata = vec![0, 0, 0];
+        let score = vec![1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0];
+        let sort1 = vec![1, 2, 3];
+        let result = agscore3(&y, &covar, &strata, &score, &weights, 0, &sort1).unwrap();
+        assert_eq!(result.len(), n * nvar);
+    }
+}

@@ -84,3 +84,83 @@ pub fn tmerge3(id: Vec<i32>, miss: Vec<bool>) -> Vec<usize> {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tmerge_single_id_cumulative_sum() {
+        let result = tmerge(
+            vec![1, 1],
+            vec![1.0, 2.0],
+            vec![0.0, 0.0],
+            vec![1],
+            vec![0.5],
+            vec![10.0],
+        );
+        assert!((result[0] - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tmerge_multiple_ids_dont_mix() {
+        let result = tmerge(
+            vec![1, 2],
+            vec![1.0, 1.0],
+            vec![0.0, 0.0],
+            vec![1, 2],
+            vec![0.5, 0.5],
+            vec![10.0, 20.0],
+        );
+        assert!((result[0] - 10.0).abs() < 1e-10);
+        assert!((result[1] - 20.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tmerge_nan_replacement() {
+        let result = tmerge(
+            vec![1, 1],
+            vec![1.0, 2.0],
+            vec![f64::NAN, f64::NAN],
+            vec![1],
+            vec![0.5],
+            vec![5.0],
+        );
+        assert!((result[0] - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tmerge2_basic_matching() {
+        let result = tmerge2(vec![1, 1], vec![1.0, 2.0], vec![1, 1], vec![0.5, 1.5]);
+        assert_eq!(result[0], 1);
+        assert_eq!(result[1], 2);
+    }
+
+    #[test]
+    fn tmerge2_no_matches() {
+        let result = tmerge2(vec![1], vec![0.0], vec![2], vec![1.0]);
+        assert_eq!(result[0], 0);
+    }
+
+    #[test]
+    fn tmerge3_no_missing() {
+        let result = tmerge3(vec![1, 1, 1], vec![false, false, false]);
+        assert_eq!(result, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn tmerge3_missing_uses_last_good() {
+        let result = tmerge3(vec![1, 1, 1], vec![false, true, false]);
+        assert_eq!(result[0], 1);
+        assert_eq!(result[1], 1);
+        assert_eq!(result[2], 3);
+    }
+
+    #[test]
+    fn tmerge3_id_transition_resets() {
+        let result = tmerge3(vec![1, 2, 2], vec![false, true, false]);
+        assert_eq!(result[0], 1);
+        assert_eq!(result[1], 0);
+        assert_eq!(result[2], 3);
+    }
+}

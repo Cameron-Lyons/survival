@@ -121,6 +121,73 @@ pub fn concordance5(
     }
     (count, imat, resid)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::CONCORDANCE_COUNT_SIZE_EXTENDED;
+
+    #[test]
+    fn basic_concordance_three_observations() {
+        let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 1.0];
+        let x = vec![0, 1, 2];
+        let wt = vec![1.0, 1.0, 1.0];
+        let timewt = vec![1.0, 1.0, 1.0];
+        let sortstop = vec![0, 1, 2];
+        let (count, _imat, _resid) = concordance5(&y, &x, &wt, &timewt, None, &sortstop, false);
+        assert_eq!(count.len(), CONCORDANCE_COUNT_SIZE_EXTENDED);
+    }
+
+    #[test]
+    fn imat_length_3n() {
+        let n = 3;
+        let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 1.0];
+        let x = vec![0, 1, 2];
+        let wt = vec![1.0, 1.0, 1.0];
+        let timewt = vec![1.0, 1.0, 1.0];
+        let sortstop = vec![0, 1, 2];
+        let (_count, imat, _resid) = concordance5(&y, &x, &wt, &timewt, None, &sortstop, false);
+        assert_eq!(imat.len(), 3 * n);
+    }
+
+    #[test]
+    fn sortstart_none_vs_some() {
+        let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 1.0];
+        let x = vec![0, 1, 2];
+        let wt = vec![1.0, 1.0, 1.0];
+        let timewt = vec![1.0, 1.0, 1.0];
+        let sortstop = vec![0, 1, 2];
+        let sortstart = vec![0, 1, 2];
+        let (count_none, _, _) = concordance5(&y, &x, &wt, &timewt, None, &sortstop, false);
+        let (count_some, _, _) =
+            concordance5(&y, &x, &wt, &timewt, Some(&sortstart), &sortstop, false);
+        assert_eq!(count_none.len(), CONCORDANCE_COUNT_SIZE_EXTENDED);
+        assert_eq!(count_some.len(), CONCORDANCE_COUNT_SIZE_EXTENDED);
+    }
+
+    #[test]
+    fn doresid_true_returns_some() {
+        let y = vec![1.0, 2.0, 1.0, 1.0];
+        let x = vec![0, 1];
+        let wt = vec![1.0, 1.0];
+        let timewt = vec![1.0, 1.0];
+        let sortstop = vec![0, 1];
+        let (_count, _imat, resid) = concordance5(&y, &x, &wt, &timewt, None, &sortstop, true);
+        assert!(resid.is_some());
+    }
+
+    #[test]
+    fn doresid_false_returns_none() {
+        let y = vec![1.0, 2.0, 1.0, 1.0];
+        let x = vec![0, 1];
+        let wt = vec![1.0, 1.0];
+        let timewt = vec![1.0, 1.0];
+        let sortstop = vec![0, 1];
+        let (_count, _imat, resid) = concordance5(&y, &x, &wt, &timewt, None, &sortstop, false);
+        assert!(resid.is_none());
+    }
+}
+
 #[inline]
 fn compute_z2(wt: f64, wsum: &[f64]) -> f64 {
     let total = wsum[0] + wsum[1] + wsum[2];

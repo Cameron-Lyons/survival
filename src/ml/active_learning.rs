@@ -664,4 +664,105 @@ mod tests {
         assert!(result.information_fraction > 0.0);
         assert!(result.efficacy_boundary > 0.0);
     }
+
+    #[test]
+    fn test_active_learning_config_zero_batch_size() {
+        let result = ActiveLearningConfig::new("uncertainty", 0, 0.5, 0.3, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_active_learning_empty_input() {
+        let config = ActiveLearningConfig::new("uncertainty", 2, 0.5, 0.3, None).unwrap();
+        let result = active_learning_selection(vec![], vec![], vec![], config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_active_learning_excludes_labeled() {
+        let covariates = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+            vec![2.0, 2.0],
+            vec![3.0, 3.0],
+            vec![4.0, 4.0],
+            vec![5.0, 5.0],
+        ];
+        let predictions = vec![
+            vec![0.1, 0.9],
+            vec![0.4, 0.6],
+            vec![0.2, 0.8],
+            vec![0.5, 0.5],
+            vec![0.3, 0.7],
+            vec![0.6, 0.4],
+        ];
+        let labeled = vec![0, 1, 2];
+        let config = ActiveLearningConfig::new("uncertainty", 3, 0.5, 0.3, Some(42)).unwrap();
+
+        let result =
+            active_learning_selection(covariates, predictions, labeled.clone(), config).unwrap();
+        for idx in &result.selected_indices {
+            assert!(!labeled.contains(idx));
+        }
+    }
+
+    #[test]
+    fn test_query_by_committee_empty_ensemble() {
+        let result = query_by_committee(vec![], vec![], 2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_query_by_committee_excludes_labeled() {
+        let ensemble = vec![
+            vec![vec![0.1], vec![0.5], vec![0.9], vec![0.2]],
+            vec![vec![0.8], vec![0.4], vec![0.3], vec![0.7]],
+        ];
+        let labeled = vec![0, 2];
+
+        let result = query_by_committee(ensemble, labeled.clone(), 2).unwrap();
+        for idx in &result.selected_indices {
+            assert!(!labeled.contains(idx));
+        }
+        assert_eq!(result.selected_indices.len(), 2);
+    }
+
+    #[test]
+    fn test_sample_size_logrank_invalid_hr() {
+        let result = sample_size_logrank(1.0, 0.8, 0.05, 1.0, Some(0.5), 0.0, None, None);
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(-0.5, 0.8, 0.05, 1.0, Some(0.5), 0.0, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_power_logrank_invalid_hr() {
+        let result = power_logrank(200, 1.0, 0.05, 1.0, 0.5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_group_sequential_invalid_stage() {
+        let result = group_sequential_analysis(50, 200, 1.5, 0, 4, 0.05, 0.0, "obf");
+        assert!(result.is_err());
+
+        let result = group_sequential_analysis(50, 200, 1.5, 5, 4, 0.05, 0.0, "obf");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_group_sequential_pocock_boundary() {
+        let result = group_sequential_analysis(100, 200, 2.0, 2, 4, 0.05, 0.0, "pocock").unwrap();
+        assert!(result.efficacy_boundary > 0.0);
+        assert_eq!(result.stage, 2);
+    }
+
+    #[test]
+    fn test_sample_size_with_dropout() {
+        let without = sample_size_logrank(0.7, 0.8, 0.05, 1.0, Some(0.5), 0.0, None, None).unwrap();
+        let with_dropout =
+            sample_size_logrank(0.7, 0.8, 0.05, 1.0, Some(0.5), 0.2, None, None).unwrap();
+        assert!(with_dropout.required_sample_size > without.required_sample_size);
+    }
 }

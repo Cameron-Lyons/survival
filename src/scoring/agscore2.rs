@@ -159,3 +159,63 @@ pub fn perform_score_calculation(
     let nvar = covariates.len() / n;
     Python::attach(|py| build_score_result(py, residuals, n, nvar, method).map(|d| d.into()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_event_breslow() {
+        let n = 3;
+        let nvar = 1;
+        let y = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0];
+        let covar = vec![0.5, 1.0, 1.5];
+        let strata = vec![0, 0, 0];
+        let score = vec![1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0];
+        let result = agscore2(&y, &covar, &strata, &score, &weights, 0).unwrap();
+        assert_eq!(result.len(), n * nvar);
+    }
+
+    #[test]
+    fn no_events_all_zero() {
+        let y = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0];
+        let covar = vec![0.5, 1.0, 1.5];
+        let strata = vec![0, 0, 0];
+        let score = vec![1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0];
+        let result = agscore2(&y, &covar, &strata, &score, &weights, 0).unwrap();
+        for &r in &result {
+            assert_eq!(r, 0.0);
+        }
+    }
+
+    #[test]
+    fn breslow_vs_efron_tied_deaths() {
+        let y = vec![0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 3.0, 1.0, 1.0, 0.0, 0.0];
+        let covar = vec![1.0, 2.0, 3.0, 4.0];
+        let strata = vec![0, 0, 0, 0];
+        let score = vec![1.0, 1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+        let breslow = agscore2(&y, &covar, &strata, &score, &weights, 0).unwrap();
+        let efron = agscore2(&y, &covar, &strata, &score, &weights, 1).unwrap();
+        let differs = breslow
+            .iter()
+            .zip(efron.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-15);
+        assert!(differs);
+    }
+
+    #[test]
+    fn multiple_covariates_output_length() {
+        let n = 3;
+        let nvar = 2;
+        let y = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0];
+        let covar = vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+        let strata = vec![0, 0, 0];
+        let score = vec![1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0];
+        let result = agscore2(&y, &covar, &strata, &score, &weights, 0).unwrap();
+        assert_eq!(result.len(), n * nvar);
+    }
+}

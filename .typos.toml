@@ -4,6 +4,17 @@ nvar = "nvar"
 ser = "ser"
 aft = "aft"
 dof = "dof"
+pn = "pn"
+numer = "numer"
+indx = "indx"
+lik = "lik"
+fpr = "fpr"
+cll = "cll"
+strat = "strat"
+ehr = "ehr"
+nd = "nd"
+perfor = "perfor"
+wil = "wil"
 
 [files]
 extend-exclude = [
