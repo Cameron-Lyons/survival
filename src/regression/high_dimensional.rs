@@ -155,7 +155,7 @@ pub fn group_lasso_cox(
                 .map(|i| (covariates[i * p + j] - mean).powi(2))
                 .sum::<f64>()
                 / n as f64;
-            var.sqrt().max(1e-10)
+            var.sqrt().max(crate::constants::DIVISION_FLOOR)
         })
         .collect();
 
@@ -176,7 +176,11 @@ pub fn group_lasso_cox(
     let mut n_iter = 0;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for iter in 0..config.max_iter {
         n_iter = iter + 1;
@@ -228,14 +232,15 @@ pub fn group_lasso_cox(
                 .iter()
                 .enumerate()
                 .map(|(k, &j)| {
-                    let h = hessian_diag[k].max(1e-10);
+                    let h = hessian_diag[k].max(crate::constants::DIVISION_FLOOR);
                     beta[j] + gradient[k] / h
                 })
                 .collect();
 
             let avg_hessian: f64 =
                 hessian_diag.iter().sum::<f64>() / hessian_diag.len().max(1) as f64;
-            let group_lambda = config.lambda * group_weights[g] / avg_hessian.max(1e-10);
+            let group_lambda = config.lambda * group_weights[g]
+                / avg_hessian.max(crate::constants::DIVISION_FLOOR);
 
             let new_beta_group = group_soft_threshold(&z, group_lambda);
 
@@ -272,9 +277,14 @@ pub fn group_lasso_cox(
         })
         .collect();
 
-    let selected_groups: Vec<usize> = (0..n_groups).filter(|&g| group_norms[g] > 1e-10).collect();
+    let selected_groups: Vec<usize> = (0..n_groups)
+        .filter(|&g| group_norms[g] > crate::constants::DIVISION_FLOOR)
+        .collect();
 
-    let df: usize = beta.iter().filter(|&&b| b.abs() > 1e-10).count();
+    let df: usize = beta
+        .iter()
+        .filter(|&&b| b.abs() > crate::constants::DIVISION_FLOOR)
+        .count();
 
     let mut log_likelihood = 0.0;
     let eta: Vec<f64> = (0..n)
@@ -411,7 +421,11 @@ pub fn sparse_boosting_cox(
     let mut no_improvement_count = 0;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for iter in 0..config.n_iterations {
         let sample_size = (n as f64 * config.subsample_ratio) as usize;
@@ -467,7 +481,7 @@ pub fn sparse_boosting_cox(
             * best_grad.signum()
             * (best_grad.abs() - config.l1_penalty).max(0.0);
 
-        if update.abs() > 1e-10 {
+        if update.abs() > crate::constants::DIVISION_FLOOR {
             beta[best_j] += update;
             beta[best_j] = beta[best_j].clamp(-10.0, 10.0);
             feature_selection_count[best_j] += 1;
@@ -489,7 +503,9 @@ pub fn sparse_boosting_cox(
         }
     }
 
-    let selected_features: Vec<usize> = (0..p).filter(|&j| beta[j].abs() > 1e-10).collect();
+    let selected_features: Vec<usize> = (0..p)
+        .filter(|&j| beta[j].abs() > crate::constants::DIVISION_FLOOR)
+        .collect();
 
     let total_selections: usize = feature_selection_count.iter().sum();
     let feature_importance: Vec<f64> = feature_selection_count
@@ -516,7 +532,11 @@ fn compute_partial_likelihood(
     p: usize,
 ) -> f64 {
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let eta: Vec<f64> = (0..n)
         .map(|i| {
@@ -618,7 +638,11 @@ pub fn sis_cox(
     };
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let marginal_scores: Vec<f64> = (0..p)
         .into_par_iter()
@@ -648,7 +672,7 @@ pub fn sis_cox(
                     }
                 }
 
-                if hessian.abs() > 1e-10 {
+                if hessian.abs() > crate::constants::DIVISION_FLOOR {
                     beta += gradient / hessian;
                     beta = beta.clamp(-10.0, 10.0);
                 }
@@ -701,7 +725,9 @@ pub fn sis_cox(
                                 let var_j = sum_jj / n as f64 - (sum_j / n as f64).powi(2);
                                 let var_k = sum_kk / n as f64 - (sum_k / n as f64).powi(2);
 
-                                if var_j > 1e-10 && var_k > 1e-10 {
+                                if var_j > crate::constants::DIVISION_FLOOR
+                                    && var_k > crate::constants::DIVISION_FLOOR
+                                {
                                     (cov / (var_j.sqrt() * var_k.sqrt())).abs()
                                 } else {
                                     0.0
@@ -911,7 +937,11 @@ fn fit_lasso_simple(time: &[f64], event: &[i32], covariates: &[f64], lambda: f64
     let mut beta = vec![0.0; p];
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for _ in 0..50 {
         for j in 0..p {
@@ -951,7 +981,7 @@ fn fit_lasso_simple(time: &[f64], event: &[i32], covariates: &[f64], lambda: f64
                 }
             }
 
-            if hessian.abs() > 1e-10 {
+            if hessian.abs() > crate::constants::DIVISION_FLOOR {
                 let z = beta[j] + gradient / hessian;
                 beta[j] = soft_threshold(z, lambda / hessian);
                 beta[j] = beta[j].clamp(-10.0, 10.0);
@@ -959,7 +989,9 @@ fn fit_lasso_simple(time: &[f64], event: &[i32], covariates: &[f64], lambda: f64
         }
     }
 
-    (0..p).filter(|&j| beta[j].abs() > 1e-10).collect()
+    (0..p)
+        .filter(|&j| beta[j].abs() > crate::constants::DIVISION_FLOOR)
+        .collect()
 }
 
 #[cfg(test)]

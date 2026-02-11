@@ -299,7 +299,7 @@ fn bspline_basis_value(x: f64, j: usize, degree: usize, knots: &[f64]) -> f64 {
 
     if j + degree < knots.len() {
         let denom1 = knots[j + degree] - knots[j];
-        if denom1 > 1e-10 {
+        if denom1 > crate::constants::DIVISION_FLOOR {
             let b1 = bspline_basis_value(x, j, degree - 1, knots);
             result += (x - knots[j]) / denom1 * b1;
         }
@@ -307,7 +307,7 @@ fn bspline_basis_value(x: f64, j: usize, degree: usize, knots: &[f64]) -> f64 {
 
     if j + degree + 1 < knots.len() {
         let denom2 = knots[j + degree + 1] - knots[j + 1];
-        if denom2 > 1e-10 {
+        if denom2 > crate::constants::DIVISION_FLOOR {
             let b2 = bspline_basis_value(x, j + 1, degree - 1, knots);
             result += (knots[j + degree + 1] - x) / denom2 * b2;
         }
@@ -393,12 +393,12 @@ pub fn restricted_cubic_spline(
 
     let _t_min = knots.first().cloned().unwrap_or(0.0);
     let t_max = knots.last().cloned().unwrap_or(1.0);
-    let d_km1_k = (t_max - knots[k - 2]).max(1e-10);
+    let d_km1_k = (t_max - knots[k - 2]).max(crate::constants::DIVISION_FLOOR);
 
     for i in 0..n {
         for j in 0..(k - 2) {
             let t_j = knots[j];
-            let d_j_k = (t_max - t_j).max(1e-10);
+            let d_j_k = (t_max - t_j).max(crate::constants::DIVISION_FLOOR);
 
             let term1 = rcs_truncated_power(x[i], t_j, 3);
             let term2 = rcs_truncated_power(x[i], knots[k - 2], 3) * d_j_k / d_km1_k;

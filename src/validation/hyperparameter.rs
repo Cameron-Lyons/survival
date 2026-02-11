@@ -288,7 +288,7 @@ pub fn hyperparameter_search(
     let best_idx = all_scores
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i)
         .unwrap_or(0);
 
@@ -331,7 +331,7 @@ impl BenchmarkResult {
 
     fn ranking(&self) -> Vec<(String, usize)> {
         let mut indexed: Vec<(usize, f64)> = self.c_indices.iter().copied().enumerate().collect();
-        indexed.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
+        indexed.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
         indexed
             .iter()
             .enumerate()
@@ -430,7 +430,7 @@ pub fn benchmark_models(
     let best_idx = c_indices
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i)
         .unwrap_or(0);
 

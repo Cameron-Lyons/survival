@@ -104,8 +104,14 @@ pub struct CopulaCensoringResult {
 }
 
 fn copula_density(u: f64, v: f64, theta: f64, copula_type: &CopulaType) -> f64 {
-    let u = u.clamp(1e-10, 1.0 - 1e-10);
-    let v = v.clamp(1e-10, 1.0 - 1e-10);
+    let u = u.clamp(
+        crate::constants::DIVISION_FLOOR,
+        1.0 - crate::constants::DIVISION_FLOOR,
+    );
+    let v = v.clamp(
+        crate::constants::DIVISION_FLOOR,
+        1.0 - crate::constants::DIVISION_FLOOR,
+    );
 
     match copula_type {
         CopulaType::Clayton => {
@@ -114,12 +120,12 @@ fn copula_density(u: f64, v: f64, theta: f64, copula_type: &CopulaType) -> f64 {
             }
             let a = u.powf(-theta) + v.powf(-theta) - 1.0;
             if a <= 0.0 {
-                return 1e-10;
+                return crate::constants::DIVISION_FLOOR;
             }
             (1.0 + theta) * (u * v).powf(-theta - 1.0) * a.powf(-2.0 - 1.0 / theta)
         }
         CopulaType::Frank => {
-            if theta.abs() < 1e-10 {
+            if theta.abs() < crate::constants::DIVISION_FLOOR {
                 return 1.0;
             }
             let a = (-theta).exp() - 1.0;
@@ -148,15 +154,21 @@ fn copula_density(u: f64, v: f64, theta: f64, copula_type: &CopulaType) -> f64 {
             let det = 1.0 - rho * rho;
             let exp_term = -(x * x + y * y - 2.0 * rho * x * y) / (2.0 * det);
             (1.0 / (2.0 * std::f64::consts::PI * det.sqrt())) * exp_term.exp()
-                / (normal_pdf(x) * normal_pdf(y)).max(1e-10)
+                / (normal_pdf(x) * normal_pdf(y)).max(crate::constants::DIVISION_FLOOR)
         }
         CopulaType::Independent => 1.0,
     }
 }
 
 fn copula_cdf(u: f64, v: f64, theta: f64, copula_type: &CopulaType) -> f64 {
-    let u = u.clamp(1e-10, 1.0 - 1e-10);
-    let v = v.clamp(1e-10, 1.0 - 1e-10);
+    let u = u.clamp(
+        crate::constants::DIVISION_FLOOR,
+        1.0 - crate::constants::DIVISION_FLOOR,
+    );
+    let v = v.clamp(
+        crate::constants::DIVISION_FLOOR,
+        1.0 - crate::constants::DIVISION_FLOOR,
+    );
 
     match copula_type {
         CopulaType::Clayton => {
@@ -170,7 +182,7 @@ fn copula_cdf(u: f64, v: f64, theta: f64, copula_type: &CopulaType) -> f64 {
             a.powf(-1.0 / theta)
         }
         CopulaType::Frank => {
-            if theta.abs() < 1e-10 {
+            if theta.abs() < crate::constants::DIVISION_FLOOR {
                 return u * v;
             }
             let a = ((-theta * u).exp() - 1.0) * ((-theta * v).exp() - 1.0);
@@ -196,7 +208,10 @@ fn copula_cdf(u: f64, v: f64, theta: f64, copula_type: &CopulaType) -> f64 {
 }
 
 fn probit(p: f64) -> f64 {
-    let p = p.clamp(1e-10, 1.0 - 1e-10);
+    let p = p.clamp(
+        crate::constants::DIVISION_FLOOR,
+        1.0 - crate::constants::DIVISION_FLOOR,
+    );
     #[allow(clippy::excessive_precision)]
     let a = [
         -3.969683028665376e1,
@@ -252,7 +267,7 @@ fn normal_pdf(x: f64) -> f64 {
 }
 
 fn bivariate_normal_cdf(x: f64, y: f64, rho: f64) -> f64 {
-    if rho.abs() < 1e-10 {
+    if rho.abs() < crate::constants::DIVISION_FLOOR {
         return normal_cdf(x) * normal_cdf(y);
     }
 
@@ -295,7 +310,7 @@ fn kendall_tau_from_theta(theta: f64, copula_type: &CopulaType) -> f64 {
     match copula_type {
         CopulaType::Clayton => theta / (theta + 2.0),
         CopulaType::Frank => {
-            if theta.abs() < 1e-10 {
+            if theta.abs() < crate::constants::DIVISION_FLOOR {
                 0.0
             } else {
                 1.0 - 4.0 / theta * (1.0 - debye_1(theta))
@@ -308,7 +323,7 @@ fn kendall_tau_from_theta(theta: f64, copula_type: &CopulaType) -> f64 {
 }
 
 fn debye_1(x: f64) -> f64 {
-    if x.abs() < 1e-10 {
+    if x.abs() < crate::constants::DIVISION_FLOOR {
         return 1.0;
     }
     let n = 100;
@@ -342,7 +357,11 @@ pub fn copula_censoring_model(
         .collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let marginal_survival_t = estimate_km(&time, &event, &eval_times);
     let marginal_survival_c = estimate_km(&time, &censoring_indicator, &eval_times);
@@ -368,19 +387,25 @@ pub fn copula_censoring_model(
                 .unwrap_or(config.n_grid - 1);
             let idx_c = idx_t;
 
-            let s_t = marginal_survival_t[idx_t].clamp(1e-10, 1.0 - 1e-10);
-            let s_c = marginal_survival_c[idx_c].clamp(1e-10, 1.0 - 1e-10);
+            let s_t = marginal_survival_t[idx_t].clamp(
+                crate::constants::DIVISION_FLOOR,
+                1.0 - crate::constants::DIVISION_FLOOR,
+            );
+            let s_c = marginal_survival_c[idx_c].clamp(
+                crate::constants::DIVISION_FLOOR,
+                1.0 - crate::constants::DIVISION_FLOOR,
+            );
 
             let f_t = if idx_t > 0 {
-                (marginal_survival_t[idx_t - 1] - s_t).max(1e-10)
+                (marginal_survival_t[idx_t - 1] - s_t).max(crate::constants::DIVISION_FLOOR)
             } else {
-                (1.0 - s_t).max(1e-10)
+                (1.0 - s_t).max(crate::constants::DIVISION_FLOOR)
             };
 
             let f_c = if idx_c > 0 {
-                (marginal_survival_c[idx_c - 1] - s_c).max(1e-10)
+                (marginal_survival_c[idx_c - 1] - s_c).max(crate::constants::DIVISION_FLOOR)
             } else {
-                (1.0 - s_c).max(1e-10)
+                (1.0 - s_c).max(crate::constants::DIVISION_FLOOR)
             };
 
             let u = 1.0 - s_t;
@@ -403,15 +428,15 @@ pub fn copula_censoring_model(
             let c_minus = copula_density(u, v, theta - eps, &config.copula_type);
             let c_curr = copula_density(u, v, theta, &config.copula_type);
 
-            if c_curr > 1e-10 {
+            if c_curr > crate::constants::DIVISION_FLOOR {
                 gradient += (c_plus - c_minus) / (2.0 * eps * c_curr);
                 hessian += ((c_plus - 2.0 * c_curr + c_minus) / (eps * eps)) / c_curr
                     - ((c_plus - c_minus) / (2.0 * eps * c_curr)).powi(2);
             }
         }
 
-        if hessian.abs() > 1e-10 {
-            let update = gradient / (-hessian).max(1e-10);
+        if hessian.abs() > crate::constants::DIVISION_FLOOR {
+            let update = gradient / (-hessian).max(crate::constants::DIVISION_FLOOR);
             theta += 0.5 * update;
             theta = match config.copula_type {
                 CopulaType::Clayton => theta.clamp(0.01, 50.0),
@@ -470,7 +495,11 @@ pub fn copula_censoring_model(
 fn estimate_km(time: &[f64], event: &[i32], eval_times: &[f64]) -> Vec<f64> {
     let n = time.len();
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut survival = 1.0;
     let mut at_risk = n as f64;
@@ -660,7 +689,11 @@ fn estimate_hazard_ratio(time: &[f64], event: &[i32], treatment: &[i32]) -> f64 
     let mut beta = 0.0;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for _ in 0..50 {
         let mut gradient = 0.0;
@@ -685,7 +718,7 @@ fn estimate_hazard_ratio(time: &[f64], event: &[i32], treatment: &[i32]) -> f64 
             }
         }
 
-        if hessian.abs() > 1e-10 {
+        if hessian.abs() > crate::constants::DIVISION_FLOOR {
             beta += gradient / hessian;
             beta = beta.clamp(-10.0, 10.0);
         }
@@ -803,7 +836,11 @@ fn estimate_weighted_km(
 ) -> Vec<f64> {
     let n = time.len();
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut survival = 1.0;
     let total_weight: f64 = weights.iter().sum();

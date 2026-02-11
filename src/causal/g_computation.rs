@@ -65,7 +65,7 @@ fn fit_outcome_model(time: &[f64], status: &[i32], x: &[f64], n: usize, p: usize
             for j in 0..p {
                 eta += x[i * p + j] * beta[j];
             }
-            let log_t = time[i].max(1e-10).ln();
+            let log_t = time[i].max(crate::constants::DIVISION_FLOOR).ln();
             let z = (log_t - scale.ln() - eta) * shape;
 
             let residual = if status[i] == 1 {
@@ -81,7 +81,7 @@ fn fit_outcome_model(time: &[f64], status: &[i32], x: &[f64], n: usize, p: usize
         }
 
         for j in 0..p {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 beta[j] += gradient[j] / (hessian_diag[j] + 0.01);
             }
         }

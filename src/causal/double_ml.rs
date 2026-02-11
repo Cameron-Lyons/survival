@@ -122,7 +122,7 @@ fn fit_nuisance_model(
     let mut beta = vec![0.0; n_features];
     #[allow(clippy::needless_range_loop)]
     for j in 0..n_features {
-        if xtx[j][j].abs() > 1e-10 {
+        if xtx[j][j].abs() > crate::constants::DIVISION_FLOOR {
             beta[j] = xty[j] / xtx[j][j];
         }
     }
@@ -171,7 +171,7 @@ fn fit_propensity_model(x: &[Vec<f64>], d: &[i32], train_idx: &[usize], trimming
             denom += xij_centered * xij_centered;
         }
 
-        if denom.abs() > 1e-10 {
+        if denom.abs() > crate::constants::DIVISION_FLOOR {
             beta[j] = num / denom;
         }
     }
@@ -307,7 +307,7 @@ pub fn double_ml_survival(
         all_scores.iter().map(|&s| (s - ate).powi(2)).sum::<f64>() / (all_scores.len() - 1) as f64;
     let se = (var / all_scores.len() as f64).sqrt();
 
-    let z = ate / se.max(1e-10);
+    let z = ate / se.max(crate::constants::DIVISION_FLOOR);
     let pvalue = 2.0 * (1.0 - normal_cdf(z.abs()));
 
     let ci_lower = ate - 1.96 * se;

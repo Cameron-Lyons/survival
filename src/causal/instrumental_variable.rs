@@ -139,7 +139,7 @@ pub fn iv_cox(
         }
 
         for j in 0..first_stage_coef.len() {
-            if xtx[j][j].abs() > 1e-10 {
+            if xtx[j][j].abs() > crate::constants::DIVISION_FLOOR {
                 first_stage_coef[j] = xty[j] / xtx[j][j];
             }
         }
@@ -172,13 +172,13 @@ pub fn iv_cox(
         .sum::<f64>()
         / n as f64;
 
-    let first_stage_r2 = if treatment_var > 1e-10 {
+    let first_stage_r2 = if treatment_var > crate::constants::DIVISION_FLOOR {
         (1.0 - residual_var / treatment_var).clamp(0.0, 1.0)
     } else {
         0.0
     };
 
-    let first_stage_f = if residual_var > 1e-10 {
+    let first_stage_f = if residual_var > crate::constants::DIVISION_FLOOR {
         (fitted_var / residual_var) * (n - n_instruments - p_cov - 1) as f64 / n_instruments as f64
     } else {
         0.0
@@ -198,7 +198,11 @@ pub fn iv_cox(
     let mut final_hessian_cov: Vec<f64> = vec![0.0; p_cov];
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for iter in 0..config.max_iter {
         n_iter = iter + 1;
@@ -254,13 +258,13 @@ pub fn iv_cox(
 
         let old_beta = beta_treatment;
 
-        if hessian_treatment.abs() > 1e-10 {
+        if hessian_treatment.abs() > crate::constants::DIVISION_FLOOR {
             beta_treatment += gradient_treatment / hessian_treatment;
             beta_treatment = beta_treatment.clamp(-10.0, 10.0);
         }
 
         for k in 0..p_cov {
-            if hessian_cov[k].abs() > 1e-10 {
+            if hessian_cov[k].abs() > crate::constants::DIVISION_FLOOR {
                 beta_cov[k] += gradient_cov[k] / hessian_cov[k];
                 beta_cov[k] = beta_cov[k].clamp(-10.0, 10.0);
             }
@@ -275,13 +279,14 @@ pub fn iv_cox(
         }
     }
 
-    let treatment_se = if final_hessian_treatment > 1e-10 {
+    let treatment_se = if final_hessian_treatment > crate::constants::DIVISION_FLOOR {
         (1.0 / final_hessian_treatment).sqrt()
     } else {
         f64::INFINITY
     };
 
-    let treatment_z = if treatment_se > 1e-10 && treatment_se.is_finite() {
+    let treatment_z = if treatment_se > crate::constants::DIVISION_FLOOR && treatment_se.is_finite()
+    {
         beta_treatment / treatment_se
     } else {
         0.0
@@ -292,7 +297,7 @@ pub fn iv_cox(
     let covariate_se: Vec<f64> = final_hessian_cov
         .iter()
         .map(|&h| {
-            if h > 1e-10 {
+            if h > crate::constants::DIVISION_FLOOR {
                 (1.0 / h).sqrt()
             } else {
                 f64::INFINITY
@@ -336,7 +341,7 @@ pub fn iv_cox(
         }
 
         let sigma_sq = residual_var;
-        if sigma_sq > 1e-10 {
+        if sigma_sq > crate::constants::DIVISION_FLOOR {
             r_sum_sq / sigma_sq
         } else {
             0.0
@@ -420,7 +425,7 @@ fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
         for n in 1..100 {
             term *= x / (a + n as f64);
             sum += term;
-            if term.abs() < 1e-10 * sum.abs() {
+            if term.abs() < crate::constants::DIVISION_FLOOR * sum.abs() {
                 break;
             }
         }
@@ -452,7 +457,7 @@ fn upper_incomplete_gamma(a: f64, x: f64) -> f64 {
         d = 1.0 / d;
         let delta = c * d;
         f *= delta;
-        if (delta - 1.0).abs() < 1e-10 {
+        if (delta - 1.0).abs() < crate::constants::DIVISION_FLOOR {
             break;
         }
     }
@@ -556,7 +561,7 @@ pub fn rd_survival(
         let centered: Vec<f64> = running_var.iter().map(|&r| r - cutoff).collect();
         let iqr = {
             let mut sorted = centered.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let q1 = sorted[n / 4];
             let q3 = sorted[3 * n / 4];
             q3 - q1
@@ -607,7 +612,7 @@ pub fn rd_survival(
     let se_right = (survival_right * (1.0 - survival_right) / n_right as f64).sqrt();
     let se = (se_left.powi(2) + se_right.powi(2)).sqrt();
 
-    let z_score = if se > 1e-10 {
+    let z_score = if se > crate::constants::DIVISION_FLOOR {
         treatment_effect / se
     } else {
         0.0
@@ -647,7 +652,11 @@ fn estimate_km_survival(
     }
 
     let mut sorted_indices: Vec<usize> = indices.to_vec();
-    sorted_indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let max_time = time[sorted_indices[sorted_indices.len() / 2]];
 
@@ -666,7 +675,7 @@ fn estimate_km_survival(
 
         let weight = kernel_weight(running_var[i] - cutoff, bandwidth, kernel);
 
-        if event[i] == 1 && at_risk > 1e-10 {
+        if event[i] == 1 && at_risk > crate::constants::DIVISION_FLOOR {
             survival *= 1.0 - weight / at_risk;
         }
 
@@ -783,7 +792,7 @@ pub fn mediation_survival(
     let direct_effect = beta_direct;
     let indirect_effect = alpha * gamma;
 
-    let proportion_mediated = if total_effect.abs() > 1e-10 {
+    let proportion_mediated = if total_effect.abs() > crate::constants::DIVISION_FLOOR {
         (indirect_effect / total_effect).clamp(-1.0, 2.0)
     } else {
         0.0
@@ -847,17 +856,17 @@ pub fn mediation_survival(
     let direct_se = std_dev(&direct_effects);
     let indirect_se = std_dev(&indirect_effects);
 
-    let total_z = if total_se > 1e-10 {
+    let total_z = if total_se > crate::constants::DIVISION_FLOOR {
         total_effect / total_se
     } else {
         0.0
     };
-    let direct_z = if direct_se > 1e-10 {
+    let direct_z = if direct_se > crate::constants::DIVISION_FLOOR {
         direct_effect / direct_se
     } else {
         0.0
     };
-    let indirect_z = if indirect_se > 1e-10 {
+    let indirect_z = if indirect_se > crate::constants::DIVISION_FLOOR {
         indirect_effect / indirect_se
     } else {
         0.0
@@ -914,7 +923,7 @@ fn fit_mediator_model(
         var_t += t_centered * t_centered;
     }
 
-    if var_t > 1e-10 {
+    if var_t > crate::constants::DIVISION_FLOOR {
         alpha = cov_tm / var_t;
     }
 
@@ -923,7 +932,7 @@ fn fit_mediator_model(
         .collect();
 
     let mse = residuals.iter().map(|&r| r * r).sum::<f64>() / n as f64;
-    let alpha_se = if var_t > 1e-10 {
+    let alpha_se = if var_t > crate::constants::DIVISION_FLOOR {
         (mse / var_t).sqrt()
     } else {
         f64::INFINITY
@@ -945,7 +954,11 @@ fn fit_outcome_model(
     let mut beta = 0.0;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for _ in 0..max_iter {
         let eta: Vec<f64> = (0..n)
@@ -972,7 +985,7 @@ fn fit_outcome_model(
             }
         }
 
-        if hessian.abs() > 1e-10 {
+        if hessian.abs() > crate::constants::DIVISION_FLOOR {
             beta += gradient / hessian;
             beta = beta.clamp(-10.0, 10.0);
         }
@@ -996,7 +1009,11 @@ fn fit_outcome_model_with_mediator(
     let mut gamma = 0.0;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for _ in 0..max_iter {
         let eta: Vec<f64> = (0..n)
@@ -1035,12 +1052,12 @@ fn fit_outcome_model_with_mediator(
             }
         }
 
-        if hess_beta.abs() > 1e-10 {
+        if hess_beta.abs() > crate::constants::DIVISION_FLOOR {
             beta += grad_beta / hess_beta;
             beta = beta.clamp(-10.0, 10.0);
         }
 
-        if hess_gamma.abs() > 1e-10 {
+        if hess_gamma.abs() > crate::constants::DIVISION_FLOOR {
             gamma += grad_gamma / hess_gamma;
             gamma = gamma.clamp(-10.0, 10.0);
         }
@@ -1178,7 +1195,7 @@ pub fn g_estimation_aft(
 
         let old_psi = psi.clone();
         for j in 0..n_params {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 psi[j] += gradient[j] / hessian_diag[j];
                 psi[j] = psi[j].clamp(-10.0, 10.0);
             }
@@ -1201,7 +1218,13 @@ pub fn g_estimation_aft(
     let z_scores: Vec<f64> = psi
         .iter()
         .zip(se.iter())
-        .map(|(&p, &s)| if s > 1e-10 { p / s } else { 0.0 })
+        .map(|(&p, &s)| {
+            if s > crate::constants::DIVISION_FLOOR {
+                p / s
+            } else {
+                0.0
+            }
+        })
         .collect();
 
     let p_values: Vec<f64> = z_scores

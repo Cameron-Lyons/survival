@@ -805,7 +805,11 @@ pub fn ipcw_auc(
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| event_time[a].partial_cmp(&event_time[b]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        event_time[a]
+            .partial_cmp(&event_time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut km_surv = vec![1.0; n];
     let mut at_risk = n as f64;

@@ -113,7 +113,7 @@ fn compute_km_censoring_survival(time: &[f64], status: &[i32]) -> Vec<f64> {
         let mut censored_count = 0;
 
         let start_i = i;
-        while i < n && (time[indices[i]] - current_time).abs() < 1e-10 {
+        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
             if status[indices[i]] == 0 {
                 censored_count += 1;
             }
@@ -408,7 +408,8 @@ impl CensoringModel {
             let mut censored_count = 0;
             let mut event_count = 0;
 
-            while i < n && (time[indices[i]] - current_time).abs() < 1e-10 {
+            while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON
+            {
                 if status[indices[i]] == 0 {
                     censored_count += 1;
                 } else {

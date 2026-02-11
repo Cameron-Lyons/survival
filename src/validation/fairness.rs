@@ -127,7 +127,7 @@ pub fn compute_fairness_metrics(
 
     let median_risk: f64 = {
         let mut sorted: Vec<f64> = risk_scores.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         sorted[sorted.len() / 2]
     };
 
@@ -142,11 +142,11 @@ pub fn compute_fairness_metrics(
     let demographic_parity = if group_high_risk_rates.len() >= 2 {
         group_high_risk_rates
             .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap()
             - group_high_risk_rates
                 .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap()
     } else {
         0.0
@@ -177,11 +177,11 @@ pub fn compute_fairness_metrics(
     let equalized_odds = if group_event_rates.len() >= 2 {
         group_event_rates
             .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap()
             - group_event_rates
                 .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap()
     } else {
         0.0
@@ -190,11 +190,11 @@ pub fn compute_fairness_metrics(
     let calibration_difference = if group_c_indices.len() >= 2 {
         group_c_indices
             .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap()
             - group_c_indices
                 .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap()
     } else {
         0.0

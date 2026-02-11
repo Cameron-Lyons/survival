@@ -270,7 +270,11 @@ pub fn fit_illness_death(
         }
 
         let mut sorted_indices: Vec<usize> = (0..n_obs).collect();
-        sorted_indices.sort_by(|&a, &b| times[a].partial_cmp(&times[b]).unwrap());
+        sorted_indices.sort_by(|&a, &b| {
+            times[a]
+                .partial_cmp(&times[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let coefficient = if n_covariates > 0 && cov.is_some() {
             let cov_vec = cov.as_ref().unwrap();
@@ -295,7 +299,7 @@ pub fn fit_illness_death(
         let se = (1.0 / hessian).sqrt();
 
         let mut unique_times: Vec<f64> = times.to_vec();
-        unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         unique_times.dedup();
 
         let baseline_hazard: Vec<f64> = unique_times

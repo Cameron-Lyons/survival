@@ -100,7 +100,7 @@ impl ConditionalLogisticRegression {
                     denominator += covariates[covariate_idx] * exp;
                 }
                 old_coefficients[covariate_idx] = self.coefficients[covariate_idx];
-                if denominator.abs() > 1e-10 {
+                if denominator.abs() > crate::constants::DIVISION_FLOOR {
                     self.coefficients[covariate_idx] += numerator / denominator;
                 }
             }

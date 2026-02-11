@@ -214,6 +214,11 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
 
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
+
         times_list = times.tolist() if times is not None else None
         t, surv = self.model_.survival_curve(X.tolist(), times_list)
         return np.array(t), np.array(surv)
@@ -233,6 +238,11 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
         """
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
+
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
 
         result = self.model_.predicted_survival_time(X.tolist(), 0.5)
         return np.array([t if t is not None else np.nan for t in result])
@@ -373,6 +383,11 @@ class GradientBoostSurvivalEstimator(SurvivalScoreMixin, BaseEstimator, Regresso
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
 
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
+
         x_flat = X.flatten().tolist()
         survival = self.model_.predict_survival(x_flat, X.shape[0])
         return np.array(self.model_.unique_times), np.array(survival)
@@ -392,6 +407,11 @@ class GradientBoostSurvivalEstimator(SurvivalScoreMixin, BaseEstimator, Regresso
         """
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
+
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
 
         x_flat = X.flatten().tolist()
         result = self.model_.predict_median_survival_time(x_flat, X.shape[0])
@@ -531,6 +551,11 @@ class SurvivalForestEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin)
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
 
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
+
         x_flat = X.flatten().tolist()
         survival = self.model_.predict_survival(x_flat, X.shape[0])
         return np.array(self.model_.unique_times), np.array(survival)
@@ -550,6 +575,11 @@ class SurvivalForestEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin)
         """
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
+
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
 
         x_flat = X.flatten().tolist()
         result = self.model_.predict_median_survival_time(x_flat, X.shape[0])
@@ -1110,6 +1140,11 @@ class DeepSurvEstimator(BaseEstimator, RegressorMixin):
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
 
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
+
         x_flat = X.flatten().tolist()
         survival = self.model_.predict_survival(x_flat, X.shape[0])
         return np.array(self.model_.unique_times), np.array(survival)
@@ -1129,6 +1164,11 @@ class DeepSurvEstimator(BaseEstimator, RegressorMixin):
         """
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
+
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
 
         x_flat = X.flatten().tolist()
         result = self.model_.predict_median_survival_time(x_flat, X.shape[0])

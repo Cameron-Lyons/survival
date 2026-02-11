@@ -375,26 +375,12 @@ class UnoCIndexResult:
     def n_concordant(self) -> int: ...
 
 class SurvivalFit:
-    @property
-    def coefficients(self) -> list[float]: ...
-    @property
-    def std_errors(self) -> list[float]: ...
-    @property
-    def vcov(self) -> list[list[float]]: ...
-    @property
-    def log_likelihood(self) -> float: ...
-    @property
-    def scale(self) -> float: ...
-    @property
-    def distribution(self) -> str: ...
-    @property
-    def n_observations(self) -> int: ...
-    @property
-    def n_events(self) -> int: ...
-    @property
-    def aic(self) -> float: ...
-    @property
-    def bic(self) -> float: ...
+    coefficients: list[float]
+    iterations: int
+    variance_matrix: list[list[float]]
+    log_likelihood: float
+    convergence_flag: int
+    score_vector: list[float]
 
 class SurvregConfig:
     def __init__(
@@ -572,9 +558,16 @@ def rmst_comparison(
 ) -> dict[str, Any]: ...
 def survreg(
     time: list[float],
-    status: list[int],
-    x: list[list[float]],
-    config: SurvregConfig | None = None,
+    status: list[float],
+    covariates: list[list[float]],
+    weights: list[float] | None = None,
+    offsets: list[float] | None = None,
+    initial_beta: list[float] | None = None,
+    strata: list[int] | None = None,
+    distribution: str | None = None,
+    max_iter: int | None = None,
+    eps: float | None = None,
+    tol_chol: float | None = None,
 ) -> SurvivalFit: ...
 def calibration(
     predicted: list[float],

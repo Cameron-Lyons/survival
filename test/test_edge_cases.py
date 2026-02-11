@@ -10,22 +10,22 @@ survival = setup_survival_import()
 
 
 def test_survfitkm_empty_input():
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="time cannot be empty"):
         survival.survfitkm(time=[], status=[])
 
 
 def test_survfitkm_length_mismatch():
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="status length mismatch"):
         survival.survfitkm(time=[1.0, 2.0], status=[1.0])
 
 
 def test_survfitkm_negative_time():
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="time contains negative value"):
         survival.survfitkm(time=[-1.0, 2.0], status=[1.0, 0.0])
 
 
 def test_agmart_length_mismatch():
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="length mismatch"):
         survival.agmart(
             n=3,
             method=0,
@@ -40,7 +40,7 @@ def test_agmart_length_mismatch():
 
 def test_coxph_model_empty_fit():
     model = survival.CoxPHModel()
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="no data provided"):
         model.fit(n_iters=10)
 
 
@@ -58,7 +58,7 @@ def test_coxph_model_covariate_dimension_mismatch():
     censoring = [1, 0]
     model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
 
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="covariate dimension mismatch"):
         model.add_subject(subject)
 
 

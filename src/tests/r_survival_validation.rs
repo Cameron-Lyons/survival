@@ -71,7 +71,11 @@ mod tests {
         let n = lung.time.len();
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| lung.time[a].partial_cmp(&lung.time[b]).unwrap());
+        indices.sort_by(|&a, &b| {
+            lung.time[a]
+                .partial_cmp(&lung.time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let time: Vec<f64> = indices.iter().map(|&i| lung.time[i]).collect();
         let status: Vec<i32> = indices.iter().map(|&i| lung.status[i] - 1).collect();
@@ -309,7 +313,11 @@ mod tests {
         let mut kaplan = vec![0.0; n];
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+        indices.sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let sorted_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
         let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
@@ -355,7 +363,11 @@ mod tests {
         let n = time.len();
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap());
+        indices.sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let sorted_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
         let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();

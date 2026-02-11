@@ -126,7 +126,11 @@ fn train_local_cox_model(
     let mut weights = initial_weights.to_vec();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for _epoch in 0..n_epochs {
         let mut gradient = vec![0.0; n_features];

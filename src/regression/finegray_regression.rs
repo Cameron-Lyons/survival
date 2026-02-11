@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::fmt;
 
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::utilities::matrix::invert_matrix;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
@@ -183,7 +184,7 @@ fn compute_censoring_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
         let mut censored_count = 0;
         let mut total_at_time = 0;
 
-        while i < n && (time[indices[i]] - current_time).abs() < 1e-10 {
+        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
             if status[indices[i]] == 0 {
                 censored_count += 1;
             }
@@ -227,60 +228,6 @@ fn get_censoring_weight(t: f64, km_times: &[f64], km_values: &[f64]) -> f64 {
 
     let g = if left == 0 { 1.0 } else { km_values[left - 1] };
     g.max(0.01)
-}
-
-fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
-    let n = mat.len();
-    if n == 0 {
-        return None;
-    }
-    for row in mat {
-        if row.len() != n {
-            return None;
-        }
-    }
-
-    let mut aug: Vec<Vec<f64>> = mat
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let mut new_row = row.clone();
-            new_row.extend(vec![0.0; n]);
-            new_row[n + i] = 1.0;
-            new_row
-        })
-        .collect();
-
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k][i].abs() > aug[max_row][i].abs() {
-                max_row = k;
-            }
-        }
-        aug.swap(i, max_row);
-
-        if aug[i][i].abs() < 1e-12 {
-            return None;
-        }
-
-        let pivot = aug[i][i];
-        for val in aug[i].iter_mut().take(2 * n) {
-            *val /= pivot;
-        }
-
-        for k in 0..n {
-            if k != i {
-                let factor = aug[k][i];
-                let aug_i_clone: Vec<f64> = aug[i].iter().take(2 * n).copied().collect();
-                for (j, aug_i_val) in aug_i_clone.iter().enumerate() {
-                    aug[k][j] -= factor * aug_i_val;
-                }
-            }
-        }
-    }
-
-    Some(aug.into_iter().map(|row| row[n..].to_vec()).collect())
 }
 
 pub fn finegray_regression_core(
@@ -435,7 +382,13 @@ pub fn finegray_regression_core(
     let z_scores: Vec<f64> = beta
         .iter()
         .zip(std_errors.iter())
-        .map(|(&b, &se)| if se > 1e-10 { b / se } else { 0.0 })
+        .map(|(&b, &se)| {
+            if se > crate::constants::DIVISION_FLOOR {
+                b / se
+            } else {
+                0.0
+            }
+        })
         .collect();
 
     let p_values: Vec<f64> = z_scores
@@ -697,7 +650,7 @@ pub fn competing_risks_cif_core(
         let mut n_other_events = 0;
         let mut total_at_time = 0;
 
-        while i < n && (time[indices[i]] - current_time).abs() < 1e-10 {
+        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
             let s = status[indices[i]];
             if s == event_type {
                 n_event_type += 1;

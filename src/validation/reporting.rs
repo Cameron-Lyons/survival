@@ -74,7 +74,7 @@ pub fn km_plot_data(
     }
 
     let mut unique_times: Vec<f64> = time.to_vec();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     unique_times.dedup();
 
     let z = match confidence_level {
@@ -276,7 +276,11 @@ pub fn calibration_plot_data(
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| predicted[a].partial_cmp(&predicted[b]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        predicted[a]
+            .partial_cmp(&predicted[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let bin_size = n / n_bins;
     let mut predicted_prob = Vec::new();
@@ -465,7 +469,7 @@ pub fn generate_survival_report(
     let n_events = event.iter().filter(|&&e| e == 1).count();
 
     let mut sorted_times: Vec<f64> = time.to_vec();
-    sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     sorted_times.dedup();
 
     let mut surv = 1.0;
@@ -628,7 +632,11 @@ pub fn roc_plot_data(scores: Vec<f64>, labels: Vec<i32>) -> PyResult<ROCPlotData
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| scores[b].partial_cmp(&scores[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        scores[b]
+            .partial_cmp(&scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut fpr = vec![0.0];
     let mut tpr = vec![0.0];

@@ -42,7 +42,7 @@ fn fit_logistic_model(x: &[f64], y: &[i32], n: usize, p: usize, max_iter: usize)
 
         let mut max_change: f64 = 0.0;
         for j in 0..p {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 let update = gradient[j] / hessian_diag[j];
                 beta[j] += update;
                 max_change = max_change.max(update.abs());
@@ -119,7 +119,7 @@ pub fn compute_ipcw_weights(
         let y_risk: Vec<i32> = at_risk
             .iter()
             .map(|&i| {
-                if (time[i] - t).abs() < 1e-10 && censored[i] == 1 {
+                if (time[i] - t).abs() < crate::constants::DIVISION_FLOOR && censored[i] == 1 {
                     1
                 } else {
                     0
@@ -188,7 +188,7 @@ fn compute_km_censoring(time: &[f64], status: &[i32], n: usize) -> Vec<f64> {
         let mut censored_count = 0;
 
         let start_i = i;
-        while i < n && (time[indices[i]] - current_time).abs() < 1e-10 {
+        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
             if status[indices[i]] == 0 {
                 censored_count += 1;
             }

@@ -53,7 +53,7 @@ fn fit_propensity_model(treatment: &[i32], x: &[f64], n: usize, p: usize) -> Vec
         }
 
         for j in 0..p {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 beta[j] += gradient[j] / hessian_diag[j];
             }
         }
@@ -176,7 +176,7 @@ fn weighted_cox_fit(
 
         let mut max_change: f64 = 0.0;
         for j in 0..p {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 let update = gradient[j] / hessian_diag[j];
                 beta[j] += update;
                 max_change = max_change.max(update.abs());
@@ -232,7 +232,7 @@ fn weighted_cox_fit(
         }
 
         for j in 0..p {
-            se[j] = if info[j] > 1e-10 {
+            se[j] = if info[j] > crate::constants::DIVISION_FLOOR {
                 (1.0 / info[j]).sqrt()
             } else {
                 f64::INFINITY

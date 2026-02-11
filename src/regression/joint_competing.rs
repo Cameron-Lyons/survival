@@ -5,6 +5,7 @@
     clippy::needless_range_loop
 )]
 
+use crate::utilities::matrix::invert_matrix;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -312,7 +313,12 @@ fn fit_cause_specific_cox(
 
     let var_cov = invert_matrix(&final_hessian).unwrap_or_else(|| vec![vec![0.0; p]; p]);
     let std_errors: Vec<f64> = (0..p)
-        .map(|j| var_cov[j][j].abs().sqrt().max(1e-10))
+        .map(|j| {
+            var_cov[j][j]
+                .abs()
+                .sqrt()
+                .max(crate::constants::DIVISION_FLOOR)
+        })
         .collect();
 
     (beta, std_errors, loglik, converged, n_iter)
@@ -429,54 +435,6 @@ fn solve_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     Some(x)
 }
 
-fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
-    let n = mat.len();
-    if n == 0 {
-        return None;
-    }
-
-    let mut aug: Vec<Vec<f64>> = mat
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let mut new_row = row.clone();
-            new_row.extend(vec![0.0; n]);
-            new_row[n + i] = 1.0;
-            new_row
-        })
-        .collect();
-
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k][i].abs() > aug[max_row][i].abs() {
-                max_row = k;
-            }
-        }
-        aug.swap(i, max_row);
-
-        if aug[i][i].abs() < 1e-12 {
-            return None;
-        }
-
-        let pivot = aug[i][i];
-        for val in aug[i].iter_mut() {
-            *val /= pivot;
-        }
-
-        for k in 0..n {
-            if k != i {
-                let factor = aug[k][i];
-                for j in 0..(2 * n) {
-                    aug[k][j] -= factor * aug[i][j];
-                }
-            }
-        }
-    }
-
-    Some(aug.into_iter().map(|row| row[n..].to_vec()).collect())
-}
-
 fn compute_baseline_hazard(
     n: usize,
     time: &[f64],
@@ -508,7 +466,9 @@ fn compute_baseline_hazard(
         let current_time = time[idx];
         let mut n_events = 0.0;
 
-        while i < n && (time[sorted_indices[i]] - current_time).abs() < 1e-9 {
+        while i < n
+            && (time[sorted_indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON
+        {
             if cause[sorted_indices[i]] == cause_of_interest {
                 n_events += weights[sorted_indices[i]];
             }
