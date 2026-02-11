@@ -15,6 +15,7 @@ ehr = "ehr"
 nd = "nd"
 perfor = "perfor"
 wil = "wil"
+consts = "consts"
 
 [files]
 extend-exclude = [
