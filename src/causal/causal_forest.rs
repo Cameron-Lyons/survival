@@ -170,7 +170,7 @@ fn find_best_split(
 
     for &feature in feature_indices {
         let mut values: Vec<f64> = indices.iter().map(|&i| covariates[i][feature]).collect();
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         values.dedup();
 
         for i in 0..values.len().saturating_sub(1) {

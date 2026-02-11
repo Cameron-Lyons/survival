@@ -231,7 +231,7 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
             }
 
             let norm: f64 = new_v.iter().map(|&x| x * x).sum::<f64>().sqrt();
-            if norm > 1e-10 {
+            if norm > crate::constants::DIVISION_FLOOR {
                 for nv in new_v.iter_mut() {
                     *nv /= norm;
                 }
@@ -264,7 +264,7 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
     let explained_variance_ratio: Vec<f64> = eigenvalues
         .iter()
         .map(|&e| {
-            if total_var > 1e-10 {
+            if total_var > crate::constants::DIVISION_FLOOR {
                 e / total_var
             } else {
                 0.0
@@ -351,7 +351,11 @@ pub fn functional_cox(
         .collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut log_likelihood = 0.0;
 
@@ -384,7 +388,7 @@ pub fn functional_cox(
                 log_likelihood += eta - risk_set_sum.ln();
 
                 for j in 0..n_params {
-                    if risk_set_sum > 1e-10 {
+                    if risk_set_sum > crate::constants::DIVISION_FLOOR {
                         let mean_x = risk_set_x_sum[j] / risk_set_sum;
                         gradient[j] += combined_covariates[i][j] - mean_x;
 
@@ -406,7 +410,7 @@ pub fn functional_cox(
         let mut max_update: f64 = 0.0;
         for j in 0..n_params {
             let h = -hessian[j][j];
-            if h > 1e-10 {
+            if h > crate::constants::DIVISION_FLOOR {
                 let update = gradient[j] / h;
                 coefficients[j] += update.clamp(-1.0, 1.0);
                 max_update = max_update.max(update.abs());
@@ -421,7 +425,7 @@ pub fn functional_cox(
     let coefficient_se: Vec<f64> = (0..n_params)
         .map(|_j| {
             let h: f64 = 1.0;
-            (1.0 / h.max(1e-10)).sqrt()
+            (1.0 / h.max(crate::constants::DIVISION_FLOOR)).sqrt()
         })
         .collect();
 
@@ -443,7 +447,11 @@ pub fn functional_cox(
         .iter()
         .zip(coefficient_se.iter())
         .map(|(c, se): (&f64, &f64)| {
-            let z: f64 = if *se > 1e-10 { c / se } else { 0.0 };
+            let z: f64 = if *se > crate::constants::DIVISION_FLOOR {
+                c / se
+            } else {
+                0.0
+            };
             2.0 * (1.0 - normal_cdf(z.abs()))
         })
         .collect();

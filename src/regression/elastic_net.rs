@@ -158,7 +158,7 @@ fn standardize_matrix(x: &[f64], n: usize, p: usize) -> (Vec<f64>, Vec<f64>, Vec
         }
         means[j] = sum / n as f64;
         let var = sum_sq / n as f64 - means[j] * means[j];
-        sds[j] = var.sqrt().max(1e-10);
+        sds[j] = var.sqrt().max(crate::constants::DIVISION_FLOOR);
 
         for i in 0..n {
             x_std[i * p + j] = (x[i * p + j] - means[j]) / sds[j];
@@ -306,7 +306,7 @@ fn coordinate_descent_cox(
 
         for j in 0..p {
             let h_jj = hessian_diag[j] + l2_penalty;
-            if h_jj.abs() < 1e-10 {
+            if h_jj.abs() < crate::constants::DIVISION_FLOOR {
                 continue;
             }
 
@@ -389,7 +389,7 @@ pub fn elastic_net_cox(
     let nonzero_indices: Vec<usize> = coefficients
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.abs() > 1e-10)
+        .filter(|(_, c)| c.abs() > crate::constants::DIVISION_FLOOR)
         .map(|(i, _)| i)
         .collect();
 
@@ -485,7 +485,10 @@ pub fn elastic_net_cox_path(
             .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
             .collect();
 
-        let df = coefficients.iter().filter(|&&c| c.abs() > 1e-10).count() as f64;
+        let df = coefficients
+            .iter()
+            .filter(|&&c| c.abs() > crate::constants::DIVISION_FLOOR)
+            .count() as f64;
         let deviance =
             compute_cox_deviance(&x, n_obs, n_vars, &time, &status, &wt, &coefficients, &off);
 

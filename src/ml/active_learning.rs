@@ -197,7 +197,7 @@ pub fn active_learning_selection(
             .iter()
             .enumerate()
             .filter(|(_, s)| s.is_finite())
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         {
             selected_indices.push(best_idx);
             diversity_scores = current_diversity;
@@ -263,7 +263,7 @@ pub fn query_by_committee(
         .map(|(i, &s)| (i, s))
         .collect();
 
-    scored_indices.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
+    scored_indices.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
 
     let selected_indices: Vec<usize> = scored_indices
         .iter()

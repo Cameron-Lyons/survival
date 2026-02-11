@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import survival._survival as _surv
 from survival.sklearn_compat import AFTEstimator, StreamingAFTEstimator
 
@@ -223,11 +224,8 @@ class TestAFTEstimator:
         y[1, 1] = 1
 
         model = AFTEstimator(distribution="weibull")
-        try:
+        with pytest.raises(ValueError, match="Not enough events"):
             model.fit(X, y)
-            assert False, "Should have raised ValueError"
-        except ValueError as e:
-            assert "Not enough events" in str(e)
 
 
 class TestStreamingAFTEstimator:

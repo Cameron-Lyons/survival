@@ -195,21 +195,21 @@ def test_deepsurv_validation_and_early_stopping():
 def test_deepsurv_mismatched_x_length():
     config = _make_config()
     bad_x = [1.0, 2.0, 3.0]
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="x length must equal n_obs"):
         survival.DeepSurv.fit(bad_x, 10, 3, time, status, config)
 
 
 def test_deepsurv_mismatched_time_length():
     config = _make_config()
     bad_time = [1.0, 2.0]
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="time and status must have length n_obs"):
         survival.DeepSurv.fit(x, n_obs, n_vars, bad_time, status, config)
 
 
 def test_deepsurv_mismatched_predict_x():
     config = _make_config()
     model = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
-    with pytest.raises(ValueError, match=".*"):
+    with pytest.raises(ValueError, match="dimensions don't match"):
         model.predict_risk([1.0, 2.0], 5)
 
 

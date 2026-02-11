@@ -211,7 +211,7 @@ fn standardize_matrix(x: &[f64], n: usize, p: usize) -> (Vec<f64>, Vec<f64>, Vec
         }
         means[j] = sum / n as f64;
         let var = sum_sq / n as f64 - means[j] * means[j];
-        sds[j] = var.sqrt().max(1e-10);
+        sds[j] = var.sqrt().max(crate::constants::DIVISION_FLOOR);
 
         for i in 0..n {
             x_std[i * p + j] = (x[i * p + j] - means[j]) / sds[j];
@@ -348,13 +348,17 @@ fn apply_strong_screening(
     };
 
     (0..p)
-        .filter(|&j| beta[j].abs() > 1e-10 || gradient[j].abs() >= threshold)
+        .filter(|&j| {
+            beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= threshold
+        })
         .collect()
 }
 
 fn apply_safe_screening(gradient: &[f64], lambda: f64, beta: &[f64], p: usize) -> Vec<usize> {
     (0..p)
-        .filter(|&j| beta[j].abs() > 1e-10 || gradient[j].abs() >= lambda)
+        .filter(|&j| {
+            beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= lambda
+        })
         .collect()
 }
 
@@ -368,7 +372,9 @@ fn apply_edpp_screening(
     let threshold = lambda * (1.0 - (lambda / lambda_max).min(1.0));
 
     (0..p)
-        .filter(|&j| beta[j].abs() > 1e-10 || gradient[j].abs() >= threshold)
+        .filter(|&j| {
+            beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= threshold
+        })
         .collect()
 }
 
@@ -473,7 +479,7 @@ fn cyclic_coordinate_descent_fast(
 
         for &j in &active_set {
             let h_jj = hessian_diag[j] + l2_penalty;
-            if h_jj.abs() < 1e-10 {
+            if h_jj.abs() < crate::constants::DIVISION_FLOOR {
                 continue;
             }
 
@@ -493,7 +499,7 @@ fn cyclic_coordinate_descent_fast(
 
             let kkt_violations: Vec<usize> = (0..p)
                 .filter(|&j| {
-                    if beta[j].abs() > 1e-10 {
+                    if beta[j].abs() > crate::constants::DIVISION_FLOOR {
                         false
                     } else {
                         full_gradient[j].abs() > l1_penalty * 1.01
@@ -517,7 +523,10 @@ fn cyclic_coordinate_descent_fast(
             );
 
             let new_active: Vec<usize> = (0..p)
-                .filter(|&j| beta[j].abs() > 1e-10 || full_gradient[j].abs() >= l1_penalty * 0.5)
+                .filter(|&j| {
+                    beta[j].abs() > crate::constants::DIVISION_FLOOR
+                        || full_gradient[j].abs() >= l1_penalty * 0.5
+                })
                 .collect();
 
             if !new_active.is_empty() {
@@ -601,7 +610,7 @@ pub fn fast_cox(
     let nonzero_indices: Vec<usize> = coefficients
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.abs() > 1e-10)
+        .filter(|(_, c)| c.abs() > crate::constants::DIVISION_FLOOR)
         .map(|(i, _)| i)
         .collect();
 
@@ -725,7 +734,10 @@ pub fn fast_cox_path(
             .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
             .collect();
 
-        let df = coefficients.iter().filter(|&&c| c.abs() > 1e-10).count() as f64;
+        let df = coefficients
+            .iter()
+            .filter(|&&c| c.abs() > crate::constants::DIVISION_FLOOR)
+            .count() as f64;
         let deviance =
             compute_cox_deviance(&x, n_obs, n_vars, &time, &status, &wt, &coefficients, &off);
 

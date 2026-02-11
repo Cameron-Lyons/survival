@@ -93,7 +93,11 @@ fn fit_base_cox(
     let mut coefficients = vec![0.0; n_features];
 
     let mut sorted_indices: Vec<usize> = train_indices.to_vec();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for _ in 0..n_iter {
         let linear_pred: Vec<f64> = sorted_indices
@@ -195,7 +199,7 @@ impl SuperLearnerResult {
             .individual_c_indices
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or((0, &0.0));
         (self.model_names[idx].clone(), max_c)
     }
@@ -583,7 +587,11 @@ impl ComponentwiseBoostingResult {
 fn compute_partial_log_likelihood(time: &[f64], event: &[i32], linear_pred: &[f64]) -> f64 {
     let n = time.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let exp_lp: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
 
@@ -659,7 +667,11 @@ pub fn componentwise_boosting(
         let exp_lp: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
 
         let mut sorted_indices: Vec<usize> = sample_indices.clone();
-        sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+        sorted_indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut best_feature = 0;
         let mut best_score = f64::NEG_INFINITY;

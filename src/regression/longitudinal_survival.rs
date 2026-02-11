@@ -236,7 +236,7 @@ pub fn joint_longitudinal_model(
             num += (longitudinal_times[i] - mean_t) * (longitudinal_values[i] - mean_y);
             denom += (longitudinal_times[i] - mean_t).powi(2);
         }
-        if denom.abs() > 1e-10 {
+        if denom.abs() > crate::constants::DIVISION_FLOOR {
             num / denom
         } else {
             0.0
@@ -455,7 +455,11 @@ pub fn landmark_cox_analysis(
         let exp_lp: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
 
         let mut indices: Vec<usize> = (0..filtered_time.len()).collect();
-        indices.sort_by(|&a, &b| filtered_time[b].partial_cmp(&filtered_time[a]).unwrap());
+        indices.sort_by(|&a, &b| {
+            filtered_time[b]
+                .partial_cmp(&filtered_time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut gradient = vec![0.0; n_features];
         let mut risk_sum = 0.0;
@@ -589,7 +593,7 @@ pub fn longitudinal_dynamic_pred(
         } else {
             let last = subj_data.last().unwrap();
             let prev = subj_data.get(subj_data.len() - 2).unwrap();
-            let slope = (last.1 - prev.1) / (last.0 - prev.0 + 1e-10);
+            let slope = (last.1 - prev.1) / (last.0 - prev.0 + crate::constants::DIVISION_FLOOR);
             (last.1, slope)
         };
 
@@ -732,7 +736,9 @@ pub fn time_varying_cox(
             let mut gradient = vec![0.0; n_features];
 
             for &i in at_risk.iter() {
-                if event[i] == 1 && (stop_time[i] - time_point).abs() < 1e-10 {
+                if event[i] == 1
+                    && (stop_time[i] - time_point).abs() < crate::constants::TIME_EPSILON
+                {
                     for (j, &xij) in covariates[i].iter().enumerate() {
                         let weighted_mean: f64 = at_risk
                             .iter()
@@ -765,7 +771,7 @@ pub fn time_varying_cox(
         let risk_sum: f64 = exp_lp.iter().sum();
 
         for (idx, &i) in at_risk.iter().enumerate() {
-            if event[i] == 1 && (stop_time[i] - time_point).abs() < 1e-10 {
+            if event[i] == 1 && (stop_time[i] - time_point).abs() < crate::constants::TIME_EPSILON {
                 total_ll += linear_pred[idx] - risk_sum.ln();
             }
         }

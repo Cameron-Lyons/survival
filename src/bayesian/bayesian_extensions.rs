@@ -495,7 +495,7 @@ pub fn bayesian_model_averaging_cox(
         .iter()
         .map(|(m, &c)| (m.clone(), c as f64 / total_model_counts as f64))
         .collect();
-    model_probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    model_probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let best_model = if !model_probs.is_empty() {
         model_probs[0].0.clone()
@@ -553,7 +553,11 @@ fn compute_cox_loglik(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut log_lik = 0.0;
     let mut risk_sum = 0.0;
@@ -591,7 +595,11 @@ fn compute_gradient_hessian_single(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut gradient = 0.0;
     let mut hessian = 0.0;

@@ -758,6 +758,7 @@ impl std::fmt::Debug for StoredWeights {
 fn extract_weights(
     model: &DynamicDeepHitNetwork<AutodiffBackend>,
     config: &DynamicDeepHitConfig,
+    n_features: usize,
 ) -> StoredWeights {
     let temporal_weights = vec![];
 
@@ -807,7 +808,7 @@ fn extract_weights(
         shared_weights,
         cause_weights,
         embedding_dim: config.embedding_dim,
-        n_features: 0,
+        n_features,
         num_causes: config.num_causes,
         num_durations: config.num_durations,
         shared_hidden_sizes: config.shared_hidden_sizes.clone(),
@@ -991,7 +992,7 @@ fn fit_dynamic_deephit_inner(
             if val_loss_history.last().copied().unwrap_or(f64::INFINITY) < best_val_loss {
                 best_val_loss = val_loss_history.last().copied().unwrap_or(f64::INFINITY);
                 epochs_without_improvement = 0;
-                best_weights = Some(extract_weights(&model, config));
+                best_weights = Some(extract_weights(&model, config, n_features));
             } else {
                 epochs_without_improvement += 1;
             }
@@ -1004,7 +1005,7 @@ fn fit_dynamic_deephit_inner(
         }
     }
 
-    let final_weights = best_weights.unwrap_or_else(|| extract_weights(&model, config));
+    let final_weights = best_weights.unwrap_or_else(|| extract_weights(&model, config, n_features));
 
     DynamicDeepHit {
         weights: final_weights,

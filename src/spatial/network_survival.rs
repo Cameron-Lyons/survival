@@ -181,7 +181,11 @@ pub fn network_survival_model(
         let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+        indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut gradient = vec![0.0; total_vars];
         let mut hessian_diag = vec![0.0; total_vars];
@@ -364,7 +368,11 @@ fn compute_betweenness_centrality(adjacency: &[f64], n: usize) -> Vec<f64> {
 
         let mut dependency = vec![0.0; n];
         let mut sorted_by_dist: Vec<usize> = (0..n).collect();
-        sorted_by_dist.sort_by(|&a, &b| dist[b].partial_cmp(&dist[a]).unwrap());
+        sorted_by_dist.sort_by(|&a, &b| {
+            dist[b]
+                .partial_cmp(&dist[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         for &w in &sorted_by_dist {
             for &v in &predecessors[w] {
@@ -545,7 +553,11 @@ fn compute_peer_hazard(time: &[f64], event: &[i32], adjacency: &[f64], n: usize)
 fn compute_partial_loglik(time: &[f64], event: &[i32], eta: &[f64], exp_eta: &[f64]) -> f64 {
     let n = time.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut log_lik = 0.0;
     let mut risk_sum = 0.0;
@@ -587,7 +599,11 @@ fn compute_se(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+    indices.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut info_diag = vec![0.0; total_vars];
     let mut risk_sum = 0.0;

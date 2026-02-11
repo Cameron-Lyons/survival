@@ -95,7 +95,11 @@ impl StreamingCoxModel {
         }
 
         let mut sorted_indices: Vec<usize> = (0..n).collect();
-        sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+        sorted_indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut gradient = vec![0.0; self.n_features];
         let mut hessian = vec![0.0; self.n_features];

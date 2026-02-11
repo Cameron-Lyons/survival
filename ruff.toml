@@ -21,7 +21,9 @@ select = [
 ignore = []
 
 [lint.per-file-ignores]
-"test/*.py" = ["S101", "PT017", "S603", "S110"]
+"test/*.py" = ["S101", "PT017", "S603", "S110", "N806"]
+"python/tests/*.py" = ["S101", "PT017", "N806"]
+"*.pyi" = ["A002"]
 
 [format]
 quote-style = "double"

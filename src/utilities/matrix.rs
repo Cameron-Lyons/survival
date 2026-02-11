@@ -116,6 +116,60 @@ pub fn matrix_inverse(matrix: &Array2<f64>) -> Option<Array2<f64>> {
     Some(faer_mat_to_ndarray(inv.as_ref()))
 }
 
+pub fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+    let n = mat.len();
+    if n == 0 {
+        return None;
+    }
+    for row in mat {
+        if row.len() != n {
+            return None;
+        }
+    }
+
+    let mut aug: Vec<Vec<f64>> = mat
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mut new_row = row.clone();
+            new_row.extend(vec![0.0; n]);
+            new_row[n + i] = 1.0;
+            new_row
+        })
+        .collect();
+
+    for i in 0..n {
+        let mut max_row = i;
+        for k in (i + 1)..n {
+            if aug[k][i].abs() > aug[max_row][i].abs() {
+                max_row = k;
+            }
+        }
+        aug.swap(i, max_row);
+
+        if aug[i][i].abs() < crate::constants::GAUSSIAN_ELIMINATION_TOL {
+            return None;
+        }
+
+        let pivot = aug[i][i];
+        for val in aug[i].iter_mut().take(2 * n) {
+            *val /= pivot;
+        }
+
+        for k in 0..n {
+            if k != i {
+                let factor = aug[k][i];
+                let aug_i_clone: Vec<f64> = aug[i].iter().take(2 * n).copied().collect();
+                for (j, aug_i_val) in aug_i_clone.iter().enumerate() {
+                    aug[k][j] -= factor * aug_i_val;
+                }
+            }
+        }
+    }
+
+    Some(aug.into_iter().map(|row| row[n..].to_vec()).collect())
+}
+
 pub fn cholesky_check(matrix: &Array2<f64>) -> bool {
     let n = matrix.nrows();
     if n == 0 {

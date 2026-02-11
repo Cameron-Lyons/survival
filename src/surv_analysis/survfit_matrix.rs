@@ -335,7 +335,7 @@ pub fn basehaz(
         let mut events = 0.0;
         let start_i = i;
 
-        while i < n && (time[indices[i]] - current_time).abs() < 1e-9 {
+        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
             if status[indices[i]] == 1 {
                 events += 1.0;
             }

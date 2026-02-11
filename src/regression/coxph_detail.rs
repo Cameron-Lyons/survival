@@ -140,7 +140,7 @@ pub fn compute_coxph_detail(
         let mut event_cov_sum = vec![0.0; nvar];
         let start_i = i;
 
-        while i < n && (time[indices[i]] - current_time).abs() < 1e-10 {
+        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
             if status[indices[i]] == 1 {
                 n_event += 1;
                 for (k, &c) in covariates[indices[i]].iter().enumerate() {

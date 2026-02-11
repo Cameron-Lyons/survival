@@ -909,7 +909,7 @@ pub fn compute_rmst_optimal_threshold(
             censor_times.push(time[i]);
         }
     }
-    event_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    event_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let max_followup = time.iter().fold(0.0_f64, |a, &b| a.max(b));
     if event_times.is_empty() {
         let rmst_result = compute_rmst(time, status, max_followup, confidence_level);
@@ -960,7 +960,7 @@ pub fn compute_rmst_optimal_threshold(
         .iter()
         .map(|&(cp, _, _)| cp)
         .collect();
-    selected_changepoints.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    selected_changepoints.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     loop {
         if selected_changepoints.len() <= 1 {
             break;

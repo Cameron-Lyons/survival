@@ -167,7 +167,11 @@ pub fn pwp_model(
         let mut hessian = vec![vec![0.0; p]; p];
 
         let mut sorted_indices: Vec<usize> = (0..n).collect();
-        sorted_indices.sort_by(|&a, &b| time_var[b].partial_cmp(&time_var[a]).unwrap());
+        sorted_indices.sort_by(|&a, &b| {
+            time_var[b]
+                .partial_cmp(&time_var[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         for &i in &sorted_indices {
             if event[i] != 1 {
@@ -214,7 +218,7 @@ pub fn pwp_model(
                 }
             }
 
-            if risk_sum > 1e-10 {
+            if risk_sum > crate::constants::DIVISION_FLOOR {
                 loglik += eta_i - risk_sum.ln();
 
                 for j in 0..p {
@@ -234,7 +238,7 @@ pub fn pwp_model(
 
         let mut inv_hess = vec![vec![0.0; p]; p];
         for j in 0..p {
-            inv_hess[j][j] = if hessian[j][j].abs() > 1e-10 {
+            inv_hess[j][j] = if hessian[j][j].abs() > crate::constants::DIVISION_FLOOR {
                 1.0 / hessian[j][j]
             } else {
                 0.0
@@ -263,7 +267,11 @@ pub fn pwp_model(
         .collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time_var[b].partial_cmp(&time_var[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        time_var[b]
+            .partial_cmp(&time_var[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for &i in &sorted_indices {
         if event[i] != 1 {
@@ -303,7 +311,7 @@ pub fn pwp_model(
             }
         }
 
-        if risk_sum > 1e-10 {
+        if risk_sum > crate::constants::DIVISION_FLOOR {
             for j1 in 0..p {
                 let x_bar1 = risk_x_sum[j1] / risk_sum;
                 for j2 in 0..p {
@@ -323,7 +331,7 @@ pub fn pwp_model(
 
     let std_errors: Vec<f64> = (0..p)
         .map(|j| {
-            if info_matrix[j][j] > 1e-10 {
+            if info_matrix[j][j] > crate::constants::DIVISION_FLOOR {
                 (1.0 / info_matrix[j][j]).sqrt()
             } else {
                 f64::INFINITY
@@ -342,7 +350,7 @@ pub fn pwp_model(
 
     let robust_std_errors: Vec<f64> = (0..p)
         .map(|j| {
-            let inv_info = if info_matrix[j][j] > 1e-10 {
+            let inv_info = if info_matrix[j][j] > crate::constants::DIVISION_FLOOR {
                 1.0 / info_matrix[j][j]
             } else {
                 0.0
@@ -360,7 +368,13 @@ pub fn pwp_model(
     let z_scores: Vec<f64> = beta
         .iter()
         .zip(se_to_use.iter())
-        .map(|(&b, &se)| if se > 1e-10 { b / se } else { 0.0 })
+        .map(|(&b, &se)| {
+            if se > crate::constants::DIVISION_FLOOR {
+                b / se
+            } else {
+                0.0
+            }
+        })
         .collect();
 
     let p_values: Vec<f64> = z_scores
@@ -388,7 +402,7 @@ pub fn pwp_model(
         .filter(|&i| event[i] == 1)
         .map(|i| time_var[i])
         .collect();
-    event_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    event_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     event_times.dedup();
 
     let baseline_cumhaz: Vec<f64> = event_times
@@ -550,7 +564,11 @@ pub fn wlw_model(
             let strata_indices: Vec<usize> = (0..n).filter(|&i| stratum[i] == strat).collect();
 
             let mut sorted_indices = strata_indices.clone();
-            sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+            sorted_indices.sort_by(|&a, &b| {
+                time[b]
+                    .partial_cmp(&time[a])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             for &i in &sorted_indices {
                 if event[i] != 1 {
@@ -587,7 +605,7 @@ pub fn wlw_model(
                     }
                 }
 
-                if risk_sum > 1e-10 {
+                if risk_sum > crate::constants::DIVISION_FLOOR {
                     loglik += eta_i - risk_sum.ln();
 
                     for j in 0..p {
@@ -607,7 +625,7 @@ pub fn wlw_model(
         }
 
         for j in 0..p {
-            if hessian[j][j].abs() > 1e-10 {
+            if hessian[j][j].abs() > crate::constants::DIVISION_FLOOR {
                 beta[j] += gradient[j] / hessian[j][j];
                 beta[j] = beta[j].clamp(-10.0, 10.0);
             }
@@ -626,7 +644,11 @@ pub fn wlw_model(
     for &strat in &unique_strata {
         let strata_indices: Vec<usize> = (0..n).filter(|&i| stratum[i] == strat).collect();
         let mut sorted_indices = strata_indices.clone();
-        sorted_indices.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap());
+        sorted_indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         for &i in &sorted_indices {
             if event[i] != 1 {
@@ -658,7 +680,7 @@ pub fn wlw_model(
                 }
             }
 
-            if risk_sum > 1e-10 {
+            if risk_sum > crate::constants::DIVISION_FLOOR {
                 for j1 in 0..p {
                     let x_bar1 = risk_x_sum[j1] / risk_sum;
                     for j2 in 0..p {
@@ -679,7 +701,7 @@ pub fn wlw_model(
 
     let std_errors: Vec<f64> = (0..p)
         .map(|j| {
-            if info_matrix[j][j] > 1e-10 {
+            if info_matrix[j][j] > crate::constants::DIVISION_FLOOR {
                 (1.0 / info_matrix[j][j]).sqrt()
             } else {
                 f64::INFINITY
@@ -698,7 +720,7 @@ pub fn wlw_model(
 
     let robust_std_errors: Vec<f64> = (0..p)
         .map(|j| {
-            let inv_info = if info_matrix[j][j] > 1e-10 {
+            let inv_info = if info_matrix[j][j] > crate::constants::DIVISION_FLOOR {
                 1.0 / info_matrix[j][j]
             } else {
                 0.0
@@ -716,7 +738,13 @@ pub fn wlw_model(
     let z_scores: Vec<f64> = beta
         .iter()
         .zip(se_to_use.iter())
-        .map(|(&b, &se)| if se > 1e-10 { b / se } else { 0.0 })
+        .map(|(&b, &se)| {
+            if se > crate::constants::DIVISION_FLOOR {
+                b / se
+            } else {
+                0.0
+            }
+        })
         .collect();
 
     let p_values: Vec<f64> = z_scores
@@ -815,7 +843,7 @@ fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
         for n in 1..100 {
             term *= x / (a + n as f64);
             sum += term;
-            if term.abs() < 1e-10 * sum.abs() {
+            if term.abs() < crate::constants::DIVISION_FLOOR * sum.abs() {
                 break;
             }
         }
@@ -847,7 +875,7 @@ fn upper_incomplete_gamma(a: f64, x: f64) -> f64 {
         d = 1.0 / d;
         let delta = c * d;
         f *= delta;
-        if (delta - 1.0).abs() < 1e-10 {
+        if (delta - 1.0).abs() < crate::constants::DIVISION_FLOOR {
             break;
         }
     }
@@ -948,7 +976,11 @@ pub fn negative_binomial_frailty(
         covariates.clone()
     };
 
-    let offset_vec = offset.unwrap_or_else(|| time.iter().map(|&t| t.max(1e-10).ln()).collect());
+    let offset_vec = offset.unwrap_or_else(|| {
+        time.iter()
+            .map(|&t| t.max(crate::constants::DIVISION_FLOOR).ln())
+            .collect()
+    });
 
     let unique_ids: Vec<i32> = {
         let mut ids = id.clone();
@@ -1033,7 +1065,7 @@ pub fn negative_binomial_frailty(
 
             let mut max_change: f64 = 0.0;
             for j in 0..p {
-                if hessian_diag[j].abs() > 1e-10 {
+                if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                     let delta = gradient[j] / (hessian_diag[j] + 1e-6);
                     beta[j] += delta;
                     beta[j] = beta[j].clamp(-10.0, 10.0);
@@ -1102,7 +1134,7 @@ pub fn negative_binomial_frailty(
     let std_errors: Vec<f64> = info_matrix
         .iter()
         .map(|&info| {
-            if info > 1e-10 {
+            if info > crate::constants::DIVISION_FLOOR {
                 (1.0 / info).sqrt()
             } else {
                 f64::INFINITY
@@ -1114,7 +1146,7 @@ pub fn negative_binomial_frailty(
         .iter()
         .zip(std_errors.iter())
         .map(|(&b, &se)| {
-            if se > 1e-10 && se.is_finite() {
+            if se > crate::constants::DIVISION_FLOOR && se.is_finite() {
                 b / se
             } else {
                 0.0
@@ -1274,7 +1306,11 @@ pub fn anderson_gill_model(
     let mut prev_loglik = f64::NEG_INFINITY;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| stop[b].partial_cmp(&stop[a]).unwrap());
+    sorted_indices.sort_by(|&a, &b| {
+        stop[b]
+            .partial_cmp(&stop[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for iter in 0..max_iter {
         n_iter = iter + 1;
@@ -1319,7 +1355,7 @@ pub fn anderson_gill_model(
                 }
             }
 
-            if risk_sum > 1e-10 {
+            if risk_sum > crate::constants::DIVISION_FLOOR {
                 loglik += eta_i - risk_sum.ln();
 
                 for j in 0..p {
@@ -1338,7 +1374,7 @@ pub fn anderson_gill_model(
         }
 
         for j in 0..p {
-            if hessian[j][j].abs() > 1e-10 {
+            if hessian[j][j].abs() > crate::constants::DIVISION_FLOOR {
                 beta[j] += gradient[j] / hessian[j][j];
                 beta[j] = beta[j].clamp(-10.0, 10.0);
             }
@@ -1384,7 +1420,7 @@ pub fn anderson_gill_model(
             }
         }
 
-        if risk_sum > 1e-10 {
+        if risk_sum > crate::constants::DIVISION_FLOOR {
             for j1 in 0..p {
                 let x_bar1 = risk_x_sum[j1] / risk_sum;
                 for j2 in 0..p {
@@ -1404,7 +1440,7 @@ pub fn anderson_gill_model(
 
     let std_errors: Vec<f64> = (0..p)
         .map(|j| {
-            if info_matrix[j][j] > 1e-10 {
+            if info_matrix[j][j] > crate::constants::DIVISION_FLOOR {
                 (1.0 / info_matrix[j][j]).sqrt()
             } else {
                 f64::INFINITY
@@ -1423,7 +1459,7 @@ pub fn anderson_gill_model(
 
     let robust_std_errors: Vec<f64> = (0..p)
         .map(|j| {
-            let inv_info = if info_matrix[j][j] > 1e-10 {
+            let inv_info = if info_matrix[j][j] > crate::constants::DIVISION_FLOOR {
                 1.0 / info_matrix[j][j]
             } else {
                 0.0
@@ -1435,7 +1471,13 @@ pub fn anderson_gill_model(
     let z_scores: Vec<f64> = beta
         .iter()
         .zip(robust_std_errors.iter())
-        .map(|(&b, &se)| if se > 1e-10 { b / se } else { 0.0 })
+        .map(|(&b, &se)| {
+            if se > crate::constants::DIVISION_FLOOR {
+                b / se
+            } else {
+                0.0
+            }
+        })
         .collect();
 
     let p_values: Vec<f64> = z_scores

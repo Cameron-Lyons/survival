@@ -136,7 +136,7 @@ fn fit_linear(x: &[Vec<f64>], y: &[f64]) -> (Vec<f64>, f64) {
             denom += xij_centered * xij_centered;
         }
 
-        if denom.abs() > 1e-10 {
+        if denom.abs() > crate::constants::DIVISION_FLOOR {
             coeffs[j] = num / denom;
         }
     }
@@ -255,7 +255,7 @@ pub fn tmle_ate(
             .map(|(&c, &r)| c * r)
             .sum();
         let denom: f64 = clever_covariate.iter().map(|&c| c * c).sum();
-        if denom.abs() > 1e-10 {
+        if denom.abs() > crate::constants::DIVISION_FLOOR {
             num / denom
         } else {
             0.0
@@ -287,7 +287,7 @@ pub fn tmle_ate(
         / (n * (n - 1)) as f64;
     let se = var.sqrt();
 
-    let z = ate / se.max(1e-10);
+    let z = ate / se.max(crate::constants::DIVISION_FLOOR);
     let pvalue = 2.0 * (1.0 - normal_cdf(z.abs()));
 
     let ci_lower = ate - 1.96 * se;
@@ -418,7 +418,7 @@ pub fn tmle_survival(
                 .map(|(&c, &r)| c * r)
                 .sum();
             let denom: f64 = clever_covariate.iter().map(|&c| c * c).sum();
-            if denom.abs() > 1e-10 {
+            if denom.abs() > crate::constants::DIVISION_FLOOR {
                 num / denom
             } else {
                 0.0

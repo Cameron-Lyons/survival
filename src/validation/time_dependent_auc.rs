@@ -115,7 +115,7 @@ fn compute_survival_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
         let mut event_count = 0;
         let mut total_at_time = 0;
 
-        while i < n && (time[indices[i]] - current_time).abs() < 1e-10 {
+        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
             if status[indices[i]] == 1 {
                 event_count += 1;
             }
@@ -156,7 +156,7 @@ fn compute_censoring_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
         let mut censored_count = 0;
         let mut total_at_time = 0;
 
-        while i < n && (time[indices[i]] - current_time).abs() < 1e-10 {
+        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
             if status[indices[i]] == 0 {
                 censored_count += 1;
             }

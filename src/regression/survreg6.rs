@@ -322,7 +322,7 @@ impl SurvregOptions {
 /// eps : float, optional
 ///     Convergence tolerance (default 1e-6).
 /// tol_chol : float, optional
-///     Cholesky tolerance (default 1e-10).
+///     Cholesky tolerance (default crate::constants::DIVISION_FLOOR).
 ///
 /// Returns
 /// -------
@@ -909,7 +909,7 @@ mod tests {
     #[test]
     fn test_calculate_variance_matrix_empty() {
         let imat = Array2::zeros((0, 0));
-        let result = calculate_variance_matrix(imat, 0, 1e-10);
+        let result = calculate_variance_matrix(imat, 0, crate::constants::DIVISION_FLOOR);
         assert!(result.is_ok());
         let var = result.unwrap();
         assert_eq!(var.nrows(), 0);
@@ -923,7 +923,7 @@ mod tests {
         imat[[1, 1]] = 2.0;
         imat[[0, 1]] = 0.5;
         imat[[1, 0]] = 0.5;
-        let result = calculate_variance_matrix(imat, 2, 1e-10);
+        let result = calculate_variance_matrix(imat, 2, crate::constants::DIVISION_FLOOR);
         assert!(result.is_ok());
         let var = result.unwrap();
         assert_eq!(var.nrows(), 2);

@@ -1,56 +1,9 @@
 use crate::constants::{EXP_CLAMP_MIN, z_score_for_confidence};
 use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
+use crate::utilities::matrix::invert_matrix;
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 use rayon::prelude::*;
-
-fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
-    let n = mat.len();
-    if n == 0 {
-        return None;
-    }
-    for row in mat {
-        if row.len() != n {
-            return None;
-        }
-    }
-    let mut aug: Vec<Vec<f64>> = mat
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let mut new_row = row.clone();
-            new_row.extend(vec![0.0; n]);
-            new_row[n + i] = 1.0;
-            new_row
-        })
-        .collect();
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k][i].abs() > aug[max_row][i].abs() {
-                max_row = k;
-            }
-        }
-        aug.swap(i, max_row);
-        if aug[i][i].abs() < 1e-12 {
-            return None;
-        }
-        let pivot = aug[i][i];
-        for val in aug[i].iter_mut().take(2 * n) {
-            *val /= pivot;
-        }
-        for k in 0..n {
-            if k != i {
-                let factor = aug[k][i];
-                let aug_i_clone: Vec<f64> = aug[i].iter().take(2 * n).copied().collect();
-                for (j, aug_i_val) in aug_i_clone.iter().enumerate() {
-                    aug[k][j] -= factor * aug_i_val;
-                }
-            }
-        }
-    }
-    Some(aug.into_iter().map(|row| row[n..].to_vec()).collect())
-}
 #[derive(Clone)]
 #[pyclass]
 pub struct Subject {
@@ -251,7 +204,10 @@ impl CoxPHModel {
             let current_time = self.event_times[idx];
             let mut events = 0.0;
             let start_i = i;
-            while i < n && (self.event_times[indices[i]] - current_time).abs() < 1e-9 {
+            while i < n
+                && (self.event_times[indices[i]] - current_time).abs()
+                    < crate::constants::TIME_EPSILON
+            {
                 if self.censoring[indices[i]] == 1 {
                     events += 1.0;
                 }
@@ -667,7 +623,8 @@ impl CoxPHModel {
                         if risk_sum > 0.0 {
                             weighted_mean /= risk_sum;
                         }
-                        mart_i * (cov_ik - weighted_mean) / risk_i.max(1e-10)
+                        mart_i * (cov_ik - weighted_mean)
+                            / risk_i.max(crate::constants::DIVISION_FLOOR)
                     })
                     .collect()
             })

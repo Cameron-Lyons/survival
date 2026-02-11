@@ -240,7 +240,7 @@ fn scale_predictors(x: &[f64], n_obs: usize, n_vars: usize) -> (Vec<f64>, Option
 
         let mean = sum / n_obs as f64;
         let variance = sum_sq / n_obs as f64 - mean * mean;
-        let sd = variance.sqrt().max(1e-10);
+        let sd = variance.sqrt().max(crate::constants::DIVISION_FLOOR);
 
         scale_factors.push(sd);
 
@@ -311,9 +311,9 @@ fn fit_unpenalized(
 
     let mut final_beta = vec![0.0; n_vars];
     for j in 0..n_vars {
-        if info_diag[j] > 1e-10 {
+        if info_diag[j] > crate::constants::DIVISION_FLOOR {
             final_beta[j] = score[j] / info_diag[j];
-            info_diag[j] = info_diag[j].max(1e-10);
+            info_diag[j] = info_diag[j].max(crate::constants::DIVISION_FLOOR);
         }
     }
 

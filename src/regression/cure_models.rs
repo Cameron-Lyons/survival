@@ -64,7 +64,10 @@ impl LinkFunction {
     }
 
     fn link(&self, p: f64) -> f64 {
-        let p_clamped = p.clamp(1e-10, 1.0 - 1e-10);
+        let p_clamped = p.clamp(
+            crate::constants::DIVISION_FLOOR,
+            1.0 - crate::constants::DIVISION_FLOOR,
+        );
         match self {
             LinkFunction::Logit => (p_clamped / (1.0 - p_clamped)).ln(),
             LinkFunction::Probit => probit(p_clamped),
@@ -307,11 +310,19 @@ pub fn mixture_cure_model(
             let (s_t, f_t) = compute_surv_density(time[i], scale, shape, &config.distribution);
             if status[i] == 1 {
                 let denom = pi[i] * f_t;
-                w[i] = if denom > 1e-10 { 1.0 } else { 0.5 };
+                w[i] = if denom > crate::constants::DIVISION_FLOOR {
+                    1.0
+                } else {
+                    0.5
+                };
             } else {
                 let numer = pi[i] * s_t;
                 let denom = (1.0 - pi[i]) + pi[i] * s_t;
-                w[i] = if denom > 1e-10 { numer / denom } else { 0.5 };
+                w[i] = if denom > crate::constants::DIVISION_FLOOR {
+                    numer / denom
+                } else {
+                    0.5
+                };
             }
         }
 
@@ -335,7 +346,7 @@ pub fn mixture_cure_model(
             }
 
             for j in 0..p_cure {
-                if hessian_diag[j].abs() > 1e-10 {
+                if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                     beta_cure[j] += gradient[j] / (hessian_diag[j] + 1e-6);
                 }
             }
@@ -522,7 +533,7 @@ pub fn promotion_time_cure_model(
             }
         }
 
-        if theta_denom > 1e-10 {
+        if theta_denom > crate::constants::DIVISION_FLOOR {
             theta = (theta_numer / theta_denom).max(0.01);
         }
 
@@ -694,7 +705,11 @@ fn baseline_cumulative_hazard(t: f64, scale: f64, shape: f64, dist: &CureDistrib
 
 fn baseline_hazard(t: f64, scale: f64, shape: f64, dist: &CureDistribution) -> f64 {
     let (s_t, f_t) = compute_surv_density(t, scale, shape, dist);
-    if s_t > 1e-10 { f_t / s_t } else { 0.0 }
+    if s_t > crate::constants::DIVISION_FLOOR {
+        f_t / s_t
+    } else {
+        0.0
+    }
 }
 
 #[pyfunction]
@@ -772,7 +787,7 @@ pub fn bounded_cumulative_hazard_model(
         }
 
         for j in 0..p {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 beta[j] += 0.5 * gradient[j] / (hessian_diag[j] + 1e-6);
                 beta[j] = beta[j].clamp(-10.0, 10.0);
             }
@@ -848,7 +863,7 @@ pub fn bounded_cumulative_hazard_model(
                 let x_ij = x_mat[i * p + j];
                 info += x_ij * x_ij * alpha * exp_eta * h_0_t;
             }
-            if info > 1e-10 {
+            if info > crate::constants::DIVISION_FLOOR {
                 (1.0 / info).sqrt()
             } else {
                 f64::INFINITY
@@ -988,7 +1003,7 @@ fn non_mixture_survival(
     match model_type {
         NonMixtureType::GeometricGeneralized => {
             let f_t = 1.0 - s_0;
-            (1.0 + theta * f_t).powf(-1.0 / theta.max(1e-10))
+            (1.0 + theta * f_t).powf(-1.0 / theta.max(crate::constants::DIVISION_FLOOR))
         }
         NonMixtureType::NegativeBinomial => {
             let f_t = 1.0 - s_0;
@@ -1021,20 +1036,21 @@ fn non_mixture_pdf(
     match model_type {
         NonMixtureType::GeometricGeneralized => {
             let base = 1.0 + theta * f_t;
-            let s_pop = base.powf(-1.0 / theta.max(1e-10));
-            let h_pop = f_0 / (base * s_0.max(1e-10));
+            let s_pop = base.powf(-1.0 / theta.max(crate::constants::DIVISION_FLOOR));
+            let h_pop = f_0 / (base * s_0.max(crate::constants::DIVISION_FLOOR));
             h_pop * s_pop
         }
         NonMixtureType::NegativeBinomial => {
             let r = 1.0 / dispersion;
             let base = 1.0 + dispersion * theta * f_t;
             let s_pop = base.powf(-r);
-            let h_pop = (r * dispersion * theta * f_0) / (base * s_0.max(1e-10));
+            let h_pop =
+                (r * dispersion * theta * f_0) / (base * s_0.max(crate::constants::DIVISION_FLOOR));
             h_pop * s_pop
         }
         NonMixtureType::Poisson => {
             let s_pop = (-theta * f_t).exp();
-            let h_pop = theta * f_0 / s_0.max(1e-10);
+            let h_pop = theta * f_0 / s_0.max(crate::constants::DIVISION_FLOOR);
             h_pop * s_pop
         }
         NonMixtureType::Destructive => {
@@ -1174,13 +1190,13 @@ pub fn non_mixture_cure_model(
         }
 
         for j in 0..p {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 beta[j] += 0.3 * gradient[j] / (hessian_diag[j] + 1e-6);
                 beta[j] = beta[j].clamp(-10.0, 10.0);
             }
         }
 
-        if theta_hess.abs() > 1e-10 {
+        if theta_hess.abs() > crate::constants::DIVISION_FLOOR {
             theta += 0.3 * theta_grad / (theta_hess + 1e-6);
             theta = theta.clamp(0.01, 100.0);
         }
@@ -1220,7 +1236,9 @@ pub fn non_mixture_cure_model(
     }
 
     let cure_fraction = match config.model_type {
-        NonMixtureType::GeometricGeneralized => (1.0 + theta).powf(-1.0 / theta.max(1e-10)),
+        NonMixtureType::GeometricGeneralized => {
+            (1.0 + theta).powf(-1.0 / theta.max(crate::constants::DIVISION_FLOOR))
+        }
         NonMixtureType::NegativeBinomial => {
             let r = 1.0 / dispersion;
             (1.0 + dispersion * theta).powf(-r)
@@ -1259,7 +1277,7 @@ pub fn non_mixture_cure_model(
                 let x_ij = x_mat[i * p + j];
                 info += x_ij * x_ij * eta.exp().powi(2);
             }
-            if info > 1e-10 {
+            if info > crate::constants::DIVISION_FLOOR {
                 (1.0 / info).sqrt()
             } else {
                 f64::INFINITY
@@ -1457,7 +1475,7 @@ pub fn compare_cure_models(
         let min_idx = aic_values
             .iter()
             .enumerate()
-            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, _)| i)
             .unwrap_or(0);
         model_names[min_idx].clone()
@@ -1469,7 +1487,7 @@ pub fn compare_cure_models(
         let min_idx = bic_values
             .iter()
             .enumerate()
-            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, _)| i)
             .unwrap_or(0);
         model_names[min_idx].clone()

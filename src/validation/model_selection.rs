@@ -188,7 +188,7 @@ impl SurvivalModelComparison {
             .zip(self.aic_values.iter())
             .map(|(n, &a)| (n.clone(), a))
             .collect();
-        ranking.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        ranking.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         ranking
     }
 
@@ -199,7 +199,7 @@ impl SurvivalModelComparison {
             .zip(self.bic_values.iter())
             .map(|(n, &b)| (n.clone(), b))
             .collect();
-        ranking.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        ranking.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         ranking
     }
 }
@@ -263,14 +263,14 @@ pub fn compare_models(
     let best_aic_idx = aic_values
         .iter()
         .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i)
         .unwrap_or(0);
 
     let best_bic_idx = bic_values
         .iter()
         .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i)
         .unwrap_or(0);
 

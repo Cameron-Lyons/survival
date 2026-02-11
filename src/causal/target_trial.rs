@@ -396,7 +396,7 @@ fn estimate_hazard_ratio(clones: &[ClonedObservation], n_vars: usize) -> f64 {
             }
         }
 
-        if hessian.abs() > 1e-10 {
+        if hessian.abs() > crate::constants::DIVISION_FLOOR {
             beta += gradient / hessian;
         }
     }
