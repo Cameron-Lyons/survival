@@ -10,7 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.100
+      - id: msrv
+        run: echo "version=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
       - uses: actions/cache@v5
         with:
           path: |
