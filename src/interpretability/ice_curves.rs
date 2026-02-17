@@ -271,21 +271,19 @@ pub fn compute_survival_ice(
         ));
     }
 
-    let results: Vec<ICEResult> = (0..n_times)
-        .into_par_iter()
-        .map(|t| {
-            let preds_at_t: Vec<f64> = survival_predictions.iter().map(|p| p[t]).collect();
-            compute_ice(
-                covariates.clone(),
-                preds_at_t,
-                feature_index,
-                n_grid,
-                false,
-                sample_size,
-            )
-            .unwrap()
-        })
-        .collect();
+    let mut results = Vec::with_capacity(n_times);
+    for t in 0..n_times {
+        let preds_at_t: Vec<f64> = survival_predictions.iter().map(|p| p[t]).collect();
+        let result = compute_ice(
+            covariates.clone(),
+            preds_at_t,
+            feature_index,
+            n_grid,
+            false,
+            sample_size,
+        )?;
+        results.push(result);
+    }
 
     Ok(results)
 }

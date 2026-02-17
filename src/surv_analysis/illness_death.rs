@@ -204,10 +204,12 @@ pub fn fit_illness_death(
     covariates: Option<Vec<Vec<f64>>>,
     config: Option<IllnessDeathConfig>,
 ) -> PyResult<IllnessDeathResult> {
-    let config = config.unwrap_or_else(|| {
-        IllnessDeathConfig::new(IllnessDeathType::Progressive, None, "forward", 100, 1e-6, 0)
-            .unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => {
+            IllnessDeathConfig::new(IllnessDeathType::Progressive, None, "forward", 100, 1e-6, 0)?
+        }
+    };
 
     let n = entry_time.len();
     if transition_time.len() != n
@@ -276,8 +278,10 @@ pub fn fit_illness_death(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let coefficient = if n_covariates > 0 && cov.is_some() {
-            let cov_vec = cov.as_ref().unwrap();
+        let coefficient = if n_covariates > 0 {
+            let Some(cov_vec) = cov.as_ref() else {
+                return (0.0, 1.0, 0.0, Vec::new(), Vec::new());
+            };
             let mut sum_cov = 0.0;
             let mut sum_event = 0;
             for &idx in &sorted_indices {

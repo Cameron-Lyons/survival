@@ -794,8 +794,9 @@ pub fn deep_surv(
     status: Vec<i32>,
     config: Option<&DeepSurvConfig>,
 ) -> PyResult<DeepSurv> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        DeepSurvConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => DeepSurvConfig::new(
             None,
             Activation::SELU,
             0.2,
@@ -806,9 +807,8 @@ pub fn deep_surv(
             None,
             None,
             0.1,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     DeepSurv::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }

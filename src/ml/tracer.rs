@@ -1926,12 +1926,12 @@ pub fn tracer(
     event: Vec<i32>,
     config: Option<&TracerConfig>,
 ) -> PyResult<Tracer> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        TracerConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => TracerConfig::new(
             32, 2, 4, 10, 1, 64, 0.1, 0.0001, 0.00001, 64, 100, None, 0.1, 1e-12, None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     Tracer::fit(
         py,

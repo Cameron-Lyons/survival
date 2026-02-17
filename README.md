@@ -42,7 +42,7 @@ pip install survival
 
 #### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - Rust (see [rustup.rs](https://rustup.rs/))
 - [maturin](https://github.com/PyO3/maturin)
 

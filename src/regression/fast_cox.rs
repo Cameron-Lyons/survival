@@ -835,10 +835,11 @@ pub fn fast_cox_cv(
                 let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
                 let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt[i]).collect();
 
-                let config = FastCoxConfig::new(
+                let Ok(config) = FastCoxConfig::new(
                     lambda, l1_ratio, 1000, 1e-7, screening, None, 10, true, true,
-                )
-                .unwrap();
+                ) else {
+                    continue;
+                };
 
                 if let Ok(result) = fast_cox(
                     train_x,

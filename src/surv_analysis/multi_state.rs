@@ -190,19 +190,43 @@ pub fn estimate_transition_intensities(
                         })
                         .count() as i32;
 
-                    n_at_risk.get_mut(&key).unwrap()[t_idx] = at_risk;
-                    n_transitions_map.get_mut(&key).unwrap()[t_idx] = transitions;
+                    if let Some(risk) = n_at_risk.get_mut(&key) {
+                        risk[t_idx] = at_risk;
+                    } else {
+                        return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                            "internal error: missing at-risk transition bucket",
+                        ));
+                    }
+                    if let Some(transitions_vec) = n_transitions_map.get_mut(&key) {
+                        transitions_vec[t_idx] = transitions;
+                    } else {
+                        return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                            "internal error: missing transition count bucket",
+                        ));
+                    }
 
                     if at_risk > 0.0 {
                         let intensity = transitions as f64 / at_risk;
-                        intensities.get_mut(&key).unwrap()[t_idx] = intensity;
+                        if let Some(intensity_vec) = intensities.get_mut(&key) {
+                            intensity_vec[t_idx] = intensity;
+                        } else {
+                            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                                "internal error: missing intensity transition bucket",
+                            ));
+                        }
 
                         let var = if at_risk > 0.0 && transitions > 0 {
                             transitions as f64 / (at_risk * at_risk)
                         } else {
                             0.0
                         };
-                        variance.get_mut(&key).unwrap()[t_idx] = var;
+                        if let Some(var_vec) = variance.get_mut(&key) {
+                            var_vec[t_idx] = var;
+                        } else {
+                            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                                "internal error: missing variance transition bucket",
+                            ));
+                        }
                     }
                 }
             }
@@ -210,7 +234,13 @@ pub fn estimate_transition_intensities(
     }
 
     for key in intensities.keys() {
-        let int_vec = intensities.get(key).unwrap();
+        let int_vec = if let Some(int_vec) = intensities.get(key) {
+            int_vec
+        } else {
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "internal error: missing intensity vector",
+            ));
+        };
         let cum_int: Vec<f64> = int_vec
             .iter()
             .scan(0.0, |acc, &x| {

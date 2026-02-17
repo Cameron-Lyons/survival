@@ -819,8 +819,9 @@ pub fn contrastive_surv(
         ));
     }
 
-    let cfg = config.cloned().unwrap_or_else(|| {
-        ContrastiveSurvConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => ContrastiveSurvConfig::new(
             64,
             32,
             vec![64],
@@ -838,9 +839,8 @@ pub fn contrastive_surv(
             None,
             0.1,
             None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     Ok(py.detach(move || fit_contrastive_surv_inner(&x, n_obs, n_features, &time, &event, &cfg)))
 }

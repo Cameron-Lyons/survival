@@ -578,11 +578,7 @@ fn extract_weights(
         input_size = output_size;
     }
 
-    let shared_output_size = if config.shared_layers.is_empty() {
-        n_features
-    } else {
-        *config.shared_layers.last().unwrap()
-    };
+    let shared_output_size = config.shared_layers.last().copied().unwrap_or(n_features);
 
     let mut cause_specific_weights = Vec::new();
     let mut cause_specific_biases = Vec::new();
@@ -616,11 +612,11 @@ fn extract_weights(
         cause_specific_biases.push(cs_b);
         cause_specific_dims.push(cs_d);
 
-        let final_in_size = if config.cause_specific_layers.is_empty() {
-            shared_output_size
-        } else {
-            *config.cause_specific_layers.last().unwrap()
-        };
+        let final_in_size = config
+            .cause_specific_layers
+            .last()
+            .copied()
+            .unwrap_or(shared_output_size);
 
         let out_w: Vec<f32> = tensor_to_vec_f32(cs_net.output.weight.val().inner());
         output_weights.push(out_w);
@@ -1097,12 +1093,12 @@ pub fn deephit(
     event: Vec<i32>,
     config: Option<&DeepHitConfig>,
 ) -> PyResult<DeepHit> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        DeepHitConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => DeepHitConfig::new(
             None, None, 10, 1, 0.1, 0.2, 0.1, 0.001, 256, 100, 0.0001, None, None, 0.1, true,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     DeepHit::fit(py, x, n_obs, n_features, time, event, &cfg)
 }

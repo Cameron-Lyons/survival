@@ -1016,7 +1016,7 @@ pub fn compute_rmst_optimal_threshold(
     let optimal_tau = if selected_changepoints.is_empty() {
         max_followup
     } else {
-        *selected_changepoints.last().unwrap()
+        selected_changepoints[selected_changepoints.len() - 1]
     };
     let rmst_at_optimal = compute_rmst(time, status, optimal_tau, confidence_level);
     RMSTOptimalThresholdResult {

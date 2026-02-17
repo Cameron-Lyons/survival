@@ -292,9 +292,12 @@ pub fn fit_survival_transformer(
     event: Vec<i32>,
     config: Option<SurvivalTransformerConfig>,
 ) -> PyResult<SurvivalTransformerModel> {
-    let config = config.unwrap_or_else(|| {
-        SurvivalTransformerConfig::new(64, 4, 2, 128, 0.1, 100.0, 20, 0.001, 64, 100, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => {
+            SurvivalTransformerConfig::new(64, 4, 2, 128, 0.1, 100.0, 20, 0.001, 64, 100, None)?
+        }
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {

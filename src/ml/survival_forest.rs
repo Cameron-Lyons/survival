@@ -800,8 +800,9 @@ pub fn survival_forest(
     status: Vec<i32>,
     config: Option<&SurvivalForestConfig>,
 ) -> PyResult<SurvivalForest> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        SurvivalForestConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => SurvivalForestConfig::new(
             500,
             None,
             15,
@@ -811,9 +812,8 @@ pub fn survival_forest(
             10,
             None,
             true,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     SurvivalForest::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }

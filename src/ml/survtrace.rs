@@ -1334,12 +1334,12 @@ pub fn survtrace(
     event: Vec<i32>,
     config: Option<&SurvTraceConfig>,
 ) -> PyResult<SurvTrace> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        SurvTraceConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => SurvTraceConfig::new(
             16, 3, 2, 64, 0.0, 0.1, 5, 1, 8, 0.001, 64, 100, 0.0001, None, None, 0.1, 1e-12,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     SurvTrace::fit(
         py,

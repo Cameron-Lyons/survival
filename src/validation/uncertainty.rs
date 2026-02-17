@@ -98,7 +98,10 @@ pub fn mc_dropout_uncertainty(
     predictions: Vec<Vec<Vec<f64>>>,
     config: Option<MCDropoutConfig>,
 ) -> PyResult<UncertaintyResult> {
-    let _config = config.unwrap_or_else(|| MCDropoutConfig::new(100, 0.1, None).unwrap());
+    let _config = match config {
+        Some(config) => config,
+        None => MCDropoutConfig::new(100, 0.1, None)?,
+    };
 
     if predictions.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(

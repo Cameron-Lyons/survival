@@ -296,9 +296,10 @@ pub fn fit_recurrent_surv(
     event: Vec<i32>,
     config: Option<RecurrentSurvConfig>,
 ) -> PyResult<RecurrentSurvModel> {
-    let config = config.unwrap_or_else(|| {
-        RecurrentSurvConfig::new(64, 2, None, false, 0.1, 20, 0.001, 64, 100, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => RecurrentSurvConfig::new(64, 2, None, false, 0.1, 20, 0.001, 64, 100, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {
@@ -463,9 +464,10 @@ pub fn fit_longitudinal_surv(
     event: Vec<i32>,
     config: Option<LongitudinalSurvConfig>,
 ) -> PyResult<LongitudinalSurvModel> {
-    let config = config.unwrap_or_else(|| {
-        LongitudinalSurvConfig::new(64, 2, 4, 0.1, 0.001, 64, 100, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => LongitudinalSurvConfig::new(64, 2, 4, 0.1, 0.001, 64, 100, None)?,
+    };
 
     let n = longitudinal_data.len();
     if n == 0 || time.len() != n || event.len() != n {

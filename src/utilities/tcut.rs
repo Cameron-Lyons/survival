@@ -192,7 +192,7 @@ pub fn tcut_expand(
                 }
             }
             if code == -1 && !sorted_cuts.is_empty() {
-                if midpoint >= *sorted_cuts.last().unwrap() {
+                if midpoint >= sorted_cuts[sorted_cuts.len() - 1] {
                     code = (sorted_cuts.len() - 1) as i32;
                 } else if midpoint < sorted_cuts[0] {
                     code = -1;

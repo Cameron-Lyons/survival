@@ -412,9 +412,10 @@ pub fn fit_temporal_fusion_transformer(
     event: Vec<i32>,
     config: Option<TFTConfig>,
 ) -> PyResult<TemporalFusionTransformer> {
-    let config = config.unwrap_or_else(|| {
-        TFTConfig::new(64, 4, 2, 2, 0.1, 20, None, 0.001, 64, 100, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => TFTConfig::new(64, 4, 2, 2, 0.1, 20, None, 0.001, 64, 100, None)?,
+    };
 
     let n = static_features.len();
     if n == 0 || time.len() != n || event.len() != n {

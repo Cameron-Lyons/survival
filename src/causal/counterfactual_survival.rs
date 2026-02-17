@@ -283,9 +283,10 @@ pub fn estimate_counterfactual_survival(
     time_points: Vec<f64>,
     config: Option<CounterfactualSurvivalConfig>,
 ) -> PyResult<CounterfactualSurvivalResult> {
-    let config = config.unwrap_or_else(|| {
-        CounterfactualSurvivalConfig::new(64, None, 1.0, 0.001, 100, 64, 0.1, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => CounterfactualSurvivalConfig::new(64, None, 1.0, 0.001, 100, 64, 0.1, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || time.len() != n || event.len() != n {

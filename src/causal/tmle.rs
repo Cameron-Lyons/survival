@@ -209,7 +209,10 @@ pub fn tmle_ate(
     outcome: Vec<f64>,
     config: Option<TMLEConfig>,
 ) -> PyResult<TMLEResult> {
-    let config = config.unwrap_or_else(|| TMLEConfig::new(5, 0.01, 100, 1e-6, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => TMLEConfig::new(5, 0.01, 100, 1e-6, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || outcome.len() != n {
@@ -351,7 +354,10 @@ pub fn tmle_survival(
     time_points: Option<Vec<f64>>,
     config: Option<TMLEConfig>,
 ) -> PyResult<TMLESurvivalResult> {
-    let config = config.unwrap_or_else(|| TMLEConfig::new(5, 0.01, 100, 1e-6, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => TMLEConfig::new(5, 0.01, 100, 1e-6, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || time.len() != n || event.len() != n {

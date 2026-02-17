@@ -377,8 +377,10 @@ pub fn fit_attention_cox(
     event: Vec<i32>,
     config: Option<AttentionCoxConfig>,
 ) -> PyResult<AttentionCoxModel> {
-    let config = config
-        .unwrap_or_else(|| AttentionCoxConfig::new(64, 4, 2, 0.1, 0.001, 64, 100, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => AttentionCoxConfig::new(64, 4, 2, 0.1, 0.001, 64, 100, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {

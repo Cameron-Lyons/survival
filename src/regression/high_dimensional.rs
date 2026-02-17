@@ -394,6 +394,11 @@ pub fn sparse_boosting_cox(
     config: &SparseBoostingConfig,
 ) -> PyResult<SparseBoostingResult> {
     let n = time.len();
+    if n == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time and event must not be empty",
+        ));
+    }
     if event.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "time and event must have same length",
@@ -404,9 +409,18 @@ pub fn sparse_boosting_cox(
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "covariates cannot be empty",
         ));
+    } else if !covariates.len().is_multiple_of(n) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "covariates length must be divisible by number of observations",
+        ));
     } else {
         covariates.len() / n
     };
+    if p == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "number of covariates must be positive",
+        ));
+    }
 
     let mut rng = fastrand::Rng::new();
     if let Some(seed) = config.seed {
@@ -470,12 +484,20 @@ pub fn sparse_boosting_cox(
             })
             .collect();
 
-        let (best_j, best_grad) = gradients
+        let Some((best_j, best_grad)) = gradients
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
+            .max_by(|(_, a), (_, b)| {
+                a.abs()
+                    .partial_cmp(&b.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .map(|(j, &g)| (j, g))
-            .unwrap();
+        else {
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "internal error: unable to select gradient",
+            ));
+        };
 
         let update = config.learning_rate
             * best_grad.signum()

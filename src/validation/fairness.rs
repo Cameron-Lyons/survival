@@ -140,14 +140,18 @@ pub fn compute_fairness_metrics(
         .collect();
 
     let demographic_parity = if group_high_risk_rates.len() >= 2 {
-        group_high_risk_rates
-            .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap()
-            - group_high_risk_rates
+        if let (Some(max_rate), Some(min_rate)) = (
+            group_high_risk_rates
                 .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .unwrap()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+            group_high_risk_rates
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+        ) {
+            max_rate - min_rate
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -175,27 +179,35 @@ pub fn compute_fairness_metrics(
         .collect();
 
     let equalized_odds = if group_event_rates.len() >= 2 {
-        group_event_rates
-            .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap()
-            - group_event_rates
+        if let (Some(max_rate), Some(min_rate)) = (
+            group_event_rates
                 .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .unwrap()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+            group_event_rates
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+        ) {
+            max_rate - min_rate
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
 
     let calibration_difference = if group_c_indices.len() >= 2 {
-        group_c_indices
-            .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap()
-            - group_c_indices
+        if let (Some(max_c), Some(min_c)) = (
+            group_c_indices
                 .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .unwrap()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+            group_c_indices
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+        ) {
+            max_c - min_c
+        } else {
+            0.0
+        }
     } else {
         0.0
     };

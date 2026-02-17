@@ -821,8 +821,9 @@ pub fn galee(
         ));
     }
 
-    let cfg = config.cloned().unwrap_or_else(|| {
-        GALEEConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => GALEEConfig::new(
             32,
             vec![64, 32],
             4,
@@ -839,9 +840,8 @@ pub fn galee(
             None,
             0.1,
             None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     Ok(py.detach(move || {
         fit_galee_inner(

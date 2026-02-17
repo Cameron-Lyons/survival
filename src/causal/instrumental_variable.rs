@@ -1160,7 +1160,7 @@ pub fn g_estimation_aft(
         sorted_indices.sort_by(|&a, &b| {
             counterfactual_times[b]
                 .partial_cmp(&counterfactual_times[a])
-                .unwrap()
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let mut risk_sum = 0.0;

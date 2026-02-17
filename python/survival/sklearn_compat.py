@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from statistics import NormalDist
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -771,9 +772,7 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         if self.distribution in ("weibull", "exponential", "extreme_value"):
             z_q = np.log(-np.log(1 - q))
         elif self.distribution in ("lognormal", "gaussian"):
-            from scipy.stats import norm
-
-            z_q = norm.ppf(q)
+            z_q = NormalDist().inv_cdf(q)
         elif self.distribution in ("loglogistic", "logistic"):
             z_q = np.log(q / (1 - q))
         else:

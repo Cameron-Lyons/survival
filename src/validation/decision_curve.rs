@@ -346,7 +346,7 @@ pub fn compare_decision_curves(
                 .max_by(|&a, &b| {
                     model_net_benefits[a][t_idx]
                         .partial_cmp(&model_net_benefits[b][t_idx])
-                        .unwrap()
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .unwrap_or(0);
             model_names[best_idx].clone()

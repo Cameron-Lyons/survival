@@ -557,8 +557,10 @@ pub fn tipping_point_analysis(
                 || (prev > target_value && current_coef <= target_value))
         {
             let frac = (target_value - prev) / (current_coef - prev);
-            let tipping_delta = prev_delta.unwrap() + frac * delta_step;
-            return Ok(Some(tipping_delta));
+            if let Some(prev_delta) = prev_delta {
+                let tipping_delta = prev_delta + frac * delta_step;
+                return Ok(Some(tipping_delta));
+            }
         }
 
         prev_coef = Some(current_coef);

@@ -392,7 +392,7 @@ pub fn monitor_performance(
     }
 
     let c_index_change = if c_indices.len() >= 2 {
-        c_indices.last().unwrap() - c_indices.first().unwrap()
+        c_indices[c_indices.len() - 1] - c_indices[0]
     } else {
         0.0
     };

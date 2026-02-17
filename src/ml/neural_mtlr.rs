@@ -251,9 +251,10 @@ pub fn fit_neural_mtlr(
     event: Vec<i32>,
     config: Option<NeuralMTLRConfig>,
 ) -> PyResult<NeuralMTLRModel> {
-    let config = config.unwrap_or_else(|| {
-        NeuralMTLRConfig::new(None, 20, 0.1, 0.001, 64, 100, 0.001, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => NeuralMTLRConfig::new(None, 20, 0.1, 0.001, 64, 100, 0.001, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {

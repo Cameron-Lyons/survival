@@ -256,9 +256,10 @@ pub fn fit_dysurv(
     event: Vec<i32>,
     config: Option<DySurvConfig>,
 ) -> PyResult<DySurvModel> {
-    let config = config.unwrap_or_else(|| {
-        DySurvConfig::new(32, None, 20, 0.1, 0.001, 64, 100, 0.1, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => DySurvConfig::new(32, None, 20, 0.1, 0.001, 64, 100, 0.1, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {

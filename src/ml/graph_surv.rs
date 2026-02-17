@@ -382,9 +382,10 @@ pub fn fit_graph_surv(
     event: Vec<i32>,
     config: Option<GraphSurvConfig>,
 ) -> PyResult<GraphSurvModel> {
-    let config = config.unwrap_or_else(|| {
-        GraphSurvConfig::new(64, 3, 4, 20, 0.1, None, 0.001, 64, 100, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => GraphSurvConfig::new(64, 3, 4, 20, 0.1, None, 0.001, 64, 100, None)?,
+    };
 
     let n = node_features.len();
     if n == 0 || time.len() != n || event.len() != n || adjacency_matrices.len() != n {

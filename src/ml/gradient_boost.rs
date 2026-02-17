@@ -696,8 +696,9 @@ pub fn gradient_boost_survival(
     status: Vec<i32>,
     config: Option<&GradientBoostSurvivalConfig>,
 ) -> PyResult<GradientBoostSurvival> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        GradientBoostSurvivalConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => GradientBoostSurvivalConfig::new(
             100,
             0.1,
             3,
@@ -708,9 +709,8 @@ pub fn gradient_boost_survival(
             GBSurvLoss::CoxPH,
             0.0,
             None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     GradientBoostSurvival::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }

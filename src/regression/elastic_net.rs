@@ -567,8 +567,10 @@ pub fn elastic_net_cox_cv(
                 let train_status: Vec<i32> = train_idx.iter().map(|&i| status[i]).collect();
                 let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt[i]).collect();
 
-                let config =
-                    ElasticNetConfig::new(lambda, l1_ratio, 1000, 1e-7, true, false).unwrap();
+                let Ok(config) = ElasticNetConfig::new(lambda, l1_ratio, 1000, 1e-7, true, false)
+                else {
+                    continue;
+                };
                 if let Ok(result) = elastic_net_cox(
                     train_x,
                     train_idx.len(),

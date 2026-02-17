@@ -622,7 +622,13 @@ pub fn predict_semi_markov(
                 0.0
             };
 
-            transition_hazards.get_mut(&key).unwrap().push(hazard);
+            if let Some(hazards) = transition_hazards.get_mut(&key) {
+                hazards.push(hazard);
+            } else {
+                return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "internal error: missing transition hazard bucket",
+                ));
+            }
         }
     }
 

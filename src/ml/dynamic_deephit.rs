@@ -582,11 +582,11 @@ impl<B: burn::prelude::Backend> DynamicDeepHitNetwork<B> {
             config.dropout_rate,
         );
 
-        let shared_output_size = if config.shared_hidden_sizes.is_empty() {
-            shared_input_size
-        } else {
-            *config.shared_hidden_sizes.last().unwrap()
-        };
+        let shared_output_size = config
+            .shared_hidden_sizes
+            .last()
+            .copied()
+            .unwrap_or(shared_input_size);
 
         let mut cause_heads = Vec::new();
         for _ in 0..config.num_causes {
@@ -1049,8 +1049,9 @@ pub fn dynamic_deephit(
         ));
     }
 
-    let cfg = config.cloned().unwrap_or_else(|| {
-        DynamicDeepHitConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => DynamicDeepHitConfig::new(
             TemporalType::LSTM,
             64,
             2,
@@ -1068,9 +1069,8 @@ pub fn dynamic_deephit(
             None,
             0.1,
             None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     Ok(py.detach(move || {
         fit_dynamic_deephit_inner(

@@ -293,9 +293,10 @@ pub fn fit_deep_pamm(
     event: Vec<i32>,
     config: Option<DeepPAMMConfig>,
 ) -> PyResult<DeepPAMMModel> {
-    let config = config.unwrap_or_else(|| {
-        DeepPAMMConfig::new(None, 20, 3, 10, 0.1, 0.001, 64, 100, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => DeepPAMMConfig::new(None, 20, 3, 10, 0.1, 0.001, 64, 100, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {

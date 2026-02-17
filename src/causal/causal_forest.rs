@@ -422,8 +422,10 @@ pub fn causal_forest_survival(
     time_horizon: f64,
     config: Option<CausalForestConfig>,
 ) -> PyResult<(CausalForestSurvival, CausalForestResult)> {
-    let config = config
-        .unwrap_or_else(|| CausalForestConfig::new(100, 10, 5, 10, None, true, 0.5, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => CausalForestConfig::new(100, 10, 5, 10, None, true, 0.5, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || time.len() != n || event.len() != n {

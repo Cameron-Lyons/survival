@@ -85,7 +85,11 @@ pub fn yates(
     let mut ns = Vec::with_capacity(levels.len());
 
     for level in &levels {
-        let indices = groups.get(level).unwrap();
+        let Some(indices) = groups.get(level) else {
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "internal error: missing group level",
+            ));
+        };
         let group_n = indices.len();
 
         if group_n == 0 {

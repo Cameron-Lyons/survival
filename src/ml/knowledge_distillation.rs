@@ -219,8 +219,10 @@ pub fn distill_survival_model(
     teacher_predictions: Vec<Vec<f64>>,
     config: Option<DistillationConfig>,
 ) -> PyResult<(DistilledSurvivalModel, DistillationResult)> {
-    let config = config
-        .unwrap_or_else(|| DistillationConfig::new(3.0, 0.5, 32, 2, 0.01, 100, 64, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => DistillationConfig::new(3.0, 0.5, 32, 2, 0.01, 100, 64, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n || teacher_predictions.len() != n {
@@ -449,7 +451,11 @@ pub fn prune_survival_model(
     let original_params = weights.iter().map(|w| w.len()).sum::<usize>();
 
     let mut all_weights: Vec<f64> = weights.iter().flat_map(|w| w.iter().cloned()).collect();
-    all_weights.sort_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap());
+    all_weights.sort_by(|a, b| {
+        a.abs()
+            .partial_cmp(&b.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let threshold_idx = (all_weights.len() as f64 * sparsity_target) as usize;
     let threshold = all_weights.get(threshold_idx).cloned().unwrap_or(0.0).abs();

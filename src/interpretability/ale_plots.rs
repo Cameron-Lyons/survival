@@ -291,13 +291,12 @@ pub fn compute_time_varying_ale(
         ));
     }
 
-    let results: Vec<ALEResult> = (0..n_times)
-        .into_par_iter()
-        .map(|t| {
-            let preds_at_t: Vec<f64> = predictions.iter().map(|p| p[t]).collect();
-            compute_ale(covariates.clone(), preds_at_t, feature_index, num_intervals).unwrap()
-        })
-        .collect();
+    let mut results = Vec::with_capacity(n_times);
+    for t in 0..n_times {
+        let preds_at_t: Vec<f64> = predictions.iter().map(|p| p[t]).collect();
+        let result = compute_ale(covariates.clone(), preds_at_t, feature_index, num_intervals)?;
+        results.push(result);
+    }
 
     Ok(results)
 }

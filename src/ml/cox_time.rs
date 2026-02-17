@@ -316,8 +316,10 @@ pub fn fit_cox_time(
     event: Vec<i32>,
     config: Option<CoxTimeConfig>,
 ) -> PyResult<CoxTimeModel> {
-    let config = config
-        .unwrap_or_else(|| CoxTimeConfig::new(None, 32, 0.1, 0.001, 64, 100, None, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => CoxTimeConfig::new(None, 32, 0.1, 0.001, 64, 100, None, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {
