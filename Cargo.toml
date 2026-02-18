@@ -2,7 +2,7 @@
 name = "survival"
 version = "1.2.6"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.92"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 license = "MIT"
@@ -20,8 +20,8 @@ name = "survival"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = "0.28.1"
-numpy = "0.28.0"
+pyo3 = "0.27.2"
+numpy = "0.27.1"
 ndarray = { version = "0.17.2", features = ["rayon"] }
 itertools = "0.14.0"
 rayon = "1.11.0"
@@ -30,7 +30,7 @@ fastrand = "2.3.0"
 pulp = "0.22.2"
 wide = "1.1.1"
 burn = { version = "0.20.1", features = ["autodiff", "ndarray"] }
-num_cpus = "1.17.0"
+num_cpus = "1.16"
 
 [features]
 default = []
