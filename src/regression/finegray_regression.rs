@@ -7,7 +7,7 @@ use crate::utilities::matrix::invert_matrix;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct FineGrayResult {
     pub coefficients: Vec<f64>,
     pub std_errors: Vec<f64>,
@@ -114,7 +114,7 @@ impl FineGrayResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct CompetingRisksCIF {
     pub times: Vec<f64>,
     pub cif: Vec<f64>,

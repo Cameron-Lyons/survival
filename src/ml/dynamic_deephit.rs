@@ -26,7 +26,7 @@ type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum TemporalType {
     LSTM,
     GRU,
@@ -51,7 +51,7 @@ impl TemporalType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DynamicDeepHitConfig {
     #[pyo3(get, set)]
     pub temporal_type: TemporalType,
@@ -817,7 +817,7 @@ fn extract_weights(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 #[allow(dead_code)]
 pub struct DynamicDeepHit {
     weights: StoredWeights,

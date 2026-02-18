@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use std::fmt;
 
 #[derive(Debug, Clone)]
-#[pyclass(str)]
+#[pyclass(str, from_py_object)]
 pub struct PyearsSummary {
     #[pyo3(get)]
     pub total_person_years: f64,
@@ -122,7 +122,7 @@ pub fn summary_pyears(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str)]
+#[pyclass(str, from_py_object)]
 pub struct PyearsCell {
     #[pyo3(get)]
     pub person_years: f64,

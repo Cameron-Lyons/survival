@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum IntervalDistribution {
     Weibull,
     LogNormal,
@@ -40,7 +40,7 @@ impl IntervalDistribution {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum CensorType {
     Exact,
     RightCensored,
@@ -49,7 +49,7 @@ pub enum CensorType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct IntervalCensoredResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -352,7 +352,7 @@ pub fn interval_censored_regression(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TurnbullResult {
     #[pyo3(get)]
     pub time_points: Vec<f64>,

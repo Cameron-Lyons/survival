@@ -7,7 +7,7 @@ use std::collections::HashMap;
 /// libraries to create box-and-arrow diagrams showing states and transitions
 /// in multi-state survival models.
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct StateFigData {
     /// Names of the states
     #[pyo3(get)]

@@ -4,7 +4,7 @@ use crate::utilities::statistical::{chi2_sf, normal_cdf};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CalibrationResult {
     #[pyo3(get)]
     pub risk_groups: Vec<f64>,
@@ -163,7 +163,7 @@ pub fn calibration(
     ))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PredictionResult {
     #[pyo3(get)]
     pub linear_predictor: Vec<f64>,
@@ -300,7 +300,7 @@ pub fn predict_cox(
     ))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RiskStratificationResult {
     #[pyo3(get)]
     pub risk_groups: Vec<usize>,
@@ -431,7 +431,7 @@ pub fn risk_stratification(
     Ok(stratify_risk(&risk_scores, &events, n_groups))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TdAUCResult {
     #[pyo3(get)]
     pub times: Vec<f64>,
@@ -525,7 +525,7 @@ pub fn td_auc(
     Ok(time_dependent_auc(&time, &status, &risk_score, &eval_times))
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct AdvancedCalibrationResult {
     #[pyo3(get)]
@@ -724,7 +724,7 @@ fn spiegelhalter_test(predicted: &[f64], observed: &[i32]) -> (f64, f64) {
     (z, p_value)
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct TimeDependentCalibrationResult {
     #[pyo3(get)]

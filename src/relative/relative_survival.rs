@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RelativeSurvivalResult {
     #[pyo3(get)]
     pub time_points: Vec<f64>,
@@ -163,7 +163,7 @@ pub fn relative_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ExcessHazardModelResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

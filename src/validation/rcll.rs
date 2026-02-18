@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use std::fmt;
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct RCLLResult {
     pub rcll: f64,
     pub mean_rcll: f64,

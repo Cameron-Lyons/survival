@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TMLEConfig {
     #[pyo3(get, set)]
     pub n_folds: usize,
@@ -164,7 +164,7 @@ fn linear_predict(x: &[Vec<f64>], coeffs: &[f64], intercept: f64) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TMLEResult {
     #[pyo3(get)]
     pub ate: f64,
@@ -308,7 +308,7 @@ pub fn tmle_ate(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TMLESurvivalResult {
     #[pyo3(get)]
     pub survival_diff: Vec<f64>,

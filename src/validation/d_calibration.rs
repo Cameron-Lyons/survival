@@ -3,7 +3,7 @@ use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DCalibrationResult {
     #[pyo3(get)]
     pub statistic: f64,
@@ -152,7 +152,7 @@ pub fn d_calibration(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct OneCalibrationResult {
     #[pyo3(get)]
     pub time_point: f64,
@@ -367,7 +367,7 @@ pub fn one_calibration(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CalibrationPlotData {
     #[pyo3(get)]
     pub predicted: Vec<f64>,
@@ -573,7 +573,7 @@ pub fn calibration_plot(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct BrierCalibrationResult {
     pub time_point: f64,
     pub brier_score: f64,
@@ -769,7 +769,7 @@ pub fn brier_calibration(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct MultiTimeCalibrationResult {
     pub time_points: Vec<f64>,
     pub brier_scores: Vec<f64>,
@@ -947,7 +947,7 @@ pub fn multi_time_calibration(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct SmoothedCalibrationCurve {
     pub predicted_grid: Vec<f64>,
     pub smoothed_observed: Vec<f64>,

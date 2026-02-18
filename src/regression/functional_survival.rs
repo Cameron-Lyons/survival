@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 pub enum BasisType {
     BSpline,
     Fourier,
@@ -27,7 +27,7 @@ impl BasisType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FunctionalSurvivalConfig {
     #[pyo3(get, set)]
     pub basis_type: BasisType,
@@ -67,7 +67,7 @@ impl FunctionalSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FunctionalPCAResult {
     #[pyo3(get)]
     pub eigenvalues: Vec<f64>,
@@ -95,7 +95,7 @@ impl FunctionalPCAResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FunctionalSurvivalResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

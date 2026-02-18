@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use std::collections::{BTreeSet, HashMap};
 
 /// Result of converting to timeline (wide) format
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct TimelineResult {
     /// Subject identifiers (one per row)
@@ -22,7 +22,7 @@ pub struct TimelineResult {
 }
 
 /// Result of converting from timeline to interval format
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct IntervalResult {
     /// Subject identifiers

@@ -14,7 +14,7 @@ type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CoxTimeConfig {
     #[pyo3(get, set)]
     pub hidden_dims: Vec<usize>,
@@ -218,7 +218,7 @@ fn compute_cox_time_loss<B: burn::prelude::Backend>(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CoxTimeModel {
     weights: Vec<f32>,
     config: CoxTimeConfig,

@@ -2,7 +2,7 @@ use super::statistical::{normal_cdf, normal_inverse_cdf};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum ReliabilityScale {
     Surv,
     Cumhaz,
@@ -31,7 +31,7 @@ impl ReliabilityScale {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ReliabilityResult {
     #[pyo3(get)]
     pub time: Vec<f64>,

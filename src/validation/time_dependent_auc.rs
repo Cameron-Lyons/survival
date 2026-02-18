@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::fmt;
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct TimeDepAUCResult {
     pub auc: f64,
     pub time: f64,
@@ -51,7 +51,7 @@ impl TimeDepAUCResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct CumulativeDynamicAUCResult {
     pub times: Vec<f64>,
     pub auc: Vec<f64>,

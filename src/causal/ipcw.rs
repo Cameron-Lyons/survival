@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct IPCWResult {
     #[pyo3(get)]
     pub weights: Vec<f64>,

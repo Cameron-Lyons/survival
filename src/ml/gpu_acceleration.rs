@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static GPU_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 pub enum ComputeBackend {
     CPU,
     CUDA,
@@ -32,7 +32,7 @@ impl ComputeBackend {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GPUConfig {
     #[pyo3(get, set)]
     pub backend: ComputeBackend,
@@ -77,7 +77,7 @@ impl GPUConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DeviceInfo {
     #[pyo3(get)]
     pub name: String,
@@ -104,7 +104,7 @@ impl DeviceInfo {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ParallelCoxResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -136,7 +136,7 @@ impl ParallelCoxResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BatchPredictionResult {
     #[pyo3(get)]
     pub predictions: Vec<f64>,

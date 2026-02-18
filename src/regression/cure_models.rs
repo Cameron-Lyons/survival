@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum CureDistribution {
     Weibull,
     LogNormal,
@@ -40,7 +40,7 @@ impl CureDistribution {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum LinkFunction {
     Logit,
     Probit,
@@ -165,7 +165,7 @@ fn exponential_pdf(t: f64, rate: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MixtureCureConfig {
     #[pyo3(get, set)]
     pub distribution: CureDistribution,
@@ -201,7 +201,7 @@ impl MixtureCureConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MixtureCureResult {
     #[pyo3(get)]
     pub cure_coef: Vec<f64>,
@@ -444,7 +444,7 @@ pub fn mixture_cure_model(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PromotionTimeCureResult {
     #[pyo3(get)]
     pub theta: f64,
@@ -637,7 +637,7 @@ pub fn predict_survival_cure(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BoundedCumulativeHazardConfig {
     #[pyo3(get, set)]
     pub distribution: CureDistribution,
@@ -664,7 +664,7 @@ impl BoundedCumulativeHazardConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BoundedCumulativeHazardResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,
@@ -892,7 +892,7 @@ pub fn bounded_cumulative_hazard_model(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum NonMixtureType {
     GeometricGeneralized,
     NegativeBinomial,
@@ -917,7 +917,7 @@ impl NonMixtureType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NonMixtureCureConfig {
     #[pyo3(get, set)]
     pub model_type: NonMixtureType,
@@ -953,7 +953,7 @@ impl NonMixtureCureConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NonMixtureCureResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,
@@ -1380,7 +1380,7 @@ pub fn predict_non_mixture_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CureModelComparisonResult {
     #[pyo3(get)]
     pub model_names: Vec<String>,

@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum VarianceEstimator {
     Greenwood,
     Aalen,
@@ -32,7 +32,7 @@ impl VarianceEstimator {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum TransitionType {
     Standard,
     MarkovIllnessDeath,
@@ -57,7 +57,7 @@ impl TransitionType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AalenJohansenExtendedConfig {
     #[pyo3(get, set)]
     pub variance_estimator: VarianceEstimator,
@@ -115,7 +115,7 @@ impl AalenJohansenExtendedConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TransitionMatrix {
     #[pyo3(get)]
     pub time: f64,
@@ -128,7 +128,7 @@ pub struct TransitionMatrix {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AalenJohansenExtendedResult {
     #[pyo3(get)]
     pub time: Vec<f64>,

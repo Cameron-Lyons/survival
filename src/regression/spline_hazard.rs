@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct SplineConfig {
     #[pyo3(get, set)]
@@ -32,7 +32,7 @@ impl SplineConfig {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct FlexibleParametricResult {
     #[pyo3(get)]
@@ -329,7 +329,7 @@ fn compute_approximate_se(beta: &[f64], gamma: &[f64], n: usize) -> Vec<f64> {
     se
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct RestrictedCubicSplineResult {
     #[pyo3(get)]
@@ -436,7 +436,7 @@ fn compute_quantile_knots(x: &[f64], n_knots: usize) -> Vec<f64> {
         .collect()
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct HazardSplineResult {
     #[pyo3(get)]

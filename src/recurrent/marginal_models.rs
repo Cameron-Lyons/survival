@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum MarginalMethod {
     WeiLinWeissfeld,
     AndersenGill,
@@ -32,7 +32,7 @@ impl MarginalMethod {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MarginalModelResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

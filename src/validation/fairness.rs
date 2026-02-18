@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FairnessMetrics {
     #[pyo3(get)]
     pub demographic_parity: f64,
@@ -222,7 +222,7 @@ pub fn compute_fairness_metrics(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RobustnessResult {
     #[pyo3(get)]
     pub original_c_index: f64,
@@ -326,7 +326,7 @@ pub fn assess_model_robustness(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SubgroupAnalysisResult {
     #[pyo3(get)]
     pub subgroup_names: Vec<String>,

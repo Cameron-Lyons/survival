@@ -1,7 +1,7 @@
 use crate::regression::coxph::{CoxPHModel, Subject};
 use pyo3::prelude::*;
 #[derive(Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum CchMethod {
     Prentice,
     SelfPrentice,

@@ -5,7 +5,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct AaregOptions {
     #[pyo3(get, set)]
@@ -71,7 +71,7 @@ impl AaregOptions {
         }
     }
 }
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct AaregResult {
     #[pyo3(get, set)]
@@ -91,7 +91,7 @@ pub struct AaregResult {
     #[pyo3(get, set)]
     diagnostics: Option<Diagnostics>,
 }
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct ConfidenceInterval {
     #[pyo3(get, set)]
@@ -99,7 +99,7 @@ struct ConfidenceInterval {
     #[pyo3(get, set)]
     upper_bound: f64,
 }
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct FitDetails {
     #[pyo3(get, set)]
@@ -119,7 +119,7 @@ struct FitDetails {
     #[pyo3(get, set)]
     warnings: Vec<String>,
 }
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct Diagnostics {
     #[pyo3(get, set)]

@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 /// Result of adjusting near ties in survival times
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AeqSurvResult {
     /// Adjusted survival times with near-ties resolved
     #[pyo3(get)]

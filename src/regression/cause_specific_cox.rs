@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum CensoringType {
     Censored,
     Competing,
@@ -31,7 +31,7 @@ impl CensoringType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CauseSpecificCoxConfig {
     #[pyo3(get, set)]
     pub cause_of_interest: i32,
@@ -90,7 +90,7 @@ impl CauseSpecificCoxConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CauseSpecificCoxResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

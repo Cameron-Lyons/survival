@@ -3,7 +3,7 @@ use crate::utilities::statistical::chi2_sf;
 use ndarray::Array2;
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TestResult {
     #[pyo3(get)]
     pub statistic: f64,
@@ -138,7 +138,7 @@ pub fn score_test_py(
     Ok(score_test(&score_vector, &information_matrix))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ProportionalityTest {
     #[pyo3(get)]
     pub variable_names: Vec<String>,

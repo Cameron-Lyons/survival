@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use crate::utilities::statistical::{lower_incomplete_gamma, normal_cdf};
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DfbetaResult {
     #[pyo3(get)]
     pub dfbeta: Vec<Vec<f64>>,
@@ -277,7 +277,7 @@ fn invert_matrix(a: &[f64], n: usize) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LeverageResult {
     #[pyo3(get)]
     pub leverage: Vec<f64>,
@@ -396,7 +396,7 @@ pub fn leverage_cox(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SchoenfeldSmoothResult {
     #[pyo3(get)]
     pub times: Vec<f64>,
@@ -576,7 +576,7 @@ fn compute_slope_test(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct OutlierDetectionResult {
     #[pyo3(get)]
     pub martingale_residuals: Vec<f64>,
@@ -701,7 +701,7 @@ pub fn outlier_detection_cox(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ModelInfluenceResult {
     #[pyo3(get)]
     pub cooks_distance: Vec<f64>,
@@ -847,7 +847,7 @@ fn estimate_coefficient_variance(dfbeta: &[Vec<f64>], n_covariates: usize) -> Ve
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GofTestResult {
     #[pyo3(get)]
     pub global_test_stat: f64,

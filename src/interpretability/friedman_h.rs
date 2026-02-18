@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FriedmanHResult {
     #[pyo3(get)]
     pub feature1_index: usize,
@@ -27,7 +27,7 @@ impl FriedmanHResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FeatureImportanceResult {
     #[pyo3(get)]
     pub feature_index: usize,

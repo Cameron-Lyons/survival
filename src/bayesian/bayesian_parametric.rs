@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum BayesianDistribution {
     Weibull,
     LogNormal,
@@ -37,7 +37,7 @@ impl BayesianDistribution {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BayesianParametricConfig {
     #[pyo3(get, set)]
     pub distribution: BayesianDistribution,
@@ -85,7 +85,7 @@ impl BayesianParametricConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BayesianParametricResult {
     #[pyo3(get)]
     pub beta_mean: Vec<f64>,

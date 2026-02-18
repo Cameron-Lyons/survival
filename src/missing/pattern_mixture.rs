@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PatternMixtureResult {
     #[pyo3(get)]
     pub pattern_coefficients: Vec<Vec<f64>>,
@@ -35,7 +35,7 @@ pub struct PatternMixtureResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum SensitivityAnalysisType {
     TiltingModel,
     SelectionModel,

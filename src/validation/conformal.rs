@@ -7,7 +7,7 @@ use crate::constants::{
 };
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ConformalCalibrationResult {
     #[pyo3(get)]
     pub conformity_scores: Vec<f64>,
@@ -24,7 +24,7 @@ pub struct ConformalCalibrationResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ConformalPredictionResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,
@@ -35,7 +35,7 @@ pub struct ConformalPredictionResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ConformalDiagnostics {
     #[pyo3(get)]
     pub empirical_coverage: f64,
@@ -355,7 +355,7 @@ pub fn conformal_coverage_test(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DoublyRobustConformalResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,
@@ -677,7 +677,7 @@ pub fn doubly_robust_conformal_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TwoSidedConformalResult {
     #[pyo3(get)]
     pub lower_bound: Vec<f64>,
@@ -696,7 +696,7 @@ pub struct TwoSidedConformalResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TwoSidedCalibrationResult {
     #[pyo3(get)]
     pub lower_quantile: f64,
@@ -932,7 +932,7 @@ pub fn two_sided_conformal_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ConformalSurvivalDistribution {
     #[pyo3(get)]
     pub time_points: Vec<f64>,
@@ -949,7 +949,7 @@ pub struct ConformalSurvivalDistribution {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BootstrapConformalResult {
     #[pyo3(get)]
     pub lower_bound: Vec<f64>,
@@ -968,7 +968,7 @@ pub struct BootstrapConformalResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CQRConformalResult {
     #[pyo3(get)]
     pub lower_bound: Vec<f64>,
@@ -987,7 +987,7 @@ pub struct CQRConformalResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ConformalCalibrationPlot {
     #[pyo3(get)]
     pub coverage_levels: Vec<f64>,
@@ -1002,7 +1002,7 @@ pub struct ConformalCalibrationPlot {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ConformalWidthAnalysis {
     #[pyo3(get)]
     pub mean_width: f64,
@@ -1023,7 +1023,7 @@ pub struct ConformalWidthAnalysis {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CoverageSelectionResult {
     #[pyo3(get)]
     pub optimal_coverage: f64,
@@ -1693,7 +1693,7 @@ pub fn conformal_survival_parallel(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct WeightDiagnostics {
     #[pyo3(get)]
     pub effective_sample_size: f64,
@@ -1708,7 +1708,7 @@ pub struct WeightDiagnostics {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CovariateShiftConformalResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,
@@ -1871,7 +1871,7 @@ pub fn covariate_shift_conformal_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CVPlusCalibrationResult {
     #[pyo3(get)]
     pub conformity_scores: Vec<f64>,
@@ -1886,7 +1886,7 @@ pub struct CVPlusCalibrationResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CVPlusConformalResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,
@@ -1987,7 +1987,7 @@ pub fn cvplus_conformal_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MondrianDiagnostics {
     #[pyo3(get)]
     pub group_labels: Vec<i32>,
@@ -2002,7 +2002,7 @@ pub struct MondrianDiagnostics {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MondrianCalibrationResult {
     #[pyo3(get)]
     pub group_thresholds: std::collections::HashMap<i32, f64>,
@@ -2019,7 +2019,7 @@ pub struct MondrianCalibrationResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MondrianConformalResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,
