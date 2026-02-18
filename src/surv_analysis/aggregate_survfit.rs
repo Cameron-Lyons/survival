@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 
 /// Result of aggregating survival curves
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AggregateSurvfitResult {
     /// Aggregated time points
     #[pyo3(get)]

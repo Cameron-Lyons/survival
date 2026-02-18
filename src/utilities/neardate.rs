@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 /// Result of nearest date matching
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NearDateResult {
     /// Index into the reference set (id2/date2) for each query, None if no match
     #[pyo3(get)]

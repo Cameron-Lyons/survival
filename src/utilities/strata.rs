@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct StrataResult {
     #[pyo3(get)]
     pub strata: Vec<i32>,

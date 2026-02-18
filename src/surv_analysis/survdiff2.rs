@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvDiffResult {
     #[pyo3(get)]
     pub observed: Vec<f64>,

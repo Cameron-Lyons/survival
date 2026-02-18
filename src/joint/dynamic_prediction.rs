@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DynamicPredictionResult {
     #[pyo3(get)]
     pub time_points: Vec<f64>,
@@ -485,7 +485,7 @@ fn compute_concordance(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TimeVaryingAUCResult {
     #[pyo3(get)]
     pub times: Vec<f64>,
@@ -615,7 +615,7 @@ pub fn time_varying_auc(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DynamicCIndexResult {
     #[pyo3(get)]
     pub c_index: f64,
@@ -775,7 +775,7 @@ pub fn dynamic_c_index(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct IPCWAUCResult {
     #[pyo3(get)]
     pub times: Vec<f64>,
@@ -892,7 +892,7 @@ pub fn ipcw_auc(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SuperLandmarkResult {
     #[pyo3(get)]
     pub landmark_times: Vec<f64>,
@@ -1122,7 +1122,7 @@ pub fn super_landmark_model(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TimeDependentROCResult {
     #[pyo3(get)]
     pub times: Vec<f64>,

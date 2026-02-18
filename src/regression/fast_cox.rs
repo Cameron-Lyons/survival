@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum ScreeningRule {
     None,
     Safe,
@@ -34,7 +34,7 @@ impl ScreeningRule {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FastCoxConfig {
     #[pyo3(get, set)]
     pub lambda: f64,
@@ -117,7 +117,7 @@ impl FastCoxConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FastCoxResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -159,7 +159,7 @@ impl FastCoxResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FastCoxPath {
     #[pyo3(get)]
     pub lambdas: Vec<f64>,
@@ -835,10 +835,11 @@ pub fn fast_cox_cv(
                 let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
                 let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt[i]).collect();
 
-                let config = FastCoxConfig::new(
+                let Ok(config) = FastCoxConfig::new(
                     lambda, l1_ratio, 1000, 1e-7, screening, None, 10, true, true,
-                )
-                .unwrap();
+                ) else {
+                    continue;
+                };
 
                 if let Ok(result) = fast_cox(
                     train_x,

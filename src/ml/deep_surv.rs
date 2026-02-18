@@ -35,7 +35,7 @@ fn selu_activation<B: burn::prelude::Backend, const D: usize>(x: Tensor<B, D>) -
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum Activation {
     ReLU,
     SELU,
@@ -58,7 +58,7 @@ impl Activation {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DeepSurvConfig {
     #[pyo3(get, set)]
     pub hidden_layers: Vec<usize>,
@@ -634,7 +634,7 @@ fn fit_deep_surv_inner(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DeepSurv {
     weights: StoredWeights,
     hidden_layers: Vec<usize>,
@@ -794,8 +794,9 @@ pub fn deep_surv(
     status: Vec<i32>,
     config: Option<&DeepSurvConfig>,
 ) -> PyResult<DeepSurv> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        DeepSurvConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => DeepSurvConfig::new(
             None,
             Activation::SELU,
             0.2,
@@ -806,9 +807,8 @@ pub fn deep_surv(
             None,
             None,
             0.1,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     DeepSurv::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }

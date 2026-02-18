@@ -2,7 +2,7 @@ use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AnovaRow {
     #[pyo3(get)]
     pub model_name: String,
@@ -50,7 +50,7 @@ impl AnovaRow {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AnovaCoxphResult {
     #[pyo3(get)]
     pub rows: Vec<AnovaRow>,

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Result of survival data validation
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvCheckResult {
     /// Number of subjects in the data
     #[pyo3(get)]

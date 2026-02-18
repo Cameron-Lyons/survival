@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TMLEConfig {
     #[pyo3(get, set)]
     pub n_folds: usize,
@@ -164,7 +164,7 @@ fn linear_predict(x: &[Vec<f64>], coeffs: &[f64], intercept: f64) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TMLEResult {
     #[pyo3(get)]
     pub ate: f64,
@@ -209,7 +209,10 @@ pub fn tmle_ate(
     outcome: Vec<f64>,
     config: Option<TMLEConfig>,
 ) -> PyResult<TMLEResult> {
-    let config = config.unwrap_or_else(|| TMLEConfig::new(5, 0.01, 100, 1e-6, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => TMLEConfig::new(5, 0.01, 100, 1e-6, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || outcome.len() != n {
@@ -305,7 +308,7 @@ pub fn tmle_ate(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TMLESurvivalResult {
     #[pyo3(get)]
     pub survival_diff: Vec<f64>,
@@ -351,7 +354,10 @@ pub fn tmle_survival(
     time_points: Option<Vec<f64>>,
     config: Option<TMLEConfig>,
 ) -> PyResult<TMLESurvivalResult> {
-    let config = config.unwrap_or_else(|| TMLEConfig::new(5, 0.01, 100, 1e-6, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => TMLEConfig::new(5, 0.01, 100, 1e-6, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || time.len() != n || event.len() != n {

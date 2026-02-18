@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum PenaltyType {
     Lasso,
     Ridge,
@@ -34,7 +34,7 @@ impl PenaltyType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ElasticNetConfig {
     #[pyo3(get, set)]
     pub alpha: f64,
@@ -94,7 +94,7 @@ impl ElasticNetConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ElasticNetCoxResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -119,7 +119,7 @@ pub struct ElasticNetCoxResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ElasticNetCoxPath {
     #[pyo3(get)]
     pub lambdas: Vec<f64>,
@@ -567,8 +567,10 @@ pub fn elastic_net_cox_cv(
                 let train_status: Vec<i32> = train_idx.iter().map(|&i| status[i]).collect();
                 let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt[i]).collect();
 
-                let config =
-                    ElasticNetConfig::new(lambda, l1_ratio, 1000, 1e-7, true, false).unwrap();
+                let Ok(config) = ElasticNetConfig::new(lambda, l1_ratio, 1000, 1e-7, true, false)
+                else {
+                    continue;
+                };
                 if let Ok(result) = elastic_net_cox(
                     train_x,
                     train_idx.len(),

@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 
 /// Result of O'Brien's test for survival association
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvObrienResult {
     /// Chi-squared test statistic
     #[pyo3(get)]

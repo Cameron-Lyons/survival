@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CausalForestConfig {
     #[pyo3(get, set)]
     pub n_trees: usize,
@@ -298,7 +298,7 @@ fn predict_tree(node: &CausalTreeNode, x: &[f64]) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CausalForestSurvival {
     trees: Vec<CausalTreeNode>,
     #[allow(dead_code)]
@@ -380,7 +380,7 @@ impl CausalForestSurvival {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CausalForestResult {
     #[pyo3(get)]
     pub cate_estimates: Vec<f64>,
@@ -422,8 +422,10 @@ pub fn causal_forest_survival(
     time_horizon: f64,
     config: Option<CausalForestConfig>,
 ) -> PyResult<(CausalForestSurvival, CausalForestResult)> {
-    let config = config
-        .unwrap_or_else(|| CausalForestConfig::new(100, 10, 5, 10, None, true, 0.5, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => CausalForestConfig::new(100, 10, 5, 10, None, true, 0.5, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || time.len() != n || event.len() != n {

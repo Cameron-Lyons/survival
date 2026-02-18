@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DySurvConfig {
     #[pyo3(get, set)]
     pub latent_dim: usize,
@@ -71,7 +71,7 @@ impl DySurvConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DySurvModel {
     encoder_weights: Vec<Vec<f64>>,
     decoder_weights: Vec<Vec<f64>>,
@@ -256,9 +256,10 @@ pub fn fit_dysurv(
     event: Vec<i32>,
     config: Option<DySurvConfig>,
 ) -> PyResult<DySurvModel> {
-    let config = config.unwrap_or_else(|| {
-        DySurvConfig::new(32, None, 20, 0.1, 0.001, 64, 100, 0.1, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => DySurvConfig::new(32, None, 20, 0.1, 0.001, 64, 100, 0.1, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {
@@ -317,7 +318,7 @@ pub fn fit_dysurv(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DynamicRiskResult {
     #[pyo3(get)]
     pub risk_scores: Vec<Vec<f64>>,

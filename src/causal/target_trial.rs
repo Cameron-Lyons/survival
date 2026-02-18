@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TargetTrialResult {
     #[pyo3(get)]
     pub hazard_ratio: f64,
@@ -45,7 +45,7 @@ pub struct TargetTrialResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TrialEmulationConfig {
     #[pyo3(get, set)]
     pub grace_period: f64,

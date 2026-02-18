@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DeepPAMMConfig {
     #[pyo3(get, set)]
     pub hidden_dims: Vec<usize>,
@@ -129,7 +129,7 @@ fn create_knot_sequence(min_t: f64, max_t: f64, num_knots: usize, degree: usize)
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DeepPAMMModel {
     baseline_coeffs: Vec<f64>,
     nn_weights: Vec<Vec<f64>>,
@@ -293,9 +293,10 @@ pub fn fit_deep_pamm(
     event: Vec<i32>,
     config: Option<DeepPAMMConfig>,
 ) -> PyResult<DeepPAMMModel> {
-    let config = config.unwrap_or_else(|| {
-        DeepPAMMConfig::new(None, 20, 3, 10, 0.1, 0.001, 64, 100, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => DeepPAMMConfig::new(None, 20, 3, 10, 0.1, 0.001, 64, 100, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {

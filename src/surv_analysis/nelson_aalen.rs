@@ -3,7 +3,7 @@ use crate::utilities::simd::sum_f64;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NelsonAalenResult {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -178,7 +178,7 @@ pub fn nelson_aalen_estimator(
     Ok(nelson_aalen(&time, &status, weights_ref, conf))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct StratifiedKMResult {
     #[pyo3(get)]
     pub strata: Vec<i32>,

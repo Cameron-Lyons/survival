@@ -8,7 +8,7 @@ use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvregConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -70,7 +70,7 @@ impl SurvregConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvivalFit {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -206,7 +206,7 @@ fn calculate_variance_matrix(
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum DistributionType {
     #[pyo3(name = "extreme_value")]
     ExtremeValue,
@@ -223,7 +223,7 @@ pub enum DistributionType {
 }
 
 #[derive(Debug, Clone, Default)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvregOptions {
     #[pyo3(get, set)]
     pub weights: Option<Vec<f64>>,

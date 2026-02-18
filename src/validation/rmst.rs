@@ -11,7 +11,7 @@ fn chi_squared_cdf(x: f64, df: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct RMSTResult {
     pub rmst: f64,
     pub variance: f64,
@@ -46,7 +46,7 @@ impl RMSTResult {
     }
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RMSTComparisonResult {
     #[pyo3(get)]
     pub rmst_diff: f64,
@@ -343,7 +343,7 @@ pub fn rmst_comparison(
     Ok(compare_rmst(&time, &status, &group, tau, conf))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MedianSurvivalResult {
     #[pyo3(get)]
     pub median: Option<f64>,
@@ -460,7 +460,7 @@ pub fn survival_quantile(
     Ok(compute_survival_quantile(&time, &status, q, conf))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CumulativeIncidenceResult {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -585,7 +585,7 @@ pub fn cumulative_incidence(
     Ok(compute_cumulative_incidence(&time, &status))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NNTResult {
     #[pyo3(get)]
     pub nnt: f64,
@@ -738,7 +738,7 @@ pub fn number_needed_to_treat(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ChangepointInfo {
     #[pyo3(get)]
     pub time: f64,
@@ -773,7 +773,7 @@ impl ChangepointInfo {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RMSTOptimalThresholdResult {
     #[pyo3(get)]
     pub optimal_tau: f64,
@@ -1016,7 +1016,7 @@ pub fn compute_rmst_optimal_threshold(
     let optimal_tau = if selected_changepoints.is_empty() {
         max_followup
     } else {
-        *selected_changepoints.last().unwrap()
+        selected_changepoints[selected_changepoints.len() - 1]
     };
     let rmst_at_optimal = compute_rmst(time, status, optimal_tau, confidence_level);
     RMSTOptimalThresholdResult {

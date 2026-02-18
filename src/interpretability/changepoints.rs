@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum ChangepointMethod {
     PELT,
     BinarySegment,
@@ -32,7 +32,7 @@ impl ChangepointMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum CostFunction {
     L2,
     L1,
@@ -57,7 +57,7 @@ impl CostFunction {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ChangepointConfig {
     #[pyo3(get, set)]
     pub method: ChangepointMethod,
@@ -110,7 +110,7 @@ impl ChangepointConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct Changepoint {
     #[pyo3(get)]
     pub index: usize,
@@ -137,7 +137,7 @@ impl Changepoint {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ChangepointResult {
     #[pyo3(get)]
     pub feature_idx: usize,
@@ -173,7 +173,7 @@ impl ChangepointResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AllChangepointsResult {
     #[pyo3(get)]
     pub results: Vec<ChangepointResult>,

@@ -59,7 +59,7 @@ fn layer_norm_3d<B: burn::prelude::Backend>(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TracerConfig {
     #[pyo3(get, set)]
     pub embedding_dim: usize,
@@ -1588,7 +1588,7 @@ fn fit_tracer_inner(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct Tracer {
     weights: StoredWeights,
     config: TracerConfig,
@@ -1926,12 +1926,12 @@ pub fn tracer(
     event: Vec<i32>,
     config: Option<&TracerConfig>,
 ) -> PyResult<Tracer> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        TracerConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => TracerConfig::new(
             32, 2, 4, 10, 1, 64, 0.1, 0.0001, 0.00001, 64, 100, None, 0.1, 1e-12, None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     Tracer::fit(
         py,

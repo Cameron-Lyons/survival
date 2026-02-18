@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum CentralityType {
     Degree,
     Betweenness,
@@ -39,7 +39,7 @@ impl CentralityType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NetworkSurvivalConfig {
     #[pyo3(get, set)]
     pub include_peer_effects: bool,
@@ -79,7 +79,7 @@ impl NetworkSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NetworkSurvivalResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -641,7 +641,7 @@ fn compute_se(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DiffusionSurvivalConfig {
     #[pyo3(get, set)]
     pub diffusion_rate: f64,
@@ -677,7 +677,7 @@ impl DiffusionSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DiffusionSurvivalResult {
     #[pyo3(get)]
     pub diffusion_rate: f64,
@@ -972,7 +972,7 @@ fn compute_susceptibility_derivatives(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NetworkHeterogeneityResult {
     #[pyo3(get)]
     pub community_hazard_ratios: Vec<f64>,

@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct IVCoxConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -41,7 +41,7 @@ impl IVCoxConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct IVCoxResult {
     #[pyo3(get)]
     pub treatment_coef: f64,
@@ -466,7 +466,7 @@ fn upper_incomplete_gamma(a: f64, x: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RDSurvivalConfig {
     #[pyo3(get, set)]
     pub bandwidth: f64,
@@ -498,7 +498,7 @@ impl RDSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RDSurvivalResult {
     #[pyo3(get)]
     pub treatment_effect: f64,
@@ -686,7 +686,7 @@ fn estimate_km_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MediationSurvivalConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -713,7 +713,7 @@ impl MediationSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MediationSurvivalResult {
     #[pyo3(get)]
     pub total_effect: f64,
@@ -1068,7 +1068,7 @@ fn fit_outcome_model_with_mediator(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GEstimationConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -1092,7 +1092,7 @@ impl GEstimationConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GEstimationResult {
     #[pyo3(get)]
     pub psi: Vec<f64>,
@@ -1160,7 +1160,7 @@ pub fn g_estimation_aft(
         sorted_indices.sort_by(|&a, &b| {
             counterfactual_times[b]
                 .partial_cmp(&counterfactual_times[a])
-                .unwrap()
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let mut risk_sum = 0.0;

@@ -24,7 +24,7 @@ type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum UnimodalConstraint {
     SoftConstraint,
     HardConstraint,
@@ -47,7 +47,7 @@ impl UnimodalConstraint {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GALEEConfig {
     #[pyo3(get, set)]
     pub health_dim: usize,
@@ -593,7 +593,7 @@ fn extract_weights(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GALEEResult {
     #[pyo3(get)]
     pub health_trajectories: Vec<Vec<Vec<f64>>>,
@@ -604,7 +604,7 @@ pub struct GALEEResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 #[allow(dead_code)]
 pub struct GALEE {
     weights: StoredWeights,
@@ -821,8 +821,9 @@ pub fn galee(
         ));
     }
 
-    let cfg = config.cloned().unwrap_or_else(|| {
-        GALEEConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => GALEEConfig::new(
             32,
             vec![64, 32],
             4,
@@ -839,9 +840,8 @@ pub fn galee(
             None,
             0.1,
             None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     Ok(py.detach(move || {
         fit_galee_inner(

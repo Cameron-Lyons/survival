@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct JointModelConfig {
     #[pyo3(get, set)]
     pub n_quadrature_points: usize,
@@ -119,7 +119,7 @@ fn compute_longitudinal_trajectory(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct JointLongSurvResult {
     #[pyo3(get)]
     pub longitudinal_fixed_effects: Vec<f64>,
@@ -361,7 +361,7 @@ pub fn joint_longitudinal_model(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LandmarkAnalysisResult {
     #[pyo3(get)]
     pub landmark_time: f64,
@@ -511,7 +511,7 @@ pub fn landmark_cox_analysis(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LongDynamicPredResult {
     #[pyo3(get)]
     pub prediction_time: f64,
@@ -591,8 +591,8 @@ pub fn longitudinal_dynamic_pred(
         } else if subj_data.len() == 1 {
             (subj_data[0].1, 0.0)
         } else {
-            let last = subj_data.last().unwrap();
-            let prev = subj_data.get(subj_data.len() - 2).unwrap();
+            let last = subj_data[subj_data.len() - 1];
+            let prev = subj_data[subj_data.len() - 2];
             let slope = (last.1 - prev.1) / (last.0 - prev.0 + crate::constants::DIVISION_FLOOR);
             (last.1, slope)
         };
@@ -627,7 +627,7 @@ pub fn longitudinal_dynamic_pred(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TimeVaryingCoxResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

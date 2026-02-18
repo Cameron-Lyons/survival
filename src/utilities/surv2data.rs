@@ -6,7 +6,7 @@
 use pyo3::prelude::*;
 
 /// Result of converting timecourse data to interval format
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct Surv2DataResult {
     /// Subject identifiers

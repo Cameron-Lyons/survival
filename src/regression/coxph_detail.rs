@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CoxphDetailRow {
     #[pyo3(get)]
     pub time: f64,
@@ -36,7 +36,7 @@ impl CoxphDetailRow {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CoxphDetail {
     #[pyo3(get)]
     pub rows: Vec<CoxphDetailRow>,

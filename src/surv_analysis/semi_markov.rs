@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::utilities::statistical::erf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 pub enum SojournDistribution {
     Exponential,
     Weibull,
@@ -33,7 +33,7 @@ impl SojournDistribution {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SemiMarkovConfig {
     #[pyo3(get, set)]
     pub n_states: usize,
@@ -81,7 +81,7 @@ impl SemiMarkovConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SojournTimeParams {
     #[pyo3(get)]
     pub distribution: SojournDistribution,
@@ -110,7 +110,7 @@ impl SojournTimeParams {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SemiMarkovResult {
     #[pyo3(get)]
     pub transition_probs: HashMap<String, f64>,
@@ -528,7 +528,7 @@ pub fn fit_semi_markov(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SemiMarkovPrediction {
     #[pyo3(get)]
     pub state_probs: Vec<Vec<f64>>,
@@ -622,7 +622,13 @@ pub fn predict_semi_markov(
                 0.0
             };
 
-            transition_hazards.get_mut(&key).unwrap().push(hazard);
+            if let Some(hazards) = transition_hazards.get_mut(&key) {
+                hazards.push(hazard);
+            } else {
+                return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "internal error: missing transition hazard bucket",
+                ));
+            }
         }
     }
 

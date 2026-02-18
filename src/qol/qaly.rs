@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct QALYResult {
     #[pyo3(get)]
     pub qaly: f64,

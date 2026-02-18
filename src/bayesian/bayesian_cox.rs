@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum PriorType {
     Normal,
     Laplace,
@@ -39,7 +39,7 @@ impl PriorType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BayesianCoxConfig {
     #[pyo3(get, set)]
     pub prior_type: PriorType,
@@ -88,7 +88,7 @@ impl BayesianCoxConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BayesianCoxResult {
     #[pyo3(get)]
     pub posterior_mean: Vec<f64>,

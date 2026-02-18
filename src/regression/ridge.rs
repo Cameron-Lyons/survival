@@ -3,7 +3,7 @@ use rayon::prelude::*;
 
 /// Configuration for ridge regression penalty
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RidgePenalty {
     /// Penalty parameter (larger = more shrinkage)
     #[pyo3(get, set)]
@@ -85,7 +85,7 @@ impl RidgePenalty {
 
 /// Result of ridge regression estimation
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RidgeResult {
     /// Penalized coefficient estimates
     #[pyo3(get)]

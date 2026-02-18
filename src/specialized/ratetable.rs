@@ -4,7 +4,7 @@ use std::fmt;
 
 /// Type of dimension in a rate table
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum DimType {
     /// Categorical factor (e.g., sex)
     Factor,
@@ -18,7 +18,7 @@ pub enum DimType {
 
 /// A dimension in the rate table
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RateDimension {
     /// Name of the dimension
     #[pyo3(get)]
@@ -59,7 +59,7 @@ impl RateDimension {
 /// sex, and potentially other factors. Used with survexp() to compute expected
 /// survival based on population mortality.
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RateTable {
     /// Dimensions of the table
     dimensions: Vec<RateDimension>,
@@ -338,7 +338,7 @@ pub fn is_ratetable(ndim: usize, has_rates: bool, has_dims: bool) -> bool {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str)]
+#[pyclass(str, from_py_object)]
 pub struct RatetableDateResult {
     #[pyo3(get)]
     pub days: f64,

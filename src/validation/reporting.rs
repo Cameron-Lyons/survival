@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use crate::utilities::statistical::{lower_incomplete_gamma, normal_cdf};
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct KaplanMeierPlotData {
     #[pyo3(get)]
     pub time_points: Vec<f64>,
@@ -146,7 +146,7 @@ pub fn km_plot_data(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ForestPlotData {
     #[pyo3(get)]
     pub variable_names: Vec<String>,
@@ -230,7 +230,7 @@ pub fn forest_plot_data(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CalibrationCurveData {
     #[pyo3(get)]
     pub predicted_prob: Vec<f64>,
@@ -334,7 +334,7 @@ pub fn calibration_plot_data(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvivalReport {
     #[pyo3(get)]
     pub title: String,
@@ -561,7 +561,7 @@ pub fn generate_survival_report(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ROCPlotData {
     #[pyo3(get)]
     pub fpr: Vec<f64>,

@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MultipleImputationResult {
     #[pyo3(get)]
     pub pooled_coefficients: Vec<f64>,
@@ -36,7 +36,7 @@ pub struct MultipleImputationResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum ImputationMethod {
     PMM,
     Regression,

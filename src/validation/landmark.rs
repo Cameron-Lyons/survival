@@ -3,7 +3,7 @@ use crate::utilities::statistical::normal_cdf as norm_cdf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LandmarkResult {
     #[pyo3(get)]
     pub landmark_time: f64,
@@ -91,7 +91,7 @@ pub fn landmark_analysis_batch(
     Ok(compute_landmarks_parallel(&time, &status, &landmark_times))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ConditionalSurvivalResult {
     #[pyo3(get)]
     pub given_time: f64,
@@ -231,7 +231,7 @@ pub fn conditional_survival(
     ))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct HazardRatioResult {
     #[pyo3(get)]
     pub hazard_ratio: f64,
@@ -415,7 +415,7 @@ pub fn hazard_ratio(
     Ok(compute_hazard_ratio(&time, &status, &group, conf))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvivalAtTimeResult {
     #[pyo3(get)]
     pub time: f64,
@@ -592,7 +592,7 @@ pub fn survival_at_times(
     Ok(compute_survival_at_times(&time, &status, &eval_times, conf))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LifeTableResult {
     #[pyo3(get)]
     pub interval_start: Vec<f64>,

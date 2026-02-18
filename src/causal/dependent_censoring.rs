@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum CopulaType {
     Clayton,
     Frank,
@@ -41,7 +41,7 @@ impl CopulaType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CopulaCensoringConfig {
     #[pyo3(get, set)]
     pub copula_type: CopulaType,
@@ -77,7 +77,7 @@ impl CopulaCensoringConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CopulaCensoringResult {
     #[pyo3(get)]
     pub theta: f64,
@@ -528,7 +528,7 @@ fn estimate_km(time: &[f64], event: &[i32], eval_times: &[f64]) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SensitivityBoundsConfig {
     #[pyo3(get, set)]
     pub gamma_range: Vec<f64>,
@@ -552,7 +552,7 @@ impl SensitivityBoundsConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SensitivityBoundsResult {
     #[pyo3(get)]
     pub gamma_values: Vec<f64>,
@@ -728,7 +728,7 @@ fn estimate_hazard_ratio(time: &[f64], event: &[i32], treatment: &[i32]) -> f64 
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MNARSurvivalConfig {
     #[pyo3(get, set)]
     pub delta_range: Vec<f64>,
@@ -749,7 +749,7 @@ impl MNARSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MNARSurvivalResult {
     #[pyo3(get)]
     pub delta_values: Vec<f64>,

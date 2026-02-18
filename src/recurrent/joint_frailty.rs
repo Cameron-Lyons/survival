@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum FrailtyDistribution {
     Gamma,
     LogNormal,
@@ -35,7 +35,7 @@ impl FrailtyDistribution {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct JointFrailtyResult {
     #[pyo3(get)]
     pub recurrent_coef: Vec<f64>,

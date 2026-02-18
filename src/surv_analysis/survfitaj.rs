@@ -1,7 +1,7 @@
 use ndarray::{Array1, Array2, s};
 use pyo3::prelude::*;
 use std::error::Error;
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
 pub struct SurvFitAJ {
     #[pyo3(get)]

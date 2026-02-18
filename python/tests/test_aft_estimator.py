@@ -188,6 +188,21 @@ class TestAFTEstimator:
 
         assert 0 <= c_index <= 1
 
+    def test_predict_quantile_lognormal(self):
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 2)
+        log_time = 1.0 + X @ np.array([0.5, -0.3]) + 0.5 * np.random.randn(n)
+        time = np.exp(log_time)
+        y = np.column_stack([time, np.ones(n)])
+
+        model = AFTEstimator(distribution="lognormal")
+        model.fit(X, y)
+        quantiles = model.predict_quantile(X, q=0.9)
+
+        assert len(quantiles) == n
+        assert all(quantiles > 0)
+
     def test_acceleration_factors(self):
         np.random.seed(42)
         n = 100

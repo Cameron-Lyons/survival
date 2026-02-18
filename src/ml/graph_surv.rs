@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GraphSurvConfig {
     #[pyo3(get, set)]
     pub hidden_dim: usize,
@@ -239,7 +239,7 @@ fn global_pooling(node_features: &[Vec<f64>], method: &str) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GraphSurvModel {
     layer_weights: Vec<Vec<Vec<f64>>>,
     layer_biases: Vec<Vec<f64>>,
@@ -382,9 +382,10 @@ pub fn fit_graph_surv(
     event: Vec<i32>,
     config: Option<GraphSurvConfig>,
 ) -> PyResult<GraphSurvModel> {
-    let config = config.unwrap_or_else(|| {
-        GraphSurvConfig::new(64, 3, 4, 20, 0.1, None, 0.001, 64, 100, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => GraphSurvConfig::new(64, 3, 4, 20, 0.1, None, 0.001, 64, 100, None)?,
+    };
 
     let n = node_features.len();
     if n == 0 || time.len() != n || event.len() != n || adjacency_matrices.len() != n {

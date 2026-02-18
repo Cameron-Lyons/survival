@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Default)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvfitKMOptions {
     #[pyo3(get, set)]
     pub weights: Option<Vec<f64>>,
@@ -63,7 +63,7 @@ impl SurvfitKMOptions {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct KaplanMeierConfig {
     #[pyo3(get, set)]
     pub reverse: bool,
@@ -113,7 +113,7 @@ impl KaplanMeierConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvFitKMOutput {
     #[pyo3(get)]
     pub time: Vec<f64>,

@@ -7,7 +7,7 @@ use rayon::prelude::*;
 /// directly represent the function values at the knots, making them
 /// easily interpretable.
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NaturalSplineKnot {
     /// Interior knot locations
     #[pyo3(get)]
@@ -154,7 +154,7 @@ impl NaturalSplineKnot {
 
 /// Result of computing spline basis
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SplineBasisResult {
     /// Basis matrix (flattened row-major)
     #[pyo3(get)]

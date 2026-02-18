@@ -6,7 +6,7 @@
 use pyo3::prelude::*;
 
 /// Result of condensing survival data
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct CondenseResult {
     /// Subject identifiers for each output row

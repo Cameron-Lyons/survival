@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 /// Result of time cutting for person-years calculations
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TcutResult {
     /// Factor codes for each observation (0-indexed interval)
     #[pyo3(get)]
@@ -192,7 +192,7 @@ pub fn tcut_expand(
                 }
             }
             if code == -1 && !sorted_cuts.is_empty() {
-                if midpoint >= *sorted_cuts.last().unwrap() {
+                if midpoint >= sorted_cuts[sorted_cuts.len() - 1] {
                     code = (sorted_cuts.len() - 1) as i32;
                 } else if midpoint < sorted_cuts[0] {
                     code = -1;

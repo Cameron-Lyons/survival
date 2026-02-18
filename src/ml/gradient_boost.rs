@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum GBSurvLoss {
     CoxPH,
     AFT,
@@ -37,7 +37,7 @@ impl GBSurvLoss {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GradientBoostSurvivalConfig {
     #[pyo3(get, set)]
     pub n_estimators: usize,
@@ -453,7 +453,7 @@ fn predict_regression_tree(node: &RegressionTreeNode, x_row: &[f64]) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GradientBoostSurvival {
     trees: Vec<RegressionTreeNode>,
     #[pyo3(get)]
@@ -696,8 +696,9 @@ pub fn gradient_boost_survival(
     status: Vec<i32>,
     config: Option<&GradientBoostSurvivalConfig>,
 ) -> PyResult<GradientBoostSurvival> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        GradientBoostSurvivalConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => GradientBoostSurvivalConfig::new(
             100,
             0.1,
             3,
@@ -708,9 +709,8 @@ pub fn gradient_boost_survival(
             GBSurvLoss::CoxPH,
             0.0,
             None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     GradientBoostSurvival::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }

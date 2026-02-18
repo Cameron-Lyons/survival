@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AttentionCoxConfig {
     #[pyo3(get, set)]
     pub d_model: usize,
@@ -158,7 +158,7 @@ fn layer_norm(x: &[f64], eps: f64) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AttentionCoxModel {
     embed_weights: Vec<Vec<f64>>,
     w_q: Vec<Vec<Vec<f64>>>,
@@ -377,8 +377,10 @@ pub fn fit_attention_cox(
     event: Vec<i32>,
     config: Option<AttentionCoxConfig>,
 ) -> PyResult<AttentionCoxModel> {
-    let config = config
-        .unwrap_or_else(|| AttentionCoxConfig::new(64, 4, 2, 0.1, 0.001, 64, 100, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => AttentionCoxConfig::new(64, 4, 2, 0.1, 0.001, 64, 100, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {

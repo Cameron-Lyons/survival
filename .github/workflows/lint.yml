@@ -41,8 +41,8 @@ jobs:
 
       - name: Check for unused dependencies
         run: |
-          cargo install cargo-machete || true
-          cargo machete || true
+          cargo install cargo-machete --locked --force
+          cargo machete
 
   python-lint:
     name: Python Lint & Format
@@ -63,15 +63,15 @@ jobs:
         run: uv pip install --system ruff mypy
 
       - name: Check formatting
-        run: ruff format test/ --check
+        run: ruff format python/ test/ --check
 
       - name: Lint code
-        run: ruff check test/
+        run: ruff check python/ test/
 
       - name: Type check stubs
         run: |
           uv pip install --system numpy
-          mypy survival.pyi --ignore-missing-imports || true
+          mypy survival.pyi --ignore-missing-imports
 
   typos:
     name: Spell Check

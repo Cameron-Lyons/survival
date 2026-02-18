@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 /// Result of Yates population prediction
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct YatesResult {
     /// Factor levels being compared
     #[pyo3(get)]
@@ -85,7 +85,11 @@ pub fn yates(
     let mut ns = Vec::with_capacity(levels.len());
 
     for level in &levels {
-        let indices = groups.get(level).unwrap();
+        let Some(indices) = groups.get(level) else {
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "internal error: missing group level",
+            ));
+        };
         let group_n = indices.len();
 
         if group_n == 0 {
@@ -302,7 +306,7 @@ pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResul
 
 /// Result of pairwise comparisons
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct YatesPairwiseResult {
     #[pyo3(get)]
     pub level1: Vec<String>,

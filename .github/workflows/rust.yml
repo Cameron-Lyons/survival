@@ -71,7 +71,7 @@ jobs:
           pip install $wheel.FullName
 
       - name: Run Python tests
-        run: python -m pytest test/ -v
+        run: python -m pytest test/ python/tests/ -v
 
   python-matrix:
     name: Python ${{ matrix.python-version }}
@@ -121,7 +121,7 @@ jobs:
         run: cargo test --release
 
       - name: Run Python tests
-        run: python -m pytest test/ -v
+        run: python -m pytest test/ python/tests/ -v
 
   r-validation:
     name: R Survival Package Validation

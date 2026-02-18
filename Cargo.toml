@@ -1,6 +1,6 @@
 [package]
 name = "survival"
-version = "1.2.6"
+version = "1.2.7"
 edition = "2024"
 rust-version = "1.92"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
@@ -41,6 +41,9 @@ cuda = []
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 divan = "0.1.21"
+
+[build-dependencies]
+pyo3-build-config = { version = "0.27.2", features = ["resolve-config"] }
 
 [[bench]]
 name = "survival_benchmarks"

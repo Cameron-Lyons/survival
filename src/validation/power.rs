@@ -2,7 +2,7 @@ use crate::constants::{DEFAULT_ALLOCATION_RATIO, DEFAULT_ALPHA, DEFAULT_POWER, D
 use crate::utilities::statistical::{normal_cdf as norm_cdf, normal_inverse_cdf as norm_ppf};
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SampleSizeResult {
     #[pyo3(get)]
     pub n_total: usize,
@@ -200,7 +200,7 @@ pub fn power_survival(
     ))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AccrualResult {
     #[pyo3(get)]
     pub n_total: usize,

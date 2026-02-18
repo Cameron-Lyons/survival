@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DoubleMLConfig {
     #[pyo3(get, set)]
     pub n_folds: usize,
@@ -191,7 +191,7 @@ fn fit_propensity_model(x: &[Vec<f64>], d: &[i32], train_idx: &[usize], trimming
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DoubleMLResult {
     #[pyo3(get)]
     pub ate: f64,
@@ -240,7 +240,10 @@ pub fn double_ml_survival(
     event: Vec<i32>,
     config: Option<DoubleMLConfig>,
 ) -> PyResult<DoubleMLResult> {
-    let config = config.unwrap_or_else(|| DoubleMLConfig::new(5, 1, None, 0.01, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => DoubleMLConfig::new(5, 1, None, 0.01, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || outcome.len() != n || time.len() != n || event.len() != n {
@@ -325,7 +328,7 @@ pub fn double_ml_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CATEResult {
     #[pyo3(get)]
     pub cate_estimates: Vec<f64>,
@@ -363,7 +366,10 @@ pub fn double_ml_cate(
     group_variable: Vec<i32>,
     config: Option<DoubleMLConfig>,
 ) -> PyResult<CATEResult> {
-    let config = config.unwrap_or_else(|| DoubleMLConfig::new(5, 1, None, 0.01, None).unwrap());
+    let config = match config {
+        Some(config) => config,
+        None => DoubleMLConfig::new(5, 1, None, 0.01, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 {

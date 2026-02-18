@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MambaSurvConfig {
     #[pyo3(get, set)]
     pub d_model: usize,
@@ -129,7 +129,7 @@ fn conv1d(input: &[f64], kernel: &[f64], padding: usize) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MambaSurvModel {
     input_proj_weights: Vec<Vec<f64>>,
     input_proj_biases: Vec<f64>,

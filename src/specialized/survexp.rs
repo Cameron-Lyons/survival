@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 /// Result of expected survival calculation
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvExpResult {
     /// Time points
     #[pyo3(get)]

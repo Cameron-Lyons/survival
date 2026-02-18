@@ -37,7 +37,8 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run benchmarks (PR)
-        run: cargo bench 2>&1 | tee pr-bench.txt
+        continue-on-error: true
+        run: cargo bench 2>&1 | tee pr-bench.txt || true
 
       - name: Checkout base branch
         uses: actions/checkout@v6
@@ -46,28 +47,34 @@ jobs:
           clean: false
 
       - name: Run benchmarks (base)
-        run: cargo bench 2>&1 | tee base-bench.txt
+        continue-on-error: true
+        run: cargo bench 2>&1 | tee base-bench.txt || true
 
       - name: Compare benchmarks
         id: compare
+        continue-on-error: true
         run: |
+          # Keep benchmark comment under GitHub's 65,536-character limit.
+          tail -n 300 base-bench.txt > base-bench-tail.txt || true
+          tail -n 300 pr-bench.txt > pr-bench-tail.txt || true
           echo "## Benchmark Results" > bench-comment.md
           echo "" >> bench-comment.md
           echo "<details><summary>Base branch</summary>" >> bench-comment.md
           echo "" >> bench-comment.md
           echo '```' >> bench-comment.md
-          cat base-bench.txt >> bench-comment.md
+          cat base-bench-tail.txt >> bench-comment.md
           echo '```' >> bench-comment.md
           echo "</details>" >> bench-comment.md
           echo "" >> bench-comment.md
           echo "<details><summary>PR branch</summary>" >> bench-comment.md
           echo "" >> bench-comment.md
           echo '```' >> bench-comment.md
-          cat pr-bench.txt >> bench-comment.md
+          cat pr-bench-tail.txt >> bench-comment.md
           echo '```' >> bench-comment.md
           echo "</details>" >> bench-comment.md
 
       - name: Post benchmark results
+        continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: bench-comment.md

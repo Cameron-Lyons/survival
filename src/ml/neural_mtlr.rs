@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NeuralMTLRConfig {
     #[pyo3(get, set)]
     pub hidden_dims: Vec<usize>,
@@ -108,7 +108,7 @@ fn cumsum_from_end(probs: &[f64]) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NeuralMTLRModel {
     weights: Vec<Vec<f64>>,
     biases: Vec<f64>,
@@ -251,9 +251,10 @@ pub fn fit_neural_mtlr(
     event: Vec<i32>,
     config: Option<NeuralMTLRConfig>,
 ) -> PyResult<NeuralMTLRModel> {
-    let config = config.unwrap_or_else(|| {
-        NeuralMTLRConfig::new(None, 20, 0.1, 0.001, 64, 100, 0.001, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => NeuralMTLRConfig::new(None, 20, 0.1, 0.001, 64, 100, 0.001, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || time.len() != n || event.len() != n {

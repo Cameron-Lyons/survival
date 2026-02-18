@@ -5,7 +5,7 @@ use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct Subject {
     #[pyo3(get, set)]
     pub id: usize,

@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 pub enum SearchStrategy {
     Grid,
     Random,
@@ -23,7 +23,7 @@ impl SearchStrategy {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct HyperparameterSearchConfig {
     #[pyo3(get, set)]
     pub strategy: SearchStrategy,
@@ -65,7 +65,7 @@ impl HyperparameterSearchConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct HyperparameterResult {
     #[pyo3(get)]
     pub best_params: Vec<(String, f64)>,
@@ -305,7 +305,7 @@ pub fn hyperparameter_search(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BenchmarkResult {
     #[pyo3(get)]
     pub model_names: Vec<String>,
@@ -446,7 +446,7 @@ pub fn benchmark_models(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NestedCVResult {
     #[pyo3(get)]
     pub outer_scores: Vec<f64>,

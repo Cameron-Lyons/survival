@@ -24,7 +24,7 @@ type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum SurvivalLossType {
     CoxPartialLikelihood,
     DiscreteHazard,
@@ -51,7 +51,7 @@ impl SurvivalLossType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ContrastiveSurvConfig {
     #[pyo3(get, set)]
     pub embedding_dim: usize,
@@ -612,7 +612,7 @@ fn extract_weights(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ContrastiveSurvResult {
     #[pyo3(get)]
     pub embeddings: Vec<Vec<f64>>,
@@ -627,7 +627,7 @@ pub struct ContrastiveSurvResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 #[allow(dead_code)]
 pub struct ContrastiveSurv {
     weights: StoredWeights,
@@ -819,8 +819,9 @@ pub fn contrastive_surv(
         ));
     }
 
-    let cfg = config.cloned().unwrap_or_else(|| {
-        ContrastiveSurvConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => ContrastiveSurvConfig::new(
             64,
             32,
             vec![64],
@@ -838,9 +839,8 @@ pub fn contrastive_surv(
             None,
             0.1,
             None,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     Ok(py.detach(move || fit_contrastive_surv_inner(&x, n_obs, n_features, &time, &event, &cfg)))
 }

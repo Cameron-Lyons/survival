@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CounterfactualSurvivalConfig {
     #[pyo3(get, set)]
     pub representation_dim: usize,
@@ -66,7 +66,7 @@ impl CounterfactualSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CounterfactualSurvivalResult {
     #[pyo3(get)]
     pub ite: Vec<f64>,
@@ -283,9 +283,10 @@ pub fn estimate_counterfactual_survival(
     time_points: Vec<f64>,
     config: Option<CounterfactualSurvivalConfig>,
 ) -> PyResult<CounterfactualSurvivalResult> {
-    let config = config.unwrap_or_else(|| {
-        CounterfactualSurvivalConfig::new(64, None, 1.0, 0.001, 100, 64, 0.1, None).unwrap()
-    });
+    let config = match config {
+        Some(config) => config,
+        None => CounterfactualSurvivalConfig::new(64, None, 1.0, 0.001, 100, 64, 0.1, None)?,
+    };
 
     let n = covariates.len();
     if n == 0 || treatment.len() != n || time.len() != n || event.len() != n {
@@ -367,7 +368,7 @@ pub fn estimate_counterfactual_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TVSurvCausConfig {
     #[pyo3(get, set)]
     pub hidden_dim: usize,
@@ -414,7 +415,7 @@ impl TVSurvCausConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TVSurvCausResult {
     #[pyo3(get)]
     pub counterfactual_survival: Vec<Vec<Vec<f64>>>,

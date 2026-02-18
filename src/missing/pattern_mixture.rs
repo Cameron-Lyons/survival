@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PatternMixtureResult {
     #[pyo3(get)]
     pub pattern_coefficients: Vec<Vec<f64>>,
@@ -35,7 +35,7 @@ pub struct PatternMixtureResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum SensitivityAnalysisType {
     TiltingModel,
     SelectionModel,
@@ -557,8 +557,10 @@ pub fn tipping_point_analysis(
                 || (prev > target_value && current_coef <= target_value))
         {
             let frac = (target_value - prev) / (current_coef - prev);
-            let tipping_delta = prev_delta.unwrap() + frac * delta_step;
-            return Ok(Some(tipping_delta));
+            if let Some(prev_delta) = prev_delta {
+                let tipping_delta = prev_delta + frac * delta_step;
+                return Ok(Some(tipping_delta));
+            }
         }
 
         prev_coef = Some(current_coef);

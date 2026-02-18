@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum SplitRule {
     LogRank,
     LogRankScore,
@@ -38,7 +38,7 @@ impl SplitRule {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvivalForestConfig {
     #[pyo3(get, set)]
     pub n_trees: usize,
@@ -495,7 +495,7 @@ fn fit_survival_forest_inner(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvivalForest {
     trees: Vec<TreeNode>,
     unique_times: Vec<f64>,
@@ -800,8 +800,9 @@ pub fn survival_forest(
     status: Vec<i32>,
     config: Option<&SurvivalForestConfig>,
 ) -> PyResult<SurvivalForest> {
-    let cfg = config.cloned().unwrap_or_else(|| {
-        SurvivalForestConfig::new(
+    let cfg = match config.cloned() {
+        Some(cfg) => cfg,
+        None => SurvivalForestConfig::new(
             500,
             None,
             15,
@@ -811,9 +812,8 @@ pub fn survival_forest(
             10,
             None,
             true,
-        )
-        .unwrap()
-    });
+        )?,
+    };
 
     SurvivalForest::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }
