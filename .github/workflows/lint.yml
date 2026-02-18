@@ -41,7 +41,7 @@ jobs:
 
       - name: Check for unused dependencies
         run: |
-          cargo install cargo-machete
+          cargo install cargo-machete --locked --force
           cargo machete
 
   python-lint:
