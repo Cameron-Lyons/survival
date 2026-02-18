@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvivalTransformerConfig {
     #[pyo3(get, set)]
     pub d_model: usize,
@@ -160,7 +160,7 @@ fn feed_forward(x: &[f64], w1: &[Vec<f64>], b1: &[f64], w2: &[Vec<f64>], b2: &[f
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvivalTransformerModel {
     embed_weights: Vec<Vec<f64>>,
     ff_w1: Vec<Vec<Vec<f64>>>,

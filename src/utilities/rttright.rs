@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 /// Result of redistribute-to-the-right weight calculation
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RttrightResult {
     /// Redistributed weights for each observation
     #[pyo3(get)]

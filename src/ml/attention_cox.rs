@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AttentionCoxConfig {
     #[pyo3(get, set)]
     pub d_model: usize,
@@ -158,7 +158,7 @@ fn layer_norm(x: &[f64], eps: f64) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AttentionCoxModel {
     embed_weights: Vec<Vec<f64>>,
     w_q: Vec<Vec<Vec<f64>>>,

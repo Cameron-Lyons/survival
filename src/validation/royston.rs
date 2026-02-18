@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 
 /// Result of Royston's D statistic calculation
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RoystonResult {
     /// Royston's D statistic (measure of prognostic separation)
     #[pyo3(get)]

@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GraphSurvConfig {
     #[pyo3(get, set)]
     pub hidden_dim: usize,
@@ -239,7 +239,7 @@ fn global_pooling(node_features: &[Vec<f64>], method: &str) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GraphSurvModel {
     layer_weights: Vec<Vec<Vec<f64>>>,
     layer_biases: Vec<Vec<f64>>,

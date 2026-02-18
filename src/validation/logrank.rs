@@ -2,7 +2,7 @@ use crate::utilities::numpy_utils::{extract_vec_f64, extract_vec_i32};
 use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LogRankResult {
     #[pyo3(get)]
     pub statistic: f64,
@@ -236,7 +236,7 @@ pub fn fleming_harrington_test(
     ))
 }
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TrendTestResult {
     #[pyo3(get)]
     pub statistic: f64,

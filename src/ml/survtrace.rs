@@ -47,7 +47,7 @@ fn layer_norm<B: burn::prelude::Backend>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum SurvTraceActivation {
     GELU,
     ReLU,
@@ -68,7 +68,7 @@ impl SurvTraceActivation {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvTraceConfig {
     #[pyo3(get, set)]
     pub hidden_size: usize,
@@ -1085,7 +1085,7 @@ fn fit_survtrace_inner(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvTrace {
     weights: StoredWeights,
     config: SurvTraceConfig,

@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvfitResiduals {
     #[pyo3(get)]
     pub residuals: Vec<f64>,

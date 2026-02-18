@@ -5963,6 +5963,7 @@ dependencies = [
  "numpy",
  "pulp 0.22.2",
  "pyo3",
+ "pyo3-build-config",
  "rayon",
  "serde",
  "serde_json",

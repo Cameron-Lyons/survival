@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RecurrentSurvConfig {
     #[pyo3(get, set)]
     pub hidden_size: usize,
@@ -185,7 +185,7 @@ impl LSTMCell {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct RecurrentSurvModel {
     output_weights: Vec<Vec<f64>>,
     output_bias: Vec<f64>,
@@ -343,7 +343,7 @@ pub fn fit_recurrent_surv(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LongitudinalSurvConfig {
     #[pyo3(get, set)]
     pub hidden_size: usize,
@@ -405,7 +405,7 @@ impl LongitudinalSurvConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LongitudinalSurvModel {
     hidden_size: usize,
     config: LongitudinalSurvConfig,

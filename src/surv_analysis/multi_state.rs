@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MultiStateConfig {
     #[pyo3(get, set)]
@@ -46,7 +46,7 @@ impl MultiStateConfig {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct TransitionIntensityResult {
     #[pyo3(get)]
@@ -85,7 +85,7 @@ impl TransitionIntensityResult {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MultiStateResult {
     #[pyo3(get)]
@@ -415,7 +415,7 @@ fn compute_sojourn_times(
         .collect()
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MarkovMSMResult {
     #[pyo3(get)]

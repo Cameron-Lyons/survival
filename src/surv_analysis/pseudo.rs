@@ -5,7 +5,7 @@ use crate::utilities::statistical::normal_cdf;
 
 /// Result of pseudo-value computation
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PseudoResult {
     /// Matrix of pseudo-values: n_subjects x n_times
     #[pyo3(get)]
@@ -324,7 +324,7 @@ mod tests {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct GEEConfig {
     #[pyo3(get, set)]
@@ -356,7 +356,7 @@ impl GEEConfig {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct GEEResult {
     #[pyo3(get)]

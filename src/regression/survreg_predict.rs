@@ -19,7 +19,7 @@ impl SurvregPredictType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvregPrediction {
     #[pyo3(get)]
     pub predictions: Vec<f64>,
@@ -44,7 +44,7 @@ impl SurvregPrediction {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvregQuantilePrediction {
     #[pyo3(get)]
     pub quantiles: Vec<f64>,

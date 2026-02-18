@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 use crate::utilities::statistical::normal_cdf;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MetaAnalysisConfig {
     #[pyo3(get, set)]
@@ -26,7 +26,7 @@ impl MetaAnalysisConfig {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MetaAnalysisResult {
     #[pyo3(get)]
@@ -335,7 +335,7 @@ fn t_distribution_quantile(_p: f64, df: usize) -> f64 {
     1.96
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MetaForestPlotData {
     #[pyo3(get)]
@@ -429,7 +429,7 @@ pub fn generate_forest_plot_data(
     })
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PublicationBiasResult {
     #[pyo3(get)]

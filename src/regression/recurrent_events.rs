@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum PWPTimescale {
     Gap,
     Total,
@@ -35,7 +35,7 @@ impl PWPTimescale {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PWPConfig {
     #[pyo3(get, set)]
     pub timescale: PWPTimescale,
@@ -71,7 +71,7 @@ impl PWPConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PWPResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,
@@ -431,7 +431,7 @@ pub fn pwp_model(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct WLWConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -458,7 +458,7 @@ impl WLWConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct WLWResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,
@@ -884,7 +884,7 @@ fn upper_incomplete_gamma(a: f64, x: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NegativeBinomialFrailtyConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -908,7 +908,7 @@ impl NegativeBinomialFrailtyConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NegativeBinomialFrailtyResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,
@@ -1220,7 +1220,7 @@ fn lgamma(x: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct AndersonGillResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,

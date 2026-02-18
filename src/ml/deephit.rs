@@ -24,7 +24,7 @@ type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DeepHitConfig {
     #[pyo3(get, set)]
     pub shared_layers: Vec<usize>,
@@ -891,7 +891,7 @@ fn fit_deephit_inner(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DeepHit {
     weights: StoredWeights,
     config: DeepHitConfig,

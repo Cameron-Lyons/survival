@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SuperLearnerConfig {
     #[pyo3(get, set)]
     pub n_folds: usize,
@@ -170,7 +170,7 @@ fn nnls_weights(predictions: &[Vec<f64>], outcomes: &[f64], n_models: usize) -> 
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SuperLearnerResult {
     #[pyo3(get)]
     pub weights: Vec<f64>,
@@ -339,7 +339,7 @@ pub fn super_learner_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct StackingConfig {
     #[pyo3(get, set)]
     pub n_folds: usize,
@@ -381,7 +381,7 @@ impl StackingConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct StackingResult {
     #[pyo3(get)]
     pub meta_coefficients: Vec<f64>,
@@ -491,7 +491,7 @@ pub fn stacking_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ComponentwiseBoostingConfig {
     #[pyo3(get, set)]
     pub n_iterations: usize,
@@ -543,7 +543,7 @@ impl ComponentwiseBoostingConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ComponentwiseBoostingResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -759,7 +759,7 @@ pub fn componentwise_boosting(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BlendingResult {
     #[pyo3(get)]
     pub blend_weights: Vec<f64>,

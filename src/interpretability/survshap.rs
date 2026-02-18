@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum AggregationMethod {
     Mean,
     Integral,
@@ -31,7 +31,7 @@ impl AggregationMethod {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvShapConfig {
     #[pyo3(get, set)]
     pub n_coalitions: usize,
@@ -74,7 +74,7 @@ impl SurvShapConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct FeatureImportance {
     #[pyo3(get)]
     pub feature_idx: usize,
@@ -101,7 +101,7 @@ impl FeatureImportance {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvShapResult {
     #[pyo3(get)]
     pub shap_values: Vec<Vec<Vec<f64>>>,
@@ -339,7 +339,7 @@ impl SurvShapResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvShapExplanation {
     #[pyo3(get)]
     pub shap_values: Vec<Vec<f64>>,
@@ -366,7 +366,7 @@ impl SurvShapExplanation {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BootstrapSurvShapResult {
     #[pyo3(get)]
     pub shap_values_mean: Vec<Vec<Vec<f64>>>,
@@ -408,7 +408,7 @@ impl BootstrapSurvShapResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PermutationImportanceResult {
     #[pyo3(get)]
     pub importance: Vec<f64>,
@@ -459,7 +459,7 @@ impl PermutationImportanceResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ShapInteractionResult {
     #[pyo3(get)]
     pub interaction_values: Vec<Vec<Vec<f64>>>,

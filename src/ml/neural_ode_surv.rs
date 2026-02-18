@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NeuralODESurvConfig {
     #[pyo3(get, set)]
     pub hidden_dims: Vec<usize>,
@@ -127,7 +127,7 @@ fn rk4_step(state: &[f64], weights: &[Vec<f64>], biases: &[f64], dt: f64) -> Vec
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NeuralODESurvModel {
     encoder_weights: Vec<Vec<f64>>,
     encoder_biases: Vec<f64>,

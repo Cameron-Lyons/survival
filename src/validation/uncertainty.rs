@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct MCDropoutConfig {
     #[pyo3(get, set)]
     pub n_samples: usize,
@@ -39,7 +39,7 @@ impl MCDropoutConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct UncertaintyResult {
     #[pyo3(get)]
     pub mean_prediction: Vec<Vec<f64>>,
@@ -185,7 +185,7 @@ pub fn mc_dropout_uncertainty(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct EnsembleUncertaintyResult {
     #[pyo3(get)]
     pub mean_prediction: Vec<Vec<f64>>,
@@ -293,7 +293,7 @@ pub fn ensemble_uncertainty(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct QuantileRegressionResult {
     #[pyo3(get)]
     pub median: Vec<Vec<f64>>,
@@ -406,7 +406,7 @@ pub fn quantile_regression_intervals(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CalibrationUncertaintyResult {
     #[pyo3(get)]
     pub expected_coverage: f64,
@@ -481,7 +481,7 @@ pub fn calibrate_prediction_intervals(
     })
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct ConformalSurvivalConfig {
     #[pyo3(get, set)]
@@ -508,7 +508,7 @@ impl ConformalSurvivalConfig {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct ConformalSurvivalResult {
     #[pyo3(get)]
@@ -547,7 +547,7 @@ impl ConformalSurvivalResult {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct BayesianBootstrapConfig {
     #[pyo3(get, set)]
@@ -571,7 +571,7 @@ impl BayesianBootstrapConfig {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct BayesianBootstrapResult {
     #[pyo3(get)]
@@ -610,7 +610,7 @@ impl BayesianBootstrapResult {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct JackknifePlusConfig {
     #[pyo3(get, set)]
@@ -634,7 +634,7 @@ impl JackknifePlusConfig {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct JackknifePlusResult {
     #[pyo3(get)]

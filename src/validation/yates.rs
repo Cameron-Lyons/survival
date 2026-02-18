@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 /// Result of Yates population prediction
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct YatesResult {
     /// Factor levels being compared
     #[pyo3(get)]
@@ -306,7 +306,7 @@ pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResul
 
 /// Result of pairwise comparisons
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct YatesPairwiseResult {
     #[pyo3(get)]
     pub level1: Vec<String>,

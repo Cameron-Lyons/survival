@@ -32,7 +32,7 @@ impl SurvregResidType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SurvregResiduals {
     #[pyo3(get)]
     pub residuals: Vec<f64>,

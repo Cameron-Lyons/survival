@@ -59,7 +59,7 @@ fn layer_norm_3d<B: burn::prelude::Backend>(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TracerConfig {
     #[pyo3(get, set)]
     pub embedding_dim: usize,
@@ -1588,7 +1588,7 @@ fn fit_tracer_inner(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct Tracer {
     weights: StoredWeights,
     config: TracerConfig,

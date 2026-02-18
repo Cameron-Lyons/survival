@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GroupLassoConfig {
     #[pyo3(get, set)]
     pub lambda: f64,
@@ -53,7 +53,7 @@ impl GroupLassoConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct GroupLassoResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -319,7 +319,7 @@ pub fn group_lasso_cox(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SparseBoostingConfig {
     #[pyo3(get, set)]
     pub n_iterations: usize,
@@ -369,7 +369,7 @@ impl SparseBoostingConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SparseBoostingResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -584,7 +584,7 @@ fn compute_partial_likelihood(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SISConfig {
     #[pyo3(get, set)]
     pub n_select: usize,
@@ -616,7 +616,7 @@ impl SISConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SISResult {
     #[pyo3(get)]
     pub selected_features: Vec<usize>,
@@ -799,7 +799,7 @@ pub fn sis_cox(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct StabilitySelectionConfig {
     #[pyo3(get, set)]
     pub n_bootstrap: usize,
@@ -845,7 +845,7 @@ impl StabilitySelectionConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct StabilitySelectionResult {
     #[pyo3(get)]
     pub selected_features: Vec<usize>,

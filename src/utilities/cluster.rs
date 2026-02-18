@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 /// Result of cluster identification
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ClusterResult {
     /// Cluster IDs for each observation (0-indexed)
     #[pyo3(get)]

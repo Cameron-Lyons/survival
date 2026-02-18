@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use std::fmt;
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct UnoCIndexResult {
     pub c_index: f64,
     pub concordant: f64,
@@ -278,7 +278,7 @@ pub fn uno_c_index(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ConcordanceComparisonResult {
     #[pyo3(get)]
     pub c_index_1: f64,
@@ -487,7 +487,7 @@ pub fn compare_uno_c_indices(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct CIndexDecompositionResult {
     pub c_index: f64,
     pub c_index_ee: f64,
@@ -690,7 +690,7 @@ pub fn c_index_decomposition(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all)]
+#[pyclass(str, get_all, from_py_object)]
 pub struct GonenHellerResult {
     pub cpe: f64,
     pub n_pairs: usize,

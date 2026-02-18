@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum NetSurvivalMethod {
     EdererI,
     EdererII,
@@ -36,7 +36,7 @@ impl NetSurvivalMethod {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct NetSurvivalResult {
     #[pyo3(get)]
     pub time_points: Vec<f64>,

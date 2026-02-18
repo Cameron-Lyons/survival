@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DySurvConfig {
     #[pyo3(get, set)]
     pub latent_dim: usize,
@@ -71,7 +71,7 @@ impl DySurvConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DySurvModel {
     encoder_weights: Vec<Vec<f64>>,
     decoder_weights: Vec<Vec<f64>>,
@@ -318,7 +318,7 @@ pub fn fit_dysurv(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DynamicRiskResult {
     #[pyo3(get)]
     pub risk_scores: Vec<Vec<f64>>,

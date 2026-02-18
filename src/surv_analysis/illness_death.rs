@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use crate::utilities::statistical::normal_cdf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 pub enum IllnessDeathType {
     Progressive,
     Reversible,
@@ -28,7 +28,7 @@ impl IllnessDeathType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct IllnessDeathConfig {
     #[pyo3(get, set)]
     pub model_type: IllnessDeathType,
@@ -82,7 +82,7 @@ impl IllnessDeathConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TransitionHazard {
     #[pyo3(get)]
     pub from_state: String,
@@ -117,7 +117,7 @@ impl TransitionHazard {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct IllnessDeathResult {
     #[pyo3(get)]
     pub transition_hazards: Vec<TransitionHazard>,
@@ -476,7 +476,7 @@ pub fn fit_illness_death(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct IllnessDeathPrediction {
     #[pyo3(get)]
     pub state_probs: Vec<Vec<f64>>,

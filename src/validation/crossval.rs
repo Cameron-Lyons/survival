@@ -4,7 +4,7 @@ use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct CVResult {
     #[pyo3(get)]
     pub fold_scores: Vec<f64>,

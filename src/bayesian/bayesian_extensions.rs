@@ -38,7 +38,7 @@ fn sample_gamma(rng: &mut fastrand::Rng, shape: f64, scale: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DirichletProcessConfig {
     #[pyo3(get, set)]
     pub concentration: f64,
@@ -74,7 +74,7 @@ impl DirichletProcessConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct DirichletProcessResult {
     #[pyo3(get)]
     pub cluster_assignments: Vec<usize>,
@@ -322,7 +322,7 @@ fn harmonic(n: usize) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BayesianModelAveragingConfig {
     #[pyo3(get, set)]
     pub n_iter: usize,
@@ -349,7 +349,7 @@ impl BayesianModelAveragingConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct BayesianModelAveragingResult {
     #[pyo3(get)]
     pub posterior_inclusion_prob: Vec<f64>,
@@ -625,7 +625,7 @@ fn compute_gradient_hessian_single(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SpikeSlabConfig {
     #[pyo3(get, set)]
     pub spike_var: f64,
@@ -665,7 +665,7 @@ impl SpikeSlabConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct SpikeSlabResult {
     #[pyo3(get)]
     pub posterior_inclusion_prob: Vec<f64>,
@@ -820,7 +820,7 @@ pub fn spike_slab_cox(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct HorseshoeConfig {
     #[pyo3(get, set)]
     pub tau_global: f64,
@@ -847,7 +847,7 @@ impl HorseshoeConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct HorseshoeResult {
     #[pyo3(get)]
     pub posterior_mean: Vec<f64>,

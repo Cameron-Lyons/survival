@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub enum AssociationStructure {
     Value,
     Slope,
@@ -39,7 +39,7 @@ impl AssociationStructure {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct JointModelConfig {
     #[pyo3(get, set)]
     pub association: AssociationStructure,
@@ -75,7 +75,7 @@ impl JointModelConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct JointModelResult {
     #[pyo3(get)]
     pub longitudinal_fixed: Vec<f64>,

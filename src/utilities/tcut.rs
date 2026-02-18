@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 /// Result of time cutting for person-years calculations
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct TcutResult {
     /// Factor codes for each observation (0-indexed interval)
     #[pyo3(get)]

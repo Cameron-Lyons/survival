@@ -139,7 +139,7 @@ pub fn survexp_usr() -> PyResult<RateTable> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct ExpectedSurvivalResult {
     #[pyo3(get)]
     pub expected_survival: Vec<f64>,
