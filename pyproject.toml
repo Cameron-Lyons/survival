@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "survival"
-version = "1.2.7"
+version = "1.2.8"
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 readme = "README.md"
 license = { text = "MIT" }

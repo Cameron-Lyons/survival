@@ -591,8 +591,8 @@ pub fn longitudinal_dynamic_pred(
         } else if subj_data.len() == 1 {
             (subj_data[0].1, 0.0)
         } else {
-            let last = subj_data[subj_data.len() - 1];
-            let prev = subj_data[subj_data.len() - 2];
+            let last = subj_data.last().unwrap();
+            let prev = subj_data.get(subj_data.len() - 2).unwrap();
             let slope = (last.1 - prev.1) / (last.0 - prev.0 + crate::constants::DIVISION_FLOOR);
             (last.1, slope)
         };
