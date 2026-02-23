@@ -468,11 +468,10 @@ pub fn batch_predict_survival(
 }
 
 #[pyfunction]
-#[pyo3(signature = (matrices, vectors, config=None))]
+#[pyo3(signature = (matrices, vectors))]
 pub fn parallel_matrix_operations(
     matrices: Vec<Vec<Vec<f64>>>,
     vectors: Vec<Vec<f64>>,
-    config: Option<GPUConfig>,
 ) -> PyResult<Vec<Vec<f64>>> {
     let n = matrices.len();
     if n != vectors.len() {
@@ -480,8 +479,6 @@ pub fn parallel_matrix_operations(
             "matrices and vectors must have the same length",
         ));
     }
-
-    drop(config.unwrap_or_else(|| GPUConfig::new(ComputeBackend::Auto, 0, 0, 256, 0, false)));
 
     let results: Vec<Vec<f64>> = matrices
         .iter()
