@@ -1,15 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -159,7 +151,7 @@ pub fn network_survival_model(
         vec![0.0; n_nodes]
     };
 
-    for iter in 0..config.max_iter {
+    for _iter in 0..config.max_iter {
         let eta: Vec<f64> = (0..n)
             .map(|i| {
                 let mut e = 0.0;
@@ -722,7 +714,7 @@ pub fn diffusion_survival_model(
     }
 
     let mut beta = config.diffusion_rate;
-    let mut gamma = config.recovery_rate;
+    let gamma = config.recovery_rate;
     let mut susceptibility = 0.0;
     let mut converged = false;
     let mut log_lik = f64::NEG_INFINITY;
@@ -1008,10 +1000,10 @@ pub fn network_heterogeneity_survival(
     let (communities, modularity) = detect_communities(&adjacency_matrix, n_nodes, k);
 
     let mut community_hazard_ratios = vec![0.0; k];
-    for c in 0..k {
+    for (c, community_hazard_ratio) in community_hazard_ratios.iter_mut().enumerate().take(k) {
         let community_nodes: Vec<usize> = (0..n).filter(|&i| communities[i] == c).collect();
         if community_nodes.is_empty() {
-            community_hazard_ratios[c] = 1.0;
+            *community_hazard_ratio = 1.0;
             continue;
         }
 
@@ -1019,9 +1011,9 @@ pub fn network_heterogeneity_survival(
         let total_time: f64 = community_nodes.iter().map(|&i| time[i]).sum();
 
         if total_time > 0.0 {
-            community_hazard_ratios[c] = n_events / total_time;
+            *community_hazard_ratio = n_events / total_time;
         } else {
-            community_hazard_ratios[c] = 0.0;
+            *community_hazard_ratio = 0.0;
         }
     }
 
@@ -1056,8 +1048,8 @@ pub fn network_heterogeneity_survival(
 
 fn detect_communities(adjacency: &[f64], n: usize, k: usize) -> (Vec<usize>, f64) {
     let mut communities = vec![0; n];
-    for i in 0..n {
-        communities[i] = i % k;
+    for (i, community) in communities.iter_mut().enumerate().take(n) {
+        *community = i % k;
     }
 
     let degree: Vec<f64> = (0..n)
@@ -1115,7 +1107,7 @@ fn compute_modularity_delta(
     degree: &[f64],
     communities: &[usize],
     node: usize,
-    from_community: usize,
+    _from_community: usize,
     to_community: usize,
     n: usize,
     total_edges: f64,

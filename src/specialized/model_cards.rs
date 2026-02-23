@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 
@@ -241,6 +240,7 @@ impl ModelCard {
     ethical_considerations=None,
     caveats=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn create_model_card(
     model_name: String,
     model_type: String,

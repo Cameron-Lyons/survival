@@ -1,11 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
     clippy::type_complexity
 )]
 
@@ -117,8 +111,8 @@ struct TreeNode {
     left: Option<Box<TreeNode>>,
     right: Option<Box<TreeNode>>,
     chf: Vec<f64>,
-    unique_times: Vec<f64>,
-    n_samples: usize,
+    _unique_times: Vec<f64>,
+    _n_samples: usize,
 }
 
 impl TreeNode {
@@ -130,8 +124,8 @@ impl TreeNode {
             left: None,
             right: None,
             chf,
-            unique_times,
-            n_samples: times.len(),
+            _unique_times: unique_times,
+            _n_samples: times.len(),
         }
     }
 }
@@ -205,7 +199,7 @@ fn log_rank_split_score(
     }
 
     let expected_left = d_total * n_left / n_total;
-    let expected_right = d_total * n_right / n_total;
+    let _expected_right = d_total * n_right / n_total;
 
     let variance = d_total * (n_left / n_total) * (n_right / n_total) * (n_total - d_total)
         / (n_total - 1.0).max(1.0);
@@ -219,7 +213,7 @@ fn log_rank_split_score(
 
 fn find_best_split(
     x: &[f64],
-    n: usize,
+    _n: usize,
     p: usize,
     times: &[f64],
     status: &[i32],
@@ -383,8 +377,8 @@ fn build_tree(
                 left: Some(Box::new(left_child)),
                 right: Some(Box::new(right_child)),
                 chf,
-                unique_times,
-                n_samples: indices.len(),
+                _unique_times: unique_times,
+                _n_samples: indices.len(),
             }
         }
         None => TreeNode::new_leaf(&node_times, &node_status, all_times),
@@ -490,7 +484,7 @@ fn fit_survival_forest_inner(
         oob_error,
         variable_importance,
         n_vars,
-        oob_indices,
+        _oob_indices: oob_indices,
     }
 }
 
@@ -504,7 +498,7 @@ pub struct SurvivalForest {
     #[pyo3(get)]
     pub variable_importance: Vec<f64>,
     n_vars: usize,
-    oob_indices: Vec<Vec<usize>>,
+    _oob_indices: Vec<Vec<usize>>,
 }
 
 #[pymethods]

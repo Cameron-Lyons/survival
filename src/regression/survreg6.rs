@@ -650,12 +650,15 @@ mod tests {
 
     #[test]
     fn test_distribution_type_variants() {
-        let _ = DistributionType::ExtremeValue;
-        let _ = DistributionType::Weibull;
-        let _ = DistributionType::Gaussian;
-        let _ = DistributionType::Logistic;
-        let _ = DistributionType::LogNormal;
-        let _ = DistributionType::LogLogistic;
+        let variants = [
+            DistributionType::ExtremeValue,
+            DistributionType::Weibull,
+            DistributionType::Gaussian,
+            DistributionType::Logistic,
+            DistributionType::LogNormal,
+            DistributionType::LogLogistic,
+        ];
+        assert_eq!(variants.len(), 6);
     }
 
     #[test]

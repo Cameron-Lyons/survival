@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -37,6 +36,7 @@ impl NeuralMTLRConfig {
         l2_reg=0.001,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_dims: Option<Vec<usize>>,
         num_time_bins: usize,
@@ -200,8 +200,7 @@ impl NeuralMTLRModel {
     }
 }
 
-#[allow(dead_code)]
-fn compute_mtlr_loss(
+fn _compute_mtlr_loss(
     logits: &[Vec<f64>],
     time_bins: &[usize],
     events: &[i32],

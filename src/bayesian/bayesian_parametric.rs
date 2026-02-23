@@ -1,8 +1,4 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     clippy::too_many_arguments,
     clippy::type_complexity
 )]

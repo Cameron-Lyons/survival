@@ -1,11 +1,3 @@
-#![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
 
 use crate::utilities::statistical::sample_normal;
 use pyo3::prelude::*;
@@ -238,6 +230,7 @@ fn log_likelihood_gradient(
     gradient
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hmc_step(
     x: &[f64],
     n: usize,
@@ -533,6 +526,7 @@ pub fn bayesian_cox(
 }
 
 #[pyfunction]
+#[allow(clippy::type_complexity)]
 pub fn bayesian_cox_predict_survival(
     result: &BayesianCoxResult,
     x_new: Vec<f64>,

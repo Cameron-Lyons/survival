@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -43,6 +42,7 @@ impl GraphSurvConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_dim: usize,
         num_layers: usize,
@@ -250,8 +250,7 @@ pub struct GraphSurvModel {
     output_biases: Vec<f64>,
     time_bins: Vec<f64>,
     config: GraphSurvConfig,
-    #[allow(dead_code)]
-    n_node_features: usize,
+    _n_node_features: usize,
 }
 
 #[pymethods]
@@ -473,7 +472,7 @@ pub fn fit_graph_surv(
         output_biases,
         time_bins,
         config,
-        n_node_features,
+        _n_node_features: n_node_features,
     })
 }
 

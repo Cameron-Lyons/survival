@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -40,6 +39,7 @@ impl DeepPAMMConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_dims: Option<Vec<usize>>,
         num_time_intervals: usize,

@@ -1,6 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -368,6 +365,7 @@ fn standard_normal_quantile(p: f64) -> f64 {
     accrual_time=None,
     follow_up_time=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn sample_size_logrank(
     hazard_ratio: f64,
     power: f64,
@@ -556,6 +554,7 @@ fn pocock_boundary(alpha: f64, _info_fraction: f64, n_looks: usize) -> f64 {
     futility_bound=0.0,
     boundary_type="obf"
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn group_sequential_analysis(
     current_events: usize,
     total_events: usize,

@@ -1,6 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -676,9 +673,7 @@ pub fn componentwise_boosting(
         let mut best_feature = 0;
         let mut best_score = f64::NEG_INFINITY;
         let mut best_update = 0.0;
-
-        #[allow(clippy::needless_range_loop)]
-        for j in 0..n_features {
+        for (j, _) in coefficients.iter().enumerate().take(n_features) {
             let mut gradient = 0.0;
             let mut hessian = 0.0;
             let mut risk_sum = 0.0;

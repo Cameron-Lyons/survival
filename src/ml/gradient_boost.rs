@@ -1,10 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
     clippy::upper_case_acronyms
 )]
 
@@ -208,7 +203,7 @@ fn compute_cox_gradient_hessian(
 
 fn find_best_split_regression(
     x: &[f64],
-    n: usize,
+    _n: usize,
     p: usize,
     gradient: &[f64],
     hessian: &[f64],

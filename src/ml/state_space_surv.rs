@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -46,6 +45,7 @@ impl MambaSurvConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         d_model: usize,
         d_state: usize,
@@ -142,8 +142,7 @@ pub struct MambaSurvModel {
     output_biases: Vec<f64>,
     time_bins: Vec<f64>,
     config: MambaSurvConfig,
-    #[allow(dead_code)]
-    n_features: usize,
+    _n_features: usize,
 }
 
 #[pymethods]
@@ -382,7 +381,7 @@ pub fn fit_mamba_surv(
         output_biases,
         time_bins,
         config,
-        n_features,
+        _n_features: n_features,
     })
 }
 

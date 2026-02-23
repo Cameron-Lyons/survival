@@ -525,12 +525,15 @@ mod tests {
 
     #[test]
     fn test_survival_dist_variants() {
-        let _ = SurvivalDist::ExtremeValue;
-        let _ = SurvivalDist::Logistic;
-        let _ = SurvivalDist::Gaussian;
-        let _ = SurvivalDist::Weibull;
-        let _ = SurvivalDist::LogNormal;
-        let _ = SurvivalDist::LogLogistic;
+        let variants = [
+            SurvivalDist::ExtremeValue,
+            SurvivalDist::Logistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::Weibull,
+            SurvivalDist::LogNormal,
+            SurvivalDist::LogLogistic,
+        ];
+        assert_eq!(variants.len(), 6);
     }
 
     #[test]

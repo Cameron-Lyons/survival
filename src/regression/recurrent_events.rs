@@ -1,15 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 use crate::utilities::statistical::normal_cdf;
 
@@ -188,7 +180,7 @@ pub fn pwp_model(
             for j in 0..p {
                 eta_i += x_mat[i * p + j] * beta[j];
             }
-            let exp_eta_i = eta_i.exp();
+            let _exp_eta_i = eta_i.exp();
 
             let mut risk_sum = 0.0;
             let mut risk_x_sum = vec![0.0; p];
@@ -824,8 +816,8 @@ fn gamma_fn(x: f64) -> f64 {
     ];
 
     let mut sum = c[0];
-    for i in 1..g + 2 {
-        sum += c[i] / (x + i as f64);
+    for (i, &coeff) in c.iter().enumerate().take(g + 2).skip(1) {
+        sum += coeff / (x + i as f64);
     }
 
     let t = x + g as f64 + 0.5;
@@ -1014,8 +1006,8 @@ pub fn negative_binomial_frailty(
 
     for idx in 0..n_subjects {
         if subject_count[idx] > 0 {
-            for j in 0..p {
-                subject_x[idx][j] /= subject_count[idx] as f64;
+            for x_j in subject_x[idx].iter_mut().take(p) {
+                *x_j /= subject_count[idx] as f64;
             }
         }
     }
@@ -1028,7 +1020,7 @@ pub fn negative_binomial_frailty(
     let mut n_iter = 0;
     let mut prev_loglik = f64::NEG_INFINITY;
 
-    for em_iter in 0..config.em_max_iter {
+    for _em_iter in 0..config.em_max_iter {
         let mut frailty: Vec<f64> = vec![1.0; n_subjects];
 
         for idx in 0..n_subjects {
@@ -1043,7 +1035,7 @@ pub fn negative_binomial_frailty(
             frailty[idx] = frailty[idx].clamp(0.01, 100.0);
         }
 
-        for iter in 0..config.max_iter {
+        for _iter in 0..config.max_iter {
             n_iter += 1;
 
             let mut gradient = vec![0.0; p];

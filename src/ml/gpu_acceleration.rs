@@ -1,6 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
-
 use pyo3::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 

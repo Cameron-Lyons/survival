@@ -1,11 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use crate::utilities::statistical::sample_normal;
 use pyo3::prelude::*;
@@ -69,6 +63,36 @@ pub fn dynamic_prediction(
     prediction_times: Vec<f64>,
     n_monte_carlo: usize,
 ) -> PyResult<DynamicPredictionResult> {
+    if y_history.len() != times_history.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "y_history and times_history must have the same length",
+        ));
+    }
+    if n_history != y_history.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_history must match y_history length",
+        ));
+    }
+    if n_surv_vars != x_surv.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_surv_vars must match x_surv length",
+        ));
+    }
+    if baseline_hazard.len() != baseline_times.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "baseline_hazard and baseline_times must have the same length",
+        ));
+    }
+    if n_monte_carlo == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_monte_carlo must be > 0",
+        ));
+    }
+    if n_long_vars > x_long_fixed.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_long_vars cannot exceed x_long_fixed length",
+        ));
+    }
     let b0 = random_effects.first().copied().unwrap_or(0.0);
     let b1 = random_effects.get(1).copied().unwrap_or(0.0);
 
@@ -207,7 +231,42 @@ pub fn dynamic_auc(
     event_status: Vec<i32>,
     horizon: f64,
 ) -> PyResult<f64> {
+    if baseline_hazard.len() != baseline_times.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "baseline_hazard and baseline_times must have the same length",
+        ));
+    }
+    if !y_observed.is_empty() && y_observed.len() != times_observed.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "y_observed and times_observed must have the same length when y_observed is provided",
+        ));
+    }
     let n_subjects = event_time.len();
+    if event_status.len() != n_subjects {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "event_time and event_status must have the same length",
+        ));
+    }
+    if n_obs != n_subjects {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_obs must match number of subjects in event_time",
+        ));
+    }
+    if n_surv_vars == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_surv_vars must be > 0",
+        ));
+    }
+    if x_surv.len() != n_subjects * n_surv_vars {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x_surv length must be n_obs * n_surv_vars",
+        ));
+    }
+    if n_long_vars > 0 && x_long_fixed.len() < n_subjects * n_long_vars {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x_long_fixed length must be at least n_obs * n_long_vars",
+        ));
+    }
 
     let risk_scores: Vec<f64> = (0..n_subjects)
         .map(|i| {
@@ -227,7 +286,7 @@ pub fn dynamic_auc(
                 .filter(|t| *t <= horizon)
                 .collect();
 
-            let t_pred = subj_times.last().copied().unwrap_or(horizon);
+            let _t_pred = subj_times.last().copied().unwrap_or(horizon);
             let mut m_t = 0.0;
 
             for (j, &bj) in beta_long.iter().enumerate() {
@@ -815,7 +874,7 @@ pub fn ipcw_auc(
     let mut at_risk = n as f64;
     let mut prev_surv = 1.0;
 
-    for (idx, &i) in sorted_indices.iter().enumerate() {
+    for &i in sorted_indices.iter() {
         if event_status[i] == 0 {
             let d = 1.0;
             prev_surv *= 1.0 - d / at_risk;

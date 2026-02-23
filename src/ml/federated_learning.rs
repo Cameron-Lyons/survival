@@ -1,6 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -41,6 +38,7 @@ impl FederatedConfig {
         noise_multiplier=1.0,
         clip_norm=1.0
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         n_rounds: usize,
         n_clients: usize,
@@ -104,6 +102,7 @@ fn add_gaussian_noise(values: &mut [f64], noise_multiplier: f64, clip_norm: f64,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn train_local_cox_model(
     time: &[f64],
     event: &[i32],

@@ -1,10 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
     clippy::type_complexity
 )]
 
@@ -369,7 +364,7 @@ pub fn joint_model(
     }
 
     let mut beta_long = vec![0.0; n_long_vars];
-    let mut gamma_surv = vec![0.0; n_surv_vars];
+    let gamma_surv = vec![0.0; n_surv_vars];
     let mut alpha = 0.0;
     let mut sigma_sq = 1.0;
     let mut d11: f64 = 1.0;
@@ -384,7 +379,7 @@ pub fn joint_model(
     let baseline_times: Vec<f64> = (0..n_knots)
         .map(|i| unique_times[i * unique_times.len() / n_knots])
         .collect();
-    let mut baseline_hazard = vec![0.01; n_knots];
+    let baseline_hazard = vec![0.01; n_knots];
 
     let (quad_nodes, _quad_weights) = gauss_hermite_quadrature(config.n_quadrature);
 

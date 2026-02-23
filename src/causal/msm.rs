@@ -1,14 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]

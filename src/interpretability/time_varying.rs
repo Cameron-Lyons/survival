@@ -1,9 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -295,7 +291,7 @@ fn beta_cf(a: f64, b: f64, x: f64) -> f64 {
 
 fn compute_variance_test(
     shap_values: &[f64],
-    time_points: &[f64],
+    _time_points: &[f64],
     n_times: usize,
     n_windows: usize,
 ) -> (Vec<f64>, Vec<f64>, f64, f64) {
@@ -344,7 +340,7 @@ fn compute_variance_test(
     let mut bartlett_num = 0.0;
     let mut bartlett_denom = 0.0;
 
-    for (w, &var) in window_variances.iter().enumerate() {
+    for &var in window_variances.iter() {
         let n_w = window_size as f64;
         if var > 1e-12 && pooled_var > 1e-12 {
             bartlett_num += (n_w - 1.0) * (var / pooled_var).ln();

@@ -1,9 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -245,7 +241,7 @@ fn compute_interaction_score(
     feature_idx: usize,
     n_samples: usize,
     n_features: usize,
-    n_times: usize,
+    _n_times: usize,
 ) -> f64 {
     let target_shap: Vec<f64> = (0..n_samples)
         .flat_map(|s| shap_values[s][feature_idx].iter().copied())
@@ -261,13 +257,19 @@ fn compute_interaction_score(
     let mut total_corr = 0.0;
     let mut count = 0;
 
-    for other_f in 0..n_features {
+    let Some(first_sample) = shap_values.first() else {
+        return 0.0;
+    };
+
+    for (other_f, _) in first_sample.iter().enumerate().take(n_features) {
         if other_f == feature_idx {
             continue;
         }
 
-        let other_shap: Vec<f64> = (0..n_samples)
-            .flat_map(|s| shap_values[s][other_f].iter().copied())
+        let other_shap: Vec<f64> = shap_values
+            .iter()
+            .take(n_samples)
+            .flat_map(|sample| sample[other_f].iter().copied())
             .collect();
 
         let other_mean = other_shap.iter().sum::<f64>() / other_shap.len() as f64;

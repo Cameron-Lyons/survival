@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -43,6 +42,7 @@ impl RecurrentSurvConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_size: usize,
         num_layers: usize,
@@ -81,18 +81,15 @@ impl RecurrentSurvConfig {
     }
 }
 
-#[allow(dead_code)]
-fn sigmoid(x: f64) -> f64 {
+fn _sigmoid(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
 }
 
-#[allow(dead_code)]
-fn tanh_activation(x: f64) -> f64 {
+fn _tanh_activation(x: f64) -> f64 {
     x.tanh()
 }
 
-#[allow(dead_code)]
-struct LSTMCell {
+struct _LSTMCell {
     w_ii: Vec<Vec<f64>>,
     w_if: Vec<Vec<f64>>,
     w_ig: Vec<Vec<f64>>,
@@ -107,9 +104,8 @@ struct LSTMCell {
     b_o: Vec<f64>,
 }
 
-#[allow(dead_code)]
-impl LSTMCell {
-    fn new(input_size: usize, hidden_size: usize, rng: &mut fastrand::Rng) -> Self {
+impl _LSTMCell {
+    fn _new(input_size: usize, hidden_size: usize, rng: &mut fastrand::Rng) -> Self {
         Self {
             w_ii: (0..hidden_size)
                 .map(|_| (0..input_size).map(|_| rng.f64() * 0.1 - 0.05).collect())
@@ -142,7 +138,7 @@ impl LSTMCell {
         }
     }
 
-    fn forward(&self, x: &[f64], h: &[f64], c: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    fn _forward(&self, x: &[f64], h: &[f64], c: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let hidden_size = h.len();
 
         let compute_gate = |w_x: &[Vec<f64>], w_h: &[Vec<f64>], b: &[f64]| -> Vec<f64> {
@@ -157,19 +153,19 @@ impl LSTMCell {
 
         let i_gate: Vec<f64> = compute_gate(&self.w_ii, &self.w_hi, &self.b_i)
             .iter()
-            .map(|&x| sigmoid(x))
+            .map(|&x| _sigmoid(x))
             .collect();
         let f_gate: Vec<f64> = compute_gate(&self.w_if, &self.w_hf, &self.b_f)
             .iter()
-            .map(|&x| sigmoid(x))
+            .map(|&x| _sigmoid(x))
             .collect();
         let g_gate: Vec<f64> = compute_gate(&self.w_ig, &self.w_hg, &self.b_g)
             .iter()
-            .map(|&x| tanh_activation(x))
+            .map(|&x| _tanh_activation(x))
             .collect();
         let o_gate: Vec<f64> = compute_gate(&self.w_io, &self.w_ho, &self.b_o)
             .iter()
-            .map(|&x| sigmoid(x))
+            .map(|&x| _sigmoid(x))
             .collect();
 
         let c_new: Vec<f64> = (0..hidden_size)
@@ -177,7 +173,7 @@ impl LSTMCell {
             .collect();
 
         let h_new: Vec<f64> = (0..hidden_size)
-            .map(|i| o_gate[i] * tanh_activation(c_new[i]))
+            .map(|i| o_gate[i] * _tanh_activation(c_new[i]))
             .collect();
 
         (h_new, c_new)
@@ -376,6 +372,7 @@ impl LongitudinalSurvConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_size: usize,
         num_layers: usize,
@@ -505,8 +502,8 @@ mod tests {
 
     #[test]
     fn test_sigmoid() {
-        assert!((sigmoid(0.0) - 0.5).abs() < 1e-6);
-        assert!(sigmoid(10.0) > 0.99);
-        assert!(sigmoid(-10.0) < 0.01);
+        assert!((_sigmoid(0.0) - 0.5).abs() < 1e-6);
+        assert!(_sigmoid(10.0) > 0.99);
+        assert!(_sigmoid(-10.0) < 0.01);
     }
 }

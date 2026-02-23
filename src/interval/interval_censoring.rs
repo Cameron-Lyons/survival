@@ -1,16 +1,10 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
     clippy::type_complexity
 )]
 
 use crate::utilities::statistical::erf;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -497,7 +491,7 @@ pub fn turnbull_estimator(
 pub fn npmle_interval(
     left: Vec<f64>,
     right: Vec<f64>,
-    weights: Option<Vec<f64>>,
+    _weights: Option<Vec<f64>>,
 ) -> PyResult<(Vec<f64>, Vec<f64>)> {
     turnbull_estimator(left, right, 1000, 1e-6).map(|result| (result.time_points, result.survival))
 }

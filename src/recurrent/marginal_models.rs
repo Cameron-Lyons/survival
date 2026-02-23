@@ -1,14 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -107,7 +100,7 @@ pub fn marginal_recurrent_model(
     };
 
     let mut prev_loglik = f64::NEG_INFINITY;
-    for iter in 0..max_iter {
+    for _iter in 0..max_iter {
         let mut gradient = vec![0.0; n_vars];
         let mut hessian_diag = vec![0.0; n_vars];
 
@@ -348,9 +341,9 @@ fn compute_robust_se(
     }
 
     let mut meat = vec![0.0; p];
-    for subj in 0..n_subjects {
+    for scores in subject_scores.iter().take(n_subjects) {
         for j in 0..p {
-            meat[j] += subject_scores[subj][j].powi(2);
+            meat[j] += scores[j].powi(2);
         }
     }
 

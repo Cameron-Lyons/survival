@@ -597,10 +597,8 @@ fn compute_sandwich_variance(
 
     for c in 0..=max_cluster {
         let mut score = vec![0.0; p];
-
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..n_obs / n_times {
-            if cluster_id[i] == c {
+        for (i, &cluster) in cluster_id.iter().enumerate().take(n_obs / n_times) {
+            if cluster == c {
                 for t in 0..n_times {
                     let idx = i * n_times + t;
                     for j in 0..p {

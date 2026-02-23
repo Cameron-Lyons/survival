@@ -98,9 +98,8 @@ pub fn compute_coxmart(
         if is_last {
             if deaths < 2 || method == 0 {
                 hazard += wtsum / current_denom;
-                #[allow(clippy::needless_range_loop)]
-                for j in lastone..=i {
-                    expect[j] -= weights.score[j] * hazard;
+                for (j, expect_j) in expect.iter_mut().enumerate().take(i + 1).skip(lastone) {
+                    *expect_j -= weights.score[j] * hazard;
                 }
             } else {
                 let mut temp = hazard;
@@ -112,12 +111,11 @@ pub fn compute_coxmart(
                     hazard += wtsum / (current_denom - e_denom * downwt);
                     temp += wtsum * (1.0 - downwt) / (current_denom - e_denom * downwt);
                 }
-                #[allow(clippy::needless_range_loop)]
-                for j in lastone..=i {
+                for (j, expect_j) in expect.iter_mut().enumerate().take(i + 1).skip(lastone) {
                     if surv_data.status[j] == 0 {
-                        expect[j] = -weights.score[j] * hazard;
+                        *expect_j = -weights.score[j] * hazard;
                     } else {
-                        expect[j] -= weights.score[j] * temp;
+                        *expect_j -= weights.score[j] * temp;
                     }
                 }
             }
@@ -130,8 +128,7 @@ pub fn compute_coxmart(
             hazard = 0.0;
         }
     }
-    #[allow(clippy::needless_range_loop)]
-    for j in lastone..n {
-        expect[j] -= weights.score[j] * hazard;
+    for (j, expect_j) in expect.iter_mut().enumerate().take(n).skip(lastone) {
+        *expect_j -= weights.score[j] * hazard;
     }
 }

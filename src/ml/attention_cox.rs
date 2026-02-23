@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -37,6 +36,7 @@ impl AttentionCoxConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         d_model: usize,
         n_heads: usize,
@@ -97,6 +97,7 @@ fn scaled_dot_product_attention(query: &[f64], keys: &[Vec<f64>], values: &[Vec<
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn multi_head_attention(
     query: &[f64],
     keys: &[Vec<f64>],

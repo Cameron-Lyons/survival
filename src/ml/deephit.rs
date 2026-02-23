@@ -1,11 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use burn::{
     backend::{Autodiff, NdArray},
@@ -357,8 +351,8 @@ fn softmax_pmf(
             .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
 
         let mut exp_sum = 0.0f32;
-        for j in start..end {
-            exp_sum += (logits[j] - max_val).exp();
+        for &logit in logits.iter().take(end).skip(start) {
+            exp_sum += (logit - max_val).exp();
         }
 
         for j in start..end {
@@ -477,20 +471,20 @@ fn compute_ranking_loss(
 }
 
 fn compute_combined_gradient(
-    logits: &[f32],
+    _logits: &[f32],
     pmf: &[f32],
     durations: &[usize],
     events: &[i32],
     num_risks: usize,
     num_durations: usize,
     batch_indices: &[usize],
-    alpha: f64,
-    sigma: f64,
+    _alpha: f64,
+    _sigma: f64,
 ) -> Vec<f32> {
     let batch_size = batch_indices.len();
     let total_outputs = num_risks * num_durations;
     let mut gradients = vec![0.0f32; batch_size * total_outputs];
-    let eps = 1e-7;
+    let _eps = 1e-7;
 
     for (local_idx, &global_idx) in batch_indices.iter().enumerate() {
         let duration_bin = durations[global_idx].min(num_durations - 1);
@@ -511,7 +505,7 @@ fn compute_combined_gradient(
             }
         } else {
             for j in start..start + total_outputs {
-                let risk = (j - start) / num_durations;
+                let _risk = (j - start) / num_durations;
                 let t = (j - start) % num_durations;
                 if t <= duration_bin {
                     gradients[j] = pmf[j];
@@ -749,7 +743,7 @@ fn fit_deephit_inner(
     let mut epochs_without_improvement = 0;
     let mut best_weights: Option<StoredWeights> = None;
 
-    for epoch in 0..config.n_epochs {
+    for _epoch in 0..config.n_epochs {
         let mut epoch_indices = train_indices.clone();
         for i in (1..epoch_indices.len()).rev() {
             let j = rng.usize(0..=i);

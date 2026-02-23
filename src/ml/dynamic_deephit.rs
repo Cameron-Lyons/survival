@@ -1,10 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
     clippy::single_range_in_vec_init,
     clippy::manual_memcpy
 )]
@@ -18,9 +13,8 @@ use burn::{
     tensor::activation::relu,
 };
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
-use super::utils::{compute_duration_bins, linear_forward, relu_vec, tensor_to_vec_f32};
+use super::utils::{compute_duration_bins, tensor_to_vec_f32};
 
 type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
@@ -220,7 +214,7 @@ impl<B: burn::prelude::Backend> LSTMCell<B> {
         h_prev: Tensor<B, 2>,
         c_prev: Tensor<B, 2>,
     ) -> (Tensor<B, 2>, Tensor<B, 2>) {
-        let [batch, _] = x.dims();
+        let [_batch, _] = x.dims();
         let combined = Tensor::cat(vec![x, h_prev.clone()], 1);
 
         let i = burn::tensor::activation::sigmoid(self.input_gate.forward(combined.clone()));
@@ -289,7 +283,7 @@ impl<B: burn::prelude::Backend> TemporalAttention<B> {
 
     fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 2> {
         let [batch, seq_len, hidden] = x.dims();
-        let device = x.device();
+        let _device = x.device();
 
         let x_2d: Tensor<B, 2> = x.clone().reshape([batch * seq_len, hidden]);
 
@@ -381,7 +375,7 @@ impl<B: burn::prelude::Backend> TemporalEncoder<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 3>, seq_lengths: &[usize]) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<B, 3>, _seq_lengths: &[usize]) -> Tensor<B, 2> {
         let [batch, max_seq_len, input_size] = x.dims();
         let device = x.device();
 
@@ -505,8 +499,7 @@ impl<B: burn::prelude::Backend> SharedNetwork<B> {
         h
     }
 
-    #[allow(dead_code)]
-    fn output_size(&self) -> usize {
+    fn _output_size(&self) -> usize {
         self.layers.last().map(|l| l.weight.dims()[0]).unwrap_or(0)
     }
 }
@@ -733,17 +726,16 @@ fn softmax_hazards(
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct StoredWeights {
-    temporal_weights: Vec<f32>,
-    shared_weights: Vec<(Vec<f32>, Vec<f32>)>,
-    cause_weights: Vec<Vec<(Vec<f32>, Vec<f32>)>>,
-    embedding_dim: usize,
-    n_features: usize,
+    _temporal_weights: Vec<f32>,
+    _shared_weights: Vec<(Vec<f32>, Vec<f32>)>,
+    _cause_weights: Vec<Vec<(Vec<f32>, Vec<f32>)>>,
+    _embedding_dim: usize,
+    _n_features: usize,
     num_causes: usize,
     num_durations: usize,
-    shared_hidden_sizes: Vec<usize>,
-    cause_hidden_sizes: Vec<usize>,
+    _shared_hidden_sizes: Vec<usize>,
+    _cause_hidden_sizes: Vec<usize>,
 }
 
 impl std::fmt::Debug for StoredWeights {
@@ -804,24 +796,23 @@ fn extract_weights(
         .collect();
 
     StoredWeights {
-        temporal_weights,
-        shared_weights,
-        cause_weights,
-        embedding_dim: config.embedding_dim,
-        n_features,
+        _temporal_weights: temporal_weights,
+        _shared_weights: shared_weights,
+        _cause_weights: cause_weights,
+        _embedding_dim: config.embedding_dim,
+        _n_features: n_features,
         num_causes: config.num_causes,
         num_durations: config.num_durations,
-        shared_hidden_sizes: config.shared_hidden_sizes.clone(),
-        cause_hidden_sizes: config.cause_hidden_sizes.clone(),
+        _shared_hidden_sizes: config.shared_hidden_sizes.clone(),
+        _cause_hidden_sizes: config.cause_hidden_sizes.clone(),
     }
 }
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
-#[allow(dead_code)]
 pub struct DynamicDeepHit {
     weights: StoredWeights,
-    config: DynamicDeepHitConfig,
+    _config: DynamicDeepHitConfig,
     #[pyo3(get)]
     pub duration_cuts: Vec<f64>,
     #[pyo3(get)]
@@ -893,7 +884,7 @@ fn fit_dynamic_deephit_inner(
     let mut epochs_without_improvement = 0;
     let mut best_weights: Option<StoredWeights> = None;
 
-    for epoch in 0..config.n_epochs {
+    for _epoch in 0..config.n_epochs {
         let mut epoch_indices = train_indices.clone();
         for i in (1..epoch_indices.len()).rev() {
             let j = rng.usize(0..=i);
@@ -1009,7 +1000,7 @@ fn fit_dynamic_deephit_inner(
 
     DynamicDeepHit {
         weights: final_weights,
-        config: config.clone(),
+        _config: config.clone(),
         duration_cuts: cuts,
         train_loss: train_loss_history,
         val_loss: val_loss_history,

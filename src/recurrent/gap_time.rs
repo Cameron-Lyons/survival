@@ -1,14 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -89,7 +82,7 @@ pub fn gap_time_model(
     let mut beta = vec![0.0; n_vars];
 
     let mut prev_loglik = f64::NEG_INFINITY;
-    for iter in 0..max_iter {
+    for _iter in 0..max_iter {
         let mut gradient = vec![0.0; n_vars];
         let mut hessian_diag = vec![0.0; n_vars];
 
@@ -324,6 +317,13 @@ pub fn pwp_gap_time(
             event_time[a]
                 .partial_cmp(&event_time[b])
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    if stratify_by_event_number {
+                        event_status[b].cmp(&event_status[a])
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
+                })
         })
     });
 

@@ -215,7 +215,6 @@ pub fn compute_se_linear_predictor(covariates: &[Vec<f64>], var_matrix: &[Vec<f6
 
 #[pyfunction]
 #[pyo3(signature = (covariates, coefficients, scale, distribution, predict_type="response".to_string(), offset=None, var_matrix=None, se_fit=false))]
-#[allow(unused_variables)]
 #[allow(clippy::too_many_arguments)]
 pub fn predict_survreg(
     covariates: Vec<Vec<f64>>,
@@ -227,6 +226,11 @@ pub fn predict_survreg(
     var_matrix: Option<Vec<Vec<f64>>>,
     se_fit: bool,
 ) -> PyResult<SurvregPrediction> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "scale must be a finite positive value",
+        ));
+    }
     let n = covariates.len();
 
     let pred_type = SurvregPredictType::from_str(&predict_type).ok_or_else(|| {

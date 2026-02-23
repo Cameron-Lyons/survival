@@ -1,12 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 type DendrogramHistory = Vec<(usize, usize, f64, usize)>;
 
@@ -215,8 +210,12 @@ fn compute_shap_correlation_matrix(
 
         for j in (i + 1)..n_features {
             let mut cov = 0.0;
-            for s in 0..n_samples {
-                cov += (aggregated[i][s] - means[i]) * (aggregated[j][s] - means[j]);
+            for (&agg_i, &agg_j) in aggregated[i]
+                .iter()
+                .zip(aggregated[j].iter())
+                .take(n_samples)
+            {
+                cov += (agg_i - means[i]) * (agg_j - means[j]);
             }
             cov /= n_samples as f64;
 
@@ -418,8 +417,8 @@ fn compute_internal_correlation(corr_matrix: &[Vec<f64>], features: &[usize]) ->
 fn find_representative_feature(
     shap_values: &[Vec<Vec<f64>>],
     features: &[usize],
-    n_samples: usize,
-    n_times: usize,
+    _n_samples: usize,
+    _n_times: usize,
 ) -> usize {
     if features.is_empty() {
         return 0;

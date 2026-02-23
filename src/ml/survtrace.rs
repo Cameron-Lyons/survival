@@ -1,11 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use burn::{
     backend::{Autodiff, NdArray},
@@ -13,7 +7,6 @@ use burn::{
     nn::{Dropout, DropoutConfig, Embedding, EmbeddingConfig, Linear, LinearConfig},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    tensor::{activation::softplus, backend::AutodiffBackend as AutodiffBackendTrait},
 };
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -37,7 +30,7 @@ fn layer_norm<B: burn::prelude::Backend>(
     beta: Tensor<B, 1>,
     eps: f32,
 ) -> Tensor<B, 2> {
-    let [batch, hidden] = x.dims();
+    let [_batch, hidden] = x.dims();
     let mean = x.clone().mean_dim(1);
     let var = x.clone().var(1);
     let x_norm = (x - mean) / (var + eps).sqrt();
@@ -770,7 +763,7 @@ fn predict_with_weights(
 
         if num_num > 0 {
             let (in_dim, out_dim) = weights.num_projection_dims;
-            for j in 0..out_dim {
+            for (j, hidden_j) in hidden.iter_mut().enumerate().take(out_dim) {
                 let mut sum = if !weights.num_projection_bias.is_empty() {
                     weights.num_projection_bias[j] as f64
                 } else {
@@ -780,7 +773,7 @@ fn predict_with_weights(
                     sum += x_num[i * num_num + k]
                         * weights.num_projection_weights[j * in_dim + k] as f64;
                 }
-                hidden[j] += sum;
+                *hidden_j += sum;
             }
         }
 
@@ -822,11 +815,11 @@ fn apply_transformer_layer_cpu(
         let start = head * head_dim;
         let end = start + head_dim;
 
-        let mut score = 0.0;
+        let mut _score = 0.0;
         for i in start..end {
-            score += q[i] * k[i];
+            _score += q[i] * k[i];
         }
-        score /= (head_dim as f64).sqrt();
+        _score /= (head_dim as f64).sqrt();
         let attn_weight = 1.0;
 
         for i in start..end {
@@ -911,7 +904,7 @@ fn fit_survtrace_inner(
     let mut epochs_without_improvement = 0;
     let mut best_weights: Option<StoredWeights> = None;
 
-    for epoch in 0..config.n_epochs {
+    for _epoch in 0..config.n_epochs {
         let mut epoch_indices = train_indices.clone();
         for i in (1..epoch_indices.len()).rev() {
             let j = rng.usize(0..=i);
@@ -962,7 +955,7 @@ fn fit_survtrace_inner(
             let mut total_loss = 0.0;
             let mut all_grads: Vec<Vec<f32>> = Vec::new();
 
-            for (event_idx, logits_tensor) in outputs.iter().enumerate() {
+            for logits_tensor in outputs.iter() {
                 let logits_vec: Vec<f32> = tensor_to_vec_f32(logits_tensor.clone().inner());
 
                 let loss = compute_nll_logistic_hazard_loss(
@@ -1255,8 +1248,7 @@ impl SurvTrace {
         );
 
         let mut all_hazards: Vec<Vec<Vec<f64>>> = Vec::new();
-        for event_idx in 0..num_events {
-            let logits = &outputs[event_idx];
+        for logits in outputs.iter().take(num_events) {
             let hazards: Vec<Vec<f64>> = (0..n_new)
                 .map(|i| {
                     (0..num_durations)
@@ -1276,18 +1268,18 @@ impl SurvTrace {
                 let mut overall_surv = vec![1.0; num_durations + 1];
                 for t in 0..num_durations {
                     let mut total_haz = 0.0;
-                    for event_idx in 0..num_events {
-                        total_haz += all_hazards[event_idx][i][t];
+                    for event_hazards in all_hazards.iter().take(num_events) {
+                        total_haz += event_hazards[i][t];
                     }
                     overall_surv[t + 1] = overall_surv[t] * (1.0 - total_haz.min(1.0));
                 }
 
                 let mut event_cifs = Vec::new();
-                for event_idx in 0..num_events {
+                for event_hazards in all_hazards.iter().take(num_events) {
                     let mut cif = Vec::with_capacity(num_durations);
                     let mut cum_inc = 0.0;
                     for t in 0..num_durations {
-                        cum_inc += overall_surv[t] * all_hazards[event_idx][i][t];
+                        cum_inc += overall_surv[t] * event_hazards[i][t];
                         cif.push(cum_inc);
                     }
                     event_cifs.push(cif);

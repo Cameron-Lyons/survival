@@ -1,15 +1,9 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
     clippy::type_complexity
 )]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -79,6 +73,13 @@ pub fn pattern_mixture_model(
     if time.len() != n_obs || status.len() != n_obs || dropout_pattern.len() != n_obs {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "All arrays must have length n_obs",
+        ));
+    }
+    if let Some(ref dt) = dropout_time
+        && dt.len() != n_obs
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "dropout_time must have length n_obs when provided",
         ));
     }
     if x.len() != n_obs * n_vars {

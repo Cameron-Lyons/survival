@@ -160,22 +160,17 @@ impl CoxFitBuilder {
             .unwrap_or_else(|| Array1::from_elem(nused, 1.0));
         let doscale = self.doscale.unwrap_or_else(|| vec![true; nvar]);
         let initial_beta = self.initial_beta.unwrap_or_else(|| vec![0.0; nvar]);
-
-        let config = CoxFitConfig {
-            method: self.method,
-            max_iter: self.max_iter,
-            eps: self.eps,
-            toler: self.toler,
-        };
-
-        CoxFit::with_config(
+        CoxFit::new(
             self.time,
             self.status,
             self.covar,
             strata,
             offset,
             weights,
-            config,
+            self.method,
+            self.max_iter,
+            self.eps,
+            self.toler,
             doscale,
             initial_beta,
         )
@@ -221,7 +216,7 @@ impl CoxFit {
         Ok(cox)
     }
 
-    #[allow(clippy::too_many_arguments, dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         time: Array1<f64>,
         status: Array1<i32>,
@@ -391,7 +386,6 @@ impl CoxFit {
                 let risk = risk_vals[person_i];
                 if self.status[person_i] == 0 {
                     denom += risk;
-                    #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar {
                         let covar_i = self.covar[(person_i, i)];
                         let risk_covar_i = risk * covar_i;
@@ -405,7 +399,6 @@ impl CoxFit {
                     deadwt += self.weights[person_i];
                     denom2 += risk;
                     loglik += self.weights[person_i] * zbeta;
-                    #[allow(clippy::needless_range_loop)]
                     for i in 0..nvar {
                         let covar_i = self.covar[(person_i, i)];
                         self.u[i] += self.weights[person_i] * covar_i;
@@ -422,20 +415,20 @@ impl CoxFit {
                 }
             }
             if ndead > 0 {
-                let _ = method;
-                denom += denom2;
-                loglik -= deadwt * denom.ln();
-                #[allow(clippy::needless_range_loop)]
-                for i in 0..nvar {
-                    a[i] += a2[i];
-                    let temp = a[i] / denom;
-                    self.u[i] -= deadwt * temp;
-                    for j in 0..=i {
-                        cmat[(i, j)] += cmat2[(i, j)];
-                        let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
-                        self.imat[(j, i)] += val;
-                        if i != j {
-                            self.imat[(i, j)] += val;
+                if matches!(method, Method::Breslow) {
+                    denom += denom2;
+                    loglik -= deadwt * denom.ln();
+                    for i in 0..nvar {
+                        a[i] += a2[i];
+                        let temp = a[i] / denom;
+                        self.u[i] -= deadwt * temp;
+                        for j in 0..=i {
+                            cmat[(i, j)] += cmat2[(i, j)];
+                            let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
+                            self.imat[(j, i)] += val;
+                            if i != j {
+                                self.imat[(i, j)] += val;
+                            }
                         }
                     }
                 }
@@ -546,7 +539,6 @@ impl CoxFit {
     }
     fn cholesky(mat: &mut Array2<f64>, toler: f64) -> Result<i32, CoxError> {
         let n = mat.nrows();
-        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             for j in (i + 1)..n {
                 mat[(i, j)] = mat[(j, i)];
@@ -555,7 +547,6 @@ impl CoxFit {
         if cholesky_check(mat) {
             Ok(n as i32)
         } else {
-            #[allow(clippy::needless_range_loop)]
             for i in 0..n {
                 if mat[(i, i)] < toler {
                     return Ok(i as i32);

@@ -497,8 +497,7 @@ pub fn publication_bias_tests(
         .map(|(e, se)| e / se)
         .collect();
 
-    let (slope, intercept, se_intercept) = weighted_regression(&precisions, &standardized);
-    let _ = slope;
+    let (_slope, intercept, se_intercept) = weighted_regression(&precisions, &standardized);
     let egger_t = if se_intercept > 0.0 {
         intercept / se_intercept
     } else {

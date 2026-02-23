@@ -1,6 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
-
 use pyo3::prelude::*;
 
 use crate::utilities::statistical::normal_cdf;
@@ -195,7 +192,6 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
         .collect();
 
     let mut cov_matrix = vec![vec![0.0; n_points]; n_points];
-    #[allow(clippy::needless_range_loop)]
     for i in 0..n_points {
         for j in 0..n_points {
             let cov: f64 = centered.iter().map(|c| c[i] * c[j]).sum::<f64>() / n_curves as f64;
@@ -401,10 +397,8 @@ pub fn functional_cox(
                 }
             }
         }
-
-        #[allow(clippy::needless_range_loop)]
-        for j in 0..n_params {
-            hessian[j][j] -= config.regularization;
+        for (j, row) in hessian.iter_mut().enumerate().take(n_params) {
+            row[j] -= config.regularization;
         }
 
         let mut max_update: f64 = 0.0;
