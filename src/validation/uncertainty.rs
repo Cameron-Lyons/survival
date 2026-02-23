@@ -87,19 +87,8 @@ fn _apply_dropout(values: &[f64], dropout_rate: f64, rng: &mut fastrand::Rng) ->
 }
 
 #[pyfunction]
-#[pyo3(signature = (
-    predictions,
-    config=None
-))]
-pub fn mc_dropout_uncertainty(
-    predictions: Vec<Vec<Vec<f64>>>,
-    config: Option<MCDropoutConfig>,
-) -> PyResult<UncertaintyResult> {
-    drop(match config {
-        Some(config) => config,
-        None => MCDropoutConfig::new(100, 0.1, None)?,
-    });
-
+#[pyo3(signature = (predictions,))]
+pub fn mc_dropout_uncertainty(predictions: Vec<Vec<Vec<f64>>>) -> PyResult<UncertaintyResult> {
     if predictions.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "predictions must not be empty",
