@@ -1,7 +1,4 @@
-#![allow(
-    unused_parens,
-    clippy::too_many_arguments
-)]
+#![allow(unused_parens, clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 

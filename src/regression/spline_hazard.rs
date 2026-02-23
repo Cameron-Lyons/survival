@@ -177,7 +177,6 @@ pub fn flexible_parametric_model(
         for j in 0..p {
             beta[j] += learning_rate * grad_beta[j];
         }
-
     }
 
     let mut eta: Vec<f64> = vec![0.0; n];

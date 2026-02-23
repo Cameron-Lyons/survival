@@ -1,4 +1,3 @@
-
 use burn::{
     backend::{Autodiff, NdArray},
     module::Module,

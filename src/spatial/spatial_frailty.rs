@@ -1,5 +1,4 @@
-#![allow(
-    clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments)]
 
 use crate::utilities::statistical::normal_cdf;
 use pyo3::prelude::*;
