@@ -999,9 +999,7 @@ fn non_mixture_survival(
             let f_t = 1.0 - s_0;
             (-theta * f_t).exp()
         }
-        NonMixtureType::Destructive => {
-            (theta * (s_0 - 1.0)).exp()
-        }
+        NonMixtureType::Destructive => (theta * (s_0 - 1.0)).exp(),
     }
 }
 

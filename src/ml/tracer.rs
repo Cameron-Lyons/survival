@@ -1377,7 +1377,6 @@ fn fit_tracer_inner(
             let batch_indices: Vec<usize> = epoch_indices[batch_start..batch_end].to_vec();
             let batch_size = batch_indices.len();
 
-
             let stride = max_seq_len * n_features;
             let (x_batch, mask_batch, time_delta_batch): (Vec<f32>, Vec<f32>, Vec<f32>) =
                 batch_indices
