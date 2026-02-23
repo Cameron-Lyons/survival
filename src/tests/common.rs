@@ -73,6 +73,7 @@ pub struct LungData {
     pub status: Vec<i32>,
     pub sex: Vec<i32>,
     pub age: Vec<f64>,
+    #[allow(dead_code)]
     pub ph_ecog: Vec<i32>,
 }
 

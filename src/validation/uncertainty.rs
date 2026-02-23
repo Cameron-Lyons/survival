@@ -95,10 +95,10 @@ pub fn mc_dropout_uncertainty(
     predictions: Vec<Vec<Vec<f64>>>,
     config: Option<MCDropoutConfig>,
 ) -> PyResult<UncertaintyResult> {
-    let _config = match config {
+    drop(match config {
         Some(config) => config,
         None => MCDropoutConfig::new(100, 0.1, None)?,
-    };
+    });
 
     if predictions.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -341,7 +341,6 @@ pub fn quantile_regression_intervals(
         ));
     }
 
-    let _n_bootstrap = bootstrap_predictions.len();
     let n_obs = bootstrap_predictions[0].len();
     let n_times = bootstrap_predictions[0]
         .first()

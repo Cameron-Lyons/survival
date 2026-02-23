@@ -229,7 +229,6 @@ fn fit_weibull_mle(times: &[f64]) -> (f64, f64) {
     }
 
     let n = times.len() as f64;
-    let _mean_t = times.iter().sum::<f64>() / n;
 
     let mut shape = 1.0;
     for _ in 0..50 {

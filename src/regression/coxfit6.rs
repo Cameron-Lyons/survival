@@ -190,7 +190,6 @@ impl CoxFit {
         initial_beta: Vec<f64>,
     ) -> Result<Self, CoxError> {
         let nvar = covar.ncols();
-        let _nused = covar.nrows();
         let mut cox = Self {
             time,
             status,

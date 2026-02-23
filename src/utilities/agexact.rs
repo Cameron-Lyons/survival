@@ -120,7 +120,6 @@ fn agexact_impl(
     let (a, rest) = rest.split_at_mut(p);
     let (newbeta, rest) = rest.split_at_mut(p);
     let (score, newvar) = rest.split_at_mut(n);
-    let _index = &mut work2[0..n];
     let atrisk = &mut work2[n..2 * n];
     if nvar_usize > 4 {
         let mean_updates: Vec<(usize, f64)> = (0..nvar_usize)
@@ -431,7 +430,6 @@ fn agexact_impl(
                 } else {
                     halving = false;
                     loglik[1] = newlk;
-                    let _flag_check = cholesky2(&mut imat[..p * p], p, tol_chol);
                     let mut u_copy = u.to_vec();
                     chsolve2(&mut imat[..p * p], p, &mut u_copy);
                     beta[..nvar_usize].copy_from_slice(&newbeta_vec[..nvar_usize]);

@@ -268,12 +268,6 @@ pub fn mixture_cure_model(
         x_cure.clone()
     };
 
-    let _x_surv_mat = if x_surv.is_empty() {
-        vec![1.0; n]
-    } else {
-        x_surv.clone()
-    };
-
     let mut beta_cure = vec![0.0; p_cure];
     let beta_surv = vec![0.0; p_surv];
     let mut scale = time.iter().copied().sum::<f64>() / n as f64;
@@ -508,7 +502,6 @@ pub fn promotion_time_cure_model(
             let exp_eta = eta.exp();
 
             let (s_0, _f_0) = compute_surv_density(time[i], scale, shape, &distribution);
-            let _f_t = -theta * exp_eta * s_0.ln();
 
             if status[i] == 1 {
                 let hazard = theta * exp_eta * (-s_0.ln().max(1e-300));
@@ -1007,7 +1000,6 @@ fn non_mixture_survival(
             (-theta * f_t).exp()
         }
         NonMixtureType::Destructive => {
-            let _h_0 = -s_0.max(1e-300).ln();
             (theta * (s_0 - 1.0)).exp()
         }
     }
@@ -1129,15 +1121,6 @@ pub fn non_mixture_cure_model(
                 loglik += f_pop.max(1e-300).ln();
 
                 let eps = 1e-6;
-                let _s_pop_p = non_mixture_survival(
-                    time[i],
-                    theta_i * (1.0 + eps),
-                    scale,
-                    shape,
-                    &config.distribution,
-                    &config.model_type,
-                    dispersion,
-                );
                 let f_pop_p = non_mixture_pdf(
                     time[i],
                     theta_i * (1.0 + eps),

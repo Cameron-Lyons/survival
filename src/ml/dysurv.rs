@@ -127,11 +127,6 @@ impl DySurvModel {
                     .zip(self.mu_weights.iter())
                     .map(|(&h, &w)| h * w)
                     .sum();
-                let _logvar: f64 = hidden
-                    .iter()
-                    .zip(self.logvar_weights.iter())
-                    .map(|(&h, &w)| h * w)
-                    .sum();
 
                 let z = mu;
 

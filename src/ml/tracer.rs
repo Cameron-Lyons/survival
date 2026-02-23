@@ -219,7 +219,6 @@ impl<B: burn::prelude::Backend> MultiHeadAttention<B> {
 
     fn forward_3d(&self, x: Tensor<B, 3>, training: bool) -> Tensor<B, 3> {
         let [batch_size, seq_len, hidden_size] = x.dims();
-        let _device = x.device();
 
         let x_2d: Tensor<B, 2> = x.clone().reshape([batch_size * seq_len, hidden_size]);
 
@@ -356,10 +355,6 @@ impl<B: burn::prelude::Backend> TimeAwareEmbedding<B> {
                         let val_data = val_tensor.into_data();
                         let val_vec: Vec<f32> = val_data.to_vec().unwrap_or_default();
                         if !val_vec.is_empty() {
-                            let _current =
-                                embedded
-                                    .clone()
-                                    .slice([b..b + 1, t..t + 1, f..f + 1, d..d + 1]);
                             let update_data = burn::tensor::TensorData::new(val_vec, [1, 1, 1, 1]);
                             let update_tensor: Tensor<B, 4> =
                                 Tensor::from_data(update_data, &device);
@@ -483,7 +478,6 @@ impl<B: burn::prelude::Backend> FactorizedAttentionBlock<B> {
             self.layer_norm_eps,
         );
 
-        let _device = x_post_cov.device();
         let x_2d: Tensor<B, 2> = x_post_cov.clone().reshape([batch_size * seq_len, hidden]);
         let ffn_out = self.ffn_linear1.forward(x_2d);
         let ffn_out = gelu(ffn_out);
@@ -1383,7 +1377,6 @@ fn fit_tracer_inner(
             let batch_indices: Vec<usize> = epoch_indices[batch_start..batch_end].to_vec();
             let batch_size = batch_indices.len();
 
-            let _total_size = batch_size * max_seq_len * n_features;
 
             let stride = max_seq_len * n_features;
             let (x_batch, mask_batch, time_delta_batch): (Vec<f32>, Vec<f32>, Vec<f32>) =
@@ -1690,7 +1683,6 @@ impl Tracer {
             ));
         }
 
-        let _logits = &outputs[event_idx];
         let num_durations = self.config.num_durations;
         let num_events = self.config.num_events;
 

@@ -110,9 +110,7 @@ impl CoxState {
         }
         *loglik = 0.0;
         let mut istrat = 0;
-        let _indx2 = 0;
         while istrat < self.strata.len() {
-            let _denom = 0.0;
             let mut risk_sum = 0.0;
             for person in istrat..self.weights.len() {
                 if self.strata[person] != self.strata[istrat] {

@@ -265,8 +265,6 @@ impl MambaSurvModel {
     }
 
     fn get_hidden_states(&self, sequence: Vec<Vec<f64>>) -> PyResult<Vec<Vec<f64>>> {
-        let _seq_len = sequence.len();
-        let _d_inner = self.config.d_model * self.config.expand_factor;
 
         let hidden_states: Vec<Vec<f64>> = sequence
             .iter()

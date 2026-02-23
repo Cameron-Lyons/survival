@@ -103,8 +103,6 @@ fn compute_cv_c_index(
     test_idx: &[usize],
 ) -> f64 {
     let train_risk: Vec<f64> = train_idx.iter().map(|&i| risk_scores[i]).collect();
-    let _train_time: Vec<f64> = train_idx.iter().map(|&i| time[i]).collect();
-    let _train_event: Vec<i32> = train_idx.iter().map(|&i| event[i]).collect();
 
     let mean_risk: f64 = train_risk.iter().sum::<f64>() / train_risk.len() as f64;
     let std_risk: f64 = {

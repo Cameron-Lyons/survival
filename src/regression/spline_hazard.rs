@@ -388,7 +388,6 @@ pub fn restricted_cubic_spline(
 
     let mut basis_matrix: Vec<Vec<f64>> = vec![vec![0.0; k - 2]; n];
 
-    let _t_min = knots.first().cloned().unwrap_or(0.0);
     let t_max = knots.last().cloned().unwrap_or(1.0);
     let d_km1_k = (t_max - knots[k - 2]).max(crate::constants::DIVISION_FLOOR);
 

@@ -155,7 +155,6 @@ pub fn group_lasso_cox(
         (0..n * p)
             .map(|idx| {
                 let j = idx % p;
-                let _i = idx / p;
                 (covariates[idx] - x_means[j]) / x_stds[j]
             })
             .collect()

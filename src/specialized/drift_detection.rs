@@ -454,13 +454,6 @@ fn compute_calibration_slope(predictions: &[f64], _time: &[f64], _event: &[i32])
         return 1.0;
     }
 
-    let mean_pred = predictions.iter().sum::<f64>() / n as f64;
-    let _var_pred: f64 = predictions
-        .iter()
-        .map(|&p| (p - mean_pred).powi(2))
-        .sum::<f64>()
-        / n as f64;
-
     1.0
 }
 

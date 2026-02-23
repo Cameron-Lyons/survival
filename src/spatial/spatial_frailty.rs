@@ -690,7 +690,7 @@ mod tests {
             0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0,
         ];
 
-        let (moran_i, z_score, p_value) = moran_i_test(values, adjacency, 4).unwrap();
+        let (moran_i, _, p_value) = moran_i_test(values, adjacency, 4).unwrap();
 
         assert!((-1.0..=1.0).contains(&moran_i));
         assert!((0.0..=1.0).contains(&p_value));

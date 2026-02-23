@@ -263,11 +263,9 @@ pub fn fit_neural_mtlr(
 
     let n_features = covariates[0].len();
     let time_bins = compute_time_bins(&time, config.num_time_bins);
-
-    let _assigned_bins: Vec<usize> = time
-        .iter()
-        .map(|&t| assign_time_bin(t, &time_bins))
-        .collect();
+    for &t in &time {
+        assign_time_bin(t, &time_bins);
+    }
 
     let mut rng = fastrand::Rng::new();
     if let Some(seed) = config.seed {
