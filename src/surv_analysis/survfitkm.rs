@@ -254,7 +254,6 @@ pub fn compute_survfitkm(
     let mut cumulative_variance = 0.0;
     let mut i = 0;
 
-
     while i < n {
         let current_time = time[indices[i]];
         let mut weighted_events = 0.0;

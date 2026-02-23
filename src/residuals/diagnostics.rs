@@ -62,13 +62,8 @@ pub fn dfbeta_cox(
 
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
-    let info_inv = compute_information_inverse(
-        &event,
-        &covariates,
-        n_covariates,
-        &exp_eta,
-        &sorted_indices,
-    );
+    let info_inv =
+        compute_information_inverse(&event, &covariates, n_covariates, &exp_eta, &sorted_indices);
 
     let score_residuals = compute_score_residuals(
         &time,
@@ -315,13 +310,8 @@ pub fn leverage_cox(
 
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
-    let info_inv = compute_information_inverse(
-        &event,
-        &covariates,
-        n_covariates,
-        &exp_eta,
-        &sorted_indices,
-    );
+    let info_inv =
+        compute_information_inverse(&event, &covariates, n_covariates, &exp_eta, &sorted_indices);
 
     let mut leverage = vec![0.0; n];
     let mut lmax = vec![0.0; n];

@@ -96,7 +96,6 @@ fn grn(
     weights2: &[Vec<f64>],
     biases: &[f64],
 ) -> Vec<f64> {
-
     let hidden: Vec<f64> = weights1
         .iter()
         .zip(biases.iter())

@@ -481,9 +481,7 @@ pub fn parallel_matrix_operations(
         ));
     }
 
-    drop(config.unwrap_or_else(|| {
-        GPUConfig::new(ComputeBackend::Auto, 0, 0, 256, 0, false)
-    }));
+    drop(config.unwrap_or_else(|| GPUConfig::new(ComputeBackend::Auto, 0, 0, 256, 0, false)));
 
     let results: Vec<Vec<f64>> = matrices
         .iter()
