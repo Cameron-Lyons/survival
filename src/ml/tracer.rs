@@ -1276,7 +1276,10 @@ fn predict_with_weights(
                 for layer in &weights.factorized_layers {
                     transformed = apply_factorized_layer_cpu(&transformed, layer, layer_norm_eps);
                 }
-                for (pooled_d, &val) in pooled.iter_mut().zip(transformed.iter()).take(embedding_dim)
+                for (pooled_d, &val) in pooled
+                    .iter_mut()
+                    .zip(transformed.iter())
+                    .take(embedding_dim)
                 {
                     *pooled_d += val;
                 }

@@ -1,7 +1,4 @@
-#![allow(
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;

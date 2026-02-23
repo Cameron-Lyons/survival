@@ -1,4 +1,3 @@
-
 use pyo3::Py;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -501,11 +500,8 @@ impl ShapInteractionResult {
             let n_times = self.time_points.len();
             for (i, row) in self.interaction_values.iter().enumerate().take(n_features) {
                 for (j, values) in row.iter().enumerate().take(n_features).skip(i + 1) {
-                    let mean_interaction: f64 = values
-                        .iter()
-                        .map(|v| v.abs())
-                        .sum::<f64>()
-                        / n_times as f64;
+                    let mean_interaction: f64 =
+                        values.iter().map(|v| v.abs()).sum::<f64>() / n_times as f64;
                     interactions.push((i, j, mean_interaction));
                 }
             }

@@ -1,5 +1,4 @@
-#![allow(
-    clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments)]
 
 use crate::utilities::matrix::invert_matrix;
 use pyo3::prelude::*;
