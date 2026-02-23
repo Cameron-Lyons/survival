@@ -209,7 +209,6 @@ impl<B: burn::prelude::Backend> HealthStateEncoder<B> {
 
     fn forward(&self, x: Tensor<B, 3>, training: bool) -> Tensor<B, 3> {
         let [batch, seq_len, input_size] = x.dims();
-        let _device = x.device();
 
         let x_2d: Tensor<B, 2> = x.reshape([batch * seq_len, input_size]);
         let mut h = self.input_projection.forward(x_2d);
@@ -246,7 +245,6 @@ impl<B: burn::prelude::Backend> MonotonicConstraintLayer<B> {
 
     fn forward(&self, health_states: Tensor<B, 3>) -> Tensor<B, 3> {
         let [batch, seq_len, health_dim] = health_states.dims();
-        let _device = health_states.device();
 
         if seq_len < 2 {
             return health_states;
@@ -299,7 +297,6 @@ impl<B: burn::prelude::Backend> GlobalAttention<B> {
 
     fn forward(&self, x: Tensor<B, 3>) -> (Tensor<B, 2>, Tensor<B, 2>) {
         let [batch, seq_len, hidden] = x.dims();
-        let _device = x.device();
 
         let x_2d: Tensor<B, 2> = x.clone().reshape([batch * seq_len, hidden]);
 

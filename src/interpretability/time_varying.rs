@@ -586,7 +586,7 @@ mod tests {
     fn test_variance_test() {
         let shap = vec![0.1, 0.15, 0.12, 0.5, 0.6, 0.55, 0.1, 0.12, 0.11, 0.58];
         let time: Vec<f64> = (0..10).map(|i| i as f64).collect();
-        let (means, vars, stat, p) = compute_variance_test(&shap, &time, 10, 2);
+        let (means, vars, _, _) = compute_variance_test(&shap, &time, 10, 2);
 
         assert_eq!(means.len(), 2);
         assert_eq!(vars.len(), 2);
@@ -596,7 +596,7 @@ mod tests {
     fn test_breakpoint_test() {
         let shap: Vec<f64> = (0..20).map(|i| if i < 10 { 0.1 } else { 0.5 }).collect();
         let time: Vec<f64> = (0..20).map(|i| i as f64).collect();
-        let (bp, stat, p) = compute_breakpoint_test(&shap, &time, 20, 3);
+        let (bp, _, _) = compute_breakpoint_test(&shap, &time, 20, 3);
 
         assert!(bp.is_some());
     }

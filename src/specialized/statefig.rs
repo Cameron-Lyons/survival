@@ -223,13 +223,6 @@ pub fn statefig_validate(
 ) -> PyResult<Vec<String>> {
     let mut issues = Vec::new();
 
-    let _state_idx: HashMap<String, usize> = data
-        .states
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.clone(), i))
-        .collect();
-
     for &(from_idx, to_idx, count) in &data.edges {
         if count > 0 {
             let from_state = &data.states[from_idx];

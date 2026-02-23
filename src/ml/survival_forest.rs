@@ -196,7 +196,6 @@ fn log_rank_split_score(
     }
 
     let expected_left = d_total * n_left / n_total;
-    let _expected_right = d_total * n_right / n_total;
 
     let variance = d_total * (n_left / n_total) * (n_right / n_total) * (n_total - d_total)
         / (n_total - 1.0).max(1.0);

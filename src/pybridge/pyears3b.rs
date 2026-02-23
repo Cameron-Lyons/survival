@@ -287,13 +287,6 @@ pub fn perform_pyears_calculation(
     for &dim in &observed_dims {
         total_observed *= dim;
     }
-    let _total_expected = {
-        let mut result = 1;
-        for &dim in &expected_dims {
-            result *= dim;
-        }
-        result
-    };
     let mut pyears = vec![0.0; total_observed];
     let mut pn = vec![0.0; total_observed];
     let mut pcount = vec![0.0; total_observed];

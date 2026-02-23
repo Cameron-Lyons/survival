@@ -483,7 +483,6 @@ fn compute_combined_gradient(
     let batch_size = batch_indices.len();
     let total_outputs = num_risks * num_durations;
     let mut gradients = vec![0.0f32; batch_size * total_outputs];
-    let _eps = 1e-7;
 
     for (local_idx, &global_idx) in batch_indices.iter().enumerate() {
         let duration_bin = durations[global_idx].min(num_durations - 1);
@@ -504,7 +503,6 @@ fn compute_combined_gradient(
             }
         } else {
             for j in start..start + total_outputs {
-                let _risk = (j - start) / num_durations;
                 let t = (j - start) % num_durations;
                 if t <= duration_bin {
                     gradients[j] = pmf[j];

@@ -131,7 +131,6 @@ pub fn compute_survdiff(params: SurvDiffParams, input: SurvDiffInput, output: &m
         if n < ntotal {
             n += 1;
         }
-        let _n_in_stratum = n - istart;
         if params.rho != 0.0 {
             let mut km = 1.0;
             let mut i = istart;

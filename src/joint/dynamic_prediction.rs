@@ -279,13 +279,6 @@ pub fn dynamic_auc(
                 }
             }
 
-            let subj_times: Vec<f64> = times_observed
-                .iter()
-                .copied()
-                .filter(|t| *t <= horizon)
-                .collect();
-
-            let _t_pred = subj_times.last().copied().unwrap_or(horizon);
             let mut m_t = 0.0;
 
             for (j, &bj) in beta_long.iter().enumerate() {

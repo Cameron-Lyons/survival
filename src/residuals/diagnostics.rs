@@ -63,7 +63,6 @@ pub fn dfbeta_cox(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let info_inv = compute_information_inverse(
-        &time,
         &event,
         &covariates,
         n_covariates,
@@ -125,14 +124,12 @@ pub fn dfbeta_cox(
 }
 
 fn compute_information_inverse(
-    time: &[f64],
     event: &[i32],
     covariates: &[f64],
     n_covariates: usize,
     exp_eta: &[f64],
     sorted_indices: &[usize],
 ) -> Vec<f64> {
-    let _n = time.len();
     let mut info = vec![0.0; n_covariates * n_covariates];
 
     let mut risk_sum = 0.0;
@@ -319,7 +316,6 @@ pub fn leverage_cox(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let info_inv = compute_information_inverse(
-        &time,
         &event,
         &covariates,
         n_covariates,

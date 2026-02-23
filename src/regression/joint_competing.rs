@@ -181,7 +181,6 @@ impl JointCompetingRisksResult {
         let cif: Vec<Vec<f64>> = (0..n_obs)
             .into_par_iter()
             .map(|i| {
-                let _cs = &self.cause_specific_results[cause_idx];
                 let mut cif_vec = Vec::with_capacity(n_times);
                 let mut cum_inc = 0.0;
                 let mut prev_surv = 1.0;

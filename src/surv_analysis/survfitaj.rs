@@ -107,7 +107,6 @@ fn compute_survfitaj(
     let trmat = params.trmat;
     let t0 = params.t0;
     let ntime = utime.len();
-    let _n = y.len() / 3;
     let nused = sort1.len();
     let nstate = p0.len();
     let nhaz = trmat.nrows();
@@ -162,8 +161,6 @@ fn compute_survfitaj(
         }
         n_risk.row_mut(i).assign(&ntemp);
     }
-    let _person1 = 0;
-    let _person2 = 0;
     let mut u = if sefit > 0 {
         Some(Array2::from_shape_vec((ngrp, nstate), i0.to_vec())?)
     } else {
@@ -199,7 +196,6 @@ fn compute_survfitaj(
         let mut ua: Array2<f64> = Array2::zeros((ngrp, nstate));
         let mut c: Array2<f64> = Array2::zeros((ngrp, nhaz));
         let mut wg: Array2<f64> = Array2::zeros((ngrp, nstate));
-        let _h: Array2<f64> = Array2::zeros((nstate, nstate));
         let mut ucopy: Array2<f64> = Array2::zeros((ngrp, nstate));
         let mut se1 = Array1::zeros(nstate);
         let mut se2 = Array1::zeros(nhaz);

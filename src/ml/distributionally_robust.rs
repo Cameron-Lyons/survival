@@ -252,7 +252,6 @@ fn weighted_cox_partial_likelihood(
         return 0.0;
     }
 
-    let _p = x[0].len();
     let mut linear_pred: Vec<f64> = x
         .iter()
         .map(|xi| {
@@ -436,7 +435,6 @@ pub fn dro_survival(
     let (robust_coefficients, worst_case_weights, dual_variable, converged, n_iterations) =
         dro_cox_optimization(&x, &time, &event, &config);
 
-    let _p = x[0].len();
     let uniform_weights = vec![1.0 / n as f64; n];
     let empirical_coefficients = {
         let mut cfg = config.clone();

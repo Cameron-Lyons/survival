@@ -67,7 +67,6 @@ impl WarrantyResult {
 }
 
 fn estimate_survival(time: &[f64], event: &[i32], eval_times: &[f64]) -> Vec<f64> {
-    let _n = time.len();
     let mut unique_times: Vec<f64> = time.to_vec();
     unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     unique_times.dedup();

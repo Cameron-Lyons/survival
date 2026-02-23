@@ -283,7 +283,6 @@ impl<B: burn::prelude::Backend> TemporalAttention<B> {
 
     fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 2> {
         let [batch, seq_len, hidden] = x.dims();
-        let _device = x.device();
 
         let x_2d: Tensor<B, 2> = x.clone().reshape([batch * seq_len, hidden]);
 

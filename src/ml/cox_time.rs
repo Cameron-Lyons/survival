@@ -177,7 +177,6 @@ fn _compute_cox_time_loss<B: burn::prelude::Backend>(
     event: &[i32],
     time_order: &[usize],
 ) -> Tensor<B, 1> {
-    let _n = event.len();
     let device = log_hazard.device();
 
     let log_hazard_data: Vec<f32> = log_hazard.clone().into_data().to_vec().unwrap_or_default();
@@ -327,7 +326,7 @@ pub fn fit_cox_time(
     let n_features = covariates[0].len();
     let device = burn::backend::ndarray::NdArrayDevice::Cpu;
 
-    let _model: CoxTimeNetwork<AutodiffBackend> = CoxTimeNetwork::new(
+    let model: CoxTimeNetwork<AutodiffBackend> = CoxTimeNetwork::new(
         &device,
         n_features,
         &config.hidden_dims,
@@ -342,7 +341,7 @@ pub fn fit_cox_time(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let weights = extract_weights(&_model, n_features);
+    let weights = extract_weights(&model, n_features);
 
     Ok(CoxTimeModel {
         weights,

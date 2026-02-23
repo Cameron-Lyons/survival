@@ -498,7 +498,6 @@ pub fn survfitaj_extended(
         }
     };
 
-    let _alpha = 1.0 - config.confidence_level;
     let z = match config.confidence_level {
         c if c >= 0.99 => 2.576,
         c if c >= 0.95 => 1.96,

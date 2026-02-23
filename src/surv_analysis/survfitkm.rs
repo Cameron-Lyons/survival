@@ -254,8 +254,6 @@ pub fn compute_survfitkm(
     let mut cumulative_variance = 0.0;
     let mut i = 0;
 
-    let _reverse = config.reverse;
-    let _computation_type = config.computation_type;
 
     while i < n {
         let current_time = time[indices[i]];

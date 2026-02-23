@@ -132,7 +132,6 @@ impl CauseSpecificCoxResult {
 
     fn predict_cumulative_hazard(&self, x: Vec<f64>, n_obs: usize) -> Vec<Vec<f64>> {
         let n_vars = self.coefficients.len();
-        let _n_times = self.cumulative_baseline_hazard.len();
 
         (0..n_obs)
             .into_par_iter()
@@ -261,7 +260,6 @@ fn compute_cause_specific_gradient_hessian(
                 gradient[j] += weights[idx] * (xij - x_bar);
 
                 for k in 0..p {
-                    let _xik = x[idx * p + k];
                     let x_bar_k = weighted_x[k] / risk_sum;
                     let x_outer_bar = weighted_x_outer[j][k] / risk_sum;
                     hessian[j][k] -= weights[idx] * (x_outer_bar - x_bar * x_bar_k);
@@ -354,7 +352,6 @@ fn compute_baseline_hazard(
         let current_time = time[idx];
 
         let mut n_events = 0.0;
-        let _start_i = i;
         while i < n
             && (time[sorted_indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON
         {

@@ -179,7 +179,6 @@ pub fn pwp_model(
             for j in 0..p {
                 eta_i += x_mat[i * p + j] * beta[j];
             }
-            let _exp_eta_i = eta_i.exp();
 
             let mut risk_sum = 0.0;
             let mut risk_x_sum = vec![0.0; p];

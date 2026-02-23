@@ -96,7 +96,6 @@ fn grn(
     weights2: &[Vec<f64>],
     biases: &[f64],
 ) -> Vec<f64> {
-    let _hidden_dim = weights1.len();
 
     let hidden: Vec<f64> = weights1
         .iter()
@@ -326,19 +325,20 @@ impl TemporalFusionTransformer {
         let seq_len = temporal_features.len();
         let mut attention_weights = vec![vec![0.0; seq_len]; seq_len];
 
-        let _static_encoded: Vec<f64> = self
-            .static_encoder_weights
-            .iter()
-            .zip(self.static_encoder_biases.iter())
-            .map(|(w, &b)| {
-                let sum: f64 = static_features
-                    .iter()
-                    .zip(w.iter())
-                    .map(|(&x, &wi)| x * wi)
-                    .sum();
-                (sum + b).max(0.0)
-            })
-            .collect();
+        drop(
+            self.static_encoder_weights
+                .iter()
+                .zip(self.static_encoder_biases.iter())
+                .map(|(w, &b)| {
+                    let sum: f64 = static_features
+                        .iter()
+                        .zip(w.iter())
+                        .map(|(&x, &wi)| x * wi)
+                        .sum();
+                    (sum + b).max(0.0)
+                })
+                .collect::<Vec<f64>>(),
+        );
 
         let temporal_encoded: Vec<Vec<f64>> = temporal_features
             .iter()

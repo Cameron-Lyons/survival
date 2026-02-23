@@ -663,7 +663,6 @@ fn estimate_km_survival(
         at_risk += kernel_weight(running_var[i] - cutoff, bandwidth, kernel);
     }
 
-    let _prev_time = 0.0;
     for &i in &sorted_indices {
         if time[i] > max_time {
             break;

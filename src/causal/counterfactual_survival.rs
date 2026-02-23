@@ -315,7 +315,9 @@ pub fn estimate_counterfactual_survival(
         .map(|(r, _)| r.clone())
         .collect();
 
-    let _imbalance = compute_mmd(&treated_repr, &control_repr, 1.0 / dim as f64);
+    if dim > 0 {
+        compute_mmd(&treated_repr, &control_repr, 1.0 / dim as f64);
+    }
 
     let coefficients_treated: Vec<f64> = (0..dim)
         .map(|i| 0.1 * (i as f64 + 1.0) / dim as f64)

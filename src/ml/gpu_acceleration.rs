@@ -481,8 +481,9 @@ pub fn parallel_matrix_operations(
         ));
     }
 
-    let _config =
-        config.unwrap_or_else(|| GPUConfig::new(ComputeBackend::Auto, 0, 0, 256, 0, false));
+    drop(config.unwrap_or_else(|| {
+        GPUConfig::new(ComputeBackend::Auto, 0, 0, 256, 0, false)
+    }));
 
     let results: Vec<Vec<f64>> = matrices
         .iter()
@@ -517,14 +518,14 @@ pub fn benchmark_compute_backend(
     let coefficients: Vec<f64> = (0..n_features).map(|j| 0.1 * (j as f64 + 1.0)).collect();
 
     let start = std::time::Instant::now();
-    let _ll = parallel_log_likelihood(&x, &time, &event, &coefficients);
+    parallel_log_likelihood(&x, &time, &event, &coefficients);
     results.insert(
         "log_likelihood_ms".to_string(),
         start.elapsed().as_secs_f64() * 1000.0,
     );
 
     let start = std::time::Instant::now();
-    let _exp_sum = parallel_exp_sum(&coefficients);
+    parallel_exp_sum(&coefficients);
     results.insert(
         "exp_sum_ms".to_string(),
         start.elapsed().as_secs_f64() * 1000.0,

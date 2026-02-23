@@ -55,7 +55,6 @@ pub fn concordance3(
         } else {
             let mut ndeath = 0;
             let mut dwt = 0.0;
-            let _dwt2 = 0.0;
             let adjtimewt = timewt[utime];
             utime += 1;
             let mut j = i;
