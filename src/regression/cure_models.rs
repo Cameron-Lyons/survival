@@ -1,14 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
-use crate::utilities::statistical::{erf, normal_cdf, probit};
+use crate::utilities::statistical::{normal_cdf, probit};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -276,14 +269,14 @@ pub fn mixture_cure_model(
         x_cure.clone()
     };
 
-    let x_surv_mat = if x_surv.is_empty() {
+    let _x_surv_mat = if x_surv.is_empty() {
         vec![1.0; n]
     } else {
         x_surv.clone()
     };
 
     let mut beta_cure = vec![0.0; p_cure];
-    let mut beta_surv = vec![0.0; p_surv];
+    let beta_surv = vec![0.0; p_surv];
     let mut scale = time.iter().copied().sum::<f64>() / n as f64;
     let mut shape = 1.0;
 
@@ -493,9 +486,9 @@ pub fn promotion_time_cure_model(
     };
 
     let mut theta = 1.0;
-    let mut beta = vec![0.0; p];
+    let beta = vec![0.0; p];
     let mut scale = time.iter().sum::<f64>() / n as f64;
-    let mut shape = 1.0;
+    let shape = 1.0;
 
     let mut converged = false;
     let mut n_iter = 0;
@@ -515,8 +508,8 @@ pub fn promotion_time_cure_model(
             }
             let exp_eta = eta.exp();
 
-            let (s_0, f_0) = compute_surv_density(time[i], scale, shape, &distribution);
-            let f_t = -theta * exp_eta * s_0.ln();
+            let (s_0, _f_0) = compute_surv_density(time[i], scale, shape, &distribution);
+            let _f_t = -theta * exp_eta * s_0.ln();
 
             if status[i] == 1 {
                 let hazard = theta * exp_eta * (-s_0.ln().max(1e-300));
@@ -575,7 +568,7 @@ pub fn promotion_time_cure_model(
 }
 
 #[pyfunction]
-pub fn predict_cure_probability(
+pub fn _predict_cure_probability(
     result: &MixtureCureResult,
     x_new: Vec<f64>,
     n_new: usize,
@@ -602,11 +595,11 @@ pub fn predict_cure_probability(
 }
 
 #[pyfunction]
-pub fn predict_survival_cure(
+pub fn _predict_survival_cure(
     result: &MixtureCureResult,
     time_points: Vec<f64>,
     x_cure: Vec<f64>,
-    x_surv: Vec<f64>,
+    _x_surv: Vec<f64>,
     n_subjects: usize,
     distribution: &CureDistribution,
     link: &LinkFunction,
@@ -1015,7 +1008,7 @@ fn non_mixture_survival(
             (-theta * f_t).exp()
         }
         NonMixtureType::Destructive => {
-            let h_0 = -s_0.max(1e-300).ln();
+            let _h_0 = -s_0.max(1e-300).ln();
             (theta * (s_0 - 1.0)).exp()
         }
     }
@@ -1091,7 +1084,7 @@ pub fn non_mixture_cure_model(
     let mut theta = 1.0;
     let mut scale = time.iter().sum::<f64>() / n as f64;
     let mut shape = 1.0;
-    let mut dispersion = config.dispersion;
+    let dispersion = config.dispersion;
 
     let mut converged = false;
     let mut n_iter = 0;
@@ -1137,7 +1130,7 @@ pub fn non_mixture_cure_model(
                 loglik += f_pop.max(1e-300).ln();
 
                 let eps = 1e-6;
-                let s_pop_p = non_mixture_survival(
+                let _s_pop_p = non_mixture_survival(
                     time[i],
                     theta_i * (1.0 + eps),
                     scale,

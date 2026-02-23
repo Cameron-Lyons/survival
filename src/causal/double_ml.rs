@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 
@@ -113,14 +112,11 @@ fn fit_nuisance_model(
             xty[j] += xi_centered[j] * yi_centered;
         }
     }
-
-    #[allow(clippy::needless_range_loop)]
-    for j in 0..n_features {
-        xtx[j][j] += 0.01;
+    for (j, row) in xtx.iter_mut().enumerate().take(n_features) {
+        row[j] += 0.01;
     }
 
     let mut beta = vec![0.0; n_features];
-    #[allow(clippy::needless_range_loop)]
     for j in 0..n_features {
         if xtx[j][j].abs() > crate::constants::DIVISION_FLOOR {
             beta[j] = xty[j] / xtx[j][j];

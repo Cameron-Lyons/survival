@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -37,6 +36,7 @@ impl DistillationConfig {
         batch_size=64,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         temperature: f64,
         alpha: f64,
@@ -99,10 +99,8 @@ pub struct DistilledSurvivalModel {
     output_weights: Vec<Vec<f64>>,
     output_biases: Vec<f64>,
     config: DistillationConfig,
-    #[allow(dead_code)]
-    n_features: usize,
-    #[allow(dead_code)]
-    n_outputs: usize,
+    _n_features: usize,
+    _n_outputs: usize,
 }
 
 #[pymethods]
@@ -267,8 +265,6 @@ pub fn distill_survival_model(
 
     for _epoch in 0..config.n_epochs {
         let mut epoch_loss = 0.0;
-
-        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             let teacher_soft =
                 softmax_with_temperature(&teacher_predictions[i], config.temperature);
@@ -302,8 +298,8 @@ pub fn distill_survival_model(
         output_weights,
         output_biases,
         config: config.clone(),
-        n_features,
-        n_outputs,
+        _n_features: n_features,
+        _n_outputs: n_outputs,
     };
 
     let student_preds = model.predict(covariates.clone())?;
@@ -343,8 +339,6 @@ fn compute_c_index(predictions: &[f64], time: &[f64], event: &[i32]) -> f64 {
     let n = predictions.len();
     let mut concordant = 0.0;
     let mut discordant = 0.0;
-
-    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         if event[i] != 1 {
             continue;

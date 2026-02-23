@@ -1,9 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use crate::utilities::matrix::invert_matrix;
 use pyo3::prelude::*;
@@ -186,19 +182,22 @@ impl JointCompetingRisksResult {
         let cif: Vec<Vec<f64>> = (0..n_obs)
             .into_par_iter()
             .map(|i| {
-                let cs = &self.cause_specific_results[cause_idx];
+                let _cs = &self.cause_specific_results[cause_idx];
                 let mut cif_vec = Vec::with_capacity(n_times);
                 let mut cum_inc = 0.0;
                 let mut prev_surv = 1.0;
 
                 for t in 0..n_times {
                     let mut total_hazard = 0.0;
-                    for k in 0..self.cause_specific_results.len() {
-                        if t < all_cum_hazards[k][i].len() {
+                    for cause_hazards in all_cum_hazards
+                        .iter()
+                        .take(self.cause_specific_results.len())
+                    {
+                        if t < cause_hazards[i].len() {
                             let h_t = if t == 0 {
-                                all_cum_hazards[k][i][t]
+                                cause_hazards[i][t]
                             } else {
-                                all_cum_hazards[k][i][t] - all_cum_hazards[k][i][t - 1]
+                                cause_hazards[i][t] - cause_hazards[i][t - 1]
                             };
                             total_hazard += h_t.max(0.0);
                         }
@@ -414,11 +413,12 @@ fn solve_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
             return None;
         }
 
+        let row_i_tail: Vec<f64> = aug[i][i..n].to_vec();
         for k in (i + 1)..n {
             let factor = aug[k][i] / aug[i][i];
             rhs[k] -= factor * rhs[i];
-            for j in i..n {
-                aug[k][j] -= factor * aug[i][j];
+            for (aug_kj, &aug_ij) in aug[k][i..n].iter_mut().zip(row_i_tail.iter()) {
+                *aug_kj -= factor * aug_ij;
             }
         }
     }
@@ -578,8 +578,8 @@ pub fn joint_competing_risks(
         CorrelationType::Independent => None,
         CorrelationType::SharedFrailty | CorrelationType::CopulaBased => {
             let mut corr = vec![vec![0.0; config.num_causes]; config.num_causes];
-            for i in 0..config.num_causes {
-                corr[i][i] = 1.0;
+            for (i, row) in corr.iter_mut().enumerate().take(config.num_causes) {
+                row[i] = 1.0;
             }
             Some(corr)
         }

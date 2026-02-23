@@ -1,15 +1,8 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     non_camel_case_types,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -121,7 +114,7 @@ pub fn joint_frailty_model(
     let mut beta_rec = vec![0.0; n_rec_vars];
     let mut beta_term = vec![0.0; n_term_vars];
     let mut theta = 1.0;
-    let mut alpha = 1.0;
+    let alpha = 1.0;
     let mut frailty = vec![1.0; n_subjects];
 
     let mut prev_loglik = f64::NEG_INFINITY;

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use pulp::{Arch, Simd, WithSimd};
 
 pub fn sum_f64(data: &[f64]) -> f64 {

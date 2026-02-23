@@ -95,47 +95,6 @@ impl CumulativeDynamicAUCResult {
     }
 }
 
-fn compute_survival_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
-    let n = time.len();
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut unique_times = Vec::new();
-    let mut km_values = Vec::new();
-    let mut cum_surv = 1.0;
-    let mut at_risk = n;
-
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        let mut event_count = 0;
-        let mut total_at_time = 0;
-
-        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
-            if status[indices[i]] == 1 {
-                event_count += 1;
-            }
-            total_at_time += 1;
-            i += 1;
-        }
-
-        if event_count > 0 && at_risk > 0 {
-            cum_surv *= 1.0 - event_count as f64 / at_risk as f64;
-        }
-
-        unique_times.push(current_time);
-        km_values.push(cum_surv);
-
-        at_risk -= total_at_time;
-    }
-
-    (unique_times, km_values)
-}
-
 fn compute_censoring_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
     let n = time.len();
     let mut indices: Vec<usize> = (0..n).collect();
@@ -222,9 +181,7 @@ pub fn time_dependent_auc_core(
     }
 
     let (cens_times, cens_km) = compute_censoring_km(time, status);
-    let (surv_times, surv_km) = compute_survival_km(time, status);
 
-    let s_t = get_km_prob(t, &surv_times, &surv_km);
     let min_g = 0.01;
 
     let mut cases: Vec<(usize, f64)> = Vec::new();
@@ -314,8 +271,6 @@ pub fn time_dependent_auc_core(
     let z = 1.96;
     let ci_lower = (auc - z * std_error).clamp(0.0, 1.0);
     let ci_upper = (auc + z * std_error).clamp(0.0, 1.0);
-
-    let _ = s_t;
 
     TimeDepAUCResult {
         auc,

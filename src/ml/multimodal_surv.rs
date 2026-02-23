@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -67,6 +66,7 @@ impl MultimodalSurvConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         clinical_hidden_dims: Option<Vec<usize>>,
         imaging_hidden_dims: Option<Vec<usize>>,
@@ -327,7 +327,6 @@ impl MultimodalSurvModel {
     event=None,
     config=None
 ))]
-#[allow(unused_variables)]
 pub fn fit_multimodal_surv(
     clinical: Option<Vec<Vec<f64>>>,
     imaging: Option<Vec<Vec<f64>>>,
@@ -362,6 +361,41 @@ pub fn fit_multimodal_surv(
     if n == 0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "At least one modality must be provided",
+        ));
+    }
+    if let Some(ref c) = clinical
+        && c.len() != n
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "clinical must have n rows",
+        ));
+    }
+    if let Some(ref i) = imaging
+        && i.len() != n
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "imaging must have n rows",
+        ));
+    }
+    if let Some(ref g) = genomic
+        && g.len() != n
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "genomic must have n rows",
+        ));
+    }
+    if let Some(ref t) = time
+        && t.len() != n
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time must have length n",
+        ));
+    }
+    if let Some(ref e) = event
+        && e.len() != n
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "event must have length n",
         ));
     }
 

@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -46,6 +45,7 @@ impl TFTConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_dim: usize,
         num_heads: usize,
@@ -80,8 +80,7 @@ impl TFTConfig {
     }
 }
 
-#[allow(dead_code)]
-fn glu(x: &[f64], weights: &[f64]) -> Vec<f64> {
+fn _glu(x: &[f64], weights: &[f64]) -> Vec<f64> {
     let half = x.len() / 2;
     x.iter()
         .take(half)
@@ -180,8 +179,7 @@ pub struct TemporalFusionTransformer {
     grn_weights1: Vec<Vec<f64>>,
     grn_weights2: Vec<Vec<f64>>,
     grn_biases: Vec<f64>,
-    #[allow(dead_code)]
-    attention_weights: Vec<Vec<f64>>,
+    _attention_weights: Vec<Vec<f64>>,
     output_weights: Vec<Vec<f64>>,
     output_biases: Vec<f64>,
     time_bins: Vec<f64>,
@@ -501,7 +499,7 @@ pub fn fit_temporal_fusion_transformer(
         grn_weights1,
         grn_weights2,
         grn_biases,
-        attention_weights,
+        _attention_weights: attention_weights,
         output_weights,
         output_biases,
         time_bins,

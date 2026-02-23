@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -40,6 +39,7 @@ impl NeuralODESurvConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_dims: Option<Vec<usize>>,
         ode_hidden_dim: usize,
@@ -135,8 +135,7 @@ pub struct NeuralODESurvModel {
     ode_biases: Vec<f64>,
     output_weights: Vec<f64>,
     output_bias: f64,
-    #[allow(dead_code)]
-    max_time: f64,
+    _max_time: f64,
     config: NeuralODESurvConfig,
     n_features: usize,
 }
@@ -345,7 +344,7 @@ pub fn fit_neural_ode_surv(
         ode_biases,
         output_weights,
         output_bias,
-        max_time,
+        _max_time: max_time,
         config,
         n_features,
     })

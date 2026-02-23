@@ -1,14 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    non_camel_case_types,
-    clippy::needless_range_loop
-)]
+    non_camel_case_types)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -225,7 +218,7 @@ fn ederer_ii_estimator(
     let mut at_risk = n;
     let mut var_term = 0.0;
 
-    for (t_idx, &t) in unique_times.iter().enumerate() {
+    for &t in unique_times.iter() {
         let mut d = 0;
 
         while time_idx < n && time[indices[time_idx]] <= t {
@@ -406,7 +399,7 @@ fn hakulinen_estimator(
 pub fn crude_probability_of_death(
     time: Vec<f64>,
     status: Vec<i32>,
-    expected_survival: Vec<f64>,
+    _expected_survival: Vec<f64>,
     cause: Vec<i32>,
     time_points: Vec<f64>,
 ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<f64>)> {

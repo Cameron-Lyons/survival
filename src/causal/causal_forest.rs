@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -37,6 +36,7 @@ impl CausalForestConfig {
         honesty_fraction=0.5,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         n_trees: usize,
         max_depth: usize,
@@ -301,8 +301,7 @@ fn predict_tree(node: &CausalTreeNode, x: &[f64]) -> f64 {
 #[pyclass(from_py_object)]
 pub struct CausalForestSurvival {
     trees: Vec<CausalTreeNode>,
-    #[allow(dead_code)]
-    config: CausalForestConfig,
+    _config: CausalForestConfig,
     n_features: usize,
 }
 
@@ -488,7 +487,7 @@ pub fn causal_forest_survival(
 
     let forest = CausalForestSurvival {
         trees,
-        config: config.clone(),
+        _config: config.clone(),
         n_features,
     };
 

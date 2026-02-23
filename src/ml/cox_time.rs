@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use burn::{
     backend::{Autodiff, NdArray},
@@ -47,6 +46,7 @@ impl CoxTimeConfig {
         early_stopping_patience=None,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_dims: Option<Vec<usize>>,
         time_embedding_dim: usize,
@@ -81,7 +81,6 @@ struct TimeEmbedding<B: burn::prelude::Backend> {
     linear2: Linear<B>,
 }
 
-#[allow(dead_code)]
 impl<B: burn::prelude::Backend> TimeEmbedding<B> {
     fn new(device: &B::Device, embedding_dim: usize) -> Self {
         Self {
@@ -90,7 +89,7 @@ impl<B: burn::prelude::Backend> TimeEmbedding<B> {
         }
     }
 
-    fn forward(&self, t: Tensor<B, 2>) -> Tensor<B, 2> {
+    fn _forward(&self, t: Tensor<B, 2>) -> Tensor<B, 2> {
         let x = self.linear1.forward(t);
         let x = relu(x);
         self.linear2.forward(x)
@@ -106,7 +105,6 @@ struct CoxTimeNetwork<B: burn::prelude::Backend> {
     dropout: Dropout,
 }
 
-#[allow(dead_code)]
 impl<B: burn::prelude::Backend> CoxTimeNetwork<B> {
     fn new(
         device: &B::Device,
@@ -148,7 +146,7 @@ impl<B: burn::prelude::Backend> CoxTimeNetwork<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, t: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn _forward(&self, x: Tensor<B, 2>, t: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
         let mut features = x;
         for layer in &self.feature_layers {
             features = layer.forward(features);
@@ -158,7 +156,7 @@ impl<B: burn::prelude::Backend> CoxTimeNetwork<B> {
             }
         }
 
-        let time_emb = self.time_embedding.forward(t);
+        let time_emb = self.time_embedding._forward(t);
 
         let combined = Tensor::cat(vec![features, time_emb], 1);
 
@@ -175,8 +173,7 @@ impl<B: burn::prelude::Backend> CoxTimeNetwork<B> {
     }
 }
 
-#[allow(dead_code)]
-fn compute_cox_time_loss<B: burn::prelude::Backend>(
+fn _compute_cox_time_loss<B: burn::prelude::Backend>(
     log_hazard: Tensor<B, 2>,
     event: &[i32],
     time_order: &[usize],

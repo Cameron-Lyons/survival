@@ -1,10 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
     clippy::single_range_in_vec_init,
     clippy::manual_memcpy
 )]
@@ -37,7 +32,7 @@ fn layer_norm<B: burn::prelude::Backend>(
     beta: Tensor<B, 1>,
     eps: f32,
 ) -> Tensor<B, 2> {
-    let [batch, hidden] = x.dims();
+    let [_batch, hidden] = x.dims();
     let mean = x.clone().mean_dim(1);
     let var = x.clone().var(1);
     let x_norm = (x - mean) / (var + eps).sqrt();
@@ -224,7 +219,7 @@ impl<B: burn::prelude::Backend> MultiHeadAttention<B> {
 
     fn forward_3d(&self, x: Tensor<B, 3>, training: bool) -> Tensor<B, 3> {
         let [batch_size, seq_len, hidden_size] = x.dims();
-        let device = x.device();
+        let _device = x.device();
 
         let x_2d: Tensor<B, 2> = x.clone().reshape([batch_size * seq_len, hidden_size]);
 
@@ -361,7 +356,7 @@ impl<B: burn::prelude::Backend> TimeAwareEmbedding<B> {
                         let val_data = val_tensor.into_data();
                         let val_vec: Vec<f32> = val_data.to_vec().unwrap_or_default();
                         if !val_vec.is_empty() {
-                            let current =
+                            let _current =
                                 embedded
                                     .clone()
                                     .slice([b..b + 1, t..t + 1, f..f + 1, d..d + 1]);
@@ -488,7 +483,7 @@ impl<B: burn::prelude::Backend> FactorizedAttentionBlock<B> {
             self.layer_norm_eps,
         );
 
-        let device = x_post_cov.device();
+        let _device = x_post_cov.device();
         let x_2d: Tensor<B, 2> = x_post_cov.clone().reshape([batch_size * seq_len, hidden]);
         let ffn_out = self.ffn_linear1.forward(x_2d);
         let ffn_out = gelu(ffn_out);
@@ -649,8 +644,7 @@ impl<B: burn::prelude::Backend> TracerNetwork<B> {
         outputs
     }
 
-    #[allow(dead_code)]
-    fn forward_inference(
+    fn _forward_inference(
         &self,
         x: Tensor<B, 3>,
         mask: Tensor<B, 3>,
@@ -801,7 +795,6 @@ fn compute_competing_risk_gradient(
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct StoredWeights {
     feature_projections: Vec<(Vec<f32>, Vec<f32>)>,
     decay_rates: Vec<f32>,
@@ -811,7 +804,7 @@ struct StoredWeights {
     embedding_dim: usize,
     n_features: usize,
     num_events: usize,
-    num_durations: usize,
+    _num_durations: usize,
 }
 
 #[derive(Clone)]
@@ -1079,7 +1072,7 @@ fn extract_weights(model: &TracerNetwork<AutodiffBackend>, config: &TracerConfig
         embedding_dim: config.embedding_dim,
         n_features: model.n_features,
         num_events: model.num_events,
-        num_durations: config.num_durations,
+        _num_durations: config.num_durations,
     }
 }
 
@@ -1152,11 +1145,11 @@ fn apply_mha_cpu(
         let start = head * head_dim;
         let end = start + head_dim;
 
-        let mut score = 0.0;
+        let mut _score = 0.0;
         for i in start..end {
-            score += q[i] * k[i];
+            _score += q[i] * k[i];
         }
-        score /= (head_dim as f64).sqrt();
+        _score /= (head_dim as f64).sqrt();
 
         for i in start..end {
             attn_output[i] = v[i];
@@ -1260,13 +1253,15 @@ fn predict_with_weights(
                         timestep_emb[d] += proj[d] * decay;
                     }
                 } else {
-                    for d in 0..embedding_dim {
+                    for (d, timestep_emb_d) in
+                        timestep_emb.iter_mut().enumerate().take(embedding_dim)
+                    {
                         let missing_emb = weights
                             .missing_embeddings
                             .get(f * embedding_dim + d)
                             .copied()
                             .unwrap_or(0.0) as f64;
-                        timestep_emb[d] += missing_emb;
+                        *timestep_emb_d += missing_emb;
                     }
                 }
             }
@@ -1277,18 +1272,17 @@ fn predict_with_weights(
         let mut pooled = vec![0.0f64; embedding_dim];
         if !seq_embeddings.is_empty() {
             for emb in &seq_embeddings {
+                let mut transformed = emb.clone();
                 for layer in &weights.factorized_layers {
-                    let _ = apply_factorized_layer_cpu(emb, layer, layer_norm_eps);
+                    transformed = apply_factorized_layer_cpu(&transformed, layer, layer_norm_eps);
+                }
+                for (pooled_d, &val) in pooled.iter_mut().zip(transformed.iter()).take(embedding_dim)
+                {
+                    *pooled_d += val;
                 }
             }
-
-            for emb in &seq_embeddings {
-                for d in 0..embedding_dim {
-                    pooled[d] += emb[d];
-                }
-            }
-            for d in 0..embedding_dim {
-                pooled[d] /= seq_embeddings.len() as f64;
+            for pooled_d in pooled.iter_mut().take(embedding_dim) {
+                *pooled_d /= seq_embeddings.len() as f64;
             }
         }
 
@@ -1371,7 +1365,7 @@ fn fit_tracer_inner(
     let mut epochs_without_improvement = 0;
     let mut best_weights: Option<StoredWeights> = None;
 
-    for epoch in 0..config.n_epochs {
+    for _epoch in 0..config.n_epochs {
         let mut epoch_indices = train_indices.clone();
         for i in (1..epoch_indices.len()).rev() {
             let j = rng.usize(0..=i);
@@ -1386,7 +1380,7 @@ fn fit_tracer_inner(
             let batch_indices: Vec<usize> = epoch_indices[batch_start..batch_end].to_vec();
             let batch_size = batch_indices.len();
 
-            let total_size = batch_size * max_seq_len * n_features;
+            let _total_size = batch_size * max_seq_len * n_features;
 
             let stride = max_seq_len * n_features;
             let (x_batch, mask_batch, time_delta_batch): (Vec<f32>, Vec<f32>, Vec<f32>) =
@@ -1693,7 +1687,7 @@ impl Tracer {
             ));
         }
 
-        let logits = &outputs[event_idx];
+        let _logits = &outputs[event_idx];
         let num_durations = self.config.num_durations;
         let num_events = self.config.num_events;
 
@@ -1852,9 +1846,10 @@ impl Tracer {
 
                 let mut cif_vec = Vec::with_capacity(num_durations);
                 let mut cum_inc = 0.0;
-                for t in 0..num_durations {
-                    let idx = i * num_events * num_durations + event_idx * num_durations + t;
-                    cum_inc += overall_surv[t] * hazards[idx] as f64;
+                let hazard_start = i * num_events * num_durations + event_idx * num_durations;
+                let hazard_end = hazard_start + num_durations;
+                for (t, &hazard) in hazards[hazard_start..hazard_end].iter().enumerate() {
+                    cum_inc += overall_surv[t] * hazard as f64;
                     cif_vec.push(cum_inc);
                 }
                 cif_vec

@@ -1,9 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -705,7 +701,7 @@ pub fn fast_cox_path(
     let mut beta_warm = vec![0.0; n_vars];
     let mut lambda_prev: Option<f64> = None;
 
-    for (idx, &lambda) in lambdas.iter().enumerate() {
+    for &lambda in lambdas.iter() {
         let (beta_std, n_iter, conv, _screened, _active) = cyclic_coordinate_descent_fast(
             &x_std,
             n_obs,

@@ -1,15 +1,8 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use crate::utilities::statistical::normal_cdf;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -128,7 +121,7 @@ pub fn spatial_frailty_model(
     let mut converged = false;
     let mut log_lik = f64::NEG_INFINITY;
 
-    for iter in 0..max_iter {
+    for _iter in 0..max_iter {
         let (new_beta, new_frailties, new_var, new_rho, new_loglik) = em_step(
             &time,
             &status,
@@ -347,9 +340,9 @@ fn em_step(
     frailties: &[f64],
     frailty_var: f64,
     spatial_rho: f64,
-    adjacency: &[f64],
+    _adjacency: &[f64],
     precision: &[f64],
-    structure: SpatialCorrelationStructure,
+    _structure: SpatialCorrelationStructure,
 ) -> (Vec<f64>, Vec<f64>, f64, f64, f64) {
     let mut new_beta = beta.to_vec();
     let mut new_frailties = frailties.to_vec();
@@ -510,7 +503,7 @@ fn compute_log_likelihood(
     log_lik
 }
 
-fn compute_saturated_loglik(time: &[f64], status: &[i32]) -> f64 {
+fn compute_saturated_loglik(_time: &[f64], _status: &[i32]) -> f64 {
     0.0
 }
 

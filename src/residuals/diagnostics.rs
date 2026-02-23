@@ -1,15 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 use crate::utilities::statistical::{lower_incomplete_gamma, normal_cdf};
 
@@ -141,7 +133,7 @@ fn compute_information_inverse(
     exp_eta: &[f64],
     sorted_indices: &[usize],
 ) -> Vec<f64> {
-    let n = time.len();
+    let _n = time.len();
     let mut info = vec![0.0; n_covariates * n_covariates];
 
     let mut risk_sum = 0.0;
@@ -190,7 +182,7 @@ fn compute_score_residuals(
 
     let mut cumulative_term = vec![vec![0.0; n_covariates]; n];
 
-    for (idx, &i) in sorted_indices.iter().enumerate() {
+    for &i in sorted_indices.iter() {
         risk_sum += exp_eta[i];
         for j in 0..n_covariates {
             weighted_x[j] += exp_eta[i] * covariates[i * n_covariates + j];
@@ -439,14 +431,14 @@ pub fn smooth_schoenfeld(
         "km" => {
             let mut km = vec![0.0; n_events];
             let mut n_risk = n_events as f64;
-            for i in 0..n_events {
-                km[i] = 1.0 - 1.0 / n_risk;
+            for km_i in km.iter_mut().take(n_events) {
+                *km_i = 1.0 - 1.0 / n_risk;
                 n_risk -= 1.0;
             }
             km
         }
         "rank" => {
-            let mut ranks: Vec<f64> = (1..=n_events)
+            let ranks: Vec<f64> = (1..=n_events)
                 .map(|i| i as f64 / (n_events as f64 + 1.0))
                 .collect();
             ranks
@@ -475,9 +467,9 @@ pub fn smooth_schoenfeld(
         for j in 0..n_covariates {
             let mut sum_w = 0.0;
             let mut sum_wy = 0.0;
-            let mut sum_wty = 0.0;
-            let mut sum_wt = 0.0;
-            let mut sum_wtt = 0.0;
+            let mut _sum_wty = 0.0;
+            let mut _sum_wt = 0.0;
+            let mut _sum_wtt = 0.0;
 
             for k in 0..n_events {
                 let t_k = transformed_times[k];
@@ -488,9 +480,9 @@ pub fn smooth_schoenfeld(
 
                 sum_w += w;
                 sum_wy += w * y;
-                sum_wty += w * t_k * y;
-                sum_wt += w * t_k;
-                sum_wtt += w * t_k * t_k;
+                _sum_wty += w * t_k * y;
+                _sum_wt += w * t_k;
+                _sum_wtt += w * t_k * t_k;
             }
 
             if sum_w > 1e-10 {
@@ -760,30 +752,30 @@ pub fn model_influence_cox(
     let coef_var = estimate_coefficient_variance(&dfbeta_result.dfbeta, n_covariates);
 
     let mut cooks_distance = vec![0.0; n];
-    for i in 0..n {
+    for (i, cook_dist) in cooks_distance.iter_mut().enumerate().take(n) {
         let mut cook = 0.0;
-        for j in 0..n_covariates {
-            if coef_var[j] > 1e-10 {
-                cook += dfbeta_result.dfbeta[i][j].powi(2) / coef_var[j];
+        for (j, &coef_var_j) in coef_var.iter().enumerate().take(n_covariates) {
+            if coef_var_j > 1e-10 {
+                cook += dfbeta_result.dfbeta[i][j].powi(2) / coef_var_j;
             }
         }
-        cooks_distance[i] = cook / n_covariates as f64;
+        *cook_dist = cook / n_covariates as f64;
     }
 
     let mut covratio = vec![1.0; n];
-    for i in 0..n {
+    for (i, covratio_i) in covratio.iter_mut().enumerate().take(n) {
         let h_i = leverage_result.leverage[i];
         if h_i < 1.0 {
-            covratio[i] = 1.0 / (1.0 - h_i).powf(n_covariates as f64);
+            *covratio_i = 1.0 / (1.0 - h_i).powf(n_covariates as f64);
         }
     }
 
     let mut dffits = vec![0.0; n];
-    for i in 0..n {
+    for (i, dffits_i) in dffits.iter_mut().enumerate().take(n) {
         let h_i = leverage_result.leverage[i];
         if h_i > 0.0 && h_i < 1.0 {
             let sum_dfbeta_sq: f64 = dfbeta_result.dfbeta[i].iter().map(|&d| d * d).sum();
-            dffits[i] = sum_dfbeta_sq.sqrt() * (h_i / (1.0 - h_i)).sqrt();
+            *dffits_i = sum_dfbeta_sq.sqrt() * (h_i / (1.0 - h_i)).sqrt();
         }
     }
 

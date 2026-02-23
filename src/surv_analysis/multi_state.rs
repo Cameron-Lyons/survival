@@ -302,11 +302,9 @@ pub fn fit_multi_state_model(
         for (i, row) in transition_probs.iter_mut().enumerate().take(n_states) {
             row[i] = 1.0;
         }
-
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..n_states {
-            for j in 0..n_states {
-                if i != j && config.transition_matrix[i][j] {
+        for (i, transition_row) in config.transition_matrix.iter().enumerate().take(n_states) {
+            for (j, &can_transition) in transition_row.iter().enumerate().take(n_states) {
+                if i != j && can_transition {
                     let key = format!("{}->{}", i, j);
                     if let Some(int_vec) = transition_result.intensities.get(&key) {
                         let intensity = interpolate_intensity(
@@ -554,14 +552,12 @@ pub fn fit_markov_msm(
         log_likelihood: log_lik,
     })
 }
-
-#[allow(clippy::needless_range_loop)]
 fn matrix_exponential(q: &[Vec<f64>], t: f64) -> Vec<Vec<f64>> {
     let n = q.len();
     let mut result = vec![vec![0.0; n]; n];
 
-    for i in 0..n {
-        result[i][i] = 1.0;
+    for (i, row) in result.iter_mut().enumerate().take(n) {
+        row[i] = 1.0;
     }
 
     let mut qt = vec![vec![0.0; n]; n];
@@ -572,8 +568,8 @@ fn matrix_exponential(q: &[Vec<f64>], t: f64) -> Vec<Vec<f64>> {
     }
 
     let mut term = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        term[i][i] = 1.0;
+    for (i, row) in term.iter_mut().enumerate().take(n) {
+        row[i] = 1.0;
     }
 
     let max_iter = 50;

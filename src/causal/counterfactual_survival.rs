@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -37,6 +36,7 @@ impl CounterfactualSurvivalConfig {
         dropout_rate=0.1,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         representation_dim: usize,
         hidden_dims: Option<Vec<usize>>,
@@ -94,8 +94,7 @@ impl CounterfactualSurvivalResult {
     }
 }
 
-#[allow(dead_code)]
-fn compute_wasserstein_distance(repr_treated: &[Vec<f64>], repr_control: &[Vec<f64>]) -> f64 {
+fn _compute_wasserstein_distance(repr_treated: &[Vec<f64>], repr_control: &[Vec<f64>]) -> f64 {
     if repr_treated.is_empty() || repr_control.is_empty() {
         return 0.0;
     }
@@ -546,7 +545,7 @@ mod tests {
     fn test_wasserstein_distance() {
         let treated = vec![vec![1.0, 2.0], vec![1.5, 2.5]];
         let control = vec![vec![0.0, 1.0], vec![0.5, 1.5]];
-        let dist = compute_wasserstein_distance(&treated, &control);
+        let dist = _compute_wasserstein_distance(&treated, &control);
         assert!(dist > 0.0);
     }
 

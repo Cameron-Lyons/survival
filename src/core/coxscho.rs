@@ -48,7 +48,6 @@ pub(crate) fn coxscho(
         let mut deaths = 0.0;
         let mut denom = 0.0;
         let mut efron_wt = 0.0;
-        #[allow(clippy::needless_range_loop)]
         for i in 0..params.nvar {
             a[i] = 0.0;
             a2[i] = 0.0;
@@ -58,14 +57,12 @@ pub(crate) fn coxscho(
             if start[k] < time {
                 let weight = input.score[k];
                 denom += weight;
-                #[allow(clippy::needless_range_loop)]
                 for i in 0..params.nvar {
                     a[i] += weight * covar_cols[i][k];
                 }
                 if stop[k] == time && event[k] == 1.0 {
                     deaths += 1.0;
                     efron_wt += weight;
-                    #[allow(clippy::needless_range_loop)]
                     for i in 0..params.nvar {
                         a2[i] += weight * covar_cols[i][k];
                     }
@@ -76,9 +73,8 @@ pub(crate) fn coxscho(
             }
             k += 1;
         }
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..params.nvar {
-            mean[i] = 0.0;
+        for mean_i in mean.iter_mut().take(params.nvar) {
+            *mean_i = 0.0;
         }
         if deaths > 0.0 {
             for k_death in 0..(deaths as usize) {
@@ -87,7 +83,6 @@ pub(crate) fn coxscho(
                 } else {
                     0.0
                 };
-                #[allow(clippy::needless_range_loop)]
                 for i in 0..params.nvar {
                     let denominator = deaths * (denom - temp * efron_wt);
                     if denominator != 0.0 {
@@ -99,7 +94,6 @@ pub(crate) fn coxscho(
         let mut k = person;
         while k < params.nused && stop[k] == time {
             if event[k] == 1.0 {
-                #[allow(clippy::needless_range_loop)]
                 for i in 0..params.nvar {
                     covar_cols[i][k] -= mean[i];
                 }

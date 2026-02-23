@@ -1,11 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use burn::{
     backend::{Autodiff, NdArray},
@@ -16,7 +10,6 @@ use burn::{
     tensor::activation::relu,
 };
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 use super::utils::{compute_duration_bins, tensor_to_vec_f32};
 
@@ -217,7 +210,7 @@ impl<B: burn::prelude::Backend> TransformerEncoderLayer<B> {
     }
 
     fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
-        let [batch, hidden] = x.dims();
+        let [_batch, hidden] = x.dims();
 
         let q = self.self_attention_query.forward(x.clone());
         let k = self.self_attention_key.forward(x.clone());
@@ -577,14 +570,13 @@ fn compute_ranking_loss(
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct StoredWeights {
-    encoder_weights: Vec<f32>,
-    projection_weights: Vec<f32>,
-    survival_weights: Vec<f32>,
+    _encoder_weights: Vec<f32>,
+    _projection_weights: Vec<f32>,
+    _survival_weights: Vec<f32>,
     embedding_dim: usize,
     projection_dim: usize,
-    n_features: usize,
+    _n_features: usize,
 }
 
 impl std::fmt::Debug for StoredWeights {
@@ -597,17 +589,17 @@ impl std::fmt::Debug for StoredWeights {
 }
 
 fn extract_weights(
-    model: &ContrastiveSurvNetwork<AutodiffBackend>,
+    _model: &ContrastiveSurvNetwork<AutodiffBackend>,
     config: &ContrastiveSurvConfig,
     n_features: usize,
 ) -> StoredWeights {
     StoredWeights {
-        encoder_weights: vec![],
-        projection_weights: vec![],
-        survival_weights: vec![],
+        _encoder_weights: vec![],
+        _projection_weights: vec![],
+        _survival_weights: vec![],
         embedding_dim: config.embedding_dim,
         projection_dim: config.projection_dim,
-        n_features,
+        _n_features: n_features,
     }
 }
 
@@ -628,10 +620,9 @@ pub struct ContrastiveSurvResult {
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
-#[allow(dead_code)]
 pub struct ContrastiveSurv {
     weights: StoredWeights,
-    config: ContrastiveSurvConfig,
+    _config: ContrastiveSurvConfig,
     #[pyo3(get)]
     pub train_loss: Vec<f64>,
     #[pyo3(get)]
@@ -701,7 +692,7 @@ fn fit_contrastive_surv_inner(
     let mut epochs_without_improvement = 0;
     let mut best_weights: Option<StoredWeights> = None;
 
-    for epoch in 0..config.n_epochs {
+    for _epoch in 0..config.n_epochs {
         let mut epoch_indices = train_indices.clone();
         for i in (1..epoch_indices.len()).rev() {
             let j = rng.usize(0..=i);
@@ -790,7 +781,7 @@ fn fit_contrastive_surv_inner(
 
     ContrastiveSurv {
         weights: final_weights,
-        config: config.clone(),
+        _config: config.clone(),
         train_loss: train_loss_history,
         val_loss: val_loss_history,
         duration_cuts,

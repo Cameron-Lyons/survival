@@ -1,15 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 use crate::utilities::statistical::normal_cdf;
 
@@ -406,8 +398,8 @@ fn gamma_fn(x: f64) -> f64 {
     ];
 
     let mut sum = c[0];
-    for i in 1..g + 2 {
-        sum += c[i] / (x + i as f64);
+    for (i, &coeff) in c.iter().enumerate().take(g + 2).skip(1) {
+        sum += coeff / (x + i as f64);
     }
 
     let t = x + g as f64 + 0.5;
@@ -554,6 +546,11 @@ pub fn rd_survival(
             "All input vectors must have the same length",
         ));
     }
+    if !covariates.is_empty() && (n == 0 || !covariates.len().is_multiple_of(n)) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "covariates must be empty or have length n_obs * n_covariates",
+        ));
+    }
 
     let bandwidth = if config.bandwidth > 0.0 {
         config.bandwidth
@@ -667,7 +664,7 @@ fn estimate_km_survival(
         at_risk += kernel_weight(running_var[i] - cutoff, bandwidth, kernel);
     }
 
-    let mut prev_time = 0.0;
+    let _prev_time = 0.0;
     for &i in &sorted_indices {
         if time[i] > max_time {
             break;
@@ -808,7 +805,7 @@ pub fn mediation_survival(
     let mut indirect_effects = Vec::new();
 
     for _ in 0..config.n_bootstrap {
-        let mut boot_indices: Vec<usize> = (0..n).map(|_| rng.usize(0..n)).collect();
+        let boot_indices: Vec<usize> = (0..n).map(|_| rng.usize(0..n)).collect();
 
         let boot_time: Vec<f64> = boot_indices.iter().map(|&i| time[i]).collect();
         let boot_event: Vec<i32> = boot_indices.iter().map(|&i| event[i]).collect();
@@ -904,9 +901,9 @@ fn std_dev(values: &[f64]) -> f64 {
 fn fit_mediator_model(
     treatment: &[f64],
     mediator: &[f64],
-    covariates: &[f64],
+    _covariates: &[f64],
     n: usize,
-    p_cov: usize,
+    _p_cov: usize,
 ) -> (f64, f64) {
     let mut alpha = 0.0;
 

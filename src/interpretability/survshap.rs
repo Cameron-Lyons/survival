@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::type_complexity)]
 
 use pyo3::Py;
 use pyo3::prelude::*;
@@ -489,23 +487,21 @@ impl ShapInteractionResult {
         }
         Ok(self.interaction_values[feature_i][feature_j].clone())
     }
-
-    #[allow(clippy::needless_range_loop)]
     fn top_interactions(&self, top_k: usize) -> Vec<(usize, usize, f64)> {
         let n_features = self.interaction_values.len();
         let mut interactions: Vec<(usize, usize, f64)> = Vec::new();
 
         if let Some(ref agg) = self.aggregated_interactions {
-            for i in 0..n_features {
-                for j in (i + 1)..n_features {
-                    interactions.push((i, j, agg[i][j]));
+            for (i, row) in agg.iter().enumerate().take(n_features) {
+                for (j, &value) in row.iter().enumerate().take(n_features).skip(i + 1) {
+                    interactions.push((i, j, value));
                 }
             }
         } else {
             let n_times = self.time_points.len();
-            for i in 0..n_features {
-                for j in (i + 1)..n_features {
-                    let mean_interaction: f64 = self.interaction_values[i][j]
+            for (i, row) in self.interaction_values.iter().enumerate().take(n_features) {
+                for (j, values) in row.iter().enumerate().take(n_features).skip(i + 1) {
+                    let mean_interaction: f64 = values
                         .iter()
                         .map(|v| v.abs())
                         .sum::<f64>()
@@ -675,6 +671,7 @@ fn solve_positive_definite(a: &mut [f64], b: &[f64], n: usize) -> Vec<f64> {
     x
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_coalition_predictions(
     _x_explain: &[f64],
     _x_background: &[f64],
@@ -733,6 +730,7 @@ fn evaluate_coalition_predictions(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_shap_inner(
     x_explain: &[f64],
     x_background: &[f64],
@@ -814,6 +812,7 @@ fn compute_shap_inner(
     config=None,
     aggregation_method=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn survshap(
     x_explain: Vec<f64>,
     x_background: Vec<f64>,
@@ -894,6 +893,8 @@ pub fn survshap(
     confidence_level=0.95,
     config=None
 ))]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn survshap_bootstrap(
     x_explain: Vec<f64>,
     x_background: Vec<f64>,
@@ -1043,6 +1044,7 @@ pub fn survshap_bootstrap(
     seed=None,
     parallel=true
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn permutation_importance(
     predictions: Vec<f64>,
     time_points: Vec<f64>,
@@ -1412,6 +1414,7 @@ pub fn aggregate_survshap(
     config=None,
     aggregation_method=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn survshap_from_model(
     py: Python<'_>,
     x_explain: Vec<f64>,

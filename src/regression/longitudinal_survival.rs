@@ -1,6 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -185,6 +182,7 @@ impl JointLongSurvResult {
     survival_covariates,
     config
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn joint_longitudinal_model(
     subject_id: Vec<usize>,
     longitudinal_times: Vec<f64>,

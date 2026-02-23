@@ -1,16 +1,8 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use crate::utilities::statistical::sample_normal;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 fn sample_gamma(rng: &mut fastrand::Rng, shape: f64, scale: f64) -> f64 {
     if shape < 1.0 {
@@ -111,6 +103,11 @@ pub fn dirichlet_process_survival(
             "time and event must have same length",
         ));
     }
+    if covariates.len() != n * n_covariates {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "covariates length must equal n_obs * n_covariates",
+        ));
+    }
 
     let mut rng = match config.seed {
         Some(s) => fastrand::Rng::with_seed(s),
@@ -124,8 +121,8 @@ pub fn dirichlet_process_survival(
         .collect();
 
     let mut cluster_assignments = vec![0; n];
-    for i in 0..n {
-        cluster_assignments[i] = rng.usize(0..config.n_components);
+    for assignment in cluster_assignments.iter_mut().take(n) {
+        *assignment = rng.usize(0..config.n_components);
     }
 
     let mut cluster_params: Vec<(f64, f64)> =
@@ -169,8 +166,12 @@ pub fn dirichlet_process_survival(
             let u: f64 = rng.f64();
             let mut cumsum = 0.0;
             let mut new_cluster = config.n_components;
-            for k in 0..=config.n_components {
-                cumsum += probs_normalized[k];
+            for (k, prob) in probs_normalized
+                .iter()
+                .enumerate()
+                .take(config.n_components + 1)
+            {
+                cumsum += *prob;
                 if u <= cumsum {
                     new_cluster = k;
                     break;
@@ -184,7 +185,7 @@ pub fn dirichlet_process_survival(
             cluster_assignments[i] = new_cluster.min(cluster_params.len() - 1);
         }
 
-        for k in 0..cluster_params.len() {
+        for (k, params) in cluster_params.iter_mut().enumerate() {
             let cluster_obs: Vec<usize> = (0..n).filter(|&i| cluster_assignments[i] == k).collect();
 
             if !cluster_obs.is_empty() {
@@ -192,11 +193,11 @@ pub fn dirichlet_process_survival(
                     &cluster_obs,
                     &time,
                     &event,
-                    cluster_params[k].0,
-                    cluster_params[k].1,
+                    params.0,
+                    params.1,
                     &mut rng,
                 );
-                cluster_params[k] = (new_shape, new_rate);
+                *params = (new_shape, new_rate);
             }
         }
 
@@ -216,10 +217,9 @@ pub fn dirichlet_process_survival(
                 .map(|&t| {
                     let mut s = 0.0;
                     let mut total = 0.0;
-                    for k in 0..cluster_params.len() {
+                    for (k, &(shape, rate)) in cluster_params.iter().enumerate() {
                         let n_k = cluster_assignments.iter().filter(|&&c| c == k).count();
                         if n_k > 0 {
-                            let (shape, rate) = cluster_params[k];
                             let surv_k = (-(t * rate).powf(shape)).exp();
                             s += n_k as f64 * surv_k;
                             total += n_k as f64;
@@ -300,7 +300,7 @@ fn sample_weibull_posterior(
     time: &[f64],
     event: &[i32],
     shape: f64,
-    rate: f64,
+    _rate: f64,
     rng: &mut fastrand::Rng,
 ) -> (f64, f64) {
     let sum_events: f64 = obs_idx.iter().map(|&i| event[i] as f64).sum();

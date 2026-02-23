@@ -1,11 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use burn::{
     backend::{Autodiff, NdArray},
@@ -13,10 +7,7 @@ use burn::{
     nn::{Dropout, DropoutConfig, Linear, LinearConfig},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    tensor::{
-        activation::{relu, tanh},
-        backend::AutodiffBackend as AutodiffBackendTrait,
-    },
+    tensor::activation::{relu, tanh},
 };
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -432,8 +423,12 @@ fn predict_with_weights(
 
         let input_size = current.len();
         let mut output = 0.0;
-        for k in 0..input_size {
-            output += current[k] * weights.output_weights[k] as f64;
+        for (&value, &weight) in current
+            .iter()
+            .zip(weights.output_weights.iter())
+            .take(input_size)
+        {
+            output += value * weight as f64;
         }
         results.push(output);
     }
@@ -523,7 +518,7 @@ fn fit_deep_surv_inner(
 
     let activation = config.activation;
 
-    for epoch in 0..config.n_epochs {
+    for _epoch in 0..config.n_epochs {
         let mut epoch_indices = train_indices.clone();
         for i in (1..epoch_indices.len()).rev() {
             let j = rng.usize(0..=i);

@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -40,6 +39,7 @@ impl DySurvConfig {
         kl_weight=0.1,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         latent_dim: usize,
         hidden_dims: Option<Vec<usize>>,
@@ -92,8 +92,7 @@ fn softplus(x: f64) -> f64 {
     if x > 20.0 { x } else { (1.0 + x.exp()).ln() }
 }
 
-#[allow(dead_code)]
-fn reparameterize(mu: f64, logvar: f64, rng: &mut fastrand::Rng) -> f64 {
+fn _reparameterize(mu: f64, logvar: f64, rng: &mut fastrand::Rng) -> f64 {
     let std = (logvar * 0.5).exp();
     let u1: f64 = rng.f64();
     let u2: f64 = rng.f64();
@@ -101,8 +100,7 @@ fn reparameterize(mu: f64, logvar: f64, rng: &mut fastrand::Rng) -> f64 {
     mu + std * normal
 }
 
-#[allow(dead_code)]
-fn kl_divergence(mu: f64, logvar: f64) -> f64 {
+fn _kl_divergence(mu: f64, logvar: f64) -> f64 {
     -0.5 * (1.0 + logvar - mu.powi(2) - logvar.exp())
 }
 

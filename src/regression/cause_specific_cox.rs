@@ -1,9 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use crate::utilities::matrix::invert_matrix;
 use pyo3::prelude::*;
@@ -137,7 +133,7 @@ impl CauseSpecificCoxResult {
 
     fn predict_cumulative_hazard(&self, x: Vec<f64>, n_obs: usize) -> Vec<Vec<f64>> {
         let n_vars = self.coefficients.len();
-        let n_times = self.cumulative_baseline_hazard.len();
+        let _n_times = self.cumulative_baseline_hazard.len();
 
         (0..n_obs)
             .into_par_iter()
@@ -205,7 +201,7 @@ fn compute_cause_specific_gradient_hessian(
     beta: &[f64],
     cause_of_interest: i32,
     treat_other_as: CensoringType,
-    ties: &str,
+    _ties: &str,
 ) -> (Vec<f64>, Vec<Vec<f64>>, f64) {
     let eta: Vec<f64> = (0..n)
         .map(|i| {
@@ -266,7 +262,7 @@ fn compute_cause_specific_gradient_hessian(
                 gradient[j] += weights[idx] * (xij - x_bar);
 
                 for k in 0..p {
-                    let xik = x[idx * p + k];
+                    let _xik = x[idx * p + k];
                     let x_bar_k = weighted_x[k] / risk_sum;
                     let x_outer_bar = weighted_x_outer[j][k] / risk_sum;
                     hessian[j][k] -= weights[idx] * (x_outer_bar - x_bar * x_bar_k);
@@ -297,11 +293,12 @@ fn solve_linear_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
             return None;
         }
 
+        let row_i_tail: Vec<f64> = aug[i][i..n].to_vec();
         for k in (i + 1)..n {
             let factor = aug[k][i] / aug[i][i];
             rhs[k] -= factor * rhs[i];
-            for j in i..n {
-                aug[k][j] -= factor * aug[i][j];
+            for (aug_kj, &aug_ij) in aug[k][i..n].iter_mut().zip(row_i_tail.iter()) {
+                *aug_kj -= factor * aug_ij;
             }
         }
     }
@@ -358,7 +355,7 @@ fn compute_baseline_hazard(
         let current_time = time[idx];
 
         let mut n_events = 0.0;
-        let start_i = i;
+        let _start_i = i;
         while i < n
             && (time[sorted_indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON
         {

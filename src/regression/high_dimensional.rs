@@ -1,12 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -163,7 +156,7 @@ pub fn group_lasso_cox(
         (0..n * p)
             .map(|idx| {
                 let j = idx % p;
-                let i = idx / p;
+                let _i = idx / p;
                 (covariates[idx] - x_means[j]) / x_stds[j]
             })
             .collect()
@@ -228,7 +221,7 @@ pub fn group_lasso_cox(
                 }
             }
 
-            let mut z: Vec<f64> = indices
+            let z: Vec<f64> = indices
                 .iter()
                 .enumerate()
                 .map(|(k, &j)| {
@@ -717,7 +710,7 @@ pub fn sis_cox(
         let mut selected: Vec<usize> = ranking[..n_select.min(p)].to_vec();
         iteration_selections.push(selected.clone());
 
-        for iter in 0..config.max_iter {
+        for _iter in 0..config.max_iter {
             let residual_scores: Vec<f64> = (0..p)
                 .map(|j| {
                     if selected.contains(&j) {

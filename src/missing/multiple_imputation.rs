@@ -1,11 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -249,7 +243,7 @@ fn impute_pmm(
                 .map(|(&obs_pred, &val)| ((other_pred - obs_pred).abs(), val))
                 .collect();
 
-            let _ = distances.select_nth_unstable_by(k_donors - 1, |a, b| {
+            distances.select_nth_unstable_by(k_donors - 1, |a, b| {
                 a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
             });
             let donor_idx = rng.usize(0..k_donors);
@@ -263,7 +257,7 @@ fn impute_regression(
     missing_idx: &[usize],
     observed_idx: &[usize],
     var_j: usize,
-    n_obs: usize,
+    _n_obs: usize,
     n_vars: usize,
     rng: &mut fastrand::Rng,
 ) {
@@ -343,7 +337,7 @@ fn impute_knn(
     missing_idx: &[usize],
     observed_idx: &[usize],
     var_j: usize,
-    n_obs: usize,
+    _n_obs: usize,
     n_vars: usize,
     k: usize,
 ) {
@@ -510,8 +504,8 @@ fn rubin_rules(results: &[Vec<f64>], n_vars: usize) -> MultipleImputationResult 
             pooled_coef[j] += result[j];
         }
     }
-    for j in 0..n_vars {
-        pooled_coef[j] /= m as f64;
+    for coef in pooled_coef.iter_mut().take(n_vars) {
+        *coef /= m as f64;
     }
 
     let mut within_var = vec![0.0; n_vars];
@@ -525,8 +519,8 @@ fn rubin_rules(results: &[Vec<f64>], n_vars: usize) -> MultipleImputationResult 
             within_var[j] += se.powi(2);
         }
     }
-    for j in 0..n_vars {
-        within_var[j] /= m as f64;
+    for var in within_var.iter_mut().take(n_vars) {
+        *var /= m as f64;
     }
 
     let mut between_var = vec![0.0; n_vars];
@@ -535,8 +529,8 @@ fn rubin_rules(results: &[Vec<f64>], n_vars: usize) -> MultipleImputationResult 
             between_var[j] += (result[j] - pooled_coef[j]).powi(2);
         }
     }
-    for j in 0..n_vars {
-        between_var[j] /= (m - 1).max(1) as f64;
+    for var in between_var.iter_mut().take(n_vars) {
+        *var /= (m - 1).max(1) as f64;
     }
 
     let total_var: Vec<f64> = (0..n_vars)
@@ -652,6 +646,26 @@ pub fn analyze_missing_pattern(
     missing_indicators: Vec<bool>,
     n_imputations: usize,
 ) -> PyResult<(Vec<f64>, Vec<String>, bool)> {
+    if time.len() != n_obs || status.len() != n_obs {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time and status must have length n_obs",
+        ));
+    }
+    if x.len() != n_obs * n_vars {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x must have length n_obs * n_vars",
+        ));
+    }
+    if missing_indicators.len() != n_obs * n_vars {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "missing_indicators must have length n_obs * n_vars",
+        ));
+    }
+    if n_imputations == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_imputations must be > 0",
+        ));
+    }
     let mut missing_per_var = vec![0usize; n_vars];
     for i in 0..n_obs {
         for j in 0..n_vars {

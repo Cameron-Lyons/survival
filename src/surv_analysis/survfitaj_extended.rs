@@ -1,9 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -207,7 +203,7 @@ fn compute_transition_matrix(
     from_state: &[usize],
     to_state: &[usize],
     time: &[f64],
-    weights: &[f64],
+    _weights: &[f64],
     n_states: usize,
     event_time: f64,
 ) -> (Vec<Vec<f64>>, Vec<usize>, Vec<Vec<usize>>) {
@@ -270,8 +266,8 @@ fn matrix_multiply(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
 
 fn identity_matrix(n: usize) -> Vec<Vec<f64>> {
     let mut mat = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        mat[i][i] = 1.0;
+    for (i, row) in mat.iter_mut().enumerate().take(n) {
+        row[i] = 1.0;
     }
     mat
 }
@@ -288,21 +284,20 @@ fn compute_greenwood_variance(
         let p = &state_probs[t];
 
         for i in 0..n_states {
-            for j in 0..n_states {
+            for (j, variance_ij) in variance[t][i].iter_mut().enumerate().take(n_states) {
                 let mut var_ij = 0.0;
 
-                for s in 0..=t {
-                    let tm = &transition_matrices[s];
-                    for k in 0..n_states {
+                for tm in transition_matrices.iter().take(t + 1) {
+                    for (k, &p_ik) in p[i].iter().enumerate().take(n_states) {
                         if tm.n_at_risk[k] > 1 {
                             let n_k = tm.n_at_risk[k] as f64;
                             let p_kj = tm.matrix[k][j];
-                            var_ij += p[i][k] * p[i][k] * p_kj * (1.0 - p_kj) / (n_k - 1.0);
+                            var_ij += p_ik * p_ik * p_kj * (1.0 - p_kj) / (n_k - 1.0);
                         }
                     }
                 }
 
-                variance[t][i][j] = var_ij.max(0.0);
+                *variance_ij = var_ij.max(0.0);
             }
         }
     }
@@ -322,24 +317,22 @@ fn compute_aalen_variance(
         let p = &state_probs[t];
 
         for i in 0..n_states {
-            for j in 0..n_states {
+            for (j, variance_ij) in variance[t][i].iter_mut().enumerate().take(n_states) {
                 let mut var_ij = 0.0;
 
-                for s in 0..=t {
-                    let tm = &transition_matrices[s];
-                    for k in 0..n_states {
+                for tm in transition_matrices.iter().take(t + 1) {
+                    for (k, &p_ik) in p[i].iter().enumerate().take(n_states) {
                         if tm.n_at_risk[k] > 0 {
                             let n_k = tm.n_at_risk[k] as f64;
                             let n_kj = tm.n_transitions[k][j] as f64;
                             if n_k > 0.0 {
-                                var_ij +=
-                                    p[i][k] * p[i][k] * n_kj * (n_k - n_kj) / (n_k * n_k * n_k);
+                                var_ij += p_ik * p_ik * n_kj * (n_k - n_kj) / (n_k * n_k * n_k);
                             }
                         }
                     }
                 }
 
-                variance[t][i][j] = var_ij.max(0.0);
+                *variance_ij = var_ij.max(0.0);
             }
         }
     }
@@ -506,7 +499,7 @@ pub fn survfitaj_extended(
         }
     };
 
-    let alpha = 1.0 - config.confidence_level;
+    let _alpha = 1.0 - config.confidence_level;
     let z = match config.confidence_level {
         c if c >= 0.99 => 2.576,
         c if c >= 0.95 => 1.96,

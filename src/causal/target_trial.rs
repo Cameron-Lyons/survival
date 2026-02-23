@@ -1,12 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -88,11 +81,11 @@ impl TrialEmulationConfig {
 struct ClonedObservation {
     original_id: usize,
     clone_type: i32,
-    baseline_time: f64,
+    _baseline_time: f64,
     followup_time: f64,
     event: i32,
     censored_by_protocol: bool,
-    covariates: Vec<f64>,
+    _covariates: Vec<f64>,
     weight: f64,
 }
 
@@ -114,7 +107,7 @@ fn create_clones(
     let treated_clone = ClonedObservation {
         original_id: subject_id,
         clone_type: 1,
-        baseline_time: 0.0,
+        _baseline_time: 0.0,
         followup_time: match treatment_time {
             Some(t_time) if t_time <= config.grace_period => {
                 (obs_time - t_time).min(config.max_followup)
@@ -130,7 +123,7 @@ fn create_clones(
         censored_by_protocol: treatment_time
             .map(|t| t > config.grace_period)
             .unwrap_or(true),
-        covariates: covariates.clone(),
+        _covariates: covariates.clone(),
         weight: 1.0,
     };
     clones.push(treated_clone);
@@ -138,7 +131,7 @@ fn create_clones(
     let control_clone = ClonedObservation {
         original_id: subject_id,
         clone_type: 0,
-        baseline_time: 0.0,
+        _baseline_time: 0.0,
         followup_time: match treatment_time {
             Some(t_time) => t_time.min(obs_time).min(config.max_followup),
             None => obs_time.min(config.max_followup),
@@ -149,7 +142,7 @@ fn create_clones(
             None => obs_status,
         },
         censored_by_protocol: treatment_time.map(|t| t < obs_time).unwrap_or(false),
-        covariates,
+        _covariates: covariates,
         weight: 1.0,
     };
     clones.push(control_clone);
@@ -159,8 +152,8 @@ fn create_clones(
 
 fn compute_censoring_weights(
     clones: &mut [ClonedObservation],
-    x_censoring: &[f64],
-    n_vars_censoring: usize,
+    _x_censoring: &[f64],
+    _n_vars_censoring: usize,
     config: &TrialEmulationConfig,
 ) {
     if !config.clone_censor_weighting {
@@ -367,7 +360,7 @@ fn compute_rmst(time_points: &[f64], survival: &[f64], tau: f64) -> f64 {
     rmst
 }
 
-fn estimate_hazard_ratio(clones: &[ClonedObservation], n_vars: usize) -> f64 {
+fn estimate_hazard_ratio(clones: &[ClonedObservation], _n_vars: usize) -> f64 {
     let mut beta = 0.0;
 
     for _ in 0..50 {
@@ -409,10 +402,10 @@ fn bootstrap_standard_errors(
     status: &[i32],
     treatment_time: &[Option<f64>],
     x_baseline: &[f64],
-    x_censoring: &[f64],
+    _x_censoring: &[f64],
     n_obs: usize,
     n_vars_baseline: usize,
-    n_vars_censoring: usize,
+    _n_vars_censoring: usize,
     config: &TrialEmulationConfig,
 ) -> (f64, f64) {
     let results: Vec<(f64, f64)> = (0..config.n_bootstrap)

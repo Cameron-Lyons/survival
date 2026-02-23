@@ -1,8 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_mut)]
-
 use pyo3::prelude::*;
 
 use crate::utilities::statistical::lower_incomplete_gamma;
@@ -340,7 +335,7 @@ impl CrossValidatedScore {
         )
     }
 
-    fn confidence_interval(&self, alpha: f64) -> (f64, f64) {
+    fn confidence_interval(&self, _alpha: f64) -> (f64, f64) {
         let z = 1.96;
         let margin = z * self.std_score / (self.n_folds as f64).sqrt();
         (self.mean_score - margin, self.mean_score + margin)

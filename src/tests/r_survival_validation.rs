@@ -579,7 +579,6 @@ mod tests {
         for i in 0..n {
             covar[[i, 0]] = group[i] as f64;
         }
-        let _ = &group;
 
         let mut strata = Array1::zeros(n);
         for i in 0..n {

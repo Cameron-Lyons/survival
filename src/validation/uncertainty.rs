@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -74,8 +73,7 @@ impl UncertaintyResult {
     }
 }
 
-#[allow(dead_code)]
-fn apply_dropout(values: &[f64], dropout_rate: f64, rng: &mut fastrand::Rng) -> Vec<f64> {
+fn _apply_dropout(values: &[f64], dropout_rate: f64, rng: &mut fastrand::Rng) -> Vec<f64> {
     let scale = 1.0 / (1.0 - dropout_rate);
     values
         .iter()
@@ -251,13 +249,11 @@ pub fn ensemble_uncertainty(
                 .collect()
         })
         .collect();
-
-    #[allow(clippy::needless_range_loop)]
     let model_disagreement: Vec<f64> = (0..n_obs)
         .into_par_iter()
         .map(|i| {
             let mut total_disagreement = 0.0;
-            for t_idx in 0..n_times {
+            for (t_idx, _) in model_predictions[0][i].iter().enumerate().take(n_times) {
                 for m1 in 0..n_models {
                     for m2 in (m1 + 1)..n_models {
                         total_disagreement += (model_predictions[m1][i][t_idx]
@@ -1169,7 +1165,7 @@ mod tests {
         let mut rng = fastrand::Rng::new();
         rng.seed(42);
         let values = vec![1.0, 1.0, 1.0, 1.0, 1.0];
-        let dropped = apply_dropout(&values, 0.5, &mut rng);
+        let dropped = _apply_dropout(&values, 0.5, &mut rng);
         assert_eq!(dropped.len(), 5);
     }
 

@@ -120,7 +120,6 @@ impl CoxState {
                 }
                 let risk_score = self.score[person].exp();
                 risk_sum += self.weights[person] * risk_score;
-                let _ = self.weights[person] * risk_score * risk_score;
             }
             for person in istrat..self.weights.len() {
                 if self.strata[person] != self.strata[istrat] {
@@ -200,7 +199,6 @@ impl CoxState {
                 {
                     let risk_score = self.score[person].exp();
                     risk_sum -= self.weights[person] * risk_score;
-                    let _ = self.weights[person] * risk_score * risk_score;
                 }
             }
             while istrat < self.strata.len() {

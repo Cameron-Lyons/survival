@@ -137,12 +137,12 @@ pub fn flexible_parametric_model(
 
         let hazard: Vec<f64> = eta.iter().map(|e| e.exp()).collect();
 
-        let mut log_lik = 0.0;
+        let mut _log_lik = 0.0;
         for i in 0..n {
             if event[i] == 1 {
-                log_lik += eta[i];
+                _log_lik += eta[i];
             }
-            log_lik -= hazard[i] * time[i];
+            _log_lik -= hazard[i] * time[i];
         }
 
         let mut grad_gamma: Vec<f64> = vec![0.0; n_spline];
@@ -178,11 +178,9 @@ pub fn flexible_parametric_model(
             beta[j] += learning_rate * grad_beta[j];
         }
 
-        let _ = log_lik;
     }
 
     let mut eta: Vec<f64> = vec![0.0; n];
-    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         for j in 0..n_spline.min(spline_basis[i].len()) {
             eta[i] += gamma[j] * spline_basis[i][j];
@@ -499,8 +497,6 @@ pub fn predict_hazard_spline(
     let mut hazard = vec![0.0; n_times];
     let mut cumulative_hazard = vec![0.0; n_times];
     let mut survival = vec![1.0; n_times];
-
-    #[allow(clippy::needless_range_loop)]
     for i in 0..n_times {
         let mut log_hazard = cov_contribution;
 

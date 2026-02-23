@@ -1,6 +1,4 @@
 #![cfg(test)]
-#![allow(dead_code)]
-
 pub const STRICT_TOL: f64 = 1e-4;
 pub const STANDARD_TOL: f64 = 1e-3;
 pub const LOOSE_TOL: f64 = 0.05;

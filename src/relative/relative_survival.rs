@@ -1,15 +1,9 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
     unused_parens,
-    clippy::needless_range_loop,
     clippy::too_many_arguments
 )]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -55,6 +49,13 @@ pub fn relative_survival(
             "All input arrays must have same length",
         ));
     }
+    if let Some(ref follow_up) = follow_up_years
+        && follow_up.len() != n
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "follow_up_years must have length n when provided",
+        ));
+    }
 
     let mut unique_times: Vec<f64> = time.clone();
     unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -87,14 +88,14 @@ pub fn relative_survival(
 
     for &t in &unique_times {
         let mut d = 0;
-        let mut expected_d = 0.0;
+        let mut _expected_d = 0.0;
 
         while time_idx < n && time[indices[time_idx]] <= t {
             let idx = indices[time_idx];
             if status[idx] == 1 {
                 d += 1;
             }
-            expected_d += expected_hazard[idx] * (time[idx] - prev_time);
+            _expected_d += expected_hazard[idx] * (time[idx] - prev_time);
             time_idx += 1;
         }
 

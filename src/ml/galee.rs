@@ -1,11 +1,5 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use burn::{
     backend::{Autodiff, NdArray},
@@ -16,7 +10,6 @@ use burn::{
     tensor::activation::relu,
 };
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 use super::utils::{compute_duration_bins, tensor_to_vec_f32};
 
@@ -217,7 +210,7 @@ impl<B: burn::prelude::Backend> HealthStateEncoder<B> {
 
     fn forward(&self, x: Tensor<B, 3>, training: bool) -> Tensor<B, 3> {
         let [batch, seq_len, input_size] = x.dims();
-        let device = x.device();
+        let _device = x.device();
 
         let x_2d: Tensor<B, 2> = x.reshape([batch * seq_len, input_size]);
         let mut h = self.input_projection.forward(x_2d);
@@ -254,7 +247,7 @@ impl<B: burn::prelude::Backend> MonotonicConstraintLayer<B> {
 
     fn forward(&self, health_states: Tensor<B, 3>) -> Tensor<B, 3> {
         let [batch, seq_len, health_dim] = health_states.dims();
-        let device = health_states.device();
+        let _device = health_states.device();
 
         if seq_len < 2 {
             return health_states;
@@ -307,7 +300,7 @@ impl<B: burn::prelude::Backend> GlobalAttention<B> {
 
     fn forward(&self, x: Tensor<B, 3>) -> (Tensor<B, 2>, Tensor<B, 2>) {
         let [batch, seq_len, hidden] = x.dims();
-        let device = x.device();
+        let _device = x.device();
 
         let x_2d: Tensor<B, 2> = x.clone().reshape([batch * seq_len, hidden]);
 
@@ -558,14 +551,13 @@ fn compute_galee_loss(
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct StoredWeights {
-    encoder_weights: Vec<f32>,
-    attention_weights: Vec<f32>,
-    hazard_weights: Vec<f32>,
+    _encoder_weights: Vec<f32>,
+    _attention_weights: Vec<f32>,
+    _hazard_weights: Vec<f32>,
     health_dim: usize,
     num_durations: usize,
-    n_features: usize,
+    _n_features: usize,
 }
 
 impl std::fmt::Debug for StoredWeights {
@@ -578,17 +570,17 @@ impl std::fmt::Debug for StoredWeights {
 }
 
 fn extract_weights(
-    model: &GALEENetwork<AutodiffBackend>,
+    _model: &GALEENetwork<AutodiffBackend>,
     config: &GALEEConfig,
     n_features: usize,
 ) -> StoredWeights {
     StoredWeights {
-        encoder_weights: vec![],
-        attention_weights: vec![],
-        hazard_weights: vec![],
+        _encoder_weights: vec![],
+        _attention_weights: vec![],
+        _hazard_weights: vec![],
         health_dim: config.health_dim,
         num_durations: config.num_durations,
-        n_features,
+        _n_features: n_features,
     }
 }
 
@@ -605,10 +597,9 @@ pub struct GALEEResult {
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
-#[allow(dead_code)]
 pub struct GALEE {
     weights: StoredWeights,
-    config: GALEEConfig,
+    _config: GALEEConfig,
     #[pyo3(get)]
     pub duration_cuts: Vec<f64>,
     #[pyo3(get)]
@@ -643,7 +634,7 @@ impl GALEE {
 
 fn fit_galee_inner(
     x: &[f64],
-    seq_lengths: &[usize],
+    _seq_lengths: &[usize],
     n_obs: usize,
     max_seq_len: usize,
     n_features: usize,
@@ -678,7 +669,7 @@ fn fit_galee_inner(
     let mut epochs_without_improvement = 0;
     let mut best_weights: Option<StoredWeights> = None;
 
-    for epoch in 0..config.n_epochs {
+    for _epoch in 0..config.n_epochs {
         let mut epoch_indices = train_indices.clone();
         for i in (1..epoch_indices.len()).rev() {
             let j = rng.usize(0..=i);
@@ -781,7 +772,7 @@ fn fit_galee_inner(
 
     GALEE {
         weights: final_weights,
-        config: config.clone(),
+        _config: config.clone(),
         duration_cuts: cuts,
         train_loss: train_loss_history,
         val_loss: val_loss_history,

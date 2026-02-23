@@ -1,15 +1,7 @@
 #![allow(
-    unused_variables,
-    unused_imports,
-    unused_mut,
-    unused_assignments,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::needless_range_loop
-)]
+    clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 use crate::utilities::statistical::normal_cdf;
 
@@ -350,6 +342,11 @@ pub fn copula_censoring_model(
             "All input vectors must have the same length",
         ));
     }
+    if !covariates.is_empty() && (n == 0 || !covariates.len().is_multiple_of(n)) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "covariates must be empty or have length n_obs * n_covariates",
+        ));
+    }
 
     let max_time = time.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let eval_times: Vec<f64> = (0..config.n_grid)
@@ -590,6 +587,11 @@ pub fn sensitivity_bounds_survival(
             "All input vectors must have the same length",
         ));
     }
+    if !covariates.is_empty() && (n == 0 || !covariates.len().is_multiple_of(n)) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "covariates must be empty or have length n_obs * n_covariates",
+        ));
+    }
 
     let max_time = tau.min(time.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
     let eval_times: Vec<f64> = (0..config.n_grid)
@@ -777,6 +779,11 @@ pub fn mnar_sensitivity_survival(
     if event.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "time and event must have same length",
+        ));
+    }
+    if !covariates.is_empty() && (n == 0 || !covariates.len().is_multiple_of(n)) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "covariates must be empty or have length n_obs * n_covariates",
         ));
     }
 

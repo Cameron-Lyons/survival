@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -46,6 +45,7 @@ impl SurvivalTransformerConfig {
         n_epochs=100,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         d_model: usize,
         n_heads: usize,
@@ -85,8 +85,7 @@ impl SurvivalTransformerConfig {
     }
 }
 
-#[allow(dead_code)]
-fn positional_encoding(seq_len: usize, d_model: usize) -> Vec<Vec<f64>> {
+fn _positional_encoding(seq_len: usize, d_model: usize) -> Vec<Vec<f64>> {
     (0..seq_len)
         .map(|pos| {
             (0..d_model)
@@ -397,7 +396,7 @@ mod tests {
 
     #[test]
     fn test_positional_encoding() {
-        let pe = positional_encoding(10, 8);
+        let pe = _positional_encoding(10, 8);
         assert_eq!(pe.len(), 10);
         assert_eq!(pe[0].len(), 8);
     }

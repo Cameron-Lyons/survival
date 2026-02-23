@@ -1,7 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
@@ -233,7 +229,7 @@ fn fit_weibull_mle(times: &[f64]) -> (f64, f64) {
     }
 
     let n = times.len() as f64;
-    let mean_t = times.iter().sum::<f64>() / n;
+    let _mean_t = times.iter().sum::<f64>() / n;
 
     let mut shape = 1.0;
     for _ in 0..50 {
@@ -456,15 +452,13 @@ pub fn fit_semi_markov(
         if t == 0.0 {
             probs[0] = 1.0;
         } else {
-            #[allow(clippy::needless_range_loop)]
             for state in 0..config.n_states {
                 if config.absorbing_states.contains(&state) {
                     let mut absorb_prob = 0.0;
-                    for from in 0..config.n_states {
+                    for (from, params) in sojourn_params.iter().enumerate().take(config.n_states) {
                         if !config.absorbing_states.contains(&from) {
                             let key = format!("{}_{}", from, state);
                             let trans_prob = *transition_probs.get(&key).unwrap_or(&0.0);
-                            let params = &sojourn_params[from];
                             let cdf = match params.distribution {
                                 SojournDistribution::Weibull
                                 | SojournDistribution::GeneralizedGamma => {
