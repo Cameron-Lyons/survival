@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use burn::{
     backend::{Autodiff, NdArray},
     module::Module,
@@ -71,6 +69,7 @@ impl DeepHitConfig {
         validation_fraction=0.1,
         use_batch_norm=true
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         shared_layers: Option<Vec<usize>>,
         cause_specific_layers: Option<Vec<usize>>,
@@ -469,6 +468,7 @@ fn compute_ranking_loss(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_combined_gradient(
     _logits: &[f32],
     pmf: &[f32],

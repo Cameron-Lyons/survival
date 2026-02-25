@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -238,6 +236,7 @@ fn weighted_cox_fit(
 
 #[pyfunction]
 #[pyo3(signature = (time, status, treatment, x_outcome, x_propensity, n_obs, n_outcome_vars, n_propensity_vars, stabilized=true, trim=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn marginal_structural_model(
     time: Vec<f64>,
     status: Vec<i32>,

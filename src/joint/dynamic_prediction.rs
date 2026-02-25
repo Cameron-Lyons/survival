@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::utilities::statistical::sample_normal;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -44,6 +42,7 @@ pub struct DynamicPredictionResult {
     prediction_times,
     n_monte_carlo=500
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn dynamic_prediction(
     beta_long: Vec<f64>,
     gamma_surv: Vec<f64>,
@@ -213,6 +212,7 @@ pub fn dynamic_prediction(
     event_status,
     horizon
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn dynamic_auc(
     beta_long: Vec<f64>,
     gamma_surv: Vec<f64>,

@@ -2,6 +2,9 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
+type PredictionMatrix = Vec<Vec<f64>>;
+type QuantilePredictionBands = (PredictionMatrix, PredictionMatrix, PredictionMatrix);
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct MCDropoutConfig {
@@ -340,12 +343,7 @@ pub fn quantile_regression_intervals(
     let median_q = quantiles.get(1).copied().unwrap_or(0.5);
     let upper_q = quantiles.last().copied().unwrap_or(0.975);
 
-    #[allow(clippy::type_complexity)]
-    let (lower_quantile, median, upper_quantile): (
-        Vec<Vec<f64>>,
-        Vec<Vec<f64>>,
-        Vec<Vec<f64>>,
-    ) = (0..n_obs)
+    let (lower_quantile, median, upper_quantile): QuantilePredictionBands = (0..n_obs)
         .into_par_iter()
         .map(|i| {
             let mut lower = vec![0.0; n_times];

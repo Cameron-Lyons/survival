@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -65,6 +63,7 @@ impl FastCoxConfig {
         standardize=true,
         use_simd=true
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         lambda: f64,
         l1_ratio: f64,
@@ -269,6 +268,7 @@ fn precompute_risk_set_cumsum(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_gradient_hessian_diag_fast(
     x: &[f64],
     n: usize,
@@ -373,6 +373,7 @@ fn apply_edpp_screening(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_cox_deviance(
     x: &[f64],
     n: usize,
@@ -416,6 +417,7 @@ fn compute_cox_deviance(
     -2.0 * loglik
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cyclic_coordinate_descent_fast(
     x: &[f64],
     n: usize,
@@ -536,6 +538,7 @@ fn cyclic_coordinate_descent_fast(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, config, weights=None, offset=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn fast_cox(
     x: Vec<f64>,
     n_obs: usize,
@@ -648,6 +651,7 @@ pub fn fast_cox(
     tol=1e-7,
     screening=ScreeningRule::Strong
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn fast_cox_path(
     x: Vec<f64>,
     n_obs: usize,
@@ -767,6 +771,7 @@ pub fn fast_cox_path(
     screening=ScreeningRule::Strong,
     seed=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn fast_cox_cv(
     x: Vec<f64>,
     n_obs: usize,
@@ -804,72 +809,81 @@ pub fn fast_cox_cv(
         fold_assign.swap(i, j);
     }
 
+    let fold_indices: Vec<(Vec<usize>, Vec<usize>)> = (0..n_folds)
+        .map(|fold| {
+            let train_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] != fold).collect();
+            let test_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] == fold).collect();
+            (train_idx, test_idx)
+        })
+        .collect();
+
     let x_ref = &x;
     let time_ref = &time;
     let status_ref = &status;
+    let wt_ref = &wt;
     let cv_deviances: Vec<Vec<f64>> = path
         .lambdas
         .par_iter()
         .map(|&lambda| {
-            let mut fold_devs = Vec::with_capacity(n_folds);
+            let fold_devs_by_fold: Vec<Option<f64>> = fold_indices
+                .par_iter()
+                .map(|(train_idx, test_idx)| {
+                    if train_idx.is_empty() || test_idx.is_empty() {
+                        return None;
+                    }
 
-            for fold in 0..n_folds {
-                let train_idx: Vec<usize> =
-                    (0..n_obs).filter(|&i| fold_assign[i] != fold).collect();
-                let test_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] == fold).collect();
-
-                if train_idx.is_empty() || test_idx.is_empty() {
-                    continue;
-                }
-
-                let train_x: Vec<f64> = train_idx
-                    .iter()
-                    .flat_map(|&i| (0..n_vars).map(move |j| x_ref[i * n_vars + j]))
-                    .collect();
-                let train_time: Vec<f64> = train_idx.iter().map(|&i| time_ref[i]).collect();
-                let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
-                let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt[i]).collect();
-
-                let Ok(config) = FastCoxConfig::new(
-                    lambda, l1_ratio, 1000, 1e-7, screening, None, 10, true, true,
-                ) else {
-                    continue;
-                };
-
-                if let Ok(result) = fast_cox(
-                    train_x,
-                    train_idx.len(),
-                    n_vars,
-                    train_time,
-                    train_status,
-                    &config,
-                    Some(train_wt),
-                    None,
-                ) {
-                    let test_x: Vec<f64> = test_idx
+                    let train_x: Vec<f64> = train_idx
                         .iter()
                         .flat_map(|&i| (0..n_vars).map(move |j| x_ref[i * n_vars + j]))
                         .collect();
-                    let test_time: Vec<f64> = test_idx.iter().map(|&i| time_ref[i]).collect();
-                    let test_status: Vec<i32> = test_idx.iter().map(|&i| status_ref[i]).collect();
-                    let test_wt: Vec<f64> = test_idx.iter().map(|&i| wt[i]).collect();
-                    let test_off = vec![0.0; test_idx.len()];
+                    let train_time: Vec<f64> = train_idx.iter().map(|&i| time_ref[i]).collect();
+                    let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
+                    let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt_ref[i]).collect();
 
-                    let dev = compute_cox_deviance(
-                        &test_x,
-                        test_idx.len(),
+                    let Ok(config) = FastCoxConfig::new(
+                        lambda, l1_ratio, 1000, 1e-7, screening, None, 10, true, true,
+                    ) else {
+                        return None;
+                    };
+
+                    if let Ok(result) = fast_cox(
+                        train_x,
+                        train_idx.len(),
                         n_vars,
-                        &test_time,
-                        &test_status,
-                        &test_wt,
-                        &result.coefficients,
-                        &test_off,
-                    );
-                    fold_devs.push(dev);
-                }
-            }
+                        train_time,
+                        train_status,
+                        &config,
+                        Some(train_wt),
+                        None,
+                    ) {
+                        let test_x: Vec<f64> = test_idx
+                            .iter()
+                            .flat_map(|&i| (0..n_vars).map(move |j| x_ref[i * n_vars + j]))
+                            .collect();
+                        let test_time: Vec<f64> = test_idx.iter().map(|&i| time_ref[i]).collect();
+                        let test_status: Vec<i32> =
+                            test_idx.iter().map(|&i| status_ref[i]).collect();
+                        let test_wt: Vec<f64> = test_idx.iter().map(|&i| wt_ref[i]).collect();
+                        let test_off = vec![0.0; test_idx.len()];
 
-            fold_devs
+                        let dev = compute_cox_deviance(
+                            &test_x,
+                            test_idx.len(),
+                            n_vars,
+                            &test_time,
+                            &test_status,
+                            &test_wt,
+                            &result.coefficients,
+                            &test_off,
+                        );
+                        Some(dev)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            fold_devs_by_fold.into_iter().flatten().collect()
         })
         .collect();
 

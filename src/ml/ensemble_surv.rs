@@ -204,11 +204,15 @@ impl SuperLearnerResult {
 
 fn compute_c_index(time: &[f64], event: &[i32], risk: &[f64]) -> f64 {
     let n = time.len();
-    let mut concordant = 0.0;
-    let mut discordant = 0.0;
+    let (concordant, discordant) = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            if event[i] != 1 {
+                return (0.0, 0.0);
+            }
 
-    for i in 0..n {
-        if event[i] == 1 {
+            let mut concordant = 0.0;
+            let mut discordant = 0.0;
             for j in 0..n {
                 if time[j] > time[i] {
                     if risk[i] > risk[j] {
@@ -221,8 +225,9 @@ fn compute_c_index(time: &[f64], event: &[i32], risk: &[f64]) -> f64 {
                     }
                 }
             }
-        }
-    }
+            (concordant, discordant)
+        })
+        .reduce(|| (0.0, 0.0), |(c1, d1), (c2, d2)| (c1 + c2, d1 + d2));
 
     if concordant + discordant > 0.0 {
         concordant / (concordant + discordant)
@@ -269,27 +274,25 @@ pub fn super_learner_survival(
 
     for test_indices in folds.iter() {
         let train_indices: Vec<usize> = (0..n).filter(|i| !test_indices.contains(i)).collect();
+        cv_predictions
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(m, model_cv_predictions)| {
+                let train_sum: f64 = train_indices
+                    .iter()
+                    .map(|&i| base_learner_predictions[m][i])
+                    .sum();
+                let scale = if train_indices.is_empty() {
+                    1.0
+                } else {
+                    train_sum / train_indices.len() as f64
+                };
 
-        for m in 0..n_models {
-            let train_preds: Vec<f64> = train_indices
-                .iter()
-                .map(|&i| base_learner_predictions[m][i])
-                .collect();
-            let test_preds: Vec<f64> = test_indices
-                .iter()
-                .map(|&i| base_learner_predictions[m][i])
-                .collect();
-
-            let scale = if !train_preds.is_empty() {
-                train_preds.iter().sum::<f64>() / train_preds.len() as f64
-            } else {
-                1.0
-            };
-
-            for (idx, &test_i) in test_indices.iter().enumerate() {
-                cv_predictions[m][test_i] = test_preds[idx] / scale.max(1e-10);
-            }
-        }
+                for &test_i in test_indices {
+                    model_cv_predictions[test_i] =
+                        base_learner_predictions[m][test_i] / scale.max(1e-10);
+                }
+            });
     }
 
     let outcomes: Vec<f64> = event.iter().map(|&e| e as f64).collect();
@@ -300,6 +303,7 @@ pub fn super_learner_survival(
     };
 
     let ensemble_risk: Vec<f64> = (0..n)
+        .into_par_iter()
         .map(|i| {
             (0..n_models)
                 .map(|m| weights[m] * base_learner_predictions[m][i])
@@ -310,19 +314,19 @@ pub fn super_learner_survival(
     let ensemble_c_index = compute_c_index(&time, &event, &ensemble_risk);
 
     let individual_c_indices: Vec<f64> = base_learner_predictions
-        .iter()
+        .par_iter()
         .map(|preds| compute_c_index(&time, &event, preds))
         .collect();
 
     let cv_risks: Vec<f64> = (0..n_models)
+        .into_par_iter()
         .map(|m| {
-            let mse: f64 = cv_predictions[m]
+            cv_predictions[m]
                 .iter()
                 .zip(outcomes.iter())
                 .map(|(&p, &o)| (p - o).powi(2))
                 .sum::<f64>()
-                / n as f64;
-            mse
+                / n as f64
         })
         .collect();
 
@@ -435,21 +439,26 @@ pub fn stacking_survival(
 
     for test_indices in &folds {
         let train_indices: Vec<usize> = (0..n).filter(|i| !test_indices.contains(i)).collect();
+        oof_predictions
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(m, model_oof_predictions)| {
+                let train_sum: f64 = train_indices.iter().map(|&i| base_predictions[m][i]).sum();
+                let train_mean = if train_indices.is_empty() {
+                    1.0
+                } else {
+                    train_sum / train_indices.len() as f64
+                };
 
-        for m in 0..n_models {
-            let train_mean: f64 = train_indices
-                .iter()
-                .map(|&i| base_predictions[m][i])
-                .sum::<f64>()
-                / train_indices.len() as f64;
-
-            for &test_i in test_indices {
-                oof_predictions[m][test_i] = base_predictions[m][test_i] / train_mean.max(1e-10);
-            }
-        }
+                for &test_i in test_indices {
+                    model_oof_predictions[test_i] =
+                        base_predictions[m][test_i] / train_mean.max(1e-10);
+                }
+            });
     }
 
     let meta_features: Vec<Vec<f64>> = (0..n)
+        .into_par_iter()
         .map(|i| (0..n_models).map(|m| oof_predictions[m][i]).collect())
         .collect();
 
@@ -807,6 +816,7 @@ pub fn blending_survival(
 
     let n_test = test_predictions[0].len();
     let blended_predictions: Vec<f64> = (0..n_test)
+        .into_par_iter()
         .map(|i| {
             (0..n_models)
                 .map(|m| blend_weights[m] * test_predictions[m][i])
@@ -815,6 +825,7 @@ pub fn blending_survival(
         .collect();
 
     let val_blended: Vec<f64> = (0..n_val)
+        .into_par_iter()
         .map(|i| {
             (0..n_models)
                 .map(|m| blend_weights[m] * val_predictions[m][i])

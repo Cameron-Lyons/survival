@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::utilities::statistical::normal_cdf;
 use pyo3::prelude::*;
 
@@ -71,6 +69,7 @@ impl SpatialCorrelationStructure {
     max_iter=100,
     tol=1e-6
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn spatial_frailty_model(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -327,6 +326,7 @@ fn invert_matrix(a: &[f64], n: usize) -> Vec<f64> {
     inv
 }
 
+#[allow(clippy::too_many_arguments)]
 fn em_step(
     time: &[f64],
     status: &[i32],
@@ -460,6 +460,7 @@ fn em_step(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_log_likelihood(
     time: &[f64],
     status: &[i32],
@@ -506,6 +507,7 @@ fn compute_saturated_loglik(_time: &[f64], _status: &[i32]) -> f64 {
     0.0
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_standard_errors(
     time: &[f64],
     status: &[i32],

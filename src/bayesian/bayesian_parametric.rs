@@ -1,8 +1,15 @@
-#![allow(clippy::too_many_arguments, clippy::type_complexity)]
-
 use crate::utilities::statistical::{normal_cdf, sample_normal};
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+type MetropolisStepResult = (Vec<f64>, f64, f64, bool);
+type ChainSamples = (Vec<Vec<f64>>, Vec<f64>, Vec<f64>);
+type SurvivalCurveMatrix = Vec<Vec<f64>>;
+type SurvivalCurveSummary = (
+    SurvivalCurveMatrix,
+    SurvivalCurveMatrix,
+    SurvivalCurveMatrix,
+);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -54,6 +61,7 @@ pub struct BayesianParametricConfig {
 impl BayesianParametricConfig {
     #[new]
     #[pyo3(signature = (distribution=BayesianDistribution::Weibull, beta_prior_scale=2.5, shape_prior_mean=1.0, shape_prior_sd=1.0, n_samples=2000, n_warmup=1000, n_chains=4, seed=None))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         distribution: BayesianDistribution,
         beta_prior_scale: f64,
@@ -171,6 +179,7 @@ fn exponential_log_lik(time: f64, status: i32, rate: f64) -> f64 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_likelihood(
     time: &[f64],
     status: &[i32],
@@ -222,6 +231,7 @@ fn log_prior(beta: &[f64], shape: f64, config: &BayesianParametricConfig) -> f64
     beta_prior + shape_prior
 }
 
+#[allow(clippy::too_many_arguments)]
 fn metropolis_step(
     time: &[f64],
     status: &[i32],
@@ -234,7 +244,7 @@ fn metropolis_step(
     proposal_sd: &[f64],
     shape_proposal_sd: f64,
     rng: &mut fastrand::Rng,
-) -> (Vec<f64>, f64, f64, bool) {
+) -> MetropolisStepResult {
     let mut new_beta = beta.to_vec();
     for j in 0..p {
         new_beta[j] += proposal_sd[j] * sample_normal(rng);
@@ -272,7 +282,7 @@ fn run_chain(
     p: usize,
     config: &BayesianParametricConfig,
     chain_id: usize,
-) -> (Vec<Vec<f64>>, Vec<f64>, Vec<f64>) {
+) -> ChainSamples {
     let seed = config.seed.unwrap_or(42) + chain_id as u64 * 1000;
     let mut rng = fastrand::Rng::with_seed(seed);
 
@@ -353,7 +363,7 @@ pub fn bayesian_parametric(
         ));
     }
 
-    let chains: Vec<(Vec<Vec<f64>>, Vec<f64>, Vec<f64>)> = (0..config.n_chains)
+    let chains: Vec<ChainSamples> = (0..config.n_chains)
         .into_par_iter()
         .map(|chain_id| run_chain(&time, &status, &x, n_obs, n_vars, config, chain_id))
         .collect();
@@ -447,7 +457,7 @@ pub fn bayesian_parametric_predict(
     n_vars: usize,
     time_points: Vec<f64>,
     distribution: &BayesianDistribution,
-) -> PyResult<(Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>)> {
+) -> PyResult<SurvivalCurveSummary> {
     let n_times = time_points.len();
     let n_samples = result.beta_samples.len().min(500);
 

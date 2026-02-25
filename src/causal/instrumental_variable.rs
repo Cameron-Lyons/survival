@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 
 use crate::utilities::statistical::normal_cdf;
@@ -936,6 +934,7 @@ fn fit_mediator_model(
     (alpha, alpha_se)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fit_outcome_model(
     time: &[f64],
     event: &[i32],
@@ -990,6 +989,7 @@ fn fit_outcome_model(
     (beta, se)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fit_outcome_model_with_mediator(
     time: &[f64],
     event: &[i32],

@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -243,6 +241,7 @@ fn weighted_kaplan_meier(
 
 #[pyfunction]
 #[pyo3(signature = (time, status, treatment_time, x_baseline, x_censoring, n_obs, n_vars_baseline, n_vars_censoring, config))]
+#[allow(clippy::too_many_arguments)]
 pub fn target_trial_emulation(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -396,6 +395,7 @@ fn estimate_hazard_ratio(clones: &[ClonedObservation], _n_vars: usize) -> f64 {
     beta.exp()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bootstrap_standard_errors(
     time: &[f64],
     status: &[i32],
@@ -481,6 +481,7 @@ fn bootstrap_standard_errors(
 
 #[pyfunction]
 #[pyo3(signature = (enrollment_times, treatment_times, event_times, event_status, x_baseline, n_obs, n_vars, trial_starts))]
+#[allow(clippy::too_many_arguments)]
 pub fn sequential_trial_emulation(
     enrollment_times: Vec<f64>,
     treatment_times: Vec<Option<f64>>,

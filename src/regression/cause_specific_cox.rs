@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::utilities::matrix::invert_matrix;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -189,6 +187,7 @@ impl CauseSpecificCoxResult {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_cause_specific_gradient_hessian(
     x: &[f64],
     n: usize,
@@ -538,6 +537,7 @@ pub fn cause_specific_cox(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, cause, max_cause, weights=None, max_iter=100, tol=1e-9))]
+#[allow(clippy::too_many_arguments)]
 pub fn cause_specific_cox_all(
     x: Vec<f64>,
     n_obs: usize,

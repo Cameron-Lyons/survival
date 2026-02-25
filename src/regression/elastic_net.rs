@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -161,6 +159,7 @@ fn standardize_matrix(x: &[f64], n: usize, p: usize) -> (Vec<f64>, Vec<f64>, Vec
     (x_std, means, sds)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_cox_gradient_hessian(
     x: &[f64],
     n: usize,
@@ -222,6 +221,7 @@ fn compute_cox_gradient_hessian(
     (gradient, hessian_diag)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_cox_deviance(
     x: &[f64],
     n: usize,
@@ -324,6 +324,7 @@ fn coordinate_descent_cox(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, config, weights=None, offset=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn elastic_net_cox(
     x: Vec<f64>,
     n_obs: usize,
@@ -406,6 +407,7 @@ pub fn elastic_net_cox(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, l1_ratio=0.5, n_lambda=100, lambda_min_ratio=None, weights=None, max_iter=1000, tol=1e-7))]
+#[allow(clippy::too_many_arguments)]
 pub fn elastic_net_cox_path(
     x: Vec<f64>,
     n_obs: usize,
@@ -502,6 +504,7 @@ pub fn elastic_net_cox_path(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, l1_ratio=0.5, n_lambda=100, n_folds=10, weights=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn elastic_net_cox_cv(
     x: Vec<f64>,
     n_obs: usize,
@@ -530,79 +533,90 @@ pub fn elastic_net_cox_cv(
     let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
 
     let fold_assign: Vec<usize> = (0..n_obs).map(|i| i % n_folds).collect();
+    let fold_indices: Vec<(Vec<usize>, Vec<usize>)> = (0..n_folds)
+        .map(|fold| {
+            let train_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] != fold).collect();
+            let test_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] == fold).collect();
+            (train_idx, test_idx)
+        })
+        .collect();
 
+    let x_ref = &x;
+    let time_ref = &time;
+    let status_ref = &status;
+    let wt_ref = &wt;
     let cv_deviances: Vec<Vec<f64>> = path
         .lambdas
         .par_iter()
         .map(|&lambda| {
-            let mut fold_devs = Vec::with_capacity(n_folds);
-            let x_local = &x;
-
-            for fold in 0..n_folds {
-                let train_idx: Vec<usize> =
-                    (0..n_obs).filter(|&i| fold_assign[i] != fold).collect();
-                let test_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] == fold).collect();
-
-                if train_idx.is_empty() || test_idx.is_empty() {
-                    continue;
-                }
-
-                let train_x: Vec<f64> = {
-                    let mut result = Vec::with_capacity(train_idx.len() * n_vars);
-                    for &i in &train_idx {
-                        for j in 0..n_vars {
-                            result.push(x_local[i * n_vars + j]);
-                        }
+            let fold_devs_by_fold: Vec<Option<f64>> = fold_indices
+                .par_iter()
+                .map(|(train_idx, test_idx)| {
+                    if train_idx.is_empty() || test_idx.is_empty() {
+                        return None;
                     }
-                    result
-                };
-                let train_time: Vec<f64> = train_idx.iter().map(|&i| time[i]).collect();
-                let train_status: Vec<i32> = train_idx.iter().map(|&i| status[i]).collect();
-                let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt[i]).collect();
 
-                let Ok(config) = ElasticNetConfig::new(lambda, l1_ratio, 1000, 1e-7, true, false)
-                else {
-                    continue;
-                };
-                if let Ok(result) = elastic_net_cox(
-                    train_x,
-                    train_idx.len(),
-                    n_vars,
-                    train_time,
-                    train_status,
-                    &config,
-                    Some(train_wt),
-                    None,
-                ) {
-                    let test_x: Vec<f64> = {
-                        let mut result = Vec::with_capacity(test_idx.len() * n_vars);
-                        for &i in &test_idx {
+                    let train_x: Vec<f64> = {
+                        let mut result = Vec::with_capacity(train_idx.len() * n_vars);
+                        for &i in train_idx {
                             for j in 0..n_vars {
-                                result.push(x_local[i * n_vars + j]);
+                                result.push(x_ref[i * n_vars + j]);
                             }
                         }
                         result
                     };
-                    let test_time: Vec<f64> = test_idx.iter().map(|&i| time[i]).collect();
-                    let test_status: Vec<i32> = test_idx.iter().map(|&i| status[i]).collect();
-                    let test_wt: Vec<f64> = test_idx.iter().map(|&i| wt[i]).collect();
-                    let test_off = vec![0.0; test_idx.len()];
+                    let train_time: Vec<f64> = train_idx.iter().map(|&i| time_ref[i]).collect();
+                    let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
+                    let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt_ref[i]).collect();
 
-                    let dev = compute_cox_deviance(
-                        &test_x,
-                        test_idx.len(),
+                    let Ok(config) =
+                        ElasticNetConfig::new(lambda, l1_ratio, 1000, 1e-7, true, false)
+                    else {
+                        return None;
+                    };
+                    if let Ok(result) = elastic_net_cox(
+                        train_x,
+                        train_idx.len(),
                         n_vars,
-                        &test_time,
-                        &test_status,
-                        &test_wt,
-                        &result.coefficients,
-                        &test_off,
-                    );
-                    fold_devs.push(dev);
-                }
-            }
+                        train_time,
+                        train_status,
+                        &config,
+                        Some(train_wt),
+                        None,
+                    ) {
+                        let test_x: Vec<f64> = {
+                            let mut result = Vec::with_capacity(test_idx.len() * n_vars);
+                            for &i in test_idx {
+                                for j in 0..n_vars {
+                                    result.push(x_ref[i * n_vars + j]);
+                                }
+                            }
+                            result
+                        };
+                        let test_time: Vec<f64> = test_idx.iter().map(|&i| time_ref[i]).collect();
+                        let test_status: Vec<i32> =
+                            test_idx.iter().map(|&i| status_ref[i]).collect();
+                        let test_wt: Vec<f64> = test_idx.iter().map(|&i| wt_ref[i]).collect();
+                        let test_off = vec![0.0; test_idx.len()];
 
-            fold_devs
+                        let dev = compute_cox_deviance(
+                            &test_x,
+                            test_idx.len(),
+                            n_vars,
+                            &test_time,
+                            &test_status,
+                            &test_wt,
+                            &result.coefficients,
+                            &test_off,
+                        );
+                        Some(dev)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            fold_devs_by_fold.into_iter().flatten().collect()
         })
         .collect();
 

@@ -1,6 +1,9 @@
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 use crate::utilities::statistical::lower_incomplete_gamma;
+
+type LikelihoodRatioTest = (String, String, f64, f64, f64);
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -162,7 +165,7 @@ pub struct SurvivalModelComparison {
     #[pyo3(get)]
     pub best_model_bic: String,
     #[pyo3(get)]
-    pub likelihood_ratio_tests: Vec<(String, String, f64, f64, f64)>,
+    pub likelihood_ratio_tests: Vec<LikelihoodRatioTest>,
 }
 
 #[pymethods]
@@ -269,31 +272,40 @@ pub fn compare_models(
         .map(|(i, _)| i)
         .unwrap_or(0);
 
-    let mut likelihood_ratio_tests: Vec<(String, String, f64, f64, f64)> = Vec::new();
+    let model_pairs: Vec<(usize, usize)> = (0..n_models)
+        .flat_map(|i| ((i + 1)..n_models).map(move |j| (i, j)))
+        .collect();
 
-    for i in 0..n_models {
-        for j in (i + 1)..n_models {
-            if n_params[i] != n_params[j] {
-                let (nested_idx, full_idx) = if n_params[i] < n_params[j] {
-                    (i, j)
-                } else {
-                    (j, i)
-                };
-
-                let lr_stat = 2.0 * (log_likelihoods[full_idx] - log_likelihoods[nested_idx]);
-                let df = (n_params[full_idx] - n_params[nested_idx]) as f64;
-                let p_value = 1.0 - chi_squared_cdf(lr_stat.max(0.0), df);
-
-                likelihood_ratio_tests.push((
-                    model_names[nested_idx].clone(),
-                    model_names[full_idx].clone(),
-                    lr_stat,
-                    df,
-                    p_value,
-                ));
+    // Keep pair output order stable while parallelizing independent LR computations.
+    let lr_candidates: Vec<Option<LikelihoodRatioTest>> = model_pairs
+        .par_iter()
+        .map(|&(i, j)| {
+            if n_params[i] == n_params[j] {
+                return None;
             }
-        }
-    }
+
+            let (nested_idx, full_idx) = if n_params[i] < n_params[j] {
+                (i, j)
+            } else {
+                (j, i)
+            };
+
+            let lr_stat = 2.0 * (log_likelihoods[full_idx] - log_likelihoods[nested_idx]);
+            let df = (n_params[full_idx] - n_params[nested_idx]) as f64;
+            let p_value = 1.0 - chi_squared_cdf(lr_stat.max(0.0), df);
+
+            Some((
+                model_names[nested_idx].clone(),
+                model_names[full_idx].clone(),
+                lr_stat,
+                df,
+                p_value,
+            ))
+        })
+        .collect();
+
+    let likelihood_ratio_tests: Vec<LikelihoodRatioTest> =
+        lr_candidates.into_iter().flatten().collect();
 
     Ok(SurvivalModelComparison {
         model_names: model_names.clone(),
