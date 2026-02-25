@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments, clippy::upper_case_acronyms)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -68,6 +66,7 @@ impl GradientBoostSurvivalConfig {
         dropout_rate=0.0,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         n_estimators: usize,
         learning_rate: f64,
@@ -198,6 +197,7 @@ fn compute_cox_gradient_hessian(
     (gradient, hessian)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn find_best_split_regression(
     x: &[f64],
     _n: usize,
@@ -276,6 +276,7 @@ fn find_best_split_regression(
     best_split
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_regression_tree(
     x: &[f64],
     n: usize,

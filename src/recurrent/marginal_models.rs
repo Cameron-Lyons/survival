@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,6 +63,7 @@ pub struct MarginalModelResult {
     max_iter=100,
     tol=1e-6
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn marginal_recurrent_model(
     subject_id: Vec<usize>,
     start_time: Vec<f64>,
@@ -288,6 +287,7 @@ fn compute_naive_se(
     (se, info)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_robust_se(
     subject_id: &[usize],
     time: &[f64],

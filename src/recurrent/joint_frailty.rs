@@ -1,4 +1,4 @@
-#![allow(non_camel_case_types, clippy::too_many_arguments)]
+#![allow(non_camel_case_types)]
 
 use pyo3::prelude::*;
 
@@ -78,6 +78,7 @@ pub struct JointFrailtyResult {
     max_iter=500,
     tol=1e-5
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn joint_frailty_model(
     subject_id: Vec<usize>,
     rec_start: Vec<f64>,

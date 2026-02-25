@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -43,6 +41,7 @@ pub struct GapTimeResult {
     max_iter=100,
     tol=1e-6
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn gap_time_model(
     subject_id: Vec<usize>,
     start_time: Vec<f64>,

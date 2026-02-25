@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::utilities::matrix::invert_matrix;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -265,6 +263,7 @@ impl JointCompetingRisksResult {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fit_cause_specific_cox(
     x: &[f64],
     n: usize,
@@ -321,6 +320,7 @@ fn fit_cause_specific_cox(
     (beta, std_errors, loglik, converged, n_iter)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_gradient_hessian(
     x: &[f64],
     n: usize,

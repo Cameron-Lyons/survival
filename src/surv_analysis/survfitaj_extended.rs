@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -339,6 +337,7 @@ fn compute_aalen_variance(
     variance
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_bootstrap_variance(
     from_state: &[usize],
     to_state: &[usize],

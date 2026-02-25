@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -563,6 +561,7 @@ fn compute_partial_loglik(time: &[f64], event: &[i32], eta: &[f64], exp_eta: &[f
     log_lik
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_se(
     time: &[f64],
     event: &[i32],
@@ -836,6 +835,7 @@ pub fn diffusion_survival_model(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_infection_hazards(
     infection_time: &[f64],
     infected: &[i32],
@@ -878,6 +878,7 @@ fn compute_infection_hazards(
     (hazards, cumulative_hazards)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_beta_derivatives(
     infection_time: &[f64],
     infected: &[i32],
@@ -922,6 +923,7 @@ fn compute_beta_derivatives(
     (gradient, hessian)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_susceptibility_derivatives(
     infection_time: &[f64],
     infected: &[i32],
@@ -1101,6 +1103,7 @@ fn detect_communities(adjacency: &[f64], n: usize, k: usize) -> (Vec<usize>, f64
     (communities, modularity)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_modularity_delta(
     adjacency: &[f64],
     degree: &[f64],

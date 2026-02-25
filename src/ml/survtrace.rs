@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use burn::{
     backend::{Autodiff, NdArray},
     module::Module,
@@ -120,6 +118,7 @@ impl SurvTraceConfig {
         validation_fraction=0.1,
         layer_norm_eps=1e-12
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_size: usize,
         num_hidden_layers: usize,
@@ -854,6 +853,7 @@ fn apply_transformer_layer_cpu(
     residual2
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fit_survtrace_inner(
     x_cat: Option<&[i64]>,
     x_num: &[f64],
@@ -1095,6 +1095,7 @@ pub struct SurvTrace {
 impl SurvTrace {
     #[staticmethod]
     #[pyo3(signature = (x_cat, x_num, n_obs, num_cat_features, num_num_features, cat_cardinalities, time, event, config))]
+    #[allow(clippy::too_many_arguments)]
     pub fn fit(
         py: Python<'_>,
         x_cat: Option<Vec<i64>>,
@@ -1313,6 +1314,7 @@ impl SurvTrace {
 
 #[pyfunction]
 #[pyo3(signature = (x_cat, x_num, n_obs, num_cat_features, num_num_features, cat_cardinalities, time, event, config=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn survtrace(
     py: Python<'_>,
     x_cat: Option<Vec<i64>>,

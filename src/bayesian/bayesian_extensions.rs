@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::utilities::statistical::sample_normal;
 use pyo3::prelude::*;
 

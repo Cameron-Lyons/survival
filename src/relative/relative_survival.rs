@@ -1,4 +1,4 @@
-#![allow(unused_parens, clippy::too_many_arguments)]
+#![allow(unused_parens)]
 
 use pyo3::prelude::*;
 
@@ -196,6 +196,7 @@ pub struct ExcessHazardModelResult {
     max_iter=100,
     tol=1e-6
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn excess_hazard_regression(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -339,6 +340,7 @@ pub fn excess_hazard_regression(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_baseline_excess_hazard(
     time: &[f64],
     status: &[i32],

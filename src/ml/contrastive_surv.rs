@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use burn::{
     backend::{Autodiff, NdArray},
     module::Module,
@@ -103,6 +101,7 @@ impl ContrastiveSurvConfig {
         validation_fraction=0.1,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         embedding_dim: usize,
         projection_dim: usize,

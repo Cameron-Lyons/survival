@@ -1,9 +1,3 @@
-#![allow(
-    clippy::too_many_arguments,
-    clippy::single_range_in_vec_init,
-    clippy::manual_memcpy
-)]
-
 use burn::{
     backend::{Autodiff, NdArray},
     module::Module,
@@ -105,6 +99,7 @@ impl DynamicDeepHitConfig {
         validation_fraction=0.1,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         temporal_type: TemporalType,
         embedding_dim: usize,
@@ -613,6 +608,7 @@ impl<B: burn::prelude::Backend> DynamicDeepHitNetwork<B> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_deephit_loss(
     hazards: &[f32],
     durations: &[usize],
@@ -844,6 +840,7 @@ impl DynamicDeepHit {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fit_dynamic_deephit_inner(
     x: &[f64],
     seq_lengths: &[usize],
@@ -1009,6 +1006,7 @@ fn fit_dynamic_deephit_inner(
 
 #[pyfunction]
 #[pyo3(signature = (x, seq_lengths, n_obs, max_seq_len, n_features, time, event, config=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn dynamic_deephit(
     py: Python<'_>,
     x: Vec<f64>,

@@ -1,7 +1,7 @@
-#![allow(clippy::too_many_arguments, clippy::type_complexity)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+type QuadratureRule = (Vec<f64>, Vec<f64>);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -103,7 +103,7 @@ pub struct JointModelResult {
     pub random_effects: Vec<Vec<f64>>,
 }
 
-fn gauss_hermite_quadrature(n: usize) -> (Vec<f64>, Vec<f64>) {
+fn gauss_hermite_quadrature(n: usize) -> QuadratureRule {
     let nodes_5 = vec![
         -2.020182870456086,
         -0.9585724646138185,
@@ -293,6 +293,7 @@ fn compute_survival_contribution(
     log_hazard - cum_hazard * linear_pred.exp()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_longitudinal_contribution(
     y_obs: &[f64],
     times_obs: &[f64],
@@ -332,6 +333,7 @@ fn compute_longitudinal_contribution(
     n_surv_vars,
     config
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn joint_model(
     y_longitudinal: Vec<f64>,
     times_longitudinal: Vec<f64>,

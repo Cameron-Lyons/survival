@@ -1,7 +1,9 @@
-#![allow(clippy::too_many_arguments, clippy::type_complexity)]
-
 use crate::utilities::statistical::erf;
 use pyo3::prelude::*;
+
+type DistributionFn = fn(f64, f64, f64) -> f64;
+type DistributionFns = (DistributionFn, DistributionFn);
+type TimeSurvivalCurve = (Vec<f64>, Vec<f64>);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -118,8 +120,7 @@ fn compute_interval_likelihood(
     shape: f64,
     distribution: &IntervalDistribution,
 ) -> f64 {
-    let (cdf_fn, pdf_fn): (fn(f64, f64, f64) -> f64, fn(f64, f64, f64) -> f64) = match distribution
-    {
+    let (cdf_fn, pdf_fn): DistributionFns = match distribution {
         IntervalDistribution::Weibull => (weibull_cdf, weibull_pdf),
         IntervalDistribution::LogNormal => (lognormal_cdf, lognormal_pdf),
         IntervalDistribution::LogLogistic => (loglogistic_cdf, loglogistic_pdf),
@@ -164,6 +165,7 @@ fn compute_interval_likelihood(
     max_iter=500,
     tol=1e-6
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn interval_censored_regression(
     left: Vec<f64>,
     right: Vec<f64>,
@@ -489,7 +491,7 @@ pub fn npmle_interval(
     left: Vec<f64>,
     right: Vec<f64>,
     _weights: Option<Vec<f64>>,
-) -> PyResult<(Vec<f64>, Vec<f64>)> {
+) -> PyResult<TimeSurvivalCurve> {
     turnbull_estimator(left, right, 1000, 1e-6).map(|result| (result.time_points, result.survival))
 }
 

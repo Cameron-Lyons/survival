@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::utilities::statistical::{normal_cdf, probit};
 use pyo3::prelude::*;
 use rayon::prelude::*;

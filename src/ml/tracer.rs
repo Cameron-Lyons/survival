@@ -1,9 +1,3 @@
-#![allow(
-    clippy::too_many_arguments,
-    clippy::single_range_in_vec_init,
-    clippy::manual_memcpy
-)]
-
 use burn::{
     backend::{Autodiff, NdArray},
     module::Module,
@@ -108,6 +102,7 @@ impl TracerConfig {
         layer_norm_eps=1e-12,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         embedding_dim: usize,
         num_factorized_layers: usize,
@@ -320,6 +315,7 @@ impl<B: burn::prelude::Backend> TimeAwareEmbedding<B> {
                 .slice([0..batch_size, 0..max_seq_len, f..f + 1])
                 .reshape([batch_size, max_seq_len]);
 
+            #[allow(clippy::single_range_in_vec_init)]
             let decay_rate_f: Tensor<B, 1> = self.decay_rates.val().slice([f..f + 1]);
             let decay_rate_expanded: Tensor<B, 2> = decay_rate_f
                 .reshape([1, 1])
@@ -1115,6 +1111,7 @@ fn layer_norm_cpu(x: &[f64], gamma: &[f32], beta: &[f32], eps: f32) -> Vec<f64> 
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_mha_cpu(
     x: &[f64],
     query_w: &[f32],
@@ -1145,6 +1142,7 @@ fn apply_mha_cpu(
         }
         _score /= (head_dim as f64).sqrt();
 
+        #[allow(clippy::manual_memcpy)]
         for i in start..end {
             attn_output[i] = v[i];
         }
@@ -1203,6 +1201,7 @@ fn apply_factorized_layer_cpu(
     layer_norm_cpu(&residual3, &layer.ln_ffn_gamma, &layer.ln_ffn_beta, eps)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn predict_with_weights(
     x: &[f64],
     mask: &[f64],
@@ -1316,6 +1315,7 @@ fn predict_with_weights(
     all_outputs
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fit_tracer_inner(
     x: &[f64],
     mask: &[f64],
@@ -1595,6 +1595,7 @@ pub struct Tracer {
 impl Tracer {
     #[staticmethod]
     #[pyo3(signature = (x, mask, time_delta, seq_lengths, n_obs, max_seq_len, n_features, time, event, config))]
+    #[allow(clippy::too_many_arguments)]
     pub fn fit(
         py: Python<'_>,
         x: Vec<f64>,
@@ -1655,6 +1656,7 @@ impl Tracer {
     }
 
     #[pyo3(signature = (x, mask, time_delta, seq_lengths, n_new, max_seq_len, event_idx=0))]
+    #[allow(clippy::too_many_arguments)]
     pub fn predict_hazard(
         &self,
         x: Vec<f64>,
@@ -1778,6 +1780,7 @@ impl Tracer {
     }
 
     #[pyo3(signature = (x, mask, time_delta, seq_lengths, n_new, max_seq_len, event_idx=0))]
+    #[allow(clippy::too_many_arguments)]
     pub fn predict_cif(
         &self,
         x: Vec<f64>,
@@ -1902,6 +1905,7 @@ impl Tracer {
 
 #[pyfunction]
 #[pyo3(signature = (x, mask, time_delta, seq_lengths, n_obs, max_seq_len, n_features, time, event, config=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn tracer(
     py: Python<'_>,
     x: Vec<f64>,

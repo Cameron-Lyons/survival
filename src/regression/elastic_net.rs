@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -161,6 +159,7 @@ fn standardize_matrix(x: &[f64], n: usize, p: usize) -> (Vec<f64>, Vec<f64>, Vec
     (x_std, means, sds)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_cox_gradient_hessian(
     x: &[f64],
     n: usize,
@@ -222,6 +221,7 @@ fn compute_cox_gradient_hessian(
     (gradient, hessian_diag)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_cox_deviance(
     x: &[f64],
     n: usize,
@@ -324,6 +324,7 @@ fn coordinate_descent_cox(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, config, weights=None, offset=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn elastic_net_cox(
     x: Vec<f64>,
     n_obs: usize,
@@ -406,6 +407,7 @@ pub fn elastic_net_cox(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, l1_ratio=0.5, n_lambda=100, lambda_min_ratio=None, weights=None, max_iter=1000, tol=1e-7))]
+#[allow(clippy::too_many_arguments)]
 pub fn elastic_net_cox_path(
     x: Vec<f64>,
     n_obs: usize,
@@ -502,6 +504,7 @@ pub fn elastic_net_cox_path(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, l1_ratio=0.5, n_lambda=100, n_folds=10, weights=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn elastic_net_cox_cv(
     x: Vec<f64>,
     n_obs: usize,

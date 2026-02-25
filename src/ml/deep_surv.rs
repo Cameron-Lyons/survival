@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use burn::{
     backend::{Autodiff, NdArray},
     module::Module,
@@ -87,6 +85,7 @@ impl DeepSurvConfig {
         early_stopping_patience=None,
         validation_fraction=0.1
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hidden_layers: Option<Vec<usize>>,
         activation: Activation,

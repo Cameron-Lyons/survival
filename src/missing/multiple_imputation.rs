@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -66,6 +64,7 @@ impl ImputationMethod {
     max_iter=20,
     seed=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn multiple_imputation_survival(
     time: Vec<f64>,
     status: Vec<i32>,

@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -65,6 +63,7 @@ impl FastCoxConfig {
         standardize=true,
         use_simd=true
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         lambda: f64,
         l1_ratio: f64,
@@ -269,6 +268,7 @@ fn precompute_risk_set_cumsum(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_gradient_hessian_diag_fast(
     x: &[f64],
     n: usize,
@@ -373,6 +373,7 @@ fn apply_edpp_screening(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_cox_deviance(
     x: &[f64],
     n: usize,
@@ -416,6 +417,7 @@ fn compute_cox_deviance(
     -2.0 * loglik
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cyclic_coordinate_descent_fast(
     x: &[f64],
     n: usize,
@@ -536,6 +538,7 @@ fn cyclic_coordinate_descent_fast(
 
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, config, weights=None, offset=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn fast_cox(
     x: Vec<f64>,
     n_obs: usize,
@@ -648,6 +651,7 @@ pub fn fast_cox(
     tol=1e-7,
     screening=ScreeningRule::Strong
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn fast_cox_path(
     x: Vec<f64>,
     n_obs: usize,
@@ -767,6 +771,7 @@ pub fn fast_cox_path(
     screening=ScreeningRule::Strong,
     seed=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn fast_cox_cv(
     x: Vec<f64>,
     n_obs: usize,

@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use burn::{
     backend::{Autodiff, NdArray},
     module::Module,
@@ -96,6 +94,7 @@ impl GALEEConfig {
         validation_fraction=0.1,
         seed=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         health_dim: usize,
         hidden_sizes: Vec<usize>,
@@ -628,6 +627,7 @@ impl GALEE {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fit_galee_inner(
     x: &[f64],
     _seq_lengths: &[usize],
@@ -778,6 +778,7 @@ fn fit_galee_inner(
 
 #[pyfunction]
 #[pyo3(signature = (x, seq_lengths, n_obs, max_seq_len, n_features, time, event, config=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn galee(
     py: Python<'_>,
     x: Vec<f64>,

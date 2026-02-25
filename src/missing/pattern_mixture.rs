@@ -1,6 +1,7 @@
-#![allow(clippy::too_many_arguments, clippy::type_complexity)]
-
 use pyo3::prelude::*;
+
+type CoxEstimate = (Vec<f64>, Vec<f64>);
+type SensitivityResult = (f64, Vec<f64>, Vec<f64>);
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -191,7 +192,7 @@ fn fit_cox_pattern(
     x: &[f64],
     n_obs: usize,
     n_vars: usize,
-) -> (Vec<f64>, Vec<f64>) {
+) -> CoxEstimate {
     let mut beta = vec![0.0; n_vars];
     let max_iter = 25;
     let tol = 1e-6;
@@ -335,6 +336,7 @@ fn compute_se(
     delta_values,
     analysis_type=SensitivityAnalysisType::DeltaAdjustment
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn sensitivity_analysis(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -344,7 +346,7 @@ pub fn sensitivity_analysis(
     dropout_pattern: Vec<i32>,
     delta_values: Vec<f64>,
     analysis_type: SensitivityAnalysisType,
-) -> PyResult<Vec<(f64, Vec<f64>, Vec<f64>)>> {
+) -> PyResult<Vec<SensitivityResult>> {
     let mut results = Vec::with_capacity(delta_values.len());
 
     for &delta in &delta_values {
@@ -374,7 +376,7 @@ fn delta_adjustment_model(
     n_vars: usize,
     dropout_pattern: &[i32],
     delta: f64,
-) -> (Vec<f64>, Vec<f64>) {
+) -> CoxEstimate {
     let mut adjusted_x = x.to_vec();
 
     for i in 0..n_obs {
@@ -396,7 +398,7 @@ fn tilting_model(
     n_vars: usize,
     dropout_pattern: &[i32],
     tilt_param: f64,
-) -> (Vec<f64>, Vec<f64>) {
+) -> CoxEstimate {
     let weights: Vec<f64> = dropout_pattern
         .iter()
         .map(|&p| (tilt_param * p as f64).exp())
@@ -419,7 +421,7 @@ fn selection_model(
     n_vars: usize,
     dropout_pattern: &[i32],
     selection_param: f64,
-) -> (Vec<f64>, Vec<f64>) {
+) -> CoxEstimate {
     let mut ipw_weights = vec![1.0; n_obs];
 
     for i in 0..n_obs {
@@ -440,7 +442,7 @@ fn fit_weighted_cox(
     weights: &[f64],
     n_obs: usize,
     n_vars: usize,
-) -> (Vec<f64>, Vec<f64>) {
+) -> CoxEstimate {
     let mut beta = vec![0.0; n_vars];
     let max_iter = 25;
     let tol = 1e-6;
@@ -519,6 +521,7 @@ fn fit_weighted_cox(
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn tipping_point_analysis(
     time: Vec<f64>,
     status: Vec<i32>,

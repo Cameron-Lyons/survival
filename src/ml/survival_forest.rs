@@ -1,7 +1,10 @@
-#![allow(clippy::too_many_arguments, clippy::type_complexity)]
-
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+type NelsonAalenCurve = (Vec<f64>, Vec<f64>);
+type SplitCandidate = (usize, f64, Vec<usize>, Vec<usize>);
+type TreeWithOob = (TreeNode, Vec<usize>);
+type OobPrediction = (usize, Vec<f64>);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -65,6 +68,7 @@ impl SurvivalForestConfig {
         seed=None,
         oob_error=true
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         n_trees: usize,
         max_depth: Option<usize>,
@@ -127,7 +131,7 @@ impl TreeNode {
     }
 }
 
-fn compute_nelson_aalen(times: &[f64], status: &[i32], all_times: &[f64]) -> (Vec<f64>, Vec<f64>) {
+fn compute_nelson_aalen(times: &[f64], status: &[i32], all_times: &[f64]) -> NelsonAalenCurve {
     if times.is_empty() {
         return (all_times.to_vec(), vec![0.0; all_times.len()]);
     }
@@ -207,6 +211,7 @@ fn log_rank_split_score(
     (d_left - expected_left).powi(2) / variance
 }
 
+#[allow(clippy::too_many_arguments)]
 fn find_best_split(
     x: &[f64],
     _n: usize,
@@ -219,7 +224,7 @@ fn find_best_split(
     n_random_splits: usize,
     rng: &mut fastrand::Rng,
     split_rule: &SplitRule,
-) -> Option<(usize, f64, Vec<usize>, Vec<usize>)> {
+) -> Option<SplitCandidate> {
     if indices.len() < 2 * min_node_size {
         return None;
     }
@@ -232,7 +237,7 @@ fn find_best_split(
     candidate_vars.truncate(mtry);
 
     let mut best_score = f64::NEG_INFINITY;
-    let mut best_split: Option<(usize, f64, Vec<usize>, Vec<usize>)> = None;
+    let mut best_split: Option<SplitCandidate> = None;
 
     for &var in &candidate_vars {
         let mut values: Vec<f64> = indices.iter().map(|&i| x[i * p + var]).collect();
@@ -294,6 +299,7 @@ fn find_best_split(
     best_split
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_tree(
     x: &[f64],
     n: usize,
@@ -413,7 +419,7 @@ fn fit_survival_forest_inner(
 
     let base_seed = config.seed.unwrap_or(42);
 
-    let results: Vec<(TreeNode, Vec<usize>)> = (0..config.n_trees)
+    let results: Vec<TreeWithOob> = (0..config.n_trees)
         .into_par_iter()
         .map(|tree_idx| {
             let mut rng = fastrand::Rng::with_seed(base_seed.wrapping_add(tree_idx as u64));
@@ -645,6 +651,7 @@ impl SurvivalForest {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_oob_error(
     trees: &[TreeNode],
     oob_indices: &[Vec<usize>],
@@ -657,7 +664,7 @@ fn compute_oob_error(
 ) -> f64 {
     let n_times = trees.first().map(|t| t.chf.len()).unwrap_or(0);
 
-    let oob_results: Vec<(usize, Vec<f64>)> = trees
+    let oob_results: Vec<OobPrediction> = trees
         .par_iter()
         .zip(oob_indices.par_iter())
         .flat_map(|(tree, oob)| {
@@ -733,6 +740,7 @@ fn compute_oob_error(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_variable_importance(
     trees: &[TreeNode],
     oob_indices: &[Vec<usize>],
