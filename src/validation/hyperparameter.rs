@@ -1,6 +1,10 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+type Hyperparameter = (String, f64);
+type HyperparameterSet = Vec<Hyperparameter>;
+type HyperparameterSearchResult = (HyperparameterSet, Vec<f64>);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(eq, eq_int, from_py_object)]
 pub enum SearchStrategy {
@@ -66,13 +70,13 @@ impl HyperparameterSearchConfig {
 #[pyclass(from_py_object)]
 pub struct HyperparameterResult {
     #[pyo3(get)]
-    pub best_params: Vec<(String, f64)>,
+    pub best_params: HyperparameterSet,
     #[pyo3(get)]
     pub best_score: f64,
     #[pyo3(get)]
     pub all_scores: Vec<f64>,
     #[pyo3(get)]
-    pub all_params: Vec<Vec<(String, f64)>>,
+    pub all_params: Vec<HyperparameterSet>,
     #[pyo3(get)]
     pub cv_scores: Vec<Vec<f64>>,
 }
@@ -215,7 +219,7 @@ pub fn hyperparameter_search(
 
     let folds = create_cv_folds(n, config.cv_folds, &mut rng);
 
-    let param_combinations: Vec<Vec<(String, f64)>> = match config.strategy {
+    let param_combinations: Vec<HyperparameterSet> = match config.strategy {
         SearchStrategy::Grid => {
             let mut combos = vec![Vec::new()];
             for (name, values) in &param_grid {
@@ -244,8 +248,7 @@ pub fn hyperparameter_search(
             .collect(),
     };
 
-    #[allow(clippy::type_complexity)]
-    let results: Vec<(Vec<(String, f64)>, Vec<f64>)> = param_combinations
+    let results: Vec<HyperparameterSearchResult> = param_combinations
         .par_iter()
         .map(|params| {
             let param_scale: f64 = params.iter().map(|(_, v)| v).sum::<f64>() / params.len() as f64;
@@ -277,7 +280,7 @@ pub fn hyperparameter_search(
         .map(|(_, scores)| scores.iter().sum::<f64>() / scores.len() as f64)
         .collect();
 
-    let all_params: Vec<Vec<(String, f64)>> = results.iter().map(|(p, _)| p.clone()).collect();
+    let all_params: Vec<HyperparameterSet> = results.iter().map(|(p, _)| p.clone()).collect();
 
     let cv_scores: Vec<Vec<f64>> = results.iter().map(|(_, s)| s.clone()).collect();
 

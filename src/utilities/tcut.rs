@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+type ExpandedIntervals = (Vec<f64>, Vec<f64>, Vec<i32>, Vec<usize>);
+
 /// Result of time cutting for person-years calculations
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -133,12 +135,7 @@ fn find_interval(breaks: &[f64], value: f64) -> i32 {
 /// # Returns
 /// * Tuple of (new_start, new_stop, interval_codes, original_indices)
 #[pyfunction]
-#[allow(clippy::type_complexity)]
-pub fn tcut_expand(
-    start: Vec<f64>,
-    stop: Vec<f64>,
-    cuts: Vec<f64>,
-) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>, Vec<usize>)> {
+pub fn tcut_expand(start: Vec<f64>, stop: Vec<f64>, cuts: Vec<f64>) -> PyResult<ExpandedIntervals> {
     let n = start.len();
     if stop.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(

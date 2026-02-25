@@ -2,6 +2,9 @@ use pyo3::Py;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+type ShapTensor = Vec<Vec<Vec<f64>>>;
+type ShapComputation = (ShapTensor, Vec<f64>);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum AggregationMethod {
@@ -739,7 +742,7 @@ fn compute_shap_inner(
     n_coalitions: usize,
     seed: u64,
     parallel: bool,
-) -> (Vec<Vec<Vec<f64>>>, Vec<f64>) {
+) -> ShapComputation {
     let n_times = time_points.len();
 
     let (coalitions, coalition_sizes) = sample_coalitions(n_features, n_coalitions, seed);
@@ -890,7 +893,6 @@ pub fn survshap(
     config=None
 ))]
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
 pub fn survshap_bootstrap(
     x_explain: Vec<f64>,
     x_background: Vec<f64>,
@@ -942,7 +944,7 @@ pub fn survshap_bootstrap(
     let preds_exp_ref = &predictions_explain;
     let time_pts_ref = &time_points;
 
-    let bootstrap_results: Vec<(Vec<Vec<Vec<f64>>>, Vec<f64>)> = (0..n_bootstrap)
+    let bootstrap_results: Vec<ShapComputation> = (0..n_bootstrap)
         .into_par_iter()
         .map(|b| {
             let seed = base_seed.wrapping_add(b as u64);

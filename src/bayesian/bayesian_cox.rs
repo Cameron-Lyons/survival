@@ -2,6 +2,13 @@ use crate::utilities::statistical::sample_normal;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+type SurvivalCurveMatrix = Vec<Vec<f64>>;
+type SurvivalCurveSummary = (
+    SurvivalCurveMatrix,
+    SurvivalCurveMatrix,
+    SurvivalCurveMatrix,
+);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum PriorType {
@@ -525,7 +532,6 @@ pub fn bayesian_cox(
 }
 
 #[pyfunction]
-#[allow(clippy::type_complexity)]
 pub fn bayesian_cox_predict_survival(
     result: &BayesianCoxResult,
     x_new: Vec<f64>,
@@ -533,7 +539,7 @@ pub fn bayesian_cox_predict_survival(
     n_vars: usize,
     baseline_hazard: Vec<f64>,
     time_points: Vec<f64>,
-) -> PyResult<(Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>)> {
+) -> PyResult<SurvivalCurveSummary> {
     let n_times = time_points.len();
     let n_samples = result.samples.len().min(500);
 
