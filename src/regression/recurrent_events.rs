@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 use crate::utilities::statistical::normal_cdf;
 
@@ -1002,13 +1003,16 @@ pub fn negative_binomial_frailty(
         }
     }
 
-    for idx in 0..n_subjects {
-        if subject_count[idx] > 0 {
-            for x_j in subject_x[idx].iter_mut().take(p) {
-                *x_j /= subject_count[idx] as f64;
+    subject_x
+        .par_iter_mut()
+        .zip(subject_count.par_iter())
+        .for_each(|(x_row, &count)| {
+            if count > 0 {
+                for x_j in x_row.iter_mut().take(p) {
+                    *x_j /= count as f64;
+                }
             }
-        }
-    }
+        });
 
     let n_events_total: usize = subject_events.iter().map(|&e| e as usize).sum();
 
@@ -1019,39 +1023,53 @@ pub fn negative_binomial_frailty(
     let mut prev_loglik = f64::NEG_INFINITY;
 
     for _em_iter in 0..config.em_max_iter {
-        let mut frailty: Vec<f64> = vec![1.0; n_subjects];
-
-        for idx in 0..n_subjects {
-            let mut eta = 0.0;
-            for j in 0..p {
-                eta += subject_x[idx][j] * beta[j];
-            }
-            let mu = subject_exposure[idx] * eta.exp();
-            let y = subject_events[idx] as f64;
-
-            frailty[idx] = (y + 1.0 / theta) / (mu + 1.0 / theta);
-            frailty[idx] = frailty[idx].clamp(0.01, 100.0);
-        }
+        let frailty: Vec<f64> = (0..n_subjects)
+            .into_par_iter()
+            .map(|idx| {
+                let eta: f64 = subject_x[idx]
+                    .iter()
+                    .zip(beta.iter())
+                    .map(|(&x, &b)| x * b)
+                    .sum();
+                let mu = subject_exposure[idx] * eta.exp();
+                let y = subject_events[idx] as f64;
+                ((y + 1.0 / theta) / (mu + 1.0 / theta)).clamp(0.01, 100.0)
+            })
+            .collect();
 
         for _iter in 0..config.max_iter {
             n_iter += 1;
 
-            let mut gradient = vec![0.0; p];
-            let mut hessian_diag = vec![0.0; p];
+            let (gradient, hessian_diag) = (0..n_subjects)
+                .into_par_iter()
+                .fold(
+                    || (vec![0.0; p], vec![0.0; p]),
+                    |(mut gradient, mut hessian_diag), idx| {
+                        let eta: f64 = subject_x[idx]
+                            .iter()
+                            .zip(beta.iter())
+                            .map(|(&x, &b)| x * b)
+                            .sum();
+                        let mu = subject_exposure[idx] * eta.exp() * frailty[idx];
+                        let y = subject_events[idx] as f64;
 
-            for idx in 0..n_subjects {
-                let mut eta = 0.0;
-                for j in 0..p {
-                    eta += subject_x[idx][j] * beta[j];
-                }
-                let mu = subject_exposure[idx] * eta.exp() * frailty[idx];
-                let y = subject_events[idx] as f64;
-
-                for j in 0..p {
-                    gradient[j] += subject_x[idx][j] * (y - mu);
-                    hessian_diag[j] += subject_x[idx][j] * subject_x[idx][j] * mu;
-                }
-            }
+                        for j in 0..p {
+                            gradient[j] += subject_x[idx][j] * (y - mu);
+                            hessian_diag[j] += subject_x[idx][j] * subject_x[idx][j] * mu;
+                        }
+                        (gradient, hessian_diag)
+                    },
+                )
+                .reduce(
+                    || (vec![0.0; p], vec![0.0; p]),
+                    |(mut g1, mut h1), (g2, h2)| {
+                        for j in 0..p {
+                            g1[j] += g2[j];
+                            h1[j] += h2[j];
+                        }
+                        (g1, h1)
+                    },
+                );
 
             let mut max_change: f64 = 0.0;
             for j in 0..p {
@@ -1068,36 +1086,41 @@ pub fn negative_binomial_frailty(
             }
         }
 
-        let mut sum_for_theta = 0.0;
-        let mut count_for_theta = 0.0;
-
-        for idx in 0..n_subjects {
-            let y = subject_events[idx] as f64;
-            let w = frailty[idx];
-            if y > 0.0 {
-                sum_for_theta += y * (w - 1.0).powi(2) / w;
-                count_for_theta += y;
-            }
-        }
+        let (sum_for_theta, count_for_theta) = (0..n_subjects)
+            .into_par_iter()
+            .map(|idx| {
+                let y = subject_events[idx] as f64;
+                let w = frailty[idx];
+                if y > 0.0 {
+                    (y * (w - 1.0).powi(2) / w, y)
+                } else {
+                    (0.0, 0.0)
+                }
+            })
+            .reduce(|| (0.0, 0.0), |(s1, c1), (s2, c2)| (s1 + s2, c1 + c2));
 
         if count_for_theta > 0.0 {
             let new_theta = (sum_for_theta / count_for_theta).clamp(0.01, 100.0);
             theta = 0.9 * theta + 0.1 * new_theta;
         }
 
-        let mut loglik = 0.0;
-        for idx in 0..n_subjects {
-            let mut eta = 0.0;
-            for j in 0..p {
-                eta += subject_x[idx][j] * beta[j];
-            }
-            let mu = subject_exposure[idx] * eta.exp();
-            let y = subject_events[idx] as f64;
-            let r = 1.0 / theta;
+        let loglik: f64 = (0..n_subjects)
+            .into_par_iter()
+            .map(|idx| {
+                let eta: f64 = subject_x[idx]
+                    .iter()
+                    .zip(beta.iter())
+                    .map(|(&x, &b)| x * b)
+                    .sum();
+                let mu = subject_exposure[idx] * eta.exp();
+                let y = subject_events[idx] as f64;
+                let r = 1.0 / theta;
 
-            loglik += lgamma(y + r) - lgamma(r) - lgamma(y + 1.0);
-            loglik += r * (r / (r + mu)).ln() + y * (mu / (r + mu)).ln();
-        }
+                let mut ll = lgamma(y + r) - lgamma(r) - lgamma(y + 1.0);
+                ll += r * (r / (r + mu)).ln() + y * (mu / (r + mu)).ln();
+                ll
+            })
+            .sum();
 
         if (loglik - prev_loglik).abs() < config.tol {
             converged = true;
@@ -1106,23 +1129,38 @@ pub fn negative_binomial_frailty(
         prev_loglik = loglik;
     }
 
-    let mut info_matrix = vec![0.0; p];
-    for idx in 0..n_subjects {
-        let mut eta = 0.0;
-        for j in 0..p {
-            eta += subject_x[idx][j] * beta[j];
-        }
-        let mu = subject_exposure[idx] * eta.exp();
-        let r = 1.0 / theta;
-        let var_factor = mu * (1.0 + theta * mu) / (r + mu);
+    let info_matrix: Vec<f64> = (0..n_subjects)
+        .into_par_iter()
+        .fold(
+            || vec![0.0; p],
+            |mut info, idx| {
+                let eta: f64 = subject_x[idx]
+                    .iter()
+                    .zip(beta.iter())
+                    .map(|(&x, &b)| x * b)
+                    .sum();
+                let mu = subject_exposure[idx] * eta.exp();
+                let r = 1.0 / theta;
+                let var_factor = mu * (1.0 + theta * mu) / (r + mu);
 
-        for j in 0..p {
-            info_matrix[j] += subject_x[idx][j] * subject_x[idx][j] * var_factor;
-        }
-    }
+                for j in 0..p {
+                    info[j] += subject_x[idx][j] * subject_x[idx][j] * var_factor;
+                }
+                info
+            },
+        )
+        .reduce(
+            || vec![0.0; p],
+            |mut a, b| {
+                for j in 0..p {
+                    a[j] += b[j];
+                }
+                a
+            },
+        );
 
     let std_errors: Vec<f64> = info_matrix
-        .iter()
+        .par_iter()
         .map(|&info| {
             if info > crate::constants::DIVISION_FLOOR {
                 (1.0 / info).sqrt()
@@ -1133,8 +1171,8 @@ pub fn negative_binomial_frailty(
         .collect();
 
     let z_scores: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
+        .par_iter()
+        .zip(std_errors.par_iter())
         .map(|(&b, &se)| {
             if se > crate::constants::DIVISION_FLOOR && se.is_finite() {
                 b / se
@@ -1145,21 +1183,21 @@ pub fn negative_binomial_frailty(
         .collect();
 
     let p_values: Vec<f64> = z_scores
-        .iter()
+        .par_iter()
         .map(|&z| 2.0 * (1.0 - normal_cdf(z.abs())))
         .collect();
 
-    let rate_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
+    let rate_ratios: Vec<f64> = beta.par_iter().map(|&b| b.exp()).collect();
 
     let rr_lower: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
+        .par_iter()
+        .zip(std_errors.par_iter())
         .map(|(&b, &se)| (b - 1.96 * se).exp())
         .collect();
 
     let rr_upper: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
+        .par_iter()
+        .zip(std_errors.par_iter())
         .map(|(&b, &se)| (b + 1.96 * se).exp())
         .collect();
 
@@ -1167,11 +1205,13 @@ pub fn negative_binomial_frailty(
     let frailty_variance = theta;
 
     let frailty_estimates: Vec<f64> = (0..n_subjects)
+        .into_par_iter()
         .map(|idx| {
-            let mut eta = 0.0;
-            for j in 0..p {
-                eta += subject_x[idx][j] * beta[j];
-            }
+            let eta: f64 = subject_x[idx]
+                .iter()
+                .zip(beta.iter())
+                .map(|(&x, &b)| x * b)
+                .sum();
             let mu = subject_exposure[idx] * eta.exp();
             let y = subject_events[idx] as f64;
             let r = 1.0 / theta;

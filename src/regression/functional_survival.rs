@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 use crate::utilities::statistical::normal_cdf;
 
@@ -178,11 +179,12 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
     let n_points = curves[0].len();
 
     let mean_function: Vec<f64> = (0..n_points)
+        .into_par_iter()
         .map(|j| curves.iter().map(|c| c[j]).sum::<f64>() / n_curves as f64)
         .collect();
 
     let centered: Vec<Vec<f64>> = curves
-        .iter()
+        .par_iter()
         .map(|c| {
             c.iter()
                 .zip(mean_function.iter())
@@ -192,12 +194,11 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
         .collect();
 
     let mut cov_matrix = vec![vec![0.0; n_points]; n_points];
-    for i in 0..n_points {
-        for j in 0..n_points {
-            let cov: f64 = centered.iter().map(|c| c[i] * c[j]).sum::<f64>() / n_curves as f64;
-            cov_matrix[i][j] = cov;
+    cov_matrix.par_iter_mut().enumerate().for_each(|(i, row)| {
+        for (j, value) in row.iter_mut().enumerate() {
+            *value = centered.iter().map(|c| c[i] * c[j]).sum::<f64>() / n_curves as f64;
         }
-    }
+    });
 
     let mut eigenvalues = vec![0.0; n_points.min(n_components)];
     let mut eigenvectors = vec![vec![0.0; n_points]; n_points.min(n_components)];
@@ -209,11 +210,9 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
 
         for _ in 0..100 {
             let mut new_v = vec![0.0; n_points];
-            for i in 0..n_points {
-                for j in 0..n_points {
-                    new_v[i] += cov_matrix[i][j] * v[j];
-                }
-            }
+            new_v.par_iter_mut().enumerate().for_each(|(i, value)| {
+                *value = (0..n_points).map(|j| cov_matrix[i][j] * v[j]).sum();
+            });
 
             for eigenvector in eigenvectors.iter().take(k) {
                 let dot: f64 = new_v
@@ -246,6 +245,7 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
         }
 
         let lambda: f64 = (0..n_points)
+            .into_par_iter()
             .map(|i| {
                 let mv: f64 = (0..n_points).map(|j| cov_matrix[i][j] * v[j]).sum();
                 mv * v[i]
@@ -278,7 +278,7 @@ fn functional_pca(curves: &[Vec<f64>], n_components: usize) -> FunctionalPCAResu
         .collect();
 
     let scores: Vec<Vec<f64>> = centered
-        .iter()
+        .par_iter()
         .map(|c| {
             eigenvectors
                 .iter()
@@ -331,6 +331,7 @@ pub fn functional_cox(
     let mut coefficients = vec![0.0; n_params];
 
     let combined_covariates: Vec<Vec<f64>> = (0..n)
+        .into_par_iter()
         .map(|i| {
             let mut cov = if i < fpca_result.scores.len() {
                 fpca_result.scores[i].clone()
@@ -340,7 +341,7 @@ pub fn functional_cox(
             if let Some(ref sc) = scalar_covariates
                 && i < sc.len()
             {
-                cov.extend(sc[i].iter());
+                cov.extend(sc[i].iter().copied());
             }
             cov
         })
@@ -423,23 +424,23 @@ pub fn functional_cox(
         })
         .collect();
 
-    let hazard_ratio: Vec<f64> = coefficients.iter().map(|&c| c.exp()).collect();
+    let hazard_ratio: Vec<f64> = coefficients.par_iter().map(|&c| c.exp()).collect();
 
     let ci_lower: Vec<f64> = coefficients
-        .iter()
-        .zip(coefficient_se.iter())
+        .par_iter()
+        .zip(coefficient_se.par_iter())
         .map(|(c, se): (&f64, &f64)| (c - 1.96 * se).exp())
         .collect();
 
     let ci_upper: Vec<f64> = coefficients
-        .iter()
-        .zip(coefficient_se.iter())
+        .par_iter()
+        .zip(coefficient_se.par_iter())
         .map(|(c, se): (&f64, &f64)| (c + 1.96 * se).exp())
         .collect();
 
     let p_values: Vec<f64> = coefficients
-        .iter()
-        .zip(coefficient_se.iter())
+        .par_iter()
+        .zip(coefficient_se.par_iter())
         .map(|(c, se): (&f64, &f64)| {
             let z: f64 = if *se > crate::constants::DIVISION_FLOOR {
                 c / se
@@ -453,6 +454,7 @@ pub fn functional_cox(
     let coefficient_function: Vec<f64> = if !fpca_result.principal_components.is_empty() {
         let n_points = fpca_result.principal_components[0].len();
         (0..n_points)
+            .into_par_iter()
             .map(|t| {
                 (0..n_functional.min(coefficients.len()))
                     .map(|k| coefficients[k] * fpca_result.principal_components[k][t])
