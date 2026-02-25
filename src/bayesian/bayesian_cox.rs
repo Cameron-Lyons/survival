@@ -532,6 +532,7 @@ pub fn bayesian_cox(
 }
 
 #[pyfunction]
+#[allow(clippy::type_complexity)]
 pub fn bayesian_cox_predict_survival(
     result: &BayesianCoxResult,
     x_new: Vec<f64>,

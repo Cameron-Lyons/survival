@@ -893,6 +893,7 @@ pub fn survshap(
     config=None
 ))]
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn survshap_bootstrap(
     x_explain: Vec<f64>,
     x_background: Vec<f64>,

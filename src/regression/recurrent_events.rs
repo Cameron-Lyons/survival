@@ -1036,7 +1036,6 @@ pub fn negative_binomial_frailty(
                 ((y + 1.0 / theta) / (mu + 1.0 / theta)).clamp(0.01, 100.0)
             })
             .collect();
-
         for _iter in 0..config.max_iter {
             n_iter += 1;
 
