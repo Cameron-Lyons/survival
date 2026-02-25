@@ -315,8 +315,7 @@ impl<B: burn::prelude::Backend> TimeAwareEmbedding<B> {
                 .slice([0..batch_size, 0..max_seq_len, f..f + 1])
                 .reshape([batch_size, max_seq_len]);
 
-            #[allow(clippy::single_range_in_vec_init)]
-            let decay_rate_f: Tensor<B, 1> = self.decay_rates.val().slice([f..f + 1]);
+            let decay_rate_f: Tensor<B, 1> = self.decay_rates.val().slice_dim(0, f);
             let decay_rate_expanded: Tensor<B, 2> = decay_rate_f
                 .reshape([1, 1])
                 .expand([batch_size, max_seq_len]);
@@ -1142,10 +1141,7 @@ fn apply_mha_cpu(
         }
         _score /= (head_dim as f64).sqrt();
 
-        #[allow(clippy::manual_memcpy)]
-        for i in start..end {
-            attn_output[i] = v[i];
-        }
+        attn_output[start..end].copy_from_slice(&v[start..end]);
     }
 
     linear_forward(&attn_output, output_w, output_b, hidden, hidden)
