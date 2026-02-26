@@ -199,43 +199,6 @@ impl NeuralMTLRModel {
     }
 }
 
-fn _compute_mtlr_loss(
-    logits: &[Vec<f64>],
-    time_bins: &[usize],
-    events: &[i32],
-    l2_reg: f64,
-    weights: &[Vec<f64>],
-) -> f64 {
-    let n = logits.len();
-    if n == 0 {
-        return 0.0;
-    }
-
-    let mut nll = 0.0;
-
-    for (i, (log, &bin)) in logits.iter().zip(time_bins.iter()).enumerate() {
-        let probs = softmax(log);
-        let survival = cumsum_from_end(&probs);
-
-        if events[i] == 1 {
-            let density = probs[bin].max(1e-10);
-            nll -= density.ln();
-        } else {
-            let surv = survival[bin].max(1e-10);
-            nll -= surv.ln();
-        }
-    }
-
-    let l2_penalty: f64 = weights
-        .iter()
-        .flat_map(|w| w.iter())
-        .map(|&x| x * x)
-        .sum::<f64>()
-        * l2_reg;
-
-    nll / n as f64 + l2_penalty
-}
-
 #[pyfunction]
 #[pyo3(signature = (
     covariates,

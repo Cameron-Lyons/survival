@@ -91,18 +91,6 @@ fn softplus(x: f64) -> f64 {
     if x > 20.0 { x } else { (1.0 + x.exp()).ln() }
 }
 
-fn _reparameterize(mu: f64, logvar: f64, rng: &mut fastrand::Rng) -> f64 {
-    let std = (logvar * 0.5).exp();
-    let u1: f64 = rng.f64();
-    let u2: f64 = rng.f64();
-    let normal = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
-    mu + std * normal
-}
-
-fn _kl_divergence(mu: f64, logvar: f64) -> f64 {
-    -0.5 * (1.0 + logvar - mu.powi(2) - logvar.exp())
-}
-
 #[pymethods]
 impl DySurvModel {
     fn predict_survival(&self, covariates: Vec<Vec<f64>>) -> PyResult<Vec<Vec<f64>>> {

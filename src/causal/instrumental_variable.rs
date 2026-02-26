@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 
-use crate::utilities::statistical::normal_cdf;
+use crate::utilities::statistical::{chi2_cdf, normal_cdf};
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -361,97 +361,6 @@ pub fn iv_cox(
         n_iter,
         converged,
     })
-}
-
-fn chi2_cdf(x: f64, df: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    let k = df / 2.0;
-    let x_half = x / 2.0;
-    lower_incomplete_gamma(k, x_half) / gamma_fn(k)
-}
-
-fn gamma_fn(x: f64) -> f64 {
-    if x <= 0.0 {
-        return f64::INFINITY;
-    }
-    if x < 0.5 {
-        return std::f64::consts::PI / ((std::f64::consts::PI * x).sin() * gamma_fn(1.0 - x));
-    }
-    let x = x - 1.0;
-    let g = 7;
-    #[allow(clippy::excessive_precision)]
-    let c = [
-        0.99999999999980993,
-        676.5203681218851,
-        -1259.1392167224028,
-        771.32342877765313,
-        -176.61502916214059,
-        12.507343278686905,
-        -0.13857109526572012,
-        9.9843695780195716e-6,
-        1.5056327351493116e-7,
-    ];
-
-    let mut sum = c[0];
-    for (i, &coeff) in c.iter().enumerate().take(g + 2).skip(1) {
-        sum += coeff / (x + i as f64);
-    }
-
-    let t = x + g as f64 + 0.5;
-    (2.0 * std::f64::consts::PI).sqrt() * t.powf(x + 0.5) * (-t).exp() * sum
-}
-
-fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x < a + 1.0 {
-        let mut sum = 0.0;
-        let mut term = 1.0 / a;
-        sum += term;
-        for n in 1..100 {
-            term *= x / (a + n as f64);
-            sum += term;
-            if term.abs() < crate::constants::DIVISION_FLOOR * sum.abs() {
-                break;
-            }
-        }
-        x.powf(a) * (-x).exp() * sum
-    } else {
-        gamma_fn(a) - upper_incomplete_gamma(a, x)
-    }
-}
-
-fn upper_incomplete_gamma(a: f64, x: f64) -> f64 {
-    let mut f = 1.0 + x - a;
-    if f.abs() < 1e-30 {
-        f = 1e-30;
-    }
-    let mut c = f;
-    let mut d = 0.0;
-
-    for n in 1..100 {
-        let an = n as f64 * (a - n as f64);
-        let bn = (2 * n + 1) as f64 + x - a;
-        d = bn + an * d;
-        if d.abs() < 1e-30 {
-            d = 1e-30;
-        }
-        c = bn + an / c;
-        if c.abs() < 1e-30 {
-            c = 1e-30;
-        }
-        d = 1.0 / d;
-        let delta = c * d;
-        f *= delta;
-        if (delta - 1.0).abs() < crate::constants::DIVISION_FLOOR {
-            break;
-        }
-    }
-
-    x.powf(a) * (-x).exp() / f
 }
 
 #[derive(Debug, Clone)]

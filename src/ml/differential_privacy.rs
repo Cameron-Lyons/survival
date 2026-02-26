@@ -1,3 +1,4 @@
+use crate::constants::{LCG64_INCREMENT, LCG64_MULTIPLIER};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -55,16 +56,22 @@ impl DPConfig {
 
 fn generate_laplace_noise(scale: f64, seed: u64) -> f64 {
     let mut rng_state = seed;
-    rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+    rng_state = rng_state
+        .wrapping_mul(LCG64_MULTIPLIER)
+        .wrapping_add(LCG64_INCREMENT);
     let u = (rng_state as f64) / (u64::MAX as f64) - 0.5;
     -scale * u.signum() * (1.0 - 2.0 * u.abs()).ln()
 }
 
 fn generate_gaussian_noise(sigma: f64, seed: u64) -> f64 {
     let mut rng_state = seed;
-    rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+    rng_state = rng_state
+        .wrapping_mul(LCG64_MULTIPLIER)
+        .wrapping_add(LCG64_INCREMENT);
     let u1 = (rng_state as f64) / (u64::MAX as f64);
-    rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+    rng_state = rng_state
+        .wrapping_mul(LCG64_MULTIPLIER)
+        .wrapping_add(LCG64_INCREMENT);
     let u2 = (rng_state as f64) / (u64::MAX as f64);
     let z = (-2.0 * u1.max(1e-10).ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
     z * sigma
@@ -548,7 +555,9 @@ pub fn local_dp_mean(
             let normalized = (v_clipped - lo) / (hi - lo);
 
             let mut rng_state = seed.wrapping_add(i as u64);
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            rng_state = rng_state
+                .wrapping_mul(LCG64_MULTIPLIER)
+                .wrapping_add(LCG64_INCREMENT);
             let u = (rng_state as f64) / (u64::MAX as f64);
 
             let p = (epsilon.exp() / (epsilon.exp() + 1.0)) * normalized

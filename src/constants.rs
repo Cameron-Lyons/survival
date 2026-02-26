@@ -58,9 +58,13 @@ pub const TEST_LOOSE_TOL: f64 = 1e-2;
 
 pub const DEFAULT_CONFORMAL_COVERAGE: f64 = 0.9;
 pub const DEFAULT_IPCW_TRIM: f64 = 0.01;
+pub const IPCW_SURVIVAL_FLOOR: f64 = DEFAULT_IPCW_TRIM;
 pub const DEFAULT_MIN_GROUP_SIZE: usize = 10;
 pub const DEFAULT_WEIGHT_TRIM: f64 = 0.01;
 pub const MAX_WEIGHT_RATIO: f64 = 100.0;
+
+pub const LCG64_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+pub const LCG64_INCREMENT: u64 = 1;
 
 pub const DEFAULT_ALPHA: f64 = 0.05;
 pub const DEFAULT_POWER: f64 = 0.8;

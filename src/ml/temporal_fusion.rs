@@ -79,16 +79,6 @@ impl TFTConfig {
     }
 }
 
-fn _glu(x: &[f64], weights: &[f64]) -> Vec<f64> {
-    let half = x.len() / 2;
-    x.iter()
-        .take(half)
-        .zip(x.iter().skip(half))
-        .zip(weights.iter())
-        .map(|((&a, &b), &w)| a * (1.0 / (1.0 + (-b * w).exp())))
-        .collect()
-}
-
 fn grn(
     input: &[f64],
     context: Option<&[f64]>,

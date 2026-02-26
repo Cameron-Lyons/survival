@@ -1,4 +1,4 @@
-use crate::constants::{COX_MAX_ITER, PARALLEL_THRESHOLD_SMALL};
+use crate::constants::{COX_MAX_ITER, LCG64_INCREMENT, LCG64_MULTIPLIER, PARALLEL_THRESHOLD_SMALL};
 use crate::utilities::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
 use ndarray::Array2;
 use pyo3::prelude::*;
@@ -50,7 +50,9 @@ fn simple_shuffle(indices: &mut [usize], seed: u64) {
     let n = indices.len();
     for i in (1..n).rev() {
         let mut state = seed.wrapping_add(i as u64);
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        state = state
+            .wrapping_mul(LCG64_MULTIPLIER)
+            .wrapping_add(LCG64_INCREMENT);
         let j = (state as usize) % (i + 1);
         indices.swap(i, j);
     }
