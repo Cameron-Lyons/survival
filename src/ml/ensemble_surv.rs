@@ -1,3 +1,4 @@
+use crate::constants::{LCG64_INCREMENT, LCG64_MULTIPLIER};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -52,7 +53,9 @@ fn create_cv_folds(n: usize, n_folds: usize, seed: u64) -> Vec<Vec<usize>> {
     let mut indices: Vec<usize> = (0..n).collect();
     let mut rng_state = seed;
     for i in (1..n).rev() {
-        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        rng_state = rng_state
+            .wrapping_mul(LCG64_MULTIPLIER)
+            .wrapping_add(LCG64_INCREMENT);
         let j = (rng_state as usize) % (i + 1);
         indices.swap(i, j);
     }
@@ -660,7 +663,9 @@ pub fn componentwise_boosting(
             let sample_size = (n as f64 * config.subsample_ratio).ceil() as usize;
             let mut indices: Vec<usize> = (0..n).collect();
             for i in (1..n).rev() {
-                rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                rng_state = rng_state
+                    .wrapping_mul(LCG64_MULTIPLIER)
+                    .wrapping_add(LCG64_INCREMENT);
                 let j = (rng_state as usize) % (i + 1);
                 indices.swap(i, j);
             }

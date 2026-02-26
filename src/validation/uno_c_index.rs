@@ -1,5 +1,5 @@
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
-use crate::utilities::statistical::normal_cdf;
+use crate::constants::{IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE};
+use crate::utilities::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::fmt;
@@ -60,71 +60,6 @@ impl UnoCIndexResult {
     }
 }
 
-fn compute_censoring_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
-    let n = time.len();
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut unique_times = Vec::new();
-    let mut km_values = Vec::new();
-    let mut cum_surv = 1.0;
-    let mut at_risk = n;
-
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        let mut censored_count = 0;
-        let mut total_at_time = 0;
-
-        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
-            if status[indices[i]] == 0 {
-                censored_count += 1;
-            }
-            total_at_time += 1;
-            i += 1;
-        }
-
-        if censored_count > 0 && at_risk > 0 {
-            cum_surv *= 1.0 - censored_count as f64 / at_risk as f64;
-        }
-
-        unique_times.push(current_time);
-        km_values.push(cum_surv);
-
-        at_risk -= total_at_time;
-    }
-
-    (unique_times, km_values)
-}
-
-fn get_censoring_prob(t: f64, unique_times: &[f64], km_values: &[f64]) -> f64 {
-    if unique_times.is_empty() {
-        return 1.0;
-    }
-
-    if t < unique_times[0] {
-        return 1.0;
-    }
-
-    let mut left = 0;
-    let mut right = unique_times.len();
-
-    while left < right {
-        let mid = (left + right) / 2;
-        if unique_times[mid] <= t {
-            left = mid + 1;
-        } else {
-            right = mid;
-        }
-    }
-
-    if left == 0 { 1.0 } else { km_values[left - 1] }
-}
-
 pub fn uno_c_index_core(
     time: &[f64],
     status: &[i32],
@@ -152,7 +87,7 @@ pub fn uno_c_index_core(
 
     let (km_times, km_values) = compute_censoring_km(time, status);
 
-    let min_g = 0.01;
+    let min_g = IPCW_SURVIVAL_FLOOR;
 
     let compute_pair_contributions = |i: usize| -> (f64, f64, f64, f64, Vec<f64>) {
         let mut concordant = 0.0;
@@ -165,7 +100,7 @@ pub fn uno_c_index_core(
             return (concordant, discordant, tied, total_weight, influence);
         }
 
-        let g_ti = get_censoring_prob(time[i], &km_times, &km_values).max(min_g);
+        let g_ti = km_step_prob_at(time[i], &km_times, &km_values).max(min_g);
         let weight = 1.0 / (g_ti * g_ti);
 
         for j in 0..n {
@@ -355,7 +290,7 @@ pub fn compare_uno_c_indices_core(
 
     let (km_times, km_values) = compute_censoring_km(time, status);
 
-    let min_g = 0.01;
+    let min_g = IPCW_SURVIVAL_FLOOR;
 
     let mut concordant_1 = 0.0;
     let mut concordant_2 = 0.0;
@@ -369,7 +304,7 @@ pub fn compare_uno_c_indices_core(
             continue;
         }
 
-        let g_ti = get_censoring_prob(time[i], &km_times, &km_values).max(min_g);
+        let g_ti = km_step_prob_at(time[i], &km_times, &km_values).max(min_g);
         let weight = 1.0 / (g_ti * g_ti);
 
         for j in 0..n {
@@ -575,7 +510,7 @@ pub fn c_index_decomposition_core(
     let tau_val = tau.unwrap_or_else(|| time.iter().copied().fold(f64::NEG_INFINITY, f64::max));
 
     let (km_times, km_values) = compute_censoring_km(time, status);
-    let min_g = 0.01;
+    let min_g = IPCW_SURVIVAL_FLOOR;
 
     let mut concordant_ee = 0.0;
     let mut concordant_ec = 0.0;
@@ -591,7 +526,7 @@ pub fn c_index_decomposition_core(
             continue;
         }
 
-        let g_ti = get_censoring_prob(time[i], &km_times, &km_values).max(min_g);
+        let g_ti = km_step_prob_at(time[i], &km_times, &km_values).max(min_g);
         let weight = 1.0 / (g_ti * g_ti);
 
         for j in 0..n {

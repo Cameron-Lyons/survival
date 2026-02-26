@@ -1,4 +1,4 @@
-use crate::constants::ITERATIVE_MAX_ITER;
+use crate::constants::{ITERATIVE_MAX_ITER, TIME_EPSILON};
 use std::f64::consts::SQRT_2;
 
 #[inline]
@@ -37,6 +37,70 @@ pub fn erfc(x: f64) -> f64 {
 #[inline]
 pub fn normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / SQRT_2))
+}
+
+#[inline]
+pub fn compute_censoring_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
+    let n = time.len();
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut unique_times = Vec::new();
+    let mut km_values = Vec::new();
+    let mut cum_surv = 1.0;
+    let mut at_risk = n;
+
+    let mut i = 0;
+    while i < n {
+        let current_time = time[indices[i]];
+        let mut censored_count = 0;
+        let mut total_at_time = 0;
+
+        while i < n && (time[indices[i]] - current_time).abs() < TIME_EPSILON {
+            if status[indices[i]] == 0 {
+                censored_count += 1;
+            }
+            total_at_time += 1;
+            i += 1;
+        }
+
+        if censored_count > 0 && at_risk > 0 {
+            cum_surv *= 1.0 - censored_count as f64 / at_risk as f64;
+        }
+
+        unique_times.push(current_time);
+        km_values.push(cum_surv);
+        at_risk -= total_at_time;
+    }
+
+    (unique_times, km_values)
+}
+
+#[inline]
+pub fn km_step_prob_at(t: f64, unique_times: &[f64], km_values: &[f64]) -> f64 {
+    if unique_times.is_empty() {
+        return 1.0;
+    }
+    if t < unique_times[0] {
+        return 1.0;
+    }
+
+    let mut left = 0;
+    let mut right = unique_times.len();
+    while left < right {
+        let mid = (left + right) / 2;
+        if unique_times[mid] <= t {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+
+    if left == 0 { 1.0 } else { km_values[left - 1] }
 }
 
 #[inline]
@@ -160,6 +224,14 @@ pub fn chi2_sf(x: f64, df: usize) -> f64 {
     let k = df as f64 / 2.0;
     let x_half = x / 2.0;
     1.0 - lower_incomplete_gamma(k, x_half)
+}
+
+#[inline]
+pub fn chi2_cdf(x: f64, df: f64) -> f64 {
+    if x <= 0.0 || df <= 0.0 {
+        return 0.0;
+    }
+    lower_incomplete_gamma(df / 2.0, x / 2.0)
 }
 
 #[inline]

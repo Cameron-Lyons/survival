@@ -1,4 +1,5 @@
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::constants::{IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE};
+use crate::utilities::statistical::{compute_censoring_km, km_step_prob_at};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::fmt;
@@ -95,71 +96,6 @@ impl CumulativeDynamicAUCResult {
     }
 }
 
-fn compute_censoring_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
-    let n = time.len();
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut unique_times = Vec::new();
-    let mut km_values = Vec::new();
-    let mut cum_surv = 1.0;
-    let mut at_risk = n;
-
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        let mut censored_count = 0;
-        let mut total_at_time = 0;
-
-        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
-            if status[indices[i]] == 0 {
-                censored_count += 1;
-            }
-            total_at_time += 1;
-            i += 1;
-        }
-
-        if censored_count > 0 && at_risk > 0 {
-            cum_surv *= 1.0 - censored_count as f64 / at_risk as f64;
-        }
-
-        unique_times.push(current_time);
-        km_values.push(cum_surv);
-
-        at_risk -= total_at_time;
-    }
-
-    (unique_times, km_values)
-}
-
-fn get_km_prob(t: f64, unique_times: &[f64], km_values: &[f64]) -> f64 {
-    if unique_times.is_empty() {
-        return 1.0;
-    }
-
-    if t < unique_times[0] {
-        return 1.0;
-    }
-
-    let mut left = 0;
-    let mut right = unique_times.len();
-
-    while left < right {
-        let mid = (left + right) / 2;
-        if unique_times[mid] <= t {
-            left = mid + 1;
-        } else {
-            right = mid;
-        }
-    }
-
-    if left == 0 { 1.0 } else { km_values[left - 1] }
-}
-
 pub fn time_dependent_auc_core(
     time: &[f64],
     status: &[i32],
@@ -182,14 +118,14 @@ pub fn time_dependent_auc_core(
 
     let (cens_times, cens_km) = compute_censoring_km(time, status);
 
-    let min_g = 0.01;
+    let min_g = IPCW_SURVIVAL_FLOOR;
 
     let mut cases: Vec<(usize, f64)> = Vec::new();
     let mut controls: Vec<(usize, f64)> = Vec::new();
 
     for i in 0..n {
         if time[i] <= t && status[i] == 1 {
-            let g_ti = get_km_prob(time[i], &cens_times, &cens_km).max(min_g);
+            let g_ti = km_step_prob_at(time[i], &cens_times, &cens_km).max(min_g);
             let weight = 1.0 / g_ti;
             cases.push((i, weight));
         } else if time[i] > t {

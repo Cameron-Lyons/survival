@@ -93,6 +93,7 @@ impl CounterfactualSurvivalResult {
     }
 }
 
+#[cfg(test)]
 fn _compute_wasserstein_distance(repr_treated: &[Vec<f64>], repr_control: &[Vec<f64>]) -> f64 {
     if repr_treated.is_empty() || repr_control.is_empty() {
         return 0.0;

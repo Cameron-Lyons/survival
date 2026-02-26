@@ -84,6 +84,7 @@ impl SurvivalTransformerConfig {
     }
 }
 
+#[cfg(test)]
 fn _positional_encoding(seq_len: usize, d_model: usize) -> Vec<Vec<f64>> {
     (0..seq_len)
         .map(|pos| {
