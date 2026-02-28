@@ -43,7 +43,7 @@ pip install survival
 #### Prerequisites
 
 - Python 3.11+
-- Rust (see [rustup.rs](https://rustup.rs/))
+- Rust 1.93+ (see [rustup.rs](https://rustup.rs/))
 - [maturin](https://github.com/PyO3/maturin)
 
 Install maturin:
@@ -65,7 +65,7 @@ pip install target/wheels/survival-*.whl
 
 For development:
 ```sh
-maturin develop
+maturin develop --release
 ```
 
 ## Usage
@@ -137,11 +137,18 @@ print(f"Concordance index: {result['concordance_index']}")
 from survival import perform_cox_regression_frailty
 
 result = perform_cox_regression_frailty(
-    time_data=[...],
-    status_data=[...],
-    covariates=[...],
-    # ... other parameters
+    time=[1.0, 2.0, 3.0, 4.0],
+    event=[1, 1, 0, 1],
+    covariates=[
+        [0.2, 1.0],
+        [0.1, 0.5],
+        [0.4, 1.2],
+        [0.3, 0.7],
+    ],
+    max_iter=20,
+    eps=1e-5,
 )
+print(result["coefficients"])
 ```
 
 ### Person-Years Calculation
@@ -149,11 +156,26 @@ result = perform_cox_regression_frailty(
 ```python
 from survival import perform_pyears_calculation
 
+# Low-level API: inputs should match ratetable-style dimensions/cuts.
 result = perform_pyears_calculation(
-    time_data=[...],
-    weights=[...],
-    # ... other parameters
+    time_data=[1.0, 2.0, 3.0, 1.0, 0.0, 1.0],  # [times..., events...], ny=2
+    weights=[1.0, 1.0, 1.0],
+    expected_dim=1,
+    expected_factors=[0],
+    expected_dims=[2],
+    expected_cuts=[0.0, 2.0],
+    expected_rates=[0.01, 0.02],
+    expected_data=[0.5, 1.5, 0.5],
+    observed_dim=1,
+    observed_factors=[0],
+    observed_dims=[2],
+    observed_cuts=[0.0, 1.5, 3.0],
+    method=0,
+    observed_data=[0.5, 1.0, 2.0],
+    do_event=1,
+    ny=2,
 )
+print(result.keys())
 ```
 
 ### Kaplan-Meier Survival Curves
@@ -352,7 +374,7 @@ print(f"Variance matrix: {result.variance}")
 
 ### Built-in Datasets
 
-The library includes 30 classic survival analysis datasets:
+The library includes 33 classic survival analysis datasets:
 
 ```python
 from survival import load_lung, load_aml, load_veteran
@@ -400,174 +422,30 @@ veteran = load_veteran()
 - `load_nafld()` - Non-Alcoholic Fatty Liver Disease Data
 - `load_cgd0()` - CGD Baseline Data
 - `load_pbcseq()` - PBC Sequential Data
+- `load_hoel()` - Hoel's Cancer Survival Data
+- `load_myeloma()` - Myeloma Survival Data
+- `load_rhdnase()` - rhDNase Clinical Trial Data
 
 ## API Reference
 
-### Classes
+The public Python surface is broad and evolves quickly. For the most accurate,
+version-matched signatures, use the checked-in type stubs:
 
-**Core Models:**
-- `AaregOptions`: Configuration options for Aalen's additive regression model
-- `PSpline`: Penalized spline class for smooth covariate effects
-- `CoxPHModel`: Cox proportional hazards model class
-- `Subject`: Subject data structure for Cox PH models
-- `ConditionalLogisticRegression`: Conditional logistic regression model
-- `ClogitDataSet`: Dataset for conditional logistic regression
+- [`python/survival/_survival.pyi`](python/survival/_survival.pyi): core
+  PyO3 bindings exposed by `survival._survival`.
+- [`python/survival/sklearn_compat.py`](python/survival/sklearn_compat.py):
+  scikit-learn-compatible estimators and streaming wrappers.
+- [`survival.pyi`](survival.pyi): additional typing surface used by downstream
+  tooling.
 
-**Survival Curves:**
-- `SurvFitKMOutput`: Output from Kaplan-Meier survival curve fitting
-- `SurvfitKMOptions`: Options for Kaplan-Meier fitting
-- `KaplanMeierConfig`: Configuration for Kaplan-Meier
-- `SurvFitAJ`: Output from Aalen-Johansen survival curve fitting
-- `NelsonAalenResult`: Output from Nelson-Aalen estimator
-- `StratifiedKMResult`: Output from stratified Kaplan-Meier
+To inspect available symbols at runtime:
 
-**Parametric Models:**
-- `SurvivalFit`: Output from parametric survival regression
-- `SurvregConfig`: Configuration for parametric survival regression
-- `DistributionType`: Distribution types for parametric models (extreme_value, logistic, gaussian, weibull, lognormal)
-- `FineGrayOutput`: Output from Fine-Gray competing risks model
+```python
+import survival
 
-**Statistical Tests:**
-- `SurvDiffResult`: Output from survival difference tests
-- `LogRankResult`: Output from log-rank test
-- `TrendTestResult`: Output from trend tests
-- `TestResult`: General test result output
-- `ProportionalityTest`: Output from proportional hazards test
-- `SurvObrienResult`: Output from O'Brien transformation
-
-**Validation:**
-- `BootstrapResult`: Output from bootstrap confidence interval calculations
-- `CVResult`: Output from cross-validation
-- `CalibrationResult`: Output from calibration analysis
-- `PredictionResult`: Output from prediction functions
-- `RiskStratificationResult`: Output from risk stratification
-- `TdAUCResult`: Output from time-dependent AUC calculation
-
-**RMST and Survival Metrics:**
-- `RMSTResult`: Output from RMST calculation
-- `RMSTComparisonResult`: Output from RMST comparison between groups
-- `MedianSurvivalResult`: Output from median survival calculation
-- `CumulativeIncidenceResult`: Output from cumulative incidence calculation
-- `NNTResult`: Number needed to treat result
-
-**Landmark Analysis:**
-- `LandmarkResult`: Output from landmark analysis
-- `ConditionalSurvivalResult`: Output from conditional survival calculation
-- `HazardRatioResult`: Output from hazard ratio calculation
-- `SurvivalAtTimeResult`: Output from survival at specific times
-- `LifeTableResult`: Output from life table calculation
-
-**Power and Sample Size:**
-- `SampleSizeResult`: Output from sample size calculations
-- `AccrualResult`: Output from accrual calculations
-
-**Utilities:**
-- `CoxCountOutput`: Output from Cox counting functions
-- `SplitResult`: Output from time-splitting
-- `CondenseResult`: Output from data condensing
-- `Surv2DataResult`: Output from survival-to-data conversion
-- `TimelineResult`: Output from timeline conversion
-- `IntervalResult`: Output from interval calculations
-- `LinkFunctionParams`: Link function parameters
-- `CchMethod`: Case-cohort method specification
-- `CohortData`: Cohort data structure
-
-### Functions
-
-**Model Fitting:**
-- `aareg(options)`: Fit Aalen's additive regression model
-- `survreg(...)`: Fit parametric accelerated failure time models
-- `perform_cox_regression_frailty(...)`: Fit Cox proportional hazards model with frailty
-
-**Survival Curves:**
-- `survfitkm(...)`: Fit Kaplan-Meier survival curves
-- `survfitkm_with_options(...)`: Fit Kaplan-Meier with configuration options
-- `survfitaj(...)`: Fit Aalen-Johansen survival curves (multi-state)
-- `nelson_aalen_estimator(...)`: Calculate Nelson-Aalen estimator
-- `stratified_kaplan_meier(...)`: Calculate stratified Kaplan-Meier curves
-- `agsurv4(...)`: Anderson-Gill survival calculations (version 4)
-- `agsurv5(...)`: Anderson-Gill survival calculations (version 5)
-
-**Statistical Tests:**
-- `survdiff2(...)`: Perform survival difference tests (log-rank, Wilcoxon, etc.)
-- `logrank_test(...)`: Perform log-rank test
-- `fleming_harrington_test(...)`: Perform Fleming-Harrington weighted test
-- `logrank_trend(...)`: Perform log-rank trend test
-- `lrt_test(...)`: Likelihood ratio test
-- `wald_test_py(...)`: Wald test
-- `score_test_py(...)`: Score test
-- `ph_test(...)`: Proportional hazards assumption test
-- `survobrien(...)`: O'Brien transformation for survival data
-
-**Residuals:**
-- `coxmart(...)`: Calculate Cox martingale residuals
-- `agmart(...)`: Calculate Anderson-Gill martingale residuals
-- `schoenfeld_residuals(...)`: Calculate Schoenfeld residuals
-- `cox_score_residuals(...)`: Calculate Cox score residuals
-
-**Concordance:**
-- `perform_concordance1_calculation(...)`: Calculate concordance index (version 1)
-- `perform_concordance3_calculation(...)`: Calculate concordance index (version 3)
-- `perform_concordance_calculation(...)`: Calculate concordance index (version 5)
-- `compute_concordance(...)`: General concordance calculation
-
-**Validation:**
-- `bootstrap_cox_ci(...)`: Bootstrap confidence intervals for Cox models
-- `bootstrap_survreg_ci(...)`: Bootstrap confidence intervals for parametric models
-- `cv_cox_concordance(...)`: Cross-validation for Cox model concordance
-- `cv_survreg_loglik(...)`: Cross-validation for parametric model log-likelihood
-- `calibration(...)`: Model calibration assessment
-- `predict_cox(...)`: Predictions from Cox models
-- `risk_stratification(...)`: Risk group stratification
-- `td_auc(...)`: Time-dependent AUC calculation
-- `brier(...)`: Calculate Brier score
-- `integrated_brier(...)`: Calculate integrated Brier score
-
-**RMST and Survival Metrics:**
-- `rmst(...)`: Calculate restricted mean survival time
-- `rmst_comparison(...)`: Compare RMST between groups
-- `survival_quantile(...)`: Calculate survival quantiles (median, etc.)
-- `cumulative_incidence(...)`: Calculate cumulative incidence
-- `number_needed_to_treat(...)`: Calculate NNT
-
-**Landmark Analysis:**
-- `landmark_analysis(...)`: Perform landmark analysis
-- `landmark_analysis_batch(...)`: Perform batch landmark analysis at multiple time points
-- `conditional_survival(...)`: Calculate conditional survival
-- `hazard_ratio(...)`: Calculate hazard ratios
-- `survival_at_times(...)`: Calculate survival at specific time points
-- `life_table(...)`: Generate life table
-
-**Power and Sample Size:**
-- `sample_size_survival(...)`: Calculate required sample size
-- `sample_size_survival_freedman(...)`: Sample size using Freedman's method
-- `power_survival(...)`: Calculate statistical power
-- `expected_events(...)`: Calculate expected number of events
-
-**Utilities:**
-- `finegray(...)`: Fine-Gray competing risks model data preparation
-- `perform_pyears_calculation(...)`: Calculate person-years of observation
-- `perform_pystep_calculation(...)`: Perform step calculations
-- `perform_pystep_simple_calculation(...)`: Perform simple step calculations
-- `perform_score_calculation(...)`: Calculate score statistics
-- `perform_agscore3_calculation(...)`: Calculate score statistics (version 3)
-- `survsplit(...)`: Split survival data at specified times
-- `survcondense(...)`: Condense survival data by collapsing adjacent intervals
-- `surv2data(...)`: Convert survival objects to data format
-- `to_timeline(...)`: Convert data to timeline format
-- `from_timeline(...)`: Convert from timeline format to intervals
-- `tmerge(...)`: Merge time-dependent covariates
-- `tmerge2(...)`: Merge time-dependent covariates (version 2)
-- `tmerge3(...)`: Merge time-dependent covariates (version 3)
-- `collapse(...)`: Collapse survival data
-- `coxcount1(...)`: Cox counting process calculations
-- `coxcount2(...)`: Cox counting process calculations (version 2)
-- `agexact(...)`: Exact Anderson-Gill calculations
-- `norisk(...)`: No-risk calculations
-- `cipoisson(...)`: Poisson confidence intervals
-- `cipoisson_exact(...)`: Exact Poisson confidence intervals
-- `cipoisson_anscombe(...)`: Anscombe Poisson confidence intervals
-- `cox_callback(...)`: Cox model callback for iterative fitting
+public_names = [name for name in dir(survival) if not name.startswith("_")]
+print(public_names)
+```
 
 ## PSpline Options
 
@@ -600,37 +478,55 @@ The `PSpline` class provides penalized spline smoothing:
 
 ## Development
 
+Install development dependencies:
+```sh
+pip install -e ".[dev,test,sklearn]"
+```
+
+Build the extension in your current environment:
+```sh
+maturin develop --release
+```
+
 Build the Rust library:
 ```sh
 cargo build
 ```
 
-Run tests:
+Run Rust tests:
 ```sh
 cargo test
 ```
 
-Format code:
+Run Python tests:
+```sh
+pytest test python/tests
+```
+
+Format and lint:
 ```sh
 cargo fmt
+ruff check .
 ```
 
 The codebase is organized with:
 - Core routines in `src/`
-- Tests and examples in `test/`
+- Rust/Python tests in `test/` and `python/tests/`
 - Python bindings using PyO3
 
 ## Dependencies
 
-- [PyO3](https://github.com/PyO3/pyo3) - Python bindings
-- [ndarray](https://github.com/rust-ndarray/ndarray) - N-dimensional arrays
-- [faer](https://github.com/sarah-ek/faer-rs) - Pure-Rust linear algebra
-- [itertools](https://github.com/rust-itertools/itertools) - Iterator utilities
-- [rayon](https://github.com/rayon-rs/rayon) - Parallel computation
+Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
+[`pyproject.toml`](pyproject.toml), including:
+
+- [PyO3](https://github.com/PyO3/pyo3) and [maturin](https://github.com/PyO3/maturin) for Python bindings
+- [numpy](https://numpy.org/) and [ndarray](https://github.com/rust-ndarray/ndarray) for array interop
+- [faer](https://github.com/sarah-ek/faer-rs), [rayon](https://github.com/rayon-rs/rayon), and [burn](https://github.com/tracel-ai/burn) for numerical compute
 
 ## Compatibility
 
 - This build is for Python only. R/extendr bindings are currently disabled.
+- Python 3.11+ and Rust 1.93+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
 
 ## License
