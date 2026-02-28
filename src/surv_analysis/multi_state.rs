@@ -1,5 +1,8 @@
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::collections::HashMap;
+
+type PairResult = (String, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<i32>);
 
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
@@ -141,16 +144,143 @@ pub fn estimate_transition_intensities(
     event: Vec<i32>,
     config: MultiStateConfig,
 ) -> PyResult<TransitionIntensityResult> {
+    estimate_transition_intensities_impl(
+        &entry_time,
+        &exit_time,
+        &from_state,
+        &to_state,
+        &event,
+        &config,
+    )
+}
+
+fn estimate_transition_intensities_impl(
+    entry_time: &[f64],
+    exit_time: &[f64],
+    from_state: &[usize],
+    to_state: &[usize],
+    event: &[i32],
+    config: &MultiStateConfig,
+) -> PyResult<TransitionIntensityResult> {
     let n = entry_time.len();
     if n == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "Input vectors must be non-empty",
         ));
     }
+    if exit_time.len() != n || from_state.len() != n || to_state.len() != n || event.len() != n {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "entry_time, exit_time, from_state, to_state, and event must have the same length",
+        ));
+    }
 
     let mut all_times: Vec<f64> = exit_time.to_vec();
-    all_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_times.sort_by(|a, b| a.total_cmp(b));
     all_times.dedup();
+    let n_times = all_times.len();
+    let time_to_index: HashMap<u64, usize> = all_times
+        .iter()
+        .enumerate()
+        .map(|(idx, &t)| (t.to_bits(), idx))
+        .collect();
+
+    let mut transition_keys: Vec<(usize, usize, String)> = Vec::new();
+    let mut transition_index = vec![vec![None; config.n_states]; config.n_states];
+    for (i, row) in config
+        .transition_matrix
+        .iter()
+        .enumerate()
+        .take(config.n_states)
+    {
+        for (j, &allowed) in row.iter().enumerate().take(config.n_states) {
+            if i != j && allowed {
+                transition_index[i][j] = Some(transition_keys.len());
+                transition_keys.push((i, j, format!("{}->{}", i, j)));
+            }
+        }
+    }
+
+    let n_at_risk_by_from_state: Vec<Vec<f64>> = (0..config.n_states)
+        .into_par_iter()
+        .map(|state| {
+            let mut entries = Vec::new();
+            let mut exits = Vec::new();
+            for idx in 0..n {
+                if from_state[idx] == state {
+                    entries.push(entry_time[idx]);
+                    exits.push(exit_time[idx]);
+                }
+            }
+            entries.sort_by(|a, b| a.total_cmp(b));
+            exits.sort_by(|a, b| a.total_cmp(b));
+
+            let mut at_risk = vec![0.0; n_times];
+            let mut entered = 0usize;
+            let mut exited = 0usize;
+            for (t_idx, &t) in all_times.iter().enumerate() {
+                while entered < entries.len() && entries[entered] < t {
+                    entered += 1;
+                }
+                while exited < exits.len() && exits[exited] < t {
+                    exited += 1;
+                }
+                at_risk[t_idx] = entered.saturating_sub(exited) as f64;
+            }
+
+            at_risk
+        })
+        .collect();
+
+    let mut n_transitions_by_pair = vec![vec![0i32; n_times]; transition_keys.len()];
+    for idx in 0..n {
+        if event[idx] != 1 {
+            continue;
+        }
+        if from_state[idx] >= config.n_states || to_state[idx] >= config.n_states {
+            continue;
+        }
+        if let Some(pair_idx) = transition_index[from_state[idx]][to_state[idx]]
+            && let Some(&t_idx) = time_to_index.get(&exit_time[idx].to_bits())
+        {
+            n_transitions_by_pair[pair_idx][t_idx] += 1;
+        }
+    }
+
+    let pair_results: Vec<PairResult> = transition_keys
+        .par_iter()
+        .enumerate()
+        .map(|(pair_idx, &(from_idx, _, ref key))| {
+            let risk_vec = n_at_risk_by_from_state[from_idx].clone();
+            let transitions = n_transitions_by_pair[pair_idx].clone();
+
+            let mut intensity = vec![0.0; n_times];
+            let mut var = vec![0.0; n_times];
+            let mut cumulative = vec![0.0; n_times];
+            let mut cum_sum = 0.0;
+
+            for t_idx in 0..n_times {
+                let at_risk = risk_vec[t_idx];
+                let n_transitions = transitions[t_idx];
+                if at_risk > 0.0 {
+                    intensity[t_idx] = n_transitions as f64 / at_risk;
+                    if n_transitions > 0 {
+                        var[t_idx] = n_transitions as f64 / (at_risk * at_risk);
+                    }
+                }
+                cum_sum += intensity[t_idx];
+                cumulative[t_idx] = cum_sum;
+            }
+
+            (
+                key.clone(),
+                intensity,
+                cumulative,
+                var,
+                risk_vec,
+                transitions,
+            )
+        })
+        .collect();
 
     let mut intensities: HashMap<String, Vec<f64>> = HashMap::new();
     let mut cumulative_intensities: HashMap<String, Vec<f64>> = HashMap::new();
@@ -158,97 +288,12 @@ pub fn estimate_transition_intensities(
     let mut n_at_risk: HashMap<String, Vec<f64>> = HashMap::new();
     let mut n_transitions_map: HashMap<String, Vec<i32>> = HashMap::new();
 
-    for i in 0..config.n_states {
-        for j in 0..config.n_states {
-            if i != j && config.transition_matrix[i][j] {
-                let key = format!("{}->{}", i, j);
-                intensities.insert(key.clone(), vec![0.0; all_times.len()]);
-                cumulative_intensities.insert(key.clone(), vec![0.0; all_times.len()]);
-                variance.insert(key.clone(), vec![0.0; all_times.len()]);
-                n_at_risk.insert(key.clone(), vec![0.0; all_times.len()]);
-                n_transitions_map.insert(key.clone(), vec![0; all_times.len()]);
-            }
-        }
-    }
-
-    for (t_idx, &t) in all_times.iter().enumerate() {
-        for i in 0..config.n_states {
-            for j in 0..config.n_states {
-                if i != j && config.transition_matrix[i][j] {
-                    let key = format!("{}->{}", i, j);
-
-                    let at_risk: f64 = (0..n)
-                        .filter(|&k| entry_time[k] < t && exit_time[k] >= t && from_state[k] == i)
-                        .count() as f64;
-
-                    let transitions: i32 = (0..n)
-                        .filter(|&k| {
-                            (exit_time[k] - t).abs() < 1e-10
-                                && event[k] == 1
-                                && from_state[k] == i
-                                && to_state[k] == j
-                        })
-                        .count() as i32;
-
-                    if let Some(risk) = n_at_risk.get_mut(&key) {
-                        risk[t_idx] = at_risk;
-                    } else {
-                        return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "internal error: missing at-risk transition bucket",
-                        ));
-                    }
-                    if let Some(transitions_vec) = n_transitions_map.get_mut(&key) {
-                        transitions_vec[t_idx] = transitions;
-                    } else {
-                        return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "internal error: missing transition count bucket",
-                        ));
-                    }
-
-                    if at_risk > 0.0 {
-                        let intensity = transitions as f64 / at_risk;
-                        if let Some(intensity_vec) = intensities.get_mut(&key) {
-                            intensity_vec[t_idx] = intensity;
-                        } else {
-                            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                                "internal error: missing intensity transition bucket",
-                            ));
-                        }
-
-                        let var = if at_risk > 0.0 && transitions > 0 {
-                            transitions as f64 / (at_risk * at_risk)
-                        } else {
-                            0.0
-                        };
-                        if let Some(var_vec) = variance.get_mut(&key) {
-                            var_vec[t_idx] = var;
-                        } else {
-                            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                                "internal error: missing variance transition bucket",
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    for key in intensities.keys() {
-        let int_vec = if let Some(int_vec) = intensities.get(key) {
-            int_vec
-        } else {
-            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "internal error: missing intensity vector",
-            ));
-        };
-        let cum_int: Vec<f64> = int_vec
-            .iter()
-            .scan(0.0, |acc, &x| {
-                *acc += x;
-                Some(*acc)
-            })
-            .collect();
-        cumulative_intensities.insert(key.clone(), cum_int);
+    for (key, intensity, cumulative, var, risk, transitions) in pair_results {
+        intensities.insert(key.clone(), intensity);
+        cumulative_intensities.insert(key.clone(), cumulative);
+        variance.insert(key.clone(), var);
+        n_at_risk.insert(key.clone(), risk);
+        n_transitions_map.insert(key, transitions);
     }
 
     Ok(TransitionIntensityResult {
@@ -280,13 +325,13 @@ pub fn fit_multi_state_model(
     eval_times: Vec<f64>,
     config: MultiStateConfig,
 ) -> PyResult<MultiStateResult> {
-    let transition_result = estimate_transition_intensities(
-        entry_time.clone(),
-        exit_time.clone(),
-        from_state.clone(),
-        to_state.clone(),
-        event.clone(),
-        config.clone(),
+    let transition_result = estimate_transition_intensities_impl(
+        &entry_time,
+        &exit_time,
+        &from_state,
+        &to_state,
+        &event,
+        &config,
     )?;
 
     let n_states = config.n_states;

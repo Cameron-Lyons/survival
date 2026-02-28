@@ -1,6 +1,7 @@
-use crate::constants::z_score_for_confidence;
+use crate::constants::{PARALLEL_THRESHOLD_XLARGE, z_score_for_confidence};
 use crate::utilities::statistical::{lower_incomplete_gamma, normal_cdf as norm_cdf};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::fmt;
 
 fn chi_squared_cdf(x: f64, df: f64) -> f64 {
@@ -112,11 +113,19 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
         };
     }
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n > PARALLEL_THRESHOLD_XLARGE {
+        indices.par_sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
     let mut unique_times: Vec<f64> = Vec::new();
     let mut n_events: Vec<f64> = Vec::new();
     let mut n_risk: Vec<f64> = Vec::new();

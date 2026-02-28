@@ -660,7 +660,7 @@ fn fit_contrastive_surv_inner(
     config: &ContrastiveSurvConfig,
 ) -> ContrastiveSurv {
     let device: <Backend as burn::prelude::Backend>::Device = Default::default();
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let duration_cuts = config.num_durations.map(|nd| {
         let (_, cuts) = compute_duration_bins(time, nd);

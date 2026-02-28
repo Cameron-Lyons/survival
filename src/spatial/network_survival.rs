@@ -1,4 +1,6 @@
+use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_MEDIUM};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -129,10 +131,24 @@ pub fn network_survival_model(
 
     let centrality = compute_centrality(&adjacency_matrix, n_nodes, &config.centrality_type);
 
-    let n_edges: usize = (0..n_nodes)
-        .flat_map(|i| (0..n_nodes).map(move |j| (i, j)))
-        .filter(|&(i, j)| i < j && adjacency_matrix[i * n_nodes + j] > 0.0)
-        .count();
+    let n_edges: usize = if n_nodes > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_nodes)
+            .into_par_iter()
+            .map(|i| {
+                ((i + 1)..n_nodes)
+                    .filter(|&j| adjacency_matrix[i * n_nodes + j] > 0.0)
+                    .count()
+            })
+            .sum()
+    } else {
+        (0..n_nodes)
+            .map(|i| {
+                ((i + 1)..n_nodes)
+                    .filter(|&j| adjacency_matrix[i * n_nodes + j] > 0.0)
+                    .count()
+            })
+            .sum()
+    };
 
     let n_extra = (if config.include_peer_effects { 1 } else { 0 })
         + (if config.include_centrality { 1 } else { 0 });
@@ -149,32 +165,65 @@ pub fn network_survival_model(
     };
 
     for _iter in 0..config.max_iter {
-        let eta: Vec<f64> = (0..n)
-            .map(|i| {
-                let mut e = 0.0;
-                for j in 0..n_covariates {
-                    e += covariates[i * n_covariates + j] * beta[j];
-                }
-                let mut idx = n_covariates;
-                if config.include_peer_effects {
-                    e += peer_hazard[i] * beta[idx];
-                    idx += 1;
-                }
-                if config.include_centrality {
-                    e += centrality[i] * beta[idx];
-                }
-                e.clamp(-500.0, 500.0)
-            })
-            .collect();
+        let eta: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+            (0..n)
+                .into_par_iter()
+                .map(|i| {
+                    let mut e = 0.0;
+                    for j in 0..n_covariates {
+                        e += covariates[i * n_covariates + j] * beta[j];
+                    }
+                    let mut idx = n_covariates;
+                    if config.include_peer_effects {
+                        e += peer_hazard[i] * beta[idx];
+                        idx += 1;
+                    }
+                    if config.include_centrality {
+                        e += centrality[i] * beta[idx];
+                    }
+                    e.clamp(-500.0, 500.0)
+                })
+                .collect()
+        } else {
+            (0..n)
+                .map(|i| {
+                    let mut e = 0.0;
+                    for j in 0..n_covariates {
+                        e += covariates[i * n_covariates + j] * beta[j];
+                    }
+                    let mut idx = n_covariates;
+                    if config.include_peer_effects {
+                        e += peer_hazard[i] * beta[idx];
+                        idx += 1;
+                    }
+                    if config.include_centrality {
+                        e += centrality[i] * beta[idx];
+                    }
+                    e.clamp(-500.0, 500.0)
+                })
+                .collect()
+        };
 
-        let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
+        let exp_eta: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+            eta.par_iter().map(|&e| e.exp()).collect()
+        } else {
+            eta.iter().map(|&e| e.exp()).collect()
+        };
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        if n > PARALLEL_THRESHOLD_LARGE {
+            indices.par_sort_by(|&a, &b| {
+                time[b]
+                    .partial_cmp(&time[a])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        } else {
+            indices.sort_by(|&a, &b| {
+                time[b]
+                    .partial_cmp(&time[a])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
 
         let mut gradient = vec![0.0; total_vars];
         let mut hessian_diag = vec![0.0; total_vars];
@@ -318,9 +367,18 @@ fn build_x_row(
 
 fn compute_centrality(adjacency: &[f64], n: usize, centrality_type: &CentralityType) -> Vec<f64> {
     match centrality_type {
-        CentralityType::Degree => (0..n)
-            .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>())
-            .collect(),
+        CentralityType::Degree => {
+            if n > PARALLEL_THRESHOLD_MEDIUM {
+                (0..n)
+                    .into_par_iter()
+                    .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>())
+                    .collect()
+            } else {
+                (0..n)
+                    .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>())
+                    .collect()
+            }
+        }
         CentralityType::Closeness => compute_closeness_centrality(adjacency, n),
         CentralityType::Betweenness => compute_betweenness_centrality(adjacency, n),
         CentralityType::Eigenvector => compute_eigenvector_centrality(adjacency, n),
@@ -329,32 +387,50 @@ fn compute_centrality(adjacency: &[f64], n: usize, centrality_type: &CentralityT
 }
 
 fn compute_closeness_centrality(adjacency: &[f64], n: usize) -> Vec<f64> {
-    let mut closeness = vec![0.0; n];
     let distances = floyd_warshall(adjacency, n);
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let sum_dist: f64 = (0..n)
+                    .filter(|&j| j != i && distances[i * n + j].is_finite())
+                    .map(|j| distances[i * n + j])
+                    .sum();
 
-    for i in 0..n {
-        let sum_dist: f64 = (0..n)
-            .filter(|&j| j != i && distances[i * n + j] < f64::INFINITY)
-            .map(|j| distances[i * n + j])
-            .sum();
+                if sum_dist > 0.0 {
+                    let reachable = (0..n)
+                        .filter(|&j| j != i && distances[i * n + j].is_finite())
+                        .count();
+                    reachable as f64 / sum_dist
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    } else {
+        let mut closeness = vec![0.0; n];
+        for i in 0..n {
+            let sum_dist: f64 = (0..n)
+                .filter(|&j| j != i && distances[i * n + j].is_finite())
+                .map(|j| distances[i * n + j])
+                .sum();
 
-        if sum_dist > 0.0 {
-            let reachable = (0..n)
-                .filter(|&j| j != i && distances[i * n + j] < f64::INFINITY)
-                .count();
-            closeness[i] = reachable as f64 / sum_dist;
+            if sum_dist > 0.0 {
+                let reachable = (0..n)
+                    .filter(|&j| j != i && distances[i * n + j].is_finite())
+                    .count();
+                closeness[i] = reachable as f64 / sum_dist;
+            }
         }
+        closeness
     }
-
-    closeness
 }
 
 fn compute_betweenness_centrality(adjacency: &[f64], n: usize) -> Vec<f64> {
-    let mut betweenness = vec![0.0; n];
-
-    for s in 0..n {
+    let source_contrib = |s: usize| {
         let (dist, paths, predecessors) = bfs_shortest_paths(adjacency, n, s);
 
+        let mut local = vec![0.0; n];
         let mut dependency = vec![0.0; n];
         let mut sorted_by_dist: Vec<usize> = (0..n).collect();
         sorted_by_dist.sort_by(|&a, &b| {
@@ -369,10 +445,32 @@ fn compute_betweenness_centrality(adjacency: &[f64], n: usize) -> Vec<f64> {
                 dependency[v] += ratio * (1.0 + dependency[w]);
             }
             if w != s {
-                betweenness[w] += dependency[w];
+                local[w] += dependency[w];
             }
         }
-    }
+        local
+    };
+
+    let mut betweenness = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n).into_par_iter().map(source_contrib).reduce(
+            || vec![0.0; n],
+            |mut a, b| {
+                for idx in 0..n {
+                    a[idx] += b[idx];
+                }
+                a
+            },
+        )
+    } else {
+        let mut acc = vec![0.0; n];
+        for s in 0..n {
+            let local = source_contrib(s);
+            for idx in 0..n {
+                acc[idx] += local[idx];
+            }
+        }
+        acc
+    };
 
     for b in betweenness.iter_mut() {
         *b /= 2.0;
@@ -423,26 +521,52 @@ fn compute_eigenvector_centrality(adjacency: &[f64], n: usize) -> Vec<f64> {
     let tol = 1e-6;
 
     for _ in 0..max_iter {
-        let mut new_centrality = vec![0.0; n];
-
-        for i in 0..n {
-            for j in 0..n {
-                new_centrality[i] += adjacency[i * n + j] * centrality[j];
+        let mut new_centrality: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+            (0..n)
+                .into_par_iter()
+                .map(|i| {
+                    let mut acc = 0.0;
+                    for j in 0..n {
+                        acc += adjacency[i * n + j] * centrality[j];
+                    }
+                    acc
+                })
+                .collect()
+        } else {
+            let mut v = vec![0.0; n];
+            for i in 0..n {
+                for j in 0..n {
+                    v[i] += adjacency[i * n + j] * centrality[j];
+                }
             }
-        }
+            v
+        };
 
-        let norm: f64 = new_centrality.iter().map(|&x| x * x).sum::<f64>().sqrt();
+        let norm_sq: f64 = if n > PARALLEL_THRESHOLD_MEDIUM {
+            new_centrality.par_iter().map(|&x| x * x).sum()
+        } else {
+            new_centrality.iter().map(|&x| x * x).sum()
+        };
+        let norm = norm_sq.sqrt();
         if norm > 0.0 {
             for c in new_centrality.iter_mut() {
                 *c /= norm;
             }
         }
 
-        let max_diff: f64 = centrality
-            .iter()
-            .zip(new_centrality.iter())
-            .map(|(&a, &b)| (a - b).abs())
-            .fold(0.0, f64::max);
+        let max_diff: f64 = if n > PARALLEL_THRESHOLD_MEDIUM {
+            centrality
+                .par_iter()
+                .zip(new_centrality.par_iter())
+                .map(|(&a, &b)| (a - b).abs())
+                .reduce(|| 0.0, f64::max)
+        } else {
+            centrality
+                .iter()
+                .zip(new_centrality.iter())
+                .map(|(&a, &b)| (a - b).abs())
+                .fold(0.0, f64::max)
+        };
 
         centrality = new_centrality;
 
@@ -459,26 +583,56 @@ fn compute_pagerank(adjacency: &[f64], n: usize, damping: f64) -> Vec<f64> {
     let max_iter = 100;
     let tol = 1e-6;
 
-    let out_degree: Vec<f64> = (0..n)
-        .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>().max(1.0))
-        .collect();
+    let out_degree: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>().max(1.0))
+            .collect()
+    } else {
+        (0..n)
+            .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>().max(1.0))
+            .collect()
+    };
 
     for _ in 0..max_iter {
-        let mut new_pagerank = vec![(1.0 - damping) / n as f64; n];
-
-        for i in 0..n {
-            for j in 0..n {
-                if adjacency[j * n + i] > 0.0 {
-                    new_pagerank[i] += damping * pagerank[j] / out_degree[j];
+        let new_pagerank: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+            (0..n)
+                .into_par_iter()
+                .map(|i| {
+                    let mut val = (1.0 - damping) / n as f64;
+                    for j in 0..n {
+                        if adjacency[j * n + i] > 0.0 {
+                            val += damping * pagerank[j] / out_degree[j];
+                        }
+                    }
+                    val
+                })
+                .collect()
+        } else {
+            let mut v = vec![(1.0 - damping) / n as f64; n];
+            for i in 0..n {
+                for j in 0..n {
+                    if adjacency[j * n + i] > 0.0 {
+                        v[i] += damping * pagerank[j] / out_degree[j];
+                    }
                 }
             }
-        }
+            v
+        };
 
-        let max_diff: f64 = pagerank
-            .iter()
-            .zip(new_pagerank.iter())
-            .map(|(&a, &b)| (a - b).abs())
-            .fold(0.0, f64::max);
+        let max_diff: f64 = if n > PARALLEL_THRESHOLD_MEDIUM {
+            pagerank
+                .par_iter()
+                .zip(new_pagerank.par_iter())
+                .map(|(&a, &b)| (a - b).abs())
+                .reduce(|| 0.0, f64::max)
+        } else {
+            pagerank
+                .iter()
+                .zip(new_pagerank.iter())
+                .map(|(&a, &b)| (a - b).abs())
+                .fold(0.0, f64::max)
+        };
 
         pagerank = new_pagerank;
 
@@ -503,10 +657,38 @@ fn floyd_warshall(adjacency: &[f64], n: usize) -> Vec<f64> {
     }
 
     for k in 0..n {
-        for i in 0..n {
-            for j in 0..n {
-                if dist[i * n + k] + dist[k * n + j] < dist[i * n + j] {
-                    dist[i * n + j] = dist[i * n + k] + dist[k * n + j];
+        let row_k = dist[k * n..(k + 1) * n].to_vec();
+        let col_k: Vec<f64> = (0..n).map(|i| dist[i * n + k]).collect();
+        if n > PARALLEL_THRESHOLD_MEDIUM {
+            dist.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+                let dik = col_k[i];
+                if !dik.is_finite() {
+                    return;
+                }
+                for j in 0..n {
+                    let dkj = row_k[j];
+                    if dkj.is_finite() {
+                        let alt = dik + dkj;
+                        if alt < row[j] {
+                            row[j] = alt;
+                        }
+                    }
+                }
+            });
+        } else {
+            for i in 0..n {
+                let dik = col_k[i];
+                if !dik.is_finite() {
+                    continue;
+                }
+                for j in 0..n {
+                    let dkj = row_k[j];
+                    if dkj.is_finite() {
+                        let alt = dik + dkj;
+                        if alt < dist[i * n + j] {
+                            dist[i * n + j] = alt;
+                        }
+                    }
                 }
             }
         }
@@ -516,37 +698,70 @@ fn floyd_warshall(adjacency: &[f64], n: usize) -> Vec<f64> {
 }
 
 fn compute_peer_hazard(time: &[f64], event: &[i32], adjacency: &[f64], n: usize) -> Vec<f64> {
-    let mut peer_hazard = vec![0.0; n];
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut n_neighbors = 0.0;
+                let mut neighbor_events = 0.0;
 
-    for i in 0..n {
-        let mut n_neighbors = 0.0;
-        let mut neighbor_events = 0.0;
+                for j in 0..n {
+                    let w = adjacency[i * n + j];
+                    if w > 0.0 {
+                        n_neighbors += w;
+                        if event[j] == 1 && time[j] <= time[i] {
+                            neighbor_events += w;
+                        }
+                    }
+                }
 
-        for j in 0..n {
-            if adjacency[i * n + j] > 0.0 {
-                n_neighbors += adjacency[i * n + j];
-                if event[j] == 1 && time[j] <= time[i] {
-                    neighbor_events += adjacency[i * n + j];
+                if n_neighbors > 0.0 {
+                    neighbor_events / n_neighbors
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    } else {
+        let mut peer_hazard = vec![0.0; n];
+        for i in 0..n {
+            let mut n_neighbors = 0.0;
+            let mut neighbor_events = 0.0;
+
+            for j in 0..n {
+                let w = adjacency[i * n + j];
+                if w > 0.0 {
+                    n_neighbors += w;
+                    if event[j] == 1 && time[j] <= time[i] {
+                        neighbor_events += w;
+                    }
                 }
             }
-        }
 
-        if n_neighbors > 0.0 {
-            peer_hazard[i] = neighbor_events / n_neighbors;
+            if n_neighbors > 0.0 {
+                peer_hazard[i] = neighbor_events / n_neighbors;
+            }
         }
+        peer_hazard
     }
-
-    peer_hazard
 }
 
 fn compute_partial_loglik(time: &[f64], event: &[i32], eta: &[f64], exp_eta: &[f64]) -> f64 {
     let n = time.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n > PARALLEL_THRESHOLD_LARGE {
+        indices.par_sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
     let mut log_lik = 0.0;
     let mut risk_sum = 0.0;
@@ -575,25 +790,51 @@ fn compute_se(
 ) -> Vec<f64> {
     let total_vars = beta.len();
 
-    let eta: Vec<f64> = (0..n)
-        .map(|i| {
-            let x = build_x_row(covariates, peer_hazard, centrality, i, n_covariates, config);
-            x.iter()
-                .zip(beta.iter())
-                .map(|(&xi, &bi)| xi * bi)
-                .sum::<f64>()
-                .clamp(-500.0, 500.0)
-        })
-        .collect();
+    let eta: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let x = build_x_row(covariates, peer_hazard, centrality, i, n_covariates, config);
+                x.iter()
+                    .zip(beta.iter())
+                    .map(|(&xi, &bi)| xi * bi)
+                    .sum::<f64>()
+                    .clamp(-500.0, 500.0)
+            })
+            .collect()
+    } else {
+        (0..n)
+            .map(|i| {
+                let x = build_x_row(covariates, peer_hazard, centrality, i, n_covariates, config);
+                x.iter()
+                    .zip(beta.iter())
+                    .map(|(&xi, &bi)| xi * bi)
+                    .sum::<f64>()
+                    .clamp(-500.0, 500.0)
+            })
+            .collect()
+    };
 
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
+    let exp_eta: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        eta.par_iter().map(|&e| e.exp()).collect()
+    } else {
+        eta.iter().map(|&e| e.exp()).collect()
+    };
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n > PARALLEL_THRESHOLD_LARGE {
+        indices.par_sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
     let mut info_diag = vec![0.0; total_vars];
     let mut risk_sum = 0.0;
@@ -730,13 +971,28 @@ pub fn diffusion_survival_model(
             config,
         );
 
-        let mut new_log_lik = 0.0;
-        for i in 0..n {
-            if infected[i] == 1 {
-                new_log_lik += hazards[i].max(1e-10).ln();
+        let new_log_lik = if n > PARALLEL_THRESHOLD_MEDIUM {
+            (0..n)
+                .into_par_iter()
+                .map(|i| {
+                    let event_term = if infected[i] == 1 {
+                        hazards[i].max(1e-10).ln()
+                    } else {
+                        0.0
+                    };
+                    event_term - cumulative_hazards[i]
+                })
+                .sum()
+        } else {
+            let mut acc = 0.0;
+            for i in 0..n {
+                if infected[i] == 1 {
+                    acc += hazards[i].max(1e-10).ln();
+                }
+                acc -= cumulative_hazards[i];
             }
-            new_log_lik -= cumulative_hazards[i];
-        }
+            acc
+        };
 
         let (grad_beta, hess_beta) = compute_beta_derivatives(
             &infection_time,
@@ -782,39 +1038,80 @@ pub fn diffusion_survival_model(
         log_lik = new_log_lik;
     }
 
-    let degree_sum: f64 = (0..n_nodes)
-        .map(|i| {
-            (0..n_nodes)
-                .map(|j| adjacency_matrix[i * n_nodes + j])
-                .sum::<f64>()
-        })
-        .sum();
+    let degree_sum: f64 = if n_nodes > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_nodes)
+            .into_par_iter()
+            .map(|i| {
+                (0..n_nodes)
+                    .map(|j| adjacency_matrix[i * n_nodes + j])
+                    .sum::<f64>()
+            })
+            .sum()
+    } else {
+        (0..n_nodes)
+            .map(|i| {
+                (0..n_nodes)
+                    .map(|j| adjacency_matrix[i * n_nodes + j])
+                    .sum::<f64>()
+            })
+            .sum()
+    };
     let avg_degree = degree_sum / n_nodes as f64;
     let r0 = beta * avg_degree / gamma.max(0.01);
 
-    let infection_probabilities: Vec<f64> = (0..n_nodes)
-        .map(|i| {
-            let neighbors_infected: f64 = (0..n_nodes)
-                .filter(|&j| adjacency_matrix[i * n_nodes + j] > 0.0 && infected[j] == 1)
-                .map(|j| adjacency_matrix[i * n_nodes + j])
-                .sum();
-            (1.0 - (-beta * neighbors_infected).exp()).clamp(0.0, 1.0)
-        })
-        .collect();
+    let infection_probabilities: Vec<f64> = if n_nodes > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_nodes)
+            .into_par_iter()
+            .map(|i| {
+                let neighbors_infected: f64 = (0..n_nodes)
+                    .filter(|&j| adjacency_matrix[i * n_nodes + j] > 0.0 && infected[j] == 1)
+                    .map(|j| adjacency_matrix[i * n_nodes + j])
+                    .sum();
+                (1.0 - (-beta * neighbors_infected).exp()).clamp(0.0, 1.0)
+            })
+            .collect()
+    } else {
+        (0..n_nodes)
+            .map(|i| {
+                let neighbors_infected: f64 = (0..n_nodes)
+                    .filter(|&j| adjacency_matrix[i * n_nodes + j] > 0.0 && infected[j] == 1)
+                    .map(|j| adjacency_matrix[i * n_nodes + j])
+                    .sum();
+                (1.0 - (-beta * neighbors_infected).exp()).clamp(0.0, 1.0)
+            })
+            .collect()
+    };
 
-    let expected_infection_times: Vec<f64> = (0..n_nodes)
-        .map(|i| {
-            let neighbors_infected: f64 = (0..n_nodes)
-                .filter(|&j| adjacency_matrix[i * n_nodes + j] > 0.0 && infected[j] == 1)
-                .map(|j| adjacency_matrix[i * n_nodes + j])
-                .sum();
-            if neighbors_infected > 0.0 {
-                1.0 / (beta * neighbors_infected)
-            } else {
-                f64::INFINITY
-            }
-        })
-        .collect();
+    let expected_infection_times: Vec<f64> = if n_nodes > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_nodes)
+            .into_par_iter()
+            .map(|i| {
+                let neighbors_infected: f64 = (0..n_nodes)
+                    .filter(|&j| adjacency_matrix[i * n_nodes + j] > 0.0 && infected[j] == 1)
+                    .map(|j| adjacency_matrix[i * n_nodes + j])
+                    .sum();
+                if neighbors_infected > 0.0 {
+                    1.0 / (beta * neighbors_infected)
+                } else {
+                    f64::INFINITY
+                }
+            })
+            .collect()
+    } else {
+        (0..n_nodes)
+            .map(|i| {
+                let neighbors_infected: f64 = (0..n_nodes)
+                    .filter(|&j| adjacency_matrix[i * n_nodes + j] > 0.0 && infected[j] == 1)
+                    .map(|j| adjacency_matrix[i * n_nodes + j])
+                    .sum();
+                if neighbors_infected > 0.0 {
+                    1.0 / (beta * neighbors_infected)
+                } else {
+                    f64::INFINITY
+                }
+            })
+            .collect()
+    };
 
     let beta_se = 0.1 * beta;
     let gamma_se = 0.1 * gamma;
@@ -848,34 +1145,55 @@ fn compute_infection_hazards(
     config: &DiffusionSurvivalConfig,
 ) -> (Vec<f64>, Vec<f64>) {
     let max_time = infection_time.iter().cloned().fold(0.0_f64, f64::max);
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        let pairs: Vec<(f64, f64)> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let t_i = infection_time[i];
+                let suscept_mult = if config.susceptibility_covariate && n_covariates > 0 {
+                    let x_i = covariates[i * n_covariates];
+                    (susceptibility * x_i).exp()
+                } else {
+                    1.0
+                };
 
-    let mut hazards = vec![0.0; n];
-    let mut cumulative_hazards = vec![0.0; n];
+                let mut n_infected_neighbors = 0.0;
+                for j in 0..n {
+                    if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
+                        n_infected_neighbors += adjacency[i * n + j];
+                    }
+                }
 
-    for i in 0..n {
-        let t_i = infection_time[i];
+                let h = beta * n_infected_neighbors * suscept_mult;
+                (h, h * t_i.min(max_time))
+            })
+            .collect();
+        pairs.into_iter().unzip()
+    } else {
+        let mut hazards = vec![0.0; n];
+        let mut cumulative_hazards = vec![0.0; n];
+        for i in 0..n {
+            let t_i = infection_time[i];
+            let suscept_mult = if config.susceptibility_covariate && n_covariates > 0 {
+                let x_i = covariates[i * n_covariates];
+                (susceptibility * x_i).exp()
+            } else {
+                1.0
+            };
 
-        let suscept_mult = if config.susceptibility_covariate && n_covariates > 0 {
-            let x_i = covariates[i * n_covariates];
-            (susceptibility * x_i).exp()
-        } else {
-            1.0
-        };
-
-        let mut n_infected_neighbors = 0.0;
-        for j in 0..n {
-            if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
-                n_infected_neighbors += adjacency[i * n + j];
+            let mut n_infected_neighbors = 0.0;
+            for j in 0..n {
+                if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
+                    n_infected_neighbors += adjacency[i * n + j];
+                }
             }
+
+            let h = beta * n_infected_neighbors * suscept_mult;
+            hazards[i] = h;
+            cumulative_hazards[i] = h * t_i.min(max_time);
         }
-
-        let h = beta * n_infected_neighbors * suscept_mult;
-        hazards[i] = h;
-
-        cumulative_hazards[i] = h * t_i.min(max_time);
+        (hazards, cumulative_hazards)
     }
-
-    (hazards, cumulative_hazards)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -890,37 +1208,63 @@ fn compute_beta_derivatives(
     n_covariates: usize,
     config: &DiffusionSurvivalConfig,
 ) -> (f64, f64) {
-    let mut gradient = 0.0;
-    let mut hessian = 0.0;
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let t_i = infection_time[i];
+                let suscept_mult = if config.susceptibility_covariate && n_covariates > 0 {
+                    let x_i = covariates[i * n_covariates];
+                    (susceptibility * x_i).exp()
+                } else {
+                    1.0
+                };
 
-    for i in 0..n {
-        let t_i = infection_time[i];
+                let mut n_infected_neighbors = 0.0;
+                for j in 0..n {
+                    if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
+                        n_infected_neighbors += adjacency[i * n + j];
+                    }
+                }
 
-        let suscept_mult = if config.susceptibility_covariate && n_covariates > 0 {
-            let x_i = covariates[i * n_covariates];
-            (susceptibility * x_i).exp()
-        } else {
-            1.0
-        };
+                let h = beta * n_infected_neighbors * suscept_mult;
+                let mut grad = 0.0;
+                if infected[i] == 1 && h > 1e-10 {
+                    grad += n_infected_neighbors * suscept_mult / h;
+                }
+                grad -= n_infected_neighbors * suscept_mult * t_i;
+                let hess = -(n_infected_neighbors * suscept_mult).powi(2) * t_i;
+                (grad, hess)
+            })
+            .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
+    } else {
+        let mut gradient = 0.0;
+        let mut hessian = 0.0;
+        for i in 0..n {
+            let t_i = infection_time[i];
+            let suscept_mult = if config.susceptibility_covariate && n_covariates > 0 {
+                let x_i = covariates[i * n_covariates];
+                (susceptibility * x_i).exp()
+            } else {
+                1.0
+            };
 
-        let mut n_infected_neighbors = 0.0;
-        for j in 0..n {
-            if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
-                n_infected_neighbors += adjacency[i * n + j];
+            let mut n_infected_neighbors = 0.0;
+            for j in 0..n {
+                if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
+                    n_infected_neighbors += adjacency[i * n + j];
+                }
             }
+
+            let h = beta * n_infected_neighbors * suscept_mult;
+            if infected[i] == 1 && h > 1e-10 {
+                gradient += n_infected_neighbors * suscept_mult / h;
+            }
+            gradient -= n_infected_neighbors * suscept_mult * t_i;
+            hessian -= (n_infected_neighbors * suscept_mult).powi(2) * t_i;
         }
-
-        let h = beta * n_infected_neighbors * suscept_mult;
-
-        if infected[i] == 1 && h > 1e-10 {
-            gradient += n_infected_neighbors * suscept_mult / h;
-        }
-        gradient -= n_infected_neighbors * suscept_mult * t_i;
-
-        hessian -= (n_infected_neighbors * suscept_mult).powi(2) * t_i;
+        (gradient, hessian)
     }
-
-    (gradient, hessian)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -934,34 +1278,61 @@ fn compute_susceptibility_derivatives(
     covariates: &[f64],
     n_covariates: usize,
 ) -> (f64, f64) {
-    let mut gradient = 0.0;
-    let mut hessian = 0.0;
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let t_i = infection_time[i];
+                let x_i = if n_covariates > 0 {
+                    covariates[i * n_covariates]
+                } else {
+                    0.0
+                };
+                let suscept_mult = (susceptibility * x_i).exp();
 
-    for i in 0..n {
-        let t_i = infection_time[i];
-        let x_i = if n_covariates > 0 {
-            covariates[i * n_covariates]
-        } else {
-            0.0
-        };
-        let suscept_mult = (susceptibility * x_i).exp();
+                let mut n_infected_neighbors = 0.0;
+                for j in 0..n {
+                    if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
+                        n_infected_neighbors += adjacency[i * n + j];
+                    }
+                }
 
-        let mut n_infected_neighbors = 0.0;
-        for j in 0..n {
-            if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
-                n_infected_neighbors += adjacency[i * n + j];
+                let mut grad = 0.0;
+                if infected[i] == 1 {
+                    grad += x_i;
+                }
+                grad -= beta * n_infected_neighbors * suscept_mult * x_i * t_i;
+                let hess = -beta * n_infected_neighbors * suscept_mult * x_i.powi(2) * t_i;
+                (grad, hess)
+            })
+            .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
+    } else {
+        let mut gradient = 0.0;
+        let mut hessian = 0.0;
+        for i in 0..n {
+            let t_i = infection_time[i];
+            let x_i = if n_covariates > 0 {
+                covariates[i * n_covariates]
+            } else {
+                0.0
+            };
+            let suscept_mult = (susceptibility * x_i).exp();
+
+            let mut n_infected_neighbors = 0.0;
+            for j in 0..n {
+                if adjacency[i * n + j] > 0.0 && infected[j] == 1 && infection_time[j] < t_i {
+                    n_infected_neighbors += adjacency[i * n + j];
+                }
             }
-        }
 
-        if infected[i] == 1 {
-            gradient += x_i;
+            if infected[i] == 1 {
+                gradient += x_i;
+            }
+            gradient -= beta * n_infected_neighbors * suscept_mult * x_i * t_i;
+            hessian -= beta * n_infected_neighbors * suscept_mult * x_i.powi(2) * t_i;
         }
-        gradient -= beta * n_infected_neighbors * suscept_mult * x_i * t_i;
-
-        hessian -= beta * n_infected_neighbors * suscept_mult * x_i.powi(2) * t_i;
+        (gradient, hessian)
     }
-
-    (gradient, hessian)
 }
 
 #[derive(Debug, Clone)]
@@ -1000,23 +1371,52 @@ pub fn network_heterogeneity_survival(
     let k = n_communities.unwrap_or(3);
     let (communities, modularity) = detect_communities(&adjacency_matrix, n_nodes, k);
 
-    let mut community_hazard_ratios = vec![0.0; k];
-    for (c, community_hazard_ratio) in community_hazard_ratios.iter_mut().enumerate().take(k) {
-        let community_nodes: Vec<usize> = (0..n).filter(|&i| communities[i] == c).collect();
-        if community_nodes.is_empty() {
-            *community_hazard_ratio = 1.0;
-            continue;
+    let mut community_hazard_ratios: Vec<f64> = if k > PARALLEL_THRESHOLD_MEDIUM {
+        (0..k)
+            .into_par_iter()
+            .map(|c| {
+                let mut n_events = 0.0;
+                let mut total_time = 0.0;
+                let mut n_members = 0usize;
+                for i in 0..n {
+                    if communities[i] == c {
+                        n_members += 1;
+                        n_events += event[i] as f64;
+                        total_time += time[i];
+                    }
+                }
+                if n_members == 0 {
+                    1.0
+                } else if total_time > 0.0 {
+                    n_events / total_time
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    } else {
+        let mut vals = vec![0.0; k];
+        for (c, value) in vals.iter_mut().enumerate().take(k) {
+            let mut n_events = 0.0;
+            let mut total_time = 0.0;
+            let mut n_members = 0usize;
+            for i in 0..n {
+                if communities[i] == c {
+                    n_members += 1;
+                    n_events += event[i] as f64;
+                    total_time += time[i];
+                }
+            }
+            *value = if n_members == 0 {
+                1.0
+            } else if total_time > 0.0 {
+                n_events / total_time
+            } else {
+                0.0
+            };
         }
-
-        let n_events: f64 = community_nodes.iter().map(|&i| event[i] as f64).sum();
-        let total_time: f64 = community_nodes.iter().map(|&i| time[i]).sum();
-
-        if total_time > 0.0 {
-            *community_hazard_ratio = n_events / total_time;
-        } else {
-            *community_hazard_ratio = 0.0;
-        }
-    }
+        vals
+    };
 
     let overall_rate: f64 = event.iter().map(|&e| e as f64).sum::<f64>() / time.iter().sum::<f64>();
     for hr in community_hazard_ratios.iter_mut() {
@@ -1163,19 +1563,41 @@ fn compute_within_community_correlation(
     adjacency: &[f64],
     n: usize,
 ) -> f64 {
-    let mut within_pairs = 0.0;
-    let mut within_concordant = 0.0;
-
-    for i in 0..n {
-        for j in (i + 1)..n {
-            if communities[i] == communities[j] && adjacency[i * n + j] > 0.0 {
-                within_pairs += 1.0;
-                if (time[i] < time[j] && event[i] == 1) || (time[j] < time[i] && event[j] == 1) {
-                    within_concordant += 1.0;
+    let (within_pairs, within_concordant) = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut local_pairs = 0.0;
+                let mut local_concordant = 0.0;
+                for j in (i + 1)..n {
+                    if communities[i] == communities[j] && adjacency[i * n + j] > 0.0 {
+                        local_pairs += 1.0;
+                        if (time[i] < time[j] && event[i] == 1)
+                            || (time[j] < time[i] && event[j] == 1)
+                        {
+                            local_concordant += 1.0;
+                        }
+                    }
+                }
+                (local_pairs, local_concordant)
+            })
+            .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
+    } else {
+        let mut pairs = 0.0;
+        let mut concordant = 0.0;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if communities[i] == communities[j] && adjacency[i * n + j] > 0.0 {
+                    pairs += 1.0;
+                    if (time[i] < time[j] && event[i] == 1) || (time[j] < time[i] && event[j] == 1)
+                    {
+                        concordant += 1.0;
+                    }
                 }
             }
         }
-    }
+        (pairs, concordant)
+    };
 
     if within_pairs > 0.0 {
         within_concordant / within_pairs
@@ -1191,27 +1613,52 @@ fn compute_between_community_effect(
     adjacency: &[f64],
     n: usize,
 ) -> f64 {
-    let mut between_effect = 0.0;
-    let mut n_between = 0.0;
+    let (between_effect, n_between) = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut n_between_neighbors_events = 0.0;
+                let mut n_between_neighbors = 0.0;
 
-    for i in 0..n {
-        let mut n_between_neighbors_events = 0.0;
-        let mut n_between_neighbors = 0.0;
+                for j in 0..n {
+                    if adjacency[i * n + j] > 0.0 && communities[i] != communities[j] {
+                        n_between_neighbors += 1.0;
+                        if event[j] == 1 && time[j] <= time[i] {
+                            n_between_neighbors_events += 1.0;
+                        }
+                    }
+                }
 
-        for j in 0..n {
-            if adjacency[i * n + j] > 0.0 && communities[i] != communities[j] {
-                n_between_neighbors += 1.0;
-                if event[j] == 1 && time[j] <= time[i] {
-                    n_between_neighbors_events += 1.0;
+                if n_between_neighbors > 0.0 {
+                    (n_between_neighbors_events / n_between_neighbors, 1.0)
+                } else {
+                    (0.0, 0.0)
+                }
+            })
+            .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
+    } else {
+        let mut effect = 0.0;
+        let mut count = 0.0;
+        for i in 0..n {
+            let mut n_between_neighbors_events = 0.0;
+            let mut n_between_neighbors = 0.0;
+
+            for j in 0..n {
+                if adjacency[i * n + j] > 0.0 && communities[i] != communities[j] {
+                    n_between_neighbors += 1.0;
+                    if event[j] == 1 && time[j] <= time[i] {
+                        n_between_neighbors_events += 1.0;
+                    }
                 }
             }
-        }
 
-        if n_between_neighbors > 0.0 {
-            between_effect += n_between_neighbors_events / n_between_neighbors;
-            n_between += 1.0;
+            if n_between_neighbors > 0.0 {
+                effect += n_between_neighbors_events / n_between_neighbors;
+                count += 1.0;
+            }
         }
-    }
+        (effect, count)
+    };
 
     if n_between > 0.0 {
         between_effect / n_between
@@ -1227,19 +1674,28 @@ fn compute_community_loglik(
     community_rates: &[f64],
 ) -> f64 {
     let n = time.len();
-    let mut log_lik = 0.0;
-
-    for i in 0..n {
-        let c = communities[i];
-        let lambda = community_rates[c].max(1e-10);
-
-        if event[i] == 1 {
-            log_lik += lambda.ln();
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let c = communities[i];
+                let lambda = community_rates[c].max(1e-10);
+                let event_term = if event[i] == 1 { lambda.ln() } else { 0.0 };
+                event_term - lambda * time[i]
+            })
+            .sum()
+    } else {
+        let mut log_lik = 0.0;
+        for i in 0..n {
+            let c = communities[i];
+            let lambda = community_rates[c].max(1e-10);
+            if event[i] == 1 {
+                log_lik += lambda.ln();
+            }
+            log_lik -= lambda * time[i];
         }
-        log_lik -= lambda * time[i];
+        log_lik
     }
-
-    log_lik
 }
 
 #[cfg(test)]

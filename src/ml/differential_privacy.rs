@@ -121,7 +121,7 @@ pub fn dp_kaplan_meier(
         ));
     }
 
-    let seed = seed.unwrap_or(42);
+    let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let mut unique_times: Vec<f64> = time.to_vec();
     unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -239,7 +239,7 @@ pub fn dp_cox_regression(
         covariates[0].len()
     };
 
-    let seed = seed.unwrap_or(42);
+    let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let per_iter_epsilon = config.epsilon / max_iter as f64;
     let sigma = config.sensitivity * (2.0 * (1.25 / config.delta).ln()).sqrt() / per_iter_epsilon;
@@ -447,7 +447,7 @@ pub fn dp_histogram(
         ));
     }
 
-    let seed = seed.unwrap_or(42);
+    let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (min_val, max_val) = if let Some((lo, hi)) = config.clip_bounds {
         (lo, hi)
@@ -545,7 +545,7 @@ pub fn local_dp_mean(
     }
 
     let (lo, hi) = bounds;
-    let seed = seed.unwrap_or(42);
+    let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let perturbed_values: Vec<f64> = values
         .par_iter()

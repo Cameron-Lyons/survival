@@ -417,7 +417,7 @@ fn fit_survival_forest_inner(
 
     let sample_size = (n_obs as f64 * config.sample_fraction).ceil() as usize;
 
-    let base_seed = config.seed.unwrap_or(42);
+    let base_seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let results: Vec<TreeWithOob> = (0..config.n_trees)
         .into_par_iter()

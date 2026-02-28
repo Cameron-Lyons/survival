@@ -60,7 +60,7 @@ fn simple_shuffle(indices: &mut [usize], seed: u64) {
 fn create_folds(n: usize, n_folds: usize, shuffle: bool, seed: Option<u64>) -> Vec<Vec<usize>> {
     let mut indices: Vec<usize> = (0..n).collect();
     if shuffle {
-        let seed = seed.unwrap_or(42);
+        let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
         simple_shuffle(&mut indices, seed);
     }
     let fold_size = n / n_folds;

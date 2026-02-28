@@ -247,7 +247,12 @@ fn compute_gradient_survival(x: &[f64], coefficients: &[f64], time: f64, event: 
         .zip(coefficients.iter())
         .map(|(&xi, &c)| xi * c)
         .sum();
-    let exp_pred = linear_pred.clamp(-20.0, 20.0).exp();
+    let exp_pred = linear_pred
+        .clamp(
+            crate::constants::LINEAR_PRED_CLAMP_MIN,
+            crate::constants::LINEAR_PRED_CLAMP_MAX,
+        )
+        .exp();
 
     let p = x.len();
     let mut gradient = vec![0.0; p];
@@ -338,7 +343,7 @@ fn deepfool_attack(
         let gradient = compute_gradient_survival(&perturbed, coefficients, time, event);
         let grad_norm: f64 = gradient.iter().map(|&g| g * g).sum::<f64>().sqrt();
 
-        if grad_norm < 1e-10 {
+        if grad_norm < crate::constants::DIVISION_FLOOR {
             break;
         }
 
@@ -372,7 +377,12 @@ fn predict_risk(x: &[f64], coefficients: &[f64]) -> f64 {
         .zip(coefficients.iter())
         .map(|(&xi, &c)| xi * c)
         .sum();
-    linear_pred.clamp(-20.0, 20.0).exp()
+    linear_pred
+        .clamp(
+            crate::constants::LINEAR_PRED_CLAMP_MIN,
+            crate::constants::LINEAR_PRED_CLAMP_MAX,
+        )
+        .exp()
 }
 
 fn l2_norm(v: &[f64]) -> f64 {
@@ -450,7 +460,8 @@ pub fn generate_adversarial_examples(
             .collect();
         let perturbation_norm = l2_norm(&perturbation);
 
-        let pred_change = (adversarial_pred - original_pred).abs() / original_pred.max(1e-10);
+        let pred_change = (adversarial_pred - original_pred).abs()
+            / original_pred.max(crate::constants::DIVISION_FLOOR);
         let success = pred_change > threshold;
 
         if success {
@@ -505,7 +516,10 @@ fn train_cox_with_data(
                     .zip(coefficients.iter())
                     .map(|(&x, &c)| x * c)
                     .sum::<f64>()
-                    .clamp(-20.0, 20.0)
+                    .clamp(
+                        crate::constants::LINEAR_PRED_CLAMP_MIN,
+                        crate::constants::LINEAR_PRED_CLAMP_MAX,
+                    )
             })
             .collect();
 
@@ -527,7 +541,7 @@ fn train_cox_with_data(
                 risk_set_x[j] += exp_pred[i] * x[i][j];
             }
 
-            if event[i] == 1 && risk_set_sum > 1e-10 {
+            if event[i] == 1 && risk_set_sum > crate::constants::DIVISION_FLOOR {
                 for j in 0..p {
                     gradient[j] += x[i][j] - risk_set_x[j] / risk_set_sum;
                     hessian_diag[j] +=
@@ -543,14 +557,14 @@ fn train_cox_with_data(
 
         let mut max_update: f64 = 0.0;
         for j in 0..p {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 let update = (gradient[j] / hessian_diag[j]).clamp(-1.0, 1.0);
                 coefficients[j] += update;
                 max_update = max_update.max(update.abs());
             }
         }
 
-        if max_update < 1e-6 {
+        if max_update < crate::constants::CONVERGENCE_EPSILON {
             break;
         }
     }
@@ -676,7 +690,7 @@ pub fn adversarial_training_survival(
             &attack_config,
         );
         let adv_pred = predict_risk(&perturbed, &robust_coefficients);
-        let change = (adv_pred - orig_pred).abs() / orig_pred.max(1e-10);
+        let change = (adv_pred - orig_pred).abs() / orig_pred.max(crate::constants::DIVISION_FLOOR);
         if change < 0.1 {
             robustness_count += 1;
         }

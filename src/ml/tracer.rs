@@ -9,6 +9,7 @@ use burn::{
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::config_validation::{ensure_open_unit_interval, ensure_positive_usize};
 use super::utils::{compute_duration_bins, linear_forward, relu_vec, tensor_to_vec_f32};
 
 type Backend = NdArray;
@@ -120,51 +121,19 @@ impl TracerConfig {
         layer_norm_eps: f32,
         seed: Option<u64>,
     ) -> PyResult<Self> {
-        if embedding_dim == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "embedding_dim must be positive",
-            ));
-        }
-        if num_factorized_layers == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "num_factorized_layers must be positive",
-            ));
-        }
-        if num_attention_heads == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "num_attention_heads must be positive",
-            ));
-        }
+        ensure_positive_usize("embedding_dim", embedding_dim)?;
+        ensure_positive_usize("num_factorized_layers", num_factorized_layers)?;
+        ensure_positive_usize("num_attention_heads", num_attention_heads)?;
         if !embedding_dim.is_multiple_of(num_attention_heads) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "embedding_dim must be divisible by num_attention_heads",
             ));
         }
-        if num_durations == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "num_durations must be positive",
-            ));
-        }
-        if batch_size == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "batch_size must be positive",
-            ));
-        }
-        if n_epochs == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "n_epochs must be positive",
-            ));
-        }
-        if !(0.0..1.0).contains(&validation_fraction) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "validation_fraction must be in [0, 1)",
-            ));
-        }
-        if !(0.0..1.0).contains(&dropout_rate) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "dropout_rate must be in [0, 1)",
-            ));
-        }
+        ensure_positive_usize("num_durations", num_durations)?;
+        ensure_positive_usize("batch_size", batch_size)?;
+        ensure_positive_usize("n_epochs", n_epochs)?;
+        ensure_open_unit_interval("validation_fraction", validation_fraction)?;
+        ensure_open_unit_interval("dropout_rate", dropout_rate)?;
 
         Ok(TracerConfig {
             embedding_dim,
@@ -1325,7 +1294,7 @@ fn fit_tracer_inner(
     config: &TracerConfig,
 ) -> Tracer {
     let device: <Backend as burn::prelude::Backend>::Device = Default::default();
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
 

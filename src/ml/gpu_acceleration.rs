@@ -167,7 +167,16 @@ fn parallel_matrix_vector_mult(matrix: &[Vec<f64>], vector: &[f64]) -> Vec<f64> 
 }
 
 fn parallel_exp_sum(values: &[f64]) -> f64 {
-    values.iter().map(|&v| v.clamp(-20.0, 20.0).exp()).sum()
+    values
+        .iter()
+        .map(|&v| {
+            v.clamp(
+                crate::constants::LINEAR_PRED_CLAMP_MIN,
+                crate::constants::LINEAR_PRED_CLAMP_MAX,
+            )
+            .exp()
+        })
+        .sum()
 }
 
 fn parallel_log_likelihood(
@@ -188,7 +197,10 @@ fn parallel_log_likelihood(
                 .zip(coefficients.iter())
                 .map(|(&x, &c)| x * c)
                 .sum::<f64>()
-                .clamp(-20.0, 20.0)
+                .clamp(
+                    crate::constants::LINEAR_PRED_CLAMP_MIN,
+                    crate::constants::LINEAR_PRED_CLAMP_MAX,
+                )
         })
         .collect();
 
@@ -206,7 +218,7 @@ fn parallel_log_likelihood(
 
     for &i in &sorted_indices {
         risk_set_sum += exp_pred[i];
-        if event[i] == 1 && risk_set_sum > 1e-10 {
+        if event[i] == 1 && risk_set_sum > crate::constants::DIVISION_FLOOR {
             log_likelihood += linear_pred[i] - risk_set_sum.ln();
         }
     }
@@ -235,7 +247,10 @@ fn parallel_gradient_hessian(
                 .zip(coefficients.iter())
                 .map(|(&x, &c)| x * c)
                 .sum::<f64>()
-                .clamp(-20.0, 20.0)
+                .clamp(
+                    crate::constants::LINEAR_PRED_CLAMP_MIN,
+                    crate::constants::LINEAR_PRED_CLAMP_MAX,
+                )
         })
         .collect();
 
@@ -264,7 +279,7 @@ fn parallel_gradient_hessian(
             }
         }
 
-        if event[i] == 1 && risk_set_sum > 1e-10 {
+        if event[i] == 1 && risk_set_sum > crate::constants::DIVISION_FLOOR {
             for j in 0..p {
                 let mean_x = risk_set_x[j] / risk_set_sum;
                 gradient[j] += x[i][j] - mean_x;
@@ -352,7 +367,7 @@ pub fn parallel_cox_regression(
     let mut coefficients = vec![0.0; p];
     let regularization = 0.01;
     let max_iter = 100;
-    let tol = 1e-6;
+    let tol = crate::constants::CONVERGENCE_EPSILON;
 
     let mut converged = false;
     let mut n_iterations = 0;
@@ -365,7 +380,7 @@ pub fn parallel_cox_regression(
 
         let mut max_update: f64 = 0.0;
         for j in 0..p {
-            if hessian[j][j].abs() > 1e-10 {
+            if hessian[j][j].abs() > crate::constants::DIVISION_FLOOR {
                 let update = (-gradient[j] / hessian[j][j]).clamp(-1.0, 1.0);
                 coefficients[j] += update;
                 max_update = max_update.max(update.abs());
@@ -384,7 +399,7 @@ pub fn parallel_cox_regression(
         .map(|j| {
             let (_, hessian) =
                 parallel_gradient_hessian(&x, &time, &event, &coefficients, regularization);
-            if hessian[j][j].abs() > 1e-10 {
+            if hessian[j][j].abs() > crate::constants::DIVISION_FLOOR {
                 (-1.0 / hessian[j][j]).sqrt()
             } else {
                 f64::NAN
@@ -440,7 +455,12 @@ pub fn batch_predict_survival(
                 .zip(coefficients.iter())
                 .map(|(&x, &c)| x * c)
                 .sum();
-            linear_pred.clamp(-20.0, 20.0).exp()
+            linear_pred
+                .clamp(
+                    crate::constants::LINEAR_PRED_CLAMP_MIN,
+                    crate::constants::LINEAR_PRED_CLAMP_MAX,
+                )
+                .exp()
         })
         .collect();
 

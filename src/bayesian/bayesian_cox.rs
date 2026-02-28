@@ -321,7 +321,8 @@ fn run_chain(
     config: &BayesianCoxConfig,
     chain_id: usize,
 ) -> (Vec<Vec<f64>>, Vec<f64>) {
-    let seed = config.seed.unwrap_or(42) + chain_id as u64 * 1000;
+    let seed =
+        config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED) + chain_id as u64 * 1000;
     let mut rng = fastrand::Rng::with_seed(seed);
 
     let mut beta = vec![0.0; p];

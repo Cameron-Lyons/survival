@@ -96,7 +96,7 @@ pub fn bootstrap_cox(
         .build()?;
     original_fit.fit()?;
     let (original_beta, _, _, _, _, _, _, _) = original_fit.results();
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {
@@ -304,7 +304,7 @@ pub fn bootstrap_survreg(
         Some(1e-5),
         Some(1e-9),
     )?;
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {

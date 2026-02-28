@@ -427,7 +427,7 @@ pub fn analyze_local_global(
         ));
     }
 
-    let base_seed = seed.unwrap_or(42);
+    let base_seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let analyses: Vec<FeatureViewAnalysis> = (0..n_features)
         .into_par_iter()

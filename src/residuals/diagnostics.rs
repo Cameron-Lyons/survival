@@ -1,5 +1,8 @@
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
+use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
+use crate::utilities::matrix::invert_flat_square_matrix_with_fallback;
 use crate::utilities::statistical::{lower_incomplete_gamma, normal_cdf};
 
 #[derive(Debug, Clone)]
@@ -42,11 +45,19 @@ pub fn dfbeta_cox(
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        sorted_indices.par_sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        sorted_indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
     let eta: Vec<f64> = (0..n)
         .map(|i| {
@@ -72,39 +83,88 @@ pub fn dfbeta_cox(
         &sorted_indices,
     );
 
-    let mut dfbeta: Vec<Vec<f64>> = vec![vec![0.0; n_covariates]; n];
-    for i in 0..n {
-        for j in 0..n_covariates {
-            for k in 0..n_covariates {
-                dfbeta[i][j] += info_inv[j * n_covariates + k] * score_residuals[i][k];
+    let dfbeta: Vec<Vec<f64>> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut row = vec![0.0; n_covariates];
+                for j in 0..n_covariates {
+                    let mut acc = 0.0;
+                    for k in 0..n_covariates {
+                        acc += info_inv[j * n_covariates + k] * score_residuals[i][k];
+                    }
+                    row[j] = acc;
+                }
+                row
+            })
+            .collect()
+    } else {
+        let mut rows = vec![vec![0.0; n_covariates]; n];
+        for i in 0..n {
+            for j in 0..n_covariates {
+                for k in 0..n_covariates {
+                    rows[i][j] += info_inv[j * n_covariates + k] * score_residuals[i][k];
+                }
             }
         }
-    }
+        rows
+    };
 
     let coef_se: Vec<f64> = (0..n_covariates)
         .map(|j| info_inv[j * n_covariates + j].sqrt().max(1e-10))
         .collect();
 
-    let mut dfbetas: Vec<Vec<f64>> = vec![vec![0.0; n_covariates]; n];
-    for i in 0..n {
-        for j in 0..n_covariates {
-            dfbetas[i][j] = dfbeta[i][j] / coef_se[j];
+    let dfbetas: Vec<Vec<f64>> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        dfbeta
+            .par_iter()
+            .map(|row| {
+                (0..n_covariates)
+                    .map(|j| row[j] / coef_se[j])
+                    .collect::<Vec<f64>>()
+            })
+            .collect()
+    } else {
+        let mut rows = vec![vec![0.0; n_covariates]; n];
+        for i in 0..n {
+            for j in 0..n_covariates {
+                rows[i][j] = dfbeta[i][j] / coef_se[j];
+            }
         }
-    }
+        rows
+    };
 
-    let max_dfbeta: Vec<f64> = (0..n_covariates)
-        .map(|j| {
-            dfbeta
-                .iter()
-                .map(|row| row[j].abs())
-                .fold(0.0_f64, f64::max)
-        })
-        .collect();
+    let max_dfbeta: Vec<f64> = if n_covariates > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_covariates)
+            .into_par_iter()
+            .map(|j| {
+                dfbeta
+                    .iter()
+                    .map(|row| row[j].abs())
+                    .fold(0.0_f64, f64::max)
+            })
+            .collect()
+    } else {
+        (0..n_covariates)
+            .map(|j| {
+                dfbeta
+                    .iter()
+                    .map(|row| row[j].abs())
+                    .fold(0.0_f64, f64::max)
+            })
+            .collect()
+    };
 
     let thresh = threshold.unwrap_or(2.0 / (n as f64).sqrt());
-    let influential_obs: Vec<usize> = (0..n)
-        .filter(|&i| dfbetas[i].iter().any(|&d| d.abs() > thresh))
-        .collect();
+    let influential_obs: Vec<usize> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .filter(|&i| dfbetas[i].iter().any(|&d| d.abs() > thresh))
+            .collect()
+    } else {
+        (0..n)
+            .filter(|&i| dfbetas[i].iter().any(|&d| d.abs() > thresh))
+            .collect()
+    };
 
     Ok(DfbetaResult {
         dfbeta,
@@ -164,11 +224,8 @@ fn compute_score_residuals(
     sorted_indices: &[usize],
 ) -> Vec<Vec<f64>> {
     let n = time.len();
-    let mut score_resid: Vec<Vec<f64>> = vec![vec![0.0; n_covariates]; n];
-
     let mut risk_sum = 0.0;
     let mut weighted_x = vec![0.0; n_covariates];
-
     let mut cumulative_term = vec![vec![0.0; n_covariates]; n];
 
     for &i in sorted_indices.iter() {
@@ -178,83 +235,68 @@ fn compute_score_residuals(
         }
 
         if event[i] == 1 && risk_sum > 0.0 {
-            for k in 0..n {
-                if time[k] >= time[i] {
-                    let x_bar = weighted_x.iter().map(|&w| w / risk_sum).collect::<Vec<_>>();
-                    for j in 0..n_covariates {
-                        cumulative_term[k][j] +=
-                            exp_eta[k] * (covariates[k * n_covariates + j] - x_bar[j]) / risk_sum;
+            let x_bar: Vec<f64> = weighted_x.iter().map(|&w| w / risk_sum).collect();
+            let time_i = time[i];
+            if n > PARALLEL_THRESHOLD_MEDIUM {
+                cumulative_term
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(k, row)| {
+                        if time[k] >= time_i {
+                            let scale = exp_eta[k] / risk_sum;
+                            let base = k * n_covariates;
+                            for j in 0..n_covariates {
+                                row[j] += scale * (covariates[base + j] - x_bar[j]);
+                            }
+                        }
+                    });
+            } else {
+                for k in 0..n {
+                    if time[k] >= time_i {
+                        let scale = exp_eta[k] / risk_sum;
+                        let base = k * n_covariates;
+                        for j in 0..n_covariates {
+                            cumulative_term[k][j] += scale * (covariates[base + j] - x_bar[j]);
+                        }
                     }
                 }
             }
         }
     }
 
-    for i in 0..n {
-        for j in 0..n_covariates {
-            if event[i] == 1 {
-                score_resid[i][j] = covariates[i * n_covariates + j];
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut row = vec![0.0; n_covariates];
+                let base = i * n_covariates;
+                for j in 0..n_covariates {
+                    let event_term = if event[i] == 1 {
+                        covariates[base + j]
+                    } else {
+                        0.0
+                    };
+                    row[j] = event_term - cumulative_term[i][j];
+                }
+                row
+            })
+            .collect()
+    } else {
+        let mut score_resid: Vec<Vec<f64>> = vec![vec![0.0; n_covariates]; n];
+        for i in 0..n {
+            for j in 0..n_covariates {
+                if event[i] == 1 {
+                    score_resid[i][j] = covariates[i * n_covariates + j];
+                }
+                score_resid[i][j] -= cumulative_term[i][j];
             }
-            score_resid[i][j] -= cumulative_term[i][j];
         }
+        score_resid
     }
-
-    score_resid
 }
 
 fn invert_matrix(a: &[f64], n: usize) -> Vec<f64> {
-    if n == 1 {
-        return vec![if a[0].abs() > 1e-10 { 1.0 / a[0] } else { 0.0 }];
-    }
-
-    let mut aug = vec![0.0; n * 2 * n];
-
-    for i in 0..n {
-        for j in 0..n {
-            aug[i * 2 * n + j] = a[i * n + j];
-        }
-        aug[i * 2 * n + n + i] = 1.0;
-    }
-
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k * 2 * n + i].abs() > aug[max_row * 2 * n + i].abs() {
-                max_row = k;
-            }
-        }
-
-        for j in 0..(2 * n) {
-            aug.swap(i * 2 * n + j, max_row * 2 * n + j);
-        }
-
-        let pivot = aug[i * 2 * n + i];
-        if pivot.abs() < 1e-10 {
-            continue;
-        }
-
-        for j in 0..(2 * n) {
-            aug[i * 2 * n + j] /= pivot;
-        }
-
-        for k in 0..n {
-            if k != i {
-                let factor = aug[k * 2 * n + i];
-                for j in 0..(2 * n) {
-                    aug[k * 2 * n + j] -= factor * aug[i * 2 * n + j];
-                }
-            }
-        }
-    }
-
-    let mut inv = vec![0.0; n * n];
-    for i in 0..n {
-        for j in 0..n {
-            inv[i * n + j] = aug[i * 2 * n + n + j];
-        }
-    }
-
-    inv
+    invert_flat_square_matrix_with_fallback(a, n)
 }
 
 #[derive(Debug, Clone)]
@@ -290,11 +332,19 @@ pub fn leverage_cox(
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        sorted_indices.par_sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        sorted_indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
     let eta: Vec<f64> = (0..n)
         .map(|i| {
@@ -325,41 +375,89 @@ pub fn leverage_cox(
 
         if risk_sum > 0.0 {
             let x_bar: Vec<f64> = weighted_x.iter().map(|&w| w / risk_sum).collect();
-
-            for k in 0..n {
-                if time[k] >= time[i] {
-                    let mut h_ik = 0.0;
-                    for j1 in 0..n_covariates {
-                        let x_diff1 = covariates[k * n_covariates + j1] - x_bar[j1];
-                        for j2 in 0..n_covariates {
-                            let x_diff2 = covariates[k * n_covariates + j2] - x_bar[j2];
-                            h_ik += x_diff1 * info_inv[j1 * n_covariates + j2] * x_diff2;
+            let time_i = time[i];
+            let event_i = event[i];
+            if n > PARALLEL_THRESHOLD_MEDIUM {
+                leverage.par_iter_mut().enumerate().for_each(|(k, lev)| {
+                    if time[k] >= time_i {
+                        let mut h_ik = 0.0;
+                        let base_k = k * n_covariates;
+                        for j1 in 0..n_covariates {
+                            let x_diff1 = covariates[base_k + j1] - x_bar[j1];
+                            for j2 in 0..n_covariates {
+                                let x_diff2 = covariates[base_k + j2] - x_bar[j2];
+                                h_ik += x_diff1 * info_inv[j1 * n_covariates + j2] * x_diff2;
+                            }
+                        }
+                        h_ik *= exp_eta[k] / risk_sum;
+                        if event_i == 1 {
+                            *lev += h_ik;
                         }
                     }
-                    h_ik *= exp_eta[k] / risk_sum;
-
-                    if event[i] == 1 {
-                        leverage[k] += h_ik;
+                });
+            } else {
+                for k in 0..n {
+                    if time[k] >= time_i {
+                        let mut h_ik = 0.0;
+                        let base_k = k * n_covariates;
+                        for j1 in 0..n_covariates {
+                            let x_diff1 = covariates[base_k + j1] - x_bar[j1];
+                            for j2 in 0..n_covariates {
+                                let x_diff2 = covariates[base_k + j2] - x_bar[j2];
+                                h_ik += x_diff1 * info_inv[j1 * n_covariates + j2] * x_diff2;
+                            }
+                        }
+                        h_ik *= exp_eta[k] / risk_sum;
+                        if event_i == 1 {
+                            leverage[k] += h_ik;
+                        }
                     }
                 }
             }
         }
     }
 
-    for i in 0..n {
-        let mut max_contrib: f64 = 0.0;
-        for j in 0..n_covariates {
-            let x_j = covariates[i * n_covariates + j];
-            let contrib = x_j.abs() * info_inv[j * n_covariates + j].sqrt();
-            max_contrib = max_contrib.max(contrib);
+    lmax = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut max_contrib: f64 = 0.0;
+                for j in 0..n_covariates {
+                    let x_j = covariates[i * n_covariates + j];
+                    let contrib = x_j.abs() * info_inv[j * n_covariates + j].sqrt();
+                    max_contrib = max_contrib.max(contrib);
+                }
+                max_contrib
+            })
+            .collect()
+    } else {
+        for i in 0..n {
+            let mut max_contrib: f64 = 0.0;
+            for j in 0..n_covariates {
+                let x_j = covariates[i * n_covariates + j];
+                let contrib = x_j.abs() * info_inv[j * n_covariates + j].sqrt();
+                max_contrib = max_contrib.max(contrib);
+            }
+            lmax[i] = max_contrib;
         }
-        lmax[i] = max_contrib;
-    }
+        lmax
+    };
 
-    let mean_leverage = leverage.iter().sum::<f64>() / n as f64;
+    let mean_leverage = if n > PARALLEL_THRESHOLD_MEDIUM {
+        leverage.par_iter().sum::<f64>() / n as f64
+    } else {
+        leverage.iter().sum::<f64>() / n as f64
+    };
     let threshold = threshold_multiplier * (n_covariates as f64) / (n as f64);
 
-    let high_leverage_obs: Vec<usize> = (0..n).filter(|&i| leverage[i] > threshold).collect();
+    let high_leverage_obs: Vec<usize> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .filter(|&i| leverage[i] > threshold)
+            .collect()
+    } else {
+        (0..n).filter(|&i| leverage[i] > threshold).collect()
+    };
 
     Ok(LeverageResult {
         leverage,
