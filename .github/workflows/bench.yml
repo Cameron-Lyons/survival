@@ -6,6 +6,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_PROFILE_BENCH_LTO: "false"
+  CARGO_PROFILE_BENCH_CODEGEN_UNITS: "16"
+  CARGO_PROFILE_BENCH_STRIP: "none"
 
 permissions:
   pull-requests: write
