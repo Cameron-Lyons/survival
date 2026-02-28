@@ -156,7 +156,7 @@ pub struct SurvFitKMOutput {
 /// -------
 /// SurvFitKMOutput
 ///     Object containing: time (event times), n_risk (at-risk counts), n_event (event counts),
-///     survival (survival probabilities), std_err (standard errors), conf_lower/conf_upper (95% CI).
+///     estimate (survival probabilities), std_err (standard errors), conf_lower/conf_upper (95% CI).
 ///
 /// Examples
 /// --------
@@ -164,7 +164,7 @@ pub struct SurvFitKMOutput {
 /// >>> import pandas as pd
 /// >>> df = pd.DataFrame({'time': [1, 2, 3, 4, 5], 'status': [1, 0, 1, 1, 0]})
 /// >>> result = survival.survfitkm(df['time'], df['status'])
-/// >>> result.survival
+/// >>> result.estimate
 #[pyfunction]
 #[pyo3(signature = (time, status, weights=None, entry_times=None, position=None, reverse=None, computation_type=None))]
 pub fn survfitkm(

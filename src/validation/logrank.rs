@@ -195,7 +195,7 @@ fn weight_name(weight_type: &WeightType) -> String {
 /// Returns
 /// -------
 /// LogRankResult
-///     Object with: chi_square (test statistic), p_value, observed/expected counts per group.
+///     Object with: statistic (test statistic), p_value, observed/expected counts per group.
 ///
 /// Examples
 /// --------
