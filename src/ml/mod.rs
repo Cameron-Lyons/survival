@@ -1,6 +1,7 @@
 pub mod active_learning;
 pub mod adversarial_robustness;
 pub mod attention_cox;
+pub mod config_validation;
 pub mod contrastive_surv;
 pub mod cox_time;
 pub mod deep_pamm;

@@ -850,7 +850,7 @@ pub fn survshap(
     let default_config = SurvShapConfig::new(2048, 100, None, true)?;
     let cfg = config.unwrap_or(&default_config);
 
-    let seed = cfg.seed.unwrap_or(42);
+    let seed = cfg.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (shap_values, base_value) = compute_shap_inner(
         &x_explain,
@@ -936,7 +936,7 @@ pub fn survshap_bootstrap(
 
     let default_config = SurvShapConfig::new(2048, 100, None, true)?;
     let cfg = config.unwrap_or(&default_config);
-    let base_seed = cfg.seed.unwrap_or(42);
+    let base_seed = cfg.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let x_bg_ref = &x_background;
     let preds_bg_ref = &predictions_background;
@@ -1070,7 +1070,7 @@ pub fn permutation_importance(
     let baseline_score =
         compute_concordance_index(&predictions, &times, &events, n_samples, n_times);
 
-    let base_seed = seed.unwrap_or(42);
+    let base_seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let compute_feature_importance = |feature_idx: usize| -> (f64, f64) {
         let mut scores = Vec::with_capacity(n_repeats);

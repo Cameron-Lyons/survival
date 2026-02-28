@@ -155,7 +155,7 @@ fn compute_wasserstein_robust_weights(
     let mean_loss: f64 = losses.iter().sum::<f64>() / n as f64;
     let std_loss = (losses.iter().map(|&l| (l - mean_loss).powi(2)).sum::<f64>() / n as f64).sqrt();
 
-    if std_loss < 1e-10 {
+    if std_loss < crate::constants::DIVISION_FLOOR {
         return vec![1.0 / n as f64; n];
     }
 
@@ -163,11 +163,11 @@ fn compute_wasserstein_robust_weights(
         *l = (*l - mean_loss) / std_loss;
     }
 
-    let eta = radius / std_loss.max(1e-10);
+    let eta = radius / std_loss.max(crate::constants::DIVISION_FLOOR);
     let mut weights: Vec<f64> = losses.iter().map(|&l| (eta * l).exp()).collect();
     let sum_weights: f64 = weights.iter().sum();
     for w in &mut weights {
-        *w /= sum_weights.max(1e-10);
+        *w /= sum_weights.max(crate::constants::DIVISION_FLOOR);
     }
 
     weights
@@ -201,7 +201,7 @@ fn compute_kl_robust_weights(
         .collect();
 
     let max_loss = losses.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let eta = 1.0 / radius.max(1e-10);
+    let eta = 1.0 / radius.max(crate::constants::DIVISION_FLOOR);
 
     let mut weights: Vec<f64> = losses
         .iter()
@@ -209,7 +209,7 @@ fn compute_kl_robust_weights(
         .collect();
     let sum_weights: f64 = weights.iter().sum();
     for w in &mut weights {
-        *w /= sum_weights.max(1e-10);
+        *w /= sum_weights.max(crate::constants::DIVISION_FLOOR);
     }
 
     weights
@@ -263,7 +263,10 @@ fn weighted_cox_partial_likelihood(
         .collect();
 
     for lp in &mut linear_pred {
-        *lp = lp.clamp(-20.0, 20.0);
+        *lp = lp.clamp(
+            crate::constants::LINEAR_PRED_CLAMP_MIN,
+            crate::constants::LINEAR_PRED_CLAMP_MAX,
+        );
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
@@ -289,7 +292,8 @@ fn weighted_cox_partial_likelihood(
         }
 
         if event[i] == 1 {
-            log_likelihood += weights[i] * (linear_pred[i] - cumulative_risk.max(1e-10).ln());
+            log_likelihood += weights[i]
+                * (linear_pred[i] - cumulative_risk.max(crate::constants::DIVISION_FLOOR).ln());
         }
 
         cumulative_risk -= weights[i] * linear_pred[i].exp();
@@ -352,7 +356,10 @@ fn dro_cox_optimization(
                     .zip(coefficients.iter())
                     .map(|(&x, &c)| x * c)
                     .sum::<f64>()
-                    .clamp(-20.0, 20.0)
+                    .clamp(
+                        crate::constants::LINEAR_PRED_CLAMP_MIN,
+                        crate::constants::LINEAR_PRED_CLAMP_MAX,
+                    )
             })
             .collect();
 
@@ -374,7 +381,7 @@ fn dro_cox_optimization(
                 risk_set_x[j] += weights[i] * exp_pred[i] * x[i][j];
             }
 
-            if event[i] == 1 && risk_set_sum > 1e-10 {
+            if event[i] == 1 && risk_set_sum > crate::constants::DIVISION_FLOOR {
                 for j in 0..p {
                     gradient[j] += weights[i] * (x[i][j] - risk_set_x[j] / risk_set_sum);
                     hessian_diag[j] += weights[i]
@@ -390,7 +397,7 @@ fn dro_cox_optimization(
 
         let mut max_update: f64 = 0.0;
         for j in 0..p {
-            if hessian_diag[j].abs() > 1e-10 {
+            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
                 let update = gradient[j] / hessian_diag[j];
                 let clamped_update = update.clamp(-1.0, 1.0);
                 coefficients[j] += clamped_update;

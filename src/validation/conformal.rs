@@ -577,7 +577,7 @@ pub fn doubly_robust_conformal_calibrate(
     }
 
     let trim_val = trim.unwrap_or(DEFAULT_IPCW_TRIM);
-    let rng_seed = seed.unwrap_or(42);
+    let rng_seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let censoring_model = CensoringModel::fit(&time, &status);
 
@@ -1154,7 +1154,7 @@ pub fn bootstrap_conformal_survival(
 
     let coverage = coverage_level.unwrap_or(DEFAULT_CONFORMAL_COVERAGE);
     let n_boot = n_bootstrap.unwrap_or(200);
-    let base_seed = seed.unwrap_or(42);
+    let base_seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let alpha = 1.0 - coverage;
 
@@ -1522,7 +1522,7 @@ pub fn conformal_coverage_cv(
 
     let k = n_folds.unwrap_or(5);
     let candidates = coverage_candidates.unwrap_or_else(|| vec![0.80, 0.85, 0.90, 0.95, 0.99]);
-    let base_seed = seed.unwrap_or(42);
+    let base_seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let mut indices: Vec<usize> = (0..n).collect();
     let mut rng_state = base_seed;

@@ -802,7 +802,7 @@ pub fn fast_cox_cv(
 
     let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
 
-    let mut rng = fastrand::Rng::with_seed(seed.unwrap_or(42));
+    let mut rng = fastrand::Rng::with_seed(seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED));
     let mut fold_assign: Vec<usize> = (0..n_obs).map(|i| i % n_folds).collect();
     for i in (1..n_obs).rev() {
         let j = rng.usize(0..=i);

@@ -19,24 +19,32 @@ pub struct IPCWResult {
     pub n_effective: f64,
 }
 
-fn fit_logistic_model(x: &[f64], y: &[i32], n: usize, p: usize, max_iter: usize) -> Vec<f64> {
+fn fit_logistic_model(
+    x: &[f64],
+    y: &[i32],
+    at_risk_indices: &[usize],
+    p: usize,
+    max_iter: usize,
+) -> Vec<f64> {
     let mut beta = vec![0.0; p];
 
     for _ in 0..max_iter {
         let mut gradient = vec![0.0; p];
         let mut hessian_diag = vec![0.0; p];
 
-        for i in 0..n {
+        for (idx, &obs) in at_risk_indices.iter().enumerate() {
+            let base = obs * p;
             let mut eta = 0.0;
             for j in 0..p {
-                eta += x[i * p + j] * beta[j];
+                eta += x[base + j] * beta[j];
             }
             let prob = 1.0 / (1.0 + (-eta.clamp(-700.0, 700.0)).exp());
-            let residual = y[i] as f64 - prob;
+            let residual = y[idx] as f64 - prob;
 
             for j in 0..p {
-                gradient[j] += x[i * p + j] * residual;
-                hessian_diag[j] += x[i * p + j] * x[i * p + j] * prob * (1.0 - prob);
+                let xij = x[base + j];
+                gradient[j] += xij * residual;
+                hessian_diag[j] += xij * xij * prob * (1.0 - prob);
             }
         }
 
@@ -57,12 +65,14 @@ fn fit_logistic_model(x: &[f64], y: &[i32], n: usize, p: usize, max_iter: usize)
     beta
 }
 
-fn predict_probs(x: &[f64], beta: &[f64], n: usize, p: usize) -> Vec<f64> {
-    (0..n)
-        .map(|i| {
+fn predict_probs(x: &[f64], beta: &[f64], at_risk_indices: &[usize], p: usize) -> Vec<f64> {
+    at_risk_indices
+        .iter()
+        .map(|&obs| {
+            let base = obs * p;
             let mut eta = 0.0;
             for j in 0..p {
-                eta += x[i * p + j] * beta[j];
+                eta += x[base + j] * beta[j];
             }
             1.0 / (1.0 + (-eta.clamp(-700.0, 700.0)).exp())
         })
@@ -97,48 +107,47 @@ pub fn compute_ipcw_weights(
     unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     unique_times.dedup();
 
+    let mut sorted_indices: Vec<usize> = (0..n_obs).collect();
+    sorted_indices.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     let mut censoring_probs = vec![1.0; n_obs];
+    let mut risk_start = 0usize;
 
     for &t in &unique_times {
-        let at_risk: Vec<usize> = (0..n_obs).filter(|&i| time[i] >= t).collect();
+        while risk_start < n_obs && time[sorted_indices[risk_start]] < t {
+            risk_start += 1;
+        }
+        let at_risk = &sorted_indices[risk_start..];
 
         if at_risk.is_empty() {
             continue;
         }
 
-        let x_risk: Vec<f64> = {
-            let mut result = Vec::with_capacity(at_risk.len() * n_vars);
-            for &i in &at_risk {
-                for j in 0..n_vars {
-                    result.push(x_censoring[i * n_vars + j]);
-                }
-            }
-            result
-        };
+        let mut y_risk = Vec::with_capacity(at_risk.len());
+        let mut has_events = false;
+        for &i in at_risk {
+            let yi = if (time[i] - t).abs() < crate::constants::DIVISION_FLOOR && censored[i] == 1 {
+                1
+            } else {
+                0
+            };
+            has_events |= yi == 1;
+            y_risk.push(yi);
+        }
 
-        let y_risk: Vec<i32> = at_risk
-            .iter()
-            .map(|&i| {
-                if (time[i] - t).abs() < crate::constants::DIVISION_FLOOR && censored[i] == 1 {
-                    1
-                } else {
-                    0
-                }
-            })
-            .collect();
-
-        let has_events = y_risk.contains(&1);
         if !has_events {
             continue;
         }
 
-        let beta = fit_logistic_model(&x_risk, &y_risk, at_risk.len(), n_vars, 50);
-        let censor_probs_t = predict_probs(&x_risk, &beta, at_risk.len(), n_vars);
+        let beta = fit_logistic_model(&x_censoring, &y_risk, at_risk, n_vars, 50);
+        let censor_probs_t = predict_probs(&x_censoring, &beta, at_risk, n_vars);
 
         for (idx, &i) in at_risk.iter().enumerate() {
-            if time[i] >= t {
-                censoring_probs[i] *= 1.0 - censor_probs_t[idx];
-            }
+            censoring_probs[i] *= 1.0 - censor_probs_t[idx];
         }
     }
 

@@ -375,7 +375,7 @@ fn fit_gradient_boost_inner(
     let mut train_loss = Vec::with_capacity(config.n_estimators);
     let mut feature_importance = vec![0.0; n_vars];
 
-    let base_seed = config.seed.unwrap_or(42);
+    let base_seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     for iter in 0..config.n_estimators {
         let mut rng = fastrand::Rng::with_seed(base_seed.wrapping_add(iter as u64));

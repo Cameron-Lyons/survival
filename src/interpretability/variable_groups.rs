@@ -493,7 +493,7 @@ pub fn group_variables(
                 n_features,
                 n_groups,
                 config.max_iter,
-                config.seed.unwrap_or(42),
+                config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED),
             );
             (ftg, None)
         }

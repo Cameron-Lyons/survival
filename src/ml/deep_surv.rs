@@ -9,6 +9,9 @@ use burn::{
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::config_validation::{
+    ensure_open_unit_interval, ensure_positive_f64, ensure_positive_usize,
+};
 use super::utils::tensor_to_vec_f32;
 
 type Backend = NdArray;
@@ -98,31 +101,11 @@ impl DeepSurvConfig {
         early_stopping_patience: Option<usize>,
         validation_fraction: f64,
     ) -> PyResult<Self> {
-        if !(0.0..1.0).contains(&dropout_rate) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "dropout_rate must be in [0, 1)",
-            ));
-        }
-        if learning_rate <= 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "learning_rate must be positive",
-            ));
-        }
-        if batch_size == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "batch_size must be positive",
-            ));
-        }
-        if n_epochs == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "n_epochs must be positive",
-            ));
-        }
-        if !(0.0..1.0).contains(&validation_fraction) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "validation_fraction must be in [0, 1)",
-            ));
-        }
+        ensure_open_unit_interval("dropout_rate", dropout_rate)?;
+        ensure_positive_f64("learning_rate", learning_rate)?;
+        ensure_positive_usize("batch_size", batch_size)?;
+        ensure_positive_usize("n_epochs", n_epochs)?;
+        ensure_open_unit_interval("validation_fraction", validation_fraction)?;
 
         Ok(DeepSurvConfig {
             hidden_layers: hidden_layers.unwrap_or_else(|| vec![64, 32]),
@@ -485,7 +468,7 @@ fn fit_deep_surv_inner(
 ) -> DeepSurv {
     let device: <Backend as burn::prelude::Backend>::Device = Default::default();
 
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let mut model: DeepSurvNetwork<AutodiffBackend> = DeepSurvNetwork::new(&device, n_vars, config);
 

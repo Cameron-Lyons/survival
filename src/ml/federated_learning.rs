@@ -290,7 +290,7 @@ pub fn federated_cox(
         client_covariates[0][0].len()
     };
 
-    let seed = seed.unwrap_or(42);
+    let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let mut global_weights = vec![0.0; n_features];
     let mut round_metrics = Vec::new();
     let mut convergence_round = None;
@@ -413,7 +413,7 @@ pub fn secure_aggregate(
         ));
     }
 
-    let seed = seed.unwrap_or(42);
+    let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let mut rng_state = seed;
 
     let mut active_clients = Vec::new();

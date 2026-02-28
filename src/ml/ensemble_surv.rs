@@ -270,7 +270,7 @@ pub fn super_learner_survival(
         ));
     }
 
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let folds = create_cv_folds(n, config.n_folds, seed);
 
     let mut cv_predictions: Vec<Vec<f64>> = vec![vec![0.0; n]; n_models];
@@ -435,7 +435,7 @@ pub fn stacking_survival(
         ));
     }
 
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let folds = create_cv_folds(n, config.n_folds, seed);
 
     let mut oof_predictions: Vec<Vec<f64>> = vec![vec![0.0; n]; n_models];
@@ -645,7 +645,7 @@ pub fn componentwise_boosting(
         covariates[0].len()
     };
 
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let mut rng_state = seed;
 
     let mut coefficients: Vec<f64> = vec![0.0; n_features];

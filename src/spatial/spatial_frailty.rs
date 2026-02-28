@@ -1,5 +1,8 @@
+use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_MEDIUM};
+use crate::utilities::matrix::invert_flat_square_matrix_with_fallback;
 use crate::utilities::statistical::normal_cdf;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -195,46 +198,86 @@ pub fn spatial_frailty_model(
 }
 
 fn compute_car_precision(adjacency: &[f64], n: usize, rho: f64) -> Vec<f64> {
-    let mut precision = vec![0.0; n * n];
-
-    for i in 0..n {
-        let n_neighbors: f64 = (0..n).map(|j| adjacency[i * n + j]).sum();
-
-        precision[i * n + i] = n_neighbors;
-
-        for j in 0..n {
-            if i != j && adjacency[i * n + j] > 0.0 {
-                precision[i * n + j] = -rho * adjacency[i * n + j];
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        let rows: Vec<Vec<f64>> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut row = vec![0.0; n];
+                let n_neighbors: f64 = (0..n).map(|j| adjacency[i * n + j]).sum();
+                row[i] = n_neighbors;
+                for j in 0..n {
+                    if i != j && adjacency[i * n + j] > 0.0 {
+                        row[j] = -rho * adjacency[i * n + j];
+                    }
+                }
+                row
+            })
+            .collect();
+        rows.into_iter().flatten().collect()
+    } else {
+        let mut precision = vec![0.0; n * n];
+        for i in 0..n {
+            let n_neighbors: f64 = (0..n).map(|j| adjacency[i * n + j]).sum();
+            precision[i * n + i] = n_neighbors;
+            for j in 0..n {
+                if i != j && adjacency[i * n + j] > 0.0 {
+                    precision[i * n + j] = -rho * adjacency[i * n + j];
+                }
             }
         }
+        precision
     }
-
-    precision
 }
 
 fn compute_sar_precision(adjacency: &[f64], n: usize, rho: f64) -> Vec<f64> {
-    let mut precision = vec![0.0; n * n];
+    let row_sums: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n)
+            .into_par_iter()
+            .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>().max(1.0))
+            .collect()
+    } else {
+        (0..n)
+            .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>().max(1.0))
+            .collect()
+    };
 
-    let row_sums: Vec<f64> = (0..n)
-        .map(|i| (0..n).map(|j| adjacency[i * n + j]).sum::<f64>().max(1.0))
-        .collect();
-
-    for i in 0..n {
-        for j in 0..n {
-            let w_ij = adjacency[i * n + j] / row_sums[i];
-            let delta = if i == j { 1.0 } else { 0.0 };
-
-            let i_rho_w = delta - rho * w_ij;
-
-            for k in 0..n {
-                let w_kj = adjacency[k * n + j] / row_sums[k];
-                let i_rho_w_t = if k == i { 1.0 } else { 0.0 } - rho * w_kj;
-                precision[i * n + j] += i_rho_w * i_rho_w_t;
+    if n > PARALLEL_THRESHOLD_MEDIUM {
+        let rows: Vec<Vec<f64>> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut row = vec![0.0; n];
+                for j in 0..n {
+                    let w_ij = adjacency[i * n + j] / row_sums[i];
+                    let delta = if i == j { 1.0 } else { 0.0 };
+                    let i_rho_w = delta - rho * w_ij;
+                    let mut acc = 0.0;
+                    for k in 0..n {
+                        let w_kj = adjacency[k * n + j] / row_sums[k];
+                        let i_rho_w_t = if k == i { 1.0 } else { 0.0 } - rho * w_kj;
+                        acc += i_rho_w * i_rho_w_t;
+                    }
+                    row[j] = acc;
+                }
+                row
+            })
+            .collect();
+        rows.into_iter().flatten().collect()
+    } else {
+        let mut precision = vec![0.0; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                let w_ij = adjacency[i * n + j] / row_sums[i];
+                let delta = if i == j { 1.0 } else { 0.0 };
+                let i_rho_w = delta - rho * w_ij;
+                for k in 0..n {
+                    let w_kj = adjacency[k * n + j] / row_sums[k];
+                    let i_rho_w_t = if k == i { 1.0 } else { 0.0 } - rho * w_kj;
+                    precision[i * n + j] += i_rho_w * i_rho_w_t;
+                }
             }
         }
+        precision
     }
-
-    precision
 }
 
 fn compute_distance_precision(
@@ -243,87 +286,73 @@ fn compute_distance_precision(
     range_param: f64,
     structure: SpatialCorrelationStructure,
 ) -> Vec<f64> {
-    let mut covariance = vec![0.0; n * n];
-
-    for i in 0..n {
-        for j in 0..n {
-            let d = distances[i * n + j];
-            let cov = match structure {
-                SpatialCorrelationStructure::Exponential => (-d / range_param).exp(),
-                SpatialCorrelationStructure::Matern => {
-                    let nu: f64 = 1.5;
-                    let scaled_d = (2.0 * nu).sqrt() * d / range_param;
-                    if scaled_d < 1e-10 {
-                        1.0
-                    } else {
-                        let term = (1.0 + scaled_d) * (-scaled_d).exp();
-                        term.max(0.0)
-                    }
+    let covariance: Vec<f64> = if n > PARALLEL_THRESHOLD_MEDIUM {
+        let rows: Vec<Vec<f64>> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut row = vec![0.0; n];
+                for j in 0..n {
+                    let d = distances[i * n + j];
+                    row[j] = match structure {
+                        SpatialCorrelationStructure::Exponential => (-d / range_param).exp(),
+                        SpatialCorrelationStructure::Matern => {
+                            let nu: f64 = 1.5;
+                            let scaled_d = (2.0 * nu).sqrt() * d / range_param;
+                            if scaled_d < 1e-10 {
+                                1.0
+                            } else {
+                                let term = (1.0 + scaled_d) * (-scaled_d).exp();
+                                term.max(0.0)
+                            }
+                        }
+                        _ => {
+                            if i == j {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                    };
                 }
-                _ => {
-                    if i == j {
-                        1.0
-                    } else {
-                        0.0
+                row
+            })
+            .collect();
+        rows.into_iter().flatten().collect()
+    } else {
+        let mut cov = vec![0.0; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                let d = distances[i * n + j];
+                cov[i * n + j] = match structure {
+                    SpatialCorrelationStructure::Exponential => (-d / range_param).exp(),
+                    SpatialCorrelationStructure::Matern => {
+                        let nu: f64 = 1.5;
+                        let scaled_d = (2.0 * nu).sqrt() * d / range_param;
+                        if scaled_d < 1e-10 {
+                            1.0
+                        } else {
+                            let term = (1.0 + scaled_d) * (-scaled_d).exp();
+                            term.max(0.0)
+                        }
                     }
-                }
-            };
-            covariance[i * n + j] = cov;
+                    _ => {
+                        if i == j {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                };
+            }
         }
-    }
+        cov
+    };
 
     invert_matrix(&covariance, n)
 }
 
 fn invert_matrix(a: &[f64], n: usize) -> Vec<f64> {
-    let mut aug = vec![0.0; n * 2 * n];
-
-    for i in 0..n {
-        for j in 0..n {
-            aug[i * 2 * n + j] = a[i * n + j];
-        }
-        aug[i * 2 * n + n + i] = 1.0;
-    }
-
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k * 2 * n + i].abs() > aug[max_row * 2 * n + i].abs() {
-                max_row = k;
-            }
-        }
-
-        for j in 0..(2 * n) {
-            aug.swap(i * 2 * n + j, max_row * 2 * n + j);
-        }
-
-        let pivot = aug[i * 2 * n + i];
-        if pivot.abs() < 1e-10 {
-            continue;
-        }
-
-        for j in 0..(2 * n) {
-            aug[i * 2 * n + j] /= pivot;
-        }
-
-        for k in 0..n {
-            if k != i {
-                let factor = aug[k * 2 * n + i];
-                for j in 0..(2 * n) {
-                    aug[k * 2 * n + j] -= factor * aug[i * 2 * n + j];
-                }
-            }
-        }
-    }
-
-    let mut inv = vec![0.0; n * n];
-    for i in 0..n {
-        for j in 0..n {
-            inv[i * n + j] = aug[i * 2 * n + n + j];
-        }
-    }
-
-    inv
+    invert_flat_square_matrix_with_fallback(a, n)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -347,24 +376,56 @@ fn em_step(
     let mut new_frailties = frailties.to_vec();
 
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n_obs > PARALLEL_THRESHOLD_LARGE {
+        indices.par_sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    let mut region_obs_by_region = vec![Vec::new(); n_regions];
+    for (i, &region) in region_id.iter().enumerate().take(n_obs) {
+        if region < n_regions {
+            region_obs_by_region[region].push(i);
+        }
+    }
 
     for _ in 0..5 {
-        let eta: Vec<f64> = (0..n_obs)
-            .map(|i| {
-                let mut e = new_frailties[region_id[i]];
-                for j in 0..n_vars {
-                    e += x[i * n_vars + j] * new_beta[j];
-                }
-                e.clamp(-500.0, 500.0)
-            })
-            .collect();
+        let eta: Vec<f64> = if n_obs > PARALLEL_THRESHOLD_MEDIUM {
+            (0..n_obs)
+                .into_par_iter()
+                .map(|i| {
+                    let mut e = new_frailties[region_id[i]];
+                    for j in 0..n_vars {
+                        e += x[i * n_vars + j] * new_beta[j];
+                    }
+                    e.clamp(-500.0, 500.0)
+                })
+                .collect()
+        } else {
+            (0..n_obs)
+                .map(|i| {
+                    let mut e = new_frailties[region_id[i]];
+                    for j in 0..n_vars {
+                        e += x[i * n_vars + j] * new_beta[j];
+                    }
+                    e.clamp(-500.0, 500.0)
+                })
+                .collect()
+        };
 
-        let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
+        let exp_eta: Vec<f64> = if n_obs > PARALLEL_THRESHOLD_MEDIUM {
+            eta.par_iter().map(|&e| e.exp()).collect()
+        } else {
+            eta.iter().map(|&e| e.exp()).collect()
+        };
 
         let mut gradient = vec![0.0; n_vars];
         let mut hessian_diag = vec![0.0; n_vars];
@@ -398,7 +459,7 @@ fn em_step(
     }
 
     for r in 0..n_regions {
-        let region_obs: Vec<usize> = (0..n_obs).filter(|&i| region_id[i] == r).collect();
+        let region_obs = &region_obs_by_region[r];
 
         if region_obs.is_empty() {
             continue;
@@ -407,7 +468,7 @@ fn em_step(
         let mut frailty_grad = 0.0;
         let mut frailty_hess = 0.0;
 
-        for &i in &region_obs {
+        for &i in region_obs {
             let mut lin_pred = new_frailties[r];
             for j in 0..n_vars {
                 lin_pred += x[i * n_vars + j] * new_beta[j];
@@ -472,23 +533,48 @@ fn compute_log_likelihood(
     n_vars: usize,
 ) -> f64 {
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n_obs > PARALLEL_THRESHOLD_LARGE {
+        indices.par_sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
-    let eta: Vec<f64> = (0..n_obs)
-        .map(|i| {
-            let mut e = frailties[region_id[i]];
-            for j in 0..n_vars {
-                e += x[i * n_vars + j] * beta[j];
-            }
-            e.clamp(-500.0, 500.0)
-        })
-        .collect();
+    let eta: Vec<f64> = if n_obs > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_obs)
+            .into_par_iter()
+            .map(|i| {
+                let mut e = frailties[region_id[i]];
+                for j in 0..n_vars {
+                    e += x[i * n_vars + j] * beta[j];
+                }
+                e.clamp(-500.0, 500.0)
+            })
+            .collect()
+    } else {
+        (0..n_obs)
+            .map(|i| {
+                let mut e = frailties[region_id[i]];
+                for j in 0..n_vars {
+                    e += x[i * n_vars + j] * beta[j];
+                }
+                e.clamp(-500.0, 500.0)
+            })
+            .collect()
+    };
 
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
+    let exp_eta: Vec<f64> = if n_obs > PARALLEL_THRESHOLD_MEDIUM {
+        eta.par_iter().map(|&e| e.exp()).collect()
+    } else {
+        eta.iter().map(|&e| e.exp()).collect()
+    };
 
     let mut log_lik = 0.0;
     let mut risk_sum = 0.0;
@@ -519,23 +605,48 @@ fn compute_standard_errors(
     n_vars: usize,
 ) -> Vec<f64> {
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if n_obs > PARALLEL_THRESHOLD_LARGE {
+        indices.par_sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        indices.sort_by(|&a, &b| {
+            time[b]
+                .partial_cmp(&time[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
-    let eta: Vec<f64> = (0..n_obs)
-        .map(|i| {
-            let mut e = frailties[region_id[i]];
-            for j in 0..n_vars {
-                e += x[i * n_vars + j] * beta[j];
-            }
-            e.clamp(-500.0, 500.0)
-        })
-        .collect();
+    let eta: Vec<f64> = if n_obs > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_obs)
+            .into_par_iter()
+            .map(|i| {
+                let mut e = frailties[region_id[i]];
+                for j in 0..n_vars {
+                    e += x[i * n_vars + j] * beta[j];
+                }
+                e.clamp(-500.0, 500.0)
+            })
+            .collect()
+    } else {
+        (0..n_obs)
+            .map(|i| {
+                let mut e = frailties[region_id[i]];
+                for j in 0..n_vars {
+                    e += x[i * n_vars + j] * beta[j];
+                }
+                e.clamp(-500.0, 500.0)
+            })
+            .collect()
+    };
 
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
+    let exp_eta: Vec<f64> = if n_obs > PARALLEL_THRESHOLD_MEDIUM {
+        eta.par_iter().map(|&e| e.exp()).collect()
+    } else {
+        eta.iter().map(|&e| e.exp()).collect()
+    };
 
     let mut info_diag = vec![0.0; n_vars];
     let mut risk_sum = 0.0;
@@ -590,22 +701,40 @@ pub fn compute_spatial_smoothed_rates(
         .map(|(&o, &e)| if e > 0.0 { o / e } else { 0.0 })
         .collect();
 
-    let mut smoothed_rates = vec![0.0; n_regions];
+    let smoothed_rates: Vec<f64> = if n_regions > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_regions)
+            .into_par_iter()
+            .map(|i| {
+                let mut weighted_sum = raw_rates[i] * (1.0 - smoothing_param);
+                let mut weight_sum = 1.0 - smoothing_param;
 
-    for i in 0..n_regions {
-        let mut weighted_sum = raw_rates[i] * (1.0 - smoothing_param);
-        let mut weight_sum = 1.0 - smoothing_param;
+                for j in 0..n_regions {
+                    if adjacency_matrix[i * n_regions + j] > 0.0 {
+                        weighted_sum +=
+                            smoothing_param * adjacency_matrix[i * n_regions + j] * raw_rates[j];
+                        weight_sum += smoothing_param * adjacency_matrix[i * n_regions + j];
+                    }
+                }
+                weighted_sum / weight_sum
+            })
+            .collect()
+    } else {
+        let mut vals = vec![0.0; n_regions];
+        for i in 0..n_regions {
+            let mut weighted_sum = raw_rates[i] * (1.0 - smoothing_param);
+            let mut weight_sum = 1.0 - smoothing_param;
 
-        for j in 0..n_regions {
-            if adjacency_matrix[i * n_regions + j] > 0.0 {
-                weighted_sum +=
-                    smoothing_param * adjacency_matrix[i * n_regions + j] * raw_rates[j];
-                weight_sum += smoothing_param * adjacency_matrix[i * n_regions + j];
+            for j in 0..n_regions {
+                if adjacency_matrix[i * n_regions + j] > 0.0 {
+                    weighted_sum +=
+                        smoothing_param * adjacency_matrix[i * n_regions + j] * raw_rates[j];
+                    weight_sum += smoothing_param * adjacency_matrix[i * n_regions + j];
+                }
             }
+            vals[i] = weighted_sum / weight_sum;
         }
-
-        smoothed_rates[i] = weighted_sum / weight_sum;
-    }
+        vals
+    };
 
     Ok((raw_rates, smoothed_rates))
 }
@@ -625,16 +754,32 @@ pub fn moran_i_test(
     let mean_val: f64 = values.iter().sum::<f64>() / n_regions as f64;
     let deviations: Vec<f64> = values.iter().map(|&v| v - mean_val).collect();
 
-    let mut w_sum = 0.0;
-    let mut numerator = 0.0;
-
-    for i in 0..n_regions {
-        for j in 0..n_regions {
-            let w = adjacency_matrix[i * n_regions + j];
-            w_sum += w;
-            numerator += w * deviations[i] * deviations[j];
+    let (w_sum, numerator) = if n_regions > PARALLEL_THRESHOLD_MEDIUM {
+        (0..n_regions)
+            .into_par_iter()
+            .map(|i| {
+                let mut local_w = 0.0;
+                let mut local_num = 0.0;
+                for j in 0..n_regions {
+                    let w = adjacency_matrix[i * n_regions + j];
+                    local_w += w;
+                    local_num += w * deviations[i] * deviations[j];
+                }
+                (local_w, local_num)
+            })
+            .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
+    } else {
+        let mut w_sum = 0.0;
+        let mut numerator = 0.0;
+        for i in 0..n_regions {
+            for j in 0..n_regions {
+                let w = adjacency_matrix[i * n_regions + j];
+                w_sum += w;
+                numerator += w * deviations[i] * deviations[j];
+            }
         }
-    }
+        (w_sum, numerator)
+    };
 
     let denominator: f64 = deviations.iter().map(|&d| d.powi(2)).sum();
 

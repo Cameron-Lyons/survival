@@ -9,6 +9,10 @@ use burn::{
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::config_validation::{
+    ensure_closed_unit_interval, ensure_open_unit_interval, ensure_positive_f64,
+    ensure_positive_usize,
+};
 use super::utils::{compute_duration_bins, linear_forward, relu_vec, tensor_to_vec_f32};
 
 type Backend = NdArray;
@@ -87,46 +91,14 @@ impl DeepHitConfig {
         validation_fraction: f64,
         use_batch_norm: bool,
     ) -> PyResult<Self> {
-        if num_durations == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "num_durations must be positive",
-            ));
-        }
-        if num_risks == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "num_risks must be positive",
-            ));
-        }
-        if !(0.0..1.0).contains(&dropout_rate) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "dropout_rate must be in [0, 1)",
-            ));
-        }
-        if !(0.0..=1.0).contains(&alpha) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "alpha must be in [0, 1]",
-            ));
-        }
-        if sigma <= 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "sigma must be positive",
-            ));
-        }
-        if batch_size == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "batch_size must be positive",
-            ));
-        }
-        if n_epochs == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "n_epochs must be positive",
-            ));
-        }
-        if !(0.0..1.0).contains(&validation_fraction) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "validation_fraction must be in [0, 1)",
-            ));
-        }
+        ensure_positive_usize("num_durations", num_durations)?;
+        ensure_positive_usize("num_risks", num_risks)?;
+        ensure_open_unit_interval("dropout_rate", dropout_rate)?;
+        ensure_closed_unit_interval("alpha", alpha)?;
+        ensure_positive_f64("sigma", sigma)?;
+        ensure_positive_usize("batch_size", batch_size)?;
+        ensure_positive_usize("n_epochs", n_epochs)?;
+        ensure_open_unit_interval("validation_fraction", validation_fraction)?;
 
         Ok(DeepHitConfig {
             shared_layers: shared_layers.unwrap_or_else(|| vec![64, 64]),
@@ -708,7 +680,7 @@ fn fit_deephit_inner(
     config: &DeepHitConfig,
 ) -> DeepHit {
     let device: <Backend as burn::prelude::Backend>::Device = Default::default();
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
 

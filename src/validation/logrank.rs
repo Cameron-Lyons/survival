@@ -1,6 +1,7 @@
 use crate::utilities::numpy_utils::{extract_vec_f64, extract_vec_i32};
 use crate::utilities::statistical::chi2_sf;
 use pyo3::prelude::*;
+use std::collections::HashMap;
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct LogRankResult {
@@ -89,10 +90,16 @@ pub fn weighted_logrank_test(
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    let group_to_index: HashMap<i32, usize> = unique_groups
+        .iter()
+        .enumerate()
+        .map(|(idx, &g)| (g, idx))
+        .collect();
     let mut at_risk: Vec<f64> = vec![0.0; n_groups];
     for &grp in group {
-        let g = unique_groups.iter().position(|&x| x == grp).unwrap_or(0);
-        at_risk[g] += 1.0;
+        if let Some(&g) = group_to_index.get(&grp) {
+            at_risk[g] += 1.0;
+        }
     }
     let mut observed = vec![0.0; n_groups];
     let mut expected = vec![0.0; n_groups];
@@ -106,10 +113,7 @@ pub fn weighted_logrank_test(
         let mut removed = vec![0.0; n_groups];
         while i < n && time[indices[i]] == current_time {
             let idx = indices[i];
-            let g = unique_groups
-                .iter()
-                .position(|&x| x == group[idx])
-                .unwrap_or(0);
+            let g = group_to_index.get(&group[idx]).copied().unwrap_or(0);
             removed[g] += 1.0;
             if status[idx] == 1 {
                 events_by_group[g] += 1.0;
@@ -282,10 +286,16 @@ pub fn logrank_trend_test(
             .partial_cmp(&time[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    let group_to_index: HashMap<i32, usize> = unique_groups
+        .iter()
+        .enumerate()
+        .map(|(idx, &g)| (g, idx))
+        .collect();
     let mut at_risk: Vec<f64> = vec![0.0; n_groups];
     for &grp in group {
-        let g = unique_groups.iter().position(|&x| x == grp).unwrap_or(0);
-        at_risk[g] += 1.0;
+        if let Some(&g) = group_to_index.get(&grp) {
+            at_risk[g] += 1.0;
+        }
     }
     let mut u_stat = 0.0;
     let mut var_stat = 0.0;
@@ -297,10 +307,7 @@ pub fn logrank_trend_test(
         let mut removed = vec![0.0; n_groups];
         while i < n && time[indices[i]] == current_time {
             let idx = indices[i];
-            let g = unique_groups
-                .iter()
-                .position(|&x| x == group[idx])
-                .unwrap_or(0);
+            let g = group_to_index.get(&group[idx]).copied().unwrap_or(0);
             removed[g] += 1.0;
             if status[idx] == 1 {
                 events_by_group[g] += 1.0;

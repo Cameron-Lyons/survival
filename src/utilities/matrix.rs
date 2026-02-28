@@ -1,4 +1,6 @@
-use crate::constants::{NEAR_ZERO_MATRIX, PARALLEL_THRESHOLD_LARGE, RIDGE_REGULARIZATION};
+use crate::constants::{
+    GAUSSIAN_ELIMINATION_TOL, NEAR_ZERO_MATRIX, PARALLEL_THRESHOLD_LARGE, RIDGE_REGULARIZATION,
+};
 use crate::utilities::validation::MatrixError;
 use faer::{linalg::solvers::DenseSolveCore, prelude::*};
 use ndarray::{Array1, Array2};
@@ -27,30 +29,24 @@ fn faer_col_to_ndarray(col: faer::ColRef<f64>) -> Array1<f64> {
 #[inline]
 fn faer_mat_to_ndarray(mat: faer::MatRef<f64>) -> Array2<f64> {
     let (rows, cols) = (mat.nrows(), mat.ncols());
+    let mut data = vec![0.0; rows * cols];
+
     if rows * cols > PARALLEL_THRESHOLD_LARGE {
-        let row_data: Vec<Vec<f64>> = (0..rows)
-            .into_par_iter()
-            .map(|i| (0..cols).map(|j| mat[(i, j)]).collect())
-            .collect();
-        let data: Vec<f64> = row_data.into_iter().flatten().collect();
-        Array2::from_shape_vec((rows, cols), data).unwrap_or_else(|_| {
-            let mut result = Array2::zeros((rows, cols));
-            for i in 0..rows {
-                for j in 0..cols {
-                    result[[i, j]] = mat[(i, j)];
-                }
+        data.par_chunks_mut(cols).enumerate().for_each(|(i, row)| {
+            for j in 0..cols {
+                row[j] = mat[(i, j)];
             }
-            result
-        })
+        });
     } else {
-        let mut result = Array2::zeros((rows, cols));
         for i in 0..rows {
             for j in 0..cols {
-                result[[i, j]] = mat[(i, j)];
+                data[i * cols + j] = mat[(i, j)];
             }
         }
-        result
     }
+
+    Array2::from_shape_vec((rows, cols), data)
+        .expect("shape and buffer length are consistent for Faer matrix conversion")
 }
 
 pub fn cholesky_solve(
@@ -116,6 +112,82 @@ pub fn matrix_inverse(matrix: &Array2<f64>) -> Option<Array2<f64>> {
     Some(faer_mat_to_ndarray(inv.as_ref()))
 }
 
+pub fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Vec<f64> {
+    if n == 0 {
+        return vec![];
+    }
+    if a.len() != n * n {
+        return vec![0.0; n * n];
+    }
+    if n == 1 {
+        return vec![if a[0].abs() > GAUSSIAN_ELIMINATION_TOL {
+            1.0 / a[0]
+        } else {
+            0.0
+        }];
+    }
+
+    if let Ok(arr) = Array2::from_shape_vec((n, n), a.to_vec())
+        && let Some(inv) = matrix_inverse(&arr)
+    {
+        return inv.iter().copied().collect();
+    }
+
+    let mut aug = vec![0.0; n * 2 * n];
+    let width = 2 * n;
+
+    for i in 0..n {
+        let row_offset = i * width;
+        for j in 0..n {
+            aug[row_offset + j] = a[i * n + j];
+        }
+        aug[row_offset + n + i] = 1.0;
+    }
+
+    for i in 0..n {
+        let mut max_row = i;
+        for k in (i + 1)..n {
+            if aug[k * width + i].abs() > aug[max_row * width + i].abs() {
+                max_row = k;
+            }
+        }
+
+        if max_row != i {
+            for j in 0..width {
+                aug.swap(i * width + j, max_row * width + j);
+            }
+        }
+
+        let pivot = aug[i * width + i];
+        if pivot.abs() < GAUSSIAN_ELIMINATION_TOL {
+            continue;
+        }
+
+        for j in 0..width {
+            aug[i * width + j] /= pivot;
+        }
+
+        for k in 0..n {
+            if k != i {
+                let factor = aug[k * width + i];
+                for j in 0..width {
+                    let pivot_val = aug[i * width + j];
+                    aug[k * width + j] -= factor * pivot_val;
+                }
+            }
+        }
+    }
+
+    let mut inv = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            inv[i * n + j] = aug[i * width + n + j];
+        }
+    }
+
+    inv
+}
+
 pub fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = mat.len();
     if n == 0 {
@@ -147,7 +219,7 @@ pub fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         }
         aug.swap(i, max_row);
 
-        if aug[i][i].abs() < crate::constants::GAUSSIAN_ELIMINATION_TOL {
+        if aug[i][i].abs() < GAUSSIAN_ELIMINATION_TOL {
             return None;
         }
 
@@ -159,9 +231,16 @@ pub fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         for k in 0..n {
             if k != i {
                 let factor = aug[k][i];
-                let aug_i_clone: Vec<f64> = aug[i].iter().take(2 * n).copied().collect();
-                for (j, aug_i_val) in aug_i_clone.iter().enumerate() {
-                    aug[k][j] -= factor * aug_i_val;
+                let (pivot_row, target_row) = if k < i {
+                    let (left, right) = aug.split_at_mut(i);
+                    (&right[0], &mut left[k])
+                } else {
+                    let (left, right) = aug.split_at_mut(k);
+                    (&left[i], &mut right[0])
+                };
+
+                for j in 0..(2 * n) {
+                    target_row[j] -= factor * pivot_row[j];
                 }
             }
         }

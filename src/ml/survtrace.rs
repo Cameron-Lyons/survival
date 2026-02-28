@@ -8,6 +8,7 @@ use burn::{
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::config_validation::{ensure_open_unit_interval, ensure_positive_usize};
 use super::utils::{
     compute_duration_bins, gelu_cpu, layer_norm_cpu, linear_forward, tensor_to_vec_f32,
 };
@@ -138,46 +139,18 @@ impl SurvTraceConfig {
         validation_fraction: f64,
         layer_norm_eps: f32,
     ) -> PyResult<Self> {
-        if hidden_size == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "hidden_size must be positive",
-            ));
-        }
-        if num_hidden_layers == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "num_hidden_layers must be positive",
-            ));
-        }
-        if num_attention_heads == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "num_attention_heads must be positive",
-            ));
-        }
+        ensure_positive_usize("hidden_size", hidden_size)?;
+        ensure_positive_usize("num_hidden_layers", num_hidden_layers)?;
+        ensure_positive_usize("num_attention_heads", num_attention_heads)?;
         if !hidden_size.is_multiple_of(num_attention_heads) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "hidden_size must be divisible by num_attention_heads",
             ));
         }
-        if num_durations == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "num_durations must be positive",
-            ));
-        }
-        if batch_size == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "batch_size must be positive",
-            ));
-        }
-        if n_epochs == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "n_epochs must be positive",
-            ));
-        }
-        if !(0.0..1.0).contains(&validation_fraction) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "validation_fraction must be in [0, 1)",
-            ));
-        }
+        ensure_positive_usize("num_durations", num_durations)?;
+        ensure_positive_usize("batch_size", batch_size)?;
+        ensure_positive_usize("n_epochs", n_epochs)?;
+        ensure_open_unit_interval("validation_fraction", validation_fraction)?;
 
         Ok(SurvTraceConfig {
             hidden_size,
@@ -866,7 +839,7 @@ fn fit_survtrace_inner(
     config: &SurvTraceConfig,
 ) -> SurvTrace {
     let device: <Backend as burn::prelude::Backend>::Device = Default::default();
-    let seed = config.seed.unwrap_or(42);
+    let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
 

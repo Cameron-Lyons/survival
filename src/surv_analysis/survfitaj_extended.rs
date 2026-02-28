@@ -483,7 +483,7 @@ pub fn survfitaj_extended(
             compute_aalen_variance(&state_probs, &transition_matrices, n_states)
         }
         VarianceEstimator::Bootstrap => {
-            let seed = config.seed.unwrap_or(42);
+            let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
             compute_bootstrap_variance(
                 &from_state,
                 &to_state,

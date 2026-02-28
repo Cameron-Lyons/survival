@@ -307,6 +307,7 @@ impl QuantileRegressionResult {
     }
 }
 
+#[cfg(test)]
 fn compute_quantile(values: &mut [f64], q: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -314,6 +315,15 @@ fn compute_quantile(values: &mut [f64], q: f64) -> f64 {
     values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let idx = (q * (values.len() - 1) as f64).round() as usize;
     values[idx.min(values.len() - 1)]
+}
+
+#[inline]
+fn quantile_index(len: usize, q: f64) -> usize {
+    if len == 0 {
+        0
+    } else {
+        ((q * (len - 1) as f64).round() as usize).min(len - 1)
+    }
 }
 
 #[pyfunction]
@@ -343,7 +353,7 @@ pub fn quantile_regression_intervals(
     let median_q = quantiles.get(1).copied().unwrap_or(0.5);
     let upper_q = quantiles.last().copied().unwrap_or(0.975);
 
-    let (lower_quantile, median, upper_quantile): QuantilePredictionBands = (0..n_obs)
+    let quantile_bands: Vec<(Vec<f64>, Vec<f64>, Vec<f64>)> = (0..n_obs)
         .into_par_iter()
         .map(|i| {
             let mut lower = vec![0.0; n_times];
@@ -352,29 +362,31 @@ pub fn quantile_regression_intervals(
 
             for t in 0..n_times {
                 let mut values: Vec<f64> = bootstrap_predictions.iter().map(|p| p[i][t]).collect();
-                lower[t] = compute_quantile(&mut values.clone(), lower_q);
-                med[t] = compute_quantile(&mut values.clone(), median_q);
-                upper[t] = compute_quantile(&mut values, upper_q);
+                values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let lower_idx = quantile_index(values.len(), lower_q);
+                let median_idx = quantile_index(values.len(), median_q);
+                let upper_idx = quantile_index(values.len(), upper_q);
+                lower[t] = values[lower_idx];
+                med[t] = values[median_idx];
+                upper[t] = values[upper_idx];
             }
 
             (lower, med, upper)
         })
-        .fold(
-            || (Vec::new(), Vec::new(), Vec::new()),
+        .collect();
+
+    let (lower_quantile, median, upper_quantile): QuantilePredictionBands =
+        quantile_bands.into_iter().fold(
+            (
+                Vec::with_capacity(n_obs),
+                Vec::with_capacity(n_obs),
+                Vec::with_capacity(n_obs),
+            ),
             |mut acc, (l, m, u)| {
                 acc.0.push(l);
                 acc.1.push(m);
                 acc.2.push(u);
                 acc
-            },
-        )
-        .reduce(
-            || (Vec::new(), Vec::new(), Vec::new()),
-            |mut a, b| {
-                a.0.extend(b.0);
-                a.1.extend(b.1);
-                a.2.extend(b.2);
-                a
             },
         );
 
@@ -1016,20 +1028,32 @@ fn estimate_cox_coefficients(time: &[f64], event: &[i32], covariates: &[Vec<f64>
     beta
 }
 
-fn compute_kernel_weights(target: &[f64], reference: &[Vec<f64>]) -> Vec<f64> {
+#[inline]
+fn compute_kernel_weight(target: &[f64], reference: &[f64]) -> f64 {
     let bandwidth = 1.0;
-
-    reference
+    let dist_sq: f64 = target
         .iter()
-        .map(|ref_cov| {
-            let dist_sq: f64 = target
-                .iter()
-                .zip(ref_cov.iter())
-                .map(|(t, r)| (t - r).powi(2))
-                .sum();
-            (-dist_sq / (2.0 * bandwidth * bandwidth)).exp()
-        })
-        .collect()
+        .zip(reference.iter())
+        .map(|(t, r)| (t - r).powi(2))
+        .sum();
+    (-dist_sq / (2.0 * bandwidth * bandwidth)).exp()
+}
+
+fn kernel_weighted_prediction(target: &[f64], reference: &[Vec<f64>], predictions: &[f64]) -> f64 {
+    let mut weighted_sum = 0.0;
+    let mut weight_sum = 0.0;
+
+    for (pred, ref_cov) in predictions.iter().zip(reference.iter()) {
+        let weight = compute_kernel_weight(target, ref_cov);
+        weighted_sum += pred * weight;
+        weight_sum += weight;
+    }
+
+    if weight_sum > 0.0 {
+        weighted_sum / weight_sum
+    } else {
+        predictions.first().copied().unwrap_or(0.0)
+    }
 }
 
 #[pyfunction]
@@ -1056,42 +1080,30 @@ pub fn jackknife_plus_survival(
     let full_predictions = simple_cox_predictions(&time, &event, &covariates);
 
     let mut loo_residuals = vec![0.0; n];
+    let p = covariates.first().map_or(0, |row| row.len());
+
+    let mut loo_time = vec![0.0; n - 1];
+    let mut loo_event = vec![0; n - 1];
+    let mut loo_cov = vec![vec![0.0; p]; n - 1];
 
     for i in 0..n {
-        let loo_time: Vec<f64> = time
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| *j != i)
-            .map(|(_, t)| *t)
-            .collect();
-        let loo_event: Vec<i32> = event
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| *j != i)
-            .map(|(_, e)| *e)
-            .collect();
-        let loo_cov: Vec<Vec<f64>> = covariates
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| *j != i)
-            .map(|(_, c)| c.clone())
-            .collect();
+        let mut dst = 0;
+        for src in 0..n {
+            if src == i {
+                continue;
+            }
+            loo_time[dst] = time[src];
+            loo_event[dst] = event[src];
+            if p > 0 {
+                loo_cov[dst].copy_from_slice(&covariates[src]);
+            }
+            dst += 1;
+        }
 
         let loo_predictions = simple_cox_predictions(&loo_time, &loo_event, &loo_cov);
 
         let pred_i = if !loo_predictions.is_empty() {
-            let weights = compute_kernel_weights(&covariates[i], &loo_cov);
-            let weighted_sum: f64 = loo_predictions
-                .iter()
-                .zip(weights.iter())
-                .map(|(p, w)| p * w)
-                .sum();
-            let weight_sum: f64 = weights.iter().sum();
-            if weight_sum > 0.0 {
-                weighted_sum / weight_sum
-            } else {
-                loo_predictions[0]
-            }
+            kernel_weighted_prediction(&covariates[i], &loo_cov, &loo_predictions)
         } else {
             full_predictions[i]
         };
