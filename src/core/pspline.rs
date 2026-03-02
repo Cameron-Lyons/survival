@@ -1,3 +1,4 @@
+use crate::constants::STRICT_EPSILON;
 use crate::utilities::matrix::lu_solve;
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyValueError;
@@ -84,7 +85,7 @@ impl PSplineBuilder {
             x,
             df: 4,
             theta: 1.0,
-            eps: 1e-5,
+            eps: STRICT_EPSILON,
             method: "GCV".to_string(),
             boundary_knots: None,
             intercept: true,

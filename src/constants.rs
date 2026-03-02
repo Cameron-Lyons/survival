@@ -50,15 +50,6 @@ pub const EXP_CLAMP_MAX: f64 = 100.0;
 
 pub const CONVERGENCE_FLAG: i32 = 1000;
 
-#[cfg(test)]
-pub const TEST_STRICT_TOL: f64 = 1e-4;
-
-#[cfg(test)]
-pub const TEST_STANDARD_TOL: f64 = 1e-3;
-
-#[cfg(test)]
-pub const TEST_LOOSE_TOL: f64 = 1e-2;
-
 pub const DEFAULT_CONFORMAL_COVERAGE: f64 = 0.9;
 pub const DEFAULT_IPCW_TRIM: f64 = 0.01;
 pub const IPCW_SURVIVAL_FLOOR: f64 = DEFAULT_IPCW_TRIM;
@@ -80,14 +71,6 @@ pub const CONCORDANCE_COUNT_SIZE_EXTENDED: usize = 6;
 pub const MAX_HALVING_ITERATIONS: usize = 10;
 pub const STEP_HALVE_FACTOR: f64 = 0.5;
 pub const STEP_DOUBLE_FACTOR: f64 = 2.0;
-
-pub const HARTLEY_A1: f64 = 0.2316419;
-pub const HARTLEY_NORM: f64 = 0.3989423;
-pub const HARTLEY_B1: f64 = 0.3193815;
-pub const HARTLEY_B2: f64 = -0.3565638;
-pub const HARTLEY_B3: f64 = 1.781478;
-pub const HARTLEY_B4: f64 = -1.821256;
-pub const HARTLEY_B5: f64 = 1.330274;
 
 pub const ROYSTON_KAPPA_FACTOR: f64 = 8.0;
 pub const ROYSTON_VARIANCE_FACTOR: f64 = 6.0;
