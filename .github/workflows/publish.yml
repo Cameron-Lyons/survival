@@ -146,7 +146,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -186,7 +186,7 @@ jobs:
             echo "Version ${{ steps.version.outputs.version }} not found on PyPI, will publish"
           fi
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         if: steps.check.outputs.exists == 'false'
         with:
           path: dist
