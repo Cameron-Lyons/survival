@@ -1,3 +1,4 @@
+use crate::utilities::statistical::concordance_index_with_horizon;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -31,39 +32,7 @@ impl FairnessMetrics {
 }
 
 fn compute_c_index(risk: &[f64], time: &[f64], event: &[i32]) -> f64 {
-    let n = risk.len();
-    if n < 2 {
-        return 0.5;
-    }
-
-    let mut concordant = 0.0;
-    let mut comparable = 0.0;
-
-    for i in 0..n {
-        for j in (i + 1)..n {
-            if event[i] == 1 && time[i] < time[j] {
-                comparable += 1.0;
-                if risk[i] > risk[j] {
-                    concordant += 1.0;
-                } else if (risk[i] - risk[j]).abs() < 1e-10 {
-                    concordant += 0.5;
-                }
-            } else if event[j] == 1 && time[j] < time[i] {
-                comparable += 1.0;
-                if risk[j] > risk[i] {
-                    concordant += 1.0;
-                } else if (risk[i] - risk[j]).abs() < 1e-10 {
-                    concordant += 0.5;
-                }
-            }
-        }
-    }
-
-    if comparable > 0.0 {
-        concordant / comparable
-    } else {
-        0.5
-    }
+    concordance_index_with_horizon(risk, time, event, None)
 }
 
 #[pyfunction]

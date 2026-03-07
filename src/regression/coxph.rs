@@ -49,6 +49,84 @@ pub struct CoxPHModel {
     #[pyo3(get, set)]
     pub censoring: Vec<u8>,
     covariates: Array2<f64>,
+    covariates_flat: Vec<f64>,
+    n_covariates: usize,
+    baseline_hazard_lookup_times: Vec<f64>,
+    baseline_hazard_lookup_values: Vec<f64>,
+}
+
+impl CoxPHModel {
+    fn invalidate_fit_cache(&mut self) {
+        self.risk_scores.clear();
+        self.baseline_hazard.clear();
+        self.baseline_hazard_lookup_times.clear();
+        self.baseline_hazard_lookup_values.clear();
+    }
+
+    fn rebuild_covariates_array(&mut self) -> PyResult<()> {
+        let nrows = self.event_times.len();
+        if self.censoring.len() != nrows {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "event_times and censoring lengths differ: {} vs {}",
+                nrows,
+                self.censoring.len()
+            )));
+        }
+
+        let expected_len = nrows
+            .checked_mul(self.n_covariates)
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("covariate shape overflow"))?;
+
+        if self.covariates_flat.len() != expected_len {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "covariate data mismatch: expected {} values for shape ({}, {}), got {}",
+                expected_len,
+                nrows,
+                self.n_covariates,
+                self.covariates_flat.len()
+            )));
+        }
+
+        self.covariates =
+            Array2::from_shape_vec((nrows, self.n_covariates), self.covariates_flat.clone())
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "failed to materialize covariate matrix: {}",
+                        e
+                    ))
+                })?;
+        Ok(())
+    }
+
+    #[inline]
+    fn baseline_cumulative_hazard_at(&self, time: f64) -> f64 {
+        if self.baseline_hazard_lookup_times.is_empty() {
+            return 0.0;
+        }
+        let pos = self
+            .baseline_hazard_lookup_times
+            .partition_point(|&t| t <= time);
+        if pos == 0 {
+            0.0
+        } else {
+            self.baseline_hazard_lookup_values[pos - 1]
+        }
+    }
+
+    fn compute_exp_risk_scores(&self, covariates: &[Vec<f64>]) -> Vec<f64> {
+        let ncoef = self.coefficients.nrows();
+        covariates
+            .par_iter()
+            .map(|row| {
+                let mut risk = 0.0;
+                for col_idx in 0..ncoef {
+                    let cov = row.get(col_idx).copied().unwrap_or(0.0);
+                    risk += self.coefficients[[col_idx, 0]] * cov;
+                }
+                risk.exp()
+            })
+            .collect()
+    }
 }
 impl Default for CoxPHModel {
     fn default() -> Self {
@@ -60,12 +138,16 @@ impl CoxPHModel {
     #[new]
     pub fn new() -> Self {
         Self {
-            coefficients: Array2::<f64>::zeros((1, 1)),
+            coefficients: Array2::<f64>::zeros((0, 1)),
             baseline_hazard: Vec::new(),
             risk_scores: Vec::new(),
             event_times: Vec::new(),
             censoring: Vec::new(),
-            covariates: Array2::<f64>::zeros((1, 1)),
+            covariates: Array2::<f64>::zeros((0, 0)),
+            covariates_flat: Vec::new(),
+            n_covariates: 0,
+            baseline_hazard_lookup_times: Vec::new(),
+            baseline_hazard_lookup_values: Vec::new(),
         }
     }
     #[pyo3(signature = (covariates, event_times, censoring))]
@@ -77,12 +159,14 @@ impl CoxPHModel {
     ) -> Self {
         let nrows = covariates.len();
         let ncols = if nrows > 0 { covariates[0].len() } else { 0 };
-        let mut cov_array = Array2::<f64>::zeros((nrows, ncols));
-        for (i, row) in covariates.iter().enumerate() {
-            for (j, &val) in row.iter().enumerate() {
-                cov_array[[i, j]] = val;
+        let mut covariates_flat = Vec::with_capacity(nrows * ncols);
+        for row in &covariates {
+            for j in 0..ncols {
+                covariates_flat.push(row.get(j).copied().unwrap_or(0.0));
             }
         }
+        let cov_array = Array2::from_shape_vec((nrows, ncols), covariates_flat.clone())
+            .expect("covariate shape and flat data length are consistent");
         Self {
             coefficients: Array2::<f64>::zeros((ncols, 1)),
             baseline_hazard: Vec::new(),
@@ -90,41 +174,39 @@ impl CoxPHModel {
             event_times,
             censoring,
             covariates: cov_array,
+            covariates_flat,
+            n_covariates: ncols,
+            baseline_hazard_lookup_times: Vec::new(),
+            baseline_hazard_lookup_values: Vec::new(),
         }
     }
     pub fn add_subject(&mut self, subject: &Subject) -> PyResult<()> {
-        let n = self.event_times.len();
-        let ncols = self.covariates.ncols();
-        if ncols != subject.covariates.len() {
+        if self.n_covariates == 0 {
+            self.n_covariates = subject.covariates.len();
+        }
+        if self.n_covariates != subject.covariates.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "covariate dimension mismatch: expected {}, got {}",
-                ncols,
+                self.n_covariates,
                 subject.covariates.len()
             )));
         }
-        let mut new_covariates = Array2::<f64>::zeros((n + 1, ncols));
-        for row_idx in 0..n {
-            for col_idx in 0..ncols {
-                new_covariates[[row_idx, col_idx]] = self.covariates[[row_idx, col_idx]];
-            }
-        }
-        for col_idx in 0..ncols {
-            new_covariates[[n, col_idx]] = subject.covariates[col_idx];
-        }
-        self.covariates = new_covariates;
+        self.covariates_flat.extend_from_slice(&subject.covariates);
         self.event_times.push(0.0);
         self.censoring.push(if subject.is_case { 1 } else { 0 });
+        self.invalidate_fit_cache();
         Ok(())
     }
     #[pyo3(signature = (n_iters = 20))]
     pub fn fit(&mut self, n_iters: u16) -> PyResult<()> {
-        if self.event_times.is_empty() || self.covariates.nrows() == 0 {
+        if self.event_times.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "cannot fit model: no data provided",
             ));
         }
+        self.rebuild_covariates_array()?;
         let n = self.event_times.len();
-        let nvar = self.covariates.ncols();
+        let nvar = self.n_covariates;
         if nvar == 0 {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "cannot fit model: no covariates provided",
@@ -175,6 +257,8 @@ impl CoxPHModel {
         let n = self.event_times.len();
         if n == 0 {
             self.baseline_hazard = Vec::new();
+            self.baseline_hazard_lookup_times.clear();
+            self.baseline_hazard_lookup_values.clear();
             return;
         }
         let mut indices: Vec<usize> = (0..n).collect();
@@ -223,13 +307,14 @@ impl CoxPHModel {
         }
         if baseline_hazard.is_empty() {
             self.baseline_hazard = vec![0.0; n];
+            self.baseline_hazard_lookup_times.clear();
+            self.baseline_hazard_lookup_values.clear();
         } else {
+            self.baseline_hazard_lookup_times = unique_times;
+            self.baseline_hazard_lookup_values = baseline_hazard;
             let mut full_baseline = vec![0.0; n];
             for (i, &t) in self.event_times.iter().enumerate() {
-                let pos = unique_times.partition_point(|&ut| ut <= t);
-                if pos > 0 {
-                    full_baseline[i] = baseline_hazard[pos - 1];
-                }
+                full_baseline[i] = self.baseline_cumulative_hazard_at(t);
             }
             self.baseline_hazard = full_baseline;
         }
@@ -272,14 +357,7 @@ impl CoxPHModel {
         if self.baseline_hazard.is_empty() || self.risk_scores.is_empty() {
             return 0.5;
         }
-        let baseline_haz = self
-            .baseline_hazard
-            .iter()
-            .zip(&self.event_times)
-            .filter(|&(_, &et)| et <= time)
-            .map(|(h, _)| *h)
-            .next_back()
-            .unwrap_or(0.0);
+        let baseline_haz = self.baseline_cumulative_hazard_at(time);
         let avg_risk = if !self.risk_scores.is_empty() {
             self.risk_scores.iter().sum::<f64>() / self.risk_scores.len() as f64
         } else {
@@ -292,40 +370,16 @@ impl CoxPHModel {
         covariates: Vec<Vec<f64>>,
         time_points: Option<Vec<f64>>,
     ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
-        let nrows = covariates.len();
-        let ncols = if nrows > 0 { covariates[0].len() } else { 0 };
-        let mut cov_array = Array2::<f64>::zeros((nrows, ncols));
-        for (row_idx, row) in covariates.iter().enumerate() {
-            for (col_idx, &val) in row.iter().enumerate() {
-                cov_array[[row_idx, col_idx]] = val;
-            }
-        }
         let times = time_points.unwrap_or_else(|| {
             let mut t = self.event_times.clone();
             t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             t.dedup();
             t
         });
-        let risk_scores: Vec<f64> = (0..nrows)
-            .into_par_iter()
-            .map(|row_idx| {
-                let mut risk = 0.0;
-                for col_idx in 0..ncols {
-                    risk += self.coefficients[[col_idx, 0]] * cov_array[[row_idx, col_idx]];
-                }
-                risk.exp()
-            })
-            .collect();
+        let risk_scores = self.compute_exp_risk_scores(&covariates);
         let baseline_hazards: Vec<f64> = times
             .iter()
-            .map(|&t| {
-                self.baseline_hazard
-                    .iter()
-                    .zip(&self.event_times)
-                    .filter(|&(_, et)| *et <= t)
-                    .map(|(h, _)| *h)
-                    .sum::<f64>()
-            })
+            .map(|&t| self.baseline_cumulative_hazard_at(t))
             .collect();
         let survival_curves: Vec<Vec<f64>> = risk_scores
             .par_iter()
@@ -475,37 +529,13 @@ impl CoxPHModel {
         -2.0 * self.log_likelihood() + k * n.ln()
     }
     pub fn cumulative_hazard(&self, covariates: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
-        let nrows = covariates.len();
-        let ncols = if nrows > 0 { covariates[0].len() } else { 0 };
-        let mut cov_array = Array2::<f64>::zeros((nrows, ncols));
-        for (row_idx, row) in covariates.iter().enumerate() {
-            for (col_idx, &val) in row.iter().enumerate() {
-                cov_array[[row_idx, col_idx]] = val;
-            }
-        }
         let mut unique_times: Vec<f64> = self.event_times.clone();
         unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         unique_times.dedup();
-        let risk_scores: Vec<f64> = (0..nrows)
-            .into_par_iter()
-            .map(|row_idx| {
-                let mut risk = 0.0;
-                for col_idx in 0..ncols {
-                    risk += self.coefficients[[col_idx, 0]] * cov_array[[row_idx, col_idx]];
-                }
-                risk.exp()
-            })
-            .collect();
+        let risk_scores = self.compute_exp_risk_scores(&covariates);
         let baseline_hazards: Vec<f64> = unique_times
             .iter()
-            .map(|&t| {
-                self.baseline_hazard
-                    .iter()
-                    .zip(&self.event_times)
-                    .filter(|&(_, et)| *et <= t)
-                    .map(|(h, _)| *h)
-                    .sum::<f64>()
-            })
+            .map(|&t| self.baseline_cumulative_hazard_at(t))
             .collect();
         let cumulative_hazards: Vec<Vec<f64>> = risk_scores
             .par_iter()
@@ -773,5 +803,42 @@ mod tests {
         let model = CoxPHModel::new();
         assert_eq!(model.n_observations(), 0);
         assert_eq!(model.n_events(), 0);
+    }
+
+    #[test]
+    fn test_add_subject_tracks_covariate_buffer() {
+        let mut model = CoxPHModel::new();
+        let s1 = Subject::new(1, vec![1.0, 2.0], true, false, 0);
+        let s2 = Subject::new(2, vec![3.0, 4.0], false, false, 0);
+        let bad = Subject::new(3, vec![5.0], true, false, 0);
+
+        model.add_subject(&s1).expect("first subject should append");
+        model
+            .add_subject(&s2)
+            .expect("second subject should append");
+
+        assert_eq!(model.n_observations(), 2);
+        assert_eq!(model.n_covariates, 2);
+        assert_eq!(model.covariates_flat, vec![1.0, 2.0, 3.0, 4.0]);
+        assert!(model.add_subject(&bad).is_err());
+    }
+
+    #[test]
+    fn test_cumulative_hazard_uses_cached_baseline_lookup() {
+        let mut model = CoxPHModel::new();
+        model.coefficients =
+            Array2::from_shape_vec((1, 1), vec![0.0]).expect("coefficient shape is valid");
+        model.event_times = vec![1.0, 2.0, 3.0];
+        model.censoring = vec![1, 1, 1];
+        model.baseline_hazard = vec![0.1, 0.2, 0.3];
+        model.baseline_hazard_lookup_times = vec![1.0, 2.0, 3.0];
+        model.baseline_hazard_lookup_values = vec![0.1, 0.2, 0.3];
+
+        let (times, hazards) = model.cumulative_hazard(vec![vec![0.0]]);
+        assert_eq!(times, vec![1.0, 2.0, 3.0]);
+        assert_eq!(hazards.len(), 1);
+        assert!((hazards[0][0] - 0.1).abs() < 1e-12);
+        assert!((hazards[0][1] - 0.2).abs() < 1e-12);
+        assert!((hazards[0][2] - 0.3).abs() < 1e-12);
     }
 }

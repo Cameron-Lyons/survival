@@ -62,7 +62,7 @@ pub struct ConditionalLogisticRegression {
 #[pymethods]
 impl ConditionalLogisticRegression {
     #[new]
-    #[pyo3(signature = (data, max_iter=100, tol=1e-6))]
+    #[pyo3(signature = (data, max_iter=100, tol=crate::constants::CLOGIT_TOLERANCE))]
     pub fn new(data: ClogitDataSet, max_iter: u32, tol: f64) -> ConditionalLogisticRegression {
         ConditionalLogisticRegression {
             data,

@@ -1,8 +1,4 @@
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(__file__))
-from helpers import setup_survival_import
+from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 
