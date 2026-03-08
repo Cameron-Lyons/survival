@@ -1,10 +1,14 @@
+import importlib
+
 import numpy as np
 import pytest
-from survival.sklearn_compat import AFTEstimator, StreamingAFTEstimator
 
 from .helpers import setup_survival_import
 
 _surv = setup_survival_import()
+sklearn_compat = importlib.import_module("survival.sklearn_compat")
+AFTEstimator = sklearn_compat.AFTEstimator
+StreamingAFTEstimator = sklearn_compat.StreamingAFTEstimator
 
 
 class TestSurvreg:
