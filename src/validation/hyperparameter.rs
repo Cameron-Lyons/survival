@@ -1,3 +1,5 @@
+use crate::constants::{DEFAULT_CONCORDANCE, DIVISION_FLOOR};
+use crate::utilities::statistical::concordance_index_with_horizon;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -115,7 +117,7 @@ fn compute_cv_c_index(
             .map(|&r| (r - mean_risk).powi(2))
             .sum::<f64>()
             / train_risk.len() as f64;
-        var.sqrt().max(1e-10)
+        var.sqrt().max(DIVISION_FLOOR)
     };
 
     let test_risk: Vec<f64> = test_idx
@@ -125,39 +127,7 @@ fn compute_cv_c_index(
     let test_time: Vec<f64> = test_idx.iter().map(|&i| time[i]).collect();
     let test_event: Vec<i32> = test_idx.iter().map(|&i| event[i]).collect();
 
-    let n = test_risk.len();
-    if n < 2 {
-        return 0.5;
-    }
-
-    let mut concordant = 0.0;
-    let mut comparable = 0.0;
-
-    for i in 0..n {
-        for j in (i + 1)..n {
-            if test_event[i] == 1 && test_time[i] < test_time[j] {
-                comparable += 1.0;
-                if test_risk[i] > test_risk[j] {
-                    concordant += 1.0;
-                } else if (test_risk[i] - test_risk[j]).abs() < 1e-10 {
-                    concordant += 0.5;
-                }
-            } else if test_event[j] == 1 && test_time[j] < test_time[i] {
-                comparable += 1.0;
-                if test_risk[j] > test_risk[i] {
-                    concordant += 1.0;
-                } else if (test_risk[i] - test_risk[j]).abs() < 1e-10 {
-                    concordant += 0.5;
-                }
-            }
-        }
-    }
-
-    if comparable > 0.0 {
-        concordant / comparable
-    } else {
-        0.5
-    }
+    concordance_index_with_horizon(&test_risk, &test_time, &test_event, None)
 }
 
 fn create_cv_folds(n: usize, n_folds: usize, rng: &mut fastrand::Rng) -> Vec<Vec<usize>> {
@@ -375,37 +345,10 @@ pub fn benchmark_models(
         .par_iter()
         .map(|predictions| {
             if predictions.len() != n {
-                return (0.5, 1.0);
+                return (DEFAULT_CONCORDANCE, 1.0);
             }
 
-            let mut concordant = 0.0;
-            let mut comparable = 0.0;
-
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    if event[i] == 1 && time[i] < time[j] {
-                        comparable += 1.0;
-                        if predictions[i] > predictions[j] {
-                            concordant += 1.0;
-                        } else if (predictions[i] - predictions[j]).abs() < 1e-10 {
-                            concordant += 0.5;
-                        }
-                    } else if event[j] == 1 && time[j] < time[i] {
-                        comparable += 1.0;
-                        if predictions[j] > predictions[i] {
-                            concordant += 1.0;
-                        } else if (predictions[i] - predictions[j]).abs() < 1e-10 {
-                            concordant += 0.5;
-                        }
-                    }
-                }
-            }
-
-            let c_index = if comparable > 0.0 {
-                concordant / comparable
-            } else {
-                0.5
-            };
+            let c_index = concordance_index_with_horizon(predictions, &time, &event, None);
 
             let brier: f64 = predictions
                 .iter()

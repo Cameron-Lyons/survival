@@ -117,3 +117,47 @@ fn finegray_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FineGrayOutput>()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn test_finegray_matches_legacy_extension_weights() {
+        let ctime = vec![3.0, 4.0, 6.0, 8.0, 9.0];
+        let cprob = vec![
+            11.0 / 12.0,
+            (11.0 / 12.0) * (8.0 / 10.0),
+            (11.0 / 12.0) * (8.0 / 10.0) * (5.0 / 6.0),
+            (11.0 / 12.0) * (8.0 / 10.0) * (5.0 / 6.0) * (3.0 / 4.0),
+            (11.0 / 12.0) * (8.0 / 10.0) * (5.0 / 6.0) * (3.0 / 4.0) * (2.0 / 3.0),
+        ];
+
+        let result = compute_finegray(
+            &[0.0, 0.0],
+            &[4.0, 2.0],
+            &ctime,
+            &cprob,
+            &[true, false],
+            &[true, true, true, true, true],
+        );
+
+        assert_eq!(result.row, vec![1, 1, 1, 1, 2]);
+        assert_eq!(result.start, vec![0.0, 4.0, 6.0, 8.0, 0.0]);
+        assert_eq!(result.end, vec![4.0, 6.0, 8.0, 9.0, 2.0]);
+        assert_eq!(result.add, vec![0, 1, 2, 3, 0]);
+
+        let expected_wt = [1.0, 5.0 / 6.0, 5.0 / 8.0, 5.0 / 12.0, 1.0];
+        assert_eq!(result.wt.len(), expected_wt.len());
+        for (&actual, &expected) in result.wt.iter().zip(expected_wt.iter()) {
+            assert_close(actual, expected, 1e-12);
+        }
+    }
+}

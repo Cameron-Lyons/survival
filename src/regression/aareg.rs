@@ -475,3 +475,90 @@ fn post_process_results(
     }
     Ok(regression_result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legacy_options() -> AaregOptions {
+        AaregOptions {
+            formula: "time ~ x".to_string(),
+            data: vec![
+                vec![4.0, 0.0],
+                vec![3.0, 2.0],
+                vec![1.0, 1.0],
+                vec![1.0, 1.0],
+                vec![2.0, 1.0],
+                vec![2.0, 0.0],
+                vec![3.0, 0.0],
+            ],
+            variable_names: vec!["time".to_string(), "x".to_string()],
+            weights: None,
+            subset: None,
+            na_action: None,
+            qrtol: 1e-7,
+            nmin: None,
+            dfbeta: false,
+            taper: 1.0,
+            test: vec![],
+            cluster: None,
+            model: false,
+            x: false,
+            y: false,
+            max_iter: 100,
+        }
+    }
+
+    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn test_aareg_legacy_reference_fit() {
+        let result = aareg(legacy_options()).expect("legacy aareg fit should succeed");
+
+        assert_eq!(result.coefficients.len(), 2);
+        assert_close(result.coefficients[0], 3.0, 1e-12);
+        assert_close(result.coefficients[1], 0.0, 1e-12);
+        assert_close(result.goodness_of_fit, -0.4807692307692306, 1e-12);
+
+        let residuals = result
+            .residuals
+            .as_ref()
+            .expect("legacy fit should expose residuals");
+        let expected_residuals = [1.0, 0.0, -2.0, -2.0, -1.0, -1.0, 0.0];
+        assert_eq!(residuals.len(), expected_residuals.len());
+        for (&actual, &expected) in residuals.iter().zip(expected_residuals.iter()) {
+            assert_close(actual, expected, 1e-12);
+        }
+
+        let fit_details = result
+            .fit_details
+            .as_ref()
+            .expect("legacy fit should expose fit details");
+        assert_eq!(fit_details.iterations, 3);
+        assert!(fit_details.converged);
+        assert_eq!(fit_details.warnings.len(), 1);
+        assert!(fit_details.warnings[0].contains("time 4.000"));
+    }
+
+    #[test]
+    fn test_aareg_legacy_dfbeta_flag_populates_diagnostics() {
+        let mut options = legacy_options();
+        options.dfbeta = true;
+
+        let result = aareg(options).expect("legacy aareg dfbeta fit should succeed");
+        let diagnostics = result
+            .diagnostics
+            .as_ref()
+            .expect("diagnostics should be present");
+
+        assert_eq!(
+            diagnostics.dfbetas,
+            Some(vec![0.0; result.coefficients.len()])
+        );
+    }
+}

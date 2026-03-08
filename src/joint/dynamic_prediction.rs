@@ -1,4 +1,4 @@
-use crate::utilities::statistical::sample_normal;
+use crate::utilities::statistical::{concordance_index_with_horizon, sample_normal};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -292,37 +292,8 @@ pub fn dynamic_auc(
         })
         .collect();
 
-    let mut concordant = 0.0;
-    let mut comparable = 0.0;
-
-    for i in 0..n_subjects {
-        for j in (i + 1)..n_subjects {
-            if event_status[i] == 1 && event_time[i] <= horizon && event_time[j] > event_time[i] {
-                comparable += 1.0;
-                if risk_scores[i] > risk_scores[j] {
-                    concordant += 1.0;
-                } else if (risk_scores[i] - risk_scores[j]).abs() < 1e-10 {
-                    concordant += 0.5;
-                }
-            } else if event_status[j] == 1
-                && event_time[j] <= horizon
-                && event_time[i] > event_time[j]
-            {
-                comparable += 1.0;
-                if risk_scores[j] > risk_scores[i] {
-                    concordant += 1.0;
-                } else if (risk_scores[i] - risk_scores[j]).abs() < 1e-10 {
-                    concordant += 0.5;
-                }
-            }
-        }
-    }
-
-    let auc = if comparable > 0.0 {
-        concordant / comparable
-    } else {
-        0.5
-    };
+    let auc =
+        concordance_index_with_horizon(&risk_scores, &event_time, &event_status, Some(horizon));
 
     Ok(auc)
 }
@@ -505,34 +476,7 @@ fn compute_concordance(
         })
         .collect();
 
-    let mut concordant = 0.0;
-    let mut comparable = 0.0;
-
-    for i in 0..n {
-        for j in (i + 1)..n {
-            if status[i] == 1 && time[i] < time[j] {
-                comparable += 1.0;
-                if risk_scores[i] > risk_scores[j] {
-                    concordant += 1.0;
-                } else if (risk_scores[i] - risk_scores[j]).abs() < 1e-10 {
-                    concordant += 0.5;
-                }
-            } else if status[j] == 1 && time[j] < time[i] {
-                comparable += 1.0;
-                if risk_scores[j] > risk_scores[i] {
-                    concordant += 1.0;
-                } else if (risk_scores[i] - risk_scores[j]).abs() < 1e-10 {
-                    concordant += 0.5;
-                }
-            }
-        }
-    }
-
-    if comparable > 0.0 {
-        concordant / comparable
-    } else {
-        0.5
-    }
+    concordance_index_with_horizon(&risk_scores, time, status, None)
 }
 
 #[derive(Debug, Clone)]

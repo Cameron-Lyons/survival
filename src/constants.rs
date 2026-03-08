@@ -50,15 +50,6 @@ pub const EXP_CLAMP_MAX: f64 = 100.0;
 
 pub const CONVERGENCE_FLAG: i32 = 1000;
 
-#[cfg(test)]
-pub const TEST_STRICT_TOL: f64 = 1e-4;
-
-#[cfg(test)]
-pub const TEST_STANDARD_TOL: f64 = 1e-3;
-
-#[cfg(test)]
-pub const TEST_LOOSE_TOL: f64 = 1e-2;
-
 pub const DEFAULT_CONFORMAL_COVERAGE: f64 = 0.9;
 pub const DEFAULT_IPCW_TRIM: f64 = 0.01;
 pub const IPCW_SURVIVAL_FLOOR: f64 = DEFAULT_IPCW_TRIM;

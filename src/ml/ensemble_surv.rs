@@ -1,4 +1,4 @@
-use crate::constants::{LCG64_INCREMENT, LCG64_MULTIPLIER};
+use crate::utilities::statistical::lcg64_shuffle_with_state;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -52,13 +52,7 @@ impl SuperLearnerConfig {
 fn create_cv_folds(n: usize, n_folds: usize, seed: u64) -> Vec<Vec<usize>> {
     let mut indices: Vec<usize> = (0..n).collect();
     let mut rng_state = seed;
-    for i in (1..n).rev() {
-        rng_state = rng_state
-            .wrapping_mul(LCG64_MULTIPLIER)
-            .wrapping_add(LCG64_INCREMENT);
-        let j = (rng_state as usize) % (i + 1);
-        indices.swap(i, j);
-    }
+    lcg64_shuffle_with_state(&mut indices, &mut rng_state);
 
     let fold_size = n / n_folds;
     let mut folds = Vec::with_capacity(n_folds);
@@ -662,13 +656,7 @@ pub fn componentwise_boosting(
         let sample_indices: Vec<usize> = if config.subsample_ratio < 1.0 {
             let sample_size = (n as f64 * config.subsample_ratio).ceil() as usize;
             let mut indices: Vec<usize> = (0..n).collect();
-            for i in (1..n).rev() {
-                rng_state = rng_state
-                    .wrapping_mul(LCG64_MULTIPLIER)
-                    .wrapping_add(LCG64_INCREMENT);
-                let j = (rng_state as usize) % (i + 1);
-                indices.swap(i, j);
-            }
+            lcg64_shuffle_with_state(&mut indices, &mut rng_state);
             indices.truncate(sample_size);
             indices
         } else {

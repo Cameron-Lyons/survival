@@ -397,7 +397,6 @@ class LifeTableResult:
     se_survival: list[float]
 
 def aareg(options: AaregOptions) -> dict[str, Any]: ...
-
 def survfitkm(
     time: list[float],
     status: list[float],
@@ -407,7 +406,6 @@ def survfitkm(
     reverse: bool | None = None,
     computation_type: int | None = None,
 ) -> SurvFitKMOutput: ...
-
 def survreg(
     time: list[float],
     status: list[float],
@@ -421,7 +419,6 @@ def survreg(
     eps: float | None = None,
     tol_chol: float | None = None,
 ) -> SurvivalFit: ...
-
 def survdiff2(
     time: list[float],
     status: list[int],
@@ -429,7 +426,6 @@ def survdiff2(
     strata: list[int] | None = None,
     rho: float | None = None,
 ) -> SurvDiffResult: ...
-
 def coxmart(
     time: list[float],
     status: list[int],
@@ -438,7 +434,6 @@ def coxmart(
     strata: list[int] | None = None,
     method: int | None = None,
 ) -> list[float]: ...
-
 def finegray(
     tstart: list[float],
     tstop: list[float],
@@ -447,7 +442,6 @@ def finegray(
     extend: list[bool],
     keep: list[bool],
 ) -> FineGrayOutput: ...
-
 def perform_cox_regression_frailty(
     time: list[float],
     event: list[int],
@@ -459,7 +453,6 @@ def perform_cox_regression_frailty(
     max_iter: int | None = None,
     eps: float | None = None,
 ) -> dict[str, Any]: ...
-
 def perform_pyears_calculation(
     n: int,
     ny: int,
@@ -478,7 +471,6 @@ def perform_pyears_calculation(
     odims: list[int],
     ocut: list[float],
 ) -> dict[str, Any]: ...
-
 def perform_concordance1_calculation(
     y: list[float],
     wt: list[float],
@@ -487,7 +479,6 @@ def perform_concordance1_calculation(
     sortstop: list[int],
     sortstart: list[int],
 ) -> dict[str, Any]: ...
-
 def perform_concordance3_calculation(
     y: list[float],
     wt: list[float],
@@ -499,7 +490,6 @@ def perform_concordance3_calculation(
     covar: list[float],
     need_residuals: bool,
 ) -> dict[str, Any]: ...
-
 def perform_concordance_calculation(
     y: list[float],
     wt: list[float],
@@ -511,7 +501,6 @@ def perform_concordance_calculation(
     covar: list[float] | None = None,
     need_residuals: bool = False,
 ) -> dict[str, Any]: ...
-
 def perform_score_calculation(
     time_data: list[float],
     covariates: list[float],
@@ -520,7 +509,6 @@ def perform_score_calculation(
     weights: list[float],
     method: int,
 ) -> dict[str, Any]: ...
-
 def perform_agscore3_calculation(
     time_data: list[float],
     covariates: list[float],
@@ -530,7 +518,6 @@ def perform_agscore3_calculation(
     method: int,
     sort1: list[int],
 ) -> dict[str, Any]: ...
-
 def perform_pystep_calculation(
     edim: int,
     data: list[float],
@@ -539,7 +526,6 @@ def perform_pystep_calculation(
     ecut: list[list[float]],
     tmax: float,
 ) -> dict[str, Any]: ...
-
 def perform_pystep_simple_calculation(
     odim: int,
     data: list[float],
@@ -548,7 +534,6 @@ def perform_pystep_simple_calculation(
     ocut: list[list[float]],
     timeleft: float,
 ) -> dict[str, Any]: ...
-
 def collapse(
     y: list[float],
     x: list[int],
@@ -557,7 +542,6 @@ def collapse(
     wt: list[float],
     order: list[int],
 ) -> dict[str, Any]: ...
-
 def cox_callback(
     time1: list[float],
     time2: list[float],
@@ -573,7 +557,6 @@ def cox_callback(
     tol_chol: float,
     beta: list[float],
 ) -> dict[str, Any]: ...
-
 def coxcount1(
     time1: list[float],
     time2: list[float],
@@ -582,7 +565,6 @@ def coxcount1(
     sort1: list[int],
     sort2: list[int],
 ) -> dict[str, Any]: ...
-
 def coxcount2(
     time1: list[float],
     time2: list[float],
@@ -591,7 +573,6 @@ def coxcount2(
     sort1: list[int],
     sort2: list[int],
 ) -> dict[str, Any]: ...
-
 def norisk(
     time1: list[float],
     time2: list[float],
@@ -600,11 +581,9 @@ def norisk(
     sort2: list[int],
     strata: list[int],
 ) -> list[int]: ...
-
 def cipoisson(k: int, time: float, p: float, method: str) -> tuple[float, float]: ...
 def cipoisson_exact(k: int, time: float, p: float) -> tuple[float, float]: ...
 def cipoisson_anscombe(k: int, time: float, p: float) -> tuple[float, float]: ...
-
 def concordance(
     y: list[float],
     wt: list[float],
@@ -614,7 +593,6 @@ def concordance(
     sortstart: list[int],
     strata: list[int],
 ) -> dict[str, Any]: ...
-
 def agexact(
     maxiter: int,
     nused: int,
@@ -630,7 +608,6 @@ def agexact(
     eps: float,
     tol_chol: float,
 ) -> dict[str, Any]: ...
-
 def agsurv4(
     y: list[float],
     wt: list[float],
@@ -641,7 +618,6 @@ def agsurv4(
     ncensor: list[float],
     strata: list[int],
 ) -> dict[str, Any]: ...
-
 def agsurv5(
     y: list[float],
     wt: list[float],
@@ -652,7 +628,6 @@ def agsurv5(
     strata: list[int],
     se_type: int,
 ) -> dict[str, Any]: ...
-
 def agmart(
     time: list[float],
     status: list[int],
@@ -661,20 +636,17 @@ def agmart(
     strata: list[int],
     method: int,
 ) -> list[float]: ...
-
 def brier(
     predictions: list[float],
     outcomes: list[int],
     weights: list[float] | None = None,
 ) -> float: ...
-
 def integrated_brier(
     predictions: list[list[float]],
     outcomes: list[int],
     times: list[float],
     weights: list[float] | None = None,
 ) -> float: ...
-
 def tmerge(
     id: list[int],
     time1: list[float],
@@ -683,25 +655,21 @@ def tmerge(
     ntime: list[float],
     x: list[float],
 ) -> list[float]: ...
-
 def tmerge2(
     id: list[int],
     time1: list[float],
     nid: list[int],
     ntime: list[float],
 ) -> list[int]: ...
-
 def tmerge3(
     id: list[int],
     miss: list[bool],
 ) -> list[int]: ...
-
 def survsplit(
     tstart: list[float],
     tstop: list[float],
     cut: list[float],
 ) -> SplitResult: ...
-
 def schoenfeld_residuals(
     y: list[float],
     score: list[float],
@@ -710,7 +678,6 @@ def schoenfeld_residuals(
     nvar: int,
     method: int = 0,
 ) -> list[float]: ...
-
 def cox_score_residuals(
     y: list[float],
     strata: list[int],
@@ -720,7 +687,6 @@ def cox_score_residuals(
     nvar: int,
     method: int = 0,
 ) -> list[float]: ...
-
 def survfitaj(
     y: list[float],
     sort1: list[int],
@@ -739,7 +705,6 @@ def survfitaj(
     trmat: list[list[int]],
     t0: float,
 ) -> SurvFitAJ: ...
-
 def bootstrap_cox_ci(
     time: list[float],
     status: list[int],
@@ -747,7 +712,6 @@ def bootstrap_cox_ci(
     n_bootstrap: int = 1000,
     confidence_level: float = 0.95,
 ) -> BootstrapResult: ...
-
 def bootstrap_survreg_ci(
     time: list[float],
     status: list[int],
@@ -756,14 +720,12 @@ def bootstrap_survreg_ci(
     n_bootstrap: int = 1000,
     confidence_level: float = 0.95,
 ) -> BootstrapResult: ...
-
 def cv_cox_concordance(
     time: list[float],
     status: list[int],
     covariates: list[list[float]],
     n_folds: int = 5,
 ) -> CVResult: ...
-
 def cv_survreg_loglik(
     time: list[float],
     status: list[int],
@@ -771,51 +733,43 @@ def cv_survreg_loglik(
     distribution: str = "weibull",
     n_folds: int = 5,
 ) -> CVResult: ...
-
 def lrt_test(
     log_likelihood_null: float,
     log_likelihood_full: float,
     df: int,
 ) -> TestResult: ...
-
 def wald_test_py(
     coefficients: list[float],
     variance_matrix: list[list[float]],
 ) -> TestResult: ...
-
 def score_test_py(
     score: list[float],
     information_matrix: list[list[float]],
 ) -> TestResult: ...
-
 def ph_test(
     time: list[float],
     status: list[int],
     schoenfeld_residuals: list[list[float]],
     variable_names: list[str],
 ) -> ProportionalityTest: ...
-
 def nelson_aalen_estimator(
     time: list[float],
     status: list[int],
     weights: list[float] | None = None,
     confidence_level: float | None = None,
 ) -> NelsonAalenResult: ...
-
 def stratified_kaplan_meier(
     time: list[float],
     status: list[int],
     strata: list[int],
     confidence_level: float | None = None,
 ) -> StratifiedKMResult: ...
-
 def logrank_test(
     time: list[float],
     status: list[int],
     group: list[int],
     weight_type: str | None = None,
 ) -> LogRankResult: ...
-
 def fleming_harrington_test(
     time: list[float],
     status: list[int],
@@ -823,14 +777,12 @@ def fleming_harrington_test(
     p: float,
     q: float,
 ) -> LogRankResult: ...
-
 def logrank_trend(
     time: list[float],
     status: list[int],
     group: list[int],
     scores: list[float] | None = None,
 ) -> TrendTestResult: ...
-
 def sample_size_survival(
     hazard_ratio: float,
     power: float | None = None,
@@ -838,7 +790,6 @@ def sample_size_survival(
     allocation_ratio: float | None = None,
     sided: int | None = None,
 ) -> SampleSizeResult: ...
-
 def sample_size_survival_freedman(
     hazard_ratio: float,
     prob_event: float,
@@ -847,7 +798,6 @@ def sample_size_survival_freedman(
     allocation_ratio: float | None = None,
     sided: int | None = None,
 ) -> SampleSizeResult: ...
-
 def power_survival(
     n_events: int,
     hazard_ratio: float,
@@ -855,7 +805,6 @@ def power_survival(
     allocation_ratio: float | None = None,
     sided: int | None = None,
 ) -> float: ...
-
 def expected_events(
     n_total: int,
     hazard_control: float,
@@ -865,13 +814,11 @@ def expected_events(
     allocation_ratio: float | None = None,
     dropout_rate: float | None = None,
 ) -> AccrualResult: ...
-
 def calibration(
     predicted_risk: list[float],
     observed_event: list[int],
     n_groups: int | None = None,
 ) -> CalibrationResult: ...
-
 def predict_cox(
     coef: list[float],
     x: list[list[float]],
@@ -879,27 +826,23 @@ def predict_cox(
     baseline_times: list[float],
     pred_times: list[float],
 ) -> PredictionResult: ...
-
 def risk_stratification(
     risk_scores: list[float],
     events: list[int],
     n_groups: int | None = None,
 ) -> RiskStratificationResult: ...
-
 def td_auc(
     time: list[float],
     status: list[int],
     risk_score: list[float],
     eval_times: list[float],
 ) -> TdAUCResult: ...
-
 def rmst(
     time: list[float],
     status: list[int],
     tau: float,
     confidence_level: float | None = None,
 ) -> RMSTResult: ...
-
 def rmst_comparison(
     time: list[float],
     status: list[int],
@@ -907,19 +850,16 @@ def rmst_comparison(
     tau: float,
     confidence_level: float | None = None,
 ) -> RMSTComparisonResult: ...
-
 def survival_quantile(
     time: list[float],
     status: list[int],
     quantile: float | None = None,
     confidence_level: float | None = None,
 ) -> MedianSurvivalResult: ...
-
 def cumulative_incidence(
     time: list[float],
     status: list[int],
 ) -> CumulativeIncidenceResult: ...
-
 def number_needed_to_treat(
     time: list[float],
     status: list[int],
@@ -927,13 +867,11 @@ def number_needed_to_treat(
     time_horizon: float,
     confidence_level: float | None = None,
 ) -> NNTResult: ...
-
 def landmark_analysis(
     time: list[float],
     status: list[int],
     landmark_time: float,
 ) -> LandmarkResult: ...
-
 def conditional_survival(
     time: list[float],
     status: list[int],
@@ -941,21 +879,18 @@ def conditional_survival(
     target_time: float,
     confidence_level: float | None = None,
 ) -> ConditionalSurvivalResult: ...
-
 def hazard_ratio(
     time: list[float],
     status: list[int],
     group: list[int],
     confidence_level: float | None = None,
 ) -> HazardRatioResult: ...
-
 def survival_at_times(
     time: list[float],
     status: list[int],
     eval_times: list[float],
     confidence_level: float | None = None,
 ) -> list[SurvivalAtTimeResult]: ...
-
 def life_table(
     time: list[float],
     status: list[int],
@@ -1067,13 +1002,11 @@ def conformal_calibrate(
     coverage_level: float | None = None,
     use_ipcw: bool | None = None,
 ) -> ConformalCalibrationResult: ...
-
 def conformal_predict(
     quantile_threshold: float,
     predicted_new: list[float],
     coverage_level: float | None = None,
 ) -> ConformalPredictionResult: ...
-
 def conformal_survival_from_predictions(
     time_calib: list[float],
     status_calib: list[int],
@@ -1082,14 +1015,12 @@ def conformal_survival_from_predictions(
     coverage_level: float | None = None,
     use_ipcw: bool | None = None,
 ) -> ConformalPredictionResult: ...
-
 def conformal_coverage_test(
     time_test: list[float],
     status_test: list[int],
     lpb: list[float],
     coverage_level: float | None = None,
 ) -> ConformalDiagnostics: ...
-
 def doubly_robust_conformal_calibrate(
     time: list[float],
     status: list[int],
@@ -1099,7 +1030,6 @@ def doubly_robust_conformal_calibrate(
     seed: int | None = None,
     trim: float | None = None,
 ) -> DoublyRobustConformalResult: ...
-
 def doubly_robust_conformal_survival(
     time_calib: list[float],
     status_calib: list[int],
@@ -1110,20 +1040,17 @@ def doubly_robust_conformal_survival(
     seed: int | None = None,
     trim: float | None = None,
 ) -> DoublyRobustConformalResult: ...
-
 def two_sided_conformal_calibrate(
     time: list[float],
     status: list[int],
     predicted: list[float],
     coverage_level: float | None = None,
 ) -> TwoSidedCalibrationResult: ...
-
 def two_sided_conformal_predict(
     calibration: TwoSidedCalibrationResult,
     predicted_new: list[float],
     censoring_scores_new: list[float] | None = None,
 ) -> TwoSidedConformalResult: ...
-
 def two_sided_conformal_survival(
     time_calib: list[float],
     status_calib: list[int],
@@ -1131,7 +1058,6 @@ def two_sided_conformal_survival(
     predicted_new: list[float],
     coverage_level: float | None = None,
 ) -> TwoSidedConformalResult: ...
-
 def conformalized_survival_distribution(
     time_points: list[float],
     survival_probs_calib: list[list[float]],
@@ -1140,7 +1066,6 @@ def conformalized_survival_distribution(
     survival_probs_new: list[list[float]],
     coverage_level: float | None = None,
 ) -> ConformalSurvivalDistribution: ...
-
 def bootstrap_conformal_survival(
     time: list[float],
     status: list[int],
@@ -1150,7 +1075,6 @@ def bootstrap_conformal_survival(
     n_bootstrap: int | None = None,
     seed: int | None = None,
 ) -> BootstrapConformalResult: ...
-
 def cqr_conformal_survival(
     time: list[float],
     status: list[int],
@@ -1159,7 +1083,6 @@ def cqr_conformal_survival(
     coverage_level: float | None = None,
     bandwidth: float | None = None,
 ) -> CQRConformalResult: ...
-
 def conformal_calibration_plot(
     time_test: list[float],
     status_test: list[int],
@@ -1167,13 +1090,11 @@ def conformal_calibration_plot(
     upper_bounds: list[list[float]] | None = None,
     n_levels: int | None = None,
 ) -> ConformalCalibrationPlot: ...
-
 def conformal_width_analysis(
     lower_bounds: list[float],
     upper_bounds: list[float],
     predicted: list[float],
 ) -> ConformalWidthAnalysis: ...
-
 def conformal_coverage_cv(
     time: list[float],
     status: list[int],
@@ -1182,7 +1103,6 @@ def conformal_coverage_cv(
     coverage_candidates: list[float] | None = None,
     seed: int | None = None,
 ) -> CoverageSelectionResult: ...
-
 def conformal_survival_parallel(
     time: list[float],
     status: list[int],

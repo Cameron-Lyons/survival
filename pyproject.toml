@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "survival"
-version = "1.2.13"
+version = "1.2.14"
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 readme = "README.md"
 license = { text = "MIT" }
@@ -74,3 +74,7 @@ ignore = ["E501"]  # line length handled by formatter
 
 [tool.ruff.lint.per-file-ignores]
 "test/*.py" = ["S101", "PT017", "S110", "S603"]
+"python/tests/*.py" = ["S101", "PT017", "S110", "S603"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]

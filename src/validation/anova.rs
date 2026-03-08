@@ -190,6 +190,127 @@ pub fn anova_coxph_single(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::regression::coxph::CoxPHModel;
+    use crate::validation::model_selection::compare_models;
+
+    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    type SyntheticNestedCoxData = (Vec<f64>, Vec<u8>, Vec<f64>, Vec<f64>, Vec<f64>);
+
+    fn synthetic_nested_cox_data() -> SyntheticNestedCoxData {
+        (
+            vec![
+                19.0, 4.0, 30.0, 15.0, 6.0, 24.0, 9.0, 21.0, 25.0, 16.0, 14.0, 26.0, 12.0, 17.0,
+                29.0, 23.0, 27.0, 13.0, 28.0, 3.0, 7.0, 2.0, 20.0, 5.0, 1.0, 8.0, 22.0, 10.0, 11.0,
+                18.0,
+            ],
+            vec![
+                0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1,
+                1, 1,
+            ],
+            vec![
+                -0.22147620175631144,
+                0.7602932575724843,
+                -0.9231655212836085,
+                -0.069374019584312,
+                0.6597046787856315,
+                -0.7463730340538133,
+                0.42097512302323836,
+                -0.3437683161794367,
+                -0.9513974428461089,
+                -0.05255013822137822,
+                0.04338547789066993,
+                -0.9168274986523088,
+                0.13183870710356138,
+                -0.3051323240843211,
+                -0.991013585487406,
+                -0.6184532386468693,
+                -0.7783786554426502,
+                0.08124390946480986,
+                -0.9137596739153231,
+                0.8562651401961585,
+                0.6901239447967451,
+                0.8905952874629122,
+                -0.3703979344271331,
+                0.8105347771237885,
+                0.9686248450400701,
+                0.5294628685052931,
+                -0.449834772848833,
+                0.3417786082943073,
+                0.19132630746795987,
+                -0.19159339567111333,
+            ],
+            vec![
+                -0.3378174893476555,
+                0.4962021719131225,
+                -1.147936036429733,
+                -0.2890003259812402,
+                0.6482403975782177,
+                -0.6612370032176764,
+                0.5794161944899268,
+                -0.6157400601961036,
+                -0.7571415192786584,
+                -0.32646740424680315,
+                0.07635357592547731,
+                -0.7703387887675024,
+                0.21057153018009817,
+                -0.03532511867451987,
+                -1.0841945736197047,
+                -0.5669232255043457,
+                -1.0286992178020604,
+                0.11712186222418908,
+                -0.7257803932695498,
+                0.6772278484914469,
+                0.5467026450170536,
+                1.0108386715947284,
+                -0.5180687542654951,
+                0.6660820615366315,
+                1.2299340178036509,
+                0.8285886870111618,
+                -0.6567157144335142,
+                0.5818760406491075,
+                0.22296219905220327,
+                -0.4684327102248028,
+            ],
+            vec![
+                0.17100543047437067,
+                0.28309930134150996,
+                -0.9324086025957814,
+                0.5153838443172007,
+                0.63560028294837,
+                -0.8567135156260877,
+                0.2967998801323577,
+                -0.0869050381944676,
+                -0.5225574253161578,
+                -0.0826592367550314,
+                -0.6812205804954357,
+                -0.3326681865354073,
+                0.310414599401895,
+                -0.04702888769625324,
+                0.11184018935508333,
+                0.08688558760906062,
+                0.6411884802232783,
+                -0.3132344036927748,
+                0.6259241815636314,
+                -0.840025825739185,
+                -0.1445339082547894,
+                -0.295359766926256,
+                -0.09683872258950199,
+                0.6670196410725331,
+                0.024798800975902147,
+                0.9744932925896734,
+                0.7229214405502136,
+                -0.7623065093739558,
+                -0.36621692887666457,
+                -0.9545489969462266,
+            ],
+        )
+    }
 
     #[test]
     fn test_anova_coxph() {
@@ -201,5 +322,90 @@ mod tests {
         assert!(result.rows[0].chisq.is_none());
         assert!(result.rows[1].chisq.is_some());
         assert!((result.rows[1].chisq.unwrap() - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_anova_coxph_matches_current_nested_models() {
+        let (time, status, x1, x2, x3) = synthetic_nested_cox_data();
+        let covariate_sets = vec![
+            x1.iter().map(|&v| vec![v]).collect::<Vec<_>>(),
+            x1.iter()
+                .zip(x2.iter())
+                .map(|(&a, &b)| vec![a, b])
+                .collect::<Vec<_>>(),
+            x1.iter()
+                .zip(x2.iter())
+                .zip(x3.iter())
+                .map(|((&a, &b), &c)| vec![a, b, c])
+                .collect::<Vec<_>>(),
+        ];
+
+        let mut logliks = Vec::new();
+        for covariates in covariate_sets {
+            let mut model = CoxPHModel::new_with_data(covariates, time.clone(), status.clone());
+            model.fit(100).expect("nested Cox model should fit");
+            logliks.push(model.log_likelihood());
+        }
+
+        assert!(logliks.windows(2).all(|pair| pair[1] >= pair[0]));
+
+        let model_names = vec![
+            "x1".to_string(),
+            "x1 + x2".to_string(),
+            "x1 + x2 + x3".to_string(),
+        ];
+        let dfs = vec![1, 2, 3];
+        let anova = anova_coxph(
+            logliks.clone(),
+            dfs.clone(),
+            Some(model_names.clone()),
+            "LRT".to_string(),
+        )
+        .expect("anova should succeed for nested Cox models");
+
+        assert_eq!(anova.rows.len(), 3);
+        assert!(anova.rows[0].chisq.is_none());
+
+        let step_12 = 2.0 * (logliks[1] - logliks[0]);
+        let step_23 = 2.0 * (logliks[2] - logliks[1]);
+        assert_close(anova.rows[1].chisq.expect("step 1 chisq"), step_12, 1e-10);
+        assert_close(anova.rows[2].chisq.expect("step 2 chisq"), step_23, 1e-10);
+
+        let single = anova_coxph_single(logliks[1], logliks[2], dfs[1], dfs[2])
+            .expect("single-step anova should succeed");
+        assert_close(
+            single.rows[1].chisq.expect("single-step chisq"),
+            anova.rows[2].chisq.expect("sequential chisq"),
+            1e-10,
+        );
+        assert_close(
+            single.rows[1].p_value.expect("single-step p-value"),
+            anova.rows[2].p_value.expect("sequential p-value"),
+            1e-10,
+        );
+
+        let comparison = compare_models(model_names, logliks.clone(), dfs, time.len())
+            .expect("model comparison should succeed");
+        assert_eq!(comparison.likelihood_ratio_tests.len(), 3);
+
+        let lr_12 = &comparison.likelihood_ratio_tests[0];
+        assert_eq!(lr_12.0, "x1");
+        assert_eq!(lr_12.1, "x1 + x2");
+        assert_close(lr_12.2, anova.rows[1].chisq.expect("step 1 chisq"), 1e-10);
+        assert_close(
+            lr_12.4,
+            anova.rows[1].p_value.expect("step 1 p-value"),
+            1e-10,
+        );
+
+        let lr_23 = &comparison.likelihood_ratio_tests[2];
+        assert_eq!(lr_23.0, "x1 + x2");
+        assert_eq!(lr_23.1, "x1 + x2 + x3");
+        assert_close(lr_23.2, anova.rows[2].chisq.expect("step 2 chisq"), 1e-10);
+        assert_close(
+            lr_23.4,
+            anova.rows[2].p_value.expect("step 2 p-value"),
+            1e-10,
+        );
     }
 }

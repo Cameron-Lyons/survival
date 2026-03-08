@@ -1,5 +1,6 @@
-use crate::constants::{COX_MAX_ITER, LCG64_INCREMENT, LCG64_MULTIPLIER, PARALLEL_THRESHOLD_SMALL};
+use crate::constants::{COX_MAX_ITER, PARALLEL_THRESHOLD_SMALL};
 use crate::utilities::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
+use crate::utilities::statistical::lcg64_shuffle_per_index_seed;
 use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -46,22 +47,11 @@ impl Default for CVConfig {
         }
     }
 }
-fn simple_shuffle(indices: &mut [usize], seed: u64) {
-    let n = indices.len();
-    for i in (1..n).rev() {
-        let mut state = seed.wrapping_add(i as u64);
-        state = state
-            .wrapping_mul(LCG64_MULTIPLIER)
-            .wrapping_add(LCG64_INCREMENT);
-        let j = (state as usize) % (i + 1);
-        indices.swap(i, j);
-    }
-}
 fn create_folds(n: usize, n_folds: usize, shuffle: bool, seed: Option<u64>) -> Vec<Vec<usize>> {
     let mut indices: Vec<usize> = (0..n).collect();
     if shuffle {
         let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
-        simple_shuffle(&mut indices, seed);
+        lcg64_shuffle_per_index_seed(&mut indices, seed);
     }
     let fold_size = n / n_folds;
     let remainder = n % n_folds;
