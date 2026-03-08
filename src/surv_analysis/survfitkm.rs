@@ -1,4 +1,4 @@
-use crate::constants::{PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON};
+use crate::constants::{DEFAULT_CONFIDENCE_LEVEL, PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON};
 use crate::utilities::numpy_utils::{
     extract_optional_vec_f64, extract_optional_vec_i32, extract_vec_f64,
 };
@@ -83,7 +83,7 @@ impl KaplanMeierConfig {
         Self {
             reverse: reverse.unwrap_or(false),
             computation_type: computation_type.unwrap_or(0),
-            conf_level: conf_level.unwrap_or(0.95),
+            conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
         }
     }
 }
@@ -93,7 +93,7 @@ impl Default for KaplanMeierConfig {
         Self {
             reverse: false,
             computation_type: 0,
-            conf_level: 0.95,
+            conf_level: DEFAULT_CONFIDENCE_LEVEL,
         }
     }
 }
@@ -107,7 +107,7 @@ impl KaplanMeierConfig {
         Self {
             reverse: reverse.unwrap_or(false),
             computation_type: computation_type.unwrap_or(0),
-            conf_level: conf_level.unwrap_or(0.95),
+            conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
         }
     }
 }

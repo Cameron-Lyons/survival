@@ -1,4 +1,6 @@
-use crate::constants::{PARALLEL_THRESHOLD_XLARGE, z_score_for_confidence};
+use crate::constants::{
+    DEFAULT_CONFIDENCE_LEVEL, PARALLEL_THRESHOLD_XLARGE, z_score_for_confidence,
+};
 use crate::utilities::statistical::{lower_incomplete_gamma, normal_cdf as norm_cdf};
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -316,7 +318,7 @@ pub fn rmst(
     tau: f64,
     confidence_level: Option<f64>,
 ) -> PyResult<RMSTResult> {
-    let conf = confidence_level.unwrap_or(0.95);
+    let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
     Ok(compute_rmst(&time, &status, tau, conf))
 }
 
@@ -348,7 +350,7 @@ pub fn rmst_comparison(
     tau: f64,
     confidence_level: Option<f64>,
 ) -> PyResult<RMSTComparisonResult> {
-    let conf = confidence_level.unwrap_or(0.95);
+    let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
     Ok(compare_rmst(&time, &status, &group, tau, conf))
 }
 #[derive(Debug, Clone)]
@@ -465,7 +467,7 @@ pub fn survival_quantile(
     confidence_level: Option<f64>,
 ) -> PyResult<MedianSurvivalResult> {
     let q = quantile.unwrap_or(0.5);
-    let conf = confidence_level.unwrap_or(0.95);
+    let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
     Ok(compute_survival_quantile(&time, &status, q, conf))
 }
 #[derive(Debug, Clone)]
@@ -742,7 +744,7 @@ pub fn number_needed_to_treat(
     time_horizon: f64,
     confidence_level: Option<f64>,
 ) -> PyResult<NNTResult> {
-    let conf = confidence_level.unwrap_or(0.95);
+    let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
     Ok(compute_nnt(&time, &status, &group, time_horizon, conf))
 }
 
@@ -1072,7 +1074,7 @@ pub fn rmst_optimal_threshold(
 ) -> PyResult<RMSTOptimalThresholdResult> {
     let alpha = alpha.unwrap_or(0.05);
     let min_events = min_events_per_interval.unwrap_or(5);
-    let conf = confidence_level.unwrap_or(0.95);
+    let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
     Ok(compute_rmst_optimal_threshold(
         &time, &status, alpha, min_events, conf,
     ))

@@ -1,4 +1,7 @@
-use crate::constants::{ITERATIVE_MAX_ITER, TIME_EPSILON};
+use crate::constants::{
+    DEFAULT_CONCORDANCE, DIVISION_FLOOR, ITERATIVE_MAX_ITER, LCG64_INCREMENT, LCG64_MULTIPLIER,
+    TIED_PAIR_WEIGHT, TIME_EPSILON,
+};
 use std::f64::consts::SQRT_2;
 
 #[inline]
@@ -37,6 +40,89 @@ pub fn erfc(x: f64) -> f64 {
 #[inline]
 pub fn normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / SQRT_2))
+}
+
+#[inline]
+pub fn concordance_index_with_horizon(
+    risk_scores: &[f64],
+    time: &[f64],
+    event: &[i32],
+    horizon: Option<f64>,
+) -> f64 {
+    let n = risk_scores.len();
+    if n < 2 || time.len() != n || event.len() != n {
+        return DEFAULT_CONCORDANCE;
+    }
+
+    let mut concordant = 0.0;
+    let mut comparable = 0.0;
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let i_comparable = event[i] == 1
+                && time[i] < time[j]
+                && match horizon {
+                    Some(h) => time[i] <= h,
+                    None => true,
+                };
+            let j_comparable = event[j] == 1
+                && time[j] < time[i]
+                && match horizon {
+                    Some(h) => time[j] <= h,
+                    None => true,
+                };
+
+            if i_comparable {
+                comparable += 1.0;
+                if risk_scores[i] > risk_scores[j] {
+                    concordant += 1.0;
+                } else if (risk_scores[i] - risk_scores[j]).abs() < DIVISION_FLOOR {
+                    concordant += TIED_PAIR_WEIGHT;
+                }
+            } else if j_comparable {
+                comparable += 1.0;
+                if risk_scores[j] > risk_scores[i] {
+                    concordant += 1.0;
+                } else if (risk_scores[i] - risk_scores[j]).abs() < DIVISION_FLOOR {
+                    concordant += TIED_PAIR_WEIGHT;
+                }
+            }
+        }
+    }
+
+    if comparable > 0.0 {
+        concordant / comparable
+    } else {
+        DEFAULT_CONCORDANCE
+    }
+}
+
+#[inline]
+pub fn lcg64_next(state: &mut u64) {
+    *state = state
+        .wrapping_mul(LCG64_MULTIPLIER)
+        .wrapping_add(LCG64_INCREMENT);
+}
+
+#[inline]
+pub fn lcg64_shuffle_with_state(indices: &mut [usize], state: &mut u64) {
+    let n = indices.len();
+    for i in (1..n).rev() {
+        lcg64_next(state);
+        let j = (*state as usize) % (i + 1);
+        indices.swap(i, j);
+    }
+}
+
+#[inline]
+pub fn lcg64_shuffle_per_index_seed(indices: &mut [usize], seed: u64) {
+    let n = indices.len();
+    for i in (1..n).rev() {
+        let mut state = seed.wrapping_add(i as u64);
+        lcg64_next(&mut state);
+        let j = (state as usize) % (i + 1);
+        indices.swap(i, j);
+    }
 }
 
 #[inline]

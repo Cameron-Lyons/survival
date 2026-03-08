@@ -1,4 +1,4 @@
-use crate::constants::{LCG64_INCREMENT, LCG64_MULTIPLIER};
+use crate::utilities::statistical::lcg64_next;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -94,13 +94,9 @@ fn clip_gradient(gradient: &mut [f64], clip_norm: f64) {
 fn add_gaussian_noise(values: &mut [f64], noise_multiplier: f64, clip_norm: f64, seed: u64) {
     let mut rng_state = seed;
     for v in values.iter_mut() {
-        rng_state = rng_state
-            .wrapping_mul(LCG64_MULTIPLIER)
-            .wrapping_add(LCG64_INCREMENT);
+        lcg64_next(&mut rng_state);
         let u1 = (rng_state as f64) / (u64::MAX as f64);
-        rng_state = rng_state
-            .wrapping_mul(LCG64_MULTIPLIER)
-            .wrapping_add(LCG64_INCREMENT);
+        lcg64_next(&mut rng_state);
         let u2 = (rng_state as f64) / (u64::MAX as f64);
         let noise = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
         *v += noise * noise_multiplier * clip_norm;
@@ -304,9 +300,7 @@ pub fn federated_cox(
         let round_seed = seed.wrapping_add(round as u64);
         let mut rng_state = round_seed;
         for i in (1..selected_clients.len()).rev() {
-            rng_state = rng_state
-                .wrapping_mul(LCG64_MULTIPLIER)
-                .wrapping_add(LCG64_INCREMENT);
+            lcg64_next(&mut rng_state);
             let j = (rng_state as usize) % (i + 1);
             selected_clients.swap(i, j);
         }
@@ -418,9 +412,7 @@ pub fn secure_aggregate(
 
     let mut active_clients = Vec::new();
     for (i, gradient) in client_gradients.iter().enumerate() {
-        rng_state = rng_state
-            .wrapping_mul(LCG64_MULTIPLIER)
-            .wrapping_add(LCG64_INCREMENT);
+        lcg64_next(&mut rng_state);
         let drop_prob = (rng_state as f64) / (u64::MAX as f64);
         if drop_prob > 0.1 {
             active_clients.push((i, gradient));

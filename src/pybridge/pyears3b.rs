@@ -1,4 +1,5 @@
 use super::column_major_index;
+use crate::constants::PYEARS_TIME_EPSILON;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -122,7 +123,7 @@ pub fn pyears3b(
             eps = timeleft;
         }
     }
-    eps *= 1e-8;
+    eps *= PYEARS_TIME_EPSILON;
     **offtable = 0.0;
     for i in 0..n {
         let mut data = vec![0.0; odim];

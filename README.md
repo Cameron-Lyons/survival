@@ -500,7 +500,7 @@ cargo test
 
 Run Python tests:
 ```sh
-pytest test python/tests
+pytest python/tests -v
 ```
 
 Format and lint:
@@ -511,7 +511,9 @@ ruff check .
 
 The codebase is organized with:
 - Core routines in `src/`
-- Rust/Python tests in `test/` and `python/tests/`
+- Rust unit/integration tests in `src/tests/`
+- Python binding tests in `python/tests/`
+- R validation fixtures and archived reference cases in `test/`
 - Python bindings using PyO3
 
 ## Dependencies
