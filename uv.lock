@@ -519,7 +519,7 @@ wheels = [
 
 [[package]]
 name = "survival"
-version = "1.2.12"
+version = "1.2.14"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },

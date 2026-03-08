@@ -72,5 +72,13 @@ pub const MAX_HALVING_ITERATIONS: usize = 10;
 pub const STEP_HALVE_FACTOR: f64 = 0.5;
 pub const STEP_DOUBLE_FACTOR: f64 = 2.0;
 
+pub const HARTLEY_A1: f64 = 0.2316419;
+pub const HARTLEY_NORM: f64 = 0.3989423;
+pub const HARTLEY_B1: f64 = 0.3193815;
+pub const HARTLEY_B2: f64 = -0.3565638;
+pub const HARTLEY_B3: f64 = 1.781478;
+pub const HARTLEY_B4: f64 = -1.821256;
+pub const HARTLEY_B5: f64 = 1.330274;
+
 pub const ROYSTON_KAPPA_FACTOR: f64 = 8.0;
 pub const ROYSTON_VARIANCE_FACTOR: f64 = 6.0;
