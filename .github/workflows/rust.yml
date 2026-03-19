@@ -152,18 +152,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-develop-py3.14-
 
+      - name: Create virtualenv
+        run: python -m venv .venv
+
       - name: Install maturin and test dependencies
-        run: pip install maturin numpy pandas polars pytest
+        run: |
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install maturin numpy pandas polars pytest
 
       - name: Remove any preinstalled survival package
-        run: pip uninstall -y survival || true
+        run: .venv/bin/python -m pip uninstall -y survival || true
 
       - name: Install extension with maturin develop
-        run: maturin develop --release --features extension-module
+        run: .venv/bin/maturin develop --release --features extension-module
 
       - name: Verify extension import path
         run: |
-          python - <<'PY'
+          .venv/bin/python - <<'PY'
           import importlib.util
           spec = importlib.util.find_spec("survival._survival")
           if spec is None or spec.origin is None:
@@ -172,7 +177,7 @@ jobs:
           PY
 
       - name: Run Python tests against source-tree install
-        run: python -m pytest python/tests/ -v
+        run: .venv/bin/python -m pytest python/tests/ -v
 
   r-validation:
     name: R Survival Package Validation

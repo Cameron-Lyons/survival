@@ -33,37 +33,24 @@ pub struct AgexactParams {
 }
 
 fn validate_agexact_inputs(
-    maxiter: i32,
-    nused: i32,
-    nvar: i32,
-    start: &[f64],
-    stop: &[f64],
-    event: &[i32],
-    covar: &[f64],
-    offset: &[f64],
-    strata: &[i32],
-    means: &[f64],
-    beta: &[f64],
-    u: &[f64],
-    imat: &[f64],
-    work: &[f64],
-    work2: &[i32],
-    nocenter: &[i32],
+    data: &AgexactData,
+    state: &AgexactState,
+    params: &AgexactParams,
 ) -> PyResult<(usize, usize)> {
-    if maxiter < 0 || nused < 0 || nvar < 0 {
+    if params.maxiter < 0 || params.nused < 0 || params.nvar < 0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "maxiter, nused, and nvar must be non-negative",
         ));
     }
 
-    let n = nused as usize;
-    let p = nvar as usize;
+    let n = params.nused as usize;
+    let p = params.nvar as usize;
 
-    if start.len() != n
-        || stop.len() != n
-        || event.len() != n
-        || offset.len() != n
-        || strata.len() != n
+    if data.start.len() != n
+        || data.stop.len() != n
+        || data.event.len() != n
+        || data.offset.len() != n
+        || data.strata.len() != n
     {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "start, stop, event, offset, and strata must all have length nused",
@@ -73,13 +60,17 @@ fn validate_agexact_inputs(
     let covar_len = p.checked_mul(n).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>("nused * nvar is too large")
     })?;
-    if covar.len() != covar_len {
+    if data.covar.len() != covar_len {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "covar must have length nused * nvar",
         ));
     }
 
-    if means.len() != p || beta.len() != p || u.len() != p || nocenter.len() != p {
+    if state.means.len() != p
+        || state.beta.len() != p
+        || state.u.len() != p
+        || data.nocenter.len() != p
+    {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "means, beta, u, and nocenter must all have length nvar",
         ));
@@ -88,7 +79,7 @@ fn validate_agexact_inputs(
     let imat_len = p.checked_mul(p).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>("nvar * nvar is too large")
     })?;
-    if imat.len() != imat_len {
+    if state.imat.len() != imat_len {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "imat must have length nvar * nvar",
         ));
@@ -103,7 +94,7 @@ fn validate_agexact_inputs(
         .ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>("required work length overflows usize")
         })?;
-    if work.len() < min_work_len {
+    if state.work.len() < min_work_len {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "work must have length at least {}",
             min_work_len
@@ -113,7 +104,7 @@ fn validate_agexact_inputs(
     let min_work2_len = n.checked_mul(2).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>("required work2 length overflows usize")
     })?;
-    if work2.len() < min_work2_len {
+    if state.work2.len() < min_work2_len {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "work2 must have length at least {}",
             min_work2_len
@@ -146,11 +137,6 @@ pub fn agexact(
     tol_chol: f64,
     nocenter: Vec<i32>,
 ) -> PyResult<Py<PyDict>> {
-    validate_agexact_inputs(
-        maxiter, nused, nvar, &start, &stop, &event, &covar, &offset, &strata, &means, &beta, &u,
-        &imat, &work, &work2, &nocenter,
-    )?;
-
     let data = AgexactData {
         start,
         stop,
@@ -176,6 +162,7 @@ pub fn agexact(
         eps,
         tol_chol,
     };
+    validate_agexact_inputs(&data, &state, &params)?;
     agexact_impl(data, state, params)
 }
 
@@ -636,29 +623,41 @@ mod tests {
     use super::*;
     use pyo3::Python;
 
+    fn sample_params(nused: i32, nvar: i32) -> AgexactParams {
+        AgexactParams {
+            maxiter: 1,
+            nused,
+            nvar,
+            eps: 1e-9,
+            tol_chol: 1e-9,
+        }
+    }
+
     #[test]
     fn validate_agexact_rejects_short_workspace() {
         Python::initialize();
 
-        let err = validate_agexact_inputs(
-            1,
-            2,
-            1,
-            &[0.0, 0.0],
-            &[1.0, 2.0],
-            &[1, 0],
-            &[1.0, 2.0],
-            &[0.0, 0.0],
-            &[0, 1],
-            &[0.0],
-            &[0.0],
-            &[0.0],
-            &[1.0],
-            &[0.0, 0.0, 0.0],
-            &[0, 0, 0, 0],
-            &[1],
-        )
-        .unwrap_err();
+        let data = AgexactData {
+            start: vec![0.0, 0.0],
+            stop: vec![1.0, 2.0],
+            event: vec![1, 0],
+            covar: vec![1.0, 2.0],
+            offset: vec![0.0, 0.0],
+            strata: vec![0, 1],
+            nocenter: vec![1],
+        };
+        let state = AgexactState {
+            means: vec![0.0],
+            beta: vec![0.0],
+            u: vec![0.0],
+            imat: vec![1.0],
+            loglik: vec![0.0, 0.0],
+            work: vec![0.0, 0.0, 0.0],
+            work2: vec![0, 0, 0, 0],
+        };
+        let params = sample_params(2, 1);
+
+        let err = validate_agexact_inputs(&data, &state, &params).unwrap_err();
 
         assert!(err.to_string().contains("work must have length at least"));
     }
@@ -667,25 +666,27 @@ mod tests {
     fn validate_agexact_rejects_length_mismatches() {
         Python::initialize();
 
-        let err = validate_agexact_inputs(
-            1,
-            2,
-            1,
-            &[0.0],
-            &[1.0, 2.0],
-            &[1, 0],
-            &[1.0, 2.0],
-            &[0.0, 0.0],
-            &[0, 1],
-            &[0.0],
-            &[0.0],
-            &[0.0],
-            &[1.0],
-            &[0.0, 0.0, 0.0, 0.0, 0.0],
-            &[0, 0, 0, 0],
-            &[1],
-        )
-        .unwrap_err();
+        let data = AgexactData {
+            start: vec![0.0],
+            stop: vec![1.0, 2.0],
+            event: vec![1, 0],
+            covar: vec![1.0, 2.0],
+            offset: vec![0.0, 0.0],
+            strata: vec![0, 1],
+            nocenter: vec![1],
+        };
+        let state = AgexactState {
+            means: vec![0.0],
+            beta: vec![0.0],
+            u: vec![0.0],
+            imat: vec![1.0],
+            loglik: vec![0.0, 0.0],
+            work: vec![0.0, 0.0, 0.0, 0.0, 0.0],
+            work2: vec![0, 0, 0, 0],
+        };
+        let params = sample_params(2, 1);
+
+        let err = validate_agexact_inputs(&data, &state, &params).unwrap_err();
 
         assert!(
             err.to_string()
