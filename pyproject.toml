@@ -62,7 +62,6 @@ sklearn = [
 features = ["pyo3/extension-module"]
 module-name = "survival._survival"
 python-source = "python"
-strip = true
 
 [tool.ruff]
 line-length = 100
