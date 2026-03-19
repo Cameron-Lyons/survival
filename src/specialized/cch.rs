@@ -1,6 +1,6 @@
 use crate::regression::coxph::{CoxPHModel, Subject};
 use pyo3::prelude::*;
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[pyclass(from_py_object)]
 pub enum CchMethod {
     Prentice,
@@ -32,11 +32,17 @@ impl CohortData {
     pub fn get_subject(&self, id: usize) -> Subject {
         self.subjects[id].clone()
     }
-    #[pyo3(signature = (_method, max_iter=100))]
-    pub fn fit(&self, _method: CchMethod, max_iter: u16) -> PyResult<CoxPHModel> {
+    #[pyo3(signature = (method, max_iter=100))]
+    pub fn fit(&self, method: CchMethod, max_iter: u16) -> PyResult<CoxPHModel> {
+        if !matches!(method, CchMethod::Prentice) {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
+                "CchMethod::{method:?} is not implemented; only Prentice is currently supported"
+            )));
+        }
+
         let mut model = CoxPHModel::new();
         for subject in &self.subjects {
-            if subject.is_subcohort {
+            if subject.is_subcohort || subject.is_case {
                 model.add_subject(subject)?;
             }
         }

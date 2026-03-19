@@ -1,4 +1,5 @@
-use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_MEDIUM};
+use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
+use crate::utilities::sorting::descending_time_indices;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -210,20 +211,7 @@ pub fn network_survival_model(
             eta.iter().map(|&e| e.exp()).collect()
         };
 
-        let mut indices: Vec<usize> = (0..n).collect();
-        if n > PARALLEL_THRESHOLD_LARGE {
-            indices.par_sort_by(|&a, &b| {
-                time[b]
-                    .partial_cmp(&time[a])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        } else {
-            indices.sort_by(|&a, &b| {
-                time[b]
-                    .partial_cmp(&time[a])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
+        let indices = descending_time_indices(&time);
 
         let mut gradient = vec![0.0; total_vars];
         let mut hessian_diag = vec![0.0; total_vars];
@@ -747,21 +735,7 @@ fn compute_peer_hazard(time: &[f64], event: &[i32], adjacency: &[f64], n: usize)
 }
 
 fn compute_partial_loglik(time: &[f64], event: &[i32], eta: &[f64], exp_eta: &[f64]) -> f64 {
-    let n = time.len();
-    let mut indices: Vec<usize> = (0..n).collect();
-    if n > PARALLEL_THRESHOLD_LARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    } else {
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+    let indices = descending_time_indices(time);
 
     let mut log_lik = 0.0;
     let mut risk_sum = 0.0;
@@ -821,20 +795,7 @@ fn compute_se(
         eta.iter().map(|&e| e.exp()).collect()
     };
 
-    let mut indices: Vec<usize> = (0..n).collect();
-    if n > PARALLEL_THRESHOLD_LARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    } else {
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+    let indices = descending_time_indices(time);
 
     let mut info_diag = vec![0.0; total_vars];
     let mut risk_sum = 0.0;

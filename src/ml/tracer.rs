@@ -10,7 +10,10 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 use super::config_validation::{ensure_open_unit_interval, ensure_positive_usize};
-use super::utils::{compute_duration_bins, linear_forward, relu_vec, tensor_to_vec_f32};
+use super::utils::{
+    EarlyStopping, compute_duration_bins, gelu_cpu, layer_norm_cpu, linear_forward, relu_vec,
+    shuffled_epoch_indices, tensor_to_vec_f32, train_validation_split_indices,
+};
 
 type Backend = NdArray;
 type AutodiffBackend = Autodiff<Backend>;
@@ -1034,51 +1037,6 @@ fn extract_weights(model: &TracerNetwork<AutodiffBackend>, config: &TracerConfig
     }
 }
 
-fn erf_approx(x: f64) -> f64 {
-    let a1 = 0.254829592;
-    let a2 = -0.284496736;
-    let a3 = 1.421413741;
-    let a4 = -1.453152027;
-    let a5 = 1.061405429;
-    let p = 0.3275911;
-
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let x = x.abs();
-
-    let t = 1.0 / (1.0 + p * x);
-    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-
-    sign * y
-}
-
-fn gelu_cpu(x: f64) -> f64 {
-    let sqrt_2 = std::f64::consts::SQRT_2;
-    x * 0.5 * (1.0 + erf_approx(x / sqrt_2))
-}
-
-fn layer_norm_cpu(x: &[f64], gamma: &[f32], beta: &[f32], eps: f32) -> Vec<f64> {
-    let n = x.len();
-    if n == 0 {
-        return vec![];
-    }
-    let mean: f64 = x.iter().sum::<f64>() / n as f64;
-    let var: f64 = x.iter().map(|&xi| (xi - mean).powi(2)).sum::<f64>() / n as f64;
-    let std = (var + eps as f64).sqrt();
-
-    x.iter()
-        .enumerate()
-        .map(|(i, &xi)| {
-            let g = if i < gamma.len() {
-                gamma[i] as f64
-            } else {
-                1.0
-            };
-            let b = if i < beta.len() { beta[i] as f64 } else { 0.0 };
-            (xi - mean) / std * g + b
-        })
-        .collect()
-}
-
 #[allow(clippy::too_many_arguments)]
 fn apply_mha_cpu(
     x: &[f64],
@@ -1308,31 +1266,19 @@ fn fit_tracer_inner(
 
     let event_weights = compute_event_weights(event, config.num_events);
 
-    let n_val = (n_obs as f64 * config.validation_fraction).floor() as usize;
-    let n_train = n_obs - n_val;
-
     let mut rng = fastrand::Rng::with_seed(seed);
-    let mut shuffled_indices: Vec<usize> = (0..n_obs).collect();
-    for i in (1..n_obs).rev() {
-        let j = rng.usize(0..=i);
-        shuffled_indices.swap(i, j);
-    }
-
-    let train_indices: Vec<usize> = shuffled_indices[..n_train].to_vec();
-    let val_indices: Vec<usize> = shuffled_indices[n_train..].to_vec();
+    let split = train_validation_split_indices(n_obs, config.validation_fraction, &mut rng);
+    let n_train = split.train_indices.len();
+    let n_val = split.val_indices.len();
+    let train_indices = split.train_indices;
+    let val_indices = split.val_indices;
 
     let mut train_loss_history = Vec::new();
     let mut val_loss_history = Vec::new();
-    let mut best_val_loss = f64::INFINITY;
-    let mut epochs_without_improvement = 0;
-    let mut best_weights: Option<StoredWeights> = None;
+    let mut early_stopping = EarlyStopping::new(config.early_stopping_patience);
 
     for _epoch in 0..config.n_epochs {
-        let mut epoch_indices = train_indices.clone();
-        for i in (1..epoch_indices.len()).rev() {
-            let j = rng.usize(0..=i);
-            epoch_indices.swap(i, j);
-        }
+        let epoch_indices = shuffled_epoch_indices(&train_indices, &mut rng);
 
         let mut epoch_loss = 0.0;
         let mut n_batches = 0;
@@ -1513,23 +1459,16 @@ fn fit_tracer_inner(
             );
             val_loss_history.push(val_loss);
 
-            if val_loss < best_val_loss {
-                best_val_loss = val_loss;
-                epochs_without_improvement = 0;
-                best_weights = Some(extract_weights(&model, config));
-            } else {
-                epochs_without_improvement += 1;
-            }
-
-            if let Some(patience) = config.early_stopping_patience
-                && epochs_without_improvement >= patience
-            {
+            early_stopping.record(val_loss, || extract_weights(&model, config));
+            if early_stopping.should_stop() {
                 break;
             }
         }
     }
 
-    let final_weights = best_weights.unwrap_or_else(|| extract_weights(&model, config));
+    let final_weights = early_stopping
+        .into_best_state()
+        .unwrap_or_else(|| extract_weights(&model, config));
 
     Tracer {
         weights: final_weights,

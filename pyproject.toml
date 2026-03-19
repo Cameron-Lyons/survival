@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "survival"
-version = "1.2.15"
+version = "1.2.16"
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 readme = "README.md"
 license = { text = "MIT" }
@@ -52,7 +52,7 @@ test = [
   "pytest==9.0.2",
   "numpy==2.4.3",
   "pandas==3.0.1",
-  "polars==1.38.1",
+  "polars==1.39.0",
 ]
 sklearn = [
   "scikit-learn>=1.0.0",

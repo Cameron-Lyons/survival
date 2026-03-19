@@ -10,7 +10,8 @@ use rayon::prelude::*;
 
 use super::config_validation::{ensure_open_unit_interval, ensure_positive_usize};
 use super::utils::{
-    compute_duration_bins, gelu_cpu, layer_norm_cpu, linear_forward, tensor_to_vec_f32,
+    EarlyStopping, compute_duration_bins, gelu_cpu, layer_norm_cpu, linear_forward,
+    shuffled_epoch_indices, tensor_to_vec_f32, train_validation_split_indices,
 };
 
 type Backend = NdArray;
@@ -857,31 +858,19 @@ fn fit_survtrace_inner(
         )))
         .init();
 
-    let n_val = (n_obs as f64 * config.validation_fraction).floor() as usize;
-    let n_train = n_obs - n_val;
-
     let mut rng = fastrand::Rng::with_seed(seed);
-    let mut shuffled_indices: Vec<usize> = (0..n_obs).collect();
-    for i in (1..n_obs).rev() {
-        let j = rng.usize(0..=i);
-        shuffled_indices.swap(i, j);
-    }
-
-    let train_indices: Vec<usize> = shuffled_indices[..n_train].to_vec();
-    let val_indices: Vec<usize> = shuffled_indices[n_train..].to_vec();
+    let split = train_validation_split_indices(n_obs, config.validation_fraction, &mut rng);
+    let n_train = split.train_indices.len();
+    let n_val = split.val_indices.len();
+    let train_indices = split.train_indices;
+    let val_indices = split.val_indices;
 
     let mut train_loss_history = Vec::new();
     let mut val_loss_history = Vec::new();
-    let mut best_val_loss = f64::INFINITY;
-    let mut epochs_without_improvement = 0;
-    let mut best_weights: Option<StoredWeights> = None;
+    let mut early_stopping = EarlyStopping::new(config.early_stopping_patience);
 
     for _epoch in 0..config.n_epochs {
-        let mut epoch_indices = train_indices.clone();
-        for i in (1..epoch_indices.len()).rev() {
-            let j = rng.usize(0..=i);
-            epoch_indices.swap(i, j);
-        }
+        let epoch_indices = shuffled_epoch_indices(&train_indices, &mut rng);
 
         let mut epoch_loss = 0.0;
         let mut n_batches = 0;
@@ -1020,24 +1009,18 @@ fn fit_survtrace_inner(
             }
             val_loss_history.push(val_loss);
 
-            if val_loss < best_val_loss {
-                best_val_loss = val_loss;
-                epochs_without_improvement = 0;
-                best_weights = Some(extract_weights(&model, config, cat_cardinalities));
-            } else {
-                epochs_without_improvement += 1;
-            }
-
-            if let Some(patience) = config.early_stopping_patience
-                && epochs_without_improvement >= patience
-            {
+            early_stopping.record(val_loss, || {
+                extract_weights(&model, config, cat_cardinalities)
+            });
+            if early_stopping.should_stop() {
                 break;
             }
         }
     }
 
-    let final_weights =
-        best_weights.unwrap_or_else(|| extract_weights(&model, config, cat_cardinalities));
+    let final_weights = early_stopping
+        .into_best_state()
+        .unwrap_or_else(|| extract_weights(&model, config, cat_cardinalities));
 
     SurvTrace {
         weights: final_weights,

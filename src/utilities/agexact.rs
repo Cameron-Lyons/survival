@@ -32,6 +32,97 @@ pub struct AgexactParams {
     pub tol_chol: f64,
 }
 
+fn validate_agexact_inputs(
+    maxiter: i32,
+    nused: i32,
+    nvar: i32,
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    covar: &[f64],
+    offset: &[f64],
+    strata: &[i32],
+    means: &[f64],
+    beta: &[f64],
+    u: &[f64],
+    imat: &[f64],
+    work: &[f64],
+    work2: &[i32],
+    nocenter: &[i32],
+) -> PyResult<(usize, usize)> {
+    if maxiter < 0 || nused < 0 || nvar < 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "maxiter, nused, and nvar must be non-negative",
+        ));
+    }
+
+    let n = nused as usize;
+    let p = nvar as usize;
+
+    if start.len() != n
+        || stop.len() != n
+        || event.len() != n
+        || offset.len() != n
+        || strata.len() != n
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "start, stop, event, offset, and strata must all have length nused",
+        ));
+    }
+
+    let covar_len = p.checked_mul(n).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("nused * nvar is too large")
+    })?;
+    if covar.len() != covar_len {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "covar must have length nused * nvar",
+        ));
+    }
+
+    if means.len() != p || beta.len() != p || u.len() != p || nocenter.len() != p {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "means, beta, u, and nocenter must all have length nvar",
+        ));
+    }
+
+    let imat_len = p.checked_mul(p).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("nvar * nvar is too large")
+    })?;
+    if imat.len() != imat_len {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "imat must have length nvar * nvar",
+        ));
+    }
+
+    let extra_work = p.checked_mul(3).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("required work length overflows usize")
+    })?;
+    let min_work_len = imat_len
+        .checked_add(extra_work)
+        .and_then(|len| len.checked_add(n))
+        .ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>("required work length overflows usize")
+        })?;
+    if work.len() < min_work_len {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "work must have length at least {}",
+            min_work_len
+        )));
+    }
+
+    let min_work2_len = n.checked_mul(2).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("required work2 length overflows usize")
+    })?;
+    if work2.len() < min_work2_len {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "work2 must have length at least {}",
+            min_work2_len
+        )));
+    }
+
+    Ok((n, p))
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn agexact(
@@ -55,6 +146,11 @@ pub fn agexact(
     tol_chol: f64,
     nocenter: Vec<i32>,
 ) -> PyResult<Py<PyDict>> {
+    validate_agexact_inputs(
+        maxiter, nused, nvar, &start, &stop, &event, &covar, &offset, &strata, &means, &beta, &u,
+        &imat, &work, &work2, &nocenter,
+    )?;
+
     let data = AgexactData {
         start,
         stop,
@@ -532,5 +628,68 @@ fn chinv2(chol: &mut [f64], n: usize) {
             }
             chol[i * n + j] = sum;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::Python;
+
+    #[test]
+    fn validate_agexact_rejects_short_workspace() {
+        Python::initialize();
+
+        let err = validate_agexact_inputs(
+            1,
+            2,
+            1,
+            &[0.0, 0.0],
+            &[1.0, 2.0],
+            &[1, 0],
+            &[1.0, 2.0],
+            &[0.0, 0.0],
+            &[0, 1],
+            &[0.0],
+            &[0.0],
+            &[0.0],
+            &[1.0],
+            &[0.0, 0.0, 0.0],
+            &[0, 0, 0, 0],
+            &[1],
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("work must have length at least"));
+    }
+
+    #[test]
+    fn validate_agexact_rejects_length_mismatches() {
+        Python::initialize();
+
+        let err = validate_agexact_inputs(
+            1,
+            2,
+            1,
+            &[0.0],
+            &[1.0, 2.0],
+            &[1, 0],
+            &[1.0, 2.0],
+            &[0.0, 0.0],
+            &[0, 1],
+            &[0.0],
+            &[0.0],
+            &[0.0],
+            &[1.0],
+            &[0.0, 0.0, 0.0, 0.0, 0.0],
+            &[0, 0, 0, 0],
+            &[1],
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("start, stop, event, offset, and strata must all have length nused")
+        );
     }
 }
