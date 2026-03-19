@@ -56,6 +56,23 @@ fn bootstrap_sample_indices(n: usize, seed: u64, iteration: usize) -> Vec<usize>
     let mut rng = fastrand::Rng::with_seed(seed.wrapping_add(iteration as u64));
     (0..n).map(|_| rng.usize(..n)).collect()
 }
+
+fn validate_bootstrap_inputs(n_bootstrap: usize, confidence_level: f64) -> PyResult<()> {
+    if n_bootstrap < 2 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_bootstrap must be at least 2",
+        ));
+    }
+
+    if !(0.0 < confidence_level && confidence_level < 1.0) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "confidence_level must be between 0 and 1",
+        ));
+    }
+
+    Ok(())
+}
+
 pub fn bootstrap_cox(
     time: &[f64],
     status: &[i32],
@@ -166,15 +183,19 @@ pub fn bootstrap_cox(
         .map(|col| col.iter().sum::<f64>() / actual_n_bootstrap as f64)
         .collect();
 
-    let std_errors: Vec<f64> = transposed
-        .iter()
-        .zip(means.iter())
-        .map(|(col, &mean)| {
-            let variance = col.iter().map(|&c| (c - mean).powi(2)).sum::<f64>()
-                / (actual_n_bootstrap - 1) as f64;
-            variance.sqrt()
-        })
-        .collect();
+    let std_errors: Vec<f64> = if actual_n_bootstrap > 1 {
+        transposed
+            .iter()
+            .zip(means.iter())
+            .map(|(col, &mean)| {
+                let variance = col.iter().map(|&c| (c - mean).powi(2)).sum::<f64>()
+                    / (actual_n_bootstrap - 1) as f64;
+                variance.sqrt()
+            })
+            .collect()
+    } else {
+        vec![0.0; nvar]
+    };
 
     let alpha = 1.0 - config.confidence_level;
     let lower_percentile = (alpha / 2.0 * actual_n_bootstrap as f64) as usize;
@@ -234,6 +255,10 @@ pub fn bootstrap_cox_ci(
     confidence_level: Option<f64>,
     seed: Option<u64>,
 ) -> PyResult<BootstrapResult> {
+    let n_bootstrap = n_bootstrap.unwrap_or(DEFAULT_BOOTSTRAP_SAMPLES);
+    let confidence_level = confidence_level.unwrap_or(0.95);
+    validate_bootstrap_inputs(n_bootstrap, confidence_level)?;
+
     let n = time.len();
     let nvar = if !covariates.is_empty() {
         covariates[0].len()
@@ -249,8 +274,8 @@ pub fn bootstrap_cox_ci(
         Array2::zeros((0, n))
     };
     let config = BootstrapConfig {
-        n_bootstrap: n_bootstrap.unwrap_or(DEFAULT_BOOTSTRAP_SAMPLES),
-        confidence_level: confidence_level.unwrap_or(0.95),
+        n_bootstrap,
+        confidence_level,
         seed,
     };
     let weights_ref = weights.as_deref();
@@ -266,7 +291,7 @@ pub fn bootstrap_survreg(
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::regression::survreg6::{DistributionType, survreg};
     let n = time.len();
-    let nvar = covariates.ncols();
+    let nvar = covariates.nrows();
     let cov_vecs: Vec<Vec<f64>> = (0..n)
         .map(|i| (0..nvar).map(|j| covariates[[j, i]]).collect())
         .collect();
@@ -348,15 +373,17 @@ pub fn bootstrap_survreg(
         *m /= actual_n_bootstrap as f64;
     }
     let mut std_errors = vec![0.0; ncoef];
-    for coefs in &bootstrap_coefs {
-        for (i, &c) in coefs.iter().enumerate() {
-            if i < ncoef {
-                std_errors[i] += (c - means[i]).powi(2);
+    if actual_n_bootstrap > 1 {
+        for coefs in &bootstrap_coefs {
+            for (i, &c) in coefs.iter().enumerate() {
+                if i < ncoef {
+                    std_errors[i] += (c - means[i]).powi(2);
+                }
             }
         }
-    }
-    for se in &mut std_errors {
-        *se = (*se / (actual_n_bootstrap - 1) as f64).sqrt();
+        for se in &mut std_errors {
+            *se = (*se / (actual_n_bootstrap - 1) as f64).sqrt();
+        }
     }
     let alpha = 1.0 - config.confidence_level;
     let lower_percentile = (alpha / 2.0 * actual_n_bootstrap as f64) as usize;
@@ -400,6 +427,10 @@ pub fn bootstrap_survreg_ci(
     confidence_level: Option<f64>,
     seed: Option<u64>,
 ) -> PyResult<BootstrapResult> {
+    let n_bootstrap = n_bootstrap.unwrap_or(DEFAULT_BOOTSTRAP_SAMPLES);
+    let confidence_level = confidence_level.unwrap_or(0.95);
+    validate_bootstrap_inputs(n_bootstrap, confidence_level)?;
+
     let n = time.len();
     let nvar = if !covariates.is_empty() {
         covariates[0].len()
@@ -415,11 +446,41 @@ pub fn bootstrap_survreg_ci(
         Array2::zeros((0, n))
     };
     let config = BootstrapConfig {
-        n_bootstrap: n_bootstrap.unwrap_or(DEFAULT_BOOTSTRAP_SAMPLES),
-        confidence_level: confidence_level.unwrap_or(0.95),
+        n_bootstrap,
+        confidence_level,
         seed,
     };
     let dist = distribution.unwrap_or("weibull");
     bootstrap_survreg(&time, &status, &cov_array, dist, &config)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BootstrapConfig, bootstrap_survreg};
+    use ndarray::Array2;
+
+    #[test]
+    fn test_bootstrap_survreg_transposed_covariates_smoke() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+        let covariates = Array2::from_shape_vec(
+            (2, 6),
+            vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        )
+        .unwrap();
+        let config = BootstrapConfig {
+            n_bootstrap: 8,
+            confidence_level: 0.95,
+            seed: Some(123),
+        };
+
+        let result = bootstrap_survreg(&time, &status, &covariates, "weibull", &config).unwrap();
+
+        assert_eq!(result.coefficients.len(), 3);
+        assert_eq!(result.std_errors.len(), 3);
+        assert_eq!(result.ci_lower.len(), 3);
+        assert_eq!(result.ci_upper.len(), 3);
+        assert!(!result.bootstrap_samples.is_empty());
+    }
 }

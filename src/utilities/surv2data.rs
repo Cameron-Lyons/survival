@@ -139,6 +139,7 @@ pub fn surv2data(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
 
     #[test]
     fn test_surv2data_basic() {
@@ -177,5 +178,50 @@ mod tests {
         assert!(result.id.len() >= 2);
         assert_eq!(result.time1[0], 0.0);
         assert_eq!(result.time2[0], 5.0);
+    }
+
+    #[test]
+    fn test_surv2data_is_invariant_to_input_order() {
+        let base_id = [1, 1, 2, 2];
+        let base_time = [0.0, 5.0, 0.0, 3.0];
+        let base_event_time = [10.0, 10.0, 8.0, 8.0];
+        let base_event_status = [1, 1, 0, 0];
+        let expected = vec![
+            (1, 0.0, 5.0, 0),
+            (1, 5.0, 10.0, 1),
+            (2, 0.0, 3.0, 0),
+            (2, 3.0, 8.0, 0),
+        ];
+
+        for permutation in (0..base_id.len()).permutations(base_id.len()) {
+            let id: Vec<i32> = permutation.iter().map(|&i| base_id[i]).collect();
+            let time: Vec<f64> = permutation.iter().map(|&i| base_time[i]).collect();
+            let event_time: Vec<f64> = permutation.iter().map(|&i| base_event_time[i]).collect();
+            let event_status: Vec<i32> =
+                permutation.iter().map(|&i| base_event_status[i]).collect();
+
+            let result = surv2data(
+                id.clone(),
+                time.clone(),
+                Some(event_time),
+                Some(event_status),
+            );
+            let intervals: Vec<(i32, f64, f64, i32)> = result
+                .id
+                .iter()
+                .zip(&result.time1)
+                .zip(&result.time2)
+                .zip(&result.status)
+                .map(|(((id, time1), time2), status)| (*id, *time1, *time2, *status))
+                .collect();
+
+            assert_eq!(intervals, expected);
+            assert_eq!(result.row_index.len(), result.id.len());
+            for idx in 0..result.row_index.len() {
+                let original = result.row_index[idx] - 1;
+                assert_eq!(id[original], result.id[idx]);
+                assert_eq!(time[original], result.time1[idx]);
+            }
+        }
     }
 }

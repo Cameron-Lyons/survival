@@ -9,6 +9,7 @@ pub mod numpy_utils;
 pub mod reliability;
 pub mod rttright;
 pub mod simd;
+pub mod sorting;
 pub mod statistical;
 pub mod strata;
 pub mod surv2data;

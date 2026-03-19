@@ -123,6 +123,57 @@ jobs:
       - name: Run Python tests
         run: python -m pytest python/tests/ -v
 
+  python-source-tree:
+    name: Python Source Tree
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-develop-py3.14-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-develop-py3.14-
+
+      - name: Install maturin and test dependencies
+        run: pip install maturin numpy pandas polars pytest
+
+      - name: Remove any preinstalled survival package
+        run: pip uninstall -y survival || true
+
+      - name: Install extension with maturin develop
+        run: maturin develop --release --features extension-module
+
+      - name: Verify extension import path
+        run: |
+          python - <<'PY'
+          import importlib.util
+          spec = importlib.util.find_spec("survival._survival")
+          if spec is None or spec.origin is None:
+              raise SystemExit("Could not locate survival._survival")
+          print(spec.origin)
+          PY
+
+      - name: Run Python tests against source-tree install
+        run: python -m pytest python/tests/ -v
+
   r-validation:
     name: R Survival Package Validation
     runs-on: ubuntu-latest

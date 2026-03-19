@@ -31,6 +31,7 @@ pub fn tmerge(
             has_one = true;
             local_k += 1;
         }
+        k = local_k;
         if has_one {
             result[i] = if result[i].is_nan() {
                 csum
@@ -162,5 +163,38 @@ mod tests {
         assert_eq!(result[0], 1);
         assert_eq!(result[1], 0);
         assert_eq!(result[2], 3);
+    }
+
+    #[test]
+    fn tmerge_accumulates_within_subject_and_resets_at_boundaries() {
+        let result = tmerge(
+            vec![1, 1, 2, 2, 2],
+            vec![1.0, 3.0, 0.5, 1.5, 3.0],
+            vec![f64::NAN, 10.0, f64::NAN, 1.0, f64::NAN],
+            vec![1, 1, 2, 2, 2],
+            vec![0.5, 2.5, 0.25, 1.0, 2.0],
+            vec![2.0, 3.0, 5.0, 7.0, 11.0],
+        );
+
+        assert_eq!(result.len(), 5);
+        assert!((result[0] - 2.0).abs() < 1e-10);
+        assert!((result[1] - 15.0).abs() < 1e-10);
+        assert!((result[2] - 5.0).abs() < 1e-10);
+        assert!((result[3] - 13.0).abs() < 1e-10);
+        assert!((result[4] - 23.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tmerge2_indices_are_subject_local_and_monotone() {
+        let result = tmerge2(
+            vec![1, 1, 2, 2],
+            vec![1.0, 3.0, 0.5, 3.0],
+            vec![1, 1, 2, 2, 2],
+            vec![0.5, 2.5, 0.25, 1.0, 2.0],
+        );
+
+        assert_eq!(result, vec![1, 2, 3, 5]);
+        assert!(result[0] <= result[1]);
+        assert!(result[2] <= result[3]);
     }
 }

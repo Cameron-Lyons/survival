@@ -123,6 +123,7 @@ pub fn survcondense(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
 
     #[test]
     fn test_survcondense_basic() {
@@ -178,5 +179,43 @@ mod tests {
 
         assert_eq!(result.id.len(), 2);
         assert_eq!(result.id, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_survcondense_is_invariant_to_input_order() {
+        let base_id = [1, 1, 1, 2, 2];
+        let base_time1 = [0.0, 2.0, 4.0, 0.0, 3.0];
+        let base_time2 = [2.0, 4.0, 6.0, 3.0, 5.0];
+        let base_status = [0, 0, 1, 0, 0];
+        let expected = vec![(1, 0.0, 6.0, 1), (2, 0.0, 5.0, 0)];
+
+        for permutation in (0..base_id.len()).permutations(base_id.len()) {
+            let id: Vec<i32> = permutation.iter().map(|&i| base_id[i]).collect();
+            let time1: Vec<f64> = permutation.iter().map(|&i| base_time1[i]).collect();
+            let time2: Vec<f64> = permutation.iter().map(|&i| base_time2[i]).collect();
+            let status: Vec<i32> = permutation.iter().map(|&i| base_status[i]).collect();
+
+            let result = survcondense(id.clone(), time1.clone(), time2.clone(), status.clone());
+            let condensed: Vec<(i32, f64, f64, i32)> = result
+                .id
+                .iter()
+                .zip(&result.time1)
+                .zip(&result.time2)
+                .zip(&result.status)
+                .map(|(((id, time1), time2), status)| (*id, *time1, *time2, *status))
+                .collect();
+
+            assert_eq!(condensed, expected);
+
+            let mut seen = vec![false; id.len()];
+            for row_indices in &result.row_map {
+                for &row in row_indices {
+                    let original = row - 1;
+                    assert!(!seen[original]);
+                    seen[original] = true;
+                }
+            }
+            assert!(seen.into_iter().all(|covered| covered));
+        }
     }
 }

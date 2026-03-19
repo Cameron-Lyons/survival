@@ -1,8 +1,8 @@
 [package]
 name = "survival"
-version = "1.2.15"
+version = "1.2.16"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.94"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 license = "MIT"
@@ -28,7 +28,7 @@ rayon = "1.11.0"
 faer = "0.24.0"
 fastrand = "2.3.0"
 pulp = "0.22.2"
-wide = "1.1.1"
+wide = "1.2.0"
 burn = { version = "0.20.1", features = ["autodiff", "ndarray"] }
 num_cpus = "1.17.0"
 

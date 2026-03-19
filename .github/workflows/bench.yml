@@ -78,7 +78,7 @@ jobs:
 
       - name: Post benchmark results
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           path: bench-comment.md
           header: benchmarks

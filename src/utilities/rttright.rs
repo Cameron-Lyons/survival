@@ -75,29 +75,6 @@ pub fn rttright(
     let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
     let sorted_weights: Vec<f64> = indices.iter().map(|&i| init_weights[i]).collect();
 
-    let mut rtt_weights = vec![0.0; n];
-    let mut cumulative_censored_weight = 0.0;
-
-    for i in 0..n {
-        if i > 0 && sorted_status[i - 1] == 0 {
-            cumulative_censored_weight += sorted_weights[i - 1];
-        }
-
-        if sorted_status[i] == 1 {
-            let base_weight = sorted_weights[i];
-            let n_at_risk = (n - i) as f64;
-            let redistributed = if n_at_risk > 0.0 {
-                cumulative_censored_weight / n_at_risk
-            } else {
-                0.0
-            };
-
-            rtt_weights[i] = base_weight + redistributed;
-        } else {
-            rtt_weights[i] = 0.0;
-        }
-    }
-
     let km_weights = compute_km_weights(&sorted_time, &sorted_status, &sorted_weights);
 
     Ok(RttrightResult {
@@ -199,9 +176,10 @@ pub fn rttright_stratified(
 
         let result = rttright(strata_time, strata_status, Some(strata_weights))?;
 
-        for (j, &orig_idx) in indices.iter().enumerate() {
-            final_weights[orig_idx] = result.weights[j];
-            final_order[offset + j] = orig_idx;
+        for (sorted_pos, &local_idx) in result.order.iter().enumerate() {
+            let orig_idx = indices[local_idx];
+            final_weights[orig_idx] = result.weights[sorted_pos];
+            final_order[offset + sorted_pos] = orig_idx;
         }
         offset += indices.len();
     }
@@ -217,6 +195,7 @@ pub fn rttright_stratified(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
 
     #[test]
     fn test_rttright_basic() {
@@ -252,5 +231,55 @@ mod tests {
 
         let result = rttright(time, status, None).unwrap();
         assert!(result.weights.is_empty());
+    }
+
+    #[test]
+    fn test_rttright_stratified_aligns_weights_to_original_rows() {
+        let result = rttright_stratified(
+            vec![3.0, 1.0, 2.0, 1.5],
+            vec![1, 0, 1, 1],
+            vec![0, 0, 1, 1],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.weights[1], 0.0);
+        assert!(result.weights[0] > 0.0);
+        assert!(result.weights[2] > 0.0);
+        assert!(result.weights[3] > 0.0);
+
+        let mut order = result.order.clone();
+        order.sort_unstable();
+        assert_eq!(order, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_rttright_is_invariant_to_input_order_with_unique_times() {
+        let base_time = [1.0, 2.0, 3.0, 4.0];
+        let base_status = [1, 0, 1, 1];
+        let base_weights = [1.0, 2.0, 1.5, 0.5];
+
+        let baseline = rttright(
+            base_time.to_vec(),
+            base_status.to_vec(),
+            Some(base_weights.to_vec()),
+        )
+        .unwrap();
+
+        for permutation in (0..base_time.len()).permutations(base_time.len()) {
+            let time: Vec<f64> = permutation.iter().map(|&i| base_time[i]).collect();
+            let status: Vec<i32> = permutation.iter().map(|&i| base_status[i]).collect();
+            let weights: Vec<f64> = permutation.iter().map(|&i| base_weights[i]).collect();
+
+            let result = rttright(time, status, Some(weights)).unwrap();
+
+            assert_eq!(result.time, baseline.time);
+            assert_eq!(result.status, baseline.status);
+            assert_eq!(result.weights, baseline.weights);
+
+            let mut order = result.order.clone();
+            order.sort_unstable();
+            assert_eq!(order, vec![0, 1, 2, 3]);
+        }
     }
 }
