@@ -112,7 +112,10 @@ def test_survexp_validates_method():
         rates_female=[0.000008, 0.00004],
     )
 
-    with pytest.raises(ValueError, match="method must be 'hakulinen', 'conditional', or 'individual'"):
+    with pytest.raises(
+        ValueError,
+        match="method must be 'hakulinen', 'conditional', or 'individual'",
+    ):
         survival.survexp(
             time=[365.0],
             age=[18250.0],

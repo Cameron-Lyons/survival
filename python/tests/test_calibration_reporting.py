@@ -36,7 +36,9 @@ def test_calibration_prediction_and_risk_public_apis():
     assert 0.0 <= calibration.hosmer_lemeshow_pvalue <= 1.0
 
     assert prediction.linear_predictor == pytest.approx([0.5, -0.25, 0.25])
-    assert prediction.risk_score == pytest.approx([1.6487212707001282, 0.7788007830714049, 1.2840254166877414])
+    assert prediction.risk_score == pytest.approx(
+        [1.6487212707001282, 0.7788007830714049, 1.2840254166877414]
+    )
     assert prediction.times == pytest.approx([1.5, 2.5])
     assert len(prediction.survival_prob) == 3
     assert all(len(row) == 2 for row in prediction.survival_prob)
@@ -183,7 +185,10 @@ def test_reporting_public_apis_and_validation():
     with pytest.raises(ValueError, match="All input vectors must have the same length"):
         survival.forest_plot_data(["x"], [0.1, 0.2], [0.1], 0.95)
 
-    with pytest.raises(ValueError, match="predicted and observed must have the same non-zero length"):
+    with pytest.raises(
+        ValueError,
+        match="predicted and observed must have the same non-zero length",
+    ):
         survival.calibration_plot_data([0.1], [0, 1], 2)
 
     with pytest.raises(ValueError, match="Both positive and negative labels required"):
@@ -223,5 +228,8 @@ def test_decision_curve_public_apis_and_validation():
     with pytest.raises(ValueError, match="All inputs must have the same non-zero length"):
         survival.decision_curve_analysis([], [], [], 1.0, None)
 
-    with pytest.raises(ValueError, match="model_predictions and model_names must have the same non-zero length"):
+    with pytest.raises(
+        ValueError,
+        match="model_predictions and model_names must have the same non-zero length",
+    ):
         survival.compare_decision_curves([[0.1]], [], [1.0], [1], 1.0, None)

@@ -70,7 +70,9 @@ def test_conditional_logistic_regression_fit_populates_outputs():
 
 
 def test_conditional_logistic_regression_is_invariant_to_row_order():
-    forward = survival.ConditionalLogisticRegression(_matched_clogit_dataset(), max_iter=20, tol=1e-9)
+    forward = survival.ConditionalLogisticRegression(
+        _matched_clogit_dataset(), max_iter=20, tol=1e-9
+    )
 
     reversed_dataset = survival.ClogitDataSet()
     for case_status, stratum, covariates in reversed(
@@ -92,7 +94,7 @@ def test_conditional_logistic_regression_is_invariant_to_row_order():
 
 def test_conditional_logistic_regression_uses_strata():
     pooled_dataset = survival.ClogitDataSet()
-    for case_status, stratum, covariates in [
+    for case_status, _stratum, covariates in [
         (1, 0, [5.0]),
         (0, 0, [0.0]),
         (1, 1, [1.0]),

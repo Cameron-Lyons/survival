@@ -342,5 +342,8 @@ def test_anova_and_basehaz_public_apis():
     with pytest.raises(ValueError, match="Need at least 2 models for comparison"):
         survival.anova_coxph([-1.0], [1], None, "LRT")
 
-    with pytest.raises(ValueError, match="time, status, and linear_predictors must have the same length"):
+    with pytest.raises(
+        ValueError,
+        match="time, status, and linear_predictors must have the same length",
+    ):
         survival.basehaz([1.0], [1, 0], [0.1], False)
