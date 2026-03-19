@@ -114,7 +114,17 @@ def test_agexact_public_api_and_validation():
         [1],
     )
 
-    assert sorted(result) == ["beta", "covar", "flag", "imat", "loglik", "maxiter", "means", "sctest", "u"]
+    assert sorted(result) == [
+        "beta",
+        "covar",
+        "flag",
+        "imat",
+        "loglik",
+        "maxiter",
+        "means",
+        "sctest",
+        "u",
+    ]
     assert result["beta"] == pytest.approx([0.0])
     assert result["loglik"] == pytest.approx([0.0, 0.0])
     assert result["flag"] == 0

@@ -94,17 +94,35 @@ def test_tree_estimators_smoke():
 
 
 @pytest.mark.parametrize(
-    "estimator_cls, kwargs",
+    ("estimator_cls", "kwargs"),
     [
         (CoxPHEstimator, {"n_iters": 5}),
-        (GradientBoostSurvivalEstimator, {"n_estimators": 5, "max_depth": 2, "min_samples_split": 2, "min_samples_leaf": 1, "seed": 1}),
-        (SurvivalForestEstimator, {"n_trees": 5, "min_node_size": 1, "sample_fraction": 0.8, "seed": 1, "oob_error": False}),
+        (
+            GradientBoostSurvivalEstimator,
+            {
+                "n_estimators": 5,
+                "max_depth": 2,
+                "min_samples_split": 2,
+                "min_samples_leaf": 1,
+                "seed": 1,
+            },
+        ),
+        (
+            SurvivalForestEstimator,
+            {
+                "n_trees": 5,
+                "min_node_size": 1,
+                "sample_fraction": 0.8,
+                "seed": 1,
+                "oob_error": False,
+            },
+        ),
     ],
 )
 def test_estimators_require_fit_before_predict(estimator_cls, kwargs):
     estimator = estimator_cls(**kwargs)
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="not fitted"):
         estimator.predict(np.array([[0.1]], dtype=np.float64))
 
 
@@ -179,10 +197,10 @@ def test_sklearn_compat_fallback_without_sklearn(monkeypatch):
     module_path = Path(sklearn_compat.__file__)
     original_import = builtins.__import__
 
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    def fake_import(name, globalns=None, localns=None, fromlist=(), level=0):
         if name.startswith("sklearn"):
             raise ImportError("scikit-learn intentionally unavailable")
-        return original_import(name, globals, locals, fromlist, level)
+        return original_import(name, globalns, localns, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     spec = importlib.util.spec_from_file_location("survival.sklearn_compat_no_sklearn", module_path)

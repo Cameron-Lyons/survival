@@ -96,7 +96,7 @@ def test_cox_score_residuals_public_api():
 
     assert len(breslow) == 4
     assert len(efron) == 4
-    assert any(abs(a - b) > 1e-12 for a, b in zip(breslow, efron))
+    assert any(abs(a - b) > 1e-12 for a, b in zip(breslow, efron, strict=True))
 
     with pytest.raises(ValueError, match="y array must have length >= 2 \\* n"):
         survival.cox_score_residuals(
