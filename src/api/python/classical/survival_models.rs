@@ -3,10 +3,13 @@ use super::*;
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_functions!(
         m,
+        agsurv4,
+        agsurv5,
         survfitkm,
         survfitkm_with_options,
         survfitaj,
         compute_logrank_components,
+        survdiff2,
         finegray,
         finegray_regression,
         competing_risks_cif,

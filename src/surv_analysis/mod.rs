@@ -1,4 +1,6 @@
 pub(crate) mod aggregate_survfit;
+pub(crate) mod agsurv4;
+pub(crate) mod agsurv5;
 pub(crate) mod cox_baseline;
 pub(crate) mod illness_death;
 pub(crate) mod logrank_components;
