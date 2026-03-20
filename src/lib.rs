@@ -115,6 +115,8 @@ pub use scoring::coxscore2::cox_score_residuals;
 pub use surv_analysis::aggregate_survfit::{
     AggregateSurvfitResult, aggregate_survfit, aggregate_survfit_by_group,
 };
+pub use surv_analysis::agsurv4::agsurv4;
+pub use surv_analysis::agsurv5::agsurv5;
 pub use surv_analysis::cox_baseline::{
     compute_baseline_survival_steps, compute_tied_baseline_summaries,
 };
@@ -122,7 +124,9 @@ pub use surv_analysis::illness_death::{
     IllnessDeathConfig, IllnessDeathPrediction, IllnessDeathResult, IllnessDeathType,
     TransitionHazard, fit_illness_death, predict_illness_death,
 };
-pub use surv_analysis::logrank_components::{SurvDiffResult, compute_logrank_components};
+pub use surv_analysis::logrank_components::{
+    SurvDiffResult, compute_logrank_components, survdiff2,
+};
 pub use surv_analysis::multi_state::{
     MarkovMSMResult, MultiStateConfig, MultiStateResult, TransitionIntensityResult,
     estimate_transition_intensities, fit_markov_msm, fit_multi_state_model,

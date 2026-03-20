@@ -1,11 +1,42 @@
 #[cfg(test)]
 mod tests {
+    use crate::agsurv4;
     use crate::data_prep::survsplit::survsplit;
     use crate::matrix::chinv2::chinv2;
     use crate::matrix::cholesky2::cholesky2;
     use crate::surv_analysis::logrank_components::{
         SurvDiffInput, SurvDiffOutput, SurvDiffParams, compute_survdiff,
     };
+    use crate::survdiff2;
+
+    #[test]
+    fn test_agsurv4_public_alias() {
+        let result = agsurv4(vec![0, 1], vec![2.0], vec![0.5], 2, vec![1.0, 4.0]).unwrap();
+        assert_eq!(
+            result.len(),
+            2,
+            "Backward-compatible agsurv4 alias should remain callable"
+        );
+    }
+
+    #[test]
+    fn test_survdiff2_public_alias() {
+        let result = survdiff2(
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![1, 1, 0, 1],
+            vec![1, 2, 1, 2],
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.observed.len(),
+            2,
+            "Backward-compatible survdiff2 alias should remain callable"
+        );
+    }
+
     #[test]
     fn test_survdiff2_standard() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];

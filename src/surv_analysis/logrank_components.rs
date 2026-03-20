@@ -92,6 +92,18 @@ pub fn compute_logrank_components(
     })
 }
 
+/// Backward-compatible alias retained for the public crate and Python APIs.
+#[pyfunction]
+pub fn survdiff2(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    group: Vec<i32>,
+    strata: Option<Vec<i32>>,
+    rho: Option<f64>,
+) -> PyResult<SurvDiffResult> {
+    compute_logrank_components(time, status, group, strata, rho)
+}
+
 pub(crate) struct SurvDiffInput<'a> {
     pub(crate) time: &'a [f64],
     pub(crate) status: &'a [i32],

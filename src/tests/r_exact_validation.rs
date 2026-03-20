@@ -401,9 +401,7 @@ mod tests {
 
         assert!(
             rel_approx_eq(result.statistic, lung.logrank_sex.chisq, STAT_TOL),
-            "Lung logrank chi-squared: expected {}, got {}",
-            lung.logrank_sex.chisq,
-            result.statistic
+            "Lung logrank chi-squared mismatch"
         );
     }
 
@@ -421,9 +419,7 @@ mod tests {
 
         assert!(
             rel_approx_eq(result.statistic, ovarian.logrank.chisq, STAT_TOL),
-            "Ovarian logrank chi-squared: expected {}, got {}",
-            ovarian.logrank.chisq,
-            result.statistic
+            "Ovarian logrank chi-squared mismatch"
         );
     }
 
