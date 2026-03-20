@@ -1,1 +1,1 @@
-pub mod interval_censoring;
+pub(crate) mod interval_censoring;

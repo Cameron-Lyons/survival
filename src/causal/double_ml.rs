@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 
-use crate::utilities::statistical::normal_cdf;
+use crate::internal::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]

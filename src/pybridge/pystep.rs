@@ -21,7 +21,7 @@ fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
         }
     }
 }
-pub fn pystep(
+pub(crate) fn pystep(
     edim: usize,
     data: &mut [f64],
     efac: &[i32],
@@ -91,7 +91,7 @@ pub fn pystep(
     }
     (et2, indx, indx2, wt)
 }
-pub fn pystep_simple(
+pub(crate) fn pystep_simple(
     odim: usize,
     data: &[f64],
     ofac: &[i32],
@@ -144,7 +144,7 @@ pub fn pystep_simple(
     (maxtime, index as i32)
 }
 #[pyfunction]
-pub fn perform_pystep_calculation(
+pub(crate) fn perform_pystep_calculation(
     edim: usize,
     data: Vec<f64>,
     efac: Vec<i32>,
@@ -183,7 +183,7 @@ pub fn perform_pystep_calculation(
     })
 }
 #[pyfunction]
-pub fn perform_pystep_simple_calculation(
+pub(crate) fn perform_pystep_simple_calculation(
     odim: usize,
     data: Vec<f64>,
     ofac: Vec<i32>,

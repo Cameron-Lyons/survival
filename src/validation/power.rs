@@ -1,5 +1,5 @@
 use crate::constants::{DEFAULT_ALLOCATION_RATIO, DEFAULT_ALPHA, DEFAULT_POWER, DEFAULT_SIDED};
-use crate::utilities::statistical::{normal_cdf as norm_cdf, normal_inverse_cdf as norm_ppf};
+use crate::internal::statistical::{normal_cdf as norm_cdf, normal_inverse_cdf as norm_ppf};
 use pyo3::prelude::*;
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -42,7 +42,7 @@ impl SampleSizeResult {
         }
     }
 }
-pub fn sample_size_logrank(
+pub(crate) fn sample_size_logrank(
     hazard_ratio: f64,
     power: f64,
     alpha: f64,
@@ -69,7 +69,7 @@ pub fn sample_size_logrank(
         method: "Schoenfeld".to_string(),
     }
 }
-pub fn sample_size_freedman(
+pub(crate) fn sample_size_freedman(
     hazard_ratio: f64,
     power: f64,
     alpha: f64,
@@ -100,7 +100,7 @@ pub fn sample_size_freedman(
         method: "Freedman".to_string(),
     }
 }
-pub fn power_logrank(
+pub(crate) fn power_logrank(
     n_events: usize,
     hazard_ratio: f64,
     alpha: f64,
@@ -232,7 +232,7 @@ impl AccrualResult {
         }
     }
 }
-pub fn expected_events_exponential(
+pub(crate) fn expected_events_exponential(
     n_total: usize,
     hazard_control: f64,
     hazard_ratio: f64,

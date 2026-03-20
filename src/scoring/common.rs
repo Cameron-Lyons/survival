@@ -1,5 +1,5 @@
 use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
-use crate::utilities::validation::{ValidationError, validate_length};
+use crate::internal::validation::{ValidationError, validate_length};
 use ndarray::Array2;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -7,7 +7,7 @@ use pyo3::types::PyDict;
 use rayon::prelude::*;
 
 #[inline]
-pub fn apply_deltas_add<F>(
+pub(crate) fn apply_deltas_add<F>(
     indices: &[usize],
     nvar: usize,
     matrix: &mut Array2<f64>,
@@ -36,7 +36,7 @@ pub fn apply_deltas_add<F>(
 }
 
 #[inline]
-pub fn apply_deltas_set<F>(
+pub(crate) fn apply_deltas_set<F>(
     indices: &[usize],
     nvar: usize,
     matrix: &mut Array2<f64>,
@@ -68,7 +68,7 @@ fn validation_err_to_pyresult<T>(result: Result<T, ValidationError>) -> PyResult
     result.map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-pub fn validate_scoring_inputs(
+pub(crate) fn validate_scoring_inputs(
     n: usize,
     time_data_len: usize,
     covariates_len: usize,
@@ -90,7 +90,7 @@ pub fn validate_scoring_inputs(
     validation_err_to_pyresult(validate_length(n, weights_len, "weights"))?;
     Ok(())
 }
-pub fn compute_summary_stats(residuals: &[f64], n: usize, nvar: usize) -> Vec<f64> {
+pub(crate) fn compute_summary_stats(residuals: &[f64], n: usize, nvar: usize) -> Vec<f64> {
     if n > PARALLEL_THRESHOLD_MEDIUM && nvar > 1 {
         (0..nvar)
             .into_par_iter()
@@ -133,7 +133,7 @@ pub fn compute_summary_stats(residuals: &[f64], n: usize, nvar: usize) -> Vec<f6
         summary_stats
     }
 }
-pub fn build_score_result(
+pub(crate) fn build_score_result(
     py: Python<'_>,
     residuals: Vec<f64>,
     n: usize,

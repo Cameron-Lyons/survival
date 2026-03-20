@@ -1,8 +1,9 @@
 use crate::constants::{DEFAULT_CONFIDENCE_LEVEL, PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON};
-use crate::utilities::numpy_utils::{
+use crate::internal::numpy_utils::{
     extract_optional_vec_f64, extract_optional_vec_i32, extract_vec_f64,
 };
-use crate::utilities::validation::{
+use crate::internal::statistical::normal_inverse_cdf;
+use crate::internal::validation::{
     clamp_probability, validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
@@ -291,7 +292,7 @@ pub fn compute_survfitkm(
     }
 
     let alpha = 1.0 - config.conf_level;
-    let z = normal_quantile(1.0 - alpha / 2.0);
+    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
 
     let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = estimate_vec
         .iter()
@@ -366,44 +367,6 @@ pub fn survfitkm_with_options(
     ))
 }
 
-fn normal_quantile(p: f64) -> f64 {
-    if p <= 0.0 || p >= 1.0 {
-        return if p <= 0.0 {
-            f64::NEG_INFINITY
-        } else {
-            f64::INFINITY
-        };
-    }
-
-    let t = if p < 0.5 {
-        (-2.0 * p.ln()).sqrt()
-    } else {
-        (-2.0 * (1.0 - p).ln()).sqrt()
-    };
-
-    let c0 = 2.515517;
-    let c1 = 0.802853;
-    let c2 = 0.010328;
-    let d1 = 1.432788;
-    let d2 = 0.189269;
-    let d3 = 0.001308;
-
-    let result = t - (c0 + c1 * t + c2 * t * t) / (1.0 + d1 * t + d2 * t * t + d3 * t * t * t);
-
-    if p < 0.5 { -result } else { result }
-}
-
-#[pymodule]
-#[pyo3(name = "survfitkm")]
-fn survfitkm_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(survfitkm, &m)?)?;
-    m.add_function(wrap_pyfunction!(survfitkm_with_options, &m)?)?;
-    m.add_class::<SurvFitKMOutput>()?;
-    m.add_class::<SurvfitKMOptions>()?;
-    m.add_class::<KaplanMeierConfig>()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,9 +389,9 @@ mod tests {
 
     #[test]
     fn test_normal_quantile() {
-        assert!((normal_quantile(0.5)).abs() < 0.01);
-        let q_025 = normal_quantile(0.025);
-        let q_975 = normal_quantile(0.975);
+        assert!((normal_inverse_cdf(0.5)).abs() < 0.01);
+        let q_025 = normal_inverse_cdf(0.025);
+        let q_975 = normal_inverse_cdf(0.975);
         assert!((q_025 + q_975).abs() < 0.01);
         assert!((q_975 - 1.96).abs() < 0.01);
     }

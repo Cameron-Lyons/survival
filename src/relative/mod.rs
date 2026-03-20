@@ -1,2 +1,2 @@
-pub mod net_survival;
-pub mod relative_survival;
+pub(crate) mod net_survival;
+pub(crate) mod relative_survival;

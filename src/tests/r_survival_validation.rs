@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use crate::regression::coxfit6::{CoxFit, CoxFitBuilder, Method as CoxMethod};
+    use crate::regression::cox_optimizer::{CoxFit, CoxFitBuilder, Method as CoxMethod};
     use crate::residuals::coxmart::compute_coxmart;
-    use crate::surv_analysis::nelson_aalen::nelson_aalen;
-    use crate::surv_analysis::survdiff2::{
+    use crate::surv_analysis::logrank_components::{
         SurvDiffInput, SurvDiffOutput, SurvDiffParams, compute_survdiff,
     };
+    use crate::surv_analysis::nelson_aalen::nelson_aalen;
     use crate::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
     use crate::tests::common::{
         STANDARD_TOL, STRICT_TOL, aml_combined_sorted as aml_combined, aml_maintained,

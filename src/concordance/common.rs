@@ -1,4 +1,4 @@
-use crate::utilities::validation::{ValidationError, validate_length};
+use crate::internal::validation::{ValidationError, validate_length};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -7,7 +7,7 @@ fn validation_err_to_pyresult<T>(result: Result<T, ValidationError>) -> PyResult
     result.map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
-pub fn validate_concordance_inputs(
+pub(crate) fn validate_concordance_inputs(
     time_data_len: usize,
     n: usize,
     indices_len: usize,
@@ -22,7 +22,7 @@ pub fn validate_concordance_inputs(
     Ok(())
 }
 
-pub fn validate_extended_concordance_inputs(
+pub(crate) fn validate_extended_concordance_inputs(
     time_data_len: usize,
     n: usize,
     indices_len: usize,
@@ -35,7 +35,7 @@ pub fn validate_extended_concordance_inputs(
     validation_err_to_pyresult(validate_length(n, sort_stop_len, "sort_stop"))?;
     Ok(())
 }
-pub fn build_concordance_result(
+pub(crate) fn build_concordance_result(
     py: Python<'_>,
     count: &[f64],
     imat: Option<&[f64]>,
@@ -77,7 +77,7 @@ pub fn build_concordance_result(
     Ok(dict.into())
 }
 #[inline]
-pub fn walkup_binary_tree(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
+pub(crate) fn walkup_binary_tree(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) -> [f64; 3] {
     let mut sums = [0.0; 3];
     if index >= ntree {
         return sums;
@@ -106,7 +106,7 @@ pub fn walkup_binary_tree(nwt: &[f64], twt: &[f64], index: usize, ntree: usize) 
     sums
 }
 #[inline]
-pub fn add_to_binary_tree(nwt: &mut [f64], twt: &mut [f64], index: usize, wt: f64) {
+pub(crate) fn add_to_binary_tree(nwt: &mut [f64], twt: &mut [f64], index: usize, wt: f64) {
     nwt[index] += wt;
     let mut current = index;
     while current > 0 {

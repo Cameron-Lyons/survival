@@ -1,5 +1,5 @@
 use crate::constants::{ROYSTON_KAPPA_FACTOR, ROYSTON_VARIANCE_FACTOR};
-use crate::utilities::statistical::{normal_cdf, normal_inverse_cdf};
+use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
 use pyo3::prelude::*;
 
 /// Result of Royston's D statistic calculation

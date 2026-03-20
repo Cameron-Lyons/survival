@@ -1,5 +1,5 @@
-use crate::utilities::matrix::lu_solve;
-use crate::utilities::statistical::normal_cdf;
+use crate::internal::matrix::lu_solve;
+use crate::internal::statistical::normal_cdf;
 use ndarray::{Array1, Array2, Axis};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;

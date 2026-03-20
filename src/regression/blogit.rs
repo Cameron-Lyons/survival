@@ -1,4 +1,4 @@
-use crate::utilities::statistical::probit;
+use crate::internal::statistical::probit;
 use pyo3::prelude::*;
 fn cloglog(p: f64) -> f64 {
     (-(1.0 - p).ln()).ln()

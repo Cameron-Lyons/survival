@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
+    use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod};
     use crate::surv_analysis::nelson_aalen::nelson_aalen;
     use crate::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
     use crate::tests::common::{LOOSE_TOL, STANDARD_TOL, rel_approx_eq};

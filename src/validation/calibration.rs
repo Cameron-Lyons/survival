@@ -1,6 +1,6 @@
 use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_SMALL};
+use crate::internal::statistical::{chi2_sf, normal_cdf};
 use crate::simd_ops::{dot_product_simd, mean_simd, subtract_scalar_simd, sum_of_squares_simd};
-use crate::utilities::statistical::{chi2_sf, normal_cdf};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ impl CalibrationResult {
         }
     }
 }
-pub fn calibration_curve(
+pub(crate) fn calibration_curve(
     predicted_risk: &[f64],
     observed_event: &[i32],
     n_groups: usize,
@@ -191,7 +191,7 @@ impl PredictionResult {
         }
     }
 }
-pub fn predict_survival(
+pub(crate) fn predict_survival(
     coef: &[f64],
     x: &[Vec<f64>],
     baseline_hazard: &[f64],
@@ -332,7 +332,7 @@ impl RiskStratificationResult {
         }
     }
 }
-pub fn stratify_risk(
+pub(crate) fn stratify_risk(
     risk_scores: &[f64],
     events: &[i32],
     n_groups: usize,
@@ -451,7 +451,7 @@ impl TdAUCResult {
         }
     }
 }
-pub fn time_dependent_auc(
+pub(crate) fn time_dependent_auc(
     time: &[f64],
     status: &[i32],
     risk_score: &[f64],

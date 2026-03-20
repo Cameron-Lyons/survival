@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 
-use crate::utilities::statistical::normal_cdf;
+use crate::internal::statistical::normal_cdf;
 
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
@@ -313,7 +313,7 @@ fn chi_square_cdf(x: f64, df: usize) -> f64 {
     if df == 0 || x <= 0.0 {
         return 0.0;
     }
-    1.0 - crate::utilities::statistical::chi2_sf(x, df)
+    1.0 - crate::internal::statistical::chi2_sf(x, df)
 }
 
 fn t_distribution_quantile(_p: f64, df: usize) -> f64 {

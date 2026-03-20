@@ -1,4 +1,4 @@
-use crate::utilities::matrix::invert_matrix;
+use crate::internal::matrix::invert_matrix;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 

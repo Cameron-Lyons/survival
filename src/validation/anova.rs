@@ -1,4 +1,4 @@
-use crate::utilities::statistical::chi2_sf;
+use crate::internal::statistical::chi2_sf;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]

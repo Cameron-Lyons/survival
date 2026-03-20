@@ -1,4 +1,4 @@
-use crate::utilities::statistical::{normal_cdf, sample_normal};
+use crate::internal::statistical::{normal_cdf, sample_normal};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 

@@ -12,7 +12,7 @@ fn compute_z2(wt: f64, wsum: &[f64]) -> f64 {
         + wsum[1] * (wt + 2.0 * (wsum[0] + wsum[2]))
         + (wsum[0] - wsum[1]).powi(2))
 }
-pub fn concordance3(
+pub(crate) fn concordance3(
     y: &[f64],
     x: &[i32],
     wt: &[f64],

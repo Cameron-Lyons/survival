@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests {
+    use crate::data_prep::survsplit::survsplit;
     use crate::matrix::chinv2::chinv2;
     use crate::matrix::cholesky2::cholesky2;
-    use crate::surv_analysis::survdiff2::{
+    use crate::surv_analysis::logrank_components::{
         SurvDiffInput, SurvDiffOutput, SurvDiffParams, compute_survdiff,
     };
-    use crate::utilities::survsplit::survsplit;
     #[test]
     fn test_survdiff2_standard() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];

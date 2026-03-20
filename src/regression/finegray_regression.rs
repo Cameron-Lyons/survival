@@ -3,8 +3,8 @@ use rayon::prelude::*;
 use std::fmt;
 
 use crate::constants::{IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE};
-use crate::utilities::matrix::invert_matrix;
-use crate::utilities::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
+use crate::internal::matrix::invert_matrix;
+use crate::internal::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
 
 #[derive(Debug, Clone)]
 #[pyclass(str, get_all, from_py_object)]
@@ -164,7 +164,7 @@ impl CompetingRisksCIF {
     }
 }
 
-pub fn finegray_regression_core(
+pub(crate) fn finegray_regression_core(
     time: &[f64],
     status: &[i32],
     covariates: &[Vec<f64>],
@@ -540,7 +540,7 @@ fn compute_gradient_hessian(
     (gradient, hessian, ll)
 }
 
-pub fn competing_risks_cif_core(
+pub(crate) fn competing_risks_cif_core(
     time: &[f64],
     status: &[i32],
     event_type: i32,

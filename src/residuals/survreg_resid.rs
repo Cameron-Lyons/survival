@@ -1,10 +1,10 @@
-use crate::utilities::statistical::normal_cdf;
+use crate::internal::statistical::normal_cdf;
 use pyo3::prelude::*;
 
 type DistFn = fn(f64) -> f64;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SurvregResidType {
+pub(crate) enum SurvregResidType {
     Response,
     Deviance,
     Dfbeta,
@@ -16,7 +16,7 @@ pub enum SurvregResidType {
 }
 
 impl SurvregResidType {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "response" => Some(SurvregResidType::Response),
             "deviance" => Some(SurvregResidType::Deviance),
@@ -78,14 +78,14 @@ fn gaussian_pdf(z: f64) -> f64 {
     (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
 }
 
-pub fn compute_response_residuals(time: &[f64], linear_pred: &[f64]) -> Vec<f64> {
+pub(crate) fn compute_response_residuals(time: &[f64], linear_pred: &[f64]) -> Vec<f64> {
     time.iter()
         .zip(linear_pred.iter())
         .map(|(&t, &lp)| t.ln() - lp)
         .collect()
 }
 
-pub fn compute_deviance_residuals_survreg(
+pub(crate) fn compute_deviance_residuals_survreg(
     time: &[f64],
     status: &[i32],
     linear_pred: &[f64],
@@ -126,7 +126,7 @@ pub fn compute_deviance_residuals_survreg(
     residuals
 }
 
-pub fn compute_working_residuals(
+pub(crate) fn compute_working_residuals(
     time: &[f64],
     status: &[i32],
     linear_pred: &[f64],
@@ -176,7 +176,7 @@ pub fn compute_working_residuals(
     residuals
 }
 
-pub fn compute_dfbeta_survreg(
+pub(crate) fn compute_dfbeta_survreg(
     time: &[f64],
     status: &[i32],
     covariates: &[Vec<f64>],
@@ -213,7 +213,7 @@ pub fn compute_dfbeta_survreg(
     dfbeta
 }
 
-pub fn compute_ldcase(
+pub(crate) fn compute_ldcase(
     time: &[f64],
     status: &[i32],
     linear_pred: &[f64],

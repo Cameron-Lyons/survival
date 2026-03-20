@@ -5,19 +5,19 @@ from .helpers import setup_survival_import
 survival = setup_survival_import()
 
 
-def test_agsurv4():
+def test_compute_baseline_survival_steps():
     ndeath = [1, 1, 0, 1, 0]
     risk = [1.0, 1.0, 1.0, 1.0, 1.0]
     wt = [1.0, 1.0, 1.0, 1.0]
     sn = 5
     denom = [5.0, 4.0, 3.0, 2.0, 1.0]
 
-    result = survival.agsurv4(ndeath, risk, wt, sn, denom)
+    result = survival.compute_baseline_survival_steps(ndeath, risk, wt, sn, denom)
     assert isinstance(result, list)
     assert len(result) == sn
 
 
-def test_agsurv5():
+def test_compute_tied_baseline_summaries():
     n = 5
     nvar = 2
     dd = [1, 1, 2, 1, 1]
@@ -26,7 +26,7 @@ def test_agsurv5():
     xsum = [10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
     xsum2 = [5.0, 4.0, 3.0, 2.0, 1.0, 2.5, 2.0, 1.5, 1.0, 0.5]
 
-    result = survival.agsurv5(n, nvar, dd, x1, x2, xsum, xsum2)
+    result = survival.compute_tied_baseline_summaries(n, nvar, dd, x1, x2, xsum, xsum2)
     assert isinstance(result, dict)
     assert "sum1" in result
     assert "sum2" in result
@@ -68,12 +68,12 @@ def test_survfitkm():
     assert len(result.estimate) == len(result.time)
 
 
-def test_survdiff2():
+def test_compute_logrank_components():
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
     status = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
     group = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
 
-    result = survival.survdiff2(
+    result = survival.compute_logrank_components(
         time=time,
         status=status,
         group=group,
