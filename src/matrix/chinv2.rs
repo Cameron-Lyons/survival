@@ -1,5 +1,5 @@
 #[cfg(test)]
-pub fn chinv2(matrix: &mut [f64], n: usize) {
+pub(crate) fn chinv2(matrix: &mut [f64], n: usize) {
     assert_eq!(matrix.len(), n * n, "Matrix must be of size n x n");
     for i in 0..n {
         let diag_idx = i * n + i;

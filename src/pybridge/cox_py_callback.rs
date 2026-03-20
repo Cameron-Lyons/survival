@@ -4,7 +4,7 @@ use pyo3::types::{PyDict, PyList};
 type CoxCallbackResult = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<i32>);
 
 #[pyfunction]
-pub fn cox_callback(
+pub(crate) fn cox_callback(
     which: i32,
     mut coef: Vec<f64>,
     mut first: Vec<f64>,

@@ -1,7 +1,7 @@
 use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
-use crate::utilities::matrix::invert_flat_square_matrix_with_fallback;
-use crate::utilities::sorting::descending_time_indices;
-use crate::utilities::statistical::normal_cdf;
+use crate::internal::matrix::invert_flat_square_matrix_with_fallback;
+use crate::internal::sorting::descending_time_indices;
+use crate::internal::statistical::normal_cdf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 

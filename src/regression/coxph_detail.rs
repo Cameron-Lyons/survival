@@ -83,7 +83,7 @@ impl CoxphDetail {
     }
 }
 
-pub fn compute_coxph_detail(
+pub(crate) fn compute_coxph_detail(
     time: &[f64],
     status: &[i32],
     covariates: &[Vec<f64>],

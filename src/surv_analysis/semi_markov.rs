@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-use crate::utilities::statistical::erf;
+use crate::internal::statistical::erf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(eq, eq_int, from_py_object)]

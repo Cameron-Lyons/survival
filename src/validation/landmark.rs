@@ -1,5 +1,5 @@
 use crate::constants::{PARALLEL_THRESHOLD_SMALL, z_score_for_confidence};
-use crate::utilities::statistical::normal_cdf as norm_cdf;
+use crate::internal::statistical::normal_cdf as norm_cdf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
@@ -39,7 +39,7 @@ impl LandmarkResult {
         }
     }
 }
-pub fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> LandmarkResult {
+pub(crate) fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> LandmarkResult {
     let n = time.len();
     let mut new_time = Vec::new();
     let mut new_status = Vec::new();
@@ -72,7 +72,7 @@ pub fn landmark_analysis(
 ) -> PyResult<LandmarkResult> {
     Ok(compute_landmark(&time, &status, landmark_time))
 }
-pub fn compute_landmarks_parallel(
+pub(crate) fn compute_landmarks_parallel(
     time: &[f64],
     status: &[i32],
     landmark_times: &[f64],
@@ -127,7 +127,7 @@ impl ConditionalSurvivalResult {
         }
     }
 }
-pub fn compute_conditional_survival(
+pub(crate) fn compute_conditional_survival(
     time: &[f64],
     status: &[i32],
     given_time: f64,
@@ -267,7 +267,7 @@ impl HazardRatioResult {
         }
     }
 }
-pub fn compute_hazard_ratio(
+pub(crate) fn compute_hazard_ratio(
     time: &[f64],
     status: &[i32],
     group: &[i32],
@@ -451,7 +451,7 @@ impl SurvivalAtTimeResult {
         }
     }
 }
-pub fn compute_survival_at_times(
+pub(crate) fn compute_survival_at_times(
     time: &[f64],
     status: &[i32],
     eval_times: &[f64],
@@ -641,7 +641,7 @@ impl LifeTableResult {
         }
     }
 }
-pub fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeTableResult {
+pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeTableResult {
     let n = time.len();
     let n_intervals = breaks.len().saturating_sub(1);
     if n == 0 || n_intervals == 0 {

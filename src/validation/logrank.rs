@@ -1,5 +1,5 @@
-use crate::utilities::numpy_utils::{extract_vec_f64, extract_vec_i32};
-use crate::utilities::statistical::chi2_sf;
+use crate::internal::numpy_utils::{extract_vec_f64, extract_vec_i32};
+use crate::internal::statistical::chi2_sf;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 #[derive(Debug, Clone)]
@@ -260,7 +260,7 @@ impl TrendTestResult {
         }
     }
 }
-pub fn logrank_trend_test(
+pub(crate) fn logrank_trend_test(
     time: &[f64],
     status: &[i32],
     group: &[i32],

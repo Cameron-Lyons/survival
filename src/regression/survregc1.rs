@@ -1,5 +1,5 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, PARALLEL_THRESHOLD_MEDIUM};
-use crate::utilities::statistical::{erf, erfc};
+use crate::internal::statistical::{erf, erfc};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
 use std::fmt;
@@ -11,7 +11,7 @@ const SPI: f64 = 2.506628274631001;
 const ROOT_2: f64 = std::f64::consts::SQRT_2;
 
 #[derive(Debug)]
-pub enum DistributionError {
+pub(crate) enum DistributionError {
     InvalidCase { case: i32, distribution: String },
 }
 
@@ -29,7 +29,7 @@ impl fmt::Display for DistributionError {
 
 impl std::error::Error for DistributionError {}
 #[derive(Clone, Copy)]
-pub enum SurvivalDist {
+pub(crate) enum SurvivalDist {
     ExtremeValue,
     Logistic,
     Gaussian,
@@ -37,7 +37,7 @@ pub enum SurvivalDist {
     LogNormal,
     LogLogistic,
 }
-pub struct SurvivalLikelihood {
+pub(crate) struct SurvivalLikelihood {
     pub loglik: f64,
     pub u: Array1<f64>,
     pub imat: Array2<f64>,
@@ -47,14 +47,14 @@ pub struct SurvivalLikelihood {
 }
 
 #[derive(Clone, Copy)]
-pub struct SurvregDimensions {
+pub(crate) struct SurvregDimensions {
     pub nvar: usize,
     pub nstrat: usize,
     pub nf: usize,
 }
 
 #[derive(Clone, Copy)]
-pub struct Derivatives {
+pub(crate) struct Derivatives {
     pub dg: f64,
     pub ddg: f64,
     pub dsig: f64,
@@ -62,7 +62,7 @@ pub struct Derivatives {
     pub dsg: f64,
 }
 #[allow(clippy::too_many_arguments)]
-pub fn survregc1(
+pub(crate) fn survregc1(
     n: usize,
     nvar: usize,
     nstrat: usize,

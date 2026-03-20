@@ -1,4 +1,4 @@
-use crate::utilities::statistical::concordance_index_with_horizon;
+use crate::internal::statistical::concordance_index_with_horizon;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 

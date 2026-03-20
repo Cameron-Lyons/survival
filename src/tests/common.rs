@@ -1,9 +1,9 @@
 #![cfg(test)]
-pub const STRICT_TOL: f64 = 1e-4;
-pub const STANDARD_TOL: f64 = 1e-3;
-pub const LOOSE_TOL: f64 = 0.05;
+pub(crate) const STRICT_TOL: f64 = 1e-4;
+pub(crate) const STANDARD_TOL: f64 = 1e-3;
+pub(crate) const LOOSE_TOL: f64 = 0.05;
 
-pub fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
+pub(crate) fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
     if a.is_nan() && b.is_nan() {
         return true;
     }
@@ -13,7 +13,7 @@ pub fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() < tol
 }
 
-pub fn rel_approx_eq(a: f64, b: f64, rel_tol: f64) -> bool {
+pub(crate) fn rel_approx_eq(a: f64, b: f64, rel_tol: f64) -> bool {
     if a.is_nan() && b.is_nan() {
         return true;
     }
@@ -24,7 +24,7 @@ pub fn rel_approx_eq(a: f64, b: f64, rel_tol: f64) -> bool {
     (a - b).abs() / max_abs < rel_tol
 }
 
-pub fn aml_maintained() -> (Vec<f64>, Vec<i32>) {
+pub(crate) fn aml_maintained() -> (Vec<f64>, Vec<i32>) {
     (
         vec![
             9.0, 13.0, 13.0, 18.0, 23.0, 28.0, 31.0, 34.0, 45.0, 48.0, 161.0,
@@ -33,7 +33,7 @@ pub fn aml_maintained() -> (Vec<f64>, Vec<i32>) {
     )
 }
 
-pub fn aml_nonmaintained() -> (Vec<f64>, Vec<i32>) {
+pub(crate) fn aml_nonmaintained() -> (Vec<f64>, Vec<i32>) {
     (
         vec![
             5.0, 5.0, 8.0, 8.0, 12.0, 16.0, 23.0, 27.0, 30.0, 33.0, 43.0, 45.0,
@@ -42,7 +42,7 @@ pub fn aml_nonmaintained() -> (Vec<f64>, Vec<i32>) {
     )
 }
 
-pub fn aml_combined() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
+pub(crate) fn aml_combined() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
     let (t1, s1) = aml_maintained();
     let (t2, s2) = aml_nonmaintained();
     let mut time = t1.clone();
@@ -54,7 +54,7 @@ pub fn aml_combined() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
     (time, status, group)
 }
 
-pub fn aml_combined_sorted() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
+pub(crate) fn aml_combined_sorted() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
     let (time, status, group) = aml_combined();
     let mut indices: Vec<usize> = (0..time.len()).collect();
     indices.sort_by(|&a, &b| {
@@ -68,7 +68,7 @@ pub fn aml_combined_sorted() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
     (time_sorted, status_sorted, group_sorted)
 }
 
-pub struct LungData {
+pub(crate) struct LungData {
     pub time: Vec<f64>,
     pub status: Vec<i32>,
     pub sex: Vec<i32>,
@@ -77,7 +77,7 @@ pub struct LungData {
     pub ph_ecog: Vec<i32>,
 }
 
-pub fn lung_data() -> LungData {
+pub(crate) fn lung_data() -> LungData {
     LungData {
         time: vec![
             306.0, 455.0, 1010.0, 210.0, 883.0, 1022.0, 310.0, 361.0, 218.0, 166.0, 170.0, 654.0,
@@ -93,7 +93,7 @@ pub fn lung_data() -> LungData {
     }
 }
 
-pub fn lung_subset() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
+pub(crate) fn lung_subset() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
     (
         vec![
             306.0, 455.0, 1010.0, 210.0, 883.0, 1022.0, 310.0, 361.0, 218.0, 166.0, 170.0, 654.0,
@@ -104,7 +104,7 @@ pub fn lung_subset() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
     )
 }
 
-pub fn ovarian_data() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
+pub(crate) fn ovarian_data() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
     (
         vec![
             59.0, 115.0, 156.0, 421.0, 431.0, 448.0, 464.0, 475.0, 477.0, 563.0, 638.0, 744.0,

@@ -1,5 +1,5 @@
 #[cfg(test)]
-pub fn cholesky2(matrix: &mut [f64], n: usize, toler: f64) -> i32 {
+pub(crate) fn cholesky2(matrix: &mut [f64], n: usize, toler: f64) -> i32 {
     let mut eps = 0.0;
     let mut nonneg = 1;
     let mut rank = 0;

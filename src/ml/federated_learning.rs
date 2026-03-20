@@ -1,4 +1,4 @@
-use crate::utilities::statistical::lcg64_next;
+use crate::internal::statistical::lcg64_next;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 

@@ -1,5 +1,5 @@
 use crate::constants::{PARALLEL_THRESHOLD_XLARGE, z_score_for_confidence};
-use crate::utilities::simd::sum_f64;
+use crate::internal::simd::sum_f64;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
@@ -218,7 +218,7 @@ impl StratifiedKMResult {
         }
     }
 }
-pub fn stratified_km(
+pub(crate) fn stratified_km(
     time: &[f64],
     status: &[i32],
     strata: &[i32],

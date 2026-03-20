@@ -1,6 +1,6 @@
 use super::common::{build_concordance_result, validate_extended_concordance_inputs};
 use crate::constants::{CONCORDANCE_COUNT_SIZE_EXTENDED, PARALLEL_THRESHOLD_SMALL};
-use crate::utilities::fenwick::FenwickTree;
+use crate::internal::fenwick::FenwickTree;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[inline]
@@ -15,7 +15,7 @@ fn walkup(nwt: &[f64], fenwick: &FenwickTree, x: usize) -> [f64; 3] {
     let sum_equal = nwt[x];
     [sum_greater, sum_less, sum_equal]
 }
-pub fn concordance5(
+pub(crate) fn concordance5(
     y: &[f64],
     x: &[i32],
     wt: &[f64],

@@ -1,2 +1,2 @@
-pub mod network_survival;
-pub mod spatial_frailty;
+pub(crate) mod network_survival;
+pub(crate) mod spatial_frailty;

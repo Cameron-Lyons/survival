@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::utilities::statistical::{ln_gamma, lower_incomplete_gamma};
+use crate::internal::statistical::{chi2_cdf, ln_gamma};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -350,16 +350,9 @@ fn compute_variance_test(
     let chi2_stat = if c > 1e-12 { -bartlett_num / c } else { 0.0 };
 
     let df = (k - 1) as f64;
-    let p_value = 1.0 - chi_squared_cdf(chi2_stat.abs(), df);
+    let p_value = 1.0 - chi2_cdf(chi2_stat.abs(), df);
 
     (window_means, window_variances, chi2_stat, p_value)
-}
-
-fn chi_squared_cdf(x: f64, df: f64) -> f64 {
-    if x <= 0.0 || df <= 0.0 {
-        return 0.0;
-    }
-    lower_incomplete_gamma(df / 2.0, x / 2.0)
 }
 
 fn compute_breakpoint_test(

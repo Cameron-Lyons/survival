@@ -36,7 +36,7 @@ impl BootstrapResult {
         }
     }
 }
-pub struct BootstrapConfig {
+pub(crate) struct BootstrapConfig {
     pub n_bootstrap: usize,
     pub confidence_level: f64,
     pub seed: Option<u64>,
@@ -73,14 +73,14 @@ fn validate_bootstrap_inputs(n_bootstrap: usize, confidence_level: f64) -> PyRes
     Ok(())
 }
 
-pub fn bootstrap_cox(
+pub(crate) fn bootstrap_cox(
     time: &[f64],
     status: &[i32],
     covariates: &Array2<f64>,
     weights: Option<&[f64]>,
     config: &BootstrapConfig,
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
+    use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
@@ -282,14 +282,14 @@ pub fn bootstrap_cox_ci(
     bootstrap_cox(&time, &status, &cov_array, weights_ref, &config)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
 }
-pub fn bootstrap_survreg(
+pub(crate) fn bootstrap_survreg(
     time: &[f64],
     status: &[f64],
     covariates: &Array2<f64>,
     distribution: &str,
     config: &BootstrapConfig,
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::survreg6::{DistributionType, survreg};
+    use crate::regression::parametric_survival::{DistributionType, survreg};
     let n = time.len();
     let nvar = covariates.nrows();
     let cov_vecs: Vec<Vec<f64>> = (0..n)

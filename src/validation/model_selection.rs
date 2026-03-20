@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::utilities::statistical::lower_incomplete_gamma;
+use crate::internal::statistical::chi2_cdf;
 
 type LikelihoodRatioTest = (String, String, f64, f64, f64);
 
@@ -202,13 +202,6 @@ impl SurvivalModelComparison {
     }
 }
 
-fn chi_squared_cdf(x: f64, df: f64) -> f64 {
-    if x <= 0.0 || df <= 0.0 {
-        return 0.0;
-    }
-    lower_incomplete_gamma(df / 2.0, x / 2.0)
-}
-
 #[pyfunction]
 #[pyo3(signature = (model_names, log_likelihoods, n_params, n_obs))]
 pub fn compare_models(
@@ -292,7 +285,7 @@ pub fn compare_models(
 
             let lr_stat = 2.0 * (log_likelihoods[full_idx] - log_likelihoods[nested_idx]);
             let df = (n_params[full_idx] - n_params[nested_idx]) as f64;
-            let p_value = 1.0 - chi_squared_cdf(lr_stat.max(0.0), df);
+            let p_value = 1.0 - chi2_cdf(lr_stat.max(0.0), df);
 
             Some((
                 model_names[nested_idx].clone(),

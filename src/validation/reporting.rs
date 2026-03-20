@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 
-use crate::utilities::statistical::{lower_incomplete_gamma, normal_cdf};
+use crate::internal::statistical::{lower_incomplete_gamma, normal_cdf};
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]

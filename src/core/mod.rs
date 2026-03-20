@@ -1,4 +1,4 @@
-pub mod coxcount1;
-pub mod coxscho;
-pub mod nsk;
-pub mod pspline;
+pub(crate) mod coxcount1;
+pub(crate) mod coxscho;
+pub(crate) mod nsk;
+pub(crate) mod pspline;

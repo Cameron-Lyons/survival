@@ -1,3 +1,4 @@
+use crate::internal::statistical::normal_inverse_cdf;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -22,7 +23,7 @@ impl SurvfitResiduals {
     }
 }
 
-pub fn compute_martingale_survfit(
+pub(crate) fn compute_martingale_survfit(
     time: &[f64],
     status: &[i32],
     surv_time: &[f64],
@@ -40,7 +41,7 @@ pub fn compute_martingale_survfit(
     residuals
 }
 
-pub fn compute_deviance_survfit(
+pub(crate) fn compute_deviance_survfit(
     time: &[f64],
     status: &[i32],
     surv_time: &[f64],
@@ -76,7 +77,7 @@ fn get_cumhaz_at_time(t: f64, surv_time: &[f64], surv: &[f64]) -> f64 {
     0.0
 }
 
-pub fn compute_quantile_residuals(
+pub(crate) fn compute_quantile_residuals(
     time: &[f64],
     status: &[i32],
     surv_time: &[f64],
@@ -90,14 +91,14 @@ pub fn compute_quantile_residuals(
 
         let resid = if status[i] == 1 {
             if s_at_t > 0.0 && s_at_t < 1.0 {
-                normal_quantile(1.0 - s_at_t)
+                normal_inverse_cdf(1.0 - s_at_t)
             } else if s_at_t <= 0.0 {
                 f64::INFINITY
             } else {
                 f64::NEG_INFINITY
             }
         } else if s_at_t > 0.0 && s_at_t < 1.0 {
-            normal_quantile(1.0 - s_at_t / 2.0)
+            normal_inverse_cdf(1.0 - s_at_t / 2.0)
         } else {
             0.0
         };
@@ -115,67 +116,6 @@ fn get_surv_at_time(t: f64, surv_time: &[f64], surv: &[f64]) -> f64 {
         }
     }
     1.0
-}
-
-fn normal_quantile(p: f64) -> f64 {
-    if p <= 0.0 {
-        return f64::NEG_INFINITY;
-    }
-    if p >= 1.0 {
-        return f64::INFINITY;
-    }
-
-    #[allow(clippy::excessive_precision)]
-    let a = [
-        -3.969683028665376e+01,
-        2.209460984245205e+02,
-        -2.759285104469687e+02,
-        1.383577518672690e+02,
-        -3.066479806614716e+01,
-        2.506628277459239e+00,
-    ];
-    #[allow(clippy::excessive_precision)]
-    let b = [
-        -5.447609879822406e+01,
-        1.615858368580409e+02,
-        -1.556989798598866e+02,
-        6.680131188771972e+01,
-        -1.328068155288572e+01,
-    ];
-    #[allow(clippy::excessive_precision)]
-    let c = [
-        -7.784894002430293e-03,
-        -3.223964580411365e-01,
-        -2.400758277161838e+00,
-        -2.549732539343734e+00,
-        4.374664141464968e+00,
-        2.938163982698783e+00,
-    ];
-    #[allow(clippy::excessive_precision)]
-    let d = [
-        7.784695709041462e-03,
-        3.224671290700398e-01,
-        2.445134137142996e+00,
-        3.754408661907416e+00,
-    ];
-
-    let p_low = 0.02425;
-    let p_high = 1.0 - p_low;
-
-    if p < p_low {
-        let q = (-2.0 * p.ln()).sqrt();
-        (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
-    } else if p <= p_high {
-        let q = p - 0.5;
-        let r = q * q;
-        (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
-            / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
-    } else {
-        let q = (-2.0 * (1.0 - p).ln()).sqrt();
-        -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
-    }
 }
 
 #[pyfunction]

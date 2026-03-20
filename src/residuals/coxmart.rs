@@ -1,19 +1,16 @@
-pub struct SurvivalData<'a> {
-    pub time: &'a [f64],
-    pub status: &'a [i32],
-    pub strata: &'a mut [i32],
-}
-pub struct Weights<'a> {
-    pub score: &'a [f64],
-    pub wt: &'a [f64],
-}
-#[pymodule]
-#[pyo3(name = "coxmart")]
-fn coxmart_module(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(coxmart, &m)?)?;
-    Ok(())
-}
 use pyo3::prelude::*;
+
+pub(crate) struct SurvivalData<'a> {
+    pub(crate) time: &'a [f64],
+    pub(crate) status: &'a [i32],
+    pub(crate) strata: &'a mut [i32],
+}
+
+pub(crate) struct Weights<'a> {
+    pub(crate) score: &'a [f64],
+    pub(crate) wt: &'a [f64],
+}
+
 #[pyfunction]
 pub fn coxmart(
     time: Vec<f64>,
@@ -55,7 +52,7 @@ pub fn coxmart(
     compute_coxmart(n, method_val, surv_data, weights_data, &mut expect);
     Ok(expect)
 }
-pub fn compute_coxmart(
+pub(crate) fn compute_coxmart(
     n: usize,
     method: i32,
     surv_data: SurvivalData,
