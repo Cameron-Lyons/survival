@@ -29,7 +29,7 @@ faer = "0.24.0"
 fastrand = "2.3.0"
 pulp = "0.22.2"
 wide = "1.2.0"
-burn = { version = "0.20.1", features = ["autodiff", "ndarray"] }
+burn = { version = "0.20.1", default-features = false, features = ["autodiff", "ndarray"] }
 num_cpus = "1.17.0"
 
 [features]
