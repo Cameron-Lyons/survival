@@ -4,8 +4,8 @@
 //! At each failure time, it ranks the covariate values among subjects still at risk
 //! and computes a test statistic based on these ranks.
 
-use crate::utilities::numpy_utils::{extract_vec_f64, extract_vec_i32};
-use crate::utilities::statistical::chi2_sf;
+use crate::internal::numpy_utils::{extract_vec_f64, extract_vec_i32};
+use crate::internal::statistical::chi2_sf;
 use pyo3::prelude::*;
 
 /// Result of O'Brien's test for survival association

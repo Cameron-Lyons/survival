@@ -1,0 +1,826 @@
+use crate::constants::{
+    CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX,
+    STEP_DOUBLE_FACTOR, STEP_HALVE_FACTOR,
+};
+use crate::internal::matrix::cholesky_solve;
+use crate::regression::survregc1::{SurvivalDist, survregc1};
+use ndarray::{Array1, Array2, ArrayView1};
+use pyo3::prelude::*;
+
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct SurvregConfig {
+    #[pyo3(get, set)]
+    pub max_iter: usize,
+
+    #[pyo3(get, set)]
+    pub eps: f64,
+
+    #[pyo3(get, set)]
+    pub tol_chol: f64,
+
+    #[pyo3(get, set)]
+    pub distribution: DistributionType,
+}
+
+#[pymethods]
+impl SurvregConfig {
+    #[new]
+    #[pyo3(signature = (distribution=None, max_iter=None, eps=None, tol_chol=None))]
+    fn new(
+        distribution: Option<DistributionType>,
+        max_iter: Option<usize>,
+        eps: Option<f64>,
+        tol_chol: Option<f64>,
+    ) -> Self {
+        Self {
+            distribution: distribution.unwrap_or(DistributionType::ExtremeValue),
+            max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
+            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
+        }
+    }
+}
+
+impl Default for SurvregConfig {
+    fn default() -> Self {
+        Self {
+            max_iter: DEFAULT_MAX_ITER,
+            eps: CONVERGENCE_EPSILON,
+            tol_chol: CHOLESKY_TOL,
+            distribution: DistributionType::ExtremeValue,
+        }
+    }
+}
+
+impl SurvregConfig {
+    pub fn create(
+        distribution: Option<DistributionType>,
+        max_iter: Option<usize>,
+        eps: Option<f64>,
+        tol_chol: Option<f64>,
+    ) -> Self {
+        Self {
+            distribution: distribution.unwrap_or(DistributionType::ExtremeValue),
+            max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
+            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct SurvivalFit {
+    #[pyo3(get)]
+    pub coefficients: Vec<f64>,
+    #[pyo3(get)]
+    pub iterations: usize,
+    #[pyo3(get)]
+    pub variance_matrix: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub log_likelihood: f64,
+    #[pyo3(get)]
+    pub convergence_flag: i32,
+    #[pyo3(get)]
+    pub score_vector: Vec<f64>,
+}
+struct LikelihoodInput<'a> {
+    n: usize,
+    nvar: usize,
+    nstrat: usize,
+    beta: &'a [f64],
+    distribution: &'a DistributionType,
+    strata: &'a [usize],
+    offsets: &'a Array1<f64>,
+    time1: &'a ArrayView1<'a, f64>,
+    time2: Option<&'a ArrayView1<'a, f64>>,
+    status: &'a ArrayView1<'a, f64>,
+    weights: &'a Array1<f64>,
+    covariates: &'a Array2<f64>,
+}
+
+struct LikelihoodOutput<'a> {
+    imat: &'a mut Array2<f64>,
+    jj: &'a mut Array2<f64>,
+    u: &'a mut Array1<f64>,
+}
+
+fn calculate_likelihood(
+    input: &LikelihoodInput<'_>,
+    output: &mut LikelihoodOutput<'_>,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let n = input.n;
+    let nvar = input.nvar;
+    let nstrat = input.nstrat;
+    let beta = input.beta;
+    let distribution = input.distribution;
+    let strata = input.strata;
+    let offsets = input.offsets;
+    let time1 = input.time1;
+    let time2 = input.time2;
+    let status = input.status;
+    let weights = input.weights;
+    let covariates = input.covariates;
+    let imat = &mut *output.imat;
+    let jj = &mut *output.jj;
+    let u = &mut *output.u;
+    let dist = match distribution {
+        DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
+        DistributionType::Logistic => SurvivalDist::Logistic,
+        DistributionType::Gaussian => SurvivalDist::Gaussian,
+        DistributionType::Weibull => SurvivalDist::Weibull,
+        DistributionType::LogNormal => SurvivalDist::LogNormal,
+        DistributionType::LogLogistic => SurvivalDist::LogLogistic,
+    };
+    let strat_vec: Vec<i32> = strata.iter().map(|&s| (s + 1) as i32).collect();
+    let strat_arr = Array1::from_vec(strat_vec);
+    let status_vec: Vec<i32> = status.iter().map(|&s| s as i32).collect();
+    let status_arr = Array1::from_vec(status_vec);
+    let beta_arr = Array1::from_vec(beta.to_vec());
+    let frail_arr = Array1::from_vec(vec![0i32; n]);
+    let nvar2 = nvar + nstrat;
+    let result = survregc1(
+        n,
+        nvar,
+        nstrat,
+        false,
+        &beta_arr.view(),
+        dist,
+        &strat_arr.view(),
+        &offsets.view(),
+        time1,
+        time2,
+        &status_arr.view(),
+        &weights.view(),
+        &covariates.view(),
+        0,
+        &frail_arr.view(),
+    )?;
+    let copy_len = nvar2.min(u.len()).min(result.u.len());
+    u.iter_mut()
+        .zip(result.u.iter())
+        .take(copy_len)
+        .for_each(|(dest, &src)| *dest = src);
+
+    let copy_rows = nvar2.min(imat.nrows()).min(result.imat.nrows());
+    let copy_cols = nvar2.min(imat.ncols()).min(result.imat.ncols());
+    imat.slice_mut(ndarray::s![..copy_rows, ..copy_cols])
+        .assign(&result.imat.slice(ndarray::s![..copy_rows, ..copy_cols]));
+
+    let copy_rows_jj = nvar2.min(jj.nrows()).min(result.jj.nrows());
+    let copy_cols_jj = nvar2.min(jj.ncols()).min(result.jj.ncols());
+    jj.slice_mut(ndarray::s![..copy_rows_jj, ..copy_cols_jj])
+        .assign(&result.jj.slice(ndarray::s![..copy_rows_jj, ..copy_cols_jj]));
+    Ok(result.loglik)
+}
+fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
+    (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
+}
+fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) {
+    newbeta[nvar..nvar + nstrat]
+        .iter_mut()
+        .zip(&beta[nvar..nvar + nstrat])
+        .for_each(|(nb, &b)| {
+            if b - *nb > 1.1 {
+                *nb = b - 1.1;
+            }
+        });
+}
+fn calculate_variance_matrix(
+    imat: Array2<f64>,
+    _nvar2: usize,
+    _tol_chol: f64,
+) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
+    use crate::internal::matrix::matrix_inverse;
+    if imat.nrows() == 0 || imat.ncols() == 0 {
+        return Ok(imat);
+    }
+    let max_val = imat.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
+    if max_val < NEAR_ZERO_MATRIX {
+        return Ok(imat);
+    }
+    match matrix_inverse(&imat) {
+        Some(inv) => Ok(inv),
+        None => Ok(imat),
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[pyclass(from_py_object)]
+pub enum DistributionType {
+    #[pyo3(name = "extreme_value")]
+    ExtremeValue,
+    #[pyo3(name = "logistic")]
+    Logistic,
+    #[pyo3(name = "gaussian")]
+    Gaussian,
+    #[pyo3(name = "weibull")]
+    Weibull,
+    #[pyo3(name = "lognormal")]
+    LogNormal,
+    #[pyo3(name = "loglogistic")]
+    LogLogistic,
+}
+
+/// Fit a parametric survival regression model.
+///
+/// Parameters
+/// ----------
+/// time : array-like
+///     Survival/censoring times.
+/// status : array-like
+///     Event indicator (1=event, 0=censored).
+/// covariates : list of lists
+///     Covariate matrix (n_obs x n_vars).
+/// weights : array-like, optional
+///     Case weights.
+/// offsets : array-like, optional
+///     Offset terms for the linear predictor.
+/// initial_beta : array-like, optional
+///     Starting values for coefficients.
+/// strata : array-like, optional
+///     Stratum indicators for stratified analysis.
+/// distribution : str, optional
+///     Error distribution: "weibull" (default), "lognormal", "loglogistic", "gaussian", "exponential".
+/// max_iter : int, optional
+///     Maximum iterations (default 30).
+/// eps : float, optional
+///     Convergence tolerance (default 1e-6).
+/// tol_chol : float, optional
+///     Cholesky tolerance (default crate::constants::DIVISION_FLOOR).
+///
+/// Returns
+/// -------
+/// SurvivalFit
+///     Object with: coefficients, std_errors, variance_matrix, log_likelihood, convergence info.
+#[pyfunction]
+#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn survreg(
+    time: Vec<f64>,
+    status: Vec<f64>,
+    covariates: Vec<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    offsets: Option<Vec<f64>>,
+    initial_beta: Option<Vec<f64>>,
+    strata: Option<Vec<usize>>,
+    distribution: Option<&str>,
+    max_iter: Option<usize>,
+    eps: Option<f64>,
+    tol_chol: Option<f64>,
+) -> PyResult<SurvivalFit> {
+    let dist_type = distribution.map(|s| match s {
+        "weibull" => DistributionType::Weibull,
+        "exponential" | "extreme_value" => DistributionType::ExtremeValue,
+        "gaussian" | "normal" => DistributionType::Gaussian,
+        "logistic" => DistributionType::Logistic,
+        "lognormal" => DistributionType::LogNormal,
+        "loglogistic" | "log_logistic" | "log-logistic" => DistributionType::LogLogistic,
+        _ => DistributionType::ExtremeValue,
+    });
+    let config = SurvregConfig::create(dist_type, max_iter, eps, tol_chol);
+    let n = time.len();
+    if status.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Length mismatch: time has {} elements but status has {}. Both must have the same length.",
+            n,
+            status.len()
+        )));
+    }
+    let nvar = if !covariates.is_empty() {
+        covariates[0].len()
+    } else {
+        0
+    };
+    if !covariates.is_empty() && covariates.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Length mismatch: time has {} observations but covariates has {} rows. \
+             Covariates should be a list of {} rows, each with {} covariate values.",
+            n,
+            covariates.len(),
+            n,
+            nvar
+        )));
+    }
+    let weights = weights.unwrap_or_else(|| vec![1.0; n]);
+    let offsets = offsets.unwrap_or_else(|| vec![0.0; n]);
+    let strata = strata.unwrap_or_else(|| vec![0; n]);
+    let nstrat = if strata.is_empty() {
+        1
+    } else {
+        strata.iter().max().copied().unwrap_or(0) + 1
+    };
+    let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; nvar + nstrat]);
+    let y = {
+        let mut y_data = Vec::new();
+        for i in 0..n {
+            y_data.push(vec![time[i], status[i]]);
+        }
+        Array2::from_shape_vec((n, 2), y_data.into_iter().flatten().collect())
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
+    };
+    let cov_array = if nvar > 0 {
+        let flat: Vec<f64> = covariates.into_iter().flatten().collect();
+        let temp = Array2::from_shape_vec((n, nvar), flat)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?;
+        temp.t().to_owned()
+    } else {
+        Array2::zeros((0, n))
+    };
+    let weights_arr = Array1::from_vec(weights);
+    let offsets_arr = Array1::from_vec(offsets);
+    let result = compute_survreg(ComputeSurvregInput {
+        max_iter: config.max_iter,
+        nvar,
+        y: &y,
+        covariates: &cov_array,
+        weights: &weights_arr,
+        offsets: &offsets_arr,
+        beta: initial_beta,
+        nstrat,
+        strata: &strata,
+        eps: config.eps,
+        tol_chol: config.tol_chol,
+        distribution: config.distribution,
+    })
+    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
+    let variance_matrix = result
+        .variance_matrix
+        .outer_iter()
+        .map(|row| row.iter().copied().collect())
+        .collect();
+    Ok(SurvivalFit {
+        coefficients: result.coefficients,
+        iterations: result.iterations,
+        variance_matrix,
+        log_likelihood: result.log_likelihood,
+        convergence_flag: result.convergence_flag,
+        score_vector: result.score_vector,
+    })
+}
+fn compute_survreg(
+    input: ComputeSurvregInput<'_>,
+) -> Result<SurvivalFitComputed, Box<dyn std::error::Error>> {
+    let ComputeSurvregInput {
+        max_iter,
+        nvar,
+        y,
+        covariates,
+        weights,
+        offsets,
+        mut beta,
+        nstrat,
+        strata,
+        eps,
+        tol_chol,
+        distribution,
+    } = input;
+    let n = y.nrows();
+    let ny = y.ncols();
+    let nvar2 = nvar + nstrat;
+    let mut imat = Array2::zeros((nvar2, nvar2));
+    let mut jj = Array2::zeros((nvar2, nvar2));
+    let mut u = Array1::zeros(nvar2);
+    let mut newbeta = beta.clone();
+    let mut usave = Array1::zeros(nvar2);
+    let time1_vec: Vec<f64> = y.column(0).iter().map(|&t| t.ln()).collect();
+    let status_vec: Vec<f64> = if ny == 2 {
+        y.column(1).iter().copied().collect()
+    } else {
+        y.column(2).iter().copied().collect()
+    };
+    let time2_vec: Option<Vec<f64>> = if ny == 3 {
+        Some(y.column(1).iter().map(|&t| t.ln()).collect())
+    } else {
+        None
+    };
+    let time1_arr = Array1::from_vec(time1_vec);
+    let status_arr = Array1::from_vec(status_vec);
+    let time2_arr = time2_vec.map(Array1::from_vec);
+    let time1 = time1_arr.view();
+    let status = status_arr.view();
+    let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());
+    let input = LikelihoodInput {
+        n,
+        nvar,
+        nstrat,
+        beta: &beta,
+        distribution: &distribution,
+        strata,
+        offsets,
+        time1: &time1,
+        time2: time2_view.as_ref(),
+        status: &status,
+        weights,
+        covariates,
+    };
+    let mut output = LikelihoodOutput {
+        imat: &mut imat,
+        jj: &mut jj,
+        u: &mut u,
+    };
+    let mut loglik = calculate_likelihood(&input, &mut output)?;
+    usave.assign(&u);
+    let mut iter = 0;
+    let mut halving = 0;
+    let mut step_factor = 1.0;
+    while iter < max_iter {
+        let chol_result = cholesky_solve(&jj, &u, tol_chol);
+        let delta = match chol_result {
+            Ok(d) => d,
+            Err(_) => cholesky_solve(&imat, &u, tol_chol)?,
+        };
+        newbeta
+            .iter_mut()
+            .zip(beta.iter().zip(delta.iter()))
+            .for_each(|(nb, (b, d))| *nb = b + d * step_factor);
+        adjust_strata(&mut newbeta, &beta, nvar, nstrat);
+        let new_input = LikelihoodInput {
+            n,
+            nvar,
+            nstrat,
+            beta: &newbeta,
+            distribution: &distribution,
+            strata,
+            offsets,
+            time1: &time1,
+            time2: time2_view.as_ref(),
+            status: &status,
+            weights,
+            covariates,
+        };
+        let mut new_output = LikelihoodOutput {
+            imat: &mut imat,
+            jj: &mut jj,
+            u: &mut u,
+        };
+        let newlik = calculate_likelihood(&new_input, &mut new_output)?;
+        if check_convergence(loglik, newlik, eps) && halving == 0 {
+            loglik = newlik;
+            usave.assign(&u);
+            std::mem::swap(&mut beta, &mut newbeta);
+            iter += 1;
+            break;
+        }
+        if newlik.is_nan() || newlik < loglik {
+            halving += 1;
+            if halving > MAX_HALVING_ITERATIONS {
+                step_factor *= STEP_HALVE_FACTOR;
+                halving = 0;
+            }
+        } else {
+            halving = 0;
+            step_factor = 1.0f64.min(step_factor * STEP_DOUBLE_FACTOR);
+            loglik = newlik;
+            usave.assign(&u);
+            std::mem::swap(&mut beta, &mut newbeta);
+        }
+        iter += 1;
+    }
+    let converged = iter < max_iter;
+    let convergence_flag = if converged { 0 } else { -1 };
+    let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
+    Ok(SurvivalFitComputed {
+        coefficients: beta,
+        iterations: iter,
+        variance_matrix: variance,
+        log_likelihood: loglik,
+        convergence_flag,
+        score_vector: usave.to_vec(),
+    })
+}
+pub(crate) struct SurvivalFitComputed {
+    coefficients: Vec<f64>,
+    iterations: usize,
+    variance_matrix: Array2<f64>,
+    log_likelihood: f64,
+    convergence_flag: i32,
+    score_vector: Vec<f64>,
+}
+
+struct ComputeSurvregInput<'a> {
+    max_iter: usize,
+    nvar: usize,
+    y: &'a Array2<f64>,
+    covariates: &'a Array2<f64>,
+    weights: &'a Array1<f64>,
+    offsets: &'a Array1<f64>,
+    beta: Vec<f64>,
+    nstrat: usize,
+    strata: &'a [usize],
+    eps: f64,
+    tol_chol: f64,
+    distribution: DistributionType,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_survreg_config_default() {
+        let config = SurvregConfig::default();
+        assert_eq!(config.max_iter, 30);
+        assert!((config.eps - 1e-6).abs() < 1e-10);
+        assert!((config.tol_chol - 1e-10).abs() < 1e-15);
+        assert_eq!(config.distribution, DistributionType::ExtremeValue);
+    }
+
+    #[test]
+    fn test_survreg_config_create() {
+        let config = SurvregConfig::create(
+            Some(DistributionType::Gaussian),
+            Some(50),
+            Some(1e-8),
+            Some(1e-12),
+        );
+        assert_eq!(config.max_iter, 50);
+        assert!((config.eps - 1e-8).abs() < 1e-15);
+        assert_eq!(config.distribution, DistributionType::Gaussian);
+    }
+
+    #[test]
+    fn test_distribution_type_variants() {
+        let variants = [
+            DistributionType::ExtremeValue,
+            DistributionType::Weibull,
+            DistributionType::Gaussian,
+            DistributionType::Logistic,
+            DistributionType::LogNormal,
+            DistributionType::LogLogistic,
+        ];
+        assert_eq!(variants.len(), 6);
+    }
+
+    #[test]
+    fn test_check_convergence() {
+        assert!(check_convergence(-100.0, -100.0, 1e-6));
+        assert!(check_convergence(-100.0, -100.00001, 1e-4));
+        assert!(!check_convergence(-100.0, -99.0, 1e-6));
+        assert!(check_convergence(-1e-10, -1e-10, 1e-6));
+        assert!(check_convergence(-100.0, -100.0 + 1e-7, 1e-6));
+    }
+
+    #[test]
+    fn test_adjust_strata() {
+        let mut newbeta = vec![1.0, 2.0, 5.0];
+        let beta = vec![1.0, 2.0, 3.0];
+        adjust_strata(&mut newbeta, &beta, 2, 1);
+        assert!(newbeta[2] <= beta[2] - 1.1 + 0.01 || (newbeta[2] - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_compute_survreg_simple() {
+        let n = 10;
+        let nvar = 1;
+        let y = Array2::from_shape_vec(
+            (n, 2),
+            vec![
+                1.0, 1.0, 2.0, 1.0, 3.0, 1.0, 4.0, 1.0, 5.0, 1.0, 6.0, 1.0, 7.0, 1.0, 8.0, 1.0,
+                9.0, 1.0, 10.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let weights = Array1::from_vec(vec![1.0; n]);
+        let offsets = Array1::from_vec(vec![0.0; n]);
+        let beta = vec![0.0, 0.0];
+        let strata = vec![0; n];
+
+        let result = compute_survreg(ComputeSurvregInput {
+            max_iter: 100,
+            nvar,
+            y: &y,
+            covariates: &covariates,
+            weights: &weights,
+            offsets: &offsets,
+            beta,
+            nstrat: 1,
+            strata: &strata,
+            eps: 1e-6,
+            tol_chol: 1e-10,
+            distribution: DistributionType::Weibull,
+        });
+
+        assert!(result.is_ok());
+        let fit = result.unwrap();
+        assert_eq!(fit.coefficients.len(), 2);
+        assert!(fit.log_likelihood.is_finite());
+    }
+
+    #[test]
+    fn test_compute_survreg_convergence() {
+        let n = 20;
+        let nvar = 1;
+        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.5).collect();
+        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
+        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
+        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let weights = Array1::from_vec(vec![1.0; n]);
+        let offsets = Array1::from_vec(vec![0.0; n]);
+        let beta = vec![0.0, 0.0];
+        let strata = vec![0; n];
+
+        let result = compute_survreg(ComputeSurvregInput {
+            max_iter: 100,
+            nvar,
+            y: &y,
+            covariates: &covariates,
+            weights: &weights,
+            offsets: &offsets,
+            beta,
+            nstrat: 1,
+            strata: &strata,
+            eps: 1e-6,
+            tol_chol: 1e-10,
+            distribution: DistributionType::Weibull,
+        });
+
+        assert!(result.is_ok());
+        let fit = result.unwrap();
+        assert!(fit.log_likelihood.is_finite());
+        assert!(fit.iterations <= 100);
+    }
+
+    #[test]
+    fn test_compute_survreg_lognormal() {
+        let n = 20;
+        let nvar = 1;
+        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.5).collect();
+        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
+        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
+        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let weights = Array1::from_vec(vec![1.0; n]);
+        let offsets = Array1::from_vec(vec![0.0; n]);
+        let beta = vec![0.0, 0.0];
+        let strata = vec![0; n];
+
+        let result = compute_survreg(ComputeSurvregInput {
+            max_iter: 100,
+            nvar,
+            y: &y,
+            covariates: &covariates,
+            weights: &weights,
+            offsets: &offsets,
+            beta,
+            nstrat: 1,
+            strata: &strata,
+            eps: 1e-6,
+            tol_chol: 1e-10,
+            distribution: DistributionType::LogNormal,
+        });
+
+        assert!(result.is_ok());
+        let fit = result.unwrap();
+        assert_eq!(fit.coefficients.len(), 2);
+    }
+
+    #[test]
+    fn test_compute_survreg_loglogistic() {
+        let n = 20;
+        let nvar = 1;
+        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.5).collect();
+        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
+        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
+        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let weights = Array1::from_vec(vec![1.0; n]);
+        let offsets = Array1::from_vec(vec![0.0; n]);
+        let beta = vec![0.0, 0.0];
+        let strata = vec![0; n];
+
+        let result = compute_survreg(ComputeSurvregInput {
+            max_iter: 100,
+            nvar,
+            y: &y,
+            covariates: &covariates,
+            weights: &weights,
+            offsets: &offsets,
+            beta,
+            nstrat: 1,
+            strata: &strata,
+            eps: 1e-6,
+            tol_chol: 1e-10,
+            distribution: DistributionType::LogLogistic,
+        });
+
+        assert!(result.is_ok());
+        let fit = result.unwrap();
+        assert_eq!(fit.coefficients.len(), 2);
+    }
+
+    #[test]
+    fn test_compute_survreg_with_censoring() {
+        let n = 20;
+        let nvar = 1;
+        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.5).collect();
+        let statuses: Vec<f64> = (0..n).map(|i| if i % 3 == 0 { 0.0 } else { 1.0 }).collect();
+        let y_data: Vec<f64> = times
+            .iter()
+            .zip(statuses.iter())
+            .flat_map(|(&t, &s)| vec![t, s])
+            .collect();
+        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
+        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let weights = Array1::from_vec(vec![1.0; n]);
+        let offsets = Array1::from_vec(vec![0.0; n]);
+        let beta = vec![0.0, 0.0];
+        let strata = vec![0; n];
+
+        let result = compute_survreg(ComputeSurvregInput {
+            max_iter: 100,
+            nvar,
+            y: &y,
+            covariates: &covariates,
+            weights: &weights,
+            offsets: &offsets,
+            beta,
+            nstrat: 1,
+            strata: &strata,
+            eps: 1e-6,
+            tol_chol: 1e-10,
+            distribution: DistributionType::Weibull,
+        });
+
+        assert!(result.is_ok());
+        let fit = result.unwrap();
+        assert_eq!(fit.coefficients.len(), 2);
+        assert!(fit.log_likelihood.is_finite());
+    }
+
+    #[test]
+    fn test_compute_survreg_multiple_covariates() {
+        let n = 30;
+        let nvar = 3;
+        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.3).collect();
+        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
+        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
+        let cov_data: Vec<f64> = (0..nvar * n)
+            .map(|i| ((i % 7) as f64 - 3.0) / 3.0)
+            .collect();
+        let covariates = Array2::from_shape_vec((nvar, n), cov_data).unwrap();
+        let weights = Array1::from_vec(vec![1.0; n]);
+        let offsets = Array1::from_vec(vec![0.0; n]);
+        let beta = vec![0.0; nvar + 1];
+        let strata = vec![0; n];
+
+        let result = compute_survreg(ComputeSurvregInput {
+            max_iter: 100,
+            nvar,
+            y: &y,
+            covariates: &covariates,
+            weights: &weights,
+            offsets: &offsets,
+            beta,
+            nstrat: 1,
+            strata: &strata,
+            eps: 1e-6,
+            tol_chol: 1e-10,
+            distribution: DistributionType::Weibull,
+        });
+
+        assert!(result.is_ok());
+        let fit = result.unwrap();
+        assert_eq!(fit.coefficients.len(), nvar + 1);
+    }
+
+    #[test]
+    fn test_survival_fit_fields() {
+        let fit = SurvivalFitComputed {
+            coefficients: vec![1.0, 0.5],
+            iterations: 10,
+            variance_matrix: Array2::zeros((2, 2)),
+            log_likelihood: -50.0,
+            convergence_flag: 0,
+            score_vector: vec![0.001, 0.002],
+        };
+
+        assert_eq!(fit.coefficients.len(), 2);
+        assert_eq!(fit.iterations, 10);
+        assert_eq!(fit.convergence_flag, 0);
+        assert!((fit.log_likelihood - (-50.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_calculate_variance_matrix_empty() {
+        let imat = Array2::zeros((0, 0));
+        let result = calculate_variance_matrix(imat, 0, crate::constants::DIVISION_FLOOR);
+        assert!(result.is_ok());
+        let var = result.unwrap();
+        assert_eq!(var.nrows(), 0);
+        assert_eq!(var.ncols(), 0);
+    }
+
+    #[test]
+    fn test_calculate_variance_matrix_small() {
+        let mut imat = Array2::zeros((2, 2));
+        imat[[0, 0]] = 2.0;
+        imat[[1, 1]] = 2.0;
+        imat[[0, 1]] = 0.5;
+        imat[[1, 0]] = 0.5;
+        let result = calculate_variance_matrix(imat, 2, crate::constants::DIVISION_FLOOR);
+        assert!(result.is_ok());
+        let var = result.unwrap();
+        assert_eq!(var.nrows(), 2);
+        assert_eq!(var.ncols(), 2);
+    }
+}

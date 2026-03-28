@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::regression::coxfit6::{CoxFit, Method as CoxMethod};
+    use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod};
     use crate::surv_analysis::nelson_aalen::nelson_aalen;
     use crate::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
     use crate::tests::common::{LOOSE_TOL, STANDARD_TOL, rel_approx_eq};
@@ -401,9 +401,7 @@ mod tests {
 
         assert!(
             rel_approx_eq(result.statistic, lung.logrank_sex.chisq, STAT_TOL),
-            "Lung logrank chi-squared: expected {}, got {}",
-            lung.logrank_sex.chisq,
-            result.statistic
+            "Lung logrank chi-squared mismatch"
         );
     }
 
@@ -421,9 +419,7 @@ mod tests {
 
         assert!(
             rel_approx_eq(result.statistic, ovarian.logrank.chisq, STAT_TOL),
-            "Ovarian logrank chi-squared: expected {}, got {}",
-            ovarian.logrank.chisq,
-            result.statistic
+            "Ovarian logrank chi-squared mismatch"
         );
     }
 

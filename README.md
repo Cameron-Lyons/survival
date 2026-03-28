@@ -68,12 +68,47 @@ For development:
 maturin develop --release
 ```
 
+## Python Package Layout
+
+Prefer domain modules in new code:
+
+```python
+from survival import core, datasets, regression, surv_analysis, validation
+
+lung = datasets.load_lung()
+fit = regression.survreg(...)
+km = surv_analysis.survfitkm(...)
+score = validation.rmst(...)
+```
+
+Top-level imports such as `from survival import survreg` still work for
+compatibility, but module imports are the preferred style because they match the
+current repo layout and keep the API easier to navigate.
+
+Common modules:
+- `survival.datasets`: built-in example and benchmark datasets
+- `survival.data_prep`: time splitting and data transformation helpers
+- `survival.core`: shared concordance, spline, and low-level core routines
+- `survival.regression`: Cox, AFT, competing-risks, cure, and recurrent-event models
+- `survival.surv_analysis`: Kaplan-Meier, Nelson-Aalen, multistate, and log-rank helpers
+- `survival.validation`: metrics, calibration, conformal, RMST, and statistical tests
+- `survival.residuals`: martingale, Schoenfeld, and related residual diagnostics
+- `survival.population`: expected-survival and rate-table routines
+- `survival.monitoring`: drift and monitoring utilities
+- `survival.ml`: neural, tree, and modern ML-oriented survival models
+- `survival.reliability_tools`: reliability utilities; the top-level
+  `survival.reliability` name remains the callable function
+
+See [`docs/repo-layout.md`](docs/repo-layout.md) for the full Rust and Python
+layout and [`examples/python_package_layout.py`](examples/python_package_layout.py)
+for a runnable module-oriented example.
+
 ## Usage
 
 ### Aalen's Additive Regression Model
 
 ```python
-from survival import AaregOptions, aareg
+from survival import regression
 
 data = [
     [1.0, 0.0, 0.5],
@@ -83,7 +118,7 @@ data = [
 variable_names = ["time", "event", "covariate1"]
 
 # Create options with required parameters (formula, data, variable_names)
-options = AaregOptions(
+options = regression.AaregOptions(
     formula="time + event ~ covariate1",
     data=data,
     variable_names=variable_names,
@@ -94,17 +129,17 @@ options = AaregOptions(
 # options.qrtol = 1e-8
 # options.dfbeta = True
 
-result = aareg(options)
+result = regression.aareg(options)
 print(result)
 ```
 
 ### Penalized Splines (P-splines)
 
 ```python
-from survival import PSpline
+from survival import core
 
 x = [0.1 * i for i in range(100)]
-pspline = PSpline(
+pspline = core.PSpline(
     x=x,
     df=10,
     theta=1.0,
@@ -120,23 +155,23 @@ pspline.fit()
 ### Concordance Index
 
 ```python
-from survival import perform_concordance1_calculation
+from survival import core
 
 time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
 weights = [1.0, 1.0, 1.0, 1.0, 1.0]
 indices = [0, 1, 2, 3, 4]
 ntree = 5
 
-result = perform_concordance1_calculation(time_data, weights, indices, ntree)
+result = core.perform_concordance1_calculation(time_data, weights, indices, ntree)
 print(f"Concordance index: {result['concordance_index']}")
 ```
 
 ### Cox Regression with Frailty
 
 ```python
-from survival import perform_cox_regression_frailty
+from survival import regression
 
-result = perform_cox_regression_frailty(
+result = regression.perform_cox_regression_frailty(
     time=[1.0, 2.0, 3.0, 4.0],
     event=[1, 1, 0, 1],
     covariates=[
@@ -154,10 +189,10 @@ print(result["coefficients"])
 ### Person-Years Calculation
 
 ```python
-from survival import perform_pyears_calculation
+from survival import pybridge
 
 # Low-level API: inputs should match ratetable-style dimensions/cuts.
-result = perform_pyears_calculation(
+result = pybridge.perform_pyears_calculation(
     time_data=[1.0, 2.0, 3.0, 1.0, 0.0, 1.0],  # [times..., events...], ny=2
     weights=[1.0, 1.0, 1.0],
     expected_dim=1,
@@ -181,14 +216,14 @@ print(result.keys())
 ### Kaplan-Meier Survival Curves
 
 ```python
-from survival import survfitkm, SurvFitKMOutput
+from survival import surv_analysis
 
 # Example survival data
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
 status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]  # 1 = event, 0 = censored
 weights = [1.0] * len(time)  # Optional: equal weights
 
-result = survfitkm(
+result = surv_analysis.survfitkm(
     time=time,
     status=status,
     weights=weights,
@@ -207,7 +242,7 @@ print(f"Number at risk: {result.n_risk}")
 ### Fine-Gray Competing Risks Model
 
 ```python
-from survival import finegray, FineGrayOutput
+from survival import regression
 
 # Example competing risks data
 tstart = [0.0, 0.0, 0.0, 0.0]
@@ -217,7 +252,7 @@ cprob = [0.1, 0.2, 0.3, 0.4]  # Cumulative probabilities
 extend = [True, True, False, False]  # Whether to extend intervals
 keep = [True, True, True, True]      # Which cut points to keep
 
-result = finegray(
+result = regression.finegray(
     tstart=tstart,
     tstop=tstop,
     ctime=ctime,
@@ -235,7 +270,7 @@ print(f"Weights: {result.wt}")
 ### Parametric Survival Regression (Accelerated Failure Time Models)
 
 ```python
-from survival import survreg, SurvivalFit, DistributionType
+from survival import regression
 
 # Example survival data
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
@@ -252,7 +287,7 @@ covariates = [
 ]
 
 # Fit parametric survival model
-result = survreg(
+result = regression.survreg(
     time=time,
     status=status,
     covariates=covariates,
@@ -276,17 +311,17 @@ print(f"Convergence flag: {result.convergence_flag}")
 ### Cox Proportional Hazards Model
 
 ```python
-from survival import CoxPHModel, Subject
+from survival import regression
 
 # Create a Cox PH model
-model = CoxPHModel()
+model = regression.CoxPHModel()
 
 # Or create with data
 covariates = [[1.0, 2.0], [2.0, 3.0], [1.5, 2.5]]
 event_times = [1.0, 2.0, 3.0]
 censoring = [1, 1, 0]  # 1 = event, 0 = censored
 
-model = CoxPHModel.new_with_data(covariates, event_times, censoring)
+model = regression.CoxPHModel.new_with_data(covariates, event_times, censoring)
 
 # Fit the model
 model.fit(n_iters=10)
@@ -313,7 +348,7 @@ print(f"Time points: {times}")
 print(f"Survival curves: {survival_curves}")  # One curve per covariate set
 
 # Create and add subjects
-subject = Subject(
+subject = regression.Subject(
     id=1,
     covariates=[1.0, 2.0],
     is_case=True,
@@ -326,7 +361,7 @@ model.add_subject(subject)
 ### Cox Martingale Residuals
 
 ```python
-from survival import coxmart
+from survival import residuals
 
 # Example survival data
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
@@ -334,7 +369,7 @@ status = [1, 1, 0, 1, 0, 1, 1, 0]  # 1 = event, 0 = censored
 score = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]  # Risk scores
 
 # Calculate martingale residuals
-residuals = coxmart(
+martingale_residuals = residuals.coxmart(
     time=time,
     status=status,
     score=score,
@@ -343,13 +378,13 @@ residuals = coxmart(
     method=0,          # Optional: method (0 = Breslow, 1 = Efron)
 )
 
-print(f"Martingale residuals: {residuals}")
+print(f"Martingale residuals: {martingale_residuals}")
 ```
 
 ### Survival Difference Tests (Log-Rank Test)
 
 ```python
-from survival import survdiff2, SurvDiffResult
+from survival import surv_analysis
 
 # Example: Compare survival between two groups
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
@@ -357,7 +392,7 @@ status = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
 group = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]  # Group 1 and Group 2
 
 # Perform log-rank test (rho=0 for standard log-rank)
-result = survdiff2(
+result = surv_analysis.compute_logrank_components(
     time=time,
     status=status,
     group=group,
@@ -377,19 +412,23 @@ print(f"Variance matrix: {result.variance}")
 The library includes 33 classic survival analysis datasets:
 
 ```python
-from survival import load_lung, load_aml, load_veteran
+from survival import datasets
 
 # Load the lung cancer dataset
-lung = load_lung()
-print(f"Columns: {lung['columns']}")
-print(f"Number of rows: {len(lung['data'])}")
+lung = datasets.load_lung()
+columns = [name for name in lung if not name.startswith("_")]
+print(f"Columns: {columns}")
+print(f"Number of rows: {lung['_nrow']}")
 
 # Load the acute myelogenous leukemia dataset
-aml = load_aml()
+aml = datasets.load_aml()
 
 # Load the veteran's lung cancer dataset
-veteran = load_veteran()
+veteran = datasets.load_veteran()
 ```
+
+Datasets are returned as column-oriented dictionaries with `_nrow` and `_ncol`
+metadata.
 
 **Available datasets:**
 - `load_lung()` - NCCTG Lung Cancer Data
@@ -434,10 +473,12 @@ version-matched signatures, use the checked-in type stubs:
 `import survival` exposes the curated package API. For lower-level or
 experimental extension symbols, import from `survival._survival` explicitly.
 
+- [`python/survival/__init__.pyi`](python/survival/__init__.pyi): package-level
+  typed surface, including the new domain modules.
 - [`python/survival/_survival.pyi`](python/survival/_survival.pyi): core
   PyO3 bindings exposed by `survival._survival`.
-- [`python/survival/__init__.pyi`](python/survival/__init__.pyi): package-level
-  typing surface for `import survival`.
+- [`python/survival/*.py`](python/survival): curated domain modules layered on
+  top of the generated bindings.
 - [`python/survival/sklearn_compat.py`](python/survival/sklearn_compat.py):
   scikit-learn-compatible estimators and streaming wrappers.
 
@@ -448,6 +489,15 @@ import survival
 
 public_names = [name for name in dir(survival) if not name.startswith("_")]
 print(public_names)
+```
+
+Or inspect a specific domain module:
+
+```python
+from survival import regression, validation
+
+print(regression.__all__[:10])
+print(validation.__all__[:10])
 ```
 
 ## PSpline Options
@@ -517,11 +567,15 @@ ruff check .
 ```
 
 The codebase is organized with:
-- Core routines in `src/`
+- Domain-oriented Rust modules in `src/`
+- Matching Python domain modules in `python/survival/`
+- Package/type stubs in `python/survival/__init__.pyi`,
+  `python/survival/_survival.pyi`, and `survival.pyi`
+- Runnable examples in `examples/`
+- Developer-facing layout notes in `docs/`
 - Rust unit/integration tests in `src/tests/`
 - Python binding tests in `python/tests/`
 - R validation fixtures and archived reference cases in `test/`
-- Python bindings using PyO3
 
 ## Dependencies
 

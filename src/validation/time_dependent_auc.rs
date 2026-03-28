@@ -1,5 +1,5 @@
 use crate::constants::{IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE};
-use crate::utilities::statistical::{compute_censoring_km, km_step_prob_at};
+use crate::internal::statistical::{compute_censoring_km, km_step_prob_at};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::fmt;

@@ -1,4 +1,4 @@
-use crate::utilities::statistical::normal_cdf;
+use crate::internal::statistical::normal_cdf;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 

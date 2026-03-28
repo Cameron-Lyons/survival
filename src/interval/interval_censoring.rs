@@ -1,4 +1,4 @@
-use crate::utilities::statistical::erf;
+use crate::internal::statistical::erf;
 use pyo3::prelude::*;
 
 type DistributionFn = fn(f64, f64, f64) -> f64;
@@ -34,7 +34,7 @@ impl IntervalDistribution {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
-pub enum CensorType {
+pub(crate) enum CensorType {
     Exact,
     RightCensored,
     LeftCensored,

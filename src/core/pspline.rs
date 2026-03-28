@@ -1,5 +1,5 @@
 use crate::constants::STRICT_EPSILON;
-use crate::utilities::matrix::lu_solve;
+use crate::internal::matrix::lu_solve;
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;

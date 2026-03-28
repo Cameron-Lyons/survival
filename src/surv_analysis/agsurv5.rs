@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+
+/// Backward-compatible aggregate survival helper kept for the public crate API.
 #[pyfunction]
 pub fn agsurv5(
     n: usize,
@@ -18,6 +20,7 @@ pub fn agsurv5(
     let mut sum1 = vec![0.0; n];
     let mut sum2 = vec![0.0; n];
     let mut xbar = vec![0.0; n * nvar];
+
     for i in 0..n {
         let d = dd_slice[i] as f64;
         if d == 1.0 {
@@ -44,6 +47,7 @@ pub fn agsurv5(
             }
         }
     }
+
     Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("sum1", sum1)?;

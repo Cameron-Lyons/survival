@@ -1,12 +1,12 @@
-use crate::utilities::matrix::{lu_solve, matrix_inverse};
-use crate::utilities::statistical::normal_cdf;
+use crate::internal::matrix::{lu_solve, matrix_inverse};
+use crate::internal::statistical::normal_cdf;
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 #[derive(Debug)]
-pub struct CoxResult {
+pub(crate) struct CoxResult {
     pub coefficients: Vec<f64>,
     pub standard_errors: Vec<f64>,
     pub p_values: Vec<f64>,
@@ -19,7 +19,7 @@ pub struct CoxResult {
     pub variance_matrix: Vec<Vec<f64>>,
 }
 
-pub struct CoxModelData<'a> {
+pub(crate) struct CoxModelData<'a> {
     pub nused: usize,
     pub nvar: usize,
     pub nfrail: usize,
@@ -32,7 +32,7 @@ pub struct CoxModelData<'a> {
     pub frail: &'a [i32],
 }
 
-pub struct CoxFitParams {
+pub(crate) struct CoxFitParams {
     pub max_iter: i32,
     pub eps: f64,
 }
@@ -228,7 +228,7 @@ pub fn perform_cox_regression_frailty(
     };
     perform_cox_regression(time, event, covariates, config)
 }
-pub fn agfit5(
+pub(crate) fn agfit5(
     data: &CoxModelData<'_>,
     params: &CoxFitParams,
 ) -> Result<CoxResult, Box<dyn std::error::Error>> {

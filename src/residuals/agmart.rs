@@ -1,4 +1,4 @@
-use crate::utilities::validation::{validate_length, validate_non_empty};
+use crate::internal::validation::{validate_length, validate_non_empty};
 use pyo3::prelude::*;
 struct AgmartInput {
     start: Vec<f64>,

@@ -1,6 +1,6 @@
 use crate::constants::{COX_MAX_ITER, PARALLEL_THRESHOLD_SMALL};
-use crate::utilities::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
-use crate::utilities::statistical::lcg64_shuffle_per_index_seed;
+use crate::internal::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
+use crate::internal::statistical::lcg64_shuffle_per_index_seed;
 use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -33,7 +33,7 @@ impl CVResult {
         }
     }
 }
-pub struct CVConfig {
+pub(crate) struct CVConfig {
     pub n_folds: usize,
     pub shuffle: bool,
     pub seed: Option<u64>,
@@ -65,14 +65,14 @@ fn create_folds(n: usize, n_folds: usize, shuffle: bool, seed: Option<u64>) -> V
     }
     folds
 }
-pub fn cv_cox(
+pub(crate) fn cv_cox(
     time: &[f64],
     status: &[i32],
     covariates: &Array2<f64>,
     weights: Option<&[f64]>,
     config: &CVConfig,
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
+    use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
@@ -258,14 +258,14 @@ pub fn cv_cox_concordance(
     cv_cox(&time, &status, &cov_array, weights_ref, &config)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
 }
-pub fn cv_survreg(
+pub(crate) fn cv_survreg(
     time: &[f64],
     status: &[f64],
     covariates: &Array2<f64>,
     distribution: &str,
     config: &CVConfig,
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::survreg6::survreg;
+    use crate::regression::parametric_survival::survreg;
     let n = time.len();
     let nvar = covariates.ncols();
     let cov_vecs: Vec<Vec<f64>> = (0..n)

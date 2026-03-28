@@ -1,4 +1,4 @@
-use crate::utilities::statistical::normal_inverse_cdf;
+use crate::internal::statistical::normal_inverse_cdf;
 use pyo3::prelude::*;
 
 /// Result of aggregating survival curves

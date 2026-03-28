@@ -6,7 +6,7 @@
 //! - Numeric and string columns
 
 /// Parse CSV data into rows of string values
-pub fn parse_csv(data: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+pub(super) fn parse_csv(data: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let mut lines = data.lines().peekable();
 
     let header_line = lines.next().ok_or("Empty CSV")?;
@@ -76,7 +76,7 @@ fn parse_csv_line(line: &str) -> Vec<String> {
 }
 
 /// Parse a string value to f64, treating NA as NaN
-pub fn parse_f64(s: &str) -> Option<f64> {
+pub(super) fn parse_f64(s: &str) -> Option<f64> {
     let s = s.trim();
     if s.is_empty() || s.eq_ignore_ascii_case("na") || s.eq_ignore_ascii_case("nan") {
         None
@@ -86,7 +86,7 @@ pub fn parse_f64(s: &str) -> Option<f64> {
 }
 
 /// Parse a string value to i32, treating NA as None
-pub fn parse_i32(s: &str) -> Option<i32> {
+pub(super) fn parse_i32(s: &str) -> Option<i32> {
     let s = s.trim();
     if s.is_empty() || s.eq_ignore_ascii_case("na") || s.eq_ignore_ascii_case("nan") {
         None

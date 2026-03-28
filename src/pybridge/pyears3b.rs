@@ -1,10 +1,10 @@
-use super::column_major_index;
+use super::pystep::pystep;
 use crate::constants::PYEARS_TIME_EPSILON;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-pub struct PyearsExpectedParams<'a> {
+pub(crate) struct PyearsExpectedParams<'a> {
     pub dim: usize,
     pub fac: &'a [i32],
     pub dims: &'a [usize],
@@ -13,7 +13,7 @@ pub struct PyearsExpectedParams<'a> {
     pub data: &'a [f64],
 }
 
-pub struct PyearsObservedParams<'a> {
+pub(crate) struct PyearsObservedParams<'a> {
     pub dim: usize,
     pub fac: &'a [i32],
     pub dims: &'a [usize],
@@ -21,7 +21,7 @@ pub struct PyearsObservedParams<'a> {
     pub data: &'a [f64],
 }
 
-pub struct PyearsOutput<'a> {
+pub(crate) struct PyearsOutput<'a> {
     pub pyears: &'a mut [f64],
     pub pn: &'a mut [f64],
     pub pcount: &'a mut [f64],
@@ -30,7 +30,7 @@ pub struct PyearsOutput<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn pyears3b(
+pub(crate) fn pyears3b(
     n: usize,
     ny: usize,
     doevent: i32,
@@ -193,74 +193,9 @@ pub fn pyears3b(
         }
     }
 }
-
-fn pystep(
-    edim: usize,
-    data: &mut [f64],
-    efac: &[i32],
-    edims: &[usize],
-    ecut: &[&[f64]],
-    tmax: f64,
-) -> (f64, usize, usize, f64) {
-    let mut et2 = tmax;
-    let mut wt = 1.0;
-    let mut limiting_dim = None;
-    for j in 0..edim {
-        if efac[j] != 0 {
-            continue;
-        }
-        let cuts = ecut[j];
-        let current = data[j];
-        let pos = cuts.partition_point(|&x| x <= current);
-        if pos < cuts.len() {
-            let next_cut = cuts[pos];
-            let delta = (next_cut - current).max(0.0);
-            if delta < et2 {
-                et2 = delta;
-                limiting_dim = Some(j);
-            }
-        }
-    }
-    et2 = et2.min(tmax);
-    let mut indices_current = vec![0; edim];
-    let mut indices_next = vec![0; edim];
-    for j in 0..edim {
-        if efac[j] == 0 {
-            data[j] += et2;
-            let cuts = ecut[j];
-            let pos = cuts.partition_point(|&x| x <= data[j]) - 1;
-            indices_current[j] = pos.min(edims[j] - 1);
-            indices_next[j] = (pos + 1).min(edims[j] - 1);
-        } else {
-            indices_current[j] = data[j] as usize - 1;
-            indices_next[j] = indices_current[j];
-        }
-    }
-    let indx = column_major_index(&indices_current, edims);
-    let indx2 = column_major_index(&indices_next, edims);
-    if let Some(dim) = limiting_dim {
-        let current = data[dim] - et2;
-        let cuts = ecut[dim];
-        let pos = cuts.partition_point(|&x| x <= current) - 1;
-        let next_cut = if pos + 1 < cuts.len() {
-            cuts[pos + 1]
-        } else {
-            cuts[pos]
-        };
-        let prev_cut = cuts[pos];
-        let width = next_cut - prev_cut;
-        wt = if width > 0.0 {
-            (current + et2 - prev_cut) / width
-        } else {
-            1.0
-        };
-        wt = wt.clamp(0.0, 1.0);
-    }
-    (et2, indx, indx2, wt)
-}
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-pub fn perform_pyears_calculation(
+pub(crate) fn perform_pyears_calculation(
     time_data: Vec<f64>,
     weights: Vec<f64>,
     expected_dim: usize,

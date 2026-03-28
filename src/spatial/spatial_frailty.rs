@@ -1,6 +1,7 @@
-use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_MEDIUM};
-use crate::utilities::matrix::invert_flat_square_matrix_with_fallback;
-use crate::utilities::statistical::normal_cdf;
+use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
+use crate::internal::matrix::invert_flat_square_matrix_with_fallback;
+use crate::internal::sorting::descending_time_indices;
+use crate::internal::statistical::normal_cdf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -375,20 +376,7 @@ fn em_step(
     let mut new_beta = beta.to_vec();
     let mut new_frailties = frailties.to_vec();
 
-    let mut indices: Vec<usize> = (0..n_obs).collect();
-    if n_obs > PARALLEL_THRESHOLD_LARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    } else {
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+    let indices = descending_time_indices(time);
 
     let mut region_obs_by_region = vec![Vec::new(); n_regions];
     for (i, &region) in region_id.iter().enumerate().take(n_obs) {
@@ -532,20 +520,7 @@ fn compute_log_likelihood(
     n_obs: usize,
     n_vars: usize,
 ) -> f64 {
-    let mut indices: Vec<usize> = (0..n_obs).collect();
-    if n_obs > PARALLEL_THRESHOLD_LARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    } else {
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+    let indices = descending_time_indices(time);
 
     let eta: Vec<f64> = if n_obs > PARALLEL_THRESHOLD_MEDIUM {
         (0..n_obs)
@@ -604,20 +579,7 @@ fn compute_standard_errors(
     n_obs: usize,
     n_vars: usize,
 ) -> Vec<f64> {
-    let mut indices: Vec<usize> = (0..n_obs).collect();
-    if n_obs > PARALLEL_THRESHOLD_LARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    } else {
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+    let indices = descending_time_indices(time);
 
     let eta: Vec<f64> = if n_obs > PARALLEL_THRESHOLD_MEDIUM {
         (0..n_obs)

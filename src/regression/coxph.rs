@@ -1,6 +1,6 @@
 use crate::constants::{EXP_CLAMP_MIN, z_score_for_confidence};
-use crate::regression::coxfit6::{CoxFitBuilder, Method as CoxMethod};
-use crate::utilities::matrix::invert_matrix;
+use crate::internal::matrix::invert_matrix;
+use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 use rayon::prelude::*;

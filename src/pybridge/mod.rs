@@ -1,6 +1,6 @@
-pub mod cox_py_callback;
-pub mod pyears3b;
-pub mod pystep;
+pub(crate) mod cox_py_callback;
+pub(crate) mod pyears3b;
+pub(crate) mod pystep;
 
 /// Convert multi-dimensional indices to a flat column-major index
 pub(crate) fn column_major_index(indices: &[usize], dims: &[usize]) -> usize {

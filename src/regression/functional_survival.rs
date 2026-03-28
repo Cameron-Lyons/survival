@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::utilities::statistical::normal_cdf;
+use crate::internal::statistical::normal_cdf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(eq, eq_int, from_py_object)]

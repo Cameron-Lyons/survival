@@ -64,7 +64,7 @@ impl SurvFitAJComputed {
     }
 }
 
-pub struct SurvFitAJData<'a> {
+pub(crate) struct SurvFitAJData<'a> {
     pub y: &'a [f64],
     pub sort1: &'a [usize],
     pub sort2: &'a [usize],
@@ -75,7 +75,7 @@ pub struct SurvFitAJData<'a> {
     pub position: &'a [usize],
 }
 
-pub struct SurvFitAJParams<'a> {
+pub(crate) struct SurvFitAJParams<'a> {
     pub ngrp: usize,
     pub p0: &'a [f64],
     pub i0: &'a [f64],

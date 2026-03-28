@@ -4,7 +4,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 #[inline]
-pub fn agscore2(
+pub(crate) fn agscore2(
     y: &[f64],
     covar: &[f64],
     strata: &[i32],

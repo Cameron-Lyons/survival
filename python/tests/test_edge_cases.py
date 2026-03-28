@@ -58,8 +58,8 @@ def test_coxph_model_covariate_dimension_mismatch():
         model.add_subject(subject)
 
 
-def test_survdiff2_with_strata():
-    result = survival.survdiff2(
+def test_compute_logrank_components_with_strata():
+    result = survival.compute_logrank_components(
         time=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         status=[1, 0, 1, 0, 1, 0],
         group=[1, 1, 1, 2, 2, 2],

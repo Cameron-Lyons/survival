@@ -6,6 +6,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  COVERAGE_MIN_PERCENT: '30'
 
 jobs:
   coverage:
@@ -42,6 +43,9 @@ jobs:
       - name: Run coverage
         run: cargo tarpaulin --engine llvm --out xml --out html --skip-clean --timeout 300
 
+      - name: Enforce minimum line coverage
+        run: python scripts/check_coverage.py cobertura.xml --min-percent "${COVERAGE_MIN_PERCENT}"
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -51,7 +55,9 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
-          path: tarpaulin-report.html
+          path: |
+            cobertura.xml
+            tarpaulin-report.html

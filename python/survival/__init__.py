@@ -1,8 +1,27 @@
-from __future__ import annotations
+# ruff: noqa: F401
 
-from warnings import warn
-
-from . import _survival as _core
+from . import bayesian as _bayesian_module
+from . import causal as _causal_module
+from . import core as _core_module
+from . import data_prep as _data_prep_module
+from . import datasets as _datasets_module
+from . import interpretability as _interpretability_module
+from . import interval as _interval_module
+from . import joint as _joint_module
+from . import missing as _missing_module
+from . import ml as _ml_module
+from . import monitoring as _monitoring_module
+from . import population as _population_module
+from . import pybridge as _pybridge_module
+from . import qol as _qol_module
+from . import recurrent as _recurrent_module
+from . import regression as _regression_module
+from . import relative as _relative_module
+from . import reliability_tools as _reliability_tools_module
+from . import residuals as _residuals_module
+from . import spatial as _spatial_module
+from . import surv_analysis as _surv_analysis_module
+from . import validation as _validation_module
 from .sklearn_compat import (
     AFTEstimator,
     CoxPHEstimator,
@@ -20,149 +39,57 @@ from .sklearn_compat import (
     survival_curves_to_disk,
 )
 
-# Curated package API. Undocumented extension symbols remain reachable through
-# `survival._survival`; `__getattr__` keeps that path working during the transition.
-_CORE_EXPORTS = (
-    "AaregOptions",
-    "PSpline",
-    "CoxCountOutput",
-    "LinkFunctionParams",
-    "Subject",
-    "CoxPHModel",
-    "SurvFitKMOutput",
-    "FineGrayOutput",
-    "SurvivalFit",
-    "DistributionType",
-    "SurvDiffResult",
-    "CchMethod",
-    "CohortData",
-    "SurvFitAJ",
-    "SplitResult",
-    "ClogitDataSet",
-    "ConditionalLogisticRegression",
-    "BootstrapResult",
-    "CVResult",
-    "TestResult",
-    "ProportionalityTest",
-    "NelsonAalenResult",
-    "StratifiedKMResult",
-    "LogRankResult",
-    "TrendTestResult",
-    "SampleSizeResult",
-    "AccrualResult",
-    "CalibrationResult",
-    "PredictionResult",
-    "RiskStratificationResult",
-    "TdAUCResult",
-    "RMSTResult",
-    "RMSTComparisonResult",
-    "MedianSurvivalResult",
-    "CumulativeIncidenceResult",
-    "NNTResult",
-    "LandmarkResult",
-    "ConditionalSurvivalResult",
-    "HazardRatioResult",
-    "SurvivalAtTimeResult",
-    "LifeTableResult",
-    "aareg",
-    "survfitkm",
-    "survreg",
-    "survdiff2",
-    "coxmart",
-    "finegray",
-    "perform_cox_regression_frailty",
-    "perform_pyears_calculation",
-    "perform_concordance1_calculation",
-    "perform_concordance3_calculation",
-    "perform_concordance_calculation",
-    "perform_score_calculation",
-    "perform_agscore3_calculation",
-    "perform_pystep_calculation",
-    "perform_pystep_simple_calculation",
-    "collapse",
-    "cox_callback",
-    "coxcount1",
-    "coxcount2",
-    "norisk",
-    "cipoisson",
-    "cipoisson_exact",
-    "cipoisson_anscombe",
-    "concordance",
-    "agexact",
-    "agsurv4",
-    "agsurv5",
-    "agmart",
-    "brier",
-    "integrated_brier",
-    "tmerge",
-    "tmerge2",
-    "tmerge3",
-    "survsplit",
-    "schoenfeld_residuals",
-    "cox_score_residuals",
-    "survfitaj",
-    "bootstrap_cox_ci",
-    "bootstrap_survreg_ci",
-    "cv_cox_concordance",
-    "cv_survreg_loglik",
-    "lrt_test",
-    "wald_test_py",
-    "score_test_py",
-    "ph_test",
-    "nelson_aalen_estimator",
-    "stratified_kaplan_meier",
-    "logrank_test",
-    "fleming_harrington_test",
-    "logrank_trend",
-    "sample_size_survival",
-    "sample_size_survival_freedman",
-    "power_survival",
-    "expected_events",
-    "calibration",
-    "predict_cox",
-    "risk_stratification",
-    "td_auc",
-    "rmst",
-    "rmst_comparison",
-    "survival_quantile",
-    "cumulative_incidence",
-    "number_needed_to_treat",
-    "landmark_analysis",
-    "conditional_survival",
-    "hazard_ratio",
-    "survival_at_times",
-    "life_table",
-    "ConformalCalibrationResult",
-    "ConformalPredictionResult",
-    "ConformalDiagnostics",
-    "DoublyRobustConformalResult",
-    "TwoSidedConformalResult",
-    "TwoSidedCalibrationResult",
-    "ConformalSurvivalDistribution",
-    "BootstrapConformalResult",
-    "CQRConformalResult",
-    "ConformalCalibrationPlot",
-    "ConformalWidthAnalysis",
-    "CoverageSelectionResult",
-    "conformal_calibrate",
-    "conformal_predict",
-    "conformal_survival_from_predictions",
-    "conformal_coverage_test",
-    "doubly_robust_conformal_calibrate",
-    "doubly_robust_conformal_survival",
-    "two_sided_conformal_calibrate",
-    "two_sided_conformal_predict",
-    "two_sided_conformal_survival",
-    "conformalized_survival_distribution",
-    "bootstrap_conformal_survival",
-    "cqr_conformal_survival",
-    "conformal_calibration_plot",
-    "conformal_width_analysis",
-    "conformal_coverage_cv",
-    "conformal_survival_parallel",
+_PUBLIC_MODULES = {
+    "bayesian": _bayesian_module,
+    "causal": _causal_module,
+    "core": _core_module,
+    "data_prep": _data_prep_module,
+    "datasets": _datasets_module,
+    "interpretability": _interpretability_module,
+    "interval": _interval_module,
+    "joint": _joint_module,
+    "missing": _missing_module,
+    "ml": _ml_module,
+    "monitoring": _monitoring_module,
+    "population": _population_module,
+    "pybridge": _pybridge_module,
+    "qol": _qol_module,
+    "recurrent": _recurrent_module,
+    "regression": _regression_module,
+    "relative": _relative_module,
+    "reliability_tools": _reliability_tools_module,
+    "residuals": _residuals_module,
+    "spatial": _spatial_module,
+    "surv_analysis": _surv_analysis_module,
+    "validation": _validation_module,
+}
+
+_DOMAIN_MODULES = (
+    _datasets_module,
+    _data_prep_module,
+    _core_module,
+    _monitoring_module,
+    _population_module,
+    _regression_module,
+    _residuals_module,
+    _bayesian_module,
+    _causal_module,
+    _interpretability_module,
+    _interval_module,
+    _joint_module,
+    _missing_module,
+    _ml_module,
+    _pybridge_module,
+    _qol_module,
+    _recurrent_module,
+    _relative_module,
+    _reliability_tools_module,
+    _spatial_module,
+    _surv_analysis_module,
+    _validation_module,
 )
 
-_SKLEARN_EXPORTS = (
+_SKLEARN_EXPORTS = [
     "AFTEstimator",
     "CoxPHEstimator",
     "DeepSurvEstimator",
@@ -177,31 +104,23 @@ _SKLEARN_EXPORTS = (
     "iter_chunks",
     "predict_large_dataset",
     "survival_curves_to_disk",
-)
+]
 
-for _name in _CORE_EXPORTS:
-    globals()[_name] = getattr(_core, _name)
+for _module in _DOMAIN_MODULES:
+    globals().update({name: getattr(_module, name) for name in _module.__all__})
+
+for _name, _module in _PUBLIC_MODULES.items():
+    globals()[_name] = _module
+
+__all__ = []
+for _module in _DOMAIN_MODULES:
+    __all__.extend(_module.__all__)
+__all__.extend(_SKLEARN_EXPORTS)
+__all__.extend(_PUBLIC_MODULES)
+__all__ = list(dict.fromkeys(__all__))
 
 del _name
-
-__all__ = [*_CORE_EXPORTS, *_SKLEARN_EXPORTS]
-
-
-def __getattr__(name: str):
-    if name.startswith("_"):
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    if hasattr(_core, name):
-        warn(
-            f"'survival.{name}' is an implicit extension re-export and is not part of the "
-            "curated package API; import it from 'survival._survival' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        value = getattr(_core, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__() -> list[str]:
-    return sorted(__all__)
+del _module
+del _DOMAIN_MODULES
+del _PUBLIC_MODULES
+del _SKLEARN_EXPORTS

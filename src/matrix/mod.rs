@@ -1,2 +1,2 @@
-pub mod chinv2;
-pub mod cholesky2;
+pub(crate) mod chinv2;
+pub(crate) mod cholesky2;

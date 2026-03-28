@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "survival"
-dynamic = ["version"]
+version = "1.2.16"
 description = "A high-performance survival analysis library written in Rust with Python bindings"
 readme = "README.md"
 license = { text = "MIT" }
@@ -39,20 +39,20 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/Cameron-Lyons/survival"
-Documentation = "https://github.com/Cameron-Lyons/survival#readme"
+Documentation = "https://github.com/Cameron-Lyons/survival#python-package-layout"
 Issues = "https://github.com/Cameron-Lyons/survival/issues"
 
 [project.optional-dependencies]
 dev = [
   "pre-commit==4.5.1",
   "pytest==9.0.2",
-  "numpy==2.4.2",
+  "numpy==2.4.3",
 ]
 test = [
   "pytest==9.0.2",
-  "numpy==2.4.2",
+  "numpy==2.4.3",
   "pandas==3.0.1",
-  "polars==1.38.1",
+  "polars==1.39.3",
 ]
 sklearn = [
   "scikit-learn>=1.0.0",
@@ -62,7 +62,6 @@ sklearn = [
 features = ["pyo3/extension-module"]
 module-name = "survival._survival"
 python-source = "python"
-strip = true
 
 [tool.ruff]
 line-length = 100
