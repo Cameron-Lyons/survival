@@ -1,5 +1,9 @@
-from survival._survival import *  # noqa: F401, F403
-from survival.sklearn_compat import (  # noqa: F401
+from __future__ import annotations
+
+from warnings import warn
+
+from . import _survival as _core
+from .sklearn_compat import (
     AFTEstimator,
     CoxPHEstimator,
     DeepSurvEstimator,
@@ -15,3 +19,189 @@ from survival.sklearn_compat import (  # noqa: F401
     predict_large_dataset,
     survival_curves_to_disk,
 )
+
+# Curated package API. Undocumented extension symbols remain reachable through
+# `survival._survival`; `__getattr__` keeps that path working during the transition.
+_CORE_EXPORTS = (
+    "AaregOptions",
+    "PSpline",
+    "CoxCountOutput",
+    "LinkFunctionParams",
+    "Subject",
+    "CoxPHModel",
+    "SurvFitKMOutput",
+    "FineGrayOutput",
+    "SurvivalFit",
+    "DistributionType",
+    "SurvDiffResult",
+    "CchMethod",
+    "CohortData",
+    "SurvFitAJ",
+    "SplitResult",
+    "ClogitDataSet",
+    "ConditionalLogisticRegression",
+    "BootstrapResult",
+    "CVResult",
+    "TestResult",
+    "ProportionalityTest",
+    "NelsonAalenResult",
+    "StratifiedKMResult",
+    "LogRankResult",
+    "TrendTestResult",
+    "SampleSizeResult",
+    "AccrualResult",
+    "CalibrationResult",
+    "PredictionResult",
+    "RiskStratificationResult",
+    "TdAUCResult",
+    "RMSTResult",
+    "RMSTComparisonResult",
+    "MedianSurvivalResult",
+    "CumulativeIncidenceResult",
+    "NNTResult",
+    "LandmarkResult",
+    "ConditionalSurvivalResult",
+    "HazardRatioResult",
+    "SurvivalAtTimeResult",
+    "LifeTableResult",
+    "aareg",
+    "survfitkm",
+    "survreg",
+    "survdiff2",
+    "coxmart",
+    "finegray",
+    "perform_cox_regression_frailty",
+    "perform_pyears_calculation",
+    "perform_concordance1_calculation",
+    "perform_concordance3_calculation",
+    "perform_concordance_calculation",
+    "perform_score_calculation",
+    "perform_agscore3_calculation",
+    "perform_pystep_calculation",
+    "perform_pystep_simple_calculation",
+    "collapse",
+    "cox_callback",
+    "coxcount1",
+    "coxcount2",
+    "norisk",
+    "cipoisson",
+    "cipoisson_exact",
+    "cipoisson_anscombe",
+    "concordance",
+    "agexact",
+    "agsurv4",
+    "agsurv5",
+    "agmart",
+    "brier",
+    "integrated_brier",
+    "tmerge",
+    "tmerge2",
+    "tmerge3",
+    "survsplit",
+    "schoenfeld_residuals",
+    "cox_score_residuals",
+    "survfitaj",
+    "bootstrap_cox_ci",
+    "bootstrap_survreg_ci",
+    "cv_cox_concordance",
+    "cv_survreg_loglik",
+    "lrt_test",
+    "wald_test_py",
+    "score_test_py",
+    "ph_test",
+    "nelson_aalen_estimator",
+    "stratified_kaplan_meier",
+    "logrank_test",
+    "fleming_harrington_test",
+    "logrank_trend",
+    "sample_size_survival",
+    "sample_size_survival_freedman",
+    "power_survival",
+    "expected_events",
+    "calibration",
+    "predict_cox",
+    "risk_stratification",
+    "td_auc",
+    "rmst",
+    "rmst_comparison",
+    "survival_quantile",
+    "cumulative_incidence",
+    "number_needed_to_treat",
+    "landmark_analysis",
+    "conditional_survival",
+    "hazard_ratio",
+    "survival_at_times",
+    "life_table",
+    "ConformalCalibrationResult",
+    "ConformalPredictionResult",
+    "ConformalDiagnostics",
+    "DoublyRobustConformalResult",
+    "TwoSidedConformalResult",
+    "TwoSidedCalibrationResult",
+    "ConformalSurvivalDistribution",
+    "BootstrapConformalResult",
+    "CQRConformalResult",
+    "ConformalCalibrationPlot",
+    "ConformalWidthAnalysis",
+    "CoverageSelectionResult",
+    "conformal_calibrate",
+    "conformal_predict",
+    "conformal_survival_from_predictions",
+    "conformal_coverage_test",
+    "doubly_robust_conformal_calibrate",
+    "doubly_robust_conformal_survival",
+    "two_sided_conformal_calibrate",
+    "two_sided_conformal_predict",
+    "two_sided_conformal_survival",
+    "conformalized_survival_distribution",
+    "bootstrap_conformal_survival",
+    "cqr_conformal_survival",
+    "conformal_calibration_plot",
+    "conformal_width_analysis",
+    "conformal_coverage_cv",
+    "conformal_survival_parallel",
+)
+
+_SKLEARN_EXPORTS = (
+    "AFTEstimator",
+    "CoxPHEstimator",
+    "DeepSurvEstimator",
+    "GradientBoostSurvivalEstimator",
+    "StreamingAFTEstimator",
+    "StreamingCoxPHEstimator",
+    "StreamingDeepSurvEstimator",
+    "StreamingGradientBoostSurvivalEstimator",
+    "StreamingMixin",
+    "StreamingSurvivalForestEstimator",
+    "SurvivalForestEstimator",
+    "iter_chunks",
+    "predict_large_dataset",
+    "survival_curves_to_disk",
+)
+
+for _name in _CORE_EXPORTS:
+    globals()[_name] = getattr(_core, _name)
+
+del _name
+
+__all__ = [*_CORE_EXPORTS, *_SKLEARN_EXPORTS]
+
+
+def __getattr__(name: str):
+    if name.startswith("_"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    if hasattr(_core, name):
+        warn(
+            f"'survival.{name}' is an implicit extension re-export and is not part of the "
+            "curated package API; import it from 'survival._survival' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        value = getattr(_core, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)

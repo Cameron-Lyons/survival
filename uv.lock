@@ -519,7 +519,6 @@ wheels = [
 
 [[package]]
 name = "survival"
-version = "1.2.12"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -553,7 +552,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = "==9.0.2" },
     { name = "scikit-learn", marker = "extra == 'sklearn'", specifier = ">=1.0.0" },
 ]
-provides-extras = ["dev", "test", "sklearn"]
+provides-extras = ["dev", "sklearn", "test"]
 
 [[package]]
 name = "threadpoolctl"

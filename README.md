@@ -431,12 +431,15 @@ veteran = load_veteran()
 The public Python surface is broad and evolves quickly. For the most accurate,
 version-matched signatures, use the checked-in type stubs:
 
+`import survival` exposes the curated package API. For lower-level or
+experimental extension symbols, import from `survival._survival` explicitly.
+
 - [`python/survival/_survival.pyi`](python/survival/_survival.pyi): core
   PyO3 bindings exposed by `survival._survival`.
+- [`python/survival/__init__.pyi`](python/survival/__init__.pyi): package-level
+  typing surface for `import survival`.
 - [`python/survival/sklearn_compat.py`](python/survival/sklearn_compat.py):
   scikit-learn-compatible estimators and streaming wrappers.
-- [`survival.pyi`](survival.pyi): additional typing surface used by downstream
-  tooling.
 
 To inspect available symbols at runtime:
 
@@ -487,6 +490,10 @@ Build the extension in your current environment:
 ```sh
 maturin develop --release
 ```
+
+`Cargo.toml` is the source of truth for the published package version.
+
+GitHub Actions publishes from an explicit tag or full commit SHA. PyPI/TestPyPI publishing is configured for trusted publishing rather than a long-lived API token.
 
 Build the Rust library:
 ```sh

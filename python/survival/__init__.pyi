@@ -1,5 +1,22 @@
 from typing import Any
 
+from .sklearn_compat import (
+    AFTEstimator,
+    CoxPHEstimator,
+    DeepSurvEstimator,
+    GradientBoostSurvivalEstimator,
+    StreamingAFTEstimator,
+    StreamingCoxPHEstimator,
+    StreamingDeepSurvEstimator,
+    StreamingGradientBoostSurvivalEstimator,
+    StreamingMixin,
+    StreamingSurvivalForestEstimator,
+    SurvivalForestEstimator,
+    iter_chunks,
+    predict_large_dataset,
+    survival_curves_to_disk,
+)
+
 class AaregOptions:
     def __init__(
         self,

@@ -200,7 +200,9 @@ mod tests {
         );
     }
 
-    fn synthetic_nested_cox_data() -> (Vec<f64>, Vec<u8>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    type SyntheticNestedCoxData = (Vec<f64>, Vec<u8>, Vec<f64>, Vec<f64>, Vec<f64>);
+
+    fn synthetic_nested_cox_data() -> SyntheticNestedCoxData {
         (
             vec![
                 19.0, 4.0, 30.0, 15.0, 6.0, 24.0, 9.0, 21.0, 25.0, 16.0, 14.0, 26.0, 12.0, 17.0,

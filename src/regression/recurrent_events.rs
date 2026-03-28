@@ -1622,7 +1622,7 @@ mod tests {
             &gap_config,
         );
         assert!(gap.is_ok());
-        let gap = gap.ok().expect("gap-time PWP result should be present");
+        let gap = gap.expect("gap-time PWP result should be present");
 
         let total_config = PWPConfig::new(PWPTimescale::Total, 100, 1e-6, true, true);
         let total = pwp_model(
@@ -1635,7 +1635,7 @@ mod tests {
             &total_config,
         );
         assert!(total.is_ok());
-        let total = total.ok().expect("total-time PWP result should be present");
+        let total = total.expect("total-time PWP result should be present");
 
         let ag = anderson_gill_model(
             bladder.id.clone(),
@@ -1647,7 +1647,7 @@ mod tests {
             1e-6,
         );
         assert!(ag.is_ok());
-        let ag = ag.ok().expect("Anderson-Gill result should be present");
+        let ag = ag.expect("Anderson-Gill result should be present");
 
         let wlw_config = WLWConfig::new(100, 1e-6, true, false);
         let wlw = wlw_model(
@@ -1659,7 +1659,7 @@ mod tests {
             &wlw_config,
         );
         assert!(wlw.is_ok());
-        let wlw = wlw.ok().expect("WLW result should be present");
+        let wlw = wlw.expect("WLW result should be present");
 
         assert_eq!(gap.n_subjects, 85);
         assert_eq!(gap.n_events, 112);

@@ -3,6 +3,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
+core = survival._survival
 
 HAS_NUMPY = False
 try:
@@ -67,7 +68,7 @@ status = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1]
 def _make_config(**overrides):
     defaults = {
         "hidden_layers": [8, 4],
-        "activation": survival.Activation("relu"),
+        "activation": core.Activation("relu"),
         "dropout_rate": 0.0,
         "learning_rate": 0.01,
         "batch_size": 12,
@@ -78,20 +79,20 @@ def _make_config(**overrides):
         "validation_fraction": 0.0,
     }
     defaults.update(overrides)
-    return survival.DeepSurvConfig(**defaults)
+    return core.DeepSurvConfig(**defaults)
 
 
 def test_deepsurv_config_defaults():
-    config = survival.DeepSurvConfig()
+    config = core.DeepSurvConfig()
     assert config.hidden_layers == [64, 32]
     assert config.dropout_rate == pytest.approx(0.2)
     assert config.learning_rate == pytest.approx(0.001)
 
 
 def test_deepsurv_config_custom():
-    custom_config = survival.DeepSurvConfig(
+    custom_config = core.DeepSurvConfig(
         hidden_layers=[32, 16, 8],
-        activation=survival.Activation("relu"),
+        activation=core.Activation("relu"),
         dropout_rate=0.1,
         learning_rate=0.01,
         batch_size=64,
@@ -107,19 +108,19 @@ def test_deepsurv_config_custom():
 
 
 def test_activation_enum():
-    survival.Activation("relu")
-    survival.Activation("selu")
-    survival.Activation("tanh")
+    core.Activation("relu")
+    core.Activation("selu")
+    core.Activation("tanh")
 
 
 def test_activation_invalid():
     with pytest.raises(ValueError, match="Unknown activation"):
-        survival.Activation("invalid")
+        core.Activation("invalid")
 
 
 def test_deepsurv_training():
     config = _make_config()
-    model = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
+    model = core.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
 
     assert model.n_features == n_vars
     assert model.hidden_layers == [8, 4]
@@ -130,14 +131,14 @@ def test_deepsurv_training():
 
 def test_deepsurv_predict_risk():
     config = _make_config()
-    model = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
+    model = core.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
     risk_scores = model.predict_risk(x, n_obs)
     assert len(risk_scores) == n_obs
 
 
 def test_deepsurv_predict_survival():
     config = _make_config()
-    model = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
+    model = core.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
     survival_probs = model.predict_survival(x, n_obs)
     assert len(survival_probs) == n_obs
     assert len(survival_probs[0]) == len(model.unique_times)
@@ -148,7 +149,7 @@ def test_deepsurv_predict_survival():
 
 def test_deepsurv_predict_cumulative_hazard():
     config = _make_config()
-    model = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
+    model = core.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
     cumhaz = model.predict_cumulative_hazard(x, n_obs)
     assert len(cumhaz) == n_obs
     for _i, ch in enumerate(cumhaz):
@@ -158,22 +159,22 @@ def test_deepsurv_predict_cumulative_hazard():
 
 def test_deepsurv_predict_median_survival_time():
     config = _make_config()
-    model = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
+    model = core.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
     median_times = model.predict_median_survival_time(x, n_obs)
     assert len(median_times) == n_obs
 
 
 def test_deepsurv_predict_survival_time():
     config = _make_config()
-    model = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
+    model = core.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
     percentile_times = model.predict_survival_time(x, n_obs, 0.75)
     assert len(percentile_times) == n_obs
 
 
 def test_deepsurv_validation_and_early_stopping():
-    config_with_val = survival.DeepSurvConfig(
+    config_with_val = core.DeepSurvConfig(
         hidden_layers=[8, 4],
-        activation=survival.Activation("selu"),
+        activation=core.Activation("selu"),
         dropout_rate=0.1,
         learning_rate=0.01,
         batch_size=6,
@@ -183,7 +184,7 @@ def test_deepsurv_validation_and_early_stopping():
         early_stopping_patience=5,
         validation_fraction=0.25,
     )
-    model_val = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config_with_val)
+    model_val = core.DeepSurv.fit(x, n_obs, n_vars, time, status, config_with_val)
     assert len(model_val.val_loss) > 0
     assert len(model_val.val_loss) == len(model_val.train_loss)
 
@@ -192,25 +193,25 @@ def test_deepsurv_mismatched_x_length():
     config = _make_config()
     bad_x = [1.0, 2.0, 3.0]
     with pytest.raises(ValueError, match="x length must equal n_obs"):
-        survival.DeepSurv.fit(bad_x, 10, 3, time, status, config)
+        core.DeepSurv.fit(bad_x, 10, 3, time, status, config)
 
 
 def test_deepsurv_mismatched_time_length():
     config = _make_config()
     bad_time = [1.0, 2.0]
     with pytest.raises(ValueError, match="time and status must have length n_obs"):
-        survival.DeepSurv.fit(x, n_obs, n_vars, bad_time, status, config)
+        core.DeepSurv.fit(x, n_obs, n_vars, bad_time, status, config)
 
 
 def test_deepsurv_mismatched_predict_x():
     config = _make_config()
-    model = survival.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
+    model = core.DeepSurv.fit(x, n_obs, n_vars, time, status, config)
     with pytest.raises(ValueError, match="dimensions don't match"):
         model.predict_risk([1.0, 2.0], 5)
 
 
 def test_deep_surv_convenience_function():
-    model_func = survival.deep_surv(x, n_obs, n_vars, time, status)
+    model_func = core.deep_surv(x, n_obs, n_vars, time, status)
     assert model_func.n_features == n_vars
 
 
