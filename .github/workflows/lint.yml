@@ -41,7 +41,7 @@ jobs:
 
       - name: Check for unused dependencies
         run: |
-          cargo install cargo-machete --locked --force
+          cargo install cargo-machete --locked --version 0.9.1 --force
           cargo machete
 
   python-lint:
@@ -71,7 +71,7 @@ jobs:
       - name: Type check stubs
         run: |
           uv pip install --system numpy
-          mypy survival.pyi --ignore-missing-imports
+          mypy python/survival/__init__.pyi python/survival/_survival.pyi --ignore-missing-imports
 
   typos:
     name: Spell Check
@@ -81,7 +81,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Check for typos
-        uses: crate-ci/typos@master
+        uses: crate-ci/typos@v1
         with:
           config: .typos.toml
 

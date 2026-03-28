@@ -17,5 +17,5 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo install cargo-fuzz
+      - run: cargo install cargo-fuzz --locked --version 0.13.1
       - run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=120

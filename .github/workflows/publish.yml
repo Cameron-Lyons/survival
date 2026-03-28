@@ -1,8 +1,6 @@
 name: Publish
 
 on:
-  push:
-    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
@@ -15,20 +13,75 @@ on:
         options:
           - testpypi
           - pypi
+          - crates
+      ref:
+        description: 'Existing tag name or full 40-character commit SHA to publish'
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  linux-x86:
+  resolve-publish-ref:
+    name: Resolve Publish Ref
     runs-on: ubuntu-latest
+    outputs:
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve immutable ref
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+          MANUAL_REF: ${{ github.event.inputs.ref || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            requested_ref="$RELEASE_TAG"
+          else
+            requested_ref="$MANUAL_REF"
+          fi
+
+          if [[ -z "$requested_ref" ]]; then
+            echo "An existing tag name or full 40-character commit SHA is required." >&2
+            exit 1
+          fi
+
+          if git show-ref --tags --verify --quiet "refs/tags/$requested_ref"; then
+            resolved_ref="$(git rev-list -n 1 "refs/tags/$requested_ref")"
+          elif [[ "$requested_ref" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${requested_ref}^{commit}" 2>/dev/null; then
+            resolved_ref="$requested_ref"
+          else
+            echo "Publish ref must be an existing tag or full 40-character commit SHA." >&2
+            exit 1
+          fi
+
+          git checkout --detach "$resolved_ref"
+          echo "checkout_ref=$resolved_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  linux-x86:
+    runs-on: ubuntu-latest
+    needs: [resolve-publish-ref]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
 
       - uses: actions/setup-python@v6
         with:
@@ -47,10 +100,11 @@ jobs:
 
   linux-arm:
     runs-on: ubuntu-24.04-arm
+    needs: [resolve-publish-ref]
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
+          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
 
       - uses: actions/setup-python@v6
         with:
@@ -69,13 +123,14 @@ jobs:
 
   macos:
     runs-on: macos-14
+    needs: [resolve-publish-ref]
     strategy:
       matrix:
         target: [x86_64-apple-darwin, aarch64-apple-darwin]
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
+          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
 
       - uses: actions/setup-python@v6
         with:
@@ -95,10 +150,11 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    needs: [resolve-publish-ref]
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
+          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
 
       - uses: actions/setup-python@v6
         with:
@@ -118,10 +174,11 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
+    needs: [resolve-publish-ref]
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
+          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -139,11 +196,12 @@ jobs:
     name: Publish to TestPyPI
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
-    needs: [linux-x86, linux-arm, macos, windows, sdist]
+    needs: [resolve-publish-ref, linux-x86, linux-arm, macos, windows, sdist]
     environment:
       name: testpypi
       url: https://test.pypi.org/project/survival
     permissions:
+      contents: read
       id-token: write
     steps:
       - uses: actions/download-artifact@v8
@@ -159,31 +217,26 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi')
-    needs: [linux-x86, linux-arm, macos, windows, sdist]
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi')
+    needs: [resolve-publish-ref, linux-x86, linux-arm, macos, windows, sdist]
     environment:
       name: pypi
       url: https://pypi.org/project/survival
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
-
-      - name: Get version from Cargo.toml
-        id: version
-        run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Check if version exists on PyPI
         id: check
+        env:
+          VERSION: ${{ needs.resolve-publish-ref.outputs.version }}
         run: |
-          if curl -s "https://pypi.org/pypi/survival/${{ steps.version.outputs.version }}/json" | grep -q '"version"'; then
+          if curl -s "https://pypi.org/pypi/survival/${VERSION}/json" | grep -q '"version"'; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Version ${{ steps.version.outputs.version }} already exists on PyPI, skipping publish"
+            echo "Version ${VERSION} already exists on PyPI, skipping publish"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Version ${{ steps.version.outputs.version }} not found on PyPI, will publish"
+            echo "Version ${VERSION} not found on PyPI, will publish"
           fi
 
       - uses: actions/download-artifact@v8
@@ -195,40 +248,35 @@ jobs:
       - name: Publish to PyPI
         if: steps.check.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
 
   publish-crates:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'release'
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'crates')
+    needs: [resolve-publish-ref]
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'push' && 'main' || github.ref }}
+          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Get version from Cargo.toml
-        id: version
-        run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Check if version exists on crates.io
         id: check
+        env:
+          VERSION: ${{ needs.resolve-publish-ref.outputs.version }}
         run: |
-          if curl -s "https://crates.io/api/v1/crates/survival/${{ steps.version.outputs.version }}" | grep -q '"version"'; then
+          if curl -s "https://crates.io/api/v1/crates/survival/${VERSION}" | grep -q '"version"'; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Version ${{ steps.version.outputs.version }} already exists on crates.io, skipping publish"
+            echo "Version ${VERSION} already exists on crates.io, skipping publish"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Version ${{ steps.version.outputs.version }} not found on crates.io, will publish"
+            echo "Version ${VERSION} not found on crates.io, will publish"
           fi
 
       - name: Publish to crates.io
         if: steps.check.outputs.exists == 'false'
-        run: cargo publish --no-verify --allow-dirty
+        run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
