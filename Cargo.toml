@@ -20,7 +20,7 @@ name = "survival"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = "0.28.2"
+pyo3 = "0.28.3"
 numpy = "0.28.0"
 ndarray = { version = "0.17.2", features = ["rayon"] }
 itertools = "0.14.0"
