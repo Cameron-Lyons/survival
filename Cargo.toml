@@ -26,7 +26,7 @@ ndarray = { version = "0.17.2", features = ["rayon"] }
 itertools = "0.14.0"
 rayon = "1.11.0"
 faer = "0.24.0"
-fastrand = "2.3.0"
+fastrand = "2.4.1"
 pulp = "0.22.2"
 wide = "1.2.0"
 burn = { version = "0.20.1", default-features = false, features = ["autodiff", "ndarray"] }
