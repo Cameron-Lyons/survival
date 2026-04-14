@@ -45,11 +45,11 @@ Issues = "https://github.com/Cameron-Lyons/survival/issues"
 [project.optional-dependencies]
 dev = [
   "pre-commit==4.5.1",
-  "pytest==9.0.2",
+  "pytest==9.0.3",
   "numpy==2.4.4",
 ]
 test = [
-  "pytest==9.0.2",
+  "pytest==9.0.3",
   "numpy==2.4.4",
   "pandas==3.0.2",
   "polars==1.39.3",
