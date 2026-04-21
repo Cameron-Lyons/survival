@@ -24,7 +24,7 @@ pyo3 = "0.28.3"
 numpy = "0.28.0"
 ndarray = { version = "0.17.2", features = ["rayon"] }
 itertools = "0.14.0"
-rayon = "1.11.0"
+rayon = "1.12.0"
 faer = "0.24.0"
 fastrand = "2.4.1"
 pulp = "0.22.2"
