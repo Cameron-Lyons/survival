@@ -183,10 +183,8 @@ impl RateTable {
                     year_key = Some(dim.name.clone());
                     coords.insert(dim.name.clone(), current_year);
                 }
-                DimType::Factor => {
-                    if dim.name.to_lowercase().contains("sex") {
-                        coords.insert(dim.name.clone(), sex.unwrap_or(0) as f64);
-                    }
+                DimType::Factor if dim.name.to_lowercase().contains("sex") => {
+                    coords.insert(dim.name.clone(), sex.unwrap_or(0) as f64);
                 }
                 _ => {}
             }

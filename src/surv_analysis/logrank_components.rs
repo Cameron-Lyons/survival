@@ -76,7 +76,7 @@ pub fn compute_logrank_components(
             df += 1;
         }
     }
-    df = (df - 1).max(0);
+    df -= 1;
     let mut variance_matrix = Vec::new();
     for i in 0..ngroup {
         let start = i * ngroup;
