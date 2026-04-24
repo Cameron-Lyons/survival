@@ -99,7 +99,7 @@ fn compute_default_layout(n_states: usize, edges: &[(usize, usize, usize)]) -> V
     let mut state_scores: Vec<(usize, i32)> = (0..n_states)
         .map(|i| (i, out_degree[i] as i32 - in_degree[i] as i32))
         .collect();
-    state_scores.sort_by(|a, b| b.1.cmp(&a.1));
+    state_scores.sort_by_key(|state| std::cmp::Reverse(state.1));
 
     let n_cols = (n_states as f64).sqrt().ceil() as usize;
     let n_rows = n_states.div_ceil(n_cols);

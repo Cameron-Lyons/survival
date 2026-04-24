@@ -514,7 +514,7 @@ pub fn detect_changepoints(
         .iter()
         .map(|r| (r.feature_idx, r.n_changepoints))
         .collect();
-    most_unstable_features.sort_by(|a, b| b.1.cmp(&a.1));
+    most_unstable_features.sort_by_key(|feature| std::cmp::Reverse(feature.1));
 
     Ok(AllChangepointsResult {
         results,
