@@ -30,9 +30,18 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NonMixtureCureResult>()?;
     m.add_class::<CureModelComparisonResult>()?;
 
-    m.add_function(wrap_pyfunction!(elastic_net_cox, m)?)?;
-    m.add_function(wrap_pyfunction!(elastic_net_cox_cv, m)?)?;
-    m.add_function(wrap_pyfunction!(elastic_net_cox_path, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::regression::elastic_net::elastic_net_cox_typed,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::regression::elastic_net::elastic_net_cox_cv_typed,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::regression::elastic_net::elastic_net_cox_path_typed,
+        m
+    )?)?;
     m.add_class::<PenaltyType>()?;
     m.add_class::<ElasticNetConfig>()?;
     m.add_class::<ElasticNetPathConfig>()?;
@@ -40,9 +49,18 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ElasticNetCoxResult>()?;
     m.add_class::<ElasticNetCoxPath>()?;
 
-    m.add_function(wrap_pyfunction!(fast_cox, m)?)?;
-    m.add_function(wrap_pyfunction!(fast_cox_path, m)?)?;
-    m.add_function(wrap_pyfunction!(fast_cox_cv, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::regression::fast_cox::fast_cox_typed,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::regression::fast_cox::fast_cox_path_typed,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::regression::fast_cox::fast_cox_cv_typed,
+        m
+    )?)?;
     m.add_class::<FastCoxConfig>()?;
     m.add_class::<FastCoxSolverConfig>()?;
     m.add_class::<FastCoxPathConfig>()?;

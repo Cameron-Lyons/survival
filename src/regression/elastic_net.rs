@@ -283,6 +283,7 @@ struct ElasticNetDescentConfig<'a> {
     beta_init: Option<&'a [f64]>,
 }
 
+#[allow(clippy::needless_range_loop)]
 fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let mut gradient = vec![0.0; data.p];
     let mut hessian_diag = vec![0.0; data.p];
@@ -335,6 +336,7 @@ fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64
     (gradient, hessian_diag)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn compute_cox_deviance(data: &ElasticNetData, beta: &[f64]) -> f64 {
     let eta: Vec<f64> = (0..data.n)
         .map(|i| {
@@ -415,9 +417,9 @@ fn coordinate_descent_cox(
     (beta, n_iter, converged)
 }
 
-#[pyfunction]
+#[pyfunction(name = "elastic_net_cox")]
 #[pyo3(signature = (input, config))]
-pub fn elastic_net_cox(
+pub(crate) fn elastic_net_cox_typed(
     input: &CoxRegressionInput,
     config: &ElasticNetConfig,
 ) -> PyResult<ElasticNetCoxResult> {
@@ -498,9 +500,9 @@ pub fn elastic_net_cox(
     })
 }
 
-#[pyfunction]
+#[pyfunction(name = "elastic_net_cox_path")]
 #[pyo3(signature = (input, config=None))]
-pub fn elastic_net_cox_path(
+pub(crate) fn elastic_net_cox_path_typed(
     input: &CoxRegressionInput,
     config: Option<&ElasticNetPathConfig>,
 ) -> PyResult<ElasticNetCoxPath> {
@@ -613,9 +615,9 @@ pub fn elastic_net_cox_path(
     })
 }
 
-#[pyfunction]
+#[pyfunction(name = "elastic_net_cox_cv")]
 #[pyo3(signature = (input, config=None))]
-pub fn elastic_net_cox_cv(
+pub(crate) fn elastic_net_cox_cv_typed(
     input: &CoxRegressionInput,
     config: Option<&ElasticNetCVConfig>,
 ) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
@@ -639,7 +641,7 @@ pub fn elastic_net_cox_cv(
         max_iter: 1000,
         tol: 1e-7,
     };
-    let path = elastic_net_cox_path(input, Some(&path_config))?;
+    let path = elastic_net_cox_path_typed(input, Some(&path_config))?;
 
     let x = &input.covariates.values;
     let n_obs = input.covariates.n_obs;
@@ -710,7 +712,7 @@ pub fn elastic_net_cox_cv(
                         return None;
                     };
 
-                    if let Ok(result) = elastic_net_cox(&train_input, &config) {
+                    if let Ok(result) = elastic_net_cox_typed(&train_input, &config) {
                         let test_x: Vec<f64> = {
                             let mut result = Vec::with_capacity(test_idx.len() * n_vars);
                             for &i in test_idx {
@@ -792,6 +794,72 @@ pub fn elastic_net_cox_cv(
     Ok((lambda_min, lambda_1se, mean_deviances, se_deviances))
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn elastic_net_cox(
+    x: Vec<f64>,
+    n_obs: usize,
+    n_vars: usize,
+    time: Vec<f64>,
+    status: Vec<i32>,
+    config: &ElasticNetConfig,
+    weights: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+) -> PyResult<ElasticNetCoxResult> {
+    let input = CoxRegressionInput::try_new(
+        CovariateMatrix::try_new(x, n_obs, n_vars)?,
+        SurvivalData::try_new(time, status)?,
+        weights.map(Weights::try_new).transpose()?,
+        offset,
+    )?;
+    elastic_net_cox_typed(&input, config)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn elastic_net_cox_path(
+    x: Vec<f64>,
+    n_obs: usize,
+    n_vars: usize,
+    time: Vec<f64>,
+    status: Vec<i32>,
+    l1_ratio: f64,
+    n_lambda: usize,
+    lambda_min_ratio: Option<f64>,
+    weights: Option<Vec<f64>>,
+    max_iter: usize,
+    tol: f64,
+) -> PyResult<ElasticNetCoxPath> {
+    let input = CoxRegressionInput::try_new(
+        CovariateMatrix::try_new(x, n_obs, n_vars)?,
+        SurvivalData::try_new(time, status)?,
+        weights.map(Weights::try_new).transpose()?,
+        None,
+    )?;
+    let config = ElasticNetPathConfig::new(l1_ratio, n_lambda, lambda_min_ratio, max_iter, tol)?;
+    elastic_net_cox_path_typed(&input, Some(&config))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn elastic_net_cox_cv(
+    x: Vec<f64>,
+    n_obs: usize,
+    n_vars: usize,
+    time: Vec<f64>,
+    status: Vec<i32>,
+    l1_ratio: f64,
+    n_lambda: usize,
+    n_folds: usize,
+    weights: Option<Vec<f64>>,
+) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
+    let input = CoxRegressionInput::try_new(
+        CovariateMatrix::try_new(x, n_obs, n_vars)?,
+        SurvivalData::try_new(time, status)?,
+        weights.map(Weights::try_new).transpose()?,
+        None,
+    )?;
+    let config = ElasticNetCVConfig::new(l1_ratio, n_lambda, n_folds)?;
+    elastic_net_cox_cv_typed(&input, Some(&config))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,7 +897,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = elastic_net_cox(&input, &config).unwrap();
+        let result = elastic_net_cox_typed(&input, &config).unwrap();
         assert_eq!(result.coefficients.len(), 2);
     }
 }

@@ -22,16 +22,10 @@ def test_survfitkm_negative_time():
 
 def test_agmart_length_mismatch():
     with pytest.raises(ValueError, match="length mismatch"):
-        counting = survival.CountingProcessData(
+        survival.CountingProcessData(
             start=[0.0, 0.0],
             stop=[1.0, 2.0, 3.0],
             event=[1, 0, 1],
-        )
-        survival.AndersenGillInput(
-            counting=counting,
-            score=[1.0, 1.0, 1.0],
-            weights=survival.Weights([1.0, 1.0, 1.0]),
-            strata=[0, 0, 0],
         )
 
 

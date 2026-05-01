@@ -11,9 +11,9 @@ mod tests {
 
     #[test]
     fn test_config() {
-        let solver =
-            FastCoxSolverConfig::new(1000, 1e-7, ScreeningRule::Strong, None, 10).unwrap();
-        let config = FastCoxConfig::new(0.1, 1.0, Some(&solver), true, true).unwrap();
+        let config =
+            FastCoxConfig::new(0.1, 1.0, 1000, 1e-7, ScreeningRule::Strong, None, 10, true, true)
+                .unwrap();
         assert_eq!(config.lambda, 0.1);
         assert_eq!(config.l1_ratio, 1.0);
     }
@@ -21,11 +21,11 @@ mod tests {
     #[test]
     fn test_config_validation() {
         assert!(
-            FastCoxConfig::new(-0.1, 1.0, None, true, true)
+            FastCoxConfig::new(-0.1, 1.0, 1000, 1e-7, ScreeningRule::Strong, None, 10, true, true)
             .is_err()
         );
         assert!(
-            FastCoxConfig::new(0.1, 1.5, None, true, true)
+            FastCoxConfig::new(0.1, 1.5, 1000, 1e-7, ScreeningRule::Strong, None, 10, true, true)
             .is_err()
         );
         assert!(FastCoxSolverConfig::new(0, 1e-7, ScreeningRule::None, None, 10).is_err());
@@ -38,8 +38,9 @@ mod tests {
         let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0];
         let time = vec![1.0, 2.0, 3.0, 4.0];
         let status = vec![1, 1, 0, 1];
-        let solver = FastCoxSolverConfig::new(100, 1e-5, ScreeningRule::None, None, 10).unwrap();
-        let config = FastCoxConfig::new(0.1, 1.0, Some(&solver), true, true).unwrap();
+        let config =
+            FastCoxConfig::new(0.1, 1.0, 100, 1e-5, ScreeningRule::None, None, 10, true, true)
+                .unwrap();
 
         let input = CoxRegressionInput::try_new(
             CovariateMatrix::try_new(x, 4, 2).unwrap(),
@@ -49,7 +50,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = fast_cox(&input, &config).unwrap();
+        let result = fast_cox_typed(&input, &config).unwrap();
         assert_eq!(result.coefficients.len(), 2);
     }
 
@@ -95,7 +96,7 @@ mod tests {
         )
         .unwrap();
 
-        let path = fast_cox_path(&input, Some(&config)).unwrap();
+        let path = fast_cox_path_typed(&input, Some(&config)).unwrap();
 
         assert_eq!(path.lambdas.len(), 10);
         assert_eq!(path.coefficients.len(), 10);
