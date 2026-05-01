@@ -43,7 +43,11 @@ def test_agmart():
     wt = [1.0, 1.0, 1.0, 1.0, 1.0]
     strata = [1, 0, 0, 0, 0]
 
-    result = survival.agmart(n, method, start, stop, event, score, wt, strata)
+    counting = survival.CountingProcessData(start, stop, event)
+    weights = survival.Weights(wt)
+    input_data = survival.AndersenGillInput(counting, score, weights, strata)
+
+    result = survival.agmart(input_data, method)
     assert isinstance(result, list)
     assert len(result) == n
 

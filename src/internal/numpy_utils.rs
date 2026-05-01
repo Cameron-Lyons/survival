@@ -1,6 +1,8 @@
+#[cfg(feature = "python")]
 use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
 
+#[cfg(feature = "python")]
 pub(crate) fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     if let Ok(arr) = obj.extract::<PyReadonlyArray1<'_, f64>>() {
         return Ok(arr.as_slice()?.to_vec());
@@ -31,6 +33,7 @@ pub(crate) fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     )))
 }
 
+#[cfg(feature = "python")]
 pub(crate) fn extract_vec_i32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
     if let Ok(arr) = obj.extract::<PyReadonlyArray1<'_, i32>>() {
         return Ok(arr.as_slice()?.to_vec());
@@ -78,6 +81,7 @@ pub(crate) fn extract_vec_i32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
     )))
 }
 
+#[cfg(feature = "python")]
 pub(crate) fn extract_optional_vec_f64(
     obj: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<Vec<f64>>> {
@@ -87,6 +91,7 @@ pub(crate) fn extract_optional_vec_f64(
     }
 }
 
+#[cfg(feature = "python")]
 pub(crate) fn extract_optional_vec_i32(
     obj: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<Vec<i32>>> {
@@ -94,4 +99,36 @@ pub(crate) fn extract_optional_vec_i32(
         Some(o) => Ok(Some(extract_vec_i32(o)?)),
         None => Ok(None),
     }
+}
+
+#[cfg(not(feature = "python"))]
+pub(crate) fn extract_vec_f64(_obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "array-like Python inputs require the `python` feature",
+    ))
+}
+
+#[cfg(not(feature = "python"))]
+pub(crate) fn extract_vec_i32(_obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "array-like Python inputs require the `python` feature",
+    ))
+}
+
+#[cfg(not(feature = "python"))]
+pub(crate) fn extract_optional_vec_f64(
+    _obj: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<Vec<f64>>> {
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "array-like Python inputs require the `python` feature",
+    ))
+}
+
+#[cfg(not(feature = "python"))]
+pub(crate) fn extract_optional_vec_i32(
+    _obj: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<Vec<i32>>> {
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "array-like Python inputs require the `python` feature",
+    ))
 }

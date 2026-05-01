@@ -33,6 +33,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(elastic_net_cox, m)?)?;
     m.add_function(wrap_pyfunction!(elastic_net_cox_cv, m)?)?;
     m.add_function(wrap_pyfunction!(elastic_net_cox_path, m)?)?;
+    m.add_class::<PenaltyType>()?;
+    m.add_class::<ElasticNetConfig>()?;
+    m.add_class::<ElasticNetPathConfig>()?;
+    m.add_class::<ElasticNetCVConfig>()?;
     m.add_class::<ElasticNetCoxResult>()?;
     m.add_class::<ElasticNetCoxPath>()?;
 
@@ -40,6 +44,9 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_cox_path, m)?)?;
     m.add_function(wrap_pyfunction!(fast_cox_cv, m)?)?;
     m.add_class::<FastCoxConfig>()?;
+    m.add_class::<FastCoxSolverConfig>()?;
+    m.add_class::<FastCoxPathConfig>()?;
+    m.add_class::<FastCoxCVConfig>()?;
     m.add_class::<FastCoxResult>()?;
     m.add_class::<FastCoxPath>()?;
     m.add_class::<ScreeningRule>()?;

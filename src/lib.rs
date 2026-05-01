@@ -1,4 +1,23 @@
+#![cfg_attr(
+    not(feature = "python"),
+    allow(dead_code, unused_imports, unused_mut, unused_variables)
+)]
+
+#[cfg(not(feature = "python"))]
+extern crate self as pyo3;
+
+#[cfg(not(feature = "python"))]
+mod pyo3_shim;
+
+#[cfg(not(feature = "python"))]
+pub use pyo3_shim::{
+    Bound, Py, PyAny, PyDict, PyErr, PyList, PyModule, PyRefMut, PyResult, Python, exceptions,
+    prelude, types,
+};
+
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 mod api;
 mod bayesian;
 mod causal;
@@ -6,6 +25,7 @@ mod concordance;
 mod constants;
 mod core;
 mod data_prep;
+#[cfg(feature = "python")]
 mod datasets;
 mod internal;
 mod interpretability;
@@ -13,9 +33,11 @@ mod interval;
 mod joint;
 mod matrix;
 mod missing;
+#[cfg(feature = "ml")]
 mod ml;
 mod monitoring;
 mod population;
+#[cfg(feature = "python")]
 mod pybridge;
 mod qol;
 mod recurrent;
@@ -52,6 +74,10 @@ pub use data_prep::survsplit::{SplitResult, survsplit};
 pub use data_prep::tcut::{TcutResult, tcut, tcut_expand};
 pub use data_prep::timeline::{IntervalResult, TimelineResult, from_timeline, to_timeline};
 pub use data_prep::tmerge::{tmerge, tmerge2, tmerge3};
+pub use internal::typed_inputs::{
+    AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
+    SurvivalData, Weights,
+};
 pub use monitoring::drift_detection::{
     DriftConfig, DriftReport, FeatureDriftResult, PerformanceDriftResult, detect_drift,
     monitor_performance,
@@ -308,8 +334,8 @@ pub use interpretability::changepoints::{
     CostFunction, detect_changepoints, detect_changepoints_single_series,
 };
 pub use interpretability::friedman_h::{
-    FeatureImportanceResult as FriedmanFeatureImportanceResult, FriedmanHResult,
-    compute_all_pairwise_interactions, compute_feature_importance_decomposition,
+    FeatureImportanceResult, FeatureImportanceResult as FriedmanFeatureImportanceResult,
+    FriedmanHResult, compute_all_pairwise_interactions, compute_feature_importance_decomposition,
     compute_friedman_h,
 };
 pub use interpretability::ice_curves::{
@@ -353,84 +379,115 @@ pub use missing::pattern_mixture::{
     PatternMixtureResult, SensitivityAnalysisType, pattern_mixture_model, sensitivity_analysis,
     tipping_point_analysis,
 };
+#[cfg(feature = "ml")]
 pub use ml::active_learning::{
     ActiveLearningConfig, ActiveLearningResult, AdaptiveDesignResult, LogrankPowerResult,
     LogrankSampleSizeResult, QBCResult, active_learning_selection, group_sequential_analysis,
     power_logrank, query_by_committee, sample_size_logrank,
 };
+#[cfg(feature = "ml")]
 pub use ml::adversarial_robustness::{
     AdversarialAttackConfig, AdversarialAttackResult, AdversarialDefenseConfig, AdversarialExample,
     AttackType, DefenseType, RobustSurvivalModel, RobustnessEvaluation,
     adversarial_training_survival, evaluate_robustness, generate_adversarial_examples,
 };
+#[cfg(feature = "ml")]
 pub use ml::attention_cox::{AttentionCoxConfig, AttentionCoxModel, fit_attention_cox};
+#[cfg(feature = "ml")]
 pub use ml::contrastive_surv::{
     ContrastiveSurv, ContrastiveSurvConfig, ContrastiveSurvResult, SurvivalLossType,
     contrastive_surv,
 };
+#[cfg(feature = "ml")]
 pub use ml::cox_time::{CoxTimeConfig, CoxTimeModel, fit_cox_time};
+#[cfg(feature = "ml")]
 pub use ml::deep_pamm::{DeepPAMMConfig, DeepPAMMModel, fit_deep_pamm};
+#[cfg(feature = "ml")]
 pub use ml::deep_surv::{Activation, DeepSurv, DeepSurvConfig, deep_surv};
+#[cfg(feature = "ml")]
 pub use ml::deephit::{DeepHit, DeepHitConfig, deephit};
+#[cfg(feature = "ml")]
 pub use ml::differential_privacy::{
     DPConfig, DPCoxResult, DPHistogramResult, DPSurvivalResult, LocalDPResult, dp_cox_regression,
     dp_histogram, dp_kaplan_meier, local_dp_mean,
 };
+#[cfg(feature = "ml")]
 pub use ml::distributionally_robust::{
     DROSurvivalConfig, DROSurvivalResult, RobustnessAnalysis, UncertaintySet, dro_survival,
     robustness_analysis,
 };
+#[cfg(feature = "ml")]
 pub use ml::dynamic_deephit::{
     DynamicDeepHit, DynamicDeepHitConfig, TemporalType, dynamic_deephit,
 };
+#[cfg(feature = "ml")]
 pub use ml::dysurv::{
     DySurvConfig, DySurvModel, DynamicRiskResult, dynamic_risk_prediction, fit_dysurv,
 };
+#[cfg(feature = "ml")]
 pub use ml::ensemble_surv::{
     BlendingResult, ComponentwiseBoostingConfig, ComponentwiseBoostingResult, StackingConfig,
     StackingResult, SuperLearnerConfig, SuperLearnerResult, blending_survival,
     componentwise_boosting, stacking_survival, super_learner_survival,
 };
+#[cfg(feature = "ml")]
 pub use ml::federated_learning::{
     FederatedConfig, FederatedSurvivalResult, PrivacyAccountant, SecureAggregationResult,
     federated_cox, secure_aggregate,
 };
+#[cfg(feature = "ml")]
 pub use ml::galee::{GALEE, GALEEConfig, GALEEResult, UnimodalConstraint, galee};
+#[cfg(feature = "ml")]
 pub use ml::gpu_acceleration::{
     BatchPredictionResult, ComputeBackend, DeviceInfo, GPUConfig, ParallelCoxResult,
     batch_predict_survival, benchmark_compute_backend, get_available_devices, is_gpu_available,
     parallel_cox_regression, parallel_matrix_operations,
 };
+#[cfg(feature = "ml")]
 pub use ml::gradient_boost::{
     GBSurvLoss, GradientBoostSurvival, GradientBoostSurvivalConfig, gradient_boost_survival,
 };
+#[cfg(feature = "ml")]
 pub use ml::graph_surv::{GraphSurvConfig, GraphSurvModel, fit_graph_surv};
+#[cfg(feature = "ml")]
 pub use ml::knowledge_distillation::{
     DistillationConfig, DistillationResult, DistilledSurvivalModel, PruningResult,
     distill_survival_model, prune_survival_model,
 };
+#[cfg(feature = "ml")]
 pub use ml::multimodal_surv::{
     FusionStrategy, MultimodalSurvConfig, MultimodalSurvModel, fit_multimodal_surv,
 };
+#[cfg(feature = "ml")]
 pub use ml::neural_mtlr::{NeuralMTLRConfig, NeuralMTLRModel, fit_neural_mtlr};
+#[cfg(feature = "ml")]
 pub use ml::neural_ode_surv::{NeuralODESurvConfig, NeuralODESurvModel, fit_neural_ode_surv};
+#[cfg(feature = "ml")]
 pub use ml::recurrent_surv::{
     LongitudinalSurvConfig, LongitudinalSurvModel, RecurrentSurvConfig, RecurrentSurvModel,
     fit_longitudinal_surv, fit_recurrent_surv,
 };
+#[cfg(feature = "ml")]
 pub use ml::state_space_surv::{MambaSurvConfig, MambaSurvModel, fit_mamba_surv};
+#[cfg(feature = "ml")]
 pub use ml::streaming_survival::{
     ConceptDriftDetector, StreamingCoxConfig, StreamingCoxModel, StreamingKaplanMeier,
 };
+#[cfg(feature = "ml")]
 pub use ml::survival_forest::{SplitRule, SurvivalForest, SurvivalForestConfig, survival_forest};
+#[cfg(feature = "ml")]
 pub use ml::survival_transformer::{
     SurvivalTransformerConfig, SurvivalTransformerModel, fit_survival_transformer,
 };
+#[cfg(feature = "ml")]
 pub use ml::survtrace::{SurvTrace, SurvTraceActivation, SurvTraceConfig, survtrace};
+#[cfg(feature = "ml")]
 pub use ml::temporal_fusion::{
     TFTConfig, TemporalFusionTransformer, fit_temporal_fusion_transformer,
 };
+#[cfg(feature = "ml")]
 pub use ml::tracer::{Tracer, TracerConfig, tracer};
+#[cfg(feature = "ml")]
 pub use ml::transfer_learning::{
     DomainAdaptationResult, PretrainedSurvivalModel, TransferLearningConfig, TransferStrategy,
     TransferredModel, compute_domain_distance, pretrain_survival_model, transfer_survival_model,
@@ -456,11 +513,12 @@ pub use regression::cure_models::{
     predict_non_mixture_survival, promotion_time_cure_model,
 };
 pub use regression::elastic_net::{
-    ElasticNetCoxPath, ElasticNetCoxResult, elastic_net_cox, elastic_net_cox_cv,
-    elastic_net_cox_path,
+    ElasticNetCVConfig, ElasticNetConfig, ElasticNetCoxPath, ElasticNetCoxResult,
+    ElasticNetPathConfig, PenaltyType, elastic_net_cox, elastic_net_cox_cv, elastic_net_cox_path,
 };
 pub use regression::fast_cox::{
-    FastCoxConfig, FastCoxPath, FastCoxResult, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
+    FastCoxCVConfig, FastCoxConfig, FastCoxPath, FastCoxPathConfig, FastCoxResult,
+    FastCoxSolverConfig, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
 };
 pub use regression::functional_survival::{
     BasisType, FunctionalPCAResult, FunctionalSurvivalConfig, FunctionalSurvivalResult,
@@ -501,6 +559,7 @@ pub use spatial::spatial_frailty::{
     moran_i_test, spatial_frailty_model,
 };
 
+#[cfg(feature = "python")]
 #[pymodule]
 fn _survival(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     api::python::register_module(&m)

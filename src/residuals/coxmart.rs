@@ -1,52 +1,32 @@
+use crate::internal::typed_inputs::CoxMartInput;
 use pyo3::prelude::*;
 
-pub(crate) struct SurvivalData<'a> {
+pub(crate) struct CoxMartSurvivalData<'a> {
     pub(crate) time: &'a [f64],
     pub(crate) status: &'a [i32],
     pub(crate) strata: &'a mut [i32],
 }
 
-pub(crate) struct Weights<'a> {
+pub(crate) struct CoxMartWeights<'a> {
     pub(crate) score: &'a [f64],
     pub(crate) wt: &'a [f64],
 }
 
 #[pyfunction]
-pub fn coxmart(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    score: Vec<f64>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
-    method: Option<i32>,
-) -> PyResult<Vec<f64>> {
-    let n = time.len();
-    if status.len() != n || score.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time, status, and score must have the same length",
-        ));
-    }
-    let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
-    let mut strata_vec = strata.unwrap_or_else(|| vec![0; n]);
+#[pyo3(signature = (input, method=None))]
+pub fn coxmart(input: &CoxMartInput, method: Option<i32>) -> PyResult<Vec<f64>> {
+    let n = input.survival.time.len();
+    let weights_vec = input.weights_or_unit();
+    let mut strata_vec = input.strata_or_default();
     let method_val = method.unwrap_or(0);
-    if weights_vec.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "weights must have the same length as time",
-        ));
-    }
-    if strata_vec.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "strata must have the same length as time",
-        ));
-    }
     let mut expect = vec![0.0; n];
-    let surv_data = SurvivalData {
-        time: &time,
-        status: &status,
+    let surv_data = CoxMartSurvivalData {
+        time: &input.survival.time,
+        status: &input.survival.status,
         strata: &mut strata_vec,
     };
-    let weights_data = Weights {
-        score: &score,
+    let weights_data = CoxMartWeights {
+        score: &input.score,
         wt: &weights_vec,
     };
     compute_coxmart(n, method_val, surv_data, weights_data, &mut expect);
@@ -55,8 +35,8 @@ pub fn coxmart(
 pub(crate) fn compute_coxmart(
     n: usize,
     method: i32,
-    surv_data: SurvivalData,
-    weights: Weights,
+    surv_data: CoxMartSurvivalData,
+    weights: CoxMartWeights,
     expect: &mut [f64],
 ) {
     if n == 0 {

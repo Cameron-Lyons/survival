@@ -105,6 +105,7 @@ pub(crate) fn lcg64_next(state: &mut u64) {
 }
 
 #[inline]
+#[cfg(feature = "ml")]
 pub(crate) fn lcg64_shuffle_with_state(indices: &mut [usize], state: &mut u64) {
     let n = indices.len();
     for i in (1..n).rev() {

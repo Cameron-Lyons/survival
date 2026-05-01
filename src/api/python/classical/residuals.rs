@@ -1,15 +1,12 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_functions!(
-        m,
-        residuals_survreg,
-        dfbeta_survreg,
-        residuals_survfit,
-        predict_survreg,
-        predict_survreg_quantile,
-        coxph_detail,
-    );
+    m.add_function(wrap_pyfunction!(residuals_survreg, m)?)?;
+    m.add_function(wrap_pyfunction!(dfbeta_survreg, m)?)?;
+    m.add_function(wrap_pyfunction!(residuals_survfit, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_survreg, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_survreg_quantile, m)?)?;
+    m.add_function(wrap_pyfunction!(coxph_detail, m)?)?;
 
     register_classes!(
         m,

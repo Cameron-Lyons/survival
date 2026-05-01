@@ -43,7 +43,7 @@ pip install survival
 #### Prerequisites
 
 - Python 3.11+
-- Rust 1.93+ (see [rustup.rs](https://rustup.rs/))
+- Rust 1.94+ (see [rustup.rs](https://rustup.rs/))
 - [maturin](https://github.com/PyO3/maturin)
 
 Install maturin:
@@ -589,7 +589,7 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 ## Compatibility
 
 - This build is for Python only. R/extendr bindings are currently disabled.
-- Python 3.11+ and Rust 1.93+ are required.
+- Python 3.11+ and Rust 1.94+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
 
 ## License

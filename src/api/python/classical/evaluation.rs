@@ -1,35 +1,32 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_functions!(
-        m,
-        schoenfeld_residuals,
-        cox_score_residuals,
-        bootstrap_cox_ci,
-        bootstrap_survreg_ci,
-        cv_cox_concordance,
-        cv_survreg_loglik,
-        lrt_test,
-        wald_test_py,
-        score_test_py,
-        ph_test,
-        sample_size_survival,
-        sample_size_survival_freedman,
-        power_survival,
-        expected_events,
-        calibration,
-        predict_cox,
-        risk_stratification,
-        td_auc,
-        d_calibration,
-        one_calibration,
-        calibration_plot,
-        brier_calibration,
-        multi_time_calibration,
-        smoothed_calibration,
-        landmark_analysis,
-        landmark_analysis_batch,
-    );
+    m.add_function(wrap_pyfunction!(schoenfeld_residuals, m)?)?;
+    m.add_function(wrap_pyfunction!(cox_score_residuals, m)?)?;
+    m.add_function(wrap_pyfunction!(bootstrap_cox_ci, m)?)?;
+    m.add_function(wrap_pyfunction!(bootstrap_survreg_ci, m)?)?;
+    m.add_function(wrap_pyfunction!(cv_cox_concordance, m)?)?;
+    m.add_function(wrap_pyfunction!(cv_survreg_loglik, m)?)?;
+    m.add_function(wrap_pyfunction!(lrt_test, m)?)?;
+    m.add_function(wrap_pyfunction!(wald_test_py, m)?)?;
+    m.add_function(wrap_pyfunction!(score_test_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ph_test, m)?)?;
+    m.add_function(wrap_pyfunction!(sample_size_survival, m)?)?;
+    m.add_function(wrap_pyfunction!(sample_size_survival_freedman, m)?)?;
+    m.add_function(wrap_pyfunction!(power_survival, m)?)?;
+    m.add_function(wrap_pyfunction!(expected_events, m)?)?;
+    m.add_function(wrap_pyfunction!(calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_cox, m)?)?;
+    m.add_function(wrap_pyfunction!(risk_stratification, m)?)?;
+    m.add_function(wrap_pyfunction!(td_auc, m)?)?;
+    m.add_function(wrap_pyfunction!(d_calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(one_calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(calibration_plot, m)?)?;
+    m.add_function(wrap_pyfunction!(brier_calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(multi_time_calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(smoothed_calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(landmark_analysis, m)?)?;
+    m.add_function(wrap_pyfunction!(landmark_analysis_batch, m)?)?;
 
     register_classes!(
         m,

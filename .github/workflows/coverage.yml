@@ -6,7 +6,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  COVERAGE_MIN_PERCENT: '30'
+  RUST_COVERAGE_MIN_PERCENT: '60'
+  PYTHON_COVERAGE_MIN_PERCENT: '80'
 
 jobs:
   coverage:
@@ -44,12 +45,13 @@ jobs:
         run: cargo tarpaulin --engine llvm --out xml --out html --skip-clean --timeout 300
 
       - name: Enforce minimum line coverage
-        run: python scripts/check_coverage.py cobertura.xml --min-percent "${COVERAGE_MIN_PERCENT}"
+        run: python scripts/check_coverage.py cobertura.xml --min-percent "${RUST_COVERAGE_MIN_PERCENT}"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
           files: cobertura.xml
+          flags: rust
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -57,7 +59,76 @@ jobs:
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-report
+          name: rust-coverage-report
           path: |
             cobertura.xml
             tarpaulin-report.html
+
+  python-coverage:
+    name: Python Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-python-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Create virtualenv
+        run: python -m venv .venv
+
+      - name: Install maturin and test dependencies
+        run: |
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install maturin numpy pandas polars pytest pytest-cov
+
+      - name: Install extension with maturin develop
+        run: .venv/bin/maturin develop --release --features extension-module,ml
+
+      - name: Check generated binding manifest
+        run: .venv/bin/python scripts/generate_binding_manifest.py --check
+
+      - name: Check API/stub/example consistency
+        run: .venv/bin/python -m pytest python/tests/test_binding_contract.py -v
+
+      - name: Run Python coverage
+        run: |
+          .venv/bin/python -m pytest python/tests/ -v \
+            --ignore=python/tests/test_binding_contract.py \
+            --cov=python/survival \
+            --cov-report=term-missing \
+            --cov-report=xml:python-coverage.xml \
+            --cov-fail-under="${PYTHON_COVERAGE_MIN_PERCENT}"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: python-coverage.xml
+          flags: python
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-coverage-report
+          path: python-coverage.xml

@@ -1,62 +1,48 @@
 
-#[pyfunction]
-#[pyo3(signature = (x, n_obs, n_vars, time, status, config, weights=None, offset=None))]
-#[allow(clippy::too_many_arguments)]
-pub fn fast_cox(
-    x: Vec<f64>,
-    n_obs: usize,
-    n_vars: usize,
-    time: Vec<f64>,
-    status: Vec<i32>,
-    config: &FastCoxConfig,
-    weights: Option<Vec<f64>>,
-    offset: Option<Vec<f64>>,
-) -> PyResult<FastCoxResult> {
-    if x.len() != n_obs * n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "x length must equal n_obs * n_vars",
-        ));
-    }
-    if time.len() != n_obs || status.len() != n_obs {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and status must have length n_obs",
-        ));
-    }
+use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData, Weights};
 
-    let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
-    let off = offset.unwrap_or_else(|| vec![0.0; n_obs]);
+#[pyfunction]
+#[pyo3(signature = (input, config))]
+pub fn fast_cox(input: &CoxRegressionInput, config: &FastCoxConfig) -> PyResult<FastCoxResult> {
+    let x = &input.covariates.values;
+    let n_obs = input.covariates.n_obs;
+    let n_vars = input.covariates.n_vars;
+    let time = &input.survival.time;
+    let status = &input.survival.status;
+    let wt = input.weights_or_unit();
+    let off = input.offset_or_zero();
 
     let (x_std, means, sds) = if config.standardize {
-        standardize_matrix(&x, n_obs, n_vars)
+        standardize_matrix(x, n_obs, n_vars)
     } else {
-        (x.clone(), vec![0.0; n_vars], vec![1.0; n_vars])
+        (x.to_vec(), vec![0.0; n_vars], vec![1.0; n_vars])
     };
 
     let beta_zero = vec![0.0; n_vars];
-    let (gradient, _) = compute_gradient_hessian_diag_fast(
-        &x_std, n_obs, n_vars, &time, &status, &wt, &beta_zero, &off, None,
-    );
+    let fit_data = FastCoxData {
+        x: &x_std,
+        n: n_obs,
+        p: n_vars,
+        time,
+        status,
+        weights: &wt,
+        offset: &off,
+    };
+    let (gradient, _) = compute_gradient_hessian_diag_fast(&fit_data, &beta_zero, None);
     let lambda_max = gradient.iter().map(|g| g.abs()).fold(0.0, f64::max) / n_obs as f64;
 
     let (beta_std, n_iter, converged, screened_out, active_set_size) =
-        cyclic_coordinate_descent_fast(
-            &x_std,
-            n_obs,
-            n_vars,
-            &time,
-            &status,
-            &wt,
-            &off,
-            config.lambda,
-            config.l1_ratio,
-            config.max_iter,
-            config.tol,
-            None,
-            config.screening,
-            config.active_set_update_freq,
-            None,
+        cyclic_coordinate_descent_fast(&fit_data, FastCoxDescentConfig {
+            lambda: config.lambda,
+            l1_ratio: config.l1_ratio,
+            max_iter: config.max_iter,
+            tol: config.tol,
+            beta_init: None,
+            screening: config.screening,
+            active_set_update_freq: config.active_set_update_freq,
+            lambda_prev: None,
             lambda_max,
-        );
+        });
 
     let coefficients: Vec<f64> = if config.standardize {
         beta_std
@@ -76,8 +62,16 @@ pub fn fast_cox(
         .collect();
 
     let df = nonzero_indices.len() as f64;
-    let deviance =
-        compute_cox_deviance(&x, n_obs, n_vars, &time, &status, &wt, &coefficients, &off);
+    let deviance_data = FastCoxData {
+        x,
+        n: n_obs,
+        p: n_vars,
+        time,
+        status,
+        weights: &wt,
+        offset: &off,
+    };
+    let deviance = compute_cox_deviance(&deviance_data, &coefficients);
 
     Ok(FastCoxResult {
         coefficients,
@@ -100,91 +94,87 @@ pub fn fast_cox(
 }
 
 #[pyfunction]
-#[pyo3(signature = (
-    x,
-    n_obs,
-    n_vars,
-    time,
-    status,
-    l1_ratio=1.0,
-    n_lambda=100,
-    lambda_min_ratio=None,
-    weights=None,
-    max_iter=1000,
-    tol=1e-7,
-    screening=ScreeningRule::Strong
-))]
-#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (input, config=None))]
 pub fn fast_cox_path(
-    x: Vec<f64>,
-    n_obs: usize,
-    n_vars: usize,
-    time: Vec<f64>,
-    status: Vec<i32>,
-    l1_ratio: f64,
-    n_lambda: usize,
-    lambda_min_ratio: Option<f64>,
-    weights: Option<Vec<f64>>,
-    max_iter: usize,
-    tol: f64,
-    screening: ScreeningRule,
+    input: &CoxRegressionInput,
+    config: Option<&FastCoxPathConfig>,
 ) -> PyResult<FastCoxPath> {
-    if x.len() != n_obs * n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "x length must equal n_obs * n_vars",
-        ));
-    }
+    let default_config;
+    let config = match config {
+        Some(config) => config,
+        None => {
+            default_config = FastCoxPathConfig {
+                l1_ratio: 1.0,
+                n_lambda: 100,
+                lambda_min_ratio: None,
+                max_iter: 1000,
+                tol: 1e-7,
+                screening: ScreeningRule::Strong,
+            };
+            &default_config
+        }
+    };
 
-    let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
-    let off = vec![0.0; n_obs];
+    let x = &input.covariates.values;
+    let n_obs = input.covariates.n_obs;
+    let n_vars = input.covariates.n_vars;
+    let time = &input.survival.time;
+    let status = &input.survival.status;
+    let wt = input.weights_or_unit();
+    let off = input.offset_or_zero();
 
-    let (x_std, _means, sds) = standardize_matrix(&x, n_obs, n_vars);
+    let (x_std, _means, sds) = standardize_matrix(x, n_obs, n_vars);
 
     let beta_zero = vec![0.0; n_vars];
-    let (gradient, _) = compute_gradient_hessian_diag_fast(
-        &x_std, n_obs, n_vars, &time, &status, &wt, &beta_zero, &off, None,
-    );
+    let fit_data = FastCoxData {
+        x: &x_std,
+        n: n_obs,
+        p: n_vars,
+        time,
+        status,
+        weights: &wt,
+        offset: &off,
+    };
+    let (gradient, _) = compute_gradient_hessian_diag_fast(&fit_data, &beta_zero, None);
 
-    let lambda_max =
-        gradient.iter().map(|g| g.abs()).fold(0.0, f64::max) / (n_obs as f64 * l1_ratio.max(0.001));
+    let lambda_max = gradient.iter().map(|g| g.abs()).fold(0.0, f64::max)
+        / (n_obs as f64 * config.l1_ratio.max(0.001));
 
-    let min_ratio = lambda_min_ratio.unwrap_or(if n_obs < n_vars { 0.01 } else { 0.0001 });
+    let min_ratio = config
+        .lambda_min_ratio
+        .unwrap_or(if n_obs < n_vars { 0.01 } else { 0.0001 });
     let lambda_min = lambda_max * min_ratio;
 
-    let lambdas: Vec<f64> = (0..n_lambda)
+    let lambdas: Vec<f64> = (0..config.n_lambda)
         .map(|i| {
-            let frac = i as f64 / (n_lambda - 1).max(1) as f64;
+            let frac = i as f64 / (config.n_lambda - 1).max(1) as f64;
             lambda_max * (lambda_min / lambda_max).powf(frac)
         })
         .collect();
 
-    let mut all_coefficients = Vec::with_capacity(n_lambda);
-    let mut all_deviances = Vec::with_capacity(n_lambda);
-    let mut all_df = Vec::with_capacity(n_lambda);
-    let mut all_n_iters = Vec::with_capacity(n_lambda);
-    let mut all_converged = Vec::with_capacity(n_lambda);
+    let mut all_coefficients = Vec::with_capacity(config.n_lambda);
+    let mut all_deviances = Vec::with_capacity(config.n_lambda);
+    let mut all_df = Vec::with_capacity(config.n_lambda);
+    let mut all_n_iters = Vec::with_capacity(config.n_lambda);
+    let mut all_converged = Vec::with_capacity(config.n_lambda);
 
     let mut beta_warm = vec![0.0; n_vars];
     let mut lambda_prev: Option<f64> = None;
 
     for &lambda in lambdas.iter() {
         let (beta_std, n_iter, conv, _screened, _active) = cyclic_coordinate_descent_fast(
-            &x_std,
-            n_obs,
-            n_vars,
-            &time,
-            &status,
-            &wt,
-            &off,
-            lambda,
-            l1_ratio,
-            max_iter,
-            tol,
-            Some(&beta_warm),
-            screening,
-            10,
-            lambda_prev,
-            lambda_max,
+            &fit_data,
+            FastCoxDescentConfig {
+                lambda,
+                l1_ratio: config.l1_ratio,
+                max_iter: config.max_iter,
+                tol: config.tol,
+                beta_init: Some(&beta_warm),
+                screening: config.screening,
+                active_set_update_freq: 10,
+                lambda_prev,
+                lambda_max,
+            },
         );
 
         beta_warm = beta_std.clone();
@@ -200,8 +190,16 @@ pub fn fast_cox_path(
             .iter()
             .filter(|&&c| c.abs() > crate::constants::DIVISION_FLOOR)
             .count() as f64;
-        let deviance =
-            compute_cox_deviance(&x, n_obs, n_vars, &time, &status, &wt, &coefficients, &off);
+        let deviance_data = FastCoxData {
+            x,
+            n: n_obs,
+            p: n_vars,
+            time,
+            status,
+            weights: &wt,
+            offset: &off,
+        };
+        let deviance = compute_cox_deviance(&deviance_data, &coefficients);
 
         all_coefficients.push(coefficients);
         all_deviances.push(deviance);
@@ -221,58 +219,53 @@ pub fn fast_cox_path(
 }
 
 #[pyfunction]
-#[pyo3(signature = (
-    x,
-    n_obs,
-    n_vars,
-    time,
-    status,
-    l1_ratio=1.0,
-    n_lambda=100,
-    n_folds=5,
-    weights=None,
-    screening=ScreeningRule::Strong,
-    seed=None
-))]
-#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (input, config=None))]
 pub fn fast_cox_cv(
-    x: Vec<f64>,
-    n_obs: usize,
-    n_vars: usize,
-    time: Vec<f64>,
-    status: Vec<i32>,
-    l1_ratio: f64,
-    n_lambda: usize,
-    n_folds: usize,
-    weights: Option<Vec<f64>>,
-    screening: ScreeningRule,
-    seed: Option<u64>,
+    input: &CoxRegressionInput,
+    config: Option<&FastCoxCVConfig>,
 ) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
-    let path = fast_cox_path(
-        x.clone(),
-        n_obs,
-        n_vars,
-        time.clone(),
-        status.clone(),
-        l1_ratio,
-        n_lambda,
-        None,
-        weights.clone(),
-        1000,
-        1e-7,
-        screening,
-    )?;
+    let default_config;
+    let config = match config {
+        Some(config) => config,
+        None => {
+            default_config = FastCoxCVConfig {
+                l1_ratio: 1.0,
+                n_lambda: 100,
+                n_folds: 5,
+                screening: ScreeningRule::Strong,
+                seed: None,
+            };
+            &default_config
+        }
+    };
 
-    let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
+    let path_config = FastCoxPathConfig {
+        l1_ratio: config.l1_ratio,
+        n_lambda: config.n_lambda,
+        lambda_min_ratio: None,
+        max_iter: 1000,
+        tol: 1e-7,
+        screening: config.screening,
+    };
+    let path = fast_cox_path(input, Some(&path_config))?;
 
-    let mut rng = fastrand::Rng::with_seed(seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED));
-    let mut fold_assign: Vec<usize> = (0..n_obs).map(|i| i % n_folds).collect();
+    let x = &input.covariates.values;
+    let n_obs = input.covariates.n_obs;
+    let n_vars = input.covariates.n_vars;
+    let time = &input.survival.time;
+    let status = &input.survival.status;
+    let wt = input.weights_or_unit();
+    let offset = input.offset_or_zero();
+
+    let mut rng =
+        fastrand::Rng::with_seed(config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED));
+    let mut fold_assign: Vec<usize> = (0..n_obs).map(|i| i % config.n_folds).collect();
     for i in (1..n_obs).rev() {
         let j = rng.usize(0..=i);
         fold_assign.swap(i, j);
     }
 
-    let fold_indices: Vec<(Vec<usize>, Vec<usize>)> = (0..n_folds)
+    let fold_indices: Vec<(Vec<usize>, Vec<usize>)> = (0..config.n_folds)
         .map(|fold| {
             let train_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] != fold).collect();
             let test_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] == fold).collect();
@@ -280,9 +273,9 @@ pub fn fast_cox_cv(
         })
         .collect();
 
-    let x_ref = &x;
-    let time_ref = &time;
-    let status_ref = &status;
+    let x_ref = x;
+    let time_ref = time;
+    let status_ref = status;
     let wt_ref = &wt;
     let cv_deviances: Vec<Vec<f64>> = path
         .lambdas
@@ -302,23 +295,39 @@ pub fn fast_cox_cv(
                     let train_time: Vec<f64> = train_idx.iter().map(|&i| time_ref[i]).collect();
                     let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
                     let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt_ref[i]).collect();
+                    let train_offset: Vec<f64> =
+                        train_idx.iter().map(|&i| offset[i]).collect();
 
-                    let Ok(config) = FastCoxConfig::new(
-                        lambda, l1_ratio, 1000, 1e-7, screening, None, 10, true, true,
+                    let Ok(solver_config) =
+                        FastCoxSolverConfig::new(1000, 1e-7, config.screening, None, 10)
+                    else {
+                        return None;
+                    };
+                    let Ok(fit_config) =
+                        FastCoxConfig::new(lambda, config.l1_ratio, Some(&solver_config), true, true)
+                    else {
+                        return None;
+                    };
+
+                    let Ok(train_input) = CoxRegressionInput::try_new(
+                        match CovariateMatrix::try_new(train_x, train_idx.len(), n_vars) {
+                            Ok(covariates) => covariates,
+                            Err(_) => return None,
+                        },
+                        match SurvivalData::try_new(train_time, train_status) {
+                            Ok(survival) => survival,
+                            Err(_) => return None,
+                        },
+                        match Weights::try_new(train_wt) {
+                            Ok(weights) => Some(weights),
+                            Err(_) => return None,
+                        },
+                        Some(train_offset),
                     ) else {
                         return None;
                     };
 
-                    if let Ok(result) = fast_cox(
-                        train_x,
-                        train_idx.len(),
-                        n_vars,
-                        train_time,
-                        train_status,
-                        &config,
-                        Some(train_wt),
-                        None,
-                    ) {
+                    if let Ok(result) = fast_cox(&train_input, &fit_config) {
                         let test_x: Vec<f64> = test_idx
                             .iter()
                             .flat_map(|&i| (0..n_vars).map(move |j| x_ref[i * n_vars + j]))
@@ -327,18 +336,18 @@ pub fn fast_cox_cv(
                         let test_status: Vec<i32> =
                             test_idx.iter().map(|&i| status_ref[i]).collect();
                         let test_wt: Vec<f64> = test_idx.iter().map(|&i| wt_ref[i]).collect();
-                        let test_off = vec![0.0; test_idx.len()];
+                        let test_off: Vec<f64> = test_idx.iter().map(|&i| offset[i]).collect();
 
-                        let dev = compute_cox_deviance(
-                            &test_x,
-                            test_idx.len(),
-                            n_vars,
-                            &test_time,
-                            &test_status,
-                            &test_wt,
-                            &result.coefficients,
-                            &test_off,
-                        );
+                        let test_data = FastCoxData {
+                            x: &test_x,
+                            n: test_idx.len(),
+                            p: n_vars,
+                            time: &test_time,
+                            status: &test_status,
+                            weights: &test_wt,
+                            offset: &test_off,
+                        };
+                        let dev = compute_cox_deviance(&test_data, &result.coefficients);
                         Some(dev)
                     } else {
                         None
@@ -394,4 +403,3 @@ pub fn fast_cox_cv(
 
     Ok((lambda_min, lambda_1se, mean_deviances, se_deviances))
 }
-

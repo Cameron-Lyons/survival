@@ -1,11 +1,5 @@
 use super::*;
 
-macro_rules! register_functions {
-    ($m:expr, $( $function:path ),+ $(,)?) => {
-        $( $m.add_function(wrap_pyfunction!($function, $m)?)?; )+
-    };
-}
-
 macro_rules! register_classes {
     ($m:expr, $( $class:ty ),+ $(,)?) => {
         $( $m.add_class::<$class>()?; )+

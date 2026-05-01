@@ -1,13 +1,10 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_functions!(
-        m,
-        create_model_card,
-        fairness_audit,
-        detect_drift,
-        monitor_performance,
-    );
+    m.add_function(wrap_pyfunction!(create_model_card, m)?)?;
+    m.add_function(wrap_pyfunction!(fairness_audit, m)?)?;
+    m.add_function(wrap_pyfunction!(detect_drift, m)?)?;
+    m.add_function(wrap_pyfunction!(monitor_performance, m)?)?;
 
     register_classes!(
         m,

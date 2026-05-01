@@ -18,5 +18,12 @@ __all__ = bind_names(
         "perform_score_calculation",
         "perform_agscore3_calculation",
         "cox_score_residuals",
+        "SurvivalData",
+        "CovariateMatrix",
+        "Weights",
+        "CountingProcessData",
+        "CoxRegressionInput",
+        "CoxMartInput",
+        "AndersenGillInput",
     ],
 )
