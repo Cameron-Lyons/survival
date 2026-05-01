@@ -45,14 +45,10 @@ def test_coxmart():
     status = [1, 1, 0, 1, 0, 1, 1, 0]
     score = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
 
-    result = survival.coxmart(
-        time=time,
-        status=status,
-        score=score,
-        weights=None,
-        strata=None,
-        method=0,
-    )
+    survival_data = survival.SurvivalData(time, status)
+    input_data = survival.CoxMartInput(survival_data, score)
+
+    result = survival.coxmart(input_data, method=0)
     assert isinstance(result, list)
     assert len(result) == len(time)
 

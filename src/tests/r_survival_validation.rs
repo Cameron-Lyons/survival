@@ -376,17 +376,17 @@ mod tests {
         let weights = vec![1.0; n];
         let mut strata = vec![0i32; n];
 
-        use crate::residuals::coxmart::{SurvivalData, Weights};
+        use crate::residuals::coxmart::{CoxMartSurvivalData, CoxMartWeights};
 
         let mut expect = vec![0.0; n];
 
-        let surv_data = SurvivalData {
+        let surv_data = CoxMartSurvivalData {
             time: &sorted_time,
             status: &sorted_status,
             strata: &mut strata,
         };
 
-        let weights_data = Weights {
+        let weights_data = CoxMartWeights {
             score: &score,
             wt: &weights,
         };

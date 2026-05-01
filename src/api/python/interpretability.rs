@@ -58,7 +58,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_class::<FriedmanHResult>()?;
-    m.add_class::<FriedmanFeatureImportanceResult>()?;
+    m.add_class::<FeatureImportanceResult>()?;
 
     m.add_function(wrap_pyfunction!(compute_ice, m)?)?;
     m.add_function(wrap_pyfunction!(compute_dice, m)?)?;

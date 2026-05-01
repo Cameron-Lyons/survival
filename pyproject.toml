@@ -46,10 +46,14 @@ Issues = "https://github.com/Cameron-Lyons/survival/issues"
 dev = [
   "pre-commit==4.6.0",
   "pytest==9.0.3",
+  "pytest-cov==7.1.0",
   "numpy==2.4.4",
+  "ruff",
+  "mypy",
 ]
 test = [
   "pytest==9.0.3",
+  "pytest-cov==7.1.0",
   "numpy==2.4.4",
   "pandas==3.0.2",
   "polars==1.40.1",
@@ -59,7 +63,7 @@ sklearn = [
 ]
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["extension-module", "ml"]
 module-name = "survival._survival"
 python-source = "python"
 
@@ -77,3 +81,11 @@ ignore = ["E501"]  # line length handled by formatter
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["python/survival"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

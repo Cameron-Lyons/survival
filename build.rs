@@ -19,12 +19,20 @@ fn main() {
         return;
     }
 
-    let config = pyo3_build_config::get();
-
-    if let Some(lib_dir) = &config.lib_dir {
-        println!("cargo:rustc-link-search=native={lib_dir}");
+    #[cfg(not(feature = "python"))]
+    {
+        return;
     }
-    if let Some(lib_name) = &config.lib_name {
-        println!("cargo:rustc-link-lib={lib_name}");
+
+    #[cfg(feature = "python")]
+    {
+        let config = pyo3_build_config::get();
+
+        if let Some(lib_dir) = &config.lib_dir {
+            println!("cargo:rustc-link-search=native={lib_dir}");
+        }
+        if let Some(lib_name) = &config.lib_name {
+            println!("cargo:rustc-link-lib={lib_name}");
+        }
     }
 }

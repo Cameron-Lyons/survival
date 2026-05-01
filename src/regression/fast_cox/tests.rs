@@ -11,18 +11,9 @@ mod tests {
 
     #[test]
     fn test_config() {
-        let config = FastCoxConfig::new(
-            0.1,
-            1.0,
-            1000,
-            1e-7,
-            ScreeningRule::Strong,
-            None,
-            10,
-            true,
-            true,
-        )
-        .unwrap();
+        let solver =
+            FastCoxSolverConfig::new(1000, 1e-7, ScreeningRule::Strong, None, 10).unwrap();
+        let config = FastCoxConfig::new(0.1, 1.0, Some(&solver), true, true).unwrap();
         assert_eq!(config.lambda, 0.1);
         assert_eq!(config.l1_ratio, 1.0);
     }
@@ -30,58 +21,35 @@ mod tests {
     #[test]
     fn test_config_validation() {
         assert!(
-            FastCoxConfig::new(
-                -0.1,
-                1.0,
-                1000,
-                1e-7,
-                ScreeningRule::None,
-                None,
-                10,
-                true,
-                true
-            )
+            FastCoxConfig::new(-0.1, 1.0, None, true, true)
             .is_err()
         );
         assert!(
-            FastCoxConfig::new(
-                0.1,
-                1.5,
-                1000,
-                1e-7,
-                ScreeningRule::None,
-                None,
-                10,
-                true,
-                true
-            )
+            FastCoxConfig::new(0.1, 1.5, None, true, true)
             .is_err()
         );
-        assert!(
-            FastCoxConfig::new(0.1, 1.0, 0, 1e-7, ScreeningRule::None, None, 10, true, true)
-                .is_err()
-        );
+        assert!(FastCoxSolverConfig::new(0, 1e-7, ScreeningRule::None, None, 10).is_err());
     }
 
     #[test]
     fn test_fast_cox_basic() {
+        use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData};
+
         let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0];
         let time = vec![1.0, 2.0, 3.0, 4.0];
         let status = vec![1, 1, 0, 1];
-        let config = FastCoxConfig::new(
-            0.1,
-            1.0,
-            100,
-            1e-5,
-            ScreeningRule::None,
+        let solver = FastCoxSolverConfig::new(100, 1e-5, ScreeningRule::None, None, 10).unwrap();
+        let config = FastCoxConfig::new(0.1, 1.0, Some(&solver), true, true).unwrap();
+
+        let input = CoxRegressionInput::try_new(
+            CovariateMatrix::try_new(x, 4, 2).unwrap(),
+            SurvivalData::try_new(time, status).unwrap(),
             None,
-            10,
-            true,
-            true,
+            None,
         )
         .unwrap();
 
-        let result = fast_cox(x, 4, 2, time, status, &config, None, None).unwrap();
+        let result = fast_cox(&input, &config).unwrap();
         assert_eq!(result.coefficients.len(), 2);
     }
 
@@ -104,25 +72,30 @@ mod tests {
 
     #[test]
     fn test_fast_cox_path() {
+        use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData};
+
         let x: Vec<f64> = (0..40).map(|i| (i as f64) * 0.1).collect();
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         let status = vec![1, 1, 0, 1, 0, 1, 1, 0, 1, 0];
 
-        let path = fast_cox_path(
-            x,
-            10,
-            4,
-            time,
-            status,
+        let input = CoxRegressionInput::try_new(
+            CovariateMatrix::try_new(x, 10, 4).unwrap(),
+            SurvivalData::try_new(time, status).unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+        let config = FastCoxPathConfig::new(
             1.0,
             10,
-            None,
             None,
             100,
             1e-5,
             ScreeningRule::Strong,
         )
         .unwrap();
+
+        let path = fast_cox_path(&input, Some(&config)).unwrap();
 
         assert_eq!(path.lambdas.len(), 10);
         assert_eq!(path.coefficients.len(), 10);

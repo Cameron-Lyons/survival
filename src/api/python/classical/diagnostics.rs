@@ -1,15 +1,12 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_functions!(
-        m,
-        dfbeta_cox,
-        leverage_cox,
-        smooth_schoenfeld,
-        outlier_detection_cox,
-        model_influence_cox,
-        goodness_of_fit_cox,
-    );
+    m.add_function(wrap_pyfunction!(dfbeta_cox, m)?)?;
+    m.add_function(wrap_pyfunction!(leverage_cox, m)?)?;
+    m.add_function(wrap_pyfunction!(smooth_schoenfeld, m)?)?;
+    m.add_function(wrap_pyfunction!(outlier_detection_cox, m)?)?;
+    m.add_function(wrap_pyfunction!(model_influence_cox, m)?)?;
+    m.add_function(wrap_pyfunction!(goodness_of_fit_cox, m)?)?;
 
     register_classes!(
         m,

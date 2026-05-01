@@ -50,7 +50,7 @@ jobs:
         shell: bash
 
       - name: Build with maturin
-        run: maturin build --release --interpreter python --features extension-module
+        run: maturin build --release --interpreter python --features extension-module,ml
 
       - name: Run Rust tests
         if: matrix.os == 'ubuntu-latest'
@@ -114,7 +114,7 @@ jobs:
 
       - name: Build and install
         run: |
-          maturin build --release --interpreter python --features extension-module
+          maturin build --release --interpreter python --features extension-module,ml
           pip install target/wheels/survival-*.whl
 
       - name: Run Rust tests
@@ -164,7 +164,7 @@ jobs:
         run: .venv/bin/python -m pip uninstall -y survival || true
 
       - name: Install extension with maturin develop
-        run: .venv/bin/maturin develop --release --features extension-module
+        run: .venv/bin/maturin develop --release --features extension-module,ml
 
       - name: Verify extension import path
         run: |
@@ -175,6 +175,9 @@ jobs:
               raise SystemExit("Could not locate survival._survival")
           print(spec.origin)
           PY
+
+      - name: Check API/stub/example consistency
+        run: .venv/bin/python -m pytest python/tests/test_binding_contract.py -v
 
       - name: Run Python tests against source-tree install
         run: .venv/bin/python -m pytest python/tests/ -v

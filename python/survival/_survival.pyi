@@ -39,6 +39,72 @@ class ReliabilityScale:
     Probit: ReliabilityScale
     Surv: ReliabilityScale
 
+class SurvivalData:
+    time: list[float]
+    status: list[int]
+    def __init__(self, time: list[float], status: list[int]) -> None: ...
+    def __len__(self) -> int: ...
+    def is_empty(self) -> bool: ...
+
+class CovariateMatrix:
+    values: list[float]
+    n_obs: int
+    n_vars: int
+    def __init__(self, values: list[float], n_obs: int, n_vars: int) -> None: ...
+    def __len__(self) -> int: ...
+    def shape(self) -> tuple[int, int]: ...
+
+class Weights:
+    values: list[float]
+    def __init__(self, values: list[float]) -> None: ...
+    @staticmethod
+    def unit(n_obs: int) -> Weights: ...
+    def __len__(self) -> int: ...
+
+class CountingProcessData:
+    start: list[float]
+    stop: list[float]
+    event: list[int]
+    def __init__(
+        self, start: list[float], stop: list[float], event: list[int]
+    ) -> None: ...
+    def __len__(self) -> int: ...
+
+class CoxRegressionInput:
+    @property
+    def n_obs(self) -> int: ...
+    @property
+    def n_vars(self) -> int: ...
+    def __init__(
+        self,
+        covariates: CovariateMatrix,
+        survival: SurvivalData,
+        weights: Weights | None = None,
+        offset: list[float] | None = None,
+    ) -> None: ...
+
+class CoxMartInput:
+    @property
+    def n_obs(self) -> int: ...
+    def __init__(
+        self,
+        survival: SurvivalData,
+        score: list[float],
+        weights: Weights | None = None,
+        strata: list[int] | None = None,
+    ) -> None: ...
+
+class AndersenGillInput:
+    @property
+    def n_obs(self) -> int: ...
+    def __init__(
+        self,
+        counting: CountingProcessData,
+        score: list[float],
+        weights: Weights | None = None,
+        strata: list[int] | None = None,
+    ) -> None: ...
+
 class GradientBoostSurvivalConfig:
     n_estimators: int
     learning_rate: float
@@ -432,19 +498,202 @@ class BayesianCoxResult:
     @property
     def rhat(self) -> list[float]: ...
 
+class PenaltyType:
+    ElasticNet: PenaltyType
+    Lasso: PenaltyType
+    Ridge: PenaltyType
+    def __init__(self, name: str) -> None: ...
+
+class ElasticNetConfig:
+    alpha: float
+    l1_ratio: float
+    max_iter: int
+    tol: float
+    standardize: bool
+    warm_start: bool
+    def __init__(
+        self,
+        alpha: float = 1.0,
+        l1_ratio: float = 0.5,
+        max_iter: int = 1000,
+        tol: float = 1e-7,
+        standardize: bool = True,
+        warm_start: bool = False,
+    ) -> None: ...
+    @staticmethod
+    def lasso(alpha: float) -> ElasticNetConfig: ...
+    @staticmethod
+    def ridge(alpha: float) -> ElasticNetConfig: ...
+
+class ElasticNetPathConfig:
+    l1_ratio: float
+    n_lambda: int
+    lambda_min_ratio: float | None
+    max_iter: int
+    tol: float
+    def __init__(
+        self,
+        l1_ratio: float = 0.5,
+        n_lambda: int = 100,
+        lambda_min_ratio: float | None = None,
+        max_iter: int = 1000,
+        tol: float = 1e-7,
+    ) -> None: ...
+
+class ElasticNetCVConfig:
+    l1_ratio: float
+    n_lambda: int
+    n_folds: int
+    def __init__(
+        self, l1_ratio: float = 0.5, n_lambda: int = 100, n_folds: int = 10
+    ) -> None: ...
+
 class ElasticNetCoxResult:
     @property
     def coefficients(self) -> list[float]: ...
     @property
-    def intercept(self) -> float: ...
+    def nonzero_indices(self) -> list[int]: ...
     @property
-    def alpha(self) -> float: ...
+    def lambda_used(self) -> float: ...
     @property
     def l1_ratio(self) -> float: ...
     @property
     def n_iter(self) -> int: ...
     @property
-    def nonzero_features(self) -> list[int]: ...
+    def converged(self) -> bool: ...
+    @property
+    def deviance(self) -> float: ...
+    @property
+    def df(self) -> float: ...
+    @property
+    def scale_factors(self) -> list[float] | None: ...
+    @property
+    def intercept(self) -> float: ...
+
+class ElasticNetCoxPath:
+    @property
+    def lambdas(self) -> list[float]: ...
+    @property
+    def coefficients(self) -> list[list[float]]: ...
+    @property
+    def deviances(self) -> list[float]: ...
+    @property
+    def df(self) -> list[float]: ...
+    @property
+    def n_iters(self) -> list[int]: ...
+
+class ScreeningRule:
+    EDPP: ScreeningRule
+    None_: ScreeningRule
+    Safe: ScreeningRule
+    Strong: ScreeningRule
+    def __init__(self, name: str) -> None: ...
+
+class FastCoxSolverConfig:
+    max_iter: int
+    tol: float
+    screening: ScreeningRule
+    working_set_size: int | None
+    active_set_update_freq: int
+    def __init__(
+        self,
+        max_iter: int = 1000,
+        tol: float = 1e-7,
+        screening: ScreeningRule | None = None,
+        working_set_size: int | None = None,
+        active_set_update_freq: int = 10,
+    ) -> None: ...
+
+class FastCoxConfig:
+    lambda_: float
+    l1_ratio: float
+    max_iter: int
+    tol: float
+    screening: ScreeningRule
+    working_set_size: int | None
+    active_set_update_freq: int
+    standardize: bool
+    use_simd: bool
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        l1_ratio: float = 1.0,
+        solver: FastCoxSolverConfig | None = None,
+        standardize: bool = True,
+        use_simd: bool = True,
+    ) -> None: ...
+
+class FastCoxPathConfig:
+    l1_ratio: float
+    n_lambda: int
+    lambda_min_ratio: float | None
+    max_iter: int
+    tol: float
+    screening: ScreeningRule
+    def __init__(
+        self,
+        l1_ratio: float = 1.0,
+        n_lambda: int = 100,
+        lambda_min_ratio: float | None = None,
+        max_iter: int = 1000,
+        tol: float = 1e-7,
+        screening: ScreeningRule | None = None,
+    ) -> None: ...
+
+class FastCoxCVConfig:
+    l1_ratio: float
+    n_lambda: int
+    n_folds: int
+    screening: ScreeningRule
+    seed: int | None
+    def __init__(
+        self,
+        l1_ratio: float = 1.0,
+        n_lambda: int = 100,
+        n_folds: int = 5,
+        screening: ScreeningRule | None = None,
+        seed: int | None = None,
+    ) -> None: ...
+
+class FastCoxResult:
+    @property
+    def coefficients(self) -> list[float]: ...
+    @property
+    def nonzero_indices(self) -> list[int]: ...
+    @property
+    def lambda_used(self) -> float: ...
+    @property
+    def l1_ratio(self) -> float: ...
+    @property
+    def n_iter(self) -> int: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def deviance(self) -> float: ...
+    @property
+    def df(self) -> float: ...
+    @property
+    def scale_factors(self) -> list[float] | None: ...
+    @property
+    def center_values(self) -> list[float] | None: ...
+    @property
+    def screened_out(self) -> int: ...
+    @property
+    def active_set_size(self) -> int: ...
+
+class FastCoxPath:
+    @property
+    def lambdas(self) -> list[float]: ...
+    @property
+    def coefficients(self) -> list[list[float]]: ...
+    @property
+    def deviances(self) -> list[float]: ...
+    @property
+    def df(self) -> list[float]: ...
+    @property
+    def n_iters(self) -> list[int]: ...
+    @property
+    def converged(self) -> list[bool]: ...
 
 class MixtureCureResult:
     @property
@@ -620,13 +869,28 @@ def bayesian_cox(
     prior_scale: float = 1.0,
 ) -> BayesianCoxResult: ...
 def elastic_net_cox(
-    time: list[float],
-    status: list[int],
-    x: list[list[float]],
-    alpha: float = 1.0,
-    l1_ratio: float = 0.5,
-    max_iter: int = 1000,
+    input: CoxRegressionInput,
+    config: ElasticNetConfig,
 ) -> ElasticNetCoxResult: ...
+def elastic_net_cox_path(
+    input: CoxRegressionInput,
+    config: ElasticNetPathConfig | None = None,
+) -> ElasticNetCoxPath: ...
+def elastic_net_cox_cv(
+    input: CoxRegressionInput,
+    config: ElasticNetCVConfig | None = None,
+) -> tuple[float, float, list[float], list[float]]: ...
+def fast_cox(input: CoxRegressionInput, config: FastCoxConfig) -> FastCoxResult: ...
+def fast_cox_path(
+    input: CoxRegressionInput,
+    config: FastCoxPathConfig | None = None,
+) -> FastCoxPath: ...
+def fast_cox_cv(
+    input: CoxRegressionInput,
+    config: FastCoxCVConfig | None = None,
+) -> tuple[float, float, list[float], list[float]]: ...
+def coxmart(input: CoxMartInput, method: int | None = None) -> list[float]: ...
+def agmart(input: AndersenGillInput, method: int | None = None) -> list[float]: ...
 def mixture_cure_model(
     time: list[float],
     status: list[int],

@@ -1930,8 +1930,13 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "survival-pyo3-macros-shim",
  "wide",
 ]
+
+[[package]]
+name = "survival-pyo3-macros-shim"
+version = "0.1.0"
 
 [[package]]
 name = "syn"

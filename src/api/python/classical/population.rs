@@ -1,22 +1,19 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_functions!(
-        m,
-        survexp,
-        survexp_individual,
-        create_simple_ratetable,
-        is_ratetable,
-        ratetable_date,
-        days_to_date,
-        summary_pyears,
-        pyears_by_cell,
-        pyears_ci,
-        survexp_us,
-        survexp_mn,
-        survexp_usr,
-        compute_expected_survival,
-    );
+    m.add_function(wrap_pyfunction!(survexp, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_individual, m)?)?;
+    m.add_function(wrap_pyfunction!(create_simple_ratetable, m)?)?;
+    m.add_function(wrap_pyfunction!(is_ratetable, m)?)?;
+    m.add_function(wrap_pyfunction!(ratetable_date, m)?)?;
+    m.add_function(wrap_pyfunction!(days_to_date, m)?)?;
+    m.add_function(wrap_pyfunction!(summary_pyears, m)?)?;
+    m.add_function(wrap_pyfunction!(pyears_by_cell, m)?)?;
+    m.add_function(wrap_pyfunction!(pyears_ci, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_us, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_mn, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_usr, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_expected_survival, m)?)?;
 
     register_classes!(
         m,

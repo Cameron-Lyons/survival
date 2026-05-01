@@ -1,20 +1,23 @@
-use crate::internal::validation::{validate_length, validate_non_empty};
+use crate::internal::typed_inputs::AndersenGillInput;
 use pyo3::prelude::*;
-struct AgmartInput {
-    start: Vec<f64>,
-    stop: Vec<f64>,
-    event: Vec<i32>,
-    score: Vec<f64>,
-    wt: Vec<f64>,
-    strata: Vec<i32>,
+
+struct AgmartData<'a> {
+    start: &'a [f64],
+    stop: &'a [f64],
+    event: &'a [i32],
+    score: &'a [f64],
+    wt: &'a [f64],
+    strata: &'a [i32],
 }
-fn compute_agmart(n: usize, method: i32, input: AgmartInput) -> Vec<f64> {
-    let start_slice = &input.start;
-    let stop_slice = &input.stop;
-    let event_slice = &input.event;
-    let score_slice = &input.score;
-    let wt_slice = &input.wt;
-    let strata_slice = &input.strata;
+
+fn compute_agmart(method: i32, input: AgmartData) -> Vec<f64> {
+    let n = input.start.len();
+    let start_slice = input.start;
+    let stop_slice = input.stop;
+    let event_slice = input.event;
+    let score_slice = input.score;
+    let wt_slice = input.wt;
+    let strata_slice = input.strata;
     let mut resid = vec![0.0; n];
     let nused = n;
     for i in 0..nused {
@@ -81,32 +84,19 @@ fn compute_agmart(n: usize, method: i32, input: AgmartInput) -> Vec<f64> {
     }
     resid
 }
-#[allow(clippy::too_many_arguments)]
+
 #[pyfunction]
-pub fn agmart(
-    n: usize,
-    method: i32,
-    start: Vec<f64>,
-    stop: Vec<f64>,
-    event: Vec<i32>,
-    score: Vec<f64>,
-    wt: Vec<f64>,
-    strata: Vec<i32>,
-) -> PyResult<Vec<f64>> {
-    validate_non_empty(&start, "start")?;
-    validate_length(n, start.len(), "start")?;
-    validate_length(n, stop.len(), "stop")?;
-    validate_length(n, event.len(), "event")?;
-    validate_length(n, score.len(), "score")?;
-    validate_length(n, wt.len(), "wt")?;
-    validate_length(n, strata.len(), "strata")?;
-    let input = AgmartInput {
-        start,
-        stop,
-        event,
-        score,
-        wt,
-        strata,
+#[pyo3(signature = (input, method=None))]
+pub fn agmart(input: &AndersenGillInput, method: Option<i32>) -> PyResult<Vec<f64>> {
+    let weights = input.weights_or_unit();
+    let strata = input.strata_or_default();
+    let data = AgmartData {
+        start: &input.counting.start,
+        stop: &input.counting.stop,
+        event: &input.counting.event,
+        score: &input.score,
+        wt: &weights,
+        strata: &strata,
     };
-    Ok(compute_agmart(n, method, input))
+    Ok(compute_agmart(method.unwrap_or(0), data))
 }

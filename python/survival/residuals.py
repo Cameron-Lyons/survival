@@ -5,6 +5,11 @@ __all__ = bind_names(
     [
         "agmart",
         "coxmart",
+        "SurvivalData",
+        "Weights",
+        "CountingProcessData",
+        "CoxMartInput",
+        "AndersenGillInput",
         "DfbetaResult",
         "GofTestResult",
         "LeverageResult",
