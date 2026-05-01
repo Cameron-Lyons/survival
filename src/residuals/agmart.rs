@@ -1,4 +1,4 @@
-use crate::internal::typed_inputs::AndersenGillInput;
+use crate::internal::typed_inputs::{AndersenGillInput, CountingProcessData, Weights};
 use pyo3::prelude::*;
 
 struct AgmartData<'a> {
@@ -85,9 +85,34 @@ fn compute_agmart(method: i32, input: AgmartData) -> Vec<f64> {
     resid
 }
 
-#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn agmart(
+    n: usize,
+    method: i32,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    event: Vec<i32>,
+    score: Vec<f64>,
+    wt: Vec<f64>,
+    strata: Vec<i32>,
+) -> PyResult<Vec<f64>> {
+    let input = AndersenGillInput::try_new(
+        CountingProcessData::try_new(start, stop, event)?,
+        score,
+        Some(Weights::try_new(wt)?),
+        Some(strata),
+    )?;
+    if input.counting.start.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "start length must equal n",
+        ));
+    }
+    agmart_typed(&input, Some(method))
+}
+
+#[pyfunction(name = "agmart")]
 #[pyo3(signature = (input, method=None))]
-pub fn agmart(input: &AndersenGillInput, method: Option<i32>) -> PyResult<Vec<f64>> {
+pub(crate) fn agmart_typed(input: &AndersenGillInput, method: Option<i32>) -> PyResult<Vec<f64>> {
     let weights = input.weights_or_unit();
     let strata = input.strata_or_default();
     let data = AgmartData {

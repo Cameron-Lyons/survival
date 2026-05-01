@@ -14,6 +14,12 @@ MANIFEST_PATH = ROOT / "python/survival/_binding_manifest.py"
 IDENT = r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*"
 WRAP_PYFUNCTION_RE = re.compile(rf"wrap_pyfunction!\s*\(\s*({IDENT})")
 ADD_CLASS_RE = re.compile(rf"add_class\s*::\s*<\s*({IDENT})\s*>")
+PYFUNCTION_NAME_RE = re.compile(
+    rf"#\s*\[\s*pyfunction\s*\(\s*name\s*=\s*\"(?P<export>[^\"]+)\"\s*\)\s*\]\s*"
+    rf"(?:#\s*\[[^\]]+\]\s*)*"
+    rf"(?:pub(?:\([^)]*\))?\s+)?fn\s+(?P<ident>{IDENT})\s*\(",
+    re.DOTALL,
+)
 REGISTER_MACRO_RE = re.compile(
     r"(?:register_functions|register_classes)!\s*\(\s*m\s*,(?P<body>.*?)\);",
     re.DOTALL,
@@ -41,14 +47,25 @@ def _macro_items(body: str) -> list[str]:
     return names
 
 
+def _pyfunction_export_names(root: Path) -> dict[str, str]:
+    exports: dict[str, str] = {}
+    for path in sorted((root / "src").rglob("*.rs")):
+        source = _strip_comments(path.read_text())
+        for match in PYFUNCTION_NAME_RE.finditer(source):
+            exports[_binding_name(match.group("ident"))] = match.group("export")
+    return exports
+
+
 def extract_rust_registrations(root: Path = ROOT) -> tuple[str, ...]:
     names: set[str] = set()
+    pyfunction_exports = _pyfunction_export_names(root)
 
     for path in sorted((root / "src/api/python").rglob("*.rs")):
         source = _strip_comments(path.read_text())
 
         for match in WRAP_PYFUNCTION_RE.finditer(source):
-            names.add(_binding_name(match.group(1)))
+            name = _binding_name(match.group(1))
+            names.add(pyfunction_exports.get(name, name))
 
         for match in ADD_CLASS_RE.finditer(source):
             names.add(_binding_name(match.group(1)))

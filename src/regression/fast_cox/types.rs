@@ -120,14 +120,23 @@ impl FastCoxConfig {
     #[pyo3(signature = (
         lambda=0.1,
         l1_ratio=1.0,
-        solver=None,
+        max_iter=1000,
+        tol=1e-7,
+        screening=ScreeningRule::Strong,
+        working_set_size=None,
+        active_set_update_freq=10,
         standardize=true,
         use_simd=true
     ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         lambda: f64,
         l1_ratio: f64,
-        solver: Option<&FastCoxSolverConfig>,
+        max_iter: usize,
+        tol: f64,
+        screening: ScreeningRule,
+        working_set_size: Option<usize>,
+        active_set_update_freq: usize,
         standardize: bool,
         use_simd: bool,
     ) -> PyResult<Self> {
@@ -141,16 +150,25 @@ impl FastCoxConfig {
                 "l1_ratio must be between 0 and 1",
             ));
         }
-        let solver = solver.cloned().unwrap_or_default();
+        if max_iter == 0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "max_iter must be positive",
+            ));
+        }
+        if active_set_update_freq == 0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "active_set_update_freq must be positive",
+            ));
+        }
 
         Ok(FastCoxConfig {
             lambda,
             l1_ratio,
-            max_iter: solver.max_iter,
-            tol: solver.tol,
-            screening: solver.screening,
-            working_set_size: solver.working_set_size,
-            active_set_update_freq: solver.active_set_update_freq,
+            max_iter,
+            tol,
+            screening,
+            working_set_size,
+            active_set_update_freq,
             standardize,
             use_simd,
         })

@@ -1,4 +1,4 @@
-use crate::internal::typed_inputs::CoxMartInput;
+use crate::internal::typed_inputs::{CoxMartInput, SurvivalData, Weights};
 use pyo3::prelude::*;
 
 pub(crate) struct CoxMartSurvivalData<'a> {
@@ -12,9 +12,26 @@ pub(crate) struct CoxMartWeights<'a> {
     pub(crate) wt: &'a [f64],
 }
 
-#[pyfunction]
+pub fn coxmart(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    score: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    method: Option<i32>,
+) -> PyResult<Vec<f64>> {
+    let input = CoxMartInput::try_new(
+        SurvivalData::try_new(time, status)?,
+        score,
+        weights.map(Weights::try_new).transpose()?,
+        strata,
+    )?;
+    coxmart_typed(&input, method)
+}
+
+#[pyfunction(name = "coxmart")]
 #[pyo3(signature = (input, method=None))]
-pub fn coxmart(input: &CoxMartInput, method: Option<i32>) -> PyResult<Vec<f64>> {
+pub(crate) fn coxmart_typed(input: &CoxMartInput, method: Option<i32>) -> PyResult<Vec<f64>> {
     let n = input.survival.time.len();
     let weights_vec = input.weights_or_unit();
     let mut strata_vec = input.strata_or_default();

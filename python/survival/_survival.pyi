@@ -65,9 +65,7 @@ class CountingProcessData:
     start: list[float]
     stop: list[float]
     event: list[int]
-    def __init__(
-        self, start: list[float], stop: list[float], event: list[int]
-    ) -> None: ...
+    def __init__(self, start: list[float], stop: list[float], event: list[int]) -> None: ...
     def __len__(self) -> int: ...
 
 class CoxRegressionInput:
@@ -544,9 +542,7 @@ class ElasticNetCVConfig:
     l1_ratio: float
     n_lambda: int
     n_folds: int
-    def __init__(
-        self, l1_ratio: float = 0.5, n_lambda: int = 100, n_folds: int = 10
-    ) -> None: ...
+    def __init__(self, l1_ratio: float = 0.5, n_lambda: int = 100, n_folds: int = 10) -> None: ...
 
 class ElasticNetCoxResult:
     @property

@@ -1,9 +1,12 @@
 
 use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData, Weights};
 
-#[pyfunction]
+#[pyfunction(name = "fast_cox")]
 #[pyo3(signature = (input, config))]
-pub fn fast_cox(input: &CoxRegressionInput, config: &FastCoxConfig) -> PyResult<FastCoxResult> {
+pub(crate) fn fast_cox_typed(
+    input: &CoxRegressionInput,
+    config: &FastCoxConfig,
+) -> PyResult<FastCoxResult> {
     let x = &input.covariates.values;
     let n_obs = input.covariates.n_obs;
     let n_vars = input.covariates.n_vars;
@@ -93,9 +96,9 @@ pub fn fast_cox(input: &CoxRegressionInput, config: &FastCoxConfig) -> PyResult<
     })
 }
 
-#[pyfunction]
+#[pyfunction(name = "fast_cox_path")]
 #[pyo3(signature = (input, config=None))]
-pub fn fast_cox_path(
+pub(crate) fn fast_cox_path_typed(
     input: &CoxRegressionInput,
     config: Option<&FastCoxPathConfig>,
 ) -> PyResult<FastCoxPath> {
@@ -218,9 +221,9 @@ pub fn fast_cox_path(
     })
 }
 
-#[pyfunction]
+#[pyfunction(name = "fast_cox_cv")]
 #[pyo3(signature = (input, config=None))]
-pub fn fast_cox_cv(
+pub(crate) fn fast_cox_cv_typed(
     input: &CoxRegressionInput,
     config: Option<&FastCoxCVConfig>,
 ) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
@@ -247,7 +250,7 @@ pub fn fast_cox_cv(
         tol: 1e-7,
         screening: config.screening,
     };
-    let path = fast_cox_path(input, Some(&path_config))?;
+    let path = fast_cox_path_typed(input, Some(&path_config))?;
 
     let x = &input.covariates.values;
     let n_obs = input.covariates.n_obs;
@@ -298,14 +301,17 @@ pub fn fast_cox_cv(
                     let train_offset: Vec<f64> =
                         train_idx.iter().map(|&i| offset[i]).collect();
 
-                    let Ok(solver_config) =
-                        FastCoxSolverConfig::new(1000, 1e-7, config.screening, None, 10)
-                    else {
-                        return None;
-                    };
-                    let Ok(fit_config) =
-                        FastCoxConfig::new(lambda, config.l1_ratio, Some(&solver_config), true, true)
-                    else {
+                    let Ok(fit_config) = FastCoxConfig::new(
+                        lambda,
+                        config.l1_ratio,
+                        1000,
+                        1e-7,
+                        config.screening,
+                        None,
+                        10,
+                        true,
+                        true,
+                    ) else {
                         return None;
                     };
 
@@ -327,7 +333,7 @@ pub fn fast_cox_cv(
                         return None;
                     };
 
-                    if let Ok(result) = fast_cox(&train_input, &fit_config) {
+                    if let Ok(result) = fast_cox_typed(&train_input, &fit_config) {
                         let test_x: Vec<f64> = test_idx
                             .iter()
                             .flat_map(|&i| (0..n_vars).map(move |j| x_ref[i * n_vars + j]))
@@ -402,4 +408,74 @@ pub fn fast_cox_cv(
         .unwrap_or(lambda_min);
 
     Ok((lambda_min, lambda_1se, mean_deviances, se_deviances))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fast_cox(
+    x: Vec<f64>,
+    n_obs: usize,
+    n_vars: usize,
+    time: Vec<f64>,
+    status: Vec<i32>,
+    config: &FastCoxConfig,
+    weights: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+) -> PyResult<FastCoxResult> {
+    let input = CoxRegressionInput::try_new(
+        CovariateMatrix::try_new(x, n_obs, n_vars)?,
+        SurvivalData::try_new(time, status)?,
+        weights.map(Weights::try_new).transpose()?,
+        offset,
+    )?;
+    fast_cox_typed(&input, config)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fast_cox_path(
+    x: Vec<f64>,
+    n_obs: usize,
+    n_vars: usize,
+    time: Vec<f64>,
+    status: Vec<i32>,
+    l1_ratio: f64,
+    n_lambda: usize,
+    lambda_min_ratio: Option<f64>,
+    weights: Option<Vec<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: ScreeningRule,
+) -> PyResult<FastCoxPath> {
+    let input = CoxRegressionInput::try_new(
+        CovariateMatrix::try_new(x, n_obs, n_vars)?,
+        SurvivalData::try_new(time, status)?,
+        weights.map(Weights::try_new).transpose()?,
+        None,
+    )?;
+    let config =
+        FastCoxPathConfig::new(l1_ratio, n_lambda, lambda_min_ratio, max_iter, tol, screening)?;
+    fast_cox_path_typed(&input, Some(&config))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fast_cox_cv(
+    x: Vec<f64>,
+    n_obs: usize,
+    n_vars: usize,
+    time: Vec<f64>,
+    status: Vec<i32>,
+    l1_ratio: f64,
+    n_lambda: usize,
+    n_folds: usize,
+    weights: Option<Vec<f64>>,
+    screening: ScreeningRule,
+    seed: Option<u64>,
+) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
+    let input = CoxRegressionInput::try_new(
+        CovariateMatrix::try_new(x, n_obs, n_vars)?,
+        SurvivalData::try_new(time, status)?,
+        weights.map(Weights::try_new).transpose()?,
+        None,
+    )?;
+    let config = FastCoxCVConfig::new(l1_ratio, n_lambda, n_folds, screening, seed)?;
+    fast_cox_cv_typed(&input, Some(&config))
 }

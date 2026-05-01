@@ -23,8 +23,11 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agexact, m)?)?;
     m.add_function(wrap_pyfunction!(compute_baseline_survival_steps, m)?)?;
     m.add_function(wrap_pyfunction!(compute_tied_baseline_summaries, m)?)?;
-    m.add_function(wrap_pyfunction!(agmart, m)?)?;
-    m.add_function(wrap_pyfunction!(coxmart, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::residuals::agmart::agmart_typed, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::residuals::coxmart::coxmart_typed,
+        m
+    )?)?;
 
     register_classes!(
         m,

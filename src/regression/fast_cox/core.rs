@@ -108,6 +108,7 @@ fn precompute_risk_set_cumsum(
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn compute_gradient_hessian_diag_fast(
     data: &FastCoxData,
     beta: &[f64],
@@ -213,6 +214,7 @@ fn apply_edpp_screening(
         .collect()
 }
 
+#[allow(clippy::needless_range_loop)]
 fn compute_cox_deviance(data: &FastCoxData, beta: &[f64]) -> f64 {
     let eta: Vec<f64> = (0..data.n)
         .map(|i| {

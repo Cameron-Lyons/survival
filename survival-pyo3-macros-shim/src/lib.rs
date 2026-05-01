@@ -66,7 +66,8 @@ fn strip_pyo3_helpers(stream: TokenStream) -> TokenStream {
 
         stripped.push(match token {
             TokenTree::Group(group) => {
-                let mut new_group = Group::new(group.delimiter(), strip_pyo3_helpers(group.stream()));
+                let mut new_group =
+                    Group::new(group.delimiter(), strip_pyo3_helpers(group.stream()));
                 new_group.set_span(group.span());
                 TokenTree::Group(new_group)
             }
@@ -91,4 +92,3 @@ fn is_pyo3_helper_attr(group: &Group) -> bool {
         "pyo3" | "new" | "staticmethod" | "classmethod" | "getter" | "setter"
     )
 }
-
