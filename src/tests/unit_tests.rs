@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::agsurv4;
-    use crate::data_prep::survsplit::survsplit;
+    use crate::data_prep::survsplit;
     use crate::matrix::chinv2::chinv2;
     use crate::matrix::cholesky2::cholesky2;
     use crate::surv_analysis::logrank_components::{

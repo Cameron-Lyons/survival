@@ -55,12 +55,27 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nsk, m)?)?;
     m.add_function(wrap_pyfunction!(anova_coxph, m)?)?;
     m.add_function(wrap_pyfunction!(anova_coxph_single, m)?)?;
-    m.add_function(wrap_pyfunction!(reliability, m)?)?;
-    m.add_function(wrap_pyfunction!(reliability_inverse, m)?)?;
-    m.add_function(wrap_pyfunction!(hazard_to_reliability, m)?)?;
-    m.add_function(wrap_pyfunction!(failure_probability, m)?)?;
-    m.add_function(wrap_pyfunction!(conditional_reliability, m)?)?;
-    m.add_function(wrap_pyfunction!(mean_residual_life, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::reliability::core::reliability, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::reliability::core::reliability_inverse,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::reliability::core::hazard_to_reliability,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::reliability::core::failure_probability,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::reliability::core::conditional_reliability,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::reliability::core::mean_residual_life,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(survfit_from_hazard, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_from_cumhaz, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_from_matrix, m)?)?;

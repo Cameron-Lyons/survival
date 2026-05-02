@@ -1,10 +1,12 @@
-pub(crate) mod coxcount1;
+#[path = "coxcount1.rs"]
+pub(crate) mod coxcount1_module;
 pub(crate) mod coxscho;
-pub(crate) mod nsk;
+#[path = "nsk.rs"]
+pub(crate) mod nsk_module;
 pub(crate) mod pspline;
 
 // Public facade exports
-pub use coxcount1::{CoxCountOutput, coxcount1, coxcount2};
+pub use coxcount1_module::{CoxCountOutput, coxcount1, coxcount2};
 pub use coxscho::schoenfeld_residuals;
-pub use nsk::{NaturalSplineKnot, SplineBasisResult, nsk};
+pub use nsk_module::{NaturalSplineKnot, SplineBasisResult, nsk};
 pub use pspline::PSpline;

@@ -20,9 +20,7 @@ fn main() {
     }
 
     #[cfg(not(feature = "python"))]
-    {
-        return;
-    }
+    {}
 
     #[cfg(feature = "python")]
     {

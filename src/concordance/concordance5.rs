@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use super::common::{build_concordance_result, validate_extended_concordance_inputs};
 use crate::constants::{CONCORDANCE_COUNT_SIZE_EXTENDED, PARALLEL_THRESHOLD_SMALL};
 use crate::internal::fenwick::FenwickTree;

@@ -1,14 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use crate::surv_analysis::nelson_aalen::{nelson_aalen, stratified_km};
+    use crate::surv_analysis::nelson_aalen;
+    use crate::surv_analysis::nelson_aalen_module::stratified_km;
     use crate::tests::common::{
         LOOSE_TOL, STANDARD_TOL, STRICT_TOL, aml_combined, aml_maintained, aml_nonmaintained,
         approx_eq, lung_subset, ovarian_data,
     };
+    use crate::validation::compute_rmst;
     use crate::validation::landmark::{compute_hazard_ratio, compute_survival_at_times};
     use crate::validation::logrank::{WeightType, weighted_logrank_test};
     use crate::validation::power::sample_size_logrank;
-    use crate::validation::rmst::compute_rmst;
 
     #[test]
     fn test_r_aml_kaplan_meier_maintained() {
@@ -180,7 +181,8 @@ mod tests {
     #[test]
     fn test_r_aml_median_survival() {
         let (time, status) = aml_nonmaintained();
-        let result = crate::validation::rmst::compute_survival_quantile(&time, &status, 0.5, 0.95);
+        let result =
+            crate::validation::rmst_module::compute_survival_quantile(&time, &status, 0.5, 0.95);
 
         if let Some(median) = result.median {
             assert!((20.0..=30.0).contains(&median));
@@ -276,7 +278,8 @@ mod tests {
     fn test_r_rmst_difference() {
         let (time, status, group) = aml_combined();
         let tau = 40.0;
-        let result = crate::validation::rmst::compare_rmst(&time, &status, &group, tau, 0.95);
+        let result =
+            crate::validation::rmst_module::compare_rmst(&time, &status, &group, tau, 0.95);
 
         assert!(result.rmst_group1.rmst > 0.0);
         assert!(result.rmst_group2.rmst > 0.0);

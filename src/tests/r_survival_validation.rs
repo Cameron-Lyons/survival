@@ -1,18 +1,18 @@
 #[cfg(test)]
 mod tests {
     use crate::regression::cox_optimizer::{CoxFit, CoxFitBuilder, Method as CoxMethod};
-    use crate::residuals::coxmart::compute_coxmart;
+    use crate::residuals::coxmart_module::compute_coxmart;
     use crate::surv_analysis::logrank_components::{
         SurvDiffInput, SurvDiffOutput, SurvDiffParams, compute_survdiff,
     };
-    use crate::surv_analysis::nelson_aalen::nelson_aalen;
-    use crate::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
+    use crate::surv_analysis::nelson_aalen;
+    use crate::surv_analysis::{KaplanMeierConfig, compute_survfitkm};
     use crate::tests::common::{
         STANDARD_TOL, STRICT_TOL, aml_combined_sorted as aml_combined, aml_maintained,
         aml_nonmaintained, approx_eq, lung_data, rel_approx_eq,
     };
+    use crate::validation::compute_rmst;
     use crate::validation::logrank::{WeightType, weighted_logrank_test};
-    use crate::validation::rmst::compute_rmst;
     use ndarray::{Array1, Array2};
 
     #[test]
@@ -376,7 +376,7 @@ mod tests {
         let weights = vec![1.0; n];
         let mut strata = vec![0i32; n];
 
-        use crate::residuals::coxmart::{CoxMartSurvivalData, CoxMartWeights};
+        use crate::residuals::coxmart_module::{CoxMartSurvivalData, CoxMartWeights};
 
         let mut expect = vec![0.0; n];
 
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_concordance_basic() {
-        use crate::concordance::concordance1::concordance1;
+        use crate::concordance::concordance1;
 
         let n = 5;
         let y = vec![1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0];
@@ -764,7 +764,7 @@ mod tests {
 
     #[test]
     fn test_concordance_ties() {
-        use crate::concordance::concordance1::concordance1;
+        use crate::concordance::concordance1;
 
         let n = 4;
         let y = vec![1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 1.0, 1.0];
@@ -780,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_concordance_range() {
-        use crate::concordance::concordance1::concordance1;
+        use crate::concordance::concordance1;
 
         let n = 10;
         let y = vec![
@@ -909,7 +909,7 @@ mod tests {
 
     #[test]
     fn test_rmst_comparison() {
-        use crate::validation::rmst::compare_rmst;
+        use crate::validation::rmst_module::compare_rmst;
 
         let (time, status, group) = aml_combined();
         let tau = 48.0;
@@ -949,7 +949,7 @@ mod tests {
 
     #[test]
     fn test_median_survival() {
-        use crate::validation::rmst::compute_survival_quantile;
+        use crate::validation::rmst_module::compute_survival_quantile;
 
         let (time, status) = aml_nonmaintained();
 
