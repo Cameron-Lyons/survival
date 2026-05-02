@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use super::common::{
     add_to_binary_tree, build_concordance_result, validate_extended_concordance_inputs,
     walkup_binary_tree,

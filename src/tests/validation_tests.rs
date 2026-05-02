@@ -1,15 +1,18 @@
 #[cfg(test)]
 mod tests {
-    use crate::surv_analysis::nelson_aalen::{nelson_aalen, stratified_km};
+    use crate::surv_analysis::nelson_aalen;
+    use crate::surv_analysis::nelson_aalen_module::stratified_km;
     use crate::tests::common::{LOOSE_TOL, STRICT_TOL, approx_eq};
-    use crate::validation::calibration::{calibration_curve, stratify_risk, time_dependent_auc};
+    use crate::validation::calibration_module::{
+        calibration_curve, stratify_risk, time_dependent_auc,
+    };
     use crate::validation::landmark::{
         compute_conditional_survival, compute_hazard_ratio, compute_landmark, compute_life_table,
         compute_survival_at_times,
     };
     use crate::validation::logrank::{WeightType, logrank_trend_test, weighted_logrank_test};
     use crate::validation::power::{power_logrank, sample_size_freedman, sample_size_logrank};
-    use crate::validation::rmst::{
+    use crate::validation::rmst_module::{
         compare_rmst, compute_cumulative_incidence, compute_rmst, compute_survival_quantile,
     };
     const TOLERANCE: f64 = STRICT_TOL;

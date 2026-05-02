@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests {
     use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod};
-    use crate::surv_analysis::nelson_aalen::nelson_aalen;
-    use crate::surv_analysis::survfitkm::{KaplanMeierConfig, compute_survfitkm};
+    use crate::surv_analysis::nelson_aalen;
+    use crate::surv_analysis::{KaplanMeierConfig, compute_survfitkm};
     use crate::tests::common::{LOOSE_TOL, STANDARD_TOL, rel_approx_eq};
+    use crate::validation::compute_rmst;
     use crate::validation::logrank::{WeightType, weighted_logrank_test};
-    use crate::validation::rmst::compute_rmst;
     use ndarray::{Array1, Array2};
     use serde::Deserialize;
     use std::fs;

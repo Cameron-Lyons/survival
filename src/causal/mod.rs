@@ -2,7 +2,8 @@ pub(crate) mod causal_forest;
 pub(crate) mod counterfactual_survival;
 pub(crate) mod dependent_censoring;
 pub(crate) mod double_ml;
-pub(crate) mod g_computation;
+#[path = "g_computation.rs"]
+pub(crate) mod g_computation_module;
 pub(crate) mod instrumental_variable;
 pub(crate) mod ipcw;
 pub(crate) mod msm;
@@ -25,7 +26,7 @@ pub use dependent_censoring::{
 pub use double_ml::{
     CATEResult, DoubleMLConfig, DoubleMLResult, double_ml_cate, double_ml_survival,
 };
-pub use g_computation::{GComputationResult, g_computation, g_computation_survival_curves};
+pub use g_computation_module::{GComputationResult, g_computation, g_computation_survival_curves};
 pub use instrumental_variable::{
     GEstimationConfig, GEstimationResult, IVCoxConfig, IVCoxResult, MediationSurvivalConfig,
     MediationSurvivalResult, RDSurvivalConfig, RDSurvivalResult, g_estimation_aft, iv_cox,

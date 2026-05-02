@@ -7,7 +7,9 @@ pub(super) fn py_fast_cox(
     input: &CoxRegressionInput,
     config: &FastCoxConfig,
 ) -> PyResult<FastCoxResult> {
-    Ok(crate::regression::fast_cox::fast_cox_typed(input, config)?)
+    Ok(crate::regression::fast_cox_module::fast_cox_typed(
+        input, config,
+    )?)
 }
 
 #[pyfunction(name = "fast_cox_numpy")]
@@ -20,7 +22,7 @@ pub(super) fn py_fast_cox_numpy(
     weights: Option<PyReadonlyArray1<'_, f64>>,
     offset: Option<PyReadonlyArray1<'_, f64>>,
 ) -> PyResult<FastCoxResult> {
-    Ok(crate::regression::fast_cox::fast_cox_array_view(
+    Ok(crate::regression::fast_cox_module::fast_cox_array_view(
         x.as_array(),
         time.as_array(),
         status.as_array(),
@@ -36,7 +38,7 @@ pub(super) fn py_fast_cox_path(
     input: &CoxRegressionInput,
     config: Option<&FastCoxPathConfig>,
 ) -> PyResult<FastCoxPath> {
-    Ok(crate::regression::fast_cox::fast_cox_path_typed(
+    Ok(crate::regression::fast_cox_module::fast_cox_path_typed(
         input, config,
     )?)
 }
@@ -47,7 +49,7 @@ pub(super) fn py_fast_cox_cv(
     input: &CoxRegressionInput,
     config: Option<&FastCoxCVConfig>,
 ) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
-    Ok(crate::regression::fast_cox::fast_cox_cv_typed(
+    Ok(crate::regression::fast_cox_module::fast_cox_cv_typed(
         input, config,
     )?)
 }

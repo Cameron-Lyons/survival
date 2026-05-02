@@ -3,7 +3,8 @@ pub(crate) mod changepoints;
 pub(crate) mod friedman_h;
 pub(crate) mod ice_curves;
 pub(crate) mod local_global;
-pub(crate) mod survshap;
+#[path = "survshap/mod.rs"]
+pub(crate) mod survshap_module;
 pub(crate) mod time_varying;
 pub(crate) mod variable_groups;
 
@@ -28,7 +29,7 @@ pub use local_global::{
     FeatureViewAnalysis, LocalGlobalConfig, LocalGlobalResult, LocalGlobalSummary,
     ViewRecommendation, analyze_local_global,
 };
-pub use survshap::{
+pub use survshap_module::{
     AggregationMethod, BootstrapSurvShapResult, FeatureImportance, PermutationImportanceResult,
     ShapInteractionResult, SurvShapConfig, SurvShapExplanation, SurvShapResult, aggregate_survshap,
     compute_shap_interactions, permutation_importance, survshap, survshap_bootstrap,

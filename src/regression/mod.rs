@@ -1,18 +1,24 @@
-pub(crate) mod aareg;
-pub(crate) mod agexact;
+#[path = "aareg.rs"]
+pub(crate) mod aareg_module;
+#[path = "agexact.rs"]
+pub(crate) mod agexact_module;
 pub(crate) mod agfit5;
 pub(crate) mod blogit;
-pub(crate) mod cause_specific_cox;
+#[path = "cause_specific_cox.rs"]
+pub(crate) mod cause_specific_cox_module;
 pub(crate) mod cch;
 pub(crate) mod clogit;
 pub(crate) mod cox_optimizer;
 pub(crate) mod coxph;
-pub(crate) mod coxph_detail;
+#[path = "coxph_detail.rs"]
+pub(crate) mod coxph_detail_module;
 pub(crate) mod cure_models;
 pub(crate) mod elastic_net;
-pub(crate) mod fast_cox;
+#[path = "fast_cox/mod.rs"]
+pub(crate) mod fast_cox_module;
 pub(crate) mod finegray_data;
-pub(crate) mod finegray_regression;
+#[path = "finegray_regression.rs"]
+pub(crate) mod finegray_regression_module;
 pub(crate) mod functional_survival;
 pub(crate) mod high_dimensional;
 pub(crate) mod joint_competing;
@@ -25,18 +31,18 @@ pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
 // Public facade exports
-pub use aareg::{AaregOptions, aareg};
-pub use agexact::agexact;
+pub use aareg_module::{AaregOptions, aareg};
+pub use agexact_module::agexact;
 pub use agfit5::perform_cox_regression_frailty;
 pub use blogit::LinkFunctionParams;
-pub use cause_specific_cox::{
+pub use cause_specific_cox_module::{
     CauseSpecificCoxConfig, CauseSpecificCoxResult, CensoringType, cause_specific_cox,
     cause_specific_cox_all,
 };
 pub use cch::{CchMethod, CohortData};
 pub use clogit::{ClogitDataSet, ConditionalLogisticRegression};
 pub use coxph::{CoxPHModel, Subject};
-pub use coxph_detail::{CoxphDetail, CoxphDetailRow, coxph_detail};
+pub use coxph_detail_module::{CoxphDetail, CoxphDetailRow, coxph_detail};
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
     CureModelComparisonResult, MixtureCureResult, NonMixtureCureConfig, NonMixtureCureResult,
@@ -48,12 +54,12 @@ pub use elastic_net::{
     ElasticNetCVConfig, ElasticNetConfig, ElasticNetCoxPath, ElasticNetCoxResult,
     ElasticNetPathConfig, PenaltyType, elastic_net_cox, elastic_net_cox_cv, elastic_net_cox_path,
 };
-pub use fast_cox::{
+pub use fast_cox_module::{
     FastCoxCVConfig, FastCoxConfig, FastCoxPath, FastCoxPathConfig, FastCoxResult,
     FastCoxSolverConfig, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
 };
 pub use finegray_data::{FineGrayOutput, finegray};
-pub use finegray_regression::{
+pub use finegray_regression_module::{
     CompetingRisksCIF, FineGrayResult, competing_risks_cif, finegray_regression,
 };
 pub use functional_survival::{

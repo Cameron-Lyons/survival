@@ -900,7 +900,14 @@ mod tests {
             oob_error: false,
         };
 
-        let forest = fit_survival_forest_inner(&x, 6, 2, &time, &status, &config);
+        let data = SurvivalForestData {
+            x: &x,
+            n_obs: 6,
+            n_vars: 2,
+            time: &time,
+            status: &status,
+        };
+        let forest = fit_survival_forest_inner(&data, &config);
         assert_eq!(forest.get_n_trees(), 10);
     }
 }
