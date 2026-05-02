@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -390,55 +389,18 @@ fn ipcw_treatment_effect_typed(input: IPCWTreatmentInput) -> PyResult<IPCWResult
 }
 
 #[pyfunction]
-#[pyo3(signature = (**kwargs))]
-pub fn ipcw_treatment_effect(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<IPCWResult> {
-    let kwargs = kwargs.ok_or_else(|| {
-        PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-            "ipcw_treatment_effect requires keyword arguments",
-        )
-    })?;
-
-    let keys = kwargs.keys();
-    for key in keys.iter() {
-        let key: String = key.extract()?;
-        if ![
-            "time",
-            "status",
-            "treatment",
-            "outcome",
-            "x_confounders",
-            "n_obs",
-            "n_vars",
-            "tau",
-        ]
-        .contains(&key.as_str())
-        {
-            return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
-                "unexpected keyword argument '{key}'"
-            )));
-        }
-    }
-
-    let required = |name: &'static str| -> PyResult<Bound<'_, PyAny>> {
-        kwargs.get_item(name)?.ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
-                "missing required keyword argument '{name}'"
-            ))
-        })
-    };
-
-    let time = required("time")?.extract()?;
-    let status = required("status")?.extract()?;
-    let treatment = required("treatment")?.extract()?;
-    let outcome = required("outcome")?.extract()?;
-    let x_confounders = required("x_confounders")?.extract()?;
-    let n_obs = required("n_obs")?.extract()?;
-    let n_vars = required("n_vars")?.extract()?;
-    let tau = kwargs
-        .get_item("tau")?
-        .map(|value| value.extract())
-        .transpose()?;
-
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (time, status, treatment, outcome, x_confounders, n_obs, n_vars, tau=None))]
+pub fn ipcw_treatment_effect(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    treatment: Vec<i32>,
+    outcome: Vec<f64>,
+    x_confounders: Vec<f64>,
+    n_obs: usize,
+    n_vars: usize,
+    tau: Option<f64>,
+) -> PyResult<IPCWResult> {
     let input = IPCWTreatmentInput {
         ipcw: IPCWInput::new(time, status, x_confounders, n_obs, n_vars)?,
         treatment,
