@@ -11,6 +11,8 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(target_trial_emulation, m)?)?;
     m.add_function(wrap_pyfunction!(sequential_trial_emulation, m)?)?;
     m.add_class::<GComputationResult>()?;
+    m.add_class::<IPCWInput>()?;
+    m.add_class::<IPCWConfig>()?;
     m.add_class::<IPCWResult>()?;
     m.add_class::<MSMResult>()?;
     m.add_class::<TargetTrialResult>()?;

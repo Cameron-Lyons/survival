@@ -1,3 +1,4 @@
+from . import _survival as _core
 from ._binding_utils import bind_names
 
 __all__ = bind_names(
@@ -43,10 +44,11 @@ __all__ = bind_names(
         "iv_cox",
         "mediation_survival",
         "rd_survival",
+        "IPCWInput",
+        "IPCWConfig",
         "IPCWResult",
         "compute_ipcw_weights",
         "ipcw_kaplan_meier",
-        "ipcw_treatment_effect",
         "MSMResult",
         "compute_longitudinal_iptw",
         "marginal_structural_model",
@@ -60,3 +62,28 @@ __all__ = bind_names(
         "tmle_survival",
     ],
 )
+
+
+def ipcw_treatment_effect(
+    time,
+    status,
+    treatment,
+    outcome,
+    x_confounders,
+    n_obs,
+    n_vars,
+    tau=None,
+):
+    return _core.ipcw_treatment_effect(
+        time=time,
+        status=status,
+        treatment=treatment,
+        outcome=outcome,
+        x_confounders=x_confounders,
+        n_obs=n_obs,
+        n_vars=n_vars,
+        tau=tau,
+    )
+
+
+__all__.append("ipcw_treatment_effect")

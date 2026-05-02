@@ -234,6 +234,12 @@ impl PyList {
 }
 
 impl<'py> Bound<'py, PyDict> {
+    pub fn keys(&self) -> Bound<'py, PyList> {
+        Bound {
+            _marker: PhantomData,
+        }
+    }
+
     pub fn set_item<K, V>(&self, _key: K, _value: V) -> PyResult<()> {
         Ok(())
     }
@@ -252,6 +258,10 @@ impl<'py> Bound<'py, PyList> {
 
     pub fn len(&self) -> usize {
         0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        true
     }
 
     pub fn iter(&self) -> std::iter::Empty<Bound<'py, PyAny>> {

@@ -13,13 +13,13 @@ pub enum ScreeningRule {
 #[pymethods]
 impl ScreeningRule {
     #[new]
-    fn new(name: &str) -> PyResult<Self> {
+    fn new(name: &str) -> SurvivalResult<Self> {
         match name.to_lowercase().as_str() {
             "none" => Ok(ScreeningRule::None),
             "safe" => Ok(ScreeningRule::Safe),
             "strong" => Ok(ScreeningRule::Strong),
             "edpp" => Ok(ScreeningRule::EDPP),
-            _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            _ => Err(SurvivalError::invalid_input(
                 "Unknown screening rule. Use 'none', 'safe', 'strong', or 'edpp'",
             )),
         }
@@ -69,14 +69,14 @@ impl FastCoxSolverConfig {
         screening: ScreeningRule,
         working_set_size: Option<usize>,
         active_set_update_freq: usize,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         if max_iter == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "max_iter must be positive",
             ));
         }
         if active_set_update_freq == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "active_set_update_freq must be positive",
             ));
         }
@@ -139,24 +139,24 @@ impl FastCoxConfig {
         active_set_update_freq: usize,
         standardize: bool,
         use_simd: bool,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         if lambda < 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "lambda must be non-negative",
             ));
         }
         if !(0.0..=1.0).contains(&l1_ratio) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "l1_ratio must be between 0 and 1",
             ));
         }
         if max_iter == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "max_iter must be positive",
             ));
         }
         if active_set_update_freq == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "active_set_update_freq must be positive",
             ));
         }
@@ -210,26 +210,26 @@ impl FastCoxPathConfig {
         max_iter: usize,
         tol: f64,
         screening: ScreeningRule,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         if !(0.0..=1.0).contains(&l1_ratio) || l1_ratio == 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "l1_ratio must be greater than 0 and at most 1",
             ));
         }
         if n_lambda < 2 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "n_lambda must be at least 2",
             ));
         }
         if max_iter == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "max_iter must be positive",
             ));
         }
         if let Some(lambda_min_ratio) = lambda_min_ratio
             && !(0.0..1.0).contains(&lambda_min_ratio)
         {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "lambda_min_ratio must be greater than 0 and less than 1",
             ));
         }
@@ -276,19 +276,19 @@ impl FastCoxCVConfig {
         n_folds: usize,
         screening: ScreeningRule,
         seed: Option<u64>,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         if !(0.0..=1.0).contains(&l1_ratio) || l1_ratio == 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "l1_ratio must be greater than 0 and at most 1",
             ));
         }
         if n_lambda < 2 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "n_lambda must be at least 2",
             ));
         }
         if n_folds < 2 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(SurvivalError::invalid_input(
                 "n_folds must be at least 2",
             ));
         }

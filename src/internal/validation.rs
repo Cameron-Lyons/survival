@@ -33,7 +33,7 @@ impl From<MatrixError> for PyErr {
 }
 
 #[derive(Debug)]
-pub(crate) enum ValidationError {
+pub enum ValidationError {
     LengthMismatch {
         expected: usize,
         got: usize,

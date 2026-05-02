@@ -185,6 +185,22 @@ class SurvivalForestConfig:
         n_random_splits: int = 10,
     ) -> None: ...
 
+class SurvivalForestInput:
+    x: list[float]
+    n_obs: int
+    n_vars: int
+    time: list[float]
+    status: list[int]
+
+    def __init__(
+        self,
+        x: list[float],
+        n_obs: int,
+        n_vars: int,
+        time: list[float],
+        status: list[int],
+    ) -> None: ...
+
 class SurvivalForest:
     @property
     def n_trees(self) -> int: ...
@@ -194,6 +210,11 @@ class SurvivalForest:
     def variable_importance(self) -> list[float]: ...
     @property
     def oob_error(self) -> float | None: ...
+    @staticmethod
+    def fit_typed(
+        input: SurvivalForestInput,
+        config: SurvivalForestConfig,
+    ) -> SurvivalForest: ...
     @staticmethod
     def fit(
         x: list[float],
@@ -711,6 +732,28 @@ class JointModelResult:
     @property
     def log_likelihood(self) -> float: ...
 
+class IPCWInput:
+    time: list[float]
+    status: list[int]
+    x_censoring: list[float]
+    n_obs: int
+    n_vars: int
+
+    def __init__(
+        self,
+        time: list[float],
+        status: list[int],
+        x_censoring: list[float],
+        n_obs: int,
+        n_vars: int,
+    ) -> None: ...
+
+class IPCWConfig:
+    stabilized: bool
+    trim: float | None
+
+    def __init__(self, stabilized: bool = True, trim: float | None = None) -> None: ...
+
 class IPCWResult:
     @property
     def weights(self) -> list[float]: ...
@@ -877,6 +920,14 @@ def elastic_net_cox_cv(
     config: ElasticNetCVConfig | None = None,
 ) -> tuple[float, float, list[float], list[float]]: ...
 def fast_cox(input: CoxRegressionInput, config: FastCoxConfig) -> FastCoxResult: ...
+def fast_cox_numpy(
+    x: Any,
+    time: Any,
+    status: Any,
+    config: FastCoxConfig,
+    weights: Any | None = None,
+    offset: Any | None = None,
+) -> FastCoxResult: ...
 def fast_cox_path(
     input: CoxRegressionInput,
     config: FastCoxPathConfig | None = None,

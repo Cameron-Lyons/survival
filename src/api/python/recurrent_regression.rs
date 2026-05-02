@@ -1,4 +1,56 @@
 use super::*;
+use numpy::{PyReadonlyArray1, PyReadonlyArray2};
+
+#[pyfunction(name = "fast_cox")]
+#[pyo3(signature = (input, config))]
+pub(super) fn py_fast_cox(
+    input: &CoxRegressionInput,
+    config: &FastCoxConfig,
+) -> PyResult<FastCoxResult> {
+    Ok(crate::regression::fast_cox::fast_cox_typed(input, config)?)
+}
+
+#[pyfunction(name = "fast_cox_numpy")]
+#[pyo3(signature = (x, time, status, config, weights=None, offset=None))]
+pub(super) fn py_fast_cox_numpy(
+    x: PyReadonlyArray2<'_, f64>,
+    time: PyReadonlyArray1<'_, f64>,
+    status: PyReadonlyArray1<'_, i32>,
+    config: &FastCoxConfig,
+    weights: Option<PyReadonlyArray1<'_, f64>>,
+    offset: Option<PyReadonlyArray1<'_, f64>>,
+) -> PyResult<FastCoxResult> {
+    Ok(crate::regression::fast_cox::fast_cox_array_view(
+        x.as_array(),
+        time.as_array(),
+        status.as_array(),
+        config,
+        weights.as_ref().map(|weights| weights.as_array()),
+        offset.as_ref().map(|offset| offset.as_array()),
+    )?)
+}
+
+#[pyfunction(name = "fast_cox_path")]
+#[pyo3(signature = (input, config=None))]
+pub(super) fn py_fast_cox_path(
+    input: &CoxRegressionInput,
+    config: Option<&FastCoxPathConfig>,
+) -> PyResult<FastCoxPath> {
+    Ok(crate::regression::fast_cox::fast_cox_path_typed(
+        input, config,
+    )?)
+}
+
+#[pyfunction(name = "fast_cox_cv")]
+#[pyo3(signature = (input, config=None))]
+pub(super) fn py_fast_cox_cv(
+    input: &CoxRegressionInput,
+    config: Option<&FastCoxCVConfig>,
+) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
+    Ok(crate::regression::fast_cox::fast_cox_cv_typed(
+        input, config,
+    )?)
+}
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gap_time_model, m)?)?;
@@ -49,18 +101,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ElasticNetCoxResult>()?;
     m.add_class::<ElasticNetCoxPath>()?;
 
-    m.add_function(wrap_pyfunction!(
-        crate::regression::fast_cox::fast_cox_typed,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        crate::regression::fast_cox::fast_cox_path_typed,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        crate::regression::fast_cox::fast_cox_cv_typed,
-        m
-    )?)?;
+    m.add_function(wrap_pyfunction!(py_fast_cox, m)?)?;
+    m.add_function(wrap_pyfunction!(py_fast_cox_numpy, m)?)?;
+    m.add_function(wrap_pyfunction!(py_fast_cox_path, m)?)?;
+    m.add_function(wrap_pyfunction!(py_fast_cox_cv, m)?)?;
     m.add_class::<FastCoxConfig>()?;
     m.add_class::<FastCoxSolverConfig>()?;
     m.add_class::<FastCoxPathConfig>()?;

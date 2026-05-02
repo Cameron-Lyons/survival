@@ -55,6 +55,22 @@ mod tests {
     }
 
     #[test]
+    fn test_fast_cox_array_view() {
+        use ndarray::{arr1, arr2};
+
+        let x = arr2(&[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]]);
+        let time = arr1(&[1.0, 2.0, 3.0, 4.0]);
+        let status = arr1(&[1, 1, 0, 1]);
+        let config =
+            FastCoxConfig::new(0.1, 1.0, 100, 1e-5, ScreeningRule::None, None, 10, true, true)
+                .unwrap();
+
+        let result =
+            fast_cox_array_view(x.view(), time.view(), status.view(), &config, None, None).unwrap();
+        assert_eq!(result.coefficients.len(), 2);
+    }
+
+    #[test]
     fn test_screening_rules() {
         let gradient = vec![0.5, 0.1, 0.8, 0.05];
         let lambda = 0.3;

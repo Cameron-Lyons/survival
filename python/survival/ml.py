@@ -141,6 +141,7 @@ __all__ = bind_names(
         "StreamingKaplanMeier",
         "SplitRule",
         "SurvivalForest",
+        "SurvivalForestInput",
         "SurvivalForestConfig",
         "survival_forest",
         "SurvivalTransformerConfig",

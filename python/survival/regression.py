@@ -85,6 +85,7 @@ __all__ = bind_names(
         "ScreeningRule",
         "fast_cox",
         "fast_cox_cv",
+        "fast_cox_numpy",
         "fast_cox_path",
         "BasisType",
         "FunctionalPCAResult",

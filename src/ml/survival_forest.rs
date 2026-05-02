@@ -1,10 +1,86 @@
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use rayon::prelude::*;
 
 type NelsonAalenCurve = (Vec<f64>, Vec<f64>);
 type SplitCandidate = (usize, f64, Vec<usize>, Vec<usize>);
 type TreeWithOob = (TreeNode, Vec<usize>);
 type OobPrediction = (usize, Vec<f64>);
+
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct SurvivalForestInput {
+    #[pyo3(get)]
+    pub x: Vec<f64>,
+    #[pyo3(get)]
+    pub n_obs: usize,
+    #[pyo3(get)]
+    pub n_vars: usize,
+    #[pyo3(get)]
+    pub time: Vec<f64>,
+    #[pyo3(get)]
+    pub status: Vec<i32>,
+}
+
+#[pymethods]
+impl SurvivalForestInput {
+    #[new]
+    #[pyo3(signature = (x, n_obs, n_vars, time, status))]
+    pub fn new(
+        x: Vec<f64>,
+        n_obs: usize,
+        n_vars: usize,
+        time: Vec<f64>,
+        status: Vec<i32>,
+    ) -> PyResult<Self> {
+        let input = Self {
+            x,
+            n_obs,
+            n_vars,
+            time,
+            status,
+        };
+        input.validate()?;
+        Ok(input)
+    }
+}
+
+impl SurvivalForestInput {
+    fn validate(&self) -> PyResult<()> {
+        if self.x.len() != self.n_obs * self.n_vars {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "x length must equal n_obs * n_vars",
+            ));
+        }
+        if self.time.len() != self.n_obs || self.status.len() != self.n_obs {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "time and status must have length n_obs",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SurvivalForestData<'a> {
+    x: &'a [f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &'a [f64],
+    status: &'a [i32],
+}
+
+impl<'a> From<&'a SurvivalForestInput> for SurvivalForestData<'a> {
+    fn from(input: &'a SurvivalForestInput) -> Self {
+        Self {
+            x: &input.x,
+            n_obs: input.n_obs,
+            n_vars: input.n_vars,
+            time: &input.time,
+            status: &input.status,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -57,52 +133,110 @@ pub struct SurvivalForestConfig {
 #[pymethods]
 impl SurvivalForestConfig {
     #[new]
-    #[pyo3(signature = (
-        n_trees=500,
-        max_depth=None,
-        min_node_size=15,
-        mtry=None,
-        sample_fraction=0.632,
-        split_rule=SplitRule::LogRank,
-        n_random_splits=10,
-        seed=None,
-        oob_error=true
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        n_trees: usize,
-        max_depth: Option<usize>,
-        min_node_size: usize,
-        mtry: Option<usize>,
-        sample_fraction: f64,
-        split_rule: SplitRule,
-        n_random_splits: usize,
-        seed: Option<u64>,
-        oob_error: bool,
-    ) -> PyResult<Self> {
-        if n_trees == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "n_trees must be positive",
-            ));
-        }
-        if sample_fraction <= 0.0 || sample_fraction > 1.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "sample_fraction must be in (0, 1]",
-            ));
+    #[pyo3(signature = (**kwargs))]
+    pub fn new(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+        let mut config = SurvivalForestConfig::default();
+
+        if let Some(kwargs) = kwargs {
+            let keys = kwargs.keys();
+            for key in keys.iter() {
+                let key: String = key.extract()?;
+                if ![
+                    "n_trees",
+                    "max_depth",
+                    "min_node_size",
+                    "mtry",
+                    "sample_fraction",
+                    "split_rule",
+                    "n_random_splits",
+                    "seed",
+                    "oob_error",
+                ]
+                .contains(&key.as_str())
+                {
+                    return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                        "unexpected keyword argument '{key}'"
+                    )));
+                }
+            }
+
+            if let Some(value) = kwargs.get_item("n_trees")? {
+                config.n_trees = value.extract()?;
+            }
+            if let Some(value) = kwargs.get_item("max_depth")? {
+                config.max_depth = value.extract()?;
+            }
+            if let Some(value) = kwargs.get_item("min_node_size")? {
+                config.min_node_size = value.extract()?;
+            }
+            if let Some(value) = kwargs.get_item("mtry")? {
+                config.mtry = value.extract()?;
+            }
+            if let Some(value) = kwargs.get_item("sample_fraction")? {
+                config.sample_fraction = value.extract()?;
+            }
+            if let Some(value) = kwargs.get_item("split_rule")? {
+                config.split_rule = value.extract()?;
+            }
+            if let Some(value) = kwargs.get_item("n_random_splits")? {
+                config.n_random_splits = value.extract()?;
+            }
+            if let Some(value) = kwargs.get_item("seed")? {
+                config.seed = value.extract()?;
+            }
+            if let Some(value) = kwargs.get_item("oob_error")? {
+                config.oob_error = value.extract()?;
+            }
         }
 
-        Ok(SurvivalForestConfig {
-            n_trees,
-            max_depth,
-            min_node_size,
-            mtry,
-            sample_fraction,
-            split_rule,
-            n_random_splits,
-            seed,
-            oob_error,
-        })
+        config.validate()?;
+        Ok(config)
     }
+}
+
+impl Default for SurvivalForestConfig {
+    fn default() -> Self {
+        Self {
+            n_trees: 500,
+            max_depth: None,
+            min_node_size: 15,
+            mtry: None,
+            sample_fraction: 0.632,
+            split_rule: SplitRule::LogRank,
+            n_random_splits: 10,
+            seed: None,
+            oob_error: true,
+        }
+    }
+}
+
+impl SurvivalForestConfig {
+    fn validate(&self) -> PyResult<()> {
+        validate_survival_forest_config(self.n_trees, self.sample_fraction, self.n_random_splits)
+    }
+}
+
+fn validate_survival_forest_config(
+    n_trees: usize,
+    sample_fraction: f64,
+    n_random_splits: usize,
+) -> PyResult<()> {
+    if n_trees == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_trees must be positive",
+        ));
+    }
+    if sample_fraction <= 0.0 || sample_fraction > 1.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "sample_fraction must be in (0, 1]",
+        ));
+    }
+    if n_random_splits == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_random_splits must be positive",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -211,13 +345,8 @@ fn log_rank_split_score(
     (d_left - expected_left).powi(2) / variance
 }
 
-#[allow(clippy::too_many_arguments)]
 fn find_best_split(
-    x: &[f64],
-    _n: usize,
-    p: usize,
-    times: &[f64],
-    status: &[i32],
+    data: &SurvivalForestData<'_>,
     indices: &[usize],
     mtry: usize,
     min_node_size: usize,
@@ -229,7 +358,7 @@ fn find_best_split(
         return None;
     }
 
-    let mut candidate_vars: Vec<usize> = (0..p).collect();
+    let mut candidate_vars: Vec<usize> = (0..data.n_vars).collect();
     for i in (1..candidate_vars.len()).rev() {
         let j = rng.usize(0..=i);
         candidate_vars.swap(i, j);
@@ -240,7 +369,10 @@ fn find_best_split(
     let mut best_split: Option<SplitCandidate> = None;
 
     for &var in &candidate_vars {
-        let mut values: Vec<f64> = indices.iter().map(|&i| x[i * p + var]).collect();
+        let mut values: Vec<f64> = indices
+            .iter()
+            .map(|&i| data.x[i * data.n_vars + var])
+            .collect();
         values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         values.dedup();
 
@@ -264,12 +396,12 @@ fn find_best_split(
         for &split_value in &split_candidates {
             let left_idx: Vec<usize> = indices
                 .iter()
-                .filter(|&&i| x[i * p + var] <= split_value)
+                .filter(|&&i| data.x[i * data.n_vars + var] <= split_value)
                 .copied()
                 .collect();
             let right_idx: Vec<usize> = indices
                 .iter()
-                .filter(|&&i| x[i * p + var] > split_value)
+                .filter(|&&i| data.x[i * data.n_vars + var] > split_value)
                 .copied()
                 .collect();
 
@@ -277,10 +409,10 @@ fn find_best_split(
                 continue;
             }
 
-            let times_left: Vec<f64> = left_idx.iter().map(|&i| times[i]).collect();
-            let status_left: Vec<i32> = left_idx.iter().map(|&i| status[i]).collect();
-            let times_right: Vec<f64> = right_idx.iter().map(|&i| times[i]).collect();
-            let status_right: Vec<i32> = right_idx.iter().map(|&i| status[i]).collect();
+            let times_left: Vec<f64> = left_idx.iter().map(|&i| data.time[i]).collect();
+            let status_left: Vec<i32> = left_idx.iter().map(|&i| data.status[i]).collect();
+            let times_right: Vec<f64> = right_idx.iter().map(|&i| data.time[i]).collect();
+            let status_right: Vec<i32> = right_idx.iter().map(|&i| data.status[i]).collect();
 
             let score = match split_rule {
                 SplitRule::LogRank | SplitRule::LogRankScore => {
@@ -299,21 +431,16 @@ fn find_best_split(
     best_split
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_tree(
-    x: &[f64],
-    n: usize,
-    p: usize,
-    times: &[f64],
-    status: &[i32],
+    data: &SurvivalForestData<'_>,
     indices: &[usize],
     all_times: &[f64],
     config: &SurvivalForestConfig,
     depth: usize,
     rng: &mut fastrand::Rng,
 ) -> TreeNode {
-    let node_times: Vec<f64> = indices.iter().map(|&i| times[i]).collect();
-    let node_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
+    let node_times: Vec<f64> = indices.iter().map(|&i| data.time[i]).collect();
+    let node_status: Vec<i32> = indices.iter().map(|&i| data.status[i]).collect();
 
     if indices.len() < 2 * config.min_node_size {
         return TreeNode::new_leaf(&node_times, &node_status, all_times);
@@ -327,15 +454,11 @@ fn build_tree(
 
     let mtry = config
         .mtry
-        .unwrap_or((p as f64).sqrt().ceil() as usize)
+        .unwrap_or((data.n_vars as f64).sqrt().ceil() as usize)
         .max(1);
 
     let best_split = find_best_split(
-        x,
-        n,
-        p,
-        times,
-        status,
+        data,
         indices,
         mtry,
         config.min_node_size,
@@ -346,30 +469,8 @@ fn build_tree(
 
     match best_split {
         Some((split_var, split_value, left_idx, right_idx)) => {
-            let left_child = build_tree(
-                x,
-                n,
-                p,
-                times,
-                status,
-                &left_idx,
-                all_times,
-                config,
-                depth + 1,
-                rng,
-            );
-            let right_child = build_tree(
-                x,
-                n,
-                p,
-                times,
-                status,
-                &right_idx,
-                all_times,
-                config,
-                depth + 1,
-                rng,
-            );
+            let left_child = build_tree(data, &left_idx, all_times, config, depth + 1, rng);
+            let right_child = build_tree(data, &right_idx, all_times, config, depth + 1, rng);
 
             let (unique_times, chf) = compute_nelson_aalen(&node_times, &node_status, all_times);
 
@@ -404,18 +505,14 @@ fn predict_tree<'a>(node: &'a TreeNode, x_row: &[f64]) -> &'a [f64] {
 }
 
 fn fit_survival_forest_inner(
-    x: &[f64],
-    n_obs: usize,
-    n_vars: usize,
-    time: &[f64],
-    status: &[i32],
+    data: &SurvivalForestData<'_>,
     config: &SurvivalForestConfig,
 ) -> SurvivalForest {
-    let mut unique_times: Vec<f64> = time.to_vec();
+    let mut unique_times: Vec<f64> = data.time.to_vec();
     unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     unique_times.dedup();
 
-    let sample_size = (n_obs as f64 * config.sample_fraction).ceil() as usize;
+    let sample_size = (data.n_obs as f64 * config.sample_fraction).ceil() as usize;
 
     let base_seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
@@ -425,28 +522,17 @@ fn fit_survival_forest_inner(
             let mut rng = fastrand::Rng::with_seed(base_seed.wrapping_add(tree_idx as u64));
 
             let mut bootstrap_indices: Vec<usize> = Vec::with_capacity(sample_size);
-            let mut in_bag = vec![false; n_obs];
+            let mut in_bag = vec![false; data.n_obs];
 
             for _ in 0..sample_size {
-                let idx = rng.usize(0..n_obs);
+                let idx = rng.usize(0..data.n_obs);
                 bootstrap_indices.push(idx);
                 in_bag[idx] = true;
             }
 
-            let oob: Vec<usize> = (0..n_obs).filter(|&i| !in_bag[i]).collect();
+            let oob: Vec<usize> = (0..data.n_obs).filter(|&i| !in_bag[i]).collect();
 
-            let tree = build_tree(
-                x,
-                n_obs,
-                n_vars,
-                time,
-                status,
-                &bootstrap_indices,
-                &unique_times,
-                config,
-                0,
-                &mut rng,
-            );
+            let tree = build_tree(data, &bootstrap_indices, &unique_times, config, 0, &mut rng);
 
             (tree, oob)
         })
@@ -455,37 +541,19 @@ fn fit_survival_forest_inner(
     let (trees, oob_indices): (Vec<TreeNode>, Vec<Vec<usize>>) = results.into_iter().unzip();
 
     let oob_error = if config.oob_error {
-        Some(compute_oob_error(
-            &trees,
-            &oob_indices,
-            x,
-            n_obs,
-            n_vars,
-            time,
-            status,
-            &unique_times,
-        ))
+        Some(compute_oob_error(&trees, &oob_indices, data))
     } else {
         None
     };
 
-    let variable_importance = compute_variable_importance(
-        &trees,
-        &oob_indices,
-        x,
-        n_obs,
-        n_vars,
-        time,
-        status,
-        &unique_times,
-    );
+    let variable_importance = compute_variable_importance(&trees, &oob_indices, data);
 
     SurvivalForest {
         trees,
         unique_times,
         oob_error,
         variable_importance,
-        n_vars,
+        n_vars: data.n_vars,
         _oob_indices: oob_indices,
     }
 }
@@ -506,6 +574,22 @@ pub struct SurvivalForest {
 #[pymethods]
 impl SurvivalForest {
     #[staticmethod]
+    #[pyo3(signature = (input, config))]
+    pub fn fit_typed(
+        py: Python<'_>,
+        input: &SurvivalForestInput,
+        config: &SurvivalForestConfig,
+    ) -> PyResult<Self> {
+        input.validate()?;
+        let input = input.clone();
+        let config = config.clone();
+        Ok(py.detach(move || {
+            let data = SurvivalForestData::from(&input);
+            fit_survival_forest_inner(&data, &config)
+        }))
+    }
+
+    #[staticmethod]
     #[pyo3(signature = (x, n_obs, n_vars, time, status, config))]
     pub fn fit(
         py: Python<'_>,
@@ -516,23 +600,8 @@ impl SurvivalForest {
         status: Vec<i32>,
         config: &SurvivalForestConfig,
     ) -> PyResult<Self> {
-        if x.len() != n_obs * n_vars {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "x length must equal n_obs * n_vars",
-            ));
-        }
-        if time.len() != n_obs || status.len() != n_obs {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "time and status must have length n_obs",
-            ));
-        }
-
-        let config = config.clone();
-        Ok(
-            py.detach(move || {
-                fit_survival_forest_inner(&x, n_obs, n_vars, &time, &status, &config)
-            }),
-        )
+        let input = SurvivalForestInput::new(x, n_obs, n_vars, time, status)?;
+        Self::fit_typed(py, &input, config)
     }
 
     #[pyo3(signature = (x_new, n_new))]
@@ -651,16 +720,10 @@ impl SurvivalForest {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compute_oob_error(
     trees: &[TreeNode],
     oob_indices: &[Vec<usize>],
-    x: &[f64],
-    n: usize,
-    p: usize,
-    time: &[f64],
-    status: &[i32],
-    _unique_times: &[f64],
+    data: &SurvivalForestData<'_>,
 ) -> f64 {
     let n_times = trees.first().map(|t| t.chf.len()).unwrap_or(0);
 
@@ -670,7 +733,7 @@ fn compute_oob_error(
         .flat_map(|(tree, oob)| {
             oob.iter()
                 .map(|&i| {
-                    let x_row = &x[i * p..(i + 1) * p];
+                    let x_row = &data.x[i * data.n_vars..(i + 1) * data.n_vars];
                     let pred = predict_tree(tree, x_row);
                     (i, pred.to_vec())
                 })
@@ -678,8 +741,8 @@ fn compute_oob_error(
         })
         .collect();
 
-    let mut oob_chf: Vec<Vec<f64>> = vec![vec![0.0; n_times]; n];
-    let mut oob_count = vec![0usize; n];
+    let mut oob_chf: Vec<Vec<f64>> = vec![vec![0.0; n_times]; data.n_obs];
+    let mut oob_count = vec![0usize; data.n_obs];
 
     for (i, pred) in oob_results {
         if oob_count[i] == 0 {
@@ -694,7 +757,7 @@ fn compute_oob_error(
         oob_count[i] += 1;
     }
 
-    for i in 0..n {
+    for i in 0..data.n_obs {
         if oob_count[i] > 0 {
             let count = oob_count[i] as f64;
             for val in &mut oob_chf[i] {
@@ -708,18 +771,18 @@ fn compute_oob_error(
         .map(|chf| chf.last().copied().unwrap_or(0.0))
         .collect();
 
-    let (concordant, comparable) = (0..n)
+    let (concordant, comparable) = (0..data.n_obs)
         .into_par_iter()
-        .filter(|&i| oob_count[i] > 0 && status[i] == 1)
+        .filter(|&i| oob_count[i] > 0 && data.status[i] == 1)
         .map(|i| {
             let risk_i = risk_scores[i];
             let mut conc = 0.0;
             let mut comp = 0.0;
-            for j in 0..n {
+            for j in 0..data.n_obs {
                 if i == j || oob_count[j] == 0 {
                     continue;
                 }
-                if time[i] < time[j] {
+                if data.time[i] < data.time[j] {
                     let risk_j = risk_scores[j];
                     comp += 1.0;
                     if risk_i > risk_j {
@@ -740,45 +803,34 @@ fn compute_oob_error(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compute_variable_importance(
     trees: &[TreeNode],
     oob_indices: &[Vec<usize>],
-    x: &[f64],
-    n: usize,
-    p: usize,
-    time: &[f64],
-    status: &[i32],
-    unique_times: &[f64],
+    data: &SurvivalForestData<'_>,
 ) -> Vec<f64> {
-    let base_error = compute_oob_error(trees, oob_indices, x, n, p, time, status, unique_times);
+    let base_error = compute_oob_error(trees, oob_indices, data);
 
-    let importance: Vec<f64> = (0..p)
+    let importance: Vec<f64> = (0..data.n_vars)
         .into_par_iter()
         .map(|var| {
-            let mut x_permuted = x.to_vec();
+            let mut x_permuted = data.x.to_vec();
 
             let mut rng = fastrand::Rng::with_seed(var as u64);
-            let mut perm: Vec<usize> = (0..n).collect();
-            for i in (1..n).rev() {
+            let mut perm: Vec<usize> = (0..data.n_obs).collect();
+            for i in (1..data.n_obs).rev() {
                 let j = rng.usize(0..=i);
                 perm.swap(i, j);
             }
 
-            for i in 0..n {
-                x_permuted[i * p + var] = x[perm[i] * p + var];
+            for i in 0..data.n_obs {
+                x_permuted[i * data.n_vars + var] = data.x[perm[i] * data.n_vars + var];
             }
 
-            let permuted_error = compute_oob_error(
-                trees,
-                oob_indices,
-                &x_permuted,
-                n,
-                p,
-                time,
-                status,
-                unique_times,
-            );
+            let permuted_data = SurvivalForestData {
+                x: &x_permuted,
+                ..*data
+            };
+            let permuted_error = compute_oob_error(trees, oob_indices, &permuted_data);
 
             permuted_error - base_error
         })
@@ -798,22 +850,10 @@ pub fn survival_forest(
     status: Vec<i32>,
     config: Option<&SurvivalForestConfig>,
 ) -> PyResult<SurvivalForest> {
-    let cfg = match config.cloned() {
-        Some(cfg) => cfg,
-        None => SurvivalForestConfig::new(
-            500,
-            None,
-            15,
-            None,
-            0.632,
-            SplitRule::LogRank,
-            10,
-            None,
-            true,
-        )?,
-    };
+    let cfg = config.cloned().unwrap_or_default();
 
-    SurvivalForest::fit(py, x, n_obs, n_vars, time, status, &cfg)
+    let input = SurvivalForestInput::new(x, n_obs, n_vars, time, status)?;
+    SurvivalForest::fit_typed(py, &input, &cfg)
 }
 
 #[cfg(test)]
@@ -822,18 +862,11 @@ mod tests {
 
     #[test]
     fn test_config_default() {
-        let config = SurvivalForestConfig::new(
-            100,
-            None,
-            10,
-            None,
-            0.632,
-            SplitRule::LogRank,
-            10,
-            None,
-            true,
-        )
-        .unwrap();
+        let config = SurvivalForestConfig {
+            n_trees: 100,
+            min_node_size: 10,
+            ..SurvivalForestConfig::default()
+        };
         assert_eq!(config.n_trees, 100);
         assert_eq!(config.min_node_size, 10);
     }
