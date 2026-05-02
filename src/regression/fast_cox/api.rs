@@ -1,19 +1,34 @@
-
 use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData, Weights};
 
-#[pyfunction(name = "fast_cox")]
-#[pyo3(signature = (input, config))]
-pub(crate) fn fast_cox_typed(
-    input: &CoxRegressionInput,
+#[allow(clippy::too_many_arguments)]
+fn fast_cox_slices(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    status: &[i32],
     config: &FastCoxConfig,
-) -> PyResult<FastCoxResult> {
-    let x = &input.covariates.values;
-    let n_obs = input.covariates.n_obs;
-    let n_vars = input.covariates.n_vars;
-    let time = &input.survival.time;
-    let status = &input.survival.status;
-    let wt = input.weights_or_unit();
-    let off = input.offset_or_zero();
+    weights: Option<&[f64]>,
+    offset: Option<&[f64]>,
+) -> SurvivalResult<FastCoxResult> {
+    validate_fast_cox_slices(x, n_obs, n_vars, time, status, weights, offset)?;
+
+    let wt_owned;
+    let wt = match weights {
+        Some(weights) => weights,
+        None => {
+            wt_owned = vec![1.0; n_obs];
+            &wt_owned
+        }
+    };
+    let off_owned;
+    let off = match offset {
+        Some(offset) => offset,
+        None => {
+            off_owned = vec![0.0; n_obs];
+            &off_owned
+        }
+    };
 
     let (x_std, means, sds) = if config.standardize {
         standardize_matrix(x, n_obs, n_vars)
@@ -28,24 +43,27 @@ pub(crate) fn fast_cox_typed(
         p: n_vars,
         time,
         status,
-        weights: &wt,
-        offset: &off,
+        weights: wt,
+        offset: off,
     };
     let (gradient, _) = compute_gradient_hessian_diag_fast(&fit_data, &beta_zero, None);
     let lambda_max = gradient.iter().map(|g| g.abs()).fold(0.0, f64::max) / n_obs as f64;
 
     let (beta_std, n_iter, converged, screened_out, active_set_size) =
-        cyclic_coordinate_descent_fast(&fit_data, FastCoxDescentConfig {
-            lambda: config.lambda,
-            l1_ratio: config.l1_ratio,
-            max_iter: config.max_iter,
-            tol: config.tol,
-            beta_init: None,
-            screening: config.screening,
-            active_set_update_freq: config.active_set_update_freq,
-            lambda_prev: None,
-            lambda_max,
-        });
+        cyclic_coordinate_descent_fast(
+            &fit_data,
+            FastCoxDescentConfig {
+                lambda: config.lambda,
+                l1_ratio: config.l1_ratio,
+                max_iter: config.max_iter,
+                tol: config.tol,
+                beta_init: None,
+                screening: config.screening,
+                active_set_update_freq: config.active_set_update_freq,
+                lambda_prev: None,
+                lambda_max,
+            },
+        );
 
     let coefficients: Vec<f64> = if config.standardize {
         beta_std
@@ -71,8 +89,8 @@ pub(crate) fn fast_cox_typed(
         p: n_vars,
         time,
         status,
-        weights: &wt,
-        offset: &off,
+        weights: wt,
+        offset: off,
     };
     let deviance = compute_cox_deviance(&deviance_data, &coefficients);
 
@@ -96,12 +114,170 @@ pub(crate) fn fast_cox_typed(
     })
 }
 
-#[pyfunction(name = "fast_cox_path")]
-#[pyo3(signature = (input, config=None))]
+#[allow(clippy::too_many_arguments)]
+fn validate_fast_cox_slices(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    status: &[i32],
+    weights: Option<&[f64]>,
+    offset: Option<&[f64]>,
+) -> SurvivalResult<()> {
+    if n_obs == 0 {
+        return Err(SurvivalError::invalid_input("n_obs must be positive"));
+    }
+    if n_vars == 0 {
+        return Err(SurvivalError::invalid_input("n_vars must be positive"));
+    }
+    let expected = n_obs
+        .checked_mul(n_vars)
+        .ok_or_else(|| SurvivalError::invalid_input("n_obs * n_vars overflows usize"))?;
+    if x.len() != expected {
+        return Err(SurvivalError::invalid_input(format!(
+            "x length {} does not match n_obs * n_vars {}",
+            x.len(),
+            expected
+        )));
+    }
+    if time.len() != n_obs {
+        return Err(SurvivalError::invalid_input(format!(
+            "time length {} does not match n_obs {}",
+            time.len(),
+            n_obs
+        )));
+    }
+    if status.len() != n_obs {
+        return Err(SurvivalError::invalid_input(format!(
+            "status length {} does not match n_obs {}",
+            status.len(),
+            n_obs
+        )));
+    }
+    if let Some(weights) = weights
+        && weights.len() != n_obs
+    {
+        return Err(SurvivalError::invalid_input(format!(
+            "weights length {} does not match n_obs {}",
+            weights.len(),
+            n_obs
+        )));
+    }
+    if let Some(offset) = offset
+        && offset.len() != n_obs
+    {
+        return Err(SurvivalError::invalid_input(format!(
+            "offset length {} does not match n_obs {}",
+            offset.len(),
+            n_obs
+        )));
+    }
+    for (index, value) in x.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(SurvivalError::invalid_input(format!(
+                "x contains non-finite value {} at index {}",
+                value, index
+            )));
+        }
+    }
+    for (index, value) in time.iter().enumerate() {
+        if !value.is_finite() || *value < 0.0 {
+            return Err(SurvivalError::invalid_input(format!(
+                "time contains invalid value {} at index {}",
+                value, index
+            )));
+        }
+    }
+    for (index, value) in status.iter().enumerate() {
+        if *value < 0 {
+            return Err(SurvivalError::invalid_input(format!(
+                "status contains negative status {} at index {}",
+                value, index
+            )));
+        }
+    }
+    if let Some(weights) = weights {
+        for (index, value) in weights.iter().enumerate() {
+            if !value.is_finite() || *value < 0.0 {
+                return Err(SurvivalError::invalid_input(format!(
+                    "weights contains invalid value {} at index {}",
+                    value, index
+                )));
+            }
+        }
+    }
+    if let Some(offset) = offset {
+        for (index, value) in offset.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(SurvivalError::invalid_input(format!(
+                    "offset contains non-finite value {} at index {}",
+                    value, index
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fast_cox_array_view(
+    x: ArrayView2<'_, f64>,
+    time: ArrayView1<'_, f64>,
+    status: ArrayView1<'_, i32>,
+    config: &FastCoxConfig,
+    weights: Option<ArrayView1<'_, f64>>,
+    offset: Option<ArrayView1<'_, f64>>,
+) -> SurvivalResult<FastCoxResult> {
+    let (n_obs, n_vars) = x.dim();
+    let x = x
+        .as_slice()
+        .ok_or_else(|| SurvivalError::invalid_input("x must be C-contiguous"))?;
+    let time = time
+        .as_slice_memory_order()
+        .ok_or_else(|| SurvivalError::invalid_input("time must be contiguous"))?;
+    let status = status
+        .as_slice_memory_order()
+        .ok_or_else(|| SurvivalError::invalid_input("status must be contiguous"))?;
+    let weights = weights
+        .as_ref()
+        .map(|weights| {
+            weights
+                .as_slice_memory_order()
+                .ok_or_else(|| SurvivalError::invalid_input("weights must be contiguous"))
+        })
+        .transpose()?;
+    let offset = offset
+        .as_ref()
+        .map(|offset| {
+            offset
+                .as_slice_memory_order()
+                .ok_or_else(|| SurvivalError::invalid_input("offset must be contiguous"))
+        })
+        .transpose()?;
+
+    fast_cox_slices(x, n_obs, n_vars, time, status, config, weights, offset)
+}
+
+pub(crate) fn fast_cox_typed(
+    input: &CoxRegressionInput,
+    config: &FastCoxConfig,
+) -> SurvivalResult<FastCoxResult> {
+    fast_cox_slices(
+        &input.covariates.values,
+        input.covariates.n_obs,
+        input.covariates.n_vars,
+        &input.survival.time,
+        &input.survival.status,
+        config,
+        input.weights.as_ref().map(|weights| weights.values.as_slice()),
+        input.offset.as_deref(),
+    )
+}
+
 pub(crate) fn fast_cox_path_typed(
     input: &CoxRegressionInput,
     config: Option<&FastCoxPathConfig>,
-) -> PyResult<FastCoxPath> {
+) -> SurvivalResult<FastCoxPath> {
     let default_config;
     let config = match config {
         Some(config) => config,
@@ -221,12 +397,10 @@ pub(crate) fn fast_cox_path_typed(
     })
 }
 
-#[pyfunction(name = "fast_cox_cv")]
-#[pyo3(signature = (input, config=None))]
 pub(crate) fn fast_cox_cv_typed(
     input: &CoxRegressionInput,
     config: Option<&FastCoxCVConfig>,
-) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
+) -> SurvivalResult<(f64, f64, Vec<f64>, Vec<f64>)> {
     let default_config;
     let config = match config {
         Some(config) => config,
@@ -298,8 +472,7 @@ pub(crate) fn fast_cox_cv_typed(
                     let train_time: Vec<f64> = train_idx.iter().map(|&i| time_ref[i]).collect();
                     let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
                     let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt_ref[i]).collect();
-                    let train_offset: Vec<f64> =
-                        train_idx.iter().map(|&i| offset[i]).collect();
+                    let train_offset: Vec<f64> = train_idx.iter().map(|&i| offset[i]).collect();
 
                     let Ok(fit_config) = FastCoxConfig::new(
                         lambda,
@@ -420,7 +593,7 @@ pub fn fast_cox(
     config: &FastCoxConfig,
     weights: Option<Vec<f64>>,
     offset: Option<Vec<f64>>,
-) -> PyResult<FastCoxResult> {
+) -> SurvivalResult<FastCoxResult> {
     let input = CoxRegressionInput::try_new(
         CovariateMatrix::try_new(x, n_obs, n_vars)?,
         SurvivalData::try_new(time, status)?,
@@ -444,15 +617,21 @@ pub fn fast_cox_path(
     max_iter: usize,
     tol: f64,
     screening: ScreeningRule,
-) -> PyResult<FastCoxPath> {
+) -> SurvivalResult<FastCoxPath> {
     let input = CoxRegressionInput::try_new(
         CovariateMatrix::try_new(x, n_obs, n_vars)?,
         SurvivalData::try_new(time, status)?,
         weights.map(Weights::try_new).transpose()?,
         None,
     )?;
-    let config =
-        FastCoxPathConfig::new(l1_ratio, n_lambda, lambda_min_ratio, max_iter, tol, screening)?;
+    let config = FastCoxPathConfig::new(
+        l1_ratio,
+        n_lambda,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        screening,
+    )?;
     fast_cox_path_typed(&input, Some(&config))
 }
 
@@ -469,7 +648,7 @@ pub fn fast_cox_cv(
     weights: Option<Vec<f64>>,
     screening: ScreeningRule,
     seed: Option<u64>,
-) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {
+) -> SurvivalResult<(f64, f64, Vec<f64>, Vec<f64>)> {
     let input = CoxRegressionInput::try_new(
         CovariateMatrix::try_new(x, n_obs, n_vars)?,
         SurvivalData::try_new(time, status)?,

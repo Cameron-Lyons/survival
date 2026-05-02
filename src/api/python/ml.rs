@@ -7,6 +7,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deephit, m)?)?;
     m.add_function(wrap_pyfunction!(survtrace, m)?)?;
     m.add_class::<SurvivalForest>()?;
+    m.add_class::<SurvivalForestInput>()?;
     m.add_class::<SurvivalForestConfig>()?;
     m.add_class::<SplitRule>()?;
     m.add_class::<GradientBoostSurvival>()?;

@@ -1,13 +1,14 @@
 use crate::internal::validation::{
     validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
+use crate::{SurvivalError, SurvivalResult};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-fn validate_finite(slice: &[f64], field: &'static str) -> PyResult<()> {
+fn validate_finite(slice: &[f64], field: &'static str) -> SurvivalResult<()> {
     for (index, value) in slice.iter().enumerate() {
         if !value.is_finite() {
-            return Err(PyValueError::new_err(format!(
+            return Err(SurvivalError::invalid_input(format!(
                 "{} contains non-finite value {} at index {}",
                 field, value, index
             )));
@@ -16,10 +17,10 @@ fn validate_finite(slice: &[f64], field: &'static str) -> PyResult<()> {
     Ok(())
 }
 
-fn validate_status_values(status: &[i32], field: &'static str) -> PyResult<()> {
+fn validate_status_values(status: &[i32], field: &'static str) -> SurvivalResult<()> {
     for (index, value) in status.iter().enumerate() {
         if *value < 0 {
-            return Err(PyValueError::new_err(format!(
+            return Err(SurvivalError::invalid_input(format!(
                 "{} contains negative status {} at index {}",
                 field, value, index
             )));
@@ -28,7 +29,7 @@ fn validate_status_values(status: &[i32], field: &'static str) -> PyResult<()> {
     Ok(())
 }
 
-fn validate_strata_len(strata: &[i32], expected: usize) -> PyResult<()> {
+fn validate_strata_len(strata: &[i32], expected: usize) -> SurvivalResult<()> {
     validate_length(expected, strata.len(), "strata")?;
     Ok(())
 }
@@ -47,7 +48,7 @@ impl SurvivalData {
     #[new]
     #[pyo3(signature = (time, status))]
     pub fn new(time: Vec<f64>, status: Vec<i32>) -> PyResult<Self> {
-        Self::try_new(time, status)
+        Ok(Self::try_new(time, status)?)
     }
 
     pub fn __len__(&self) -> usize {
@@ -60,7 +61,7 @@ impl SurvivalData {
 }
 
 impl SurvivalData {
-    pub fn try_new(time: Vec<f64>, status: Vec<i32>) -> PyResult<Self> {
+    pub fn try_new(time: Vec<f64>, status: Vec<i32>) -> SurvivalResult<Self> {
         validate_non_empty(&time, "time")?;
         validate_length(time.len(), status.len(), "status")?;
         validate_no_nan(&time, "time")?;
@@ -91,7 +92,7 @@ impl CovariateMatrix {
     #[new]
     #[pyo3(signature = (values, n_obs, n_vars))]
     pub fn new(values: Vec<f64>, n_obs: usize, n_vars: usize) -> PyResult<Self> {
-        Self::try_new(values, n_obs, n_vars)
+        Ok(Self::try_new(values, n_obs, n_vars)?)
     }
 
     pub fn __len__(&self) -> usize {
@@ -104,17 +105,17 @@ impl CovariateMatrix {
 }
 
 impl CovariateMatrix {
-    pub fn try_new(values: Vec<f64>, n_obs: usize, n_vars: usize) -> PyResult<Self> {
+    pub fn try_new(values: Vec<f64>, n_obs: usize, n_vars: usize) -> SurvivalResult<Self> {
         if n_obs == 0 {
-            return Err(PyValueError::new_err("n_obs must be positive"));
+            return Err(SurvivalError::invalid_input("n_obs must be positive"));
         }
         if n_vars == 0 {
-            return Err(PyValueError::new_err("n_vars must be positive"));
+            return Err(SurvivalError::invalid_input("n_vars must be positive"));
         }
 
         let expected = n_obs
             .checked_mul(n_vars)
-            .ok_or_else(|| PyValueError::new_err("n_obs * n_vars overflows usize"))?;
+            .ok_or_else(|| SurvivalError::invalid_input("n_obs * n_vars overflows usize"))?;
         validate_length(expected, values.len(), "values")?;
         validate_no_nan(&values, "values")?;
         validate_finite(&values, "values")?;
@@ -139,7 +140,7 @@ impl Weights {
     #[new]
     #[pyo3(signature = (values))]
     pub fn new(values: Vec<f64>) -> PyResult<Self> {
-        Self::try_new(values)
+        Ok(Self::try_new(values)?)
     }
 
     #[staticmethod]
@@ -158,7 +159,7 @@ impl Weights {
 }
 
 impl Weights {
-    pub fn try_new(values: Vec<f64>) -> PyResult<Self> {
+    pub fn try_new(values: Vec<f64>) -> SurvivalResult<Self> {
         validate_non_empty(&values, "weights")?;
         validate_no_nan(&values, "weights")?;
         validate_finite(&values, "weights")?;
@@ -166,7 +167,7 @@ impl Weights {
         Ok(Self { values })
     }
 
-    pub(crate) fn validate_len(&self, expected: usize) -> PyResult<()> {
+    pub(crate) fn validate_len(&self, expected: usize) -> SurvivalResult<()> {
         validate_length(expected, self.values.len(), "weights")?;
         Ok(())
     }
@@ -188,7 +189,7 @@ impl CountingProcessData {
     #[new]
     #[pyo3(signature = (start, stop, event))]
     pub fn new(start: Vec<f64>, stop: Vec<f64>, event: Vec<i32>) -> PyResult<Self> {
-        Self::try_new(start, stop, event)
+        Ok(Self::try_new(start, stop, event)?)
     }
 
     pub fn __len__(&self) -> usize {
@@ -197,7 +198,7 @@ impl CountingProcessData {
 }
 
 impl CountingProcessData {
-    pub fn try_new(start: Vec<f64>, stop: Vec<f64>, event: Vec<i32>) -> PyResult<Self> {
+    pub fn try_new(start: Vec<f64>, stop: Vec<f64>, event: Vec<i32>) -> SurvivalResult<Self> {
         validate_non_empty(&start, "start")?;
         validate_length(start.len(), stop.len(), "stop")?;
         validate_length(start.len(), event.len(), "event")?;
@@ -211,7 +212,7 @@ impl CountingProcessData {
 
         for (index, (&start, &stop)) in start.iter().zip(stop.iter()).enumerate() {
             if stop < start {
-                return Err(PyValueError::new_err(format!(
+                return Err(SurvivalError::invalid_input(format!(
                     "stop {} is before start {} at index {}",
                     stop, start, index
                 )));
@@ -244,7 +245,7 @@ impl CoxRegressionInput {
         survival: &SurvivalData,
         weights: Option<&Weights>,
         offset: Option<Vec<f64>>,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         Self::try_new(
             covariates.clone(),
             survival.clone(),
@@ -270,7 +271,7 @@ impl CoxRegressionInput {
         survival: SurvivalData,
         weights: Option<Weights>,
         offset: Option<Vec<f64>>,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         validate_length(covariates.n_obs, survival.len(), "survival")?;
 
         if let Some(weights) = &weights {
@@ -323,7 +324,7 @@ impl CoxMartInput {
         score: Vec<f64>,
         weights: Option<&Weights>,
         strata: Option<Vec<i32>>,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         Self::try_new(survival.clone(), score, weights.cloned(), strata)
     }
 
@@ -339,7 +340,7 @@ impl CoxMartInput {
         score: Vec<f64>,
         weights: Option<Weights>,
         strata: Option<Vec<i32>>,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         let n_obs = survival.len();
         validate_length(n_obs, score.len(), "score")?;
         validate_no_nan(&score, "score")?;
@@ -392,7 +393,7 @@ impl AndersenGillInput {
         score: Vec<f64>,
         weights: Option<&Weights>,
         strata: Option<Vec<i32>>,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         Self::try_new(counting.clone(), score, weights.cloned(), strata)
     }
 
@@ -408,7 +409,7 @@ impl AndersenGillInput {
         score: Vec<f64>,
         weights: Option<Weights>,
         strata: Option<Vec<i32>>,
-    ) -> PyResult<Self> {
+    ) -> SurvivalResult<Self> {
         let n_obs = counting.len();
         validate_length(n_obs, score.len(), "score")?;
         validate_no_nan(&score, "score")?;
