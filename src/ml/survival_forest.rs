@@ -1,5 +1,4 @@
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use rayon::prelude::*;
 
 type NelsonAalenCurve = (Vec<f64>, Vec<f64>);
@@ -133,62 +132,40 @@ pub struct SurvivalForestConfig {
 #[pymethods]
 impl SurvivalForestConfig {
     #[new]
-    #[pyo3(signature = (**kwargs))]
-    pub fn new(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let mut config = SurvivalForestConfig::default();
-
-        if let Some(kwargs) = kwargs {
-            let keys = kwargs.keys();
-            for key in keys.iter() {
-                let key: String = key.extract()?;
-                if ![
-                    "n_trees",
-                    "max_depth",
-                    "min_node_size",
-                    "mtry",
-                    "sample_fraction",
-                    "split_rule",
-                    "n_random_splits",
-                    "seed",
-                    "oob_error",
-                ]
-                .contains(&key.as_str())
-                {
-                    return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
-                        "unexpected keyword argument '{key}'"
-                    )));
-                }
-            }
-
-            if let Some(value) = kwargs.get_item("n_trees")? {
-                config.n_trees = value.extract()?;
-            }
-            if let Some(value) = kwargs.get_item("max_depth")? {
-                config.max_depth = value.extract()?;
-            }
-            if let Some(value) = kwargs.get_item("min_node_size")? {
-                config.min_node_size = value.extract()?;
-            }
-            if let Some(value) = kwargs.get_item("mtry")? {
-                config.mtry = value.extract()?;
-            }
-            if let Some(value) = kwargs.get_item("sample_fraction")? {
-                config.sample_fraction = value.extract()?;
-            }
-            if let Some(value) = kwargs.get_item("split_rule")? {
-                config.split_rule = value.extract()?;
-            }
-            if let Some(value) = kwargs.get_item("n_random_splits")? {
-                config.n_random_splits = value.extract()?;
-            }
-            if let Some(value) = kwargs.get_item("seed")? {
-                config.seed = value.extract()?;
-            }
-            if let Some(value) = kwargs.get_item("oob_error")? {
-                config.oob_error = value.extract()?;
-            }
-        }
-
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        n_trees=500,
+        max_depth=None,
+        min_node_size=15,
+        mtry=None,
+        sample_fraction=0.632,
+        split_rule=SplitRule::LogRank,
+        n_random_splits=10,
+        seed=None,
+        oob_error=true
+    ))]
+    pub fn new(
+        n_trees: usize,
+        max_depth: Option<usize>,
+        min_node_size: usize,
+        mtry: Option<usize>,
+        sample_fraction: f64,
+        split_rule: SplitRule,
+        n_random_splits: usize,
+        seed: Option<u64>,
+        oob_error: bool,
+    ) -> PyResult<Self> {
+        let config = Self {
+            n_trees,
+            max_depth,
+            min_node_size,
+            mtry,
+            sample_fraction,
+            split_rule,
+            n_random_splits,
+            seed,
+            oob_error,
+        };
         config.validate()?;
         Ok(config)
     }
