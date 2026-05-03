@@ -37,6 +37,8 @@ survival-pyo3-macros-shim = { path = "survival-pyo3-macros-shim" }
 default = []
 python = ["dep:numpy", "dep:pyo3", "dep:pyo3-build-config"]
 ml = ["dep:burn"]
+# Compatibility placeholder only; CUDA execution is not implemented.
+cuda = []
 extension-module = ["python", "pyo3/extension-module"]
 
 [dev-dependencies]

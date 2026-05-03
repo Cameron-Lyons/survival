@@ -4,7 +4,10 @@ use std::ops::{Deref, DerefMut};
 
 pub mod prelude {
     pub use crate::{Bound, Py, PyAny, PyErr, PyModule, PyRefMut, PyResult, Python};
-    pub use survival_pyo3_macros_shim::{pyclass, pyfunction, pymethods, pymodule};
+    pub use survival_pyo3_macros_shim::{
+        classmethod, getter, new, pyclass, pyfunction, pymethods, pymodule, pyo3, setter,
+        staticmethod,
+    };
 }
 
 pub mod types {

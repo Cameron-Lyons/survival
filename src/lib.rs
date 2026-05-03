@@ -2,7 +2,13 @@
     not(feature = "python"),
     // The non-Python build compiles PyO3-facing constructors and methods through
     // a local shim, so rustc cannot see the dynamic Python entry points.
-    allow(dead_code, unused_imports, unused_mut, unused_variables)
+    allow(
+        dead_code,
+        unused_attributes,
+        unused_imports,
+        unused_mut,
+        unused_variables
+    )
 )]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
@@ -15,7 +21,7 @@ mod pyo3_shim;
 #[cfg(not(feature = "python"))]
 pub use pyo3_shim::{
     Bound, Py, PyAny, PyDict, PyErr, PyList, PyModule, PyRefMut, PyResult, Python, exceptions,
-    prelude, types,
+    types,
 };
 
 #[cfg(feature = "python")]
@@ -67,8 +73,8 @@ pub mod data_types {
 
 /// Curated imports for new Rust code.
 ///
-/// Prefer domain modules from this prelude over root-level compatibility exports.
-pub mod prelude {
+/// Prefer domain modules from this module over root-level compatibility exports.
+pub mod preferred {
     pub use crate::data_types::{
         AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
         SurvivalData, Weights,
@@ -83,10 +89,21 @@ pub mod prelude {
     };
 }
 
+/// PyO3-compatible prelude for internal Python-facing modules.
+///
+/// New Rust callers should prefer `survival::preferred` or explicit domain
+/// modules over this compatibility-oriented prelude.
+pub mod prelude {
+    #[cfg(feature = "python")]
+    pub use crate::preferred::*;
+    #[cfg(not(feature = "python"))]
+    pub use crate::pyo3_shim::prelude::*;
+}
+
 /// Root-level compatibility exports are retained for old callers but are no
 /// longer the preferred API shape.
 pub const DEPRECATED_ROOT_EXPORTS_NOTE: &str =
-    "Prefer survival::prelude or explicit domain modules such as survival::regression.";
+    "Prefer survival::preferred or explicit domain modules such as survival::regression.";
 
 /// Backwards-compatible root-level exports.
 ///
@@ -124,7 +141,7 @@ pub mod compatibility {
 
 #[deprecated(
     since = "1.2.17",
-    note = "Prefer survival::prelude or explicit domain modules such as survival::regression"
+    note = "Prefer survival::preferred or explicit domain modules such as survival::regression"
 )]
 pub use compatibility::*;
 
