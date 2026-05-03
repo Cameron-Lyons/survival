@@ -1,7 +1,26 @@
 use crate::constants::{CONCORDANCE_COUNT_SIZE, PARALLEL_THRESHOLD_LARGE};
+use crate::internal::statistical::concordance_index_with_horizon;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
+
+/// Compute Harrell's concordance index for survival predictions.
+#[pyfunction]
+pub fn concordance_index(time: Vec<f64>, status: Vec<i32>, risk_scores: Vec<f64>) -> PyResult<f64> {
+    if time.len() != status.len() || time.len() != risk_scores.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time, status, and risk_scores must have the same length",
+        ));
+    }
+
+    Ok(concordance_index_with_horizon(
+        &risk_scores,
+        &time,
+        &status,
+        None,
+    ))
+}
+
 /// Compute concordance statistics for survival predictions.
 ///
 /// Parameters

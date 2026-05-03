@@ -48,8 +48,8 @@ dev = [
   "pytest==9.0.3",
   "pytest-cov==7.1.0",
   "numpy==2.4.4",
-  "ruff",
-  "mypy",
+  "ruff==0.15.12",
+  "mypy==1.20.2",
 ]
 test = [
   "pytest==9.0.3",
@@ -72,12 +72,32 @@ line-length = 100
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
-ignore = ["E501"]  # line length handled by formatter
+select = [
+  "E",
+  "F",
+  "I",
+  "N",
+  "W",
+  "UP",
+  "S",
+  "B",
+  "A",
+  "C4",
+  "PT",
+  "RET",
+  "SIM",
+  "ERA",
+]
+ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-"test/*.py" = ["S101", "PT017", "S110", "S603"]
-"python/tests/*.py" = ["S101", "PT017", "S110", "S603"]
+"test/*.py" = ["S101", "PT017", "S603", "S110", "N806"]
+"python/tests/*.py" = ["S101", "PT017", "N806"]
+"*.pyi" = ["A002"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

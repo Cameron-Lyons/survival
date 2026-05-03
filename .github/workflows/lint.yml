@@ -62,19 +62,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Install linters
-        run: uv pip install --system ruff mypy
+      - name: Install Python lint dependencies
+        run: uv sync --extra dev --extra test --no-install-project
 
       - name: Check formatting
-        run: ruff format python/ test/ --check
+        run: uv run --no-sync ruff format python/ test/ --check
 
       - name: Lint code
-        run: ruff check python/ test/
+        run: uv run --no-sync ruff check python/ test/
 
       - name: Type check stubs
-        run: |
-          uv pip install --system numpy
-          mypy python/survival/__init__.pyi python/survival/_survival.pyi --ignore-missing-imports
+        run: uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi --ignore-missing-imports
 
   typos:
     name: Spell Check

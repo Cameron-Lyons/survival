@@ -11,7 +11,7 @@ fn fast_cox_slices(
     weights: Option<&[f64]>,
     offset: Option<&[f64]>,
 ) -> SurvivalResult<FastCoxResult> {
-    validate_fast_cox_slices(x, n_obs, n_vars, time, status, weights, offset)?;
+    CoxRegressionInput::validate_slices(x, n_obs, n_vars, time, status, weights, offset)?;
 
     let wt_owned;
     let wt = match weights {
@@ -112,111 +112,6 @@ fn fast_cox_slices(
         screened_out,
         active_set_size,
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_fast_cox_slices(
-    x: &[f64],
-    n_obs: usize,
-    n_vars: usize,
-    time: &[f64],
-    status: &[i32],
-    weights: Option<&[f64]>,
-    offset: Option<&[f64]>,
-) -> SurvivalResult<()> {
-    if n_obs == 0 {
-        return Err(SurvivalError::invalid_input("n_obs must be positive"));
-    }
-    if n_vars == 0 {
-        return Err(SurvivalError::invalid_input("n_vars must be positive"));
-    }
-    let expected = n_obs
-        .checked_mul(n_vars)
-        .ok_or_else(|| SurvivalError::invalid_input("n_obs * n_vars overflows usize"))?;
-    if x.len() != expected {
-        return Err(SurvivalError::invalid_input(format!(
-            "x length {} does not match n_obs * n_vars {}",
-            x.len(),
-            expected
-        )));
-    }
-    if time.len() != n_obs {
-        return Err(SurvivalError::invalid_input(format!(
-            "time length {} does not match n_obs {}",
-            time.len(),
-            n_obs
-        )));
-    }
-    if status.len() != n_obs {
-        return Err(SurvivalError::invalid_input(format!(
-            "status length {} does not match n_obs {}",
-            status.len(),
-            n_obs
-        )));
-    }
-    if let Some(weights) = weights
-        && weights.len() != n_obs
-    {
-        return Err(SurvivalError::invalid_input(format!(
-            "weights length {} does not match n_obs {}",
-            weights.len(),
-            n_obs
-        )));
-    }
-    if let Some(offset) = offset
-        && offset.len() != n_obs
-    {
-        return Err(SurvivalError::invalid_input(format!(
-            "offset length {} does not match n_obs {}",
-            offset.len(),
-            n_obs
-        )));
-    }
-    for (index, value) in x.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(SurvivalError::invalid_input(format!(
-                "x contains non-finite value {} at index {}",
-                value, index
-            )));
-        }
-    }
-    for (index, value) in time.iter().enumerate() {
-        if !value.is_finite() || *value < 0.0 {
-            return Err(SurvivalError::invalid_input(format!(
-                "time contains invalid value {} at index {}",
-                value, index
-            )));
-        }
-    }
-    for (index, value) in status.iter().enumerate() {
-        if *value < 0 {
-            return Err(SurvivalError::invalid_input(format!(
-                "status contains negative status {} at index {}",
-                value, index
-            )));
-        }
-    }
-    if let Some(weights) = weights {
-        for (index, value) in weights.iter().enumerate() {
-            if !value.is_finite() || *value < 0.0 {
-                return Err(SurvivalError::invalid_input(format!(
-                    "weights contains invalid value {} at index {}",
-                    value, index
-                )));
-            }
-        }
-    }
-    if let Some(offset) = offset {
-        for (index, value) in offset.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(SurvivalError::invalid_input(format!(
-                    "offset contains non-finite value {} at index {}",
-                    value, index
-                )));
-            }
-        }
-    }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

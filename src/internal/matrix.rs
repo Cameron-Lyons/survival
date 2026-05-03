@@ -10,7 +10,13 @@ use rayon::prelude::*;
 fn ndarray_to_faer(arr: &Array2<f64>) -> Mat<f64> {
     let (rows, cols) = arr.dim();
     if arr.is_standard_layout() && rows * cols > PARALLEL_THRESHOLD_LARGE {
-        Mat::from_fn(rows, cols, |i, j| unsafe { *arr.uget((i, j)) })
+        Mat::from_fn(rows, cols, |i, j| {
+            // SAFETY: `Mat::from_fn` calls this closure with `i < rows` and
+            // `j < cols`, where `(rows, cols)` came directly from `arr.dim()`.
+            // The standard-layout check is only a fast-path precondition; the
+            // bounds invariant is what makes unchecked ndarray access valid.
+            unsafe { *arr.uget((i, j)) }
+        })
     } else {
         Mat::from_fn(rows, cols, |i, j| arr[[i, j]])
     }
@@ -23,6 +29,8 @@ fn faer_col_to_ndarray(col: faer::ColRef<f64>) -> Array1<f64> {
     for i in 0..n {
         result[i].write(col[i]);
     }
+    // SAFETY: `result` has length `n`, and the loop above writes exactly once
+    // to every index in `0..n` before initialization is assumed.
     unsafe { result.assume_init() }
 }
 

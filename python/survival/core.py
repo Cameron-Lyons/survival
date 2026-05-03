@@ -4,6 +4,7 @@ __all__ = bind_names(
     globals(),
     [
         "concordance",
+        "concordance_index",
         "perform_concordance1_calculation",
         "perform_concordance3_calculation",
         "perform_concordance_calculation",

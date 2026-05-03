@@ -62,13 +62,18 @@ impl SurvivalData {
 
 impl SurvivalData {
     pub fn try_new(time: Vec<f64>, status: Vec<i32>) -> SurvivalResult<Self> {
-        validate_non_empty(&time, "time")?;
-        validate_length(time.len(), status.len(), "status")?;
-        validate_no_nan(&time, "time")?;
-        validate_finite(&time, "time")?;
-        validate_non_negative(&time, "time")?;
-        validate_status_values(&status, "status")?;
+        Self::validate_parts(&time, &status)?;
         Ok(Self { time, status })
+    }
+
+    pub(crate) fn validate_parts(time: &[f64], status: &[i32]) -> SurvivalResult<()> {
+        validate_non_empty(time, "time")?;
+        validate_length(time.len(), status.len(), "status")?;
+        validate_no_nan(time, "time")?;
+        validate_finite(time, "time")?;
+        validate_non_negative(time, "time")?;
+        validate_status_values(status, "status")?;
+        Ok(())
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -106,6 +111,20 @@ impl CovariateMatrix {
 
 impl CovariateMatrix {
     pub fn try_new(values: Vec<f64>, n_obs: usize, n_vars: usize) -> SurvivalResult<Self> {
+        Self::validate_parts(&values, n_obs, n_vars)?;
+
+        Ok(Self {
+            values,
+            n_obs,
+            n_vars,
+        })
+    }
+
+    pub(crate) fn validate_parts(
+        values: &[f64],
+        n_obs: usize,
+        n_vars: usize,
+    ) -> SurvivalResult<()> {
         if n_obs == 0 {
             return Err(SurvivalError::invalid_input("n_obs must be positive"));
         }
@@ -117,14 +136,9 @@ impl CovariateMatrix {
             .checked_mul(n_vars)
             .ok_or_else(|| SurvivalError::invalid_input("n_obs * n_vars overflows usize"))?;
         validate_length(expected, values.len(), "values")?;
-        validate_no_nan(&values, "values")?;
-        validate_finite(&values, "values")?;
-
-        Ok(Self {
-            values,
-            n_obs,
-            n_vars,
-        })
+        validate_no_nan(values, "values")?;
+        validate_finite(values, "values")?;
+        Ok(())
     }
 }
 
@@ -160,11 +174,16 @@ impl Weights {
 
 impl Weights {
     pub fn try_new(values: Vec<f64>) -> SurvivalResult<Self> {
-        validate_non_empty(&values, "weights")?;
-        validate_no_nan(&values, "weights")?;
-        validate_finite(&values, "weights")?;
-        validate_non_negative(&values, "weights")?;
+        Self::validate_values(&values)?;
         Ok(Self { values })
+    }
+
+    pub(crate) fn validate_values(values: &[f64]) -> SurvivalResult<()> {
+        validate_non_empty(values, "weights")?;
+        validate_no_nan(values, "weights")?;
+        validate_finite(values, "weights")?;
+        validate_non_negative(values, "weights")?;
+        Ok(())
     }
 
     pub(crate) fn validate_len(&self, expected: usize) -> SurvivalResult<()> {
@@ -272,17 +291,7 @@ impl CoxRegressionInput {
         weights: Option<Weights>,
         offset: Option<Vec<f64>>,
     ) -> SurvivalResult<Self> {
-        validate_length(covariates.n_obs, survival.len(), "survival")?;
-
-        if let Some(weights) = &weights {
-            weights.validate_len(covariates.n_obs)?;
-        }
-
-        if let Some(offset) = &offset {
-            validate_length(covariates.n_obs, offset.len(), "offset")?;
-            validate_no_nan(offset, "offset")?;
-            validate_finite(offset, "offset")?;
-        }
+        Self::validate_parts(&covariates, &survival, weights.as_ref(), offset.as_deref())?;
 
         Ok(Self {
             covariates,
@@ -290,6 +299,54 @@ impl CoxRegressionInput {
             weights,
             offset,
         })
+    }
+
+    pub(crate) fn validate_slices(
+        x: &[f64],
+        n_obs: usize,
+        n_vars: usize,
+        time: &[f64],
+        status: &[i32],
+        weights: Option<&[f64]>,
+        offset: Option<&[f64]>,
+    ) -> SurvivalResult<()> {
+        CovariateMatrix::validate_parts(x, n_obs, n_vars)?;
+        SurvivalData::validate_parts(time, status)?;
+        validate_length(n_obs, time.len(), "survival")?;
+
+        if let Some(weights) = weights {
+            Weights::validate_values(weights)?;
+            validate_length(n_obs, weights.len(), "weights")?;
+        }
+
+        if let Some(offset) = offset {
+            validate_length(n_obs, offset.len(), "offset")?;
+            validate_no_nan(offset, "offset")?;
+            validate_finite(offset, "offset")?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn validate_parts(
+        covariates: &CovariateMatrix,
+        survival: &SurvivalData,
+        weights: Option<&Weights>,
+        offset: Option<&[f64]>,
+    ) -> SurvivalResult<()> {
+        validate_length(covariates.n_obs, survival.len(), "survival")?;
+
+        if let Some(weights) = weights {
+            weights.validate_len(covariates.n_obs)?;
+        }
+
+        if let Some(offset) = offset {
+            validate_length(covariates.n_obs, offset.len(), "offset")?;
+            validate_no_nan(offset, "offset")?;
+            validate_finite(offset, "offset")?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn weights_or_unit(&self) -> Vec<f64> {

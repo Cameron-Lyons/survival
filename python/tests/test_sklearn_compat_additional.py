@@ -1,6 +1,7 @@
 import builtins
 import importlib
 import importlib.util
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +32,26 @@ def _toy_data():
         ]
     )
     return x, y
+
+
+def test_score_uses_rust_concordance(monkeypatch):
+    common = importlib.import_module("survival._sklearn_common")
+    calls = []
+
+    def fake_concordance_index(time, status, risk_scores):
+        calls.append((time, status, risk_scores))
+        return 0.8125
+
+    monkeypatch.setattr(common._surv, "concordance_index", fake_concordance_index, raising=False)
+
+    score = common._compute_concordance_index(
+        np.array([1.0, 2.0], dtype=np.float64),
+        np.array([1, 0], dtype=np.int32),
+        np.array([0.7, 0.2], dtype=np.float64),
+    )
+
+    assert score == 0.8125
+    assert calls == [([1.0, 2.0], [1, 0], [0.7, 0.2])]
 
 
 def test_coxph_estimator_smoke():
@@ -203,6 +224,9 @@ def test_sklearn_compat_fallback_without_sklearn(monkeypatch):
         return original_import(name, globalns, localns, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
+    for name in list(sys.modules):
+        if name.startswith("survival._sklearn_"):
+            monkeypatch.delitem(sys.modules, name, raising=False)
     spec = importlib.util.spec_from_file_location("survival.sklearn_compat_no_sklearn", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

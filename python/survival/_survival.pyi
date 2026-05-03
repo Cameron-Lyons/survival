@@ -869,6 +869,11 @@ def uno_c_index(
     risk_scores: list[float],
     tau: float | None = None,
 ) -> UnoCIndexResult: ...
+def concordance_index(
+    time: list[float],
+    status: list[int],
+    risk_scores: list[float],
+) -> float: ...
 def brier(
     time: list[float],
     status: list[int],

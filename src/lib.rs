@@ -1,7 +1,10 @@
 #![cfg_attr(
     not(feature = "python"),
+    // The non-Python build compiles PyO3-facing constructors and methods through
+    // a local shim, so rustc cannot see the dynamic Python entry points.
     allow(dead_code, unused_imports, unused_mut, unused_variables)
 )]
+#![deny(clippy::undocumented_unsafe_blocks)]
 
 #[cfg(not(feature = "python"))]
 extern crate self as pyo3;
@@ -62,6 +65,29 @@ pub mod data_types {
     };
 }
 
+/// Curated imports for new Rust code.
+///
+/// Prefer domain modules from this prelude over root-level compatibility exports.
+pub mod prelude {
+    pub use crate::data_types::{
+        AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
+        SurvivalData, Weights,
+    };
+    pub use crate::error::{SurvivalError, SurvivalResult};
+    #[cfg(feature = "ml")]
+    pub use crate::ml;
+    pub use crate::{
+        bayesian, causal, concordance, core, data_prep, interpretability, interval, joint, missing,
+        monitoring, population, qol, recurrent, regression, relative, reliability, residuals,
+        scoring, spatial, surv_analysis, validation,
+    };
+}
+
+/// Root-level compatibility exports are retained for old callers but are no
+/// longer the preferred API shape.
+pub const DEPRECATED_ROOT_EXPORTS_NOTE: &str =
+    "Prefer survival::prelude or explicit domain modules such as survival::regression.";
+
 /// Backwards-compatible root-level exports.
 ///
 /// Prefer importing through the public domain modules, for example
@@ -96,6 +122,10 @@ pub mod compatibility {
     pub use crate::validation::*;
 }
 
+#[deprecated(
+    since = "1.2.17",
+    note = "Prefer survival::prelude or explicit domain modules such as survival::regression"
+)]
 pub use compatibility::*;
 
 #[cfg(feature = "python")]

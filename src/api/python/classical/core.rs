@@ -12,6 +12,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perform_pystep_simple_calculation, m)?)?;
     m.add_function(wrap_pyfunction!(aareg, m)?)?;
     m.add_function(wrap_pyfunction!(collapse, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::concordance_index,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount1, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount2, m)?)?;

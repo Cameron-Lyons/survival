@@ -563,6 +563,7 @@ BINDINGS = (
     "compute_tied_baseline_summaries",
     "compute_time_varying_ale",
     "concordance",
+    "concordance_index",
     "conditional_reliability",
     "conditional_survival",
     "conformal_calibrate",

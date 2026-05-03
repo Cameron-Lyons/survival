@@ -85,6 +85,11 @@ Top-level imports such as `from survival import survreg` still work for
 compatibility, but module imports are the preferred style because they match the
 current repo layout and keep the API easier to navigate.
 
+`survival.__all__` and `dir(survival)` expose the curated package surface:
+domain modules and scikit-learn helpers. Legacy root-level algorithm exports are
+still available for compatibility and are listed in
+`survival.__deprecated_root_exports__`.
+
 Common modules:
 - `survival.datasets`: built-in example and benchmark datasets
 - `survival.data_prep`: time splitting and data transformation helpers
@@ -470,8 +475,10 @@ metadata.
 The public Python surface is broad and evolves quickly. For the most accurate,
 version-matched signatures, use the checked-in type stubs:
 
-`import survival` exposes the curated package API. For lower-level or
-experimental extension symbols, import from `survival._survival` explicitly.
+`import survival` exposes the curated package API via domain modules. Legacy
+root-level algorithm symbols remain available for compatibility, but new code
+should import from the relevant domain module. For lower-level or experimental
+extension symbols, import from `survival._survival` explicitly.
 
 - [`python/survival/__init__.pyi`](python/survival/__init__.pyi): package-level
   typed surface, including the new domain modules.
@@ -489,6 +496,7 @@ import survival
 
 public_names = [name for name in dir(survival) if not name.startswith("_")]
 print(public_names)
+print(survival.__deprecated_root_export_reason__)
 ```
 
 Or inspect a specific domain module:
@@ -531,9 +539,12 @@ The `PSpline` class provides penalized spline smoothing:
 
 ## Development
 
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full local development
+workflow, feature-test matrix, and binding/stub update process.
+
 Install development dependencies:
 ```sh
-pip install -e ".[dev,test,sklearn]"
+uv sync --extra dev --extra test --extra sklearn --no-install-project
 ```
 
 Build the extension in your current environment:
@@ -557,13 +568,15 @@ cargo test
 
 Run Python tests:
 ```sh
-pytest python/tests -v
+uv run --no-sync pytest python/tests -v
 ```
 
 Format and lint:
 ```sh
 cargo fmt
-ruff check .
+uv run --no-sync ruff format python/ test/ --check
+uv run --no-sync ruff check python/ test/
+uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi --ignore-missing-imports
 ```
 
 The codebase is organized with:

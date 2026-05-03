@@ -11,7 +11,13 @@ from .helpers import setup_survival_import
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / "python/survival"
 README = ROOT / "README.md"
-MODULE_METADATA_NAMES = {"__all__"}
+MODULE_METADATA_NAMES = {
+    "__all__",
+    "__deprecated_root_export_reason__",
+    "__deprecated_root_exports__",
+    "__legacy_root_exports__",
+    "__preferred__",
+}
 
 
 def _manifest_bindings() -> tuple[str, ...]:
@@ -74,17 +80,24 @@ def _top_level_names() -> set[str]:
                 sklearn_exports.update(_literal_string_list(node.value))
 
     domain_exports = set().union(*_binding_names_by_module().values())
-    return public_modules | sklearn_exports | domain_exports
+    return public_modules | sklearn_exports | domain_exports | MODULE_METADATA_NAMES
 
 
 def _sklearn_names() -> set[str]:
     tree = ast.parse((PACKAGE_ROOT / "sklearn_compat.py").read_text())
-    return {
+    names = {
         node.name
         for node in tree.body
         if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
         and not node.name.startswith("_")
     }
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "__all__":
+                names.update(_literal_string_list(node.value))
+    return names
 
 
 def _pyi_top_level_names(path: Path) -> set[str]:
@@ -223,3 +236,14 @@ def test_runtime_extension_exports_manifest_symbols():
     missing = [name for name in _manifest_bindings() if not hasattr(core, name)]
 
     assert missing == []
+
+
+def test_package_root_marks_curated_and_legacy_exports():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+
+    assert "regression" in survival.__all__
+    assert "validation" in survival.__all__
+    assert "survreg" not in survival.__all__
+    assert "survreg" in survival.__deprecated_root_exports__
+    assert survival.survreg is survival.regression.survreg

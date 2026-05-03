@@ -1,5 +1,7 @@
 # ruff: noqa: F401, F403
 
+from typing import Final
+
 from . import bayesian as bayesian
 from . import causal as causal
 from . import core as core
@@ -39,3 +41,8 @@ from .sklearn_compat import (
     predict_large_dataset,
     survival_curves_to_disk,
 )
+
+__preferred__: Final[tuple[str, ...]]
+__legacy_root_exports__: Final[tuple[str, ...]]
+__deprecated_root_exports__: Final[tuple[str, ...]]
+__deprecated_root_export_reason__: Final[str]
