@@ -834,7 +834,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mypy", marker = "extra == 'dev'" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = "==1.20.2" },
     { name = "numpy", specifier = ">=1.20.0" },
     { name = "numpy", marker = "extra == 'dev'", specifier = "==2.4.4" },
     { name = "numpy", marker = "extra == 'test'", specifier = "==2.4.4" },
@@ -845,7 +845,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = "==9.0.3" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = "==7.1.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = "==7.1.0" },
-    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.12" },
     { name = "scikit-learn", marker = "extra == 'sklearn'", specifier = ">=1.0.0" },
 ]
 provides-extras = ["dev", "test", "sklearn"]

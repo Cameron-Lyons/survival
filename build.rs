@@ -7,15 +7,16 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PYO3_CONFIG_FILE");
 
     // `extension-module` suppresses normal libpython linkage. Rust test binaries
-    // still need explicit libpython symbols on Linux, but wheel builds must not
-    // link libpython (manylinux policy).
+    // still need explicit libpython symbols on Unix platforms, but wheel builds
+    // must not link libpython (manylinux policy).
     if env::var_os("CARGO_FEATURE_EXTENSION_MODULE").is_none() {
         return;
     }
     if env::var_os("PYO3_BUILD_EXTENSION_MODULE").is_some() {
         return;
     }
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+    let target_os = env::var("CARGO_CFG_TARGET_OS");
+    if !matches!(target_os.as_deref(), Ok("linux" | "macos")) {
         return;
     }
 

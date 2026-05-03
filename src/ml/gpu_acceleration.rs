@@ -313,19 +313,25 @@ pub fn get_available_devices() -> PyResult<Vec<DeviceInfo>> {
         is_available: true,
     });
 
-    #[cfg(feature = "cuda")]
-    {
-        devices.push(DeviceInfo {
-            name: "CUDA Device".to_string(),
-            backend: ComputeBackend::CUDA,
-            memory_total_mb: 8192,
-            memory_available_mb: 6144,
-            compute_units: 128,
-            is_available: true,
-        });
-    }
-
     Ok(devices)
+}
+
+fn resolve_compute_backend(backend: ComputeBackend) -> PyResult<ComputeBackend> {
+    match backend {
+        ComputeBackend::CPU | ComputeBackend::Auto => Ok(ComputeBackend::CPU),
+        ComputeBackend::CUDA => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "CUDA backend is not available: this build only implements the CPU backend",
+        )),
+        ComputeBackend::OpenCL => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "OpenCL backend is not available: this build only implements the CPU backend",
+        )),
+        ComputeBackend::Metal => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Metal backend is not available: this build only implements the CPU backend",
+        )),
+        ComputeBackend::Vulkan => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Vulkan backend is not available: this build only implements the CPU backend",
+        )),
+    }
 }
 
 #[pyfunction]
@@ -358,10 +364,7 @@ pub fn parallel_cox_regression(
     let config =
         config.unwrap_or_else(|| GPUConfig::new(ComputeBackend::Auto, 0, 0, 256, 0, false));
 
-    let backend_used = match config.backend {
-        ComputeBackend::Auto => ComputeBackend::CPU,
-        other => other,
-    };
+    let backend_used = resolve_compute_backend(config.backend)?;
 
     let p = x[0].len();
     let mut coefficients = vec![0.0; p];
@@ -440,10 +443,7 @@ pub fn batch_predict_survival(
     let config =
         config.unwrap_or_else(|| GPUConfig::new(ComputeBackend::Auto, 0, 0, 256, 0, false));
 
-    let backend_used = match config.backend {
-        ComputeBackend::Auto => ComputeBackend::CPU,
-        other => other,
-    };
+    let backend_used = resolve_compute_backend(config.backend)?;
 
     let batch_size_used = config.batch_size.min(n);
 
@@ -518,6 +518,7 @@ pub fn benchmark_compute_backend(
 ) -> PyResult<std::collections::HashMap<String, f64>> {
     let config =
         config.unwrap_or_else(|| GPUConfig::new(ComputeBackend::Auto, 0, 0, 256, 0, false));
+    let _backend_used = resolve_compute_backend(config.backend)?;
 
     let mut results = std::collections::HashMap::new();
 
@@ -577,6 +578,20 @@ mod tests {
         let devices = get_available_devices().unwrap();
         assert!(!devices.is_empty());
         assert!(devices.iter().any(|d| d.backend == ComputeBackend::CPU));
+        assert!(!devices.iter().any(|d| d.backend == ComputeBackend::CUDA));
+        assert!(!is_gpu_available(ComputeBackend::CUDA).unwrap());
+    }
+
+    #[test]
+    fn test_unavailable_gpu_backend_errors() {
+        let config = GPUConfig::new(ComputeBackend::CUDA, 0, 4, 256, 1024, false);
+        let result = parallel_cox_regression(
+            vec![vec![1.0], vec![2.0]],
+            vec![1.0, 2.0],
+            vec![1, 0],
+            Some(config),
+        );
+        assert!(result.is_err());
     }
 
     #[test]

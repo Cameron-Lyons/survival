@@ -106,21 +106,38 @@ _SKLEARN_EXPORTS = [
     "survival_curves_to_disk",
 ]
 
+_PREFERRED_EXPORTS = list(_PUBLIC_MODULES) + _SKLEARN_EXPORTS
+
 for _module in _DOMAIN_MODULES:
     globals().update({name: getattr(_module, name) for name in _module.__all__})
 
 for _name, _module in _PUBLIC_MODULES.items():
     globals()[_name] = _module
 
-__all__ = []
-for _module in _DOMAIN_MODULES:
-    __all__.extend(_module.__all__)
-__all__.extend(_SKLEARN_EXPORTS)
-__all__.extend(_PUBLIC_MODULES)
-__all__ = list(dict.fromkeys(__all__))
+__preferred__ = tuple(_PREFERRED_EXPORTS)
+__legacy_root_exports__ = tuple(
+    name
+    for _module in _DOMAIN_MODULES
+    for name in _module.__all__
+    if name not in _PREFERRED_EXPORTS
+)
+__deprecated_root_exports__ = __legacy_root_exports__
+__deprecated_root_export_reason__ = (
+    "Root-level algorithm and result exports are retained for compatibility. "
+    "Prefer importing from domain modules such as survival.regression, "
+    "survival.surv_analysis, or survival.validation."
+)
+
+__all__ = list(dict.fromkeys(_PREFERRED_EXPORTS))
+
+
+def __dir__():
+    return sorted(set(__all__) | {"__preferred__", "__deprecated_root_exports__"})
+
 
 del _name
 del _module
 del _DOMAIN_MODULES
 del _PUBLIC_MODULES
+del _PREFERRED_EXPORTS
 del _SKLEARN_EXPORTS

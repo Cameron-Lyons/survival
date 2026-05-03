@@ -38,7 +38,6 @@ default = []
 python = ["dep:numpy", "dep:pyo3", "dep:pyo3-build-config"]
 ml = ["dep:burn"]
 extension-module = ["python", "pyo3/extension-module"]
-cuda = []
 
 [dev-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
