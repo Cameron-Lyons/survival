@@ -29,7 +29,7 @@ faer = "0.24.0"
 fastrand = "2.4.1"
 pulp = "0.22.2"
 wide = "1.4.0"
-burn = { version = "0.20.1", default-features = false, features = ["autodiff", "ndarray"], optional = true }
+burn = { version = "0.21.0", default-features = false, features = ["autodiff", "ndarray"], optional = true }
 num_cpus = "1.17.0"
 survival-pyo3-macros-shim = { path = "survival-pyo3-macros-shim" }
 
