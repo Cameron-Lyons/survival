@@ -47,14 +47,14 @@ dev = [
   "pre-commit==4.6.0",
   "pytest==9.0.3",
   "pytest-cov==7.1.0",
-  "numpy==2.4.4",
   "ruff==0.15.13",
+  "numpy==2.4.6",
   "mypy==1.20.2",
 ]
 test = [
   "pytest==9.0.3",
   "pytest-cov==7.1.0",
-  "numpy==2.4.4",
+  "numpy==2.4.6",
   "pandas==3.0.2",
   "polars==1.40.1",
 ]
