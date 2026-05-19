@@ -12,7 +12,7 @@ fn fit_tracer_inner(
     event: &[i32],
     config: &TracerConfig,
 ) -> Tracer {
-    let device: <Backend as burn::prelude::Backend>::Device = Default::default();
+    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
@@ -605,4 +605,3 @@ pub fn tracer(
         &cfg,
     )
 }
-

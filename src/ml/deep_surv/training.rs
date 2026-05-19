@@ -47,7 +47,7 @@ fn fit_deep_surv_inner(
     status: &[i32],
     config: &DeepSurvConfig,
 ) -> DeepSurv {
-    let device: <Backend as burn::prelude::Backend>::Device = Default::default();
+    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
 
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
