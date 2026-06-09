@@ -47,7 +47,7 @@ dev = [
   "pre-commit==4.6.0",
   "pytest==9.0.3",
   "pytest-cov==7.1.0",
-  "ruff==0.15.15",
+  "ruff==0.15.16",
   "numpy==2.4.6",
   "mypy==2.1.0",
 ]
