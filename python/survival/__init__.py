@@ -40,7 +40,7 @@ from .r_api import (
     survreg,
 )
 
-__version__ = "1.2.16"
+__version__ = "2.0.0"
 
 _PUBLIC_MODULES = {
     "bayesian": _bayesian_module,
