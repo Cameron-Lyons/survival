@@ -37,5 +37,7 @@ pub use ipcw::{
     ipcw_treatment_effect,
 };
 pub use msm::{MSMResult, compute_longitudinal_iptw, marginal_structural_model};
-pub use target_trial::{TargetTrialResult, sequential_trial_emulation, target_trial_emulation};
+pub use target_trial::{
+    TargetTrialResult, TrialEmulationConfig, sequential_trial_emulation, target_trial_emulation,
+};
 pub use tmle::{TMLEConfig, TMLEResult, TMLESurvivalResult, tmle_ate, tmle_survival};

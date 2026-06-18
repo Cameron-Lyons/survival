@@ -18,6 +18,20 @@ def test_coxcount1():
     assert len(result.time) > 0
 
 
+def test_coxcount1_validates_public_inputs():
+    with pytest.raises(ValueError, match="status length"):
+        survival.coxcount1([1.0], [1.0, 0.0], [1])
+
+    with pytest.raises(ValueError, match="finite"):
+        survival.coxcount1([float("nan")], [1.0], [1])
+
+    with pytest.raises(ValueError, match="status values"):
+        survival.coxcount1([1.0], [2.0], [1])
+
+    with pytest.raises(ValueError, match="strata values"):
+        survival.coxcount1([1.0], [1.0], [2])
+
+
 def test_coxcount2():
     time1 = [0.0, 0.0, 1.0, 1.0, 2.0, 2.0]
     time2 = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0]
@@ -29,6 +43,27 @@ def test_coxcount2():
     result2 = survival.coxcount2(time1, time2, status, sort1, sort2, strata2)
     assert hasattr(result2, "time")
     assert hasattr(result2, "nrisk")
+
+
+def test_coxcount2_validates_public_inputs():
+    with pytest.raises(ValueError, match="time2 length"):
+        survival.coxcount2([0.0], [], [1.0], [0], [0], [1])
+
+    with pytest.raises(ValueError, match="finite"):
+        survival.coxcount2(
+            [0.0],
+            [float("inf")],
+            [1.0],
+            [0],
+            [0],
+            [1],
+        )
+
+    with pytest.raises(ValueError, match="status values"):
+        survival.coxcount2([0.0], [1.0], [0.5], [0], [0], [1])
+
+    with pytest.raises(ValueError, match="sort1 index out of bounds"):
+        survival.coxcount2([0.0], [1.0], [1.0], [1], [0], [1])
 
 
 def test_score_calculation_public_api():

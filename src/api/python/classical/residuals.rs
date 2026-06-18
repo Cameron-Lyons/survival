@@ -3,6 +3,9 @@ use super::*;
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(residuals_survreg, m)?)?;
     m.add_function(wrap_pyfunction!(dfbeta_survreg, m)?)?;
+    m.add_function(wrap_pyfunction!(survreg_residual_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(survreg_influence_residuals, m)?)?;
+    m.add_function(wrap_pyfunction!(survreg_dfbeta_residuals, m)?)?;
     m.add_function(wrap_pyfunction!(residuals_survfit, m)?)?;
     m.add_function(wrap_pyfunction!(predict_survreg, m)?)?;
     m.add_function(wrap_pyfunction!(predict_survreg_quantile, m)?)?;

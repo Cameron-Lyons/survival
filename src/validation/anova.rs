@@ -342,7 +342,8 @@ mod tests {
 
         let mut logliks = Vec::new();
         for covariates in covariate_sets {
-            let mut model = CoxPHModel::new_with_data(covariates, time.clone(), status.clone());
+            let mut model = CoxPHModel::new_with_data(covariates, time.clone(), status.clone())
+                .expect("nested Cox model data should be valid");
             model.fit(100).expect("nested Cox model should fit");
             logliks.push(model.log_likelihood());
         }

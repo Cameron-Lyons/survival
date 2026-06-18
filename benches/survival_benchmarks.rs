@@ -1,3 +1,5 @@
+use std::hint::black_box;
+use survival::regression::{CoxPHModel, coxph_fit, survreg};
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
     nelson_aalen, weighted_logrank_test,
@@ -24,6 +26,48 @@ fn generate_group_data(n: usize) -> Vec<i32> {
 
 fn generate_predictions(n: usize) -> Vec<f64> {
     (0..n).map(|i| 0.1 + (i % 8) as f64 * 0.1).collect()
+}
+
+fn generate_covariates(n: usize, p: usize) -> Vec<Vec<f64>> {
+    (0..n)
+        .map(|i| {
+            (0..p)
+                .map(|j| {
+                    let centered_i = (i % 17) as f64 - 8.0;
+                    let centered_j = (j % 5) as f64 - 2.0;
+                    centered_i * 0.03 + centered_j * 0.1 + ((i * (j + 3)) % 11) as f64 * 0.01
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn generate_tied_regression_data(n: usize, p: usize) -> (Vec<f64>, Vec<i32>, Vec<Vec<f64>>) {
+    let time = (0..n)
+        .map(|i| 1.0 + (i % 80) as f64 * 0.25 + (i / 80) as f64 * 0.01)
+        .collect();
+    let status = (0..n).map(|i| if i % 4 == 0 { 0 } else { 1 }).collect();
+    let covariates = generate_covariates(n, p);
+    (time, status, covariates)
+}
+
+fn generate_case_weights(n: usize) -> Vec<f64> {
+    (0..n).map(|i| 0.75 + (i % 7) as f64 * 0.1).collect()
+}
+
+fn generate_strata(n: usize, n_strata: usize) -> Vec<i32> {
+    (0..n).map(|i| (i % n_strata) as i32).collect()
+}
+
+fn fitted_coxph_model(n: usize, p: usize) -> CoxPHModel {
+    let (time, status, covariates) = generate_tied_regression_data(n, p);
+    let status: Vec<u8> = status.into_iter().map(|value| value as u8).collect();
+    let mut model = CoxPHModel::new_with_data(covariates, time, status)
+        .expect("benchmark CoxPHModel data should be valid");
+    model
+        .fit(20)
+        .expect("benchmark CoxPHModel fit should converge");
+    model
 }
 
 mod kaplan_meier {
@@ -128,6 +172,308 @@ mod concordance_bench {
         let indx: Vec<i32> = (0..n).map(|i| (i % ntree as usize) as i32).collect();
 
         bencher.bench_local(|| concordance1(&y, &weights, &indx, ntree));
+    }
+}
+
+mod cox_regression {
+    use super::*;
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_efron(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+
+        bencher.bench_local(|| {
+            let fit = coxph_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                Some(20),
+                Some(1e-7),
+                Some(1e-9),
+                Some("efron"),
+                None,
+            )
+            .expect("benchmark Cox PH Efron fit should converge");
+            black_box(fit);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_breslow(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+
+        bencher.bench_local(|| {
+            let fit = coxph_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                Some(20),
+                Some(1e-7),
+                Some(1e-9),
+                Some("breslow"),
+                None,
+            )
+            .expect("benchmark Cox PH Breslow fit should converge");
+            black_box(fit);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn weighted_stratified_coxph_efron(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+        let weights = generate_case_weights(n);
+        let strata = generate_strata(n, 3);
+
+        bencher.bench_local(|| {
+            let fit = coxph_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                Some(strata.clone()),
+                Some(weights.clone()),
+                None,
+                None,
+                Some(20),
+                Some(1e-7),
+                Some(1e-9),
+                Some("efron"),
+                None,
+            )
+            .expect("benchmark weighted stratified Cox PH fit should converge");
+            black_box(fit);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_expected_events(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+        let weights = generate_case_weights(n);
+        let strata = generate_strata(n, 3);
+        let entry_times: Vec<f64> = time.iter().map(|time| (time - 0.5).max(0.0)).collect();
+        let fit = coxph_fit(
+            time,
+            status,
+            covariates,
+            Some(strata),
+            Some(weights),
+            None,
+            None,
+            Some(20),
+            Some(1e-7),
+            Some(1e-9),
+            Some("efron"),
+            Some(entry_times),
+        )
+        .expect("benchmark Cox PH fit should converge");
+
+        bencher.bench_local(|| {
+            let expected = fit
+                .expected_events()
+                .expect("benchmark expected event prediction should succeed");
+            black_box(expected);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_stratified_survival_curve(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+        let weights = generate_case_weights(n);
+        let strata = generate_strata(n, 3);
+        let fit = coxph_fit(
+            time,
+            status,
+            covariates,
+            Some(strata),
+            Some(weights),
+            None,
+            None,
+            Some(20),
+            Some(1e-7),
+            Some(1e-9),
+            Some("efron"),
+            None,
+        )
+        .expect("benchmark Cox PH fit should converge");
+        let rows = generate_covariates(3, 4);
+        let prediction_strata = vec![0, 1, 2];
+
+        bencher.bench_local(|| {
+            let curves = fit
+                .survival_curve_with_strata(rows.clone(), prediction_strata.clone(), true)
+                .expect("benchmark stratified survival curve should succeed");
+            black_box(curves);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_schoenfeld_residuals(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+        let weights = generate_case_weights(n);
+        let strata = generate_strata(n, 3);
+        let entry_times: Vec<f64> = time.iter().map(|time| (time - 0.5).max(0.0)).collect();
+        let fit = coxph_fit(
+            time,
+            status,
+            covariates,
+            Some(strata),
+            Some(weights),
+            None,
+            None,
+            Some(20),
+            Some(1e-7),
+            Some(1e-9),
+            Some("efron"),
+            Some(entry_times),
+        )
+        .expect("benchmark Cox PH fit should converge");
+
+        bencher.bench_local(|| {
+            let residuals = fit
+                .schoenfeld_residuals()
+                .expect("benchmark Schoenfeld residuals should succeed");
+            black_box(residuals);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_counting_score_residuals(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+        let weights = generate_case_weights(n);
+        let strata = generate_strata(n, 3);
+        let entry_times: Vec<f64> = time.iter().map(|time| (time - 0.5).max(0.0)).collect();
+        let fit = coxph_fit(
+            time,
+            status,
+            covariates,
+            Some(strata),
+            Some(weights),
+            None,
+            None,
+            Some(20),
+            Some(1e-7),
+            Some(1e-9),
+            Some("efron"),
+            Some(entry_times),
+        )
+        .expect("benchmark Cox PH fit should converge");
+
+        bencher.bench_local(|| {
+            let residuals = fit
+                .score_residuals()
+                .expect("benchmark score residuals should succeed");
+            black_box(residuals);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_model_log_likelihood(bencher: divan::Bencher, n: usize) {
+        let model = fitted_coxph_model(n, 4);
+
+        bencher.bench_local(|| {
+            let log_likelihood = model.log_likelihood();
+            black_box(log_likelihood);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_model_std_errors(bencher: divan::Bencher, n: usize) {
+        let model = fitted_coxph_model(n, 4);
+
+        bencher.bench_local(|| {
+            let standard_errors = model.std_errors();
+            black_box(standard_errors);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_model_dfbeta(bencher: divan::Bencher, n: usize) {
+        let model = fitted_coxph_model(n, 4);
+
+        bencher.bench_local(|| {
+            let residuals = model.dfbeta();
+            black_box(residuals);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_model_vcov(bencher: divan::Bencher, n: usize) {
+        let model = fitted_coxph_model(n, 4);
+
+        bencher.bench_local(|| {
+            let variance = model.vcov();
+            black_box(variance);
+        });
+    }
+}
+
+mod survreg_bench {
+    use super::*;
+
+    fn status_as_survreg(status: &[i32]) -> Vec<f64> {
+        status.iter().map(|&value| f64::from(value)).collect()
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn survreg_weibull(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 3);
+        let status = status_as_survreg(&status);
+
+        bencher.bench_local(|| {
+            let fit = survreg(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                Some("weibull"),
+                Some(30),
+                Some(1e-7),
+                Some(1e-9),
+                None,
+            )
+            .expect("benchmark Weibull survreg fit should converge");
+            black_box(fit);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn weighted_stratified_survreg_lognormal(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 3);
+        let status = status_as_survreg(&status);
+        let weights = generate_case_weights(n);
+        let strata: Vec<usize> = generate_strata(n, 3)
+            .into_iter()
+            .map(|value| value as usize)
+            .collect();
+
+        bencher.bench_local(|| {
+            let fit = survreg(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                Some(weights.clone()),
+                None,
+                None,
+                Some(strata.clone()),
+                Some("lognormal"),
+                Some(30),
+                Some(1e-7),
+                Some(1e-9),
+                None,
+            )
+            .expect("benchmark weighted stratified lognormal survreg fit should converge");
+            black_box(fit);
+        });
     }
 }
 

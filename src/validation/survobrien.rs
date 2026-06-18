@@ -6,7 +6,43 @@
 
 use crate::internal::numpy_utils::{extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::chi2_sf;
+use crate::internal::validation::{
+    validate_finite, validate_length, validate_no_nan, validate_non_negative,
+};
 use pyo3::prelude::*;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+fn validate_binary_status(status: &[i32]) -> PyResult<()> {
+    for (idx, &value) in status.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(value_error(format!(
+                "status must contain only 0/1 values; found {value} at observation {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_survobrien_inputs(
+    time: &[f64],
+    status: &[i32],
+    covariate: &[f64],
+    strata: &[i32],
+) -> PyResult<()> {
+    validate_length(time.len(), status.len(), "status")?;
+    validate_length(time.len(), covariate.len(), "covariate")?;
+    validate_length(time.len(), strata.len(), "strata")?;
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_status(status)?;
+    validate_no_nan(covariate, "covariate")?;
+    validate_finite(covariate, "covariate")?;
+    Ok(())
+}
 
 /// Result of O'Brien's test for survival association
 #[derive(Debug, Clone)]
@@ -89,6 +125,7 @@ pub fn survobrien(
         None => vec![1; time_vec.len()],
     };
 
+    validate_survobrien_inputs(&time_vec, &status_vec, &covariate_vec, &strata_vec)?;
     let result = compute_survobrien(&time_vec, &status_vec, &covariate_vec, &strata_vec);
     Ok(result)
 }
@@ -274,5 +311,20 @@ mod tests {
 
         assert!(result.statistic >= 0.0);
         assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+    }
+
+    #[test]
+    fn test_survobrien_validates_public_inputs() {
+        let err = validate_survobrien_inputs(&[1.0, 2.0], &[1], &[0.1, 0.2], &[1, 1])
+            .expect_err("status length mismatch should fail");
+        assert!(err.to_string().contains("status length mismatch"));
+
+        let err = validate_survobrien_inputs(&[1.0], &[2], &[0.1], &[1])
+            .expect_err("non-binary status should fail");
+        assert!(err.to_string().contains("status must contain only 0/1"));
+
+        let err = validate_survobrien_inputs(&[1.0], &[1], &[f64::INFINITY], &[1])
+            .expect_err("non-finite covariate should fail");
+        assert!(err.to_string().contains("covariate contains non-finite"));
     }
 }

@@ -1,7 +1,10 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use crate::constants::TIME_EPSILON;
 use crate::internal::statistical::erf;
+use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(eq, eq_int, from_py_object)]
@@ -56,24 +59,111 @@ impl SemiMarkovConfig {
         absorbing_states: Option<Vec<usize>>,
         max_iter: usize,
         tol: f64,
-    ) -> Self {
+    ) -> PyResult<Self> {
         let state_names =
             state_names.unwrap_or_else(|| (0..n_states).map(|i| format!("State_{}", i)).collect());
 
         let sojourn_distributions =
             sojourn_distributions.unwrap_or_else(|| vec![SojournDistribution::Weibull; n_states]);
 
-        let absorbing_states = absorbing_states.unwrap_or_else(|| vec![n_states - 1]);
+        let absorbing_states = absorbing_states.unwrap_or_else(|| {
+            if n_states == 0 {
+                Vec::new()
+            } else {
+                vec![n_states - 1]
+            }
+        });
 
-        Self {
+        validate_semi_markov_config_values(
+            n_states,
+            &state_names,
+            &sojourn_distributions,
+            &absorbing_states,
+            max_iter,
+            tol,
+        )?;
+
+        Ok(Self {
             n_states,
             state_names,
             sojourn_distributions,
             absorbing_states,
             max_iter,
             tol,
+        })
+    }
+}
+
+fn validate_semi_markov_config_values(
+    n_states: usize,
+    state_names: &[String],
+    sojourn_distributions: &[SojournDistribution],
+    absorbing_states: &[usize],
+    max_iter: usize,
+    tol: f64,
+) -> PyResult<()> {
+    if n_states == 0 {
+        return Err(PyValueError::new_err("n_states must be positive"));
+    }
+    if state_names.len() != n_states {
+        return Err(PyValueError::new_err(format!(
+            "state_names length must equal n_states: expected {}, got {}",
+            n_states,
+            state_names.len()
+        )));
+    }
+    if let Some((index, _)) = state_names
+        .iter()
+        .enumerate()
+        .find(|(_, name)| name.trim().is_empty())
+    {
+        return Err(PyValueError::new_err(format!(
+            "state_names entries must be non-empty; got empty name at index {}",
+            index
+        )));
+    }
+    if sojourn_distributions.len() != n_states {
+        return Err(PyValueError::new_err(format!(
+            "sojourn_distributions length must equal n_states: expected {}, got {}",
+            n_states,
+            sojourn_distributions.len()
+        )));
+    }
+    let mut seen_absorbing_states = HashSet::with_capacity(absorbing_states.len());
+    for &state in absorbing_states {
+        if state >= n_states {
+            return Err(PyValueError::new_err(format!(
+                "absorbing_states must contain values in 0..n_states; got {}",
+                state
+            )));
+        }
+        if !seen_absorbing_states.insert(state) {
+            return Err(PyValueError::new_err(format!(
+                "absorbing_states must not contain duplicates; got {} more than once",
+                state
+            )));
         }
     }
+    if max_iter == 0 {
+        return Err(PyValueError::new_err("max_iter must be positive"));
+    }
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(PyValueError::new_err(
+            "tol must be finite and strictly positive",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_semi_markov_config(config: &SemiMarkovConfig) -> PyResult<()> {
+    validate_semi_markov_config_values(
+        config.n_states,
+        &config.state_names,
+        &config.sojourn_distributions,
+        &config.absorbing_states,
+        config.max_iter,
+        config.tol,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -292,6 +382,60 @@ fn fit_gamma_mle(times: &[f64]) -> (f64, f64) {
     (shape.max(0.1), rate.max(0.01))
 }
 
+fn validate_state_sequence(field: &'static str, states: &[i32], n_states: usize) -> PyResult<()> {
+    for (index, &state) in states.iter().enumerate() {
+        if state < 0 || state as usize >= n_states {
+            return Err(PyValueError::new_err(format!(
+                "{} must contain values in 0..n_states; got {} at index {}",
+                field, state, index
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_semi_markov_fit_inputs(
+    entry_times: &[f64],
+    exit_times: &[f64],
+    from_states: &[i32],
+    to_states: &[i32],
+    config: &SemiMarkovConfig,
+) -> PyResult<()> {
+    validate_semi_markov_config(config)?;
+
+    let n = entry_times.len();
+    if exit_times.len() != n || from_states.len() != n || to_states.len() != n {
+        return Err(PyValueError::new_err(
+            "All input vectors must have the same length",
+        ));
+    }
+    if n == 0 {
+        return Err(PyValueError::new_err("input vectors must be non-empty"));
+    }
+
+    validate_no_nan(entry_times, "entry_times")?;
+    validate_finite(entry_times, "entry_times")?;
+    validate_non_negative(entry_times, "entry_times")?;
+    validate_no_nan(exit_times, "exit_times")?;
+    validate_finite(exit_times, "exit_times")?;
+    validate_non_negative(exit_times, "exit_times")?;
+
+    for (index, (&entry_time, &exit_time)) in entry_times.iter().zip(exit_times.iter()).enumerate()
+    {
+        if entry_time > exit_time + TIME_EPSILON {
+            return Err(PyValueError::new_err(format!(
+                "entry_times must be <= exit_times; got entry_time {} and exit_time {} at index {}",
+                entry_time, exit_time, index
+            )));
+        }
+    }
+
+    validate_state_sequence("from_states", from_states, config.n_states)?;
+    validate_state_sequence("to_states", to_states, config.n_states)?;
+
+    Ok(())
+}
+
 #[pyfunction]
 #[pyo3(signature = (entry_times, exit_times, from_states, to_states, config))]
 pub fn fit_semi_markov(
@@ -301,12 +445,9 @@ pub fn fit_semi_markov(
     to_states: Vec<i32>,
     config: &SemiMarkovConfig,
 ) -> PyResult<SemiMarkovResult> {
+    validate_semi_markov_fit_inputs(&entry_times, &exit_times, &from_states, &to_states, config)?;
+
     let n = entry_times.len();
-    if exit_times.len() != n || from_states.len() != n || to_states.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All input vectors must have the same length",
-        ));
-    }
 
     let sojourn_times: Vec<f64> = entry_times
         .iter()
@@ -533,6 +674,37 @@ pub struct SemiMarkovPrediction {
     pub transition_hazards: HashMap<String, Vec<f64>>,
 }
 
+fn validate_semi_markov_prediction_inputs(
+    model: &SemiMarkovResult,
+    current_state: usize,
+    time_in_state: f64,
+    prediction_times: &[f64],
+) -> PyResult<()> {
+    let n_states = model.sojourn_params.len();
+    if n_states == 0 {
+        return Err(PyValueError::new_err(
+            "model must contain at least one state",
+        ));
+    }
+    if current_state >= n_states {
+        return Err(PyValueError::new_err(
+            "current_state must be less than number of states",
+        ));
+    }
+    if !time_in_state.is_finite() {
+        return Err(PyValueError::new_err("time_in_state must be finite"));
+    }
+    if time_in_state < 0.0 {
+        return Err(PyValueError::new_err("time_in_state must be non-negative"));
+    }
+
+    validate_no_nan(prediction_times, "prediction_times")?;
+    validate_finite(prediction_times, "prediction_times")?;
+    validate_non_negative(prediction_times, "prediction_times")?;
+
+    Ok(())
+}
+
 #[pyfunction]
 #[pyo3(signature = (model, current_state, time_in_state, prediction_times))]
 pub fn predict_semi_markov(
@@ -541,12 +713,9 @@ pub fn predict_semi_markov(
     time_in_state: f64,
     prediction_times: Vec<f64>,
 ) -> PyResult<SemiMarkovPrediction> {
+    validate_semi_markov_prediction_inputs(model, current_state, time_in_state, &prediction_times)?;
+
     let n_states = model.sojourn_params.len();
-    if current_state >= n_states {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "current_state must be less than number of states",
-        ));
-    }
 
     let params = &model.sojourn_params[current_state];
     let current_survival = match params.distribution {
@@ -641,10 +810,30 @@ mod tests {
 
     #[test]
     fn test_semi_markov_config() {
-        let config = SemiMarkovConfig::new(3, None, None, None, 100, 1e-6);
+        let config = SemiMarkovConfig::new(3, None, None, None, 100, 1e-6).unwrap();
         assert_eq!(config.n_states, 3);
         assert_eq!(config.state_names.len(), 3);
         assert_eq!(config.sojourn_distributions.len(), 3);
+
+        assert!(SemiMarkovConfig::new(0, None, None, None, 100, 1e-6).is_err());
+        assert!(
+            SemiMarkovConfig::new(3, Some(vec!["Only".to_string()]), None, None, 100, 1e-6)
+                .is_err()
+        );
+        assert!(
+            SemiMarkovConfig::new(
+                3,
+                None,
+                Some(vec![SojournDistribution::Weibull]),
+                None,
+                100,
+                1e-6,
+            )
+            .is_err()
+        );
+        assert!(SemiMarkovConfig::new(3, None, None, Some(vec![3]), 100, 1e-6).is_err());
+        assert!(SemiMarkovConfig::new(3, None, None, None, 0, 1e-6).is_err());
+        assert!(SemiMarkovConfig::new(3, None, None, None, 100, f64::NAN).is_err());
     }
 
     #[test]
@@ -666,7 +855,7 @@ mod tests {
         let from_states = vec![0, 0, 1, 1, 0, 0, 1, 1];
         let to_states = vec![1, 1, 2, 2, 1, 1, 2, 2];
 
-        let config = SemiMarkovConfig::new(3, None, None, Some(vec![2]), 100, 1e-6);
+        let config = SemiMarkovConfig::new(3, None, None, Some(vec![2]), 100, 1e-6).unwrap();
         let result =
             fit_semi_markov(entry_times, exit_times, from_states, to_states, &config).unwrap();
 
@@ -676,13 +865,59 @@ mod tests {
     }
 
     #[test]
+    fn test_fit_semi_markov_rejects_malformed_inputs() {
+        let config = SemiMarkovConfig::new(3, None, None, Some(vec![2]), 100, 1e-6).unwrap();
+
+        let err = fit_semi_markov(vec![], vec![], vec![], vec![], &config).unwrap_err();
+        assert!(err.to_string().contains("input vectors must be non-empty"));
+
+        let err =
+            fit_semi_markov(vec![0.0], vec![f64::INFINITY], vec![0], vec![1], &config).unwrap_err();
+        assert!(err.to_string().contains("exit_times contains non-finite"));
+
+        let err = fit_semi_markov(vec![2.0], vec![1.0], vec![0], vec![1], &config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("entry_times must be <= exit_times")
+        );
+
+        let err = fit_semi_markov(vec![0.0], vec![1.0], vec![-1], vec![1], &config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("from_states must contain values in 0..n_states")
+        );
+
+        let err = fit_semi_markov(vec![0.0], vec![1.0], vec![0], vec![3], &config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("to_states must contain values in 0..n_states")
+        );
+
+        let mutated_config = SemiMarkovConfig {
+            n_states: 3,
+            state_names: vec![
+                "State_0".to_string(),
+                "State_1".to_string(),
+                "State_2".to_string(),
+            ],
+            sojourn_distributions: vec![SojournDistribution::Weibull],
+            absorbing_states: vec![2],
+            max_iter: 100,
+            tol: 1e-6,
+        };
+        let err =
+            fit_semi_markov(vec![0.0], vec![1.0], vec![0], vec![1], &mutated_config).unwrap_err();
+        assert!(err.to_string().contains("sojourn_distributions length"));
+    }
+
+    #[test]
     fn test_predict_semi_markov() {
         let entry_times = vec![0.0, 1.0, 2.0, 3.0];
         let exit_times = vec![1.0, 2.0, 3.0, 4.0];
         let from_states = vec![0, 0, 1, 1];
         let to_states = vec![1, 1, 2, 2];
 
-        let config = SemiMarkovConfig::new(3, None, None, Some(vec![2]), 100, 1e-6);
+        let config = SemiMarkovConfig::new(3, None, None, Some(vec![2]), 100, 1e-6).unwrap();
         let model =
             fit_semi_markov(entry_times, exit_times, from_states, to_states, &config).unwrap();
 
@@ -690,5 +925,44 @@ mod tests {
 
         assert_eq!(prediction.state_probs.len(), 4);
         assert_eq!(prediction.time_points.len(), 4);
+    }
+
+    #[test]
+    fn test_predict_semi_markov_rejects_malformed_inputs() {
+        let entry_times = vec![0.0, 1.0, 2.0, 3.0];
+        let exit_times = vec![1.0, 2.0, 3.0, 4.0];
+        let from_states = vec![0, 0, 1, 1];
+        let to_states = vec![1, 1, 2, 2];
+
+        let config = SemiMarkovConfig::new(3, None, None, Some(vec![2]), 100, 1e-6).unwrap();
+        let model =
+            fit_semi_markov(entry_times, exit_times, from_states, to_states, &config).unwrap();
+
+        let err = predict_semi_markov(&model, 3, 0.5, vec![1.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("current_state must be less than number of states")
+        );
+
+        let err = predict_semi_markov(&model, 0, f64::INFINITY, vec![1.0]).unwrap_err();
+        assert!(err.to_string().contains("time_in_state must be finite"));
+
+        let err = predict_semi_markov(&model, 0, -0.5, vec![1.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("time_in_state must be non-negative")
+        );
+
+        let err = predict_semi_markov(&model, 0, 0.5, vec![-1.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("prediction_times contains negative value")
+        );
+
+        let err = predict_semi_markov(&model, 0, 0.5, vec![f64::INFINITY]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("prediction_times contains non-finite")
+        );
     }
 }

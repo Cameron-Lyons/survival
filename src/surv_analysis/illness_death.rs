@@ -1,6 +1,9 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use crate::constants::TIME_EPSILON;
 use crate::internal::statistical::normal_cdf;
+use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(eq, eq_int, from_py_object)]
@@ -63,10 +66,11 @@ impl IllnessDeathConfig {
         });
 
         if !["forward", "backward", "gap"].contains(&clock_type) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(PyValueError::new_err(
                 "clock_type must be one of: forward, backward, gap",
             ));
         }
+        validate_illness_death_config_values(&state_names, max_iter, tol)?;
 
         Ok(Self {
             model_type,
@@ -77,6 +81,43 @@ impl IllnessDeathConfig {
             n_bootstrap,
         })
     }
+}
+
+fn validate_illness_death_config(config: &IllnessDeathConfig) -> PyResult<()> {
+    if !["forward", "backward", "gap"].contains(&config.clock_type.as_str()) {
+        return Err(PyValueError::new_err(
+            "clock_type must be one of: forward, backward, gap",
+        ));
+    }
+    validate_illness_death_config_values(&config.state_names, config.max_iter, config.tol)
+}
+
+fn validate_illness_death_config_values(
+    state_names: &[String],
+    max_iter: usize,
+    tol: f64,
+) -> PyResult<()> {
+    if state_names.len() < 3 {
+        return Err(PyValueError::new_err(
+            "state_names must contain at least 3 states",
+        ));
+    }
+    if state_names
+        .iter()
+        .take(3)
+        .any(|name| name.trim().is_empty())
+    {
+        return Err(PyValueError::new_err(
+            "state_names must not contain empty names",
+        ));
+    }
+    if max_iter == 0 {
+        return Err(PyValueError::new_err("max_iter must be positive"));
+    }
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(PyValueError::new_err("tol must be finite and positive"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -208,17 +249,17 @@ pub fn fit_illness_death(
             IllnessDeathConfig::new(IllnessDeathType::Progressive, None, "forward", 100, 1e-6, 0)?
         }
     };
+    validate_illness_death_config(&config)?;
 
     let n = entry_time.len();
-    if transition_time.len() != n
-        || exit_time.len() != n
-        || from_state.len() != n
-        || to_state.len() != n
-    {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All input vectors must have the same length",
-        ));
-    }
+    validate_illness_death_fit_inputs(
+        &entry_time,
+        &transition_time,
+        &exit_time,
+        &from_state,
+        &to_state,
+        covariates.as_deref(),
+    )?;
 
     let n_covariates = covariates
         .as_ref()
@@ -227,113 +268,115 @@ pub fn fit_illness_death(
 
     let mut trans_01_times: Vec<f64> = Vec::new();
     let mut trans_01_events: Vec<bool> = Vec::new();
+    let mut trans_01_covariates: Vec<Vec<f64>> = Vec::new();
     let mut trans_02_times: Vec<f64> = Vec::new();
     let mut trans_02_events: Vec<bool> = Vec::new();
+    let mut trans_02_covariates: Vec<Vec<f64>> = Vec::new();
     let mut trans_12_times: Vec<f64> = Vec::new();
     let mut trans_12_events: Vec<bool> = Vec::new();
+    let mut trans_12_covariates: Vec<Vec<f64>> = Vec::new();
 
     for i in 0..n {
         let from = from_state[i];
         let to = to_state[i];
+        let cov_row = covariates
+            .as_ref()
+            .map(|cov| cov[i].clone())
+            .unwrap_or_default();
 
         if from == 0 {
             if to == 1 {
                 trans_01_times.push(transition_time[i] - entry_time[i]);
                 trans_01_events.push(true);
+                trans_01_covariates.push(cov_row);
             } else if to == 2 {
                 trans_02_times.push(exit_time[i] - entry_time[i]);
                 trans_02_events.push(true);
+                trans_02_covariates.push(cov_row);
             } else {
                 trans_01_times.push(exit_time[i] - entry_time[i]);
                 trans_01_events.push(false);
+                trans_01_covariates.push(cov_row.clone());
                 trans_02_times.push(exit_time[i] - entry_time[i]);
                 trans_02_events.push(false);
+                trans_02_covariates.push(cov_row);
             }
         } else if from == 1 {
             trans_12_times.push(exit_time[i] - transition_time[i]);
             trans_12_events.push(to == 2);
+            trans_12_covariates.push(cov_row);
         }
     }
 
-    let fit_cox = |times: &[f64],
-                   events: &[bool],
-                   cov: &Option<Vec<Vec<f64>>>|
-     -> (f64, f64, f64, Vec<f64>, Vec<f64>) {
-        let n_obs = times.len();
-        if n_obs == 0 {
-            return (0.0, 1.0, 0.0, Vec::new(), Vec::new());
-        }
-
-        let n_events: usize = events.iter().filter(|&&e| e).count();
-        if n_events == 0 {
-            return (0.0, 1.0, 0.0, Vec::new(), Vec::new());
-        }
-
-        let mut sorted_indices: Vec<usize> = (0..n_obs).collect();
-        sorted_indices.sort_by(|&a, &b| {
-            times[a]
-                .partial_cmp(&times[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let coefficient = if n_covariates > 0 {
-            let Some(cov_vec) = cov.as_ref() else {
+    let fit_cox =
+        |times: &[f64], events: &[bool], cov: &[Vec<f64>]| -> (f64, f64, f64, Vec<f64>, Vec<f64>) {
+            let n_obs = times.len();
+            if n_obs == 0 {
                 return (0.0, 1.0, 0.0, Vec::new(), Vec::new());
-            };
-            let mut sum_cov = 0.0;
-            let mut sum_event = 0;
-            for &idx in &sorted_indices {
-                if events[idx] && idx < cov_vec.len() && !cov_vec[idx].is_empty() {
-                    sum_cov += cov_vec[idx][0];
-                    sum_event += 1;
+            }
+
+            let n_events: usize = events.iter().filter(|&&e| e).count();
+            if n_events == 0 {
+                return (0.0, 1.0, 0.0, Vec::new(), Vec::new());
+            }
+
+            let mut sorted_indices: Vec<usize> = (0..n_obs).collect();
+            sorted_indices.sort_by(|&a, &b| times[a].total_cmp(&times[b]).then_with(|| a.cmp(&b)));
+
+            let coefficient = if n_covariates > 0 {
+                if cov.len() != n_obs {
+                    return (0.0, 1.0, 0.0, Vec::new(), Vec::new());
                 }
-            }
-            if sum_event > 0 {
-                sum_cov / sum_event as f64
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-
-        let hessian = (n_events as f64).max(1.0);
-        let se = (1.0 / hessian).sqrt();
-
-        let mut unique_times: Vec<f64> = times.to_vec();
-        unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        unique_times.dedup();
-
-        let baseline_hazard: Vec<f64> = unique_times
-            .iter()
-            .map(|&t| {
-                let at_risk = times.iter().filter(|&&ti| ti >= t).count() as f64;
-                let events_at_t = times
-                    .iter()
-                    .zip(events.iter())
-                    .filter(|&(&ti, &e)| (ti - t).abs() < 1e-10 && e)
-                    .count() as f64;
-                if at_risk > 0.0 {
-                    events_at_t / at_risk
+                let mut sum_cov = 0.0;
+                let mut sum_event = 0;
+                for &idx in &sorted_indices {
+                    if events[idx] && !cov[idx].is_empty() {
+                        sum_cov += cov[idx][0];
+                        sum_event += 1;
+                    }
+                }
+                if sum_event > 0 {
+                    sum_cov / sum_event as f64
                 } else {
                     0.0
                 }
-            })
-            .collect();
+            } else {
+                0.0
+            };
 
-        let log_lik = -(n_events as f64) * (n_events as f64 / n_obs as f64).ln().max(-100.0);
+            let hessian = (n_events as f64).max(1.0);
+            let se = (1.0 / hessian).sqrt();
 
-        (coefficient, se, log_lik, baseline_hazard, unique_times)
-    };
+            let unique_times = unique_illness_times(times);
 
-    let cov_subset: Option<Vec<Vec<f64>>> = covariates.clone();
+            let baseline_hazard: Vec<f64> = unique_times
+                .iter()
+                .map(|&t| {
+                    let at_risk = times.iter().filter(|&&ti| ti + TIME_EPSILON >= t).count() as f64;
+                    let events_at_t = times
+                        .iter()
+                        .zip(events.iter())
+                        .filter(|&(ti, e)| same_illness_time(*ti, t) && *e)
+                        .count() as f64;
+                    if at_risk > 0.0 {
+                        events_at_t / at_risk
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+
+            let log_lik = -(n_events as f64) * (n_events as f64 / n_obs as f64).ln().max(-100.0);
+
+            (coefficient, se, log_lik, baseline_hazard, unique_times)
+        };
 
     let (coef_01, se_01, ll_01, bh_01, bt_01) =
-        fit_cox(&trans_01_times, &trans_01_events, &cov_subset);
+        fit_cox(&trans_01_times, &trans_01_events, &trans_01_covariates);
     let (coef_02, se_02, ll_02, bh_02, bt_02) =
-        fit_cox(&trans_02_times, &trans_02_events, &cov_subset);
+        fit_cox(&trans_02_times, &trans_02_events, &trans_02_covariates);
     let (coef_12, se_12, ll_12, bh_12, bt_12) =
-        fit_cox(&trans_12_times, &trans_12_events, &cov_subset);
+        fit_cox(&trans_12_times, &trans_12_events, &trans_12_covariates);
 
     let make_transition_hazard = |from: &str,
                                   to: &str,
@@ -473,6 +516,104 @@ pub fn fit_illness_death(
     })
 }
 
+fn same_illness_time(left: f64, right: f64) -> bool {
+    (left - right).abs() < TIME_EPSILON
+}
+
+fn unique_illness_times(times: &[f64]) -> Vec<f64> {
+    let mut unique_times = times.to_vec();
+    unique_times.sort_by(|a, b| a.total_cmp(b));
+    unique_times.dedup_by(|a, b| same_illness_time(*a, *b));
+    unique_times
+}
+
+fn validate_illness_death_fit_inputs(
+    entry_time: &[f64],
+    transition_time: &[f64],
+    exit_time: &[f64],
+    from_state: &[i32],
+    to_state: &[i32],
+    covariates: Option<&[Vec<f64>]>,
+) -> PyResult<()> {
+    let n = entry_time.len();
+    if transition_time.len() != n
+        || exit_time.len() != n
+        || from_state.len() != n
+        || to_state.len() != n
+    {
+        return Err(PyValueError::new_err(
+            "All input vectors must have the same length",
+        ));
+    }
+    if n == 0 {
+        return Err(PyValueError::new_err("input vectors must be non-empty"));
+    }
+
+    validate_no_nan(entry_time, "entry_time")?;
+    validate_finite(entry_time, "entry_time")?;
+    validate_non_negative(entry_time, "entry_time")?;
+    validate_no_nan(transition_time, "transition_time")?;
+    validate_finite(transition_time, "transition_time")?;
+    validate_non_negative(transition_time, "transition_time")?;
+    validate_no_nan(exit_time, "exit_time")?;
+    validate_finite(exit_time, "exit_time")?;
+    validate_non_negative(exit_time, "exit_time")?;
+
+    for i in 0..n {
+        let from = from_state[i];
+        let to = to_state[i];
+        if !(0..=1).contains(&from) {
+            return Err(PyValueError::new_err(format!(
+                "from_state must contain only 0/1 values; got {from} at index {i}"
+            )));
+        }
+        if !(0..=2).contains(&to) {
+            return Err(PyValueError::new_err(format!(
+                "to_state must contain only 0/1/2 values; got {to} at index {i}"
+            )));
+        }
+        if entry_time[i] > exit_time[i] + TIME_EPSILON {
+            return Err(PyValueError::new_err(format!(
+                "entry_time must be <= exit_time at index {i}"
+            )));
+        }
+        if (from == 1 || (from == 0 && to == 1))
+            && (transition_time[i] + TIME_EPSILON < entry_time[i]
+                || transition_time[i] > exit_time[i] + TIME_EPSILON)
+        {
+            return Err(PyValueError::new_err(format!(
+                "transition_time must be between entry_time and exit_time at index {i}"
+            )));
+        }
+        if from == 1 && to == 0 {
+            return Err(PyValueError::new_err(
+                "to_state cannot return to 0 when from_state is 1",
+            ));
+        }
+    }
+
+    if let Some(covariates) = covariates {
+        if covariates.len() != n {
+            return Err(PyValueError::new_err(
+                "covariates must have the same number of rows as input vectors",
+            ));
+        }
+        let n_cols = covariates.first().map_or(0, Vec::len);
+        for (row_idx, row) in covariates.iter().enumerate() {
+            if row.len() != n_cols {
+                return Err(PyValueError::new_err(format!(
+                    "covariates row {row_idx} has {} columns, expected {n_cols}",
+                    row.len()
+                )));
+            }
+            validate_no_nan(row, "covariates")?;
+            validate_finite(row, "covariates")?;
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct IllnessDeathPrediction {
@@ -497,11 +638,13 @@ pub fn predict_illness_death(
     prediction_times: Vec<f64>,
     covariates: Option<Vec<f64>>,
 ) -> PyResult<IllnessDeathPrediction> {
-    if current_state > 2 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "current_state must be 0 (Healthy), 1 (Illness), or 2 (Death)",
-        ));
-    }
+    validate_illness_death_prediction_inputs(
+        model,
+        current_state,
+        time_in_state,
+        &prediction_times,
+        covariates.as_deref(),
+    )?;
 
     if current_state == 2 {
         let n_times = prediction_times.len();
@@ -610,6 +753,40 @@ pub fn predict_illness_death(
     })
 }
 
+fn validate_illness_death_prediction_inputs(
+    model: &IllnessDeathResult,
+    current_state: usize,
+    time_in_state: f64,
+    prediction_times: &[f64],
+    covariates: Option<&[f64]>,
+) -> PyResult<()> {
+    if model.transition_hazards.len() < 3 {
+        return Err(PyValueError::new_err(
+            "model must contain at least 3 transition hazards",
+        ));
+    }
+    if current_state > 2 {
+        return Err(PyValueError::new_err(
+            "current_state must be 0 (Healthy), 1 (Illness), or 2 (Death)",
+        ));
+    }
+    if !time_in_state.is_finite() || time_in_state < 0.0 {
+        return Err(PyValueError::new_err(
+            "time_in_state must be finite and non-negative",
+        ));
+    }
+    validate_no_nan(prediction_times, "prediction_times")?;
+    validate_finite(prediction_times, "prediction_times")?;
+    validate_non_negative(prediction_times, "prediction_times")?;
+
+    if let Some(covariates) = covariates {
+        validate_no_nan(covariates, "covariates")?;
+        validate_finite(covariates, "covariates")?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,6 +798,33 @@ mod tests {
                 .unwrap();
         assert_eq!(config.state_names.len(), 3);
         assert_eq!(config.model_type, IllnessDeathType::Progressive);
+
+        assert!(
+            IllnessDeathConfig::new(
+                IllnessDeathType::Progressive,
+                None,
+                "sideways",
+                100,
+                1e-6,
+                0
+            )
+            .is_err()
+        );
+        assert!(
+            IllnessDeathConfig::new(IllnessDeathType::Progressive, None, "forward", 0, 1e-6, 0)
+                .is_err()
+        );
+        assert!(
+            IllnessDeathConfig::new(
+                IllnessDeathType::Progressive,
+                Some(vec!["Healthy".to_string(), "Illness".to_string()]),
+                "forward",
+                100,
+                1e-6,
+                0,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -652,6 +856,90 @@ mod tests {
     }
 
     #[test]
+    fn test_fit_illness_death_groups_near_tied_times_and_aligns_covariates() {
+        let entry_time = vec![0.0, 0.0, 0.0];
+        let transition_time = vec![1.0, 0.0, 1.0 + TIME_EPSILON / 2.0];
+        let exit_time = vec![2.0, 2.0, 2.0];
+        let from_state = vec![0, 0, 0];
+        let to_state = vec![1, 2, 1];
+        let covariates = vec![vec![10.0], vec![20.0], vec![30.0]];
+
+        let result = fit_illness_death(
+            entry_time,
+            transition_time,
+            exit_time,
+            from_state,
+            to_state,
+            Some(covariates),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.transition_hazards[0].baseline_times.len(), 1);
+        assert!((result.transition_hazards[0].baseline_times[0] - 1.0).abs() < TIME_EPSILON);
+        assert!((result.transition_hazards[0].baseline_hazard[0] - 1.0).abs() < 1e-12);
+        assert!((result.transition_hazards[0].coefficient - 20.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_fit_illness_death_rejects_malformed_inputs() {
+        let err =
+            fit_illness_death(vec![], vec![], vec![], vec![], vec![], None, None).unwrap_err();
+        assert!(err.to_string().contains("input vectors must be non-empty"));
+
+        let err = fit_illness_death(
+            vec![0.0],
+            vec![0.0],
+            vec![f64::INFINITY],
+            vec![0],
+            vec![0],
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("exit_time contains non-finite"));
+
+        let err = fit_illness_death(
+            vec![0.0],
+            vec![0.0],
+            vec![1.0],
+            vec![3],
+            vec![0],
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("from_state must contain only 0/1"));
+
+        let err = fit_illness_death(
+            vec![0.0],
+            vec![3.0],
+            vec![2.0],
+            vec![0],
+            vec![1],
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("transition_time must be between entry_time and exit_time")
+        );
+
+        let err = fit_illness_death(
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![2.0, 2.0],
+            vec![0, 0],
+            vec![1, 2],
+            Some(vec![vec![1.0], vec![2.0, 3.0]]),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("covariates row 1 has 2 columns"));
+    }
+
+    #[test]
     fn test_predict_illness_death() {
         let entry_time = vec![0.0, 0.0, 0.0, 0.0];
         let transition_time = vec![1.0, 0.0, 1.5, 0.0];
@@ -678,6 +966,24 @@ mod tests {
             let sum: f64 = probs.iter().sum();
             assert!((sum - 1.0).abs() < 0.1);
         }
+
+        let err = predict_illness_death(&model, 3, 0.0, vec![1.0], None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("current_state must be 0 (Healthy), 1 (Illness), or 2 (Death)")
+        );
+
+        let err = predict_illness_death(&model, 0, f64::INFINITY, vec![1.0], None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("time_in_state must be finite and non-negative")
+        );
+
+        let err = predict_illness_death(&model, 0, 0.0, vec![-1.0], None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("prediction_times contains negative value")
+        );
     }
 
     #[test]

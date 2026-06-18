@@ -3,9 +3,13 @@ from ._binding_utils import bind_names
 __all__ = bind_names(
     globals(),
     [
+        "PriorType",
+        "BayesianCoxConfig",
         "BayesianCoxResult",
         "bayesian_cox",
         "bayesian_cox_predict_survival",
+        "BayesianDistribution",
+        "BayesianParametricConfig",
         "BayesianModelAveragingConfig",
         "BayesianModelAveragingResult",
         "DirichletProcessConfig",

@@ -3,9 +3,11 @@ from ._binding_utils import bind_names
 __all__ = bind_names(
     globals(),
     [
+        "AssociationStructure",
         "DynamicCIndexResult",
         "DynamicPredictionResult",
         "IPCWAUCResult",
+        "JointSurvivalModelConfig",
         "SuperLandmarkResult",
         "TimeDependentROCResult",
         "TimeVaryingAUCResult",
@@ -18,7 +20,6 @@ __all__ = bind_names(
         "super_landmark_model",
         "time_dependent_roc",
         "time_varying_auc",
-        "AssociationStructure",
         "JointModelResult",
         "joint_model",
     ],

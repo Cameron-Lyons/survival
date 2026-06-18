@@ -1,6 +1,17 @@
 use std::collections::BTreeMap;
 
+use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
 use pyo3::prelude::*;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+#[inline]
+fn exp_clamped(value: f64) -> f64 {
+    value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
+}
+
 #[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct ClogitDataSet {
@@ -23,20 +34,44 @@ impl ClogitDataSet {
             covariates: Vec::new(),
         }
     }
-    pub fn add_observation(&mut self, case_control_status: u8, stratum: u8, covariates: Vec<f64>) {
+    pub fn add_observation(
+        &mut self,
+        case_control_status: u8,
+        stratum: u8,
+        covariates: Vec<f64>,
+    ) -> PyResult<()> {
+        if case_control_status > 1 {
+            return Err(value_error("case_control_status values must be 0 or 1"));
+        }
+
+        if let Some(expected_covariates) = self.covariates.first().map(Vec::len)
+            && covariates.len() != expected_covariates
+        {
+            return Err(value_error(
+                "all observations must have the same number of covariates",
+            ));
+        }
+
+        if covariates.iter().any(|value| !value.is_finite()) {
+            return Err(value_error("covariates must contain only finite values"));
+        }
+
         self.case_control_status.push(case_control_status);
         self.strata.push(stratum);
         self.covariates.push(covariates);
+        Ok(())
     }
     pub fn get_num_observations(&self) -> usize {
         self.case_control_status.len()
     }
     pub fn get_num_covariates(&self) -> usize {
-        if self.covariates.is_empty() {
-            0
-        } else {
-            self.covariates[0].len()
-        }
+        self.covariates.first().map_or(0, Vec::len)
+    }
+    pub fn __len__(&self) -> usize {
+        self.get_num_observations()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.case_control_status.is_empty()
     }
 }
 impl ClogitDataSet {
@@ -53,10 +88,14 @@ impl ClogitDataSet {
     }
 
     fn validate(&self) -> PyResult<BTreeMap<u8, Vec<usize>>> {
+        if self.case_control_status.is_empty() {
+            return Err(value_error("at least one observation is required"));
+        }
+
         if self.case_control_status.len() != self.strata.len()
             || self.case_control_status.len() != self.covariates.len()
         {
-            return Err(pyo3::exceptions::PyValueError::new_err(
+            return Err(value_error(
                 "case_control_status, strata, and covariates must have the same length",
             ));
         }
@@ -66,15 +105,17 @@ impl ClogitDataSet {
         for observation in 0..self.get_num_observations() {
             let case_status = self.get_case_control_status(observation);
             if case_status > 1 {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "case_control_status values must be 0 or 1",
-                ));
+                return Err(value_error("case_control_status values must be 0 or 1"));
             }
 
-            if self.get_covariates(observation).len() != num_covariates {
-                return Err(pyo3::exceptions::PyValueError::new_err(
+            let covariates = self.get_covariates(observation);
+            if covariates.len() != num_covariates {
+                return Err(value_error(
                     "all observations must have the same number of covariates",
                 ));
+            }
+            if covariates.iter().any(|value| !value.is_finite()) {
+                return Err(value_error("covariates must contain only finite values"));
             }
 
             strata_groups
@@ -85,7 +126,7 @@ impl ClogitDataSet {
 
         for indices in strata_groups.values() {
             if indices.len() < 2 {
-                return Err(pyo3::exceptions::PyValueError::new_err(
+                return Err(value_error(
                     "each stratum must contain at least two observations",
                 ));
             }
@@ -95,7 +136,7 @@ impl ClogitDataSet {
                 .map(|&idx| self.get_case_control_status(idx) as usize)
                 .sum::<usize>();
             if case_count == 0 || case_count == indices.len() {
-                return Err(pyo3::exceptions::PyValueError::new_err(
+                return Err(value_error(
                     "each stratum must contain at least one case and one control",
                 ));
             }
@@ -122,18 +163,21 @@ pub struct ConditionalLogisticRegression {
 impl ConditionalLogisticRegression {
     #[new]
     #[pyo3(signature = (data, max_iter=100, tol=crate::constants::CLOGIT_TOLERANCE))]
-    pub fn new(data: ClogitDataSet, max_iter: u32, tol: f64) -> ConditionalLogisticRegression {
-        ConditionalLogisticRegression {
+    pub fn new(data: ClogitDataSet, max_iter: u32, tol: f64) -> PyResult<Self> {
+        validate_solver_controls(max_iter, tol)?;
+        Ok(ConditionalLogisticRegression {
             data,
             coefficients: Vec::new(),
             max_iter,
             tol,
             iterations: 0,
             converged: false,
-        }
+        })
     }
     pub fn fit(&mut self) -> PyResult<()> {
+        validate_solver_controls(self.max_iter, self.tol)?;
         let num_covariates = self.data.get_num_covariates();
+        let strata_groups = self.data.validate()?;
         if num_covariates == 0 {
             self.coefficients.clear();
             self.iterations = 0;
@@ -141,7 +185,6 @@ impl ConditionalLogisticRegression {
             return Ok(());
         }
 
-        let strata_groups = self.data.validate()?;
         let n_strata = strata_groups.len() as f64;
 
         self.coefficients = vec![0.0; num_covariates];
@@ -217,16 +260,122 @@ impl ConditionalLogisticRegression {
 
         Ok(())
     }
-    pub fn predict(&self, covariates: Vec<f64>) -> f64 {
+    pub fn predict(&self, covariates: Vec<f64>) -> PyResult<f64> {
+        self.validate_prediction_row(&covariates)?;
         let exp_sum: f64 = self
             .coefficients
             .iter()
             .zip(covariates.iter())
             .map(|(coef, cov)| coef * cov)
             .sum();
-        exp_sum.exp()
+        Ok(exp_clamped(exp_sum))
     }
     pub fn odds_ratios(&self) -> Vec<f64> {
-        self.coefficients.iter().map(|c| c.exp()).collect()
+        self.coefficients
+            .iter()
+            .map(|coefficient| exp_clamped(*coefficient))
+            .collect()
+    }
+}
+
+impl ConditionalLogisticRegression {
+    fn validate_prediction_row(&self, covariates: &[f64]) -> PyResult<()> {
+        if self.coefficients.is_empty() && self.iterations == 0 && !self.converged {
+            return Err(value_error("model must be fit before prediction"));
+        }
+        if covariates.len() != self.coefficients.len() {
+            return Err(value_error(format!(
+                "prediction row has {} covariates, expected {}",
+                covariates.len(),
+                self.coefficients.len()
+            )));
+        }
+        if covariates.iter().any(|value| !value.is_finite()) {
+            return Err(value_error("prediction covariates must be finite"));
+        }
+        Ok(())
+    }
+}
+
+fn validate_solver_controls(max_iter: u32, tol: f64) -> PyResult<()> {
+    if max_iter == 0 {
+        return Err(value_error("max_iter must be positive"));
+    }
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(value_error("tol must be a positive finite value"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matched_dataset() -> ClogitDataSet {
+        let mut dataset = ClogitDataSet::new();
+        for (case_status, stratum, covariates) in [
+            (1, 0, vec![2.0]),
+            (0, 0, vec![1.0]),
+            (1, 1, vec![3.0]),
+            (0, 1, vec![1.0]),
+        ] {
+            dataset
+                .add_observation(case_status, stratum, covariates)
+                .expect("valid matched observation");
+        }
+        dataset
+    }
+
+    #[test]
+    fn dataset_rejects_invalid_rows() {
+        let mut dataset = ClogitDataSet::new();
+
+        assert!(dataset.add_observation(2, 0, vec![1.0]).is_err());
+        assert!(dataset.add_observation(1, 0, vec![f64::NAN]).is_err());
+
+        dataset.add_observation(1, 0, vec![1.0]).unwrap();
+        assert!(dataset.add_observation(0, 0, vec![1.0, 2.0]).is_err());
+        assert_eq!(dataset.get_num_observations(), 1);
+    }
+
+    #[test]
+    fn solver_controls_are_validated() {
+        assert!(ConditionalLogisticRegression::new(matched_dataset(), 0, 1e-6).is_err());
+        assert!(ConditionalLogisticRegression::new(matched_dataset(), 10, 0.0).is_err());
+        assert!(ConditionalLogisticRegression::new(matched_dataset(), 10, f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn fit_validates_data_before_null_model_short_circuit() {
+        let mut dataset = ClogitDataSet::new();
+        dataset.add_observation(1, 0, Vec::new()).unwrap();
+
+        let mut model = ConditionalLogisticRegression::new(dataset, 10, 1e-6).unwrap();
+        assert!(model.fit().is_err());
+    }
+
+    #[test]
+    fn prediction_requires_fitted_model_and_matching_finite_row() {
+        let mut model = ConditionalLogisticRegression::new(matched_dataset(), 10, 1e-9).unwrap();
+        assert!(model.predict(vec![1.0]).is_err());
+
+        model.fit().unwrap();
+
+        assert!(model.predict(Vec::new()).is_err());
+        assert!(model.predict(vec![f64::NAN]).is_err());
+        assert!(model.predict(vec![1.0]).unwrap().is_finite());
+    }
+
+    #[test]
+    fn exponentials_are_clamped_for_public_outputs() {
+        let mut model = ConditionalLogisticRegression::new(matched_dataset(), 1, 1e-9).unwrap();
+        model.coefficients = vec![1_000.0, -1_000.0];
+        model.iterations = 1;
+
+        let ratios = model.odds_ratios();
+
+        assert_eq!(ratios.len(), 2);
+        assert!(ratios.iter().all(|ratio| ratio.is_finite()));
+        assert!(model.predict(vec![1.0, 1.0]).unwrap().is_finite());
     }
 }

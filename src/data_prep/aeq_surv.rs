@@ -1,3 +1,4 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Result of adjusting near ties in survival times
@@ -31,6 +32,23 @@ pub struct AeqSurvResult {
 #[pyo3(signature = (time, tolerance=None))]
 pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResult> {
     let n = time.len();
+    for (idx, value) in time.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "time values must be finite, got non-finite value at index {}",
+                idx
+            )));
+        }
+    }
+
+    if let Some(tol) = tolerance
+        && (!tol.is_finite() || tol < 0.0)
+    {
+        return Err(PyErr::new::<PyValueError, _>(
+            "tolerance must be non-negative and finite",
+        ));
+    }
+
     if n == 0 {
         return Ok(AeqSurvResult {
             time: vec![],
@@ -47,11 +65,7 @@ pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResul
     });
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut adjusted_time = time.clone();
     let mut adjusted_indices = Vec::new();
@@ -118,5 +132,12 @@ mod tests {
         let time = vec![1.0, 1.0, 1.0, 1.0];
         let result = aeq_surv(time, None).unwrap();
         assert_eq!(result.adjusted_count, 0);
+    }
+
+    #[test]
+    fn test_aeq_surv_rejects_nonfinite_values_and_tolerance() {
+        assert!(aeq_surv(vec![1.0, f64::NAN], None).is_err());
+        assert!(aeq_surv(vec![1.0], Some(f64::INFINITY)).is_err());
+        assert!(aeq_surv(vec![1.0], Some(-1.0)).is_err());
     }
 }

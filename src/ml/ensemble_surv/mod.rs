@@ -1,4 +1,4 @@
-use crate::internal::statistical::lcg64_shuffle_with_state;
+use crate::internal::statistical::{concordance_index_with_horizon, lcg64_shuffle_with_state};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 

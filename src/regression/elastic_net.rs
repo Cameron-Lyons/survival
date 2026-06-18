@@ -275,6 +275,13 @@ struct ElasticNetData<'a> {
     offset: &'a [f64],
 }
 
+struct RiskSetData {
+    cumsum_exp_eta: Vec<f64>,
+    cumsum_weighted_x: Vec<Vec<f64>>,
+    cumsum_weighted_x_sq: Vec<Vec<f64>>,
+    risk_set_pos: Vec<usize>,
+}
+
 struct ElasticNetDescentConfig<'a> {
     lambda: f64,
     l1_ratio: f64,
@@ -284,52 +291,129 @@ struct ElasticNetDescentConfig<'a> {
 }
 
 #[allow(clippy::needless_range_loop)]
+fn linear_predictors(data: &ElasticNetData, beta: &[f64]) -> Vec<f64> {
+    (0..data.n)
+        .map(|i| {
+            let mut eta = data.offset[i];
+            for j in 0..data.p {
+                eta += data.x[i * data.p + j] * beta[j];
+            }
+            eta
+        })
+        .collect()
+}
+
+fn risk_shift(eta: &[f64], weights: &[f64]) -> f64 {
+    let shift = eta
+        .iter()
+        .zip(weights.iter())
+        .filter_map(|(&eta_i, &weight)| {
+            if weight > 0.0 && eta_i.is_finite() {
+                Some(eta_i)
+            } else {
+                None
+            }
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    if shift.is_finite() { shift } else { 0.0 }
+}
+
+fn shifted_exp_eta(eta: &[f64], weights: &[f64]) -> Vec<f64> {
+    let shift = risk_shift(eta, weights);
+    eta.iter().map(|&eta_i| (eta_i - shift).exp()).collect()
+}
+
+fn same_elastic_net_time(left: f64, right: f64) -> bool {
+    (left - right).abs() < crate::constants::TIME_EPSILON
+}
+
+#[allow(clippy::needless_range_loop)]
+fn precompute_risk_set_cumsum(
+    x: &[f64],
+    n: usize,
+    p: usize,
+    time: &[f64],
+    weights: &[f64],
+    exp_eta: &[f64],
+) -> RiskSetData {
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]).then_with(|| a.cmp(&b)));
+
+    let mut cumsum_exp_eta = vec![0.0; n];
+    let mut cumsum_weighted_x = vec![vec![0.0; p]; n];
+    let mut cumsum_weighted_x_sq = vec![vec![0.0; p]; n];
+    let mut risk_set_pos = vec![0usize; n];
+
+    let mut running_exp = 0.0;
+    let mut running_x = vec![0.0; p];
+    let mut running_x_sq = vec![0.0; p];
+
+    for (pos, &idx) in indices.iter().enumerate() {
+        let w = weights[idx] * exp_eta[idx];
+        running_exp += w;
+
+        for j in 0..p {
+            let xij = x[idx * p + j];
+            running_x[j] += w * xij;
+            running_x_sq[j] += w * xij * xij;
+        }
+
+        cumsum_exp_eta[pos] = running_exp;
+        cumsum_weighted_x[pos] = running_x.clone();
+        cumsum_weighted_x_sq[pos] = running_x_sq.clone();
+    }
+
+    let mut start = 0;
+    while start < n {
+        let current_time = time[indices[start]];
+        let mut end = start + 1;
+        while end < n && same_elastic_net_time(time[indices[end]], current_time) {
+            end += 1;
+        }
+
+        let pos = end - 1;
+        for &idx in &indices[start..end] {
+            risk_set_pos[idx] = pos;
+        }
+        start = end;
+    }
+
+    RiskSetData {
+        cumsum_exp_eta,
+        cumsum_weighted_x,
+        cumsum_weighted_x_sq,
+        risk_set_pos,
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
 fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let mut gradient = vec![0.0; data.p];
     let mut hessian_diag = vec![0.0; data.p];
+    let eta = linear_predictors(data, beta);
+    let exp_eta = shifted_exp_eta(&eta, data.weights);
+    let risk_data =
+        precompute_risk_set_cumsum(data.x, data.n, data.p, data.time, data.weights, &exp_eta);
 
-    let eta: Vec<f64> = (0..data.n)
-        .map(|i| {
-            let mut e = data.offset[i];
-            for j in 0..data.p {
-                e += data.x[i * data.p + j] * beta[j];
-            }
-            e.clamp(-700.0, 700.0)
-        })
-        .collect();
+    for i in 0..data.n {
+        if data.status[i] != 1 {
+            continue;
+        }
 
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
-
-    let mut indices: Vec<usize> = (0..data.n).collect();
-    indices.sort_by(|&a, &b| {
-        data.time[b]
-            .partial_cmp(&data.time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut risk_sum = 0.0;
-    let mut weighted_x = vec![0.0; data.p];
-    let mut weighted_x_sq = vec![0.0; data.p];
-
-    for &i in &indices {
-        let w = data.weights[i] * exp_eta[i];
-        risk_sum += w;
+        let pos = risk_data.risk_set_pos[i];
+        let risk_sum = risk_data.cumsum_exp_eta[pos];
+        if risk_sum <= 0.0 {
+            continue;
+        }
 
         for j in 0..data.p {
             let xij = data.x[i * data.p + j];
-            weighted_x[j] += w * xij;
-            weighted_x_sq[j] += w * xij * xij;
-        }
+            let x_bar = risk_data.cumsum_weighted_x[pos][j] / risk_sum;
+            let x_sq_bar = risk_data.cumsum_weighted_x_sq[pos][j] / risk_sum;
 
-        if data.status[i] == 1 && risk_sum > 0.0 {
-            for j in 0..data.p {
-                let xij = data.x[i * data.p + j];
-                let x_bar = weighted_x[j] / risk_sum;
-                let x_sq_bar = weighted_x_sq[j] / risk_sum;
-
-                gradient[j] += data.weights[i] * (xij - x_bar);
-                hessian_diag[j] += data.weights[i] * (x_sq_bar - x_bar * x_bar);
-            }
+            gradient[j] += data.weights[i] * (xij - x_bar);
+            hessian_diag[j] += data.weights[i] * (x_sq_bar - x_bar * x_bar);
         }
     }
 
@@ -338,33 +422,18 @@ fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64
 
 #[allow(clippy::needless_range_loop)]
 fn compute_cox_deviance(data: &ElasticNetData, beta: &[f64]) -> f64 {
-    let eta: Vec<f64> = (0..data.n)
-        .map(|i| {
-            let mut e = data.offset[i];
-            for j in 0..data.p {
-                e += data.x[i * data.p + j] * beta[j];
-            }
-            e.clamp(-700.0, 700.0)
-        })
-        .collect();
-
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
-
-    let mut indices: Vec<usize> = (0..data.n).collect();
-    indices.sort_by(|&a, &b| {
-        data.time[b]
-            .partial_cmp(&data.time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    let eta = linear_predictors(data, beta);
+    let shift = risk_shift(&eta, data.weights);
+    let exp_eta: Vec<f64> = eta.iter().map(|&eta_i| (eta_i - shift).exp()).collect();
+    let risk_data =
+        precompute_risk_set_cumsum(data.x, data.n, data.p, data.time, data.weights, &exp_eta);
 
     let mut loglik = 0.0;
-    let mut risk_sum = 0.0;
 
-    for &i in &indices {
-        risk_sum += data.weights[i] * exp_eta[i];
-
+    for i in 0..data.n {
+        let risk_sum = risk_data.cumsum_exp_eta[risk_data.risk_set_pos[i]];
         if data.status[i] == 1 && risk_sum > 0.0 {
-            loglik += data.weights[i] * (eta[i] - risk_sum.ln());
+            loglik += data.weights[i] * (eta[i] - shift - risk_sum.ln());
         }
     }
 
@@ -899,5 +968,53 @@ mod tests {
 
         let result = elastic_net_cox_typed(&input, &config).unwrap();
         assert_eq!(result.coefficients.len(), 2);
+    }
+
+    #[test]
+    fn test_elastic_net_deviance_uses_shifted_risk_scores_for_large_offsets() {
+        let x = vec![0.0, 0.0, 0.0];
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 0, 1];
+        let weights = vec![1.0, 1.0, 1.0];
+        let offset = vec![710.0, 709.0, 708.0];
+        let data = ElasticNetData {
+            x: &x,
+            n: 3,
+            p: 1,
+            time: &time,
+            status: &status,
+            weights: &weights,
+            offset: &offset,
+        };
+
+        let deviance = compute_cox_deviance(&data, &[0.0]);
+        let expected = 2.0 * (1.0 + (-1.0_f64).exp() + (-2.0_f64).exp()).ln();
+        assert!(deviance.is_finite());
+        assert!((deviance - expected).abs() < 1e-12);
+
+        let (gradient, hessian_diag) = compute_cox_gradient_hessian(&data, &[0.0]);
+        assert!(gradient.iter().all(|value| value.is_finite()));
+        assert!(hessian_diag.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn test_elastic_net_risk_sets_include_equal_times() {
+        let x = vec![0.0, 2.0, 2.0];
+        let time = vec![1.0, 1.0, 2.0];
+        let status = vec![1, 0, 0];
+        let weights = vec![1.0, 1.0, 1.0];
+        let offset = vec![0.0, 0.0, 0.0];
+        let data = ElasticNetData {
+            x: &x,
+            n: 3,
+            p: 1,
+            time: &time,
+            status: &status,
+            weights: &weights,
+            offset: &offset,
+        };
+
+        let (gradient, _) = compute_cox_gradient_hessian(&data, &[0.0]);
+        assert!((gradient[0] + 4.0 / 3.0).abs() < 1e-12);
     }
 }

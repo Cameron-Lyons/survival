@@ -1,7 +1,7 @@
 use crate::internal::matrix::lu_solve;
 use crate::internal::statistical::normal_cdf;
 use ndarray::{Array1, Array2, Axis};
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
@@ -79,21 +79,21 @@ pub struct AaregResult {
     #[pyo3(get, set)]
     standard_errors: Vec<f64>,
     #[pyo3(get, set)]
-    confidence_intervals: Vec<ConfidenceInterval>,
+    confidence_intervals: Vec<AaregConfidenceInterval>,
     #[pyo3(get, set)]
     p_values: Vec<f64>,
     #[pyo3(get, set)]
     goodness_of_fit: f64,
     #[pyo3(get, set)]
-    fit_details: Option<FitDetails>,
+    fit_details: Option<AaregFitDetails>,
     #[pyo3(get, set)]
     residuals: Option<Vec<f64>>,
     #[pyo3(get, set)]
-    diagnostics: Option<Diagnostics>,
+    diagnostics: Option<AaregDiagnostics>,
 }
 #[pyclass(from_py_object)]
 #[derive(Clone)]
-struct ConfidenceInterval {
+pub struct AaregConfidenceInterval {
     #[pyo3(get, set)]
     lower_bound: f64,
     #[pyo3(get, set)]
@@ -101,7 +101,7 @@ struct ConfidenceInterval {
 }
 #[pyclass(from_py_object)]
 #[derive(Clone)]
-struct FitDetails {
+pub struct AaregFitDetails {
     #[pyo3(get, set)]
     iterations: u32,
     #[pyo3(get, set)]
@@ -121,7 +121,7 @@ struct FitDetails {
 }
 #[pyclass(from_py_object)]
 #[derive(Clone)]
-struct Diagnostics {
+pub struct AaregDiagnostics {
     #[pyo3(get, set)]
     dfbetas: Option<Vec<f64>>,
     #[pyo3(get, set)]
@@ -167,12 +167,21 @@ impl From<pyo3::PyErr> for AaregError {
 }
 impl From<AaregError> for PyErr {
     fn from(err: AaregError) -> PyErr {
-        PyRuntimeError::new_err(format!("Aareg error: {}", err))
+        match err {
+            AaregError::Data(_)
+            | AaregError::Formula(_)
+            | AaregError::Weights(_)
+            | AaregError::Input(_) => PyValueError::new_err(format!("Aareg error: {}", err)),
+            AaregError::Calculation(_) | AaregError::Generic(_) => {
+                PyRuntimeError::new_err(format!("Aareg error: {}", err))
+            }
+        }
     }
 }
 #[pyfunction]
 #[pyo3(name = "aareg")]
 pub fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
+    validate_options(&options)?;
     let data_array = Array2::from_shape_vec(
         (options.data.len(), options.data[0].len()),
         options.data.clone().into_iter().flatten().collect(),
@@ -180,7 +189,8 @@ pub fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
     .map_err(|e| AaregError::Data(e.to_string()))?;
     let (response_name, covariate_names) = parse_formula(&options.formula)?;
     let subset_data = apply_subset(&data_array, &options.subset)?;
-    let weighted_data = apply_weights(&subset_data, options.weights.clone())?;
+    let selected_weights = select_weights(options.weights.clone(), &options.subset)?;
+    let weighted_data = apply_weights(&subset_data, selected_weights)?;
     let filtered_data = handle_missing_data(&weighted_data, options.na_action.clone())?;
     let (y, x) = prepare_data_for_regression(
         &filtered_data,
@@ -192,6 +202,127 @@ pub fn aareg(options: AaregOptions) -> PyResult<AaregResult> {
     let processed_result = post_process_results(regression_result, &options)?;
     Ok(processed_result)
 }
+
+fn validate_options(options: &AaregOptions) -> Result<(), AaregError> {
+    validate_data_matrix(&options.data)?;
+
+    if options.variable_names.len() != options.data[0].len() {
+        return Err(AaregError::Data(format!(
+            "variable_names length ({}) must match data column count ({})",
+            options.variable_names.len(),
+            options.data[0].len()
+        )));
+    }
+    if options
+        .variable_names
+        .iter()
+        .any(|name| name.trim().is_empty())
+    {
+        return Err(AaregError::Data(
+            "variable_names must not contain empty names".to_string(),
+        ));
+    }
+
+    let mut seen_names = std::collections::HashSet::new();
+    for name in &options.variable_names {
+        if !seen_names.insert(name) {
+            return Err(AaregError::Data(format!(
+                "variable_names contains duplicate name '{}'",
+                name
+            )));
+        }
+    }
+
+    if !options.qrtol.is_finite() || options.qrtol <= 0.0 {
+        return Err(AaregError::Input(
+            "qrtol must be finite and positive".to_string(),
+        ));
+    }
+    if !options.taper.is_finite() || options.taper < 0.0 {
+        return Err(AaregError::Input(
+            "taper must be finite and non-negative".to_string(),
+        ));
+    }
+    if options.max_iter == 0 {
+        return Err(AaregError::Input("max_iter must be positive".to_string()));
+    }
+
+    if let Some(nmin) = options.nmin
+        && nmin == 0
+    {
+        return Err(AaregError::Input("nmin must be positive".to_string()));
+    }
+
+    if let Some(weights) = &options.weights {
+        if weights.len() != options.data.len() {
+            return Err(AaregError::Weights(format!(
+                "Weights length ({}) does not match number of observations ({})",
+                weights.len(),
+                options.data.len()
+            )));
+        }
+        for (idx, &weight) in weights.iter().enumerate() {
+            if !weight.is_finite() {
+                return Err(AaregError::Weights(format!(
+                    "weights contains non-finite value {} at index {}",
+                    weight, idx
+                )));
+            }
+            if weight < 0.0 {
+                return Err(AaregError::Weights(format!(
+                    "weights contains negative value {} at index {}",
+                    weight, idx
+                )));
+            }
+        }
+    }
+
+    if let Some(action) = &options.na_action
+        && action != "Fail"
+        && action != "Exclude"
+    {
+        return Err(AaregError::Input(format!(
+            "Invalid na_action '{}'. Expected 'Fail' or 'Exclude'.",
+            action
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_data_matrix(data: &[Vec<f64>]) -> Result<(), AaregError> {
+    let first_row = data
+        .first()
+        .ok_or_else(|| AaregError::Data("data cannot be empty".to_string()))?;
+    if first_row.is_empty() {
+        return Err(AaregError::Data(
+            "data must contain at least one column".to_string(),
+        ));
+    }
+
+    let n_cols = first_row.len();
+    for (row_idx, row) in data.iter().enumerate() {
+        if row.len() != n_cols {
+            return Err(AaregError::Data(format!(
+                "data row {} has {} columns; expected {}",
+                row_idx,
+                row.len(),
+                n_cols
+            )));
+        }
+        for (col_idx, &value) in row.iter().enumerate() {
+            if value.is_infinite() {
+                return Err(AaregError::Data(format!(
+                    "data contains non-finite value {} at row {}, column {}",
+                    value, row_idx, col_idx
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
     let mut formula_parts = formula.splitn(2, '~');
     let response = formula_parts
@@ -199,14 +330,33 @@ fn parse_formula(formula: &str) -> Result<(String, Vec<String>), AaregError> {
         .ok_or_else(|| AaregError::Formula("Formula is missing a response variable.".to_string()))?
         .trim()
         .to_string();
+    if response.is_empty() {
+        return Err(AaregError::Formula(
+            "Formula is missing a response variable.".to_string(),
+        ));
+    }
     let covariates_str = formula_parts
         .next()
         .ok_or_else(|| AaregError::Formula("Formula is missing covariates.".to_string()))?
         .trim();
+    if covariates_str.is_empty() {
+        return Err(AaregError::Formula(
+            "Formula is missing covariates.".to_string(),
+        ));
+    }
     let covariates = covariates_str
         .split('+')
-        .map(|s| s.trim().to_string())
-        .collect();
+        .map(str::trim)
+        .map(|s| {
+            if s.is_empty() {
+                Err(AaregError::Formula(
+                    "Formula contains an empty covariate term.".to_string(),
+                ))
+            } else {
+                Ok(s.to_string())
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok((response, covariates))
 }
 fn apply_subset(
@@ -226,6 +376,29 @@ fn apply_subset(
         None => Ok(data.clone()),
     }
 }
+
+fn select_weights(
+    weights: Option<Vec<f64>>,
+    subset: &Option<Vec<usize>>,
+) -> Result<Option<Vec<f64>>, AaregError> {
+    match (weights, subset) {
+        (Some(weights), Some(subset)) => subset
+            .iter()
+            .map(|&idx| {
+                weights.get(idx).copied().ok_or_else(|| {
+                    AaregError::Weights(format!(
+                        "Subset index {} is out of bounds for weights",
+                        idx
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        (weights, None) => Ok(weights),
+        (None, Some(_)) => Ok(None),
+    }
+}
+
 fn apply_weights(data: &Array2<f64>, weights: Option<Vec<f64>>) -> Result<Array2<f64>, AaregError> {
     match weights {
         Some(w) => {
@@ -241,6 +414,7 @@ fn apply_weights(data: &Array2<f64>, weights: Option<Vec<f64>>) -> Result<Array2
         None => Ok(data.clone()),
     }
 }
+
 fn handle_missing_data(
     data: &Array2<f64>,
     na_action: Option<String>,
@@ -272,7 +446,16 @@ fn handle_missing_data(
             "Invalid na_action '{}'. Expected 'Fail' or 'Exclude'.",
             other
         ))),
-        None => Ok(data.clone()),
+        None => {
+            if data.iter().any(|x| x.is_nan()) {
+                Err(AaregError::Input(
+                    "Invalid input: missing values in data; set na_action='Exclude' to omit rows"
+                        .to_string(),
+                ))
+            } else {
+                Ok(data.clone())
+            }
+        }
     }
 }
 fn prepare_data_for_regression(
@@ -330,7 +513,7 @@ fn perform_aalen_regression(
         design_matrix.column_mut(j + 1).assign(&x.column(j));
     }
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| y[a].total_cmp(&y[b]).then_with(|| a.cmp(&b)));
     let sorted_times: Vec<f64> = indices.iter().map(|&i| y[i]).collect();
     let mut sorted_design = Array2::zeros((n, p + 1));
     for (new_idx, &old_idx) in indices.iter().enumerate() {
@@ -363,9 +546,9 @@ fn perform_aalen_regression(
         let current_time = unique_times[t_idx];
         let event_idx = time_indices[t_idx];
         let at_risk: Vec<usize> = (event_idx..n).collect();
-        if at_risk.len() < p + 1 {
+        if at_risk.len() <= p + 1 {
             warnings.push(format!(
-                "Insufficient observations at risk at time {:.3}",
+                "Insufficient residual degrees of freedom at time {:.3}",
                 current_time
             ));
             continue;
@@ -406,12 +589,12 @@ fn perform_aalen_regression(
             *p_val = 2.0 * (1.0 - normal_cdf(z_stat.abs()));
         }
     }
-    let confidence_intervals: Vec<ConfidenceInterval> = coefficients
+    let confidence_intervals: Vec<AaregConfidenceInterval> = coefficients
         .iter()
         .zip(standard_errors.iter())
         .map(|(&coef, &se)| {
             let margin = 1.96 * se;
-            ConfidenceInterval {
+            AaregConfidenceInterval {
                 lower_bound: coef - margin,
                 upper_bound: coef + margin,
             }
@@ -441,7 +624,7 @@ fn perform_aalen_regression(
         confidence_intervals,
         p_values,
         goodness_of_fit,
-        fit_details: Some(FitDetails {
+        fit_details: Some(AaregFitDetails {
             iterations,
             converged,
             final_objective_value: residual_ss,
@@ -452,7 +635,7 @@ fn perform_aalen_regression(
             warnings,
         }),
         residuals: Some(residuals),
-        diagnostics: Some(Diagnostics {
+        diagnostics: Some(AaregDiagnostics {
             dfbetas: None,
             cooks_distance: None,
             leverage: None,
@@ -479,6 +662,7 @@ fn post_process_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::common::initialize_python;
 
     fn legacy_options() -> AaregOptions {
         AaregOptions {
@@ -516,6 +700,13 @@ mod tests {
         );
     }
 
+    fn unwrap_aareg_err(result: PyResult<AaregResult>) -> PyErr {
+        match result {
+            Ok(_) => panic!("expected aareg to fail"),
+            Err(err) => err,
+        }
+    }
+
     #[test]
     fn test_aareg_legacy_reference_fit() {
         let result = aareg(legacy_options()).expect("legacy aareg fit should succeed");
@@ -543,6 +734,86 @@ mod tests {
         assert!(fit_details.converged);
         assert_eq!(fit_details.warnings.len(), 1);
         assert!(fit_details.warnings[0].contains("time 4.000"));
+    }
+
+    #[test]
+    fn test_aareg_rejects_malformed_options() {
+        initialize_python();
+
+        let mut options = legacy_options();
+        options.data = vec![];
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("data cannot be empty"));
+
+        let mut options = legacy_options();
+        options.data[1].pop();
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("data row 1 has 1 columns"));
+
+        let mut options = legacy_options();
+        options.variable_names = vec!["time".to_string()];
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("variable_names length"));
+
+        let mut options = legacy_options();
+        options.data[0][1] = f64::INFINITY;
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("data contains non-finite value"));
+
+        let mut options = legacy_options();
+        options.qrtol = 0.0;
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(
+            err.to_string()
+                .contains("qrtol must be finite and positive")
+        );
+
+        let mut options = legacy_options();
+        options.max_iter = 0;
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("max_iter must be positive"));
+    }
+
+    #[test]
+    fn test_aareg_validates_missing_data_and_weights() {
+        initialize_python();
+
+        let mut options = legacy_options();
+        options.data[0][1] = f64::NAN;
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("missing values in data"));
+
+        let mut options = legacy_options();
+        options.data[0][1] = f64::NAN;
+        options.na_action = Some("Exclude".to_string());
+        let result = aareg(options).expect("Exclude should omit missing rows");
+        assert_eq!(result.residuals.as_ref().expect("residuals").len(), 6);
+
+        let mut options = legacy_options();
+        options.weights = Some(vec![1.0; 6]);
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("Weights length"));
+
+        let mut options = legacy_options();
+        options.weights = Some(vec![1.0, 1.0, f64::INFINITY, 1.0, 1.0, 1.0, 1.0]);
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("weights contains non-finite"));
+
+        let mut options = legacy_options();
+        options.weights = Some(vec![1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0]);
+        let err = unwrap_aareg_err(aareg(options));
+        assert!(err.to_string().contains("weights contains negative"));
+    }
+
+    #[test]
+    fn test_aareg_subset_selects_matching_observation_weights() {
+        let mut options = legacy_options();
+        options.subset = Some(vec![0, 1, 2, 3, 4]);
+        options.weights = Some(vec![1.0, 1.5, 1.0, 2.0, 1.0, 99.0, 99.0]);
+
+        let result = aareg(options).expect("subset should select matching weights");
+
+        assert_eq!(result.residuals.as_ref().expect("residuals").len(), 5);
     }
 
     #[test]

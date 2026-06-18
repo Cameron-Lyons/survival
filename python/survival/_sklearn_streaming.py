@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 
@@ -12,6 +12,17 @@ from ._sklearn_ensemble import GradientBoostSurvivalEstimator, SurvivalForestEst
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike, NDArray
+
+
+class _Predictor(Protocol):
+    def predict(self, X: ArrayLike) -> NDArray[np.float64]: ...
+
+
+class _SurvivalFunctionPredictor(Protocol):
+    def predict_survival_function(
+        self,
+        X: ArrayLike,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
 
 
 def iter_chunks(X: ArrayLike, batch_size: int = 1000) -> Iterator[tuple[int, NDArray[np.float64]]]:
@@ -75,7 +86,7 @@ class StreamingMixin:
         >>> predictions = np.concatenate(all_predictions)
         """
         for _, chunk in iter_chunks(X, batch_size):
-            yield self.predict(chunk)
+            yield cast(_Predictor, self).predict(chunk)
 
     def predict_survival_batched(
         self, X: ArrayLike, batch_size: int = 1000
@@ -97,7 +108,7 @@ class StreamingMixin:
             Survival probabilities for each batch.
         """
         for _, chunk in iter_chunks(X, batch_size):
-            yield self.predict_survival_function(chunk)
+            yield cast(_SurvivalFunctionPredictor, self).predict_survival_function(chunk)
 
     def predict_to_array(
         self, X: ArrayLike, batch_size: int = 1000, out: NDArray | None = None
@@ -139,7 +150,7 @@ class StreamingMixin:
 
         for start_idx, chunk in iter_chunks(X, batch_size):
             end_idx = start_idx + chunk.shape[0]
-            out[start_idx:end_idx] = self.predict(chunk)
+            out[start_idx:end_idx] = cast(_Predictor, self).predict(chunk)
 
         return out
 
@@ -193,7 +204,7 @@ class StreamingAFTEstimator(AFTEstimator, StreamingMixin):
 
 
 def predict_large_dataset(
-    estimator,
+    estimator: _Predictor,
     X: ArrayLike,
     batch_size: int = 1000,
     output_file: str | None = None,
@@ -236,6 +247,7 @@ def predict_large_dataset(
     X = np.asarray(X)
     n_samples = X.shape[0]
 
+    predictions: Any
     if output_file is not None:
         predictions = np.memmap(output_file, dtype=np.float64, mode="w+", shape=(n_samples,))
     else:
@@ -257,7 +269,7 @@ def predict_large_dataset(
 
 
 def survival_curves_to_disk(
-    estimator,
+    estimator: _SurvivalFunctionPredictor,
     X: ArrayLike,
     output_file: str,
     batch_size: int = 100,

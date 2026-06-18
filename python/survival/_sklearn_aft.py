@@ -120,10 +120,10 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
             eps=self.tol,
         )
 
-        coefs = np.array(self.model_.coefficients)
-        self.intercept_ = coefs[0]
-        self.coef_ = coefs[1:-1]
-        self.scale_ = np.exp(coefs[-1])
+        location = np.array(self.model_.location_coefficients)
+        self.intercept_ = location[0]
+        self.coef_ = location[1:]
+        self.scale_ = self.model_.scale
         self.converged_ = self.model_.convergence_flag == 0
 
         self.is_fitted_ = True

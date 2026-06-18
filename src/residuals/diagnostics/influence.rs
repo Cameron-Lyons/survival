@@ -31,11 +31,8 @@ pub fn outlier_detection_cox(
     outlier_threshold: f64,
 ) -> PyResult<OutlierDetectionResult> {
     let n = time.len();
-    if event.len() != n || covariates.len() != n * n_covariates {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input dimensions mismatch",
-        ));
-    }
+    validate_cox_diagnostic_inputs(&time, &event, &covariates, n_covariates, &coefficients)?;
+    validate_positive_finite_scalar("outlier_threshold", outlier_threshold)?;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     sorted_indices.sort_by(|&a, &b| {
@@ -157,11 +154,7 @@ pub fn model_influence_cox(
     coefficients: Vec<f64>,
 ) -> PyResult<ModelInfluenceResult> {
     let n = time.len();
-    if event.len() != n || covariates.len() != n * n_covariates {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input dimensions mismatch",
-        ));
-    }
+    validate_cox_diagnostic_inputs(&time, &event, &covariates, n_covariates, &coefficients)?;
 
     let dfbeta_result = dfbeta_cox(
         time.clone(),
@@ -301,9 +294,11 @@ pub fn goodness_of_fit_cox(
     coefficients: Vec<f64>,
 ) -> PyResult<GofTestResult> {
     let n = time.len();
-    if event.len() != n || covariates.len() != n * n_covariates {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input dimensions mismatch",
+    validate_cox_diagnostic_inputs(&time, &event, &covariates, n_covariates, &coefficients)?;
+    let n_events = event.iter().filter(|&&e| e == 1).count();
+    if n_events < n_covariates {
+        return Err(diagnostic_value_error(
+            "number of events must be at least n_covariates for goodness-of-fit",
         ));
     }
 
@@ -315,8 +310,6 @@ pub fn goodness_of_fit_cox(
         coefficients.clone(),
         3.0,
     )?;
-
-    let n_events = event.iter().filter(|&&e| e == 1).count();
 
     let chi_sq: f64 = outlier_result
         .deviance_residuals
@@ -368,4 +361,3 @@ fn chi_sq_p_value(chi_sq: f64, df: usize) -> f64 {
     }
     1.0 - lower_incomplete_gamma(df as f64 / 2.0, chi_sq / 2.0)
 }
-

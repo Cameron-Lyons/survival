@@ -10,7 +10,9 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Fail if a Cobertura-style coverage report is below a minimum line coverage percentage."
+        description=(
+            "Fail if a Cobertura-style coverage report is below a minimum line coverage percentage."
+        )
     )
     parser.add_argument("report", type=Path, help="Path to cobertura.xml")
     parser.add_argument(
@@ -45,7 +47,8 @@ def main() -> int:
         print(f"coverage report not found: {args.report}", file=sys.stderr)
         return 1
 
-    root = ET.parse(args.report).getroot()
+    # CI generates this report locally via cargo-tarpaulin/pytest-cov.
+    root = ET.parse(args.report).getroot()  # noqa: S314
     line_rate = extract_line_rate(root)
     percent = line_rate * 100.0
 

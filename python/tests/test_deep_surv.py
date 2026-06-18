@@ -4,6 +4,14 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 core = survival._survival
+HAS_DEEPSURV_BINDINGS = all(
+    hasattr(core, name) for name in ("Activation", "DeepSurv", "DeepSurvConfig", "deep_surv")
+)
+
+pytestmark = pytest.mark.skipif(
+    not HAS_DEEPSURV_BINDINGS,
+    reason="DeepSurv tests require the Rust extension to be built with the ml feature",
+)
 
 HAS_NUMPY = False
 try:

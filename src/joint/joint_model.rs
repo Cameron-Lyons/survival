@@ -32,7 +32,7 @@ impl AssociationStructure {
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
-pub struct JointModelConfig {
+pub struct JointSurvivalModelConfig {
     #[pyo3(get, set)]
     pub association: AssociationStructure,
     #[pyo3(get, set)]
@@ -46,7 +46,7 @@ pub struct JointModelConfig {
 }
 
 #[pymethods]
-impl JointModelConfig {
+impl JointSurvivalModelConfig {
     #[new]
     #[pyo3(signature = (association=AssociationStructure::Value, n_quadrature=15, max_iter=500, tol=1e-4, baseline_hazard_knots=5))]
     pub fn new(
@@ -56,7 +56,7 @@ impl JointModelConfig {
         tol: f64,
         baseline_hazard_knots: usize,
     ) -> Self {
-        JointModelConfig {
+        JointSurvivalModelConfig {
             association,
             n_quadrature,
             max_iter,
@@ -346,7 +346,7 @@ pub fn joint_model(
     x_survival: Vec<f64>,
     n_subjects: usize,
     n_surv_vars: usize,
-    config: &JointModelConfig,
+    config: &JointSurvivalModelConfig,
 ) -> PyResult<JointModelResult> {
     if y_longitudinal.len() != n_long_obs
         || times_longitudinal.len() != n_long_obs
@@ -359,6 +359,21 @@ pub fn joint_model(
     if event_time.len() != n_subjects || event_status.len() != n_subjects {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "Survival data dimensions mismatch",
+        ));
+    }
+    if x_longitudinal.len() != n_long_obs * n_long_vars {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x_longitudinal length must be n_long_obs * n_long_vars",
+        ));
+    }
+    if x_survival.len() != n_subjects * n_surv_vars {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x_survival length must be n_subjects * n_surv_vars",
+        ));
+    }
+    if subject_ids_long.iter().any(|&id| id >= n_subjects) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "subject_ids_long values must be less than n_subjects",
         ));
     }
 
@@ -661,7 +676,28 @@ mod tests {
 
     #[test]
     fn test_joint_model_config() {
-        let config = JointModelConfig::new(AssociationStructure::Value, 15, 100, 1e-4, 5);
+        let config = JointSurvivalModelConfig::new(AssociationStructure::Value, 15, 100, 1e-4, 5);
         assert_eq!(config.n_quadrature, 15);
+    }
+
+    #[test]
+    fn test_joint_model_rejects_malformed_design_lengths() {
+        let config = JointSurvivalModelConfig::new(AssociationStructure::Value, 5, 5, 1e-4, 3);
+        let result = joint_model(
+            vec![1.0, 2.0, 1.5, 2.5],
+            vec![0.0, 1.0, 0.0, 1.0],
+            vec![1.0, 0.5, 1.0, 0.6],
+            4,
+            2,
+            vec![0, 0, 1, 1],
+            vec![2.0, 3.0],
+            vec![1, 0],
+            vec![0.5, 0.6],
+            2,
+            1,
+            &config,
+        );
+
+        assert!(result.is_err());
     }
 }

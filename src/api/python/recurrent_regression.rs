@@ -75,7 +75,9 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(predict_bounded_cumulative_hazard, m)?)?;
     m.add_function(wrap_pyfunction!(predict_non_mixture_survival, m)?)?;
     m.add_class::<MixtureCureResult>()?;
+    m.add_class::<MixtureCureConfig>()?;
     m.add_class::<PromotionTimeCureResult>()?;
+    m.add_class::<LinkFunction>()?;
     m.add_class::<CureDistribution>()?;
     m.add_class::<BoundedCumulativeHazardConfig>()?;
     m.add_class::<BoundedCumulativeHazardResult>()?;

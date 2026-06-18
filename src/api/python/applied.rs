@@ -1,27 +1,12 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(decision_curve_analysis, m)?)?;
-    m.add_function(wrap_pyfunction!(clinical_utility_at_threshold, m)?)?;
-    m.add_function(wrap_pyfunction!(compare_decision_curves, m)?)?;
-    m.add_class::<DecisionCurveResult>()?;
-    m.add_class::<ClinicalUtilityResult>()?;
-
-    m.add_function(wrap_pyfunction!(warranty_analysis, m)?)?;
-    m.add_function(wrap_pyfunction!(renewal_analysis, m)?)?;
-    m.add_function(wrap_pyfunction!(reliability_growth, m)?)?;
-    m.add_class::<WarrantyConfig>()?;
-    m.add_class::<WarrantyResult>()?;
-    m.add_class::<RenewalResult>()?;
-    m.add_class::<ReliabilityGrowthResult>()?;
-
     m.add_function(wrap_pyfunction!(distill_survival_model, m)?)?;
     m.add_function(wrap_pyfunction!(prune_survival_model, m)?)?;
     m.add_class::<DistillationConfig>()?;
     m.add_class::<DistilledSurvivalModel>()?;
     m.add_class::<DistillationResult>()?;
     m.add_class::<PruningResult>()?;
-    m.add_class::<ModelComparisonResult>()?;
 
     m.add_function(wrap_pyfunction!(federated_cox, m)?)?;
     m.add_function(wrap_pyfunction!(secure_aggregate, m)?)?;
@@ -68,36 +53,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LogrankSampleSizeResult>()?;
     m.add_class::<LogrankPowerResult>()?;
     m.add_class::<AdaptiveDesignResult>()?;
-
-    m.add_function(wrap_pyfunction!(joint_longitudinal_model, m)?)?;
-    m.add_function(wrap_pyfunction!(landmark_cox_analysis, m)?)?;
-    m.add_function(wrap_pyfunction!(longitudinal_dynamic_pred, m)?)?;
-    m.add_function(wrap_pyfunction!(time_varying_cox, m)?)?;
-    m.add_class::<JointModelConfig>()?;
-    m.add_class::<JointLongSurvResult>()?;
-    m.add_class::<LandmarkAnalysisResult>()?;
-    m.add_class::<LongDynamicPredResult>()?;
-    m.add_class::<TimeVaryingCoxResult>()?;
-
-    m.add_function(wrap_pyfunction!(km_plot_data, m)?)?;
-    m.add_function(wrap_pyfunction!(forest_plot_data, m)?)?;
-    m.add_function(wrap_pyfunction!(calibration_plot_data, m)?)?;
-    m.add_function(wrap_pyfunction!(generate_survival_report, m)?)?;
-    m.add_function(wrap_pyfunction!(roc_plot_data, m)?)?;
-    m.add_class::<KaplanMeierPlotData>()?;
-    m.add_class::<ForestPlotData>()?;
-    m.add_class::<CalibrationCurveData>()?;
-    m.add_class::<SurvivalReport>()?;
-    m.add_class::<ROCPlotData>()?;
-
-    m.add_function(wrap_pyfunction!(qaly_calculation, m)?)?;
-    m.add_function(wrap_pyfunction!(qaly_comparison, m)?)?;
-    m.add_function(wrap_pyfunction!(incremental_cost_effectiveness, m)?)?;
-    m.add_function(wrap_pyfunction!(qtwist_analysis, m)?)?;
-    m.add_function(wrap_pyfunction!(qtwist_comparison, m)?)?;
-    m.add_function(wrap_pyfunction!(qtwist_sensitivity, m)?)?;
-    m.add_class::<QALYResult>()?;
-    m.add_class::<QTWISTResult>()?;
 
     Ok(())
 }

@@ -180,9 +180,14 @@ mod tests {
             &KaplanMeierConfig::default(),
         );
 
+        assert_eq!(result.time, time, "Expected censor rows with all censored");
+        assert_eq!(result.n_event, vec![0.0; 5]);
+        assert_eq!(result.n_censor, vec![1.0; 5]);
         assert!(
-            result.time.is_empty(),
-            "Expected no event times with all censored"
+            result
+                .estimate
+                .iter()
+                .all(|estimate| approx_eq(*estimate, 1.0, STRICT_TOL))
         );
     }
 

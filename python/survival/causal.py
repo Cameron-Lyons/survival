@@ -52,6 +52,7 @@ __all__ = bind_names(
         "MSMResult",
         "compute_longitudinal_iptw",
         "marginal_structural_model",
+        "TrialEmulationConfig",
         "TargetTrialResult",
         "sequential_trial_emulation",
         "target_trial_emulation",

@@ -118,7 +118,7 @@ pub struct FastCoxConfig {
 impl FastCoxConfig {
     #[new]
     #[pyo3(signature = (
-        lambda=0.1,
+        lambda_=0.1,
         l1_ratio=1.0,
         max_iter=1000,
         tol=1e-7,
@@ -130,7 +130,7 @@ impl FastCoxConfig {
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        lambda: f64,
+        lambda_: f64,
         l1_ratio: f64,
         max_iter: usize,
         tol: f64,
@@ -140,7 +140,7 @@ impl FastCoxConfig {
         standardize: bool,
         use_simd: bool,
     ) -> SurvivalResult<Self> {
-        if lambda < 0.0 {
+        if lambda_ < 0.0 {
             return Err(SurvivalError::invalid_input(
                 "lambda must be non-negative",
             ));
@@ -162,7 +162,7 @@ impl FastCoxConfig {
         }
 
         Ok(FastCoxConfig {
-            lambda,
+            lambda: lambda_,
             l1_ratio,
             max_iter,
             tol,
@@ -172,6 +172,22 @@ impl FastCoxConfig {
             standardize,
             use_simd,
         })
+    }
+
+    #[getter]
+    pub fn lambda_(&self) -> f64 {
+        self.lambda
+    }
+
+    #[setter]
+    pub fn set_lambda_(&mut self, value: f64) -> SurvivalResult<()> {
+        if value < 0.0 {
+            return Err(SurvivalError::invalid_input(
+                "lambda must be non-negative",
+            ));
+        }
+        self.lambda = value;
+        Ok(())
     }
 }
 

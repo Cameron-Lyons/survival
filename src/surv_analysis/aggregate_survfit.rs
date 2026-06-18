@@ -1,5 +1,128 @@
+use crate::constants::TIME_EPSILON;
 use crate::internal::statistical::normal_inverse_cdf;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<PyValueError, _>(message.into())
+}
+
+fn validate_probability_curve(name: &str, values: &[f64]) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{name} contains non-finite value at index {idx}"
+            )));
+        }
+        if !(0.0..=1.0).contains(&value) {
+            return Err(value_error(format!(
+                "{name} values must be between 0 and 1; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_nonnegative_finite_curve(name: &str, values: &[f64]) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{name} contains non-finite value at index {idx}"
+            )));
+        }
+        if value < 0.0 {
+            return Err(value_error(format!(
+                "{name} values must be non-negative; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_time_curve(name: &str, values: &[f64]) -> PyResult<()> {
+    let mut previous = f64::NEG_INFINITY;
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{name} contains non-finite value at index {idx}"
+            )));
+        }
+        if value < 0.0 {
+            return Err(value_error(format!(
+                "{name} values must be non-negative; got {value} at index {idx}"
+            )));
+        }
+        if value + TIME_EPSILON < previous {
+            return Err(value_error(format!(
+                "{name} values must be sorted in non-decreasing order"
+            )));
+        }
+        previous = value;
+    }
+    Ok(())
+}
+
+fn validate_conf_level(conf_level: f64) -> PyResult<()> {
+    if !conf_level.is_finite() || !(0.0..1.0).contains(&conf_level) {
+        return Err(value_error("conf_level must be finite and between 0 and 1"));
+    }
+    Ok(())
+}
+
+fn normalized_weights(weights: Option<Vec<f64>>, n_curves: usize) -> PyResult<Vec<f64>> {
+    match weights {
+        Some(wts) => {
+            if wts.len() != n_curves {
+                return Err(value_error(
+                    "weights must have same length as number of curves",
+                ));
+            }
+            validate_nonnegative_finite_curve("weights", &wts)?;
+            let sum: f64 = wts.iter().sum();
+            if sum <= 0.0 {
+                return Err(value_error(
+                    "weights must include at least one positive value",
+                ));
+            }
+            Ok(wts.iter().map(|&x| x / sum).collect())
+        }
+        None => Ok(vec![1.0 / n_curves as f64; n_curves]),
+    }
+}
+
+fn validate_curve_inputs(
+    times: &[Vec<f64>],
+    survs: &[Vec<f64>],
+    std_errs: Option<&[Vec<f64>]>,
+) -> PyResult<()> {
+    for (idx, (time, surv)) in times.iter().zip(survs.iter()).enumerate() {
+        if time.len() != surv.len() {
+            return Err(value_error(format!(
+                "times[{idx}] and survs[{idx}] must have the same length"
+            )));
+        }
+        validate_time_curve(&format!("times[{idx}]"), time)?;
+        validate_probability_curve(&format!("survs[{idx}]"), surv)?;
+    }
+
+    if let Some(ses) = std_errs {
+        if ses.len() != times.len() {
+            return Err(value_error(
+                "std_errs must have same length as number of curves",
+            ));
+        }
+        for (idx, se) in ses.iter().enumerate() {
+            if se.len() != times[idx].len() {
+                return Err(value_error(format!(
+                    "std_errs[{idx}] must have the same length as times[{idx}]"
+                )));
+            }
+            validate_nonnegative_finite_curve(&format!("std_errs[{idx}]"), se)?;
+        }
+    }
+    Ok(())
+}
 
 /// Result of aggregating survival curves
 #[derive(Debug, Clone)]
@@ -61,6 +184,20 @@ pub fn aggregate_survfit(
     }
 
     if n_curves == 0 {
+        if let Some(wts) = weights
+            && !wts.is_empty()
+        {
+            return Err(value_error(
+                "weights must be empty when no curves are supplied",
+            ));
+        }
+        if let Some(ses) = std_errs
+            && !ses.is_empty()
+        {
+            return Err(value_error(
+                "std_errs must be empty when no curves are supplied",
+            ));
+        }
         return Ok(AggregateSurvfitResult {
             time: vec![],
             surv: vec![],
@@ -73,36 +210,27 @@ pub fn aggregate_survfit(
     }
 
     let conf = conf_level.unwrap_or(0.95);
+    validate_conf_level(conf)?;
     let z = z_score(conf);
 
-    let w: Vec<f64> = match weights {
-        Some(wts) => {
-            if wts.len() != n_curves {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "weights must have same length as number of curves",
-                ));
-            }
-            let sum: f64 = wts.iter().sum();
-            wts.iter().map(|&x| x / sum).collect()
-        }
-        None => vec![1.0 / n_curves as f64; n_curves],
-    };
+    validate_curve_inputs(&times, &survs, std_errs.as_deref())?;
+    let w = normalized_weights(weights, n_curves)?;
 
     let mut all_times: Vec<f64> = times.iter().flatten().cloned().collect();
-    all_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    all_times.dedup();
+    all_times.sort_by(|a, b| a.total_cmp(b));
+    all_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
 
     let mut interpolated_survs = vec![vec![0.0; all_times.len()]; n_curves];
     let mut interpolated_ses = vec![vec![0.0; all_times.len()]; n_curves];
 
     for (i, (t, s)) in times.iter().zip(survs.iter()).enumerate() {
         for (j, &eval_t) in all_times.iter().enumerate() {
-            interpolated_survs[i][j] = interpolate_step(t, s, eval_t);
+            interpolated_survs[i][j] = interpolate_step(t, s, eval_t, 1.0);
 
             if let Some(ref ses) = std_errs
                 && i < ses.len()
             {
-                interpolated_ses[i][j] = interpolate_step(t, &ses[i], eval_t);
+                interpolated_ses[i][j] = interpolate_step(t, &ses[i], eval_t, 0.0);
             }
         }
     }
@@ -142,16 +270,19 @@ pub fn aggregate_survfit(
 }
 
 /// Interpolate step function at a given point
-fn interpolate_step(times: &[f64], values: &[f64], at: f64) -> f64 {
+fn interpolate_step(times: &[f64], values: &[f64], at: f64, default_value: f64) -> f64 {
     if times.is_empty() || values.is_empty() {
-        return 1.0;
+        return default_value;
     }
 
-    if at < times[0] {
-        return 1.0;
+    if at + TIME_EPSILON < times[0] {
+        return default_value;
     }
 
-    let idx = times.iter().position(|&t| t > at).unwrap_or(times.len());
+    let idx = times
+        .iter()
+        .position(|&t| t > at + TIME_EPSILON)
+        .unwrap_or(times.len());
 
     if idx == 0 { 1.0 } else { values[idx - 1] }
 }
@@ -176,8 +307,15 @@ pub fn aggregate_survfit_by_group(
             "times, survs, and groups must have same length",
         ));
     }
+    if let Some(values) = weights.as_ref()
+        && values.len() != n
+    {
+        return Err(value_error(
+            "weights must have same length as number of curves",
+        ));
+    }
 
-    let mut grouped: std::collections::HashMap<i32, Vec<usize>> = std::collections::HashMap::new();
+    let mut grouped: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (i, &g) in groups.iter().enumerate() {
         grouped.entry(g).or_default().push(i);
     }
@@ -226,6 +364,52 @@ mod tests {
         let result = aggregate_survfit(times, survs, None, Some(weights), None).unwrap();
 
         assert!(result.surv[0] > 0.85);
+    }
+
+    #[test]
+    fn test_aggregate_survfit_validates_inputs() {
+        assert!(
+            aggregate_survfit(vec![vec![1.0, 2.0]], vec![vec![0.9]], None, None, None).is_err()
+        );
+        assert!(aggregate_survfit(vec![vec![1.0]], vec![vec![1.1]], None, None, None).is_err());
+        assert!(
+            aggregate_survfit(
+                vec![vec![1.0]],
+                vec![vec![0.9]],
+                Some(vec![vec![-0.1]]),
+                None,
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            aggregate_survfit(
+                vec![vec![1.0]],
+                vec![vec![0.9]],
+                None,
+                Some(vec![0.0]),
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            aggregate_survfit(vec![vec![1.0]], vec![vec![0.9]], None, None, Some(1.0)).is_err()
+        );
+    }
+
+    #[test]
+    fn test_aggregate_survfit_deduplicates_near_times() {
+        let result = aggregate_survfit(
+            vec![vec![1.0, 2.0], vec![1.0 + TIME_EPSILON / 2.0, 2.0]],
+            vec![vec![0.9, 0.8], vec![0.95, 0.85]],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.time, vec![1.0, 2.0]);
+        assert_eq!(result.surv, vec![0.925, 0.825]);
     }
 
     #[test]

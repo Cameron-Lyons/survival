@@ -1,6 +1,39 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 type ExpandedIntervals = (Vec<f64>, Vec<f64>, Vec<i32>, Vec<usize>);
+
+fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
+    for (idx, value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "{} values must be finite, got non-finite value at index {}",
+                name, idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn sorted_unique_points(name: &str, mut values: Vec<f64>, min_len: usize) -> PyResult<Vec<f64>> {
+    if values.len() < min_len {
+        return Err(PyErr::new::<PyValueError, _>(format!(
+            "{} must have at least {} elements",
+            name, min_len
+        )));
+    }
+    validate_finite_values(name, &values)?;
+    values.sort_by(|a, b| a.total_cmp(b));
+    for window in values.windows(2) {
+        if window[0] == window[1] {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "{} must contain unique values",
+                name
+            )));
+        }
+    }
+    Ok(values)
+}
 
 /// Result of time cutting for person-years calculations
 #[derive(Debug, Clone)]
@@ -41,14 +74,8 @@ pub fn tcut(
     breaks: Vec<f64>,
     labels: Option<Vec<String>>,
 ) -> PyResult<TcutResult> {
-    if breaks.len() < 2 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "breaks must have at least 2 elements",
-        ));
-    }
-
-    let mut sorted_breaks = breaks.clone();
-    sorted_breaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    validate_finite_values("value", &value)?;
+    let sorted_breaks = sorted_unique_points("breaks", breaks, 2)?;
 
     let n_intervals = sorted_breaks.len() - 1;
 
@@ -142,15 +169,10 @@ pub fn tcut_expand(start: Vec<f64>, stop: Vec<f64>, cuts: Vec<f64>) -> PyResult<
             "start and stop must have same length",
         ));
     }
+    validate_finite_values("start", &start)?;
+    validate_finite_values("stop", &stop)?;
 
-    if cuts.is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "cuts cannot be empty",
-        ));
-    }
-
-    let mut sorted_cuts = cuts.clone();
-    sorted_cuts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let sorted_cuts = sorted_unique_points("cuts", cuts, 1)?;
 
     let mut new_start = Vec::new();
     let mut new_stop = Vec::new();
@@ -251,5 +273,21 @@ mod tests {
         assert_eq!(new_start.len(), new_stop.len());
         assert_eq!(new_start.len(), codes.len());
         assert_eq!(new_start.len(), indices.len());
+    }
+
+    #[test]
+    fn test_tcut_rejects_malformed_breaks_and_values() {
+        assert!(tcut(vec![f64::NAN], vec![0.0, 1.0], None).is_err());
+        assert!(tcut(vec![0.5], vec![0.0, f64::INFINITY], None).is_err());
+        assert!(tcut(vec![0.5], vec![0.0, 0.0], None).is_err());
+        assert!(tcut(vec![0.5], vec![0.0], None).is_err());
+    }
+
+    #[test]
+    fn test_tcut_expand_rejects_malformed_inputs() {
+        assert!(tcut_expand(vec![f64::NAN], vec![1.0], vec![0.0]).is_err());
+        assert!(tcut_expand(vec![0.0], vec![f64::INFINITY], vec![0.0]).is_err());
+        assert!(tcut_expand(vec![0.0], vec![1.0], vec![]).is_err());
+        assert!(tcut_expand(vec![0.0], vec![1.0], vec![0.0, 0.0]).is_err());
     }
 }

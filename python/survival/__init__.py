@@ -1,5 +1,7 @@
 # ruff: noqa: F401
 
+from importlib import import_module as _import_module
+
 from . import bayesian as _bayesian_module
 from . import causal as _causal_module
 from . import core as _core_module
@@ -14,6 +16,7 @@ from . import monitoring as _monitoring_module
 from . import population as _population_module
 from . import pybridge as _pybridge_module
 from . import qol as _qol_module
+from . import r_api as _r_api_module
 from . import recurrent as _recurrent_module
 from . import regression as _regression_module
 from . import relative as _relative_module
@@ -22,22 +25,22 @@ from . import residuals as _residuals_module
 from . import spatial as _spatial_module
 from . import surv_analysis as _surv_analysis_module
 from . import validation as _validation_module
-from .sklearn_compat import (
-    AFTEstimator,
-    CoxPHEstimator,
-    DeepSurvEstimator,
-    GradientBoostSurvivalEstimator,
-    StreamingAFTEstimator,
-    StreamingCoxPHEstimator,
-    StreamingDeepSurvEstimator,
-    StreamingGradientBoostSurvivalEstimator,
-    StreamingMixin,
-    StreamingSurvivalForestEstimator,
-    SurvivalForestEstimator,
-    iter_chunks,
-    predict_large_dataset,
-    survival_curves_to_disk,
+from .r_api import (
+    Surv,
+    anova,
+    basehaz,
+    concordance,
+    cox_zph,
+    coxph,
+    coxph_detail,
+    is_surv,
+    predict,
+    survdiff,
+    survfit,
+    survreg,
 )
+
+__version__ = "2.0.0"
 
 _PUBLIC_MODULES = {
     "bayesian": _bayesian_module,
@@ -59,6 +62,7 @@ _PUBLIC_MODULES = {
     "relative": _relative_module,
     "reliability_tools": _reliability_tools_module,
     "residuals": _residuals_module,
+    "r_api": _r_api_module,
     "spatial": _spatial_module,
     "surv_analysis": _surv_analysis_module,
     "validation": _validation_module,
@@ -85,6 +89,7 @@ _DOMAIN_MODULES = (
     _relative_module,
     _reliability_tools_module,
     _spatial_module,
+    _r_api_module,
     _surv_analysis_module,
     _validation_module,
 )
@@ -106,21 +111,35 @@ _SKLEARN_EXPORTS = [
     "survival_curves_to_disk",
 ]
 
-_PREFERRED_EXPORTS = list(_PUBLIC_MODULES) + _SKLEARN_EXPORTS
+_R_EXPORTS = [
+    "Surv",
+    "anova",
+    "basehaz",
+    "concordance",
+    "coxph",
+    "coxph_detail",
+    "cox_zph",
+    "is_surv",
+    "predict",
+    "survdiff",
+    "survfit",
+    "survreg",
+]
 
-for _module in _DOMAIN_MODULES:
-    globals().update({name: getattr(_module, name) for name in _module.__all__})
+_PREFERRED_EXPORTS = list(_PUBLIC_MODULES) + _R_EXPORTS + _SKLEARN_EXPORTS
+
+_LEGACY_EXPORT_MODULES = {
+    name: _module
+    for _module in _DOMAIN_MODULES
+    for name in _module.__all__
+    if name not in _PREFERRED_EXPORTS
+}
 
 for _name, _module in _PUBLIC_MODULES.items():
     globals()[_name] = _module
 
 __preferred__ = tuple(_PREFERRED_EXPORTS)
-__legacy_root_exports__ = tuple(
-    name
-    for _module in _DOMAIN_MODULES
-    for name in _module.__all__
-    if name not in _PREFERRED_EXPORTS
-)
+__legacy_root_exports__ = tuple(_LEGACY_EXPORT_MODULES)
 __deprecated_root_exports__ = __legacy_root_exports__
 __deprecated_root_export_reason__ = (
     "Root-level algorithm and result exports are retained for compatibility. "
@@ -131,8 +150,20 @@ __deprecated_root_export_reason__ = (
 __all__ = list(dict.fromkeys(_PREFERRED_EXPORTS))
 
 
+def __getattr__(name):
+    if name in _SKLEARN_EXPORTS:
+        value = getattr(_import_module(".sklearn_compat", __name__), name)
+        globals()[name] = value
+        return value
+
+    module = _LEGACY_EXPORT_MODULES.get(name)
+    if module is not None:
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def __dir__():
-    return sorted(set(__all__) | {"__preferred__", "__deprecated_root_exports__"})
+    return sorted(set(__all__) | {"__preferred__", "__deprecated_root_exports__", "__version__"})
 
 
 del _name
@@ -140,4 +171,3 @@ del _module
 del _DOMAIN_MODULES
 del _PUBLIC_MODULES
 del _PREFERRED_EXPORTS
-del _SKLEARN_EXPORTS

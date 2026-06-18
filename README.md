@@ -58,6 +58,13 @@ Build the Python wheel:
 maturin build --release
 ```
 
+The default source build keeps optional ML bindings out of the extension. To
+build the full Python surface locally, include the ML feature explicitly:
+
+```sh
+maturin build --release --features extension-module,ml
+```
+
 Install the wheel:
 ```sh
 pip install target/wheels/survival-*.whl
@@ -66,6 +73,11 @@ pip install target/wheels/survival-*.whl
 For development:
 ```sh
 maturin develop --release
+```
+
+For development against ML bindings:
+```sh
+maturin develop --release --features extension-module,ml
 ```
 
 ## Python Package Layout
@@ -81,14 +93,65 @@ km = surv_analysis.survfitkm(...)
 score = validation.rmst(...)
 ```
 
-Top-level imports such as `from survival import survreg` still work for
-compatibility, but module imports are the preferred style because they match the
-current repo layout and keep the API easier to navigate.
+R-style entry points are intentionally available from the package root for users
+porting code from R's `survival` package:
+
+```python
+from survival import Surv, basehaz, coxph, predict, survdiff, survfit, survreg
+
+data = {
+    "time": [1.0, 2.0, 3.0, 4.0],
+    "status": [1, 1, 0, 1],
+    "group": ["control", "control", "treated", "treated"],
+    "age": [52.0, 61.0, 58.0, 63.0],
+}
+
+km = survfit("Surv(time, status) ~ group", data=data)
+cox_model = coxph("Surv(time, status) ~ group + age", data=data)
+risk_scores = predict(cox_model, [[1.0, 60.0]], type="risk")
+hazard_times, cumulative_hazard = basehaz(cox_model)
+aft_model = survreg("Surv(time, status) ~ group + age", data=data)
+```
+
+Formula support is intentionally conservative: `+` terms, `.` expansion,
+`-` exclusions, backtick-quoted column names, categorical treatment coding,
+`factor(...)` / `as.factor(...)`, `strata(...)`, interaction terms with `:`
+or `*`, and numeric `offset(...)` terms are supported, along with one-column
+numeric transforms `log(...)`, `sqrt(...)`, and `exp(...)`;
+time transforms should use the lower-level matrix APIs until they have
+dedicated Rust-backed support.
+Formula calls also accept `subset=` as a boolean mask or zero-based row indices
+and `na_action="omit"` for row-wise missing-data omission across formula
+columns and external row-aligned arrays such as `weights`, `offset`, and
+`strata`.
+Kaplan-Meier `survfit` calls honor `conf_level=`, R-style `conf_type=`
+choices for confidence intervals, `start_time=` for conditional curves, and
+`time0=True` to include the starting row.
+They support right-censored `Surv(time, event)` data and counting-process
+`Surv(start, stop, event)` data with delayed-entry risk sets.
+`survdiff` uses the same right-censored and delayed-entry response forms.
+`coxph` uses Efron's tie handling by default, matching R, and also accepts
+`ties="breslow"` or the compatibility alias `method="breslow"`.
+The R-style `predict(...)` generic supports Cox linear predictors, relative
+risk scores, term contributions, survival curves, and expected event counts.
+For `survreg` fits it supports response-scale predictions, linear predictors,
+term contributions, and quantile predictions via `type="quantile"`.
+The `survival.residuals` name remains the residual diagnostics module; the
+R-style residual generic is available as `survival.r_api.residuals(...)` for
+fitted Cox and `survreg` models.
+
+Other historical root-level algorithm names remain available for compatibility,
+but module imports are the preferred style because they match the current repo
+layout and keep the API easier to navigate. Legacy root-level algorithm names
+are resolved lazily instead of being copied into the package namespace at import
+time.
 
 `survival.__all__` and `dir(survival)` expose the curated package surface:
-domain modules and scikit-learn helpers. Legacy root-level algorithm exports are
-still available for compatibility and are listed in
-`survival.__deprecated_root_exports__`.
+domain modules, R-style entry points, and scikit-learn helpers. Legacy
+root-level algorithm exports are still available for compatibility and are listed in
+`survival.__deprecated_root_exports__`. In lean source builds, symbols that
+require the Rust `ml` feature are omitted from their domain module until the
+extension is built with `--features extension-module,ml`.
 
 Common modules:
 - `survival.datasets`: built-in example and benchmark datasets
@@ -234,7 +297,7 @@ result = surv_analysis.survfitkm(
     weights=weights,
     entry_times=None,  # Optional: entry times for left-truncation
     position=None,     # Optional: position flags
-    reverse=False,     # Optional: reverse time order
+    reverse=False,     # Optional: estimate the censoring distribution
     computation_type=0 # Optional: computation type
 )
 
@@ -402,7 +465,7 @@ result = surv_analysis.compute_logrank_components(
     status=status,
     group=group,
     strata=None,  # Optional: stratification variable
-    rho=0.0,      # 0.0 = log-rank, 1.0 = Wilcoxon, other = generalized
+    rho=0.0,      # 0.0 = log-rank; nonzero values use G-rho weights
 )
 
 print(f"Observed events: {result.observed}")
@@ -476,9 +539,9 @@ The public Python surface is broad and evolves quickly. For the most accurate,
 version-matched signatures, use the checked-in type stubs:
 
 `import survival` exposes the curated package API via domain modules. Legacy
-root-level algorithm symbols remain available for compatibility, but new code
-should import from the relevant domain module. For lower-level or experimental
-extension symbols, import from `survival._survival` explicitly.
+root-level algorithm symbols remain available lazily for compatibility, but new
+code should import from the relevant domain module. For lower-level or
+experimental extension symbols, import from `survival._survival` explicitly.
 
 - [`python/survival/__init__.pyi`](python/survival/__init__.pyi): package-level
   typed surface, including the new domain modules.
@@ -550,6 +613,11 @@ uv sync --extra dev --extra test --extra sklearn --no-install-project
 Build the extension in your current environment:
 ```sh
 maturin develop --release
+```
+
+Build with optional ML bindings:
+```sh
+maturin develop --release --features extension-module,ml
 ```
 
 `Cargo.toml` is the source of truth for the published package version.

@@ -83,4 +83,72 @@ mod tests {
         assert_eq!(result.n_obs, 8);
         assert!(result.global_p_value >= 0.0 && result.global_p_value <= 1.0);
     }
+
+    #[test]
+    fn test_cox_diagnostics_validate_shared_inputs() {
+        let too_short = dfbeta_cox(vec![1.0], vec![1], vec![0.1], 1, vec![0.5], None)
+            .unwrap_err()
+            .to_string();
+        assert!(too_short.contains("at least two observations"));
+
+        let bad_event = leverage_cox(vec![1.0, 2.0], vec![1, 2], vec![0.1, 0.2], 1, vec![0.5], 2.0)
+            .unwrap_err()
+            .to_string();
+        assert!(bad_event.contains("event must contain only 0/1"));
+
+        let bad_coefficients =
+            outlier_detection_cox(vec![1.0, 2.0], vec![1, 0], vec![0.1, 0.2], 1, vec![], 3.0)
+                .unwrap_err()
+                .to_string();
+        assert!(bad_coefficients.contains("coefficients must have length"));
+
+        let bad_covariates = model_influence_cox(
+            vec![1.0, 2.0],
+            vec![1, 0],
+            vec![0.1, f64::NAN],
+            1,
+            vec![0.5],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(bad_covariates.contains("covariates contains non-finite"));
+
+        let bad_gof = goodness_of_fit_cox(
+            vec![1.0, 2.0],
+            vec![0, 0],
+            vec![0.1, 0.2],
+            1,
+            vec![0.5],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(bad_gof.contains("number of events"));
+    }
+
+    #[test]
+    fn test_schoenfeld_smooth_validates_inputs() {
+        let bad_bandwidth =
+            smooth_schoenfeld(vec![1.0, 2.0], vec![0.1, 0.2], 1, vec![0.5], Some(0.0), "identity")
+                .unwrap_err()
+                .to_string();
+        assert!(bad_bandwidth.contains("bandwidth must be a finite positive value"));
+
+        let bad_transform =
+            smooth_schoenfeld(vec![1.0, 2.0], vec![0.1, 0.2], 1, vec![0.5], None, "weird")
+                .unwrap_err()
+                .to_string();
+        assert!(bad_transform.contains("transform must be"));
+
+        let bad_log_time =
+            smooth_schoenfeld(vec![0.0, 2.0], vec![0.1, 0.2], 1, vec![0.5], None, "log")
+                .unwrap_err()
+                .to_string();
+        assert!(bad_log_time.contains("positive for log transform"));
+
+        let bad_coefficients =
+            smooth_schoenfeld(vec![1.0, 2.0], vec![0.1, 0.2], 1, vec![], None, "identity")
+                .unwrap_err()
+                .to_string();
+        assert!(bad_coefficients.contains("coefficients must have length"));
+    }
 }

@@ -48,6 +48,8 @@ impl std::error::Error for CoxError {}
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Method {
     Breslow,
+    Efron,
+    Exact,
 }
 pub(crate) type CoxFitResults = (
     Vec<f64>,
@@ -59,9 +61,79 @@ pub(crate) type CoxFitResults = (
     i32,
     usize,
 );
+
+fn add_risk_sums(
+    covar: &Array2<f64>,
+    nvar: usize,
+    person: usize,
+    risk: f64,
+    denom: &mut f64,
+    a: &mut [f64],
+    cmat: &mut Array2<f64>,
+) {
+    *denom += risk;
+    for i in 0..nvar {
+        let covar_i = covar[(person, i)];
+        let risk_covar_i = risk * covar_i;
+        a[i] += risk_covar_i;
+        for j in 0..=i {
+            cmat[(i, j)] += risk_covar_i * covar[(person, j)];
+        }
+    }
+}
+
+pub(crate) fn exact_tied_moments(
+    risk_indices: &[usize],
+    deaths: usize,
+    risk_vals: &[f64],
+    covar: &Array2<f64>,
+) -> (f64, Vec<f64>, Array2<f64>) {
+    let nvar = covar.ncols();
+    let cmat_len = nvar * nvar;
+    let mut denom = vec![0.0; deaths + 1];
+    let mut a = vec![vec![0.0; nvar]; deaths + 1];
+    let mut cmat = vec![vec![0.0; cmat_len]; deaths + 1];
+    denom[0] = 1.0;
+
+    for (seen, &person) in risk_indices.iter().enumerate() {
+        let risk = risk_vals[person];
+        let max_size = deaths.min(seen + 1);
+        for size in (1..=max_size).rev() {
+            let base = denom[size - 1];
+            if base == 0.0 {
+                continue;
+            }
+            let prev_a = a[size - 1].clone();
+            let prev_cmat = cmat[size - 1].clone();
+            denom[size] += risk * base;
+            for i in 0..nvar {
+                let xi = covar[(person, i)];
+                a[size][i] += risk * (prev_a[i] + base * xi);
+                for j in 0..=i {
+                    let xj = covar[(person, j)];
+                    cmat[size][i * nvar + j] += risk
+                        * (prev_cmat[i * nvar + j]
+                            + xi * prev_a[j]
+                            + xj * prev_a[i]
+                            + base * xi * xj);
+                }
+            }
+        }
+    }
+
+    let mut cmat_array = Array2::zeros((nvar, nvar));
+    for i in 0..nvar {
+        for j in 0..=i {
+            cmat_array[(i, j)] = cmat[deaths][i * nvar + j];
+        }
+    }
+    (denom[deaths], a[deaths].clone(), cmat_array)
+}
+
 pub(crate) struct CoxFit {
     time: Array1<f64>,
     status: Array1<i32>,
+    entry_times: Option<Array1<f64>>,
     covar: Array2<f64>,
     strata: Array1<i32>,
     offset: Array1<f64>,
@@ -189,10 +261,38 @@ impl CoxFit {
         doscale: Vec<bool>,
         initial_beta: Vec<f64>,
     ) -> Result<Self, CoxError> {
+        Self::with_config_and_entry_times(
+            time,
+            status,
+            covar,
+            None,
+            strata,
+            offset,
+            weights,
+            config,
+            doscale,
+            initial_beta,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn with_config_and_entry_times(
+        time: Array1<f64>,
+        status: Array1<i32>,
+        covar: Array2<f64>,
+        entry_times: Option<Array1<f64>>,
+        strata: Array1<i32>,
+        offset: Array1<f64>,
+        weights: Array1<f64>,
+        config: CoxFitConfig,
+        doscale: Vec<bool>,
+        initial_beta: Vec<f64>,
+    ) -> Result<Self, CoxError> {
         let nvar = covar.ncols();
         let mut cox = Self {
             time,
             status,
+            entry_times,
             covar,
             strata,
             offset,
@@ -240,6 +340,42 @@ impl CoxFit {
             time,
             status,
             covar,
+            strata,
+            offset,
+            weights,
+            config,
+            doscale,
+            initial_beta,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_entry_times(
+        time: Array1<f64>,
+        status: Array1<i32>,
+        covar: Array2<f64>,
+        entry_times: Option<Array1<f64>>,
+        strata: Array1<i32>,
+        offset: Array1<f64>,
+        weights: Array1<f64>,
+        method: Method,
+        max_iter: usize,
+        eps: f64,
+        toler: f64,
+        doscale: Vec<bool>,
+        initial_beta: Vec<f64>,
+    ) -> Result<Self, CoxError> {
+        let config = CoxFitConfig {
+            method,
+            max_iter,
+            eps,
+            toler,
+        };
+        Self::with_config_and_entry_times(
+            time,
+            status,
+            covar,
+            entry_times,
             strata,
             offset,
             weights,
@@ -334,7 +470,7 @@ impl CoxFit {
         self.beta = new_beta;
         Ok(())
     }
-    fn iterate(&mut self, beta: &[f64]) -> Result<f64, CoxError> {
+    fn iterate_right_censored(&mut self, beta: &[f64]) -> Result<f64, CoxError> {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let method = self.method;
@@ -346,6 +482,7 @@ impl CoxFit {
         let mut cmat2 = Array2::zeros((nvar, nvar));
         let mut loglik = 0.0;
         let mut denom = 0.0;
+        let mut risk_indices: Vec<usize> = Vec::new();
 
         let (zbeta_vals, risk_vals): (Vec<f64>, Vec<f64>) = if nused > PARALLEL_THRESHOLD_MEDIUM {
             (0..nused)
@@ -379,6 +516,7 @@ impl CoxFit {
                 a.fill(0.0);
                 cmat.fill(0.0);
                 denom = 0.0;
+                risk_indices.clear();
             }
             let dtime = self.time[person_idx];
             let mut ndead = 0;
@@ -390,6 +528,7 @@ impl CoxFit {
                 _nrisk += 1;
                 let zbeta = zbeta_vals[person_i];
                 let risk = risk_vals[person_i];
+                risk_indices.push(person_i);
                 if self.status[person_i] == 0 {
                     denom += risk;
                     for i in 0..nvar {
@@ -421,7 +560,29 @@ impl CoxFit {
                 }
             }
             if ndead > 0 {
-                if matches!(method, Method::Breslow) {
+                if matches!(method, Method::Exact) && ndead > 1 {
+                    let (exact_denom, exact_a, exact_cmat) =
+                        exact_tied_moments(&risk_indices, ndead, &risk_vals, &self.covar);
+                    loglik -= exact_denom.ln();
+                    for i in 0..nvar {
+                        let temp = exact_a[i] / exact_denom;
+                        self.u[i] -= temp;
+                        for j in 0..=i {
+                            let val = (exact_cmat[(i, j)] - temp * exact_a[j]) / exact_denom;
+                            self.imat[(j, i)] += val;
+                            if i != j {
+                                self.imat[(i, j)] += val;
+                            }
+                        }
+                    }
+                    denom += denom2;
+                    for i in 0..nvar {
+                        a[i] += a2[i];
+                        for j in 0..=i {
+                            cmat[(i, j)] += cmat2[(i, j)];
+                        }
+                    }
+                } else if matches!(method, Method::Breslow) || ndead == 1 {
                     denom += denom2;
                     loglik -= deadwt * denom.ln();
                     for i in 0..nvar {
@@ -437,6 +598,27 @@ impl CoxFit {
                             }
                         }
                     }
+                } else {
+                    let death_count = ndead as f64;
+                    let risk_fraction = denom2 / death_count;
+                    let weight_average = deadwt / death_count;
+                    for _ in 0..ndead {
+                        denom += risk_fraction;
+                        loglik -= weight_average * denom.ln();
+                        for i in 0..nvar {
+                            a[i] += a2[i] / death_count;
+                            let temp = a[i] / denom;
+                            self.u[i] -= weight_average * temp;
+                            for j in 0..=i {
+                                cmat[(i, j)] += cmat2[(i, j)] / death_count;
+                                let val = weight_average * (cmat[(i, j)] - temp * a[j]) / denom;
+                                self.imat[(j, i)] += val;
+                                if i != j {
+                                    self.imat[(i, j)] += val;
+                                }
+                            }
+                        }
+                    }
                 }
                 a2.fill(0.0);
                 cmat2.fill(0.0);
@@ -444,6 +626,232 @@ impl CoxFit {
         }
         Ok(loglik)
     }
+
+    fn iterate_counting_process(&mut self, beta: &[f64]) -> Result<f64, CoxError> {
+        let Some(entry_times) = self.entry_times.as_ref() else {
+            return self.iterate_right_censored(beta);
+        };
+        let nvar = self.covar.ncols();
+        let nused = self.covar.nrows();
+        let method = self.method;
+        self.u.fill(0.0);
+        self.imat.fill(0.0);
+
+        let (zbeta_vals, risk_vals): (Vec<f64>, Vec<f64>) = if nused > PARALLEL_THRESHOLD_MEDIUM {
+            (0..nused)
+                .into_par_iter()
+                .map(|person| {
+                    let zbeta = self.offset[person]
+                        + beta
+                            .iter()
+                            .enumerate()
+                            .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person, i)]);
+                    (zbeta, zbeta.exp() * self.weights[person])
+                })
+                .unzip()
+        } else {
+            (0..nused)
+                .map(|person| {
+                    let zbeta = self.offset[person]
+                        + beta
+                            .iter()
+                            .enumerate()
+                            .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person, i)]);
+                    (zbeta, zbeta.exp() * self.weights[person])
+                })
+                .unzip()
+        };
+
+        let mut loglik = 0.0;
+        let mut stratum_start = 0usize;
+        for stratum_end in 0..nused {
+            if self.strata[stratum_end] != 1 {
+                continue;
+            }
+
+            let mut start_order: Vec<usize> = (stratum_start..=stratum_end).collect();
+            start_order.sort_by(|&lhs, &rhs| {
+                entry_times[rhs]
+                    .partial_cmp(&entry_times[lhs])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| rhs.cmp(&lhs))
+            });
+
+            let mut stop_denom = 0.0;
+            let mut stop_a = vec![0.0; nvar];
+            let mut stop_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
+            let mut unentered_denom = 0.0;
+            let mut unentered_a = vec![0.0; nvar];
+            let mut unentered_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
+            let mut stop_ptr = stratum_end as isize;
+            let mut start_ptr = 0usize;
+            let mut time_end = stratum_end;
+
+            loop {
+                let event_time = self.time[time_end];
+                while stop_ptr >= stratum_start as isize
+                    && self.time[stop_ptr as usize] >= event_time
+                {
+                    let person = stop_ptr as usize;
+                    add_risk_sums(
+                        &self.covar,
+                        nvar,
+                        person,
+                        risk_vals[person],
+                        &mut stop_denom,
+                        &mut stop_a,
+                        &mut stop_cmat,
+                    );
+                    stop_ptr -= 1;
+                }
+                while start_ptr < start_order.len()
+                    && entry_times[start_order[start_ptr]] >= event_time
+                {
+                    let person = start_order[start_ptr];
+                    add_risk_sums(
+                        &self.covar,
+                        nvar,
+                        person,
+                        risk_vals[person],
+                        &mut unentered_denom,
+                        &mut unentered_a,
+                        &mut unentered_cmat,
+                    );
+                    start_ptr += 1;
+                }
+
+                let mut time_start = time_end;
+                while time_start > stratum_start && self.time[time_start - 1] == event_time {
+                    time_start -= 1;
+                }
+
+                let mut ndead = 0usize;
+                let mut deadwt = 0.0;
+                let mut denom2 = 0.0;
+                let mut a2 = vec![0.0; nvar];
+                let mut cmat2: Array2<f64> = Array2::zeros((nvar, nvar));
+
+                for person in time_start..=time_end {
+                    if self.status[person] == 0 {
+                        continue;
+                    }
+                    ndead += 1;
+                    deadwt += self.weights[person];
+                    loglik += self.weights[person] * zbeta_vals[person];
+                    add_risk_sums(
+                        &self.covar,
+                        nvar,
+                        person,
+                        risk_vals[person],
+                        &mut denom2,
+                        &mut a2,
+                        &mut cmat2,
+                    );
+                    for i in 0..nvar {
+                        self.u[i] += self.weights[person] * self.covar[(person, i)];
+                    }
+                }
+
+                if ndead > 0 {
+                    let denom = stop_denom - unentered_denom;
+                    let mut a = vec![0.0; nvar];
+                    let mut cmat: Array2<f64> = Array2::zeros((nvar, nvar));
+                    for i in 0..nvar {
+                        a[i] = stop_a[i] - unentered_a[i];
+                        for j in 0..=i {
+                            cmat[(i, j)] = stop_cmat[(i, j)] - unentered_cmat[(i, j)];
+                        }
+                    }
+                    if matches!(method, Method::Exact) && ndead > 1 {
+                        let risk_indices: Vec<usize> = (stratum_start..=stratum_end)
+                            .filter(|&idx| {
+                                entry_times[idx] < event_time && self.time[idx] >= event_time
+                            })
+                            .collect();
+                        let (exact_denom, exact_a, exact_cmat) =
+                            exact_tied_moments(&risk_indices, ndead, &risk_vals, &self.covar);
+                        loglik -= exact_denom.ln();
+                        for i in 0..nvar {
+                            let temp = exact_a[i] / exact_denom;
+                            self.u[i] -= temp;
+                            for j in 0..=i {
+                                let val = (exact_cmat[(i, j)] - temp * exact_a[j]) / exact_denom;
+                                self.imat[(j, i)] += val;
+                                if i != j {
+                                    self.imat[(i, j)] += val;
+                                }
+                            }
+                        }
+                    } else if matches!(method, Method::Breslow) || ndead == 1 {
+                        loglik -= deadwt * denom.ln();
+                        for i in 0..nvar {
+                            let temp = a[i] / denom;
+                            self.u[i] -= deadwt * temp;
+                            for j in 0..=i {
+                                let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
+                                self.imat[(j, i)] += val;
+                                if i != j {
+                                    self.imat[(i, j)] += val;
+                                }
+                            }
+                        }
+                    } else {
+                        let death_count = ndead as f64;
+                        let risk_fraction = denom2 / death_count;
+                        let weight_average = deadwt / death_count;
+                        let mut efron_denom = denom - denom2;
+                        let mut efron_a: Vec<f64> = a
+                            .iter()
+                            .zip(a2.iter())
+                            .map(|(&all, &dead)| all - dead)
+                            .collect();
+                        let mut efron_cmat = cmat.clone();
+                        for i in 0..nvar {
+                            for j in 0..=i {
+                                efron_cmat[(i, j)] -= cmat2[(i, j)];
+                            }
+                        }
+                        for _ in 0..ndead {
+                            efron_denom += risk_fraction;
+                            loglik -= weight_average * efron_denom.ln();
+                            for i in 0..nvar {
+                                efron_a[i] += a2[i] / death_count;
+                                let temp = efron_a[i] / efron_denom;
+                                self.u[i] -= weight_average * temp;
+                                for j in 0..=i {
+                                    efron_cmat[(i, j)] += cmat2[(i, j)] / death_count;
+                                    let val = weight_average
+                                        * (efron_cmat[(i, j)] - temp * efron_a[j])
+                                        / efron_denom;
+                                    self.imat[(j, i)] += val;
+                                    if i != j {
+                                        self.imat[(i, j)] += val;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if time_start == stratum_start {
+                    break;
+                }
+                time_end = time_start - 1;
+            }
+            stratum_start = stratum_end + 1;
+        }
+
+        Ok(loglik)
+    }
+
+    fn iterate(&mut self, beta: &[f64]) -> Result<f64, CoxError> {
+        if self.entry_times.is_some() {
+            self.iterate_counting_process(beta)
+        } else {
+            self.iterate_right_censored(beta)
+        }
+    }
+
     pub(crate) fn fit(&mut self) -> Result<(), CoxError> {
         let nvar = self.beta.len();
         let mut newbeta = vec![0.0; nvar];
@@ -453,6 +861,10 @@ impl CoxFit {
         let beta_copy = self.beta.clone();
         self.loglik[0] = self.iterate(&beta_copy)?;
         self.loglik[1] = self.loglik[0];
+        if nvar == 0 {
+            self.flag = 0;
+            return Ok(());
+        }
         a.copy_from_slice(&self.u);
         self.flag = Self::cholesky(&mut self.imat, self.toler)?;
         Self::chsolve(&self.imat, &mut a)?;
@@ -665,6 +1077,10 @@ mod tests {
     #[test]
     fn test_method_variants() {
         let breslow = Method::Breslow;
+        let efron = Method::Efron;
+        let exact = Method::Exact;
         assert!(matches!(breslow, Method::Breslow));
+        assert!(matches!(efron, Method::Efron));
+        assert!(matches!(exact, Method::Exact));
     }
 }

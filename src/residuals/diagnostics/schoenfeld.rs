@@ -31,15 +31,40 @@ pub fn smooth_schoenfeld(
     transform: &str,
 ) -> PyResult<SchoenfeldSmoothResult> {
     let n_events = event_times.len();
+    if n_events == 0 {
+        return Err(diagnostic_value_error("event_times must not be empty"));
+    }
+    if n_covariates == 0 {
+        return Err(diagnostic_value_error("n_covariates must be positive"));
+    }
     if schoenfeld_residuals.len() != n_events * n_covariates {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(diagnostic_value_error(
             "schoenfeld_residuals must have length n_events * n_covariates",
         ));
     }
+    if coefficients.len() != n_covariates {
+        return Err(diagnostic_value_error(format!(
+            "coefficients must have length n_covariates ({n_covariates}); got {}",
+            coefficients.len()
+        )));
+    }
+
+    validate_finite_slice("event_times", &event_times)?;
+    validate_finite_slice("schoenfeld_residuals", &schoenfeld_residuals)?;
+    validate_finite_slice("coefficients", &coefficients)?;
 
     let transformed_times: Vec<f64> = match transform.to_lowercase().as_str() {
         "identity" => event_times.clone(),
-        "log" => event_times.iter().map(|&t| (t.max(1e-10)).ln()).collect(),
+        "log" => {
+            for (idx, &time) in event_times.iter().enumerate() {
+                if time <= 0.0 {
+                    return Err(diagnostic_value_error(format!(
+                        "event_times must be positive for log transform; got {time} at index {idx}"
+                    )));
+                }
+            }
+            event_times.iter().map(|&t| t.ln()).collect()
+        }
         "km" => {
             let mut km = vec![0.0; n_events];
             let mut n_risk = n_events as f64;
@@ -55,10 +80,17 @@ pub fn smooth_schoenfeld(
                 .collect();
             ranks
         }
-        _ => event_times.clone(),
+        _ => {
+            return Err(diagnostic_value_error(
+                "transform must be 'identity', 'log', 'km', or 'rank'",
+            ));
+        }
     };
 
-    let h = bandwidth.unwrap_or_else(|| {
+    let h = if let Some(value) = bandwidth {
+        validate_positive_finite_scalar("bandwidth", value)?;
+        value
+    } else {
         let time_range = transformed_times
             .iter()
             .cloned()
@@ -67,8 +99,8 @@ pub fn smooth_schoenfeld(
                 .iter()
                 .cloned()
                 .fold(f64::INFINITY, f64::min);
-        0.2 * time_range
-    });
+        if time_range > 0.0 { 0.2 * time_range } else { 1.0 }
+    };
 
     let mut smoothed: Vec<Vec<f64>> = vec![vec![0.0; n_covariates]; n_events];
     let mut coefficient_path: Vec<Vec<f64>> = vec![vec![0.0; n_covariates]; n_events];

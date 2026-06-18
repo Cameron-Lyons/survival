@@ -2,9 +2,20 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::fmt;
 
-use crate::constants::{IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE};
+use crate::constants::{
+    EXP_CLAMP_MAX, EXP_CLAMP_MIN, IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE,
+};
 use crate::internal::matrix::invert_matrix;
 use crate::internal::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+#[inline]
+fn exp_clamped(value: f64) -> f64 {
+    value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
+}
 
 #[derive(Debug, Clone)]
 #[pyclass(str, get_all, from_py_object)]
@@ -80,7 +91,10 @@ impl FineGrayResult {
     }
 
     fn hazard_ratio(&self) -> Vec<f64> {
-        self.coefficients.iter().map(|&c| c.exp()).collect()
+        self.coefficients
+            .iter()
+            .map(|&coefficient| exp_clamped(coefficient))
+            .collect()
     }
 
     fn summary(&self) -> String {
@@ -98,7 +112,7 @@ impl FineGrayResult {
             s.push_str(&format!(
                 "  {:.4}    {:.4}     {:.4}     {:.3}    {:.4}\n",
                 self.coefficients[i],
-                self.coefficients[i].exp(),
+                exp_clamped(self.coefficients[i]),
                 self.std_errors[i],
                 self.z_scores[i],
                 self.p_values[i]
@@ -409,7 +423,7 @@ fn compute_log_likelihood(
                     1.0
                 };
 
-                sum_exp_eta += weight * eta_j.exp();
+                sum_exp_eta += weight * exp_clamped(eta_j);
             }
         }
 
@@ -473,7 +487,7 @@ fn compute_gradient_hessian(
                     1.0
                 };
 
-                let exp_eta = eta_j.exp();
+                let exp_eta = exp_clamped(eta_j);
                 let w_exp = weight * exp_eta;
 
                 s0 += w_exp;
@@ -664,37 +678,7 @@ pub fn finegray_regression(
     max_iter: usize,
     eps: f64,
 ) -> PyResult<FineGrayResult> {
-    let n = time.len();
-
-    if n != status.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and status must have the same length",
-        ));
-    }
-
-    if n != covariates.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and covariates must have the same length",
-        ));
-    }
-
-    if covariates.is_empty() || covariates[0].is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "covariates must not be empty",
-        ));
-    }
-
-    let p = covariates[0].len();
-    for (i, row) in covariates.iter().enumerate() {
-        if row.len() != p {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "all covariate rows must have the same length (row {} has {} instead of {})",
-                i,
-                row.len(),
-                p
-            )));
-        }
-    }
+    validate_finegray_regression_input(&time, &status, &covariates, event_type, max_iter, eps)?;
 
     Ok(finegray_regression_core(
         &time,
@@ -714,11 +698,7 @@ pub fn competing_risks_cif(
     event_type: i32,
     confidence_level: f64,
 ) -> PyResult<CompetingRisksCIF> {
-    if time.len() != status.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and status must have the same length",
-        ));
-    }
+    validate_competing_risks_input(&time, &status, event_type, confidence_level)?;
 
     Ok(competing_risks_cif_core(
         &time,
@@ -726,6 +706,99 @@ pub fn competing_risks_cif(
         event_type,
         confidence_level,
     ))
+}
+
+fn validate_survival_outcome(time: &[f64], status: &[i32], event_type: i32) -> PyResult<()> {
+    if time.is_empty() {
+        return Err(value_error("time must not be empty"));
+    }
+    if time.len() != status.len() {
+        return Err(value_error("time and status must have the same length"));
+    }
+    if event_type <= 0 {
+        return Err(value_error("event_type must be positive"));
+    }
+    for (idx, &value) in time.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "time contains non-finite value at index {}",
+                idx
+            )));
+        }
+        if value < 0.0 {
+            return Err(value_error(format!(
+                "time contains negative value {} at index {}",
+                value, idx
+            )));
+        }
+    }
+    for (idx, &value) in status.iter().enumerate() {
+        if value < 0 {
+            return Err(value_error(format!(
+                "status contains negative value {} at index {}",
+                value, idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_finegray_regression_input(
+    time: &[f64],
+    status: &[i32],
+    covariates: &[Vec<f64>],
+    event_type: i32,
+    max_iter: usize,
+    eps: f64,
+) -> PyResult<()> {
+    validate_survival_outcome(time, status, event_type)?;
+    if time.len() != covariates.len() {
+        return Err(value_error("time and covariates must have the same length"));
+    }
+    if covariates.is_empty() || covariates[0].is_empty() {
+        return Err(value_error("covariates must not be empty"));
+    }
+    let p = covariates[0].len();
+    for (row_idx, row) in covariates.iter().enumerate() {
+        if row.len() != p {
+            return Err(value_error(format!(
+                "all covariate rows must have the same length (row {} has {} instead of {})",
+                row_idx,
+                row.len(),
+                p
+            )));
+        }
+        for (col_idx, &value) in row.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(value_error(format!(
+                    "covariates contains non-finite value at row {}, column {}",
+                    row_idx, col_idx
+                )));
+            }
+        }
+    }
+    if max_iter == 0 {
+        return Err(value_error("max_iter must be positive"));
+    }
+    if !eps.is_finite() || eps <= 0.0 {
+        return Err(value_error("eps must be a positive finite value"));
+    }
+    Ok(())
+}
+
+fn validate_competing_risks_input(
+    time: &[f64],
+    status: &[i32],
+    event_type: i32,
+    confidence_level: f64,
+) -> PyResult<()> {
+    validate_survival_outcome(time, status, event_type)?;
+    if !confidence_level.is_finite() || !(0.0..1.0).contains(&confidence_level) {
+        return Err(value_error(
+            "confidence_level must be a finite value between 0 and 1",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -812,5 +885,86 @@ mod tests {
         for &v in &km_values {
             assert!((0.0..=1.0).contains(&v));
         }
+    }
+
+    #[test]
+    fn test_finegray_public_api_rejects_malformed_inputs() {
+        assert!(
+            finegray_regression(vec![], vec![], vec![], 1, 25, 1e-9)
+                .unwrap_err()
+                .to_string()
+                .contains("time must not be empty")
+        );
+        assert!(
+            finegray_regression(vec![1.0], vec![1], vec![vec![f64::NAN]], 1, 25, 1e-9,)
+                .unwrap_err()
+                .to_string()
+                .contains("covariates contains non-finite")
+        );
+        assert!(
+            finegray_regression(vec![1.0], vec![1], vec![vec![0.0]], 1, 0, 1e-9)
+                .unwrap_err()
+                .to_string()
+                .contains("max_iter must be positive")
+        );
+        assert!(
+            finegray_regression(vec![1.0], vec![1], vec![vec![0.0]], 1, 25, f64::INFINITY)
+                .unwrap_err()
+                .to_string()
+                .contains("eps must be")
+        );
+    }
+
+    #[test]
+    fn test_competing_risks_cif_public_api_rejects_malformed_inputs() {
+        assert!(
+            competing_risks_cif(vec![1.0], vec![], 1, 0.95)
+                .unwrap_err()
+                .to_string()
+                .contains("same length")
+        );
+        assert!(
+            competing_risks_cif(vec![f64::INFINITY], vec![1], 1, 0.95)
+                .unwrap_err()
+                .to_string()
+                .contains("time contains non-finite")
+        );
+        assert!(
+            competing_risks_cif(vec![1.0], vec![-1], 1, 0.95)
+                .unwrap_err()
+                .to_string()
+                .contains("status contains negative")
+        );
+        assert!(
+            competing_risks_cif(vec![1.0], vec![1], 1, 1.0)
+                .unwrap_err()
+                .to_string()
+                .contains("confidence_level")
+        );
+    }
+
+    #[test]
+    fn test_hazard_ratios_are_clamped_for_large_coefficients() {
+        let result = FineGrayResult::new(
+            vec![1_000.0],
+            vec![1.0],
+            vec![0.0],
+            vec![1.0],
+            vec![999.0],
+            vec![1001.0],
+            vec![vec![1.0]],
+            0.0,
+            0.0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            true,
+            1,
+        );
+
+        assert!(result.hazard_ratio()[0].is_finite());
+        assert!(result.summary().contains("Fine-Gray"));
     }
 }

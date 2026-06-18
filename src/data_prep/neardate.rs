@@ -1,3 +1,4 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
@@ -14,6 +15,28 @@ pub struct NearDateResult {
     /// Number of successful matches
     #[pyo3(get)]
     pub n_matched: usize,
+}
+
+fn validate_dates(name: &str, values: &[f64]) -> PyResult<()> {
+    for (idx, value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "{} values must be finite, got non-finite value at index {}",
+                name, idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_direction(best: Option<&str>) -> PyResult<&str> {
+    let direction = best.unwrap_or("closest");
+    if !["prior", "after", "closest"].contains(&direction) {
+        return Err(PyErr::new::<PyValueError, _>(
+            "best must be 'prior', 'after', or 'closest'",
+        ));
+    }
+    Ok(direction)
 }
 
 /// Find the closest matching date/value in a reference set.
@@ -54,13 +77,10 @@ pub fn neardate(
             "id2 and date2 must have same length",
         ));
     }
+    validate_dates("date1", &date1)?;
+    validate_dates("date2", &date2)?;
 
-    let direction = best.unwrap_or("closest");
-    if !["prior", "after", "closest"].contains(&direction) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "best must be 'prior', 'after', or 'closest'",
-        ));
-    }
+    let direction = validate_direction(best)?;
 
     let mut ref_by_id: HashMap<i64, Vec<(usize, f64)>> = HashMap::new();
     for (idx, (&id, &date)) in id2.iter().zip(date2.iter()).enumerate() {
@@ -68,7 +88,7 @@ pub fn neardate(
     }
 
     for entries in ref_by_id.values_mut() {
-        entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        entries.sort_by(|a, b| a.1.total_cmp(&b.1));
     }
 
     let mut indices = Vec::with_capacity(n1);
@@ -169,13 +189,10 @@ pub fn neardate_str(
             "id2 and date2 must have same length",
         ));
     }
+    validate_dates("date1", &date1)?;
+    validate_dates("date2", &date2)?;
 
-    let direction = best.unwrap_or("closest");
-    if !["prior", "after", "closest"].contains(&direction) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "best must be 'prior', 'after', or 'closest'",
-        ));
-    }
+    let direction = validate_direction(best)?;
 
     let mut ref_by_id: HashMap<String, Vec<(usize, f64)>> = HashMap::new();
     for (idx, (id, &date)) in id2.iter().zip(date2.iter()).enumerate() {
@@ -183,7 +200,7 @@ pub fn neardate_str(
     }
 
     for entries in ref_by_id.values_mut() {
-        entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        entries.sort_by(|a, b| a.1.total_cmp(&b.1));
     }
 
     let mut indices = Vec::with_capacity(n1);
@@ -266,5 +283,21 @@ mod tests {
         let result = neardate(id1, date1, id2, date2, None, None).unwrap();
         assert_eq!(result.n_matched, 0);
         assert_eq!(result.indices[0], None);
+    }
+
+    #[test]
+    fn test_neardate_rejects_nonfinite_dates() {
+        assert!(neardate(vec![1], vec![f64::NAN], vec![1], vec![1.0], None, None).is_err());
+        assert!(
+            neardate_str(
+                vec!["a".to_string()],
+                vec![1.0],
+                vec!["a".to_string()],
+                vec![f64::INFINITY],
+                None,
+                None,
+            )
+            .is_err()
+        );
     }
 }

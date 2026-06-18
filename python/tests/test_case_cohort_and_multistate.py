@@ -55,6 +55,36 @@ def test_clogit_dataset_tracks_observations_and_covariates():
 
     assert dataset.get_num_observations() == 4
     assert dataset.get_num_covariates() == 1
+    assert len(dataset) == 4
+    assert dataset.is_empty() is False
+
+
+def test_clogit_dataset_rejects_invalid_observations():
+    dataset = survival.ClogitDataSet()
+    assert len(dataset) == 0
+    assert dataset.is_empty() is True
+
+    with pytest.raises(ValueError, match="0 or 1"):
+        dataset.add_observation(2, 0, [1.0])
+    with pytest.raises(ValueError, match="finite"):
+        dataset.add_observation(1, 0, [math.nan])
+
+    dataset.add_observation(1, 0, [1.0])
+
+    with pytest.raises(ValueError, match="same number of covariates"):
+        dataset.add_observation(0, 0, [1.0, 2.0])
+    assert len(dataset) == 1
+
+
+def test_conditional_logistic_regression_rejects_invalid_controls():
+    dataset = _matched_clogit_dataset()
+
+    with pytest.raises(ValueError, match="max_iter"):
+        survival.ConditionalLogisticRegression(dataset, max_iter=0)
+    with pytest.raises(ValueError, match="tol"):
+        survival.ConditionalLogisticRegression(dataset, tol=0.0)
+    with pytest.raises(ValueError, match="tol"):
+        survival.ConditionalLogisticRegression(dataset, tol=math.inf)
 
 
 def test_conditional_logistic_regression_fit_populates_outputs():
@@ -67,6 +97,22 @@ def test_conditional_logistic_regression_fit_populates_outputs():
     assert model.coefficients[0] > 0.0
     assert model.predict([2.0]) > model.predict([1.0])
     assert model.odds_ratios()[0] == pytest.approx(math.exp(model.coefficients[0]))
+
+
+def test_conditional_logistic_regression_predict_validates_rows():
+    model = survival.ConditionalLogisticRegression(_matched_clogit_dataset(), max_iter=20, tol=1e-9)
+
+    with pytest.raises(ValueError, match="fit before prediction"):
+        model.predict([1.0])
+
+    model.fit()
+
+    with pytest.raises(ValueError, match="expected 1"):
+        model.predict([])
+    with pytest.raises(ValueError, match="finite"):
+        model.predict([math.nan])
+
+    assert math.isfinite(model.predict([2.0]))
 
 
 def test_conditional_logistic_regression_is_invariant_to_row_order():
@@ -122,8 +168,13 @@ def test_conditional_logistic_regression_uses_strata():
 
 def test_case_cohort_prentice_accepts_public_enum_value():
     cohort = survival.CohortData.new()
+    assert len(cohort) == 0
+    assert cohort.is_empty() is True
+
     cohort.add_subject(_simple_subject(1, 0.1, is_case=True, is_subcohort=True))
     cohort.add_subject(_simple_subject(2, 0.2, is_case=False, is_subcohort=True))
+    assert len(cohort) == 2
+    assert cohort.is_empty() is False
 
     fitted = cohort.fit(survival.CchMethod.Prentice, max_iter=5)
 
@@ -186,6 +237,14 @@ def test_cohort_data_returns_added_subject():
     assert subject.is_subcohort is True
 
 
+def test_cohort_data_rejects_out_of_range_subject_index():
+    cohort = survival.CohortData.new()
+    cohort.add_subject(_simple_subject(7, 1.5, is_case=True, is_subcohort=True))
+
+    with pytest.raises(IndexError, match="subject index 1 out of range"):
+        cohort.get_subject(1)
+
+
 def test_survfitaj_basic_outputs_are_consistent():
     result = survival.survfitaj(**_survfitaj_kwargs(sefit=0))
 
@@ -220,3 +279,155 @@ def test_survfitaj_rejects_ragged_hindx():
 
     with pytest.raises(ValueError, match="Invalid hindx array"):
         survival.survfitaj(**kwargs)
+
+
+def test_survfitaj_validates_public_inputs():
+    kwargs = _survfitaj_kwargs(sefit=0)
+    kwargs["y"] = [0.0, 1.0]
+    with pytest.raises(ValueError, match="y length must be a multiple of 3"):
+        survival.survfitaj(**kwargs)
+
+    kwargs = _survfitaj_kwargs(sefit=0)
+    kwargs["sort1"] = [0, 4, 2]
+    with pytest.raises(ValueError, match="sort index 4"):
+        survival.survfitaj(**kwargs)
+
+    kwargs = _survfitaj_kwargs(sefit=0)
+    kwargs["wt"] = [1.0, float("inf"), 1.0]
+    with pytest.raises(ValueError, match="wt contains non-finite"):
+        survival.survfitaj(**kwargs)
+
+    kwargs = _survfitaj_kwargs(sefit=0)
+    kwargs["cstate"] = [0, 2, 0]
+    with pytest.raises(ValueError, match="cstate value 2"):
+        survival.survfitaj(**kwargs)
+
+    kwargs = _survfitaj_kwargs(sefit=1)
+    kwargs["i0"] = [0.0]
+    with pytest.raises(ValueError, match="i0 length must equal ngrp"):
+        survival.survfitaj(**kwargs)
+
+    kwargs = _survfitaj_kwargs(sefit=0)
+    kwargs["p0"] = [0.6, 0.6]
+    with pytest.raises(ValueError, match="p0 probabilities must sum to 1"):
+        survival.survfitaj(**kwargs)
+
+    kwargs = _survfitaj_kwargs(sefit=0)
+    kwargs["p0"] = [-1.0, 2.0]
+    with pytest.raises(ValueError, match="p0 contains negative value"):
+        survival.survfitaj(**kwargs)
+
+    kwargs = _survfitaj_kwargs(sefit=0)
+    kwargs["trmat"] = [[0, 1, 2]]
+    with pytest.raises(ValueError, match="trmat array: matrix must have exactly 2 columns"):
+        survival.survfitaj(**kwargs)
+
+    kwargs = _survfitaj_kwargs(sefit=0)
+    kwargs["hindx"] = [[1]]
+    with pytest.raises(ValueError, match="hindx hazard index 1"):
+        survival.survfitaj(**kwargs)
+
+
+def test_illness_death_public_apis_and_validation():
+    model = survival.fit_illness_death(
+        entry_time=[0.0, 0.0, 0.0],
+        transition_time=[1.0, 0.0, 1.0 + 5e-10],
+        exit_time=[2.0, 2.0, 2.0],
+        from_state=[0, 0, 0],
+        to_state=[1, 2, 1],
+        covariates=[[10.0], [20.0], [30.0]],
+        config=None,
+    )
+    prediction = survival.predict_illness_death(
+        model,
+        current_state=0,
+        time_in_state=0.0,
+        prediction_times=[0.5, 1.0],
+        covariates=[0.1],
+    )
+
+    assert len(model.transition_hazards) == 3
+    assert model.transition_hazards[0].baseline_times == pytest.approx([1.0])
+    assert model.transition_hazards[0].baseline_hazard == pytest.approx([1.0])
+    assert model.transition_hazards[0].coefficient == pytest.approx(20.0)
+    assert len(prediction.state_probs) == 2
+    assert prediction.survival_prob[0] > 0.0
+
+    with pytest.raises(ValueError, match="input vectors must be non-empty"):
+        survival.fit_illness_death([], [], [], [], [], None, None)
+
+    with pytest.raises(ValueError, match="exit_time contains non-finite"):
+        survival.fit_illness_death([0.0], [0.0], [float("inf")], [0], [0], None, None)
+
+    with pytest.raises(ValueError, match="from_state must contain only 0/1"):
+        survival.fit_illness_death([0.0], [0.0], [1.0], [3], [0], None, None)
+
+    with pytest.raises(ValueError, match="transition_time must be between"):
+        survival.fit_illness_death([0.0], [3.0], [2.0], [0], [1], None, None)
+
+    with pytest.raises(ValueError, match="covariates row 1 has 2 columns"):
+        survival.fit_illness_death(
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [2.0, 2.0],
+            [0, 0],
+            [1, 2],
+            [[1.0], [2.0, 3.0]],
+            None,
+        )
+
+    with pytest.raises(ValueError, match="current_state must be"):
+        survival.predict_illness_death(model, 3, 0.0, [1.0], None)
+
+    with pytest.raises(ValueError, match="time_in_state must be finite"):
+        survival.predict_illness_death(model, 0, float("inf"), [1.0], None)
+
+    with pytest.raises(ValueError, match="prediction_times contains negative value"):
+        survival.predict_illness_death(model, 0, 0.0, [-1.0], None)
+
+
+def test_semi_markov_public_apis_and_validation():
+    config = survival.SemiMarkovConfig(3)
+    model = survival.fit_semi_markov(
+        [0.0, 1.0, 2.0, 0.5],
+        [1.0, 2.0, 3.0, 1.5],
+        [0, 0, 1, 1],
+        [1, 1, 2, 2],
+        config,
+    )
+    prediction = survival.predict_semi_markov(model, 0, 0.5, [0.5, 1.0])
+
+    assert len(model.sojourn_params) == 3
+    assert model.get_transition_prob(0, 1) == pytest.approx(1.0)
+    assert len(prediction.state_probs) == 2
+    assert prediction.time_points == pytest.approx([0.5, 1.0])
+
+    with pytest.raises(ValueError, match="n_states must be positive"):
+        survival.SemiMarkovConfig(0)
+
+    with pytest.raises(ValueError, match="state_names length"):
+        survival.SemiMarkovConfig(3, ["A"])
+
+    with pytest.raises(ValueError, match="absorbing_states must contain values"):
+        survival.SemiMarkovConfig(3, None, None, [3])
+
+    with pytest.raises(ValueError, match="input vectors must be non-empty"):
+        survival.fit_semi_markov([], [], [], [], config)
+
+    with pytest.raises(ValueError, match="exit_times contains non-finite"):
+        survival.fit_semi_markov([0.0], [float("inf")], [0], [1], config)
+
+    with pytest.raises(ValueError, match="entry_times must be <= exit_times"):
+        survival.fit_semi_markov([2.0], [1.0], [0], [1], config)
+
+    with pytest.raises(ValueError, match="from_states must contain values"):
+        survival.fit_semi_markov([0.0], [1.0], [-1], [1], config)
+
+    with pytest.raises(ValueError, match="current_state must be"):
+        survival.predict_semi_markov(model, 3, 0.0, [1.0])
+
+    with pytest.raises(ValueError, match="time_in_state must be finite"):
+        survival.predict_semi_markov(model, 0, float("inf"), [1.0])
+
+    with pytest.raises(ValueError, match="prediction_times contains negative value"):
+        survival.predict_semi_markov(model, 0, 0.0, [-1.0])

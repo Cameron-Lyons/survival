@@ -25,11 +25,8 @@ pub fn leverage_cox(
     threshold_multiplier: f64,
 ) -> PyResult<LeverageResult> {
     let n = time.len();
-    if event.len() != n || covariates.len() != n * n_covariates {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input dimensions mismatch",
-        ));
-    }
+    validate_cox_diagnostic_inputs(&time, &event, &covariates, n_covariates, &coefficients)?;
+    validate_nonnegative_finite_scalar("threshold_multiplier", threshold_multiplier)?;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     if n > PARALLEL_THRESHOLD_MEDIUM {
