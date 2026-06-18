@@ -19,26 +19,42 @@ pub struct GroupLassoConfig {
 #[pymethods]
 impl GroupLassoConfig {
     #[new]
-    #[pyo3(signature = (lambda=1.0, max_iter=1000, tol=1e-6, standardize=true, group_weights=None))]
+    #[pyo3(signature = (lambda_=1.0, max_iter=1000, tol=1e-6, standardize=true, group_weights=None))]
     pub fn new(
-        lambda: f64,
+        lambda_: f64,
         max_iter: usize,
         tol: f64,
         standardize: bool,
         group_weights: Option<Vec<f64>>,
     ) -> PyResult<Self> {
-        if lambda < 0.0 {
+        if lambda_ < 0.0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "lambda must be non-negative",
             ));
         }
         Ok(GroupLassoConfig {
-            lambda,
+            lambda: lambda_,
             max_iter,
             tol,
             standardize,
             group_weights,
         })
+    }
+
+    #[getter]
+    pub fn lambda_(&self) -> f64 {
+        self.lambda
+    }
+
+    #[setter]
+    pub fn set_lambda_(&mut self, value: f64) -> PyResult<()> {
+        if value < 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "lambda must be non-negative",
+            ));
+        }
+        self.lambda = value;
+        Ok(())
     }
 }
 
@@ -63,6 +79,14 @@ pub struct GroupLassoResult {
     pub n_groups: usize,
     #[pyo3(get)]
     pub df: usize,
+}
+
+#[pymethods]
+impl GroupLassoResult {
+    #[getter]
+    pub fn lambda_(&self) -> f64 {
+        self.lambda
+    }
 }
 
 fn soft_threshold(x: f64, lambda: f64) -> f64 {

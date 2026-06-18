@@ -295,7 +295,7 @@ mod tests {
         let tstart = vec![f64::NAN, 1.0, 2.0];
         let tstop = vec![5.0, 3.0, 4.0];
         let cut = vec![2.5];
-        let result = survsplit(tstart, tstop, cut);
+        let result = survsplit(tstart, tstop, cut).unwrap();
         assert_eq!(result.row.len(), 5);
         assert!(result.start[0].is_nan());
     }
@@ -304,7 +304,7 @@ mod tests {
         let tstart = vec![1.0, 2.0, 3.0];
         let tstop = vec![f64::NAN, 4.0, 5.0];
         let cut = vec![3.5];
-        let result = survsplit(tstart, tstop, cut);
+        let result = survsplit(tstart, tstop, cut).unwrap();
         assert!(result.end[0].is_nan());
     }
     #[test]
@@ -312,7 +312,7 @@ mod tests {
         let tstart = vec![1.0, 2.0];
         let tstop = vec![5.0, 6.0];
         let cut = vec![f64::NAN, 3.0, 4.0];
-        let result = survsplit(tstart, tstop, cut);
+        let result = survsplit(tstart, tstop, cut).unwrap();
         assert!(!result.row.is_empty());
     }
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         let tstart = vec![f64::NAN, f64::NAN];
         let tstop = vec![f64::NAN, f64::NAN];
         let cut = vec![1.0, 2.0];
-        let result = survsplit(tstart, tstop, cut);
+        let result = survsplit(tstart, tstop, cut).unwrap();
         assert_eq!(result.row.len(), 2);
         assert!(result.start.iter().all(|x| x.is_nan()));
         assert!(result.end.iter().all(|x| x.is_nan()));
@@ -330,7 +330,7 @@ mod tests {
         let tstart = vec![0.0, 0.0];
         let tstop = vec![5.0, 10.0];
         let cut = vec![2.0, 4.0, 6.0, 8.0];
-        let result = survsplit(tstart, tstop, cut);
+        let result = survsplit(tstart, tstop, cut).unwrap();
         assert_eq!(result.row.len(), 8);
     }
     #[test]

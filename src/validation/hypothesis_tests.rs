@@ -205,7 +205,7 @@ pub(crate) fn proportional_hazards_test(
             .partial_cmp(&event_times[b])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let ranks: Vec<f64> = (1..=n_events).map(|r| r as f64).collect();
+    let transformed_time: Vec<f64> = sorted_indices.iter().map(|&idx| event_times[idx]).collect();
     let mut chi2_values = Vec::with_capacity(n_vars);
     let mut p_values = Vec::with_capacity(n_vars);
     let mut global_chi2 = 0.0;
@@ -218,20 +218,20 @@ pub(crate) fn proportional_hazards_test(
                     .and_then(|row| row.get(var).copied())
             })
             .collect();
-        let mean_rank = (n_events as f64 + 1.0) / 2.0;
+        let mean_time: f64 = transformed_time.iter().sum::<f64>() / n_events as f64;
         let mean_resid: f64 = residuals.iter().sum::<f64>() / n_events as f64;
         let mut cov = 0.0;
-        let mut var_rank = 0.0;
+        let mut var_time = 0.0;
         let mut var_resid = 0.0;
         for i in 0..n_events {
-            let r_diff = ranks[i] - mean_rank;
+            let r_diff = transformed_time[i] - mean_time;
             let resid_diff = residuals[i] - mean_resid;
             cov += r_diff * resid_diff;
-            var_rank += r_diff * r_diff;
+            var_time += r_diff * r_diff;
             var_resid += resid_diff * resid_diff;
         }
-        let correlation = if var_rank > 0.0 && var_resid > 0.0 {
-            cov / (var_rank.sqrt() * var_resid.sqrt())
+        let correlation = if var_time > 0.0 && var_resid > 0.0 {
+            cov / (var_time.sqrt() * var_resid.sqrt())
         } else {
             0.0
         };
@@ -257,10 +257,46 @@ pub fn ph_test(
     event_times: Vec<f64>,
     weights: Option<Vec<f64>>,
 ) -> PyResult<ProportionalityTest> {
+    if event_times.len() != schoenfeld_residuals.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "event_times must have the same length as schoenfeld_residuals",
+        ));
+    }
+    if let Some(first_row) = schoenfeld_residuals.first() {
+        let width = first_row.len();
+        if schoenfeld_residuals.iter().any(|row| row.len() != width) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "schoenfeld_residuals must be rectangular",
+            ));
+        }
+    }
     let weights_ref = weights.as_deref();
     Ok(proportional_hazards_test(
         &schoenfeld_residuals,
         &event_times,
         weights_ref,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proportional_hazards_test_uses_supplied_transformed_time_axis() {
+        let residuals = vec![vec![0.0], vec![1.0], vec![0.0], vec![1.0]];
+        let rank_time = vec![1.0, 2.0, 3.0, 4.0];
+        let uneven_time = vec![1.0, 2.0, 10.0, 11.0];
+
+        let rank_result = proportional_hazards_test(&residuals, &rank_time, None);
+        let uneven_result = proportional_hazards_test(&residuals, &uneven_time, None);
+
+        assert_ne!(rank_result.chi2_values[0], uneven_result.chi2_values[0]);
+    }
+
+    #[test]
+    fn ph_test_validates_time_length_and_rectangular_residuals() {
+        assert!(ph_test(vec![vec![1.0], vec![2.0]], vec![1.0], None).is_err());
+        assert!(ph_test(vec![vec![1.0], vec![2.0, 3.0]], vec![1.0, 2.0], None).is_err());
+    }
 }

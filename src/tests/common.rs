@@ -3,6 +3,14 @@ pub(crate) const STRICT_TOL: f64 = 1e-4;
 pub(crate) const STANDARD_TOL: f64 = 1e-3;
 pub(crate) const LOOSE_TOL: f64 = 0.05;
 
+#[cfg(feature = "python")]
+pub(crate) fn initialize_python() {
+    pyo3::Python::initialize();
+}
+
+#[cfg(not(feature = "python"))]
+pub(crate) fn initialize_python() {}
+
 pub(crate) fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
     if a.is_nan() && b.is_nan() {
         return true;

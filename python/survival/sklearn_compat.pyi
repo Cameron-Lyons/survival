@@ -6,14 +6,18 @@ from typing import Any, Self
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from survival._survival import CoxPHFit
+
 class SurvivalScoreMixin:
     def predict(self, X: ArrayLike) -> NDArray[np.float64]: ...
     def score(self, X: ArrayLike, y: ArrayLike) -> float: ...
 
 class CoxPHEstimator(SurvivalScoreMixin):
     n_iters: int
+    model_: CoxPHFit
     n_features_in_: int
     coef_: NDArray[np.float64]
+    event_times_: NDArray[np.float64]
     is_fitted_: bool
 
     def __init__(self, n_iters: int = 20) -> None: ...

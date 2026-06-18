@@ -5,6 +5,7 @@ use rayon::prelude::*;
 use std::fmt;
 
 type SurvregDerivatives = (f64, f64, f64, f64, f64, f64);
+type DistributionEval = [f64; 4];
 
 const SMALL: f64 = -200.0;
 const SPI: f64 = 2.506628274631001;
@@ -140,7 +141,7 @@ pub(crate) fn survregc1(
                             "Missing time2 for interval censored data",
                         )
                     })?[person];
-                    compute_interval_censored(z, sz, time2_val, eta, sigma, dist)
+                    compute_interval_censored(z, time2_val, eta, sigma, dist)
                 }
                 _ => Err("Invalid status value".into()),
             }
@@ -263,7 +264,7 @@ fn survregc1_sequential(
             3 => {
                 let time2_val = time2
                     .ok_or_else(|| "Missing time2 for interval censored data".to_string())?[person];
-                compute_interval_censored(z, sz, time2_val, eta, sigma, dist)
+                compute_interval_censored(z, time2_val, eta, sigma, dist)
             }
             _ => return Err("Invalid status value".into()),
         }?;
@@ -294,17 +295,17 @@ fn compute_exact(
     sigma: f64,
     dist: SurvivalDist,
 ) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    let (f, df, ddf) = match dist {
+    let funs = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 1)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 1)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 1)?,
     };
-    if f <= 0.0 {
+    if funs[1] <= 0.0 {
         Ok((SMALL, -z / sigma, -1.0 / sigma, 0.0, 0.0, 0.0))
     } else {
-        let g = f.ln() - sigma.ln();
-        let temp = df / sigma;
-        let temp2 = ddf / (sigma * sigma);
+        let g = funs[1].ln() - sigma.ln();
+        let temp = funs[2] / sigma;
+        let temp2 = funs[3] / (sigma * sigma);
         let dg = -temp;
         let dsig = -temp * sz;
         let ddg = temp2 - dg.powi(2);
@@ -320,23 +321,22 @@ fn compute_right_censored(
     sigma: f64,
     dist: SurvivalDist,
 ) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    let (f, _df, _ddf) = match dist {
+    let funs = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
-    let surv = 1.0 - f;
-    if surv <= 0.0 || surv >= 1.0 {
-        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+    if funs[1] <= 0.0 {
+        Ok((SMALL, z / sigma, 0.0, 0.0, 0.0, 0.0))
     } else {
-        let g = surv.ln();
-        let exp_z = (-g).max(1e-300);
-        let temp = exp_z / sigma;
-        let dg = temp;
-        let dsig = temp * sz;
-        let ddg = -temp / sigma;
-        let dsg = -sz * temp / sigma;
-        let ddsig = -temp * sz * (z + 1.0);
+        let g = funs[1].ln();
+        let temp = -funs[2] / (funs[1] * sigma);
+        let temp2 = -funs[3] / (funs[1] * sigma * sigma);
+        let dg = -temp;
+        let dsig = -temp * sz;
+        let ddg = temp2 - dg.powi(2);
+        let dsg = sz * temp2 - dg * (dsig + 1.0);
+        let ddsig = sz.powi(2) * temp2 - dsig * (1.0 + dsig);
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
@@ -347,28 +347,28 @@ fn compute_left_censored(
     sigma: f64,
     dist: SurvivalDist,
 ) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    let (f, df, _ddf) = match dist {
+    let funs = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
-    if f <= 0.0 || f >= 1.0 {
-        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+    if funs[0] <= 0.0 {
+        Ok((SMALL, -z / sigma, 0.0, 0.0, 0.0, 0.0))
     } else {
-        let g = (1.0 - f).ln();
-        let temp = -df / ((1.0 - f) * sigma);
-        let dg = temp;
-        let dsig = temp * sz;
-        let ddg = -dg.powi(2);
-        let dsg = -sz * dg.powi(2);
-        let ddsig = -sz.powi(2) * dg.powi(2);
+        let g = funs[0].ln();
+        let temp = funs[2] / (funs[0] * sigma);
+        let temp2 = funs[3] / (funs[0] * sigma * sigma);
+        let dg = -temp;
+        let dsig = -temp * sz;
+        let ddg = temp2 - dg.powi(2);
+        let dsg = sz * temp2 - dg * (dsig + 1.0);
+        let ddsig = sz.powi(2) * temp2 - dsig * (1.0 + dsig);
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
 #[inline]
 fn compute_interval_censored(
     z: f64,
-    sz: f64,
     time2: f64,
     eta: f64,
     sigma: f64,
@@ -376,51 +376,55 @@ fn compute_interval_censored(
 ) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
     let sz2 = time2 - eta;
     let z2 = sz2 / sigma;
-    let (f1, df1, _ddf1) = match dist {
+    let funs = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
     };
-    let (f2, df2, _ddf2) = match dist {
+    let ufun = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z2, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z2, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z2, 2)?,
     };
-    let diff = f2 - f1;
+    let diff = if z > 0.0 {
+        funs[1] - ufun[1]
+    } else {
+        ufun[0] - funs[0]
+    };
     if diff <= 0.0 {
-        Ok((SMALL, 0.0, 0.0, 0.0, 0.0, 0.0))
+        Ok((SMALL, 1.0, 0.0, 0.0, 0.0, 0.0))
     } else {
         let g = diff.ln();
-        let temp1 = df1 / (diff * sigma);
-        let temp2 = df2 / (diff * sigma);
-        let dg = temp2 - temp1;
-        let dsig = (temp2 * sz2 - temp1 * sz) / sigma;
-        let ddg = -(dg.powi(2));
-        let dsg = -(sz * temp1.powi(2) + sz2 * temp2.powi(2)) / sigma;
-        let ddsig = -(sz.powi(2) * temp1.powi(2) + sz2.powi(2) * temp2.powi(2)) / (sigma * sigma);
+        let dg = -(ufun[2] - funs[2]) / (diff * sigma);
+        let ddg = (ufun[3] - funs[3]) / (diff * sigma * sigma) - dg.powi(2);
+        let dsig = (z * funs[2] - z2 * ufun[2]) / diff;
+        let ddsig = (z2 * z2 * ufun[3] - z * z * funs[3]) / diff - dsig * (1.0 + dsig);
+        let dsg = (z2 * ufun[3] - z * funs[3]) / (diff * sigma) - dg * (dsig + 1.0);
         Ok((g, dg, ddg, dsig, ddsig, dsg))
     }
 }
 #[inline]
-fn logistic_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
-    let (w, sign) = if z > 0.0 {
-        ((-z).exp(), -1.0)
+fn logistic_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
+    let mut ans = [0.0; 4];
+    let (w, sign, ii) = if z > 0.0 {
+        ((-z).exp(), -1.0, 0usize)
     } else {
-        (z.exp(), 1.0)
+        (z.exp(), 1.0, 1usize)
     };
     let temp = 1.0 + w;
     match case {
         1 => {
-            let f = w / temp.powi(2);
-            let df = sign * (1.0 - w) / temp;
-            let ddf = (w.powi(2) - 4.0 * w + 1.0) / temp.powi(2);
-            Ok((f, df, ddf))
+            ans[1] = w / temp.powi(2);
+            ans[2] = sign * (1.0 - w) / temp;
+            ans[3] = (w.powi(2) - 4.0 * w + 1.0) / temp.powi(2);
+            Ok(ans)
         }
         2 => {
-            let f = w / temp;
-            let df = w / temp.powi(2);
-            let ddf = sign * df * (1.0 - w) / temp;
-            Ok((f, df, ddf))
+            ans[1 - ii] = w / temp;
+            ans[ii] = 1.0 / temp;
+            ans[2] = w / temp.powi(2);
+            ans[3] = sign * ans[2] * (1.0 - w) / temp;
+            Ok(ans)
         }
         _ => Err(DistributionError::InvalidCase {
             case,
@@ -429,17 +433,27 @@ fn logistic_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
     }
 }
 #[inline]
-fn gauss_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
+fn gauss_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
+    let mut ans = [0.0; 4];
     let f = (-z.powi(2) / 2.0).exp() / SPI;
     match case {
-        1 => Ok((f, -z, z.powi(2) - 1.0)),
+        1 => {
+            ans[1] = f;
+            ans[2] = -z;
+            ans[3] = z.powi(2) - 1.0;
+            Ok(ans)
+        }
         2 => {
-            let (f0, f1) = if z > 0.0 {
-                ((1.0 + erf(z / ROOT_2)) / 2.0, erfc(z / ROOT_2) / 2.0)
+            if z > 0.0 {
+                ans[0] = (1.0 + erf(z / ROOT_2)) / 2.0;
+                ans[1] = erfc(z / ROOT_2) / 2.0;
             } else {
-                (erfc(-z / ROOT_2) / 2.0, (1.0 + erf(-z / ROOT_2)) / 2.0)
-            };
-            Ok((f0, f1, -z * f))
+                ans[1] = (1.0 + erf(-z / ROOT_2)) / 2.0;
+                ans[0] = erfc(-z / ROOT_2) / 2.0;
+            }
+            ans[2] = f;
+            ans[3] = -z * f;
+            Ok(ans)
         }
         _ => Err(DistributionError::InvalidCase {
             case,
@@ -448,12 +462,24 @@ fn gauss_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
     }
 }
 #[inline]
-fn exvalue_d(z: f64, case: i32) -> Result<(f64, f64, f64), DistributionError> {
+fn exvalue_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
+    let mut ans = [0.0; 4];
     let w = z.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
     let temp = (-w).exp();
     match case {
-        1 => Ok((w * temp, 1.0 - w, w * (w - 3.0) + 1.0)),
-        2 => Ok((1.0 - temp, temp, w * temp * (1.0 - w))),
+        1 => {
+            ans[1] = w * temp;
+            ans[2] = 1.0 - w;
+            ans[3] = w * (w - 3.0) + 1.0;
+            Ok(ans)
+        }
+        2 => {
+            ans[0] = 1.0 - temp;
+            ans[1] = temp;
+            ans[2] = w * temp;
+            ans[3] = w * temp * (1.0 - w);
+            Ok(ans)
+        }
         _ => Err(DistributionError::InvalidCase {
             case,
             distribution: "extreme value".to_string(),
@@ -570,59 +596,127 @@ mod tests {
         assert!((mat[[0, 0]] - 5.0).abs() < 1e-10);
     }
 
+    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    fn contribution(
+        status: i32,
+        y: f64,
+        upper: Option<f64>,
+        eta: f64,
+        log_sigma: f64,
+        dist: SurvivalDist,
+    ) -> SurvregDerivatives {
+        let sigma = log_sigma.exp();
+        let sz = y - eta;
+        let z = sz / sigma;
+        match status {
+            0 => compute_right_censored(z, sz, sigma, dist).unwrap(),
+            1 => compute_exact(z, sz, sigma, dist).unwrap(),
+            2 => compute_left_censored(z, sz, sigma, dist).unwrap(),
+            3 => compute_interval_censored(z, upper.unwrap(), eta, sigma, dist).unwrap(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn assert_derivatives_match_finite_difference(
+        status: i32,
+        y: f64,
+        upper: Option<f64>,
+        eta: f64,
+        log_sigma: f64,
+        dist: SurvivalDist,
+    ) {
+        let h = 1e-5;
+        let h2 = 1e-4;
+        let (g, dg, ddg, dsig, ddsig, dsg) = contribution(status, y, upper, eta, log_sigma, dist);
+
+        let g_eta_plus = contribution(status, y, upper, eta + h, log_sigma, dist).0;
+        let g_eta_minus = contribution(status, y, upper, eta - h, log_sigma, dist).0;
+        let eta_score = (g_eta_plus - g_eta_minus) / (2.0 * h);
+        let eta_hessian = (g_eta_plus - 2.0 * g + g_eta_minus) / (h * h);
+
+        let g_sigma_plus = contribution(status, y, upper, eta, log_sigma + h, dist).0;
+        let g_sigma_minus = contribution(status, y, upper, eta, log_sigma - h, dist).0;
+        let sigma_score = (g_sigma_plus - g_sigma_minus) / (2.0 * h);
+        let sigma_hessian = (g_sigma_plus - 2.0 * g + g_sigma_minus) / (h * h);
+
+        let cross = (contribution(status, y, upper, eta + h2, log_sigma + h2, dist).0
+            - contribution(status, y, upper, eta + h2, log_sigma - h2, dist).0
+            - contribution(status, y, upper, eta - h2, log_sigma + h2, dist).0
+            + contribution(status, y, upper, eta - h2, log_sigma - h2, dist).0)
+            / (4.0 * h2 * h2);
+
+        assert_close(dg, eta_score, 1e-5);
+        assert_close(ddg, eta_hessian, 1e-4);
+        assert_close(dsig, sigma_score, 1e-5);
+        assert_close(ddsig, sigma_hessian, 1e-4);
+        assert_close(dsg, cross, 1e-4);
+    }
+
     #[test]
     fn test_exvalue_d_density() {
         let result = exvalue_d(0.0, 1);
         assert!(result.is_ok());
-        let (f, df, ddf) = result.unwrap();
-        assert!(f > 0.0);
-        assert!((df - 0.0).abs() < 1e-10);
-        assert!(ddf.is_finite());
+        let funs = result.unwrap();
+        assert!(funs[1] > 0.0);
+        assert!((funs[2] - 0.0).abs() < 1e-10);
+        assert!(funs[3].is_finite());
     }
 
     #[test]
     fn test_exvalue_d_survival() {
         let result = exvalue_d(0.0, 2);
         assert!(result.is_ok());
-        let (f, df, _ddf) = result.unwrap();
-        assert!(f > 0.0 && f < 1.0);
-        assert!(df > 0.0);
+        let funs = result.unwrap();
+        assert_close(funs[0], 1.0 - (-1.0f64).exp(), 1e-12);
+        assert_close(funs[1], (-1.0f64).exp(), 1e-12);
+        assert!(funs[2] > 0.0);
     }
 
     #[test]
     fn test_gauss_d_density() {
         let result = gauss_d(0.0, 1);
         assert!(result.is_ok());
-        let (f, df, ddf) = result.unwrap();
-        assert!(f > 0.0);
-        assert!((df - 0.0).abs() < 1e-10);
-        assert!(ddf.is_finite());
+        let funs = result.unwrap();
+        assert!(funs[1] > 0.0);
+        assert!((funs[2] - 0.0).abs() < 1e-10);
+        assert!(funs[3].is_finite());
     }
 
     #[test]
     fn test_gauss_d_survival() {
         let result = gauss_d(0.0, 2);
         assert!(result.is_ok());
-        let (f, _df, _ddf) = result.unwrap();
-        assert!((f - 0.5).abs() < 0.01);
+        let funs = result.unwrap();
+        assert!((funs[0] - 0.5).abs() < 0.01);
+        assert!((funs[1] - 0.5).abs() < 0.01);
+        assert!(funs[2] > 0.0);
     }
 
     #[test]
     fn test_logistic_d_density() {
         let result = logistic_d(0.0, 1);
         assert!(result.is_ok());
-        let (f, df, ddf) = result.unwrap();
-        assert!(f > 0.0);
-        assert!((df - 0.0).abs() < 1e-10);
-        assert!(ddf.is_finite());
+        let funs = result.unwrap();
+        assert!(funs[1] > 0.0);
+        assert!((funs[2] - 0.0).abs() < 1e-10);
+        assert!(funs[3].is_finite());
     }
 
     #[test]
     fn test_logistic_d_survival() {
-        let result = logistic_d(0.0, 2);
+        let result = logistic_d(2.0, 2);
         assert!(result.is_ok());
-        let (f, _df, _ddf) = result.unwrap();
-        assert!((f - 0.5).abs() < 1e-10);
+        let funs = result.unwrap();
+        let cdf = 1.0 / (1.0 + (-2.0f64).exp());
+        assert_close(funs[0], cdf, 1e-12);
+        assert_close(funs[1], 1.0 - cdf, 1e-12);
+        assert_close(funs[2], cdf * (1.0 - cdf), 1e-12);
     }
 
     #[test]
@@ -670,7 +764,7 @@ mod tests {
         assert!(result.is_ok());
         let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
         assert!(g.is_finite());
-        assert!(g < 0.0);
+        assert_close(g, -1.0, 1e-12);
         assert!(dg.is_finite());
         assert!(ddg.is_finite());
         assert!(dsig.is_finite());
@@ -699,7 +793,24 @@ mod tests {
         let result = compute_left_censored(0.0, 0.0, 1.0, SurvivalDist::Weibull);
         assert!(result.is_ok());
         let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
-        assert!(g.is_finite());
+        assert_close(g, (1.0 - (-1.0f64).exp()).ln(), 1e-12);
+    }
+
+    #[test]
+    fn test_compute_interval_censored_weibull() {
+        let upper = 2.0f64.ln();
+        let result = compute_interval_censored(0.0, upper, 0.0, 1.0, SurvivalDist::Weibull);
+        assert!(result.is_ok());
+        let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
+        assert_close(g, ((-1.0f64).exp() - (-2.0f64).exp()).ln(), 1e-12);
+    }
+
+    #[test]
+    fn test_censored_derivatives_match_finite_difference() {
+        let dist = SurvivalDist::Weibull;
+        assert_derivatives_match_finite_difference(0, 0.4, None, -0.2, 0.15, dist);
+        assert_derivatives_match_finite_difference(2, 0.4, None, -0.2, 0.15, dist);
+        assert_derivatives_match_finite_difference(3, 0.4, Some(1.1), -0.2, 0.15, dist);
     }
 
     #[test]

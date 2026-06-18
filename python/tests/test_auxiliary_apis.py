@@ -50,6 +50,94 @@ def test_statistical_test_helpers():
     ):
         survival.score_test_py([1.0, 2.0], [[1.0]])
 
+    with pytest.raises(ValueError, match="event_times"):
+        survival.ph_test([[1.0], [2.0]], [1.0], None)
+
+    with pytest.raises(ValueError, match="rectangular"):
+        survival.ph_test([[1.0], [2.0, 3.0]], [1.0, 2.0], None)
+
+
+def test_cox_diagnostic_helpers_validate_inputs():
+    with pytest.raises(ValueError, match="at least two observations"):
+        survival.dfbeta_cox([1.0], [1], [0.1], 1, [0.5])
+
+    with pytest.raises(ValueError, match="event must contain only 0/1"):
+        survival.leverage_cox([1.0, 2.0], [1, 2], [0.1, 0.2], 1, [0.5])
+
+    with pytest.raises(ValueError, match="coefficients must have length"):
+        survival.outlier_detection_cox([1.0, 2.0], [1, 0], [0.1, 0.2], 1, [])
+
+    with pytest.raises(ValueError, match="covariates contains non-finite"):
+        survival.model_influence_cox([1.0, 2.0], [1, 0], [0.1, float("nan")], 1, [0.5])
+
+    with pytest.raises(ValueError, match="number of events"):
+        survival.goodness_of_fit_cox([1.0, 2.0], [0, 0], [0.1, 0.2], 1, [0.5])
+
+    with pytest.raises(ValueError, match="threshold must be a finite positive value"):
+        survival.dfbeta_cox([1.0, 2.0], [1, 0], [0.1, 0.2], 1, [0.5], threshold=0.0)
+
+
+def test_schoenfeld_smoothing_validates_inputs():
+    with pytest.raises(ValueError, match="bandwidth must be a finite positive value"):
+        survival.smooth_schoenfeld(
+            [1.0, 2.0],
+            [0.1, 0.2],
+            1,
+            [0.5],
+            bandwidth=0.0,
+        )
+
+    with pytest.raises(ValueError, match="transform must be"):
+        survival.smooth_schoenfeld([1.0, 2.0], [0.1, 0.2], 1, [0.5], transform="weird")
+
+    with pytest.raises(ValueError, match="positive for log transform"):
+        survival.smooth_schoenfeld([0.0, 2.0], [0.1, 0.2], 1, [0.5], transform="log")
+
+    with pytest.raises(ValueError, match="coefficients must have length"):
+        survival.smooth_schoenfeld([1.0, 2.0], [0.1, 0.2], 1, [])
+
+
+def test_fast_cox_numpy_uses_shifted_risk_scores_for_large_offsets():
+    config = survival.FastCoxConfig(
+        0.0,
+        1.0,
+        1,
+        1e-7,
+        survival.ScreeningRule("none"),
+        None,
+        10,
+        False,
+        True,
+    )
+    result = survival.fast_cox_numpy(
+        np.zeros((3, 1), dtype=float),
+        np.array([1.0, 2.0, 3.0], dtype=float),
+        np.array([1, 0, 1], dtype=np.int32),
+        config,
+        offset=np.array([710.0, 709.0, 708.0], dtype=float),
+    )
+    expected = 2.0 * np.log(1.0 + np.exp(-1.0) + np.exp(-2.0))
+
+    assert np.isfinite(result.deviance)
+    assert result.deviance == pytest.approx(expected)
+
+
+def test_elastic_net_cox_uses_shifted_risk_scores_for_large_offsets():
+    covariates = survival.CovariateMatrix([0.0, 0.0, 0.0], 3, 1)
+    survival_data = survival.SurvivalData([1.0, 2.0, 3.0], [1, 0, 1])
+    input_data = survival.CoxRegressionInput(
+        covariates,
+        survival_data,
+        None,
+        [710.0, 709.0, 708.0],
+    )
+    config = survival.ElasticNetConfig(0.0, 0.0, 1, 1e-7, False, False)
+    result = survival.elastic_net_cox(input_data, config)
+    expected = 2.0 * np.log(1.0 + np.exp(-1.0) + np.exp(-2.0))
+
+    assert np.isfinite(result.deviance)
+    assert result.deviance == pytest.approx(expected)
+
 
 def test_bootstrap_ci_helpers_smoke():
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]

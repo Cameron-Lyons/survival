@@ -5,6 +5,9 @@ __all__ = bind_names(
     [
         "concordance",
         "concordance_index",
+        "concordance_summary",
+        "counting_concordance_index",
+        "counting_concordance_summary",
         "perform_concordance1_calculation",
         "perform_concordance3_calculation",
         "perform_concordance_calculation",

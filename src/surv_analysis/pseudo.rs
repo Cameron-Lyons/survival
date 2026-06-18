@@ -1,7 +1,10 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::constants::TIME_EPSILON;
 use crate::internal::statistical::normal_cdf;
+use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
+use pyo3::exceptions::PyValueError;
 
 /// Result of pseudo-value computation
 #[derive(Debug, Clone)]
@@ -51,42 +54,21 @@ pub fn pseudo(
     type_: Option<&str>,
 ) -> PyResult<PseudoResult> {
     let n = time.len();
-
-    if status.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and status must have same length",
-        ));
-    }
+    let pseudo_type = validate_pseudo_type(type_)?;
+    validate_pseudo_inputs(&time, &status, eval_times.as_deref())?;
 
     if n == 0 {
         return Ok(PseudoResult {
             pseudo: vec![],
             time: vec![],
-            type_: type_.unwrap_or("survival").to_string(),
+            type_: pseudo_type.to_string(),
             n: 0,
         });
     }
 
-    let pseudo_type = type_.unwrap_or("survival");
-    if !["survival", "cumhaz", "rmst"].contains(&pseudo_type) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "type must be 'survival', 'cumhaz', or 'rmst'",
-        ));
-    }
-
     let times = match eval_times {
         Some(t) => t,
-        None => {
-            let mut event_times: Vec<f64> = time
-                .iter()
-                .zip(status.iter())
-                .filter(|(_, s)| **s == 1)
-                .map(|(t, _)| *t)
-                .collect();
-            event_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            event_times.dedup();
-            event_times
-        }
+        None => default_event_times(&time, &status),
     };
 
     if times.is_empty() {
@@ -135,6 +117,70 @@ pub fn pseudo(
     })
 }
 
+fn validate_pseudo_type(type_: Option<&str>) -> PyResult<&'static str> {
+    match type_.unwrap_or("survival") {
+        "survival" => Ok("survival"),
+        "cumhaz" => Ok("cumhaz"),
+        "rmst" => Ok("rmst"),
+        _ => Err(PyValueError::new_err(
+            "type must be 'survival', 'cumhaz', or 'rmst'",
+        )),
+    }
+}
+
+fn validate_binary_status(status: &[i32]) -> PyResult<()> {
+    for (idx, &value) in status.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(PyValueError::new_err(format!(
+                "status must contain only 0/1 values; got {} at index {}",
+                value, idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_pseudo_inputs(
+    time: &[f64],
+    status: &[i32],
+    eval_times: Option<&[f64]>,
+) -> PyResult<()> {
+    if status.len() != time.len() {
+        return Err(PyValueError::new_err(
+            "time and status must have same length",
+        ));
+    }
+
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_status(status)?;
+
+    if let Some(eval_times) = eval_times {
+        validate_no_nan(eval_times, "eval_times")?;
+        validate_finite(eval_times, "eval_times")?;
+        validate_non_negative(eval_times, "eval_times")?;
+    }
+
+    Ok(())
+}
+
+fn same_pseudo_time(left: f64, right: f64) -> bool {
+    (left - right).abs() < TIME_EPSILON
+}
+
+fn default_event_times(time: &[f64], status: &[i32]) -> Vec<f64> {
+    let mut event_times: Vec<f64> = time
+        .iter()
+        .zip(status.iter())
+        .filter(|(_, s)| **s == 1)
+        .map(|(t, _)| *t)
+        .collect();
+    event_times.sort_by(|a, b| a.total_cmp(b));
+    event_times.dedup_by(|a, b| same_pseudo_time(*a, *b));
+    event_times
+}
+
 /// Compute Kaplan-Meier estimates at specified times
 fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> Vec<f64> {
     let n = time.len();
@@ -143,11 +189,7 @@ fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> 
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
 
     let mut km_times = Vec::new();
     let mut km_surv = Vec::new();
@@ -162,30 +204,42 @@ fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> 
     km_surv.push(1.0);
     km_cumhaz.push(0.0);
 
-    for &idx in &indices {
-        let t = time[idx];
-        let s = status[idx];
-
-        if t > prev_time && prev_time > f64::NEG_INFINITY {
-            km_times.push(prev_time);
-            km_surv.push(surv);
-            km_cumhaz.push(cumhaz);
+    let mut start = 0;
+    while start < n {
+        let current_time = time[indices[start]];
+        let mut end = start + 1;
+        while end < n && same_pseudo_time(time[indices[end]], current_time) {
+            end += 1;
         }
 
-        if s == 1 && n_at_risk > 0.0 {
-            let hazard = 1.0 / n_at_risk;
+        let n_events = indices[start..end]
+            .iter()
+            .filter(|&&idx| status[idx] == 1)
+            .count() as f64;
+        let n_removed = (end - start) as f64;
+
+        if n_events > 0.0 && n_at_risk > 0.0 {
+            let hazard = n_events / n_at_risk;
             surv *= 1.0 - hazard;
             cumhaz += hazard;
         }
 
-        n_at_risk -= 1.0;
-        prev_time = t;
-    }
+        n_at_risk -= n_removed;
 
-    if prev_time > *km_times.last().unwrap_or(&0.0) {
-        km_times.push(prev_time);
-        km_surv.push(surv);
-        km_cumhaz.push(cumhaz);
+        if current_time > prev_time + TIME_EPSILON {
+            if current_time > *km_times.last().unwrap_or(&0.0) + TIME_EPSILON {
+                km_times.push(current_time);
+                km_surv.push(surv);
+                km_cumhaz.push(cumhaz);
+            } else {
+                let last = km_times.len() - 1;
+                km_surv[last] = surv;
+                km_cumhaz[last] = cumhaz;
+            }
+            prev_time = current_time;
+        }
+
+        start = end;
     }
 
     let mut result = Vec::with_capacity(eval_times.len());
@@ -193,7 +247,7 @@ fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> 
     for &eval_t in eval_times {
         let idx = km_times
             .iter()
-            .position(|&t| t > eval_t)
+            .position(|&t| t > eval_t + TIME_EPSILON)
             .unwrap_or(km_times.len());
         let idx = if idx > 0 { idx - 1 } else { 0 };
 
@@ -247,6 +301,13 @@ pub fn pseudo_fast(
 mod tests {
     use super::*;
 
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "expected {expected}, got {actual}"
+        );
+    }
+
     #[test]
     fn test_pseudo_basic() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -262,6 +323,57 @@ mod tests {
             let avg: f64 = result.pseudo.iter().map(|p| p[t_idx]).sum::<f64>() / 5.0;
             assert!(avg.is_finite());
         }
+    }
+
+    #[test]
+    fn test_compute_km_groups_event_and_censor_ties() {
+        let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
+        let status = vec![0, 1, 0];
+        let eval_times = vec![1.0];
+
+        let survival = compute_km(&time, &status, &eval_times, "survival");
+        let cumhaz = compute_km(&time, &status, &eval_times, "cumhaz");
+
+        assert_close(survival[0], 2.0 / 3.0);
+        assert_close(cumhaz[0], 1.0 / 3.0);
+    }
+
+    #[test]
+    fn test_default_event_times_deduplicate_near_ties() {
+        let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
+        let status = vec![1, 1, 0];
+
+        let event_times = default_event_times(&time, &status);
+
+        assert_eq!(event_times.len(), 1);
+        assert_close(event_times[0], 1.0);
+    }
+
+    #[test]
+    fn test_pseudo_rejects_malformed_inputs() {
+        let err = pseudo(vec![1.0, 2.0], vec![1, 2], None, Some("survival")).unwrap_err();
+        assert!(err.to_string().contains("status must contain only 0/1"));
+
+        let err = pseudo(vec![1.0, f64::INFINITY], vec![1, 0], None, Some("survival")).unwrap_err();
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = pseudo(
+            vec![1.0, 2.0],
+            vec![1, 0],
+            Some(vec![-1.0]),
+            Some("survival"),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("eval_times contains negative value")
+        );
+
+        let err = pseudo(vec![], vec![], None, Some("weird")).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("type must be 'survival', 'cumhaz', or 'rmst'")
+        );
     }
 
     #[test]
@@ -316,11 +428,41 @@ mod tests {
             "identity".to_string(),
             100,
             1e-6,
-        );
+        )
+        .unwrap();
         let result = pseudo_gee_regression(pseudo_values, covariates, None, Some(config)).unwrap();
 
         assert_eq!(result.coefficients.len(), 2);
         assert_eq!(result.std_errors.len(), 2);
+    }
+
+    #[test]
+    fn test_pseudo_gee_rejects_malformed_inputs() {
+        let err = GEEConfig::new("weird".to_string(), "identity".to_string(), 100, 1e-6)
+            .expect_err("invalid correlation structure should fail");
+        assert!(err.to_string().contains("correlation_structure"));
+
+        let err = GEEConfig::new("independence".to_string(), "identity".to_string(), 0, 1e-6)
+            .expect_err("zero max_iter should fail");
+        assert!(err.to_string().contains("max_iter"));
+
+        let err = pseudo_gee_regression(
+            vec![vec![0.8], vec![0.7, 0.6]],
+            vec![vec![1.0], vec![1.0]],
+            None,
+            None,
+        )
+        .expect_err("ragged pseudo_values should fail");
+        assert!(err.to_string().contains("pseudo_values row 1"));
+
+        let err = pseudo_gee_regression(
+            vec![vec![0.8], vec![0.7]],
+            vec![vec![1.0], vec![1.0]],
+            Some(vec![0]),
+            None,
+        )
+        .expect_err("short cluster_id should fail");
+        assert!(err.to_string().contains("cluster_id length"));
     }
 }
 
@@ -346,13 +488,15 @@ impl GEEConfig {
         link_function: String,
         max_iter: usize,
         tol: f64,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        let config = Self {
             correlation_structure,
             link_function,
             max_iter,
             tol,
-        }
+        };
+        validate_gee_config(&config)?;
+        Ok(config)
     }
 }
 
@@ -412,25 +556,24 @@ pub fn pseudo_gee_regression(
     cluster_id: Option<Vec<usize>>,
     config: Option<GEEConfig>,
 ) -> PyResult<GEEResult> {
-    let config = config.unwrap_or_else(|| {
-        GEEConfig::new(
+    let config = match config {
+        Some(config) => {
+            validate_gee_config(&config)?;
+            config
+        }
+        None => GEEConfig::new(
             "independence".to_string(),
             "identity".to_string(),
             100,
             1e-6,
-        )
-    });
+        )?,
+    };
+
+    validate_pseudo_gee_inputs(&pseudo_values, &covariates, cluster_id.as_deref())?;
 
     let n = pseudo_values.len();
-    if n == 0 || covariates.is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input data must be non-empty",
-        ));
-    }
-
     let n_times = pseudo_values[0].len();
     let p = covariates[0].len();
-
     let cluster_id = cluster_id.unwrap_or_else(|| (0..n).collect());
 
     let y: Vec<f64> = pseudo_values
@@ -541,6 +684,108 @@ pub fn pseudo_gee_regression(
         n_iterations,
         converged,
     })
+}
+
+fn validate_gee_config(config: &GEEConfig) -> PyResult<()> {
+    match config.correlation_structure.as_str() {
+        "independence" | "exchangeable" | "ar1" => {}
+        _ => {
+            return Err(PyValueError::new_err(
+                "correlation_structure must be 'independence', 'exchangeable', or 'ar1'",
+            ));
+        }
+    }
+
+    match config.link_function.as_str() {
+        "identity" | "log" | "logit" | "cloglog" => {}
+        _ => {
+            return Err(PyValueError::new_err(
+                "link_function must be 'identity', 'log', 'logit', or 'cloglog'",
+            ));
+        }
+    }
+
+    if config.max_iter == 0 {
+        return Err(PyValueError::new_err("max_iter must be positive"));
+    }
+    if !config.tol.is_finite() || config.tol <= 0.0 {
+        return Err(PyValueError::new_err(
+            "tol must be finite and strictly positive",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_matrix_values(
+    matrix: &[Vec<f64>],
+    name: &'static str,
+    require_non_empty_rows: bool,
+) -> PyResult<usize> {
+    let n_cols = matrix
+        .first()
+        .ok_or_else(|| PyValueError::new_err("Input data must be non-empty"))?
+        .len();
+    if require_non_empty_rows && n_cols == 0 {
+        return Err(PyValueError::new_err(format!(
+            "{name} rows must not be empty"
+        )));
+    }
+
+    for (row_idx, row) in matrix.iter().enumerate() {
+        if row.len() != n_cols {
+            return Err(PyValueError::new_err(format!(
+                "{name} row {row_idx} has {} columns, expected {n_cols}",
+                row.len()
+            )));
+        }
+        for (col_idx, &value) in row.iter().enumerate() {
+            if value.is_nan() {
+                return Err(PyValueError::new_err(format!(
+                    "{name} contains NaN at row {row_idx}, column {col_idx}"
+                )));
+            }
+            if !value.is_finite() {
+                return Err(PyValueError::new_err(format!(
+                    "{name} contains non-finite value {value} at row {row_idx}, column {col_idx}"
+                )));
+            }
+        }
+    }
+
+    Ok(n_cols)
+}
+
+fn validate_pseudo_gee_inputs(
+    pseudo_values: &[Vec<f64>],
+    covariates: &[Vec<f64>],
+    cluster_id: Option<&[usize]>,
+) -> PyResult<()> {
+    if pseudo_values.is_empty() || covariates.is_empty() {
+        return Err(PyValueError::new_err("Input data must be non-empty"));
+    }
+    if covariates.len() != pseudo_values.len() {
+        return Err(PyValueError::new_err(format!(
+            "covariates length must equal pseudo_values length; got {} and {}",
+            covariates.len(),
+            pseudo_values.len()
+        )));
+    }
+
+    validate_matrix_values(pseudo_values, "pseudo_values", true)?;
+    validate_matrix_values(covariates, "covariates", true)?;
+
+    if let Some(cluster_id) = cluster_id
+        && cluster_id.len() != pseudo_values.len()
+    {
+        return Err(PyValueError::new_err(format!(
+            "cluster_id length must equal pseudo_values length; got {} and {}",
+            cluster_id.len(),
+            pseudo_values.len()
+        )));
+    }
+
+    Ok(())
 }
 
 fn apply_link_inverse(eta: &[f64], link: &str) -> Vec<f64> {

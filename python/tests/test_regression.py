@@ -141,6 +141,18 @@ def test_aareg_public_api():
     assert len(result.residuals) == 4
     assert math.isfinite(result.goodness_of_fit)
 
+    weighted_subset = survival.AaregOptions(
+        formula="time ~ x1",
+        data=[[1.0, 2.0], [2.0, 3.0], [3.0, 4.0], [4.0, 5.0]],
+        variable_names=["time", "x1"],
+        max_iter=20,
+    )
+    weighted_subset.subset = [0, 1, 2]
+    weighted_subset.weights = [1.0, 2.0, 1.0, 99.0]
+    weighted_result = survival.aareg(weighted_subset)
+
+    assert len(weighted_result.residuals) == 3
+
 
 def test_aareg_rejects_invalid_formula():
     options = survival.AaregOptions(
@@ -150,8 +162,76 @@ def test_aareg_rejects_invalid_formula():
         max_iter=5,
     )
 
-    with pytest.raises(RuntimeError, match="Formula Error"):
+    with pytest.raises(ValueError, match="Formula Error"):
         survival.aareg(options)
+
+
+def test_aareg_validates_public_inputs():
+    with pytest.raises(ValueError, match="data cannot be empty"):
+        survival.aareg(
+            survival.AaregOptions(
+                formula="time ~ x1",
+                data=[],
+                variable_names=["time", "x1"],
+            )
+        )
+
+    with pytest.raises(ValueError, match="data row 1 has 1 columns"):
+        survival.aareg(
+            survival.AaregOptions(
+                formula="time ~ x1",
+                data=[[1.0, 2.0], [2.0]],
+                variable_names=["time", "x1"],
+            )
+        )
+
+    with pytest.raises(ValueError, match="variable_names length"):
+        survival.aareg(
+            survival.AaregOptions(
+                formula="time ~ x1",
+                data=[[1.0, 2.0], [2.0, 3.0]],
+                variable_names=["time"],
+            )
+        )
+
+    with pytest.raises(ValueError, match="data contains non-finite"):
+        survival.aareg(
+            survival.AaregOptions(
+                formula="time ~ x1",
+                data=[[1.0, float("inf")], [2.0, 3.0]],
+                variable_names=["time", "x1"],
+            )
+        )
+
+    missing = survival.AaregOptions(
+        formula="time ~ x1",
+        data=[[1.0, float("nan")], [2.0, 3.0], [3.0, 4.0]],
+        variable_names=["time", "x1"],
+    )
+    with pytest.raises(ValueError, match="missing values in data"):
+        survival.aareg(missing)
+
+    missing.na_action = "Exclude"
+    excluded = survival.aareg(missing)
+    assert len(excluded.residuals) == 2
+
+    bad_weights = survival.AaregOptions(
+        formula="time ~ x1",
+        data=[[1.0, 2.0], [2.0, 3.0]],
+        variable_names=["time", "x1"],
+    )
+    bad_weights.weights = [1.0, float("inf")]
+    with pytest.raises(ValueError, match="weights contains non-finite"):
+        survival.aareg(bad_weights)
+
+    bad_iter = survival.AaregOptions(
+        formula="time ~ x1",
+        data=[[1.0, 2.0], [2.0, 3.0]],
+        variable_names=["time", "x1"],
+        max_iter=0,
+    )
+    with pytest.raises(ValueError, match="max_iter must be positive"):
+        survival.aareg(bad_iter)
 
 
 def test_coxph_detail_public_api():
@@ -161,6 +241,8 @@ def test_coxph_detail_public_api():
         covariates=[[1.0], [2.0], [3.0]],
         coefficients=[0.5],
     )
+    expected_risk = math.exp(0.5) + math.exp(1.0) + math.exp(1.5)
+    expected_mean = (math.exp(0.5) + 2.0 * math.exp(1.0) + 3.0 * math.exp(1.5)) / expected_risk
 
     assert detail.n_events == 2
     assert detail.n_observations == 3
@@ -170,6 +252,56 @@ def test_coxph_detail_public_api():
     assert detail.cumulative_hazards()[0] <= detail.cumulative_hazards()[1]
     assert detail.n_risk_at_times() == [3, 1]
     assert len(detail.schoenfeld_residuals()) == 2
+    assert detail.rows[0].wtrisk == pytest.approx(expected_risk)
+    assert detail.rows[0].means == pytest.approx([expected_mean])
+    assert detail.rows[0].score == pytest.approx([1.0 - expected_mean])
+    assert detail.rows[0].imat[0][0] > 0.0
+    assert detail.rows[0].varhaz > 0.0
+    assert detail.scores()[0] == pytest.approx(detail.rows[0].score)
+    assert detail.information_matrices()[0][0][0] == pytest.approx(detail.rows[0].imat[0][0])
+
+
+def test_coxph_detail_uses_shifted_risk_scores_for_large_linear_predictors():
+    detail = survival.coxph_detail(
+        time=[1.0, 2.0, 3.0],
+        status=[1, 1, 1],
+        covariates=[[1.0], [709.0 / 710.0], [708.0 / 710.0]],
+        coefficients=[710.0],
+    )
+    expected_first = math.exp(-710.0) / (1.0 + math.exp(-1.0) + math.exp(-2.0))
+
+    assert detail.times() == pytest.approx([1.0, 2.0, 3.0])
+    assert detail.hazards()[0] == pytest.approx(expected_first, rel=1e-12, abs=0.0)
+    assert (
+        0.0 < detail.hazards()[0] < detail.cumulative_hazards()[1] < detail.cumulative_hazards()[2]
+    )
+
+
+def test_coxph_detail_low_level_supports_entry_strata_and_efron():
+    breslow = survival.regression.coxph_detail(
+        time=[2.0, 2.0, 4.0, 5.0, 5.0, 6.0],
+        status=[1, 1, 1, 0, 1, 0],
+        covariates=[[0.2], [0.8], [0.4], [1.1], [0.7], [0.3]],
+        coefficients=[0.0],
+        entry_times=[0.0, 0.0, 1.5, 2.5, 0.0, 3.0],
+        strata=[0, 0, 0, 0, 1, 1],
+    )
+    efron = survival.regression.coxph_detail(
+        time=[2.0, 2.0, 4.0, 5.0, 5.0, 6.0],
+        status=[1, 1, 1, 0, 1, 0],
+        covariates=[[0.2], [0.8], [0.4], [1.1], [0.7], [0.3]],
+        coefficients=[0.0],
+        entry_times=[0.0, 0.0, 1.5, 2.5, 0.0, 3.0],
+        strata=[0, 0, 0, 0, 1, 1],
+        method="efron",
+    )
+
+    assert [row.stratum for row in breslow.rows] == [0, 0, 1]
+    assert breslow.times() == pytest.approx([2.0, 4.0, 5.0])
+    assert breslow.n_risk_at_times() == [3, 2, 2]
+    assert breslow.hazards()[0] == pytest.approx(2.0 / 3.0)
+    assert efron.hazards()[0] == pytest.approx((1.0 / 3.0) + (1.0 / 2.0))
+    assert efron.hazards()[0] > breslow.hazards()[0]
 
 
 def test_coxph_detail_validates_input_lengths():
@@ -232,6 +364,106 @@ def test_predict_survreg_rejects_invalid_scale():
         )
 
 
+def test_predict_survreg_validates_numeric_inputs():
+    with pytest.raises(ValueError, match="coefficients contains non-finite"):
+        survival.predict_survreg(
+            covariates=[[1.0, 2.0]],
+            coefficients=[0.1, float("nan")],
+            scale=1.0,
+            distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match=r"covariates\[0\]\[1\] contains non-finite"):
+        survival.predict_survreg(
+            covariates=[[1.0, float("inf")]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match="covariates row 0 has 1 columns"):
+        survival.predict_survreg(
+            covariates=[[1.0]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match="offset has 1 values"):
+        survival.predict_survreg(
+            covariates=[[1.0, 2.0], [2.0, 3.0]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="weibull",
+            offset=[0.0],
+        )
+
+    with pytest.raises(ValueError, match="offset contains non-finite"):
+        survival.predict_survreg_quantile(
+            covariates=[[1.0, 2.0]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="weibull",
+            quantiles=[0.5],
+            offset=[float("nan")],
+        )
+
+    with pytest.raises(ValueError, match="var_matrix must have at least 2 rows"):
+        survival.predict_survreg(
+            covariates=[[1.0, 2.0]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="weibull",
+            var_matrix=[[1.0, 0.0]],
+            se_fit=True,
+        )
+
+    with pytest.raises(ValueError, match=r"var_matrix\[1\]\[1\] contains non-finite"):
+        survival.predict_survreg(
+            covariates=[[1.0, 2.0]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="weibull",
+            var_matrix=[[1.0, 0.0], [0.0, float("nan")]],
+            se_fit=True,
+        )
+
+    with pytest.raises(ValueError, match="Quantiles must be between 0 and 1"):
+        survival.predict_survreg_quantile(
+            covariates=[[1.0, 2.0]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="weibull",
+            quantiles=[float("nan")],
+        )
+
+    with pytest.raises(ValueError, match="scale must be a finite positive value"):
+        survival.predict_survreg_quantile(
+            covariates=[[1.0, 2.0]],
+            coefficients=[0.1, 0.2],
+            scale=float("inf"),
+            distribution="weibull",
+            quantiles=[0.5],
+        )
+
+    with pytest.raises(ValueError, match="distribution must be one of"):
+        survival.predict_survreg(
+            covariates=[[1.0, 2.0]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="mystery",
+        )
+
+    with pytest.raises(ValueError, match="distribution must be one of"):
+        survival.predict_survreg_quantile(
+            covariates=[[1.0, 2.0]],
+            coefficients=[0.1, 0.2],
+            scale=1.0,
+            distribution="mystery",
+            quantiles=[0.5],
+        )
+
+
 def test_survfit_and_survreg_residual_public_apis():
     survfit_residuals = survival.residuals_survfit(
         time=[1.0, 2.0, 3.0],
@@ -257,6 +489,99 @@ def test_survfit_and_survreg_residual_public_apis():
     assert survreg_residuals.n == 3
 
 
+def test_survreg_residual_matrix_public_api_returns_derivative_columns():
+    matrix = survival.survreg_residual_matrix(
+        time=[1.5],
+        status=[1],
+        linear_pred=[1.0],
+        scale=1.0,
+        distribution="gaussian",
+    )
+    z = 0.5
+    expected_loglik = -0.5 * z * z - 0.5 * math.log(2.0 * math.pi)
+
+    assert len(matrix) == 1
+    assert matrix[0] == pytest.approx(
+        [
+            expected_loglik,
+            z,
+            -1.0,
+            z * z - 1.0,
+            -2.0 * z * z,
+            -2.0 * z,
+        ],
+        abs=1e-5,
+    )
+
+
+def test_survreg_influence_residual_public_api_matches_quadratic_forms():
+    derivative_matrix = [[0.0, 2.0, 3.0, 5.0, 7.0, 11.0]]
+    covariates = [[1.0, 4.0]]
+    scales = [1.5]
+    strata = [0]
+    var_matrix = [[1.0, 0.1, 0.2], [0.1, 2.0, 0.3], [0.2, 0.3, 3.0]]
+
+    assert survival.survreg_influence_residuals(
+        derivative_matrix,
+        covariates,
+        scales,
+        strata,
+        var_matrix,
+        "ldcase",
+        True,
+    ) == pytest.approx([238.2])
+    assert survival.survreg_influence_residuals(
+        derivative_matrix,
+        covariates,
+        scales,
+        strata,
+        var_matrix,
+        "ldresp",
+        True,
+    ) == pytest.approx([1709.1])
+    assert survival.survreg_influence_residuals(
+        derivative_matrix,
+        covariates,
+        scales,
+        strata,
+        var_matrix,
+        "ldshape",
+        True,
+    ) == pytest.approx([4452.4])
+
+
+def test_survreg_dfbeta_residual_public_api_matches_score_times_variance():
+    derivative_matrix = [[0.0, 2.0, 3.0, 5.0, 7.0, 11.0]]
+    covariates = [[1.0, 4.0]]
+    scales = [1.5]
+    strata = [0]
+    var_matrix = [[1.0, 0.1, 0.2], [0.1, 2.0, 0.3], [0.2, 0.3, 3.0]]
+
+    dfbeta = survival.survreg_dfbeta_residuals(
+        derivative_matrix,
+        covariates,
+        scales,
+        strata,
+        var_matrix,
+        True,
+        False,
+    )
+    dfbetas = survival.survreg_dfbeta_residuals(
+        derivative_matrix,
+        covariates,
+        scales,
+        strata,
+        var_matrix,
+        True,
+        True,
+    )
+
+    assert len(dfbeta) == 1
+    assert len(dfbetas) == 1
+    assert dfbeta[0] == pytest.approx([3.8, 17.7, 17.8])
+    assert dfbetas[0] == pytest.approx([3.8, 17.7 / math.sqrt(2.0), 17.8 / math.sqrt(3.0)])
+
+
 def test_residual_apis_validate_type_and_lengths():
     with pytest.raises(ValueError, match="Unknown residual type"):
         survival.residuals_survfit(
@@ -276,4 +601,158 @@ def test_residual_apis_validate_type_and_lengths():
             scale=1.0,
             var_matrix=[[1.0]],
             distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match="matrix residuals are matrix-valued"):
+        survival.residuals_survreg(
+            time=[1.0],
+            status=[1],
+            linear_pred=[0.0],
+            scale=1.0,
+            distribution="weibull",
+            residual_type="matrix",
+        )
+
+
+def test_survfit_residual_api_validates_numeric_inputs():
+    with pytest.raises(ValueError, match="status must contain only 0/1"):
+        survival.residuals_survfit(
+            time=[1.0],
+            status=[2],
+            surv_time=[1.0],
+            surv=[0.9],
+        )
+
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.residuals_survfit(
+            time=[math.inf],
+            status=[1],
+            surv_time=[1.0],
+            surv=[0.9],
+        )
+
+    with pytest.raises(ValueError, match="surv_time contains non-finite"):
+        survival.residuals_survfit(
+            time=[1.0],
+            status=[1],
+            surv_time=[math.nan],
+            surv=[0.9],
+        )
+
+    with pytest.raises(ValueError, match="probabilities between 0 and 1"):
+        survival.residuals_survfit(
+            time=[1.0],
+            status=[1],
+            surv_time=[1.0],
+            surv=[1.2],
+        )
+
+    with pytest.raises(ValueError, match="surv_time must be sorted"):
+        survival.residuals_survfit(
+            time=[1.0],
+            status=[1],
+            surv_time=[2.0, 1.0],
+            surv=[0.9, 0.8],
+        )
+
+
+def test_survreg_residual_apis_validate_numeric_inputs():
+    with pytest.raises(ValueError, match="status must contain only 0/1/2/3"):
+        survival.residuals_survreg(
+            time=[1.0],
+            status=[4],
+            linear_pred=[0.0],
+            scale=1.0,
+            distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match="linear_pred contains non-finite"):
+        survival.residuals_survreg(
+            time=[1.0],
+            status=[1],
+            linear_pred=[float("inf")],
+            scale=1.0,
+            distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match="scale must be a finite positive value"):
+        survival.residuals_survreg(
+            time=[1.0],
+            status=[1],
+            linear_pred=[0.0],
+            scale=0.0,
+            distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match="distribution must be one of"):
+        survival.residuals_survreg(
+            time=[1.0],
+            status=[1],
+            linear_pred=[0.0],
+            scale=1.0,
+            distribution="mystery",
+        )
+
+    with pytest.raises(ValueError, match="use dfbeta_survreg"):
+        survival.residuals_survreg(
+            time=[1.0, 2.0],
+            status=[1, 0],
+            linear_pred=[0.0, 0.5],
+            scale=1.0,
+            distribution="weibull",
+            residual_type="dfbeta",
+        )
+
+    with pytest.raises(ValueError, match="use dfbeta_survreg"):
+        survival.residuals_survreg(
+            time=[1.0, 2.0],
+            status=[1, 0],
+            linear_pred=[0.0, 0.5],
+            scale=1.0,
+            distribution="weibull",
+            residual_type="dfbetas",
+        )
+
+    with pytest.raises(ValueError, match="greater than time"):
+        survival.residuals_survreg(
+            time=[2.0],
+            status=[3],
+            linear_pred=[0.0],
+            scale=1.0,
+            distribution="weibull",
+            residual_type="ldcase",
+            time2=[1.5],
+        )
+
+    with pytest.raises(ValueError, match="covariates row 1"):
+        survival.dfbeta_survreg(
+            time=[1.0, 2.0],
+            status=[1, 0],
+            covariates=[[1.0, 0.5], [1.0]],
+            linear_pred=[0.0, 0.5],
+            scale=1.0,
+            var_matrix=[[1.0, 0.0], [0.0, 1.0]],
+            distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match=r"var_matrix\[1\]\[1\] contains non-finite"):
+        survival.dfbeta_survreg(
+            time=[1.0, 2.0],
+            status=[1, 0],
+            covariates=[[1.0, 0.5], [1.0, 0.2]],
+            linear_pred=[0.0, 0.5],
+            scale=1.0,
+            var_matrix=[[1.0, 0.0], [0.0, float("nan")]],
+            distribution="weibull",
+        )
+
+    with pytest.raises(ValueError, match="distribution must be one of"):
+        survival.dfbeta_survreg(
+            time=[1.0, 2.0],
+            status=[1, 0],
+            covariates=[[1.0, 0.5], [1.0, 0.2]],
+            linear_pred=[0.0, 0.5],
+            scale=1.0,
+            var_matrix=[[1.0, 0.0], [0.0, 1.0]],
+            distribution="mystery",
         )

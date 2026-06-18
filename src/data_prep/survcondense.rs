@@ -3,11 +3,15 @@
 //! This is the inverse operation of survsplit - it merges adjacent censored intervals
 //! that have the same covariate values.
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+use crate::constants::TIME_EPSILON;
+use crate::internal::validation::{validate_finite, validate_no_nan};
 
 /// Result of condensing survival data
 #[pyclass(from_py_object)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CondenseResult {
     /// Subject identifiers for each output row
     #[pyo3(get)]
@@ -48,23 +52,51 @@ pub fn survcondense(
     time1: Vec<f64>,
     time2: Vec<f64>,
     status: Vec<i32>,
-) -> CondenseResult {
+) -> PyResult<CondenseResult> {
     let n = id.len();
+    if time1.len() != n {
+        return Err(PyErr::new::<PyValueError, _>(
+            "time1 must have same length as id",
+        ));
+    }
+    if time2.len() != n {
+        return Err(PyErr::new::<PyValueError, _>(
+            "time2 must have same length as id",
+        ));
+    }
+    if status.len() != n {
+        return Err(PyErr::new::<PyValueError, _>(
+            "status must have same length as id",
+        ));
+    }
+
+    validate_no_nan(&time1, "time1")?;
+    validate_finite(&time1, "time1")?;
+    validate_no_nan(&time2, "time2")?;
+    validate_finite(&time2, "time2")?;
+    validate_binary_status("status", &status)?;
+    for (index, (&start, &stop)) in time1.iter().zip(time2.iter()).enumerate() {
+        if start > stop + TIME_EPSILON {
+            return Err(PyValueError::new_err(format!(
+                "time1 must be <= time2; got time1 {} and time2 {} at index {}",
+                start, stop, index
+            )));
+        }
+    }
+
     if n == 0 {
-        return CondenseResult {
+        return Ok(CondenseResult {
             id: Vec::new(),
             time1: Vec::new(),
             time2: Vec::new(),
             status: Vec::new(),
             row_map: Vec::new(),
-        };
+        });
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| match id[a].cmp(&id[b]) {
-        std::cmp::Ordering::Equal => time1[a]
-            .partial_cmp(&time1[b])
-            .unwrap_or(std::cmp::Ordering::Equal),
+        std::cmp::Ordering::Equal => time1[a].total_cmp(&time1[b]).then_with(|| a.cmp(&b)),
         other => other,
     });
 
@@ -94,7 +126,7 @@ pub fn survcondense(
             }
 
             let gap = (time1[next_idx] - current_end).abs();
-            if gap > 1e-9 {
+            if gap > TIME_EPSILON {
                 break;
             }
 
@@ -117,12 +149,25 @@ pub fn survcondense(
         i = j;
     }
 
-    result
+    Ok(result)
+}
+
+fn validate_binary_status(field: &str, status: &[i32]) -> PyResult<()> {
+    for (index, &status_value) in status.iter().enumerate() {
+        if status_value != 0 && status_value != 1 {
+            return Err(PyValueError::new_err(format!(
+                "{} must contain only 0/1 values; got {} at index {}",
+                field, status_value, index
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::common::initialize_python;
     use itertools::Itertools;
 
     #[test]
@@ -132,7 +177,7 @@ mod tests {
         let time2 = vec![5.0, 10.0, 15.0];
         let status = vec![0, 0, 0];
 
-        let result = survcondense(id, time1, time2, status);
+        let result = survcondense(id, time1, time2, status).unwrap();
 
         assert_eq!(result.id.len(), 1);
         assert_eq!(result.time1[0], 0.0);
@@ -148,7 +193,7 @@ mod tests {
         let time2 = vec![5.0, 10.0];
         let status = vec![0, 1];
 
-        let result = survcondense(id, time1, time2, status);
+        let result = survcondense(id, time1, time2, status).unwrap();
 
         assert_eq!(result.id.len(), 1);
         assert_eq!(result.time1[0], 0.0);
@@ -163,7 +208,7 @@ mod tests {
         let time2 = vec![5.0, 10.0];
         let status = vec![1, 0];
 
-        let result = survcondense(id, time1, time2, status);
+        let result = survcondense(id, time1, time2, status).unwrap();
 
         assert_eq!(result.id.len(), 2);
     }
@@ -175,7 +220,7 @@ mod tests {
         let time2 = vec![5.0, 10.0, 3.0, 8.0];
         let status = vec![0, 0, 0, 1];
 
-        let result = survcondense(id, time1, time2, status);
+        let result = survcondense(id, time1, time2, status).unwrap();
 
         assert_eq!(result.id.len(), 2);
         assert_eq!(result.id, vec![1, 2]);
@@ -195,7 +240,8 @@ mod tests {
             let time2: Vec<f64> = permutation.iter().map(|&i| base_time2[i]).collect();
             let status: Vec<i32> = permutation.iter().map(|&i| base_status[i]).collect();
 
-            let result = survcondense(id.clone(), time1.clone(), time2.clone(), status.clone());
+            let result =
+                survcondense(id.clone(), time1.clone(), time2.clone(), status.clone()).unwrap();
             let condensed: Vec<(i32, f64, f64, i32)> = result
                 .id
                 .iter()
@@ -217,5 +263,32 @@ mod tests {
             }
             assert!(seen.into_iter().all(|covered| covered));
         }
+    }
+
+    #[test]
+    fn test_survcondense_rejects_mismatched_inputs() {
+        assert!(survcondense(vec![1], vec![], vec![1.0], vec![0]).is_err());
+        assert!(survcondense(vec![1], vec![0.0], vec![], vec![0]).is_err());
+        assert!(survcondense(vec![1], vec![0.0], vec![1.0], vec![]).is_err());
+    }
+
+    #[test]
+    fn test_survcondense_rejects_malformed_values() {
+        initialize_python();
+
+        let err = survcondense(vec![1], vec![f64::NAN], vec![1.0], vec![0]).unwrap_err();
+        assert!(err.to_string().contains("time1 contains NaN"));
+
+        let err = survcondense(vec![1], vec![0.0], vec![f64::INFINITY], vec![0]).unwrap_err();
+        assert!(err.to_string().contains("time2 contains non-finite"));
+
+        let err = survcondense(vec![1], vec![2.0], vec![1.0], vec![0]).unwrap_err();
+        assert!(err.to_string().contains("time1 must be <= time2"));
+
+        let err = survcondense(vec![1], vec![0.0], vec![1.0], vec![2]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("status must contain only 0/1 values")
+        );
     }
 }

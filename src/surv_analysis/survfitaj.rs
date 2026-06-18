@@ -1,6 +1,9 @@
 use ndarray::{Array1, Array2, s};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::error::Error;
+
+use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
 pub struct SurvFitAJ {
@@ -373,16 +376,13 @@ pub fn survfitaj(
     trmat: Vec<Vec<usize>>,
     t0: f64,
 ) -> PyResult<SurvFitAJ> {
-    let hindx_array = Array2::from_shape_vec(
-        (hindx.len(), hindx[0].len()),
-        hindx.into_iter().flatten().collect(),
-    )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid hindx array: {}", e)))?;
-    let trmat_array = Array2::from_shape_vec(
-        (trmat.len(), trmat[0].len()),
-        trmat.into_iter().flatten().collect(),
-    )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid trmat array: {}", e)))?;
+    validate_survfitaj_inputs(
+        &y, &sort1, &sort2, &utime, &cstate, &wt, &grp, ngrp, &p0, &i0, sefit, &position, &hindx,
+        &trmat, t0,
+    )?;
+
+    let hindx_array = matrix_from_rows(hindx, "hindx")?;
+    let trmat_array = matrix_from_rows(trmat, "trmat")?;
     let data = SurvFitAJData {
         y: &y,
         sort1: &sort1,
@@ -407,4 +407,282 @@ pub fn survfitaj(
         pyo3::exceptions::PyRuntimeError::new_err(format!("survfitaj failed: {}", e))
     })?;
     Ok(result.into_python_result())
+}
+
+fn matrix_from_rows(rows: Vec<Vec<usize>>, name: &'static str) -> PyResult<Array2<usize>> {
+    let n_rows = rows.len();
+    let n_cols = rows
+        .first()
+        .ok_or_else(|| {
+            PyValueError::new_err(format!("Invalid {name} array: matrix cannot be empty"))
+        })?
+        .len();
+    if n_cols == 0 {
+        return Err(PyValueError::new_err(format!(
+            "Invalid {name} array: matrix must have at least one column"
+        )));
+    }
+    if let Some((row_idx, row)) = rows.iter().enumerate().find(|(_, row)| row.len() != n_cols) {
+        return Err(PyValueError::new_err(format!(
+            "Invalid {name} array: row {row_idx} has {} columns, expected {n_cols}",
+            row.len()
+        )));
+    }
+
+    Array2::from_shape_vec((n_rows, n_cols), rows.into_iter().flatten().collect())
+        .map_err(|e| PyValueError::new_err(format!("Invalid {name} array: {e}")))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_survfitaj_inputs(
+    y: &[f64],
+    sort1: &[usize],
+    sort2: &[usize],
+    utime: &[f64],
+    cstate: &[usize],
+    wt: &[f64],
+    grp: &[usize],
+    ngrp: usize,
+    p0: &[f64],
+    i0: &[f64],
+    sefit: i32,
+    position: &[usize],
+    hindx: &[Vec<usize>],
+    trmat: &[Vec<usize>],
+    t0: f64,
+) -> PyResult<()> {
+    if !y.len().is_multiple_of(3) {
+        return Err(PyValueError::new_err(
+            "y length must be a multiple of 3 (start, stop, status/state)",
+        ));
+    }
+    let n_obs = y.len() / 3;
+    if n_obs == 0 {
+        return Err(PyValueError::new_err(
+            "survfitaj requires at least one observation",
+        ));
+    }
+    if sort1.is_empty() || sort2.is_empty() {
+        return Err(PyValueError::new_err("sort1 and sort2 cannot be empty"));
+    }
+    if sort1.len() != sort2.len() {
+        return Err(PyValueError::new_err(
+            "sort1 and sort2 must have equal length",
+        ));
+    }
+    if cstate.len() != n_obs || wt.len() != n_obs || grp.len() != n_obs || position.len() != n_obs {
+        return Err(PyValueError::new_err(
+            "cstate, wt, grp, and position must have length equal to y.len() / 3",
+        ));
+    }
+    if p0.is_empty() {
+        return Err(PyValueError::new_err(
+            "p0 must contain at least one state probability",
+        ));
+    }
+    if ngrp == 0 {
+        return Err(PyValueError::new_err("ngrp must be positive"));
+    }
+    if sefit < 0 {
+        return Err(PyValueError::new_err("sefit must be non-negative"));
+    }
+    if sefit > 0 && i0.len() != ngrp * p0.len() {
+        return Err(PyValueError::new_err(
+            "i0 length must equal ngrp * number of states when sefit > 0",
+        ));
+    }
+    if !t0.is_finite() || t0 < 0.0 {
+        return Err(PyValueError::new_err("t0 must be finite and non-negative"));
+    }
+
+    validate_no_nan(y, "y")?;
+    validate_finite(y, "y")?;
+    validate_no_nan(utime, "utime")?;
+    validate_finite(utime, "utime")?;
+    validate_non_negative(utime, "utime")?;
+    validate_no_nan(wt, "wt")?;
+    validate_finite(wt, "wt")?;
+    validate_non_negative(wt, "wt")?;
+    validate_no_nan(p0, "p0")?;
+    validate_finite(p0, "p0")?;
+    validate_non_negative(p0, "p0")?;
+    validate_no_nan(i0, "i0")?;
+    validate_finite(i0, "i0")?;
+    let p0_sum: f64 = p0.iter().sum();
+    if (p0_sum - 1.0).abs() > 1e-8 {
+        return Err(PyValueError::new_err(format!(
+            "p0 probabilities must sum to 1; got {p0_sum}"
+        )));
+    }
+
+    let nstate = p0.len();
+    if let Some((idx, state)) = cstate
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, state)| *state >= nstate)
+    {
+        return Err(PyValueError::new_err(format!(
+            "cstate value {state} at index {idx} is out of range for {nstate} states"
+        )));
+    }
+    if let Some((idx, group)) = grp
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, group)| *group >= ngrp)
+    {
+        return Err(PyValueError::new_err(format!(
+            "grp value {group} at index {idx} is out of range for {ngrp} groups"
+        )));
+    }
+    if let Some((idx, sort_idx)) = sort1
+        .iter()
+        .chain(sort2.iter())
+        .copied()
+        .enumerate()
+        .find(|(_, sort_idx)| *sort_idx >= n_obs)
+    {
+        return Err(PyValueError::new_err(format!(
+            "sort index {sort_idx} at combined position {idx} is out of range for {n_obs} observations"
+        )));
+    }
+
+    validate_usize_matrix_shape(hindx, "hindx")?;
+    validate_usize_matrix_shape(trmat, "trmat")?;
+    if trmat.first().map_or(0, Vec::len) != 2 {
+        return Err(PyValueError::new_err(
+            "Invalid trmat array: matrix must have exactly 2 columns",
+        ));
+    }
+    let nhaz = trmat.len();
+
+    for (row_idx, row) in trmat.iter().enumerate() {
+        for (col_idx, &state) in row.iter().enumerate() {
+            if state >= nstate {
+                return Err(PyValueError::new_err(format!(
+                    "trmat state {state} at row {row_idx}, column {col_idx} is out of range for {nstate} states"
+                )));
+            }
+        }
+    }
+
+    for (row_idx, row) in hindx.iter().enumerate() {
+        if row_idx >= nstate {
+            return Err(PyValueError::new_err(format!(
+                "Invalid hindx array: row {row_idx} exceeds number of states {nstate}"
+            )));
+        }
+        for (col_idx, &haz_idx) in row.iter().enumerate() {
+            if haz_idx >= nhaz {
+                return Err(PyValueError::new_err(format!(
+                    "hindx hazard index {haz_idx} at row {row_idx}, column {col_idx} is out of range for {nhaz} transitions"
+                )));
+            }
+        }
+    }
+
+    for obs in 0..n_obs {
+        let start = y[obs * 3];
+        let stop = y[obs * 3 + 1];
+        let state = y[obs * 3 + 2];
+        if start < 0.0 || stop < 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "y start/stop times must be non-negative at observation {obs}"
+            )));
+        }
+        if start > stop {
+            return Err(PyValueError::new_err(format!(
+                "y start time must be <= stop time at observation {obs}"
+            )));
+        }
+        if state < 0.0 || state.fract() != 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "y state/status value must be a non-negative integer at observation {obs}"
+            )));
+        }
+        if state as usize > 0 {
+            let to_state = state as usize - 1;
+            if to_state >= nstate {
+                return Err(PyValueError::new_err(format!(
+                    "y state/status value {} at observation {} is out of range for {} states",
+                    state, obs, nstate
+                )));
+            }
+            let current_state = cstate[obs];
+            if current_state >= hindx.len() || to_state >= hindx[current_state].len() {
+                return Err(PyValueError::new_err(format!(
+                    "hindx does not contain transition from state {current_state} to state {to_state}"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_usize_matrix_shape(matrix: &[Vec<usize>], name: &'static str) -> PyResult<()> {
+    let n_cols = matrix
+        .first()
+        .ok_or_else(|| {
+            PyValueError::new_err(format!("Invalid {name} array: matrix cannot be empty"))
+        })?
+        .len();
+    if n_cols == 0 {
+        return Err(PyValueError::new_err(format!(
+            "Invalid {name} array: matrix must have at least one column"
+        )));
+    }
+    if let Some((row_idx, row)) = matrix
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.len() != n_cols)
+    {
+        return Err(PyValueError::new_err(format!(
+            "Invalid {name} array: row {row_idx} has {} columns, expected {n_cols}",
+            row.len()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_survfitaj(p0: Vec<f64>) -> PyResult<SurvFitAJ> {
+        survfitaj(
+            vec![0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 0.0, 2.0, 0.0],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            vec![1.0, 2.0],
+            vec![0, 0, 0],
+            vec![1.0, 1.0, 1.0],
+            vec![0, 0, 0],
+            1,
+            p0,
+            vec![0.0, 0.0],
+            0,
+            false,
+            vec![2, 2, 2],
+            vec![vec![0]],
+            vec![vec![0, 1]],
+            0.0,
+        )
+    }
+
+    #[test]
+    fn survfitaj_rejects_non_normalized_initial_state_distribution() {
+        let err = minimal_survfitaj(vec![0.6, 0.6]).expect_err("non-normalized p0 should fail");
+
+        assert!(err.to_string().contains("p0 probabilities must sum to 1"));
+    }
+
+    #[test]
+    fn survfitaj_accepts_normalized_initial_state_distribution() {
+        let result = minimal_survfitaj(vec![1.0, 0.0]).unwrap();
+
+        assert_eq!(result.pstate.len(), 2);
+        assert_eq!(result.pstate[0].len(), 2);
+    }
 }

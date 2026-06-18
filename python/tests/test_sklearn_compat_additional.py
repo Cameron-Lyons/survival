@@ -9,7 +9,8 @@ import pytest
 
 from .helpers import setup_survival_import
 
-setup_survival_import()
+survival = setup_survival_import()
+core = survival._survival
 sklearn_compat = importlib.import_module("survival.sklearn_compat")
 
 CoxPHEstimator = sklearn_compat.CoxPHEstimator
@@ -21,6 +22,15 @@ StreamingSurvivalForestEstimator = sklearn_compat.StreamingSurvivalForestEstimat
 iter_chunks = sklearn_compat.iter_chunks
 predict_large_dataset = sklearn_compat.predict_large_dataset
 survival_curves_to_disk = sklearn_compat.survival_curves_to_disk
+HAS_TREE_BINDINGS = all(
+    hasattr(core, name)
+    for name in (
+        "GradientBoostSurvivalConfig",
+        "gradient_boost_survival",
+        "SurvivalForestConfig",
+        "survival_forest",
+    )
+)
 
 
 def _toy_data():
@@ -59,6 +69,9 @@ def test_coxph_estimator_smoke():
     estimator = CoxPHEstimator(n_iters=10)
     estimator.fit(x, y)
 
+    assert isinstance(estimator.model_, core.CoxPHFit)
+    assert estimator.coef_.shape == (x.shape[1],)
+
     risk = estimator.predict(x)
     times, survival = estimator.predict_survival_function(x)
     median = estimator.predict_median_survival_time(x)
@@ -80,11 +93,27 @@ def test_coxph_estimator_custom_times_and_feature_validation():
 
     assert returned_times.tolist() == pytest.approx(custom_times.tolist())
     assert survival.shape == (2, 3)
+    assert np.all((survival >= 0.0) & (survival <= 1.0))
+
+    baseline_times, baseline_hazard = estimator.model_.basehaz(True)
+    positions = np.searchsorted(np.asarray(baseline_times), custom_times, side="right") - 1
+    expected_hazard = np.zeros_like(custom_times)
+    valid = positions >= 0
+    expected_hazard[valid] = np.asarray(baseline_hazard)[positions[valid]]
+    linear_predictors = np.asarray(estimator.model_.predict(x[:2].tolist()))
+    center = np.mean(np.asarray(estimator.model_.linear_predictors))
+    expected_survival = np.exp(-np.outer(np.exp(linear_predictors - center), expected_hazard))
+
+    assert survival == pytest.approx(expected_survival)
 
     with pytest.raises(ValueError, match="expects 1"):
         estimator.predict(np.array([[0.1, 0.2]], dtype=np.float64))
 
 
+@pytest.mark.skipif(
+    not HAS_TREE_BINDINGS,
+    reason="tree survival estimators require the Rust extension to be built with the ml feature",
+)
 def test_tree_estimators_smoke():
     x, y = _toy_data()
 
@@ -180,6 +209,10 @@ def test_streaming_helpers_and_disk_io(tmp_path):
     assert survival.shape == (x.shape[0], x.shape[0])
 
 
+@pytest.mark.skipif(
+    not HAS_TREE_BINDINGS,
+    reason="tree survival estimators require the Rust extension to be built with the ml feature",
+)
 def test_streaming_tree_estimators_smoke():
     x, y = _toy_data()
 

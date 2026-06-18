@@ -1,5 +1,9 @@
-use crate::constants::{PARALLEL_THRESHOLD_XLARGE, z_score_for_confidence};
+use crate::constants::{PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON, z_score_for_confidence};
 use crate::internal::simd::sum_f64;
+use crate::internal::validation::{
+    validate_finite, validate_length, validate_no_nan, validate_non_negative,
+};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
@@ -46,6 +50,63 @@ impl NelsonAalenResult {
         self.cumulative_hazard.iter().map(|&h| (-h).exp()).collect()
     }
 }
+
+fn validate_confidence_level(confidence_level: f64) -> PyResult<()> {
+    if !(0.0..1.0).contains(&confidence_level) {
+        return Err(PyValueError::new_err(
+            "confidence_level must be between 0 and 1",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_binary_status(status: &[i32]) -> PyResult<()> {
+    for (idx, &value) in status.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(PyValueError::new_err(format!(
+                "status must contain only 0/1 values; found {} at observation {}",
+                value, idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_survival_inputs(
+    time: &[f64],
+    status: &[i32],
+    weights: Option<&[f64]>,
+    confidence_level: f64,
+) -> PyResult<()> {
+    validate_length(time.len(), status.len(), "status")?;
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_status(status)?;
+    if let Some(weights) = weights {
+        validate_length(time.len(), weights.len(), "weights")?;
+        validate_no_nan(weights, "weights")?;
+        validate_finite(weights, "weights")?;
+        validate_non_negative(weights, "weights")?;
+    }
+    validate_confidence_level(confidence_level)?;
+    Ok(())
+}
+
+fn sorted_indices_by_time(time: &[f64]) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..time.len()).collect();
+    if time.len() > PARALLEL_THRESHOLD_XLARGE {
+        indices.par_sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
+    } else {
+        indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
+    }
+    indices
+}
+
+fn same_time(left: f64, right: f64) -> bool {
+    (left - right).abs() < TIME_EPSILON
+}
+
 pub fn nelson_aalen(
     time: &[f64],
     status: &[i32],
@@ -66,20 +127,7 @@ pub fn nelson_aalen(
     }
     let default_weights: Vec<f64> = vec![1.0; n];
     let weights = weights.unwrap_or(&default_weights);
-    let mut indices: Vec<usize> = (0..n).collect();
-    if n > PARALLEL_THRESHOLD_XLARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    } else {
-        indices.sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+    let indices = sorted_indices_by_time(time);
     let mut unique_times: Vec<f64> = Vec::new();
     let mut events_at_time: Vec<f64> = Vec::new();
     let mut at_risk: Vec<f64> = Vec::new();
@@ -94,7 +142,7 @@ pub fn nelson_aalen(
         let mut event_count = 0usize;
         let mut censored_weight = 0.0;
         let mut censored_count = 0usize;
-        while i < n && time[indices[i]] == current_time {
+        while i < n && same_time(time[indices[i]], current_time) {
             let idx = indices[i];
             if status[idx] == 1 {
                 events += weights[idx];
@@ -175,6 +223,7 @@ pub fn nelson_aalen_estimator(
 ) -> PyResult<NelsonAalenResult> {
     let conf = confidence_level.unwrap_or(0.95);
     let weights_ref = weights.as_deref();
+    validate_survival_inputs(&time, &status, weights_ref, conf)?;
     Ok(nelson_aalen(&time, &status, weights_ref, conf))
 }
 #[derive(Debug, Clone)]
@@ -310,20 +359,7 @@ fn kaplan_meier(
     }
     let default_weights: Vec<f64> = vec![1.0; n];
     let weights = weights.unwrap_or(&default_weights);
-    let mut indices: Vec<usize> = (0..n).collect();
-    if n > PARALLEL_THRESHOLD_XLARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    } else {
-        indices.sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+    let indices = sorted_indices_by_time(time);
     let mut unique_times: Vec<f64> = Vec::new();
     let mut events_at_time: Vec<f64> = Vec::new();
     let mut at_risk: Vec<f64> = Vec::new();
@@ -338,7 +374,7 @@ fn kaplan_meier(
         let mut event_count = 0usize;
         let mut removed_weight = 0.0;
         let mut removed_count = 0usize;
-        while i < n && time[indices[i]] == current_time {
+        while i < n && same_time(time[indices[i]], current_time) {
             let idx = indices[i];
             removed_weight += weights[idx];
             removed_count += 1;
@@ -401,6 +437,8 @@ pub fn stratified_kaplan_meier(
     confidence_level: Option<f64>,
 ) -> PyResult<StratifiedKMResult> {
     let conf = confidence_level.unwrap_or(0.95);
+    validate_survival_inputs(&time, &status, None, conf)?;
+    validate_length(time.len(), strata.len(), "strata")?;
     Ok(stratified_km(&time, &status, &strata, conf))
 }
 
@@ -465,6 +503,43 @@ mod tests {
         let result = nelson_aalen(&time, &status, Some(&weights), 0.95);
         assert_eq!(result.cumulative_hazard.len(), 3);
         assert!(result.cumulative_hazard[0] > 0.0);
+    }
+
+    #[test]
+    fn nelson_aalen_groups_near_tied_event_times() {
+        let time = vec![1.0 + TIME_EPSILON / 2.0, 2.0, 1.0];
+        let status = vec![1, 0, 1];
+        let result = nelson_aalen(&time, &status, None, 0.95);
+
+        assert_eq!(result.time, vec![1.0]);
+        assert_eq!(result.n_risk, vec![3]);
+        assert_eq!(result.n_events, vec![2]);
+        assert!((result.cumulative_hazard[0] - 2.0 / 3.0).abs() < 1e-10);
+        assert!((result.variance[0] - 2.0 / 9.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn validate_survival_inputs_rejects_malformed_public_inputs() {
+        let status_err = validate_survival_inputs(&[1.0, 2.0], &[1, 2], None, 0.95)
+            .expect_err("non-binary status should be rejected");
+        assert!(
+            status_err
+                .to_string()
+                .contains("status must contain only 0/1")
+        );
+
+        let weights_err =
+            validate_survival_inputs(&[1.0, 2.0], &[1, 0], Some(&[1.0, f64::INFINITY]), 0.95)
+                .expect_err("non-finite weights should be rejected");
+        assert!(
+            weights_err
+                .to_string()
+                .contains("weights contains non-finite")
+        );
+
+        let confidence_err = validate_survival_inputs(&[1.0, 2.0], &[1, 0], None, 1.0)
+            .expect_err("invalid confidence level should be rejected");
+        assert!(confidence_err.to_string().contains("confidence_level"));
     }
 
     #[test]

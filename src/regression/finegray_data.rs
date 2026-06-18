@@ -1,4 +1,9 @@
 use pyo3::prelude::*;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct FineGrayOutput {
@@ -21,9 +26,103 @@ pub fn finegray(
     cprob: Vec<f64>,
     extend: Vec<bool>,
     keep: Vec<bool>,
-) -> FineGrayOutput {
-    compute_finegray(&tstart, &tstop, &ctime, &cprob, &extend, &keep)
+) -> PyResult<FineGrayOutput> {
+    validate_finegray_inputs(&tstart, &tstop, &ctime, &cprob, &extend, &keep)?;
+    Ok(compute_finegray(
+        &tstart, &tstop, &ctime, &cprob, &extend, &keep,
+    ))
 }
+
+fn validate_finegray_inputs(
+    tstart: &[f64],
+    tstop: &[f64],
+    ctime: &[f64],
+    cprob: &[f64],
+    extend: &[bool],
+    keep: &[bool],
+) -> PyResult<()> {
+    let n = tstart.len();
+    if tstop.len() != n {
+        return Err(value_error(format!(
+            "tstop length ({}) must match tstart length ({})",
+            tstop.len(),
+            n
+        )));
+    }
+    if extend.len() != n {
+        return Err(value_error(format!(
+            "extend length ({}) must match tstart length ({})",
+            extend.len(),
+            n
+        )));
+    }
+
+    for (idx, (&start, &stop)) in tstart.iter().zip(tstop.iter()).enumerate() {
+        if !start.is_finite() {
+            return Err(value_error(format!(
+                "tstart contains non-finite value at index {}",
+                idx
+            )));
+        }
+        if !stop.is_finite() {
+            return Err(value_error(format!(
+                "tstop contains non-finite value at index {}",
+                idx
+            )));
+        }
+        if start > stop {
+            return Err(value_error(format!(
+                "tstart value {} exceeds tstop value {} at index {}",
+                start, stop, idx
+            )));
+        }
+    }
+
+    let ncut = ctime.len();
+    if cprob.len() != ncut {
+        return Err(value_error(format!(
+            "cprob length ({}) must match ctime length ({})",
+            cprob.len(),
+            ncut
+        )));
+    }
+    if keep.len() != ncut {
+        return Err(value_error(format!(
+            "keep length ({}) must match ctime length ({})",
+            keep.len(),
+            ncut
+        )));
+    }
+
+    for (idx, &time) in ctime.iter().enumerate() {
+        if !time.is_finite() {
+            return Err(value_error(format!(
+                "ctime contains non-finite value at index {}",
+                idx
+            )));
+        }
+        if idx > 0 && time < ctime[idx - 1] {
+            return Err(value_error("ctime must be sorted in nondecreasing order"));
+        }
+    }
+    for (idx, &probability) in cprob.iter().enumerate() {
+        if !probability.is_finite() {
+            return Err(value_error(format!(
+                "cprob contains non-finite value at index {}",
+                idx
+            )));
+        }
+        if !(0.0..=1.0).contains(&probability) || probability == 0.0 {
+            return Err(value_error(format!(
+                "cprob must contain values in (0, 1]; found {} at index {}",
+                probability, idx
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn compute_finegray(
     tstart: &[f64],
     tstop: &[f64],
@@ -151,5 +250,33 @@ mod tests {
         for (&actual, &expected) in result.wt.iter().zip(expected_wt.iter()) {
             assert_close(actual, expected, 1e-12);
         }
+    }
+
+    #[test]
+    fn test_finegray_public_api_rejects_malformed_inputs() {
+        assert!(finegray(vec![0.0], vec![], vec![], vec![], vec![true], vec![]).is_err());
+        assert!(finegray(vec![2.0], vec![1.0], vec![], vec![], vec![true], vec![]).is_err());
+        assert!(
+            finegray(
+                vec![0.0],
+                vec![1.0],
+                vec![2.0, 1.0],
+                vec![1.0, 1.0],
+                vec![true],
+                vec![true, true]
+            )
+            .is_err()
+        );
+        assert!(
+            finegray(
+                vec![0.0],
+                vec![1.0],
+                vec![1.0],
+                vec![0.0],
+                vec![true],
+                vec![true]
+            )
+            .is_err()
+        );
     }
 }

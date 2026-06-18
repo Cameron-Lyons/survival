@@ -5,7 +5,11 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bayesian_cox_predict_survival, m)?)?;
     m.add_function(wrap_pyfunction!(bayesian_parametric, m)?)?;
     m.add_function(wrap_pyfunction!(bayesian_parametric_predict, m)?)?;
+    m.add_class::<PriorType>()?;
+    m.add_class::<BayesianCoxConfig>()?;
     m.add_class::<BayesianCoxResult>()?;
+    m.add_class::<BayesianDistribution>()?;
+    m.add_class::<BayesianParametricConfig>()?;
     m.add_class::<BayesianParametricResult>()?;
 
     m.add_function(wrap_pyfunction!(dirichlet_process_survival, m)?)?;

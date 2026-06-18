@@ -242,13 +242,17 @@ mod tests {
         );
 
         for (i, &r_surv) in aml.km_maintained.survival.iter().enumerate() {
-            if i < result.estimate.len() {
+            if let Some(pos) = result
+                .time
+                .iter()
+                .position(|&t| (t - aml.km_maintained.time[i]).abs() < 0.01)
+            {
                 assert!(
-                    rel_approx_eq(result.estimate[i], r_surv, STANDARD_TOL),
+                    rel_approx_eq(result.estimate[pos], r_surv, STANDARD_TOL),
                     "KM survival at time {}: expected {}, got {}",
                     aml.km_maintained.time[i],
                     r_surv,
-                    result.estimate[i]
+                    result.estimate[pos]
                 );
             }
         }
@@ -441,14 +445,20 @@ mod tests {
             &KaplanMeierConfig::default(),
         );
 
+        let event_positions: Vec<usize> = result
+            .n_event
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &events)| (events > 0.0).then_some(idx))
+            .collect();
         for (i, &r_surv) in ovarian.km.survival.iter().take(5).enumerate() {
-            if i < result.estimate.len() {
+            if let Some(&pos) = event_positions.get(i) {
                 assert!(
-                    rel_approx_eq(result.estimate[i], r_surv, STANDARD_TOL),
+                    rel_approx_eq(result.estimate[pos], r_surv, STANDARD_TOL),
                     "Ovarian KM survival at index {}: expected {}, got {}",
                     i,
                     r_surv,
-                    result.estimate[i]
+                    result.estimate[pos]
                 );
             }
         }

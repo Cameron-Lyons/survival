@@ -60,6 +60,7 @@ pub mod scoring;
 pub mod simd_ops;
 pub mod spatial;
 pub mod surv_analysis;
+#[cfg(test)]
 mod tests;
 pub mod validation;
 

@@ -15,4 +15,7 @@ pub use diagnostics::{
     outlier_detection_cox, smooth_schoenfeld,
 };
 pub use survfit_resid::{SurvfitResiduals, residuals_survfit};
-pub use survreg_resid::{SurvregResiduals, dfbeta_survreg, residuals_survreg};
+pub use survreg_resid::{
+    SurvregResiduals, dfbeta_survreg, residuals_survreg, survreg_dfbeta_residuals,
+    survreg_influence_residuals, survreg_residual_matrix,
+};

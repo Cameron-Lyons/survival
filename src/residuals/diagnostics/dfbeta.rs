@@ -29,16 +29,8 @@ pub fn dfbeta_cox(
     threshold: Option<f64>,
 ) -> PyResult<DfbetaResult> {
     let n = time.len();
-    if event.len() != n || covariates.len() != n * n_covariates {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input dimensions mismatch",
-        ));
-    }
-    if coefficients.len() != n_covariates {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "coefficients must have length n_covariates",
-        ));
-    }
+    validate_cox_diagnostic_inputs(&time, &event, &covariates, n_covariates, &coefficients)?;
+    validate_optional_positive_finite_scalar("threshold", threshold)?;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     if n > PARALLEL_THRESHOLD_MEDIUM {

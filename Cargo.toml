@@ -47,7 +47,7 @@ serde_json = "1.0.149"
 divan = "0.1.21"
 
 [build-dependencies]
-pyo3-build-config = { version = "0.28.2", features = ["resolve-config"], optional = true }
+pyo3-build-config = { version = "0.28.3", features = ["resolve-config"], optional = true }
 
 [[bench]]
 name = "survival_benchmarks"
@@ -57,7 +57,9 @@ harness = false
 lto = true
 codegen-units = 1
 opt-level = 3
-strip = true
+# Stripping the PyO3 cdylib can produce malformed Mach-O LINKEDIT metadata on
+# macOS when maturin installs an editable extension module.
+strip = false
 panic = "abort"
 
 [profile.release-native]

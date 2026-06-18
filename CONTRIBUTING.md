@@ -21,7 +21,14 @@ Build the Python extension into that environment when Python tests need the
 native module:
 
 ```sh
-uv run --with maturin maturin develop --features python,ml
+uv run --with maturin maturin develop --features extension-module
+```
+
+Include optional ML bindings when the changed code touches ML or the full
+published Python surface:
+
+```sh
+uv run --with maturin maturin develop --features extension-module,ml
 ```
 
 For release-like wheel checks, use:
@@ -73,8 +80,8 @@ The important feature combinations are:
 
 - `--no-default-features`: Rust crate without Python enabled.
 - `--features ml`: optional ML code without PyO3.
-- `--features python,ml`: local Python extension development.
-- `--features extension-module,ml`: wheel/extension-module builds.
+- `--features extension-module`: lean local Python extension development.
+- `--features extension-module,ml`: full wheel/extension-module builds.
 - `--all-features`: broad safety check. This intentionally enables
   `extension-module`, so `build.rs` must keep libpython linkage working for
   local tests.

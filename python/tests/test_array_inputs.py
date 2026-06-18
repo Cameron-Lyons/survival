@@ -76,6 +76,40 @@ def test_logrank_with_lists():
     assert hasattr(result, "p_value")
 
 
+def test_logrank_accepts_weight_type_keyword():
+    time_list = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
+    status_list = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
+    group_list = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+    result = survival.logrank_test(
+        time_list,
+        status_list,
+        group_list,
+        weight_type="wilcoxon",
+    )
+
+    assert result.weight_type == "Wilcoxon"
+
+
+def test_fleming_harrington_defaults_and_keyword_weights():
+    time_list = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
+    status_list = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
+    group_list = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+
+    logrank = survival.logrank_test(time_list, status_list, group_list)
+    default = survival.fleming_harrington_test(time_list, status_list, group_list)
+    weighted = survival.fleming_harrington_test(
+        time_list,
+        status_list,
+        group_list,
+        rho=0.5,
+        gamma=0.0,
+    )
+
+    assert default.statistic == pytest.approx(logrank.statistic)
+    assert default.p_value == pytest.approx(logrank.p_value)
+    assert weighted.weight_type == "FlemingHarrington(p=0.5, q=0)"
+
+
 def test_logrank_with_numpy():
     time_list = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
     status_list = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]

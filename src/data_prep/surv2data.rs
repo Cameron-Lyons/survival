@@ -3,11 +3,16 @@
 //! Converts data where each row represents an observation at a single time point
 //! into counting process format with (time1, time2) intervals.
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use std::collections::HashMap;
+
+use crate::constants::TIME_EPSILON;
+use crate::internal::validation::{validate_finite, validate_no_nan};
 
 /// Result of converting timecourse data to interval format
 #[pyclass(from_py_object)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Surv2DataResult {
     /// Subject identifiers
     #[pyo3(get)]
@@ -46,34 +51,85 @@ pub fn surv2data(
     time: Vec<f64>,
     event_time: Option<Vec<f64>>,
     event_status: Option<Vec<i32>>,
-) -> Surv2DataResult {
+) -> PyResult<Surv2DataResult> {
     let n = id.len();
+    if time.len() != n {
+        return Err(PyErr::new::<PyValueError, _>(
+            "time must have same length as id",
+        ));
+    }
+    match (&event_time, &event_status) {
+        (Some(etimes), Some(estatus)) => {
+            if etimes.len() != n {
+                return Err(PyErr::new::<PyValueError, _>(
+                    "event_time must have same length as id",
+                ));
+            }
+            if estatus.len() != n {
+                return Err(PyErr::new::<PyValueError, _>(
+                    "event_status must have same length as id",
+                ));
+            }
+        }
+        (None, None) => {}
+        _ => {
+            return Err(PyErr::new::<PyValueError, _>(
+                "event_time and event_status must both be provided or both be None",
+            ));
+        }
+    }
+
+    validate_no_nan(&time, "time")?;
+    validate_finite(&time, "time")?;
+    if let Some(etimes) = &event_time {
+        validate_no_nan(etimes, "event_time")?;
+        validate_finite(etimes, "event_time")?;
+    }
+    if let Some(estatus) = &event_status {
+        validate_binary_status("event_status", estatus)?;
+    }
+
     if n == 0 {
-        return Surv2DataResult {
+        return Ok(Surv2DataResult {
             id: Vec::new(),
             time1: Vec::new(),
             time2: Vec::new(),
             status: Vec::new(),
             row_index: Vec::new(),
-        };
+        });
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| match id[a].cmp(&id[b]) {
-        std::cmp::Ordering::Equal => time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal),
+        std::cmp::Ordering::Equal => time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)),
         other => other,
     });
 
-    let mut subject_event: std::collections::HashMap<i32, (f64, i32)> =
-        std::collections::HashMap::new();
+    let mut subject_event: HashMap<i32, (f64, i32)> = HashMap::new();
     if let (Some(etimes), Some(estatus)) = (&event_time, &event_status) {
         for i in 0..n {
             let subj_id = id[i];
-            subject_event
-                .entry(subj_id)
-                .or_insert((etimes[i], estatus[i]));
+            if etimes[i] + TIME_EPSILON < time[i] {
+                return Err(PyValueError::new_err(format!(
+                    "event_time must be >= time for each row; got event_time {} before time {} at index {}",
+                    etimes[i], time[i], i
+                )));
+            }
+            match subject_event.get(&subj_id) {
+                Some(&(event_time, event_status))
+                    if (event_time - etimes[i]).abs() > TIME_EPSILON
+                        || event_status != estatus[i] =>
+                {
+                    return Err(PyValueError::new_err(format!(
+                        "event_time/event_status must be constant within id; id {} has conflicting event metadata at index {}",
+                        subj_id, i
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    subject_event.insert(subj_id, (etimes[i], estatus[i]));
+                }
+            }
         }
     }
 
@@ -133,12 +189,25 @@ pub fn surv2data(
         i = j;
     }
 
-    result
+    Ok(result)
+}
+
+fn validate_binary_status(field: &str, status: &[i32]) -> PyResult<()> {
+    for (index, &status_value) in status.iter().enumerate() {
+        if status_value != 0 && status_value != 1 {
+            return Err(PyValueError::new_err(format!(
+                "{} must contain only 0/1 values; got {} at index {}",
+                field, status_value, index
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::common::initialize_python;
     use itertools::Itertools;
 
     #[test]
@@ -148,7 +217,7 @@ mod tests {
         let event_time = Some(vec![15.0, 15.0, 15.0]);
         let event_status = Some(vec![1, 1, 1]);
 
-        let result = surv2data(id, time, event_time, event_status);
+        let result = surv2data(id, time, event_time, event_status).unwrap();
 
         assert_eq!(result.id.len(), 3);
         assert_eq!(result.time1, vec![0.0, 5.0, 10.0]);
@@ -163,7 +232,7 @@ mod tests {
         let event_time = Some(vec![10.0, 10.0, 8.0, 8.0]);
         let event_status = Some(vec![1, 1, 0, 0]);
 
-        let result = surv2data(id, time, event_time, event_status);
+        let result = surv2data(id, time, event_time, event_status).unwrap();
 
         assert_eq!(result.id.len(), 4);
     }
@@ -173,7 +242,7 @@ mod tests {
         let id = vec![1, 1, 1];
         let time = vec![0.0, 5.0, 10.0];
 
-        let result = surv2data(id, time, None, None);
+        let result = surv2data(id, time, None, None).unwrap();
 
         assert!(result.id.len() >= 2);
         assert_eq!(result.time1[0], 0.0);
@@ -205,7 +274,8 @@ mod tests {
                 time.clone(),
                 Some(event_time),
                 Some(event_status),
-            );
+            )
+            .unwrap();
             let intervals: Vec<(i32, f64, f64, i32)> = result
                 .id
                 .iter()
@@ -223,5 +293,46 @@ mod tests {
                 assert_eq!(time[original], result.time1[idx]);
             }
         }
+    }
+
+    #[test]
+    fn test_surv2data_rejects_mismatched_inputs() {
+        assert!(surv2data(vec![1], vec![], None, None).is_err());
+        assert!(surv2data(vec![1], vec![0.0], Some(vec![]), Some(vec![1])).is_err());
+        assert!(surv2data(vec![1], vec![0.0], Some(vec![1.0]), Some(vec![])).is_err());
+        assert!(surv2data(vec![1], vec![0.0], Some(vec![1.0]), None).is_err());
+    }
+
+    #[test]
+    fn test_surv2data_rejects_malformed_values() {
+        initialize_python();
+
+        let err = surv2data(vec![1], vec![f64::NAN], None, None).unwrap_err();
+        assert!(err.to_string().contains("time contains NaN"));
+
+        let err =
+            surv2data(vec![1], vec![0.0], Some(vec![f64::INFINITY]), Some(vec![1])).unwrap_err();
+        assert!(err.to_string().contains("event_time contains non-finite"));
+
+        let err = surv2data(vec![1], vec![0.0], Some(vec![1.0]), Some(vec![2])).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("event_status must contain only 0/1 values")
+        );
+
+        let err = surv2data(
+            vec![1, 1],
+            vec![0.0, 1.0],
+            Some(vec![3.0, 4.0]),
+            Some(vec![1, 1]),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("event_time/event_status must be constant within id")
+        );
+
+        let err = surv2data(vec![1], vec![2.0], Some(vec![1.0]), Some(vec![1])).unwrap_err();
+        assert!(err.to_string().contains("event_time must be >= time"));
     }
 }

@@ -1,3 +1,4 @@
+use crate::internal::statistical::concordance_index_with_horizon;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -377,34 +378,7 @@ pub fn fairness_audit(
 }
 
 fn compute_c_index(predictions: &[f64], time: &[f64], event: &[i32]) -> f64 {
-    let n = predictions.len();
-    let mut concordant = 0.0;
-    let mut discordant = 0.0;
-
-    for i in 0..n {
-        if event[i] != 1 {
-            continue;
-        }
-        for j in 0..n {
-            if i == j || time[j] <= time[i] {
-                continue;
-            }
-            if predictions[i] > predictions[j] {
-                concordant += 1.0;
-            } else if predictions[i] < predictions[j] {
-                discordant += 1.0;
-            } else {
-                concordant += 0.5;
-                discordant += 0.5;
-            }
-        }
-    }
-
-    if concordant + discordant > 0.0 {
-        concordant / (concordant + discordant)
-    } else {
-        0.5
-    }
+    concordance_index_with_horizon(predictions, time, event, None)
 }
 
 #[cfg(test)]

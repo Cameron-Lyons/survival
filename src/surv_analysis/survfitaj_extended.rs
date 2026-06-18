@@ -1,6 +1,10 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::constants::TIME_EPSILON;
+use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
+use pyo3::exceptions::PyValueError;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum VarianceEstimator {
@@ -85,13 +89,13 @@ impl AalenJohansenExtendedConfig {
         compute_sojourn: bool,
         seed: Option<u64>,
     ) -> PyResult<Self> {
-        if !(0.0..1.0).contains(&confidence_level) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        if !confidence_level.is_finite() || !(0.0..1.0).contains(&confidence_level) {
+            return Err(PyValueError::new_err(
                 "confidence_level must be between 0 and 1",
             ));
         }
         if variance_estimator == VarianceEstimator::Bootstrap && n_bootstrap == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(PyValueError::new_err(
                 "n_bootstrap must be positive when using bootstrap variance",
             ));
         }
@@ -188,7 +192,7 @@ impl AalenJohansenExtendedResult {
         let idx = self
             .time
             .iter()
-            .position(|&t| t > query_time)
+            .position(|&t| t > query_time + TIME_EPSILON)
             .unwrap_or(self.time.len())
             .saturating_sub(1);
 
@@ -208,7 +212,7 @@ fn compute_transition_matrix(
     let mut n_at_risk = vec![0usize; n_states];
 
     for (i, &t) in time.iter().enumerate() {
-        if (t - event_time).abs() < 1e-9 {
+        if same_transition_time(t, event_time) {
             let from = from_state[i];
             let to = to_state[i];
             if from < n_states && to < n_states {
@@ -427,6 +431,60 @@ fn compute_expected_sojourn(
     sojourn
 }
 
+fn same_transition_time(left: f64, right: f64) -> bool {
+    (left - right).abs() < TIME_EPSILON
+}
+
+fn unique_transition_times(time: &[f64]) -> Vec<f64> {
+    let mut unique_times = time.to_vec();
+    unique_times.sort_by(|a, b| a.total_cmp(b));
+    unique_times.dedup_by(|a, b| same_transition_time(*a, *b));
+    unique_times
+}
+
+fn validate_survfitaj_config(config: &AalenJohansenExtendedConfig) -> PyResult<()> {
+    if !config.confidence_level.is_finite() || !(0.0..1.0).contains(&config.confidence_level) {
+        return Err(PyValueError::new_err(
+            "confidence_level must be between 0 and 1",
+        ));
+    }
+    if config.variance_estimator == VarianceEstimator::Bootstrap && config.n_bootstrap == 0 {
+        return Err(PyValueError::new_err(
+            "n_bootstrap must be positive when using bootstrap variance",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_survfitaj_inputs(
+    from_state: &[usize],
+    to_state: &[usize],
+    time: &[f64],
+    weights: Option<&[f64]>,
+) -> PyResult<()> {
+    let n = from_state.len();
+    if to_state.len() != n || time.len() != n {
+        return Err(PyValueError::new_err(
+            "from_state, to_state, and time must have equal length",
+        ));
+    }
+
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+
+    if let Some(weights) = weights {
+        if weights.len() != n {
+            return Err(PyValueError::new_err("weights must have length n_obs"));
+        }
+        validate_no_nan(weights, "weights")?;
+        validate_finite(weights, "weights")?;
+        validate_non_negative(weights, "weights")?;
+    }
+
+    Ok(())
+}
+
 #[pyfunction]
 #[pyo3(signature = (from_state, to_state, time, config, weights=None))]
 pub fn survfitaj_extended(
@@ -437,11 +495,8 @@ pub fn survfitaj_extended(
     weights: Option<Vec<f64>>,
 ) -> PyResult<AalenJohansenExtendedResult> {
     let n = from_state.len();
-    if to_state.len() != n || time.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "from_state, to_state, and time must have equal length",
-        ));
-    }
+    validate_survfitaj_config(config)?;
+    validate_survfitaj_inputs(&from_state, &to_state, &time, weights.as_deref())?;
 
     let wt = weights.unwrap_or_else(|| vec![1.0; n]);
 
@@ -452,9 +507,7 @@ pub fn survfitaj_extended(
         .map(|&m| m + 1)
         .unwrap_or(2);
 
-    let mut unique_times: Vec<f64> = time.to_vec();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    unique_times.dedup();
+    let unique_times = unique_transition_times(&time);
 
     let mut transition_matrices = Vec::with_capacity(unique_times.len());
     let mut p_current = identity_matrix(n_states);
@@ -604,6 +657,17 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            AalenJohansenExtendedConfig::new(
+                VarianceEstimator::Greenwood,
+                TransitionType::Standard,
+                200,
+                f64::NAN,
+                true,
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -669,5 +733,101 @@ mod tests {
 
         let cif_1 = result.get_cif(1).unwrap();
         assert_eq!(cif_1.len(), result.time.len());
+    }
+
+    #[test]
+    fn test_survfitaj_groups_near_tied_transition_times() {
+        let from_state = vec![0, 0, 0];
+        let to_state = vec![1, 2, 0];
+        let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
+        let config = AalenJohansenExtendedConfig::new(
+            VarianceEstimator::Greenwood,
+            TransitionType::Standard,
+            10,
+            0.95,
+            false,
+            None,
+        )
+        .unwrap();
+
+        let result = survfitaj_extended(from_state, to_state, time, &config, None).unwrap();
+
+        assert_eq!(result.time.len(), 2);
+        assert!((result.time[0] - 1.0).abs() < TIME_EPSILON);
+        assert_eq!(result.transition_matrices[0].n_transitions[0][1], 1);
+        assert_eq!(result.transition_matrices[0].n_transitions[0][2], 1);
+        assert!((result.transition_matrices[0].matrix[0][0] - 1.0 / 3.0).abs() < 1e-12);
+        assert!((result.transition_matrices[0].matrix[0][1] - 1.0 / 3.0).abs() < 1e-12);
+        assert!((result.transition_matrices[0].matrix[0][2] - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_survfitaj_rejects_malformed_public_inputs() {
+        let config = AalenJohansenExtendedConfig::new(
+            VarianceEstimator::Greenwood,
+            TransitionType::Standard,
+            10,
+            0.95,
+            false,
+            None,
+        )
+        .unwrap();
+
+        let err = survfitaj_extended(vec![0], vec![1, 2], vec![1.0], &config, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("from_state, to_state, and time must have equal length")
+        );
+
+        let err = survfitaj_extended(
+            vec![0, 0],
+            vec![1, 2],
+            vec![1.0, f64::INFINITY],
+            &config,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = survfitaj_extended(
+            vec![0, 0],
+            vec![1, 2],
+            vec![1.0, 2.0],
+            &config,
+            Some(vec![1.0]),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("weights must have length n_obs"));
+
+        let err = survfitaj_extended(
+            vec![0, 0],
+            vec![1, 2],
+            vec![1.0, 2.0],
+            &config,
+            Some(vec![1.0, -1.0]),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("weights contains negative value"));
+
+        let invalid_config = AalenJohansenExtendedConfig {
+            variance_estimator: VarianceEstimator::Bootstrap,
+            transition_type: TransitionType::Standard,
+            n_bootstrap: 0,
+            confidence_level: 0.95,
+            compute_sojourn: false,
+            seed: None,
+        };
+        let err = survfitaj_extended(
+            vec![0, 0],
+            vec![1, 2],
+            vec![1.0, 2.0],
+            &invalid_config,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("n_bootstrap must be positive when using bootstrap variance")
+        );
     }
 }

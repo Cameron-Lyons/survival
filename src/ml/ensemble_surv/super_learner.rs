@@ -198,37 +198,7 @@ impl SuperLearnerResult {
 }
 
 fn compute_c_index(time: &[f64], event: &[i32], risk: &[f64]) -> f64 {
-    let n = time.len();
-    let (concordant, discordant) = (0..n)
-        .into_par_iter()
-        .map(|i| {
-            if event[i] != 1 {
-                return (0.0, 0.0);
-            }
-
-            let mut concordant = 0.0;
-            let mut discordant = 0.0;
-            for j in 0..n {
-                if time[j] > time[i] {
-                    if risk[i] > risk[j] {
-                        concordant += 1.0;
-                    } else if risk[i] < risk[j] {
-                        discordant += 1.0;
-                    } else {
-                        concordant += 0.5;
-                        discordant += 0.5;
-                    }
-                }
-            }
-            (concordant, discordant)
-        })
-        .reduce(|| (0.0, 0.0), |(c1, d1), (c2, d2)| (c1 + c2, d1 + d2));
-
-    if concordant + discordant > 0.0 {
-        concordant / (concordant + discordant)
-    } else {
-        0.5
-    }
+    concordance_index_with_horizon(risk, time, event, None)
 }
 
 #[pyfunction]

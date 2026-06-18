@@ -12,6 +12,9 @@ pub(crate) mod cox_optimizer;
 pub(crate) mod coxph;
 #[path = "coxph_detail.rs"]
 pub(crate) mod coxph_detail_module;
+pub(crate) mod coxph_diagnostics;
+pub(crate) mod coxph_model;
+pub(crate) mod coxph_support;
 pub(crate) mod cure_models;
 pub(crate) mod elastic_net;
 #[path = "fast_cox/mod.rs"]
@@ -31,7 +34,9 @@ pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
 // Public facade exports
-pub use aareg_module::{AaregOptions, aareg};
+pub use aareg_module::{
+    AaregConfidenceInterval, AaregDiagnostics, AaregFitDetails, AaregOptions, AaregResult, aareg,
+};
 pub use agexact_module::agexact;
 pub use agfit5::perform_cox_regression_frailty;
 pub use blogit::LinkFunctionParams;
@@ -41,14 +46,15 @@ pub use cause_specific_cox_module::{
 };
 pub use cch::{CchMethod, CohortData};
 pub use clogit::{ClogitDataSet, ConditionalLogisticRegression};
-pub use coxph::{CoxPHModel, Subject};
+pub use coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit};
 pub use coxph_detail_module::{CoxphDetail, CoxphDetailRow, coxph_detail};
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
-    CureModelComparisonResult, MixtureCureResult, NonMixtureCureConfig, NonMixtureCureResult,
-    NonMixtureType, PromotionTimeCureResult, bounded_cumulative_hazard_model, compare_cure_models,
-    mixture_cure_model, non_mixture_cure_model, predict_bounded_cumulative_hazard,
-    predict_non_mixture_survival, promotion_time_cure_model,
+    CureModelComparisonResult, LinkFunction, MixtureCureConfig, MixtureCureResult,
+    NonMixtureCureConfig, NonMixtureCureResult, NonMixtureType, PromotionTimeCureResult,
+    bounded_cumulative_hazard_model, compare_cure_models, mixture_cure_model,
+    non_mixture_cure_model, predict_bounded_cumulative_hazard, predict_non_mixture_survival,
+    promotion_time_cure_model,
 };
 pub use elastic_net::{
     ElasticNetCVConfig, ElasticNetConfig, ElasticNetCoxPath, ElasticNetCoxResult,

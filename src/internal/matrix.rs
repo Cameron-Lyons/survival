@@ -57,10 +57,9 @@ fn faer_mat_to_ndarray(mat: faer::MatRef<f64>) -> Array2<f64> {
         .expect("shape and buffer length are consistent for Faer matrix conversion")
 }
 
-pub(crate) fn cholesky_solve(
+pub(crate) fn regularized_lu_solve(
     matrix: &Array2<f64>,
     vector: &Array1<f64>,
-    _tol: f64,
 ) -> Result<Array1<f64>, MatrixError> {
     if matrix.nrows() == 0 || matrix.ncols() == 0 {
         if vector.is_empty() {
@@ -284,27 +283,27 @@ mod tests {
     use ndarray::arr2;
 
     #[test]
-    fn test_cholesky_solve_identity() {
+    fn test_regularized_lu_solve_identity() {
         let matrix = arr2(&[[1.0, 0.0], [0.0, 1.0]]);
         let vector = Array1::from_vec(vec![1.0, 2.0]);
-        let result = cholesky_solve(&matrix, &vector, 1e-9).unwrap();
+        let result = regularized_lu_solve(&matrix, &vector).unwrap();
         assert!((result[0] - 1.0).abs() < 1e-10);
         assert!((result[1] - 2.0).abs() < 1e-10);
     }
 
     #[test]
-    fn test_cholesky_solve_empty() {
+    fn test_regularized_lu_solve_empty() {
         let matrix: Array2<f64> = Array2::zeros((0, 0));
         let vector: Array1<f64> = Array1::zeros(0);
-        let result = cholesky_solve(&matrix, &vector, 1e-9).unwrap();
+        let result = regularized_lu_solve(&matrix, &vector).unwrap();
         assert_eq!(result.len(), 0);
     }
 
     #[test]
-    fn test_cholesky_solve_near_zero_matrix() {
+    fn test_regularized_lu_solve_near_zero_matrix() {
         let matrix = arr2(&[[1e-15, 0.0], [0.0, 1e-15]]);
         let vector = Array1::from_vec(vec![1.0, 2.0]);
-        let result = cholesky_solve(&matrix, &vector, 1e-9);
+        let result = regularized_lu_solve(&matrix, &vector);
         assert!(matches!(result, Err(MatrixError::SingularMatrix)));
     }
 

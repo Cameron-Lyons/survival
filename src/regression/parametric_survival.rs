@@ -2,10 +2,22 @@ use crate::constants::{
     CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX,
     STEP_DOUBLE_FACTOR, STEP_HALVE_FACTOR,
 };
-use crate::internal::matrix::cholesky_solve;
+use crate::internal::matrix::regularized_lu_solve;
+use crate::regression::survreg_predict::{
+    SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
+    compute_quantile_prediction, compute_response_prediction, compute_se_linear_predictor,
+};
 use crate::regression::survregc1::{SurvivalDist, survregc1};
+use crate::residuals::survreg_resid::{
+    SurvregResidType, SurvregResiduals, compute_deviance_residuals_survreg, compute_dfbeta_survreg,
+    compute_ldcase, compute_response_residuals, compute_response_residuals_censored,
+    compute_survreg_dfbeta_residuals, compute_survreg_residual_matrix, compute_working_residuals,
+    compute_working_residuals_from_derivative_matrix,
+};
 use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
+
+type PredictionRows = (Vec<f64>, Option<Vec<Vec<f64>>>);
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -75,6 +87,32 @@ pub struct SurvivalFit {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
     #[pyo3(get)]
+    pub location_coefficients: Vec<f64>,
+    #[pyo3(get)]
+    pub scale: f64,
+    #[pyo3(get)]
+    pub scales: Vec<f64>,
+    #[pyo3(get)]
+    pub distribution: String,
+    #[pyo3(get)]
+    pub n_covariates: usize,
+    #[pyo3(get)]
+    pub n_strata: usize,
+    #[pyo3(get)]
+    pub linear_predictors: Vec<f64>,
+    #[pyo3(get)]
+    pub time: Vec<f64>,
+    #[pyo3(get)]
+    pub time2: Option<Vec<f64>>,
+    #[pyo3(get)]
+    pub status: Vec<i32>,
+    #[pyo3(get)]
+    pub covariates: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub strata: Vec<usize>,
+    #[pyo3(get)]
+    pub weights: Vec<f64>,
+    #[pyo3(get)]
     pub iterations: usize,
     #[pyo3(get)]
     pub variance_matrix: Vec<Vec<f64>>,
@@ -84,6 +122,349 @@ pub struct SurvivalFit {
     pub convergence_flag: i32,
     #[pyo3(get)]
     pub score_vector: Vec<f64>,
+}
+
+impl DistributionType {
+    fn canonical_name(self) -> &'static str {
+        match self {
+            DistributionType::ExtremeValue => "extreme_value",
+            DistributionType::Logistic => "logistic",
+            DistributionType::Gaussian => "gaussian",
+            DistributionType::Weibull => "weibull",
+            DistributionType::LogNormal => "lognormal",
+            DistributionType::LogLogistic => "loglogistic",
+        }
+    }
+}
+
+fn requested_distribution_name(requested: Option<&str>, distribution: DistributionType) -> String {
+    let Some(name) = requested else {
+        return distribution.canonical_name().to_string();
+    };
+    match name.to_lowercase().replace('-', "_").as_str() {
+        "exponential" => "exponential".to_string(),
+        "normal" => "gaussian".to_string(),
+        "log_logistic" => "loglogistic".to_string(),
+        "log_gaussian" | "lognormal" | "log_normal" => "lognormal".to_string(),
+        "extreme" | "extremevalue" => "extreme_value".to_string(),
+        _ => distribution.canonical_name().to_string(),
+    }
+}
+
+fn parse_distribution_type(distribution: Option<&str>) -> PyResult<DistributionType> {
+    let Some(name) = distribution else {
+        return Ok(DistributionType::ExtremeValue);
+    };
+    match name.to_lowercase().replace('-', "_").as_str() {
+        "weibull" => Ok(DistributionType::Weibull),
+        "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
+            Ok(DistributionType::ExtremeValue)
+        }
+        "gaussian" | "normal" => Ok(DistributionType::Gaussian),
+        "logistic" => Ok(DistributionType::Logistic),
+        "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => {
+            Ok(DistributionType::LogNormal)
+        }
+        "loglogistic" | "log_logistic" => Ok(DistributionType::LogLogistic),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic",
+        )),
+    }
+}
+
+impl SurvivalFit {
+    fn validate_covariates(&self, covariates: &[Vec<f64>]) -> PyResult<()> {
+        for (idx, row) in covariates.iter().enumerate() {
+            if row.len() != self.n_covariates {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "covariate row {} has {} columns but model expects {}",
+                    idx,
+                    row.len(),
+                    self.n_covariates
+                )));
+            }
+            if let Some((col_idx, _)) = row.iter().enumerate().find(|(_, value)| !value.is_finite())
+            {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "covariates[{}][{}] contains non-finite value",
+                    idx, col_idx
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_offset(offset: Option<Vec<f64>>, n: usize) -> PyResult<Option<Vec<f64>>> {
+        if let Some(values) = offset {
+            if values.len() != n {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "offset has {} values but covariates has {} rows",
+                    values.len(),
+                    n
+                )));
+            }
+            if let Some((idx, _)) = values
+                .iter()
+                .enumerate()
+                .find(|(_, value)| !value.is_finite())
+            {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "offset contains non-finite value at index {}",
+                    idx
+                )));
+            }
+            Ok(Some(values))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn location_variance_matrix(&self) -> Vec<Vec<f64>> {
+        self.variance_matrix
+            .iter()
+            .take(self.n_covariates)
+            .map(|row| row.iter().take(self.n_covariates).copied().collect())
+            .collect()
+    }
+
+    fn prediction_rows(
+        &self,
+        covariates: Option<Vec<Vec<f64>>>,
+        offset: Option<Vec<f64>>,
+    ) -> PyResult<PredictionRows> {
+        if let Some(rows) = covariates {
+            self.validate_covariates(&rows)?;
+            let offset = Self::validate_offset(offset, rows.len())?;
+            let linear_predictors =
+                compute_linear_predictor(&rows, &self.location_coefficients, offset.as_deref());
+            Ok((linear_predictors, Some(rows)))
+        } else {
+            if offset.is_some() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "offset can only be supplied with new covariates",
+                ));
+            }
+            Ok((self.linear_predictors.clone(), None))
+        }
+    }
+}
+
+#[pymethods]
+impl SurvivalFit {
+    #[pyo3(signature = (covariates=None, predict_type="response".to_string(), offset=None, se_fit=false))]
+    pub fn predict(
+        &self,
+        covariates: Option<Vec<Vec<f64>>>,
+        predict_type: String,
+        offset: Option<Vec<f64>>,
+        se_fit: bool,
+    ) -> PyResult<SurvregPrediction> {
+        let (linear_predictors, rows) = self.prediction_rows(covariates, offset)?;
+        let prediction_type =
+            crate::regression::survreg_predict::SurvregPredictType::from_str(&predict_type)
+                .ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Unknown prediction type: {}. Valid types: response, lp/linear, terms",
+                        predict_type
+                    ))
+                })?;
+
+        let predictions = match prediction_type {
+            crate::regression::survreg_predict::SurvregPredictType::Lp
+            | crate::regression::survreg_predict::SurvregPredictType::Terms => {
+                linear_predictors.clone()
+            }
+            crate::regression::survreg_predict::SurvregPredictType::Response => {
+                compute_response_prediction(&linear_predictors, &self.distribution)
+            }
+        };
+
+        let se = if se_fit {
+            rows.as_ref()
+                .map(|values| compute_se_linear_predictor(values, &self.location_variance_matrix()))
+        } else {
+            None
+        };
+
+        Ok(SurvregPrediction {
+            n: predictions.len(),
+            predictions,
+            se,
+            prediction_type: predict_type,
+        })
+    }
+
+    #[pyo3(signature = (covariates=None, quantiles=None, offset=None))]
+    pub fn predict_quantile(
+        &self,
+        covariates: Option<Vec<Vec<f64>>>,
+        quantiles: Option<Vec<f64>>,
+        offset: Option<Vec<f64>>,
+    ) -> PyResult<SurvregQuantilePrediction> {
+        let quantiles = quantiles.unwrap_or_else(|| vec![0.5]);
+        for &q in &quantiles {
+            if q <= 0.0 || q >= 1.0 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Quantiles must be between 0 and 1 (exclusive)",
+                ));
+            }
+        }
+
+        let (linear_predictors, _rows) = self.prediction_rows(covariates, offset)?;
+        let predictions = compute_quantile_prediction(
+            &linear_predictors,
+            self.scale,
+            &quantiles,
+            &self.distribution,
+        );
+
+        Ok(SurvregQuantilePrediction {
+            n: predictions.len(),
+            quantiles,
+            predictions,
+        })
+    }
+
+    #[pyo3(signature = (residual_type="deviance".to_string()))]
+    pub fn residuals(&self, residual_type: String) -> PyResult<SurvregResiduals> {
+        let resid_type = SurvregResidType::from_str(&residual_type).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Unknown residual type: {}. Valid types: response, deviance, working, ldcase, ldresp, ldshape, dfbeta, dfbetas, matrix",
+                residual_type
+            ))
+        })?;
+        if matches!(
+            resid_type,
+            SurvregResidType::Dfbeta | SurvregResidType::Dfbetas
+        ) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "survreg dfbeta residuals are matrix-valued; use SurvivalFit.dfbeta() or survival.r_api.residuals",
+            ));
+        }
+        if matches!(resid_type, SurvregResidType::Matrix) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "survreg matrix residuals are matrix-valued; use survival.r_api.residuals or survival.survreg_residual_matrix",
+            ));
+        }
+        let has_interval_censoring = self.status.iter().any(|&value| value == 2 || value == 3);
+        if has_interval_censoring
+            && !matches!(
+                resid_type,
+                SurvregResidType::Response
+                    | SurvregResidType::Deviance
+                    | SurvregResidType::Working
+                    | SurvregResidType::Ldcase
+                    | SurvregResidType::Ldresp
+                    | SurvregResidType::Ldshape
+            )
+        {
+            return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+                format!(
+                    "survreg residual type '{}' is not implemented for left or interval-censored data; use ldcase",
+                    residual_type
+                ),
+            ));
+        }
+
+        let residuals = match resid_type {
+            SurvregResidType::Response => {
+                if has_interval_censoring {
+                    compute_response_residuals_censored(
+                        &self.time,
+                        self.time2.as_deref(),
+                        &self.status,
+                        &self.linear_predictors,
+                        self.scale,
+                        &self.distribution,
+                    )?
+                } else {
+                    compute_response_residuals(
+                        &self.time,
+                        &self.linear_predictors,
+                        &self.distribution,
+                    )
+                }
+            }
+            SurvregResidType::Deviance => compute_deviance_residuals_survreg(
+                &self.time,
+                self.time2.as_deref(),
+                &self.status,
+                &self.linear_predictors,
+                self.scale,
+                &self.distribution,
+            )?,
+            SurvregResidType::Working => {
+                if has_interval_censoring {
+                    let derivative_matrix = compute_survreg_residual_matrix(
+                        &self.time,
+                        self.time2.as_deref(),
+                        &self.status,
+                        &self.linear_predictors,
+                        self.scale,
+                        &self.distribution,
+                    )?;
+                    compute_working_residuals_from_derivative_matrix(&derivative_matrix)?
+                } else {
+                    compute_working_residuals(
+                        &self.time,
+                        &self.status,
+                        &self.linear_predictors,
+                        self.scale,
+                        &self.distribution,
+                    )
+                }
+            }
+            SurvregResidType::Ldcase | SurvregResidType::Ldresp | SurvregResidType::Ldshape => {
+                compute_ldcase(
+                    &self.time,
+                    self.time2.as_deref(),
+                    &self.status,
+                    &self.linear_predictors,
+                    self.scale,
+                    &self.distribution,
+                )?
+            }
+            SurvregResidType::Dfbeta | SurvregResidType::Dfbetas => unreachable!(),
+            SurvregResidType::Matrix => unreachable!(),
+        };
+
+        Ok(SurvregResiduals {
+            n: residuals.len(),
+            residuals,
+            residual_type,
+        })
+    }
+
+    pub fn dfbeta(&self) -> PyResult<Vec<Vec<f64>>> {
+        if self.status.iter().any(|&value| value == 2 || value == 3) {
+            let derivative_matrix = compute_survreg_residual_matrix(
+                &self.time,
+                self.time2.as_deref(),
+                &self.status,
+                &self.linear_predictors,
+                self.scale,
+                &self.distribution,
+            )?;
+            return compute_survreg_dfbeta_residuals(
+                &derivative_matrix,
+                &self.covariates,
+                &self.scales,
+                &self.strata,
+                &self.location_variance_matrix(),
+                false,
+                false,
+            );
+        }
+        Ok(compute_dfbeta_survreg(
+            &self.time,
+            &self.status,
+            &self.covariates,
+            &self.linear_predictors,
+            self.scale,
+            &self.location_variance_matrix(),
+            &self.distribution,
+        ))
+    }
 }
 struct LikelihoodInput<'a> {
     n: usize,
@@ -205,6 +586,162 @@ fn calculate_variance_matrix(
         None => Ok(imat),
     }
 }
+
+fn validate_time_values(time: &[f64]) -> PyResult<()> {
+    if time.is_empty() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time must not be empty",
+        ));
+    }
+    for (idx, &value) in time.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "time contains non-finite value at index {}",
+                idx
+            )));
+        }
+        if value <= 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "time[{}] must be positive",
+                idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_status_values(status: &[f64]) -> PyResult<()> {
+    for (idx, &value) in status.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "status contains non-finite value at index {}",
+                idx
+            )));
+        }
+        if value != 0.0 && value != 1.0 && value != 2.0 && value != 3.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "status must contain only 0/1/2/3 values",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_time2_values(
+    time: &[f64],
+    status: &[f64],
+    time2: Option<Vec<f64>>,
+) -> PyResult<Option<Vec<f64>>> {
+    let has_interval_rows = status.contains(&3.0);
+    if !has_interval_rows && time2.is_none() {
+        return Ok(None);
+    }
+    let Some(values) = time2 else {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time2 is required for interval-censored rows",
+        ));
+    };
+    if values.len() != time.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Length mismatch: time has {} elements but time2 has {}. Both must have the same length.",
+            time.len(),
+            values.len()
+        )));
+    }
+
+    let mut sanitized = Vec::with_capacity(values.len());
+    for (idx, ((&start, &end), &event)) in time
+        .iter()
+        .zip(values.iter())
+        .zip(status.iter())
+        .enumerate()
+    {
+        if event == 3.0 {
+            if !end.is_finite() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "time2 contains non-finite interval endpoint at index {}",
+                    idx
+                )));
+            }
+            if end <= 0.0 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "time2[{}] must be positive",
+                    idx
+                )));
+            }
+            if end <= start {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "time2[{}] must be greater than time[{}] for interval-censored rows",
+                    idx, idx
+                )));
+            }
+            sanitized.push(end);
+        } else {
+            // survregc1 ignores time2 unless status == 3; keep the logged array finite.
+            sanitized.push(start);
+        }
+    }
+    Ok(Some(sanitized))
+}
+
+fn validate_case_weights(weights: &[f64]) -> PyResult<()> {
+    let mut has_positive = false;
+    for (idx, &value) in weights.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "weights contains non-finite value at index {}",
+                idx
+            )));
+        }
+        if value < 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "weights must be non-negative",
+            ));
+        }
+        has_positive |= value > 0.0;
+    }
+    if !has_positive {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "weights must contain at least one positive value",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "{} contains non-finite value at index {}",
+                name, idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_covariate_values(covariates: &[Vec<f64>], nvar: usize) -> PyResult<()> {
+    for (idx, row) in covariates.iter().enumerate() {
+        if row.len() != nvar {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "covariate row {} has {} columns but expected {}",
+                idx,
+                row.len(),
+                nvar
+            )));
+        }
+        for (col_idx, &value) in row.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "covariates[{}][{}] contains non-finite value",
+                    idx, col_idx
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum DistributionType {
@@ -227,9 +764,9 @@ pub enum DistributionType {
 /// Parameters
 /// ----------
 /// time : array-like
-///     Survival/censoring times.
+///     Exact, right-censoring, left-censoring, or interval lower-bound times.
 /// status : array-like
-///     Event indicator (1=event, 0=censored).
+///     Censoring status (0=right censored, 1=exact, 2=left censored, 3=interval censored).
 /// covariates : list of lists
 ///     Covariate matrix (n_obs x n_vars).
 /// weights : array-like, optional
@@ -248,13 +785,15 @@ pub enum DistributionType {
 ///     Convergence tolerance (default 1e-6).
 /// tol_chol : float, optional
 ///     Cholesky tolerance (default crate::constants::DIVISION_FLOOR).
+/// time2 : array-like, optional
+///     Interval upper-bound times. Required for rows with status=3.
 ///
 /// Returns
 /// -------
 /// SurvivalFit
 ///     Object with: coefficients, std_errors, variance_matrix, log_likelihood, convergence info.
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None))]
+#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survreg(
     time: Vec<f64>,
@@ -268,17 +807,10 @@ pub fn survreg(
     max_iter: Option<usize>,
     eps: Option<f64>,
     tol_chol: Option<f64>,
+    time2: Option<Vec<f64>>,
 ) -> PyResult<SurvivalFit> {
-    let dist_type = distribution.map(|s| match s {
-        "weibull" => DistributionType::Weibull,
-        "exponential" | "extreme_value" => DistributionType::ExtremeValue,
-        "gaussian" | "normal" => DistributionType::Gaussian,
-        "logistic" => DistributionType::Logistic,
-        "lognormal" => DistributionType::LogNormal,
-        "loglogistic" | "log_logistic" | "log-logistic" => DistributionType::LogLogistic,
-        _ => DistributionType::ExtremeValue,
-    });
-    let config = SurvregConfig::create(dist_type, max_iter, eps, tol_chol);
+    let dist_type = parse_distribution_type(distribution)?;
+    let config = SurvregConfig::create(Some(dist_type), max_iter, eps, tol_chol);
     let n = time.len();
     if status.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -287,48 +819,99 @@ pub fn survreg(
             status.len()
         )));
     }
-    let nvar = if !covariates.is_empty() {
-        covariates[0].len()
+    validate_time_values(&time)?;
+    validate_status_values(&status)?;
+    let time2_values = validate_time2_values(&time, &status, time2)?;
+    if !config.eps.is_finite() || config.eps <= 0.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "eps must be a finite positive value",
+        ));
+    }
+    if !config.tol_chol.is_finite() || config.tol_chol <= 0.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "tol_chol must be a finite positive value",
+        ));
+    }
+    let covariate_rows = covariates;
+    let nvar = if !covariate_rows.is_empty() {
+        covariate_rows[0].len()
     } else {
         0
     };
-    if !covariates.is_empty() && covariates.len() != n {
+    if !covariate_rows.is_empty() && covariate_rows.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "Length mismatch: time has {} observations but covariates has {} rows. \
              Covariates should be a list of {} rows, each with {} covariate values.",
             n,
-            covariates.len(),
+            covariate_rows.len(),
             n,
             nvar
         )));
     }
-    let weights = weights.unwrap_or_else(|| vec![1.0; n]);
-    let offsets = offsets.unwrap_or_else(|| vec![0.0; n]);
-    let strata = strata.unwrap_or_else(|| vec![0; n]);
-    let nstrat = if strata.is_empty() {
-        1
+    validate_covariate_values(&covariate_rows, nvar)?;
+    let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
+    let offsets_vec = offsets.unwrap_or_else(|| vec![0.0; n]);
+    let has_strata = strata.is_some();
+    let strata_vec = strata.unwrap_or_else(|| vec![0; n]);
+    if weights_vec.len() != n || offsets_vec.len() != n || strata_vec.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "weights, offsets, and strata must have the same length as time",
+        ));
+    }
+    validate_case_weights(&weights_vec)?;
+    validate_finite_values("offsets", &offsets_vec)?;
+    let nstrat = if has_strata {
+        strata_vec.iter().max().copied().unwrap_or(0) + 1
     } else {
-        strata.iter().max().copied().unwrap_or(0) + 1
+        1
     };
+    if let Some(values) = initial_beta.as_ref()
+        && values.len() != nvar + nstrat
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "initial_beta has {} values but model expects {}",
+            values.len(),
+            nvar + nstrat
+        )));
+    }
+    if let Some(values) = initial_beta.as_ref() {
+        validate_finite_values("initial_beta", values)?;
+    }
     let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; nvar + nstrat]);
     let y = {
-        let mut y_data = Vec::new();
-        for i in 0..n {
-            y_data.push(vec![time[i], status[i]]);
+        if let Some(time2) = time2_values.as_ref() {
+            let mut y_data = Vec::with_capacity(n * 3);
+            for i in 0..n {
+                y_data.push(time[i]);
+                y_data.push(time2[i]);
+                y_data.push(status[i]);
+            }
+            Array2::from_shape_vec((n, 3), y_data)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
+        } else {
+            let mut y_data = Vec::with_capacity(n * 2);
+            for i in 0..n {
+                y_data.push(time[i]);
+                y_data.push(status[i]);
+            }
+            Array2::from_shape_vec((n, 2), y_data)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
         }
-        Array2::from_shape_vec((n, 2), y_data.into_iter().flatten().collect())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
     };
     let cov_array = if nvar > 0 {
-        let flat: Vec<f64> = covariates.into_iter().flatten().collect();
-        let temp = Array2::from_shape_vec((n, nvar), flat)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?;
-        temp.t().to_owned()
+        let mut flat = Vec::with_capacity(n * nvar);
+        for col_idx in 0..nvar {
+            flat.extend(covariate_rows.iter().map(|row| row[col_idx]));
+        }
+        Array2::from_shape_vec((nvar, n), flat)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
     } else {
         Array2::zeros((0, n))
     };
-    let weights_arr = Array1::from_vec(weights);
-    let offsets_arr = Array1::from_vec(offsets);
+    let weights_arr = Array1::from_vec(weights_vec);
+    let offsets_arr = Array1::from_vec(offsets_vec.clone());
+    let distribution_type = config.distribution;
+    let distribution_name = requested_distribution_name(distribution, distribution_type);
     let result = compute_survreg(ComputeSurvregInput {
         max_iter: config.max_iter,
         nvar,
@@ -338,10 +921,10 @@ pub fn survreg(
         offsets: &offsets_arr,
         beta: initial_beta,
         nstrat,
-        strata: &strata,
+        strata: &strata_vec,
         eps: config.eps,
         tol_chol: config.tol_chol,
-        distribution: config.distribution,
+        distribution: distribution_type,
     })
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
     let variance_matrix = result
@@ -349,8 +932,34 @@ pub fn survreg(
         .outer_iter()
         .map(|row| row.iter().copied().collect())
         .collect();
+    let location_coefficients = result.coefficients[..nvar].to_vec();
+    let scales: Vec<f64> = result.coefficients[nvar..nvar + nstrat]
+        .iter()
+        .map(|value| value.exp())
+        .collect();
+    let linear_predictors =
+        compute_linear_predictor(&covariate_rows, &location_coefficients, Some(&offsets_vec));
+    let status_values: Vec<i32> = status.iter().map(|&value| value as i32).collect();
+    let fitted_covariates = if nvar == 0 {
+        vec![vec![]; n]
+    } else {
+        covariate_rows
+    };
     Ok(SurvivalFit {
         coefficients: result.coefficients,
+        location_coefficients,
+        scale: scales.first().copied().unwrap_or(1.0),
+        scales,
+        distribution: distribution_name,
+        n_covariates: nvar,
+        n_strata: nstrat,
+        linear_predictors,
+        time,
+        time2: time2_values,
+        status: status_values,
+        covariates: fitted_covariates,
+        strata: strata_vec.clone(),
+        weights: weights_arr.to_vec(),
         iterations: result.iterations,
         variance_matrix,
         log_likelihood: result.log_likelihood,
@@ -425,10 +1034,10 @@ fn compute_survreg(
     let mut halving = 0;
     let mut step_factor = 1.0;
     while iter < max_iter {
-        let chol_result = cholesky_solve(&jj, &u, tol_chol);
-        let delta = match chol_result {
+        let solve_result = regularized_lu_solve(&jj, &u);
+        let delta = match solve_result {
             Ok(d) => d,
-            Err(_) => cholesky_solve(&imat, &u, tol_chol)?,
+            Err(_) => regularized_lu_solve(&imat, &u)?,
         };
         newbeta
             .iter_mut()
@@ -550,6 +1159,26 @@ mod tests {
             DistributionType::LogLogistic,
         ];
         assert_eq!(variants.len(), 6);
+    }
+
+    #[test]
+    fn test_requested_distribution_name_preserves_response_transform() {
+        assert_eq!(
+            requested_distribution_name(Some("exponential"), DistributionType::ExtremeValue),
+            "exponential"
+        );
+        assert_eq!(
+            requested_distribution_name(Some("normal"), DistributionType::Gaussian),
+            "gaussian"
+        );
+        assert_eq!(
+            requested_distribution_name(Some("log-logistic"), DistributionType::LogLogistic),
+            "loglogistic"
+        );
+        assert_eq!(
+            requested_distribution_name(Some("extreme"), DistributionType::ExtremeValue),
+            "extreme_value"
+        );
     }
 
     #[test]

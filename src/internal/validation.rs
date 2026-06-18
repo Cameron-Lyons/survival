@@ -51,6 +51,11 @@ pub enum ValidationError {
         field: &'static str,
         index: usize,
     },
+    NonFiniteValue {
+        field: &'static str,
+        index: usize,
+        value: f64,
+    },
 }
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -77,6 +82,15 @@ impl fmt::Display for ValidationError {
             ValidationError::NaNValue { field, index } => {
                 write!(f, "{} contains NaN at index {}", field, index)
             }
+            ValidationError::NonFiniteValue {
+                field,
+                index,
+                value,
+            } => write!(
+                f,
+                "{} contains non-finite value {} at index {}",
+                field, value, index
+            ),
         }
     }
 }
@@ -128,6 +142,18 @@ pub(crate) fn validate_no_nan(slice: &[f64], field: &'static str) -> Result<(), 
     for (i, &val) in slice.iter().enumerate() {
         if val.is_nan() {
             return Err(ValidationError::NaNValue { field, index: i });
+        }
+    }
+    Ok(())
+}
+pub(crate) fn validate_finite(slice: &[f64], field: &'static str) -> Result<(), ValidationError> {
+    for (i, &val) in slice.iter().enumerate() {
+        if !val.is_finite() {
+            return Err(ValidationError::NonFiniteValue {
+                field,
+                index: i,
+                value: val,
+            });
         }
     }
     Ok(())

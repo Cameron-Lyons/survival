@@ -34,10 +34,10 @@ fn standardize_matrix(x: &[f64], n: usize, p: usize) -> (Vec<f64>, Vec<f64>, Vec
 }
 
 struct RiskSetData {
-    sorted_indices: Vec<usize>,
     cumsum_exp_eta: Vec<f64>,
     cumsum_weighted_x: Vec<Vec<f64>>,
     cumsum_weighted_x_sq: Vec<Vec<f64>>,
+    risk_set_pos: Vec<usize>,
 }
 
 struct FastCoxData<'a> {
@@ -71,15 +71,12 @@ fn precompute_risk_set_cumsum(
     exp_eta: &[f64],
 ) -> RiskSetData {
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]).then_with(|| a.cmp(&b)));
 
     let mut cumsum_exp_eta = vec![0.0; n];
     let mut cumsum_weighted_x = vec![vec![0.0; p]; n];
     let mut cumsum_weighted_x_sq = vec![vec![0.0; p]; n];
+    let mut risk_set_pos = vec![0usize; n];
 
     let mut running_exp = 0.0;
     let mut running_wx = vec![0.0; p];
@@ -100,12 +97,67 @@ fn precompute_risk_set_cumsum(
         cumsum_weighted_x_sq[pos] = running_wxsq.clone();
     }
 
+    let mut start = 0;
+    while start < n {
+        let current_time = time[sorted_indices[start]];
+        let mut end = start + 1;
+        while end < n && same_fast_cox_time(time[sorted_indices[end]], current_time) {
+            end += 1;
+        }
+
+        let pos = end - 1;
+        for &idx in &sorted_indices[start..end] {
+            risk_set_pos[idx] = pos;
+        }
+        start = end;
+    }
+
     RiskSetData {
-        sorted_indices,
         cumsum_exp_eta,
         cumsum_weighted_x,
         cumsum_weighted_x_sq,
+        risk_set_pos,
     }
+}
+
+#[allow(clippy::needless_range_loop)]
+fn linear_predictors(data: &FastCoxData, beta: &[f64]) -> Vec<f64> {
+    (0..data.n)
+        .map(|i| {
+            let mut eta = data.offset[i];
+            for j in 0..data.p {
+                eta += data.x[i * data.p + j] * beta[j];
+            }
+            eta
+        })
+        .collect()
+}
+
+fn shifted_exp_eta(eta: &[f64], weights: &[f64]) -> Vec<f64> {
+    let risk_shift = eta
+        .iter()
+        .zip(weights.iter())
+        .filter_map(|(&eta_i, &weight)| {
+            if weight > 0.0 && eta_i.is_finite() {
+                Some(eta_i)
+            } else {
+                None
+            }
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    let risk_shift = if risk_shift.is_finite() {
+        risk_shift
+    } else {
+        0.0
+    };
+
+    eta.iter()
+        .map(|&eta_i| (eta_i - risk_shift).exp())
+        .collect()
+}
+
+fn same_fast_cox_time(left: f64, right: f64) -> bool {
+    (left - right).abs() < crate::constants::TIME_EPSILON
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -114,17 +166,8 @@ fn compute_gradient_hessian_diag_fast(
     beta: &[f64],
     active_set: Option<&[usize]>,
 ) -> (Vec<f64>, Vec<f64>) {
-    let eta: Vec<f64> = (0..data.n)
-        .map(|i| {
-            let mut e = data.offset[i];
-            for j in 0..data.p {
-                e += data.x[i * data.p + j] * beta[j];
-            }
-            e.clamp(-700.0, 700.0)
-        })
-        .collect();
-
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
+    let eta = linear_predictors(data, beta);
+    let exp_eta = shifted_exp_eta(&eta, data.weights);
 
     let risk_data = precompute_risk_set_cumsum(
         data.x,
@@ -142,17 +185,12 @@ fn compute_gradient_hessian_diag_fast(
     let mut gradient = vec![0.0; data.p];
     let mut hessian_diag = vec![0.0; data.p];
 
-    let mut index_to_pos = vec![0usize; data.n];
-    for (pos, &idx) in risk_data.sorted_indices.iter().enumerate() {
-        index_to_pos[idx] = pos;
-    }
-
     for i in 0..data.n {
         if data.status[i] != 1 {
             continue;
         }
 
-        let pos = index_to_pos[i];
+        let pos = risk_data.risk_set_pos[i];
         let risk_sum = risk_data.cumsum_exp_eta[pos];
         if risk_sum <= 0.0 {
             continue;
@@ -216,33 +254,39 @@ fn apply_edpp_screening(
 
 #[allow(clippy::needless_range_loop)]
 fn compute_cox_deviance(data: &FastCoxData, beta: &[f64]) -> f64 {
-    let eta: Vec<f64> = (0..data.n)
-        .map(|i| {
-            let mut e = data.offset[i];
-            for j in 0..data.p {
-                e += data.x[i * data.p + j] * beta[j];
+    let eta = linear_predictors(data, beta);
+    let risk_shift = eta
+        .iter()
+        .zip(data.weights.iter())
+        .filter_map(|(&eta_i, &weight)| {
+            if weight > 0.0 && eta_i.is_finite() {
+                Some(eta_i)
+            } else {
+                None
             }
-            e.clamp(-700.0, 700.0)
         })
-        .collect();
-
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
-
-    let mut indices: Vec<usize> = (0..data.n).collect();
-    indices.sort_by(|&a, &b| {
-        data.time[b]
-            .partial_cmp(&data.time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+        .fold(f64::NEG_INFINITY, f64::max);
+    let risk_shift = if risk_shift.is_finite() {
+        risk_shift
+    } else {
+        0.0
+    };
+    let exp_eta: Vec<f64> = eta.iter().map(|&eta_i| (eta_i - risk_shift).exp()).collect();
+    let risk_data = precompute_risk_set_cumsum(
+        data.x,
+        data.n,
+        data.p,
+        data.time,
+        data.weights,
+        &exp_eta,
+    );
 
     let mut loglik = 0.0;
-    let mut risk_sum = 0.0;
 
-    for &i in &indices {
-        risk_sum += data.weights[i] * exp_eta[i];
-
+    for i in 0..data.n {
+        let risk_sum = risk_data.cumsum_exp_eta[risk_data.risk_set_pos[i]];
         if data.status[i] == 1 && risk_sum > 0.0 {
-            loglik += data.weights[i] * (eta[i] - risk_sum.ln());
+            loglik += data.weights[i] * (eta[i] - risk_shift - risk_sum.ln());
         }
     }
 

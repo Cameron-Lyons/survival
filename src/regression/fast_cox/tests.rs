@@ -15,7 +15,22 @@ mod tests {
             FastCoxConfig::new(0.1, 1.0, 1000, 1e-7, ScreeningRule::Strong, None, 10, true, true)
                 .unwrap();
         assert_eq!(config.lambda, 0.1);
+        assert_eq!(config.lambda_(), 0.1);
         assert_eq!(config.l1_ratio, 1.0);
+    }
+
+    #[test]
+    fn test_lambda_property_validation() {
+        let mut config =
+            FastCoxConfig::new(0.1, 1.0, 1000, 1e-7, ScreeningRule::Strong, None, 10, true, true)
+                .unwrap();
+
+        config.set_lambda_(0.25).unwrap();
+
+        assert_eq!(config.lambda, 0.25);
+        assert_eq!(config.lambda_(), 0.25);
+        assert!(config.set_lambda_(-0.1).is_err());
+        assert_eq!(config.lambda, 0.25);
     }
 
     #[test]
@@ -68,6 +83,54 @@ mod tests {
         let result =
             fast_cox_array_view(x.view(), time.view(), status.view(), &config, None, None).unwrap();
         assert_eq!(result.coefficients.len(), 2);
+    }
+
+    #[test]
+    fn test_fast_cox_deviance_uses_shifted_risk_scores_for_large_offsets() {
+        let x = vec![0.0, 0.0, 0.0];
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 0, 1];
+        let weights = vec![1.0, 1.0, 1.0];
+        let offset = vec![710.0, 709.0, 708.0];
+        let data = FastCoxData {
+            x: &x,
+            n: 3,
+            p: 1,
+            time: &time,
+            status: &status,
+            weights: &weights,
+            offset: &offset,
+        };
+
+        let deviance = compute_cox_deviance(&data, &[0.0]);
+        let expected = 2.0 * (1.0 + (-1.0_f64).exp() + (-2.0_f64).exp()).ln();
+        assert!(deviance.is_finite());
+        assert!((deviance - expected).abs() < 1e-12);
+
+        let (gradient, hessian_diag) = compute_gradient_hessian_diag_fast(&data, &[0.0], None);
+        assert!(gradient.iter().all(|value| value.is_finite()));
+        assert!(hessian_diag.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn test_fast_cox_risk_sets_include_equal_times() {
+        let x = vec![0.0, 2.0, 2.0];
+        let time = vec![1.0, 1.0, 2.0];
+        let status = vec![1, 0, 0];
+        let weights = vec![1.0, 1.0, 1.0];
+        let offset = vec![0.0, 0.0, 0.0];
+        let data = FastCoxData {
+            x: &x,
+            n: 3,
+            p: 1,
+            time: &time,
+            status: &status,
+            weights: &weights,
+            offset: &offset,
+        };
+
+        let (gradient, _) = compute_gradient_hessian_diag_fast(&data, &[0.0], None);
+        assert!((gradient[0] + 4.0 / 3.0).abs() < 1e-12);
     }
 
     #[test]

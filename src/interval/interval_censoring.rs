@@ -362,12 +362,13 @@ pub struct TurnbullResult {
 }
 
 #[pyfunction]
-#[pyo3(signature = (left, right, max_iter=1000, tol=1e-6))]
+#[pyo3(signature = (left, right, max_iter=1000, tol=1e-6, weights=None))]
 pub fn turnbull_estimator(
     left: Vec<f64>,
     right: Vec<f64>,
     max_iter: usize,
     tol: f64,
+    weights: Option<Vec<f64>>,
 ) -> PyResult<TurnbullResult> {
     let n = left.len();
     if right.len() != n {
@@ -375,6 +376,39 @@ pub fn turnbull_estimator(
             "left and right must have same length",
         ));
     }
+    let weights = match weights {
+        Some(values) => {
+            if values.len() != n {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "weights must have same length as left and right",
+                ));
+            }
+            let mut has_positive = false;
+            for (idx, &value) in values.iter().enumerate() {
+                if !value.is_finite() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "weights contains non-finite value at index {}",
+                        idx
+                    )));
+                }
+                if value < 0.0 {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "weights must be non-negative; got {} at index {}",
+                        value, idx
+                    )));
+                }
+                has_positive |= value > 0.0;
+            }
+            if !has_positive {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "weights must include at least one positive value",
+                ));
+            }
+            values
+        }
+        None => vec![1.0; n],
+    };
+    let total_weight: f64 = weights.iter().sum();
 
     let mut all_points: Vec<f64> = Vec::new();
     for i in 0..n {
@@ -410,9 +444,12 @@ pub fn turnbull_estimator(
         let p_old = p.clone();
 
         let mut p_new = vec![0.0; m];
-        let mut weights = vec![0.0; m];
 
         for i in 0..n {
+            let case_weight = weights[i];
+            if case_weight == 0.0 {
+                continue;
+            }
             let mut sum_p = 0.0;
             let mut contributing_intervals: Vec<usize> = Vec::new();
 
@@ -426,8 +463,7 @@ pub fn turnbull_estimator(
             if sum_p > 0.0 {
                 for &j in &contributing_intervals {
                     let w = p[j] / sum_p;
-                    p_new[j] += w;
-                    weights[j] += 1.0;
+                    p_new[j] += case_weight * w;
                 }
             }
         }
@@ -460,7 +496,7 @@ pub fn turnbull_estimator(
 
     let se: Vec<f64> = p
         .iter()
-        .map(|&prob| (prob * (1.0 - prob) / n as f64).sqrt())
+        .map(|&prob| (prob * (1.0 - prob) / total_weight).sqrt())
         .collect();
 
     let z = 1.96;
@@ -490,9 +526,10 @@ pub fn turnbull_estimator(
 pub fn npmle_interval(
     left: Vec<f64>,
     right: Vec<f64>,
-    _weights: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
 ) -> PyResult<TimeSurvivalCurve> {
-    turnbull_estimator(left, right, 1000, 1e-6).map(|result| (result.time_points, result.survival))
+    turnbull_estimator(left, right, 1000, 1e-6, weights)
+        .map(|result| (result.time_points, result.survival))
 }
 
 #[cfg(test)]
@@ -511,9 +548,29 @@ mod tests {
         let left = vec![1.0, 2.0, 3.0, 1.0, 2.0];
         let right = vec![2.0, 3.0, 5.0, 4.0, f64::INFINITY];
 
-        let result = turnbull_estimator(left, right, 100, 1e-4).unwrap();
+        let result = turnbull_estimator(left, right, 100, 1e-4, None).unwrap();
         assert!(!result.time_points.is_empty());
         assert!(result.survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
+    }
+
+    #[test]
+    fn test_turnbull_weights_match_replicated_rows() {
+        let left = vec![0.0, 1.0, 2.0];
+        let right = vec![1.0, 3.0, f64::INFINITY];
+        let weights = vec![2.0, 1.0, 3.0];
+
+        let weighted =
+            turnbull_estimator(left.clone(), right.clone(), 100, 1e-8, Some(weights)).unwrap();
+
+        let replicated_left = vec![0.0, 0.0, 1.0, 2.0, 2.0, 2.0];
+        let replicated_right = vec![1.0, 1.0, 3.0, f64::INFINITY, f64::INFINITY, f64::INFINITY];
+        let replicated =
+            turnbull_estimator(replicated_left, replicated_right, 100, 1e-8, None).unwrap();
+
+        assert_eq!(weighted.time_points, replicated.time_points);
+        for (actual, expected) in weighted.survival.iter().zip(replicated.survival.iter()) {
+            assert!((actual - expected).abs() < 1e-10);
+        }
     }
 
     #[test]

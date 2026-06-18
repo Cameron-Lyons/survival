@@ -38,6 +38,23 @@ def test_norisk():
     assert len(result) == len(time1)
 
 
+def test_norisk_validates_public_inputs():
+    with pytest.raises(ValueError, match="time2 length"):
+        survival.norisk([0.0, 1.0], [1.0], [1, 0], [0, 1], [0, 1], [])
+
+    with pytest.raises(ValueError, match="finite"):
+        survival.norisk([float("nan")], [1.0], [1], [0], [0], [])
+
+    with pytest.raises(ValueError, match="status values"):
+        survival.norisk([0.0], [1.0], [2], [0], [0], [])
+
+    with pytest.raises(ValueError, match="sort1 index out of bounds"):
+        survival.norisk([0.0], [1.0], [1], [-1], [0], [])
+
+    with pytest.raises(ValueError, match="strata values"):
+        survival.norisk([0.0], [1.0], [1], [0], [0], [2])
+
+
 def test_finegray():
     tstart = [0.0, 0.0, 0.0, 0.0]
     tstop = [1.0, 2.0, 3.0, 4.0]
@@ -59,6 +76,65 @@ def test_finegray():
     assert hasattr(result, "end")
     assert hasattr(result, "wt")
     assert len(result.row) > 0
+
+
+def test_finegray_validates_public_inputs():
+    with pytest.raises(ValueError, match="tstop length"):
+        survival.finegray([0.0], [], [], [], [True], [])
+
+    with pytest.raises(ValueError, match="exceeds tstop"):
+        survival.finegray([2.0], [1.0], [], [], [True], [])
+
+    with pytest.raises(ValueError, match="ctime must be sorted"):
+        survival.finegray([0.0], [1.0], [2.0, 1.0], [1.0, 1.0], [True], [True, True])
+
+    with pytest.raises(ValueError, match="cprob must contain values"):
+        survival.finegray([0.0], [1.0], [1.0], [0.0], [True], [True])
+
+
+def test_finegray_regression_and_cif_public_api():
+    result = survival.finegray_regression(
+        time=[1.0, 2.0, 3.0, 4.0],
+        status=[1, 2, 0, 1],
+        covariates=[[0.0], [1.0], [0.5], [1.5]],
+        event_type=1,
+        max_iter=5,
+        eps=1e-8,
+    )
+    assert len(result.coefficients) == 1
+    assert len(result.hazard_ratio()) == 1
+    assert "Fine-Gray" in result.summary()
+
+    cif = survival.competing_risks_cif(
+        time=[1.0, 2.0, 3.0, 4.0],
+        status=[1, 2, 0, 1],
+        event_type=1,
+    )
+    assert cif.event_type == 1
+    assert len(cif.times) == len(cif.cif)
+
+
+def test_finegray_regression_and_cif_validate_public_inputs():
+    with pytest.raises(ValueError, match="time must not be empty"):
+        survival.finegray_regression([], [], [], 1)
+
+    with pytest.raises(ValueError, match="covariates contains non-finite"):
+        survival.finegray_regression([1.0], [1], [[float("nan")]], 1)
+
+    with pytest.raises(ValueError, match="max_iter must be positive"):
+        survival.finegray_regression([1.0], [1], [[0.0]], 1, max_iter=0)
+
+    with pytest.raises(ValueError, match="eps must be"):
+        survival.finegray_regression([1.0], [1], [[0.0]], 1, eps=float("inf"))
+
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.competing_risks_cif([float("inf")], [1], 1)
+
+    with pytest.raises(ValueError, match="status contains negative"):
+        survival.competing_risks_cif([1.0], [-1], 1)
+
+    with pytest.raises(ValueError, match="confidence_level"):
+        survival.competing_risks_cif([1.0], [1], 1, confidence_level=1.0)
 
 
 def test_ratetable_and_survexp_public_apis():

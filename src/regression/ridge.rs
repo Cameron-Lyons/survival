@@ -1,3 +1,8 @@
+use crate::constants::{DIVISION_FLOOR, TIME_EPSILON};
+use crate::internal::validation::{
+    validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
+};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -26,9 +31,9 @@ impl RidgePenalty {
     #[new]
     #[pyo3(signature = (theta, scale=None))]
     pub fn new(theta: f64, scale: Option<bool>) -> PyResult<Self> {
-        if theta < 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "theta must be non-negative",
+        if !theta.is_finite() || theta < 0.0 {
+            return Err(PyValueError::new_err(
+                "theta must be finite and non-negative",
             ));
         }
 
@@ -48,8 +53,8 @@ impl RidgePenalty {
     #[staticmethod]
     #[pyo3(signature = (df, n_vars, scale=None))]
     pub fn from_df(df: f64, n_vars: usize, scale: Option<bool>) -> PyResult<Self> {
-        if df <= 0.0 || df > n_vars as f64 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+        if !df.is_finite() || df <= 0.0 || df > n_vars as f64 {
+            return Err(PyValueError::new_err(format!(
                 "df must be between 0 and {} (number of variables)",
                 n_vars
             )));
@@ -135,16 +140,8 @@ pub fn ridge_fit(
     penalty: &RidgePenalty,
     weights: Option<Vec<f64>>,
 ) -> PyResult<RidgeResult> {
-    if x.len() != n_obs * n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "x length must equal n_obs * n_vars",
-        ));
-    }
-    if time.len() != n_obs || status.len() != n_obs {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and status must have length n_obs",
-        ));
-    }
+    validate_ridge_inputs(&x, n_obs, n_vars, &time, &status, weights.as_deref())?;
+    validate_ridge_penalty(penalty)?;
 
     let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
 
@@ -239,8 +236,8 @@ fn scale_predictors(x: &[f64], n_obs: usize, n_vars: usize) -> (Vec<f64>, Option
         }
 
         let mean = sum / n_obs as f64;
-        let variance = sum_sq / n_obs as f64 - mean * mean;
-        let sd = variance.sqrt().max(crate::constants::DIVISION_FLOOR);
+        let variance = (sum_sq / n_obs as f64 - mean * mean).max(0.0);
+        let sd = variance.sqrt().max(DIVISION_FLOOR);
 
         scale_factors.push(sd);
 
@@ -250,6 +247,77 @@ fn scale_predictors(x: &[f64], n_obs: usize, n_vars: usize) -> (Vec<f64>, Option
     }
 
     (scaled, Some(scale_factors))
+}
+
+fn validate_ridge_status(status: &[i32]) -> PyResult<()> {
+    for (idx, &value) in status.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(PyValueError::new_err(format!(
+                "status must contain only 0/1 values; got {} at index {}",
+                value, idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_ridge_penalty(penalty: &RidgePenalty) -> PyResult<()> {
+    if !penalty.theta.is_finite() || penalty.theta < 0.0 {
+        return Err(PyValueError::new_err(
+            "theta must be finite and non-negative",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ridge_inputs(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    status: &[i32],
+    weights: Option<&[f64]>,
+) -> PyResult<()> {
+    if n_obs == 0 {
+        return Err(PyValueError::new_err("n_obs must be positive"));
+    }
+    if n_vars == 0 {
+        return Err(PyValueError::new_err("n_vars must be positive"));
+    }
+
+    let expected_x_len = n_obs.checked_mul(n_vars).ok_or_else(|| {
+        PyValueError::new_err("n_obs * n_vars overflowed while validating x length")
+    })?;
+    if x.len() != expected_x_len {
+        return Err(PyValueError::new_err("x length must equal n_obs * n_vars"));
+    }
+    if time.len() != n_obs || status.len() != n_obs {
+        return Err(PyValueError::new_err(
+            "time and status must have length n_obs",
+        ));
+    }
+
+    validate_no_nan(x, "x")?;
+    validate_finite(x, "x")?;
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_ridge_status(status)?;
+
+    if let Some(weights) = weights {
+        if weights.len() != n_obs {
+            return Err(PyValueError::new_err("weights must have length n_obs"));
+        }
+        validate_no_nan(weights, "weights")?;
+        validate_finite(weights, "weights")?;
+        validate_non_negative(weights, "weights")?;
+    }
+
+    Ok(())
+}
+
+fn same_ridge_time(left: f64, right: f64) -> bool {
+    (left - right).abs() < TIME_EPSILON
 }
 
 /// Fit unpenalized model (simplified)
@@ -262,58 +330,86 @@ fn fit_unpenalized(
     weights: &[f64],
 ) -> PyResult<(Vec<f64>, Vec<f64>)> {
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
 
     let beta = vec![0.0; n_vars];
     let mut info_diag = vec![0.0; n_vars];
     let mut score = vec![0.0; n_vars];
 
+    let mut eta = vec![0.0; n_obs];
+    for i in 0..n_obs {
+        for j in 0..n_vars {
+            eta[i] += x[i * n_vars + j] * beta[j];
+        }
+    }
+
+    let shift = eta
+        .iter()
+        .zip(weights.iter())
+        .filter_map(|(&eta_i, &weight)| {
+            if weight > 0.0 && eta_i.is_finite() {
+                Some(eta_i)
+            } else {
+                None
+            }
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    let shift = if shift.is_finite() { shift } else { 0.0 };
+
     let mut risk_cache = vec![0.0; n_obs];
     for i in 0..n_obs {
-        let mut eta = 0.0;
-        for j in 0..n_vars {
-            eta += x[i * n_vars + j] * beta[j];
-        }
-        risk_cache[i] = (eta.min(700.0)).exp() * weights[i];
+        risk_cache[i] = (eta[i] - shift).exp() * weights[i];
     }
 
-    let mut risk_sum = vec![0.0; n_obs];
+    let mut risk_sum_at_pos = vec![0.0; n_obs];
     let mut total_risk = 0.0;
-    for &i in indices.iter().rev() {
+    for (pos, &i) in indices.iter().enumerate().rev() {
         total_risk += risk_cache[i];
-        risk_sum[i] = total_risk;
+        risk_sum_at_pos[pos] = total_risk;
     }
 
-    for (order_idx, &i) in indices.iter().enumerate() {
-        if status[i] == 1 && risk_sum[i] > 0.0 {
+    let mut risk_set_start_pos = vec![0usize; n_obs];
+    let mut start = 0;
+    while start < n_obs {
+        let current_time = time[indices[start]];
+        let mut end = start + 1;
+        while end < n_obs && same_ridge_time(time[indices[end]], current_time) {
+            end += 1;
+        }
+        for &idx in &indices[start..end] {
+            risk_set_start_pos[idx] = start;
+        }
+        start = end;
+    }
+
+    for &i in &indices {
+        let start_pos = risk_set_start_pos[i];
+        let risk_sum = risk_sum_at_pos[start_pos];
+        if status[i] == 1 && risk_sum > 0.0 {
             for j in 0..n_vars {
                 let xij = x[i * n_vars + j];
 
                 let mut x_mean = 0.0;
                 let mut x_sq_mean = 0.0;
 
-                for &k in &indices[order_idx..] {
+                for &k in &indices[start_pos..] {
                     let xkj = x[k * n_vars + j];
                     let risk = risk_cache[k];
-                    x_mean += xkj * risk / risk_sum[i];
-                    x_sq_mean += xkj * xkj * risk / risk_sum[i];
+                    x_mean += xkj * risk / risk_sum;
+                    x_sq_mean += xkj * xkj * risk / risk_sum;
                 }
 
                 score[j] += weights[i] * (xij - x_mean);
-                info_diag[j] += weights[i] * (x_sq_mean - x_mean * x_mean);
+                info_diag[j] += weights[i] * (x_sq_mean - x_mean * x_mean).max(0.0);
             }
         }
     }
 
     let mut final_beta = vec![0.0; n_vars];
     for j in 0..n_vars {
-        if info_diag[j] > crate::constants::DIVISION_FLOOR {
+        if info_diag[j] > DIVISION_FLOOR {
             final_beta[j] = score[j] / info_diag[j];
-            info_diag[j] = info_diag[j].max(crate::constants::DIVISION_FLOOR);
+            info_diag[j] = info_diag[j].max(DIVISION_FLOOR);
         }
     }
 
@@ -352,13 +448,22 @@ pub fn ridge_cv(
     theta_grid: Option<Vec<f64>>,
     n_folds: Option<usize>,
 ) -> PyResult<(f64, Vec<f64>)> {
+    validate_ridge_inputs(&x, n_obs, n_vars, &time, &status, None)?;
+
     let grid = theta_grid.unwrap_or_else(|| {
         (0..20)
             .map(|i| 10.0_f64.powf(-4.0 + i as f64 * 0.4))
             .collect()
     });
+    validate_non_empty(&grid, "theta_grid")?;
+    validate_no_nan(&grid, "theta_grid")?;
+    validate_finite(&grid, "theta_grid")?;
+    validate_non_negative(&grid, "theta_grid")?;
 
-    let folds = n_folds.unwrap_or(5);
+    let folds = n_folds.unwrap_or_else(|| n_obs.min(5));
+    if folds < 2 || folds > n_obs {
+        return Err(PyValueError::new_err("n_folds must be between 2 and n_obs"));
+    }
     let fold_assign: Vec<usize> = (0..n_obs).map(|i| i % folds).collect();
 
     let x_ref = &x;
@@ -415,7 +520,7 @@ pub fn ridge_cv(
     let best_idx = cv_scores
         .iter()
         .enumerate()
-        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
         .map(|(i, _)| i)
         .unwrap_or(0);
 
@@ -431,6 +536,12 @@ mod tests {
         let penalty = RidgePenalty::new(1.0, None).unwrap();
         assert_eq!(penalty.theta, 1.0);
         assert!(penalty.scale);
+
+        let err = RidgePenalty::new(f64::INFINITY, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("theta must be finite and non-negative")
+        );
     }
 
     #[test]
@@ -438,6 +549,9 @@ mod tests {
         let penalty = RidgePenalty::from_df(5.0, 10, None).unwrap();
         assert!(penalty.theta > 0.0);
         assert_eq!(penalty.df, Some(5.0));
+
+        let err = RidgePenalty::from_df(f64::NAN, 10, None).unwrap_err();
+        assert!(err.to_string().contains("df must be between 0 and 10"));
     }
 
     #[test]
@@ -458,5 +572,74 @@ mod tests {
         let result = ridge_fit(x, 3, 2, time, status, &penalty, None).unwrap();
         assert_eq!(result.coefficients.len(), 2);
         assert_eq!(result.std_err.len(), 2);
+    }
+
+    #[test]
+    fn test_ridge_fit_uses_shared_risk_set_for_tied_times() {
+        let x = vec![0.0, 2.0, 2.0];
+        let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
+        let status = vec![1, 0, 0];
+        let weights = vec![1.0, 1.0, 1.0];
+
+        let (beta, info_diag) = fit_unpenalized(&x, 3, 1, &time, &status, &weights).unwrap();
+
+        assert!((beta[0] + 1.5).abs() < 1e-12);
+        assert!((info_diag[0] - 8.0 / 9.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_ridge_fit_rejects_malformed_public_inputs() {
+        let penalty = RidgePenalty::new(0.1, Some(false)).unwrap();
+
+        let err = ridge_fit(
+            vec![1.0, 2.0],
+            2,
+            1,
+            vec![1.0, 2.0],
+            vec![1, 2],
+            &penalty,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("status must contain only 0/1"));
+
+        let err = ridge_fit(
+            vec![1.0, 2.0],
+            2,
+            1,
+            vec![1.0, 2.0],
+            vec![1, 1],
+            &penalty,
+            Some(vec![1.0, f64::INFINITY]),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("weights contains non-finite"));
+
+        let err = ridge_cv(
+            vec![1.0, 0.0, 0.0, 1.0],
+            2,
+            2,
+            vec![1.0, 2.0],
+            vec![1, 1],
+            Some(vec![]),
+            Some(2),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("theta_grid cannot be empty"));
+
+        let err = ridge_cv(
+            vec![1.0, 0.0, 0.0, 1.0],
+            2,
+            2,
+            vec![1.0, 2.0],
+            vec![1, 1],
+            Some(vec![0.1]),
+            Some(0),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("n_folds must be between 2 and n_obs")
+        );
     }
 }

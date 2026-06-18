@@ -9,9 +9,27 @@ def setup_survival_import() -> ModuleType:
 
     try:
         return importlib.import_module("survival")
-    except ImportError:
+    except ModuleNotFoundError as exc:
+        if exc.name != "survival":
+            raise ImportError(
+                "Could not import `survival`. Build the extension first, for example:\n"
+                "  maturin develop --release\n"
+                "Or install the built wheel, for example:\n"
+                "  pip install target/wheels/survival-*.whl\n"
+                "Then run:\n"
+                "  pytest python/tests -v"
+            ) from exc
         sys.modules.pop("survival", None)
         sys.path[:] = [path for path in sys.path if Path(path or ".").resolve() != python_root]
+    except ImportError as exc:
+        raise ImportError(
+            "Could not import `survival`. Build the extension first, for example:\n"
+            "  maturin develop --release\n"
+            "Or install the built wheel, for example:\n"
+            "  pip install target/wheels/survival-*.whl\n"
+            "Then run:\n"
+            "  pytest python/tests -v"
+        ) from exc
 
     try:
         return importlib.import_module("survival")

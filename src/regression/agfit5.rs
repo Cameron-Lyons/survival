@@ -91,9 +91,9 @@ impl CoxState {
     }
 
     fn update(&mut self, beta: &mut [f64], u: &mut [f64], imat: &mut [f64], loglik: &mut f64) {
-        let nvar = beta.len();
-        let nfrail = self.frail.len();
-        let nvar2 = nvar + nfrail;
+        let nvar = self.covar.len();
+        let has_frailty = beta.len() > nvar;
+        let nvar2 = beta.len();
         self.a.fill(0.0);
         self.a2.fill(0.0);
         u.fill(0.0);
@@ -103,7 +103,7 @@ impl CoxState {
             for (i, beta_val) in beta.iter().enumerate().take(nvar) {
                 zbeta += beta_val * self.covar[i][person];
             }
-            if nfrail > 0 {
+            if has_frailty {
                 zbeta += beta[nvar] * self.frail[person] as f64;
             }
             self.score[person] = zbeta;
@@ -135,7 +135,7 @@ impl CoxState {
                         }
                         *u_elem += self.weights[person] * (self.covar[i][person] - temp / risk_sum);
                     }
-                    if nfrail > 0 {
+                    if has_frailty {
                         let mut temp = 0.0;
                         for j in person..self.weights.len() {
                             if self.strata[j] == self.strata[person] {
@@ -163,7 +163,7 @@ impl CoxState {
                                     - (self.a[i] * self.a[j]) / (risk_sum * risk_sum));
                         }
                     }
-                    if nfrail > 0 {
+                    if has_frailty {
                         for i in 0..nvar {
                             let mut temp = 0.0;
                             for k in person..self.weights.len() {
@@ -205,8 +205,60 @@ impl CoxState {
         }
     }
 }
+fn normalize_covariates(covariates: Vec<Vec<f64>>, nused: usize) -> PyResult<Vec<Vec<f64>>> {
+    if covariates.is_empty() {
+        return Err(PyRuntimeError::new_err("No covariates provided"));
+    }
+    if covariates.iter().all(|covariate| covariate.len() == nused) {
+        return Ok(covariates);
+    }
+    if covariates.len() == nused {
+        let nvar = covariates[0].len();
+        if nvar == 0 {
+            return Err(PyRuntimeError::new_err("No covariates provided"));
+        }
+        if covariates.iter().any(|row| row.len() != nvar) {
+            return Err(PyRuntimeError::new_err(
+                "Covariate rows must all have the same length",
+            ));
+        }
+        let mut transposed = vec![vec![0.0; nused]; nvar];
+        for (row_idx, row) in covariates.iter().enumerate() {
+            for (col_idx, value) in row.iter().enumerate() {
+                transposed[col_idx][row_idx] = *value;
+            }
+        }
+        return Ok(transposed);
+    }
+    Err(PyRuntimeError::new_err(
+        "Covariates must be n_observations rows or n_covariates vectors",
+    ))
+}
+
+fn validate_optional_len<T>(name: &str, values: &Option<Vec<T>>, nused: usize) -> PyResult<()> {
+    if let Some(values) = values
+        && values.len() != nused
+    {
+        return Err(PyRuntimeError::new_err(format!(
+            "{name} vector length does not match time vector"
+        )));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
+#[pyo3(signature = (
+    time,
+    event,
+    covariates,
+    offset=None,
+    weights=None,
+    strata=None,
+    frail=None,
+    max_iter=None,
+    eps=None,
+))]
 pub fn perform_cox_regression_frailty(
     time: Vec<f64>,
     event: Vec<i32>,
@@ -218,6 +270,10 @@ pub fn perform_cox_regression_frailty(
     max_iter: Option<i32>,
     eps: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
+    validate_optional_len("Offset", &offset, time.len())?;
+    validate_optional_len("Weights", &weights, time.len())?;
+    validate_optional_len("Strata", &strata, time.len())?;
+    validate_optional_len("Frailty", &frail, time.len())?;
     let config = CoxRegressionConfig {
         offset,
         weights,
@@ -335,21 +391,12 @@ fn perform_cox_regression(
     if nused == 0 {
         return Err(PyRuntimeError::new_err("No observations provided"));
     }
+    let covariates = normalize_covariates(covariates, nused)?;
     let nvar = covariates.len();
-    if nvar == 0 {
-        return Err(PyRuntimeError::new_err("No covariates provided"));
-    }
     if event.len() != nused {
         return Err(PyRuntimeError::new_err(
             "Event vector length does not match time vector",
         ));
-    }
-    for cov in &covariates {
-        if cov.len() != nused {
-            return Err(PyRuntimeError::new_err(
-                "Covariate vector length does not match time vector",
-            ));
-        }
     }
     let offset = config.offset.unwrap_or_else(|| vec![0.0; nused]);
     let weights = config.weights.unwrap_or_else(|| vec![1.0; nused]);
@@ -362,10 +409,8 @@ fn perform_cox_regression(
     yy.extend_from_slice(&time);
     yy.extend(event.iter().map(|&x| x as f64));
     let mut covar = Vec::with_capacity(nvar * nused);
-    for i in 0..nused {
-        for covariate_row in covariates.iter().take(nvar) {
-            covar.push(covariate_row[i]);
-        }
+    for covariate in &covariates {
+        covar.extend(covariate);
     }
     let sort: Vec<i32> = (1..=nused as i32).collect();
     let nfrail = if frail.iter().any(|&x| x != 0) { 1 } else { 0 };

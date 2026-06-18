@@ -10,4 +10,6 @@ pub use dynamic_prediction_module::{
     dynamic_c_index, dynamic_prediction, ipcw_auc, landmarking_analysis, super_landmark_model,
     time_dependent_roc, time_varying_auc,
 };
-pub use joint_model_module::{AssociationStructure, JointModelResult, joint_model};
+pub use joint_model_module::{
+    AssociationStructure, JointModelResult, JointSurvivalModelConfig, joint_model,
+};

@@ -19,6 +19,50 @@ from ._sklearn_common import (
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike, NDArray
 
+_EXP_CLAMP_MIN = -100.0
+_EXP_CLAMP_MAX = 100.0
+
+
+def _step_values_at(
+    step_times: NDArray[np.float64],
+    step_values: NDArray[np.float64],
+    evaluation_times: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Evaluate a cumulative step function at requested times."""
+    if step_times.size == 0:
+        return np.zeros_like(evaluation_times, dtype=np.float64)
+    positions = np.searchsorted(step_times, evaluation_times, side="right") - 1
+    values = np.zeros_like(evaluation_times, dtype=np.float64)
+    valid = positions >= 0
+    values[valid] = step_values[positions[valid]]
+    return values
+
+
+def _median_survival_times(
+    times: NDArray[np.float64], survival: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    medians = np.empty(survival.shape[0], dtype=np.float64)
+    target = 0.5
+    for row_idx, curve in enumerate(survival):
+        crossing = np.flatnonzero(curve <= target)
+        if crossing.size == 0:
+            medians[row_idx] = np.nan
+            continue
+        idx = int(crossing[0])
+        if idx == 0:
+            medians[row_idx] = times[0]
+            continue
+        previous_survival = curve[idx - 1]
+        current_survival = curve[idx]
+        previous_time = times[idx - 1]
+        current_time = times[idx]
+        if previous_survival == current_survival:
+            medians[row_idx] = current_time
+        else:
+            fraction = (previous_survival - target) / (previous_survival - current_survival)
+            medians[row_idx] = previous_time + fraction * (current_time - previous_time)
+    return medians
+
 
 class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
     """Scikit-learn compatible Cox Proportional Hazards model.
@@ -30,7 +74,7 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
 
     Attributes
     ----------
-    model_ : CoxPHModel
+    model_ : CoxPHFit
         The underlying fitted Cox model.
     coef_ : ndarray of shape (n_features,)
         Estimated coefficients.
@@ -70,10 +114,27 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
         self.n_features_in_ = X.shape[1]
 
         covariates = X.tolist()
-        self.model_ = _surv.CoxPHModel.new_with_data(covariates, time.tolist(), status.tolist())
-        self.model_.fit(self.n_iters)
+        self.model_ = _surv.coxph_fit(
+            time.tolist(),
+            status.tolist(),
+            covariates,
+            None,
+            None,
+            None,
+            None,
+            self.n_iters,
+            None,
+            None,
+            "breslow",
+            None,
+        )
 
-        self.coef_ = np.array(self.model_.coefficients)
+        self.coef_ = np.asarray(self.model_.coefficients[0], dtype=np.float64)
+        self.event_times_ = np.sort(np.unique(time))
+        baseline_times, baseline_hazard = self.model_.basehaz(True)
+        self._baseline_times_ = np.asarray(baseline_times, dtype=np.float64)
+        self._baseline_hazard_ = np.asarray(baseline_hazard, dtype=np.float64)
+        self._center_ = float(np.mean(np.asarray(self.model_.linear_predictors, dtype=np.float64)))
         self.is_fitted_ = True
         return self
 
@@ -127,9 +188,20 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
                 f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
             )
 
-        times_list = times.tolist() if times is not None else None
-        t, surv = self.model_.survival_curve(X.tolist(), times_list)
-        return np.array(t), np.array(surv)
+        evaluation_times = (
+            np.asarray(times, dtype=np.float64)
+            if times is not None
+            else np.asarray(self.event_times_, dtype=np.float64)
+        )
+        baseline_hazard = _step_values_at(
+            self._baseline_times_, self._baseline_hazard_, evaluation_times
+        )
+        linear_predictors = np.asarray(self.model_.predict(X.tolist()), dtype=np.float64)
+        risk_multipliers = np.exp(
+            np.clip(linear_predictors - self._center_, _EXP_CLAMP_MIN, _EXP_CLAMP_MAX)
+        )
+        survival = np.exp(-np.outer(risk_multipliers, baseline_hazard))
+        return evaluation_times, np.clip(survival, 0.0, 1.0)
 
     def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]:
         """Predict median survival time for samples.
@@ -152,5 +224,5 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
                 f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
             )
 
-        result = self.model_.predicted_survival_time(X.tolist(), 0.5)
-        return np.array([t if t is not None else np.nan for t in result])
+        times, survival = self.predict_survival_function(X)
+        return _median_survival_times(times, survival)

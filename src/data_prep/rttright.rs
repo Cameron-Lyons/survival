@@ -1,4 +1,8 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
+
+use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 
 /// Result of redistribute-to-the-right weight calculation
 #[derive(Debug, Clone)]
@@ -43,17 +47,18 @@ pub fn rttright(
     let n = time.len();
 
     if status.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(PyValueError::new_err(
             "time and status must have same length",
         ));
     }
 
     let init_weights = weights.unwrap_or_else(|| vec![1.0; n]);
     if init_weights.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(PyValueError::new_err(
             "weights must have same length as time",
         ));
     }
+    validate_rttright_inputs(&time, &status, &init_weights)?;
 
     if n == 0 {
         return Ok(RttrightResult {
@@ -65,11 +70,7 @@ pub fn rttright(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
 
     let sorted_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
@@ -83,6 +84,25 @@ pub fn rttright(
         status: sorted_status,
         order: indices,
     })
+}
+
+fn validate_rttright_inputs(time: &[f64], status: &[i32], weights: &[f64]) -> PyResult<()> {
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_no_nan(weights, "weights")?;
+    validate_finite(weights, "weights")?;
+    validate_non_negative(weights, "weights")?;
+
+    for (index, &status_value) in status.iter().enumerate() {
+        if status_value != 0 && status_value != 1 {
+            return Err(PyValueError::new_err(format!(
+                "status must contain only 0/1 values; got {} at index {}",
+                status_value, index
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Compute IPCW weights using Kaplan-Meier censoring distribution
@@ -152,15 +172,20 @@ pub fn rttright_stratified(
     let n = time.len();
 
     if status.len() != n || strata.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(PyValueError::new_err(
             "time, status, and strata must have same length",
         ));
     }
 
     let init_weights = weights.unwrap_or_else(|| vec![1.0; n]);
+    if init_weights.len() != n {
+        return Err(PyValueError::new_err(
+            "weights must have same length as time",
+        ));
+    }
+    validate_rttright_inputs(&time, &status, &init_weights)?;
 
-    let mut strata_indices: std::collections::HashMap<i32, Vec<usize>> =
-        std::collections::HashMap::new();
+    let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (i, &s) in strata.iter().enumerate() {
         strata_indices.entry(s).or_default().push(i);
     }
@@ -195,6 +220,7 @@ pub fn rttright_stratified(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::common::initialize_python;
     use itertools::Itertools;
 
     #[test]
@@ -251,6 +277,41 @@ mod tests {
         let mut order = result.order.clone();
         order.sort_unstable();
         assert_eq!(order, vec![0, 1, 2, 3]);
+        assert_eq!(result.order, vec![1, 0, 3, 2]);
+    }
+
+    #[test]
+    fn test_rttright_stratified_validates_weights_length() {
+        initialize_python();
+
+        let err = rttright_stratified(vec![1.0, 2.0], vec![1, 0], vec![0, 0], Some(vec![1.0]))
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("weights must have same length as time")
+        );
+    }
+
+    #[test]
+    fn test_rttright_rejects_malformed_inputs() {
+        initialize_python();
+
+        let err = rttright(vec![f64::NAN], vec![1], None).unwrap_err();
+        assert!(err.to_string().contains("time contains NaN"));
+
+        let err = rttright(vec![1.0], vec![2], None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("status must contain only 0/1 values")
+        );
+
+        let err = rttright(vec![1.0], vec![1], Some(vec![-1.0])).unwrap_err();
+        assert!(err.to_string().contains("weights contains negative value"));
+
+        let err = rttright_stratified(vec![1.0], vec![1], vec![0], Some(vec![f64::INFINITY]))
+            .unwrap_err();
+        assert!(err.to_string().contains("weights contains non-finite"));
     }
 
     #[test]

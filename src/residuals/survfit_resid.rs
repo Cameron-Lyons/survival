@@ -1,4 +1,5 @@
 use crate::internal::statistical::normal_inverse_cdf;
+use crate::internal::validation::validate_finite;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -118,6 +119,53 @@ fn get_surv_at_time(t: f64, surv_time: &[f64], surv: &[f64]) -> f64 {
     1.0
 }
 
+fn validate_binary_status(status: &[i32]) -> PyResult<()> {
+    if status.iter().any(|&value| value != 0 && value != 1) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "status must contain only 0/1 values",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_survival_probabilities(surv: &[f64]) -> PyResult<()> {
+    validate_finite(surv, "surv")?;
+    for (index, &value) in surv.iter().enumerate() {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "surv must contain probabilities between 0 and 1; got {} at index {}",
+                value, index
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_survfit_residual_inputs(
+    time: &[f64],
+    status: &[i32],
+    surv_time: &[f64],
+    surv: &[f64],
+) -> PyResult<()> {
+    validate_finite(time, "time")?;
+    validate_binary_status(status)?;
+    validate_finite(surv_time, "surv_time")?;
+    validate_survival_probabilities(surv)?;
+
+    for (index, pair) in surv_time.windows(2).enumerate() {
+        if pair[1] < pair[0] {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "surv_time must be sorted in nondecreasing order; index {} has {} before {}",
+                index + 1,
+                pair[1],
+                pair[0]
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[pyfunction]
 #[pyo3(signature = (time, status, surv_time, surv, residual_type="martingale".to_string()))]
 pub fn residuals_survfit(
@@ -139,6 +187,7 @@ pub fn residuals_survfit(
             "surv_time and surv must have the same length",
         ));
     }
+    validate_survfit_residual_inputs(&time, &status, &surv_time, &surv)?;
 
     let residuals = match residual_type.to_lowercase().as_str() {
         "martingale" => compute_martingale_survfit(&time, &status, &surv_time, &surv),

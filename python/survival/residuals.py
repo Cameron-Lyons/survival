@@ -27,5 +27,8 @@ __all__ = bind_names(
         "SurvregResiduals",
         "dfbeta_survreg",
         "residuals_survreg",
+        "survreg_dfbeta_residuals",
+        "survreg_influence_residuals",
+        "survreg_residual_matrix",
     ],
 )

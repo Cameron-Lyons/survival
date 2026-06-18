@@ -16,6 +16,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<IPCWResult>()?;
     m.add_class::<MSMResult>()?;
     m.add_class::<TargetTrialResult>()?;
+    m.add_class::<TrialEmulationConfig>()?;
 
     m.add_function(wrap_pyfunction!(estimate_counterfactual_survival, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_tv_survcaus, m)?)?;
@@ -77,6 +78,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(super_landmark_model, m)?)?;
     m.add_function(wrap_pyfunction!(time_dependent_roc, m)?)?;
     m.add_class::<JointModelResult>()?;
+    m.add_class::<JointSurvivalModelConfig>()?;
     m.add_class::<DynamicPredictionResult>()?;
     m.add_class::<AssociationStructure>()?;
     m.add_class::<TimeVaryingAUCResult>()?;
