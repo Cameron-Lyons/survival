@@ -47,7 +47,7 @@ dev = [
   "pre-commit==4.6.0",
   "pytest==9.0.3",
   "pytest-cov==7.1.0",
-  "ruff==0.15.12",
+  "ruff==0.15.16",
   "numpy==2.4.6",
   "mypy==2.1.0",
 ]
@@ -56,7 +56,7 @@ test = [
   "pytest-cov==7.1.0",
   "numpy==2.4.6",
   "pandas==3.0.3",
-  "polars==1.40.1",
+  "polars==1.41.2",
 ]
 sklearn = [
   "scikit-learn>=1.0.0",

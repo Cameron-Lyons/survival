@@ -51,7 +51,7 @@ jobs:
         run: python scripts/check_coverage.py cobertura.xml --min-percent "${RUST_COVERAGE_MIN_PERCENT}"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: cobertura.xml
           flags: rust
@@ -122,7 +122,7 @@ jobs:
             --cov-fail-under="${PYTHON_COVERAGE_MIN_PERCENT}"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: python-coverage.xml
           flags: python
