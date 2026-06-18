@@ -62,7 +62,8 @@ fn generate_strata(n: usize, n_strata: usize) -> Vec<i32> {
 fn fitted_coxph_model(n: usize, p: usize) -> CoxPHModel {
     let (time, status, covariates) = generate_tied_regression_data(n, p);
     let status: Vec<u8> = status.into_iter().map(|value| value as u8).collect();
-    let mut model = CoxPHModel::new_with_data(covariates, time, status);
+    let mut model = CoxPHModel::new_with_data(covariates, time, status)
+        .expect("benchmark CoxPHModel data should be valid");
     model
         .fit(20)
         .expect("benchmark CoxPHModel fit should converge");
