@@ -1,4 +1,4 @@
-use wide::{CmpGt, CmpLt, f64x4};
+use wide::f64x4;
 
 pub fn dot_product_simd(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len().min(b.len());
