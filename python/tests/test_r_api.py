@@ -656,7 +656,7 @@ def test_survfit_fleming_harrington_type_matches_low_level_counts():
     default = survival.survfit(response)
     kaplan_prefix = survival.survfit(response, type="kap")
     direct = survival.survfit(response, type="fleming-harrington")
-    prefix = survival.survfit(response, type="fle")
+    prefix = survival.survfit(response, type="fleming")
     spaced = survival.survfit(response, type=" fleming-harrington ")
     formula = survival.survfit(
         "Surv(time, status) ~ 1",
