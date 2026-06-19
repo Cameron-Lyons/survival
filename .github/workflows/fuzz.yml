@@ -1,5 +1,8 @@
 name: Fuzz
 
+permissions:
+  contents: read
+
 on:
   schedule:
     # Every Monday at 6:00 UTC
