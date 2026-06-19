@@ -196,6 +196,7 @@ mod cox_regression {
                 Some(1e-9),
                 Some("efron"),
                 None,
+                None,
             )
             .expect("benchmark Cox PH Efron fit should converge");
             black_box(fit);
@@ -219,6 +220,7 @@ mod cox_regression {
                 Some(1e-7),
                 Some(1e-9),
                 Some("breslow"),
+                None,
                 None,
             )
             .expect("benchmark Cox PH Breslow fit should converge");
@@ -246,6 +248,7 @@ mod cox_regression {
                 Some(1e-9),
                 Some("efron"),
                 None,
+                None,
             )
             .expect("benchmark weighted stratified Cox PH fit should converge");
             black_box(fit);
@@ -271,6 +274,7 @@ mod cox_regression {
             Some(1e-9),
             Some("efron"),
             Some(entry_times),
+            None,
         )
         .expect("benchmark Cox PH fit should converge");
 
@@ -299,6 +303,7 @@ mod cox_regression {
             Some(1e-7),
             Some(1e-9),
             Some("efron"),
+            None,
             None,
         )
         .expect("benchmark Cox PH fit should converge");
@@ -332,6 +337,7 @@ mod cox_regression {
             Some(1e-9),
             Some("efron"),
             Some(entry_times),
+            None,
         )
         .expect("benchmark Cox PH fit should converge");
 
@@ -362,6 +368,7 @@ mod cox_regression {
             Some(1e-9),
             Some("efron"),
             Some(entry_times),
+            None,
         )
         .expect("benchmark Cox PH fit should converge");
 
@@ -440,6 +447,7 @@ mod survreg_bench {
                 Some(1e-7),
                 Some(1e-9),
                 None,
+                None,
             )
             .expect("benchmark Weibull survreg fit should converge");
             black_box(fit);
@@ -469,6 +477,7 @@ mod survreg_bench {
                 Some(30),
                 Some(1e-7),
                 Some(1e-9),
+                None,
                 None,
             )
             .expect("benchmark weighted stratified lognormal survreg fit should converge");
