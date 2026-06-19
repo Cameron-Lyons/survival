@@ -151,7 +151,7 @@ pub fn rd_survival(
     let se_right = (survival_right * (1.0 - survival_right) / n_right as f64).sqrt();
     let se = (se_left.powi(2) + se_right.powi(2)).sqrt();
 
-    let z_score = if se > crate::constants::DIVISION_FLOOR {
+    let z_score = if se > DIVISION_FLOOR {
         treatment_effect / se
     } else {
         0.0
@@ -159,8 +159,7 @@ pub fn rd_survival(
 
     let p_value = 2.0 * (1.0 - normal_cdf(z_score.abs()));
 
-    let ci_lower = treatment_effect - 1.96 * se;
-    let ci_upper = treatment_effect + 1.96 * se;
+    let (ci_lower, ci_upper) = normal_ci_95(treatment_effect, se);
 
     Ok(RDSurvivalResult {
         treatment_effect,

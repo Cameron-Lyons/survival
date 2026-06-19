@@ -1,5 +1,6 @@
+use crate::constants::DIVISION_FLOOR;
 use crate::internal::statistical::normal_inverse_cdf;
-use crate::internal::validation::validate_finite;
+use crate::internal::validation::{validate_binary_i32, validate_finite};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -56,7 +57,7 @@ pub(crate) fn compute_deviance_survfit(
         .map(|(&m, &d)| {
             let sign = if m >= 0.0 { 1.0 } else { -1.0 };
             let abs_term = if d == 1 {
-                -2.0 * (m - 1.0 + (1.0 - m).max(1e-10).ln())
+                -2.0 * (m - 1.0 + (1.0 - m).max(DIVISION_FLOOR).ln())
             } else {
                 -2.0 * m
             };
@@ -119,15 +120,6 @@ fn get_surv_at_time(t: f64, surv_time: &[f64], surv: &[f64]) -> f64 {
     1.0
 }
 
-fn validate_binary_status(status: &[i32]) -> PyResult<()> {
-    if status.iter().any(|&value| value != 0 && value != 1) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "status must contain only 0/1 values",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_survival_probabilities(surv: &[f64]) -> PyResult<()> {
     validate_finite(surv, "surv")?;
     for (index, &value) in surv.iter().enumerate() {
@@ -148,7 +140,7 @@ fn validate_survfit_residual_inputs(
     surv: &[f64],
 ) -> PyResult<()> {
     validate_finite(time, "time")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
     validate_finite(surv_time, "surv_time")?;
     validate_survival_probabilities(surv)?;
 

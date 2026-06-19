@@ -1,6 +1,8 @@
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 
+use crate::constants::same_time;
+
 fn value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<PyValueError, _>(message.into())
 }
@@ -656,7 +658,7 @@ pub fn basehaz(
             .filter_map(|(&event_time, &event)| (event == 1).then_some(event_time))
             .collect();
         event_times.sort_by(|a, b| a.total_cmp(b));
-        event_times.dedup_by(|a, b| (*a - *b).abs() < crate::constants::TIME_EPSILON);
+        event_times.dedup_by(|a, b| same_time(*a, *b));
 
         let mut hazard = Vec::with_capacity(event_times.len());
         let mut cum_hazard = 0.0;
@@ -666,8 +668,7 @@ pub fn basehaz(
                 .zip(status.iter())
                 .zip(weights.iter())
                 .filter_map(|((&stop, &event), &weight)| {
-                    (event == 1 && (stop - event_time).abs() < crate::constants::TIME_EPSILON)
-                        .then_some(weight)
+                    (event == 1 && same_time(stop, *event_time)).then_some(weight)
                 })
                 .sum::<f64>();
             let risk_sum: f64 = (0..n)
@@ -707,7 +708,7 @@ pub fn basehaz(
         let mut events = 0.0;
         let start_i = i;
 
-        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
+        while i < n && same_time(time[indices[i]], current_time) {
             if status[indices[i]] == 1 {
                 events += weights[indices[i]];
             }

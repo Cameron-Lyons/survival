@@ -1,4 +1,5 @@
 use crate::constants::TIME_EPSILON;
+use crate::internal::validation::validate_binary_i32;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -502,14 +503,7 @@ pub fn coxph_detail(
             )));
         }
     }
-    for (idx, value) in status.iter().enumerate() {
-        if *value != 0 && *value != 1 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "status must contain only 0/1 values; got {} at index {}",
-                value, idx
-            )));
-        }
-    }
+    validate_binary_i32(&status, "status")?;
     for (row_idx, row) in covariates.iter().enumerate() {
         if row.len() != coefficients.len() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(

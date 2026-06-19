@@ -1,3 +1,4 @@
+use crate::constants::normal_ci_95;
 use crate::internal::matrix::{lu_solve, matrix_inverse};
 use crate::internal::statistical::normal_cdf;
 use ndarray::{Array1, Array2};
@@ -350,7 +351,7 @@ pub(crate) fn agfit5(
         .map(|i| {
             let se = standard_errors[i];
             let coef = beta[i];
-            (coef - 1.96 * se, coef + 1.96 * se)
+            normal_ci_95(coef, se)
         })
         .collect();
     let score: f64 = u.iter().map(|&x| x * x).sum();

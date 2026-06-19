@@ -1,3 +1,4 @@
+use crate::constants::clamped_normal_ci_bounds_95;
 use crate::internal::statistical::erf;
 use pyo3::prelude::*;
 
@@ -499,18 +500,7 @@ pub fn turnbull_estimator(
         .map(|&prob| (prob * (1.0 - prob) / total_weight).sqrt())
         .collect();
 
-    let z = 1.96;
-    let survival_lower: Vec<f64> = survival
-        .iter()
-        .zip(se.iter())
-        .map(|(&s, &se)| (s - z * se).max(0.0))
-        .collect();
-
-    let survival_upper: Vec<f64> = survival
-        .iter()
-        .zip(se.iter())
-        .map(|(&s, &se)| (s + z * se).min(1.0))
-        .collect();
+    let (survival_lower, survival_upper) = clamped_normal_ci_bounds_95(&survival, &se, 0.0, 1.0);
 
     Ok(TurnbullResult {
         time_points: all_points,

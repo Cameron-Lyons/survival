@@ -2,7 +2,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 
-use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
+};
 
 /// Result of redistribute-to-the-right weight calculation
 #[derive(Debug, Clone)]
@@ -93,14 +95,7 @@ fn validate_rttright_inputs(time: &[f64], status: &[i32], weights: &[f64]) -> Py
     validate_finite(weights, "weights")?;
     validate_non_negative(weights, "weights")?;
 
-    for (index, &status_value) in status.iter().enumerate() {
-        if status_value != 0 && status_value != 1 {
-            return Err(PyValueError::new_err(format!(
-                "status must contain only 0/1 values; got {} at index {}",
-                status_value, index
-            )));
-        }
-    }
+    validate_binary_i32(status, "status")?;
 
     Ok(())
 }

@@ -2,6 +2,8 @@
 
 use pyo3::prelude::*;
 
+use crate::constants::exp_ci_bounds_95;
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct RelativeSurvivalResult {
@@ -296,18 +298,7 @@ pub fn excess_hazard_regression(
     let std_errors = vec![0.1; n_vars];
     let excess_hazard_ratio: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
 
-    let z = 1.96;
-    let ehr_ci_lower: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| (b - z * se).exp())
-        .collect();
-
-    let ehr_ci_upper: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| (b + z * se).exp())
-        .collect();
+    let (ehr_ci_lower, ehr_ci_upper) = exp_ci_bounds_95(&beta, &std_errors);
 
     let mut unique_times: Vec<f64> = time.clone();
     unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

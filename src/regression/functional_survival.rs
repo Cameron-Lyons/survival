@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::constants::exp_ci_bounds_95;
 use crate::internal::statistical::normal_cdf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -426,17 +427,7 @@ pub fn functional_cox(
 
     let hazard_ratio: Vec<f64> = coefficients.par_iter().map(|&c| c.exp()).collect();
 
-    let ci_lower: Vec<f64> = coefficients
-        .par_iter()
-        .zip(coefficient_se.par_iter())
-        .map(|(c, se): (&f64, &f64)| (c - 1.96 * se).exp())
-        .collect();
-
-    let ci_upper: Vec<f64> = coefficients
-        .par_iter()
-        .zip(coefficient_se.par_iter())
-        .map(|(c, se): (&f64, &f64)| (c + 1.96 * se).exp())
-        .collect();
+    let (ci_lower, ci_upper) = exp_ci_bounds_95(&coefficients, &coefficient_se);
 
     let p_values: Vec<f64> = coefficients
         .par_iter()

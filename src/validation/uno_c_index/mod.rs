@@ -1,4 +1,6 @@
-use crate::constants::{IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE};
+use crate::constants::{
+    IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE, clamped_normal_ci_95, normal_ci_95,
+};
 use crate::internal::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
 use pyo3::prelude::*;
 use rayon::prelude::*;

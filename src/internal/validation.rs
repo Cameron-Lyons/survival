@@ -56,6 +56,11 @@ pub enum ValidationError {
         index: usize,
         value: f64,
     },
+    NonBinaryValue {
+        field: &'static str,
+        index: usize,
+        value: String,
+    },
 }
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -90,6 +95,15 @@ impl fmt::Display for ValidationError {
                 f,
                 "{} contains non-finite value {} at index {}",
                 field, value, index
+            ),
+            ValidationError::NonBinaryValue {
+                field,
+                index,
+                value,
+            } => write!(
+                f,
+                "{} values must be 0 or 1; {} must contain only 0/1 values; got {} at index {}",
+                field, field, value, index
             ),
         }
     }
@@ -158,6 +172,39 @@ pub(crate) fn validate_finite(slice: &[f64], field: &'static str) -> Result<(), 
     }
     Ok(())
 }
+
+pub(crate) fn validate_binary_i32(
+    slice: &[i32],
+    field: &'static str,
+) -> Result<(), ValidationError> {
+    for (index, &value) in slice.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(ValidationError::NonBinaryValue {
+                field,
+                index,
+                value: value.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_binary_f64(
+    slice: &[f64],
+    field: &'static str,
+) -> Result<(), ValidationError> {
+    for (index, &value) in slice.iter().enumerate() {
+        if value != 0.0 && value != 1.0 {
+            return Err(ValidationError::NonBinaryValue {
+                field,
+                index,
+                value: value.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn clamp_probability(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }

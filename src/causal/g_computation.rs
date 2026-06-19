@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::constants::normal_ci_95;
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct GComputationResult {
@@ -206,9 +208,7 @@ pub fn g_computation(
         n_boot,
     );
 
-    let z = 1.96;
-    let ate_ci_lower = ate - z * ate_se;
-    let ate_ci_upper = ate + z * ate_se;
+    let (ate_ci_lower, ate_ci_upper) = normal_ci_95(ate, ate_se);
 
     Ok(GComputationResult {
         ate,

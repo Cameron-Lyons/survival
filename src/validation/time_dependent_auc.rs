@@ -1,8 +1,12 @@
-use crate::constants::{IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE};
+use crate::constants::{
+    DIVISION_FLOOR, IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE, clamped_normal_ci_95,
+};
 use crate::internal::statistical::{compute_censoring_km, km_step_prob_at};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::fmt;
+
+const TIED_MARKER_TOLERANCE: f64 = DIVISION_FLOOR;
 
 #[derive(Debug, Clone)]
 #[pyclass(str, get_all, from_py_object)]
@@ -155,7 +159,7 @@ pub fn time_dependent_auc_core(
 
             let indicator = if m_case > m_ctrl {
                 1.0
-            } else if (m_case - m_ctrl).abs() < 1e-10 {
+            } else if (m_case - m_ctrl).abs() < TIED_MARKER_TOLERANCE {
                 0.5
             } else {
                 0.0
@@ -204,9 +208,7 @@ pub fn time_dependent_auc_core(
         0.0
     };
     let std_error = var_auc.sqrt();
-    let z = 1.96;
-    let ci_lower = (auc - z * std_error).clamp(0.0, 1.0);
-    let ci_upper = (auc + z * std_error).clamp(0.0, 1.0);
+    let (ci_lower, ci_upper) = clamped_normal_ci_95(auc, std_error, 0.0, 1.0);
 
     TimeDepAUCResult {
         auc,

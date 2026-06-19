@@ -186,8 +186,8 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
     }
     let se = variance.sqrt();
     let z = z_score_for_confidence(confidence_level);
-    let ci_lower = (rmst - z * se).max(0.0);
-    let ci_upper = rmst + z * se;
+    let (ci_lower, ci_upper) = normal_ci(rmst, se, z);
+    let ci_lower = ci_lower.max(0.0);
     RMSTResult {
         rmst,
         variance,
@@ -245,8 +245,7 @@ pub(crate) fn compare_rmst(
     let diff_var = rmst1.variance + rmst2.variance;
     let diff_se = diff_var.sqrt();
     let z = z_score_for_confidence(confidence_level);
-    let diff_ci_lower = diff - z * diff_se;
-    let diff_ci_upper = diff + z * diff_se;
+    let (diff_ci_lower, diff_ci_upper) = normal_ci(diff, diff_se, z);
     let ratio = if rmst2.rmst > 0.0 {
         rmst1.rmst / rmst2.rmst
     } else {
@@ -257,10 +256,7 @@ pub(crate) fn compare_rmst(
         let log_ratio_var =
             rmst1.variance / (rmst1.rmst * rmst1.rmst) + rmst2.variance / (rmst2.rmst * rmst2.rmst);
         let log_ratio_se = log_ratio_var.sqrt();
-        (
-            (log_ratio - z * log_ratio_se).exp(),
-            (log_ratio + z * log_ratio_se).exp(),
-        )
+        exp_ci(log_ratio, log_ratio_se, z)
     } else {
         (0.0, f64::INFINITY)
     };

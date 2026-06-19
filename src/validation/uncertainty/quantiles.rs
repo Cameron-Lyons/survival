@@ -60,16 +60,14 @@ pub fn ensemble_uncertainty(
         })
         .collect();
 
-    let z = 1.96 * (1.0 + (1.0 - confidence_level).ln().abs()).sqrt();
+    let z = Z_SCORE_95 * (1.0 + (1.0 - confidence_level).ln().abs()).sqrt();
 
     let prediction_intervals: Vec<Vec<(f64, f64)>> = mean_prediction
         .iter()
         .zip(std_prediction.iter())
         .map(|(m, s)| {
-            m.iter()
-                .zip(s.iter())
-                .map(|(&mi, &si)| ((mi - z * si).clamp(0.0, 1.0), (mi + z * si).clamp(0.0, 1.0)))
-                .collect()
+            let (lower, upper) = clamped_normal_ci_bounds(m, s, z, 0.0, 1.0);
+            lower.into_iter().zip(upper).collect()
         })
         .collect();
 

@@ -1,3 +1,4 @@
+use crate::constants::same_time;
 use crate::internal::matrix::invert_matrix;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -464,9 +465,7 @@ fn compute_baseline_hazard(
         let current_time = time[idx];
         let mut n_events = 0.0;
 
-        while i < n
-            && (time[sorted_indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON
-        {
+        while i < n && same_time(time[sorted_indices[i]], current_time) {
             if cause[sorted_indices[i]] == cause_of_interest {
                 n_events += weights[sorted_indices[i]];
             }

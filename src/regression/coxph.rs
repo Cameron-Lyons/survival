@@ -1,4 +1,5 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, TIME_EPSILON};
+use crate::internal::validation::validate_binary_i32;
 use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod};
 pub use crate::regression::coxph_model::{CoxPHModel, Subject};
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
@@ -74,6 +75,8 @@ pub struct CoxPHFit {
     pub strata: Vec<i32>,
     #[pyo3(get)]
     pub method: String,
+    #[pyo3(get)]
+    pub nocenter: Vec<f64>,
 }
 
 impl CoxPHFit {
@@ -476,18 +479,6 @@ fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
-fn validate_binary_status(status: &[i32]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "status must contain only 0/1 values; got {} at index {}",
-                value, idx
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn validate_case_weights(weights: &[f64]) -> PyResult<()> {
     validate_finite_values("weights", weights)?;
     for (idx, &value) in weights.iter().enumerate() {
@@ -507,7 +498,7 @@ fn validate_case_weights(weights: &[f64]) -> PyResult<()> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None))]
+#[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_fit(
     time: Vec<f64>,
@@ -522,6 +513,7 @@ pub fn coxph_fit(
     toler: Option<f64>,
     method: Option<&str>,
     entry_times: Option<Vec<f64>>,
+    nocenter: Option<Vec<f64>>,
 ) -> PyResult<CoxPHFit> {
     let event_times = time.clone();
     let status_values = status.clone();
@@ -553,7 +545,7 @@ pub fn coxph_fit(
         ));
     }
     validate_finite_values("time", &time)?;
-    validate_binary_status(&status)?;
+    validate_binary_i32(&status, "status")?;
     for (idx, row) in covariates.iter().enumerate() {
         validate_finite_values(&format!("covariates[{}]", idx), row)?;
     }
@@ -590,6 +582,9 @@ pub fn coxph_fit(
                 )));
             }
         }
+    }
+    if let Some(values) = nocenter.as_ref() {
+        validate_finite_values("nocenter", values)?;
     }
     if let Some(values) = initial_beta.as_ref()
         && values.len() != nvar
@@ -629,6 +624,18 @@ pub fn coxph_fit(
     let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
     let strata_values = strata.unwrap_or_else(|| vec![0; n]);
     let original_strata_values = strata_values.clone();
+    let nocenter_values = nocenter.unwrap_or_default();
+    let doscale: Vec<bool> = if nocenter_values.is_empty() {
+        vec![true; nvar]
+    } else {
+        (0..nvar)
+            .map(|col_idx| {
+                !covariates
+                    .iter()
+                    .all(|row| nocenter_values.iter().any(|value| row[col_idx] == *value))
+            })
+            .collect()
+    };
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&lhs, &rhs| {
         strata_values[lhs]
@@ -669,7 +676,7 @@ pub fn coxph_fit(
         max_iter.unwrap_or(20),
         eps.unwrap_or(1e-5),
         toler.unwrap_or(1e-9),
-        vec![true; nvar],
+        doscale,
         initial_beta.unwrap_or_else(|| vec![0.0; nvar]),
     )
     .map_err(|e| {
@@ -718,6 +725,7 @@ pub fn coxph_fit(
         covariates,
         strata: original_strata_values,
         method: method_name,
+        nocenter: nocenter_values,
     })
 }
 
@@ -751,6 +759,7 @@ mod tests {
             ],
             strata: vec![1, 1, 1, 2, 2, 2],
             method: method.to_string(),
+            nocenter: vec![-1.0, 0.0, 1.0],
         }
     }
 
@@ -922,6 +931,7 @@ mod tests {
             covariates: vec![vec![1.0], vec![709.0 / 710.0], vec![708.0 / 710.0]],
             strata: vec![0, 0, 0],
             method: "breslow".to_string(),
+            nocenter: Vec::new(),
         };
 
         let (times, hazards, strata) = fit.basehaz_with_strata_internal(false).unwrap();

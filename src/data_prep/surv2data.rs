@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::constants::TIME_EPSILON;
-use crate::internal::validation::{validate_finite, validate_no_nan};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
 
 /// Result of converting timecourse data to interval format
 #[pyclass(from_py_object)]
@@ -86,7 +86,7 @@ pub fn surv2data(
         validate_finite(etimes, "event_time")?;
     }
     if let Some(estatus) = &event_status {
-        validate_binary_status("event_status", estatus)?;
+        validate_binary_i32(estatus, "event_status")?;
     }
 
     if n == 0 {
@@ -190,18 +190,6 @@ pub fn surv2data(
     }
 
     Ok(result)
-}
-
-fn validate_binary_status(field: &str, status: &[i32]) -> PyResult<()> {
-    for (index, &status_value) in status.iter().enumerate() {
-        if status_value != 0 && status_value != 1 {
-            return Err(PyValueError::new_err(format!(
-                "{} must contain only 0/1 values; got {} at index {}",
-                field, status_value, index
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

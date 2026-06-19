@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use crate::constants::exp_ci_bounds_95;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum MarginalMethod {
@@ -188,18 +190,7 @@ pub fn marginal_recurrent_model(
 
     let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
 
-    let z = 1.96;
-    let hr_ci_lower: Vec<f64> = beta
-        .iter()
-        .zip(robust_se.iter())
-        .map(|(&b, &se)| (b - z * se).exp())
-        .collect();
-
-    let hr_ci_upper: Vec<f64> = beta
-        .iter()
-        .zip(robust_se.iter())
-        .map(|(&b, &se)| (b + z * se).exp())
-        .collect();
+    let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&beta, &robust_se);
 
     let score_test: f64 = beta
         .iter()

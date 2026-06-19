@@ -172,9 +172,7 @@ pub(crate) fn uno_c_index_core(
     };
 
     let std_error = variance.sqrt();
-    let z = 1.96;
-    let ci_lower = (c_index - z * std_error).clamp(0.0, 1.0);
-    let ci_upper = (c_index + z * std_error).clamp(0.0, 1.0);
+    let (ci_lower, ci_upper) = clamped_normal_ci_95(c_index, std_error, 0.0, 1.0);
 
     UnoCIndexResult {
         c_index,

@@ -2,6 +2,8 @@
 
 use pyo3::prelude::*;
 
+use crate::constants::clamped_normal_ci_bounds_95;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum NetSurvivalMethod {
@@ -164,18 +166,8 @@ fn pohar_perme_estimator(
         at_risk_set.retain(|&i| time[i] > t);
     }
 
-    let z = 1.96;
-    let net_survival_lower: Vec<f64> = net_survival
-        .iter()
-        .zip(net_survival_se.iter())
-        .map(|(&s, &se)| (s - z * se).max(0.0))
-        .collect();
-
-    let net_survival_upper: Vec<f64> = net_survival
-        .iter()
-        .zip(net_survival_se.iter())
-        .map(|(&s, &se)| (s + z * se).min(1.0))
-        .collect();
+    let (net_survival_lower, net_survival_upper) =
+        clamped_normal_ci_bounds_95(&net_survival, &net_survival_se, 0.0, 1.0);
 
     Ok(NetSurvivalResult {
         time_points: unique_times.to_vec(),
@@ -261,18 +253,8 @@ fn ederer_ii_estimator(
         at_risk -= d;
     }
 
-    let z = 1.96;
-    let net_survival_lower: Vec<f64> = net_survival
-        .iter()
-        .zip(net_survival_se.iter())
-        .map(|(&s, &se)| (s - z * se).max(0.0))
-        .collect();
-
-    let net_survival_upper: Vec<f64> = net_survival
-        .iter()
-        .zip(net_survival_se.iter())
-        .map(|(&s, &se)| (s + z * se).min(1.0))
-        .collect();
+    let (net_survival_lower, net_survival_upper) =
+        clamped_normal_ci_bounds_95(&net_survival, &net_survival_se, 0.0, 1.0);
 
     Ok(NetSurvivalResult {
         time_points: unique_times.to_vec(),
@@ -355,18 +337,8 @@ fn ederer_i_estimator(
         at_risk -= d;
     }
 
-    let z = 1.96;
-    let net_survival_lower: Vec<f64> = net_survival
-        .iter()
-        .zip(net_survival_se.iter())
-        .map(|(&s, &se)| (s - z * se).max(0.0))
-        .collect();
-
-    let net_survival_upper: Vec<f64> = net_survival
-        .iter()
-        .zip(net_survival_se.iter())
-        .map(|(&s, &se)| (s + z * se).min(1.0))
-        .collect();
+    let (net_survival_lower, net_survival_upper) =
+        clamped_normal_ci_bounds_95(&net_survival, &net_survival_se, 0.0, 1.0);
 
     Ok(NetSurvivalResult {
         time_points: unique_times.to_vec(),

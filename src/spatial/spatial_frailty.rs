@@ -1,4 +1,4 @@
-use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
+use crate::constants::{PARALLEL_THRESHOLD_MEDIUM, exp_ci_bounds_95};
 use crate::internal::matrix::invert_flat_square_matrix_with_fallback;
 use crate::internal::sorting::descending_time_indices;
 use crate::internal::statistical::normal_cdf;
@@ -166,18 +166,7 @@ pub fn spatial_frailty_model(
 
     let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
 
-    let z = 1.96;
-    let hr_ci_lower: Vec<f64> = beta
-        .iter()
-        .zip(se.iter())
-        .map(|(&b, &se)| (b - z * se).exp())
-        .collect();
-
-    let hr_ci_upper: Vec<f64> = beta
-        .iter()
-        .zip(se.iter())
-        .map(|(&b, &se)| (b + z * se).exp())
-        .collect();
+    let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&beta, &se);
 
     let p_d = 2.0 * (log_lik - compute_saturated_loglik(&time, &status));
     let dic = -2.0 * log_lik + 2.0 * p_d;

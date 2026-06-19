@@ -1,30 +1,24 @@
 use crate::constants::{CONCORDANCE_COUNT_SIZE, PARALLEL_THRESHOLD_LARGE, TIME_EPSILON};
 use crate::internal::statistical::{
-    ConcordanceSummary, concordance_index_with_horizon, concordance_summary_with_horizon,
-    counting_process_concordance_index, counting_process_concordance_summary,
+    ConcordanceSummary, ConcordanceTimeWeight, concordance_index_with_horizon,
+    concordance_summary_with_horizon, concordance_summary_with_horizon_and_weights,
+    concordance_summary_with_horizon_weights_and_time_weight, counting_process_concordance_index,
+    counting_process_concordance_summary, counting_process_concordance_summary_with_weights,
+    counting_process_concordance_summary_with_weights_and_time_weight,
 };
-use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
 
-fn validate_binary_status(status: &[i32]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(PyValueError::new_err(format!(
-                "status must contain only 0/1 values; found {} at observation {}",
-                value, idx
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn validate_right_concordance_inputs(
     time: &[f64],
     status: &[i32],
     risk_scores: &[f64],
+    weights: Option<&[f64]>,
 ) -> PyResult<()> {
     if time.len() != status.len() || time.len() != risk_scores.len() {
         return Err(PyValueError::new_err(
@@ -36,7 +30,17 @@ fn validate_right_concordance_inputs(
     validate_non_negative(time, "time")?;
     validate_no_nan(risk_scores, "risk_scores")?;
     validate_finite(risk_scores, "risk_scores")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
+    if let Some(values) = weights {
+        if values.len() != time.len() {
+            return Err(PyValueError::new_err(
+                "weights must have the same length as time",
+            ));
+        }
+        validate_no_nan(values, "weights")?;
+        validate_finite(values, "weights")?;
+        validate_non_negative(values, "weights")?;
+    }
     Ok(())
 }
 
@@ -45,6 +49,7 @@ fn validate_counting_concordance_inputs(
     stop: &[f64],
     status: &[i32],
     risk_scores: &[f64],
+    weights: Option<&[f64]>,
 ) -> PyResult<()> {
     if start.len() != stop.len() || start.len() != status.len() || start.len() != risk_scores.len()
     {
@@ -60,7 +65,17 @@ fn validate_counting_concordance_inputs(
     validate_non_negative(stop, "stop")?;
     validate_no_nan(risk_scores, "risk_scores")?;
     validate_finite(risk_scores, "risk_scores")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
+    if let Some(values) = weights {
+        if values.len() != start.len() {
+            return Err(PyValueError::new_err(
+                "weights must have the same length as start",
+            ));
+        }
+        validate_no_nan(values, "weights")?;
+        validate_finite(values, "weights")?;
+        validate_non_negative(values, "weights")?;
+    }
 
     for (idx, (&entry, &exit)) in start.iter().zip(stop.iter()).enumerate() {
         if entry >= exit - TIME_EPSILON {
@@ -73,17 +88,58 @@ fn validate_counting_concordance_inputs(
     Ok(())
 }
 
+fn parse_concordance_time_weight(timewt: &str) -> PyResult<ConcordanceTimeWeight> {
+    match timewt {
+        "n" => Ok(ConcordanceTimeWeight::N),
+        "S" => Ok(ConcordanceTimeWeight::S),
+        "S/G" => Ok(ConcordanceTimeWeight::SOverG),
+        "n/G2" => Ok(ConcordanceTimeWeight::NOverG2),
+        "I" => Ok(ConcordanceTimeWeight::I),
+        _ => Err(PyValueError::new_err(
+            "timewt must be one of 'n', 'S', 'S/G', 'n/G2', 'I'",
+        )),
+    }
+}
+
+fn parse_counting_concordance_time_weight(timewt: &str) -> PyResult<ConcordanceTimeWeight> {
+    match parse_concordance_time_weight(timewt)? {
+        ConcordanceTimeWeight::SOverG | ConcordanceTimeWeight::NOverG2 => {
+            Err(PyValueError::new_err(
+                "S/G and n/G2 timewt options are not supported for counting-process data",
+            ))
+        }
+        value => Ok(value),
+    }
+}
+
 /// Compute Harrell's concordance index for survival predictions.
 #[pyfunction]
-pub fn concordance_index(time: Vec<f64>, status: Vec<i32>, risk_scores: Vec<f64>) -> PyResult<f64> {
-    validate_right_concordance_inputs(&time, &status, &risk_scores)?;
+#[pyo3(signature = (time, status, risk_scores, weights=None, timewt="n".to_string()))]
+pub fn concordance_index(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    risk_scores: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    timewt: String,
+) -> PyResult<f64> {
+    validate_right_concordance_inputs(&time, &status, &risk_scores, weights.as_deref())?;
+    let time_weight = parse_concordance_time_weight(&timewt)?;
 
-    Ok(concordance_index_with_horizon(
-        &risk_scores,
-        &time,
-        &status,
-        None,
-    ))
+    Ok(
+        if time_weight == ConcordanceTimeWeight::N && weights.is_none() {
+            concordance_index_with_horizon(&risk_scores, &time, &status, None)
+        } else {
+            concordance_summary_with_horizon_weights_and_time_weight(
+                &risk_scores,
+                &time,
+                &status,
+                weights.as_deref(),
+                None,
+                time_weight,
+            )
+            .c_index()
+        },
+    )
 }
 
 fn build_concordance_summary_dict(summary: ConcordanceSummary) -> PyResult<Py<PyDict>> {
@@ -98,55 +154,106 @@ fn build_concordance_summary_dict(summary: ConcordanceSummary) -> PyResult<Py<Py
 
 /// Compute Harrell's concordance index and pair counts for survival predictions.
 #[pyfunction]
+#[pyo3(signature = (time, status, risk_scores, weights=None, timewt="n".to_string()))]
 pub fn concordance_summary(
     time: Vec<f64>,
     status: Vec<i32>,
     risk_scores: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    timewt: String,
 ) -> PyResult<Py<PyDict>> {
-    validate_right_concordance_inputs(&time, &status, &risk_scores)?;
+    validate_right_concordance_inputs(&time, &status, &risk_scores, weights.as_deref())?;
+    let time_weight = parse_concordance_time_weight(&timewt)?;
 
-    build_concordance_summary_dict(concordance_summary_with_horizon(
-        &risk_scores,
-        &time,
-        &status,
-        None,
-    ))
+    build_concordance_summary_dict(if time_weight == ConcordanceTimeWeight::N {
+        match weights.as_deref() {
+            Some(values) => concordance_summary_with_horizon_and_weights(
+                &risk_scores,
+                &time,
+                &status,
+                Some(values),
+                None,
+            ),
+            None => concordance_summary_with_horizon(&risk_scores, &time, &status, None),
+        }
+    } else {
+        concordance_summary_with_horizon_weights_and_time_weight(
+            &risk_scores,
+            &time,
+            &status,
+            weights.as_deref(),
+            None,
+            time_weight,
+        )
+    })
 }
 
 /// Compute Harrell's concordance index for counting-process survival data.
 #[pyfunction]
+#[pyo3(signature = (start, stop, status, risk_scores, weights=None, timewt="n".to_string()))]
 pub fn counting_concordance_index(
     start: Vec<f64>,
     stop: Vec<f64>,
     status: Vec<i32>,
     risk_scores: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    timewt: String,
 ) -> PyResult<f64> {
-    validate_counting_concordance_inputs(&start, &stop, &status, &risk_scores)?;
+    validate_counting_concordance_inputs(&start, &stop, &status, &risk_scores, weights.as_deref())?;
+    let time_weight = parse_counting_concordance_time_weight(&timewt)?;
 
-    Ok(counting_process_concordance_index(
-        &risk_scores,
-        &start,
-        &stop,
-        &status,
-    ))
+    Ok(
+        if time_weight == ConcordanceTimeWeight::N && weights.is_none() {
+            counting_process_concordance_index(&risk_scores, &start, &stop, &status)
+        } else {
+            counting_process_concordance_summary_with_weights_and_time_weight(
+                &risk_scores,
+                &start,
+                &stop,
+                &status,
+                weights.as_deref(),
+                time_weight,
+            )
+            .c_index()
+        },
+    )
 }
 
 /// Compute Harrell's concordance index and pair counts for counting-process data.
 #[pyfunction]
+#[pyo3(signature = (start, stop, status, risk_scores, weights=None, timewt="n".to_string()))]
 pub fn counting_concordance_summary(
     start: Vec<f64>,
     stop: Vec<f64>,
     status: Vec<i32>,
     risk_scores: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    timewt: String,
 ) -> PyResult<Py<PyDict>> {
-    validate_counting_concordance_inputs(&start, &stop, &status, &risk_scores)?;
+    validate_counting_concordance_inputs(&start, &stop, &status, &risk_scores, weights.as_deref())?;
+    let time_weight = parse_counting_concordance_time_weight(&timewt)?;
 
-    build_concordance_summary_dict(counting_process_concordance_summary(
-        &risk_scores,
-        &start,
-        &stop,
-        &status,
-    ))
+    build_concordance_summary_dict(if time_weight == ConcordanceTimeWeight::N {
+        match weights.as_deref() {
+            Some(values) => counting_process_concordance_summary_with_weights(
+                &risk_scores,
+                &start,
+                &stop,
+                &status,
+                Some(values),
+            ),
+            None => counting_process_concordance_summary(&risk_scores, &start, &stop, &status),
+        }
+    } else {
+        counting_process_concordance_summary_with_weights_and_time_weight(
+            &risk_scores,
+            &start,
+            &stop,
+            &status,
+            weights.as_deref(),
+            time_weight,
+        )
+    })
 }
 
 /// Compute concordance statistics for survival predictions.
@@ -283,7 +390,7 @@ mod tests {
     fn validate_right_concordance_rejects_malformed_inputs() {
         initialize_python();
 
-        let status_err = validate_right_concordance_inputs(&[1.0, 2.0], &[1, 2], &[0.4, 0.1])
+        let status_err = validate_right_concordance_inputs(&[1.0, 2.0], &[1, 2], &[0.4, 0.1], None)
             .expect_err("non-binary status should be rejected");
         assert!(
             status_err
@@ -292,31 +399,61 @@ mod tests {
         );
 
         let time_err =
-            validate_right_concordance_inputs(&[1.0, f64::INFINITY], &[1, 0], &[0.4, 0.1])
+            validate_right_concordance_inputs(&[1.0, f64::INFINITY], &[1, 0], &[0.4, 0.1], None)
                 .expect_err("non-finite time should be rejected");
         assert!(time_err.to_string().contains("time contains non-finite"));
 
-        let risk_err = validate_right_concordance_inputs(&[1.0, 2.0], &[1, 0], &[0.4, f64::NAN])
-            .expect_err("NaN risk score should be rejected");
+        let risk_err =
+            validate_right_concordance_inputs(&[1.0, 2.0], &[1, 0], &[0.4, f64::NAN], None)
+                .expect_err("NaN risk score should be rejected");
         assert!(risk_err.to_string().contains("risk_scores contains NaN"));
+
+        let weight_err = validate_right_concordance_inputs(
+            &[1.0, 2.0],
+            &[1, 0],
+            &[0.4, 0.1],
+            Some(&[1.0, -1.0]),
+        )
+        .expect_err("negative weights should be rejected");
+        assert!(weight_err.to_string().contains("weights contains negative"));
     }
 
     #[test]
     fn validate_counting_concordance_rejects_malformed_inputs() {
         initialize_python();
 
-        let interval_err =
-            validate_counting_concordance_inputs(&[0.0, 2.0], &[1.0, 2.0], &[1, 0], &[0.4, 0.1])
-                .expect_err("zero-width counting interval should be rejected");
+        let interval_err = validate_counting_concordance_inputs(
+            &[0.0, 2.0],
+            &[1.0, 2.0],
+            &[1, 0],
+            &[0.4, 0.1],
+            None,
+        )
+        .expect_err("zero-width counting interval should be rejected");
         assert!(
             interval_err
                 .to_string()
                 .contains("start must be less than stop")
         );
 
-        let start_err =
-            validate_counting_concordance_inputs(&[-0.1, 0.0], &[1.0, 2.0], &[1, 0], &[0.4, 0.1])
-                .expect_err("negative start time should be rejected");
+        let start_err = validate_counting_concordance_inputs(
+            &[-0.1, 0.0],
+            &[1.0, 2.0],
+            &[1, 0],
+            &[0.4, 0.1],
+            None,
+        )
+        .expect_err("negative start time should be rejected");
         assert!(start_err.to_string().contains("start contains negative"));
+
+        let weight_err = validate_counting_concordance_inputs(
+            &[0.0, 0.0],
+            &[1.0, 2.0],
+            &[1, 0],
+            &[0.4, 0.1],
+            Some(&[1.0, f64::NAN]),
+        )
+        .expect_err("NaN weights should be rejected");
+        assert!(weight_err.to_string().contains("weights contains NaN"));
     }
 }

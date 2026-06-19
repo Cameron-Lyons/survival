@@ -1,11 +1,13 @@
-use crate::constants::{DEFAULT_CONFIDENCE_LEVEL, PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON};
+use crate::constants::{
+    DEFAULT_CONFIDENCE_LEVEL, PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON, exp_ci, normal_ci,
+};
 use crate::internal::numpy_utils::{
     extract_optional_vec_f64, extract_optional_vec_i32, extract_vec_f64,
 };
 use crate::internal::statistical::normal_inverse_cdf;
 use crate::internal::validation::{
-    clamp_probability, validate_finite, validate_length, validate_no_nan, validate_non_empty,
-    validate_non_negative,
+    clamp_probability, validate_binary_f64, validate_finite, validate_length, validate_no_nan,
+    validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -187,17 +189,15 @@ fn compute_confidence_interval(survival: f64, std_err: f64, z: f64, conf_type: &
     }
 
     match conf_type {
-        "plain" => (
-            clamp_probability(survival - z * std_err),
-            clamp_probability(survival + z * std_err),
-        ),
+        "plain" => {
+            let (lower, upper) = normal_ci(survival, std_err, z);
+            (clamp_probability(lower), clamp_probability(upper))
+        }
         "log" => {
             let log_survival = survival.ln();
             let log_std_err = std_err / survival;
-            (
-                clamp_probability((log_survival - z * log_std_err).exp()),
-                clamp_probability((log_survival + z * log_std_err).exp()),
-            )
+            let (lower, upper) = exp_ci(log_survival, log_std_err, z);
+            (clamp_probability(lower), clamp_probability(upper))
         }
         "log-log" => {
             let log_survival = survival.ln();
@@ -244,18 +244,6 @@ fn validate_entry_times(time: &[f64], entry_times: &[f64]) -> PyResult<()> {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "entry_times must be less than time for observation {}",
                 idx
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_binary_status(status: &[f64]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0.0 && value != 1.0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "status must contain only 0/1 values; found {} at observation {}",
-                value, idx
             )));
         }
     }
@@ -378,7 +366,7 @@ pub fn survfitkm(
     validate_non_negative(&time, "time")?;
     validate_no_nan(&status, "status")?;
     validate_finite(&status, "status")?;
-    validate_binary_status(&status)?;
+    validate_binary_f64(&status, "status")?;
     let weights = match weights_opt {
         Some(w) => {
             validate_length(time.len(), w.len(), "weights")?;
@@ -535,7 +523,7 @@ pub fn survfitkm_with_options(
     validate_non_negative(&time, "time")?;
     validate_no_nan(&status, "status")?;
     validate_finite(&status, "status")?;
-    validate_binary_status(&status)?;
+    validate_binary_f64(&status, "status")?;
     let weights = match opts.weights {
         Some(w) => {
             validate_length(time.len(), w.len(), "weights")?;
@@ -643,10 +631,10 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_binary_status_rejects_non_binary_values() {
+    fn test_validate_binary_f64_rejects_non_binary_values() {
         pyo3::Python::initialize();
 
-        let err = validate_binary_status(&[0.0, 0.5, 1.0])
+        let err = validate_binary_f64(&[0.0, 0.5, 1.0], "status")
             .expect_err("non-binary status should be rejected");
 
         assert!(err.to_string().contains("status must contain only 0/1"));

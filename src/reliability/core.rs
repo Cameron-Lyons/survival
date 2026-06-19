@@ -1,3 +1,4 @@
+use crate::constants::normal_ci;
 use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
 use pyo3::prelude::*;
 
@@ -178,16 +179,17 @@ pub fn reliability(
 
             let (new_se, l, u) = match scale_enum {
                 ReliabilityScale::Surv => {
-                    let l = (s - z * se_val).max(0.0);
-                    let u = (s + z * se_val).min(1.0);
+                    let (l, u) = normal_ci(s, se_val, z);
+                    let l = l.max(0.0);
+                    let u = u.min(1.0);
                     (se_val, l, u)
                 }
                 ReliabilityScale::Cumhaz => {
                     if s > 0.0 && se_val > 0.0 {
                         let h = -s.ln();
                         let se_h = se_val / s;
-                        let l = (h - z * se_h).max(0.0);
-                        let u = h + z * se_h;
+                        let (l, u) = normal_ci(h, se_h, z);
+                        let l = l.max(0.0);
                         (se_h, l, u)
                     } else {
                         (f64::NAN, f64::NAN, f64::NAN)
@@ -198,8 +200,7 @@ pub fn reliability(
                         let h = -s.ln();
                         let se_cll = se_val / (s * h);
                         let cll = h.ln();
-                        let l = cll - z * se_cll;
-                        let u = cll + z * se_cll;
+                        let (l, u) = normal_ci(cll, se_cll, z);
                         (se_cll, l, u)
                     } else {
                         (f64::NAN, f64::NAN, f64::NAN)
@@ -209,8 +210,7 @@ pub fn reliability(
                     if s > 0.0 && s < 1.0 && se_val > 0.0 {
                         let se_logit = se_val / (s * (1.0 - s));
                         let logit = ((1.0 - s) / s).ln();
-                        let l = logit - z * se_logit;
-                        let u = logit + z * se_logit;
+                        let (l, u) = normal_ci(logit, se_logit, z);
                         (se_logit, l, u)
                     } else {
                         (f64::NAN, f64::NAN, f64::NAN)
@@ -223,8 +223,7 @@ pub fn reliability(
                         let phi =
                             (-0.5 * z_val.powi(2)).exp() / (2.0 * std::f64::consts::PI).sqrt();
                         let se_probit = se_val / phi;
-                        let l = z_val - z * se_probit;
-                        let u = z_val + z * se_probit;
+                        let (l, u) = normal_ci(z_val, se_probit, z);
                         (se_probit, l, u)
                     } else {
                         (f64::NAN, f64::NAN, f64::NAN)

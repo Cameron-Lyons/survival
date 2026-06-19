@@ -162,9 +162,8 @@ pub fn conformal_coverage_test(
     let expected_coverage = coverage;
 
     let se = (empirical_coverage * (1.0 - empirical_coverage) / total_count as f64).sqrt();
-    let z = 1.96;
-    let coverage_ci_lower = (empirical_coverage - z * se).max(0.0);
-    let coverage_ci_upper = (empirical_coverage + z * se).min(1.0);
+    let (coverage_ci_lower, coverage_ci_upper) =
+        clamped_normal_ci_95(empirical_coverage, se, 0.0, 1.0);
 
     let mut sorted_lpb: Vec<f64> = lpb.clone();
     sorted_lpb.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

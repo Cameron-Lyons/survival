@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use crate::constants::exp_ci_bounds_95;
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct MSMResult {
@@ -279,18 +281,7 @@ pub fn marginal_structural_model(
 
     let hazard_ratios: Vec<f64> = coefficients.iter().map(|&b| b.exp()).collect();
 
-    let z = 1.96;
-    let hr_ci_lower: Vec<f64> = coefficients
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| (b - z * se).exp())
-        .collect();
-
-    let hr_ci_upper: Vec<f64> = coefficients
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| (b + z * se).exp())
-        .collect();
+    let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&coefficients, &std_errors);
 
     Ok(MSMResult {
         coefficients,

@@ -54,8 +54,7 @@ impl CensoringModel {
             let mut censored_count = 0;
             let mut event_count = 0;
 
-            while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON
-            {
+            while i < n && same_time(time[indices[i]], current_time) {
                 if status[indices[i]] == 0 {
                     censored_count += 1;
                 } else {

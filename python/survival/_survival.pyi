@@ -955,6 +955,8 @@ class CoxPHFit:
     def strata(self) -> list[int]: ...
     @property
     def method(self) -> str: ...
+    @property
+    def nocenter(self) -> list[float]: ...
 
 class CoxphDetailRow:
     @property
@@ -6420,6 +6422,7 @@ def coxph_fit(
     toler: float | None = None,
     method: str | None = None,
     entry_times: list[float] | None = None,
+    nocenter: list[float] | None = None,
 ) -> CoxPHFit: ...
 def coxph_detail(
     time: list[float],
@@ -6492,6 +6495,7 @@ def survreg(
     eps: float | None = None,
     tol_chol: float | None = None,
     time2: list[float] | None = None,
+    fixed_scale: float | None = None,
 ) -> SurvivalFit: ...
 def predict_survreg(
     covariates: list[list[float]],
@@ -6636,23 +6640,31 @@ def concordance_index(
     time: list[float],
     status: list[int],
     risk_scores: list[float],
+    weights: list[float] | None = None,
+    timewt: str = "n",
 ) -> float: ...
 def concordance_summary(
     time: list[float],
     status: list[int],
     risk_scores: list[float],
+    weights: list[float] | None = None,
+    timewt: str = "n",
 ) -> dict[str, float]: ...
 def counting_concordance_index(
     start: list[float],
     stop: list[float],
     status: list[int],
     risk_scores: list[float],
+    weights: list[float] | None = None,
+    timewt: str = "n",
 ) -> float: ...
 def counting_concordance_summary(
     start: list[float],
     stop: list[float],
     status: list[int],
     risk_scores: list[float],
+    weights: list[float] | None = None,
+    timewt: str = "n",
 ) -> dict[str, float]: ...
 def brier(
     time: list[float],

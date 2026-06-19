@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use crate::internal::validation::validate_binary_i32;
+
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
 }
@@ -18,17 +20,6 @@ fn validate_finite(values: &[f64], name: &str) -> PyResult<()> {
         if !value.is_finite() {
             return Err(value_error(format!(
                 "{name} must contain only finite values; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_binary_status(values: &[i32]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(value_error(format!(
-                "status values must be 0 or 1; got {value} at index {idx}"
             )));
         }
     }
@@ -72,7 +63,7 @@ fn validate_norisk_inputs(
     validate_same_length(n, sort2.len(), "sort2")?;
     validate_finite(time1, "time1")?;
     validate_finite(time2, "time2")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
     validate_sort_indices(sort1, n, "sort1")?;
     validate_sort_indices(sort2, n, "sort2")?;
     validate_strata_boundaries(strata, n)
@@ -169,6 +160,6 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err.to_string().contains("status values must be 0 or 1"));
+        assert!(err.to_string().contains("status must contain only 0/1"));
     }
 }

@@ -1,6 +1,13 @@
 use pyo3::prelude::*;
 
+use crate::constants::{
+    DIVISION_FLOOR, Z_SCORE_95, exp_ci, exp_ci_bounds, same_time, z_score_for_confidence,
+};
 use crate::internal::statistical::{lower_incomplete_gamma, normal_cdf};
+
+const MEDIAN_CI_LOWER_FACTOR: f64 = 0.8;
+const MEDIAN_CI_UPPER_FACTOR: f64 = 1.2;
+const DEFAULT_LANDMARK_FRACTIONS: [f64; 4] = [0.25, 0.5, 0.75, 1.0];
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -74,11 +81,7 @@ pub fn km_plot_data(
     unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     unique_times.dedup();
 
-    let z = match confidence_level {
-        c if (c - 0.90).abs() < 0.01 => 1.645,
-        c if (c - 0.99).abs() < 0.01 => 2.576,
-        _ => 1.96,
-    };
+    let z = z_score_for_confidence(confidence_level);
 
     let mut time_points = vec![0.0];
     let mut survival_prob = vec![1.0];
@@ -96,12 +99,12 @@ pub fn km_plot_data(
         let event_count = time
             .iter()
             .zip(event.iter())
-            .filter(|&(&ti, &ei)| (ti - t).abs() < 1e-10 && ei == 1)
+            .filter(|&(&ti, &ei)| same_time(ti, t) && ei == 1)
             .count();
         let censored_count = time
             .iter()
             .zip(event.iter())
-            .filter(|&(&ti, &ei)| (ti - t).abs() < 1e-10 && ei == 0)
+            .filter(|&(&ti, &ei)| same_time(ti, t) && ei == 0)
             .count();
 
         if risk_count > 0 {
@@ -114,11 +117,13 @@ pub fn km_plot_data(
             }
 
             let se = surv * var_sum.sqrt();
-            let log_surv = surv.max(1e-10).ln();
-            let log_se = se / surv.max(1e-10);
+            let bounded_surv = surv.max(DIVISION_FLOOR);
+            let log_surv = bounded_surv.ln();
+            let log_se = se / bounded_surv;
 
-            let lower = (log_surv - z * log_se).exp().clamp(0.0, 1.0);
-            let upper = (log_surv + z * log_se).exp().clamp(0.0, 1.0);
+            let (lower, upper) = exp_ci(log_surv, log_se, z);
+            let lower = lower.clamp(0.0, 1.0);
+            let upper = upper.clamp(0.0, 1.0);
 
             time_points.push(t);
             survival_prob.push(surv);
@@ -190,23 +195,10 @@ pub fn forest_plot_data(
         ));
     }
 
-    let z = match confidence_level {
-        c if (c - 0.90).abs() < 0.01 => 1.645,
-        c if (c - 0.99).abs() < 0.01 => 2.576,
-        _ => 1.96,
-    };
+    let z = z_score_for_confidence(confidence_level);
 
     let hazard_ratios: Vec<f64> = coefficients.iter().map(|&c| c.exp()).collect();
-    let lower_ci: Vec<f64> = coefficients
-        .iter()
-        .zip(standard_errors.iter())
-        .map(|(&c, &se)| (c - z * se).exp())
-        .collect();
-    let upper_ci: Vec<f64> = coefficients
-        .iter()
-        .zip(standard_errors.iter())
-        .map(|(&c, &se)| (c + z * se).exp())
-        .collect();
+    let (lower_ci, upper_ci) = exp_ci_bounds(&coefficients, &standard_errors, z);
     let p_values: Vec<f64> = coefficients
         .iter()
         .zip(standard_errors.iter())
@@ -312,7 +304,8 @@ pub fn calibration_plot_data(
         let expected = bin_n as f64 * pred_mean;
         let obs_events = bin_indices.iter().map(|&j| observed[j] as f64).sum::<f64>();
         if expected > 0.0 && expected < bin_n as f64 {
-            hl_stat += (obs_events - expected).powi(2) / (expected * (1.0 - pred_mean)).max(1e-10);
+            hl_stat += (obs_events - expected).powi(2)
+                / (expected * (1.0 - pred_mean)).max(DIVISION_FLOOR);
         }
     }
     bin_boundaries.push(1.0);
@@ -480,7 +473,7 @@ pub fn generate_survival_report(
         let event_count = time
             .iter()
             .zip(event.iter())
-            .filter(|&(&ti, &ei)| (ti - t).abs() < 1e-10 && ei == 1)
+            .filter(|&(&ti, &ei)| same_time(ti, t) && ei == 1)
             .count();
 
         if risk_count > 0 {
@@ -493,10 +486,12 @@ pub fn generate_survival_report(
             }
 
             let se = surv * var_sum.sqrt();
-            let log_surv = surv.max(1e-10).ln();
-            let log_se = se / surv.max(1e-10);
-            let lower = (log_surv - 1.96 * log_se).exp().clamp(0.0, 1.0);
-            let upper = (log_surv + 1.96 * log_se).exp().clamp(0.0, 1.0);
+            let bounded_surv = surv.max(DIVISION_FLOOR);
+            let log_surv = bounded_surv.ln();
+            let log_se = se / bounded_surv;
+            let (lower, upper) = exp_ci(log_surv, log_se, Z_SCORE_95);
+            let lower = lower.clamp(0.0, 1.0);
+            let upper = upper.clamp(0.0, 1.0);
 
             survival_at_times.push((t, surv, lower, upper));
 
@@ -506,11 +501,15 @@ pub fn generate_survival_report(
         }
     }
 
-    let median_ci = median_survival.map(|m| (m * 0.8, m * 1.2));
+    let median_ci =
+        median_survival.map(|m| (m * MEDIAN_CI_LOWER_FACTOR, m * MEDIAN_CI_UPPER_FACTOR));
 
     let landmarks = landmark_times.unwrap_or_else(|| {
         let max_time = sorted_times.last().cloned().unwrap_or(1.0);
-        vec![max_time * 0.25, max_time * 0.5, max_time * 0.75, max_time]
+        DEFAULT_LANDMARK_FRACTIONS
+            .iter()
+            .map(|fraction| max_time * *fraction)
+            .collect()
     });
 
     let survival_rates: Vec<(f64, f64, f64, f64)> = landmarks

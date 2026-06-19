@@ -7,7 +7,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::constants::TIME_EPSILON;
-use crate::internal::validation::{validate_finite, validate_no_nan};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
 
 /// Result of condensing survival data
 #[pyclass(from_py_object)]
@@ -74,7 +74,7 @@ pub fn survcondense(
     validate_finite(&time1, "time1")?;
     validate_no_nan(&time2, "time2")?;
     validate_finite(&time2, "time2")?;
-    validate_binary_status("status", &status)?;
+    validate_binary_i32(&status, "status")?;
     for (index, (&start, &stop)) in time1.iter().zip(time2.iter()).enumerate() {
         if start > stop + TIME_EPSILON {
             return Err(PyValueError::new_err(format!(
@@ -150,18 +150,6 @@ pub fn survcondense(
     }
 
     Ok(result)
-}
-
-fn validate_binary_status(field: &str, status: &[i32]) -> PyResult<()> {
-    for (index, &status_value) in status.iter().enumerate() {
-        if status_value != 0 && status_value != 1 {
-            return Err(PyValueError::new_err(format!(
-                "{} must contain only 0/1 values; got {} at index {}",
-                field, status_value, index
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

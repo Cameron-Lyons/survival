@@ -1,6 +1,7 @@
-use crate::constants::{DIVISION_FLOOR, TIME_EPSILON};
+use crate::constants::{DIVISION_FLOOR, same_time};
 use crate::internal::validation::{
-    validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
+    validate_binary_i32, validate_finite, validate_no_nan, validate_non_empty,
+    validate_non_negative,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -249,18 +250,6 @@ fn scale_predictors(x: &[f64], n_obs: usize, n_vars: usize) -> (Vec<f64>, Option
     (scaled, Some(scale_factors))
 }
 
-fn validate_ridge_status(status: &[i32]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(PyValueError::new_err(format!(
-                "status must contain only 0/1 values; got {} at index {}",
-                value, idx
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn validate_ridge_penalty(penalty: &RidgePenalty) -> PyResult<()> {
     if !penalty.theta.is_finite() || penalty.theta < 0.0 {
         return Err(PyValueError::new_err(
@@ -302,7 +291,7 @@ fn validate_ridge_inputs(
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
     validate_non_negative(time, "time")?;
-    validate_ridge_status(status)?;
+    validate_binary_i32(status, "status")?;
 
     if let Some(weights) = weights {
         if weights.len() != n_obs {
@@ -314,10 +303,6 @@ fn validate_ridge_inputs(
     }
 
     Ok(())
-}
-
-fn same_ridge_time(left: f64, right: f64) -> bool {
-    (left - right).abs() < TIME_EPSILON
 }
 
 /// Fit unpenalized model (simplified)
@@ -373,7 +358,7 @@ fn fit_unpenalized(
     while start < n_obs {
         let current_time = time[indices[start]];
         let mut end = start + 1;
-        while end < n_obs && same_ridge_time(time[indices[end]], current_time) {
+        while end < n_obs && same_time(time[indices[end]], current_time) {
             end += 1;
         }
         for &idx in &indices[start..end] {
@@ -530,6 +515,7 @@ pub fn ridge_cv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::TIME_EPSILON;
 
     #[test]
     fn test_ridge_penalty_new() {

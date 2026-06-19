@@ -1,4 +1,6 @@
-use crate::constants::{PARALLEL_THRESHOLD_SMALL, z_score_for_confidence};
+use crate::constants::{
+    PARALLEL_THRESHOLD_SMALL, clamped_normal_ci, exp_ci, z_score_for_confidence,
+};
 use crate::internal::statistical::normal_cdf as norm_cdf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -201,8 +203,7 @@ pub(crate) fn compute_conditional_survival(
         0.0
     };
     let se = var_conditional.sqrt();
-    let ci_lower = (conditional - z * se).clamp(0.0, 1.0);
-    let ci_upper = (conditional + z * se).clamp(0.0, 1.0);
+    let (ci_lower, ci_upper) = clamped_normal_ci(conditional, se, z, 0.0, 1.0);
     ConditionalSurvivalResult {
         given_time,
         target_time,
@@ -360,17 +361,8 @@ pub(crate) fn compute_hazard_ratio(
     } else {
         0.0
     };
-    let z: f64 = if confidence_level >= 0.99 {
-        2.576
-    } else if confidence_level >= 0.95 {
-        1.96
-    } else if confidence_level >= 0.90 {
-        1.645
-    } else {
-        1.28
-    };
-    let ci_lower = (log_hr - z * se_log_hr).exp();
-    let ci_upper = (log_hr + z * se_log_hr).exp();
+    let z = z_score_for_confidence(confidence_level);
+    let (ci_lower, ci_upper) = exp_ci(log_hr, se_log_hr, z);
     let z_statistic: f64 = if se_log_hr > 0.0 {
         log_hr / se_log_hr
     } else {
@@ -534,8 +526,7 @@ pub(crate) fn compute_survival_at_times(
                     }
                 };
                 let se = var.sqrt();
-                let ci_lower = (survival - z * se).clamp(0.0, 1.0);
-                let ci_upper = (survival + z * se).clamp(0.0, 1.0);
+                let (ci_lower, ci_upper) = clamped_normal_ci(survival, se, z, 0.0, 1.0);
                 SurvivalAtTimeResult {
                     time: t,
                     survival,
@@ -565,8 +556,7 @@ pub(crate) fn compute_survival_at_times(
                 }
             };
             let se = var.sqrt();
-            let ci_lower = (survival - z * se).clamp(0.0, 1.0);
-            let ci_upper = (survival + z * se).clamp(0.0, 1.0);
+            let (ci_lower, ci_upper) = clamped_normal_ci(survival, se, z, 0.0, 1.0);
             results.push(SurvivalAtTimeResult {
                 time: t,
                 survival,

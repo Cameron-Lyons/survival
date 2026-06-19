@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::constants::normal_ci_bounds_95;
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct MultipleImputationResult {
@@ -537,18 +539,7 @@ fn rubin_rules(results: &[Vec<f64>], n_vars: usize) -> MultipleImputationResult 
 
     let pooled_se: Vec<f64> = total_var.iter().map(|&v| v.sqrt()).collect();
 
-    let z = 1.96;
-    let pooled_ci_lower: Vec<f64> = pooled_coef
-        .iter()
-        .zip(pooled_se.iter())
-        .map(|(&c, &se)| c - z * se)
-        .collect();
-
-    let pooled_ci_upper: Vec<f64> = pooled_coef
-        .iter()
-        .zip(pooled_se.iter())
-        .map(|(&c, &se)| c + z * se)
-        .collect();
+    let (pooled_ci_lower, pooled_ci_upper) = normal_ci_bounds_95(&pooled_coef, &pooled_se);
 
     let fmi: Vec<f64> = (0..n_vars)
         .map(|j| {

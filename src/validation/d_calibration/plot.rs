@@ -122,9 +122,7 @@ pub(crate) fn calibration_plot_data_core(
             0.0
         };
 
-        let z = 1.96;
-        let lower = (obs_surv - z * se).max(0.0);
-        let upper = (obs_surv + z * se).min(1.0);
+        let (lower, upper) = clamped_normal_ci_95(obs_surv, se, 0.0, 1.0);
 
         predicted.push(mean_pred);
         observed.push(obs_surv);

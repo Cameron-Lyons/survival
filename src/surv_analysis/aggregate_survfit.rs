@@ -1,4 +1,4 @@
-use crate::constants::TIME_EPSILON;
+use crate::constants::{TIME_EPSILON, clamped_normal_ci_bounds};
 use crate::internal::statistical::normal_inverse_cdf;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -246,17 +246,7 @@ pub fn aggregate_survfit(
         agg_se[j] = agg_se[j].sqrt();
     }
 
-    let lower: Vec<f64> = agg_surv
-        .iter()
-        .zip(agg_se.iter())
-        .map(|(&s, &se)| (s - z * se).max(0.0))
-        .collect();
-
-    let upper: Vec<f64> = agg_surv
-        .iter()
-        .zip(agg_se.iter())
-        .map(|(&s, &se)| (s + z * se).min(1.0))
-        .collect();
+    let (lower, upper) = clamped_normal_ci_bounds(&agg_surv, &agg_se, z, 0.0, 1.0);
 
     Ok(AggregateSurvfitResult {
         time: all_times,
