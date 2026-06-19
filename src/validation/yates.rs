@@ -1,3 +1,4 @@
+use crate::constants::{Z_SCORE_90, Z_SCORE_95, Z_SCORE_99, normal_ci, normal_ci_bounds_95};
 use crate::internal::statistical::normal_cdf;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -129,8 +130,9 @@ pub fn yates(
 
         means.push(mean);
         ses.push(se);
-        lowers.push(mean - z * se);
-        uppers.push(mean + z * se);
+        let (lower, upper) = normal_ci(mean, se, z);
+        lowers.push(lower);
+        uppers.push(upper);
         ns.push(group_n);
     }
 
@@ -230,17 +232,7 @@ pub fn yates_contrast(
         ses.push(se);
     }
 
-    let z = 1.96;
-    let lower: Vec<f64> = means
-        .iter()
-        .zip(ses.iter())
-        .map(|(&m, &s)| m - z * s)
-        .collect();
-    let upper: Vec<f64> = means
-        .iter()
-        .zip(ses.iter())
-        .map(|(&m, &s)| m + z * s)
-        .collect();
+    let (lower, upper) = normal_ci_bounds_95(&means, &ses);
 
     Ok(YatesResult {
         levels,
@@ -324,10 +316,10 @@ pub struct YatesPairwiseResult {
 
 fn z_score(conf_level: f64) -> f64 {
     match conf_level {
-        c if (c - 0.90).abs() < 0.001 => 1.645,
-        c if (c - 0.95).abs() < 0.001 => 1.96,
-        c if (c - 0.99).abs() < 0.001 => 2.576,
-        _ => 1.96,
+        c if (c - 0.90).abs() < 0.001 => Z_SCORE_90,
+        c if (c - 0.95).abs() < 0.001 => Z_SCORE_95,
+        c if (c - 0.99).abs() < 0.001 => Z_SCORE_99,
+        _ => Z_SCORE_95,
     }
 }
 

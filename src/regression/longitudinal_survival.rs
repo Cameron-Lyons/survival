@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::constants::{clamped_normal_ci_95, same_time};
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct JointModelConfig {
@@ -610,8 +612,9 @@ pub fn longitudinal_dynamic_pred(
         survival_probabilities.push(surv_prob);
 
         let se = 0.05;
-        confidence_lower.push((surv_prob - 1.96 * se).clamp(0.0, 1.0));
-        confidence_upper.push((surv_prob + 1.96 * se).clamp(0.0, 1.0));
+        let (lower, upper) = clamped_normal_ci_95(surv_prob, se, 0.0, 1.0);
+        confidence_lower.push(lower);
+        confidence_upper.push(upper);
     }
 
     Ok(LongDynamicPredResult {
@@ -734,9 +737,7 @@ pub fn time_varying_cox(
             let mut gradient = vec![0.0; n_features];
 
             for &i in at_risk.iter() {
-                if event[i] == 1
-                    && (stop_time[i] - time_point).abs() < crate::constants::TIME_EPSILON
-                {
+                if event[i] == 1 && same_time(stop_time[i], time_point) {
                     for (j, &xij) in covariates[i].iter().enumerate() {
                         let weighted_mean: f64 = at_risk
                             .iter()
@@ -769,7 +770,7 @@ pub fn time_varying_cox(
         let risk_sum: f64 = exp_lp.iter().sum();
 
         for (idx, &i) in at_risk.iter().enumerate() {
-            if event[i] == 1 && (stop_time[i] - time_point).abs() < crate::constants::TIME_EPSILON {
+            if event[i] == 1 && same_time(stop_time[i], time_point) {
                 total_ll += linear_pred[idx] - risk_sum.ln();
             }
         }

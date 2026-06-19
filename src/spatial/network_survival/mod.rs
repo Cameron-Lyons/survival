@@ -1,4 +1,4 @@
-use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
+use crate::constants::{PARALLEL_THRESHOLD_MEDIUM, exp_ci_bounds_95};
 use crate::internal::sorting::descending_time_indices;
 use pyo3::prelude::*;
 use rayon::prelude::*;

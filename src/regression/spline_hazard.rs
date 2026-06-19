@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use crate::constants::clamped_normal_ci_bounds_95;
+
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
 pub struct SplineConfig {
@@ -517,16 +519,9 @@ pub fn predict_hazard_spline(
         survival[i] = (-cumulative_hazard[i]).exp();
     }
 
-    let z = 1.96;
     let se_factor = 0.1;
-    let lower_ci: Vec<f64> = survival
-        .iter()
-        .map(|s| (s - z * s * se_factor).clamp(0.0, 1.0))
-        .collect();
-    let upper_ci: Vec<f64> = survival
-        .iter()
-        .map(|s| (s + z * s * se_factor).clamp(0.0, 1.0))
-        .collect();
+    let survival_se: Vec<f64> = survival.iter().map(|&s| s * se_factor).collect();
+    let (lower_ci, upper_ci) = clamped_normal_ci_bounds_95(&survival, &survival_se, 0.0, 1.0);
 
     Ok(HazardSplineResult {
         time_points: eval_times,

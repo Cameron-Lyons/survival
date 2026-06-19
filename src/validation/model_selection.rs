@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::constants::Z_SCORE_95;
 use crate::internal::statistical::chi2_cdf;
 
 type LikelihoodRatioTest = (String, String, f64, f64, f64);
@@ -341,8 +342,7 @@ impl CrossValidatedScore {
     }
 
     fn confidence_interval(&self, _alpha: f64) -> (f64, f64) {
-        let z = 1.96;
-        let margin = z * self.std_score / (self.n_folds as f64).sqrt();
+        let margin = Z_SCORE_95 * self.std_score / (self.n_folds as f64).sqrt();
         (self.mean_score - margin, self.mean_score + margin)
     }
 }

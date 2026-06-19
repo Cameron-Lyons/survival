@@ -1,8 +1,7 @@
-
+const NORMAL_CI_Z_SCORE: f64 = crate::constants::Z_SCORE_95;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
-
 pub struct MCDropoutConfig {
     #[pyo3(get, set)]
     pub n_samples: usize,
@@ -130,7 +129,7 @@ pub fn mc_dropout_uncertainty(predictions: Vec<Vec<Vec<f64>>>) -> PyResult<Uncer
         .map(|(m, s)| {
             m.iter()
                 .zip(s.iter())
-                .map(|(&mi, &si)| (mi - 1.96 * si).clamp(0.0, 1.0))
+                .map(|(&mi, &si)| (mi - NORMAL_CI_Z_SCORE * si).clamp(0.0, 1.0))
                 .collect()
         })
         .collect();
@@ -141,7 +140,7 @@ pub fn mc_dropout_uncertainty(predictions: Vec<Vec<Vec<f64>>>) -> PyResult<Uncer
         .map(|(m, s)| {
             m.iter()
                 .zip(s.iter())
-                .map(|(&mi, &si)| (mi + 1.96 * si).clamp(0.0, 1.0))
+                .map(|(&mi, &si)| (mi + NORMAL_CI_Z_SCORE * si).clamp(0.0, 1.0))
                 .collect()
         })
         .collect();

@@ -75,42 +75,20 @@ pub fn negative_binomial_frailty(
     config: &NegativeBinomialFrailtyConfig,
 ) -> PyResult<NegativeBinomialFrailtyResult> {
     let n = id.len();
-    if time.len() != n || event.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All input vectors must have the same length",
-        ));
-    }
+    validate_recurrent_lengths(n, &[time.len(), event.len()])?;
 
-    let p = if covariates.is_empty() {
-        1
-    } else {
-        covariates.len() / n
-    };
-    let x_mat = if covariates.is_empty() {
-        vec![1.0; n]
-    } else {
-        covariates.clone()
-    };
+    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n);
 
     let offset_vec = offset.unwrap_or_else(|| {
         time.iter()
-            .map(|&t| t.max(crate::constants::DIVISION_FLOOR).ln())
+            .map(|&t| t.max(DIVISION_FLOOR).ln())
             .collect()
     });
 
-    let unique_ids: Vec<i32> = {
-        let mut ids = id.clone();
-        ids.sort();
-        ids.dedup();
-        ids
-    };
+    let unique_ids = sorted_unique_i32(&id);
     let n_subjects = unique_ids.len();
 
-    let id_to_idx: std::collections::HashMap<i32, usize> = unique_ids
-        .iter()
-        .enumerate()
-        .map(|(idx, &id_val)| (id_val, idx))
-        .collect();
+    let id_to_idx = index_by_i32(&unique_ids);
 
     let mut subject_events: Vec<i32> = vec![0; n_subjects];
     let mut subject_exposure: Vec<f64> = vec![0.0; n_subjects];
@@ -197,7 +175,7 @@ pub fn negative_binomial_frailty(
 
             let mut max_change: f64 = 0.0;
             for j in 0..p {
-                if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
+                if hessian_diag[j].abs() > DIVISION_FLOOR {
                     let delta = gradient[j] / (hessian_diag[j] + 1e-6);
                     beta[j] += delta;
                     beta[j] = beta[j].clamp(-10.0, 10.0);
@@ -286,7 +264,7 @@ pub fn negative_binomial_frailty(
     let std_errors: Vec<f64> = info_matrix
         .par_iter()
         .map(|&info| {
-            if info > crate::constants::DIVISION_FLOOR {
+            if info > DIVISION_FLOOR {
                 (1.0 / info).sqrt()
             } else {
                 f64::INFINITY
@@ -298,7 +276,7 @@ pub fn negative_binomial_frailty(
         .par_iter()
         .zip(std_errors.par_iter())
         .map(|(&b, &se)| {
-            if se > crate::constants::DIVISION_FLOOR && se.is_finite() {
+            if se > DIVISION_FLOOR && se.is_finite() {
                 b / se
             } else {
                 0.0
@@ -313,17 +291,7 @@ pub fn negative_binomial_frailty(
 
     let rate_ratios: Vec<f64> = beta.par_iter().map(|&b| b.exp()).collect();
 
-    let rr_lower: Vec<f64> = beta
-        .par_iter()
-        .zip(std_errors.par_iter())
-        .map(|(&b, &se)| (b - 1.96 * se).exp())
-        .collect();
-
-    let rr_upper: Vec<f64> = beta
-        .par_iter()
-        .zip(std_errors.par_iter())
-        .map(|(&b, &se)| (b + 1.96 * se).exp())
-        .collect();
+    let (rr_lower, rr_upper) = exp_ci_bounds_95(&beta, &std_errors);
 
     let theta_se = (theta.powi(2) * 2.0 / n_subjects as f64).sqrt();
     let frailty_variance = theta;

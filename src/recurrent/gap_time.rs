@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use crate::constants::exp_ci_bounds_95;
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct GapTimeResult {
@@ -195,18 +197,7 @@ pub fn gap_time_model(
 
     let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
 
-    let z = 1.96;
-    let hr_ci_lower: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| (b - z * se).exp())
-        .collect();
-
-    let hr_ci_upper: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| (b + z * se).exp())
-        .collect();
+    let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&beta, &std_errors);
 
     let mut unique_times: Vec<f64> = gap_times.clone();
     unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

@@ -35,6 +35,130 @@ pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
     }
 }
 
+#[inline]
+pub fn normal_ci(estimate: f64, standard_error: f64, z_score: f64) -> (f64, f64) {
+    (
+        estimate - z_score * standard_error,
+        estimate + z_score * standard_error,
+    )
+}
+
+#[inline]
+pub fn clamped_normal_ci(
+    estimate: f64,
+    standard_error: f64,
+    z_score: f64,
+    lower_bound: f64,
+    upper_bound: f64,
+) -> (f64, f64) {
+    let (lower, upper) = normal_ci(estimate, standard_error, z_score);
+    (
+        lower.clamp(lower_bound, upper_bound),
+        upper.clamp(lower_bound, upper_bound),
+    )
+}
+
+#[inline]
+pub fn normal_ci_95(estimate: f64, standard_error: f64) -> (f64, f64) {
+    normal_ci(estimate, standard_error, Z_SCORE_95)
+}
+
+#[inline]
+pub fn clamped_normal_ci_95(
+    estimate: f64,
+    standard_error: f64,
+    lower_bound: f64,
+    upper_bound: f64,
+) -> (f64, f64) {
+    clamped_normal_ci(
+        estimate,
+        standard_error,
+        Z_SCORE_95,
+        lower_bound,
+        upper_bound,
+    )
+}
+
+#[inline]
+pub fn exp_ci(log_estimate: f64, standard_error: f64, z_score: f64) -> (f64, f64) {
+    let (lower, upper) = normal_ci(log_estimate, standard_error, z_score);
+    (lower.exp(), upper.exp())
+}
+
+#[inline]
+pub fn exp_ci_95(log_estimate: f64, standard_error: f64) -> (f64, f64) {
+    exp_ci(log_estimate, standard_error, Z_SCORE_95)
+}
+
+#[inline]
+pub fn normal_ci_bounds_95(estimates: &[f64], standard_errors: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    normal_ci_bounds(estimates, standard_errors, Z_SCORE_95)
+}
+
+#[inline]
+pub fn normal_ci_bounds(
+    estimates: &[f64],
+    standard_errors: &[f64],
+    z_score: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    estimates
+        .iter()
+        .zip(standard_errors.iter())
+        .map(|(&estimate, &standard_error)| normal_ci(estimate, standard_error, z_score))
+        .unzip()
+}
+
+#[inline]
+pub fn clamped_normal_ci_bounds_95(
+    estimates: &[f64],
+    standard_errors: &[f64],
+    lower_bound: f64,
+    upper_bound: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    clamped_normal_ci_bounds(
+        estimates,
+        standard_errors,
+        Z_SCORE_95,
+        lower_bound,
+        upper_bound,
+    )
+}
+
+#[inline]
+pub fn clamped_normal_ci_bounds(
+    estimates: &[f64],
+    standard_errors: &[f64],
+    z_score: f64,
+    lower_bound: f64,
+    upper_bound: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    estimates
+        .iter()
+        .zip(standard_errors.iter())
+        .map(|(&estimate, &standard_error)| {
+            clamped_normal_ci(estimate, standard_error, z_score, lower_bound, upper_bound)
+        })
+        .unzip()
+}
+
+#[inline]
+pub fn exp_ci_bounds_95(log_estimates: &[f64], standard_errors: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    exp_ci_bounds(log_estimates, standard_errors, Z_SCORE_95)
+}
+
+#[inline]
+pub fn exp_ci_bounds(
+    log_estimates: &[f64],
+    standard_errors: &[f64],
+    z_score: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    log_estimates
+        .iter()
+        .zip(standard_errors.iter())
+        .map(|(&log_estimate, &standard_error)| exp_ci(log_estimate, standard_error, z_score))
+        .unzip()
+}
+
 pub const PARALLEL_THRESHOLD_SMALL: usize = 100;
 pub const PARALLEL_THRESHOLD_MEDIUM: usize = 500;
 pub const PARALLEL_THRESHOLD_LARGE: usize = 1000;
@@ -47,6 +171,17 @@ pub const LINEAR_PRED_CLAMP_MAX: f64 = 20.0;
 
 pub const EXP_CLAMP_MIN: f64 = -100.0;
 pub const EXP_CLAMP_MAX: f64 = 100.0;
+
+#[inline]
+pub fn exp_clamped(value: f64) -> f64 {
+    value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
+}
+
+#[inline]
+pub fn exp_clamped_ci(log_estimate: f64, standard_error: f64, z_score: f64) -> (f64, f64) {
+    let (lower, upper) = normal_ci(log_estimate, standard_error, z_score);
+    (exp_clamped(lower), exp_clamped(upper))
+}
 
 pub const CONVERGENCE_FLAG: i32 = 1000;
 
@@ -82,3 +217,8 @@ pub const HARTLEY_B5: f64 = 1.330274;
 
 pub const ROYSTON_KAPPA_FACTOR: f64 = 8.0;
 pub const ROYSTON_VARIANCE_FACTOR: f64 = 6.0;
+
+#[inline]
+pub fn same_time(left: f64, right: f64) -> bool {
+    (left - right).abs() < TIME_EPSILON
+}

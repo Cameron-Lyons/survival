@@ -11,6 +11,15 @@ pub(crate) struct ConcordanceSummary {
     pub(crate) comparable: f64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConcordanceTimeWeight {
+    N,
+    S,
+    SOverG,
+    NOverG2,
+    I,
+}
+
 impl ConcordanceSummary {
     #[inline]
     pub(crate) fn c_index(self) -> f64 {
@@ -76,8 +85,39 @@ pub(crate) fn concordance_summary_with_horizon(
     event: &[i32],
     horizon: Option<f64>,
 ) -> ConcordanceSummary {
+    concordance_summary_with_horizon_and_weights(risk_scores, time, event, None, horizon)
+}
+
+pub(crate) fn concordance_summary_with_horizon_and_weights(
+    risk_scores: &[f64],
+    time: &[f64],
+    event: &[i32],
+    weights: Option<&[f64]>,
+    horizon: Option<f64>,
+) -> ConcordanceSummary {
+    concordance_summary_with_horizon_weights_and_time_weight(
+        risk_scores,
+        time,
+        event,
+        weights,
+        horizon,
+        ConcordanceTimeWeight::N,
+    )
+}
+
+pub(crate) fn concordance_summary_with_horizon_weights_and_time_weight(
+    risk_scores: &[f64],
+    time: &[f64],
+    event: &[i32],
+    weights: Option<&[f64]>,
+    horizon: Option<f64>,
+    time_weight: ConcordanceTimeWeight,
+) -> ConcordanceSummary {
     let n = risk_scores.len();
     if n < 2 || time.len() != n || event.len() != n {
+        return ConcordanceSummary::default();
+    }
+    if weights.is_some_and(|values| values.len() != n) {
         return ConcordanceSummary::default();
     }
 
@@ -85,10 +125,17 @@ pub(crate) fn concordance_summary_with_horizon(
         || risk_scores.iter().any(|value| !value.is_finite())
         || horizon.is_some_and(|value| !value.is_finite())
     {
-        return concordance_summary_quadratic(risk_scores, time, event, horizon);
+        return concordance_summary_quadratic(
+            risk_scores,
+            time,
+            event,
+            weights,
+            horizon,
+            time_weight,
+        );
     }
 
-    concordance_summary_ranked(risk_scores, time, event, horizon)
+    concordance_summary_ranked(risk_scores, time, event, weights, horizon, time_weight)
 }
 
 pub(crate) fn counting_process_concordance_index(
@@ -106,8 +153,39 @@ pub(crate) fn counting_process_concordance_summary(
     stop: &[f64],
     event: &[i32],
 ) -> ConcordanceSummary {
+    counting_process_concordance_summary_with_weights(risk_scores, start, stop, event, None)
+}
+
+pub(crate) fn counting_process_concordance_summary_with_weights(
+    risk_scores: &[f64],
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    weights: Option<&[f64]>,
+) -> ConcordanceSummary {
+    counting_process_concordance_summary_with_weights_and_time_weight(
+        risk_scores,
+        start,
+        stop,
+        event,
+        weights,
+        ConcordanceTimeWeight::N,
+    )
+}
+
+pub(crate) fn counting_process_concordance_summary_with_weights_and_time_weight(
+    risk_scores: &[f64],
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    weights: Option<&[f64]>,
+    time_weight: ConcordanceTimeWeight,
+) -> ConcordanceSummary {
     let n = risk_scores.len();
     if n < 2 || start.len() != n || stop.len() != n || event.len() != n {
+        return ConcordanceSummary::default();
+    }
+    if weights.is_some_and(|values| values.len() != n) {
         return ConcordanceSummary::default();
     }
 
@@ -115,7 +193,14 @@ pub(crate) fn counting_process_concordance_summary(
         || stop.iter().any(|value| !value.is_finite())
         || risk_scores.iter().any(|value| !value.is_finite())
     {
-        return counting_process_concordance_summary_quadratic(risk_scores, start, stop, event);
+        return counting_process_concordance_summary_quadratic(
+            risk_scores,
+            start,
+            stop,
+            event,
+            weights,
+            time_weight,
+        );
     }
 
     let mut risk_levels = risk_scores.to_vec();
@@ -134,6 +219,12 @@ pub(crate) fn counting_process_concordance_summary(
     event_times.sort_by(f64::total_cmp);
     event_times.dedup();
 
+    let event_time_multipliers = if time_weight == ConcordanceTimeWeight::N {
+        Vec::new()
+    } else {
+        counting_process_time_weight_multipliers(start, stop, event, weights, time_weight)
+    };
+
     let mut at_risk = FenwickTree::new(risk_levels.len());
     let mut active = vec![false; n];
     let mut start_cursor = 0usize;
@@ -146,31 +237,48 @@ pub(crate) fn counting_process_concordance_summary(
             let idx = start_order[start_cursor];
             if !active[idx] {
                 let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
-                at_risk.update(rank, 1.0);
+                at_risk.update(rank, observation_weight(weights, idx));
                 active[idx] = true;
             }
             start_cursor += 1;
         }
 
+        while stop_cursor < n && stop[stop_order[stop_cursor]] < event_time {
+            let idx = stop_order[stop_cursor];
+            if active[idx] {
+                let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+                at_risk.update(rank, -observation_weight(weights, idx));
+                active[idx] = false;
+            }
+            stop_cursor += 1;
+        }
+
+        let event_time_multiplier = if time_weight == ConcordanceTimeWeight::N {
+            1.0
+        } else {
+            event_time_multiplier_at(&event_time_multipliers, event_time)
+        };
+
         while stop_cursor < n && stop[stop_order[stop_cursor]] <= event_time {
             let idx = stop_order[stop_cursor];
             if active[idx] {
                 let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
-                at_risk.update(rank, -1.0);
+                at_risk.update(rank, -observation_weight(weights, idx));
                 active[idx] = false;
             }
             stop_cursor += 1;
         }
 
         let at_risk_total = at_risk.total();
-        if at_risk_total <= 0.0 {
+        if at_risk_total <= 0.0 || event_time_multiplier <= 0.0 {
             continue;
         }
         for idx in 0..n {
             if event[idx] == 1 && stop[idx] == event_time {
-                comparable += at_risk_total;
-                concordant +=
-                    concordance_contribution_for_rank(&at_risk, &risk_levels, risk_scores[idx]);
+                let event_weight = observation_weight(weights, idx) * event_time_multiplier;
+                comparable += event_weight * at_risk_total;
+                concordant += event_weight
+                    * concordance_contribution_for_rank(&at_risk, &risk_levels, risk_scores[idx]);
             }
         }
     }
@@ -188,7 +296,15 @@ fn counting_process_concordance_quadratic(
     stop: &[f64],
     event: &[i32],
 ) -> f64 {
-    counting_process_concordance_summary_quadratic(risk_scores, start, stop, event).c_index()
+    counting_process_concordance_summary_quadratic(
+        risk_scores,
+        start,
+        stop,
+        event,
+        None,
+        ConcordanceTimeWeight::N,
+    )
+    .c_index()
 }
 
 fn counting_process_concordance_summary_quadratic(
@@ -196,27 +312,45 @@ fn counting_process_concordance_summary_quadratic(
     start: &[f64],
     stop: &[f64],
     event: &[i32],
+    weights: Option<&[f64]>,
+    time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceSummary {
     let n = risk_scores.len();
     let mut concordant = 0.0;
     let mut comparable = 0.0;
+    let event_time_multipliers = if time_weight == ConcordanceTimeWeight::N {
+        Vec::new()
+    } else {
+        counting_process_time_weight_multipliers(start, stop, event, weights, time_weight)
+    };
 
     for event_idx in 0..n {
         if event[event_idx] != 1 {
             continue;
         }
         let event_time = stop[event_idx];
+        let event_time_multiplier = if time_weight == ConcordanceTimeWeight::N {
+            1.0
+        } else {
+            event_time_multiplier_at(&event_time_multipliers, event_time)
+        };
+        if event_time_multiplier <= 0.0 {
+            continue;
+        }
         for risk_idx in 0..n {
             if risk_idx == event_idx {
                 continue;
             }
             if start[risk_idx] < event_time && stop[risk_idx] > event_time {
-                comparable += 1.0;
+                let pair_weight = observation_weight(weights, event_idx)
+                    * observation_weight(weights, risk_idx)
+                    * event_time_multiplier;
+                comparable += pair_weight;
                 let diff = risk_scores[event_idx] - risk_scores[risk_idx];
                 if diff > 0.0 {
-                    concordant += 1.0;
+                    concordant += pair_weight;
                 } else if diff.abs() < DIVISION_FLOOR {
-                    concordant += TIED_PAIR_WEIGHT;
+                    concordant += TIED_PAIR_WEIGHT * pair_weight;
                 }
             }
         }
@@ -235,18 +369,33 @@ fn concordance_index_quadratic(
     event: &[i32],
     horizon: Option<f64>,
 ) -> f64 {
-    concordance_summary_quadratic(risk_scores, time, event, horizon).c_index()
+    concordance_summary_quadratic(
+        risk_scores,
+        time,
+        event,
+        None,
+        horizon,
+        ConcordanceTimeWeight::N,
+    )
+    .c_index()
 }
 
 fn concordance_summary_quadratic(
     risk_scores: &[f64],
     time: &[f64],
     event: &[i32],
+    weights: Option<&[f64]>,
     horizon: Option<f64>,
+    time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceSummary {
     let n = risk_scores.len();
     let mut concordant = 0.0;
     let mut comparable = 0.0;
+    let event_time_multipliers = if time_weight == ConcordanceTimeWeight::N {
+        Vec::new()
+    } else {
+        right_censored_time_weight_multipliers(time, event, weights, time_weight)
+    };
 
     for i in 0..n {
         for j in (i + 1)..n {
@@ -264,18 +413,34 @@ fn concordance_summary_quadratic(
                 };
 
             if i_comparable {
-                comparable += 1.0;
+                let event_time_multiplier = if time_weight == ConcordanceTimeWeight::N {
+                    1.0
+                } else {
+                    event_time_multiplier_at(&event_time_multipliers, time[i])
+                };
+                let pair_weight = observation_weight(weights, i)
+                    * observation_weight(weights, j)
+                    * event_time_multiplier;
+                comparable += pair_weight;
                 if risk_scores[i] > risk_scores[j] {
-                    concordant += 1.0;
+                    concordant += pair_weight;
                 } else if (risk_scores[i] - risk_scores[j]).abs() < DIVISION_FLOOR {
-                    concordant += TIED_PAIR_WEIGHT;
+                    concordant += TIED_PAIR_WEIGHT * pair_weight;
                 }
             } else if j_comparable {
-                comparable += 1.0;
+                let event_time_multiplier = if time_weight == ConcordanceTimeWeight::N {
+                    1.0
+                } else {
+                    event_time_multiplier_at(&event_time_multipliers, time[j])
+                };
+                let pair_weight = observation_weight(weights, j)
+                    * observation_weight(weights, i)
+                    * event_time_multiplier;
+                comparable += pair_weight;
                 if risk_scores[j] > risk_scores[i] {
-                    concordant += 1.0;
+                    concordant += pair_weight;
                 } else if (risk_scores[i] - risk_scores[j]).abs() < DIVISION_FLOOR {
-                    concordant += TIED_PAIR_WEIGHT;
+                    concordant += TIED_PAIR_WEIGHT * pair_weight;
                 }
             }
         }
@@ -294,14 +459,24 @@ fn concordance_index_ranked(
     event: &[i32],
     horizon: Option<f64>,
 ) -> f64 {
-    concordance_summary_ranked(risk_scores, time, event, horizon).c_index()
+    concordance_summary_ranked(
+        risk_scores,
+        time,
+        event,
+        None,
+        horizon,
+        ConcordanceTimeWeight::N,
+    )
+    .c_index()
 }
 
 fn concordance_summary_ranked(
     risk_scores: &[f64],
     time: &[f64],
     event: &[i32],
+    weights: Option<&[f64]>,
     horizon: Option<f64>,
+    time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceSummary {
     let n = risk_scores.len();
     let mut time_order: Vec<usize> = (0..n).collect();
@@ -315,6 +490,11 @@ fn concordance_summary_ranked(
     let mut concordant = 0.0;
     let mut comparable = 0.0;
     let mut group_start = 0;
+    let event_time_multipliers = if time_weight == ConcordanceTimeWeight::N {
+        Vec::new()
+    } else {
+        right_censored_time_weight_multipliers(time, event, weights, time_weight)
+    };
 
     while group_start < n {
         let current_time = time[time_order[group_start]];
@@ -324,21 +504,27 @@ fn concordance_summary_ranked(
         }
 
         let at_risk_total = at_risk.total();
-        if at_risk_total > 0.0 {
+        let event_time_multiplier = if time_weight == ConcordanceTimeWeight::N {
+            1.0
+        } else {
+            event_time_multiplier_at(&event_time_multipliers, current_time)
+        };
+        if at_risk_total > 0.0 && event_time_multiplier > 0.0 {
             for &idx in &time_order[group_start..group_end] {
                 if event[idx] != 1 || horizon.is_some_and(|h| time[idx] > h) {
                     continue;
                 }
 
-                comparable += at_risk_total;
-                concordant +=
-                    concordance_contribution_for_rank(&at_risk, &risk_levels, risk_scores[idx]);
+                let event_weight = observation_weight(weights, idx) * event_time_multiplier;
+                comparable += event_weight * at_risk_total;
+                concordant += event_weight
+                    * concordance_contribution_for_rank(&at_risk, &risk_levels, risk_scores[idx]);
             }
         }
 
         for &idx in &time_order[group_start..group_end] {
             let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
-            at_risk.update(rank, 1.0);
+            at_risk.update(rank, observation_weight(weights, idx));
         }
 
         group_start = group_end;
@@ -348,6 +534,178 @@ fn concordance_summary_ranked(
         concordant,
         comparable,
     }
+}
+
+#[inline]
+fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
+    weights.map_or(1.0, |values| values[idx])
+}
+
+fn event_time_multiplier_at(event_time_multipliers: &[(f64, f64)], event_time: f64) -> f64 {
+    event_time_multipliers
+        .binary_search_by(|&(time, _)| time.total_cmp(&event_time))
+        .map_or(0.0, |idx| event_time_multipliers[idx].1)
+}
+
+fn time_weight_multiplier_from_components(
+    time_weight: ConcordanceTimeWeight,
+    total_weight: f64,
+    survival: f64,
+    censoring_survival: f64,
+    nrisk: f64,
+) -> f64 {
+    if nrisk <= 0.0 {
+        return 0.0;
+    }
+    match time_weight {
+        ConcordanceTimeWeight::N => 1.0,
+        ConcordanceTimeWeight::S => total_weight * survival / nrisk,
+        ConcordanceTimeWeight::SOverG => {
+            if censoring_survival > 0.0 {
+                total_weight * survival / (censoring_survival * nrisk)
+            } else {
+                0.0
+            }
+        }
+        ConcordanceTimeWeight::NOverG2 => {
+            if censoring_survival > 0.0 {
+                1.0 / (censoring_survival * censoring_survival)
+            } else {
+                0.0
+            }
+        }
+        ConcordanceTimeWeight::I => 1.0 / nrisk,
+    }
+}
+
+fn right_censored_time_weight_multipliers(
+    time: &[f64],
+    event: &[i32],
+    weights: Option<&[f64]>,
+    time_weight: ConcordanceTimeWeight,
+) -> Vec<(f64, f64)> {
+    if time_weight == ConcordanceTimeWeight::N {
+        return Vec::new();
+    }
+
+    let n = time.len();
+    let total_weight: f64 = (0..n).map(|idx| observation_weight(weights, idx)).sum();
+    let mut time_order: Vec<usize> = (0..n).collect();
+    time_order.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
+
+    let mut nrisk = total_weight;
+    let mut survival = 1.0;
+    let mut censoring_survival = 1.0;
+    let mut multipliers = Vec::new();
+    let mut group_start = 0usize;
+
+    while group_start < n {
+        let current_time = time[time_order[group_start]];
+        let mut group_end = group_start + 1;
+        while group_end < n && time[time_order[group_end]] == current_time {
+            group_end += 1;
+        }
+
+        let mut death_weight = 0.0;
+        let mut censor_weight = 0.0;
+        let mut group_weight = 0.0;
+        for &idx in &time_order[group_start..group_end] {
+            let weight = observation_weight(weights, idx);
+            group_weight += weight;
+            if event[idx] == 1 {
+                death_weight += weight;
+            } else {
+                censor_weight += weight;
+            }
+        }
+
+        if death_weight > 0.0 {
+            multipliers.push((
+                current_time,
+                time_weight_multiplier_from_components(
+                    time_weight,
+                    total_weight,
+                    survival,
+                    censoring_survival,
+                    nrisk,
+                ),
+            ));
+            if nrisk > 0.0 {
+                survival *= ((nrisk - death_weight) / nrisk).max(0.0);
+            }
+        }
+        if censor_weight > 0.0 && nrisk > 0.0 {
+            censoring_survival *= ((nrisk - censor_weight) / nrisk).max(0.0);
+        }
+        nrisk -= group_weight;
+        group_start = group_end;
+    }
+
+    multipliers
+}
+
+fn counting_process_time_weight_multipliers(
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    weights: Option<&[f64]>,
+    time_weight: ConcordanceTimeWeight,
+) -> Vec<(f64, f64)> {
+    if time_weight == ConcordanceTimeWeight::N {
+        return Vec::new();
+    }
+
+    let n = start.len();
+    let total_weight: f64 = (0..n).map(|idx| observation_weight(weights, idx)).sum();
+    let mut event_times: Vec<f64> = (0..n)
+        .filter(|&idx| event[idx] == 1)
+        .map(|idx| stop[idx])
+        .collect();
+    event_times.sort_by(f64::total_cmp);
+    event_times.dedup();
+
+    let mut start_order: Vec<usize> = (0..n).collect();
+    start_order.sort_by(|&a, &b| start[a].total_cmp(&start[b]));
+    let mut stop_order: Vec<usize> = (0..n).collect();
+    stop_order.sort_by(|&a, &b| stop[a].total_cmp(&stop[b]));
+
+    let mut active_weight = 0.0;
+    let mut start_cursor = 0usize;
+    let mut stop_cursor = 0usize;
+    let mut survival = 1.0;
+    let mut multipliers = Vec::with_capacity(event_times.len());
+
+    for event_time in event_times {
+        while start_cursor < n && start[start_order[start_cursor]] < event_time {
+            active_weight += observation_weight(weights, start_order[start_cursor]);
+            start_cursor += 1;
+        }
+        while stop_cursor < n && stop[stop_order[stop_cursor]] < event_time {
+            active_weight -= observation_weight(weights, stop_order[stop_cursor]);
+            stop_cursor += 1;
+        }
+
+        let death_weight = (0..n)
+            .filter(|&idx| event[idx] == 1 && stop[idx] == event_time)
+            .map(|idx| observation_weight(weights, idx))
+            .sum::<f64>();
+
+        multipliers.push((
+            event_time,
+            time_weight_multiplier_from_components(
+                time_weight,
+                total_weight,
+                survival,
+                1.0,
+                active_weight,
+            ),
+        ));
+        if active_weight > 0.0 {
+            survival *= ((active_weight - death_weight) / active_weight).max(0.0);
+        }
+    }
+
+    multipliers
 }
 
 #[inline]
@@ -710,6 +1068,128 @@ mod tests {
         );
     }
 
+    fn assert_weighted_ranked_matches_quadratic(
+        risk_scores: &[f64],
+        time: &[f64],
+        event: &[i32],
+        weights: &[f64],
+        horizon: Option<f64>,
+    ) {
+        let ranked = concordance_summary_ranked(
+            risk_scores,
+            time,
+            event,
+            Some(weights),
+            horizon,
+            ConcordanceTimeWeight::N,
+        )
+        .c_index();
+        let quadratic = concordance_summary_quadratic(
+            risk_scores,
+            time,
+            event,
+            Some(weights),
+            horizon,
+            ConcordanceTimeWeight::N,
+        )
+        .c_index();
+
+        assert!(
+            (ranked - quadratic).abs() < 1e-12,
+            "weighted ranked {ranked} differed from quadratic {quadratic}"
+        );
+    }
+
+    fn assert_time_weighted_ranked_matches_quadratic(
+        risk_scores: &[f64],
+        time: &[f64],
+        event: &[i32],
+        weights: &[f64],
+        time_weight: ConcordanceTimeWeight,
+    ) {
+        let ranked =
+            concordance_summary_ranked(risk_scores, time, event, Some(weights), None, time_weight)
+                .c_index();
+        let quadratic = concordance_summary_quadratic(
+            risk_scores,
+            time,
+            event,
+            Some(weights),
+            None,
+            time_weight,
+        )
+        .c_index();
+
+        assert!(
+            (ranked - quadratic).abs() < 1e-12,
+            "time-weighted ranked {ranked} differed from quadratic {quadratic}"
+        );
+    }
+
+    fn assert_weighted_counting_ranked_matches_quadratic(
+        risk_scores: &[f64],
+        start: &[f64],
+        stop: &[f64],
+        event: &[i32],
+        weights: &[f64],
+    ) {
+        let ranked = counting_process_concordance_summary_with_weights(
+            risk_scores,
+            start,
+            stop,
+            event,
+            Some(weights),
+        )
+        .c_index();
+        let quadratic = counting_process_concordance_summary_quadratic(
+            risk_scores,
+            start,
+            stop,
+            event,
+            Some(weights),
+            ConcordanceTimeWeight::N,
+        )
+        .c_index();
+
+        assert!(
+            (ranked - quadratic).abs() < 1e-12,
+            "weighted counting ranked {ranked} differed from quadratic {quadratic}"
+        );
+    }
+
+    fn assert_time_weighted_counting_ranked_matches_quadratic(
+        risk_scores: &[f64],
+        start: &[f64],
+        stop: &[f64],
+        event: &[i32],
+        weights: &[f64],
+        time_weight: ConcordanceTimeWeight,
+    ) {
+        let ranked = counting_process_concordance_summary_with_weights_and_time_weight(
+            risk_scores,
+            start,
+            stop,
+            event,
+            Some(weights),
+            time_weight,
+        )
+        .c_index();
+        let quadratic = counting_process_concordance_summary_quadratic(
+            risk_scores,
+            start,
+            stop,
+            event,
+            Some(weights),
+            time_weight,
+        )
+        .c_index();
+
+        assert!(
+            (ranked - quadratic).abs() < 1e-12,
+            "time-weighted counting ranked {ranked} differed from quadratic {quadratic}"
+        );
+    }
+
     #[test]
     fn test_ranked_concordance_matches_quadratic_for_common_cases() {
         let time = [5.0, 2.0, 7.0, 3.0, 3.0, 9.0, 1.0];
@@ -761,6 +1241,80 @@ mod tests {
     }
 
     #[test]
+    fn test_weighted_ranked_concordance_matches_quadratic() {
+        for n in 2..40 {
+            let time: Vec<f64> = (0..n).map(|i| ((i * 7 + n * 3) % 11) as f64).collect();
+            let event: Vec<i32> = (0..n)
+                .map(|i| if (i + n) % 4 == 0 { 0 } else { 1 })
+                .collect();
+            let risk: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 6 == 0 {
+                        0.25
+                    } else {
+                        ((i * 11 + n * 5) % 17) as f64 / 10.0
+                    }
+                })
+                .collect();
+            let weights: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 9 == 0 {
+                        0.0
+                    } else {
+                        0.5 + (i % 5) as f64
+                    }
+                })
+                .collect();
+
+            assert_weighted_ranked_matches_quadratic(&risk, &time, &event, &weights, None);
+            assert_weighted_ranked_matches_quadratic(&risk, &time, &event, &weights, Some(5.0));
+        }
+    }
+
+    #[test]
+    fn test_time_weighted_ranked_concordance_matches_quadratic() {
+        for n in 2..40 {
+            let time: Vec<f64> = (0..n).map(|i| ((i * 5 + n * 2) % 13) as f64).collect();
+            let event: Vec<i32> = (0..n)
+                .map(|i| if (i + n) % 5 == 0 { 0 } else { 1 })
+                .collect();
+            let risk: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 7 == 0 {
+                        0.15
+                    } else {
+                        ((i * 17 + n * 3) % 23) as f64 / 10.0
+                    }
+                })
+                .collect();
+            let weights: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 10 == 0 {
+                        0.0
+                    } else {
+                        0.25 + (i % 7) as f64
+                    }
+                })
+                .collect();
+
+            for time_weight in [
+                ConcordanceTimeWeight::S,
+                ConcordanceTimeWeight::SOverG,
+                ConcordanceTimeWeight::NOverG2,
+                ConcordanceTimeWeight::I,
+            ] {
+                assert_time_weighted_ranked_matches_quadratic(
+                    &risk,
+                    &time,
+                    &event,
+                    &weights,
+                    time_weight,
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_concordance_falls_back_for_non_finite_values() {
         let time = [1.0, f64::NAN, 3.0];
         let event = [1, 1, 1];
@@ -805,6 +1359,87 @@ mod tests {
                 .collect();
 
             assert_counting_ranked_matches_quadratic(&risk, &start, &stop, &event);
+        }
+    }
+
+    #[test]
+    fn test_weighted_counting_concordance_matches_quadratic() {
+        for n in 2..40 {
+            let start: Vec<f64> = (0..n).map(|i| (i % 5) as f64 * 0.5).collect();
+            let stop: Vec<f64> = start
+                .iter()
+                .enumerate()
+                .map(|(i, &value)| value + 0.5 + ((i * 7 + n) % 6) as f64 * 0.25)
+                .collect();
+            let event: Vec<i32> = (0..n)
+                .map(|i| if (i + n) % 5 == 0 { 0 } else { 1 })
+                .collect();
+            let risk: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 7 == 0 {
+                        0.35
+                    } else {
+                        ((i * 13 + n * 3) % 19) as f64 / 10.0
+                    }
+                })
+                .collect();
+            let weights: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 8 == 0 {
+                        0.0
+                    } else {
+                        0.25 + (i % 6) as f64
+                    }
+                })
+                .collect();
+
+            assert_weighted_counting_ranked_matches_quadratic(
+                &risk, &start, &stop, &event, &weights,
+            );
+        }
+    }
+
+    #[test]
+    fn test_time_weighted_counting_concordance_matches_quadratic() {
+        for n in 2..40 {
+            let start: Vec<f64> = (0..n).map(|i| (i % 6) as f64 * 0.25).collect();
+            let stop: Vec<f64> = start
+                .iter()
+                .enumerate()
+                .map(|(i, &value)| value + 0.5 + ((i * 5 + n) % 7) as f64 * 0.2)
+                .collect();
+            let event: Vec<i32> = (0..n)
+                .map(|i| if (i + n) % 6 == 0 { 0 } else { 1 })
+                .collect();
+            let risk: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 8 == 0 {
+                        0.45
+                    } else {
+                        ((i * 19 + n * 2) % 29) as f64 / 10.0
+                    }
+                })
+                .collect();
+            let weights: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 9 == 0 {
+                        0.0
+                    } else {
+                        0.5 + (i % 5) as f64
+                    }
+                })
+                .collect();
+
+            for time_weight in [ConcordanceTimeWeight::S, ConcordanceTimeWeight::I] {
+                assert_time_weighted_counting_ranked_matches_quadratic(
+                    &risk,
+                    &start,
+                    &stop,
+                    &event,
+                    &weights,
+                    time_weight,
+                );
+            }
         }
     }
 

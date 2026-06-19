@@ -1,4 +1,4 @@
-use crate::constants::{DEFAULT_CONCORDANCE, DIVISION_FLOOR};
+use crate::constants::{DEFAULT_CONCORDANCE, DIVISION_FLOOR, Z_SCORE_95};
 use crate::internal::statistical::concordance_index_with_horizon;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -410,8 +410,7 @@ impl NestedCVResult {
     }
 
     fn confidence_interval(&self, _alpha: f64) -> (f64, f64) {
-        let z = 1.96;
-        let margin = z * self.std_score / (self.outer_scores.len() as f64).sqrt();
+        let margin = Z_SCORE_95 * self.std_score / (self.outer_scores.len() as f64).sqrt();
         (self.mean_score - margin, self.mean_score + margin)
     }
 }

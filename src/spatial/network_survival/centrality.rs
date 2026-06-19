@@ -275,17 +275,8 @@ pub fn network_survival_model(
     );
 
     let hazard_ratios: Vec<f64> = beta[..n_covariates].iter().map(|&b| b.exp()).collect();
-    let z = 1.96;
-    let hr_ci_lower: Vec<f64> = beta[..n_covariates]
-        .iter()
-        .zip(se[..n_covariates].iter())
-        .map(|(&b, &s)| (b - z * s).exp())
-        .collect();
-    let hr_ci_upper: Vec<f64> = beta[..n_covariates]
-        .iter()
-        .zip(se[..n_covariates].iter())
-        .map(|(&b, &s)| (b + z * s).exp())
-        .collect();
+    let (hr_ci_lower, hr_ci_upper) =
+        exp_ci_bounds_95(&beta[..n_covariates], &se[..n_covariates]);
 
     let mut idx = n_covariates;
     let (peer_effect, peer_effect_se) = if config.include_peer_effects {

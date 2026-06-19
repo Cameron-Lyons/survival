@@ -147,11 +147,11 @@ pub(crate) fn smoothed_calibration_core(
         };
 
         let se = (variance / weight_sum.max(1.0)).sqrt();
-        let z = 1.96;
+        let (lower, upper) = clamped_normal_ci_95(smoothed, se, 0.0, 1.0);
 
         smoothed_observed.push(smoothed);
-        ci_lower.push((smoothed - z * se).clamp(0.0, 1.0));
-        ci_upper.push((smoothed + z * se).clamp(0.0, 1.0));
+        ci_lower.push(lower);
+        ci_upper.push(upper);
     }
 
     SmoothedCalibrationCurve {
@@ -196,4 +196,3 @@ pub fn smoothed_calibration(
         bandwidth,
     ))
 }
-

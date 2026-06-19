@@ -441,6 +441,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
             "eps",
             "tol_chol",
             "time2",
+            "fixed_scale",
         ],
         "predict_survreg": [
             "covariates",
@@ -595,6 +596,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
         1e-5,
         1e-9,
         None,
+        None,
     )
     fit_prediction = fit.predict(covariates[:2], "lp")
     fit_quantiles = fit.predict_quantile(covariates[:2], [0.25, 0.5])
@@ -637,6 +639,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "toler",
             "method",
             "entry_times",
+            "nocenter",
         ],
         "coxph_detail": [
             "time",
@@ -713,6 +716,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "covariates",
         "strata",
         "method",
+        "nocenter",
     }
     assert _pyi_class_property_names(stub_path, "CoxphDetailRow") == {
         "stratum",
@@ -7973,29 +7977,48 @@ def test_counting_concordance_binding_is_typed():
     stub_names = _pyi_top_level_names(stub_path)
 
     assert {
+        "concordance_index",
         "concordance_summary",
         "counting_concordance_index",
         "counting_concordance_summary",
     } <= stub_names
+    assert "time" in inspect.signature(core.concordance_index).parameters
     assert "time" in inspect.signature(core.concordance_summary).parameters
     assert "start" in inspect.signature(core.counting_concordance_index).parameters
     assert "start" in inspect.signature(core.counting_concordance_summary).parameters
+    assert "timewt" in inspect.signature(core.concordance_index).parameters
+    assert "timewt" in inspect.signature(core.concordance_summary).parameters
+    assert "timewt" in inspect.signature(core.counting_concordance_index).parameters
+    assert "timewt" in inspect.signature(core.counting_concordance_summary).parameters
+    assert _pyi_function_arg_names(stub_path, "concordance_index") == [
+        "time",
+        "status",
+        "risk_scores",
+        "weights",
+        "timewt",
+    ]
     assert _pyi_function_arg_names(stub_path, "concordance_summary") == [
         "time",
         "status",
         "risk_scores",
+        "weights",
+        "timewt",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_index") == [
         "start",
         "stop",
         "status",
         "risk_scores",
+        "weights",
+        "timewt",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_summary") == [
         "start",
         "stop",
         "status",
         "risk_scores",
+        "weights",
+        "timewt",
     ]
 
 
@@ -9962,9 +9985,18 @@ def test_r_api_stub_tracks_concordance_public_signature():
         "data",
         "scores",
         "risk_scores",
+        "weights",
         "subset",
         "na_action",
+        "cluster",
+        "ymin",
+        "ymax",
+        "timewt",
+        "influence",
+        "ranks",
         "reverse",
+        "timefix",
+        "keepstrata",
     ]
     runtime_params = inspect.signature(survival.r_api.concordance).parameters
     assert [
@@ -9993,6 +10025,7 @@ def test_r_api_stub_tracks_survfit_public_signature():
         "conf_level",
         "conf_int",
         "conf_type",
+        "se_fit",
         "start_time",
         "time0",
         "reverse",
@@ -10000,6 +10033,15 @@ def test_r_api_stub_tracks_survfit_public_signature():
         "type",
         "stype",
         "ctype",
+        "id",
+        "cluster",
+        "robust",
+        "istate",
+        "etype",
+        "model",
+        "error",
+        "entry",
+        "timefix",
     ]
     runtime_params = inspect.signature(survival.r_api.survfit).parameters
     assert [
@@ -10051,6 +10093,24 @@ def test_r_api_stub_tracks_predict_public_signature():
     assert predict_node.args.kwarg.arg == "kwargs"
 
 
+def test_r_api_stub_tracks_residuals_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "fit",
+        "type",
+        "terms",
+        "collapse",
+        "weighted",
+        "rsigma",
+    ]
+    runtime_params = inspect.signature(survival.r_api.residuals).parameters
+    assert list(runtime_params) == expected
+    assert _pyi_function_arg_names(stub_path, "residuals") == expected
+
+
 def test_r_api_stub_tracks_survdiff_public_signature():
     setup_survival_import()
     survival = importlib.import_module("survival")
@@ -10100,6 +10160,14 @@ def test_r_api_stub_tracks_fit_control_public_signatures():
             "method",
             "ties",
             "robust",
+            "model",
+            "y",
+            "tt",
+            "id",
+            "istate",
+            "statedata",
+            "singular_ok",
+            "nocenter",
             "control",
         ],
         "survreg": [
@@ -10113,6 +10181,7 @@ def test_r_api_stub_tracks_fit_control_public_signatures():
             "weights",
             "offset",
             "offsets",
+            "init",
             "initial",
             "initial_beta",
             "strata",
@@ -10120,6 +10189,13 @@ def test_r_api_stub_tracks_fit_control_public_signatures():
             "na_action",
             "dist",
             "distribution",
+            "scale",
+            "parms",
+            "model",
+            "y",
+            "robust",
+            "cluster",
+            "score",
             "max_iter",
             "eps",
             "tol_chol",

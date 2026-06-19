@@ -787,13 +787,15 @@ pub enum DistributionType {
 ///     Cholesky tolerance (default crate::constants::DIVISION_FLOOR).
 /// time2 : array-like, optional
 ///     Interval upper-bound times. Required for rows with status=3.
+/// fixed_scale : float, optional
+///     Fixed scale parameter. When supplied, the scale is not estimated.
 ///
 /// Returns
 /// -------
 /// SurvivalFit
 ///     Object with: coefficients, std_errors, variance_matrix, log_likelihood, convergence info.
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None))]
+#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None, fixed_scale=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survreg(
     time: Vec<f64>,
@@ -808,6 +810,7 @@ pub fn survreg(
     eps: Option<f64>,
     tol_chol: Option<f64>,
     time2: Option<Vec<f64>>,
+    fixed_scale: Option<f64>,
 ) -> PyResult<SurvivalFit> {
     let dist_type = parse_distribution_type(distribution)?;
     let config = SurvregConfig::create(Some(dist_type), max_iter, eps, tol_chol);
@@ -865,19 +868,33 @@ pub fn survreg(
     } else {
         1
     };
+    if let Some(scale) = fixed_scale {
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "fixed_scale must be a finite positive value",
+            ));
+        }
+        if nstrat > 1 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "cannot have both a fixed scale and strata",
+            ));
+        }
+    }
+    let estimated_scale_count = if fixed_scale.is_some() { 0 } else { nstrat };
+    let expected_initial_len = nvar + estimated_scale_count;
     if let Some(values) = initial_beta.as_ref()
-        && values.len() != nvar + nstrat
+        && values.len() != expected_initial_len
     {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "initial_beta has {} values but model expects {}",
             values.len(),
-            nvar + nstrat
+            expected_initial_len
         )));
     }
     if let Some(values) = initial_beta.as_ref() {
         validate_finite_values("initial_beta", values)?;
     }
-    let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; nvar + nstrat]);
+    let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; expected_initial_len]);
     let y = {
         if let Some(time2) = time2_values.as_ref() {
             let mut y_data = Vec::with_capacity(n * 3);
@@ -925,6 +942,7 @@ pub fn survreg(
         eps: config.eps,
         tol_chol: config.tol_chol,
         distribution: distribution_type,
+        fixed_scale,
     })
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
     let variance_matrix = result
@@ -933,10 +951,14 @@ pub fn survreg(
         .map(|row| row.iter().copied().collect())
         .collect();
     let location_coefficients = result.coefficients[..nvar].to_vec();
-    let scales: Vec<f64> = result.coefficients[nvar..nvar + nstrat]
-        .iter()
-        .map(|value| value.exp())
-        .collect();
+    let scales: Vec<f64> = if let Some(scale) = fixed_scale {
+        vec![scale]
+    } else {
+        result.coefficients[nvar..nvar + nstrat]
+            .iter()
+            .map(|value| value.exp())
+            .collect()
+    };
     let linear_predictors =
         compute_linear_predictor(&covariate_rows, &location_coefficients, Some(&offsets_vec));
     let status_values: Vec<i32> = status.iter().map(|&value| value as i32).collect();
@@ -946,7 +968,11 @@ pub fn survreg(
         covariate_rows
     };
     Ok(SurvivalFit {
-        coefficients: result.coefficients,
+        coefficients: if fixed_scale.is_some() {
+            location_coefficients.clone()
+        } else {
+            result.coefficients
+        },
         location_coefficients,
         scale: scales.first().copied().unwrap_or(1.0),
         scales,
@@ -977,19 +1003,28 @@ fn compute_survreg(
         covariates,
         weights,
         offsets,
-        mut beta,
+        beta,
         nstrat,
         strata,
         eps,
         tol_chol,
         distribution,
+        fixed_scale,
     } = input;
     let n = y.nrows();
     let ny = y.ncols();
-    let nvar2 = nvar + nstrat;
+    let estimated_scale_count = if fixed_scale.is_some() { 0 } else { nstrat };
+    let nvar2 = nvar + estimated_scale_count;
     let mut imat = Array2::zeros((nvar2, nvar2));
     let mut jj = Array2::zeros((nvar2, nvar2));
     let mut u = Array1::zeros(nvar2);
+    let mut beta = if let Some(scale) = fixed_scale {
+        let mut values = beta;
+        values.push(scale.ln());
+        values
+    } else {
+        beta
+    };
     let mut newbeta = beta.clone();
     let mut usave = Array1::zeros(nvar2);
     let time1_vec: Vec<f64> = y.column(0).iter().map(|&t| t.ln()).collect();
@@ -1012,7 +1047,7 @@ fn compute_survreg(
     let input = LikelihoodInput {
         n,
         nvar,
-        nstrat,
+        nstrat: estimated_scale_count,
         beta: &beta,
         distribution: &distribution,
         strata,
@@ -1043,11 +1078,11 @@ fn compute_survreg(
             .iter_mut()
             .zip(beta.iter().zip(delta.iter()))
             .for_each(|(nb, (b, d))| *nb = b + d * step_factor);
-        adjust_strata(&mut newbeta, &beta, nvar, nstrat);
+        adjust_strata(&mut newbeta, &beta, nvar, estimated_scale_count);
         let new_input = LikelihoodInput {
             n,
             nvar,
-            nstrat,
+            nstrat: estimated_scale_count,
             beta: &newbeta,
             distribution: &distribution,
             strata,
@@ -1120,6 +1155,7 @@ struct ComputeSurvregInput<'a> {
     eps: f64,
     tol_chol: f64,
     distribution: DistributionType,
+    fixed_scale: Option<f64>,
 }
 
 #[cfg(test)]
@@ -1229,6 +1265,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            fixed_scale: None,
         });
 
         assert!(result.is_ok());
@@ -1263,6 +1300,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            fixed_scale: None,
         });
 
         assert!(result.is_ok());
@@ -1297,6 +1335,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::LogNormal,
+            fixed_scale: None,
         });
 
         assert!(result.is_ok());
@@ -1330,6 +1369,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::LogLogistic,
+            fixed_scale: None,
         });
 
         assert!(result.is_ok());
@@ -1368,6 +1408,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            fixed_scale: None,
         });
 
         assert!(result.is_ok());
@@ -1405,11 +1446,50 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            fixed_scale: None,
         });
 
         assert!(result.is_ok());
         let fit = result.unwrap();
         assert_eq!(fit.coefficients.len(), nvar + 1);
+    }
+
+    #[test]
+    fn test_compute_survreg_fixed_scale_uses_location_variance() {
+        let n = 20;
+        let nvar = 1;
+        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.4 + 0.5).collect();
+        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
+        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
+        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
+        let weights = Array1::from_vec(vec![1.0; n]);
+        let offsets = Array1::from_vec(vec![0.0; n]);
+        let beta = vec![0.0; nvar];
+        let strata = vec![0; n];
+
+        let result = compute_survreg(ComputeSurvregInput {
+            max_iter: 20,
+            nvar,
+            y: &y,
+            covariates: &covariates,
+            weights: &weights,
+            offsets: &offsets,
+            beta,
+            nstrat: 1,
+            strata: &strata,
+            eps: 1e-6,
+            tol_chol: 1e-10,
+            distribution: DistributionType::Weibull,
+            fixed_scale: Some(1.25),
+        });
+
+        assert!(result.is_ok());
+        let fit = result.unwrap();
+        assert_eq!(fit.coefficients.len(), nvar + 1);
+        assert_eq!(fit.score_vector.len(), nvar);
+        assert_eq!(fit.variance_matrix.shape(), &[nvar, nvar]);
+        assert_eq!(fit.coefficients[nvar], 1.25f64.ln());
+        assert!(fit.log_likelihood.is_finite());
     }
 
     #[test]

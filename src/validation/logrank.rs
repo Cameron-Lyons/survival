@@ -1,8 +1,8 @@
-use crate::constants::TIME_EPSILON;
+use crate::constants::{TIME_EPSILON, same_time};
 use crate::internal::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::chi2_sf;
 use crate::internal::validation::{
-    validate_finite, validate_length, validate_no_nan, validate_non_negative,
+    validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
 };
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -208,7 +208,7 @@ fn validate_logrank_inputs(
 ) -> PyResult<()> {
     validate_length(time.len(), status.len(), "status")?;
     validate_length(time.len(), group.len(), "group")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
     validate_non_negative(time, "time")?;
@@ -224,18 +224,6 @@ fn validate_logrank_inputs(
                     idx
                 )));
             }
-        }
-    }
-    Ok(())
-}
-
-fn validate_binary_status(status: &[i32]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "status must contain only 0/1 values; got {} at index {}",
-                value, idx
-            )));
         }
     }
     Ok(())
@@ -263,7 +251,7 @@ fn validate_logrank_trend_inputs(
 ) -> PyResult<()> {
     validate_length(time.len(), status.len(), "status")?;
     validate_length(time.len(), group.len(), "group")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
     validate_non_negative(time, "time")?;
@@ -276,10 +264,6 @@ fn validate_logrank_trend_inputs(
         validate_finite(values, "scores")?;
     }
     Ok(())
-}
-
-fn same_time(left: f64, right: f64) -> bool {
-    (left - right).abs() < TIME_EPSILON
 }
 
 fn weight_name(weight_type: &WeightType) -> String {

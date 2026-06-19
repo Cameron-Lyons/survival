@@ -133,9 +133,7 @@ pub(crate) fn gonen_heller_core(linear_predictor: &[f64]) -> GonenHellerResult {
     };
 
     let std_error = variance.sqrt();
-    let z = 1.96;
-    let ci_lower = (cpe - z * std_error).clamp(0.0, 1.0);
-    let ci_upper = (cpe + z * std_error).clamp(0.0, 1.0);
+    let (ci_lower, ci_upper) = clamped_normal_ci_95(cpe, std_error, 0.0, 1.0);
 
     GonenHellerResult {
         cpe,
@@ -158,4 +156,3 @@ pub fn gonen_heller_concordance(linear_predictor: Vec<f64>) -> PyResult<GonenHel
 
     Ok(gonen_heller_core(&linear_predictor))
 }
-

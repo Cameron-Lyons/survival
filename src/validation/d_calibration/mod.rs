@@ -1,3 +1,4 @@
+use crate::constants::clamped_normal_ci_95;
 use crate::internal::statistical::chi2_sf;
 use crate::simd_ops::{dot_product_simd, mean_simd, subtract_scalar_simd, sum_of_squares_simd};
 use pyo3::prelude::*;

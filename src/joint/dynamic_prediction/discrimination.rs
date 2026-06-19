@@ -223,8 +223,9 @@ pub fn time_varying_auc(
         auc_values.push(auc);
 
         let se = (auc * (1.0 - auc) / cases.len().min(controls.len()) as f64).sqrt();
-        auc_lower.push((auc - 1.96 * se).max(0.0));
-        auc_upper.push((auc + 1.96 * se).min(1.0));
+        let (lower, upper) = clamped_normal_ci_95(auc, se, 0.0, 1.0);
+        auc_lower.push(lower);
+        auc_upper.push(upper);
     }
 
     let integrated_auc = if eval_times.len() > 1 {
@@ -351,8 +352,7 @@ pub fn dynamic_c_index(
         0.0
     };
 
-    let lower = (c_index - 1.96 * se).max(0.0);
-    let upper = (c_index + 1.96 * se).min(1.0);
+    let (lower, upper) = clamped_normal_ci_95(c_index, se, 0.0, 1.0);
 
     let default_times: Vec<f64> = {
         let min_t = event_time

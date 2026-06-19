@@ -11,29 +11,11 @@ pub fn anderson_gill_model(
     tol: f64,
 ) -> PyResult<AndersonGillResult> {
     let n = id.len();
-    if start.len() != n || stop.len() != n || event.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All input vectors must have the same length",
-        ));
-    }
+    validate_recurrent_lengths(n, &[start.len(), stop.len(), event.len()])?;
 
-    let p = if covariates.is_empty() {
-        1
-    } else {
-        covariates.len() / n
-    };
-    let x_mat = if covariates.is_empty() {
-        vec![1.0; n]
-    } else {
-        covariates.clone()
-    };
+    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n);
 
-    let unique_ids: Vec<i32> = {
-        let mut ids = id.clone();
-        ids.sort();
-        ids.dedup();
-        ids
-    };
+    let unique_ids = sorted_unique_i32(&id);
     let n_subjects = unique_ids.len();
 
     let n_events_total = event.iter().filter(|&&e| e == 1).count();
@@ -41,11 +23,7 @@ pub fn anderson_gill_model(
     let total_time: f64 = stop.iter().zip(start.iter()).map(|(&s, &st)| s - st).sum();
     let mean_event_rate = n_events_total as f64 / total_time;
 
-    let id_to_idx: std::collections::HashMap<i32, usize> = unique_ids
-        .iter()
-        .enumerate()
-        .map(|(idx, &id_val)| (id_val, idx))
-        .collect();
+    let id_to_idx = index_by_i32(&unique_ids);
 
     let mut beta = vec![0.0; p];
     let mut converged = false;
@@ -102,7 +80,7 @@ pub fn anderson_gill_model(
                 }
             }
 
-            if risk_sum > crate::constants::DIVISION_FLOOR {
+            if risk_sum > DIVISION_FLOOR {
                 loglik += eta_i - risk_sum.ln();
 
                 for j in 0..p {
@@ -121,7 +99,7 @@ pub fn anderson_gill_model(
         }
 
         for j in 0..p {
-            if hessian[j][j].abs() > crate::constants::DIVISION_FLOOR {
+            if hessian[j][j].abs() > DIVISION_FLOOR {
                 beta[j] += gradient[j] / hessian[j][j];
                 beta[j] = beta[j].clamp(-10.0, 10.0);
             }
@@ -167,7 +145,7 @@ pub fn anderson_gill_model(
             }
         }
 
-        if risk_sum > crate::constants::DIVISION_FLOOR {
+        if risk_sum > DIVISION_FLOOR {
             for j1 in 0..p {
                 let x_bar1 = risk_x_sum[j1] / risk_sum;
                 for j2 in 0..p {
@@ -187,7 +165,7 @@ pub fn anderson_gill_model(
 
     let std_errors: Vec<f64> = (0..p)
         .map(|j| {
-            if info_matrix[j][j] > crate::constants::DIVISION_FLOOR {
+            if info_matrix[j][j] > DIVISION_FLOOR {
                 (1.0 / info_matrix[j][j]).sqrt()
             } else {
                 f64::INFINITY
@@ -206,7 +184,7 @@ pub fn anderson_gill_model(
 
     let robust_std_errors: Vec<f64> = (0..p)
         .map(|j| {
-            let inv_info = if info_matrix[j][j] > crate::constants::DIVISION_FLOOR {
+            let inv_info = if info_matrix[j][j] > DIVISION_FLOOR {
                 1.0 / info_matrix[j][j]
             } else {
                 0.0
@@ -219,7 +197,7 @@ pub fn anderson_gill_model(
         .iter()
         .zip(robust_std_errors.iter())
         .map(|(&b, &se)| {
-            if se > crate::constants::DIVISION_FLOOR {
+            if se > DIVISION_FLOOR {
                 b / se
             } else {
                 0.0
@@ -234,17 +212,7 @@ pub fn anderson_gill_model(
 
     let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
 
-    let hr_lower: Vec<f64> = beta
-        .iter()
-        .zip(robust_std_errors.iter())
-        .map(|(&b, &se)| (b - 1.96 * se).exp())
-        .collect();
-
-    let hr_upper: Vec<f64> = beta
-        .iter()
-        .zip(robust_std_errors.iter())
-        .map(|(&b, &se)| (b + 1.96 * se).exp())
-        .collect();
+    let (hr_lower, hr_upper) = exp_ci_bounds_95(&beta, &robust_std_errors);
 
     Ok(AndersonGillResult {
         coef: beta,
@@ -263,4 +231,3 @@ pub fn anderson_gill_model(
         mean_event_rate,
     })
 }
-

@@ -1,5 +1,5 @@
 use crate::internal::validation::{
-    validate_finite, validate_length, validate_no_nan, validate_non_negative,
+    validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
 };
 use pyo3::prelude::*;
 
@@ -39,7 +39,7 @@ pub fn compute_logrank_components(
     validate_no_nan(&time, "time")?;
     validate_finite(&time, "time")?;
     validate_non_negative(&time, "time")?;
-    validate_binary_status(&status)?;
+    validate_binary_i32(&status, "status")?;
     validate_group_codes(&group, n)?;
     let strata_vec = strata.unwrap_or_else(|| vec![0; n]);
     validate_length(n, strata_vec.len(), "strata")?;
@@ -113,17 +113,6 @@ pub fn compute_logrank_components(
         chi_squared: chi_sq,
         degrees_of_freedom: df,
     })
-}
-
-fn validate_binary_status(values: &[i32]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(value_error(format!(
-                "status values must be 0 or 1; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn validate_group_codes(values: &[i32], n: usize) -> PyResult<()> {
@@ -329,7 +318,7 @@ mod tests {
         let err = compute_logrank_components(vec![1.0], vec![2], vec![1], None, None)
             .expect_err("non-binary status should fail");
 
-        assert!(err.to_string().contains("status values must be 0 or 1"));
+        assert!(err.to_string().contains("status must contain only 0/1"));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use crate::constants::{DIVISION_FLOOR, Z_SCORE_95, normal_ci_95, same_time};
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct IPCWInput {
@@ -139,7 +141,7 @@ fn fit_logistic_model(
 
         let mut max_change: f64 = 0.0;
         for j in 0..p {
-            if hessian_diag[j].abs() > crate::constants::DIVISION_FLOOR {
+            if hessian_diag[j].abs() > DIVISION_FLOOR {
                 let update = gradient[j] / hessian_diag[j];
                 beta[j] += update;
                 max_change = max_change.max(update.abs());
@@ -206,7 +208,7 @@ fn compute_ipcw_weights_typed(input: &IPCWInput, config: &IPCWConfig) -> PyResul
         let mut y_risk = Vec::with_capacity(at_risk.len());
         let mut has_events = false;
         for &i in at_risk {
-            let yi = if (time[i] - t).abs() < crate::constants::DIVISION_FLOOR && censored[i] == 1 {
+            let yi = if (time[i] - t).abs() < DIVISION_FLOOR && censored[i] == 1 {
                 1
             } else {
                 0
@@ -289,7 +291,7 @@ fn compute_km_censoring(time: &[f64], status: &[i32], n: usize) -> Vec<f64> {
         let mut censored_count = 0;
 
         let start_i = i;
-        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
+        while i < n && same_time(time[indices[i]], current_time) {
             if status[indices[i]] == 0 {
                 censored_count += 1;
             }
@@ -373,9 +375,7 @@ fn ipcw_treatment_effect_typed(input: IPCWTreatmentInput) -> PyResult<IPCWResult
     }
 
     let std_error = (var_sum / (n_treated + n_control).powi(2)).sqrt();
-    let z = 1.96;
-    let ci_lower = treatment_effect - z * std_error;
-    let ci_upper = treatment_effect + z * std_error;
+    let (ci_lower, ci_upper) = normal_ci_95(treatment_effect, std_error);
 
     Ok(IPCWResult {
         weights: ipcw.weights,
@@ -457,7 +457,7 @@ pub fn ipcw_kaplan_meier(
         variance.push(var);
     }
 
-    let ci_width: Vec<f64> = variance.iter().map(|&v| 1.96 * v.sqrt()).collect();
+    let ci_width: Vec<f64> = variance.iter().map(|&v| Z_SCORE_95 * v.sqrt()).collect();
 
     Ok((time_points, survival, ci_width))
 }

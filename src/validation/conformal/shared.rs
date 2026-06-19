@@ -107,7 +107,7 @@ pub(super) fn compute_km_censoring_survival(time: &[f64], status: &[i32]) -> Vec
         let mut censored_count = 0;
 
         let start_i = i;
-        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
+        while i < n && same_time(time[indices[i]], current_time) {
             if status[indices[i]] == 0 {
                 censored_count += 1;
             }

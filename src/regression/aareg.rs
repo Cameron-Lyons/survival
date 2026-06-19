@@ -1,3 +1,4 @@
+use crate::constants::normal_ci_95;
 use crate::internal::matrix::lu_solve;
 use crate::internal::statistical::normal_cdf;
 use ndarray::{Array1, Array2, Axis};
@@ -593,10 +594,10 @@ fn perform_aalen_regression(
         .iter()
         .zip(standard_errors.iter())
         .map(|(&coef, &se)| {
-            let margin = 1.96 * se;
+            let (lower_bound, upper_bound) = normal_ci_95(coef, se);
             AaregConfidenceInterval {
-                lower_bound: coef - margin,
-                upper_bound: coef + margin,
+                lower_bound,
+                upper_bound,
             }
         })
         .collect();

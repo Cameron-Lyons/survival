@@ -324,10 +324,6 @@ fn shifted_exp_eta(eta: &[f64], weights: &[f64]) -> Vec<f64> {
     eta.iter().map(|&eta_i| (eta_i - shift).exp()).collect()
 }
 
-fn same_elastic_net_time(left: f64, right: f64) -> bool {
-    (left - right).abs() < crate::constants::TIME_EPSILON
-}
-
 #[allow(clippy::needless_range_loop)]
 fn precompute_risk_set_cumsum(
     x: &[f64],
@@ -368,7 +364,7 @@ fn precompute_risk_set_cumsum(
     while start < n {
         let current_time = time[indices[start]];
         let mut end = start + 1;
-        while end < n && same_elastic_net_time(time[indices[end]], current_time) {
+        while end < n && crate::constants::same_time(time[indices[end]], current_time) {
             end += 1;
         }
 

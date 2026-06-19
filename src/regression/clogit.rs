@@ -1,15 +1,10 @@
 use std::collections::BTreeMap;
 
-use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
+use crate::constants::exp_clamped;
 use pyo3::prelude::*;
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
-}
-
-#[inline]
-fn exp_clamped(value: f64) -> f64 {
-    value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
 }
 
 #[pyclass(from_py_object)]

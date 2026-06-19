@@ -1,9 +1,13 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::constants::TIME_EPSILON;
+use crate::constants::{
+    TIME_EPSILON, Z_SCORE_90, Z_SCORE_95, Z_SCORE_99, clamped_normal_ci_bounds, same_time,
+};
 use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 use pyo3::exceptions::PyValueError;
+
+type StateProbabilityCube = Vec<Vec<Vec<f64>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -212,7 +216,7 @@ fn compute_transition_matrix(
     let mut n_at_risk = vec![0usize; n_states];
 
     for (i, &t) in time.iter().enumerate() {
-        if same_transition_time(t, event_time) {
+        if same_time(t, event_time) {
             let from = from_state[i];
             let to = to_state[i];
             if from < n_states && to < n_states {
@@ -431,14 +435,10 @@ fn compute_expected_sojourn(
     sojourn
 }
 
-fn same_transition_time(left: f64, right: f64) -> bool {
-    (left - right).abs() < TIME_EPSILON
-}
-
 fn unique_transition_times(time: &[f64]) -> Vec<f64> {
     let mut unique_times = time.to_vec();
     unique_times.sort_by(|a, b| a.total_cmp(b));
-    unique_times.dedup_by(|a, b| same_transition_time(*a, *b));
+    unique_times.dedup_by(|a, b| same_time(*a, *b));
     unique_times
 }
 
@@ -551,45 +551,27 @@ pub fn survfitaj_extended(
     };
 
     let z = match config.confidence_level {
-        c if c >= 0.99 => 2.576,
-        c if c >= 0.95 => 1.96,
-        c if c >= 0.90 => 1.645,
-        _ => 1.96,
+        c if c >= 0.99 => Z_SCORE_99,
+        c if c >= 0.95 => Z_SCORE_95,
+        c if c >= 0.90 => Z_SCORE_90,
+        _ => Z_SCORE_95,
     };
 
-    let ci_lower: Vec<Vec<Vec<f64>>> = variance
+    let (ci_lower, ci_upper): (StateProbabilityCube, StateProbabilityCube) = variance
         .iter()
         .zip(state_probs.iter())
         .map(|(var, probs)| {
-            var.iter()
+            let row_intervals: Vec<(Vec<f64>, Vec<f64>)> = var
+                .iter()
                 .zip(probs.iter())
                 .map(|(var_row, prob_row)| {
-                    var_row
-                        .iter()
-                        .zip(prob_row.iter())
-                        .map(|(&v, &p)| (p - z * v.sqrt()).clamp(0.0, 1.0))
-                        .collect()
+                    let std_errors: Vec<f64> = var_row.iter().map(|&v| v.sqrt()).collect();
+                    clamped_normal_ci_bounds(prob_row, &std_errors, z, 0.0, 1.0)
                 })
-                .collect()
+                .collect();
+            row_intervals.into_iter().unzip()
         })
-        .collect();
-
-    let ci_upper: Vec<Vec<Vec<f64>>> = variance
-        .iter()
-        .zip(state_probs.iter())
-        .map(|(var, probs)| {
-            var.iter()
-                .zip(probs.iter())
-                .map(|(var_row, prob_row)| {
-                    var_row
-                        .iter()
-                        .zip(prob_row.iter())
-                        .map(|(&v, &p)| (p + z * v.sqrt()).clamp(0.0, 1.0))
-                        .collect()
-                })
-                .collect()
-        })
-        .collect();
+        .unzip();
 
     let cumulative_incidence: Vec<Vec<f64>> = (0..n_states)
         .map(|j| state_probs.iter().map(|p| p[0][j]).collect())

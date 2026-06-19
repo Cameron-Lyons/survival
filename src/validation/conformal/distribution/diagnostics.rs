@@ -95,11 +95,11 @@ pub fn conformal_calibration_plot(
             0.0
         };
         let se = (emp_cov * (1.0 - emp_cov) / total.max(1) as f64).sqrt();
-        let z = 1.96;
+        let (lower, upper) = clamped_normal_ci_95(emp_cov, se, 0.0, 1.0);
 
         empirical_coverages.push(emp_cov);
-        ci_lower.push((emp_cov - z * se).max(0.0));
-        ci_upper.push((emp_cov + z * se).min(1.0));
+        ci_lower.push(lower);
+        ci_upper.push(upper);
     }
 
     Ok(ConformalCalibrationPlot {

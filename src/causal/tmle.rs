@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+use crate::constants::{DIVISION_FLOOR, normal_ci_95};
 use crate::internal::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
@@ -288,11 +289,10 @@ pub fn tmle_ate(
         / (n * (n - 1)) as f64;
     let se = var.sqrt();
 
-    let z = ate / se.max(crate::constants::DIVISION_FLOOR);
+    let z = ate / se.max(DIVISION_FLOOR);
     let pvalue = 2.0 * (1.0 - normal_cdf(z.abs()));
 
-    let ci_lower = ate - 1.96 * se;
-    let ci_upper = ate + 1.96 * se;
+    let (ci_lower, ci_upper) = normal_ci_95(ate, se);
 
     Ok(TMLEResult {
         ate,
@@ -453,8 +453,9 @@ pub fn tmle_survival(
 
         survival_diff.push(diff);
         se_vec.push(se);
-        ci_lower.push(diff - 1.96 * se);
-        ci_upper.push(diff + 1.96 * se);
+        let (lower, upper) = normal_ci_95(diff, se);
+        ci_lower.push(lower);
+        ci_upper.push(upper);
     }
 
     let mut rmst_diff = 0.0;

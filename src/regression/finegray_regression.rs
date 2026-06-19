@@ -3,18 +3,14 @@ use rayon::prelude::*;
 use std::fmt;
 
 use crate::constants::{
-    EXP_CLAMP_MAX, EXP_CLAMP_MIN, IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE,
+    IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE, Z_SCORE_90, Z_SCORE_95, Z_SCORE_99,
+    clamped_normal_ci_bounds, exp_clamped, normal_ci_bounds_95, same_time,
 };
 use crate::internal::matrix::invert_matrix;
 use crate::internal::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
-}
-
-#[inline]
-fn exp_clamped(value: f64) -> f64 {
-    value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
 }
 
 #[derive(Debug, Clone)]
@@ -344,17 +340,7 @@ pub(crate) fn finegray_regression_core(
         .map(|&z| 2.0 * (1.0 - normal_cdf(z.abs())))
         .collect();
 
-    let z_crit = 1.96;
-    let ci_lower: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| b - z_crit * se)
-        .collect();
-    let ci_upper: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| b + z_crit * se)
-        .collect();
+    let (ci_lower, ci_upper) = normal_ci_bounds_95(&beta, &std_errors);
 
     FineGrayResult {
         coefficients: beta,
@@ -600,7 +586,7 @@ pub(crate) fn competing_risks_cif_core(
         let mut n_other_events = 0;
         let mut total_at_time = 0;
 
-        while i < n && (time[indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON {
+        while i < n && same_time(time[indices[i]], current_time) {
             let s = status[indices[i]];
             if s == event_type {
                 n_event_type += 1;
@@ -638,23 +624,14 @@ pub(crate) fn competing_risks_cif_core(
     }
 
     let z = match confidence_level {
-        x if (x - 0.90).abs() < 0.01 => 1.645,
-        x if (x - 0.95).abs() < 0.01 => 1.96,
-        x if (x - 0.99).abs() < 0.01 => 2.576,
-        _ => 1.96,
+        x if (x - 0.90).abs() < 0.01 => Z_SCORE_90,
+        x if (x - 0.95).abs() < 0.01 => Z_SCORE_95,
+        x if (x - 0.99).abs() < 0.01 => Z_SCORE_99,
+        _ => Z_SCORE_95,
     };
 
-    let ci_lower: Vec<f64> = cif_values
-        .iter()
-        .zip(variance_values.iter())
-        .map(|(&c, &v)| (c - z * v.sqrt()).max(0.0))
-        .collect();
-
-    let ci_upper: Vec<f64> = cif_values
-        .iter()
-        .zip(variance_values.iter())
-        .map(|(&c, &v)| (c + z * v.sqrt()).min(1.0))
-        .collect();
+    let cif_se: Vec<f64> = variance_values.iter().map(|&v| v.sqrt()).collect();
+    let (ci_lower, ci_upper) = clamped_normal_ci_bounds(&cif_values, &cif_se, z, 0.0, 1.0);
 
     CompetingRisksCIF {
         times: unique_times,

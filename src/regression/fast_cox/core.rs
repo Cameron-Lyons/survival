@@ -101,7 +101,7 @@ fn precompute_risk_set_cumsum(
     while start < n {
         let current_time = time[sorted_indices[start]];
         let mut end = start + 1;
-        while end < n && same_fast_cox_time(time[sorted_indices[end]], current_time) {
+        while end < n && crate::constants::same_time(time[sorted_indices[end]], current_time) {
             end += 1;
         }
 
@@ -154,10 +154,6 @@ fn shifted_exp_eta(eta: &[f64], weights: &[f64]) -> Vec<f64> {
     eta.iter()
         .map(|&eta_i| (eta_i - risk_shift).exp())
         .collect()
-}
-
-fn same_fast_cox_time(left: f64, right: f64) -> bool {
-    (left - right).abs() < crate::constants::TIME_EPSILON
 }
 
 #[allow(clippy::needless_range_loop)]

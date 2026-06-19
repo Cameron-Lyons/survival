@@ -1,7 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::constants::TIME_EPSILON;
+use crate::constants::{TIME_EPSILON, exp_ci_95, same_time};
 use crate::internal::statistical::normal_cdf;
 use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 
@@ -356,7 +356,7 @@ pub fn fit_illness_death(
                     let events_at_t = times
                         .iter()
                         .zip(events.iter())
-                        .filter(|&(ti, e)| same_illness_time(*ti, t) && *e)
+                        .filter(|&(ti, e)| same_time(*ti, t) && *e)
                         .count() as f64;
                     if at_risk > 0.0 {
                         events_at_t / at_risk
@@ -388,14 +388,15 @@ pub fn fit_illness_death(
         let hr = coef.exp();
         let z = if se > 1e-10 { coef / se } else { 0.0 };
         let p_value = 2.0 * (1.0 - normal_cdf(z.abs()));
+        let (ci_lower, ci_upper) = exp_ci_95(coef, se);
         TransitionHazard {
             from_state: from.to_string(),
             to_state: to.to_string(),
             coefficient: coef,
             se,
             hazard_ratio: hr,
-            ci_lower: (coef - 1.96 * se).exp(),
-            ci_upper: (coef + 1.96 * se).exp(),
+            ci_lower,
+            ci_upper,
             p_value,
             baseline_hazard: bh,
             baseline_times: bt,
@@ -516,14 +517,10 @@ pub fn fit_illness_death(
     })
 }
 
-fn same_illness_time(left: f64, right: f64) -> bool {
-    (left - right).abs() < TIME_EPSILON
-}
-
 fn unique_illness_times(times: &[f64]) -> Vec<f64> {
     let mut unique_times = times.to_vec();
     unique_times.sort_by(|a, b| a.total_cmp(b));
-    unique_times.dedup_by(|a, b| same_illness_time(*a, *b));
+    unique_times.dedup_by(|a, b| same_time(*a, *b));
     unique_times
 }
 

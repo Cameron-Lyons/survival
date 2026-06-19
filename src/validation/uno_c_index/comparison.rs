@@ -166,9 +166,7 @@ pub(crate) fn compare_uno_c_indices_core(
 
     let p_value = 2.0 * (1.0 - normal_cdf(z_statistic.abs()));
 
-    let z = 1.96;
-    let ci_lower = difference - z * std_error_diff;
-    let ci_upper = difference + z * std_error_diff;
+    let (ci_lower, ci_upper) = normal_ci_95(difference, std_error_diff);
 
     ConcordanceComparisonResult {
         c_index_1,

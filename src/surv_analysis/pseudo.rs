@@ -1,9 +1,11 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::constants::TIME_EPSILON;
+use crate::constants::{DIVISION_FLOOR, TIME_EPSILON, normal_ci_95, same_time};
 use crate::internal::statistical::normal_cdf;
-use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
+};
 use pyo3::exceptions::PyValueError;
 
 /// Result of pseudo-value computation
@@ -128,18 +130,6 @@ fn validate_pseudo_type(type_: Option<&str>) -> PyResult<&'static str> {
     }
 }
 
-fn validate_binary_status(status: &[i32]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(PyValueError::new_err(format!(
-                "status must contain only 0/1 values; got {} at index {}",
-                value, idx
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn validate_pseudo_inputs(
     time: &[f64],
     status: &[i32],
@@ -154,7 +144,7 @@ fn validate_pseudo_inputs(
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
     validate_non_negative(time, "time")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
 
     if let Some(eval_times) = eval_times {
         validate_no_nan(eval_times, "eval_times")?;
@@ -165,10 +155,6 @@ fn validate_pseudo_inputs(
     Ok(())
 }
 
-fn same_pseudo_time(left: f64, right: f64) -> bool {
-    (left - right).abs() < TIME_EPSILON
-}
-
 fn default_event_times(time: &[f64], status: &[i32]) -> Vec<f64> {
     let mut event_times: Vec<f64> = time
         .iter()
@@ -177,7 +163,7 @@ fn default_event_times(time: &[f64], status: &[i32]) -> Vec<f64> {
         .map(|(t, _)| *t)
         .collect();
     event_times.sort_by(|a, b| a.total_cmp(b));
-    event_times.dedup_by(|a, b| same_pseudo_time(*a, *b));
+    event_times.dedup_by(|a, b| same_time(*a, *b));
     event_times
 }
 
@@ -208,7 +194,7 @@ fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> 
     while start < n {
         let current_time = time[indices[start]];
         let mut end = start + 1;
-        while end < n && same_pseudo_time(time[indices[end]], current_time) {
+        while end < n && same_time(time[indices[end]], current_time) {
             end += 1;
         }
 
@@ -668,7 +654,7 @@ pub fn pseudo_gee_regression(
     let confidence_intervals: Vec<(f64, f64)> = beta
         .iter()
         .zip(std_errors.iter())
-        .map(|(b, se)| (b - 1.96 * se, b + 1.96 * se))
+        .map(|(&beta, &std_error)| normal_ci_95(beta, std_error))
         .collect();
 
     let rss: f64 = residuals.iter().map(|r| r * r).sum();
@@ -801,15 +787,15 @@ fn apply_link_inverse(eta: &[f64], link: &str) -> Vec<f64> {
 fn compute_link_derivative(mu: &[f64], link: &str) -> Vec<f64> {
     match link {
         "identity" => vec![1.0; mu.len()],
-        "log" => mu.iter().map(|m| 1.0 / m.max(1e-10)).collect(),
+        "log" => mu.iter().map(|m| 1.0 / m.max(DIVISION_FLOOR)).collect(),
         "logit" => mu
             .iter()
-            .map(|m| 1.0 / (m.max(1e-10) * (1.0 - m).max(1e-10)))
+            .map(|m| 1.0 / (m.max(DIVISION_FLOOR) * (1.0 - m).max(DIVISION_FLOOR)))
             .collect(),
         "cloglog" => mu
             .iter()
             .map(|m| {
-                let m = m.clamp(1e-10, 1.0 - 1e-10);
+                let m = m.clamp(DIVISION_FLOOR, 1.0 - DIVISION_FLOOR);
                 1.0 / ((1.0 - m) * (-(1.0 - m).ln()))
             })
             .collect(),
@@ -898,7 +884,7 @@ fn invert_matrix(m: &[Vec<f64>]) -> Vec<Vec<f64>> {
         aug.swap(i, max_row);
 
         let pivot = aug[i][i];
-        if pivot.abs() < 1e-10 {
+        if pivot.abs() < DIVISION_FLOOR {
             continue;
         }
 

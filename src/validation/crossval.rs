@@ -299,6 +299,7 @@ pub(crate) fn cv_survreg(
                 Some(1e-5),
                 Some(1e-9),
                 None,
+                None,
             )
             .ok()?;
             let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
@@ -317,6 +318,7 @@ pub(crate) fn cv_survreg(
                 Some(1),
                 Some(1e-5),
                 Some(1e-9),
+                None,
                 None,
             )
             .ok()?;

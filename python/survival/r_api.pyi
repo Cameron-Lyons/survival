@@ -14,12 +14,21 @@ class Surv:
 def is_surv(value: Any) -> bool: ...
 
 class ConcordanceResult:
-    concordance: float
+    concordance: float | list[float]
     n: int
     n_event: int
     reverse: bool
+    concordant: float | list[float]
+    comparable: float | list[float]
+    ranks: list[dict[str, float]] | list[list[dict[str, float]] | None] | None
+    dfbeta: list[float] | list[list[float] | None] | None
+    influence: list[list[float]] | list[list[list[float]] | None] | None
+    variance: float | list[float | None] | None
+    score_names: list[str] | None
     @property
-    def c_index(self) -> float: ...
+    def c_index(self) -> float | list[float]: ...
+    @property
+    def var(self) -> float | list[float | None] | None: ...
 
 class PredictResult:
     fit: Any
@@ -102,6 +111,7 @@ class CoxSurvfitResult:
     std_chaz: list[list[float]]
     conf_lower: list[list[float]]
     conf_upper: list[list[float]]
+    model: dict[str, Any] | None
     def __iter__(self): ...
     @property
     def curves(self) -> list[list[float]]: ...
@@ -123,6 +133,8 @@ class SurvfitResult:
     conf_upper: list[float]
     cumhaz: list[float]
     std_chaz: list[float]
+    n_enter: list[float] | None
+    model: dict[str, Any] | None
     @property
     def surv(self) -> list[float]: ...
     @property
@@ -130,15 +142,33 @@ class SurvfitResult:
     @property
     def cumulative_hazard_std_err(self) -> list[float]: ...
 
+class TurnbullSurvfitResult:
+    time_points: list[float]
+    survival: list[float]
+    survival_lower: list[float]
+    survival_upper: list[float]
+    n_iter: int
+    converged: bool
+    model: dict[str, Any] | None
+
 def concordance(
     response: Surv | str,
     data: Any | None = None,
     *,
     scores: Any | None = None,
     risk_scores: Any | None = None,
+    weights: Any | None = None,
     subset: Any | None = None,
     na_action: str | None = "fail",
+    cluster: Any | None = None,
+    ymin: Any | None = None,
+    ymax: Any | None = None,
+    timewt: Any = "n",
+    influence: Any = 0,
+    ranks: bool = False,
     reverse: bool = False,
+    timefix: bool = True,
+    keepstrata: Any = 10,
     **kwargs: Any,
 ) -> ConcordanceResult: ...
 def survfit(
@@ -153,6 +183,7 @@ def survfit(
     conf_level: float = 0.95,
     conf_int: Any | None = None,
     conf_type: str | None = "log",
+    se_fit: Any = True,
     start_time: Any | None = None,
     time0: bool = False,
     reverse: bool = False,
@@ -160,6 +191,15 @@ def survfit(
     type: str | None = None,
     stype: int | None = None,
     ctype: int | None = None,
+    id: Any | None = None,
+    cluster: Any | None = None,
+    robust: Any | None = None,
+    istate: Any | None = None,
+    etype: Any | None = None,
+    model: Any = False,
+    error: Any | None = None,
+    entry: Any = False,
+    timefix: bool = True,
     **kwargs: Any,
 ) -> Any: ...
 def survdiff(
@@ -224,6 +264,14 @@ def coxph(
     method: str | None = None,
     ties: str | None = None,
     robust: Any | None = None,
+    model: Any = False,
+    y: Any = True,
+    tt: Any | None = None,
+    id: Any | None = None,
+    istate: Any | None = None,
+    statedata: Any | None = None,
+    singular_ok: Any = True,
+    nocenter: Any = (-1, 0, 1),
     control: Any | None = None,
     **kwargs: Any,
 ) -> Any: ...
@@ -246,6 +294,7 @@ def residuals(
     fit: Any,
     *,
     type: str = "martingale",
+    terms: Any | None = None,
     collapse: Any = False,
     weighted: bool | None = None,
     rsigma: bool | None = None,
@@ -262,6 +311,7 @@ def survreg(
     weights: Any | None = None,
     offset: Any | None = None,
     offsets: Any | None = None,
+    init: Any | None = None,
     initial: Any | None = None,
     initial_beta: Any | None = None,
     strata: Any | None = None,
@@ -269,6 +319,13 @@ def survreg(
     na_action: str | None = "fail",
     dist: str | None = None,
     distribution: str | None = None,
+    scale: Any = 0.0,
+    parms: Any | None = None,
+    model: Any = False,
+    y: Any = True,
+    robust: Any | None = None,
+    cluster: Any | None = None,
+    score: Any = False,
     max_iter: int | None = None,
     eps: float | None = None,
     tol_chol: float | None = None,

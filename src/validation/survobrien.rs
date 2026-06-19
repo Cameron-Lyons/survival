@@ -7,24 +7,11 @@
 use crate::internal::numpy_utils::{extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::chi2_sf;
 use crate::internal::validation::{
-    validate_finite, validate_length, validate_no_nan, validate_non_negative,
+    validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
 };
 use pyo3::prelude::*;
 
-fn value_error(message: impl Into<String>) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(message.into())
-}
-
-fn validate_binary_status(status: &[i32]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(value_error(format!(
-                "status must contain only 0/1 values; found {value} at observation {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
+const RANK_TIE_TOLERANCE: f64 = 1e-10;
 
 fn validate_survobrien_inputs(
     time: &[f64],
@@ -38,7 +25,7 @@ fn validate_survobrien_inputs(
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
     validate_non_negative(time, "time")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
     validate_no_nan(covariate, "covariate")?;
     validate_finite(covariate, "covariate")?;
     Ok(())
@@ -213,7 +200,8 @@ fn compute_survobrien(
                         let mut rank_sum = (k + 1) as f64;
 
                         while k + tie_count < n_at_risk
-                            && (at_risk_values[k + tie_count].1 - current_value).abs() < 1e-10
+                            && (at_risk_values[k + tie_count].1 - current_value).abs()
+                                < RANK_TIE_TOLERANCE
                         {
                             rank_sum += (k + tie_count + 1) as f64;
                             tie_count += 1;

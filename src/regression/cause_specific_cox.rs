@@ -1,3 +1,4 @@
+use crate::constants::{exp_ci_bounds_95, same_time};
 use crate::internal::matrix::invert_matrix;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -351,9 +352,7 @@ fn compute_baseline_hazard(
         let current_time = time[idx];
 
         let mut n_events = 0.0;
-        while i < n
-            && (time[sorted_indices[i]] - current_time).abs() < crate::constants::TIME_EPSILON
-        {
+        while i < n && same_time(time[sorted_indices[i]], current_time) {
             if cause[sorted_indices[i]] == cause_of_interest {
                 n_events += weights[sorted_indices[i]];
             }
@@ -483,17 +482,7 @@ pub fn cause_specific_cox(
 
     let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
 
-    let z = 1.96;
-    let hr_ci_lower: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| (b - z * se).exp())
-        .collect();
-    let hr_ci_upper: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&b, &se)| (b + z * se).exp())
-        .collect();
+    let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&beta, &std_errors);
 
     let exp_eta: Vec<f64> = (0..n_obs)
         .map(|i| {

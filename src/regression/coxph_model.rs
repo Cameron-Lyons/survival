@@ -1,5 +1,6 @@
 use crate::constants::{
-    DIVISION_FLOOR, EXP_CLAMP_MAX, EXP_CLAMP_MIN, TIME_EPSILON, z_score_for_confidence,
+    DIVISION_FLOOR, EXP_CLAMP_MIN, TIME_EPSILON, exp_clamped, exp_clamped_ci,
+    z_score_for_confidence,
 };
 use crate::internal::matrix::invert_matrix;
 use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
@@ -16,10 +17,6 @@ struct CoxModelRiskSetCache {
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
-}
-
-fn exp_clamped(value: f64) -> f64 {
-    value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
 }
 
 fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
@@ -584,8 +581,9 @@ impl CoxPHModel {
         for (i, &beta) in coefs.iter().enumerate() {
             let se_i = se.get(i).copied().unwrap_or(0.1);
             hr.push(exp_clamped(beta));
-            ci_lower.push(exp_clamped(beta - z * se_i));
-            ci_upper.push(exp_clamped(beta + z * se_i));
+            let (lower, upper) = exp_clamped_ci(beta, se_i, z);
+            ci_lower.push(lower);
+            ci_upper.push(upper);
         }
         (hr, ci_lower, ci_upper)
     }

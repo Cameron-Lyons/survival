@@ -74,8 +74,7 @@ pub(crate) fn compute_survival_quantile(
                 var_sum += events / (total_at_risk * (total_at_risk - events));
             }
             let se = surv * var_sum.sqrt();
-            let lower = (surv - z * se).clamp(0.0, 1.0);
-            let upper = (surv + z * se).clamp(0.0, 1.0);
+            let (lower, upper) = clamped_normal_ci(surv, se, z, 0.0, 1.0);
             unique_times.push(current_time);
             survival.push(surv);
             ci_lower_vec.push(lower);
@@ -295,8 +294,7 @@ pub(crate) fn compute_nnt(
     let arr = risk2 - risk1;
     let z = z_score_for_confidence(confidence_level);
     let arr_se = (surv1.1 + surv2.1).sqrt();
-    let arr_ci_lower = arr - z * arr_se;
-    let arr_ci_upper = arr + z * arr_se;
+    let (arr_ci_lower, arr_ci_upper) = normal_ci(arr, arr_se, z);
     let nnt = if arr.abs() > 1e-10 {
         1.0 / arr
     } else {

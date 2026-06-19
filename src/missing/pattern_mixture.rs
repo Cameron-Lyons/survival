@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use crate::constants::normal_ci_bounds_95;
+
 type CoxEstimate = (Vec<f64>, Vec<f64>);
 type SensitivityResult = (f64, Vec<f64>, Vec<f64>);
 
@@ -160,18 +162,7 @@ pub fn pattern_mixture_model(
 
     let averaged_se: Vec<f64> = averaged_var.iter().map(|&v| v.sqrt()).collect();
 
-    let z = 1.96;
-    let averaged_ci_lower: Vec<f64> = averaged_coef
-        .iter()
-        .zip(averaged_se.iter())
-        .map(|(&c, &se)| c - z * se)
-        .collect();
-
-    let averaged_ci_upper: Vec<f64> = averaged_coef
-        .iter()
-        .zip(averaged_se.iter())
-        .map(|(&c, &se)| c + z * se)
-        .collect();
+    let (averaged_ci_lower, averaged_ci_upper) = normal_ci_bounds_95(&averaged_coef, &averaged_se);
 
     Ok(PatternMixtureResult {
         pattern_coefficients,

@@ -1,6 +1,13 @@
 use pyo3::prelude::*;
 
+use crate::constants::{
+    DEFAULT_CONFIDENCE_LEVEL, DIVISION_FLOOR, Z_SCORE_95, normal_ci, normal_ci_bounds,
+    z_score_for_confidence,
+};
 use crate::internal::statistical::normal_cdf;
+
+const REML_MAX_ITERATIONS: usize = 100;
+const REML_TOLERANCE: f64 = 1e-8;
 
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
@@ -105,8 +112,13 @@ pub fn survival_meta_analysis(
     std_errors: Vec<f64>,
     config: Option<MetaAnalysisConfig>,
 ) -> PyResult<MetaAnalysisResult> {
-    let config = config
-        .unwrap_or_else(|| MetaAnalysisConfig::new("random".to_string(), 0.95, "dl".to_string()));
+    let config = config.unwrap_or_else(|| {
+        MetaAnalysisConfig::new(
+            "random".to_string(),
+            DEFAULT_CONFIDENCE_LEVEL,
+            "dl".to_string(),
+        )
+    });
 
     let k = effects.len();
     if k < 2 || std_errors.len() != k {
@@ -133,9 +145,8 @@ pub fn survival_meta_analysis(
         _ => compute_random_effects(&effects, &variances, tau_squared),
     };
 
-    let z = 1.96;
-    let lower_ci = pooled_effect - z * pooled_se;
-    let upper_ci = pooled_effect + z * pooled_se;
+    let z = z_score_for_confidence(config.confidence_level);
+    let (lower_ci, upper_ci) = normal_ci(pooled_effect, pooled_se, z);
 
     let z_value = if pooled_se > 0.0 {
         pooled_effect / pooled_se
@@ -216,7 +227,7 @@ fn compute_tau_squared_reml(effects: &[f64], variances: &[f64]) -> f64 {
     let k = effects.len();
     let mut tau2: f64 = 0.0;
 
-    for _ in 0..100 {
+    for _ in 0..REML_MAX_ITERATIONS {
         let weights: Vec<f64> = variances.iter().map(|v| 1.0 / (v + tau2)).collect();
         let sum_w: f64 = weights.iter().sum();
         let weighted_mean: f64 = effects
@@ -238,7 +249,7 @@ fn compute_tau_squared_reml(effects: &[f64], variances: &[f64]) -> f64 {
         let tau2_new = (q - (k as f64 - 1.0)) / c;
         let tau2_new = tau2_new.max(0.0);
 
-        if (tau2_new - tau2).abs() < 1e-8 {
+        if (tau2_new - tau2).abs() < REML_TOLERANCE {
             break;
         }
         tau2 = tau2_new;
@@ -332,7 +343,7 @@ fn t_distribution_quantile(_p: f64, df: usize) -> f64 {
     if df <= 30 {
         return 2.04;
     }
-    1.96
+    Z_SCORE_95
 }
 
 #[pyclass(from_py_object)]
@@ -402,19 +413,17 @@ pub fn generate_forest_plot_data(
         ));
     }
 
-    let z = 1.96;
-    let lower_ci: Vec<f64> = effects
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(e, se)| e - z * se)
-        .collect();
-    let upper_ci: Vec<f64> = effects
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(e, se)| e + z * se)
-        .collect();
+    let config = config.unwrap_or_else(|| {
+        MetaAnalysisConfig::new(
+            "random".to_string(),
+            DEFAULT_CONFIDENCE_LEVEL,
+            "dl".to_string(),
+        )
+    });
+    let z = z_score_for_confidence(config.confidence_level);
+    let (lower_ci, upper_ci) = normal_ci_bounds(&effects, &std_errors, z);
 
-    let meta_result = survival_meta_analysis(effects.clone(), std_errors.clone(), config)?;
+    let meta_result = survival_meta_analysis(effects.clone(), std_errors.clone(), Some(config))?;
 
     Ok(MetaForestPlotData {
         study_names,
@@ -529,7 +538,7 @@ fn weighted_regression(x: &[f64], y: &[f64]) -> (f64, f64, f64) {
     let sum_xx: f64 = x.iter().map(|xi| xi * xi).sum();
 
     let denom = n * sum_xx - sum_x * sum_x;
-    if denom.abs() < 1e-10 {
+    if denom.abs() < DIVISION_FLOOR {
         return (0.0, 0.0, f64::INFINITY);
     }
 

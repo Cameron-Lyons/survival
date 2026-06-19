@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::constants::{exp_ci_95, normal_ci_95};
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct TargetTrialResult {
@@ -310,11 +312,8 @@ pub fn target_trial_emulation(
         config,
     );
 
-    let z = 1.96;
-    let hr_ci_lower = (hazard_ratio.ln() - z * hr_se).exp();
-    let hr_ci_upper = (hazard_ratio.ln() + z * hr_se).exp();
-    let rd_ci_lower = risk_difference - z * rd_se;
-    let rd_ci_upper = risk_difference + z * rd_se;
+    let (hr_ci_lower, hr_ci_upper) = exp_ci_95(hazard_ratio.ln(), hr_se);
+    let (rd_ci_lower, rd_ci_upper) = normal_ci_95(risk_difference, rd_se);
 
     let weights: Vec<f64> = all_clones.iter().map(|c| c.weight).collect();
 

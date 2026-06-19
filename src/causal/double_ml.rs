@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+use crate::constants::{DIVISION_FLOOR, normal_ci_95};
 use crate::internal::statistical::normal_cdf;
 
 #[derive(Debug, Clone)]
@@ -305,11 +306,10 @@ pub fn double_ml_survival(
         all_scores.iter().map(|&s| (s - ate).powi(2)).sum::<f64>() / (all_scores.len() - 1) as f64;
     let se = (var / all_scores.len() as f64).sqrt();
 
-    let z = ate / se.max(crate::constants::DIVISION_FLOOR);
+    let z = ate / se.max(DIVISION_FLOOR);
     let pvalue = 2.0 * (1.0 - normal_cdf(z.abs()));
 
-    let ci_lower = ate - 1.96 * se;
-    let ci_upper = ate + 1.96 * se;
+    let (ci_lower, ci_upper) = normal_ci_95(ate, se);
 
     Ok(DoubleMLResult {
         ate,

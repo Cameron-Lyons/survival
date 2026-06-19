@@ -1,7 +1,9 @@
-use crate::constants::{PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON, z_score_for_confidence};
+use crate::constants::{
+    PARALLEL_THRESHOLD_XLARGE, clamped_normal_ci, normal_ci, same_time, z_score_for_confidence,
+};
 use crate::internal::simd::sum_f64;
 use crate::internal::validation::{
-    validate_finite, validate_length, validate_no_nan, validate_non_negative,
+    validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -60,18 +62,6 @@ fn validate_confidence_level(confidence_level: f64) -> PyResult<()> {
     Ok(())
 }
 
-fn validate_binary_status(status: &[i32]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(PyValueError::new_err(format!(
-                "status must contain only 0/1 values; found {} at observation {}",
-                value, idx
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn validate_survival_inputs(
     time: &[f64],
     status: &[i32],
@@ -82,7 +72,7 @@ fn validate_survival_inputs(
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
     validate_non_negative(time, "time")?;
-    validate_binary_status(status)?;
+    validate_binary_i32(status, "status")?;
     if let Some(weights) = weights {
         validate_length(time.len(), weights.len(), "weights")?;
         validate_no_nan(weights, "weights")?;
@@ -101,10 +91,6 @@ fn sorted_indices_by_time(time: &[f64]) -> Vec<usize> {
         indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
     }
     indices
-}
-
-fn same_time(left: f64, right: f64) -> bool {
-    (left - right).abs() < TIME_EPSILON
 }
 
 pub fn nelson_aalen(
@@ -183,8 +169,9 @@ pub fn nelson_aalen(
     let mut ci_upper = Vec::with_capacity(m);
     for j in 0..m {
         let se = variance[j].sqrt();
-        ci_lower.push((cumulative_hazard[j] - z * se).max(0.0));
-        ci_upper.push(cumulative_hazard[j] + z * se);
+        let (lower, upper) = normal_ci(cumulative_hazard[j], se, z);
+        ci_lower.push(lower.max(0.0));
+        ci_upper.push(upper);
     }
     NelsonAalenResult {
         time: unique_times,
@@ -416,8 +403,9 @@ fn kaplan_meier(
     let mut ci_upper = Vec::with_capacity(m);
     for j in 0..m {
         let se = greenwood_var[j].sqrt();
-        ci_lower.push((survival[j] - z * se).clamp(0.0, 1.0));
-        ci_upper.push((survival[j] + z * se).clamp(0.0, 1.0));
+        let (lower, upper) = clamped_normal_ci(survival[j], se, z, 0.0, 1.0);
+        ci_lower.push(lower);
+        ci_upper.push(upper);
     }
     KMResult {
         time: unique_times,
@@ -445,6 +433,7 @@ pub fn stratified_kaplan_meier(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::TIME_EPSILON;
 
     #[test]
     fn nelson_aalen_empty_input() {
