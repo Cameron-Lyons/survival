@@ -149,6 +149,6 @@ def test_r_bridge_has_ci_check_with_python_extension():
     assert "R Bridge Package" in workflow
     assert "maturin develop --release --features extension-module,ml" in workflow
     assert 'Sys.getenv("RSPM"' in workflow
-    assert 'repos <- if (nzchar(rspm)) c(CRAN = rspm)' in workflow
+    assert "repos <- if (nzchar(rspm)) c(CRAN = rspm)" in workflow
     assert "R CMD check --no-manual --no-build-vignettes r/survivalr" in workflow
     assert "RETICULATE_PYTHON" in workflow
