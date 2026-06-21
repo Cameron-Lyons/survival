@@ -267,7 +267,10 @@ jobs:
 
       - name: Install R bridge dependencies
         run: |
-          install.packages(c("reticulate", "testthat"), repos = "https://cloud.r-project.org")
+          rspm <- Sys.getenv("RSPM", unset = "")
+          repos <- if (nzchar(rspm)) c(CRAN = rspm) else c(CRAN = "https://cloud.r-project.org")
+          package_type <- if (nzchar(rspm)) "binary" else "source"
+          install.packages(c("reticulate", "testthat"), repos = repos, type = package_type)
         shell: Rscript {0}
 
       - name: Check R bridge package
