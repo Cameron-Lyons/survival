@@ -17,6 +17,7 @@ perfor = "perfor"
 wil = "wil"
 consts = "consts"
 parms = "parms"
+parm = "parm"
 
 [files]
 extend-exclude = [
