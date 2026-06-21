@@ -97,7 +97,18 @@ R-style entry points are intentionally available from the package root for users
 porting code from R's `survival` package:
 
 ```python
-from survival import Surv, basehaz, coxph, predict, survdiff, survfit, survreg
+from survival import (
+    Surv,
+    aic,
+    as_data_frame,
+    basehaz,
+    coxph,
+    fitted,
+    predict,
+    survdiff,
+    survfit,
+    survreg,
+)
 
 data = {
     "time": [1.0, 2.0, 3.0, 4.0],
@@ -107,8 +118,11 @@ data = {
 }
 
 km = survfit("Surv(time, status) ~ group", data=data)
+km_table = as_data_frame(km)
 cox_model = coxph("Surv(time, status) ~ group + age", data=data)
 risk_scores = predict(cox_model, [[1.0, 60.0]], type="risk")
+training_lp = fitted(cox_model)
+model_aic = aic(cox_model)
 hazard_times, cumulative_hazard = basehaz(cox_model)
 aft_model = survreg("Surv(time, status) ~ group + age", data=data)
 ```
@@ -117,7 +131,8 @@ Formula support is intentionally conservative: `+` terms, `.` expansion,
 `-` exclusions, backtick-quoted column names, categorical treatment coding,
 `factor(...)` / `as.factor(...)`, `strata(...)`, interaction terms with `:`
 or `*`, and numeric `offset(...)` terms are supported, along with one-column
-numeric transforms `log(...)`, `sqrt(...)`, and `exp(...)`;
+numeric transforms `log(...)`, `sqrt(...)`, and `exp(...)`, plus
+`I(...)`/`identity(...)` arithmetic with `+`, `-`, `*`, `/`, and `^`;
 time transforms should use the lower-level matrix APIs until they have
 dedicated Rust-backed support.
 Formula calls also accept `subset=` as a boolean mask or zero-based row indices
@@ -129,13 +144,26 @@ choices for confidence intervals, `start_time=` for conditional curves, and
 `time0=True` to include the starting row.
 They support right-censored `Surv(time, event)` data and counting-process
 `Surv(start, stop, event)` data with delayed-entry risk sets.
+Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
+to produce model-based survival curves.
 `survdiff` uses the same right-censored and delayed-entry response forms.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.
-The R-style `predict(...)` generic supports Cox linear predictors, relative
-risk scores, term contributions, survival curves, and expected event counts.
+R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
+in the bridge and pass named control lists through to the Python API.
+The R-style `predict(...)` and `fitted(...)` generics support Cox linear
+predictors, relative risk scores, term contributions, survival curves, and
+expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
 term contributions, and quantile predictions via `type="quantile"`.
+Model helpers include `model_formula`, `model_weights`, `df_residual`,
+`loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
+confidence-interval, model-matrix/model-frame, and summary accessors for fitted
+Cox and `survreg` models.
+Common result objects can be converted to column-oriented tables with
+`as_data_frame(...)`; the experimental R bridge exposes the same path through
+`as.data.frame(...)`, `summary(...)`, and `print(...)` methods.
+`Surv` responses also support table conversion for quick data inspection.
 The `survival.residuals` name remains the residual diagnostics module; the
 R-style residual generic is available as `survival.r_api.residuals(...)` for
 fitted Cox and `survreg` models.
@@ -639,6 +667,11 @@ Run Python tests:
 uv run --no-sync pytest python/tests -v
 ```
 
+Smoke-test benchmarks:
+```sh
+cargo bench -- --test
+```
+
 Format and lint:
 ```sh
 cargo fmt
@@ -650,6 +683,7 @@ uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi
 The codebase is organized with:
 - Domain-oriented Rust modules in `src/`
 - Matching Python domain modules in `python/survival/`
+- Experimental R bridge package in `r/survivalr/`
 - Package/type stubs in `python/survival/__init__.pyi`,
   `python/survival/_survival.pyi`, and `survival.pyi`
 - Runnable examples in `examples/`
@@ -664,12 +698,15 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 [`pyproject.toml`](pyproject.toml), including:
 
 - [PyO3](https://github.com/PyO3/pyo3) and [maturin](https://github.com/PyO3/maturin) for Python bindings
+- [reticulate](https://rstudio.github.io/reticulate/) for the experimental R bridge package
 - [numpy](https://numpy.org/) and [ndarray](https://github.com/rust-ndarray/ndarray) for array interop
 - [faer](https://github.com/sarah-ek/faer-rs), [rayon](https://github.com/rayon-rs/rayon), and [burn](https://github.com/tracel-ai/burn) for numerical compute
 
 ## Compatibility
 
-- This build is for Python only. R/extendr bindings are currently disabled.
+- Native extendr bindings are currently disabled. The experimental
+  `r/survivalr` package provides an R facade through reticulate and the Python
+  `survival.r_api` module.
 - Python 3.11+ and Rust 1.94+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
 

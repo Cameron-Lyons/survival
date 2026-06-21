@@ -1,0 +1,19 @@
+Package: survivalr
+Title: R Bridge for the Rust/Python Survival Package
+Version: 0.1.0
+Author: Cameron Lyons [aut, cre]
+Maintainer: Cameron Lyons <cameron.lyons2@gmail.com>
+Authors@R: person("Cameron", "Lyons", email = "cameron.lyons2@gmail.com", role = c("aut", "cre"))
+Description: Experimental R facade for the Rust-backed Python survival package.
+    The package exposes familiar R survival-analysis entry points and delegates
+    computation to the Python survival.r_api module through reticulate.
+License: MIT + file LICENSE
+Encoding: UTF-8
+SystemRequirements: Python (>= 3.11) with the survival Python package
+Imports:
+    reticulate,
+    stats
+Suggests:
+    survival,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

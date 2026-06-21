@@ -38,6 +38,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Smoke test benchmarks (PR)
+        run: cargo bench -- --test
+
       - name: Run benchmarks (PR)
         continue-on-error: true
         run: cargo bench 2>&1 | tee pr-bench.txt || true

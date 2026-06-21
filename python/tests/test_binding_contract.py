@@ -9951,26 +9951,62 @@ def test_package_root_marks_curated_and_legacy_exports():
 
     assert "regression" in survival.__all__
     assert "Surv" in survival.__all__
+    assert "aic" in survival.__all__
     assert "anova" in survival.__all__
+    assert "as_data_frame" in survival.__all__
     assert "basehaz" in survival.__all__
+    assert "coef" in survival.__all__
+    assert "coef_names" in survival.__all__
+    assert "confint" in survival.__all__
     assert "cox_zph" in survival.__all__
     assert "coxph_detail" in survival.__all__
+    assert "df_residual" in survival.__all__
+    assert "degrees_freedom" in survival.__all__
+    assert "bic" in survival.__all__
+    assert "extract_aic" in survival.__all__
+    assert "fitted" in survival.__all__
     assert "is_surv" in survival.__all__
+    assert "loglik" in survival.__all__
+    assert "model_formula" in survival.__all__
+    assert "model_frame" in survival.__all__
+    assert "model_matrix" in survival.__all__
+    assert "model_weights" in survival.__all__
+    assert "model_summary" in survival.__all__
+    assert "nobs" in survival.__all__
     assert "survreg" in survival.__all__
+    assert "vcov" in survival.__all__
     assert "validation" in survival.__all__
     assert "ridge_fit" not in survival.__all__
     assert "ridge_fit" in survival.__deprecated_root_exports__
     assert "ridge_fit" not in vars(survival)
     assert survival.Surv is survival.r_api.Surv
+    assert survival.aic is survival.r_api.aic
     assert survival.anova is survival.r_api.anova
+    assert survival.as_data_frame is survival.r_api.as_data_frame
     assert survival.basehaz is survival.r_api.basehaz
+    assert survival.coef is survival.r_api.coef
+    assert survival.coef_names is survival.r_api.coef_names
+    assert survival.confint is survival.r_api.confint
     assert survival.cox_zph is survival.r_api.cox_zph
     assert survival.coxph_detail is survival.r_api.coxph_detail
+    assert survival.df_residual is survival.r_api.df_residual
+    assert survival.degrees_freedom is survival.r_api.degrees_freedom
+    assert survival.bic is survival.r_api.bic
+    assert survival.extract_aic is survival.r_api.extract_aic
+    assert survival.fitted is survival.r_api.fitted
     assert survival.is_surv is survival.r_api.is_surv
     assert survival.is_surv(survival.Surv([1.0])) is True
     assert survival.is_surv([1.0]) is False
+    assert survival.loglik is survival.r_api.loglik
+    assert survival.model_formula is survival.r_api.model_formula
+    assert survival.model_frame is survival.r_api.model_frame
+    assert survival.model_matrix is survival.r_api.model_matrix
+    assert survival.model_weights is survival.r_api.model_weights
+    assert survival.model_summary is survival.r_api.model_summary
+    assert survival.nobs is survival.r_api.nobs
     assert survival.survreg is survival.r_api.survreg
     assert survival.survreg is not survival.regression.survreg
+    assert survival.vcov is survival.r_api.vcov
     assert survival.ridge_fit is survival.regression.ridge_fit
     assert "ridge_fit" not in vars(survival)
 
@@ -10007,6 +10043,54 @@ def test_r_api_stub_tracks_concordance_public_signature():
     assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
     assert _pyi_function_arg_names(stub_path, "concordance") == expected
     assert _pyi_function_kwarg_name(stub_path, "concordance") == "kwargs"
+
+
+def test_r_api_stub_tracks_model_generic_public_signatures():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected_by_name = {
+        "coef": ["fit"],
+        "coef_names": ["fit", "complete"],
+        "confint": ["fit", "parm", "level"],
+        "vcov": ["fit", "complete"],
+        "loglik": ["fit"],
+        "model_formula": ["fit"],
+        "model_summary": ["fit"],
+        "model_weights": ["fit"],
+        "nobs": ["fit"],
+        "degrees_freedom": ["fit"],
+        "df_residual": ["fit"],
+        "aic": ["fit", "k"],
+        "bic": ["fit"],
+        "extract_aic": ["fit", "scale", "k"],
+        "model_frame": ["fit"],
+        "model_matrix": ["fit"],
+        "as_data_frame": ["result"],
+        "fitted": [
+            "fit",
+            "type",
+            "centered",
+            "terms",
+            "collapse",
+            "reference",
+            "se_fit",
+            "times",
+            "p",
+            "quantiles",
+        ],
+    }
+    for name, expected in expected_by_name.items():
+        runtime_params = inspect.signature(getattr(survival.r_api, name)).parameters
+        assert [
+            param_name
+            for param_name, parameter in runtime_params.items()
+            if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+        ] == expected
+        assert _pyi_function_arg_names(stub_path, name) == expected
+        if name == "fitted":
+            assert _pyi_function_kwarg_name(stub_path, name) == "kwargs"
 
 
 def test_r_api_stub_tracks_survfit_public_signature():

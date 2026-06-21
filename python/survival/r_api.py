@@ -4,6 +4,7 @@ import math
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 from itertools import combinations, product
 from operator import index
 from statistics import NormalDist
@@ -19,18 +20,36 @@ __all__ = [
     "CoxZPHResult",
     "PredictResult",
     "SurvfitResult",
+    "aic",
+    "as_data_frame",
     "basehaz",
     "anova",
+    "coef",
+    "coef_names",
+    "confint",
     "concordance",
     "coxph",
     "coxph_detail",
     "cox_zph",
+    "df_residual",
+    "degrees_freedom",
+    "bic",
+    "extract_aic",
+    "fitted",
     "is_surv",
+    "loglik",
+    "model_formula",
+    "model_summary",
+    "model_frame",
+    "model_matrix",
+    "model_weights",
+    "nobs",
     "predict",
     "residuals",
     "survdiff",
     "survfit",
     "survreg",
+    "vcov",
 ]
 
 _EXP_CLAMP_MIN = -745.0
@@ -103,6 +122,8 @@ class _FormulaDesign:
 class _FormulaFit:
     fit: Any
     design: _FormulaDesign | None
+    formula: str | None = None
+    case_weights: list[float] | None = None
     robust_variance: list[list[float]] | None = None
     naive_variance: list[list[float]] | None = None
     cluster: list[Any] | None = None
@@ -121,6 +142,8 @@ class _FormulaFit:
             return self.y_response
         if name == "model" and self.model_frame is not None:
             return self.model_frame
+        if name == "weights" and self.case_weights is not None:
+            return self.case_weights
         if name == "score" and self.score_values is not None:
             return self.score_values
         if name == "scaled_schoenfeld_residuals" and hasattr(self.fit, "schoenfeld_residuals"):
@@ -172,8 +195,8 @@ class _FormulaFit:
 
 @dataclass(frozen=True)
 class _SurvResponseSpec:
-    arguments: list[str]
-    columns: list[str]
+    arguments: tuple[str, ...]
+    columns: tuple[str, ...]
     type: str | None
     origin: float = 0.0
 
@@ -1111,6 +1134,7 @@ def _parse_formula_origin_option(value: str) -> float:
     return _finite_float(value, "origin")
 
 
+@lru_cache(maxsize=512)
 def _formula_response_spec(formula: str) -> _SurvResponseSpec:
     lhs, sep, _rhs = formula.partition("~")
     if not sep:
@@ -1149,15 +1173,15 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
     if len(arguments) not in {1, 2, 3}:
         raise ValueError("Surv(...) formula response must have 1, 2, or 3 column arguments")
     return _SurvResponseSpec(
-        arguments=arguments,
-        columns=columns,
+        arguments=tuple(arguments),
+        columns=tuple(columns),
         type=surv_type,
         origin=origin,
     )
 
 
 def _formula_response_args(formula: str) -> list[str]:
-    return _formula_response_spec(formula).columns
+    return list(_formula_response_spec(formula).columns)
 
 
 def _covariate_factors(term: _CovariateSpec) -> tuple[_CovariateTerm, ...]:
@@ -1197,6 +1221,7 @@ def _is_formula_arithmetic_expression(expression: str) -> bool:
         stripped_expression.startswith(("+", "-"))
         or _find_top_level_arithmetic_operator(expression, {"+", "-"}) is not None
         or _find_top_level_arithmetic_operator(expression, {"*", "/"}) is not None
+        or _find_top_level_power_operator(expression) is not None
     )
 
 
@@ -1211,11 +1236,18 @@ def _arithmetic_expression_columns(expression: str) -> list[str]:
         _append_unique(columns, _arithmetic_expression_columns(right))
         return columns
 
-    if _arithmetic_literal(expression) is not None:
-        return []
-
     if expression.startswith(("+", "-")):
         return _arithmetic_expression_columns(expression[1:].strip())
+
+    split = _find_top_level_power_operator(expression)
+    if split is not None:
+        left, _operator, right = split
+        columns = _arithmetic_expression_columns(left)
+        _append_unique(columns, _arithmetic_expression_columns(right))
+        return columns
+
+    if _arithmetic_literal(expression) is not None:
+        return []
 
     column, quoted = _formula_name(expression)
     if _unsupported_formula_name(column, quoted):
@@ -1245,15 +1277,31 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
             raise ValueError("formula arithmetic division by zero")
         return [left / right for left, right in zip(left_values, right_values, strict=True)]
 
-    literal = _arithmetic_literal(expression)
-    if literal is not None:
-        return [literal] * n
-
     if expression.startswith(("+", "-")):
         values = _arithmetic_expression_values(data, expression[1:].strip(), n)
         if expression[0] == "-":
             return [-value for value in values]
         return values
+
+    power = _find_top_level_power_operator(expression)
+    if power is not None:
+        left, _operator, right = power
+        left_values = _arithmetic_expression_values(data, left, n)
+        right_values = _arithmetic_expression_values(data, right, n)
+        powered: list[float] = []
+        for left_value, right_value in zip(left_values, right_values, strict=True):
+            try:
+                value = math.pow(left_value, right_value)
+            except ValueError as exc:
+                raise ValueError("formula arithmetic power produced a non-real value") from exc
+            if not math.isfinite(value):
+                raise ValueError("formula arithmetic power produced a non-finite value")
+            powered.append(value)
+        return powered
+
+    literal = _arithmetic_literal(expression)
+    if literal is not None:
+        return [literal] * n
 
     column, quoted = _formula_name(expression)
     if _unsupported_formula_name(column, quoted):
@@ -1455,8 +1503,36 @@ def _find_top_level_arithmetic_operator(
             continue
         if depth == 0 and char in operators:
             previous = _previous_non_space(expression, idx)
-            if previous is None or previous in "+-*/(":
+            if previous is None or previous in "+-*/(^":
                 continue
+            left = expression[:idx].strip()
+            right = expression[idx + 1 :].strip()
+            if not left or not right:
+                raise ValueError("formula arithmetic terms require both operands")
+            return left, char, right
+
+    if in_backtick:
+        raise ValueError("unterminated backtick in formula")
+    return None
+
+
+def _find_top_level_power_operator(expression: str) -> tuple[str, str, str] | None:
+    depth = 0
+    in_backtick = False
+
+    for idx, char in enumerate(expression):
+        if char == "`":
+            in_backtick = not in_backtick
+            continue
+        if in_backtick:
+            continue
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            continue
+        if char == "^" and depth == 0:
             left = expression[:idx].strip()
             right = expression[idx + 1 :].strip()
             if not left or not right:
@@ -5485,6 +5561,758 @@ def _cox_degrees_of_freedom(fit: Any) -> int:
     return len(_cox_beta(fit))
 
 
+def _formula_design_output_names(design: _FormulaDesign) -> list[str]:
+    names = [name for term in design.covariates for name in _design_term_output_names(term)]
+    if design.intercept:
+        names.insert(0, "(Intercept)")
+    return names
+
+
+def _fallback_coef_names(width: int) -> list[str]:
+    return [f"x{idx + 1}" for idx in range(width)]
+
+
+def _fit_location_coef_names(fit: Any, width: int) -> list[str]:
+    design = _formula_design_for_fit(fit)
+    if design is not None:
+        names = _formula_design_output_names(design)
+        if len(names) == width:
+            return names
+    return _fallback_coef_names(width)
+
+
+def _survreg_scale_coef_names(fit: Any, width: int) -> list[str]:
+    if width <= 0:
+        return []
+    if width == 1:
+        return ["Log(scale)"]
+    design = _formula_design_for_fit(fit)
+    if design is not None and len(design.strata_levels) == width:
+        return [f"Log(scale:{level})" for level in design.strata_levels]
+    return [f"Log(scale{idx + 1})" for idx in range(width)]
+
+
+def _is_model_fit(fit: Any) -> bool:
+    return _is_coxph_fit(fit) or _is_survreg_fit(fit)
+
+
+def _require_model_fit(fit: Any, generic: str) -> Any:
+    if not _is_model_fit(fit):
+        raise TypeError(f"{generic} requires a fitted coxph or survreg model")
+    return fit
+
+
+def coef(fit: Any) -> list[float]:
+    """Return fitted model coefficients, like R's coef generic."""
+
+    _require_model_fit(fit, "coef")
+    if _is_survreg_fit(fit):
+        return _location_beta(fit)
+    return _cox_beta(fit)
+
+
+def coef_names(fit: Any, *, complete: Any = False) -> list[str]:
+    """Return fitted coefficient names for R-style model helpers."""
+
+    _require_model_fit(fit, "coef_names")
+    include_complete = _normalize_bool_option_with_default(complete, "complete", False)
+    if _is_survreg_fit(fit):
+        location_width = len(_location_beta(fit))
+        names = _fit_location_coef_names(fit, location_width)
+        if include_complete:
+            total_width = len(list(fit.coefficients))
+            names.extend(_survreg_scale_coef_names(fit, total_width - location_width))
+        return names
+
+    beta = _cox_beta(fit)
+    return _fit_location_coef_names(fit, len(beta))
+
+
+def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
+    """Return a fitted model variance-covariance matrix, like R's vcov generic."""
+
+    _require_model_fit(fit, "vcov")
+    include_complete = _normalize_bool_option_with_default(complete, "complete", True)
+    if _is_survreg_fit(fit):
+        width = len(list(fit.coefficients)) if include_complete else len(_location_beta(fit))
+        return _survreg_variance_matrix(fit, width)
+    return _cox_variance_matrix(fit, len(_cox_beta(fit)))
+
+
+def loglik(fit: Any) -> float:
+    """Return a fitted model log likelihood."""
+
+    _require_model_fit(fit, "loglik")
+    if _is_survreg_fit(fit):
+        return _survreg_original_scale_loglik(fit)
+    return _cox_full_loglik(_unwrap_formula_fit(fit))
+
+
+def nobs(fit: Any) -> int:
+    """Return the number of observations used by a fitted model."""
+
+    _require_model_fit(fit, "nobs")
+    values = getattr(fit, "status", None)
+    if values is None:
+        values = getattr(fit, "event_times", None)
+    if values is None:
+        raise TypeError("nobs requires a fitted model with stored observations")
+    return len(list(values))
+
+
+def degrees_freedom(fit: Any) -> int:
+    """Return the number of fitted parameters counted by model log likelihoods."""
+
+    _require_model_fit(fit, "degrees_freedom")
+    if _is_survreg_fit(fit):
+        return len(list(fit.coefficients))
+    return _cox_degrees_of_freedom(_unwrap_formula_fit(fit))
+
+
+def df_residual(fit: Any) -> int:
+    """Return residual degrees of freedom for fitted ``survreg`` models."""
+
+    _require_model_fit(fit, "df_residual")
+    if not _is_survreg_fit(fit):
+        raise TypeError("df_residual is only defined for fitted survreg models")
+    return nobs(fit) - degrees_freedom(fit)
+
+
+def _finite_numeric_option(value: Any, name: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must be numeric") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def aic(fit: Any, *, k: Any = 2.0) -> float:
+    """Return Akaike-style information criterion for a fitted model."""
+
+    penalty = _finite_numeric_option(k, "k")
+    return -2.0 * loglik(fit) + penalty * degrees_freedom(fit)
+
+
+def bic(fit: Any) -> float:
+    """Return Bayesian information criterion for a fitted model."""
+
+    return aic(fit, k=math.log(nobs(fit)))
+
+
+def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]:
+    """Return ``[df, AIC]`` like R's ``extractAIC`` generic."""
+
+    _finite_numeric_option(scale, "scale")
+    return [float(degrees_freedom(fit)), aic(fit, k=k)]
+
+
+def model_formula(fit: Any) -> str:
+    """Return the formula string used to create a formula-based model fit."""
+
+    _require_model_fit(fit, "model_formula")
+    if isinstance(fit, _FormulaFit) and fit.formula is not None:
+        return fit.formula
+    raise TypeError("model_formula requires a formula-based fitted model")
+
+
+def model_weights(fit: Any) -> list[float] | None:
+    """Return explicit case weights for a fitted model, or ``None`` when absent."""
+
+    _require_model_fit(fit, "model_weights")
+    if isinstance(fit, _FormulaFit) and fit.case_weights is not None:
+        return list(fit.case_weights)
+    values = getattr(_unwrap_formula_fit(fit), "weights", None)
+    if values is None:
+        return None
+    weights = [float(value) for value in _materialize_1d(values, "weights")]
+    if all(abs(value - 1.0) <= 1e-12 for value in weights):
+        return None
+    return weights
+
+
+def _model_matrix_column_names(fit: Any, width: int) -> list[str]:
+    design = _formula_design_for_fit(fit)
+    if design is not None:
+        names = _formula_design_output_names(design)
+        if len(names) == width:
+            return names
+    if _is_model_fit(fit):
+        names = coef_names(fit)
+        if len(names) == width:
+            return names
+    return _fallback_coef_names(width)
+
+
+def model_matrix(fit: Any) -> dict[str, Any]:
+    """Return the training design matrix and column names for a fitted model."""
+
+    _require_model_fit(fit, "model_matrix")
+    rows = getattr(fit, "covariates", None)
+    if rows is None:
+        rows = getattr(fit, "x", None)
+    if rows is None:
+        raise TypeError("model_matrix requires a fitted model with stored covariates")
+    matrix = [[float(value) for value in row] for row in rows]
+    width = len(matrix[0]) if matrix else 0
+    if any(len(row) != width for row in matrix):
+        raise ValueError("stored model matrix must be rectangular")
+    return {
+        "data": matrix,
+        "columns": _model_matrix_column_names(fit, width),
+    }
+
+
+def _model_frame_surv_columns(response: Surv, existing: set[str]) -> dict[str, list[Any]]:
+    columns: dict[str, list[Any]] = {}
+    if response.start is not None:
+        if "start" not in existing:
+            columns["start"] = list(response.start)
+        if "stop" not in existing:
+            columns["stop"] = list(response.time)
+    elif "time" not in existing:
+        columns["time"] = list(response.time)
+    if response.time2 is not None and "time2" not in existing:
+        columns["time2"] = list(response.time2)
+    if "status" not in existing:
+        columns["status"] = list(response.event)
+    return columns
+
+
+def model_frame(fit: Any) -> dict[str, list[Any]]:
+    """Return a plain stored model frame for fits created with ``model=True``."""
+
+    _require_model_fit(fit, "model_frame")
+    frame = getattr(fit, "model", None)
+    if frame is None:
+        raise TypeError("model_frame requires fitting with model=True")
+    if not isinstance(frame, Mapping):
+        raise TypeError("stored model frame must be mapping-like")
+
+    columns: dict[str, list[Any]] = {}
+    for name, values in frame.items():
+        if isinstance(values, Surv):
+            columns.update(_model_frame_surv_columns(values, set(columns)))
+            continue
+        if isinstance(values, Mapping):
+            continue
+        materialized = _materialize_1d(values, str(name))
+        if materialized and isinstance(materialized[0], list | tuple):
+            continue
+        columns[str(name)] = list(materialized)
+    return columns
+
+
+def fitted(
+    fit: Any,
+    *,
+    type: str | None = None,  # noqa: A002
+    centered: bool | None = None,
+    terms: Any | None = None,
+    collapse: Any = False,
+    reference: str | None = None,
+    se_fit: bool = False,
+    times: Any | None = None,
+    p: Any | None = None,
+    quantiles: Any | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Return fitted values for the training observations of a model."""
+
+    _require_model_fit(fit, "fitted")
+    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"fitted got unexpected keyword argument(s): {unexpected}")
+
+    return predict(
+        fit,
+        type=type,
+        centered=centered,
+        terms=terms,
+        collapse=collapse,
+        reference=reference,
+        se_fit=se_fit,
+        times=times,
+        p=p,
+        quantiles=quantiles,
+    )
+
+
+def _normal_two_sided_p_value(statistic: float) -> float:
+    if math.isnan(statistic):
+        return math.nan
+    if math.isinf(statistic):
+        return 0.0
+    return 2.0 * NormalDist().cdf(-abs(statistic))
+
+
+def _coefficient_summary_rows(
+    names: list[str],
+    coefficients: list[float],
+    variance: list[list[float]],
+) -> list[dict[str, float | str]]:
+    if len(names) != len(coefficients):
+        raise ValueError("coefficient names do not match coefficient width")
+    if len(variance) != len(coefficients) or any(len(row) != len(coefficients) for row in variance):
+        raise ValueError("variance matrix does not match coefficient width")
+
+    rows = []
+    for idx, value in enumerate(coefficients):
+        standard_error = math.sqrt(max(float(variance[idx][idx]), 0.0))
+        if standard_error > 0.0:
+            statistic = value / standard_error
+        elif value == 0.0:
+            statistic = 0.0
+        else:
+            statistic = math.copysign(math.inf, value)
+        rows.append(
+            {
+                "name": names[idx],
+                "coef": value,
+                "se": standard_error,
+                "statistic": statistic,
+                "p": _normal_two_sided_p_value(statistic),
+            }
+        )
+    return rows
+
+
+def _coefficient_selection_indices(parm: Any, names: list[str]) -> list[int]:
+    if parm is None:
+        return list(range(len(names)))
+
+    if isinstance(parm, str):
+        values: list[Any] = [parm]
+    elif isinstance(parm, bool):
+        raise TypeError("parm must be coefficient names or 1-based indices")
+    else:
+        if isinstance(parm, Sequence) and not isinstance(parm, bytes):
+            values = list(_materialize_1d(parm, "parm"))
+        else:
+            values = [parm]
+
+    indices: list[int] = []
+    for value in values:
+        if isinstance(value, str):
+            try:
+                idx = names.index(value)
+            except ValueError as exc:
+                raise ValueError(f"unknown coefficient name {value!r}") from exc
+        else:
+            if isinstance(value, bool):
+                raise TypeError("parm must be coefficient names or 1-based indices")
+            try:
+                raw_idx = index(value)
+            except TypeError:
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise TypeError("parm must be coefficient names or 1-based indices") from exc
+                if not numeric.is_integer():
+                    raise TypeError("parm must be coefficient names or 1-based indices") from None
+                raw_idx = int(numeric)
+            except ValueError as exc:
+                raise TypeError("parm must be coefficient names or 1-based indices") from exc
+            idx = raw_idx - 1
+            if idx < 0 or idx >= len(names):
+                raise IndexError("parm index out of range")
+        indices.append(idx)
+    return indices
+
+
+def confint(
+    fit: Any,
+    parm: Any | None = None,
+    *,
+    level: Any = 0.95,
+) -> list[dict[str, float | str]]:
+    """Return normal-approximation confidence intervals for model coefficients."""
+
+    _require_model_fit(fit, "confint")
+    confidence_level = _normalize_conf_level(level, "level")
+    alpha = 1.0 - confidence_level
+    z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+    names = coef_names(fit)
+    coefficients = coef(fit)
+    variance = vcov(fit, complete=False)
+    indices = _coefficient_selection_indices(parm, names)
+
+    intervals = []
+    for idx in indices:
+        standard_error = math.sqrt(max(float(variance[idx][idx]), 0.0))
+        margin = z * standard_error
+        intervals.append(
+            {
+                "name": names[idx],
+                "lower": coefficients[idx] - margin,
+                "upper": coefficients[idx] + margin,
+            }
+        )
+    return intervals
+
+
+def model_summary(fit: Any) -> dict[str, Any]:
+    """Return a compact R-style model summary as plain Python data."""
+
+    _require_model_fit(fit, "model_summary")
+    names = coef_names(fit)
+    coefficients = coef(fit)
+    variance = vcov(fit, complete=False)
+    result: dict[str, Any] = {
+        "model_type": "survreg" if _is_survreg_fit(fit) else "coxph",
+        "coefficients": _coefficient_summary_rows(names, coefficients, variance),
+        "coefficient_names": names,
+        "loglik": loglik(fit),
+        "df": degrees_freedom(fit),
+        "n": nobs(fit),
+        "robust": bool(getattr(fit, "robust", False)),
+    }
+    if _is_survreg_fit(fit):
+        result["scale"] = float(fit.scale)
+        result["scales"] = _survreg_scales(fit)
+        distribution = getattr(fit, "distribution", None)
+        if distribution is not None:
+            result["distribution"] = str(distribution)
+    else:
+        model = _unwrap_formula_fit(fit)
+        logliks = _cox_loglik_values(model)
+        result["null_loglik"] = logliks[0]
+        result["n_event"] = sum(1 for event in model.status if int(event) == 1)
+        result["method"] = str(getattr(model, "method", "breslow"))
+    return result
+
+
+def _empty_columns(names: tuple[str, ...]) -> dict[str, list[Any]]:
+    return {name: [] for name in names}
+
+
+def _survfit_frame(result: SurvfitResult) -> dict[str, list[Any]]:
+    std_err = list(result.std_err)
+    conf_lower = list(result.conf_lower)
+    conf_upper = list(result.conf_upper)
+    for idx, survival in enumerate(result.estimate):
+        if survival <= 0.0:
+            if idx < len(std_err):
+                std_err[idx] = math.nan
+            if idx < len(conf_lower):
+                conf_lower[idx] = math.nan
+            if idx < len(conf_upper):
+                conf_upper[idx] = math.nan
+    frame: dict[str, list[Any]] = {
+        "time": result.time,
+        "n.risk": result.n_risk,
+        "n.event": result.n_event,
+        "n.censor": result.n_censor,
+        "surv": result.estimate,
+        "std.err": std_err,
+        "lower": conf_lower,
+        "upper": conf_upper,
+        "cumhaz": result.cumhaz,
+        "std.chaz": result.std_chaz,
+    }
+    if result.n_enter is not None:
+        frame["n.enter"] = result.n_enter
+    return frame
+
+
+def _turnbull_survfit_frame(result: TurnbullSurvfitResult) -> dict[str, list[Any]]:
+    return {
+        "time": result.time_points,
+        "surv": result.survival,
+        "lower": result.survival_lower,
+        "upper": result.survival_upper,
+    }
+
+
+def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
+    frame: dict[str, list[Any]] = {}
+    for label, curve in result.items():
+        curve_frame = as_data_frame(curve)
+        if not curve_frame:
+            continue
+        n_rows = len(next(iter(curve_frame.values())))
+        if not frame:
+            frame = {"strata": []}
+            for name in curve_frame:
+                frame[name] = []
+        elif set(curve_frame) != set(frame) - {"strata"}:
+            raise ValueError("grouped survfit results must share tabular columns")
+        frame["strata"].extend([str(label)] * n_rows)
+        for name, values in curve_frame.items():
+            frame[name].extend(values)
+    return frame
+
+
+def _raw_survfit_frame(result: Any) -> dict[str, list[Any]]:
+    return _survfit_frame(
+        SurvfitResult(
+            time=[float(value) for value in result.time],
+            n_risk=[float(value) for value in result.n_risk],
+            n_event=[float(value) for value in result.n_event],
+            n_censor=[float(value) for value in result.n_censor],
+            estimate=[float(value) for value in result.estimate],
+            std_err=[float(value) for value in result.std_err],
+            conf_lower=[float(value) for value in result.conf_lower],
+            conf_upper=[float(value) for value in result.conf_upper],
+            cumhaz=[float(value) for value in result.cumhaz],
+            std_chaz=[float(value) for value in result.std_chaz],
+            n_enter=(
+                [float(value) for value in result.n_enter]
+                if getattr(result, "n_enter", None) is not None
+                else None
+            ),
+        )
+    )
+
+
+def _raw_turnbull_survfit_frame(result: Any) -> dict[str, list[Any]]:
+    return _turnbull_survfit_frame(
+        TurnbullSurvfitResult(
+            time_points=[float(value) for value in result.time_points],
+            survival=[float(value) for value in result.survival],
+            survival_lower=[float(value) for value in result.survival_lower],
+            survival_upper=[float(value) for value in result.survival_upper],
+            n_iter=int(result.n_iter),
+            converged=bool(result.converged),
+        )
+    )
+
+
+def _cox_basehaz_frame(result: CoxBaseHazardResult) -> dict[str, list[Any]]:
+    if result.cumhaz and isinstance(result.cumhaz[0], Sequence):
+        frame: dict[str, list[Any]] = {
+            "curve": [],
+            "time": [],
+            "cumhaz": [],
+        }
+        if result.curve_strata is not None:
+            frame["strata"] = []
+        for curve_idx, curve in enumerate(result.cumhaz):
+            if isinstance(curve, (str, bytes)):
+                raise TypeError("basehaz cumulative hazards must be numeric")
+            if len(curve) != len(result.time):
+                raise ValueError("basehaz curve length must match time length")
+            frame["curve"].extend([curve_idx + 1] * len(result.time))
+            frame["time"].extend(result.time)
+            frame["cumhaz"].extend([float(value) for value in curve])
+            if result.curve_strata is not None:
+                frame["strata"].extend([result.curve_strata[curve_idx]] * len(result.time))
+        return frame
+
+    frame = {
+        "time": result.time,
+        "cumhaz": [float(value) for value in result.cumhaz],
+    }
+    if result.strata is not None:
+        frame["strata"] = result.strata
+    return frame
+
+
+def _cox_survfit_optional_curve_column(
+    values: list[list[float]],
+    curve_idx: int,
+    time_count: int,
+) -> list[float] | None:
+    if len(values) <= curve_idx:
+        return None
+    column = values[curve_idx]
+    if len(column) != time_count:
+        raise ValueError("Cox survfit curve columns must match time length")
+    return column
+
+
+def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
+    frame: dict[str, list[Any]] = {
+        "curve": [],
+        "time": [],
+        "surv": [],
+        "cumhaz": [],
+        "linear.predictor": [],
+    }
+    if result.strata is not None:
+        frame["strata"] = []
+    if result.start_time is not None:
+        frame["start.time"] = []
+
+    optional_columns = {
+        "std.err": result.std_err,
+        "std.chaz": result.std_chaz,
+        "lower": result.conf_lower,
+        "upper": result.conf_upper,
+    }
+    active_optional = {name: values for name, values in optional_columns.items() if values}
+    for name in active_optional:
+        frame[name] = []
+
+    for curve_idx, (surv_curve, cumhaz_curve, linear_predictor) in enumerate(
+        zip(result.surv, result.cumhaz, result.linear_predictors, strict=True)
+    ):
+        if len(surv_curve) != len(result.time) or len(cumhaz_curve) != len(result.time):
+            raise ValueError("Cox survfit curves must match time length")
+        n_times = len(result.time)
+        frame["curve"].extend([curve_idx + 1] * n_times)
+        frame["time"].extend(result.time)
+        frame["surv"].extend(surv_curve)
+        frame["cumhaz"].extend(cumhaz_curve)
+        frame["linear.predictor"].extend([linear_predictor] * n_times)
+        if result.strata is not None:
+            frame["strata"].extend([result.strata[curve_idx]] * n_times)
+        if result.start_time is not None:
+            frame["start.time"].extend([result.start_time] * n_times)
+        for name, values in active_optional.items():
+            optional_curve = _cox_survfit_optional_curve_column(values, curve_idx, n_times)
+            if optional_curve is not None:
+                frame[name].extend(optional_curve)
+    return frame
+
+
+def _survdiff_frame(result: Any) -> dict[str, list[Any]]:
+    observed = [float(value) for value in result.observed]
+    expected = [float(value) for value in result.expected]
+    if len(observed) != len(expected):
+        raise ValueError("survdiff observed and expected lengths differ")
+    variance = getattr(result, "variance", None)
+    if isinstance(variance, int | float):
+        variance_diag = [float(variance)] * len(observed)
+    elif variance is not None:
+        variance_diag = [float(row[idx]) for idx, row in enumerate(variance)]
+    else:
+        variance_diag = [math.nan] * len(observed)
+    return {
+        "group": [idx + 1 for idx in range(len(observed))],
+        "observed": observed,
+        "expected": expected,
+        "variance": variance_diag,
+    }
+
+
+def _cox_zph_frame(result: CoxZPHResult) -> dict[str, list[Any]]:
+    rows = result.table
+    return {
+        "name": [str(row["name"]) for row in rows],
+        "chisq": [float(row["chisq"]) for row in rows],
+        "df": [int(row["df"]) for row in rows],
+        "p": [float(row["p"]) for row in rows],
+    }
+
+
+def _coxph_detail_frame(result: CoxPHDetailResult) -> dict[str, list[Any]]:
+    frame: dict[str, list[Any]] = {
+        "time": result.time,
+        "n.event": result.nevent,
+        "n.risk": result.nrisk,
+        "hazard": result.hazard,
+        "varhaz": result.varhaz,
+        "cumhaz": result.cumulative_hazard,
+        "wtrisk": result.wtrisk,
+    }
+    if result.nevent_wt is not None:
+        frame["n.event.weight"] = result.nevent_wt
+    if result.nrisk_wt is not None:
+        frame["n.risk.weight"] = result.nrisk_wt
+    if result.strata is not None:
+        frame["strata"] = []
+        for stratum, count in result.strata.items():
+            frame["strata"].extend([stratum] * int(count))
+    return frame
+
+
+def _anova_frame(result: Any) -> dict[str, list[Any]]:
+    rows = list(result.rows)
+    return {
+        "model": [str(row.model_name) for row in rows],
+        "loglik": [float(row.loglik) for row in rows],
+        "df": [int(row.df) for row in rows],
+        "chisq": [math.nan if row.chisq is None else float(row.chisq) for row in rows],
+        "p": [math.nan if row.p_value is None else float(row.p_value) for row in rows],
+    }
+
+
+def _concordance_frame(result: ConcordanceResult) -> dict[str, list[Any]]:
+    if isinstance(result.concordance, list):
+        n_scores = len(result.concordance)
+        score_names = result.score_names or [f"score{idx + 1}" for idx in range(n_scores)]
+        variance = result.variance if isinstance(result.variance, list) else [math.nan] * n_scores
+        return {
+            "score": score_names,
+            "concordance": [float(value) for value in result.concordance],
+            "concordant": [float(value) for value in result.concordant],
+            "comparable": [float(value) for value in result.comparable],
+            "n": [result.n] * n_scores,
+            "n.event": [result.n_event] * n_scores,
+            "variance": [math.nan if value is None else float(value) for value in variance],
+        }
+
+    variance_value = result.variance if isinstance(result.variance, int | float) else math.nan
+    return {
+        "score": [result.score_names[0] if result.score_names else "score"],
+        "concordance": [float(result.concordance)],
+        "concordant": [float(result.concordant)],
+        "comparable": [float(result.comparable)],
+        "n": [result.n],
+        "n.event": [result.n_event],
+        "variance": [float(variance_value)],
+    }
+
+
+def _surv_response_frame(response: Surv) -> dict[str, list[Any]]:
+    if response.start is not None:
+        frame: dict[str, list[Any]] = {
+            "start": list(response.start),
+            "stop": list(response.time),
+            "status": list(response.event),
+        }
+    else:
+        frame = {
+            "time": list(response.time),
+            "status": list(response.event),
+        }
+        if response.time2 is not None:
+            frame["time2"] = list(response.time2)
+    frame["type"] = [response.type] * len(response)
+    return frame
+
+
+def as_data_frame(result: Any) -> dict[str, list[Any]]:
+    """Return a plain column-oriented table for common R-style result objects."""
+
+    if isinstance(result, Surv):
+        return _surv_response_frame(result)
+    if isinstance(result, CoxSurvfitResult):
+        return _cox_survfit_frame(result)
+    if isinstance(result, CoxBaseHazardResult):
+        return _cox_basehaz_frame(result)
+    if isinstance(result, SurvfitResult):
+        return _survfit_frame(result)
+    if isinstance(result, TurnbullSurvfitResult):
+        return _turnbull_survfit_frame(result)
+    if all(
+        hasattr(result, name)
+        for name in ("time", "n_risk", "n_event", "n_censor", "estimate", "cumhaz")
+    ):
+        return _raw_survfit_frame(result)
+    if all(
+        hasattr(result, name)
+        for name in ("time_points", "survival", "survival_lower", "survival_upper")
+    ):
+        return _raw_turnbull_survfit_frame(result)
+    if isinstance(result, CoxZPHResult):
+        return _cox_zph_frame(result)
+    if isinstance(result, CoxPHDetailResult):
+        return _coxph_detail_frame(result)
+    if isinstance(result, ConcordanceResult):
+        return _concordance_frame(result)
+    if isinstance(result, Mapping):
+        return _grouped_survfit_frame(result)
+    if hasattr(result, "observed") and hasattr(result, "expected") and hasattr(result, "variance"):
+        return _survdiff_frame(result)
+    if hasattr(result, "rows") and hasattr(result, "test_type"):
+        return _anova_frame(result)
+    raise TypeError("as_data_frame requires a survival result object")
+
+
 def _cox_anova_test(test: str | None) -> tuple[str, bool]:
     if test is None:
         return "none", False
@@ -6268,6 +7096,25 @@ def _survreg_response_uses_log_transform(fit: Any) -> bool:
         "loglogistic",
         "log_logistic",
     }
+
+
+def _survreg_original_scale_loglik(fit: Any) -> float:
+    model = _unwrap_formula_fit(fit)
+    log_likelihood = float(model.log_likelihood)
+    if not _survreg_response_uses_log_transform(model):
+        return log_likelihood
+
+    times = [float(value) for value in model.time]
+    status = [int(value) for value in model.status]
+    weights = [float(value) for value in getattr(model, "weights", [1.0] * len(times))]
+    if len(status) != len(times) or len(weights) != len(times):
+        raise ValueError("fitted survreg model has inconsistent likelihood arrays")
+    jacobian = math.fsum(
+        weight * math.log(time)
+        for time, event, weight in zip(times, status, weights, strict=True)
+        if event == 1
+    )
+    return log_likelihood - jacobian
 
 
 def _survreg_prediction_se(
@@ -8915,6 +9762,7 @@ def coxph(
 
     method_name = _cox_tie_method(method, ties)
     robust_value = _normalize_optional_bool_option(robust, "robust")
+    explicit_weights = weights is not None
     keep_model = _normalize_bool_option_with_default(model, "model", False)
     keep_y = _normalize_bool_option_with_default(y, "y", True)
     singular_ok_value = _normalize_bool_option_with_default(singular_ok, "singular_ok", True)
@@ -8924,13 +9772,16 @@ def coxph(
         raise NotImplementedError("coxph multi-state istate/statedata inputs are not supported")
     if init is not None and initial_beta is not None:
         raise ValueError("use only one of init or initial_beta")
+    max_iter = _integer_scalar(max_iter, "max_iter")
     max_iter, eps, toler, fix_time = _apply_coxph_control(control, max_iter, eps, toler)
 
     formula_design: _FormulaDesign | None = None
+    formula_string: str | None = None
     formula_x_matrix: list[list[float]] | None = None
     formula_model_data: Any | None = None
     formula_cluster_columns: tuple[str, ...] = ()
     if isinstance(response, str):
+        formula_string = response
         response_spec = _formula_response_spec(response)
         if _formula_has_time_transform_term(response):
             raise NotImplementedError("coxph tt time-transform terms are not supported")
@@ -9034,6 +9885,7 @@ def coxph(
         raise ValueError("id must have the same length as the Surv response")
     fit_strata = _encode_groups(strata, n) if strata is not None else None
     fit_weights = _optional_float_vector(weights, "weights", n)
+    case_weights = fit_weights if explicit_weights else None
     fit_offset = _optional_float_vector(offset, "offset", n)
     if not singular_ok_value:
         _check_cox_design_full_rank(rows, fit_weights, toler if toler is not None else 1e-9)
@@ -9102,14 +9954,21 @@ def coxph(
             fit,
             robust_cluster,
         )
-    if formula_design is not None or robust_variance is not None or model_frame is not None:
+    if (
+        formula_design is not None
+        or case_weights is not None
+        or robust_variance is not None
+        or model_frame is not None
+    ):
         return _FormulaFit(
             fit,
             formula_design,
-            robust_variance,
-            naive_variance,
-            cluster_values,
-            id_values,
+            formula=formula_string,
+            case_weights=case_weights,
+            robust_variance=robust_variance,
+            naive_variance=naive_variance,
+            cluster=cluster_values,
+            id_values=id_values,
             x_matrix=formula_x_matrix,
             y_response=response if formula_design is not None and keep_y else None,
             model_frame=model_frame,
@@ -9176,11 +10035,15 @@ def survreg(
     keep_model = _normalize_bool_option_with_default(model, "model", False)
     keep_y = _normalize_bool_option_with_default(y, "y", True)
     keep_score = _normalize_bool_option_with_default(score, "score", False)
+    explicit_weights = weights is not None
     robust_requested = None if robust is None else _normalize_bool_option(robust, "robust")
+    if max_iter is not None:
+        max_iter = _integer_scalar(max_iter, "max_iter")
     max_iter, eps, tol_chol = _apply_survreg_control(control, max_iter, eps, tol_chol)
 
     formula_rows: list[list[float]] | None = None
     formula_design: _FormulaDesign | None = None
+    formula_string: str | None = None
     formula_x_matrix: list[list[float]] | None = None
     formula_model_data: Any | None = None
     formula_cluster_columns: tuple[str, ...] = ()
@@ -9254,6 +10117,7 @@ def survreg(
         if time2 is not None:
             raise ValueError("time2 is only supported with matrix time/status input")
         if isinstance(response, str):
+            formula_string = response
             response_spec = _formula_response_spec(response)
             if subset is not None:
                 data, aligned = _subset_formula_inputs(
@@ -9376,6 +10240,7 @@ def survreg(
     distribution_name = normalized_distribution
     offset_values = _optional_float_vector(offsets if offsets is not None else offset, "offsets", n)
     weight_values = _optional_float_vector(weights, "weights", n)
+    case_weights = weight_values if explicit_weights else None
     strata_values = _encode_groups(strata, n) if strata is not None else None
     if scale_value > 0.0 and strata_values is not None and len(set(strata_values)) > 1:
         raise ValueError("cannot have both a fixed scale and strata")
@@ -9464,6 +10329,8 @@ def survreg(
         _FormulaFit(
             fit,
             formula_design,
+            formula=formula_string,
+            case_weights=case_weights,
             robust_variance=robust_variance,
             naive_variance=naive_variance,
             cluster=cluster_values,
@@ -9474,6 +10341,7 @@ def survreg(
         )
         if (
             formula_design is not None
+            or case_weights is not None
             or robust_variance is not None
             or model_frame is not None
             or score_values is not None
