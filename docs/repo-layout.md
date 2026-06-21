@@ -55,6 +55,25 @@ Python source builds use the lean `extension-module` feature set by default.
 Build with `--features extension-module,ml` when the optional ML bindings should
 be present.
 
+## R Layout
+
+The experimental R bridge package lives in `r/survivalr/`. It is named
+`survivalr` so it can coexist with CRAN's `survival` package while exposing
+familiar R-style entry points:
+
+- `Surv`, `survfit` formula/string/fitted-Cox methods, `survdiff`, `coxph`,
+  `coxph.control`, `survreg`, and `survreg.control`
+- `basehaz`, `concordance`, `cox.zph`, and `coxph.detail`
+- S3 methods for `coef`, `vcov`, `confint`, `logLik`, `nobs`, `df.residual`,
+  `extractAIC`, `formula`, `terms`, `model.matrix`, `model.frame`, `summary`,
+  `fitted`, `predict`, `residuals`, `weights`, and `anova` on bridged model objects
+- `as.data.frame` methods for bridged `Surv` responses and common result objects backed by
+  `survival.r_api.as_data_frame`
+- `summary` and `print` methods for common tabular result objects
+
+This bridge uses `reticulate` to call `survival.r_api` and should remain a thin
+facade until native R/extendr bindings are introduced.
+
 ## Naming Notes
 
 - `survival.reliability` is the callable reliability function.

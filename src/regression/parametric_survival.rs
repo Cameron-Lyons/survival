@@ -1,6 +1,6 @@
 use crate::constants::{
     CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX,
-    STEP_DOUBLE_FACTOR, STEP_HALVE_FACTOR,
+    STEP_HALVE_FACTOR,
 };
 use crate::internal::matrix::regularized_lu_solve;
 use crate::regression::survreg_predict::{
@@ -135,6 +135,13 @@ impl DistributionType {
             DistributionType::LogLogistic => "loglogistic",
         }
     }
+
+    fn uses_log_time(self) -> bool {
+        matches!(
+            self,
+            DistributionType::Weibull | DistributionType::LogNormal | DistributionType::LogLogistic
+        )
+    }
 }
 
 fn requested_distribution_name(requested: Option<&str>, distribution: DistributionType) -> String {
@@ -157,9 +164,8 @@ fn parse_distribution_type(distribution: Option<&str>) -> PyResult<DistributionT
     };
     match name.to_lowercase().replace('-', "_").as_str() {
         "weibull" => Ok(DistributionType::Weibull),
-        "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
-            Ok(DistributionType::ExtremeValue)
-        }
+        "exponential" => Ok(DistributionType::Weibull),
+        "extreme" | "extreme_value" | "extremevalue" => Ok(DistributionType::ExtremeValue),
         "gaussian" | "normal" => Ok(DistributionType::Gaussian),
         "logistic" => Ok(DistributionType::Logistic),
         "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => {
@@ -812,7 +818,14 @@ pub fn survreg(
     time2: Option<Vec<f64>>,
     fixed_scale: Option<f64>,
 ) -> PyResult<SurvivalFit> {
+    let requested_distribution_key = distribution.map(|name| name.to_lowercase().replace('-', "_"));
     let dist_type = parse_distribution_type(distribution)?;
+    let fixed_scale =
+        if requested_distribution_key.as_deref() == Some("exponential") && fixed_scale.is_none() {
+            Some(1.0)
+        } else {
+            fixed_scale
+        };
     let config = SurvregConfig::create(Some(dist_type), max_iter, eps, tol_chol);
     let n = time.len();
     if status.len() != n {
@@ -1025,16 +1038,17 @@ fn compute_survreg(
     } else {
         beta
     };
-    let mut newbeta = beta.clone();
     let mut usave = Array1::zeros(nvar2);
-    let time1_vec: Vec<f64> = y.column(0).iter().map(|&t| t.ln()).collect();
+    let uses_log_time = distribution.uses_log_time();
+    let transform_time = |t: f64| if uses_log_time { t.ln() } else { t };
+    let time1_vec: Vec<f64> = y.column(0).iter().map(|&t| transform_time(t)).collect();
     let status_vec: Vec<f64> = if ny == 2 {
         y.column(1).iter().copied().collect()
     } else {
         y.column(2).iter().copied().collect()
     };
     let time2_vec: Option<Vec<f64>> = if ny == 3 {
-        Some(y.column(1).iter().map(|&t| t.ln()).collect())
+        Some(y.column(1).iter().map(|&t| transform_time(t)).collect())
     } else {
         None
     };
@@ -1066,62 +1080,80 @@ fn compute_survreg(
     let mut loglik = calculate_likelihood(&input, &mut output)?;
     usave.assign(&u);
     let mut iter = 0;
-    let mut halving = 0;
-    let mut step_factor = 1.0;
+    let mut converged = false;
     while iter < max_iter {
+        let old_loglik = loglik;
         let solve_result = regularized_lu_solve(&jj, &u);
         let delta = match solve_result {
             Ok(d) => d,
             Err(_) => regularized_lu_solve(&imat, &u)?,
         };
-        newbeta
-            .iter_mut()
-            .zip(beta.iter().zip(delta.iter()))
-            .for_each(|(nb, (b, d))| *nb = b + d * step_factor);
-        adjust_strata(&mut newbeta, &beta, nvar, estimated_scale_count);
-        let new_input = LikelihoodInput {
-            n,
-            nvar,
-            nstrat: estimated_scale_count,
-            beta: &newbeta,
-            distribution: &distribution,
-            strata,
-            offsets,
-            time1: &time1,
-            time2: time2_view.as_ref(),
-            status: &status,
-            weights,
-            covariates,
-        };
-        let mut new_output = LikelihoodOutput {
-            imat: &mut imat,
-            jj: &mut jj,
-            u: &mut u,
-        };
-        let newlik = calculate_likelihood(&new_input, &mut new_output)?;
-        if check_convergence(loglik, newlik, eps) && halving == 0 {
-            loglik = newlik;
-            usave.assign(&u);
-            std::mem::swap(&mut beta, &mut newbeta);
-            iter += 1;
-            break;
+
+        let mut accepted = None;
+        let mut step_factor = 1.0;
+        for _ in 0..=MAX_HALVING_ITERATIONS {
+            let mut candidate_beta = beta.clone();
+            candidate_beta
+                .iter_mut()
+                .zip(beta.iter().zip(delta.iter()))
+                .for_each(|(nb, (b, d))| *nb = b + d * step_factor);
+            adjust_strata(&mut candidate_beta, &beta, nvar, estimated_scale_count);
+
+            let mut candidate_imat = Array2::zeros((nvar2, nvar2));
+            let mut candidate_jj = Array2::zeros((nvar2, nvar2));
+            let mut candidate_u = Array1::zeros(nvar2);
+            let candidate_input = LikelihoodInput {
+                n,
+                nvar,
+                nstrat: estimated_scale_count,
+                beta: &candidate_beta,
+                distribution: &distribution,
+                strata,
+                offsets,
+                time1: &time1,
+                time2: time2_view.as_ref(),
+                status: &status,
+                weights,
+                covariates,
+            };
+            let mut candidate_output = LikelihoodOutput {
+                imat: &mut candidate_imat,
+                jj: &mut candidate_jj,
+                u: &mut candidate_u,
+            };
+            let candidate_loglik = calculate_likelihood(&candidate_input, &mut candidate_output)?;
+            if candidate_loglik.is_finite() && candidate_loglik >= old_loglik {
+                accepted = Some((
+                    candidate_beta,
+                    candidate_loglik,
+                    candidate_imat,
+                    candidate_jj,
+                    candidate_u,
+                ));
+                break;
+            }
+            step_factor *= STEP_HALVE_FACTOR;
         }
-        if newlik.is_nan() || newlik < loglik {
-            halving += 1;
-            if halving > MAX_HALVING_ITERATIONS {
-                step_factor *= STEP_HALVE_FACTOR;
-                halving = 0;
+
+        if let Some((candidate_beta, candidate_loglik, candidate_imat, candidate_jj, candidate_u)) =
+            accepted
+        {
+            beta = candidate_beta;
+            loglik = candidate_loglik;
+            imat = candidate_imat;
+            jj = candidate_jj;
+            u = candidate_u;
+            usave.assign(&u);
+            iter += 1;
+
+            if check_convergence(old_loglik, loglik, eps) {
+                converged = true;
+                break;
             }
         } else {
-            halving = 0;
-            step_factor = 1.0f64.min(step_factor * STEP_DOUBLE_FACTOR);
-            loglik = newlik;
-            usave.assign(&u);
-            std::mem::swap(&mut beta, &mut newbeta);
+            break;
         }
-        iter += 1;
     }
-    let converged = iter < max_iter;
     let convergence_flag = if converged { 0 } else { -1 };
     let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
     Ok(SurvivalFitComputed {

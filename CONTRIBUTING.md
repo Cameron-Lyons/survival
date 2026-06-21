@@ -63,12 +63,20 @@ uv run --with maturin maturin develop --features python,ml
 PYTHONPATH=.:python uv run --no-sync pytest python/tests -q
 ```
 
+Benchmark or performance-sensitive change:
+
+```sh
+cargo bench --no-run
+cargo bench -- --test
+```
+
 Before a PR or broad refactor:
 
 ```sh
 cargo fmt --check
 cargo clippy --all-features --all-targets -- -D warnings
 cargo test --lib --all-features
+cargo bench -- --test
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
 uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi --ignore-missing-imports

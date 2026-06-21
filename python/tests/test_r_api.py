@@ -3578,6 +3578,369 @@ def test_coxph_formula_cluster_computes_robust_variance():
     assert robust_prediction.se_fit == pytest.approx([expected_se])
 
 
+def test_model_generic_helpers_report_core_fit_metadata():
+    data = _toy_data()
+    cox = survival.coxph(
+        "Surv(time, status) ~ x1 + x2 + cluster(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    fixed_scale_aft = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        scale=1.0,
+        max_iter=10,
+        eps=1e-5,
+    )
+    matrix_cox = survival.coxph(
+        survival.Surv(data["time"], data["status"]),
+        x=[[value] for value in data["x1"]],
+        max_iter=0,
+    )
+    weighted_matrix_cox = survival.coxph(
+        survival.Surv(data["time"], data["status"]),
+        x=[[value] for value in data["x1"]],
+        weights=[1.0] * len(data["time"]),
+        max_iter=0,
+    )
+    weighted_cox = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=data,
+        weights=data["x2"],
+        max_iter=0,
+    )
+    weighted_aft = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=data,
+        weights=data["x2"],
+        max_iter=1,
+    )
+
+    assert survival.coef(cox) == pytest.approx(cox.coefficients[0])
+    for actual, expected in zip(survival.vcov(cox), cox.variance_matrix, strict=True):
+        assert actual == pytest.approx(expected)
+    assert survival.loglik(cox) == pytest.approx(cox.log_likelihood[-1])
+    assert survival.nobs(cox) == len(data["time"])
+    assert survival.degrees_freedom(cox) == len(cox.coefficients[0])
+    assert survival.aic(cox) == pytest.approx(
+        -2.0 * survival.loglik(cox) + 2.0 * survival.degrees_freedom(cox)
+    )
+    assert survival.aic(cox, k=4) == pytest.approx(
+        -2.0 * survival.loglik(cox) + 4.0 * survival.degrees_freedom(cox)
+    )
+    assert survival.bic(cox) == pytest.approx(
+        -2.0 * survival.loglik(cox) + math.log(survival.nobs(cox)) * survival.degrees_freedom(cox)
+    )
+    assert survival.extract_aic(cox) == pytest.approx(
+        [survival.degrees_freedom(cox), survival.aic(cox)]
+    )
+    assert survival.model_formula(cox) == "Surv(time, status) ~ x1 + x2 + cluster(group)"
+    assert survival.model_weights(cox) is None
+    assert survival.model_weights(weighted_matrix_cox) == pytest.approx([1.0] * len(data["time"]))
+    assert survival.model_weights(weighted_cox) == pytest.approx(data["x2"])
+    cox_matrix = survival.model_matrix(cox)
+    assert cox_matrix["columns"] == ["x1", "x2"]
+    for actual, expected in zip(cox_matrix["data"], cox.covariates, strict=True):
+        assert actual == pytest.approx(expected)
+    assert survival.fitted(cox) == pytest.approx(survival.predict(cox))
+    assert survival.fitted(cox, type="risk") == pytest.approx(survival.predict(cox, type="risk"))
+    cox_fitted_with_se = survival.fitted(cox, **{"se.fit": True})
+    assert cox_fitted_with_se.fit == pytest.approx(survival.fitted(cox))
+    assert len(cox_fitted_with_se.se_fit) == len(data["time"])
+
+    assert survival.coef(aft) == pytest.approx(aft.location_coefficients)
+    for actual, expected in zip(survival.vcov(aft), aft.variance_matrix, strict=True):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        survival.vcov(aft, complete=False),
+        [row[: aft.n_covariates] for row in aft.variance_matrix[: aft.n_covariates]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    expected_aft_loglik = aft.log_likelihood - sum(
+        math.log(time)
+        for time, event in zip(data["time"], data["status"], strict=True)
+        if event == 1
+    )
+    assert survival.loglik(aft) == pytest.approx(expected_aft_loglik)
+    assert survival.nobs(aft) == len(data["time"])
+    assert survival.degrees_freedom(aft) == len(aft.coefficients)
+    assert survival.df_residual(aft) == survival.nobs(aft) - survival.degrees_freedom(aft)
+    assert survival.degrees_freedom(fixed_scale_aft) == len(fixed_scale_aft.location_coefficients)
+    assert survival.aic(aft) == pytest.approx(
+        -2.0 * survival.loglik(aft) + 2.0 * survival.degrees_freedom(aft)
+    )
+    assert survival.extract_aic(aft, k=3) == pytest.approx(
+        [survival.degrees_freedom(aft), survival.aic(aft, k=3)]
+    )
+    assert survival.model_formula(aft) == "Surv(time, status) ~ x1 + x2"
+    assert survival.model_weights(aft) is None
+    assert survival.model_weights(weighted_aft) == pytest.approx(data["x2"])
+    aft_matrix = survival.model_matrix(aft)
+    assert aft_matrix["columns"] == ["(Intercept)", "x1", "x2"]
+    for actual, expected in zip(aft_matrix["data"], aft.covariates, strict=True):
+        assert actual == pytest.approx(expected)
+    assert survival.fitted(aft) == pytest.approx(survival.predict(aft))
+    assert survival.fitted(aft, type="lp") == pytest.approx(survival.predict(aft, type="lp"))
+
+    with pytest.raises(TypeError, match="fitted coxph or survreg"):
+        survival.coef(survival.Surv([1.0, 2.0], [1, 0]))
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        survival.fitted(cox, newdata={"x1": [0.2], "x2": [0.8]})
+    with pytest.raises(ValueError, match="finite"):
+        survival.aic(cox, k=float("nan"))
+    with pytest.raises(TypeError, match="formula-based"):
+        survival.model_formula(matrix_cox)
+    with pytest.raises(TypeError, match="fitted coxph or survreg"):
+        survival.model_weights(survival.Surv([1.0, 2.0], [1, 0]))
+    with pytest.raises(TypeError, match="survreg"):
+        survival.df_residual(cox)
+    with pytest.raises(TypeError, match="model=True"):
+        survival.model_frame(cox)
+
+
+def test_model_frame_returns_stored_formula_columns():
+    data = _toy_data()
+    cox = survival.coxph(
+        "Surv(time, status) ~ x1 + x2 + offset(offset) + strata(group)",
+        data=data,
+        model=True,
+        max_iter=10,
+        eps=1e-5,
+    )
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        model=True,
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    cox_frame = survival.model_frame(cox)
+    assert {"time", "status", "x1", "x2", "offset", "group", "(offset)", "(strata)"} <= set(
+        cox_frame
+    )
+    assert cox_frame["time"] == pytest.approx(data["time"])
+    assert cox_frame["status"] == list(data["status"])
+    assert cox_frame["x1"] == pytest.approx(data["x1"])
+    assert cox_frame["(strata)"] == data["group"]
+
+    aft_frame = survival.model_frame(aft)
+    assert {"time", "status", "x1", "x2"} <= set(aft_frame)
+    assert aft_frame["x2"] == pytest.approx(data["x2"])
+
+
+def test_formula_fit_iteration_counts_accept_integer_valued_floats():
+    data = _toy_data()
+
+    cox = survival.coxph("Surv(time, status) ~ x1", data=data, max_iter=0.0)
+    aft = survival.survreg("Surv(time, status) ~ x1", data=data, max_iter=1.0)
+
+    assert len(cox.coefficients[0]) == 1
+    assert len(aft.location_coefficients) == 2
+    with pytest.raises(ValueError, match="integer"):
+        survival.coxph("Surv(time, status) ~ x1", data=data, max_iter=1.5)
+
+
+def test_model_generic_helpers_report_formula_coefficient_names():
+    data = _factor_data()
+    data["group"] = ["A", "A", "B", "B", "C", "C", "A", "B"]
+    cox = survival.coxph(
+        "Surv(time, status) ~ x1 + factor(group) + x1:x2",
+        data=data,
+        max_iter=0,
+    )
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1 + x2 + strata(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    assert survival.coef_names(cox) == ["x1", "groupB", "groupC", "x1:x2"]
+    assert survival.coef_names(aft) == ["(Intercept)", "x1", "x2"]
+    assert survival.coef_names(aft, complete=True) == [
+        "(Intercept)",
+        "x1",
+        "x2",
+        "Log(scale:A)",
+        "Log(scale:B)",
+        "Log(scale:C)",
+    ]
+    assert len(survival.coef_names(aft, complete=True)) == len(aft.coefficients)
+    assert len(survival.coef_names(aft)) == len(survival.coef(aft))
+
+
+def test_model_summary_reports_named_coefficient_table():
+    data = _toy_data()
+    cox = survival.coxph(
+        "Surv(time, status) ~ x1 + x2 + cluster(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    cox_summary = survival.model_summary(cox)
+    aft_summary = survival.model_summary(aft)
+
+    assert cox_summary["model_type"] == "coxph"
+    assert cox_summary["robust"] is True
+    assert cox_summary["n"] == len(data["time"])
+    assert cox_summary["n_event"] == sum(data["status"])
+    assert cox_summary["df"] == 2
+    assert cox_summary["loglik"] == pytest.approx(cox.log_likelihood[-1])
+    assert cox_summary["null_loglik"] == pytest.approx(cox.log_likelihood[0])
+    assert [row["name"] for row in cox_summary["coefficients"]] == ["x1", "x2"]
+    for idx, (row, coefficient, variance_row) in enumerate(
+        zip(
+            cox_summary["coefficients"],
+            survival.coef(cox),
+            survival.vcov(cox),
+            strict=True,
+        )
+    ):
+        assert row["coef"] == pytest.approx(coefficient)
+        assert row["se"] == pytest.approx(math.sqrt(max(variance_row[idx], 0.0)))
+        assert row["statistic"] == pytest.approx(row["coef"] / row["se"])
+        assert 0.0 <= row["p"] <= 1.0
+
+    assert aft_summary["model_type"] == "survreg"
+    assert aft_summary["n"] == len(data["time"])
+    assert aft_summary["df"] == len(aft.coefficients)
+    assert aft_summary["scale"] == pytest.approx(aft.scale)
+    assert aft_summary["scales"] == pytest.approx(aft.scales)
+    assert [row["name"] for row in aft_summary["coefficients"]] == ["(Intercept)", "x1", "x2"]
+    for row, coefficient in zip(
+        aft_summary["coefficients"], aft.location_coefficients, strict=True
+    ):
+        assert row["coef"] == pytest.approx(coefficient)
+        assert 0.0 <= row["p"] <= 1.0
+
+
+def test_model_confint_reports_named_coefficient_intervals():
+    data = _toy_data()
+    cox = survival.coxph(
+        "Surv(time, status) ~ x1 + x2 + cluster(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    z = NormalDist().inv_cdf(0.95)
+
+    intervals = survival.confint(cox, level=0.9)
+
+    assert [row["name"] for row in intervals] == ["x1", "x2"]
+    for idx, row in enumerate(intervals):
+        coefficient = survival.coef(cox)[idx]
+        se = math.sqrt(max(survival.vcov(cox)[idx][idx], 0.0))
+        assert row["lower"] == pytest.approx(coefficient - z * se)
+        assert row["upper"] == pytest.approx(coefficient + z * se)
+
+    assert survival.confint(cox, parm="x2")[0]["name"] == "x2"
+    assert [row["name"] for row in survival.confint(aft, parm=[1, "x2"])] == [
+        "(Intercept)",
+        "x2",
+    ]
+    with pytest.raises(ValueError, match="level"):
+        survival.confint(cox, level=1.5)
+    with pytest.raises(ValueError, match="unknown coefficient"):
+        survival.confint(cox, parm="missing")
+    with pytest.raises(IndexError, match="parm index"):
+        survival.confint(cox, parm=0)
+    with pytest.raises(TypeError, match="parm"):
+        survival.confint(cox, parm=1.5)
+
+
+def test_as_data_frame_returns_r_friendly_result_tables():
+    data = _toy_data()
+    cox = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    surv_table = survival.as_data_frame(survival.Surv(data["time"], data["status"]))
+    assert set(surv_table) == {"time", "status", "type"}
+    assert surv_table["time"] == pytest.approx(data["time"])
+    assert surv_table["status"] == data["status"]
+    assert surv_table["type"] == ["right"] * len(data["time"])
+
+    counting_table = survival.as_data_frame(survival.Surv([0.0, 1.0], [2.0, 3.0], [1, 0]))
+    assert set(counting_table) == {"start", "stop", "status", "type"}
+    assert counting_table["start"] == pytest.approx([0.0, 1.0])
+    assert counting_table["stop"] == pytest.approx([2.0, 3.0])
+    assert counting_table["type"] == ["counting", "counting"]
+
+    interval_table = survival.as_data_frame(
+        survival.Surv([1.0, 2.0], [2.0, 4.0], [3, 0], type="interval")
+    )
+    assert set(interval_table) == {"time", "status", "time2", "type"}
+    assert interval_table["time2"] == pytest.approx([2.0, 4.0])
+    assert interval_table["type"] == ["interval", "interval"]
+
+    km_table = survival.as_data_frame(survival.survfit("Surv(time, status) ~ group", data=data))
+    assert {"strata", "time", "n.risk", "n.event", "surv", "cumhaz"} <= set(km_table)
+    assert len(km_table["strata"]) == len(km_table["time"])
+    assert set(km_table["strata"]) == {"A", "B"}
+
+    zero_survival_table = survival.as_data_frame(
+        survival.survfit(survival.Surv([1.0, 2.0], [1, 1]))
+    )
+    assert zero_survival_table["surv"][-1] == pytest.approx(0.0)
+    assert math.isnan(zero_survival_table["std.err"][-1])
+    assert math.isnan(zero_survival_table["lower"][-1])
+    assert math.isnan(zero_survival_table["upper"][-1])
+
+    cox_surv_table = survival.as_data_frame(
+        survival.survfit(cox, newdata={"x1": [0.2, 1.0], "x2": [1.0, 0.4]})
+    )
+    assert {"curve", "time", "surv", "cumhaz", "linear.predictor"} <= set(cox_surv_table)
+    assert set(cox_surv_table["curve"]) == {1, 2}
+    assert len(cox_surv_table["surv"]) == 2 * len(set(data["time"]))
+
+    basehaz_table = survival.as_data_frame(survival.basehaz(cox))
+    assert set(basehaz_table) == {"time", "cumhaz"}
+    assert basehaz_table["time"] == sorted(set(data["time"]))
+
+    survdiff_table = survival.as_data_frame(
+        survival.survdiff("Surv(time, status) ~ group", data=data)
+    )
+    assert set(survdiff_table) == {"group", "observed", "expected", "variance"}
+    assert survdiff_table["group"] == [1, 2]
+
+    zph_table = survival.as_data_frame(survival.cox_zph(cox))
+    assert {"name", "chisq", "df", "p"} <= set(zph_table)
+    assert zph_table["name"][-1] == "GLOBAL"
+
+    detail_table = survival.as_data_frame(survival.coxph_detail(cox))
+    assert {"time", "n.event", "n.risk", "hazard", "cumhaz"} <= set(detail_table)
+    assert len(detail_table["time"]) == sum(data["status"])
+
+    anova_table = survival.as_data_frame(survival.anova(cox))
+    assert set(anova_table) == {"model", "loglik", "df", "chisq", "p"}
+    assert anova_table["model"][0] == "NULL"
+
+
 def test_anova_coxph_single_formula_model_refits_terms_sequentially():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data)
@@ -5009,12 +5372,17 @@ def test_coxph_formula_accepts_identity_wrappers_for_numeric_terms():
 def test_coxph_formula_accepts_identity_arithmetic_terms():
     data = _numeric_data()
     fit = survival.coxph(
-        "Surv(time, status) ~ I(-x1) + I(x1 + x2)",
+        "Surv(time, status) ~ I(-x1) + I(x1 + x2) + I((x1 + x2)^2)",
         data=data,
         max_iter=0,
     )
     expected_rows = [
-        [-data["x1"][idx], data["x1"][idx] + data["x2"][idx]] for idx in range(len(data["time"]))
+        [
+            -data["x1"][idx],
+            data["x1"][idx] + data["x2"][idx],
+            (data["x1"][idx] + data["x2"][idx]) ** 2,
+        ]
+        for idx in range(len(data["time"]))
     ]
     low_level = survival.regression.coxph_fit(
         time=data["time"],
@@ -7371,6 +7739,48 @@ def test_survreg_distribution_accepts_r_style_prefixes_and_aliases():
         )
 
 
+def test_survreg_loglik_and_response_transform_follow_r_distribution_scale():
+    data = _toy_data()
+
+    weibull = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        dist="weibull",
+        max_iter=80,
+        eps=1e-8,
+    )
+    expected_loglik = weibull.log_likelihood - sum(
+        math.log(time)
+        for time, event in zip(data["time"], data["status"], strict=True)
+        if event == 1
+    )
+    assert survival.loglik(weibull) == pytest.approx(expected_loglik)
+
+    lognormal = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        dist="lognormal",
+        max_iter=80,
+        eps=1e-8,
+    )
+    lognormal_lp = survival.predict(lognormal, type="lp")
+    assert survival.predict(lognormal, type="response") == pytest.approx(
+        [math.exp(value) for value in lognormal_lp]
+    )
+
+    gaussian = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        dist="gaussian",
+        max_iter=80,
+        eps=1e-8,
+    )
+    assert survival.loglik(gaussian) == pytest.approx(gaussian.log_likelihood)
+    assert survival.predict(gaussian, type="response") == pytest.approx(
+        survival.predict(gaussian, type="lp")
+    )
+
+
 def test_low_level_survreg_rejects_invalid_numeric_inputs():
     kwargs = {
         "time": [1.0, 2.0, 3.0],
@@ -8153,14 +8563,18 @@ def test_predict_survreg_formula_newdata_mapping_rebuilds_transforms_and_interac
 def test_formula_identity_arithmetic_terms_rebuild_for_newdata():
     data = _numeric_data()
     fit = survival.survreg(
-        "Surv(time, status) ~ I(x1 + x2) + I(x1 * x2)",
+        "Surv(time, status) ~ I(x1 + x2) + I(x1 * x2) + I(x1^2)",
         data=data,
         dist="weibull",
         max_iter=10,
         eps=1e-5,
     )
     expected_rows = [
-        [data["x1"][idx] + data["x2"][idx], data["x1"][idx] * data["x2"][idx]]
+        [
+            data["x1"][idx] + data["x2"][idx],
+            data["x1"][idx] * data["x2"][idx],
+            data["x1"][idx] ** 2,
+        ]
         for idx in range(len(data["time"]))
     ]
     low_level = survival.regression.survreg(
@@ -8172,7 +8586,7 @@ def test_formula_identity_arithmetic_terms_rebuild_for_newdata():
         eps=1e-5,
     )
     newdata = {"x1": [0.25, 1.0], "x2": [0.5, 0.8]}
-    new_rows = [[0.75, 0.125], [1.8, 0.8]]
+    new_rows = [[0.75, 0.125, 0.0625], [1.8, 0.8, 1.0]]
 
     for actual, expected in zip(fit.covariates, low_level.covariates, strict=True):
         assert actual == pytest.approx(expected)
