@@ -203,11 +203,7 @@ fn compute_monotonicity(feature_values: &[f64], shap_values: &[f64]) -> f64 {
     }
 
     let mut indices: Vec<usize> = (0..feature_values.len()).collect();
-    indices.sort_by(|&a, &b| {
-        feature_values[a]
-            .partial_cmp(&feature_values[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| feature_values[a].total_cmp(&feature_values[b]));
 
     let sorted_shap: Vec<f64> = indices.iter().map(|&i| shap_values[i]).collect();
 
@@ -315,7 +311,7 @@ fn compute_confidence_interval_width(
         .collect();
 
     let mut sorted = bootstrap_means;
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(f64::total_cmp);
 
     let alpha = 1.0 - confidence_level;
     let lower_idx = ((alpha / 2.0) * n_bootstrap as f64).floor() as usize;

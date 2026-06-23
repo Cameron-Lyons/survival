@@ -372,7 +372,7 @@ fn validate_matrix_result_parts(
     if n_states == 0 {
         return Err(value_error("n_states must be positive"));
     }
-    validate_finite_slice("time", time)?;
+    validate_step_times("time", time)?;
     validate_matrix_width("surv", surv, time.len(), n_states)?;
     validate_matrix_width("cumhaz", cumhaz, time.len(), n_states)?;
     validate_survival_matrix("surv", surv)?;
@@ -413,11 +413,92 @@ fn step_value_at(times: &[f64], values: &[f64], time: f64) -> f64 {
     if idx == 0 { 0.0 } else { values[idx - 1] }
 }
 
+fn basehaz_with_entry_times(
+    time: &[f64],
+    status: &[i32],
+    entry: &[f64],
+    weights: &[f64],
+    risk_scores: &[f64],
+    risk_scale: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    let n = time.len();
+    let mut event_times: Vec<f64> = time
+        .iter()
+        .zip(status.iter())
+        .filter_map(|(&event_time, &event)| (event == 1).then_some(event_time))
+        .collect();
+    event_times.sort_by(f64::total_cmp);
+    event_times.dedup_by(|a, b| same_time(*a, *b));
+
+    let mut entry_order: Vec<usize> = (0..n).collect();
+    entry_order.sort_by(|&a, &b| entry[a].total_cmp(&entry[b]).then_with(|| a.cmp(&b)));
+    let mut stop_order: Vec<usize> = (0..n).collect();
+    stop_order.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
+    let mut event_order: Vec<usize> = (0..n).filter(|&idx| status[idx] == 1).collect();
+    event_order.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
+
+    let mut active = vec![false; n];
+    let mut entry_pos = 0;
+    let mut stop_pos = 0;
+    let mut event_pos = 0;
+    let mut risk_sum = 0.0;
+    let mut cum_hazard = 0.0;
+    let mut hazard = Vec::with_capacity(event_times.len());
+
+    for &event_time in &event_times {
+        while entry_pos < entry_order.len() && entry[entry_order[entry_pos]] < event_time {
+            let idx = entry_order[entry_pos];
+            if !active[idx] {
+                active[idx] = true;
+                risk_sum += risk_scores[idx];
+            }
+            entry_pos += 1;
+        }
+        while stop_pos < stop_order.len() && time[stop_order[stop_pos]] < event_time {
+            let idx = stop_order[stop_pos];
+            if active[idx] {
+                active[idx] = false;
+                risk_sum -= risk_scores[idx];
+            }
+            stop_pos += 1;
+        }
+
+        while event_pos < event_order.len()
+            && time[event_order[event_pos]] < event_time
+            && !same_time(time[event_order[event_pos]], event_time)
+        {
+            event_pos += 1;
+        }
+        let mut events = 0.0;
+        while event_pos < event_order.len() && same_time(time[event_order[event_pos]], event_time) {
+            events += weights[event_order[event_pos]];
+            event_pos += 1;
+        }
+
+        cum_hazard += scaled_hazard_increment(events, risk_sum, risk_scale);
+        hazard.push(cum_hazard);
+    }
+
+    (event_times, hazard)
+}
+
 fn validate_sorted_step_times(name: &str, times: &[f64], stratum: i32) -> PyResult<()> {
     for window in times.windows(2) {
         if window[1] < window[0] {
             return Err(value_error(format!(
                 "{name} must be sorted within each stratum; stratum {stratum} has {} before {}",
+                window[1], window[0]
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_non_decreasing_step_values(name: &str, values: &[f64], stratum: i32) -> PyResult<()> {
+    for window in values.windows(2) {
+        if window[1] < window[0] {
+            return Err(value_error(format!(
+                "{name} must be non-decreasing within each stratum; stratum {stratum} has {} before {}",
                 window[1], window[0]
             )));
         }
@@ -542,7 +623,7 @@ pub fn survfit_from_hazard(
             "time and hazard must have the same length",
         ));
     }
-    validate_finite_slice("time", &time)?;
+    validate_step_times("time", &time)?;
     validate_nonnegative_finite_slice("hazard", &hazard)?;
 
     let n = time.len();
@@ -583,7 +664,7 @@ pub fn survfit_from_cumhaz(
             "time and cumhaz must have the same length",
         ));
     }
-    validate_finite_slice("time", &time)?;
+    validate_step_times("time", &time)?;
     validate_nonnegative_cumhaz_slice("cumhaz", &cumhaz)?;
 
     let n = time.len();
@@ -620,7 +701,7 @@ pub fn survfit_from_matrix(
     if n_states == 0 {
         return Err(value_error("hazard_matrix must have at least one column"));
     }
-    validate_finite_slice("time", &time)?;
+    validate_step_times("time", &time)?;
 
     validate_matrix_width("hazard_matrix", &hazard_matrix, n_times, n_states)?;
     validate_matrix_nonnegative_finite("hazard_matrix", &hazard_matrix)?;
@@ -662,7 +743,7 @@ pub fn survfit_multistate(
     }
 
     let n_times = time.len();
-    validate_finite_slice("time", &time)?;
+    validate_step_times("time", &time)?;
 
     let n_states = validate_transition_hazards(&transition_hazards, n_times)?;
 
@@ -769,8 +850,20 @@ pub fn cox_survfit_from_baseline(
         times.push(time);
         hazards.push(hazard);
     }
-    for (&stratum, (times, _)) in &baselines {
+    for (&stratum, (times, hazards)) in &baselines {
         validate_sorted_step_times("base_times", times, stratum)?;
+        validate_non_decreasing_step_values("base_hazards", hazards, stratum)?;
+    }
+
+    let mut selected_strata = curve_strata_values.clone();
+    selected_strata.sort_unstable();
+    selected_strata.dedup();
+    for stratum in &selected_strata {
+        if !baselines.contains_key(stratum) {
+            return Err(value_error(format!(
+                "curve_strata contains stratum {stratum} with no baseline hazard"
+            )));
+        }
     }
 
     let output_times = match requested_times {
@@ -780,20 +873,18 @@ pub fn cox_survfit_from_baseline(
         }
         None => {
             let mut values = Vec::new();
-            let mut selected_strata = curve_strata_values.clone();
-            selected_strata.sort_unstable();
-            selected_strata.dedup();
             for stratum in selected_strata {
                 if let Some((times, _)) = baselines.get(&stratum) {
                     values.extend(times.iter().copied());
                 }
             }
             values.sort_by(|left, right| left.total_cmp(right));
-            values.dedup_by(|left, right| *left == *right);
+            values.dedup_by(|left, right| same_time(*left, *right));
             values
         }
     };
 
+    let output_times_sorted = requested_times_are_sorted(&output_times);
     let mut survival_curves = Vec::with_capacity(linear_predictors.len());
     let mut cumulative_hazards = Vec::with_capacity(linear_predictors.len());
     for (&linear_predictor, &stratum) in linear_predictors.iter().zip(curve_strata_values.iter()) {
@@ -806,10 +897,27 @@ pub fn cox_survfit_from_baseline(
             .unwrap_or((empty_times, empty_hazards));
         let mut curve = Vec::with_capacity(output_times.len());
         let mut cumhaz = Vec::with_capacity(output_times.len());
-        for &time in &output_times {
-            let hazard = step_value_at(times, hazards, time) * risk_multiplier;
-            cumhaz.push(hazard);
-            curve.push(safe_exp(-hazard).clamp(0.0, 1.0));
+        if output_times_sorted {
+            let mut cursor = 0;
+            for &time in &output_times {
+                while cursor < times.len() && times[cursor] <= time {
+                    cursor += 1;
+                }
+                let base_hazard = if cursor == 0 {
+                    0.0
+                } else {
+                    hazards[cursor - 1]
+                };
+                let hazard = base_hazard * risk_multiplier;
+                cumhaz.push(hazard);
+                curve.push(safe_exp(-hazard).clamp(0.0, 1.0));
+            }
+        } else {
+            for &time in &output_times {
+                let hazard = step_value_at(times, hazards, time) * risk_multiplier;
+                cumhaz.push(hazard);
+                curve.push(safe_exp(-hazard).clamp(0.0, 1.0));
+            }
         }
         survival_curves.push(curve);
         cumulative_hazards.push(cumhaz);
@@ -941,33 +1049,14 @@ pub fn basehaz(
         .collect();
 
     if let Some(entry) = entry_times {
-        let mut event_times: Vec<f64> = time
-            .iter()
-            .zip(status.iter())
-            .filter_map(|(&event_time, &event)| (event == 1).then_some(event_time))
-            .collect();
-        event_times.sort_by(|a, b| a.total_cmp(b));
-        event_times.dedup_by(|a, b| same_time(*a, *b));
-
-        let mut hazard = Vec::with_capacity(event_times.len());
-        let mut cum_hazard = 0.0;
-        for event_time in &event_times {
-            let events = time
-                .iter()
-                .zip(status.iter())
-                .zip(weights.iter())
-                .filter_map(|((&stop, &event), &weight)| {
-                    (event == 1 && same_time(stop, *event_time)).then_some(weight)
-                })
-                .sum::<f64>();
-            let risk_sum: f64 = (0..n)
-                .filter(|&idx| entry[idx] < *event_time && time[idx] >= *event_time)
-                .map(|idx| risk_scores[idx])
-                .sum();
-            cum_hazard += scaled_hazard_increment(events, risk_sum, risk_scale);
-            hazard.push(cum_hazard);
-        }
-        return Ok((event_times, hazard));
+        return Ok(basehaz_with_entry_times(
+            &time,
+            &status,
+            &entry,
+            &weights,
+            &risk_scores,
+            risk_scale,
+        ));
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
@@ -987,24 +1076,24 @@ pub fn basehaz(
     let mut cum_hazard = 0.0;
 
     while i < n {
-        let idx = indices[i];
-        if status[idx] == 0 {
-            i += 1;
-            continue;
-        }
-
-        let current_time = time[idx];
+        let group_start = i;
+        let current_time = time[indices[i]];
         let mut events = 0.0;
-        let start_i = i;
+        let mut has_event = false;
 
         while i < n && same_time(time[indices[i]], current_time) {
             if status[indices[i]] == 1 {
+                has_event = true;
                 events += weights[indices[i]];
             }
             i += 1;
         }
 
-        let risk_sum = cumulative_risk[start_i];
+        if !has_event {
+            continue;
+        }
+
+        let risk_sum = cumulative_risk[group_start];
         cum_hazard += scaled_hazard_increment(events, risk_sum, risk_scale);
 
         unique_times.push(current_time);
@@ -1031,6 +1120,14 @@ mod tests {
     }
 
     #[test]
+    fn test_survfit_from_hazard_rejects_unsorted_time() {
+        let err = survfit_from_hazard(vec![2.0, 1.0], vec![0.1, 0.1], None, None)
+            .expect_err("unsorted time grid should fail");
+
+        assert!(err.to_string().contains("time must be sorted ascending"));
+    }
+
+    #[test]
     fn test_survfit_from_cumhaz() {
         let time = vec![1.0, 2.0, 3.0];
         let cumhaz = vec![0.1, 0.3, 0.6];
@@ -1038,6 +1135,14 @@ mod tests {
 
         assert_eq!(result.time.len(), 3);
         assert!((result.surv[2][0] - (-0.6_f64).exp()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_survfit_from_cumhaz_rejects_unsorted_time() {
+        let err = survfit_from_cumhaz(vec![2.0, 1.0], vec![0.1, 0.2], None, None)
+            .expect_err("unsorted time grid should fail");
+
+        assert!(err.to_string().contains("time must be sorted ascending"));
     }
 
     #[test]
@@ -1052,6 +1157,14 @@ mod tests {
     }
 
     #[test]
+    fn test_survfit_from_matrix_rejects_unsorted_time() {
+        let err = survfit_from_matrix(vec![2.0, 1.0, 3.0], vec![vec![0.1], vec![0.1], vec![0.1]])
+            .expect_err("unsorted time grid should fail");
+
+        assert!(err.to_string().contains("time must be sorted ascending"));
+    }
+
+    #[test]
     fn test_survfit_multistate_preserves_probability_mass() {
         let result =
             survfit_multistate(vec![1.0], vec![vec![vec![0.0, 0.25], vec![0.10, 0.0]]], 0).unwrap();
@@ -1059,6 +1172,21 @@ mod tests {
         assert_eq!(result.n_states, 2);
         assert_eq!(result.surv[0], vec![0.75, 0.25]);
         assert!((result.surv[0].iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_survfit_multistate_rejects_unsorted_time() {
+        let err = survfit_multistate(
+            vec![2.0, 1.0],
+            vec![
+                vec![vec![0.0, 0.25], vec![0.10, 0.0]],
+                vec![vec![0.0, 0.20], vec![0.05, 0.0]],
+            ],
+            0,
+        )
+        .expect_err("unsorted time grid should fail");
+
+        assert!(err.to_string().contains("time must be sorted ascending"));
     }
 
     #[test]
@@ -1125,6 +1253,26 @@ mod tests {
     }
 
     #[test]
+    fn test_survfit_matrix_result_constructor_rejects_unsorted_time() {
+        let result = SurvfitMatrixResult::new(
+            vec![2.0, 1.0],
+            vec![vec![0.9], vec![0.8]],
+            vec![vec![0.1], vec![0.2]],
+            None,
+            vec![],
+            vec![],
+            1,
+        );
+
+        assert!(
+            result
+                .expect_err("unsorted time grid should fail")
+                .to_string()
+                .contains("time must be sorted ascending")
+        );
+    }
+
+    #[test]
     fn test_survfit_matrix_accessors_reject_ragged_rows() {
         let result = SurvfitMatrixResult {
             time: vec![1.0],
@@ -1186,6 +1334,74 @@ mod tests {
     }
 
     #[test]
+    fn test_cox_survfit_from_baseline_preserves_unsorted_requested_times() {
+        let (times, curves, cumhaz) = cox_survfit_from_baseline(
+            vec![1.0, 3.0],
+            vec![0.2, 0.5],
+            vec![0.0],
+            0.0,
+            None,
+            None,
+            Some(vec![4.0, 0.5, 2.0]),
+        )
+        .unwrap();
+
+        assert_eq!(times, vec![4.0, 0.5, 2.0]);
+        assert_eq!(cumhaz[0], vec![0.5, 0.0, 0.2]);
+        assert_eq!(curves[0][1], 1.0);
+        assert!((curves[0][0] - (-0.5_f64).exp()).abs() < 1e-12);
+        assert!((curves[0][2] - (-0.2_f64).exp()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_cox_survfit_from_baseline_dedupes_near_tied_default_times() {
+        let (times, curves, cumhaz) = cox_survfit_from_baseline(
+            vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0],
+            vec![0.2, 0.25, 0.6],
+            vec![0.0],
+            0.0,
+            Some(vec![0, 0, 0]),
+            Some(vec![0]),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(times, vec![1.0, 2.0]);
+        assert_eq!(cumhaz[0], vec![0.2, 0.6]);
+        assert!((curves[0][0] - (-0.2_f64).exp()).abs() < 1e-12);
+        assert!((curves[0][1] - (-0.6_f64).exp()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_cox_survfit_from_baseline_rejects_invalid_baseline_inputs() {
+        assert!(
+            cox_survfit_from_baseline(
+                vec![1.0, 2.0],
+                vec![0.2, 0.1],
+                vec![0.0],
+                0.0,
+                None,
+                None,
+                None,
+            )
+            .is_err()
+        );
+
+        assert!(
+            cox_survfit_from_baseline(
+                vec![1.0],
+                vec![0.2],
+                vec![0.0],
+                0.0,
+                Some(vec![0]),
+                Some(vec![1]),
+                None,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn test_basehaz() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 0, 1, 0, 1];
@@ -1213,5 +1429,109 @@ mod tests {
         assert!((haz[0] - expected_first).abs() <= expected_first * 1e-12);
         assert!(haz[1] > haz[0]);
         assert!(haz[2] > haz[1]);
+    }
+
+    #[test]
+    fn test_basehaz_counts_same_time_censors_in_event_risk_set() {
+        let (times, hazard) = basehaz(
+            vec![2.0, 2.0, 3.0],
+            vec![0, 1, 1],
+            vec![0.0, 0.0, 0.0],
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(times, vec![2.0, 3.0]);
+        assert!((hazard[0] - 1.0 / 3.0).abs() < 1e-12);
+        assert!((hazard[1] - (1.0 / 3.0 + 1.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_basehaz_same_time_censors_match_weighted_scan_reference() {
+        let time = vec![2.0, 2.0, 2.0, 3.0];
+        let status = vec![0, 1, 0, 1];
+        let lp: Vec<f64> = vec![0.0, 0.3, -0.2, 0.1];
+        let weights = vec![2.0, 1.5, 0.5, 1.0];
+
+        let risk_at_two = weights[0] * lp[0].exp()
+            + weights[1] * lp[1].exp()
+            + weights[2] * lp[2].exp()
+            + weights[3] * lp[3].exp();
+        let risk_at_three = weights[3] * lp[3].exp();
+        let expected = [
+            weights[1] / risk_at_two,
+            weights[1] / risk_at_two + weights[3] / risk_at_three,
+        ];
+
+        let (times, hazard) = basehaz(time, status, lp, false, None, Some(weights)).unwrap();
+
+        assert_eq!(times, vec![2.0, 3.0]);
+        for (actual, expected) in hazard.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_basehaz_with_entry_times_uses_delayed_entry_risk_sets() {
+        let time = vec![2.0, 2.0, 4.0, 5.0, 5.0, 6.0];
+        let status = vec![1, 1, 1, 0, 1, 0];
+        let lp = vec![0.0; time.len()];
+        let entry = vec![0.0, 0.0, 1.5, 2.5, 0.0, 3.0];
+        let (times, haz) = basehaz(time, status, lp, false, Some(entry), None).unwrap();
+
+        assert_eq!(times, vec![2.0, 4.0, 5.0]);
+        assert!((haz[0] - 0.5).abs() < 1e-12);
+        assert!((haz[1] - 0.75).abs() < 1e-12);
+        assert!((haz[2] - (0.75 + 1.0 / 3.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_basehaz_with_entry_times_matches_weighted_scan_reference() {
+        let time = vec![2.0, 2.0, 4.0, 5.0, 5.0, 6.0];
+        let status = vec![1, 1, 1, 0, 1, 0];
+        let lp: Vec<f64> = vec![0.0, 0.2, -0.1, 0.4, 0.1, -0.3];
+        let entry = vec![0.0, 0.0, 1.5, 2.5, 0.0, 3.0];
+        let weights = vec![1.0, 2.0, 0.5, 1.5, 1.0, 0.25];
+
+        let mut expected_times: Vec<f64> = time
+            .iter()
+            .zip(status.iter())
+            .filter_map(|(&event_time, &event)| (event == 1).then_some(event_time))
+            .collect();
+        expected_times.sort_by(f64::total_cmp);
+        expected_times.dedup_by(|left, right| same_time(*left, *right));
+
+        let mut cumulative = 0.0;
+        let expected_hazard: Vec<f64> = expected_times
+            .iter()
+            .map(|&event_time| {
+                let events = time
+                    .iter()
+                    .zip(status.iter())
+                    .zip(weights.iter())
+                    .filter_map(|((&stop, &event), &weight)| {
+                        (event == 1 && same_time(stop, event_time)).then_some(weight)
+                    })
+                    .sum::<f64>();
+                let risk_sum = (0..time.len())
+                    .filter(|&idx| entry[idx] < event_time && time[idx] >= event_time)
+                    .map(|idx| weights[idx] * lp[idx].exp())
+                    .sum::<f64>();
+                if risk_sum > 0.0 {
+                    cumulative += events / risk_sum;
+                }
+                cumulative
+            })
+            .collect();
+
+        let (times, hazard) = basehaz(time, status, lp, false, Some(entry), Some(weights)).unwrap();
+
+        assert_eq!(times, expected_times);
+        assert_eq!(hazard.len(), expected_hazard.len());
+        for (actual, expected) in hazard.iter().zip(expected_hazard.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
     }
 }

@@ -241,7 +241,7 @@ pub fn qtwist_comparison(
         }
     }
 
-    boot_diffs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    boot_diffs.sort_by(f64::total_cmp);
 
     let ci_lower = boot_diffs[(n_bootstrap as f64 * 0.025) as usize];
     let ci_upper = boot_diffs[(n_bootstrap as f64 * 0.975) as usize];

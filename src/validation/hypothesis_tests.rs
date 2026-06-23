@@ -295,11 +295,7 @@ pub(crate) fn proportional_hazards_test(
         };
     }
     let mut sorted_indices: Vec<usize> = (0..n_events).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        event_times[a]
-            .partial_cmp(&event_times[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| event_times[a].total_cmp(&event_times[b]));
     let transformed_time: Vec<f64> = sorted_indices.iter().map(|&idx| event_times[idx]).collect();
     let mut chi2_values = Vec::with_capacity(n_vars);
     let mut p_values = Vec::with_capacity(n_vars);

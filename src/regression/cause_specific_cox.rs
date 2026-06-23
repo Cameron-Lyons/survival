@@ -214,11 +214,7 @@ fn compute_cause_specific_gradient_hessian(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let is_at_risk = |idx: usize| -> bool {
         match treat_other_as {
@@ -322,11 +318,7 @@ fn compute_baseline_hazard(
     treat_other_as: CensoringType,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let is_at_risk = |idx: usize| -> bool {
         match treat_other_as {

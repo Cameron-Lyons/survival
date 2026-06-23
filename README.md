@@ -143,7 +143,9 @@ Kaplan-Meier `survfit` calls honor `conf_level=`, R-style `conf_type=`
 choices for confidence intervals, `start_time=` for conditional curves, and
 `time0=True` to include the starting row.
 They support right-censored `Surv(time, event)` data and counting-process
-`Surv(start, stop, event)` data with delayed-entry risk sets.
+`Surv(start, stop, event)` data with delayed-entry risk sets. Direct and
+formula `Surv(...)` calls also accept R-style named aliases including `time=`,
+`time1=`, `start=`, `time2=`, `stop=`, `event=`, and `status=`.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
 to produce model-based survival curves.
 `survdiff` uses the same right-censored and delayed-entry response forms.

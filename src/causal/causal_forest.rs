@@ -51,7 +51,7 @@ impl CausalForestConfig {
                 "n_trees must be greater than 0",
             ));
         }
-        if honesty_fraction <= 0.0 || honesty_fraction >= 1.0 {
+        if !honesty_fraction.is_finite() || honesty_fraction <= 0.0 || honesty_fraction >= 1.0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "honesty_fraction must be between 0 and 1",
             ));
@@ -169,7 +169,7 @@ fn find_best_split(
 
     for &feature in feature_indices {
         let mut values: Vec<f64> = indices.iter().map(|&i| covariates[i][feature]).collect();
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.sort_by(f64::total_cmp);
         values.dedup();
 
         for i in 0..values.len().saturating_sub(1) {
@@ -544,6 +544,12 @@ mod tests {
         assert!(result.is_err());
 
         let result = CausalForestConfig::new(10, 5, 2, 4, None, true, 1.0, None);
+        assert!(result.is_err());
+
+        let result = CausalForestConfig::new(10, 5, 2, 4, None, true, f64::NAN, None);
+        assert!(result.is_err());
+
+        let result = CausalForestConfig::new(10, 5, 2, 4, None, true, f64::INFINITY, None);
         assert!(result.is_err());
 
         let result = CausalForestConfig::new(10, 5, 2, 4, None, true, 0.5, None);

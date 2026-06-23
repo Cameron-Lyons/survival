@@ -350,7 +350,7 @@ fn find_best_split(
             .iter()
             .map(|&i| data.x[i * data.n_vars + var])
             .collect();
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.sort_by(f64::total_cmp);
         values.dedup();
 
         if values.len() < 2 {
@@ -486,7 +486,7 @@ fn fit_survival_forest_inner(
     config: &SurvivalForestConfig,
 ) -> SurvivalForest {
     let mut unique_times: Vec<f64> = data.time.to_vec();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     let sample_size = (data.n_obs as f64 * config.sample_fraction).ceil() as usize;

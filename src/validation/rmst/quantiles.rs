@@ -43,11 +43,7 @@ pub(crate) fn compute_survival_quantile(
         };
     }
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
     let mut unique_times: Vec<f64> = Vec::new();
     let mut survival: Vec<f64> = Vec::new();
     let mut ci_lower_vec: Vec<f64> = Vec::new();
@@ -61,7 +57,7 @@ pub(crate) fn compute_survival_quantile(
         let current_time = time[indices[i]];
         let mut events = 0.0;
         let mut removed = 0.0;
-        while i < n && time[indices[i]] == current_time {
+        while i < n && same_time(time[indices[i]], current_time) {
             removed += 1.0;
             if status[indices[i]] == 1 {
                 events += 1.0;
@@ -180,11 +176,7 @@ pub(crate) fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> Cumu
     }
     let n_event_types = event_types.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
     let mut unique_times: Vec<f64> = Vec::new();
     let mut n_risk_vec: Vec<usize> = Vec::new();
     let mut events_by_type: Vec<Vec<f64>> = vec![Vec::new(); n_event_types];
@@ -194,7 +186,7 @@ pub(crate) fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> Cumu
         let current_time = time[indices[i]];
         let mut event_counts = vec![0.0; n_event_types];
         let mut removed = 0usize;
-        while i < n && time[indices[i]] == current_time {
+        while i < n && same_time(time[indices[i]], current_time) {
             let s = status[indices[i]];
             removed += 1;
             if let Some(idx) = event_types.iter().position(|&e| e == s) {
@@ -358,23 +350,19 @@ fn compute_survival_at_time(
     }
     let n = filtered_time.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        filtered_time[a]
-            .partial_cmp(&filtered_time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| filtered_time[a].total_cmp(&filtered_time[b]));
     let mut surv = 1.0;
     let mut var_sum = 0.0;
     let mut total_at_risk = n as f64;
     let mut i = 0;
     while i < n {
         let current_time = filtered_time[indices[i]];
-        if current_time > t {
+        if current_time > t && !same_time(current_time, t) {
             break;
         }
         let mut events = 0.0;
         let mut removed = 0.0;
-        while i < n && filtered_time[indices[i]] == current_time {
+        while i < n && same_time(filtered_time[indices[i]], current_time) {
             removed += 1.0;
             if filtered_status[indices[i]] == 1 {
                 events += 1.0;

@@ -5441,12 +5441,16 @@ def rttright(
     time: list[float],
     status: list[int],
     weights: list[float] | None = None,
+    timefix: bool = True,
+    renorm: bool = True,
 ) -> RttrightResult: ...
 def rttright_stratified(
     time: list[float],
     status: list[int],
     strata: list[int],
     weights: list[float] | None = None,
+    timefix: bool = True,
+    renorm: bool = True,
 ) -> RttrightResult: ...
 def surv2data(
     id: list[int],
@@ -5462,7 +5466,7 @@ def survcondense(
 ) -> CondenseResult: ...
 def tcut(
     value: list[float],
-    breaks: list[float],
+    breaks: float | list[float],
     labels: list[str] | None = None,
 ) -> TcutResult: ...
 def tcut_expand(
@@ -5882,9 +5886,14 @@ def logrank_trend(
     group: list[int],
     scores: list[float] | None = None,
 ) -> TrendTestResult: ...
-def cipoisson_exact(k: int, time: float, p: float) -> tuple[float, float]: ...
-def cipoisson_anscombe(k: int, time: float, p: float) -> tuple[float, float]: ...
-def cipoisson(k: int, time: float, p: float, method: str) -> tuple[float, float]: ...
+def cipoisson_exact(k: int, time: float = 1.0, p: float = 0.95) -> tuple[float, float]: ...
+def cipoisson_anscombe(k: int, time: float = 1.0, p: float = 0.95) -> tuple[float, float]: ...
+def cipoisson(
+    k: int,
+    time: float = 1.0,
+    p: float = 0.95,
+    method: str = "exact",
+) -> tuple[float, float]: ...
 def agexact(
     maxiter: int,
     nused: int,

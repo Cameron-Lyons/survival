@@ -1,4 +1,4 @@
-use crate::constants::z_score_for_confidence;
+use crate::internal::statistical::gamma_inverse_cdf;
 use crate::internal::validation::{validate_finite, validate_non_negative};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -243,22 +243,13 @@ pub fn pyears_ci(observed: f64, expected: f64, conf_level: f64) -> PyResult<(f64
     }
 
     let smr = observed / expected;
-
-    let z = z_score_for_confidence(conf_level);
-
-    let se_log = if observed > 0.0 {
-        1.0 / observed.sqrt()
-    } else {
-        f64::INFINITY
-    };
-
-    let lower = if observed > 0.0 {
-        smr * (-z * se_log).exp()
-    } else {
+    let alpha = (1.0 - conf_level) / 2.0;
+    let lower = if observed == 0.0 {
         0.0
+    } else {
+        gamma_inverse_cdf(alpha, observed) / expected
     };
-
-    let upper = smr * (z * se_log).exp();
+    let upper = gamma_inverse_cdf(1.0 - alpha, observed + 1.0) / expected;
 
     Ok((smr, lower, upper))
 }
@@ -288,8 +279,13 @@ mod tests {
         let (smr, lower, upper) = pyears_ci(20.0, 10.0, 0.95).unwrap();
 
         assert!((smr - 2.0).abs() < 1e-10);
-        assert!(lower < smr);
-        assert!(upper > smr);
+        assert!((lower - 1.221652).abs() < 1e-6);
+        assert!((upper - 3.088838).abs() < 1e-6);
+
+        let (smr, lower, upper) = pyears_ci(0.0, 10.0, 0.95).unwrap();
+        assert_eq!(smr, 0.0);
+        assert_eq!(lower, 0.0);
+        assert!((upper - 0.3688879).abs() < 1e-6);
     }
 
     #[test]

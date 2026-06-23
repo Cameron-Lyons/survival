@@ -271,8 +271,7 @@ impl SurvShapResult {
 
         ranking.sort_by(|a, b| {
             b.importance
-                .partial_cmp(&a.importance)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&a.importance)
         });
 
         if let Some(k) = top_k {
@@ -442,8 +441,7 @@ impl PermutationImportanceResult {
 
         ranking.sort_by(|a, b| {
             b.importance
-                .partial_cmp(&a.importance)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&a.importance)
         });
 
         if let Some(k) = top_k {
@@ -506,9 +504,8 @@ impl ShapInteractionResult {
             }
         }
 
-        interactions.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        interactions.sort_by(|a, b| b.2.total_cmp(&a.2));
         interactions.truncate(top_k);
         interactions
     }
 }
-

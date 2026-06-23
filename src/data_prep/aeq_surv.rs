@@ -24,7 +24,8 @@ pub struct AeqSurvResult {
 ///
 /// # Arguments
 /// * `time` - Vector of survival times
-/// * `tolerance` - Tolerance for considering values as tied (default: 1e-8 * range)
+/// * `tolerance` - Absolute/relative tolerance for considering values as tied
+///   (default: `sqrt(f64::EPSILON)`)
 ///
 /// # Returns
 /// * `AeqSurvResult` containing adjusted times and adjustment info
@@ -42,11 +43,9 @@ pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResul
     }
 
     if let Some(tol) = tolerance
-        && (!tol.is_finite() || tol < 0.0)
+        && !tol.is_finite()
     {
-        return Err(PyErr::new::<PyValueError, _>(
-            "tolerance must be non-negative and finite",
-        ));
+        return Err(PyErr::new::<PyValueError, _>("tolerance must be finite"));
     }
 
     if n == 0 {
@@ -57,37 +56,70 @@ pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResul
         });
     }
 
-    let tol = tolerance.unwrap_or_else(|| {
-        let min_val = time.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max_val = time.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let range = max_val - min_val;
-        if range > 0.0 { range * 1e-8 } else { 1e-8 }
-    });
+    let tol = tolerance.unwrap_or_else(|| f64::EPSILON.sqrt());
+    if tol <= 0.0 {
+        return Ok(AeqSurvResult {
+            time,
+            adjusted_count: 0,
+            adjusted_indices: vec![],
+        });
+    }
 
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
+    let mut unique_times = Vec::with_capacity(n);
+    for &idx in &indices {
+        let value = time[idx];
+        if unique_times
+            .last()
+            .is_none_or(|previous| value != *previous)
+        {
+            unique_times.push(value);
+        }
+    }
+
+    if unique_times.len() <= 1 {
+        return Ok(AeqSurvResult {
+            time,
+            adjusted_count: 0,
+            adjusted_indices: vec![],
+        });
+    }
+
+    let mean_abs =
+        unique_times.iter().map(|value| value.abs()).sum::<f64>() / unique_times.len() as f64;
+    let mut cuts = Vec::with_capacity(unique_times.len());
+    cuts.push(unique_times[0]);
+    for pair in unique_times.windows(2) {
+        let delta = pair[1] - pair[0];
+        let tied = delta <= tol || (mean_abs > 0.0 && delta / mean_abs <= tol);
+        if !tied {
+            cuts.push(pair[1]);
+        }
+    }
+
+    if cuts.len() == unique_times.len() {
+        return Ok(AeqSurvResult {
+            time,
+            adjusted_count: 0,
+            adjusted_indices: vec![],
+        });
+    }
+
     let mut adjusted_time = time.clone();
     let mut adjusted_indices = Vec::new();
 
-    let mut i = 0;
-    while i < n {
-        let base_val = adjusted_time[indices[i]];
-        let mut j = i + 1;
-
-        while j < n {
-            let current_val = adjusted_time[indices[j]];
-            if (current_val - base_val).abs() <= tol {
-                if current_val != base_val {
-                    adjusted_time[indices[j]] = base_val;
-                    adjusted_indices.push(indices[j]);
-                }
-                j += 1;
-            } else {
-                break;
-            }
+    for (idx, value) in time.iter().copied().enumerate() {
+        let cut_idx = match cuts.binary_search_by(|cut| cut.total_cmp(&value)) {
+            Ok(found) => found,
+            Err(insert_pos) => insert_pos.saturating_sub(1),
+        };
+        let adjusted_value = cuts[cut_idx];
+        if adjusted_value != value {
+            adjusted_time[idx] = adjusted_value;
+            adjusted_indices.push(idx);
         }
-        i = j;
     }
 
     let adjusted_count = adjusted_indices.len();
@@ -120,6 +152,32 @@ mod tests {
     }
 
     #[test]
+    fn test_aeq_surv_matches_r_adjacent_cutpoints() {
+        let result = aeq_surv(vec![1.0, 1.0 + 9e-9, 1.0 + 18e-9], Some(1e-8)).unwrap();
+        assert_eq!(result.time, vec![1.0, 1.0, 1.0]);
+        assert_eq!(result.adjusted_indices, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_aeq_surv_matches_r_relative_tolerance() {
+        let result = aeq_surv(vec![1e9, 1e9 + 1.0, 1e9 + 20.0], Some(1e-8)).unwrap();
+        assert_eq!(result.time, vec![1e9, 1e9, 1e9 + 20.0]);
+        assert_eq!(result.adjusted_indices, vec![1]);
+    }
+
+    #[test]
+    fn test_aeq_surv_nonpositive_tolerance_is_noop() {
+        let time = vec![1.0, 1.0 + 1e-10];
+        let negative = aeq_surv(time.clone(), Some(-1.0)).unwrap();
+        let zero = aeq_surv(time.clone(), Some(0.0)).unwrap();
+
+        assert_eq!(negative.time, time);
+        assert_eq!(negative.adjusted_count, 0);
+        assert_eq!(zero.time, time);
+        assert_eq!(zero.adjusted_count, 0);
+    }
+
+    #[test]
     fn test_aeq_surv_empty() {
         let time: Vec<f64> = vec![];
         let result = aeq_surv(time, None).unwrap();
@@ -138,6 +196,5 @@ mod tests {
     fn test_aeq_surv_rejects_nonfinite_values_and_tolerance() {
         assert!(aeq_surv(vec![1.0, f64::NAN], None).is_err());
         assert!(aeq_surv(vec![1.0], Some(f64::INFINITY)).is_err());
-        assert!(aeq_surv(vec![1.0], Some(-1.0)).is_err());
     }
 }

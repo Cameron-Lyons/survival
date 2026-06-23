@@ -166,7 +166,7 @@ pub fn conformal_coverage_test(
         clamped_normal_ci_95(empirical_coverage, se, 0.0, 1.0);
 
     let mut sorted_lpb: Vec<f64> = lpb.clone();
-    sorted_lpb.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_lpb.sort_by(f64::total_cmp);
 
     let mean_lpb = lpb.iter().sum::<f64>() / n as f64;
     let median_lpb = if n.is_multiple_of(2) {

@@ -1,24 +1,14 @@
-use crate::constants::clamped_normal_ci_95;
+use crate::constants::{clamped_normal_ci_95, same_time};
 use crate::internal::statistical::chi2_sf;
-use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_non_negative, validate_probability_slice,
+};
 use crate::simd_ops::{dot_product_simd, mean_simd, subtract_scalar_simd, sum_of_squares_simd};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 fn validate_survival_probabilities(values: &[f64], field: &str) -> PyResult<()> {
-    for (index, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(PyValueError::new_err(format!(
-                "{field} contains non-finite value {value} at index {index}"
-            )));
-        }
-        if !(0.0..=1.0).contains(&value) {
-            return Err(PyValueError::new_err(format!(
-                "{field} must contain probabilities between 0 and 1; got {value} at index {index}"
-            )));
-        }
-    }
-    Ok(())
+    validate_probability_slice(values, field)
 }
 
 fn validate_calibration_observations(time: &[f64], status: &[i32]) -> PyResult<()> {
@@ -60,6 +50,32 @@ fn validate_bandwidth(bandwidth: Option<f64>) -> PyResult<()> {
         }
     }
     Ok(())
+}
+
+#[inline]
+fn at_or_before_time_point(time: f64, time_point: f64) -> bool {
+    time <= time_point || same_time(time, time_point)
+}
+
+#[inline]
+fn after_time_point(time: f64, time_point: f64) -> bool {
+    time > time_point && !same_time(time, time_point)
+}
+
+#[inline]
+fn event_at_or_before_time_point(time: f64, status: i32, time_point: f64) -> bool {
+    status == 1 && at_or_before_time_point(time, time_point)
+}
+
+#[inline]
+fn observed_survival_at_time_point(time: f64, status: i32, time_point: f64) -> Option<f64> {
+    if event_at_or_before_time_point(time, status, time_point) {
+        Some(0.0)
+    } else if after_time_point(time, time_point) {
+        Some(1.0)
+    } else {
+        None
+    }
 }
 
 include!("dcal.rs");

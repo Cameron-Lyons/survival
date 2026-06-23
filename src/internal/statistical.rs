@@ -1,6 +1,6 @@
 use crate::constants::{
     DEFAULT_CONCORDANCE, DIVISION_FLOOR, ITERATIVE_MAX_ITER, LCG64_INCREMENT, LCG64_MULTIPLIER,
-    TIED_PAIR_WEIGHT, TIME_EPSILON,
+    TIED_PAIR_WEIGHT, TIME_EPSILON, same_time,
 };
 use crate::internal::fenwick::FenwickTree;
 use std::f64::consts::SQRT_2;
@@ -29,6 +29,16 @@ impl ConcordanceSummary {
             DEFAULT_CONCORDANCE
         }
     }
+}
+
+#[inline]
+fn concordance_time_precedes(left: f64, right: f64) -> bool {
+    left < right && !same_time(left, right)
+}
+
+#[inline]
+fn concordance_at_or_before_horizon(time: f64, horizon: f64) -> bool {
+    time <= horizon || same_time(time, horizon)
 }
 
 #[inline]
@@ -212,12 +222,8 @@ pub(crate) fn counting_process_concordance_summary_with_weights_and_time_weight(
     let mut stop_order: Vec<usize> = (0..n).collect();
     stop_order.sort_by(|&a, &b| stop[a].total_cmp(&stop[b]));
 
-    let mut event_times: Vec<f64> = (0..n)
-        .filter(|&idx| event[idx] == 1)
-        .map(|idx| stop[idx])
-        .collect();
-    event_times.sort_by(f64::total_cmp);
-    event_times.dedup();
+    let mut event_order: Vec<usize> = (0..n).filter(|&idx| event[idx] == 1).collect();
+    event_order.sort_by(|&a, &b| stop[a].total_cmp(&stop[b]).then_with(|| a.cmp(&b)));
 
     let event_time_multipliers = if time_weight == ConcordanceTimeWeight::N {
         Vec::new()
@@ -231,8 +237,17 @@ pub(crate) fn counting_process_concordance_summary_with_weights_and_time_weight(
     let mut stop_cursor = 0usize;
     let mut concordant = 0.0;
     let mut comparable = 0.0;
+    let mut event_group_start = 0usize;
 
-    for event_time in event_times {
+    while event_group_start < event_order.len() {
+        let event_time = stop[event_order[event_group_start]];
+        let mut event_group_end = event_group_start + 1;
+        while event_group_end < event_order.len()
+            && stop[event_order[event_group_end]] == event_time
+        {
+            event_group_end += 1;
+        }
+
         while start_cursor < n && start[start_order[start_cursor]] < event_time {
             let idx = start_order[start_cursor];
             if !active[idx] {
@@ -270,17 +285,16 @@ pub(crate) fn counting_process_concordance_summary_with_weights_and_time_weight(
         }
 
         let at_risk_total = at_risk.total();
-        if at_risk_total <= 0.0 || event_time_multiplier <= 0.0 {
-            continue;
-        }
-        for idx in 0..n {
-            if event[idx] == 1 && stop[idx] == event_time {
+        if at_risk_total > 0.0 && event_time_multiplier > 0.0 {
+            for &idx in &event_order[event_group_start..event_group_end] {
                 let event_weight = observation_weight(weights, idx) * event_time_multiplier;
                 comparable += event_weight * at_risk_total;
                 concordant += event_weight
                     * concordance_contribution_for_rank(&at_risk, &risk_levels, risk_scores[idx]);
             }
         }
+
+        event_group_start = event_group_end;
     }
 
     ConcordanceSummary {
@@ -400,15 +414,15 @@ fn concordance_summary_quadratic(
     for i in 0..n {
         for j in (i + 1)..n {
             let i_comparable = event[i] == 1
-                && time[i] < time[j]
+                && concordance_time_precedes(time[i], time[j])
                 && match horizon {
-                    Some(h) => time[i] <= h,
+                    Some(h) => concordance_at_or_before_horizon(time[i], h),
                     None => true,
                 };
             let j_comparable = event[j] == 1
-                && time[j] < time[i]
+                && concordance_time_precedes(time[j], time[i])
                 && match horizon {
-                    Some(h) => time[j] <= h,
+                    Some(h) => concordance_at_or_before_horizon(time[j], h),
                     None => true,
                 };
 
@@ -499,7 +513,7 @@ fn concordance_summary_ranked(
     while group_start < n {
         let current_time = time[time_order[group_start]];
         let mut group_end = group_start + 1;
-        while group_end < n && time[time_order[group_end]] == current_time {
+        while group_end < n && same_time(time[time_order[group_end]], current_time) {
             group_end += 1;
         }
 
@@ -511,7 +525,9 @@ fn concordance_summary_ranked(
         };
         if at_risk_total > 0.0 && event_time_multiplier > 0.0 {
             for &idx in &time_order[group_start..group_end] {
-                if event[idx] != 1 || horizon.is_some_and(|h| time[idx] > h) {
+                if event[idx] != 1
+                    || horizon.is_some_and(|h| !concordance_at_or_before_horizon(time[idx], h))
+                {
                     continue;
                 }
 
@@ -542,9 +558,20 @@ fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
 }
 
 fn event_time_multiplier_at(event_time_multipliers: &[(f64, f64)], event_time: f64) -> f64 {
-    event_time_multipliers
-        .binary_search_by(|&(time, _)| time.total_cmp(&event_time))
-        .map_or(0.0, |idx| event_time_multipliers[idx].1)
+    match event_time_multipliers.binary_search_by(|&(time, _)| time.total_cmp(&event_time)) {
+        Ok(idx) => event_time_multipliers[idx].1,
+        Err(idx) => {
+            if idx < event_time_multipliers.len()
+                && same_time(event_time_multipliers[idx].0, event_time)
+            {
+                event_time_multipliers[idx].1
+            } else if idx > 0 && same_time(event_time_multipliers[idx - 1].0, event_time) {
+                event_time_multipliers[idx - 1].1
+            } else {
+                0.0
+            }
+        }
+    }
 }
 
 fn time_weight_multiplier_from_components(
@@ -602,7 +629,7 @@ fn right_censored_time_weight_multipliers(
     while group_start < n {
         let current_time = time[time_order[group_start]];
         let mut group_end = group_start + 1;
-        while group_end < n && time[time_order[group_end]] == current_time {
+        while group_end < n && same_time(time[time_order[group_end]], current_time) {
             group_end += 1;
         }
 
@@ -657,12 +684,8 @@ fn counting_process_time_weight_multipliers(
 
     let n = start.len();
     let total_weight: f64 = (0..n).map(|idx| observation_weight(weights, idx)).sum();
-    let mut event_times: Vec<f64> = (0..n)
-        .filter(|&idx| event[idx] == 1)
-        .map(|idx| stop[idx])
-        .collect();
-    event_times.sort_by(f64::total_cmp);
-    event_times.dedup();
+    let mut event_order: Vec<usize> = (0..n).filter(|&idx| event[idx] == 1).collect();
+    event_order.sort_by(|&a, &b| stop[a].total_cmp(&stop[b]).then_with(|| a.cmp(&b)));
 
     let mut start_order: Vec<usize> = (0..n).collect();
     start_order.sort_by(|&a, &b| start[a].total_cmp(&start[b]));
@@ -673,9 +696,18 @@ fn counting_process_time_weight_multipliers(
     let mut start_cursor = 0usize;
     let mut stop_cursor = 0usize;
     let mut survival = 1.0;
-    let mut multipliers = Vec::with_capacity(event_times.len());
+    let mut multipliers = Vec::new();
+    let mut event_group_start = 0usize;
 
-    for event_time in event_times {
+    while event_group_start < event_order.len() {
+        let event_time = stop[event_order[event_group_start]];
+        let mut event_group_end = event_group_start + 1;
+        while event_group_end < event_order.len()
+            && stop[event_order[event_group_end]] == event_time
+        {
+            event_group_end += 1;
+        }
+
         while start_cursor < n && start[start_order[start_cursor]] < event_time {
             active_weight += observation_weight(weights, start_order[start_cursor]);
             start_cursor += 1;
@@ -685,9 +717,9 @@ fn counting_process_time_weight_multipliers(
             stop_cursor += 1;
         }
 
-        let death_weight = (0..n)
-            .filter(|&idx| event[idx] == 1 && stop[idx] == event_time)
-            .map(|idx| observation_weight(weights, idx))
+        let death_weight = event_order[event_group_start..event_group_end]
+            .iter()
+            .map(|&idx| observation_weight(weights, idx))
             .sum::<f64>();
 
         multipliers.push((
@@ -703,6 +735,8 @@ fn counting_process_time_weight_multipliers(
         if active_weight > 0.0 {
             survival *= ((active_weight - death_weight) / active_weight).max(0.0);
         }
+
+        event_group_start = event_group_end;
     }
 
     multipliers
@@ -766,11 +800,7 @@ pub(crate) fn lcg64_shuffle_per_index_seed(indices: &mut [usize], seed: u64) {
 pub(crate) fn compute_censoring_km(time: &[f64], status: &[i32]) -> (Vec<f64>, Vec<f64>) {
     let n = time.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut unique_times = Vec::new();
     let mut km_values = Vec::new();
@@ -886,6 +916,16 @@ pub(crate) fn normal_inverse_cdf(p: f64) -> f64 {
         -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
             / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
     }
+}
+
+#[inline]
+pub(crate) fn two_sided_normal_quantile(alpha: f64) -> Option<f64> {
+    if !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0 {
+        return None;
+    }
+
+    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
+    z.is_finite().then_some(z)
 }
 
 #[inline]
@@ -1050,6 +1090,27 @@ mod tests {
         assert!(
             (ranked - quadratic).abs() < 1e-12,
             "ranked {ranked} differed from quadratic {quadratic}"
+        );
+    }
+
+    fn assert_concordance_summary_close(actual: ConcordanceSummary, expected: ConcordanceSummary) {
+        assert!(
+            (actual.concordant - expected.concordant).abs() < 1e-12,
+            "concordant {} differed from {}",
+            actual.concordant,
+            expected.concordant
+        );
+        assert!(
+            (actual.comparable - expected.comparable).abs() < 1e-12,
+            "comparable {} differed from {}",
+            actual.comparable,
+            expected.comparable
+        );
+        assert!(
+            (actual.c_index() - expected.c_index()).abs() < 1e-12,
+            "c-index {} differed from {}",
+            actual.c_index(),
+            expected.c_index()
         );
     }
 
@@ -1232,6 +1293,74 @@ mod tests {
     }
 
     #[test]
+    fn test_right_censored_concordance_groups_near_tied_event_times() {
+        let exact_time = [1.0, 1.0, 2.0, 3.0];
+        let near_time = [1.0, 1.0 + TIME_EPSILON / 2.0, 2.0, 3.0];
+        let event = [1, 1, 1, 0];
+        let risk = [0.9, 0.1, 0.5, 0.2];
+
+        for horizon in [None, Some(1.0)] {
+            let exact = concordance_summary_with_horizon(&risk, &exact_time, &event, horizon);
+            let near = concordance_summary_with_horizon(&risk, &near_time, &event, horizon);
+            let near_quadratic = concordance_summary_quadratic(
+                &risk,
+                &near_time,
+                &event,
+                None,
+                horizon,
+                ConcordanceTimeWeight::N,
+            );
+
+            assert_concordance_summary_close(near, exact);
+            assert_concordance_summary_close(near, near_quadratic);
+        }
+    }
+
+    #[test]
+    fn test_time_weighted_concordance_groups_near_tied_event_times() {
+        let exact_time = [1.0, 1.0, 2.0, 3.0, 4.0];
+        let near_time = [1.0, 1.0 + TIME_EPSILON / 2.0, 2.0, 3.0, 4.0];
+        let event = [1, 1, 1, 0, 1];
+        let risk = [0.9, 0.1, 0.5, 0.2, 0.4];
+        let weights = [1.0, 2.0, 1.0, 1.5, 0.5];
+
+        for time_weight in [
+            ConcordanceTimeWeight::S,
+            ConcordanceTimeWeight::SOverG,
+            ConcordanceTimeWeight::NOverG2,
+            ConcordanceTimeWeight::I,
+        ] {
+            let exact = concordance_summary_ranked(
+                &risk,
+                &exact_time,
+                &event,
+                Some(&weights),
+                None,
+                time_weight,
+            );
+            let near = concordance_summary_ranked(
+                &risk,
+                &near_time,
+                &event,
+                Some(&weights),
+                None,
+                time_weight,
+            );
+            let near_quadratic = concordance_summary_quadratic(
+                &risk,
+                &near_time,
+                &event,
+                Some(&weights),
+                None,
+                time_weight,
+            );
+
+            assert_concordance_summary_close(near, exact);
+            assert_concordance_summary_close(near, near_quadratic);
+        }
+    }
+
+    #[test]
     fn test_ranked_concordance_handles_signed_zero_scores() {
         let time = [1.0, 2.0, 3.0, 4.0];
         let event = [1, 1, 1, 1];
@@ -1334,6 +1463,32 @@ mod tests {
         let risk = [0.9, 0.2, 0.7, 0.1, 0.5, 0.4];
 
         assert_counting_ranked_matches_quadratic(&risk, &start, &stop, &event);
+    }
+
+    #[test]
+    fn test_counting_process_concordance_groups_duplicate_event_indices() {
+        let start = [0.0, 0.0, 0.25, 0.5, 0.0, 1.0, 1.0];
+        let stop = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0];
+        let event = [1, 1, 1, 1, 0, 1, 0];
+        let risk = [0.9, 0.2, 0.7, 0.4, 0.1, 0.8, 0.3];
+        let weights = [1.0, 0.0, 2.0, 1.5, 0.5, 3.0, 1.0];
+
+        assert_counting_ranked_matches_quadratic(&risk, &start, &stop, &event);
+        assert_weighted_counting_ranked_matches_quadratic(&risk, &start, &stop, &event, &weights);
+        for time_weight in [
+            ConcordanceTimeWeight::S,
+            ConcordanceTimeWeight::NOverG2,
+            ConcordanceTimeWeight::I,
+        ] {
+            assert_time_weighted_counting_ranked_matches_quadratic(
+                &risk,
+                &start,
+                &stop,
+                &event,
+                &weights,
+                time_weight,
+            );
+        }
     }
 
     #[test]

@@ -2,6 +2,12 @@
 
 use pyo3::prelude::*;
 
+use crate::constants::exp_clamped;
+use crate::recurrent::validation::{
+    validate_counting_process_design, validate_solver_controls, validate_subject_ids_within_count,
+    validate_terminal_design,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum FrailtyDistribution {
@@ -96,19 +102,32 @@ pub fn joint_frailty_model(
     max_iter: usize,
     tol: f64,
 ) -> PyResult<JointFrailtyResult> {
-    if subject_id.len() != n_rec_obs {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "subject_id length must match n_rec_obs",
-        ));
-    }
-    if term_time.len() != n_subjects || term_status.len() != n_subjects {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Terminal event data must have length n_subjects",
-        ));
-    }
+    validate_counting_process_design(
+        &subject_id,
+        &rec_start,
+        &rec_stop,
+        &rec_status,
+        &x_recurrent,
+        n_rec_obs,
+        n_rec_vars,
+    )?;
+    validate_terminal_design(
+        &term_time,
+        &term_status,
+        &x_terminal,
+        n_subjects,
+        n_term_vars,
+    )?;
+    validate_subject_ids_within_count(&subject_id, n_subjects)?;
+    validate_solver_controls(max_iter, tol)?;
 
     let n_rec_events = rec_status.iter().filter(|&&s| s == 1).count();
     let n_term_events = term_status.iter().filter(|&&s| s == 1).count();
+
+    let mut recurrent_rows_by_subject: Vec<Vec<usize>> = vec![Vec::new(); n_subjects];
+    for (row, &subject) in subject_id.iter().enumerate() {
+        recurrent_rows_by_subject[subject].push(row);
+    }
 
     let mut beta_rec = vec![0.0; n_rec_vars];
     let mut beta_term = vec![0.0; n_term_vars];
@@ -124,26 +143,24 @@ pub fn joint_frailty_model(
         n_iter = iter + 1;
 
         for i in 0..n_subjects {
-            let rec_indices: Vec<usize> = (0..n_rec_obs).filter(|&j| subject_id[j] == i).collect();
-
-            let n_events_i: f64 =
-                rec_indices.iter().filter(|&&j| rec_status[j] == 1).count() as f64;
+            let rec_indices = &recurrent_rows_by_subject[i];
+            let n_events_i = rec_indices.iter().filter(|&&j| rec_status[j] == 1).count() as f64;
 
             let mut cum_hazard_rec = 0.0;
-            for &j in &rec_indices {
+            for &j in rec_indices {
                 let gap = rec_stop[j] - rec_start[j];
                 let mut eta = 0.0;
                 for k in 0..n_rec_vars {
                     eta += x_recurrent[j * n_rec_vars + k] * beta_rec[k];
                 }
-                cum_hazard_rec += gap * eta.exp();
+                cum_hazard_rec += gap * exp_clamped(eta);
             }
 
             let mut eta_term = 0.0;
             for k in 0..n_term_vars {
                 eta_term += x_terminal[i * n_term_vars + k] * beta_term[k];
             }
-            let cum_hazard_term = term_time[i] * (alpha * eta_term).exp();
+            let cum_hazard_term = term_time[i] * exp_clamped(alpha * eta_term);
 
             match frailty_dist {
                 FrailtyDistribution::Gamma => {
@@ -181,7 +198,7 @@ pub fn joint_frailty_model(
             for k in 0..n_rec_vars {
                 eta += x_recurrent[j * n_rec_vars + k] * beta_rec[k];
             }
-            let exp_eta = eta.clamp(-700.0, 700.0).exp();
+            let exp_eta = exp_clamped(eta);
 
             if rec_status[j] == 1 {
                 for k in 0..n_rec_vars {
@@ -216,7 +233,7 @@ pub fn joint_frailty_model(
             for k in 0..n_term_vars {
                 eta += x_terminal[i * n_term_vars + k] * beta_term[k];
             }
-            let exp_eta = eta.clamp(-700.0, 700.0).exp();
+            let exp_eta = exp_clamped(eta);
 
             if term_status[i] == 1 {
                 for k in 0..n_term_vars {
@@ -260,7 +277,7 @@ pub fn joint_frailty_model(
             }
 
             let gap = rec_stop[j] - rec_start[j];
-            loglik -= f_i * gap * eta.exp();
+            loglik -= f_i * gap * exp_clamped(eta);
         }
 
         for i in 0..n_subjects {
@@ -275,10 +292,11 @@ pub fn joint_frailty_model(
                 loglik += f_i.ln() + eta;
             }
 
-            loglik -= f_i * term_time[i] * eta.exp();
+            loglik -= f_i * term_time[i] * exp_clamped(eta);
         }
 
         if (loglik - prev_loglik).abs() < tol {
+            prev_loglik = loglik;
             converged = true;
             break;
         }
@@ -349,5 +367,129 @@ mod tests {
         assert_eq!(result.recurrent_coef.len(), 1);
         assert_eq!(result.terminal_coef.len(), 1);
         assert!(result.frailty_variance > 0.0);
+    }
+
+    #[test]
+    fn joint_frailty_validates_public_inputs() {
+        assert!(
+            joint_frailty_model(
+                vec![0, 1],
+                vec![0.0, 0.0],
+                vec![1.0, 1.0],
+                vec![1, 0],
+                vec![0.5],
+                2,
+                1,
+                vec![1.0, 1.0],
+                vec![1, 0],
+                vec![0.5, 0.2],
+                2,
+                1,
+                FrailtyDistribution::Gamma,
+                20,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            joint_frailty_model(
+                vec![0],
+                vec![0.0],
+                vec![0.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                FrailtyDistribution::Gamma,
+                20,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            joint_frailty_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![2],
+                vec![0.5],
+                1,
+                1,
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                FrailtyDistribution::Gamma,
+                20,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            joint_frailty_model(
+                vec![2],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                vec![1.0, 1.0],
+                vec![1, 0],
+                vec![0.5, 0.2],
+                2,
+                1,
+                FrailtyDistribution::Gamma,
+                20,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            joint_frailty_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                vec![1.0],
+                vec![2],
+                vec![0.5],
+                1,
+                1,
+                FrailtyDistribution::Gamma,
+                20,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            joint_frailty_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                FrailtyDistribution::Gamma,
+                0,
+                1e-4,
+            )
+            .is_err()
+        );
     }
 }

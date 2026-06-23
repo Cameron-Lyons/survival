@@ -21,6 +21,7 @@
 \alias{survfit.character}
 \alias{survfit.formula}
 \alias{survfit.survival_py_coxph}
+\alias{survfit.survival_py_surv}
 \alias{coef.survival_py_model}
 \alias{vcov.survival_py_model}
 \alias{confint.survival_py_model}
@@ -71,7 +72,7 @@ The exported functions preserve familiar R survival-analysis entry points while
 delegating computation to \code{survival.r_api} through \pkg{reticulate}.
 }
 \usage{
-Surv(time, time2, event, type = NULL, origin = 0)
+Surv(time, time2, event, type = NULL, origin = 0, time1, start, stop, status)
 
 is.Surv(value)
 
@@ -81,6 +82,9 @@ survfit(formula, ...)
   na.action = "fail")
 
 \method{survfit}{character}(formula, data = NULL, ..., subset = NULL,
+  na.action = "fail")
+
+\method{survfit}{survival_py_surv}(formula, ..., group = NULL, subset = NULL,
   na.action = "fail")
 
 \method{survfit}{survival_py_coxph}(formula, newdata = NULL, ..., se.fit = TRUE)
@@ -101,7 +105,8 @@ survreg.control(maxiter = 30, rel.tolerance = 1e-09,
 
 basehaz(fit, ..., centered = TRUE)
 
-concordance(formula, data = NULL, ..., subset = NULL, na.action = "fail")
+concordance(formula, data = NULL, ..., scores = NULL, risk.scores = NULL,
+  weights = NULL, cluster = NULL, subset = NULL, na.action = "fail")
 
 cox.zph(fit, ...)
 
@@ -215,6 +220,9 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 }
 \arguments{
 \item{time, time2, event}{Survival response vectors.}
+\item{time1, start, stop, status}{Named aliases for R-style response
+construction. \code{time1} and \code{start} map to the first time column,
+\code{stop} maps to \code{time2}, and \code{status} maps to \code{event}.}
 \item{type}{Optional survival response or prediction type.}
 \item{origin}{Optional time origin passed to the Python response constructor.}
 \item{value}{Object to test.}
@@ -225,13 +233,17 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 \item{best}{Nearest-date direction, either \code{"after"} or \code{"prior"}.
 The bridge also accepts \code{"closest"} as a Python-backed extension.}
 \item{nomatch}{Scalar value used when \code{neardate} cannot find a match.}
-\item{formula}{Formula, formula string, or bridged fitted Cox model accepted by
-\code{survival.r_api}.}
+\item{formula}{Formula, formula string, bridged \code{Surv} response, or
+bridged fitted Cox model accepted by \code{survival.r_api}.}
 \item{data, newdata}{Optional data frames or Python-compatible data objects.}
 \item{subset}{Optional row subset.}
 \item{na.action}{Missing-data policy, either a string or one of the common
 \pkg{stats} NA action functions.}
 \item{group}{Optional group vector for direct \code{survdiff} calls.}
+\item{scores, risk.scores}{Optional direct concordance score vectors or
+matrices. Use at most one of these.}
+\item{weights}{Optional case weights.}
+\item{cluster}{Optional cluster labels for robust variance where supported.}
 \item{fit, object}{Bridged model or result object.}
 \item{x}{Bridged result object for methods, or a numeric vector for \code{tcut}.}
 \item{eps, toler.chol, iter.max, toler.inf, outer.max, timefix}{Control

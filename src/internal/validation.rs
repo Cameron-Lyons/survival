@@ -205,6 +205,78 @@ pub(crate) fn validate_binary_f64(
     Ok(())
 }
 
+pub(crate) fn validate_non_overlapping_intervals_i32(
+    id: &[i32],
+    start: &[f64],
+    stop: &[f64],
+    epsilon: f64,
+) -> Result<(), PyErr> {
+    let mut order: Vec<usize> = (0..id.len()).collect();
+    order.sort_by(|&a, &b| {
+        id[a]
+            .cmp(&id[b])
+            .then_with(|| start[a].total_cmp(&start[b]))
+            .then_with(|| stop[a].total_cmp(&stop[b]))
+            .then_with(|| a.cmp(&b))
+    });
+
+    for pair in order.windows(2) {
+        let previous = pair[0];
+        let current = pair[1];
+        if id[previous] == id[current] && start[current] < stop[previous] - epsilon {
+            return Err(PyValueError::new_err(format!(
+                "intervals must not overlap within id; id {} rows {} and {} overlap",
+                id[current],
+                previous + 1,
+                current + 1
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_probability_slice(values: &[f64], field: &str) -> Result<(), PyErr> {
+    for (index, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "{field} contains non-finite value {value} at index {index}"
+            )));
+        }
+        if !(0.0..=1.0).contains(&value) {
+            return Err(PyValueError::new_err(format!(
+                "{field} must contain probabilities between 0 and 1; got {value} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_positive_finite_slice(values: &[f64], field: &str) -> Result<(), PyErr> {
+    for (index, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "{field} contains non-finite value {value} at index {index}"
+            )));
+        }
+        if value <= 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "{field} must contain positive values; got {value} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_confidence_level(confidence_level: f64) -> Result<(), PyErr> {
+    if !confidence_level.is_finite() || confidence_level <= 0.0 || confidence_level >= 1.0 {
+        return Err(PyValueError::new_err(
+            "confidence_level must be a finite value between 0 and 1",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn clamp_probability(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }

@@ -45,6 +45,65 @@ impl GonenHellerResult {
     }
 }
 
+struct GonenHellerAccumulator {
+    total_sum: f64,
+    total_pairs: usize,
+    total_ties: usize,
+    influence_sums: Vec<f64>,
+}
+
+impl GonenHellerAccumulator {
+    fn new(n: usize) -> Self {
+        Self {
+            total_sum: 0.0,
+            total_pairs: 0,
+            total_ties: 0,
+            influence_sums: vec![0.0; n],
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.total_sum += other.total_sum;
+        self.total_pairs += other.total_pairs;
+        self.total_ties += other.total_ties;
+        for (left, right) in self
+            .influence_sums
+            .iter_mut()
+            .zip(other.influence_sums.iter())
+        {
+            *left += right;
+        }
+    }
+}
+
+fn accumulate_gonen_heller_row(
+    accumulator: &mut GonenHellerAccumulator,
+    linear_predictor: &[f64],
+    i: usize,
+) {
+    for j in (i + 1)..linear_predictor.len() {
+        let diff = linear_predictor[i] - linear_predictor[j];
+
+        if diff.abs() < 1e-10 {
+            accumulator.total_ties += 1;
+            continue;
+        }
+
+        accumulator.total_pairs += 1;
+        let contribution = 1.0 / (1.0 + (-diff.abs()).exp());
+        accumulator.total_sum += contribution;
+
+        let deriv = contribution * (1.0 - contribution);
+        if diff > 0.0 {
+            accumulator.influence_sums[i] += deriv;
+            accumulator.influence_sums[j] -= deriv;
+        } else {
+            accumulator.influence_sums[i] -= deriv;
+            accumulator.influence_sums[j] += deriv;
+        }
+    }
+}
+
 pub(crate) fn gonen_heller_core(linear_predictor: &[f64]) -> GonenHellerResult {
     let n = linear_predictor.len();
 
@@ -60,69 +119,43 @@ pub(crate) fn gonen_heller_core(linear_predictor: &[f64]) -> GonenHellerResult {
         };
     }
 
-    let compute_contributions = |i: usize| -> (f64, usize, usize, Vec<f64>) {
-        let mut sum = 0.0;
-        let mut pairs = 0usize;
-        let mut ties = 0usize;
-        let mut influence = vec![0.0; n];
-
-        for j in (i + 1)..n {
-            let diff = linear_predictor[i] - linear_predictor[j];
-
-            if diff.abs() < 1e-10 {
-                ties += 1;
-                continue;
-            }
-
-            pairs += 1;
-            let contribution = 1.0 / (1.0 + (-diff.abs()).exp());
-            sum += contribution;
-
-            let deriv = contribution * (1.0 - contribution);
-            if diff > 0.0 {
-                influence[i] += deriv;
-                influence[j] -= deriv;
-            } else {
-                influence[i] -= deriv;
-                influence[j] += deriv;
-            }
-        }
-
-        (sum, pairs, ties, influence)
-    };
-
-    let results: Vec<(f64, usize, usize, Vec<f64>)> = if n > PARALLEL_THRESHOLD_LARGE {
-        (0..n).into_par_iter().map(compute_contributions).collect()
+    let accumulator = if n > PARALLEL_THRESHOLD_LARGE {
+        (0..n)
+            .into_par_iter()
+            .fold(
+                || GonenHellerAccumulator::new(n),
+                |mut accumulator, i| {
+                    accumulate_gonen_heller_row(&mut accumulator, linear_predictor, i);
+                    accumulator
+                },
+            )
+            .reduce(
+                || GonenHellerAccumulator::new(n),
+                |mut left, right| {
+                    left.merge(right);
+                    left
+                },
+            )
     } else {
-        (0..n).map(compute_contributions).collect()
+        let mut accumulator = GonenHellerAccumulator::new(n);
+        for i in 0..n {
+            accumulate_gonen_heller_row(&mut accumulator, linear_predictor, i);
+        }
+        accumulator
     };
 
-    let mut total_sum = 0.0;
-    let mut total_pairs = 0usize;
-    let mut total_ties = 0usize;
-    let mut influence_sums = vec![0.0; n];
-
-    for (sum, pairs, ties, influence) in results {
-        total_sum += sum;
-        total_pairs += pairs;
-        total_ties += ties;
-        for (k, &inf) in influence.iter().enumerate() {
-            influence_sums[k] += inf;
-        }
-    }
-
-    let cpe = if total_pairs > 0 {
-        total_sum / total_pairs as f64
+    let cpe = if accumulator.total_pairs > 0 {
+        accumulator.total_sum / accumulator.total_pairs as f64
     } else {
         0.5
     };
 
-    let variance = if total_pairs > 0 {
+    let variance = if accumulator.total_pairs > 0 {
         let n_f = n as f64;
-        let pairs_f = total_pairs as f64;
+        let pairs_f = accumulator.total_pairs as f64;
         let mut var_sum = 0.0;
 
-        for &inf in &influence_sums {
+        for &inf in &accumulator.influence_sums {
             let normalized = inf / pairs_f;
             var_sum += normalized * normalized;
         }
@@ -137,8 +170,8 @@ pub(crate) fn gonen_heller_core(linear_predictor: &[f64]) -> GonenHellerResult {
 
     GonenHellerResult {
         cpe,
-        n_pairs: total_pairs,
-        n_ties: total_ties,
+        n_pairs: accumulator.total_pairs,
+        n_ties: accumulator.total_ties,
         variance,
         std_error,
         ci_lower,
@@ -153,6 +186,8 @@ pub fn gonen_heller_concordance(linear_predictor: Vec<f64>) -> PyResult<GonenHel
             "linear_predictor must not be empty",
         ));
     }
+    validate_no_nan(&linear_predictor, "linear_predictor")?;
+    validate_finite(&linear_predictor, "linear_predictor")?;
 
     Ok(gonen_heller_core(&linear_predictor))
 }

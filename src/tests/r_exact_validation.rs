@@ -292,11 +292,7 @@ mod tests {
         let n = aml.combined.time.len();
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            aml.combined.time[a]
-                .partial_cmp(&aml.combined.time[b])
-                .unwrap()
-        });
+        indices.sort_by(|&a, &b| aml.combined.time[a].total_cmp(&aml.combined.time[b]));
 
         let time: Vec<f64> = indices.iter().map(|&i| aml.combined.time[i]).collect();
         let status: Vec<i32> = indices.iter().map(|&i| aml.combined.status[i]).collect();

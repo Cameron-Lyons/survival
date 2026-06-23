@@ -222,7 +222,7 @@ fn compute_quantile(values: &mut [f64], q: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    values.sort_by(f64::total_cmp);
     let idx = (q * (values.len() - 1) as f64).round() as usize;
     values[idx.min(values.len() - 1)]
 }

@@ -113,11 +113,7 @@ fn estimate_weighted_km(
 ) -> Vec<f64> {
     let n = time.len();
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut survival = 1.0;
     let total_weight: f64 = weights.iter().sum();
@@ -145,4 +141,3 @@ fn estimate_weighted_km(
         })
         .collect()
 }
-

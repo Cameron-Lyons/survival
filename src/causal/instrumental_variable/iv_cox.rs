@@ -186,11 +186,7 @@ pub fn iv_cox(
     let mut final_hessian_cov: Vec<f64> = vec![0.0; p_cov];
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     for iter in 0..config.max_iter {
         n_iter = iter + 1;

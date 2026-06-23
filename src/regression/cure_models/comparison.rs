@@ -18,6 +18,21 @@ pub struct CureModelComparisonResult {
     pub best_model_bic: String,
 }
 
+fn parse_comparison_distribution(name: &str) -> PyResult<(CureDistribution, &'static str)> {
+    match name.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "weibull" => Ok((CureDistribution::Weibull, "weibull")),
+        "lognormal" | "log_normal" => Ok((CureDistribution::LogNormal, "lognormal")),
+        "loglogistic" | "log_logistic" => {
+            Ok((CureDistribution::LogLogistic, "loglogistic"))
+        }
+        "exponential" | "exp" => Ok((CureDistribution::Exponential, "exponential")),
+        "gamma" => Ok((CureDistribution::Gamma, "gamma")),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "distribution must be one of weibull, lognormal, loglogistic, exponential, or gamma",
+        )),
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, distributions=None))]
 pub fn compare_cure_models(
@@ -33,6 +48,11 @@ pub fn compare_cure_models(
             "loglogistic".to_string(),
         ]
     });
+    if dists.is_empty() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "distributions must not be empty",
+        ));
+    }
 
     let mut model_names = Vec::new();
     let mut log_likelihoods = Vec::new();
@@ -41,13 +61,7 @@ pub fn compare_cure_models(
     let mut cure_fractions = Vec::new();
 
     for dist_name in &dists {
-        let dist = match dist_name.to_lowercase().as_str() {
-            "weibull" => CureDistribution::Weibull,
-            "lognormal" | "log_normal" => CureDistribution::LogNormal,
-            "loglogistic" | "log_logistic" => CureDistribution::LogLogistic,
-            "exponential" | "exp" => CureDistribution::Exponential,
-            _ => CureDistribution::Weibull,
-        };
+        let (dist, dist_label) = parse_comparison_distribution(dist_name)?;
 
         let mixture_config = MixtureCureConfig::new(dist, LinkFunction::Logit, 50, 1e-5, 200);
         if let Ok(result) = mixture_cure_model(
@@ -57,7 +71,7 @@ pub fn compare_cure_models(
             vec![],
             &mixture_config,
         ) {
-            model_names.push(format!("Mixture-{}", dist_name));
+            model_names.push(format!("Mixture-{dist_label}"));
             log_likelihoods.push(result.log_likelihood);
             aic_values.push(result.aic);
             bic_values.push(result.bic);
@@ -71,7 +85,7 @@ pub fn compare_cure_models(
             covariates.clone(),
             &bch_config,
         ) {
-            model_names.push(format!("BCH-{}", dist_name));
+            model_names.push(format!("BCH-{dist_label}"));
             log_likelihoods.push(result.log_likelihood);
             aic_values.push(result.aic);
             bic_values.push(result.bic);
@@ -83,7 +97,7 @@ pub fn compare_cure_models(
         if let Ok(result) =
             non_mixture_cure_model(time.clone(), status.clone(), covariates.clone(), &nm_config)
         {
-            model_names.push(format!("NonMixture-{}", dist_name));
+            model_names.push(format!("NonMixture-{dist_label}"));
             log_likelihoods.push(result.log_likelihood);
             aic_values.push(result.aic);
             bic_values.push(result.bic);
@@ -95,7 +109,7 @@ pub fn compare_cure_models(
         let min_idx = aic_values
             .iter()
             .enumerate()
-            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|(_, a), (_, b)| a.total_cmp(b))
             .map(|(i, _)| i)
             .unwrap_or(0);
         model_names[min_idx].clone()
@@ -107,7 +121,7 @@ pub fn compare_cure_models(
         let min_idx = bic_values
             .iter()
             .enumerate()
-            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|(_, a), (_, b)| a.total_cmp(b))
             .map(|(i, _)| i)
             .unwrap_or(0);
         model_names[min_idx].clone()
@@ -125,4 +139,3 @@ pub fn compare_cure_models(
         best_model_bic,
     })
 }
-

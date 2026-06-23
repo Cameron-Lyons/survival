@@ -1,4 +1,4 @@
-use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
+use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, same_time};
 use crate::regression::cox_optimizer::{Method as CoxMethod, exact_tied_moments};
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_support::{
@@ -7,7 +7,6 @@ use crate::regression::coxph_support::{
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
 use ndarray::Array2;
 use pyo3::prelude::*;
-use std::cmp::Ordering;
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
@@ -155,6 +154,17 @@ fn grouped_quadratic_form(row: &[f64], variance: &[Vec<f64>], columns: &[usize])
                 .sum::<f64>()
         })
         .sum()
+}
+
+fn diagnostic_order(strata: &[i32], event_times: &[f64]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..event_times.len()).collect();
+    order.sort_by(|&lhs, &rhs| {
+        strata[lhs]
+            .cmp(&strata[rhs])
+            .then_with(|| event_times[lhs].total_cmp(&event_times[rhs]))
+            .then_with(|| lhs.cmp(&rhs))
+    });
+    order
 }
 
 #[pyfunction]
@@ -572,17 +582,7 @@ impl CoxPHFit {
             return self.score_residuals_counting_process(nvar, method);
         }
 
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&lhs, &rhs| {
-            self.strata[lhs]
-                .cmp(&self.strata[rhs])
-                .then_with(|| {
-                    self.event_times[lhs]
-                        .partial_cmp(&self.event_times[rhs])
-                        .unwrap_or(Ordering::Equal)
-                })
-                .then_with(|| lhs.cmp(&rhs))
-        });
+        let order = diagnostic_order(&self.strata, &self.event_times);
 
         let mut y = Vec::with_capacity(2 * n);
         y.extend(order.iter().map(|&idx| self.event_times[idx]));
@@ -652,7 +652,7 @@ impl CoxPHFit {
                 let event_time = self.event_times[order[time_pos]];
                 let mut time_start = time_pos;
                 while time_start > stratum_start
-                    && self.event_times[order[time_start - 1]] == event_time
+                    && same_time(self.event_times[order[time_start - 1]], event_time)
                 {
                     time_start -= 1;
                 }
@@ -721,17 +721,7 @@ impl CoxPHFit {
                     * self.weights[idx]
             })
             .collect();
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&lhs, &rhs| {
-            self.strata[lhs]
-                .cmp(&self.strata[rhs])
-                .then_with(|| {
-                    self.event_times[lhs]
-                        .partial_cmp(&self.event_times[rhs])
-                        .unwrap_or(Ordering::Equal)
-                })
-                .then_with(|| lhs.cmp(&rhs))
-        });
+        let order = diagnostic_order(&self.strata, &self.event_times);
 
         if method == 2 {
             return Ok(self.score_residuals_counting_process_by_scan(
@@ -768,7 +758,8 @@ impl CoxPHFit {
             while time_start <= stratum_end {
                 let event_time = self.event_times[order[time_start]];
                 let mut time_end = time_start;
-                while time_end < stratum_end && self.event_times[order[time_end + 1]] == event_time
+                while time_end < stratum_end
+                    && same_time(self.event_times[order[time_end + 1]], event_time)
                 {
                     time_end += 1;
                 }
@@ -897,7 +888,7 @@ impl CoxPHFit {
             while time_start < rows.len() {
                 let event_time = rows[time_start].stop;
                 let mut time_end = time_start;
-                while time_end + 1 < rows.len() && rows[time_end + 1].stop == event_time {
+                while time_end + 1 < rows.len() && same_time(rows[time_end + 1].stop, event_time) {
                     time_end += 1;
                 }
 
@@ -1102,17 +1093,7 @@ impl CoxPHFit {
             ));
         }
 
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&lhs, &rhs| {
-            self.strata[lhs]
-                .cmp(&self.strata[rhs])
-                .then_with(|| {
-                    self.event_times[lhs]
-                        .partial_cmp(&self.event_times[rhs])
-                        .unwrap_or(Ordering::Equal)
-                })
-                .then_with(|| lhs.cmp(&rhs))
-        });
+        let order = diagnostic_order(&self.strata, &self.event_times);
 
         let method = self.tie_method();
         if matches!(method, CoxMethod::Exact) {
@@ -1166,7 +1147,7 @@ impl CoxPHFit {
             while time_start <= stratum_end {
                 let event_time = sorted_time[time_start];
                 let mut time_end = time_start;
-                while time_end < stratum_end && sorted_time[time_end + 1] == event_time {
+                while time_end < stratum_end && same_time(sorted_time[time_end + 1], event_time) {
                     time_end += 1;
                 }
 
@@ -1203,11 +1184,13 @@ impl CoxPHFit {
                             for col_idx in 0..nvar {
                                 let value = covar[(idx, col_idx)];
                                 a[col_idx] += risk * value;
-                                if sorted_time[idx] == event_time && sorted_status[idx] == 1 {
+                                if same_time(sorted_time[idx], event_time)
+                                    && sorted_status[idx] == 1
+                                {
                                     death_a[col_idx] += risk * value;
                                 }
                             }
-                            if sorted_time[idx] == event_time && sorted_status[idx] == 1 {
+                            if same_time(sorted_time[idx], event_time) && sorted_status[idx] == 1 {
                                 death_denom += risk;
                             }
                         }
@@ -1303,7 +1286,7 @@ impl CoxPHFit {
             while time_start < rows.len() {
                 let event_time = rows[time_start].stop;
                 let mut time_end = time_start;
-                while time_end + 1 < rows.len() && rows[time_end + 1].stop == event_time {
+                while time_end + 1 < rows.len() && same_time(rows[time_end + 1].stop, event_time) {
                     time_end += 1;
                 }
 
@@ -1425,6 +1408,10 @@ mod tests {
         )
         .expect("event indices should compute");
         assert_eq!(indices, vec![2, 0, 3]);
+        assert_eq!(
+            diagnostic_order(&[1, 0, 0, 1], &[2.0, 1.0, 2.0, 1.0]),
+            vec![1, 2, 3, 0]
+        );
 
         let scaled = scale_schoenfeld_residuals(
             vec![vec![1.0, 2.0], vec![3.0, 4.0]],

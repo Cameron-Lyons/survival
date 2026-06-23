@@ -1,3 +1,4 @@
+use crate::internal::matrix::invert_matrix;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -201,6 +202,7 @@ impl NaturalSplineKnot {
                     "not enough x values inside boundary_knots to compute {n_interior} interior knots"
                 )));
             }
+            validate_strictly_increasing(&computed, "computed knots")?;
             computed
         } else {
             self.knots.clone()
@@ -218,7 +220,7 @@ impl NaturalSplineKnot {
             .flat_map(|&xi| natural_spline_basis_at_point(xi, &all_knots))
             .collect();
 
-        let transformed_basis = transform_to_knot_heights(&basis, n, n_basis, &all_knots);
+        let transformed_basis = transform_to_knot_heights(&basis, n, n_basis, &all_knots)?;
 
         Ok(SplineBasisResult {
             basis: transformed_basis,
@@ -313,7 +315,7 @@ fn compute_quantile_knots(x: &[f64], n_knots: usize, low: f64, high: f64) -> Vec
     }
 
     let mut sorted: Vec<f64> = x.iter().copied().filter(|&v| v > low && v < high).collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(f64::total_cmp);
 
     if sorted.is_empty() {
         return vec![];
@@ -322,8 +324,11 @@ fn compute_quantile_knots(x: &[f64], n_knots: usize, low: f64, high: f64) -> Vec
     let mut knots = Vec::with_capacity(n_knots);
     for i in 1..=n_knots {
         let p = i as f64 / (n_knots + 1) as f64;
-        let idx = ((sorted.len() - 1) as f64 * p).round() as usize;
-        knots.push(sorted[idx.min(sorted.len() - 1)]);
+        let pos = (p * (sorted.len() as f64 + 1.0) - 1.0).clamp(0.0, (sorted.len() - 1) as f64);
+        let lower = pos.floor() as usize;
+        let upper = pos.ceil() as usize;
+        let weight = pos - lower as f64;
+        knots.push(sorted[lower] * (1.0 - weight) + sorted[upper] * weight);
     }
 
     knots
@@ -369,26 +374,65 @@ fn truncated_power(x: f64, knot: f64, degree: i32) -> f64 {
 }
 
 /// Transform basis to knot-height parameterization
-fn transform_to_knot_heights(basis: &[f64], _n: usize, n_basis: usize, knots: &[f64]) -> Vec<f64> {
+fn transform_to_knot_heights(
+    basis: &[f64],
+    n: usize,
+    n_basis: usize,
+    knots: &[f64],
+) -> PyResult<Vec<f64>> {
     let k = knots.len();
     if k == 0 || k != n_basis {
-        return basis.to_vec();
+        return Ok(basis.to_vec());
+    }
+    if basis.len() != n * n_basis {
+        return Err(value_error(format!(
+            "basis length ({}) must equal n * n_basis ({})",
+            basis.len(),
+            n * n_basis
+        )));
     }
 
-    let mut b_matrix = vec![0.0; k * n_basis];
+    let mut b_matrix = vec![vec![0.0; n_basis]; k];
     for (i, &knot) in knots.iter().enumerate() {
         let basis_at_knot = natural_spline_basis_at_point(knot, knots);
         for (j, &val) in basis_at_knot.iter().enumerate() {
-            b_matrix[i * n_basis + j] = val;
+            b_matrix[i][j] = val;
         }
     }
 
-    basis.to_vec()
+    let inverse = invert_matrix(&b_matrix).ok_or_else(|| {
+        value_error("knot-height transform is singular; knots must be distinct and well-spaced")
+    })?;
+
+    let transformed: Vec<f64> = basis
+        .par_chunks(n_basis)
+        .flat_map_iter(|row| {
+            (0..n_basis).map(|col| {
+                row.iter()
+                    .zip(inverse.iter())
+                    .map(|(&basis_value, inverse_row)| basis_value * inverse_row[col])
+                    .sum::<f64>()
+            })
+        })
+        .collect();
+
+    if let Some((idx, value)) = transformed
+        .iter()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
+    {
+        return Err(value_error(format!(
+            "knot-height transform produced non-finite value {value} at index {idx}"
+        )));
+    }
+
+    Ok(transformed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::common::initialize_python;
 
     #[test]
     fn test_nsk_basic() {
@@ -413,20 +457,49 @@ mod tests {
     }
 
     #[test]
+    fn test_nsk_basis_is_knot_height_parameterized() {
+        let x = vec![1.0, 3.0, 5.0, 7.0, 10.0];
+        let knots = vec![3.0, 5.0, 7.0];
+        let boundary = (1.0, 10.0);
+
+        let result = nsk(x, None, Some(knots), Some(boundary)).unwrap();
+
+        assert_eq!(result.n_rows, 5);
+        assert_eq!(result.n_cols, 5);
+        for row in 0..result.n_rows {
+            for col in 0..result.n_cols {
+                let expected = if row == col { 1.0 } else { 0.0 };
+                let actual = result.basis[row * result.n_cols + col];
+                assert!(
+                    (actual - expected).abs() < 1e-10,
+                    "basis[{row}, {col}] = {actual}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_natural_spline_knot_predict() {
-        let spline = NaturalSplineKnot::new(None, Some((0.0, 10.0)), Some(3), None).unwrap();
+        let spline =
+            NaturalSplineKnot::new(Some(vec![3.0, 5.0, 7.0]), Some((1.0, 10.0)), None, None)
+                .unwrap();
 
-        let x = vec![0.0, 2.5, 5.0, 7.5, 10.0];
+        let x = vec![1.0, 3.0, 5.0, 7.0, 10.0];
         let basis_result = spline.basis(x.clone()).unwrap();
+        assert_eq!(basis_result.n_cols, 5);
 
-        let coef = vec![1.0; basis_result.n_cols];
-        let predictions = spline.predict(x, coef).unwrap();
+        let coef = vec![10.0, 30.0, 50.0, 70.0, 100.0];
+        let predictions = spline.predict(x, coef.clone()).unwrap();
 
-        assert_eq!(predictions.len(), 5);
+        for (actual, expected) in predictions.iter().zip(coef.iter()) {
+            assert!((actual - expected).abs() < 1e-9);
+        }
     }
 
     #[test]
     fn test_nsk_rejects_malformed_inputs() {
+        initialize_python();
+
         assert!(nsk(vec![1.0, f64::NAN], Some(3), None, None).is_err());
         assert!(nsk(vec![1.0, 1.0], Some(3), None, None).is_err());
         assert!(nsk(vec![1.0, 2.0], Some(0), None, None).is_err());
@@ -435,10 +508,19 @@ mod tests {
         assert!(nsk(vec![1.0, 2.0], None, Some(vec![1.5, 1.5]), Some((0.0, 3.0))).is_err());
         assert!(nsk(vec![1.0, 2.0], None, Some(vec![2.5]), Some((0.0, 2.0))).is_err());
         assert!(NaturalSplineKnot::new(None, Some((0.0, 10.0)), Some(1), Some(true)).is_err());
+
+        let err = nsk(vec![0.0, 1.0, 1.0, 1.0, 2.0], Some(4), None, None)
+            .expect_err("duplicate computed quantile knots should be rejected");
+        assert!(
+            err.to_string()
+                .contains("computed knots must be strictly increasing")
+        );
     }
 
     #[test]
     fn test_natural_spline_knot_predict_rejects_non_finite_coef() {
+        initialize_python();
+
         let spline = NaturalSplineKnot::new(None, Some((0.0, 2.0)), Some(1), None).unwrap();
         let err = spline
             .predict(vec![0.0, 1.0], vec![1.0, f64::INFINITY])

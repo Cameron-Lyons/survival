@@ -210,6 +210,13 @@ fn validate_expected_baseline_inputs(
     if let Some(entry_times) = entry_times {
         validate_exact_len("entry_times", entry_times.len(), n)?;
         validate_finite_values("entry_times", entry_times)?;
+        for (idx, (&entry, &exit)) in entry_times.iter().zip(time.iter()).enumerate() {
+            if entry >= exit {
+                return Err(value_error(format!(
+                    "entry_times[{idx}] must be less than time[{idx}]"
+                )));
+            }
+        }
     }
     validate_finite_values("time", time)?;
     validate_binary_status(status)?;
@@ -231,8 +238,34 @@ fn sorted_unique_event_times(indices: &[usize], time: &[f64], status: &[i32]) ->
         .filter_map(|&idx| (status[idx] == 1).then_some(time[idx]))
         .collect();
     event_times.sort_by(f64::total_cmp);
-    event_times.dedup_by(|left, right| *left == *right);
+    event_times.dedup_by(|left, right| (*left - *right).abs() < TIME_EPSILON);
     event_times
+}
+
+fn add_risk_row(
+    idx: usize,
+    centered_rows: &[Vec<f64>],
+    risk_weights: &[f64],
+    risk_xsum: &mut [f64],
+) {
+    for (col_idx, value) in risk_xsum.iter_mut().enumerate() {
+        *value += risk_weights[idx] * centered_rows[idx][col_idx];
+    }
+}
+
+fn remove_risk_row(
+    idx: usize,
+    centered_rows: &[Vec<f64>],
+    risk_weights: &[f64],
+    risk_xsum: &mut [f64],
+) {
+    for (col_idx, value) in risk_xsum.iter_mut().enumerate() {
+        *value -= risk_weights[idx] * centered_rows[idx][col_idx];
+    }
+}
+
+fn is_before_event_time(time: f64, event_time: f64) -> bool {
+    time < event_time && (event_time - time).abs() >= TIME_EPSILON
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -256,35 +289,92 @@ fn accumulate_expected_baseline_stratum(
     let mut cumulative_varhaz = 0.0;
     let mut cumulative_xbar = vec![0.0; nvar];
 
+    let mut stop_order = indices.to_vec();
+    stop_order.sort_by(|&left, &right| {
+        time[left]
+            .total_cmp(&time[right])
+            .then_with(|| left.cmp(&right))
+    });
+    let entry_order = entry_times.map(|entry| {
+        let mut order = indices.to_vec();
+        order.sort_by(|&left, &right| {
+            entry[left]
+                .total_cmp(&entry[right])
+                .then_with(|| left.cmp(&right))
+        });
+        order
+    });
+    let mut event_order: Vec<usize> = indices
+        .iter()
+        .copied()
+        .filter(|&idx| status[idx] == 1)
+        .collect();
+    event_order.sort_by(|&left, &right| {
+        time[left]
+            .total_cmp(&time[right])
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut active = vec![entry_times.is_none(); time.len()];
+    let mut risk_sum = 0.0;
+    let mut risk_xsum = vec![0.0; nvar];
+    if entry_times.is_none() {
+        for &idx in indices {
+            risk_sum += risk_weights[idx];
+            add_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
+        }
+    }
+
+    let mut entry_pos = 0;
+    let mut stop_pos = 0;
+    let mut event_pos = 0;
+    let mut deaths = Vec::new();
+
     for &event_time in event_times {
-        let at_risk: Vec<usize> = indices
-            .iter()
-            .copied()
-            .filter(|&idx| {
-                time[idx] >= event_time && entry_times.is_none_or(|entry| entry[idx] < event_time)
-            })
-            .collect();
-        let deaths: Vec<usize> = at_risk
-            .iter()
-            .copied()
-            .filter(|&idx| status[idx] == 1 && (time[idx] - event_time).abs() < TIME_EPSILON)
-            .collect();
+        if let (Some(entry), Some(order)) = (entry_times, entry_order.as_ref()) {
+            while entry_pos < order.len() && entry[order[entry_pos]] < event_time {
+                let idx = order[entry_pos];
+                if !active[idx] {
+                    active[idx] = true;
+                    risk_sum += risk_weights[idx];
+                    add_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
+                }
+                entry_pos += 1;
+            }
+        }
+        while stop_pos < stop_order.len()
+            && is_before_event_time(time[stop_order[stop_pos]], event_time)
+        {
+            let idx = stop_order[stop_pos];
+            if active[idx] {
+                active[idx] = false;
+                risk_sum -= risk_weights[idx];
+                remove_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
+            }
+            stop_pos += 1;
+        }
+
+        while event_pos < event_order.len()
+            && is_before_event_time(time[event_order[event_pos]], event_time)
+        {
+            event_pos += 1;
+        }
+        deaths.clear();
+        while event_pos < event_order.len()
+            && (time[event_order[event_pos]] - event_time).abs() < TIME_EPSILON
+        {
+            deaths.push(event_order[event_pos]);
+            event_pos += 1;
+        }
         if deaths.is_empty() {
             continue;
         }
 
         let event_weight: f64 = deaths.iter().map(|&idx| weights[idx]).sum();
-        let denom: f64 = at_risk.iter().map(|&idx| risk_weights[idx]).sum();
+        let denom = risk_sum;
         let (hazard, varhaz, xbar_increment) = if denom <= 0.0 {
             (0.0, 0.0, vec![0.0; nvar])
         } else {
-            let mut risk_xsum = vec![0.0; nvar];
-            for &idx in &at_risk {
-                for (col_idx, value) in risk_xsum.iter_mut().enumerate() {
-                    *value += risk_weights[idx] * centered_rows[idx][col_idx];
-                }
-            }
-
             if method == "efron" && deaths.len() > 1 {
                 let death_risk: f64 = deaths.iter().map(|&idx| risk_weights[idx]).sum();
                 let mut death_xsum = vec![0.0; nvar];
@@ -597,5 +687,52 @@ mod tests {
         assert!((efron.2[0][1] - 13.0 / 12.0).abs() < 1e-12);
         assert!((efron.3[0][1] - 61.0 / 144.0).abs() < 1e-12);
         assert!((efron.4[0][1][0] - 13.0 / 24.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn expected_baseline_groups_near_tied_event_times() {
+        let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
+        let status = vec![1, 1, 0];
+        let covariates = vec![vec![0.0], vec![1.0], vec![2.0]];
+        let result = cox_expected_baseline_by_stratum(
+            time,
+            status,
+            covariates,
+            vec![0.0],
+            vec![1.0; 3],
+            vec![0; 3],
+            vec![0.0; 3],
+            vec![1.0],
+            None,
+            Some("breslow".to_string()),
+        )
+        .expect("near-tied expected baseline should compute");
+
+        assert_eq!(result.1[0], vec![1.0]);
+        assert!((result.2[0][0] - 2.0 / 3.0).abs() < 1e-12);
+        assert!((result.3[0][0] - 2.0 / 9.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn expected_baseline_rejects_invalid_entry_intervals() {
+        let (time, status, covariates, beta, weights, strata, offset, means) = baseline_args();
+        let err = cox_expected_baseline_by_stratum(
+            time,
+            status,
+            covariates,
+            beta,
+            weights,
+            strata,
+            offset,
+            means,
+            Some(vec![0.0, 2.0, 0.0, 0.0]),
+            Some("breslow".to_string()),
+        )
+        .expect_err("entry time equal to exit time should fail");
+
+        assert!(
+            err.to_string()
+                .contains("entry_times[1] must be less than time[1]")
+        );
     }
 }

@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from survival import _survival as _surv
-
+from . import _survival as _surv
 from ._sklearn_common import (
     BaseEstimator,
     RegressorMixin,

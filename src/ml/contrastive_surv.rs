@@ -508,11 +508,7 @@ fn compute_cox_loss(
     }
 
     let mut sorted_indices: Vec<usize> = (0..batch_size).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        times[batch_indices[b]]
-            .partial_cmp(&times[batch_indices[a]])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| times[batch_indices[b]].total_cmp(&times[batch_indices[a]]));
 
     let mut loss = 0.0;
     let mut risk_sum = 0.0;

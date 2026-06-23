@@ -190,9 +190,7 @@ pub fn group_lasso_cox(
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        time[b].total_cmp(&time[a])
     });
 
     for iter in 0..config.max_iter {

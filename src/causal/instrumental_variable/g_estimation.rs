@@ -90,9 +90,7 @@ pub fn g_estimation_aft(
 
         let mut sorted_indices: Vec<usize> = (0..n).collect();
         sorted_indices.sort_by(|&a, &b| {
-            counterfactual_times[b]
-                .partial_cmp(&counterfactual_times[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
+            counterfactual_times[b].total_cmp(&counterfactual_times[a])
         });
 
         let mut risk_sum = 0.0;
@@ -187,4 +185,3 @@ pub fn g_estimation_aft(
         converged,
     })
 }
-

@@ -345,11 +345,7 @@ fn compute_gradient_hessian(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let mut gradient = vec![0.0; p];
     let mut hessian = vec![vec![0.0; p]; p];
@@ -443,11 +439,7 @@ fn compute_baseline_hazard(
     cause_of_interest: i32,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut unique_times = Vec::new();
     let mut baseline = Vec::new();

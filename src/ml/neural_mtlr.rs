@@ -70,7 +70,7 @@ fn compute_time_bins(times: &[f64], num_bins: usize) -> Vec<f64> {
     }
 
     let mut sorted_times = times.to_vec();
-    sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_times.sort_by(f64::total_cmp);
 
     let min_time = sorted_times[0];
     let max_time = sorted_times[sorted_times.len() - 1];

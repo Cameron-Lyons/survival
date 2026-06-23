@@ -271,4 +271,116 @@ mod tests {
         assert_eq!(result.n_events, 3);
         assert!(result.mean_event_rate > 0.0);
     }
+
+    #[test]
+    fn recurrent_models_validate_public_inputs() {
+        assert!(anderson_gill_model(vec![], vec![], vec![], vec![], vec![], 10, 1e-6).is_err());
+        assert!(
+            anderson_gill_model(
+                vec![1, 2],
+                vec![0.0, 0.0],
+                vec![1.0, 1.0],
+                vec![1, 0],
+                vec![0.5],
+                10,
+                1e-6,
+            )
+            .is_err()
+        );
+        assert!(
+            anderson_gill_model(vec![1], vec![0.0], vec![0.0], vec![1], vec![], 10, 1e-6)
+                .is_err()
+        );
+        assert!(
+            anderson_gill_model(vec![1], vec![0.0], vec![1.0], vec![2], vec![], 10, 1e-6)
+                .is_err()
+        );
+        assert!(
+            anderson_gill_model(
+                vec![1],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![f64::NAN],
+                10,
+                1e-6,
+            )
+            .is_err()
+        );
+        assert!(
+            anderson_gill_model(vec![1], vec![0.0], vec![1.0], vec![1], vec![], 0, 1e-6)
+                .is_err()
+        );
+
+        let pwp_config = PWPConfig::new(PWPTimescale::Gap, 10, 1e-6, true, true);
+        assert!(
+            pwp_model(
+                vec![1],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![0],
+                vec![],
+                &pwp_config,
+            )
+            .is_err()
+        );
+        let mut bad_pwp_config = PWPConfig::new(PWPTimescale::Gap, 10, 1e-6, true, true);
+        bad_pwp_config.tol = f64::NAN;
+        assert!(
+            pwp_model(
+                vec![1],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![1],
+                vec![],
+                &bad_pwp_config,
+            )
+            .is_err()
+        );
+
+        let wlw_config = WLWConfig::new(10, 1e-6, true, false);
+        assert!(wlw_model(vec![1], vec![f64::INFINITY], vec![1], vec![1], vec![], &wlw_config).is_err());
+        assert!(wlw_model(vec![1], vec![1.0], vec![2], vec![1], vec![], &wlw_config).is_err());
+        let bad_wlw_config = WLWConfig::new(0, 1e-6, true, false);
+        assert!(wlw_model(vec![1], vec![1.0], vec![1], vec![1], vec![], &bad_wlw_config).is_err());
+
+        let nb_config = NegativeBinomialFrailtyConfig::new(10, 1e-6, 10);
+        assert!(
+            negative_binomial_frailty(vec![1], vec![-1.0], vec![1], vec![], None, &nb_config)
+                .is_err()
+        );
+        assert!(
+            negative_binomial_frailty(vec![1], vec![1.0], vec![-1], vec![], None, &nb_config)
+                .is_err()
+        );
+        assert!(
+            negative_binomial_frailty(
+                vec![1, 2],
+                vec![1.0, 1.0],
+                vec![1, 0],
+                vec![],
+                Some(vec![0.0]),
+                &nb_config,
+            )
+            .is_err()
+        );
+        assert!(
+            negative_binomial_frailty(
+                vec![1],
+                vec![1.0],
+                vec![1],
+                vec![],
+                Some(vec![f64::NAN]),
+                &nb_config,
+            )
+            .is_err()
+        );
+        let bad_nb_config = NegativeBinomialFrailtyConfig::new(10, 1e-6, 0);
+        assert!(
+            negative_binomial_frailty(vec![1], vec![1.0], vec![1], vec![], None, &bad_nb_config)
+                .is_err()
+        );
+    }
 }

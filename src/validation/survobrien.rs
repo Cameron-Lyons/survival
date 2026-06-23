@@ -4,6 +4,7 @@
 //! At each failure time, it ranks the covariate values among subjects still at risk
 //! and computes a test statistic based on these ranks.
 
+use crate::constants::same_time;
 use crate::internal::numpy_utils::{extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::chi2_sf;
 use crate::internal::validation::{
@@ -155,11 +156,7 @@ fn compute_survobrien(
         }
 
         let mut sorted_indices = stratum_indices.clone();
-        sorted_indices.sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
         let n_stratum = sorted_indices.len();
 
@@ -171,7 +168,7 @@ fn compute_survobrien(
 
             let mut event_indices: Vec<usize> = Vec::new();
             let mut j = i;
-            while j < n_stratum && time[sorted_indices[j]] == current_time {
+            while j < n_stratum && same_time(time[sorted_indices[j]], current_time) {
                 if status[sorted_indices[j]] == 1 {
                     event_indices.push(j);
                 }
@@ -188,8 +185,7 @@ fn compute_survobrien(
 
                 let n_at_risk = at_risk_values.len();
                 if n_at_risk > 0 {
-                    at_risk_values
-                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    at_risk_values.sort_by(|a, b| a.1.total_cmp(&b.1));
 
                     let mut ranks: std::collections::HashMap<usize, f64> =
                         std::collections::HashMap::new();
@@ -299,6 +295,26 @@ mod tests {
 
         assert!(result.statistic >= 0.0);
         assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+    }
+
+    #[test]
+    fn test_survobrien_groups_near_tied_event_times() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let status = vec![1, 1, 0, 0];
+        let covariate = vec![10.0, 30.0, 20.0, 40.0];
+        let strata = vec![1, 1, 1, 1];
+
+        let expected = compute_survobrien(&exact_time, &status, &covariate, &strata);
+        let actual = compute_survobrien(&near_time, &status, &covariate, &strata);
+
+        assert!((actual.statistic - expected.statistic).abs() < 1e-12);
+        assert!((actual.p_value - expected.p_value).abs() < 1e-12);
+        assert!((actual.score_sum - expected.score_sum).abs() < 1e-12);
+        assert!((actual.variance - expected.variance).abs() < 1e-12);
+        for (actual, expected) in actual.scores.iter().zip(expected.scores.iter()) {
+            assert!((*actual - *expected).abs() < 1e-12);
+        }
     }
 
     #[test]

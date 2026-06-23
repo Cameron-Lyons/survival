@@ -94,8 +94,8 @@ pub fn bootstrap_conformal_survival(
     let mut all_lower: Vec<f64> = bootstrap_thresholds.iter().map(|(l, _)| *l).collect();
     let mut all_upper: Vec<f64> = bootstrap_thresholds.iter().map(|(_, u)| *u).collect();
 
-    all_lower.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    all_upper.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_lower.sort_by(f64::total_cmp);
+    all_upper.sort_by(f64::total_cmp);
 
     let upper_idx = ((1.0 - alpha / 2.0) * n_boot as f64) as usize;
     let upper_idx = upper_idx.min(n_boot - 1);

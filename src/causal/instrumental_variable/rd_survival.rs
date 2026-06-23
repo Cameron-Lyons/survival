@@ -100,7 +100,7 @@ pub fn rd_survival(
         let centered: Vec<f64> = running_var.iter().map(|&r| r - cutoff).collect();
         let iqr = {
             let mut sorted = centered.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.sort_by(f64::total_cmp);
             let q1 = sorted[n / 4];
             let q3 = sorted[3 * n / 4];
             q3 - q1
@@ -190,11 +190,7 @@ fn estimate_km_survival(
     }
 
     let mut sorted_indices: Vec<usize> = indices.to_vec();
-    sorted_indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let max_time = time[sorted_indices[sorted_indices.len() / 2]];
 

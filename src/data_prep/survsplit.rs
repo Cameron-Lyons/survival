@@ -36,7 +36,25 @@ pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> PyResult<S
         )));
     }
 
-    let mut cutpoints: Vec<f64> = cut.into_iter().filter(|c| c.is_finite()).collect();
+    for i in 0..n {
+        if tstart[i].is_infinite() || tstop[i].is_infinite() {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "tstart and tstop may be finite or NaN, but not infinite; got infinite value at row {}",
+                i + 1
+            )));
+        }
+    }
+
+    for (idx, value) in cut.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "cut must be a vector of finite numbers; got non-finite value at index {}",
+                idx
+            )));
+        }
+    }
+
+    let mut cutpoints = cut;
     cutpoints.sort_by(|a, b| a.total_cmp(b));
     cutpoints.dedup_by(|a, b| a == b);
 
@@ -119,13 +137,8 @@ mod tests {
     }
 
     #[test]
-    fn unsorted_duplicate_and_nonfinite_cuts_are_normalized() {
-        let result = survsplit(
-            vec![0.0],
-            vec![10.0],
-            vec![7.0, f64::NAN, 3.0, 3.0, f64::INFINITY],
-        )
-        .unwrap();
+    fn unsorted_duplicate_cuts_are_normalized() {
+        let result = survsplit(vec![0.0], vec![10.0], vec![7.0, 3.0, 3.0]).unwrap();
         assert_eq!(result.start, vec![0.0, 3.0, 7.0]);
         assert_eq!(result.end, vec![3.0, 7.0, 10.0]);
     }
@@ -169,6 +182,23 @@ mod tests {
     }
 
     #[test]
+    fn infinite_endpoints_are_value_error() {
+        initialize_python();
+
+        let err = survsplit(vec![0.0], vec![f64::INFINITY], vec![5.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("tstart and tstop may be finite or NaN, but not infinite")
+        );
+
+        let err = survsplit(vec![f64::NEG_INFINITY], vec![10.0], vec![5.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("tstart and tstop may be finite or NaN, but not infinite")
+        );
+    }
+
+    #[test]
     fn multiple_observations() {
         let result = survsplit(vec![0.0, 0.0, 0.0], vec![10.0, 5.0, 8.0], vec![3.0, 7.0]).unwrap();
         assert_eq!(result.row.iter().filter(|&&r| r == 1).count(), 3);
@@ -184,6 +214,23 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("tstart and tstop must have same length")
+        );
+    }
+
+    #[test]
+    fn nonfinite_cuts_are_value_error() {
+        initialize_python();
+
+        let err = survsplit(vec![0.0], vec![10.0], vec![3.0, f64::NAN]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cut must be a vector of finite numbers")
+        );
+
+        let err = survsplit(vec![0.0], vec![10.0], vec![f64::INFINITY]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cut must be a vector of finite numbers")
         );
     }
 }

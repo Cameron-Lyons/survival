@@ -3,6 +3,80 @@
 use pyo3::prelude::*;
 
 use crate::constants::clamped_normal_ci_bounds_95;
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_expected_survival(values: &[f64]) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() || value <= 0.0 || value > 1.0 {
+            return Err(value_error(format!(
+                "expected_survival must contain finite values in (0, 1]; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_weights(weights: &[f64], n: usize) -> PyResult<()> {
+    if weights.len() != n {
+        return Err(value_error(format!(
+            "weights length mismatch: expected {n}, got {}",
+            weights.len()
+        )));
+    }
+    validate_finite(weights, "weights")?;
+    validate_non_negative(weights, "weights")?;
+    if weights.iter().all(|&weight| weight == 0.0) {
+        return Err(value_error(
+            "weights must contain at least one positive value",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_net_survival_inputs(
+    time: &[f64],
+    status: &[i32],
+    expected_survival: &[f64],
+    weights: &[f64],
+) -> PyResult<()> {
+    let n = time.len();
+    if n == 0 || status.len() != n || expected_survival.len() != n {
+        return Err(value_error(
+            "All input arrays must have same non-zero length",
+        ));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(status, "status")?;
+    validate_expected_survival(expected_survival)?;
+    validate_weights(weights, n)
+}
+
+fn validate_crude_probability_inputs(
+    time: &[f64],
+    status: &[i32],
+    expected_survival: &[f64],
+    cause: &[i32],
+    time_points: &[f64],
+) -> PyResult<()> {
+    let n = time.len();
+    if n == 0 || status.len() != n || expected_survival.len() != n || cause.len() != n {
+        return Err(value_error(
+            "All subject-level input arrays must have same non-zero length",
+        ));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(status, "status")?;
+    validate_expected_survival(expected_survival)?;
+    validate_finite(time_points, "time_points")?;
+    validate_non_negative(time_points, "time_points")?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -68,16 +142,11 @@ pub fn net_survival(
     weights: Option<Vec<f64>>,
 ) -> PyResult<NetSurvivalResult> {
     let n = time.len();
-    if status.len() != n || expected_survival.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All input arrays must have same length",
-        ));
-    }
-
     let wt = weights.unwrap_or_else(|| vec![1.0; n]);
+    validate_net_survival_inputs(&time, &status, &expected_survival, &wt)?;
 
     let mut unique_times: Vec<f64> = time.clone();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     match method {
@@ -106,11 +175,7 @@ fn pohar_perme_estimator(
     let n = time.len();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut net_survival = Vec::with_capacity(unique_times.len());
     let mut net_survival_se = Vec::with_capacity(unique_times.len());
@@ -192,11 +257,7 @@ fn ederer_ii_estimator(
     let n = time.len();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut net_survival = Vec::with_capacity(unique_times.len());
     let mut net_survival_se = Vec::with_capacity(unique_times.len());
@@ -286,11 +347,7 @@ fn ederer_i_estimator(
         / weights.iter().sum::<f64>().max(1e-10);
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut net_survival = Vec::with_capacity(unique_times.len());
     let mut net_survival_se = Vec::with_capacity(unique_times.len());
@@ -375,6 +432,7 @@ pub fn crude_probability_of_death(
     time_points: Vec<f64>,
 ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<f64>)> {
     let n = time.len();
+    validate_crude_probability_inputs(&time, &status, &_expected_survival, &cause, &time_points)?;
 
     let mut crude_cancer = Vec::with_capacity(time_points.len());
     let mut crude_other = Vec::with_capacity(time_points.len());
@@ -405,6 +463,7 @@ pub fn crude_probability_of_death(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::common::initialize_python;
 
     #[test]
     fn test_pohar_perme_basic() {
@@ -423,5 +482,122 @@ mod tests {
 
         assert!(!result.time_points.is_empty());
         assert!(result.net_survival.iter().all(|&s| s >= 0.0));
+    }
+
+    #[test]
+    fn net_survival_validates_public_inputs() {
+        initialize_python();
+
+        assert!(
+            net_survival(vec![], vec![], vec![], NetSurvivalMethod::Pohar_Perme, None,)
+                .expect_err("empty input should fail")
+                .to_string()
+                .contains("same non-zero length")
+        );
+
+        assert!(
+            net_survival(
+                vec![1.0],
+                vec![1, 0],
+                vec![0.9],
+                NetSurvivalMethod::Pohar_Perme,
+                None,
+            )
+            .expect_err("status length mismatch should fail")
+            .to_string()
+            .contains("same non-zero length")
+        );
+
+        assert!(
+            net_survival(
+                vec![f64::INFINITY],
+                vec![1],
+                vec![0.9],
+                NetSurvivalMethod::Pohar_Perme,
+                None,
+            )
+            .expect_err("non-finite time should fail")
+            .to_string()
+            .contains("time contains non-finite")
+        );
+
+        assert!(
+            net_survival(
+                vec![1.0],
+                vec![2],
+                vec![0.9],
+                NetSurvivalMethod::Pohar_Perme,
+                None,
+            )
+            .expect_err("non-binary status should fail")
+            .to_string()
+            .contains("status must contain only 0/1")
+        );
+
+        assert!(
+            net_survival(
+                vec![1.0],
+                vec![1],
+                vec![0.0],
+                NetSurvivalMethod::Pohar_Perme,
+                None,
+            )
+            .expect_err("zero expected survival should fail")
+            .to_string()
+            .contains("expected_survival")
+        );
+
+        assert!(
+            net_survival(
+                vec![1.0],
+                vec![1],
+                vec![0.9],
+                NetSurvivalMethod::Pohar_Perme,
+                Some(vec![0.0]),
+            )
+            .expect_err("all-zero weights should fail")
+            .to_string()
+            .contains("at least one positive")
+        );
+    }
+
+    #[test]
+    fn crude_probability_validates_public_inputs() {
+        initialize_python();
+
+        assert!(
+            crude_probability_of_death(vec![], vec![], vec![], vec![], vec![1.0])
+                .expect_err("empty inputs should fail")
+                .to_string()
+                .contains("same non-zero length")
+        );
+
+        assert!(
+            crude_probability_of_death(vec![1.0], vec![1], vec![0.9], vec![], vec![1.0])
+                .expect_err("cause length mismatch should fail")
+                .to_string()
+                .contains("same non-zero length")
+        );
+
+        assert!(
+            crude_probability_of_death(vec![1.0], vec![2], vec![0.9], vec![1], vec![1.0])
+                .expect_err("non-binary status should fail")
+                .to_string()
+                .contains("status must contain only 0/1")
+        );
+
+        assert!(
+            crude_probability_of_death(vec![1.0], vec![1], vec![1.2], vec![1], vec![1.0])
+                .expect_err("invalid expected survival should fail")
+                .to_string()
+                .contains("expected_survival")
+        );
+
+        assert!(
+            crude_probability_of_death(vec![1.0], vec![1], vec![0.9], vec![1], vec![f64::NAN])
+                .expect_err("non-finite time point should fail")
+                .to_string()
+                .contains("time_points contains non-finite")
+        );
     }
 }

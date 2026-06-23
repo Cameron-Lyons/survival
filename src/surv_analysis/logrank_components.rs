@@ -72,6 +72,7 @@ pub fn compute_logrank_components(
         status: &prepared.status,
         group: &prepared.group,
         strata: &prepared.strata,
+        timefix,
     };
     let mut output = SurvDiffOutput {
         obs: &mut obs,
@@ -541,6 +542,7 @@ pub(crate) struct SurvDiffInput<'a> {
     pub(crate) status: &'a [i32],
     pub(crate) group: &'a [i32],
     pub(crate) strata: &'a [i32],
+    pub(crate) timefix: bool,
 }
 
 pub(crate) struct SurvDiffOutput<'a> {
@@ -591,7 +593,7 @@ pub(crate) fn compute_survdiff(
                 let current_time = input.time[i];
                 let mut deaths = 0;
                 let mut j = i;
-                while j < n && input.time[j] == current_time {
+                while j < n && same_logrank_time(input.time[j], current_time, input.timefix) {
                     output.kaplan[j] = km;
                     deaths += input.status[j] as usize;
                     j += 1;
@@ -626,7 +628,7 @@ pub(crate) fn compute_survdiff(
                 if j == istart {
                     break;
                 }
-                if input.time[j - 1] != current_time {
+                if !same_logrank_time(input.time[j - 1], current_time, input.timefix) {
                     break;
                 }
                 j -= 1;
@@ -828,6 +830,56 @@ mod tests {
         assert!((exact.expected[1] - 13.0 / 6.0).abs() < 1e-12);
         assert!((exact.variance[0][0] - 17.0 / 36.0).abs() < 1e-12);
         assert!((exact.chi_squared - 1.0 / 17.0).abs() < 1e-12);
+        assert_eq!(fixed.chi_squared, 0.0);
+    }
+
+    #[test]
+    fn compute_survdiff_core_honors_timefix_grouping() {
+        fn run_core(timefix: bool) -> SurvDiffResult {
+            let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0, 3.0];
+            let status = vec![1, 1, 0, 1];
+            let group = vec![1, 2, 1, 2];
+            let strata = vec![0, 0, 0, 1];
+            let ngroup = 2;
+            let n = time.len();
+            let mut obs = vec![0.0; ngroup];
+            let mut exp = vec![0.0; ngroup];
+            let mut var = vec![0.0; ngroup * ngroup];
+            let mut risk = vec![0.0; ngroup];
+            let mut kaplan = vec![0.0; n];
+            let params = SurvDiffParams {
+                nn: n as i32,
+                nngroup: ngroup as i32,
+                _nstrat: 1,
+                rho: 0.0,
+            };
+            let input = SurvDiffInput {
+                time: &time,
+                status: &status,
+                group: &group,
+                strata: &strata,
+                timefix,
+            };
+            let mut output = SurvDiffOutput {
+                obs: &mut obs,
+                exp: &mut exp,
+                var: &mut var,
+                risk: &mut risk,
+                kaplan: &mut kaplan,
+            };
+            compute_survdiff(params, input, &mut output);
+            survdiff_result_from_flat_components(obs, exp, var, ngroup)
+        }
+
+        let fixed = run_core(true);
+        let exact = run_core(false);
+
+        assert_eq!(exact.observed, vec![1.0, 2.0]);
+        assert!((exact.expected[0] - 5.0 / 6.0).abs() < 1e-12);
+        assert!((exact.expected[1] - 13.0 / 6.0).abs() < 1e-12);
+        assert!((exact.chi_squared - 1.0 / 17.0).abs() < 1e-12);
+        assert_eq!(fixed.observed, vec![1.0, 2.0]);
+        assert_eq!(fixed.expected, vec![1.0, 2.0]);
         assert_eq!(fixed.chi_squared, 0.0);
     }
 

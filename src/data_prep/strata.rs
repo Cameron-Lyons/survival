@@ -1,6 +1,5 @@
 use pyo3::prelude::*;
-use std::collections::HashMap;
-use std::hash::Hash;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -17,7 +16,7 @@ pub struct StrataResult {
 
 fn strata_internal<T, F>(variables: &[Vec<T>], format_label: F) -> Result<StrataResult, String>
 where
-    T: Clone + Eq + Hash,
+    T: Clone + Eq + Ord,
     F: Fn(&[T]) -> String,
 {
     if variables.is_empty() {
@@ -50,23 +49,29 @@ where
         });
     }
 
-    let mut strata_map: HashMap<Vec<T>, i32> = HashMap::new();
-    let mut strata = Vec::with_capacity(n);
-    let mut levels = Vec::new();
-    let mut current_stratum_id = 0i32;
+    let mut row_keys = Vec::with_capacity(n);
+    let mut strata_map: BTreeMap<Vec<T>, i32> = BTreeMap::new();
 
-    for i in 0..n {
-        let key: Vec<T> = variables.iter().map(|var| var[i].clone()).collect();
-        let stratum_id = *strata_map.entry(key.clone()).or_insert_with(|| {
-            let id = current_stratum_id;
-            levels.push(format_label(&key));
-            current_stratum_id += 1;
-            id
-        });
-        strata.push(stratum_id);
+    for row in 0..n {
+        let key: Vec<T> = variables.iter().map(|var| var[row].clone()).collect();
+        row_keys.push(key.clone());
+        strata_map.entry(key).or_insert(0);
+    }
+
+    let mut levels = Vec::with_capacity(strata_map.len());
+    for (stratum_id, (key, value)) in strata_map.iter_mut().enumerate() {
+        *value = stratum_id as i32;
+        levels.push(format_label(key));
     }
 
     let n_strata = strata_map.len();
+    let mut strata = Vec::with_capacity(n);
+    for key in &row_keys {
+        let Some(&stratum_id) = strata_map.get(key) else {
+            return Err("internal strata key missing from level map".to_string());
+        };
+        strata.push(stratum_id);
+    }
     let mut counts = vec![0usize; n_strata];
     for &s in &strata {
         counts[s as usize] += 1;
@@ -104,10 +109,11 @@ mod tests {
 
     #[test]
     fn test_strata_single_var() {
-        let vars = vec![vec![1, 1, 2, 2, 3]];
+        let vars = vec![vec![2, 1, 2, 3, 1]];
         let result = strata(vars).unwrap();
         assert_eq!(result.n_strata, 3);
-        assert_eq!(result.strata, vec![0, 0, 1, 1, 2]);
+        assert_eq!(result.strata, vec![1, 0, 1, 2, 0]);
+        assert_eq!(result.levels, vec!["v1=1", "v1=2", "v1=3"]);
         assert_eq!(result.counts, vec![2, 2, 1]);
     }
 
@@ -116,7 +122,21 @@ mod tests {
         let vars = vec![vec![1, 1, 2, 2], vec![1, 2, 1, 2]];
         let result = strata(vars).unwrap();
         assert_eq!(result.n_strata, 4);
+        assert_eq!(
+            result.levels,
+            vec!["v1=1, v2=1", "v1=1, v2=2", "v1=2, v2=1", "v1=2, v2=2"]
+        );
         assert_eq!(result.counts, vec![1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn test_strata_string_levels_are_sorted() {
+        let vars = vec![vec!["b".to_string(), "a".to_string(), "b".to_string()]];
+        let result = strata_str(vars).unwrap();
+
+        assert_eq!(result.strata, vec![1, 0, 1]);
+        assert_eq!(result.levels, vec!["a", "b"]);
+        assert_eq!(result.counts, vec![1, 2]);
     }
 
     #[test]

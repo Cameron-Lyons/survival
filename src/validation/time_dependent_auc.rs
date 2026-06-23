@@ -1,5 +1,5 @@
 use crate::constants::{
-    DIVISION_FLOOR, IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE, clamped_normal_ci_95,
+    DIVISION_FLOOR, IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE, clamped_normal_ci_95, same_time,
 };
 use crate::internal::statistical::{compute_censoring_km, km_step_prob_at};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
@@ -9,6 +9,13 @@ use rayon::prelude::*;
 use std::fmt;
 
 const TIED_MARKER_TOLERANCE: f64 = DIVISION_FLOOR;
+
+fn control_marker_counts(control_markers: &[f64], marker_value: f64) -> (usize, usize) {
+    let lower_count = control_markers.partition_point(|&value| value < marker_value);
+    let tied_upper =
+        control_markers.partition_point(|&value| value - marker_value < TIED_MARKER_TOLERANCE);
+    (lower_count, tied_upper.saturating_sub(lower_count))
+}
 
 #[derive(Debug, Clone)]
 #[pyclass(str, get_all, from_py_object)]
@@ -108,6 +115,18 @@ pub fn time_dependent_auc_core(
     marker: &[f64],
     t: f64,
 ) -> TimeDepAUCResult {
+    let (cens_times, cens_km) = compute_censoring_km(time, status);
+    time_dependent_auc_with_censoring(time, status, marker, t, &cens_times, &cens_km)
+}
+
+fn time_dependent_auc_with_censoring(
+    time: &[f64],
+    status: &[i32],
+    marker: &[f64],
+    t: f64,
+    cens_times: &[f64],
+    cens_km: &[f64],
+) -> TimeDepAUCResult {
     let n = time.len();
 
     if n == 0 {
@@ -122,20 +141,19 @@ pub fn time_dependent_auc_core(
         };
     }
 
-    let (cens_times, cens_km) = compute_censoring_km(time, status);
-
     let min_g = IPCW_SURVIVAL_FLOOR;
 
     let mut cases: Vec<(usize, f64)> = Vec::new();
-    let mut controls: Vec<(usize, f64)> = Vec::new();
+    let mut controls: Vec<usize> = Vec::new();
 
     for i in 0..n {
-        if time[i] <= t && status[i] == 1 {
-            let g_ti = km_step_prob_at(time[i], &cens_times, &cens_km).max(min_g);
+        let at_or_before_t = time[i] <= t || same_time(time[i], t);
+        if at_or_before_t && status[i] == 1 {
+            let g_ti = km_step_prob_at(time[i], cens_times, cens_km).max(min_g);
             let weight = 1.0 / g_ti;
             cases.push((i, weight));
-        } else if time[i] > t {
-            controls.push((i, 1.0));
+        } else if time[i] > t && !same_time(time[i], t) {
+            controls.push(i);
         }
     }
 
@@ -154,45 +172,30 @@ pub fn time_dependent_auc_core(
         };
     }
 
-    let compute_pair_contribution =
-        |case_idx: usize, case_weight: f64, ctrl_idx: usize| -> (f64, f64) {
-            let m_case = marker[case_idx];
-            let m_ctrl = marker[ctrl_idx];
+    let mut control_markers: Vec<f64> = controls
+        .iter()
+        .map(|&control_idx| marker[control_idx])
+        .collect();
+    control_markers.sort_by(f64::total_cmp);
 
-            let indicator = if m_case > m_ctrl {
-                1.0
-            } else if (m_case - m_ctrl).abs() < TIED_MARKER_TOLERANCE {
-                0.5
-            } else {
-                0.0
-            };
+    let compute_case_contribution = |case_idx: usize, case_weight: f64| -> (f64, f64) {
+        let (lower_count, tied_count) = control_marker_counts(&control_markers, marker[case_idx]);
+        let favorable = lower_count as f64 + 0.5 * tied_count as f64;
+        (favorable * case_weight, n_controls as f64 * case_weight)
+    };
 
-            (indicator * case_weight, case_weight)
-        };
-
-    let (numerator, denominator) = if n_cases * n_controls > PARALLEL_THRESHOLD_LARGE {
+    let (numerator, denominator) = if n_cases > PARALLEL_THRESHOLD_LARGE {
         cases
             .par_iter()
-            .map(|&(case_idx, case_weight)| {
-                let mut local_num = 0.0;
-                let mut local_den = 0.0;
-                for &(ctrl_idx, _) in &controls {
-                    let (num, den) = compute_pair_contribution(case_idx, case_weight, ctrl_idx);
-                    local_num += num;
-                    local_den += den;
-                }
-                (local_num, local_den)
-            })
+            .map(|&(case_idx, case_weight)| compute_case_contribution(case_idx, case_weight))
             .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
     } else {
         let mut num = 0.0;
         let mut den = 0.0;
         for &(case_idx, case_weight) in &cases {
-            for &(ctrl_idx, _) in &controls {
-                let (n, d) = compute_pair_contribution(case_idx, case_weight, ctrl_idx);
-                num += n;
-                den += d;
-            }
+            let (n, d) = compute_case_contribution(case_idx, case_weight);
+            num += n;
+            den += d;
         }
         (num, den)
     };
@@ -242,16 +245,14 @@ pub fn cumulative_dynamic_auc_core(
         };
     }
 
+    let (cens_times, cens_km) = compute_censoring_km(time, status);
+    let compute_at_time =
+        |t| time_dependent_auc_with_censoring(time, status, marker, t, &cens_times, &cens_km);
+
     let results: Vec<TimeDepAUCResult> = if times.len() > 4 {
-        times
-            .par_iter()
-            .map(|&t| time_dependent_auc_core(time, status, marker, t))
-            .collect()
+        times.par_iter().map(|&t| compute_at_time(t)).collect()
     } else {
-        times
-            .iter()
-            .map(|&t| time_dependent_auc_core(time, status, marker, t))
-            .collect()
+        times.iter().map(|&t| compute_at_time(t)).collect()
     };
 
     let auc_values: Vec<f64> = results.iter().map(|r| r.auc).collect();
@@ -446,6 +447,114 @@ mod tests {
         assert_eq!(result.auc.len(), 3);
         assert!(result.mean_auc >= 0.0 && result.mean_auc <= 1.0);
         assert!(result.integrated_auc >= 0.0 && result.integrated_auc <= 1.0);
+    }
+
+    #[test]
+    fn test_cumulative_dynamic_auc_matches_direct_auc_calls_with_shared_censoring_state() {
+        let time = vec![0.8, 1.0, 1.4, 2.0, 2.5, 3.0, 3.8, 4.2, 5.0, 5.5, 6.2, 7.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0];
+        let marker = vec![
+            0.9, 0.2, 0.85, 0.7, 0.4, 0.65, 0.3, 0.6, 0.5, 0.1, 0.45, 0.05,
+        ];
+        let times = vec![1.0, 1.5, 2.5, 3.5, 4.5, 5.5];
+
+        let cumulative = cumulative_dynamic_auc_core(&time, &status, &marker, &times);
+        let direct: Vec<TimeDepAUCResult> = times
+            .iter()
+            .map(|&t| time_dependent_auc_core(&time, &status, &marker, t))
+            .collect();
+
+        assert_eq!(
+            cumulative.n_cases,
+            direct.iter().map(|r| r.n_cases).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            cumulative.n_controls,
+            direct.iter().map(|r| r.n_controls).collect::<Vec<_>>()
+        );
+        for (actual_auc, expected) in cumulative.auc.iter().zip(direct.iter()) {
+            assert!((actual_auc - expected.auc).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_control_marker_counts_preserves_tie_boundary() {
+        let controls = vec![
+            0.4,
+            0.5,
+            0.5 + TIED_MARKER_TOLERANCE / 2.0,
+            0.5 + TIED_MARKER_TOLERANCE * 2.0,
+            0.7,
+        ];
+
+        let (lower_count, tied_count) = control_marker_counts(&controls, 0.5);
+
+        assert_eq!(lower_count, 1);
+        assert_eq!(tied_count, 2);
+    }
+
+    #[test]
+    fn test_time_dependent_auc_large_case_set_uses_sorted_counting() {
+        let n_cases = PARALLEL_THRESHOLD_LARGE + 5;
+        let n_controls = 10;
+        let mut time = Vec::with_capacity(n_cases + n_controls);
+        let mut status = Vec::with_capacity(n_cases + n_controls);
+        let mut marker = Vec::with_capacity(n_cases + n_controls);
+
+        for i in 0..n_cases {
+            time.push(1.0);
+            status.push(1);
+            marker.push(1.0 + i as f64 * 1e-6);
+        }
+        for i in 0..n_controls {
+            time.push(2.0 + i as f64 * 1e-6);
+            status.push(0);
+            marker.push(i as f64 * 1e-6);
+        }
+
+        let result = time_dependent_auc_core(&time, &status, &marker, 1.0);
+
+        assert_eq!(result.n_cases, n_cases);
+        assert_eq!(result.n_controls, n_controls);
+        assert!((result.auc - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_time_dependent_auc_counts_near_tied_events_at_eval_time() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let status = vec![1, 1, 0, 0];
+        let marker = vec![0.9, 0.8, 0.2, 0.1];
+
+        let expected = time_dependent_auc_core(&exact_time, &status, &marker, 1.0);
+        let actual = time_dependent_auc_core(&near_time, &status, &marker, 1.0);
+
+        assert_eq!(actual.n_cases, expected.n_cases);
+        assert_eq!(actual.n_controls, expected.n_controls);
+        assert!((actual.auc - expected.auc).abs() < 1e-12);
+        assert!((actual.std_error - expected.std_error).abs() < 1e-12);
+        assert!((actual.ci_lower - expected.ci_lower).abs() < 1e-12);
+        assert!((actual.ci_upper - expected.ci_upper).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_cumulative_dynamic_auc_counts_near_tied_events_at_eval_time() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let status = vec![1, 1, 0, 0];
+        let marker = vec![0.9, 0.8, 0.2, 0.1];
+        let times = vec![1.0, 2.0];
+
+        let expected = cumulative_dynamic_auc_core(&exact_time, &status, &marker, &times);
+        let actual = cumulative_dynamic_auc_core(&near_time, &status, &marker, &times);
+
+        assert_eq!(actual.n_cases, expected.n_cases);
+        assert_eq!(actual.n_controls, expected.n_controls);
+        for (actual_auc, expected_auc) in actual.auc.iter().zip(expected.auc.iter()) {
+            assert!((actual_auc - expected_auc).abs() < 1e-12);
+        }
+        assert!((actual.mean_auc - expected.mean_auc).abs() < 1e-12);
+        assert!((actual.integrated_auc - expected.integrated_auc).abs() < 1e-12);
     }
 
     #[test]

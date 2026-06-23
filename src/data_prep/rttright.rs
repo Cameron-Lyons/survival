@@ -2,6 +2,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 
+use crate::constants::{DIVISION_FLOOR, same_time};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
 };
@@ -36,15 +37,29 @@ pub struct RttrightResult {
 /// * `time` - Survival/censoring times
 /// * `status` - Event indicator (1=event, 0=censored)
 /// * `weights` - Optional initial weights (default: 1.0 for all)
+/// * `timefix` - Coalesce nearly-equal times like R's `aeqSurv`
+/// * `renorm` - Normalize weights to sum to one before redistribution
 ///
 /// # Returns
 /// * `RttrightResult` containing redistributed weights
 #[pyfunction]
-#[pyo3(signature = (time, status, weights=None))]
+#[pyo3(signature = (time, status, weights=None, timefix=true, renorm=true))]
 pub fn rttright(
     time: Vec<f64>,
     status: Vec<i32>,
     weights: Option<Vec<f64>>,
+    timefix: bool,
+    renorm: bool,
+) -> PyResult<RttrightResult> {
+    rttright_impl(time, status, weights, timefix, renorm)
+}
+
+fn rttright_impl(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    weights: Option<Vec<f64>>,
+    timefix: bool,
+    renorm: bool,
 ) -> PyResult<RttrightResult> {
     let n = time.len();
 
@@ -77,8 +92,9 @@ pub fn rttright(
     let sorted_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
     let sorted_weights: Vec<f64> = indices.iter().map(|&i| init_weights[i]).collect();
+    let sorted_weights = normalize_case_weights(&sorted_weights, renorm)?;
 
-    let km_weights = compute_km_weights(&sorted_time, &sorted_status, &sorted_weights);
+    let km_weights = compute_km_weights(&sorted_time, &sorted_status, &sorted_weights, timefix);
 
     Ok(RttrightResult {
         weights: km_weights,
@@ -100,56 +116,79 @@ fn validate_rttright_inputs(time: &[f64], status: &[i32], weights: &[f64]) -> Py
     Ok(())
 }
 
-/// Compute IPCW weights using Kaplan-Meier censoring distribution
-fn compute_km_weights(time: &[f64], status: &[i32], init_weights: &[f64]) -> Vec<f64> {
+fn normalize_case_weights(weights: &[f64], renorm: bool) -> PyResult<Vec<f64>> {
+    if !renorm {
+        return Ok(weights.to_vec());
+    }
+
+    let total = weights.iter().sum::<f64>();
+    if total <= DIVISION_FLOOR {
+        return Err(PyValueError::new_err(
+            "weights must have positive sum when renorm is true",
+        ));
+    }
+
+    Ok(weights.iter().map(|weight| weight / total).collect())
+}
+
+fn same_rttright_time(left: f64, right: f64, timefix: bool) -> bool {
+    if timefix {
+        same_time(left, right)
+    } else {
+        left == right
+    }
+}
+
+/// Compute IPCW weights using the Kaplan-Meier censoring distribution.
+///
+/// Within a time block, observed events receive the censoring survival just
+/// before the block; censoring at that same time updates the censoring curve
+/// only after those same-time events have left the risk set. This matches the
+/// shifted-censoring construction used by R's `rttright`.
+fn compute_km_weights(
+    time: &[f64],
+    status: &[i32],
+    init_weights: &[f64],
+    timefix: bool,
+) -> Vec<f64> {
     let n = time.len();
     if n == 0 {
         return vec![];
     }
 
-    let mut g_t = vec![1.0; n];
+    let mut weights = vec![0.0; n];
     let mut n_at_risk = init_weights.iter().sum::<f64>();
-
-    let mut prev_time = f64::NEG_INFINITY;
     let mut current_g = 1.0;
 
-    for i in 0..n {
-        if time[i] > prev_time && i > 0 {
-            let mut n_censored = 0.0;
-            let mut j = i - 1;
-            while j < i && time[j] == prev_time {
-                if status[j] == 0 {
-                    n_censored += init_weights[j];
-                }
-                if j == 0 {
-                    break;
-                }
-                j -= 1;
-            }
-
-            if n_at_risk > 0.0 && n_censored > 0.0 {
-                current_g *= 1.0 - n_censored / n_at_risk;
-            }
+    let mut start = 0;
+    while start < n {
+        let block_time = time[start];
+        let mut end = start + 1;
+        while end < n && same_rttright_time(time[end], block_time, timefix) {
+            end += 1;
         }
 
-        g_t[i] = current_g;
-        n_at_risk -= init_weights[i];
-        prev_time = time[i];
-    }
-
-    let mut weights = Vec::with_capacity(n);
-    for i in 0..n {
-        if status[i] == 1 {
-            let g = if i > 0 { g_t[i - 1] } else { 1.0 };
-            let w = if g > 1e-10 {
-                init_weights[i] / g
+        let mut event_weight = 0.0;
+        let mut censor_weight = 0.0;
+        for row in start..end {
+            if status[row] == 1 {
+                event_weight += init_weights[row];
+                weights[row] = if current_g > DIVISION_FLOOR {
+                    init_weights[row] / current_g
+                } else {
+                    init_weights[row]
+                };
             } else {
-                init_weights[i]
-            };
-            weights.push(w);
-        } else {
-            weights.push(0.0);
+                censor_weight += init_weights[row];
+            }
         }
+
+        let risk_after_events = n_at_risk - event_weight;
+        if risk_after_events > DIVISION_FLOOR && censor_weight > 0.0 {
+            current_g *= 1.0 - censor_weight / risk_after_events;
+        }
+        n_at_risk = risk_after_events - censor_weight;
+        start = end;
     }
 
     weights
@@ -157,12 +196,14 @@ fn compute_km_weights(time: &[f64], status: &[i32], init_weights: &[f64]) -> Vec
 
 /// Compute IPCW weights with stratification
 #[pyfunction]
-#[pyo3(signature = (time, status, strata, weights=None))]
+#[pyo3(signature = (time, status, strata, weights=None, timefix=true, renorm=true))]
 pub fn rttright_stratified(
     time: Vec<f64>,
     status: Vec<i32>,
     strata: Vec<i32>,
     weights: Option<Vec<f64>>,
+    timefix: bool,
+    renorm: bool,
 ) -> PyResult<RttrightResult> {
     let n = time.len();
 
@@ -194,7 +235,13 @@ pub fn rttright_stratified(
         let strata_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
         let strata_weights: Vec<f64> = indices.iter().map(|&i| init_weights[i]).collect();
 
-        let result = rttright(strata_time, strata_status, Some(strata_weights))?;
+        let result = rttright_impl(
+            strata_time,
+            strata_status,
+            Some(strata_weights),
+            timefix,
+            renorm,
+        )?;
 
         for (sorted_pos, &local_idx) in result.order.iter().enumerate() {
             let orig_idx = indices[local_idx];
@@ -218,12 +265,19 @@ mod tests {
     use crate::tests::common::initialize_python;
     use itertools::Itertools;
 
+    fn assert_close_slice(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (left, right) in actual.iter().zip(expected.iter()) {
+            assert!((left - right).abs() < 1e-12, "{actual:?} != {expected:?}");
+        }
+    }
+
     #[test]
     fn test_rttright_basic() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 0, 1, 0, 1];
 
-        let result = rttright(time, status, None).unwrap();
+        let result = rttright(time, status, None, true, true).unwrap();
 
         assert!(result.weights[0] > 0.0);
         assert!(result.weights[2] > 0.0);
@@ -238,11 +292,73 @@ mod tests {
         let time = vec![1.0, 2.0, 3.0];
         let status = vec![1, 1, 1];
 
-        let result = rttright(time, status, None).unwrap();
+        let result = rttright(time, status, None, true, true).unwrap();
 
         for w in &result.weights {
-            assert!((*w - 1.0).abs() < 1e-10);
+            assert!((*w - (1.0 / 3.0)).abs() < 1e-10);
         }
+    }
+
+    #[test]
+    fn test_rttright_matches_r_normalized_right_censoring_weights() {
+        let result = rttright(vec![1.0, 2.0, 3.0], vec![0, 1, 1], None, true, true).unwrap();
+
+        assert_close_slice(&result.weights, &[0.0, 0.5, 0.5]);
+
+        let raw = rttright(vec![1.0, 2.0, 3.0], vec![0, 1, 1], None, true, false).unwrap();
+
+        assert_close_slice(&raw.weights, &[0.0, 1.5, 1.5]);
+
+        let weighted = rttright(
+            vec![1.0, 2.0, 3.0],
+            vec![0, 1, 1],
+            Some(vec![2.0, 1.0, 3.0]),
+            true,
+            true,
+        )
+        .unwrap();
+        let weighted_raw = rttright(
+            vec![1.0, 2.0, 3.0],
+            vec![0, 1, 1],
+            Some(vec![2.0, 1.0, 3.0]),
+            true,
+            false,
+        )
+        .unwrap();
+
+        assert_close_slice(&weighted.weights, &[0.0, 0.25, 0.75]);
+        assert_close_slice(&weighted_raw.weights, &[0.0, 1.5, 4.5]);
+    }
+
+    #[test]
+    fn test_rttright_tied_blocks_are_atomic() {
+        let result =
+            rttright(vec![1.0, 2.0, 2.0, 3.0], vec![0, 1, 1, 1], None, true, true).unwrap();
+
+        assert_close_slice(&result.weights, &[0.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]);
+    }
+
+    #[test]
+    fn test_rttright_timefix_controls_near_tie_grouping() {
+        let fixed = rttright(
+            vec![1.0, 1.0 + 5e-10, 2.0],
+            vec![0, 1, 1],
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        let exact = rttright(
+            vec![1.0, 1.0 + 5e-10, 2.0],
+            vec![0, 1, 1],
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_close_slice(&fixed.weights, &[0.0, 1.0, 2.0]);
+        assert_close_slice(&exact.weights, &[0.0, 1.5, 1.5]);
     }
 
     #[test]
@@ -250,7 +366,7 @@ mod tests {
         let time: Vec<f64> = vec![];
         let status: Vec<i32> = vec![];
 
-        let result = rttright(time, status, None).unwrap();
+        let result = rttright(time, status, None, true, true).unwrap();
         assert!(result.weights.is_empty());
     }
 
@@ -261,13 +377,12 @@ mod tests {
             vec![1, 0, 1, 1],
             vec![0, 0, 1, 1],
             None,
+            true,
+            true,
         )
         .unwrap();
 
-        assert_eq!(result.weights[1], 0.0);
-        assert!(result.weights[0] > 0.0);
-        assert!(result.weights[2] > 0.0);
-        assert!(result.weights[3] > 0.0);
+        assert_close_slice(&result.weights, &[1.0, 0.0, 0.5, 0.5]);
 
         let mut order = result.order.clone();
         order.sort_unstable();
@@ -279,8 +394,15 @@ mod tests {
     fn test_rttright_stratified_validates_weights_length() {
         initialize_python();
 
-        let err = rttright_stratified(vec![1.0, 2.0], vec![1, 0], vec![0, 0], Some(vec![1.0]))
-            .unwrap_err();
+        let err = rttright_stratified(
+            vec![1.0, 2.0],
+            vec![1, 0],
+            vec![0, 0],
+            Some(vec![1.0]),
+            true,
+            true,
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string()
@@ -292,21 +414,34 @@ mod tests {
     fn test_rttright_rejects_malformed_inputs() {
         initialize_python();
 
-        let err = rttright(vec![f64::NAN], vec![1], None).unwrap_err();
+        let err = rttright(vec![f64::NAN], vec![1], None, true, true).unwrap_err();
         assert!(err.to_string().contains("time contains NaN"));
 
-        let err = rttright(vec![1.0], vec![2], None).unwrap_err();
+        let err = rttright(vec![1.0], vec![2], None, true, true).unwrap_err();
         assert!(
             err.to_string()
                 .contains("status must contain only 0/1 values")
         );
 
-        let err = rttright(vec![1.0], vec![1], Some(vec![-1.0])).unwrap_err();
+        let err = rttright(vec![1.0], vec![1], Some(vec![-1.0]), true, true).unwrap_err();
         assert!(err.to_string().contains("weights contains negative value"));
 
-        let err = rttright_stratified(vec![1.0], vec![1], vec![0], Some(vec![f64::INFINITY]))
-            .unwrap_err();
+        let err = rttright_stratified(
+            vec![1.0],
+            vec![1],
+            vec![0],
+            Some(vec![f64::INFINITY]),
+            true,
+            true,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("weights contains non-finite"));
+
+        let err = rttright(vec![1.0], vec![1], Some(vec![0.0]), true, true).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("weights must have positive sum when renorm is true")
+        );
     }
 
     #[test]
@@ -319,6 +454,8 @@ mod tests {
             base_time.to_vec(),
             base_status.to_vec(),
             Some(base_weights.to_vec()),
+            true,
+            true,
         )
         .unwrap();
 
@@ -327,7 +464,7 @@ mod tests {
             let status: Vec<i32> = permutation.iter().map(|&i| base_status[i]).collect();
             let weights: Vec<f64> = permutation.iter().map(|&i| base_weights[i]).collect();
 
-            let result = rttright(time, status, Some(weights)).unwrap();
+            let result = rttright(time, status, Some(weights), true, true).unwrap();
 
             assert_eq!(result.time, baseline.time);
             assert_eq!(result.status, baseline.status);

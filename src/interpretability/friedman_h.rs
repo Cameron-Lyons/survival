@@ -58,7 +58,7 @@ fn compute_pdp_values(
         .zip(predictions.iter())
         .map(|(c, &p)| (c[feature_index], p))
         .collect();
-    feature_values.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    feature_values.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     grid_points
         .iter()
@@ -78,10 +78,7 @@ fn compute_pdp_values(
                 total / count as f64
             } else {
                 let idx = feature_values
-                    .binary_search_by(|(fv, _)| {
-                        fv.partial_cmp(&grid_val)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
+                    .binary_search_by(|(fv, _)| fv.total_cmp(&grid_val))
                     .unwrap_or_else(|i| i.min(feature_values.len() - 1));
                 feature_values[idx].1
             }
@@ -134,7 +131,7 @@ fn compute_pdp_2d_values(
                             .min_by(|a, b| {
                                 let d_a = (a.0 - g1).powi(2) + (a.1 - g2).powi(2);
                                 let d_b = (b.0 - g1).powi(2) + (b.1 - g2).powi(2);
-                                d_a.partial_cmp(&d_b).unwrap_or(std::cmp::Ordering::Equal)
+                                d_a.total_cmp(&d_b)
                             })
                             .map(|t| t.2)
                             .unwrap_or(0.0)
@@ -147,7 +144,7 @@ fn compute_pdp_2d_values(
 
 fn compute_grid_points(values: &[f64], n_points: usize) -> Vec<f64> {
     let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(f64::total_cmp);
 
     let n = sorted.len();
     (0..n_points)

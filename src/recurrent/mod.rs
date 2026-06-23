@@ -1,6 +1,7 @@
 pub(crate) mod gap_time;
 pub(crate) mod joint_frailty;
 pub(crate) mod marginal_models;
+pub(crate) mod validation;
 
 // Public facade exports
 pub use gap_time::{GapTimeResult, gap_time_model, pwp_gap_time};

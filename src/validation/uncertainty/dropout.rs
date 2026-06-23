@@ -21,9 +21,9 @@ impl MCDropoutConfig {
                 "n_samples must be positive",
             ));
         }
-        if !(0.0..=1.0).contains(&dropout_rate) {
+        if !dropout_rate.is_finite() || !(0.0..1.0).contains(&dropout_rate) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "dropout_rate must be between 0 and 1",
+                "dropout_rate must be in [0, 1)",
             ));
         }
         Ok(Self {
@@ -71,6 +71,7 @@ impl UncertaintyResult {
 }
 
 fn _apply_dropout(values: &[f64], dropout_rate: f64, rng: &mut fastrand::Rng) -> Vec<f64> {
+    debug_assert!(dropout_rate.is_finite() && (0.0..1.0).contains(&dropout_rate));
     let scale = 1.0 / (1.0 - dropout_rate);
     values
         .iter()
@@ -84,18 +85,28 @@ fn _apply_dropout(values: &[f64], dropout_rate: f64, rng: &mut fastrand::Rng) ->
         .collect()
 }
 
+fn validate_probability_prediction_cube(
+    predictions: &[Vec<Vec<f64>>],
+) -> PyResult<(usize, usize, usize)> {
+    let shape = validate_prediction_cube(predictions, "predictions")?;
+    for (model_idx, model) in predictions.iter().enumerate() {
+        for (obs_idx, row) in model.iter().enumerate() {
+            for (time_idx, &value) in row.iter().enumerate() {
+                if !(0.0..=1.0).contains(&value) {
+                    return Err(uncertainty_value_error(format!(
+                        "predictions must contain probabilities between 0 and 1; got {value} at model {model_idx}, observation {obs_idx}, time {time_idx}"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(shape)
+}
+
 #[pyfunction]
 #[pyo3(signature = (predictions,))]
 pub fn mc_dropout_uncertainty(predictions: Vec<Vec<Vec<f64>>>) -> PyResult<UncertaintyResult> {
-    if predictions.is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "predictions must not be empty",
-        ));
-    }
-
-    let n_samples = predictions.len();
-    let n_times = predictions[0].first().map(|p| p.len()).unwrap_or(0);
-    let n_obs = predictions[0].len();
+    let (n_samples, n_obs, n_times) = validate_probability_prediction_cube(&predictions)?;
 
     let mean_prediction: Vec<Vec<f64>> = (0..n_obs)
         .into_par_iter()

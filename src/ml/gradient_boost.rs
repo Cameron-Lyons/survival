@@ -148,11 +148,7 @@ fn compute_cox_gradient_hessian(
     }
 
     let mut sorted_indices = indices.to_vec();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let mut risk_sum = 0.0;
     let mut risk_sum_sq = 0.0;
@@ -235,7 +231,7 @@ fn find_best_split_regression(
     for &var in &candidate_vars {
         let mut var_indices: Vec<(f64, usize)> =
             indices.iter().map(|&i| (x[i * p + var], i)).collect();
-        var_indices.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        var_indices.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         let mut left_grad = 0.0;
         let mut left_hess = 0.0;
@@ -367,7 +363,7 @@ fn fit_gradient_boost_inner(
     config: &GradientBoostSurvivalConfig,
 ) -> GradientBoostSurvival {
     let mut unique_times: Vec<f64> = time.to_vec();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     let mut predictions = vec![0.0; n_obs];
@@ -616,11 +612,7 @@ fn update_feature_importance(node: &RegressionTreeNode, importance: &mut [f64]) 
 fn compute_cox_loss(time: &[f64], status: &[i32], predictions: &[f64]) -> f64 {
     let n = time.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let mut loglik = 0.0;
     let mut risk_sum = 0.0;
@@ -646,11 +638,7 @@ fn compute_baseline_hazard(
     let n = time.len();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let exp_preds: Vec<f64> = predictions
         .iter()

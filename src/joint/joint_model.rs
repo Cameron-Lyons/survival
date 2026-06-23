@@ -387,7 +387,7 @@ pub fn joint_model(
     let mut random_effects: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; n_subjects];
 
     let mut unique_times: Vec<f64> = event_time.clone();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
     let n_knots = config.baseline_hazard_knots.min(unique_times.len());
     let baseline_times: Vec<f64> = (0..n_knots)

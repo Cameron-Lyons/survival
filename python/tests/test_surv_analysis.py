@@ -270,6 +270,9 @@ def test_survfitkm_with_options_honors_conf_level():
             survival.SurvfitKMOptions().with_conf_level(1.0),
         )
 
+    with pytest.raises(ValueError, match="conf_level"):
+        survival.KaplanMeierConfig(conf_level=1.0)
+
 
 def test_survfitkm_honors_conf_type():
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
@@ -295,6 +298,7 @@ def test_survfitkm_honors_conf_type():
     assert plain.conf_lower != pytest.approx(default.conf_lower)
     assert none.conf_lower == []
     assert none.conf_upper == []
+    assert survival.KaplanMeierConfig(conf_type="log_log").conf_type == "log-log"
 
     with pytest.raises(ValueError, match="conf_type"):
         survival.survfitkm(time, status, conf_type="weird")
@@ -305,6 +309,9 @@ def test_survfitkm_honors_conf_type():
             status,
             survival.SurvfitKMOptions().with_conf_type("weird"),
         )
+
+    with pytest.raises(ValueError, match="conf_type"):
+        survival.KaplanMeierConfig(conf_type="weird")
 
 
 def test_survfitkm_honors_delayed_entry():
@@ -461,6 +468,30 @@ def test_survfit_matrix_public_apis_validate_shapes_and_values():
             0,
         )
 
+    core = survival._survival
+
+    with pytest.raises(ValueError, match="base_hazards must be non-decreasing"):
+        core.cox_survfit_from_baseline(
+            [1.0, 2.0],
+            [0.2, 0.1],
+            [0.0],
+            0.0,
+            None,
+            None,
+            None,
+        )
+
+    with pytest.raises(ValueError, match="no baseline hazard"):
+        core.cox_survfit_from_baseline(
+            [1.0],
+            [0.2],
+            [0.0],
+            0.0,
+            [0],
+            [1],
+            None,
+        )
+
 
 def test_compute_logrank_components():
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
@@ -584,6 +615,22 @@ def test_survcheck_public_apis_and_validation():
         time=[1.0, -1.0, float("nan")],
         status=[1, 0, 2],
     )
+    simple_inf = survival.survcheck_simple(
+        time=[1.0, float("inf")],
+        status=[1, 0],
+    )
+    multi_issue = survival.survcheck(
+        id=[2, 2, 1, 1, 1],
+        time1=[0.0, 5.0, 0.0, 5.0, 20.0],
+        time2=[10.0, 15.0, 10.0, 15.0, 25.0],
+        status=[0, 1, 0, 1, 0],
+    )
+    multi_nonfinite = survival.survcheck(
+        id=[1, 1, 1],
+        time1=[0.0, float("nan"), 1.0],
+        time2=[1.0, 2.0, 2.0],
+        status=[0, 1, 0],
+    )
 
     assert result.n_subjects == 2
     assert result.n_transitions == 3
@@ -599,8 +646,50 @@ def test_survcheck_public_apis_and_validation():
     assert simple.flags == [0, 4, 4]
     assert any("negative time" in message for message in simple.messages)
 
+    assert simple_inf.is_valid is False
+    assert simple_inf.n_problems == 1
+    assert simple_inf.invalid_ids == [1]
+    assert simple_inf.flags == [0, 4]
+
+    assert multi_issue.n_problems == 2
+    assert multi_issue.overlap_ids == [1, 2]
+    assert multi_issue.gap_ids == [1]
+
+    assert multi_nonfinite.is_valid is False
+    assert multi_nonfinite.n_problems == 1
+    assert multi_nonfinite.invalid_ids == [1]
+    assert multi_nonfinite.overlap_ids == []
+    assert multi_nonfinite.gap_ids == []
+    assert multi_nonfinite.flags == [0, 4, 0]
+
     with pytest.raises(ValueError, match="All input vectors must have the same length"):
         survival.survcheck([1], [0.0], [1.0, 2.0], [1], None)
+
+
+def test_life_table_public_api_and_validation():
+    result = survival.life_table(
+        time=[1.0, 2.0, 4.0],
+        status=[1, 0, 1],
+        breaks=[0.0, 2.0, 4.0],
+    )
+
+    assert result.interval_start == pytest.approx([0.0, 2.0])
+    assert result.interval_end == pytest.approx([2.0, 4.0])
+    assert result.n_deaths == pytest.approx([1.0, 1.0])
+    assert result.n_censored == pytest.approx([0.0, 1.0])
+
+    with pytest.raises(ValueError, match="time and status must have same length"):
+        survival.life_table([1.0], [], [0.0, 2.0])
+    with pytest.raises(ValueError, match="breaks must define at least one interval"):
+        survival.life_table([1.0], [1], [0.0])
+    with pytest.raises(ValueError, match="time contains NaN"):
+        survival.life_table([float("nan")], [1], [0.0, 2.0])
+    with pytest.raises(ValueError, match="status must contain only 0/1"):
+        survival.life_table([1.0], [2], [0.0, 2.0])
+    with pytest.raises(ValueError, match="breaks must be strictly increasing"):
+        survival.life_table([1.0], [1], [0.0, 0.0])
+    with pytest.raises(ValueError, match="time values must fall within the break range"):
+        survival.life_table([3.0], [1], [0.0, 2.0])
 
 
 def test_royston_public_apis_and_validation():
@@ -627,6 +716,16 @@ def test_royston_public_apis_and_validation():
 
     with pytest.raises(ValueError, match="At least 2 events required"):
         survival.royston([0.1, 0.2], [1.0, 2.0], [1, 0])
+    with pytest.raises(ValueError, match="linear_predictor contains NaN"):
+        survival.royston([float("nan"), 0.2], [1.0, 2.0], [1, 1])
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.royston([0.1, 0.2], [1.0, float("inf")], [1, 1])
+    with pytest.raises(ValueError, match="status must contain only 0/1"):
+        survival.royston([0.1, 0.2], [1.0, 2.0], [1, 2])
+    with pytest.raises(ValueError, match="x contains NaN"):
+        survival.royston_from_model([float("nan"), 1.0], [0.5], 2, [1.0, 2.0], [1, 1])
+    with pytest.raises(ValueError, match="coef contains non-finite"):
+        survival.royston_from_model([1.0, 1.0], [float("inf")], 2, [1.0, 2.0], [1, 1])
 
 
 def test_yates_public_apis_and_validation():
@@ -658,8 +757,34 @@ def test_yates_public_apis_and_validation():
     assert contrast.predict_type == "risk"
     assert contrast.means[1] > contrast.means[0]
 
+    narrow = survival.yates([1.0, 2.0, 3.0, 4.0], ["A", "A", "A", "A"], None, 0.80)
+    wide = survival.yates([1.0, 2.0, 3.0, 4.0], ["A", "A", "A", "A"], None, 0.99)
+    assert wide.upper[0] - wide.lower[0] > narrow.upper[0] - narrow.lower[0]
+
     with pytest.raises(ValueError, match="weights must have same length as predictions"):
         survival.yates([1.0], ["A"], [1.0, 2.0], 0.95)
+    with pytest.raises(ValueError, match="predictions cannot be empty"):
+        survival.yates([], [], None, 0.95)
+    with pytest.raises(ValueError, match="predictions contains NaN"):
+        survival.yates([float("nan")], ["A"], None, 0.95)
+    with pytest.raises(ValueError, match="weights contains negative"):
+        survival.yates([1.0], ["A"], [-1.0], 0.95)
+    with pytest.raises(ValueError, match="positive total weight"):
+        survival.yates([1.0], ["A"], [0.0], 0.95)
+    with pytest.raises(ValueError, match="conf_level"):
+        survival.yates([1.0], ["A"], None, 1.0)
+    with pytest.raises(ValueError, match="n_obs must be greater than 0"):
+        survival.yates_contrast([], [0.5], 0, 1, 0, [0.0], "linear")
+    with pytest.raises(ValueError, match="factor_levels cannot be empty"):
+        survival.yates_contrast([1.0], [0.5], 1, 1, 0, [], "linear")
+    with pytest.raises(ValueError, match="x contains NaN"):
+        survival.yates_contrast([float("nan")], [0.5], 1, 1, 0, [0.0], "linear")
+    with pytest.raises(ValueError, match="coef contains non-finite"):
+        survival.yates_contrast([1.0], [float("inf")], 1, 1, 0, [0.0], "linear")
+    with pytest.raises(ValueError, match="factor_levels contains NaN"):
+        survival.yates_contrast([1.0], [0.5], 1, 1, 0, [float("nan")], "linear")
+    with pytest.raises(ValueError, match="predict_type must be one of"):
+        survival.yates_contrast([1.0], [0.5], 1, 1, 0, [0.0], "bogus")
 
 
 def test_concordance_metric_public_apis_and_validation():
@@ -693,8 +818,67 @@ def test_concordance_metric_public_apis_and_validation():
     assert 0.0 <= gonen.cpe <= 1.0
     assert gonen.std_error >= 0.0
 
+    with pytest.raises(ValueError, match="linear_predictor must not be empty"):
+        survival.gonen_heller_concordance([])
+    with pytest.raises(ValueError, match="linear_predictor contains NaN"):
+        survival.gonen_heller_concordance([0.1, float("nan")])
+    with pytest.raises(ValueError, match="linear_predictor contains non-finite"):
+        survival.gonen_heller_concordance([0.1, float("inf")])
+
+    exact_time = [1.0, 2.0, 2.0, 3.0, 4.0]
+    near_time = [1.0, 2.0 + 5e-10, 2.0, 3.0, 4.0]
+    boundary_status = [1, 1, 1, 0, 0]
+    boundary_risk = [0.9, 0.7, 0.8, 0.4, 0.2]
+    reverse_boundary_risk = [0.2, 0.4, 0.3, 0.7, 0.9]
+
+    exact_uno = survival.uno_c_index(exact_time, boundary_status, boundary_risk, 2.0)
+    near_uno = survival.uno_c_index(near_time, boundary_status, boundary_risk, 2.0)
+    assert near_uno.comparable_pairs == pytest.approx(exact_uno.comparable_pairs)
+    assert near_uno.concordant == pytest.approx(exact_uno.concordant)
+    assert near_uno.discordant == pytest.approx(exact_uno.discordant)
+    assert near_uno.tied_risk == pytest.approx(exact_uno.tied_risk)
+    assert near_uno.c_index == pytest.approx(exact_uno.c_index)
+
+    exact_comparison = survival.compare_uno_c_indices(
+        exact_time, boundary_status, boundary_risk, reverse_boundary_risk, 2.0
+    )
+    near_comparison = survival.compare_uno_c_indices(
+        near_time, boundary_status, boundary_risk, reverse_boundary_risk, 2.0
+    )
+    assert near_comparison.c_index_1 == pytest.approx(exact_comparison.c_index_1)
+    assert near_comparison.c_index_2 == pytest.approx(exact_comparison.c_index_2)
+    assert near_comparison.difference == pytest.approx(exact_comparison.difference)
+    assert near_comparison.variance_diff == pytest.approx(exact_comparison.variance_diff)
+
+    exact_decomposition = survival.c_index_decomposition(
+        exact_time, boundary_status, boundary_risk, 2.0
+    )
+    near_decomposition = survival.c_index_decomposition(
+        near_time, boundary_status, boundary_risk, 2.0
+    )
+    assert near_decomposition.n_event_event_pairs == exact_decomposition.n_event_event_pairs
+    assert near_decomposition.n_event_censored_pairs == exact_decomposition.n_event_censored_pairs
+    assert near_decomposition.c_index == pytest.approx(exact_decomposition.c_index)
+    assert near_decomposition.c_index_ee == pytest.approx(exact_decomposition.c_index_ee)
+    assert near_decomposition.c_index_ec == pytest.approx(exact_decomposition.c_index_ec)
+    assert near_decomposition.alpha == pytest.approx(exact_decomposition.alpha)
+
     with pytest.raises(ValueError, match="time, status, and risk_score must have the same length"):
         survival.uno_c_index([1.0], [1], [0.1, 0.2])
+    with pytest.raises(ValueError, match="time cannot be empty"):
+        survival.uno_c_index([], [], [])
+    with pytest.raises(ValueError, match="time contains NaN"):
+        survival.uno_c_index([float("nan")], [1], [0.5])
+    with pytest.raises(ValueError, match="status must contain only 0/1"):
+        survival.uno_c_index([1.0], [2], [0.5])
+    with pytest.raises(ValueError, match="risk_score contains non-finite"):
+        survival.uno_c_index([1.0], [1], [float("inf")])
+    with pytest.raises(ValueError, match="tau must be non-negative"):
+        survival.uno_c_index([1.0], [1], [0.5], -1.0)
+    with pytest.raises(ValueError, match="risk_score_2 contains NaN"):
+        survival.compare_uno_c_indices([1.0], [1], [0.5], [float("nan")])
+    with pytest.raises(ValueError, match="tau must be finite"):
+        survival.c_index_decomposition([1.0], [1], [0.5], float("inf"))
 
 
 def test_time_dependent_auc_public_apis_and_validation():
@@ -710,6 +894,32 @@ def test_time_dependent_auc_public_apis_and_validation():
     assert auc.n_controls == 2
     assert len(cumulative.auc) == 3
     assert 0.0 <= cumulative.mean_auc <= 1.0
+
+    exact_time = [1.0, 1.0, 2.0, 3.0]
+    near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
+    boundary_status = [1, 1, 0, 0]
+    boundary_marker = [0.9, 0.8, 0.2, 0.1]
+
+    exact_auc = survival.time_dependent_auc(
+        exact_time, boundary_status, boundary_marker, 1.0
+    )
+    near_auc = survival.time_dependent_auc(near_time, boundary_status, boundary_marker, 1.0)
+    assert near_auc.n_cases == exact_auc.n_cases
+    assert near_auc.n_controls == exact_auc.n_controls
+    assert near_auc.auc == pytest.approx(exact_auc.auc)
+    assert near_auc.std_error == pytest.approx(exact_auc.std_error)
+
+    exact_cumulative = survival.cumulative_dynamic_auc(
+        exact_time, boundary_status, boundary_marker, [1.0, 2.0]
+    )
+    near_cumulative = survival.cumulative_dynamic_auc(
+        near_time, boundary_status, boundary_marker, [1.0, 2.0]
+    )
+    assert near_cumulative.n_cases == exact_cumulative.n_cases
+    assert near_cumulative.n_controls == exact_cumulative.n_controls
+    assert near_cumulative.auc == pytest.approx(exact_cumulative.auc)
+    assert near_cumulative.mean_auc == pytest.approx(exact_cumulative.mean_auc)
+    assert near_cumulative.integrated_auc == pytest.approx(exact_cumulative.integrated_auc)
 
     with pytest.raises(ValueError, match="time contains non-finite"):
         survival.time_dependent_auc([float("nan")], [1], [0.5], 1.0)
@@ -728,6 +938,57 @@ def test_time_dependent_auc_public_apis_and_validation():
 
     with pytest.raises(ValueError, match="times must be sorted"):
         survival.cumulative_dynamic_auc(time, status, marker, [2.5, 1.5])
+
+
+def test_landmark_summary_apis_group_near_tied_event_times():
+    exact_time = [1.0, 1.0, 2.0, 3.0]
+    near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
+    status = [1, 1, 0, 0]
+
+    exact_conditional = survival.conditional_survival(exact_time, status, 1.0, 2.0)
+    near_conditional = survival.conditional_survival(near_time, status, 1.0, 2.0)
+    assert near_conditional.conditional_survival == pytest.approx(
+        exact_conditional.conditional_survival
+    )
+    assert near_conditional.n_at_risk == exact_conditional.n_at_risk
+
+    exact_survival = survival.survival_at_times(exact_time, status, [1.0, 2.0])
+    near_survival = survival.survival_at_times(near_time, status, [1.0, 2.0])
+    for actual, expected in zip(near_survival, exact_survival, strict=True):
+        assert actual.survival == pytest.approx(expected.survival)
+        assert actual.n_at_risk == expected.n_at_risk
+        assert actual.n_events == expected.n_events
+
+    group = [0, 1, 0, 1, 0, 1]
+    grouped_status = [1, 1, 1, 0, 0, 0]
+    exact_hazard = survival.hazard_ratio([1.0, 1.0, 2.0, 2.0, 3.0, 3.0], grouped_status, group)
+    near_hazard = survival.hazard_ratio(
+        [1.0, 1.0 + 5e-10, 2.0, 2.0 + 5e-10, 3.0, 3.0],
+        grouped_status,
+        group,
+    )
+    assert near_hazard.hazard_ratio == pytest.approx(exact_hazard.hazard_ratio)
+    assert near_hazard.se_log_hr == pytest.approx(exact_hazard.se_log_hr)
+    assert near_hazard.p_value == pytest.approx(exact_hazard.p_value)
+
+
+def test_landmark_summary_apis_validate_public_inputs():
+    with pytest.raises(ValueError, match="time and status must have same length"):
+        survival.landmark_analysis([1.0], [], 0.5)
+    with pytest.raises(ValueError, match="time contains NaN"):
+        survival.landmark_analysis([float("nan")], [1], 0.5)
+    with pytest.raises(ValueError, match="status must contain only 0/1"):
+        survival.landmark_analysis([1.0], [2], 0.5)
+    with pytest.raises(ValueError, match="landmark_times contains non-finite"):
+        survival.landmark_analysis_batch([1.0], [1], [float("inf")])
+    with pytest.raises(ValueError, match="given_time must be finite"):
+        survival.conditional_survival([1.0], [1], float("nan"), 2.0)
+    with pytest.raises(ValueError, match="confidence_level"):
+        survival.conditional_survival([1.0], [1], 0.5, 2.0, 1.0)
+    with pytest.raises(ValueError, match="group must have same length"):
+        survival.hazard_ratio([1.0], [1], [])
+    with pytest.raises(ValueError, match="eval_times contains NaN"):
+        survival.survival_at_times([1.0], [1], [float("nan")])
 
 
 def test_rcll_public_apis_and_validation():
@@ -808,6 +1069,60 @@ def test_rmst_family_public_apis_and_validation():
     assert incidence.event_types == [1, 2]
     assert nnt.time_horizon == pytest.approx(4.0)
     assert threshold.max_followup == pytest.approx(4.0)
+
+    exact_time = [1.0, 1.0, 2.0, 3.0]
+    near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
+    tied_status = [1, 1, 0, 0]
+    exact_rmst = survival.rmst(exact_time, tied_status, 4.0)
+    near_rmst = survival.rmst(near_time, tied_status, 4.0)
+    assert near_rmst.rmst == pytest.approx(exact_rmst.rmst)
+    assert near_rmst.variance == pytest.approx(exact_rmst.variance)
+
+    exact_quantile = survival.survival_quantile(exact_time, tied_status, 0.5)
+    near_quantile = survival.survival_quantile(near_time, tied_status, 0.5)
+    assert near_quantile.median == exact_quantile.median
+    assert near_quantile.ci_lower == exact_quantile.ci_lower
+    assert near_quantile.ci_upper == exact_quantile.ci_upper
+
+    exact_incidence = survival.cumulative_incidence(exact_time, [1, 2, 0, 0])
+    near_incidence = survival.cumulative_incidence(near_time, [1, 2, 0, 0])
+    assert near_incidence.time == pytest.approx(exact_incidence.time)
+    assert near_incidence.n_risk == exact_incidence.n_risk
+    for actual_curve, expected_curve in zip(near_incidence.cif, exact_incidence.cif, strict=True):
+        assert actual_curve == pytest.approx(expected_curve)
+
+    exact_nnt = survival.number_needed_to_treat(
+        [1.0, 1.0, 3.0, 2.0, 2.0, 3.0],
+        [1, 1, 0, 1, 0, 0],
+        [0, 0, 0, 1, 1, 1],
+        2.0,
+    )
+    near_nnt = survival.number_needed_to_treat(
+        [1.0, 1.0 + 5e-10, 3.0, 2.0 + 5e-10, 2.0, 3.0],
+        [1, 1, 0, 1, 0, 0],
+        [0, 0, 0, 1, 1, 1],
+        2.0,
+    )
+    assert near_nnt.nnt == pytest.approx(exact_nnt.nnt)
+    assert near_nnt.absolute_risk_reduction == pytest.approx(exact_nnt.absolute_risk_reduction)
+
+    exact_threshold = survival.rmst_optimal_threshold(
+        [1.0, 1.0, 2.0, 3.0, 4.0, 4.5],
+        [1, 1, 1, 1, 0, 0],
+        0.999,
+        2,
+    )
+    near_threshold = survival.rmst_optimal_threshold(
+        [1.0, 1.0 + 5e-10, 2.0, 3.0, 4.0, 4.5],
+        [1, 1, 1, 1, 0, 0],
+        0.999,
+        2,
+    )
+    assert near_threshold.optimal_tau == pytest.approx(exact_threshold.optimal_tau)
+    assert near_threshold.n_changepoints == exact_threshold.n_changepoints
+    assert near_threshold.rmst_at_optimal.rmst == pytest.approx(
+        exact_threshold.rmst_at_optimal.rmst
+    )
 
     with pytest.raises(ValueError, match="time contains non-finite"):
         survival.rmst([float("nan")], [1], 1.0)
@@ -1053,3 +1368,15 @@ def test_anova_and_basehaz_public_apis():
         match="time, status, and linear_predictors must have the same length",
     ):
         survival.basehaz([1.0], [1, 0], [0.1], False)
+
+
+def test_basehaz_counts_same_time_censors_in_event_risk_set():
+    times, hazard = survival.basehaz(
+        time=[2.0, 2.0, 3.0],
+        status=[0, 1, 1],
+        linear_predictors=[0.0, 0.0, 0.0],
+        centered=False,
+    )
+
+    assert times == pytest.approx([2.0, 3.0])
+    assert hazard == pytest.approx([1.0 / 3.0, 1.0 / 3.0 + 1.0])

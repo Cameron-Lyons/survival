@@ -119,11 +119,7 @@ fn weighted_cox_fit(
         let mut hessian_diag = vec![0.0; p];
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
         let eta: Vec<f64> = (0..n)
             .map(|i| {
@@ -194,11 +190,7 @@ fn weighted_cox_fit(
         let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
         let mut risk_sum = 0.0;
         let mut weighted_x = vec![0.0; p];

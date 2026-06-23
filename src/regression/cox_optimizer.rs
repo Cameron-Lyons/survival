@@ -672,8 +672,7 @@ impl CoxFit {
             let mut start_order: Vec<usize> = (stratum_start..=stratum_end).collect();
             start_order.sort_by(|&lhs, &rhs| {
                 entry_times[rhs]
-                    .partial_cmp(&entry_times[lhs])
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .total_cmp(&entry_times[lhs])
                     .then_with(|| rhs.cmp(&lhs))
             });
 

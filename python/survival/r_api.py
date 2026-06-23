@@ -60,6 +60,16 @@ _COX_DFBETAS_SCALE_FLOOR = 1e-10
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2")
 
 
+class _MissingArgument:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "..."
+
+
+_MISSING = _MissingArgument()
+
+
 @dataclass(frozen=True)
 class _CovariateTerm:
     column: str
@@ -82,6 +92,15 @@ class _FormulaTerms:
     strata: list[str]
     offsets: list[_CovariateTerm]
     clusters: list[str]
+    intercept: bool = True
+
+
+@dataclass(frozen=True)
+class _CachedFormulaTerms:
+    covariates: tuple[_CovariateSpec, ...]
+    strata: tuple[str, ...]
+    offsets: tuple[_CovariateTerm, ...]
+    clusters: tuple[str, ...]
     intercept: bool = True
 
 
@@ -122,6 +141,7 @@ class _FormulaFit:
     fit: Any
     design: _FormulaDesign | None
     formula: str | None = None
+    coefficient_names: tuple[str, ...] | None = None
     case_weights: list[float] | None = None
     robust_variance: list[list[float]] | None = None
     naive_variance: list[list[float]] | None = None
@@ -349,6 +369,8 @@ class CoxBaseHazardResult:
     strata: list[int] | None = None
     centered: bool = True
     curve_strata: list[int] | None = None
+    strata_labels: list[Any] | None = None
+    curve_strata_labels: list[Any] | None = None
 
     def __iter__(self):
         yield self.time
@@ -371,6 +393,7 @@ class CoxSurvfitResult:
     linear_predictors: list[float]
     centered: bool = True
     strata: list[int] | None = None
+    strata_labels: list[Any] | None = None
     start_time: float | None = None
     std_err: list[list[float]] = field(default_factory=list)
     std_chaz: list[list[float]] = field(default_factory=list)
@@ -448,9 +471,32 @@ class _SurvfitComputation:
         return self.stype == 1 and self.ctype == 1
 
 
+def _coerce_mapping_rows(values: Mapping[Any, Any], name: str) -> list[list[Any]]:
+    keys = tuple(values)
+    if not keys:
+        return []
+
+    columns: list[list[Any]] = []
+    row_count: int | None = None
+    for key in keys:
+        column = _coerce_array_like(values[key], f"{name}[{key!r}]")
+        if column and isinstance(column[0], list | tuple):
+            raise ValueError(f"{name} columns must be one-dimensional")
+        if row_count is None:
+            row_count = len(column)
+        elif len(column) != row_count:
+            raise ValueError(f"{name} columns must have the same length")
+        columns.append(column)
+
+    n_rows = row_count or 0
+    return [[column[row_idx] for column in columns] for row_idx in range(n_rows)]
+
+
 def _coerce_array_like(values: Any, name: str) -> list[Any]:
     if values is None:
         raise ValueError(f"{name} is required")
+    if isinstance(values, Mapping):
+        return _coerce_mapping_rows(values, name)
     if hasattr(values, "to_list"):
         values = values.to_list()
     elif hasattr(values, "to_numpy"):
@@ -697,20 +743,36 @@ def _as_rows(values: Any, name: str) -> list[list[float]]:
     return _as_matrix_rows(values, name, allow_empty_columns=False)
 
 
+def _matrix_input_column_names(values: Any) -> tuple[str, ...] | None:
+    if isinstance(values, Mapping):
+        return tuple(str(key) for key in values) or None
+    columns = getattr(values, "columns", None)
+    if columns is None:
+        return None
+    try:
+        names = tuple(str(column) for column in columns)
+    except TypeError:
+        return None
+    return names or None
+
+
+def _validated_matrix_column_names(
+    names: tuple[str, ...] | None,
+    rows: list[list[float]],
+) -> tuple[str, ...] | None:
+    if names is None:
+        return None
+    width = len(rows[0]) if rows else 0
+    return names if len(names) == width else None
+
+
 def _as_matrix_rows(
     values: Any,
     name: str,
     *,
     allow_empty_columns: bool,
 ) -> list[list[float]]:
-    if values is None:
-        raise ValueError(f"{name} is required")
-    if hasattr(values, "to_numpy"):
-        values = values.to_numpy().tolist()
-    elif hasattr(values, "tolist"):
-        values = values.tolist()
-
-    rows = list(values)
+    rows = _coerce_array_like(values, name)
     if not rows:
         raise ValueError(f"{name} must not be empty")
     if not isinstance(rows[0], list | tuple):
@@ -1133,6 +1195,59 @@ def _parse_formula_origin_option(value: str) -> float:
     return _finite_float(value, "origin")
 
 
+_FORMULA_RESPONSE_ARGUMENT_ALIASES = {
+    "event": "event",
+    "start": "time",
+    "status": "event",
+    "stop": "time2",
+    "time": "time",
+    "time1": "time",
+    "time2": "time2",
+}
+
+
+def _formula_response_argument_name(name: str) -> str | None:
+    return _FORMULA_RESPONSE_ARGUMENT_ALIASES.get(name.strip().lower())
+
+
+def _ordered_named_response_arguments(named_arguments: dict[str, str]) -> list[str]:
+    if "time" not in named_arguments:
+        raise ValueError("named Surv(...) formula response requires time=")
+    arguments = [named_arguments["time"]]
+    if "time2" in named_arguments:
+        arguments.append(named_arguments["time2"])
+    if "event" in named_arguments:
+        arguments.append(named_arguments["event"])
+    return arguments
+
+
+def _ordered_named_surv_arguments(named_arguments: Mapping[str, Any]) -> tuple[Any, ...]:
+    if "time" not in named_arguments:
+        raise ValueError("named Surv(...) requires time=, time1=, or start=")
+    arguments = [named_arguments["time"]]
+    if "time2" in named_arguments:
+        arguments.append(named_arguments["time2"])
+    if "event" in named_arguments:
+        arguments.append(named_arguments["event"])
+    return tuple(arguments)
+
+
+def _collect_named_surv_arguments(arguments: Mapping[str, Any]) -> tuple[Any, ...] | None:
+    named_arguments: dict[str, Any] = {}
+    for option, value in arguments.items():
+        if value is _MISSING:
+            continue
+        argument_name = _formula_response_argument_name(option)
+        if argument_name is None:
+            raise TypeError(f"Surv got an unexpected keyword argument {option!r}")
+        if argument_name in named_arguments:
+            raise ValueError(f"Surv(...) contains multiple {argument_name}= arguments")
+        named_arguments[argument_name] = value
+    if not named_arguments:
+        return None
+    return _ordered_named_surv_arguments(named_arguments)
+
+
 @lru_cache(maxsize=512)
 def _formula_response_spec(formula: str) -> _SurvResponseSpec:
     lhs, sep, _rhs = formula.partition("~")
@@ -1148,6 +1263,7 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
     origin = 0.0
     has_origin = False
     arguments: list[str] = []
+    named_arguments: dict[str, str] = {}
     for part in _formula_response_parts(lhs[5:-1]):
         option_spec = _formula_named_option(part)
         if option_spec is not None:
@@ -1161,14 +1277,34 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
                     raise ValueError("formula Surv(...) contains multiple origin= arguments")
                 origin = _parse_formula_origin_option(value)
                 has_origin = True
+            elif (argument_name := _formula_response_argument_name(option)) is not None:
+                if argument_name in named_arguments:
+                    raise ValueError(
+                        f"formula Surv(...) contains multiple {argument_name}= arguments"
+                    )
+                named_arguments[argument_name] = value
+                _append_unique(columns, _response_arg_columns(value))
             else:
                 raise ValueError(
-                    "formula Surv(...) supports only named type= and origin= arguments"
+                    "formula Surv(...) supports only named time=, time2=, event=, type=, "
+                    "and origin= arguments"
                 )
             continue
+        if named_arguments:
+            raise ValueError(
+                "Surv(...) formula response must not mix positional and named time/time2/event "
+                "arguments"
+            )
         arguments.append(part)
         _append_unique(columns, _response_arg_columns(part))
 
+    if named_arguments:
+        if arguments:
+            raise ValueError(
+                "Surv(...) formula response must not mix positional and named time/time2/event "
+                "arguments"
+            )
+        arguments = _ordered_named_response_arguments(named_arguments)
     if len(arguments) not in {1, 2, 3}:
         raise ValueError("Surv(...) formula response must have 1, 2, or 3 column arguments")
     return _SurvResponseSpec(
@@ -1607,7 +1743,7 @@ def _interaction_from_terms(terms: tuple[_CovariateSpec, ...]) -> _CovariateSpec
     return _interaction_from_factors(factors)
 
 
-def _dot_covariate_terms(dot_terms: list[str] | None) -> list[_CovariateSpec]:
+def _dot_covariate_terms(dot_terms: Sequence[str] | None) -> list[_CovariateSpec]:
     if dot_terms is None:
         raise ValueError("formula '.' requires named tabular data")
     return [_CovariateTerm(column) for column in dot_terms]
@@ -1653,7 +1789,7 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
 
 def _parse_interaction_term(
     term: str,
-    dot_terms: list[str] | None,
+    dot_terms: Sequence[str] | None,
 ) -> list[_CovariateSpec]:
     parts = _split_top_level(term, ":")
     if len(parts) == 1:
@@ -1715,7 +1851,7 @@ def _parse_formula_power_degree(value: str) -> int:
 
 def _parse_formula_power_base_terms(
     term: str,
-    dot_terms: list[str] | None,
+    dot_terms: Sequence[str] | None,
 ) -> list[_CovariateSpec]:
     expression = _strip_outer_formula_parentheses(term)
     terms: list[_CovariateSpec] = []
@@ -1732,7 +1868,7 @@ def _parse_formula_power_base_terms(
 
 def _parse_formula_power_expression(
     term: str,
-    dot_terms: list[str] | None,
+    dot_terms: Sequence[str] | None,
 ) -> list[_CovariateSpec] | None:
     parts = _split_top_level(term, "^")
     if len(parts) == 1:
@@ -1754,7 +1890,7 @@ def _parse_formula_power_expression(
 
 def _parse_parenthesized_formula_expression(
     term: str,
-    dot_terms: list[str] | None,
+    dot_terms: Sequence[str] | None,
 ) -> list[_CovariateSpec] | None:
     stripped = _strip_outer_formula_parentheses(term)
     if stripped == term.strip():
@@ -1764,7 +1900,7 @@ def _parse_parenthesized_formula_expression(
 
 def _parse_covariate_expression(
     term: str,
-    dot_terms: list[str] | None,
+    dot_terms: Sequence[str] | None,
 ) -> list[_CovariateSpec]:
     if term == ".":
         return _dot_covariate_terms(dot_terms)
@@ -1819,7 +1955,21 @@ def _parse_covariate_expression(
     return crossed_expanded
 
 
-def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
+def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
+    return _FormulaTerms(
+        covariates=list(terms.covariates),
+        strata=list(terms.strata),
+        offsets=list(terms.offsets),
+        clusters=list(terms.clusters),
+        intercept=terms.intercept,
+    )
+
+
+@lru_cache(maxsize=512)
+def _split_terms_cached(
+    rhs: str,
+    dot_terms: tuple[str, ...] | None = None,
+) -> _CachedFormulaTerms:
     covariates: list[_CovariateSpec] = []
     strata: list[str] = []
     offsets: list[_CovariateTerm] = []
@@ -1891,13 +2041,18 @@ def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
     if unsupported:
         joined = ", ".join(unsupported)
         raise ValueError(f"unsupported formula term(s): {joined}")
-    return _FormulaTerms(
-        covariates=covariates,
-        strata=strata,
-        offsets=offsets,
-        clusters=clusters,
+    return _CachedFormulaTerms(
+        covariates=tuple(covariates),
+        strata=tuple(strata),
+        offsets=tuple(offsets),
+        clusters=tuple(clusters),
         intercept=intercept,
     )
+
+
+def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
+    dot_key = None if dot_terms is None else tuple(dot_terms)
+    return _materialize_formula_terms(_split_terms_cached(rhs, dot_key))
 
 
 def _formula_has_time_transform_term(formula: str) -> bool:
@@ -2641,7 +2796,36 @@ class Surv:
     time2: tuple[float, ...] | None
     type: str
 
-    def __init__(self, *args: Any, type: str | None = None, origin: Any = 0.0) -> None:  # noqa: A002
+    def __init__(  # noqa: A002
+        self,
+        *args: Any,
+        type: str | None = None,  # noqa: A002
+        origin: Any = 0.0,
+        time: Any = _MISSING,
+        time1: Any = _MISSING,
+        time2: Any = _MISSING,
+        event: Any = _MISSING,
+        status: Any = _MISSING,
+        start: Any = _MISSING,
+        stop: Any = _MISSING,
+    ) -> None:
+        named_options = {
+            "time": time,
+            "time1": time1,
+            "time2": time2,
+            "event": event,
+            "status": status,
+            "start": start,
+            "stop": stop,
+        }
+        if args and any(value is not _MISSING for value in named_options.values()):
+            raise TypeError(
+                "Surv(...) must not mix positional and named time/time2/event arguments"
+            )
+        named_args = _collect_named_surv_arguments(named_options)
+        if named_args is not None:
+            args = named_args
+
         surv_type = _normalize_surv_type(type) if type is not None else None
         origin_value = _finite_float(origin, "origin")
         if len(args) == 1:
@@ -3578,11 +3762,13 @@ def _cox_flat_basehaz_with_training_times(
     event_times = getattr(fit, "event_times", None)
     if event_times is None:
         strata_values = [int(value) for value in base_strata]
+        strata = strata_values if len(set(strata_values)) > 1 else None
         return CoxBaseHazardResult(
             time=[float(value) for value in base_times],
             cumhaz=[float(value) for value in base_hazards],
-            strata=strata_values if len(set(strata_values)) > 1 else None,
+            strata=strata,
             centered=centered,
+            strata_labels=_cox_strata_labels_for_fit(fit, strata),
         )
 
     stop_times = [float(value) for value in event_times]
@@ -3609,11 +3795,13 @@ def _cox_flat_basehaz_with_training_times(
             expanded_hazards.append(hazard)
             expanded_strata.append(stratum)
 
+    strata = expanded_strata if len(set(row_strata)) > 1 else None
     return CoxBaseHazardResult(
         time=expanded_times,
         cumhaz=expanded_hazards,
-        strata=expanded_strata if len(set(row_strata)) > 1 else None,
+        strata=strata,
         centered=centered,
+        strata_labels=_cox_strata_labels_for_fit(fit, strata),
     )
 
 
@@ -4015,6 +4203,27 @@ def _survdiff_timefix_values(times: list[float], timefix: bool) -> list[float]:
     return fixed
 
 
+def _concordance_core_time_values(
+    times: list[float],
+    timefix: bool,
+) -> tuple[list[float], dict[float, float] | None]:
+    if timefix or len(times) < 2:
+        return times, None
+
+    unique_times = sorted(set(times))
+    if len(unique_times) < 2:
+        return times, None
+
+    step = _SURVFIT_TIME_EPSILON * 2.0
+    display_by_core_time = {
+        index * step: value for index, value in enumerate(unique_times)
+    }
+    core_by_display_time = {
+        value: index * step for index, value in enumerate(unique_times)
+    }
+    return [core_by_display_time[value] for value in times], display_by_core_time
+
+
 def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
     fixed = [list(vector) for vector in vectors]
     points = [
@@ -4223,18 +4432,23 @@ def basehaz(
             if len(result.cumhaz) == 1:
                 curve_strata = result.strata
                 strata = [curve_strata[0]] * len(result.time) if curve_strata is not None else None
+                curve_strata_labels = _cox_strata_labels_for_fit(fit, curve_strata)
                 return CoxBaseHazardResult(
                     time=result.time,
                     cumhaz=result.cumhaz[0],
                     strata=strata,
                     centered=True,
                     curve_strata=curve_strata,
+                    strata_labels=_cox_strata_labels_for_fit(fit, strata),
+                    curve_strata_labels=curve_strata_labels,
                 )
+            curve_strata_labels = _cox_strata_labels_for_fit(fit, result.strata)
             return CoxBaseHazardResult(
                 time=result.time,
                 cumhaz=result.cumhaz,
                 centered=True,
                 curve_strata=result.strata,
+                curve_strata_labels=curve_strata_labels,
             )
         return _cox_flat_basehaz_with_training_times(fit, centered_value)
     if newdata is not None:
@@ -4654,7 +4868,13 @@ def _cox_term_contributions(fit: Any, n: int) -> list[list[float]]:
 def _cox_predict_term_groups(fit: Any, nvar: int) -> list[tuple[str, list[int]]]:
     design = _formula_design_for_fit(fit)
     if design is None:
-        return [(f"x{idx + 1}", [idx]) for idx in range(nvar)]
+        coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
+        names = (
+            list(coefficient_names)
+            if coefficient_names is not None and len(coefficient_names) == nvar
+            else _fallback_coef_names(nvar)
+        )
+        return [(name, [idx]) for idx, name in enumerate(names)]
 
     groups: list[tuple[str, list[int]]] = []
     cursor = 1 if design.intercept else 0
@@ -4988,6 +5208,9 @@ def _fit_location_coef_names(fit: Any, width: int) -> list[str]:
         names = _formula_design_output_names(design)
         if len(names) == width:
             return names
+    coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
+    if coefficient_names is not None and len(coefficient_names) == width:
+        return list(coefficient_names)
     return _fallback_coef_names(width)
 
 
@@ -5398,6 +5621,20 @@ def _empty_columns(names: tuple[str, ...]) -> dict[str, list[Any]]:
     return {name: [] for name in names}
 
 
+def _add_optional_survfit_column(
+    frame: dict[str, list[Any]],
+    name: str,
+    values: Sequence[Any],
+    row_count: int,
+) -> None:
+    column = list(values)
+    if not column:
+        return
+    if len(column) != row_count:
+        raise ValueError(f"survfit column {name!r} must match time length")
+    frame[name] = column
+
+
 def _survfit_frame(result: SurvfitResult) -> dict[str, list[Any]]:
     std_err = list(result.std_err)
     conf_lower = list(result.conf_lower)
@@ -5410,18 +5647,19 @@ def _survfit_frame(result: SurvfitResult) -> dict[str, list[Any]]:
                 conf_lower[idx] = math.nan
             if idx < len(conf_upper):
                 conf_upper[idx] = math.nan
+    row_count = len(result.time)
     frame: dict[str, list[Any]] = {
         "time": result.time,
         "n.risk": result.n_risk,
         "n.event": result.n_event,
         "n.censor": result.n_censor,
         "surv": result.estimate,
-        "std.err": std_err,
-        "lower": conf_lower,
-        "upper": conf_upper,
         "cumhaz": result.cumhaz,
-        "std.chaz": result.std_chaz,
     }
+    _add_optional_survfit_column(frame, "std.err", std_err, row_count)
+    _add_optional_survfit_column(frame, "lower", conf_lower, row_count)
+    _add_optional_survfit_column(frame, "upper", conf_upper, row_count)
+    _add_optional_survfit_column(frame, "std.chaz", result.std_chaz, row_count)
     if result.n_enter is not None:
         frame["n.enter"] = result.n_enter
     return frame
@@ -5497,7 +5735,8 @@ def _cox_basehaz_frame(result: CoxBaseHazardResult) -> dict[str, list[Any]]:
             "time": [],
             "cumhaz": [],
         }
-        if result.curve_strata is not None:
+        curve_strata = result.curve_strata_labels or result.curve_strata
+        if curve_strata is not None:
             frame["strata"] = []
         for curve_idx, curve in enumerate(result.cumhaz):
             if isinstance(curve, (str, bytes)):
@@ -5507,16 +5746,17 @@ def _cox_basehaz_frame(result: CoxBaseHazardResult) -> dict[str, list[Any]]:
             frame["curve"].extend([curve_idx + 1] * len(result.time))
             frame["time"].extend(result.time)
             frame["cumhaz"].extend([float(value) for value in curve])
-            if result.curve_strata is not None:
-                frame["strata"].extend([result.curve_strata[curve_idx]] * len(result.time))
+            if curve_strata is not None:
+                frame["strata"].extend([curve_strata[curve_idx]] * len(result.time))
         return frame
 
     frame = {
         "time": result.time,
         "cumhaz": [float(value) for value in result.cumhaz],
     }
-    if result.strata is not None:
-        frame["strata"] = result.strata
+    strata = result.strata_labels or result.strata
+    if strata is not None:
+        frame["strata"] = strata
     return frame
 
 
@@ -5541,7 +5781,8 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
         "cumhaz": [],
         "linear.predictor": [],
     }
-    if result.strata is not None:
+    strata = result.strata_labels or result.strata
+    if strata is not None:
         frame["strata"] = []
     if result.start_time is not None:
         frame["start.time"] = []
@@ -5567,8 +5808,8 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
         frame["surv"].extend(surv_curve)
         frame["cumhaz"].extend(cumhaz_curve)
         frame["linear.predictor"].extend([linear_predictor] * n_times)
-        if result.strata is not None:
-            frame["strata"].extend([result.strata[curve_idx]] * n_times)
+        if strata is not None:
+            frame["strata"].extend([strata[curve_idx]] * n_times)
         if result.start_time is not None:
             frame["start.time"].extend([result.start_time] * n_times)
         for name, values in active_optional.items():
@@ -6498,7 +6739,7 @@ def _survreg_distribution_family(fit: Any) -> str:
 
 def _survreg_quantile_probabilities(values: Any | None) -> list[float]:
     probabilities = _quantile_vector(values, "p") if values is not None else [0.1, 0.9]
-    if any(value <= 0.0 or value >= 1.0 for value in probabilities):
+    if any(not math.isfinite(value) or value <= 0.0 or value >= 1.0 for value in probabilities):
         raise ValueError("p must be between 0 and 1")
     return probabilities
 
@@ -6690,6 +6931,36 @@ def _formula_design_for_fit(fit: Any) -> _FormulaDesign | None:
     return fit.design if isinstance(fit, _FormulaFit) else None
 
 
+def _cox_strata_labels_for_fit(
+    fit: Any,
+    strata: Sequence[int] | None,
+) -> list[Any] | None:
+    if strata is None:
+        return None
+    design = _formula_design_for_fit(fit)
+    if design is None or not design.strata_levels:
+        return None
+    labels = list(design.strata_levels)
+    result: list[Any] = []
+    for value in strata:
+        idx = int(value)
+        if idx < 0 or idx >= len(labels):
+            return None
+        result.append(labels[idx])
+    return result
+
+
+def _direct_named_prediction_rows(
+    newdata: Any,
+    coefficient_names: tuple[str, ...],
+) -> list[list[float]]:
+    columns = [_column(newdata, name) for name in coefficient_names]
+    row_count = len(columns[0]) if columns else 0
+    if any(len(column) != row_count for column in columns):
+        raise ValueError("newdata columns must have the same length")
+    return [[float(column[row_idx]) for column in columns] for row_idx in range(row_count)]
+
+
 def _prediction_inputs(
     fit: Any,
     newdata: Any | None,
@@ -6701,6 +6972,11 @@ def _prediction_inputs(
         n = _formula_design_row_count(newdata, design)
         offsets = _offset_vector(newdata, list(design.offsets), n) if design.offsets else None
         return _design_rows_from_spec(newdata, design, n), offsets
+    coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
+    if coefficient_names is not None and (
+        isinstance(newdata, Mapping) or hasattr(newdata, "columns")
+    ):
+        return _direct_named_prediction_rows(newdata, coefficient_names), None
     if isinstance(newdata, Mapping):
         raise TypeError("newdata must be a design matrix unless the fit was created from a formula")
     rows = _as_rows(newdata, "newdata")
@@ -7146,8 +7422,10 @@ def _cox_survfit_curve_strata(
     training_rows = _cox_training_rows(fit, len(beta))
     training_strata = _cox_training_strata(fit, len(training_rows)) if training_rows else [0]
     unique_strata = sorted(set(training_strata))
+    if len(unique_strata) <= 1:
+        return None
     if rows is None:
-        if len(unique_strata) > 1 and n_curves == len(unique_strata):
+        if n_curves == len(unique_strata):
             return unique_strata
         return None
     prediction_strata = _cox_prediction_strata(fit, newdata, len(rows))
@@ -7205,6 +7483,7 @@ def _cox_survfit_with_censor_times(
         linear_predictors=result.linear_predictors,
         centered=result.centered,
         strata=result.strata,
+        strata_labels=result.strata_labels,
         start_time=result.start_time,
         std_err=result.std_err,
         std_chaz=result.std_chaz,
@@ -7240,6 +7519,7 @@ def _cox_survfit_conditioned(
         linear_predictors=result.linear_predictors,
         centered=result.centered,
         strata=result.strata,
+        strata_labels=result.strata_labels,
         start_time=t0 if start_time is not None else None,
         std_err=result.std_err,
         std_chaz=result.std_chaz,
@@ -7355,6 +7635,7 @@ def _cox_survfit_with_confidence(
         linear_predictors=result.linear_predictors,
         centered=result.centered,
         strata=result.strata,
+        strata_labels=result.strata_labels,
         start_time=result.start_time,
         std_err=std_err,
         std_chaz=std_chaz,
@@ -7383,6 +7664,13 @@ def _cox_survfit_result(
     else:
         linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
     curve_strata = _cox_survfit_curve_strata(fit, rows, newdata, len(curves))
+    curve_strata_labels = None
+    if curve_strata is not None:
+        curve_strata_labels = (
+            _cox_strata_labels_for_fit(fit, curve_strata)
+            if rows is None
+            else list(range(1, len(curve_strata) + 1))
+        )
     basehaz_with_strata = getattr(fit, "basehaz_with_strata", None)
     if curve_strata is not None and basehaz_with_strata is not None:
         base_times, base_hazards, base_strata = basehaz_with_strata(centered)
@@ -7411,6 +7699,7 @@ def _cox_survfit_result(
         linear_predictors=linear_predictors,
         centered=centered,
         strata=curve_strata,
+        strata_labels=curve_strata_labels,
     )
     if include_censor:
         result = _cox_survfit_with_censor_times(fit, result)
@@ -7590,10 +7879,11 @@ def _concordance_bounded_times_and_status(
 
 def _concordance_rank_row_dicts(
     rows: list[tuple[float, float, float, float]],
+    display_by_core_time: dict[float, float] | None = None,
 ) -> list[dict[str, float]]:
     return [
         {
-            "time": float(time),
+            "time": float(display_by_core_time.get(time, time) if display_by_core_time else time),
             "rank": float(rank),
             "timewt": float(time_weight),
             "casewt": float(case_weight),
@@ -7616,14 +7906,16 @@ def _single_concordance_ranks(
         times = _survdiff_timefix_values(list(response.time), timefix)
         status = list(response.event)
         times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        core_times, display_by_core_time = _concordance_core_time_values(times, timefix)
         return _concordance_rank_row_dicts(
             _core.concordance_rank_rows(
-                times,
+                core_times,
                 status,
                 risk_values,
                 case_weights,
                 timewt,
-            )
+            ),
+            display_by_core_time,
         )
     if response.type == "counting":
         if timewt in {"S/G", "n/G2"}:
@@ -7680,15 +7972,17 @@ def _concordance_ranks(
         times = _survdiff_timefix_values(list(response.time), timefix)
         status = list(response.event)
         times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        core_times, display_by_core_time = _concordance_core_time_values(times, timefix)
         return _concordance_rank_row_dicts(
             _core.stratified_concordance_rank_rows(
-                times,
+                core_times,
                 status,
                 risk_values,
                 strata_codes,
                 case_weights,
                 timewt,
-            )
+            ),
+            display_by_core_time,
         )
     if response.type == "counting":
         if timewt in {"S/G", "n/G2"}:
@@ -7745,9 +8039,10 @@ def _single_concordance_influence(
         times = _survdiff_timefix_values(list(response.time), timefix)
         status = list(response.event)
         times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        core_times, _display_by_core_time = _concordance_core_time_values(times, timefix)
         return _concordance_influence_result(
             _core.concordance_influence_rows(
-                times,
+                core_times,
                 status,
                 risk_values,
                 case_weights,
@@ -7809,9 +8104,10 @@ def _concordance_influence(
         times = _survdiff_timefix_values(list(response.time), timefix)
         status = list(response.event)
         times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        core_times, _display_by_core_time = _concordance_core_time_values(times, timefix)
         return _concordance_influence_result(
             _core.stratified_concordance_influence_rows(
-                times,
+                core_times,
                 status,
                 risk_values,
                 strata_codes,
@@ -7885,8 +8181,9 @@ def _single_concordance_summary(
         times = _survdiff_timefix_values(list(response.time), timefix)
         status = list(response.event)
         times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        core_times, _display_by_core_time = _concordance_core_time_values(times, timefix)
         summary = _core.concordance_summary(
-            times,
+            core_times,
             status,
             risk_values,
             weights,
@@ -7947,10 +8244,11 @@ def _concordance_summary(
         times = _survdiff_timefix_values(list(response.time), timefix)
         status = list(response.event)
         times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        core_times, _display_by_core_time = _concordance_core_time_values(times, timefix)
         return {
             key: float(value)
             for key, value in _core.stratified_concordance_summary(
-                times,
+                core_times,
                 status,
                 risk_values,
                 strata_codes,
@@ -8790,6 +9088,7 @@ def coxph(
     formula_x_matrix: list[list[float]] | None = None
     formula_model_data: Any | None = None
     formula_cluster_columns: tuple[str, ...] = ()
+    direct_coefficient_names: tuple[str, ...] | None = None
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
@@ -8854,6 +9153,8 @@ def coxph(
 
     if not isinstance(response, Surv):
         raise TypeError("coxph response must be a Surv object or formula")
+    if formula_design is None:
+        direct_coefficient_names = _matrix_input_column_names(x)
     if subset is not None:
         indices = _subset_indices(subset, len(response))
         response = _subset_surv(response, indices)
@@ -8886,6 +9187,7 @@ def coxph(
         )
 
     rows = _as_matrix_rows(x, "x", allow_empty_columns=True)
+    direct_coefficient_names = _validated_matrix_column_names(direct_coefficient_names, rows)
     if len(rows) != len(response):
         raise ValueError("x must have the same number of rows as the Surv response")
 
@@ -8966,6 +9268,7 @@ def coxph(
         )
     if (
         formula_design is not None
+        or direct_coefficient_names is not None
         or case_weights is not None
         or robust_variance is not None
         or model_frame is not None
@@ -8974,6 +9277,7 @@ def coxph(
             fit,
             formula_design,
             formula=formula_string,
+            coefficient_names=direct_coefficient_names,
             case_weights=case_weights,
             robust_variance=robust_variance,
             naive_variance=naive_variance,
@@ -9057,12 +9361,19 @@ def survreg(
     formula_x_matrix: list[list[float]] | None = None
     formula_model_data: Any | None = None
     formula_cluster_columns: tuple[str, ...] = ()
+    direct_coefficient_names: tuple[str, ...] | None = None
     matrix_input = response is None and time is not None and status is not None
     if matrix_input:
         response_time = _float_vector(time, "time")
         response_time2 = _float_vector(time2, "time2") if time2 is not None else None
         response_status = _materialize_1d(status, "status")
-        rows = _as_rows(covariates if covariates is not None else x, "covariates")
+        matrix_values = covariates if covariates is not None else x
+        direct_coefficient_names = _matrix_input_column_names(matrix_values)
+        rows = _as_rows(matrix_values, "covariates")
+        direct_coefficient_names = _validated_matrix_column_names(
+            direct_coefficient_names,
+            rows,
+        )
         if subset is not None:
             indices = _subset_indices(subset, len(response_time))
             response_time = [response_time[idx] for idx in indices]
@@ -9200,6 +9511,10 @@ def survreg(
 
         if not isinstance(response, Surv):
             raise TypeError("survreg response must be a Surv object, formula, or time/status input")
+        if formula_design is None:
+            direct_coefficient_names = _matrix_input_column_names(
+                covariates if covariates is not None else x,
+            )
         if subset is not None:
             indices = _subset_indices(subset, len(response))
             response = _subset_surv(response, indices)
@@ -9235,6 +9550,10 @@ def survreg(
             formula_rows
             if formula_rows is not None
             else _as_rows(covariates if covariates is not None else x, "x")
+        )
+        direct_coefficient_names = _validated_matrix_column_names(
+            direct_coefficient_names,
+            rows,
         )
         distribution_name = distribution or dist or "weibull"
 
@@ -9340,6 +9659,7 @@ def survreg(
             fit,
             formula_design,
             formula=formula_string,
+            coefficient_names=direct_coefficient_names,
             case_weights=case_weights,
             robust_variance=robust_variance,
             naive_variance=naive_variance,
@@ -9351,6 +9671,7 @@ def survreg(
         )
         if (
             formula_design is not None
+            or direct_coefficient_names is not None
             or case_weights is not None
             or robust_variance is not None
             or model_frame is not None

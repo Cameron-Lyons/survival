@@ -477,7 +477,7 @@ fn compute_unimodality_violation(
         let max_idx = hazards
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
             .map(|(idx, _)| idx)
             .unwrap_or(0);
 

@@ -243,9 +243,7 @@ fn impute_pmm(
                 .map(|(&obs_pred, &val)| ((other_pred - obs_pred).abs(), val))
                 .collect();
 
-            distances.select_nth_unstable_by(k_donors - 1, |a, b| {
-                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            distances.select_nth_unstable_by(k_donors - 1, |a, b| a.0.total_cmp(&b.0));
             let donor_idx = rng.usize(0..k_donors);
             x[i * n_vars + var_j] = distances[donor_idx].1;
         }
@@ -355,7 +353,7 @@ fn impute_knn(
             })
             .collect();
 
-        distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        distances.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         let k_actual = k.min(distances.len());
         let imputed_val: f64 =
@@ -370,11 +368,7 @@ fn fit_cox_model(time: &[f64], status: &[i32], x: &[f64], n_obs: usize, n_vars: 
     let tol = 1e-6;
 
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     for _ in 0..max_iter {
         let eta: Vec<f64> = (0..n_obs)
@@ -444,11 +438,7 @@ fn compute_standard_errors(
     n_vars: usize,
 ) -> Vec<f64> {
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let eta: Vec<f64> = (0..n_obs)
         .map(|i| {

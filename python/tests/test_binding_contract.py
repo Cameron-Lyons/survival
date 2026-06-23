@@ -1,10 +1,12 @@
 import ast
+import dataclasses
 import importlib
 import importlib.util
 import inspect
 import math
 import re
 import runpy
+import sys
 import tomllib
 from pathlib import Path
 
@@ -24,6 +26,7 @@ _MANIFEST_MODULE = importlib.util.module_from_spec(_MANIFEST_SPEC)
 _MANIFEST_SPEC.loader.exec_module(_MANIFEST_MODULE)
 
 extract_feature_registrations = _MANIFEST_MODULE.extract_feature_registrations
+extract_python_module_bindings = _MANIFEST_MODULE.extract_python_module_bindings
 extract_rust_registrations = _MANIFEST_MODULE.extract_rust_registrations
 
 PACKAGE_ROOT = ROOT / "python/survival"
@@ -46,6 +49,11 @@ def _manifest_bindings() -> tuple[str, ...]:
 def _feature_bindings() -> dict[str, tuple[str, ...]]:
     manifest = runpy.run_path(str(PACKAGE_ROOT / "_binding_manifest.py"))
     return manifest["FEATURE_BINDINGS"]
+
+
+def _module_bindings() -> dict[str, tuple[str, ...]]:
+    manifest = runpy.run_path(str(PACKAGE_ROOT / "_binding_manifest.py"))
+    return manifest["MODULE_BINDINGS"]
 
 
 def _has_ml_bindings(core) -> bool:
@@ -85,6 +93,42 @@ def _binding_names_by_module() -> dict[str, set[str]]:
     return modules
 
 
+def _module_export_names_by_module() -> dict[str, tuple[str, ...]]:
+    modules: dict[str, tuple[str, ...]] = {}
+    for path in sorted(PACKAGE_ROOT.glob("*.py")):
+        if path.name.startswith("_") or path.name in {"__init__.py", "sklearn_compat.py"}:
+            continue
+
+        tree = ast.parse(path.read_text(), filename=str(path))
+        names: list[str] = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "bind_names"
+                and len(node.args) >= 2
+            ):
+                for name in _literal_string_list(node.args[1]):
+                    if name not in names:
+                        names.append(name)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "append"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "__all__"
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value not in names
+            ):
+                names.append(node.args[0].value)
+
+        if names:
+            modules[path.stem] = tuple(names)
+    return modules
+
+
 def _top_level_names() -> set[str]:
     tree = ast.parse((PACKAGE_ROOT / "__init__.py").read_text())
     public_modules: set[str] = set()
@@ -110,7 +154,7 @@ def _top_level_names() -> set[str]:
             if isinstance(target, ast.Name) and target.id == "_R_EXPORTS":
                 r_exports.update(_literal_string_list(node.value))
 
-    domain_exports = set().union(*_binding_names_by_module().values())
+    domain_exports = set().union(*_module_export_names_by_module().values())
     return public_modules | r_exports | sklearn_exports | domain_exports | MODULE_METADATA_NAMES
 
 
@@ -126,9 +170,17 @@ def _sklearn_names() -> set[str]:
         if not isinstance(node, ast.Assign):
             continue
         for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "_PUBLIC_EXPORTS":
+                names.update(_literal_string_list(node.value))
             if isinstance(target, ast.Name) and target.id == "__all__":
                 names.update(_literal_string_list(node.value))
     return names
+
+
+def _remove_survival_modules() -> None:
+    for name in tuple(sys.modules):
+        if name == "survival" or name.startswith("survival."):
+            sys.modules.pop(name, None)
 
 
 def _pyi_top_level_names(path: Path) -> set[str]:
@@ -156,6 +208,16 @@ def _pyi_function_kwarg_name(path: Path, name: str) -> str | None:
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node.args.kwarg.arg if node.args.kwarg is not None else None
+    raise AssertionError(f"{name} not found in {path}")
+
+
+def _pyi_function_return(path: Path, name: str) -> str:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            if node.returns is None:
+                return ""
+            return ast.unparse(node.returns)
     raise AssertionError(f"{name} not found in {path}")
 
 
@@ -224,6 +286,10 @@ def test_generated_manifest_matches_rust_registration():
 
 def test_generated_feature_manifest_matches_rust_registration():
     assert _feature_bindings() == extract_feature_registrations(ROOT)
+
+
+def test_generated_module_manifest_matches_python_modules():
+    assert _module_bindings() == extract_python_module_bindings(ROOT)
 
 
 def test_python_modules_only_declare_registered_bindings():
@@ -1188,6 +1254,17 @@ def test_cure_model_bindings_are_typed_to_runtime_surface():
     assert len(comparison.cure_fractions) == 3
     assert comparison.best_model_aic in comparison.model_names
     assert comparison.best_model_bic in comparison.model_names
+
+    aliased_comparison = core.compare_cure_models(time, status, covariates, ["log-logistic"])
+    assert aliased_comparison.model_names == [
+        "Mixture-loglogistic",
+        "BCH-loglogistic",
+        "NonMixture-loglogistic",
+    ]
+    with pytest.raises(ValueError, match="distribution must be one of"):
+        core.compare_cure_models(time, status, covariates, ["mystery"])
+    with pytest.raises(ValueError, match="distributions must not be empty"):
+        core.compare_cure_models(time, status, covariates, [])
 
 
 def test_cause_specific_cox_bindings_are_typed_to_runtime_surface():
@@ -3034,8 +3111,8 @@ def test_data_prep_low_level_bindings_are_typed():
         "aeq_surv": ["time", "tolerance"],
         "neardate": ["id1", "date1", "id2", "date2", "best", "nomatch"],
         "neardate_str": ["id1", "date1", "id2", "date2", "best", "nomatch"],
-        "rttright": ["time", "status", "weights"],
-        "rttright_stratified": ["time", "status", "strata", "weights"],
+        "rttright": ["time", "status", "weights", "timefix", "renorm"],
+        "rttright_stratified": ["time", "status", "strata", "weights", "timefix", "renorm"],
         "surv2data": ["id", "time", "event_time", "event_status"],
         "survcondense": ["id", "time1", "time2", "status"],
         "tcut": ["value", "breaks", "labels"],
@@ -8928,31 +9005,13 @@ def test_core_utility_bindings_are_typed():
     assert basis.n_cols == 4
     assert basis.knots == pytest.approx([2.0, 3.0])
     assert basis.boundary_knots == pytest.approx((1.0, 4.0))
-    assert basis.basis == pytest.approx(
-        [
-            1.0,
-            1.0,
-            0.0,
-            0.0,
-            1.0,
-            2.0,
-            0.0,
-            0.0,
-            1.0,
-            3.0,
-            0.1111111111111111,
-            0.0,
-            1.0,
-            4.0,
-            0.7777777777777777,
-            -0.1111111111111111,
-        ]
-    )
+    expected_identity = [1.0 if row == col else 0.0 for row in range(4) for col in range(4)]
+    assert basis.basis == pytest.approx(expected_identity)
     assert spline.df == 3
     assert spline.intercept is False
     assert spline_basis.n_rows == 3
     assert spline_basis.n_cols == 4
-    assert spline.predict([1.0, 2.0], [0.0, 1.0, 2.0, 3.0]) == pytest.approx([1.0, 2.08])
+    assert spline.predict([1.0, 2.0], [0.0, 1.0, 2.0, 3.0]) == pytest.approx([1.0, 2.0])
     assert pspline.df == 3
     assert pspline.eps == pytest.approx(1e-6)
     assert pspline.fitted is False
@@ -8992,6 +9051,8 @@ def test_core_nsk_rejects_malformed_inputs():
         core.nsk([1.0, 1.0], 3, None, None)
     with pytest.raises(ValueError, match="df must be at least 1"):
         core.nsk([1.0, 2.0], 0, None, None)
+    with pytest.raises(ValueError, match="computed knots must be strictly increasing"):
+        core.nsk([0.0, 1.0, 1.0, 1.0, 2.0], 4, None, None)
     with pytest.raises(ValueError, match="boundary_knots must be finite"):
         core.NaturalSplineKnot(None, (1.0, 1.0), 3, False)
     with pytest.raises(ValueError, match="knots must be strictly increasing"):
@@ -10639,6 +10700,39 @@ def test_init_stub_references_existing_python_symbols():
     assert missing == [], _format_missing(missing)
 
 
+def test_sklearn_compat_stub_tracks_public_exports():
+    setup_survival_import()
+    sklearn_compat = importlib.import_module("survival.sklearn_compat")
+    stub_path = PACKAGE_ROOT / "sklearn_compat.pyi"
+
+    assert _pyi_top_level_names(stub_path) == set(sklearn_compat.__all__)
+    assert _pyi_function_arg_names(stub_path, "iter_chunks") == ["X", "batch_size"]
+    assert _pyi_function_arg_names(stub_path, "predict_large_dataset") == [
+        "estimator",
+        "X",
+        "batch_size",
+        "output_file",
+        "verbose",
+    ]
+    assert _pyi_function_arg_names(stub_path, "survival_curves_to_disk") == [
+        "estimator",
+        "X",
+        "output_file",
+        "batch_size",
+        "verbose",
+    ]
+    assert (
+        _pyi_function_return(stub_path, "survival_curves_to_disk")
+        == "tuple[NDArray[np.float64], np.memmap]"
+    )
+    for method_name, expected in {
+        "predict_batched": ["self", "X", "batch_size"],
+        "predict_survival_batched": ["self", "X", "batch_size"],
+        "predict_to_array": ["self", "X", "batch_size", "out"],
+    }.items():
+        assert _pyi_class_method_arg_names(stub_path, "StreamingMixin", method_name) == expected
+
+
 def test_readme_python_examples_reference_public_symbols():
     manifest = set(_manifest_bindings())
     module_exports = _binding_names_by_module()
@@ -10797,6 +10891,80 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.vcov is survival.r_api.vcov
     assert survival.ridge_fit is survival.regression.ridge_fit
     assert "ridge_fit" not in vars(survival)
+
+
+def test_package_root_lazy_loads_domain_modules():
+    _remove_survival_modules()
+    survival = setup_survival_import()
+
+    assert "survival._survival" not in sys.modules
+    assert "survival._binding_utils" not in sys.modules
+    assert "survival.regression" not in sys.modules
+    assert "regression" not in vars(survival)
+    assert "ridge_fit" in survival.__deprecated_root_exports__
+
+    regression = survival.regression
+
+    assert sys.modules["survival.regression"] is regression
+    assert survival.ridge_fit is regression.ridge_fit
+    assert "ridge_fit" not in vars(survival)
+
+    assert survival._survival is sys.modules["survival._survival"]
+    assert "_survival" in vars(survival)
+
+
+def test_package_root_lazy_loads_r_api_exports():
+    _remove_survival_modules()
+    survival = setup_survival_import()
+
+    assert "survival.r_api" not in sys.modules
+    assert "r_api" not in vars(survival)
+    assert "Surv" not in vars(survival)
+
+    assert survival.Surv is survival.r_api.Surv
+    assert "survival.r_api" in sys.modules
+    assert "r_api" in vars(survival)
+    assert "Surv" in vars(survival)
+
+
+def test_r_api_stub_tracks_surv_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "self",
+        "type",
+        "origin",
+        "time",
+        "time1",
+        "time2",
+        "event",
+        "status",
+        "start",
+        "stop",
+    ]
+    runtime_params = inspect.signature(survival.r_api.Surv.__init__).parameters
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is not inspect.Parameter.VAR_POSITIONAL
+    ] == expected
+    assert runtime_params["args"].kind is inspect.Parameter.VAR_POSITIONAL
+    assert _pyi_class_method_arg_names(stub_path, "Surv", "__init__") == expected
+
+
+def test_r_api_stub_tracks_dataclass_public_fields():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    for class_name in sorted(_pyi_top_level_names(stub_path)):
+        runtime_class = getattr(survival.r_api, class_name, None)
+        if not isinstance(runtime_class, type) or not dataclasses.is_dataclass(runtime_class):
+            continue
+        runtime_fields = set(runtime_class.__dataclass_fields__)
+        assert _pyi_class_annotation_names(stub_path, class_name) == runtime_fields
 
 
 def test_r_api_stub_tracks_concordance_public_signature():
@@ -11103,13 +11271,51 @@ def test_package_root_version_matches_project_metadata():
 
 
 def test_package_root_lazy_loads_sklearn_exports():
-    setup_survival_import()
-    survival = importlib.import_module("survival")
+    _remove_survival_modules()
+    survival = setup_survival_import()
 
     assert "CoxPHEstimator" in survival.__all__
     assert "CoxPHEstimator" not in vars(survival)
 
     sklearn_compat = importlib.import_module("survival.sklearn_compat")
 
+    assert "survival._sklearn_cox" not in sys.modules
+    assert "survival._sklearn_aft" not in sys.modules
+    assert "survival._sklearn_deep" not in sys.modules
+    assert "survival._sklearn_ensemble" not in sys.modules
+
     assert survival.CoxPHEstimator is sklearn_compat.CoxPHEstimator
     assert survival.CoxPHEstimator is sklearn_compat.CoxPHEstimator
+    assert "survival._sklearn_cox" in sys.modules
+    assert "survival._sklearn_aft" not in sys.modules
+    assert "survival._sklearn_deep" not in sys.modules
+    assert "survival._sklearn_ensemble" not in sys.modules
+
+
+def test_package_root_lazy_loads_streaming_sklearn_exports():
+    _remove_survival_modules()
+    survival = setup_survival_import()
+
+    assert "StreamingMixin" in survival.__all__
+    assert "StreamingMixin" not in vars(survival)
+
+    assert (
+        survival.StreamingMixin is importlib.import_module("survival.sklearn_compat").StreamingMixin
+    )
+    assert "survival._sklearn_streaming" in sys.modules
+    assert "survival._sklearn_cox" not in sys.modules
+    assert "survival._sklearn_aft" not in sys.modules
+    assert "survival._sklearn_deep" not in sys.modules
+    assert "survival._sklearn_ensemble" not in sys.modules
+
+    streaming_cox = survival.StreamingCoxPHEstimator
+
+    assert "survival._sklearn_streaming_cox" in sys.modules
+    assert "survival._sklearn_cox" in sys.modules
+    assert "survival._sklearn_aft" not in sys.modules
+    assert "survival._sklearn_deep" not in sys.modules
+    assert "survival._sklearn_ensemble" not in sys.modules
+    assert issubclass(
+        streaming_cox,
+        importlib.import_module("survival._sklearn_cox").CoxPHEstimator,
+    )

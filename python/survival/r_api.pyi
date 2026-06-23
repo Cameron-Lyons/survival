@@ -6,7 +6,19 @@ class Surv:
     start: tuple[float, ...] | None
     time2: tuple[float, ...] | None
     type: str
-    def __init__(self, *args: Any, type: str | None = None, origin: Any = 0.0) -> None: ...
+    def __init__(
+        self,
+        *args: Any,
+        type: str | None = None,
+        origin: Any = 0.0,
+        time: Any = ...,
+        time1: Any = ...,
+        time2: Any = ...,
+        event: Any = ...,
+        status: Any = ...,
+        start: Any = ...,
+        stop: Any = ...,
+    ) -> None: ...
     def __len__(self) -> int: ...
     @property
     def status(self) -> tuple[int, ...]: ...
@@ -93,6 +105,8 @@ class CoxBaseHazardResult:
     strata: list[int] | None
     centered: bool
     curve_strata: list[int] | None
+    strata_labels: list[Any] | None
+    curve_strata_labels: list[Any] | None
     def __iter__(self): ...
     @property
     def hazard(self) -> list[float] | list[list[float]]: ...
@@ -106,6 +120,7 @@ class CoxSurvfitResult:
     linear_predictors: list[float]
     centered: bool
     strata: list[int] | None
+    strata_labels: list[Any] | None
     start_time: float | None
     std_err: list[list[float]]
     std_chaz: list[list[float]]

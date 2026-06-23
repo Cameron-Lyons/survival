@@ -147,11 +147,7 @@ pub(crate) fn relu_vec(x: &mut [f64]) {
 pub(crate) fn compute_duration_bins(times: &[f64], num_durations: usize) -> (Vec<usize>, Vec<f64>) {
     let n = times.len();
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        times[a]
-            .partial_cmp(&times[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| times[a].total_cmp(&times[b]));
 
     let mut cuts = Vec::with_capacity(num_durations + 1);
     cuts.push(0.0);
@@ -164,14 +160,12 @@ pub(crate) fn compute_duration_bins(times: &[f64], num_durations: usize) -> (Vec
 
     let duration_bins: Vec<usize> = times
         .iter()
-        .map(|&t| {
-            match cuts[1..]
-                .binary_search_by(|cut| cut.partial_cmp(&t).unwrap_or(std::cmp::Ordering::Equal))
-            {
+        .map(
+            |&t| match cuts[1..].binary_search_by(|cut| cut.total_cmp(&t)) {
                 Ok(idx) => (idx + 1).min(num_durations - 1),
                 Err(idx) => idx.min(num_durations - 1),
-            }
-        })
+            },
+        )
         .collect();
 
     (duration_bins, cuts)

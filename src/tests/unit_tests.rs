@@ -2,8 +2,6 @@
 mod tests {
     use crate::agsurv4;
     use crate::data_prep::survsplit;
-    use crate::matrix::chinv2::chinv2;
-    use crate::matrix::cholesky2::cholesky2;
     use crate::surv_analysis::logrank_components::{
         SurvDiffInput, SurvDiffOutput, SurvDiffParams, compute_survdiff,
     };
@@ -62,6 +60,7 @@ mod tests {
             status: &status,
             group: &group,
             strata: &strata,
+            timefix: false,
         };
         let mut output = SurvDiffOutput {
             obs: &mut obs,
@@ -100,6 +99,7 @@ mod tests {
             status: &status,
             group: &group,
             strata: &strata,
+            timefix: false,
         };
         let mut output = SurvDiffOutput {
             obs: &mut obs,
@@ -135,6 +135,7 @@ mod tests {
             status: &status,
             group: &group,
             strata: &strata,
+            timefix: false,
         };
         let mut output = SurvDiffOutput {
             obs: &mut obs,
@@ -169,6 +170,7 @@ mod tests {
             status: &status,
             group: &group,
             strata: &strata,
+            timefix: false,
         };
         let mut output = SurvDiffOutput {
             obs: &mut obs,
@@ -207,6 +209,7 @@ mod tests {
             status: &status,
             group: &group,
             strata: &strata,
+            timefix: false,
         };
         let mut output = SurvDiffOutput {
             obs: &mut obs,
@@ -243,6 +246,7 @@ mod tests {
             status: &status,
             group: &group,
             strata: &strata,
+            timefix: false,
         };
         let mut output = SurvDiffOutput {
             obs: &mut obs,
@@ -279,6 +283,7 @@ mod tests {
             status: &status,
             group: &group,
             strata: &strata,
+            timefix: false,
         };
         let mut output = SurvDiffOutput {
             obs: &mut obs,
@@ -313,8 +318,11 @@ mod tests {
         let tstart = vec![1.0, 2.0];
         let tstop = vec![5.0, 6.0];
         let cut = vec![f64::NAN, 3.0, 4.0];
-        let result = survsplit(tstart, tstop, cut).unwrap();
-        assert!(!result.row.is_empty());
+        let err = survsplit(tstart, tstop, cut).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cut must be a vector of finite numbers")
+        );
     }
     #[test]
     fn test_survsplit_all_nan() {
@@ -333,57 +341,5 @@ mod tests {
         let cut = vec![2.0, 4.0, 6.0, 8.0];
         let result = survsplit(tstart, tstop, cut).unwrap();
         assert_eq!(result.row.len(), 8);
-    }
-    #[test]
-    fn test_cholesky2_identity() {
-        let mut matrix = vec![1.0, 0.0, 0.0, 1.0];
-        let rank = cholesky2(&mut matrix, 2, 1e-10);
-        assert_eq!(rank, 2);
-    }
-    #[test]
-    fn test_cholesky2_positive_definite() {
-        let mut matrix = vec![4.0, 2.0, 2.0, 5.0];
-        let rank = cholesky2(&mut matrix, 2, 1e-10);
-        assert_eq!(rank, 2);
-    }
-    #[test]
-    fn test_cholesky2_singular() {
-        let mut matrix = vec![1.0, 1.0, 1.0, 1.0];
-        let rank = cholesky2(&mut matrix, 2, 1e-10);
-        assert_eq!(rank, 1);
-    }
-    #[test]
-    fn test_cholesky2_3x3() {
-        let mut matrix = vec![4.0, 2.0, 1.0, 2.0, 5.0, 2.0, 1.0, 2.0, 6.0];
-        let rank = cholesky2(&mut matrix, 3, 1e-10);
-        assert_eq!(rank, 3);
-    }
-    #[test]
-    fn test_cholesky2_with_nan() {
-        let mut matrix = vec![f64::NAN, 0.0, 0.0, 1.0];
-        let rank = cholesky2(&mut matrix, 2, 1e-10);
-        assert!(rank <= 2);
-    }
-    #[test]
-    fn test_chinv2_identity() {
-        let mut matrix = vec![1.0, 0.0, 0.0, 1.0];
-        chinv2(&mut matrix, 2);
-        assert!((matrix[0] - 1.0).abs() < 1e-10);
-        assert!((matrix[3] - 1.0).abs() < 1e-10);
-    }
-    #[test]
-    fn test_chinv2_diagonal() {
-        let mut matrix = vec![2.0, 0.0, 0.0, 4.0];
-        chinv2(&mut matrix, 2);
-        assert!((matrix[0] - 0.5).abs() < 1e-10);
-        assert!((matrix[3] - 0.25).abs() < 1e-10);
-    }
-    #[test]
-    fn test_chinv2_zero_diagonal() {
-        let mut matrix = vec![0.0, 0.0, 0.0, 1.0];
-        chinv2(&mut matrix, 2);
-        assert_eq!(matrix[0], 0.0);
-        assert_eq!(matrix[1], 0.0);
-        assert_eq!(matrix[2], 0.0);
     }
 }

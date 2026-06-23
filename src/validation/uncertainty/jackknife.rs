@@ -1,3 +1,56 @@
+fn validate_jackknife_covariates(covariates: &[Vec<f64>], n: usize) -> PyResult<()> {
+    if covariates.len() != n {
+        return Err(uncertainty_value_error(format!(
+            "covariates must have one row per observation; got {} rows for {n} observations",
+            covariates.len()
+        )));
+    }
+
+    let p = covariates.first().map_or(0, |row| row.len());
+    for (row_idx, row) in covariates.iter().enumerate() {
+        if row.len() != p {
+            return Err(uncertainty_value_error(format!(
+                "covariates must be rectangular; row {row_idx} has {} values, expected {p}",
+                row.len()
+            )));
+        }
+        for (col_idx, &value) in row.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(uncertainty_value_error(format!(
+                    "covariates contains non-finite value {value} at row {row_idx}, column {col_idx}"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_jackknife_plus_inputs(
+    time: &[f64],
+    event: &[i32],
+    covariates: &[Vec<f64>],
+    config: &JackknifePlusConfig,
+) -> PyResult<()> {
+    if time.len() < 2 {
+        return Err(uncertainty_value_error(
+            "Need at least 2 observations for jackknife",
+        ));
+    }
+    crate::internal::validation::validate_length(time.len(), event.len(), "event")?;
+    crate::internal::validation::validate_finite(time, "time")?;
+    crate::internal::validation::validate_non_negative(time, "time")?;
+    crate::internal::validation::validate_binary_i32(event, "event")?;
+    validate_jackknife_covariates(covariates, time.len())?;
+    validate_probability_open(config.alpha, "alpha")?;
+
+    if config.cv_folds == 0 {
+        return Err(uncertainty_value_error("cv_folds must be positive"));
+    }
+
+    Ok(())
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     time,
@@ -12,12 +65,7 @@ pub fn jackknife_plus_survival(
     config: JackknifePlusConfig,
 ) -> PyResult<JackknifePlusResult> {
     let n = time.len();
-
-    if n < 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "Need at least 2 observations for jackknife",
-        ));
-    }
+    validate_jackknife_plus_inputs(&time, &event, &covariates, &config)?;
 
     let full_predictions = simple_cox_predictions(&time, &event, &covariates);
 
@@ -60,7 +108,7 @@ pub fn jackknife_plus_survival(
     };
 
     let mut sorted_residuals = loo_residuals.clone();
-    sorted_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_residuals.sort_by(f64::total_cmp);
     let q = sorted_residuals[quantile_idx.min(n - 1)];
 
     let lower_bounds: Vec<f64> = full_predictions.iter().map(|p| (p - q).max(0.0)).collect();

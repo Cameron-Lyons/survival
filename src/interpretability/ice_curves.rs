@@ -60,7 +60,7 @@ impl DICEResult {
 
 fn compute_grid(values: &[f64], n_points: usize) -> Vec<f64> {
     let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(f64::total_cmp);
 
     let min_val = sorted[0];
     let max_val = sorted[sorted.len() - 1];

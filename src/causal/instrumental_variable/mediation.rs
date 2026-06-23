@@ -269,11 +269,7 @@ fn fit_outcome_model(
     let mut beta = 0.0;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     for _ in 0..max_iter {
         let eta: Vec<f64> = (0..n)
@@ -325,11 +321,7 @@ fn fit_outcome_model_with_mediator(
     let mut gamma = 0.0;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     for _ in 0..max_iter {
         let eta: Vec<f64> = (0..n)

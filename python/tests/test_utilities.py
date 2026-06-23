@@ -6,7 +6,7 @@ survival = setup_survival_import()
 
 
 def test_collapse():
-    y = [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0]
+    y = [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 0.0, 0.0, 1.0, 0.0]
     x = [1, 1, 1, 1]
     istate = [0, 0, 0, 0]
     subject_id = [1, 1, 2, 2]
@@ -15,8 +15,8 @@ def test_collapse():
 
     result = survival.collapse(y, x, istate, subject_id, wt, order)
     assert isinstance(result, dict)
-    assert "matrix" in result
-    assert "dimnames" in result
+    assert result["matrix"] == [[1, 2], [3, 3], [4, 4]]
+    assert result["dimnames"] == ["start", "end"]
 
     with pytest.raises(ValueError, match="y must have 3 columns"):
         survival.collapse(y[:-1], x, istate, subject_id, wt, order)
@@ -32,6 +32,34 @@ def test_collapse():
         survival.collapse(y, x, istate, subject_id, wt, [0, 1, 2, 4])
     with pytest.raises(ValueError, match="order must be a permutation"):
         survival.collapse(y, x, istate, subject_id, wt, [0, 1, 1, 3])
+
+
+def test_cluster_and_strata_public_apis():
+    clusters = survival.cluster([2, 2, 1, 3])
+    string_clusters = survival.cluster_str(["b", "a", "b"])
+    numeric_strata = survival.strata([[2, 1, 2], [1, 2, 1]])
+    string_strata = survival.strata_str([["b", "a", "b"], ["x", "y", "x"]])
+
+    assert clusters.cluster_ids == [0, 0, 1, 2]
+    assert clusters.levels == ["2", "1", "3"]
+    assert clusters.cluster_sizes == [2, 1, 1]
+
+    assert string_clusters.cluster_ids == [0, 1, 0]
+    assert string_clusters.levels == ["b", "a"]
+    assert string_clusters.cluster_sizes == [2, 1]
+
+    assert numeric_strata.strata == [1, 0, 1]
+    assert numeric_strata.levels == ["v1=1, v2=2", "v1=2, v2=1"]
+    assert numeric_strata.counts == [1, 2]
+    assert numeric_strata.n_strata == 2
+
+    assert string_strata.strata == [1, 0, 1]
+    assert string_strata.levels == ["a, y", "b, x"]
+    assert string_strata.counts == [1, 2]
+    assert string_strata.n_strata == 2
+
+    with pytest.raises(ValueError, match="Variable 1 has length"):
+        survival.strata([[1, 2], [1]])
 
 
 def test_tmerge_family_public_apis():
@@ -93,7 +121,7 @@ def test_survsplit_public_api_and_validation():
     result = survival.survsplit(
         [0.0],
         [10.0],
-        [7.0, float("nan"), 3.0, 3.0, float("inf")],
+        [7.0, 3.0, 3.0],
     )
     boundary_result = survival.survsplit([0.0], [10.0], [0.0, 3.0, 10.0])
 
@@ -111,6 +139,14 @@ def test_survsplit_public_api_and_validation():
 
     with pytest.raises(ValueError, match="tstart and tstop must have same length"):
         survival.survsplit([0.0], [], [1.0])
+    with pytest.raises(ValueError, match="cut must be a vector of finite numbers"):
+        survival.survsplit([0.0], [10.0], [3.0, float("nan")])
+    with pytest.raises(ValueError, match="cut must be a vector of finite numbers"):
+        survival.survsplit([0.0], [10.0], [float("inf")])
+    with pytest.raises(ValueError, match="not infinite"):
+        survival.survsplit([0.0], [float("inf")], [5.0])
+    with pytest.raises(ValueError, match="not infinite"):
+        survival.survsplit([float("-inf")], [10.0], [5.0])
 
 
 def test_surv2data_and_survcondense_public_apis():
@@ -158,6 +194,8 @@ def test_surv2data_and_survcondense_public_apis():
         survival.surv2data([1, 1], [0.0, 1.0], [3.0, 4.0], [1, 1])
     with pytest.raises(ValueError, match="event_time must be >= time"):
         survival.surv2data([1], [2.0], [1.0], [1])
+    with pytest.raises(ValueError, match="duplicated time values for a single id"):
+        survival.surv2data([1, 1], [2.0, 2.0])
     with pytest.raises(ValueError, match="time1 must have same length as id"):
         survival.survcondense([1], [], [1.0], [0])
     with pytest.raises(ValueError, match="time2 must have same length as id"):
@@ -172,10 +210,15 @@ def test_surv2data_and_survcondense_public_apis():
         survival.survcondense([1], [2.0], [1.0], [0])
     with pytest.raises(ValueError, match="status must contain only 0/1"):
         survival.survcondense([1], [0.0], [1.0], [2])
+    with pytest.raises(ValueError, match="intervals must not overlap within id"):
+        survival.survcondense([1, 1], [0.0, 4.0], [5.0, 6.0], [0, 0])
 
 
 def test_aeq_surv_neardate_and_tcut_public_apis():
     adjusted = survival.aeq_surv([1.0, 1.0 + 1e-10, 2.0], 1e-8)
+    transitive_adjusted = survival.aeq_surv([1.0, 1.0 + 9e-9, 1.0 + 18e-9], 1e-8)
+    relative_adjusted = survival.aeq_surv([1e9, 1e9 + 1.0, 1e9 + 20.0], 1e-8)
+    no_adjust = survival.aeq_surv([1.0, 1.0 + 1e-10], -1.0)
     nearest = survival.neardate([1, 1, 2], [4.0, 12.0, 7.0], [1, 1, 2], [5.0, 10.0, 9.0])
     nearest_tie = survival.neardate(
         [1, 1, 1],
@@ -184,14 +227,25 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
         [10.0, 20.0, 10.0, 12.0],
     )
     nearest_str = survival.neardate_str(["a"], [4.0], ["a"], [1.0], "prior")
+    nearest_after_prefix = survival.neardate([1], [15.0], [1, 1], [10.0, 20.0], "a")
+    nearest_prior_prefix = survival.neardate([1], [15.0], [1, 1], [10.0, 20.0], "pr")
+    nearest_closest_prefix = survival.neardate([1], [18.0], [1, 1], [10.0, 20.0], "cl")
     cut = survival.tcut([5.0, 15.0, 30.0], [0.0, 10.0, 20.0, 30.0])
     cut_boundaries = survival.tcut([0.0, 10.0, 20.0, 30.0], [0.0, 10.0, 20.0, 30.0])
+    cut_generated = survival.tcut([5.0, 15.0, 25.0], 3.0)
+    cut_duplicate_break = survival.tcut([5.0, 15.0, 25.0], [0.0, 10.0, 10.0, 30.0])
     expanded = survival.tcut_expand([0.0], [25.0], [0.0, 10.0, 20.0, 30.0])
     expanded_edges = survival.tcut_expand([-5.0, 35.0], [25.0, 40.0], [0.0, 10.0, 20.0])
 
     assert adjusted.time[0] == pytest.approx(adjusted.time[1])
     assert adjusted.adjusted_count == 1
     assert adjusted.adjusted_indices == [1]
+    assert transitive_adjusted.time == pytest.approx([1.0, 1.0, 1.0])
+    assert transitive_adjusted.adjusted_indices == [1, 2]
+    assert relative_adjusted.time == pytest.approx([1e9, 1e9, 1e9 + 20.0])
+    assert relative_adjusted.adjusted_indices == [1]
+    assert no_adjust.time == pytest.approx([1.0, 1.0 + 1e-10])
+    assert no_adjust.adjusted_count == 0
 
     assert nearest.indices == [0, 1, 2]
     assert nearest.distances == pytest.approx([1.0, 2.0, 2.0])
@@ -200,12 +254,24 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
     assert nearest_tie.distances == pytest.approx([3.0, 0.0, 1.0])
     assert nearest_str.indices == [0]
     assert nearest_str.distances == pytest.approx([3.0])
+    assert nearest_after_prefix.indices == [1]
+    assert nearest_after_prefix.distances == pytest.approx([5.0])
+    assert nearest_prior_prefix.indices == [0]
+    assert nearest_prior_prefix.distances == pytest.approx([5.0])
+    assert nearest_closest_prefix.indices == [1]
+    assert nearest_closest_prefix.distances == pytest.approx([2.0])
 
     assert cut.codes == [0, 1, 2]
     assert cut.counts == [1, 1, 1]
     assert cut.breaks == pytest.approx([0.0, 10.0, 20.0, 30.0])
     assert cut_boundaries.codes == [0, 1, 2, 2]
     assert cut_boundaries.counts == [1, 1, 2]
+    assert cut_generated.codes == [0, 1, 2]
+    assert cut_generated.levels == ["Range 1", "Range 2", "Range 3"]
+    assert cut_generated.breaks == pytest.approx([4.8, 11.6, 18.4, 25.2])
+    assert cut_generated.counts == [1, 1, 1]
+    assert cut_duplicate_break.codes == [0, 2, 2]
+    assert cut_duplicate_break.counts == [1, 0, 2]
 
     start, stop, codes, original = expanded
     assert start == pytest.approx([0.0, 10.0, 20.0])
@@ -220,10 +286,12 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
 
     with pytest.raises(ValueError, match="best must be 'prior', 'after', or 'closest'"):
         survival.neardate([1], [1.0], [1], [1.0], "sideways")
+    with pytest.raises(ValueError, match="best must be 'prior', 'after', or 'closest'"):
+        survival.neardate([1], [1.0], [1], [1.0], "")
     with pytest.raises(ValueError, match="labels length"):
         survival.tcut([1.0], [0.0, 1.0, 2.0], ["only-one"])
-    with pytest.raises(ValueError, match="tolerance must be non-negative and finite"):
-        survival.aeq_surv([1.0], -1.0)
+    with pytest.raises(ValueError, match="tolerance must be finite"):
+        survival.aeq_surv([1.0], float("inf"))
     with pytest.raises(ValueError, match="time values must be finite"):
         survival.aeq_surv([1.0, float("nan")])
     with pytest.raises(ValueError, match="date1 values must be finite"):
@@ -232,8 +300,10 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
         survival.neardate_str(["a"], [1.0], ["a"], [float("inf")])
     with pytest.raises(ValueError, match="value values must be finite"):
         survival.tcut([float("nan")], [0.0, 1.0])
-    with pytest.raises(ValueError, match="breaks must contain unique values"):
-        survival.tcut([0.5], [0.0, 0.0])
+    with pytest.raises(ValueError, match="breaks must be given in ascending order"):
+        survival.tcut([0.5], [2.0, 1.0])
+    with pytest.raises(ValueError, match="Must specify at least one interval"):
+        survival.tcut([0.5], 0.0)
     with pytest.raises(ValueError, match="start values must be finite"):
         survival.tcut_expand([float("nan")], [1.0], [0.0])
     with pytest.raises(ValueError, match="cuts must contain unique values"):
@@ -269,6 +339,8 @@ def test_timeline_public_apis_and_validation():
         survival.to_timeline([1], [0.0], [float("inf")], [0])
     with pytest.raises(ValueError, match="time1 must be <= time2"):
         survival.to_timeline([1], [2.0], [1.0], [0])
+    with pytest.raises(ValueError, match="intervals must not overlap within id"):
+        survival.to_timeline([1, 1], [0.0, 4.0], [5.0, 6.0], [0, 1])
     with pytest.raises(ValueError, match="time_points must be strictly increasing"):
         survival.to_timeline([1], [0.0], [1.0], [0], [0.0, 0.0])
     with pytest.raises(ValueError, match="states must have one row per id"):
@@ -291,13 +363,38 @@ def test_rttright_public_apis_and_validation():
 
     assert result.time == pytest.approx([1.0, 2.0, 3.0])
     assert result.status == [0, 1, 1]
-    assert result.weights == pytest.approx([0.0, 1.0, 2.0])
+    assert result.weights == pytest.approx([0.0, 0.5, 0.5])
     assert result.order == [1, 2, 0]
+
+    raw = survival.rttright([1.0, 2.0, 3.0], [0, 1, 1], renorm=False)
+    assert raw.weights == pytest.approx([0.0, 1.5, 1.5])
+
+    weighted = survival.rttright([1.0, 2.0, 3.0], [0, 1, 1], [2.0, 1.0, 3.0])
+    weighted_raw = survival.rttright(
+        [1.0, 2.0, 3.0],
+        [0, 1, 1],
+        [2.0, 1.0, 3.0],
+        renorm=False,
+    )
+    assert weighted.weights == pytest.approx([0.0, 0.25, 0.75])
+    assert weighted_raw.weights == pytest.approx([0.0, 1.5, 4.5])
+
+    tied = survival.rttright([1.0, 2.0, 2.0, 3.0], [0, 1, 1, 1])
+    assert tied.weights == pytest.approx([0.0, 1 / 3, 1 / 3, 1 / 3])
+
+    fixed = survival.rttright([1.0, 1.0 + 5e-10, 2.0], [0, 1, 1], renorm=False)
+    exact = survival.rttright(
+        [1.0, 1.0 + 5e-10, 2.0],
+        [0, 1, 1],
+        timefix=False,
+        renorm=False,
+    )
+    assert fixed.weights == pytest.approx([0.0, 1.0, 2.0])
+    assert exact.weights == pytest.approx([0.0, 1.5, 1.5])
 
     assert stratified.time == pytest.approx([3.0, 1.0, 2.0, 1.5])
     assert stratified.status == [1, 0, 1, 1]
-    assert all(weight >= 0.0 for weight in stratified.weights)
-    assert sum(weight > 0.0 for weight in stratified.weights) == 3
+    assert stratified.weights == pytest.approx([1.0, 0.0, 0.5, 0.5])
     assert stratified.order == [1, 0, 3, 2]
 
     with pytest.raises(ValueError, match="time and status must have same length"):
@@ -312,6 +409,8 @@ def test_rttright_public_apis_and_validation():
         survival.rttright([1.0], [1], [-1.0])
     with pytest.raises(ValueError, match="weights contains non-finite"):
         survival.rttright_stratified([1.0], [1], [0], [float("inf")])
+    with pytest.raises(ValueError, match="weights must have positive sum"):
+        survival.rttright([1.0], [1], [0.0])
 
 
 def test_agexact_public_api_and_validation():

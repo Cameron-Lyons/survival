@@ -106,8 +106,11 @@ pub fn pwp_model(
 ) -> PyResult<PWPResult> {
     let n = id.len();
     validate_recurrent_lengths(n, &[start.len(), stop.len(), event.len(), event_number.len()])?;
+    validate_counting_process_inputs(&start, &stop, &event)?;
+    validate_event_numbers(&event_number)?;
+    validate_recurrent_solver_controls(config.max_iter, config.tol)?;
 
-    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n);
+    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n)?;
 
     let unique_ids = sorted_unique_i32(&id);
     let n_subjects = unique_ids.len();
@@ -138,9 +141,7 @@ pub fn pwp_model(
 
         let mut sorted_indices: Vec<usize> = (0..n).collect();
         sorted_indices.sort_by(|&a, &b| {
-            time_var[b]
-                .partial_cmp(&time_var[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
+            time_var[b].total_cmp(&time_var[a])
         });
 
         for &i in &sorted_indices {
@@ -233,9 +234,7 @@ pub fn pwp_model(
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     sorted_indices.sort_by(|&a, &b| {
-        time_var[b]
-            .partial_cmp(&time_var[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        time_var[b].total_cmp(&time_var[a])
     });
 
     for &i in &sorted_indices {
@@ -357,7 +356,7 @@ pub fn pwp_model(
         .filter(|&i| event[i] == 1)
         .map(|i| time_var[i])
         .collect();
-    event_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    event_times.sort_by(f64::total_cmp);
     event_times.dedup();
 
     let baseline_cumhaz: Vec<f64> = event_times

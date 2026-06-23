@@ -77,9 +77,7 @@ pub fn sis_cox(
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        time[b].total_cmp(&time[a])
     });
 
     let marginal_scores: Vec<f64> = (0..p)
@@ -122,9 +120,7 @@ pub fn sis_cox(
 
     let mut ranking: Vec<usize> = (0..p).collect();
     ranking.sort_by(|&a, &b| {
-        marginal_scores[b]
-            .partial_cmp(&marginal_scores[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        marginal_scores[b].total_cmp(&marginal_scores[a])
     });
 
     let mut iteration_selections = Vec::new();
@@ -180,9 +176,7 @@ pub fn sis_cox(
 
             let mut new_ranking: Vec<usize> = (0..p).collect();
             new_ranking.sort_by(|&a, &b| {
-                residual_scores[b]
-                    .partial_cmp(&residual_scores[a])
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                residual_scores[b].total_cmp(&residual_scores[a])
             });
 
             let new_selected: Vec<usize> = new_ranking
@@ -376,9 +370,7 @@ fn fit_lasso_simple(time: &[f64], event: &[i32], covariates: &[f64], lambda: f64
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        time[b].total_cmp(&time[a])
     });
 
     for _ in 0..50 {
@@ -431,4 +423,3 @@ fn fit_lasso_simple(time: &[f64], event: &[i32], covariates: &[f64], lambda: f64
         .filter(|&j| beta[j].abs() > crate::constants::DIVISION_FLOOR)
         .collect()
 }
-

@@ -51,7 +51,7 @@ impl ALE2DResult {
 
 fn compute_quantile_bins(values: &[f64], num_intervals: usize) -> Vec<f64> {
     let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(f64::total_cmp);
 
     let n = sorted.len();
     let mut bins = Vec::with_capacity(num_intervals + 1);

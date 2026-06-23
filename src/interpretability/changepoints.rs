@@ -202,7 +202,7 @@ fn compute_segment_cost(data: &[f64], start: usize, end: usize, cost: CostFuncti
         }
         CostFunction::L1 => {
             let mut sorted: Vec<f64> = segment.to_vec();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.sort_by(f64::total_cmp);
             let median = if sorted.len().is_multiple_of(2) {
                 (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2.0
             } else {

@@ -34,17 +34,9 @@ pub fn dfbeta_cox(
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     if n > PARALLEL_THRESHOLD_MEDIUM {
-        sorted_indices.par_sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted_indices.par_sort_by(|&a, &b| time[b].total_cmp(&time[a]));
     } else {
-        sorted_indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
     }
 
     let eta: Vec<f64> = (0..n)

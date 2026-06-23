@@ -224,6 +224,20 @@ def test_survobrien_rejects_invalid_public_inputs(call, message):
         call()
 
 
+def test_survobrien_groups_near_tied_event_times():
+    status = [1, 1, 0, 0]
+    covariate = [10.0, 30.0, 20.0, 40.0]
+
+    exact = survival.survobrien([1.0, 1.0, 2.0, 3.0], status, covariate)
+    near_tied = survival.survobrien([1.0, 1.0 + 5e-10, 2.0, 3.0], status, covariate)
+
+    assert near_tied.statistic == pytest.approx(exact.statistic)
+    assert near_tied.p_value == pytest.approx(exact.p_value)
+    assert near_tied.score_sum == pytest.approx(exact.score_sum)
+    assert near_tied.variance == pytest.approx(exact.variance)
+    assert near_tied.scores == pytest.approx(exact.scores)
+
+
 def test_compute_logrank_components_all_censored_has_zero_degrees_of_freedom():
     result = survival.compute_logrank_components(
         time=[1.0, 2.0, 3.0, 4.0],

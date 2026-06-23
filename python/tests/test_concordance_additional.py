@@ -59,6 +59,72 @@ def test_concordance_summary_counts_near_tied_risk_scores():
     ) == pytest.approx(2.5 / 3.0)
 
 
+def test_concordance_summary_groups_near_tied_event_times():
+    exact_time = [1.0, 1.0, 2.0, 3.0]
+    near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
+    status = [1, 1, 1, 0]
+    risk = [0.9, 0.1, 0.5, 0.2]
+
+    exact = survival.core.concordance_summary(exact_time, status, risk)
+    near = survival.core.concordance_summary(near_time, status, risk)
+    assert near["concordant"] == pytest.approx(exact["concordant"])
+    assert near["comparable"] == pytest.approx(exact["comparable"])
+    assert near["concordance"] == pytest.approx(exact["concordance"])
+
+    exact_weighted = survival.core.concordance_summary(exact_time, status, risk, timewt="S")
+    near_weighted = survival.core.concordance_summary(near_time, status, risk, timewt="S")
+    assert near_weighted["concordant"] == pytest.approx(exact_weighted["concordant"])
+    assert near_weighted["comparable"] == pytest.approx(exact_weighted["comparable"])
+    assert near_weighted["concordance"] == pytest.approx(exact_weighted["concordance"])
+
+
+def test_concordance_diagnostic_rows_group_near_tied_event_times():
+    exact_time = [1.0, 1.0, 2.0, 3.0]
+    near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
+    status = [1, 1, 1, 0]
+    risk = [0.9, 0.1, 0.5, 0.2]
+    weights = [2.0, 1.0, 3.0, 1.0]
+    core = survival._survival
+
+    exact_ranks = core.concordance_rank_rows(exact_time, status, risk, weights, timewt="S")
+    near_ranks = core.concordance_rank_rows(near_time, status, risk, weights, timewt="S")
+    assert len(near_ranks) == len(exact_ranks)
+    for near_row, exact_row in zip(near_ranks, exact_ranks):
+        assert near_row[1:] == pytest.approx(exact_row[1:])
+
+    exact_influence, exact_dfbeta, exact_variance = (
+        core.concordance_influence_rows(exact_time, status, risk, weights, timewt="S")
+    )
+    near_influence, near_dfbeta, near_variance = (
+        core.concordance_influence_rows(near_time, status, risk, weights, timewt="S")
+    )
+    assert len(near_influence) == len(exact_influence)
+    for near_row, exact_row in zip(near_influence, exact_influence):
+        assert near_row == pytest.approx(exact_row)
+    assert near_dfbeta == pytest.approx(exact_dfbeta)
+    assert near_variance == pytest.approx(exact_variance)
+
+
+def test_counting_concordance_summary_handles_duplicate_event_times():
+    start = [0.0, 0.0, 0.25, 0.5, 0.0, 1.0, 1.0]
+    stop = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]
+    status = [1, 1, 1, 1, 0, 1, 0]
+    risk = [0.9, 0.2, 0.7, 0.4, 0.1, 0.8, 0.3]
+    weights = [1.0, 0.0, 2.0, 1.5, 0.5, 3.0, 1.0]
+
+    summary = survival.core.counting_concordance_summary(start, stop, status, risk)
+    assert summary["concordant"] == pytest.approx(6.0)
+    assert summary["comparable"] == pytest.approx(8.0)
+    assert summary["concordance"] == pytest.approx(0.75)
+
+    weighted = survival.core.counting_concordance_summary(
+        start, stop, status, risk, weights=weights
+    )
+    assert weighted["concordant"] == pytest.approx(7.5)
+    assert weighted["comparable"] == pytest.approx(12.0)
+    assert weighted["concordance"] == pytest.approx(0.625)
+
+
 def test_concordance_public_apis_validate_values():
     with pytest.raises(ValueError, match="time contains non-finite"):
         survival.concordance_index([1.0, float("inf")], [1, 0], [0.4, 0.1])

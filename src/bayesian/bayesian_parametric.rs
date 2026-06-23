@@ -391,7 +391,7 @@ pub fn bayesian_parametric(
     let beta_lower: Vec<f64> = (0..n_vars)
         .map(|j| {
             let mut vals: Vec<f64> = all_beta.iter().map(|b| b[j]).collect();
-            vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            vals.sort_by(f64::total_cmp);
             vals[(n_total as f64 * 0.025) as usize]
         })
         .collect();
@@ -399,7 +399,7 @@ pub fn bayesian_parametric(
     let beta_upper: Vec<f64> = (0..n_vars)
         .map(|j| {
             let mut vals: Vec<f64> = all_beta.iter().map(|b| b[j]).collect();
-            vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            vals.sort_by(f64::total_cmp);
             vals[(n_total as f64 * 0.975) as usize]
         })
         .collect();
@@ -413,7 +413,7 @@ pub fn bayesian_parametric(
         .sqrt();
 
     let mut sorted_shape = all_shape.clone();
-    sorted_shape.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_shape.sort_by(f64::total_cmp);
     let shape_lower = sorted_shape[(n_total as f64 * 0.025) as usize];
     let shape_upper = sorted_shape[(n_total as f64 * 0.975) as usize];
 
@@ -520,7 +520,7 @@ pub fn bayesian_parametric_predict(
             (0..n_times)
                 .map(|t| {
                     let mut vals: Vec<f64> = all_survival[i].iter().map(|s| s[t]).collect();
-                    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    vals.sort_by(f64::total_cmp);
                     vals[(n_samples as f64 * 0.025) as usize]
                 })
                 .collect()
@@ -532,7 +532,7 @@ pub fn bayesian_parametric_predict(
             (0..n_times)
                 .map(|t| {
                     let mut vals: Vec<f64> = all_survival[i].iter().map(|s| s[t]).collect();
-                    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    vals.sort_by(f64::total_cmp);
                     vals[(n_samples as f64 * 0.975) as usize]
                 })
                 .collect()

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::constants::exp_clamped;
+use crate::constants::{DIVISION_FLOOR, exp_clamped};
 use pyo3::prelude::*;
 
 fn value_error(message: impl Into<String>) -> PyErr {
@@ -186,7 +186,7 @@ impl ConditionalLogisticRegression {
         self.iterations = 0;
         self.converged = false;
 
-        // Use a stable gradient ascent step on the conditional softmax objective
+        // Use a stable gradient ascent step on the conditional likelihood
         // within each stratum so matched-set membership actually affects the fit.
         let learning_rate = 0.1;
         while self.iterations < self.max_iter {
@@ -194,17 +194,17 @@ impl ConditionalLogisticRegression {
 
             for indices in strata_groups.values() {
                 let mut linear_predictors = Vec::with_capacity(indices.len());
-                let mut max_linear_predictor = f64::NEG_INFINITY;
-                let mut case_count = 0.0;
+                let mut covariate_rows = Vec::with_capacity(indices.len());
+                let mut case_count = 0_usize;
                 let mut case_sums = vec![0.0; num_covariates];
 
                 for &observation in indices {
                     let covariates = self.data.get_covariates(observation);
-                    let case_status = self.data.get_case_control_status(observation) as f64;
+                    let case_status = self.data.get_case_control_status(observation) as usize;
                     case_count += case_status;
 
                     for (sum, value) in case_sums.iter_mut().zip(covariates.iter()) {
-                        *sum += case_status * value;
+                        *sum += case_status as f64 * value;
                     }
 
                     let linear_predictor: f64 = self
@@ -213,29 +213,20 @@ impl ConditionalLogisticRegression {
                         .zip(covariates.iter())
                         .map(|(coef, cov)| coef * cov)
                         .sum();
-                    max_linear_predictor = max_linear_predictor.max(linear_predictor);
                     linear_predictors.push(linear_predictor);
+                    covariate_rows.push(covariates.as_slice());
                 }
 
-                let weights: Vec<f64> = linear_predictors
-                    .iter()
-                    .map(|value| (value - max_linear_predictor).exp())
-                    .collect();
-                let total_weight = weights.iter().sum::<f64>();
-                if total_weight <= crate::constants::DIVISION_FLOOR {
-                    continue;
-                }
+                let expected_sums = exact_subset_expected_sums(
+                    &covariate_rows,
+                    &linear_predictors,
+                    case_count,
+                    num_covariates,
+                )?;
 
                 for covariate_idx in 0..num_covariates {
-                    let expected = indices
-                        .iter()
-                        .zip(weights.iter())
-                        .map(|(&observation, weight)| {
-                            self.data.get_covariates(observation)[covariate_idx] * *weight
-                        })
-                        .sum::<f64>()
-                        / total_weight;
-                    gradient[covariate_idx] += case_sums[covariate_idx] - case_count * expected;
+                    gradient[covariate_idx] +=
+                        case_sums[covariate_idx] - expected_sums[covariate_idx];
                 }
             }
 
@@ -299,6 +290,118 @@ fn validate_solver_controls(max_iter: u32, tol: f64) -> PyResult<()> {
     if !tol.is_finite() || tol <= 0.0 {
         return Err(value_error("tol must be a positive finite value"));
     }
+    Ok(())
+}
+
+fn exact_subset_expected_sums(
+    covariates: &[&[f64]],
+    linear_predictors: &[f64],
+    selected_count: usize,
+    num_covariates: usize,
+) -> PyResult<Vec<f64>> {
+    debug_assert_eq!(covariates.len(), linear_predictors.len());
+    debug_assert!(selected_count > 0);
+    debug_assert!(selected_count < covariates.len());
+
+    let max_linear_predictor = linear_predictors
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let mut subset_weights = vec![0.0; selected_count + 1];
+    let mut weighted_sums = vec![0.0; (selected_count + 1) * num_covariates];
+    subset_weights[0] = 1.0;
+
+    for (observation_idx, covariate_row) in covariates.iter().enumerate() {
+        let weight = exp_clamped(linear_predictors[observation_idx] - max_linear_predictor);
+        let max_k = selected_count.min(observation_idx + 1);
+
+        for k in (1..=max_k).rev() {
+            let previous_weight = subset_weights[k - 1];
+            if previous_weight <= 0.0 {
+                continue;
+            }
+
+            let added_weight = previous_weight * weight;
+            subset_weights[k] += added_weight;
+
+            let current_offset = k * num_covariates;
+            let previous_offset = (k - 1) * num_covariates;
+            for covariate_idx in 0..num_covariates {
+                weighted_sums[current_offset + covariate_idx] += weight
+                    * (weighted_sums[previous_offset + covariate_idx]
+                        + previous_weight * covariate_row[covariate_idx]);
+            }
+        }
+
+        normalize_conditional_dp(
+            &mut subset_weights,
+            &mut weighted_sums,
+            max_k,
+            num_covariates,
+        )?;
+    }
+
+    let denominator = subset_weights[selected_count];
+    if !denominator.is_finite() || denominator <= DIVISION_FLOOR {
+        return Err(value_error(
+            "conditional likelihood denominator is numerically unstable",
+        ));
+    }
+
+    let expected_offset = selected_count * num_covariates;
+    let expected_sums = weighted_sums[expected_offset..expected_offset + num_covariates]
+        .iter()
+        .map(|value| value / denominator)
+        .collect::<Vec<_>>();
+    if expected_sums.iter().any(|value| !value.is_finite()) {
+        return Err(value_error(
+            "conditional likelihood expectation is numerically unstable",
+        ));
+    }
+
+    Ok(expected_sums)
+}
+
+fn normalize_conditional_dp(
+    subset_weights: &mut [f64],
+    weighted_sums: &mut [f64],
+    max_k: usize,
+    num_covariates: usize,
+) -> PyResult<()> {
+    let mut max_abs = 0.0_f64;
+    for value in subset_weights.iter().take(max_k + 1) {
+        if !value.is_finite() {
+            return Err(value_error(
+                "conditional likelihood weights are numerically unstable",
+            ));
+        }
+        max_abs = max_abs.max(value.abs());
+    }
+
+    for k in 0..=max_k {
+        let offset = k * num_covariates;
+        for value in &weighted_sums[offset..offset + num_covariates] {
+            if !value.is_finite() {
+                return Err(value_error(
+                    "conditional likelihood sums are numerically unstable",
+                ));
+            }
+            max_abs = max_abs.max(value.abs());
+        }
+    }
+
+    if max_abs > 1e100 {
+        for value in subset_weights.iter_mut().take(max_k + 1) {
+            *value /= max_abs;
+        }
+        for k in 0..=max_k {
+            let offset = k * num_covariates;
+            for value in &mut weighted_sums[offset..offset + num_covariates] {
+                *value /= max_abs;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -372,5 +475,25 @@ mod tests {
         assert_eq!(ratios.len(), 2);
         assert!(ratios.iter().all(|ratio| ratio.is_finite()));
         assert!(model.predict(vec![1.0, 1.0]).unwrap().is_finite());
+    }
+
+    #[test]
+    fn exact_subset_expectation_handles_multiple_cases() {
+        let rows = [vec![2.0], vec![3.0], vec![0.0]];
+        let covariates = rows.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let linear_predictors = vec![2.0, 3.0, 0.0];
+
+        let expected = exact_subset_expected_sums(&covariates, &linear_predictors, 2, 1).unwrap();
+
+        let w01 = (2.0_f64 + 3.0).exp();
+        let w02 = 2.0_f64.exp();
+        let w12 = 3.0_f64.exp();
+        let denominator = w01 + w02 + w12;
+        let manual = (5.0 * w01 + 2.0 * w02 + 3.0 * w12) / denominator;
+        let softmax_approximation = 2.0 * (2.0 * 2.0_f64.exp() + 3.0 * 3.0_f64.exp())
+            / (2.0_f64.exp() + 3.0_f64.exp() + 1.0);
+
+        assert!((expected[0] - manual).abs() < 1e-12);
+        assert!((expected[0] - softmax_approximation).abs() > 1e-2);
     }
 }

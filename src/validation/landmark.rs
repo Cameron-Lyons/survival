@@ -1,7 +1,11 @@
 use crate::constants::{
-    PARALLEL_THRESHOLD_SMALL, clamped_normal_ci, exp_ci, z_score_for_confidence,
+    PARALLEL_THRESHOLD_SMALL, clamped_normal_ci, exp_ci, same_time, z_score_for_confidence,
 };
 use crate::internal::statistical::normal_cdf as norm_cdf;
+use crate::internal::validation::{
+    validate_binary_i32, validate_confidence_level, validate_finite, validate_no_nan,
+};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[derive(Debug, Clone)]
@@ -41,6 +45,34 @@ impl LandmarkResult {
         }
     }
 }
+
+fn validate_landmark_survival_inputs(time: &[f64], status: &[i32]) -> PyResult<()> {
+    if status.len() != time.len() {
+        return Err(PyValueError::new_err(format!(
+            "time and status must have same length, got {} and {}",
+            time.len(),
+            status.len()
+        )));
+    }
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_binary_i32(status, "status")?;
+    Ok(())
+}
+
+fn validate_finite_scalar(value: f64, name: &str) -> PyResult<()> {
+    if !value.is_finite() {
+        return Err(PyValueError::new_err(format!("{name} must be finite")));
+    }
+    Ok(())
+}
+
+fn validate_confidence_option(confidence_level: Option<f64>) -> PyResult<f64> {
+    let confidence = confidence_level.unwrap_or(0.95);
+    validate_confidence_level(confidence)?;
+    Ok(confidence)
+}
+
 pub(crate) fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> LandmarkResult {
     let n = time.len();
     let mut new_time = Vec::new();
@@ -72,6 +104,8 @@ pub fn landmark_analysis(
     status: Vec<i32>,
     landmark_time: f64,
 ) -> PyResult<LandmarkResult> {
+    validate_landmark_survival_inputs(&time, &status)?;
+    validate_finite_scalar(landmark_time, "landmark_time")?;
     Ok(compute_landmark(&time, &status, landmark_time))
 }
 pub(crate) fn compute_landmarks_parallel(
@@ -90,6 +124,9 @@ pub fn landmark_analysis_batch(
     status: Vec<i32>,
     landmark_times: Vec<f64>,
 ) -> PyResult<Vec<LandmarkResult>> {
+    validate_landmark_survival_inputs(&time, &status)?;
+    validate_no_nan(&landmark_times, "landmark_times")?;
+    validate_finite(&landmark_times, "landmark_times")?;
     Ok(compute_landmarks_parallel(&time, &status, &landmark_times))
 }
 #[derive(Debug, Clone)]
@@ -148,11 +185,7 @@ pub(crate) fn compute_conditional_survival(
         };
     }
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
     let mut surv_given = 1.0;
     let mut surv_target = 1.0;
     let mut var_given = 0.0;
@@ -164,7 +197,7 @@ pub(crate) fn compute_conditional_survival(
         let current_time = time[indices[i]];
         let mut events = 0.0;
         let mut removed = 0.0;
-        while i < n && time[indices[i]] == current_time {
+        while i < n && same_time(time[indices[i]], current_time) {
             removed += 1.0;
             if status[indices[i]] == 1 {
                 events += 1.0;
@@ -173,20 +206,20 @@ pub(crate) fn compute_conditional_survival(
         }
         if events > 0.0 && total_at_risk > 0.0 {
             let hazard = events / total_at_risk;
-            if current_time <= given_time {
+            if current_time <= given_time || same_time(current_time, given_time) {
                 surv_given *= 1.0 - hazard;
                 if total_at_risk > events {
                     var_given += events / (total_at_risk * (total_at_risk - events));
                 }
             }
-            if current_time <= target_time {
+            if current_time <= target_time || same_time(current_time, target_time) {
                 surv_target *= 1.0 - hazard;
                 if total_at_risk > events {
                     var_target += events / (total_at_risk * (total_at_risk - events));
                 }
             }
         }
-        if current_time <= given_time {
+        if current_time <= given_time || same_time(current_time, given_time) {
             n_at_given = (total_at_risk - removed) as usize;
         }
         total_at_risk -= removed;
@@ -222,7 +255,10 @@ pub fn conditional_survival(
     target_time: f64,
     confidence_level: Option<f64>,
 ) -> PyResult<ConditionalSurvivalResult> {
-    let conf = confidence_level.unwrap_or(0.95);
+    validate_landmark_survival_inputs(&time, &status)?;
+    validate_finite_scalar(given_time, "given_time")?;
+    validate_finite_scalar(target_time, "target_time")?;
+    let conf = validate_confidence_option(confidence_level)?;
     Ok(compute_conditional_survival(
         &time,
         &status,
@@ -301,11 +337,7 @@ pub(crate) fn compute_hazard_ratio(
     let g1 = unique_groups[0];
     let g2 = unique_groups[1];
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
     let mut n1_at_risk = 0.0;
     let mut n2_at_risk = 0.0;
     for &grp in group {
@@ -324,7 +356,7 @@ pub(crate) fn compute_hazard_ratio(
         let mut d2 = 0.0;
         let mut r1 = 0.0;
         let mut r2 = 0.0;
-        while i < n && time[indices[i]] == current_time {
+        while i < n && same_time(time[indices[i]], current_time) {
             let idx = indices[i];
             if group[idx] == g1 {
                 r1 += 1.0;
@@ -403,7 +435,15 @@ pub fn hazard_ratio(
     group: Vec<i32>,
     confidence_level: Option<f64>,
 ) -> PyResult<HazardRatioResult> {
-    let conf = confidence_level.unwrap_or(0.95);
+    validate_landmark_survival_inputs(&time, &status)?;
+    if group.len() != time.len() {
+        return Err(PyValueError::new_err(format!(
+            "group must have same length as time, got {} and {}",
+            group.len(),
+            time.len()
+        )));
+    }
+    let conf = validate_confidence_option(confidence_level)?;
     Ok(compute_hazard_ratio(&time, &status, &group, conf))
 }
 #[derive(Debug, Clone)]
@@ -464,11 +504,7 @@ pub(crate) fn compute_survival_at_times(
             .collect();
     }
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
     let mut event_times: Vec<f64> = Vec::new();
     let mut survival_vals: Vec<f64> = Vec::new();
     let mut var_vals: Vec<f64> = Vec::new();
@@ -483,7 +519,7 @@ pub(crate) fn compute_survival_at_times(
         let current_time = time[indices[i]];
         let mut events = 0.0;
         let mut removed = 0.0;
-        while i < n && time[indices[i]] == current_time {
+        while i < n && same_time(time[indices[i]], current_time) {
             removed += 1.0;
             if status[indices[i]] == 1 {
                 events += 1.0;
@@ -509,11 +545,12 @@ pub(crate) fn compute_survival_at_times(
         eval_times
             .par_iter()
             .map(|&t| {
-                let (survival, var, n_risk, n_ev) = if event_times.is_empty() || t < event_times[0]
+                let (survival, var, n_risk, n_ev) = if event_times.is_empty()
+                    || (t < event_times[0] && !same_time(t, event_times[0]))
                 {
                     (1.0, 0.0, n, 0)
                 } else {
-                    let idx = event_times.partition_point(|&et| et <= t);
+                    let idx = event_times.partition_point(|&et| et <= t || same_time(et, t));
                     if idx == 0 {
                         (1.0, 0.0, n, 0)
                     } else {
@@ -540,10 +577,12 @@ pub(crate) fn compute_survival_at_times(
     } else {
         let mut results = Vec::with_capacity(eval_times.len());
         for &t in eval_times {
-            let (survival, var, n_risk, n_ev) = if event_times.is_empty() || t < event_times[0] {
+            let (survival, var, n_risk, n_ev) = if event_times.is_empty()
+                || (t < event_times[0] && !same_time(t, event_times[0]))
+            {
                 (1.0, 0.0, n, 0)
             } else {
-                let idx = event_times.partition_point(|&et| et <= t);
+                let idx = event_times.partition_point(|&et| et <= t || same_time(et, t));
                 if idx == 0 {
                     (1.0, 0.0, n, 0)
                 } else {
@@ -578,7 +617,10 @@ pub fn survival_at_times(
     eval_times: Vec<f64>,
     confidence_level: Option<f64>,
 ) -> PyResult<Vec<SurvivalAtTimeResult>> {
-    let conf = confidence_level.unwrap_or(0.95);
+    validate_landmark_survival_inputs(&time, &status)?;
+    validate_no_nan(&eval_times, "eval_times")?;
+    validate_finite(&eval_times, "eval_times")?;
+    let conf = validate_confidence_option(confidence_level)?;
     Ok(compute_survival_at_times(&time, &status, &eval_times, conf))
 }
 #[derive(Debug, Clone)]
@@ -658,7 +700,10 @@ pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -
     for i in 0..n {
         let t = time[i];
         for j in 0..n_intervals {
-            if t >= breaks[j] && t < breaks[j + 1] {
+            let is_final_interval = j + 1 == n_intervals;
+            if t >= breaks[j]
+                && (t < breaks[j + 1] || (is_final_interval && same_time(t, breaks[j + 1])))
+            {
                 if status[i] == 1 {
                     n_deaths[j] += 1.0;
                 } else {
@@ -710,8 +755,57 @@ pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -
         se_survival,
     }
 }
+
+fn validate_life_table_inputs(time: &[f64], status: &[i32], breaks: &[f64]) -> PyResult<()> {
+    if status.len() != time.len() {
+        return Err(PyValueError::new_err(format!(
+            "time and status must have same length, got {} and {}",
+            time.len(),
+            status.len()
+        )));
+    }
+    if breaks.len() < 2 {
+        return Err(PyValueError::new_err(
+            "breaks must define at least one interval",
+        ));
+    }
+
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_no_nan(breaks, "breaks")?;
+    validate_finite(breaks, "breaks")?;
+    validate_binary_i32(status, "status")?;
+
+    for (index, window) in breaks.windows(2).enumerate() {
+        if window[1] <= window[0] || same_time(window[0], window[1]) {
+            return Err(PyValueError::new_err(format!(
+                "breaks must be strictly increasing; got {} then {} at positions {} and {}",
+                window[0],
+                window[1],
+                index,
+                index + 1
+            )));
+        }
+    }
+
+    let first = breaks[0];
+    let last = breaks[breaks.len() - 1];
+    for (index, &value) in time.iter().enumerate() {
+        if (value < first && !same_time(value, first)) || (value > last && !same_time(value, last))
+        {
+            return Err(PyValueError::new_err(format!(
+                "time values must fall within the break range; got {} at index {} outside [{}, {}]",
+                value, index, first, last
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[pyfunction]
 pub fn life_table(time: Vec<f64>, status: Vec<i32>, breaks: Vec<f64>) -> PyResult<LifeTableResult> {
+    validate_life_table_inputs(&time, &status, &breaks)?;
     Ok(compute_life_table(&time, &status, &breaks))
 }
 
@@ -772,6 +866,99 @@ mod tests {
     }
 
     #[test]
+    fn test_landmark_public_wrappers_reject_malformed_inputs() {
+        let err = landmark_analysis(vec![1.0], vec![], 0.5).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("time and status must have same length")
+        );
+
+        let err = landmark_analysis(vec![f64::NAN], vec![1], 0.5).unwrap_err();
+        assert!(err.to_string().contains("time contains NaN"));
+
+        let err = landmark_analysis(vec![1.0], vec![2], 0.5).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("status must contain only 0/1 values")
+        );
+
+        let err = landmark_analysis_batch(vec![1.0], vec![1], vec![f64::INFINITY]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("landmark_times contains non-finite")
+        );
+
+        let err = conditional_survival(vec![1.0], vec![1], f64::NAN, 2.0, None).unwrap_err();
+        assert!(err.to_string().contains("given_time must be finite"));
+
+        let err = conditional_survival(vec![1.0], vec![1], 0.5, 2.0, Some(1.0)).unwrap_err();
+        assert!(err.to_string().contains("confidence_level"));
+
+        let err = hazard_ratio(vec![1.0], vec![1], vec![], None).unwrap_err();
+        assert!(err.to_string().contains("group must have same length"));
+
+        let err = survival_at_times(vec![1.0], vec![1], vec![f64::NAN], None).unwrap_err();
+        assert!(err.to_string().contains("eval_times contains NaN"));
+    }
+
+    #[test]
+    fn test_conditional_survival_groups_near_tied_event_times() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let status = vec![1, 1, 0, 0];
+
+        let expected = compute_conditional_survival(&exact_time, &status, 1.0, 2.0, 0.95);
+        let actual = compute_conditional_survival(&near_time, &status, 1.0, 2.0, 0.95);
+
+        assert!((actual.conditional_survival - expected.conditional_survival).abs() < 1e-12);
+        assert!((actual.ci_lower - expected.ci_lower).abs() < 1e-12);
+        assert!((actual.ci_upper - expected.ci_upper).abs() < 1e-12);
+        assert_eq!(actual.n_at_risk, expected.n_at_risk);
+    }
+
+    #[test]
+    fn test_hazard_ratio_groups_near_tied_event_times() {
+        let exact_time = vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0];
+        let near_time = vec![
+            1.0,
+            1.0 + crate::constants::TIME_EPSILON / 2.0,
+            2.0,
+            2.0 + crate::constants::TIME_EPSILON / 2.0,
+            3.0,
+            3.0,
+        ];
+        let status = vec![1, 1, 1, 0, 0, 0];
+        let group = vec![0, 1, 0, 1, 0, 1];
+
+        let expected = compute_hazard_ratio(&exact_time, &status, &group, 0.95);
+        let actual = compute_hazard_ratio(&near_time, &status, &group, 0.95);
+
+        assert!((actual.hazard_ratio - expected.hazard_ratio).abs() < 1e-12);
+        assert!((actual.se_log_hr - expected.se_log_hr).abs() < 1e-12);
+        assert!((actual.z_statistic - expected.z_statistic).abs() < 1e-12);
+        assert!((actual.p_value - expected.p_value).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_survival_at_times_groups_near_tied_event_times() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let status = vec![1, 1, 0, 0];
+
+        let expected = compute_survival_at_times(&exact_time, &status, &[1.0, 2.0], 0.95);
+        let actual = compute_survival_at_times(&near_time, &status, &[1.0, 2.0], 0.95);
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert!((actual.survival - expected.survival).abs() < 1e-12);
+            assert!((actual.ci_lower - expected.ci_lower).abs() < 1e-12);
+            assert!((actual.ci_upper - expected.ci_upper).abs() < 1e-12);
+            assert_eq!(actual.n_at_risk, expected.n_at_risk);
+            assert_eq!(actual.n_events, expected.n_events);
+        }
+    }
+
+    #[test]
     fn test_compute_life_table_basic() {
         let time = vec![1.5, 2.5, 3.5, 4.5, 5.5];
         let status = vec![1, 1, 0, 1, 0];
@@ -795,6 +982,50 @@ mod tests {
         assert_eq!(result.interval_start.len(), 3);
         assert!(result.n_deaths.iter().all(|&d| d == 0.0));
         assert!(result.survival.iter().all(|&s| s == 1.0));
+    }
+
+    #[test]
+    fn test_life_table_includes_final_break() {
+        let result = life_table(vec![2.0], vec![1], vec![0.0, 1.0, 2.0]).unwrap();
+
+        assert_eq!(result.n_deaths, vec![0.0, 1.0]);
+        assert_eq!(result.n_censored, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_life_table_rejects_malformed_public_inputs() {
+        let err = life_table(vec![1.0], vec![], vec![0.0, 2.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("time and status must have same length")
+        );
+
+        let err = life_table(vec![1.0], vec![1], vec![0.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("breaks must define at least one interval")
+        );
+
+        let err = life_table(vec![f64::NAN], vec![1], vec![0.0, 2.0]).unwrap_err();
+        assert!(err.to_string().contains("time contains NaN"));
+
+        let err = life_table(vec![1.0], vec![2], vec![0.0, 2.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("status must contain only 0/1 values")
+        );
+
+        let err = life_table(vec![1.0], vec![1], vec![0.0, 0.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("breaks must be strictly increasing")
+        );
+
+        let err = life_table(vec![3.0], vec![1], vec![0.0, 2.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("time values must fall within the break range")
+        );
     }
 
     #[test]

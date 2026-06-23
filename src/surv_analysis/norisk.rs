@@ -46,12 +46,25 @@ fn validate_sort_indices(values: &[i32], n: usize, name: &str) -> PyResult<()> {
 }
 
 fn validate_strata_boundaries(values: &[i32], n: usize) -> PyResult<()> {
+    if values.len() == n && values.iter().all(|&value| value == 0 || value == 1) {
+        return Ok(());
+    }
+
+    let mut previous = None;
     for (idx, &value) in values.iter().enumerate() {
         if value < 0 || value as usize > n {
             return Err(value_error(format!(
                 "strata values must be between 0 and {n}; got {value} at index {idx}"
             )));
         }
+        if let Some(previous_value) = previous
+            && value <= previous_value
+        {
+            return Err(value_error(format!(
+                "strata values must be strictly increasing; got {value} after {previous_value} at index {idx}"
+            )));
+        }
+        previous = Some(value);
     }
     Ok(())
 }
@@ -133,9 +146,12 @@ pub fn norisk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::common::initialize_python;
 
     #[test]
     fn norisk_rejects_mismatched_lengths() {
+        initialize_python();
+
         let err = match norisk(
             vec![0.0, 1.0],
             vec![1.0],
@@ -153,6 +169,8 @@ mod tests {
 
     #[test]
     fn norisk_rejects_negative_sort_index() {
+        initialize_python();
+
         let err = match norisk(vec![0.0], vec![1.0], vec![1], vec![-1], vec![0], vec![]) {
             Ok(_) => panic!("negative sort index should fail"),
             Err(err) => err,
@@ -163,6 +181,8 @@ mod tests {
 
     #[test]
     fn norisk_rejects_duplicate_sort_index() {
+        initialize_python();
+
         let err = match norisk(
             vec![0.0, 1.0],
             vec![1.0, 2.0],
@@ -180,11 +200,52 @@ mod tests {
 
     #[test]
     fn norisk_rejects_non_binary_status() {
+        initialize_python();
+
         let err = match norisk(vec![0.0], vec![1.0], vec![2], vec![0], vec![0], vec![]) {
             Ok(_) => panic!("non-binary status should fail"),
             Err(err) => err,
         };
 
         assert!(err.to_string().contains("status must contain only 0/1"));
+    }
+
+    #[test]
+    fn norisk_rejects_unordered_strata_boundaries() {
+        initialize_python();
+
+        let err = match norisk(
+            vec![0.0, 1.0, 2.0],
+            vec![1.0, 2.0, 3.0],
+            vec![1, 0, 1],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            vec![2, 1],
+        ) {
+            Ok(_) => panic!("unordered strata boundaries should fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("strata values must be strictly increasing")
+        );
+    }
+
+    #[test]
+    fn norisk_accepts_marker_style_strata_vector() {
+        initialize_python();
+
+        let result = norisk(
+            vec![0.0, 1.0, 2.0],
+            vec![1.0, 2.0, 3.0],
+            vec![1, 0, 1],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            vec![1, 0, 0],
+        )
+        .expect("marker-style strata should remain accepted");
+
+        assert_eq!(result.len(), 3);
     }
 }

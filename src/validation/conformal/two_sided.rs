@@ -151,7 +151,7 @@ pub fn two_sided_conformal_calibrate(
         f64::INFINITY
     } else {
         let mut sorted_scores = censored_scores.clone();
-        sorted_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted_scores.sort_by(f64::total_cmp);
         let idx = ((1.0 - alpha_half) * sorted_scores.len() as f64) as usize;
         sorted_scores[idx.min(sorted_scores.len() - 1)]
     };

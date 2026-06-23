@@ -21,6 +21,21 @@ test_that("R formula wrappers delegate to the Python survival package", {
   counting_frame <- as.data.frame(counting_response)
   expect_equal(names(counting_frame), c("start", "stop", "status", "type"))
   expect_equal(counting_frame$stop, c(2, 3))
+  named_response <- Surv(time = data$time, status = data$status)
+  named_frame <- as.data.frame(named_response)
+  expect_equal(named_frame$time, data$time)
+  expect_equal(named_frame$status, data$status)
+  named_counting <- Surv(start = c(0, 1), stop = c(2, 3), status = c(1, 0))
+  named_counting_frame <- as.data.frame(named_counting)
+  expect_equal(named_counting_frame$start, c(0, 1))
+  expect_equal(named_counting_frame$stop, c(2, 3))
+  named_interval2 <- Surv(time1 = c(-Inf, 2), stop = c(1, Inf), type = "interval2")
+  named_interval2_frame <- as.data.frame(named_interval2)
+  expect_equal(named_interval2_frame$status, c(2, 0))
+  expect_error(
+    Surv(time = data$time, start = data$time, status = data$status),
+    "multiple time"
+  )
   expect_true(any(grepl("status", capture.output(print(response)), fixed = TRUE)))
 
   cox_control <- coxph.control(iter.max = 0, eps = 1e-05, toler.chol = 1e-08, timefix = FALSE)
@@ -39,9 +54,31 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(km, "survival_py_survfit")
   km_from_string <- survfit("Surv(time, status) ~ group", data = data)
   expect_s3_class(km_from_string, "survival_py_survfit")
+  km_from_response <- survfit(response)
+  expect_s3_class(km_from_response, "survival_py_survfit")
+  grouped_from_response <- survfit(response, group = data$group, se.fit = FALSE)
+  expect_s3_class(grouped_from_response, "survival_py_survfit")
+  expect_equal(names(grouped_from_response), c("control", "treated"))
+  grouped_no_se_frame <- as.data.frame(grouped_from_response)
+  expect_s3_class(grouped_no_se_frame, "data.frame")
+  expect_false(any(c("std.err", "lower", "upper", "std.chaz") %in% names(grouped_no_se_frame)))
+  expect_true(all(vapply(grouped_no_se_frame, length, integer(1)) == nrow(grouped_no_se_frame)))
+  omitted_direct <- survfit(
+    response,
+    group = c("control", NA, "treated", "treated"),
+    subset = c(TRUE, TRUE, TRUE, FALSE),
+    na.action = stats::na.omit
+  )
+  omitted_manual <- survfit(
+    Surv(data$time[c(1, 3)], data$status[c(1, 3)]),
+    group = data$group[c(1, 3)]
+  )
+  expect_equal(as.data.frame(omitted_direct), as.data.frame(omitted_manual))
   km_frame <- as.data.frame(km)
   expect_s3_class(km_frame, "data.frame")
   expect_true(all(c("strata", "time", "surv") %in% names(km_frame)))
+  response_frame <- as.data.frame(km_from_response)
+  expect_true(all(c("time", "surv") %in% names(response_frame)))
   km_summary <- summary(km)
   expect_s3_class(km_summary, "summary.survival_py_survfit")
   expect_s3_class(km_summary, "data.frame")
@@ -55,6 +92,23 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(aft_fit, "survival_py_survreg")
   expect_s3_class(aft_fit, "survival_py_model")
   expect_equal(df.residual(aft_fit), nobs(aft_fit) - attr(logLik(aft_fit), "df"))
+  direct_cox_fit <- coxph(response, x = data.frame(x = data$x), max_iter = 0)
+  direct_aft_fit <- survreg(response, x = data.frame(x = data$x), control = survreg_control)
+  expect_equal(names(coef(direct_cox_fit)), "x")
+  expect_equal(names(coef(direct_aft_fit)), "x")
+  direct_prediction <- predict(direct_cox_fit, data.frame(x = c(0.5, 0.7)))
+  expect_type(direct_prediction, "double")
+  expect_length(direct_prediction, 2L)
+  direct_terms <- predict(direct_cox_fit, data.frame(x = c(0.5, 0.7)), type = "terms", terms = "x")
+  expect_true(is.matrix(direct_terms))
+  expect_equal(colnames(direct_terms), "x")
+  direct_aft_terms <- predict(direct_aft_fit, data.frame(x = c(0.5, 0.7)), type = "terms", terms = "x")
+  expect_true(is.matrix(direct_aft_terms))
+  expect_equal(colnames(direct_aft_terms), "x")
+  direct_curves <- survfit(direct_cox_fit, newdata = data.frame(x = c(0.5, 0.7)), se.fit = FALSE)
+  direct_curves_frame <- as.data.frame(direct_curves)
+  expect_false("strata" %in% names(direct_curves_frame))
+  expect_true(all(c("curve", "time", "surv") %in% names(direct_curves_frame)))
   aft_print <- capture.output(print(aft_fit))
   expect_true(any(grepl("Call:", aft_print, fixed = TRUE)))
   expect_true(any(grepl("Coefficients:", aft_print, fixed = TRUE)))
@@ -134,10 +188,20 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(cox_curve_frame, "data.frame")
   expect_true(all(c("curve", "time", "surv", "cumhaz", "linear.predictor") %in% names(cox_curve_frame)))
   expect_equal(length(unique(cox_curve_frame$curve)), 2L)
+  stratified_curves <- survfit(
+    coxph(Surv(time, status) ~ x + strata(group), data = data, max_iter = 0),
+    newdata = data.frame(x = c(0.5, 0.7), group = c("control", "treated")),
+    se.fit = FALSE
+  )
+  stratified_curve_frame <- as.data.frame(stratified_curves)
+  expect_equal(unique(stratified_curve_frame$strata), c(1L, 2L))
 
   hazard_frame <- as.data.frame(basehaz(fit))
   expect_s3_class(hazard_frame, "data.frame")
   expect_true(all(c("time", "cumhaz") %in% names(hazard_frame)))
+  stratified_fit <- coxph(Surv(time, status) ~ x + strata(group), data = data, max_iter = 0)
+  stratified_hazard_frame <- as.data.frame(basehaz(stratified_fit, centered = FALSE))
+  expect_equal(unique(stratified_hazard_frame$strata), c("control", "treated"))
   hazard_summary <- summary(basehaz(fit))
   expect_s3_class(hazard_summary, "summary.survival_py_basehaz")
   expect_true(all(c("time", "cumhaz") %in% names(hazard_summary)))
@@ -148,6 +212,29 @@ test_that("R formula wrappers delegate to the Python survival package", {
   zph_summary <- summary(cox.zph(fit))
   expect_s3_class(zph_summary, "summary.survival_py_cox_zph")
   expect_true(all(c("name", "chisq", "p") %in% names(zph_summary)))
+
+  direct_concordance <- concordance(
+    response,
+    scores = data$x,
+    weights = data$wt,
+    cluster = c("a", NA, "b", "b"),
+    subset = c(TRUE, TRUE, TRUE, FALSE),
+    na.action = stats::na.omit,
+    influence = 1
+  )
+  formula_concordance <- concordance(
+    "Surv(time, status) ~ x",
+    data = data[c(1, 3), ],
+    weights = "wt",
+    cluster = c("a", "b"),
+    influence = 1
+  )
+  direct_concordance_frame <- as.data.frame(direct_concordance)
+  formula_concordance_frame <- as.data.frame(formula_concordance)
+  expect_s3_class(direct_concordance_frame, "data.frame")
+  expect_equal(direct_concordance_frame$concordance, formula_concordance_frame$concordance)
+  expect_equal(direct_concordance_frame$variance, formula_concordance_frame$variance)
+  expect_equal(as.numeric(direct_concordance$var), as.numeric(formula_concordance$var))
 
   aft_terms <- predict(aft_fit, data.frame(x = c(0.5, 0.7)), type = "terms")
   expect_true(is.matrix(aft_terms))
@@ -343,14 +430,32 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
   bridged_diff <- survdiff(Surv(time, status) ~ group, data = data)
   reference_diff <- survival::survdiff(survival::Surv(time, status) ~ group, data = data)
   bridged_diff_frame <- as.data.frame(bridged_diff)
+  direct_group <- data$group
+  direct_group[2L] <- NA
+  direct_diff <- survdiff(
+    Surv(data$time, data$status),
+    group = direct_group,
+    subset = c(rep(TRUE, 7), FALSE),
+    na.action = stats::na.omit
+  )
+  direct_reference <- survival::survdiff(
+    survival::Surv(time, status) ~ group,
+    data = data[c(1, 3:7), ]
+  )
+  direct_diff_frame <- as.data.frame(direct_diff)
 
   expect_equal(bridged_diff_frame$observed, unname(reference_diff$obs), tolerance = 1e-06)
   expect_equal(bridged_diff_frame$expected, unname(reference_diff$exp), tolerance = 1e-06)
+  expect_equal(direct_diff_frame$observed, unname(direct_reference$obs), tolerance = 1e-06)
+  expect_equal(direct_diff_frame$expected, unname(direct_reference$exp), tolerance = 1e-06)
   expect_equal(
     bridged_diff_frame$variance,
     unname(diag(reference_diff$var)),
     tolerance = 1e-06
   )
+  expect_equal(direct_diff_frame$variance, unname(diag(direct_reference$var)), tolerance = 1e-06)
   expect_equal(as.numeric(bridged_diff$statistic), reference_diff$chisq, tolerance = 1e-06)
   expect_equal(as.numeric(bridged_diff$p_value), reference_diff$pvalue, tolerance = 1e-06)
+  expect_equal(as.numeric(direct_diff$statistic), direct_reference$chisq, tolerance = 1e-06)
+  expect_equal(as.numeric(direct_diff$p_value), direct_reference$pvalue, tolerance = 1e-06)
 })

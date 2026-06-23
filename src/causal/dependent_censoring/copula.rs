@@ -302,11 +302,7 @@ pub fn copula_censoring_model(
         .collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let marginal_survival_t = estimate_km(&time, &event, &eval_times);
     let marginal_survival_c = estimate_km(&time, &censoring_indicator, &eval_times);
@@ -440,11 +436,7 @@ pub fn copula_censoring_model(
 fn estimate_km(time: &[f64], event: &[i32], eval_times: &[f64]) -> Vec<f64> {
     let n = time.len();
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut survival = 1.0;
     let mut at_risk = n as f64;

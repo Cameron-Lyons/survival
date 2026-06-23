@@ -35,11 +35,7 @@ pub fn outlier_detection_cox(
     validate_positive_finite_scalar("outlier_threshold", outlier_threshold)?;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let eta: Vec<f64> = (0..n)
         .map(|i| {

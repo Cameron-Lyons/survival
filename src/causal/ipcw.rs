@@ -182,15 +182,11 @@ fn compute_ipcw_weights_typed(input: &IPCWInput, config: &IPCWConfig) -> PyResul
     let censored: Vec<i32> = status.iter().map(|&s| if s == 0 { 1 } else { 0 }).collect();
 
     let mut unique_times: Vec<f64> = time.clone();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     let mut sorted_indices: Vec<usize> = (0..n_obs).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut censoring_probs = vec![1.0; n_obs];
     let mut risk_start = 0usize;
@@ -275,11 +271,7 @@ pub fn compute_ipcw_weights(
 
 fn compute_km_censoring(time: &[f64], status: &[i32], n: usize) -> Vec<f64> {
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut km_surv = vec![1.0; n];
     let mut cum_surv = 1.0;

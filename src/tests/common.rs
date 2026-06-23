@@ -65,11 +65,7 @@ pub(crate) fn aml_combined() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
 pub(crate) fn aml_combined_sorted() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
     let (time, status, group) = aml_combined();
     let mut indices: Vec<usize> = (0..time.len()).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
     let time_sorted: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
     let status_sorted: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
     let group_sorted: Vec<i32> = indices.iter().map(|&i| group[i]).collect();

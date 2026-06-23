@@ -1,4 +1,5 @@
-use crate::constants::{CONCORDANCE_COUNT_SIZE, PARALLEL_THRESHOLD_LARGE, TIME_EPSILON};
+use crate::constants::{CONCORDANCE_COUNT_SIZE, PARALLEL_THRESHOLD_LARGE, TIME_EPSILON, same_time};
+use crate::internal::fenwick::FenwickTree;
 use crate::internal::statistical::{
     ConcordanceSummary, ConcordanceTimeWeight, concordance_index_with_horizon,
     concordance_summary_with_horizon, concordance_summary_with_horizon_and_weights,
@@ -216,10 +217,23 @@ fn concordance_time_weight_multiplier(
 }
 
 fn multiplier_at(multipliers: &[(f64, f64)], time: f64) -> f64 {
-    multipliers
-        .binary_search_by(|(candidate, _)| candidate.total_cmp(&time))
-        .map(|idx| multipliers[idx].1)
-        .unwrap_or(0.0)
+    match multipliers.binary_search_by(|(candidate, _)| candidate.total_cmp(&time)) {
+        Ok(idx) => multipliers[idx].1,
+        Err(idx) => {
+            if idx < multipliers.len() && same_time(multipliers[idx].0, time) {
+                multipliers[idx].1
+            } else if idx > 0 && same_time(multipliers[idx - 1].0, time) {
+                multipliers[idx - 1].1
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
+#[inline]
+fn concordance_time_precedes(left: f64, right: f64) -> bool {
+    left < right && !same_time(left, right)
 }
 
 fn right_concordance_time_weight_multipliers(
@@ -235,7 +249,7 @@ fn right_concordance_time_weight_multipliers(
             .filter_map(|(&time, &event)| (event == 1).then_some(time))
             .collect();
         values.sort_by(|left, right| left.total_cmp(right));
-        values.dedup_by(|left, right| *left == *right);
+        values.dedup_by(|left, right| same_time(*left, *right));
         return values.into_iter().map(|time| (time, 1.0)).collect();
     }
 
@@ -243,32 +257,34 @@ fn right_concordance_time_weight_multipliers(
     let mut survival = 1.0;
     let mut censoring_survival = 1.0;
     let mut multipliers = Vec::new();
-    let mut unique_times = time.to_vec();
-    unique_times.sort_by(|left, right| left.total_cmp(right));
-    unique_times.dedup_by(|left, right| *left == *right);
+    let mut nrisk = total_weight;
+    let mut time_order: Vec<usize> = (0..time.len()).collect();
+    time_order.sort_by(|&left, &right| {
+        time[left]
+            .total_cmp(&time[right])
+            .then_with(|| left.cmp(&right))
+    });
 
-    for event_time in unique_times {
-        let nrisk = time
-            .iter()
-            .zip(weights.iter())
-            .filter_map(|(&value, &weight)| (value >= event_time).then_some(weight))
-            .sum::<f64>();
-        let death_weight = time
-            .iter()
-            .zip(status.iter())
-            .zip(weights.iter())
-            .filter_map(|((&value, &event), &weight)| {
-                (value == event_time && event == 1).then_some(weight)
-            })
-            .sum::<f64>();
-        let censor_weight = time
-            .iter()
-            .zip(status.iter())
-            .zip(weights.iter())
-            .filter_map(|((&value, &event), &weight)| {
-                (value == event_time && event != 1).then_some(weight)
-            })
-            .sum::<f64>();
+    let mut group_start = 0;
+    while group_start < time_order.len() {
+        let event_time = time[time_order[group_start]];
+        let mut group_end = group_start + 1;
+        while group_end < time_order.len() && same_time(time[time_order[group_end]], event_time) {
+            group_end += 1;
+        }
+
+        let mut death_weight = 0.0;
+        let mut censor_weight = 0.0;
+        let mut group_weight = 0.0;
+        for &idx in &time_order[group_start..group_end] {
+            group_weight += weights[idx];
+            if status[idx] == 1 {
+                death_weight += weights[idx];
+            } else {
+                censor_weight += weights[idx];
+            }
+        }
+
         if death_weight > 0.0 {
             multipliers.push((
                 event_time,
@@ -287,6 +303,8 @@ fn right_concordance_time_weight_multipliers(
         if censor_weight > 0.0 && nrisk > 0.0 {
             censoring_survival *= ((nrisk - censor_weight) / nrisk).max(0.0);
         }
+        nrisk = (nrisk - group_weight).max(0.0);
+        group_start = group_end;
     }
     multipliers
 }
@@ -298,76 +316,109 @@ fn counting_concordance_time_weight_multipliers(
     weights: &[f64],
     time_weight: ConcordanceTimeWeight,
 ) -> Vec<(f64, f64)> {
-    let mut event_times: Vec<f64> = stop
+    let mut event_indices: Vec<usize> = status
         .iter()
-        .zip(status.iter())
-        .filter_map(|(&time, &event)| (event == 1).then_some(time))
+        .enumerate()
+        .filter_map(|(idx, &event)| (event == 1).then_some(idx))
         .collect();
-    event_times.sort_by(|left, right| left.total_cmp(right));
-    event_times.dedup_by(|left, right| *left == *right);
+    event_indices.sort_by(|&left, &right| {
+        stop[left]
+            .total_cmp(&stop[right])
+            .then_with(|| left.cmp(&right))
+    });
 
     if time_weight == ConcordanceTimeWeight::N {
-        return event_times.into_iter().map(|time| (time, 1.0)).collect();
+        let mut multipliers = Vec::new();
+        let mut group_start = 0;
+        while group_start < event_indices.len() {
+            let event_time = stop[event_indices[group_start]];
+            multipliers.push((event_time, 1.0));
+            group_start += 1;
+            while group_start < event_indices.len()
+                && stop[event_indices[group_start]] == event_time
+            {
+                group_start += 1;
+            }
+        }
+        return multipliers;
     }
 
     let total_weight = weights.iter().sum::<f64>();
     let mut survival = 1.0;
-    let mut multipliers = Vec::with_capacity(event_times.len());
-    for event_time in event_times {
-        let nrisk = start
-            .iter()
-            .zip(stop.iter())
-            .zip(weights.iter())
-            .filter_map(|((&entry, &exit), &weight)| {
-                (entry < event_time && event_time <= exit).then_some(weight)
-            })
-            .sum::<f64>();
+    let mut multipliers = Vec::new();
+    let mut start_order: Vec<usize> = (0..start.len()).collect();
+    start_order.sort_by(|&left, &right| {
+        start[left]
+            .total_cmp(&start[right])
+            .then_with(|| left.cmp(&right))
+    });
+    let mut stop_order: Vec<usize> = (0..stop.len()).collect();
+    stop_order.sort_by(|&left, &right| {
+        stop[left]
+            .total_cmp(&stop[right])
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut nrisk = 0.0;
+    let mut start_pos = 0;
+    let mut stop_pos = 0;
+    let mut group_start = 0;
+    while group_start < event_indices.len() {
+        let event_time = stop[event_indices[group_start]];
+        while start_pos < start_order.len() && start[start_order[start_pos]] < event_time {
+            nrisk += weights[start_order[start_pos]];
+            start_pos += 1;
+        }
+        while stop_pos < stop_order.len() && stop[stop_order[stop_pos]] < event_time {
+            nrisk -= weights[stop_order[stop_pos]];
+            stop_pos += 1;
+        }
+
+        let mut group_end = group_start + 1;
+        let mut death_weight = weights[event_indices[group_start]];
+        while group_end < event_indices.len() && stop[event_indices[group_end]] == event_time {
+            death_weight += weights[event_indices[group_end]];
+            group_end += 1;
+        }
         multipliers.push((
             event_time,
             concordance_time_weight_multiplier(time_weight, total_weight, survival, 1.0, nrisk),
         ));
-        let death_weight = stop
-            .iter()
-            .zip(status.iter())
-            .zip(weights.iter())
-            .filter_map(|((&time, &event), &weight)| {
-                (event == 1 && time == event_time).then_some(weight)
-            })
-            .sum::<f64>();
         if nrisk > 0.0 {
             survival *= ((nrisk - death_weight) / nrisk).max(0.0);
         }
+        group_start = group_end;
     }
     multipliers
 }
 
-fn rank_at_event<I>(
-    risk_scores: &[f64],
-    weights: &[f64],
-    event_idx: usize,
-    at_risk: I,
-) -> Option<(f64, f64)>
-where
-    I: IntoIterator<Item = usize>,
-{
-    let event_risk = risk_scores[event_idx];
-    let mut risk_weight = 0.0;
-    let mut greater = 0.0;
-    let mut lower = 0.0;
-    for idx in at_risk {
-        let weight = weights[idx];
-        risk_weight += weight;
-        let diff = risk_scores[idx] - event_risk;
-        if diff > CONCORDANCE_RISK_TIE_FLOOR {
-            greater += weight;
-        } else if diff < -CONCORDANCE_RISK_TIE_FLOOR {
-            lower += weight;
-        }
-    }
+fn rank_from_active_risk_set(
+    at_risk: &FenwickTree,
+    risk_levels: &[f64],
+    event_risk: f64,
+) -> Option<(f64, f64)> {
+    let risk_weight = at_risk.total();
     if risk_weight <= 0.0 {
         return None;
     }
+
+    let lower_end =
+        risk_levels.partition_point(|&risk| risk < event_risk - CONCORDANCE_RISK_TIE_FLOOR);
+    let not_greater_end =
+        risk_levels.partition_point(|&risk| risk <= event_risk + CONCORDANCE_RISK_TIE_FLOOR);
+    let lower = rank_prefix_weight_before(at_risk, lower_end);
+    let not_greater = rank_prefix_weight_before(at_risk, not_greater_end);
+    let greater = risk_weight - not_greater;
     Some(((lower - greater) / risk_weight, risk_weight))
+}
+
+#[inline]
+fn rank_prefix_weight_before(at_risk: &FenwickTree, end: usize) -> f64 {
+    if end == 0 {
+        0.0
+    } else {
+        at_risk.prefix_sum(end - 1)
+    }
 }
 
 fn right_concordance_rank_rows_for_vectors(
@@ -390,27 +441,60 @@ fn right_concordance_rank_rows_for_vectors(
             .then_with(|| left.cmp(&right))
     });
 
+    let mut risk_levels = risk_scores.to_vec();
+    risk_levels.sort_by(f64::total_cmp);
+    risk_levels.dedup();
+    let mut time_order: Vec<usize> = (0..time.len()).collect();
+    time_order.sort_by(|&left, &right| {
+        time[left]
+            .total_cmp(&time[right])
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut at_risk = FenwickTree::new(risk_levels.len());
+    for idx in 0..time.len() {
+        let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+        at_risk.update(rank, case_weights[idx]);
+    }
+    let mut time_cursor = 0usize;
     let mut rows = Vec::with_capacity(event_indices.len());
-    for event_idx in event_indices {
-        let event_time = time[event_idx];
-        let multiplier = multiplier_at(&multipliers, event_time);
-        if multiplier <= 0.0 {
-            continue;
-        }
-        let at_risk = time
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, &value)| (value >= event_time).then_some(idx));
-        if let Some((rank, risk_weight)) =
-            rank_at_event(risk_scores, case_weights, event_idx, at_risk)
+    let mut event_group_start = 0usize;
+    while event_group_start < event_indices.len() {
+        let event_time = time[event_indices[event_group_start]];
+        while time_cursor < time_order.len()
+            && concordance_time_precedes(time[time_order[time_cursor]], event_time)
         {
-            rows.push((
-                event_time,
-                rank,
-                risk_weight * multiplier,
-                case_weights[event_idx],
-            ));
+            let idx = time_order[time_cursor];
+            let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+            at_risk.update(rank, -case_weights[idx]);
+            time_cursor += 1;
         }
+
+        let mut event_group_end = event_group_start + 1;
+        while event_group_end < event_indices.len()
+            && same_time(time[event_indices[event_group_end]], event_time)
+        {
+            event_group_end += 1;
+        }
+
+        for &event_idx in &event_indices[event_group_start..event_group_end] {
+            let multiplier = multiplier_at(&multipliers, time[event_idx]);
+            if multiplier <= 0.0 {
+                continue;
+            }
+            if let Some((rank, risk_weight)) =
+                rank_from_active_risk_set(&at_risk, &risk_levels, risk_scores[event_idx])
+            {
+                rows.push((
+                    time[event_idx],
+                    rank,
+                    risk_weight * multiplier,
+                    case_weights[event_idx],
+                ));
+            }
+        }
+
+        event_group_start = event_group_end;
     }
     rows
 }
@@ -441,31 +525,73 @@ fn counting_concordance_rank_rows_for_vectors(
             .then_with(|| left.cmp(&right))
     });
 
+    let mut risk_levels = risk_scores.to_vec();
+    risk_levels.sort_by(f64::total_cmp);
+    risk_levels.dedup();
+    let mut start_order: Vec<usize> = (0..start.len()).collect();
+    start_order.sort_by(|&left, &right| {
+        start[left]
+            .total_cmp(&start[right])
+            .then_with(|| left.cmp(&right))
+    });
+    let mut stop_order: Vec<usize> = (0..stop.len()).collect();
+    stop_order.sort_by(|&left, &right| {
+        stop[left]
+            .total_cmp(&stop[right])
+            .then_with(|| left.cmp(&right))
+    });
+
     let mut rows = Vec::with_capacity(event_indices.len());
-    for event_idx in event_indices {
-        let event_time = stop[event_idx];
-        let multiplier = multiplier_at(&multipliers, event_time);
-        if multiplier <= 0.0 {
-            continue;
+    let mut at_risk = FenwickTree::new(risk_levels.len());
+    let mut active = vec![false; stop.len()];
+    let mut start_cursor = 0usize;
+    let mut stop_cursor = 0usize;
+    let mut event_group_start = 0usize;
+    while event_group_start < event_indices.len() {
+        let event_time = stop[event_indices[event_group_start]];
+        while start_cursor < start_order.len() && start[start_order[start_cursor]] < event_time {
+            let idx = start_order[start_cursor];
+            if !active[idx] {
+                let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+                at_risk.update(rank, case_weights[idx]);
+                active[idx] = true;
+            }
+            start_cursor += 1;
         }
-        let at_risk =
-            start
-                .iter()
-                .zip(stop.iter())
-                .enumerate()
-                .filter_map(|(idx, (&entry, &exit))| {
-                    (entry < event_time && event_time <= exit).then_some(idx)
-                });
-        if let Some((rank, risk_weight)) =
-            rank_at_event(risk_scores, case_weights, event_idx, at_risk)
+        while stop_cursor < stop_order.len() && stop[stop_order[stop_cursor]] < event_time {
+            let idx = stop_order[stop_cursor];
+            if active[idx] {
+                let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+                at_risk.update(rank, -case_weights[idx]);
+                active[idx] = false;
+            }
+            stop_cursor += 1;
+        }
+
+        let mut event_group_end = event_group_start + 1;
+        while event_group_end < event_indices.len()
+            && stop[event_indices[event_group_end]] == event_time
         {
-            rows.push((
-                event_time,
-                rank,
-                risk_weight * multiplier,
-                case_weights[event_idx],
-            ));
+            event_group_end += 1;
         }
+
+        let multiplier = multiplier_at(&multipliers, event_time);
+        if multiplier > 0.0 {
+            for &event_idx in &event_indices[event_group_start..event_group_end] {
+                if let Some((rank, risk_weight)) =
+                    rank_from_active_risk_set(&at_risk, &risk_levels, risk_scores[event_idx])
+                {
+                    rows.push((
+                        event_time,
+                        rank,
+                        risk_weight * multiplier,
+                        case_weights[event_idx],
+                    ));
+                }
+            }
+        }
+
+        event_group_start = event_group_end;
     }
     rows
 }
@@ -584,7 +710,7 @@ fn right_concordance_influence_rows_for_vectors(
 
     for left in 0..time.len() {
         for right in left + 1..time.len() {
-            if status[left] == 1 && status[right] == 1 && time[left] == time[right] {
+            if status[left] == 1 && status[right] == 1 && same_time(time[left], time[right]) {
                 let multiplier = multiplier_at(&multipliers, time[left]);
                 let pair_weight = case_weights[left] * case_weights[right] * multiplier;
                 if pair_weight <= 0.0 {
@@ -601,13 +727,14 @@ fn right_concordance_influence_rows_for_vectors(
                 continue;
             }
 
-            let (event_idx, risk_idx) = if status[left] == 1 && time[left] < time[right] {
-                (left, right)
-            } else if status[right] == 1 && time[right] < time[left] {
-                (right, left)
-            } else {
-                continue;
-            };
+            let (event_idx, risk_idx) =
+                if status[left] == 1 && concordance_time_precedes(time[left], time[right]) {
+                    (left, right)
+                } else if status[right] == 1 && concordance_time_precedes(time[right], time[left]) {
+                    (right, left)
+                } else {
+                    continue;
+                };
             let multiplier = multiplier_at(&multipliers, time[event_idx]);
             let pair_weight = case_weights[event_idx] * case_weights[risk_idx] * multiplier;
             if pair_weight <= 0.0 {
@@ -1654,6 +1781,66 @@ mod tests {
     }
 
     #[test]
+    fn concordance_rank_rows_group_near_tied_event_times() {
+        initialize_python();
+
+        let status = vec![1, 1, 1, 0];
+        let risk = vec![0.9, 0.1, 0.5, 0.2];
+        let weights = Some(vec![2.0, 1.0, 3.0, 1.0]);
+        let exact = concordance_rank_rows(
+            vec![1.0, 1.0, 2.0, 3.0],
+            status.clone(),
+            risk.clone(),
+            weights.clone(),
+            "S".to_string(),
+        )
+        .unwrap();
+        let near = concordance_rank_rows(
+            vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0, 3.0],
+            status,
+            risk,
+            weights,
+            "S".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(near.len(), exact.len());
+        for (actual, expected) in near.iter().zip(exact.iter()) {
+            assert!((actual.1 - expected.1).abs() < 1e-12);
+            assert!((actual.2 - expected.2).abs() < 1e-12);
+            assert!((actual.3 - expected.3).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn concordance_rank_rows_sweep_removes_earlier_times() {
+        initialize_python();
+
+        let rows = concordance_rank_rows(
+            vec![3.0, 1.0, 2.0, 1.0 + TIME_EPSILON / 2.0, 0.5],
+            vec![0, 1, 1, 1, 0],
+            vec![0.2, 0.9, 0.5, 0.1, 0.8],
+            Some(vec![1.0, 2.0, 3.0, 1.0, 4.0]),
+            "n".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, 1.0);
+        assert!((rows[0].1 - 5.0 / 7.0).abs() < 1e-12);
+        assert_eq!(rows[0].2, 7.0);
+        assert_eq!(rows[0].3, 2.0);
+        assert_eq!(rows[1].0, 1.0 + TIME_EPSILON / 2.0);
+        assert!((rows[1].1 + 6.0 / 7.0).abs() < 1e-12);
+        assert_eq!(rows[1].2, 7.0);
+        assert_eq!(rows[1].3, 1.0);
+        assert_eq!(rows[2].0, 2.0);
+        assert_eq!(rows[2].1, 0.25);
+        assert_eq!(rows[2].2, 4.0);
+        assert_eq!(rows[2].3, 3.0);
+    }
+
+    #[test]
     fn counting_concordance_rank_rows_use_delayed_entry_risk_sets() {
         initialize_python();
 
@@ -1672,6 +1859,66 @@ mod tests {
         assert_eq!(rows[0], (1.0, 2.0 / 3.0, 3.0, 1.0));
         assert_eq!(rows[1], (2.0, 2.0 / 3.0, 3.0, 1.0));
         assert_eq!(rows[2], (3.0, 1.0 / 2.0, 2.0, 1.0));
+    }
+
+    #[test]
+    fn counting_concordance_time_weights_sweep_duplicate_event_times() {
+        initialize_python();
+
+        let start = vec![0.0, 0.0, 0.25, 0.0, 1.0];
+        let stop = vec![1.0, 1.0, 2.0, 2.0, 3.0];
+        let status = vec![1, 1, 1, 0, 1];
+        let weights = vec![2.0, 1.0, 3.0, 0.5, 4.0];
+
+        let multipliers = counting_concordance_time_weight_multipliers(
+            &start,
+            &stop,
+            &status,
+            &weights,
+            ConcordanceTimeWeight::S,
+        );
+
+        assert_eq!(multipliers.len(), 3);
+        assert_eq!(multipliers[0].0, 1.0);
+        assert_eq!(multipliers[1].0, 2.0);
+        assert_eq!(multipliers[2].0, 3.0);
+        assert!((multipliers[0].1 - 21.0 / 13.0).abs() < 1e-12);
+        assert!((multipliers[1].1 - 49.0 / 65.0).abs() < 1e-12);
+        assert!((multipliers[2].1 - 441.0 / 520.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn counting_concordance_rank_rows_share_duplicate_event_time_weight() {
+        initialize_python();
+
+        let rows = counting_concordance_rank_rows(
+            vec![0.0, 0.0, 0.25, 0.0, 1.0],
+            vec![1.0, 1.0, 2.0, 2.0, 3.0],
+            vec![1, 1, 1, 0, 1],
+            vec![0.9, 0.2, 0.7, 0.1, 0.8],
+            Some(vec![2.0, 1.0, 3.0, 0.5, 4.0]),
+            "S".to_string(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].0, 1.0);
+        assert!((rows[0].1 - 9.0 / 13.0).abs() < 1e-12);
+        assert!((rows[0].2 - 10.5).abs() < 1e-12);
+        assert_eq!(rows[0].3, 2.0);
+        assert_eq!(rows[1].0, 1.0);
+        assert!((rows[1].1 + 9.0 / 13.0).abs() < 1e-12);
+        assert!((rows[1].2 - 10.5).abs() < 1e-12);
+        assert_eq!(rows[1].3, 1.0);
+        assert_eq!(rows[2].0, 2.0);
+        assert!((rows[2].1 + 7.0 / 15.0).abs() < 1e-12);
+        assert!((rows[2].2 - 147.0 / 26.0).abs() < 1e-12);
+        assert_eq!(rows[2].3, 3.0);
+        assert_eq!(rows[3].0, 3.0);
+        assert_eq!(rows[3].1, 0.0);
+        assert!((rows[3].2 - 441.0 / 130.0).abs() < 1e-12);
+        assert_eq!(rows[3].3, 4.0);
     }
 
     #[test]
@@ -1815,6 +2062,42 @@ mod tests {
         assert!((dfbeta[0] - 20.0 / 289.0).abs() < 1e-12);
         assert!((dfbeta[1] + 22.0 / 289.0).abs() < 1e-12);
         assert!((variance - dfbeta.iter().map(|value| value * value).sum::<f64>()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn concordance_influence_rows_group_near_tied_event_times() {
+        initialize_python();
+
+        let status = vec![1, 1, 1, 0];
+        let risk = vec![0.9, 0.1, 0.5, 0.2];
+        let weights = Some(vec![2.0, 1.0, 3.0, 1.0]);
+        let exact = concordance_influence_rows(
+            vec![1.0, 1.0, 2.0, 3.0],
+            status.clone(),
+            risk.clone(),
+            weights.clone(),
+            "S".to_string(),
+        )
+        .unwrap();
+        let near = concordance_influence_rows(
+            vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0, 3.0],
+            status,
+            risk,
+            weights,
+            "S".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(near.0.len(), exact.0.len());
+        for (actual_row, expected_row) in near.0.iter().zip(exact.0.iter()) {
+            for (actual, expected) in actual_row.iter().zip(expected_row.iter()) {
+                assert!((actual - expected).abs() < 1e-12);
+            }
+        }
+        for (actual, expected) in near.1.iter().zip(exact.1.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert!((near.2 - exact.2).abs() < 1e-12);
     }
 
     #[test]

@@ -411,9 +411,7 @@ fn compute_betweenness_centrality(adjacency: &[f64], n: usize) -> Vec<f64> {
         let mut dependency = vec![0.0; n];
         let mut sorted_by_dist: Vec<usize> = (0..n).collect();
         sorted_by_dist.sort_by(|&a, &b| {
-            dist[b]
-                .partial_cmp(&dist[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
+            dist[b].total_cmp(&dist[a])
         });
 
         for &w in &sorted_by_dist {

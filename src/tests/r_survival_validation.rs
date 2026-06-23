@@ -71,11 +71,7 @@ mod tests {
         let n = lung.time.len();
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            lung.time[a]
-                .partial_cmp(&lung.time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| lung.time[a].total_cmp(&lung.time[b]));
 
         let time: Vec<f64> = indices.iter().map(|&i| lung.time[i]).collect();
         let status: Vec<i32> = indices.iter().map(|&i| lung.status[i] - 1).collect();
@@ -318,11 +314,7 @@ mod tests {
         let mut kaplan = vec![0.0; n];
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
         let sorted_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
         let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
@@ -340,6 +332,7 @@ mod tests {
             status: &sorted_status,
             group: &sorted_group,
             strata: &strata,
+            timefix: false,
         };
 
         let mut output = SurvDiffOutput {
@@ -368,11 +361,7 @@ mod tests {
         let n = time.len();
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
         let sorted_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
         let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();

@@ -6,8 +6,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from survival import _survival as _surv
-
+from . import _survival as _surv
 from ._sklearn_common import (
     BaseEstimator,
     RegressorMixin,
@@ -198,7 +197,7 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
 
-        if not 0 < q < 1:
+        if not np.isfinite(q) or not 0 < q < 1:
             raise ValueError("q must be between 0 and 1")
 
         linear_pred = self.intercept_ + X @ self.coef_

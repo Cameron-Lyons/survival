@@ -52,11 +52,7 @@ pub(super) fn weighted_quantile(values: &[f64], weights: &[f64], q: f64) -> f64 
 
     let n = values.len();
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        values[a]
-            .partial_cmp(&values[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
 
     let total_weight: f64 = weights.iter().sum();
     if total_weight <= 0.0 {
@@ -91,11 +87,7 @@ pub(super) fn compute_km_censoring_survival(time: &[f64], status: &[i32]) -> Vec
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut km_surv = vec![1.0; n];
     let mut cum_surv = 1.0;

@@ -51,6 +51,95 @@ impl ConcordanceComparisonResult {
     }
 }
 
+struct UnoComparisonAccumulator {
+    concordant_1: f64,
+    concordant_2: f64,
+    total_pairs: f64,
+    influence_1: Vec<f64>,
+    influence_2: Vec<f64>,
+}
+
+impl UnoComparisonAccumulator {
+    fn new(n: usize) -> Self {
+        Self {
+            concordant_1: 0.0,
+            concordant_2: 0.0,
+            total_pairs: 0.0,
+            influence_1: vec![0.0; n],
+            influence_2: vec![0.0; n],
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.concordant_1 += other.concordant_1;
+        self.concordant_2 += other.concordant_2;
+        self.total_pairs += other.total_pairs;
+        for (left, right) in self.influence_1.iter_mut().zip(other.influence_1.iter()) {
+            *left += right;
+        }
+        for (left, right) in self.influence_2.iter_mut().zip(other.influence_2.iter()) {
+            *left += right;
+        }
+    }
+}
+
+struct UnoComparisonContext<'a> {
+    time: &'a [f64],
+    status: &'a [i32],
+    risk_score_1: &'a [f64],
+    risk_score_2: &'a [f64],
+    km_times: &'a [f64],
+    km_values: &'a [f64],
+    tau: f64,
+    min_g: f64,
+}
+
+fn accumulate_uno_comparison_row(
+    accumulator: &mut UnoComparisonAccumulator,
+    context: &UnoComparisonContext<'_>,
+    i: usize,
+) {
+    if context.status[i] != 1 || !at_or_before_tau(context.time[i], context.tau) {
+        return;
+    }
+
+    let g_ti = km_step_prob_at(context.time[i], context.km_times, context.km_values)
+        .max(context.min_g);
+    let weight = 1.0 / (g_ti * g_ti);
+
+    for j in 0..context.time.len() {
+        if i == j || !after_event_time(context.time[j], context.time[i]) {
+            continue;
+        }
+
+        accumulator.total_pairs += weight;
+
+        let contrib_1 = if context.risk_score_1[i] > context.risk_score_1[j] {
+            weight
+        } else if context.risk_score_1[i] < context.risk_score_1[j] {
+            0.0
+        } else {
+            0.5 * weight
+        };
+
+        let contrib_2 = if context.risk_score_2[i] > context.risk_score_2[j] {
+            weight
+        } else if context.risk_score_2[i] < context.risk_score_2[j] {
+            0.0
+        } else {
+            0.5 * weight
+        };
+
+        accumulator.concordant_1 += contrib_1;
+        accumulator.concordant_2 += contrib_2;
+
+        accumulator.influence_1[i] += contrib_1;
+        accumulator.influence_1[j] -= contrib_1;
+        accumulator.influence_2[i] += contrib_2;
+        accumulator.influence_2[j] -= contrib_2;
+    }
+}
+
 pub(crate) fn compare_uno_c_indices_core(
     time: &[f64],
     status: &[i32],
@@ -80,74 +169,63 @@ pub(crate) fn compare_uno_c_indices_core(
 
     let min_g = IPCW_SURVIVAL_FLOOR;
 
-    let mut concordant_1 = 0.0;
-    let mut concordant_2 = 0.0;
-    let mut total_pairs = 0.0;
+    let context = UnoComparisonContext {
+        time,
+        status,
+        risk_score_1,
+        risk_score_2,
+        km_times: &km_times,
+        km_values: &km_values,
+        tau: tau_val,
+        min_g,
+    };
 
-    let mut influence_1 = vec![0.0; n];
-    let mut influence_2 = vec![0.0; n];
-
-    for i in 0..n {
-        if status[i] != 1 || time[i] > tau_val {
-            continue;
+    let accumulator = if n > PARALLEL_THRESHOLD_LARGE {
+        (0..n)
+            .into_par_iter()
+            .fold(
+                || UnoComparisonAccumulator::new(n),
+                |mut accumulator, i| {
+                    accumulate_uno_comparison_row(&mut accumulator, &context, i);
+                    accumulator
+                },
+            )
+            .reduce(
+                || UnoComparisonAccumulator::new(n),
+                |mut left, right| {
+                    left.merge(right);
+                    left
+                },
+            )
+    } else {
+        let mut accumulator = UnoComparisonAccumulator::new(n);
+        for i in 0..n {
+            accumulate_uno_comparison_row(&mut accumulator, &context, i);
         }
+        accumulator
+    };
 
-        let g_ti = km_step_prob_at(time[i], &km_times, &km_values).max(min_g);
-        let weight = 1.0 / (g_ti * g_ti);
-
-        for j in 0..n {
-            if i == j || time[j] <= time[i] {
-                continue;
-            }
-
-            total_pairs += weight;
-
-            let contrib_1 = if risk_score_1[i] > risk_score_1[j] {
-                weight
-            } else if risk_score_1[i] < risk_score_1[j] {
-                0.0
-            } else {
-                0.5 * weight
-            };
-
-            let contrib_2 = if risk_score_2[i] > risk_score_2[j] {
-                weight
-            } else if risk_score_2[i] < risk_score_2[j] {
-                0.0
-            } else {
-                0.5 * weight
-            };
-
-            concordant_1 += contrib_1;
-            concordant_2 += contrib_2;
-
-            influence_1[i] += contrib_1;
-            influence_1[j] -= contrib_1;
-            influence_2[i] += contrib_2;
-            influence_2[j] -= contrib_2;
-        }
-    }
-
-    let c_index_1 = if total_pairs > 0.0 {
-        concordant_1 / total_pairs
+    let c_index_1 = if accumulator.total_pairs > 0.0 {
+        accumulator.concordant_1 / accumulator.total_pairs
     } else {
         0.5
     };
 
-    let c_index_2 = if total_pairs > 0.0 {
-        concordant_2 / total_pairs
+    let c_index_2 = if accumulator.total_pairs > 0.0 {
+        accumulator.concordant_2 / accumulator.total_pairs
     } else {
         0.5
     };
 
     let difference = c_index_1 - c_index_2;
 
-    let variance_diff = if total_pairs > 0.0 {
+    let variance_diff = if accumulator.total_pairs > 0.0 {
         let n_f = n as f64;
         let mut var_sum = 0.0;
 
         for k in 0..n {
-            let diff_inf = (influence_1[k] - influence_2[k]) / total_pairs;
+            let diff_inf =
+                (accumulator.influence_1[k] - accumulator.influence_2[k]) / accumulator.total_pairs;
             var_sum += diff_inf * diff_inf;
         }
 
@@ -196,6 +274,10 @@ pub fn compare_uno_c_indices(
             "All input vectors must have the same length",
         ));
     }
+    validate_uno_time_status(&time, &status)?;
+    validate_uno_risk_score(&risk_score_1, "risk_score_1")?;
+    validate_uno_risk_score(&risk_score_2, "risk_score_2")?;
+    validate_uno_tau(tau)?;
 
     Ok(compare_uno_c_indices_core(
         &time,

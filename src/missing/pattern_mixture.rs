@@ -189,11 +189,7 @@ fn fit_cox_pattern(
     let tol = 1e-6;
 
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let n_events: usize = status.iter().filter(|&&s| s == 1).count();
     if n_events == 0 {
@@ -265,11 +261,7 @@ fn compute_se(
     n_vars: usize,
 ) -> Vec<f64> {
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let eta: Vec<f64> = (0..n_obs)
         .map(|i| {
@@ -440,11 +432,7 @@ fn fit_weighted_cox(
     let mut hessian_diag = vec![0.0; n_vars];
 
     let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     for _ in 0..max_iter {
         let eta: Vec<f64> = (0..n_obs)

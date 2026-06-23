@@ -1,6 +1,10 @@
 use pyo3::prelude::*;
 
-use crate::constants::exp_ci_bounds_95;
+use crate::constants::{exp_ci_bounds_95, exp_clamped};
+use crate::recurrent::validation::{
+    unique_subject_count, validate_counting_process_design, validate_event_time_design,
+    validate_solver_controls,
+};
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -55,20 +59,16 @@ pub fn gap_time_model(
     max_iter: usize,
     tol: f64,
 ) -> PyResult<GapTimeResult> {
-    if subject_id.len() != n_obs
-        || start_time.len() != n_obs
-        || stop_time.len() != n_obs
-        || event_status.len() != n_obs
-    {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input arrays must have length n_obs",
-        ));
-    }
-    if x.len() != n_obs * n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "x length must equal n_obs * n_vars",
-        ));
-    }
+    validate_counting_process_design(
+        &subject_id,
+        &start_time,
+        &stop_time,
+        &event_status,
+        &x,
+        n_obs,
+        n_vars,
+    )?;
+    validate_solver_controls(max_iter, tol)?;
 
     let gap_times: Vec<f64> = stop_time
         .iter()
@@ -77,21 +77,16 @@ pub fn gap_time_model(
         .collect();
 
     let n_events = event_status.iter().filter(|&&s| s == 1).count();
-    let n_subjects = subject_id.iter().copied().max().map(|x| x + 1).unwrap_or(0);
+    let n_subjects = unique_subject_count(&subject_id);
 
     let mut beta = vec![0.0; n_vars];
+    let mut indices: Vec<usize> = (0..n_obs).collect();
+    indices.sort_by(|&a, &b| gap_times[b].total_cmp(&gap_times[a]));
 
     let mut prev_loglik = f64::NEG_INFINITY;
     for _iter in 0..max_iter {
         let mut gradient = vec![0.0; n_vars];
         let mut hessian_diag = vec![0.0; n_vars];
-
-        let mut indices: Vec<usize> = (0..n_obs).collect();
-        indices.sort_by(|&a, &b| {
-            gap_times[b]
-                .partial_cmp(&gap_times[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
 
         let eta: Vec<f64> = (0..n_obs)
             .map(|i| {
@@ -139,6 +134,7 @@ pub fn gap_time_model(
         }
 
         if max_change < tol || (loglik - prev_loglik).abs() < tol {
+            prev_loglik = loglik;
             break;
         }
         prev_loglik = loglik;
@@ -156,13 +152,6 @@ pub fn gap_time_model(
             })
             .collect();
         let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
-
-        let mut indices: Vec<usize> = (0..n_obs).collect();
-        indices.sort_by(|&a, &b| {
-            gap_times[b]
-                .partial_cmp(&gap_times[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
 
         let mut risk_sum = 0.0;
         let mut weighted_x = vec![0.0; n_vars];
@@ -195,12 +184,12 @@ pub fn gap_time_model(
         se
     };
 
-    let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
+    let hazard_ratios: Vec<f64> = beta.iter().map(|&b| exp_clamped(b)).collect();
 
     let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&beta, &std_errors);
 
     let mut unique_times: Vec<f64> = gap_times.clone();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     let baseline_hazard = compute_baseline_hazard(
@@ -254,11 +243,7 @@ fn compute_baseline_hazard(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut risk_sum = exp_eta.iter().sum::<f64>();
     let mut baseline_hazard = Vec::with_capacity(unique_times.len());
@@ -300,19 +285,18 @@ pub fn pwp_gap_time(
     n_vars: usize,
     stratify_by_event_number: bool,
 ) -> PyResult<GapTimeResult> {
+    validate_event_time_design(&subject_id, &event_time, &event_status, &x, n_obs, n_vars)?;
+
     let mut sorted_indices: Vec<usize> = (0..n_obs).collect();
     sorted_indices.sort_by(|&a, &b| {
         subject_id[a].cmp(&subject_id[b]).then_with(|| {
-            event_time[a]
-                .partial_cmp(&event_time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    if stratify_by_event_number {
-                        event_status[b].cmp(&event_status[a])
-                    } else {
-                        std::cmp::Ordering::Equal
-                    }
-                })
+            event_time[a].total_cmp(&event_time[b]).then_with(|| {
+                if stratify_by_event_number {
+                    event_status[b].cmp(&event_status[a])
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
         })
     });
 
@@ -367,5 +351,99 @@ mod tests {
 
         assert_eq!(result.coefficients.len(), 1);
         assert_eq!(result.n_events, 4);
+    }
+
+    #[test]
+    fn gap_time_validates_public_inputs() {
+        assert!(gap_time_model(vec![], vec![], vec![], vec![], vec![], 0, 1, 50, 1e-4).is_err());
+        assert!(
+            gap_time_model(
+                vec![0, 1],
+                vec![0.0, 0.0],
+                vec![1.0, 1.0],
+                vec![1, 0],
+                vec![0.5],
+                2,
+                1,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            gap_time_model(
+                vec![0],
+                vec![1.0],
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            gap_time_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![2],
+                vec![0.5],
+                1,
+                1,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            gap_time_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![f64::NAN],
+                1,
+                1,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            gap_time_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                0,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(pwp_gap_time(vec![0], vec![1.0], vec![1], vec![], 2, 0, false).is_err());
+    }
+
+    #[test]
+    fn gap_time_counts_sparse_subject_ids_as_observed_subjects() {
+        let result = gap_time_model(
+            vec![10, 10, 42],
+            vec![0.0, 2.0, 0.0],
+            vec![2.0, 5.0, 3.0],
+            vec![1, 0, 1],
+            vec![1.0, 0.5, 0.0],
+            3,
+            1,
+            20,
+            1e-4,
+        )
+        .unwrap();
+
+        assert_eq!(result.n_subjects, 2);
     }
 }

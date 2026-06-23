@@ -24,14 +24,148 @@ impl SplineConfig {
         degree: usize,
         knot_placement: String,
         boundary_knots: Option<(f64, f64)>,
-    ) -> Self {
-        Self {
-            n_knots,
-            degree,
-            knot_placement,
-            boundary_knots,
+    ) -> PyResult<Self> {
+        build_spline_config(n_knots, degree, knot_placement, boundary_knots)
+    }
+}
+
+fn build_spline_config(
+    n_knots: usize,
+    degree: usize,
+    knot_placement: String,
+    boundary_knots: Option<(f64, f64)>,
+) -> PyResult<SplineConfig> {
+    if n_knots == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "n_knots must be positive",
+        ));
+    }
+    if degree == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "degree must be positive",
+        ));
+    }
+
+    let knot_placement = normalize_knot_placement(&knot_placement)?;
+    validate_boundary_knots(boundary_knots)?;
+
+    Ok(SplineConfig {
+        n_knots,
+        degree,
+        knot_placement,
+        boundary_knots,
+    })
+}
+
+fn normalize_knot_placement(knot_placement: &str) -> PyResult<String> {
+    let normalized = knot_placement.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "quantile" => Ok("quantile".to_string()),
+        "equal" | "uniform" => Ok("equal".to_string()),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            "knot_placement must be 'quantile' or 'equal'",
+        )),
+    }
+}
+
+fn validate_boundary_knots(boundary_knots: Option<(f64, f64)>) -> PyResult<()> {
+    if let Some((lower, upper)) = boundary_knots
+        && (!lower.is_finite() || !upper.is_finite() || lower <= 0.0 || lower >= upper)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "boundary_knots must be finite positive values with lower < upper",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_spline_config(config: SplineConfig) -> PyResult<SplineConfig> {
+    build_spline_config(
+        config.n_knots,
+        config.degree,
+        config.knot_placement,
+        config.boundary_knots,
+    )
+}
+
+fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
+    for (idx, value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{name} must contain only finite values; got non-finite value at index {idx}",
+            )));
         }
     }
+    Ok(())
+}
+
+fn validate_eval_times(eval_times: &[f64]) -> PyResult<()> {
+    if eval_times.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "eval_times cannot be empty",
+        ));
+    }
+    validate_finite_values("eval_times", eval_times)?;
+    if eval_times.iter().any(|&time| time < 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "eval_times must be non-negative",
+        ));
+    }
+    if eval_times.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "eval_times must be strictly increasing",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_hazard_prediction_inputs(
+    model_result: &FlexibleParametricResult,
+    eval_times: &[f64],
+    covariate_values: Option<&[f64]>,
+) -> PyResult<()> {
+    validate_eval_times(eval_times)?;
+    validate_finite_values("coefficients", &model_result.coefficients)?;
+    validate_finite_values("spline_coefficients", &model_result.spline_coefficients)?;
+    validate_finite_values("knots", &model_result.knots)?;
+
+    let expected_spline_coefficients = model_result.knots.len() + 2;
+    if model_result.spline_coefficients.len() != expected_spline_coefficients {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "spline_coefficients length must be knots length + 2 for cubic prediction; got {} and expected {}",
+            model_result.spline_coefficients.len(),
+            expected_spline_coefficients
+        )));
+    }
+
+    if let Some(covariates) = covariate_values {
+        if covariates.len() != model_result.coefficients.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "covariate_values length must match coefficients length; got {} and expected {}",
+                covariates.len(),
+                model_result.coefficients.len()
+            )));
+        }
+        validate_finite_values("covariate_values", covariates)?;
+    }
+
+    Ok(())
+}
+
+fn validate_restricted_cubic_knots(knots: &[f64]) -> PyResult<()> {
+    if knots.len() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Need at least 3 knots",
+        ));
+    }
+
+    validate_finite_values("knots", knots)?;
+    if knots.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "knots must be strictly increasing",
+        ));
+    }
+    Ok(())
 }
 
 #[pyclass(from_py_object)]
@@ -94,7 +228,10 @@ pub fn flexible_parametric_model(
     covariates: Vec<Vec<f64>>,
     config: Option<SplineConfig>,
 ) -> PyResult<FlexibleParametricResult> {
-    let config = config.unwrap_or_else(|| SplineConfig::new(4, 3, "quantile".to_string(), None));
+    let config = match config {
+        Some(config) => validate_spline_config(config)?,
+        None => build_spline_config(4, 3, "quantile".to_string(), None)?,
+    };
 
     let n = time.len();
     if n < 10 {
@@ -233,7 +370,7 @@ fn compute_knots(log_time: &[f64], event: &[i32], config: &SplineConfig) -> Vec<
     }
 
     let mut sorted_times = event_times.clone();
-    sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_times.sort_by(f64::total_cmp);
 
     let (min_t, max_t) = match &config.boundary_knots {
         Some((l, u)) => (l.ln(), u.ln()),
@@ -257,13 +394,7 @@ fn compute_knots(log_time: &[f64], event: &[i32], config: &SplineConfig) -> Vec<
                 .map(|i| min_t + (i as f64 + 1.0) * step)
                 .collect()
         }
-        _ => (0..config.n_knots)
-            .map(|i| {
-                let q = (i as f64 + 1.0) / (config.n_knots as f64 + 1.0);
-                let idx = (q * (sorted_times.len() as f64 - 1.0)).round() as usize;
-                sorted_times[idx.min(sorted_times.len() - 1)]
-            })
-            .collect(),
+        _ => unreachable!("knot_placement is validated before knot computation"),
     }
 }
 
@@ -372,22 +503,24 @@ pub fn restricted_cubic_spline(
             "Need at least 5 observations",
         ));
     }
+    validate_finite_values("x", &x)?;
 
     let knots = match knots {
         Some(k) => k,
         None => {
             let n_k = n_knots.unwrap_or(4);
+            if n_k < 3 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "n_knots must be at least 3",
+                ));
+            }
             compute_quantile_knots(&x, n_k)
         }
     };
 
-    let k = knots.len();
-    if k < 3 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "Need at least 3 knots",
-        ));
-    }
+    validate_restricted_cubic_knots(&knots)?;
 
+    let k = knots.len();
     let mut basis_matrix: Vec<Vec<f64>> = vec![vec![0.0; k - 2]; n];
 
     let t_max = knots.last().cloned().unwrap_or(1.0);
@@ -423,7 +556,7 @@ fn rcs_truncated_power(x: f64, t: f64, power: i32) -> f64 {
 
 fn compute_quantile_knots(x: &[f64], n_knots: usize) -> Vec<f64> {
     let mut sorted = x.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(f64::total_cmp);
 
     (0..n_knots)
         .map(|i| {
@@ -480,13 +613,15 @@ pub fn predict_hazard_spline(
     eval_times: Vec<f64>,
     covariate_values: Option<Vec<f64>>,
 ) -> PyResult<HazardSplineResult> {
+    validate_hazard_prediction_inputs(&model_result, &eval_times, covariate_values.as_deref())?;
+
     let n_times = eval_times.len();
 
     let log_times: Vec<f64> = eval_times.iter().map(|t| t.max(0.001).ln()).collect();
     let spline_basis = compute_bspline_basis(&log_times, &model_result.knots, 3);
 
-    let cov_contribution: f64 = match covariate_values {
-        Some(ref cov) => cov
+    let cov_contribution: f64 = match covariate_values.as_deref() {
+        Some(cov) => cov
             .iter()
             .zip(model_result.coefficients.iter())
             .map(|(c, b)| c * b)
@@ -543,7 +678,7 @@ mod tests {
         let event: Vec<i32> = (0..20).map(|i| if i % 3 == 0 { 1 } else { 0 }).collect();
         let covariates: Vec<Vec<f64>> = (0..20).map(|i| vec![i as f64 * 0.1]).collect();
 
-        let config = SplineConfig::new(3, 3, "quantile".to_string(), None);
+        let config = SplineConfig::new(3, 3, "quantile".to_string(), None).unwrap();
         let result = flexible_parametric_model(time, event, covariates, Some(config)).unwrap();
 
         assert!(!result.knots.is_empty());
@@ -559,6 +694,21 @@ mod tests {
         assert_eq!(result.knots.len(), 4);
         assert_eq!(result.basis_matrix.len(), 50);
         assert_eq!(result.basis_matrix[0].len(), 2);
+    }
+
+    #[test]
+    fn test_restricted_cubic_spline_validates_inputs() {
+        let x: Vec<f64> = (1..=5).map(|i| i as f64).collect();
+
+        assert!(
+            restricted_cubic_spline(vec![1.0, 2.0, f64::NAN, 4.0, 5.0], Some(4), None).is_err()
+        );
+        assert!(restricted_cubic_spline(x.clone(), Some(2), None).is_err());
+        assert!(
+            restricted_cubic_spline(x.clone(), None, Some(vec![1.0, 2.0, f64::INFINITY])).is_err()
+        );
+        assert!(restricted_cubic_spline(x.clone(), None, Some(vec![1.0, 2.0, 2.0])).is_err());
+        assert!(restricted_cubic_spline(vec![1.0; 5], Some(4), None).is_err());
     }
 
     #[test]
@@ -581,7 +731,7 @@ mod tests {
         let event: Vec<i32> = (0..20).map(|i| if i % 3 == 0 { 1 } else { 0 }).collect();
         let covariates: Vec<Vec<f64>> = (0..20).map(|i| vec![i as f64 * 0.1]).collect();
 
-        let config = SplineConfig::new(3, 3, "quantile".to_string(), None);
+        let config = SplineConfig::new(3, 3, "quantile".to_string(), None).unwrap();
         let model = flexible_parametric_model(time, event, covariates, Some(config)).unwrap();
 
         let eval_times: Vec<f64> = (1..=10).map(|x| x as f64).collect();
@@ -594,5 +744,60 @@ mod tests {
         for s in &result.survival {
             assert!(*s >= 0.0 && *s <= 1.0);
         }
+    }
+
+    #[test]
+    fn test_predict_hazard_spline_validates_inputs() {
+        let time: Vec<f64> = (1..=20).map(|x| x as f64).collect();
+        let event: Vec<i32> = (0..20).map(|i| if i % 3 == 0 { 1 } else { 0 }).collect();
+        let covariates: Vec<Vec<f64>> = (0..20).map(|i| vec![i as f64 * 0.1]).collect();
+
+        let config = SplineConfig::new(3, 3, "quantile".to_string(), None).unwrap();
+        let model = flexible_parametric_model(time, event, covariates, Some(config)).unwrap();
+
+        assert!(predict_hazard_spline(model.clone(), vec![], Some(vec![0.5])).is_err());
+        assert!(
+            predict_hazard_spline(model.clone(), vec![1.0, f64::NAN], Some(vec![0.5])).is_err()
+        );
+        assert!(predict_hazard_spline(model.clone(), vec![-1.0, 2.0], Some(vec![0.5])).is_err());
+        assert!(predict_hazard_spline(model.clone(), vec![1.0, 1.0], Some(vec![0.5])).is_err());
+        assert!(
+            predict_hazard_spline(model.clone(), vec![1.0, 2.0], Some(vec![0.5, 1.0])).is_err()
+        );
+        assert!(
+            predict_hazard_spline(model.clone(), vec![1.0, 2.0], Some(vec![f64::NAN])).is_err()
+        );
+
+        let mut nonfinite_model = model.clone();
+        nonfinite_model.coefficients[0] = f64::NAN;
+        assert!(predict_hazard_spline(nonfinite_model, vec![1.0, 2.0], Some(vec![0.5])).is_err());
+
+        let mut mismatched_model = model;
+        mismatched_model.spline_coefficients.pop();
+        assert!(predict_hazard_spline(mismatched_model, vec![1.0, 2.0], Some(vec![0.5])).is_err());
+    }
+
+    #[test]
+    fn test_spline_config_validates_options() {
+        assert!(SplineConfig::new(0, 3, "quantile".to_string(), None).is_err());
+        assert!(SplineConfig::new(3, 0, "quantile".to_string(), None).is_err());
+        assert!(SplineConfig::new(3, 3, "unknown".to_string(), None).is_err());
+        assert!(SplineConfig::new(3, 3, "quantile".to_string(), Some((0.0, 5.0))).is_err());
+        assert!(SplineConfig::new(3, 3, "quantile".to_string(), Some((5.0, 5.0))).is_err());
+        assert!(SplineConfig::new(3, 3, "quantile".to_string(), Some((f64::NAN, 5.0))).is_err());
+
+        let config = SplineConfig::new(3, 3, " Uniform ".to_string(), Some((1.0, 5.0))).unwrap();
+        assert_eq!(config.knot_placement, "equal");
+    }
+
+    #[test]
+    fn test_flexible_parametric_model_revalidates_mutated_config() {
+        let time: Vec<f64> = (1..=20).map(|x| x as f64).collect();
+        let event: Vec<i32> = (0..20).map(|i| if i % 3 == 0 { 1 } else { 0 }).collect();
+        let covariates: Vec<Vec<f64>> = (0..20).map(|i| vec![i as f64 * 0.1]).collect();
+        let mut config = SplineConfig::new(3, 3, "quantile".to_string(), None).unwrap();
+        config.knot_placement = "unknown".to_string();
+
+        assert!(flexible_parametric_model(time, event, covariates, Some(config)).is_err());
     }
 }
