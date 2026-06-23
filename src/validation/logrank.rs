@@ -1,4 +1,5 @@
 use crate::constants::{TIME_EPSILON, same_time};
+use crate::internal::logrank::logrank_statistic_from_flat_covariance;
 use crate::internal::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::chi2_sf;
 use crate::internal::validation::{
@@ -76,11 +77,11 @@ pub fn weighted_logrank_test_with_entry_times(
         return LogRankResult {
             statistic: 0.0,
             p_value: 1.0,
-            df: 1,
+            df: 0,
             observed: vec![],
             expected: vec![],
             variance: 0.0,
-            weight_type: "LogRank".to_string(),
+            weight_type: weight_name(&weight_type),
         };
     }
     let mut unique_groups: Vec<i32> = group.to_vec();
@@ -121,7 +122,7 @@ pub fn weighted_logrank_test_with_entry_times(
     }
     let mut observed = vec![0.0; n_groups];
     let mut expected = vec![0.0; n_groups];
-    let mut variance_sum = 0.0;
+    let mut variance = vec![0.0; n_groups * n_groups];
     let mut km_survival = 1.0;
     let mut i = 0;
     while i < n {
@@ -168,11 +169,16 @@ pub fn weighted_logrank_test_with_entry_times(
                     expected[g] += weight * exp_g;
                 }
                 if total_at_risk > 1.0 {
-                    let var_factor = total_events * (total_at_risk - total_events)
-                        / (total_at_risk * total_at_risk * (total_at_risk - 1.0));
-                    for &n_g in at_risk.iter().take(n_groups - 1) {
-                        let n_not_g = total_at_risk - n_g;
-                        variance_sum += weight * weight * var_factor * n_g * n_not_g;
+                    let var_factor =
+                        weight * weight * total_events * (total_at_risk - total_events)
+                            / (total_at_risk * (total_at_risk - 1.0));
+                    for g in 0..n_groups {
+                        let row_start = g * n_groups;
+                        for h in 0..n_groups {
+                            let diagonal = if g == h { 1.0 } else { 0.0 };
+                            variance[row_start + h] +=
+                                var_factor * at_risk[g] * (diagonal - at_risk[h] / total_at_risk);
+                        }
                     }
                 }
                 km_survival *= 1.0 - total_events / total_at_risk;
@@ -182,20 +188,16 @@ pub fn weighted_logrank_test_with_entry_times(
             at_risk[g] -= removed[g];
         }
     }
-    let statistic = if variance_sum > 0.0 {
-        let diff = observed[0] - expected[0];
-        diff * diff / variance_sum
-    } else {
-        0.0
-    };
-    let p_value = chi2_sf(statistic, n_groups - 1);
+    let (statistic, df) =
+        logrank_statistic_from_flat_covariance(&observed, &expected, &variance, n_groups);
+    let p_value = chi2_sf(statistic, df);
     LogRankResult {
         statistic,
         p_value,
-        df: n_groups - 1,
+        df,
         observed,
         expected,
-        variance: variance_sum,
+        variance: variance.first().copied().unwrap_or(0.0),
         weight_type: weight_name(&weight_type),
     }
 }
@@ -520,5 +522,23 @@ mod tests {
         assert!((near.variance - exact.variance).abs() < 1e-12);
         assert!((near.statistic - exact.statistic).abs() < 1e-12);
         assert!((near.p_value - exact.p_value).abs() < 1e-12);
+    }
+
+    #[test]
+    fn multigroup_logrank_uses_full_covariance_statistic() {
+        let time = vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 5.0, 7.0];
+        let status = vec![1, 1, 0, 1, 0, 1, 1, 1, 0];
+        let group = vec![0, 0, 0, 1, 1, 1, 2, 2, 2];
+
+        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+
+        assert_eq!(result.df, 2);
+        assert_eq!(result.observed, vec![2.0, 2.0, 2.0]);
+        assert!((result.expected[0] - 1.0).abs() < 1e-12);
+        assert!((result.expected[1] - 2.25).abs() < 1e-12);
+        assert!((result.expected[2] - 2.75).abs() < 1e-12);
+        assert!((result.variance - 0.6825396825396826).abs() < 1e-12);
+        assert!((result.statistic - 1.5105257668985863).abs() < 1e-12);
+        assert!((result.p_value - 0.4698870729581883).abs() < 1e-9);
     }
 }

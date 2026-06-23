@@ -243,4 +243,59 @@ mod tests {
         assert_eq!(result.n_changepoints, 1);
         assert_eq!(result.changepoints.len(), 1);
     }
+
+    #[test]
+    fn public_rmst_wrappers_validate_inputs() {
+        let err = rmst(vec![f64::NAN], vec![1], 1.0, None).unwrap_err();
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = rmst(vec![1.0], vec![2], 1.0, None).unwrap_err();
+        assert!(err.to_string().contains("status must contain only 0/1"));
+
+        let err = rmst(vec![1.0], vec![1], -1.0, None).unwrap_err();
+        assert!(err.to_string().contains("tau must be non-negative"));
+
+        let err = rmst(vec![1.0], vec![1], 1.0, Some(1.0)).unwrap_err();
+        assert!(err.to_string().contains("confidence_level must be greater than 0"));
+    }
+
+    #[test]
+    fn public_grouped_rmst_wrappers_validate_lengths_and_parameters() {
+        let err = rmst_comparison(vec![1.0], vec![1], vec![0, 1], 1.0, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("time, status, and group must have the same length")
+        );
+
+        let err = number_needed_to_treat(vec![1.0], vec![1], vec![0], f64::INFINITY, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("time_horizon contains non-finite"));
+    }
+
+    #[test]
+    fn public_quantile_and_incidence_wrappers_validate_inputs() {
+        let err = survival_quantile(vec![1.0], vec![1], Some(0.0), None).unwrap_err();
+        assert!(err.to_string().contains("quantile must be greater than 0"));
+
+        let err = cumulative_incidence(vec![1.0], vec![-1]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("status must contain non-negative event codes")
+        );
+
+        let result = cumulative_incidence(vec![1.0, 2.0], vec![1, 2]).unwrap();
+        assert_eq!(result.event_types, vec![1, 2]);
+    }
+
+    #[test]
+    fn public_rmst_optimal_threshold_validates_parameters() {
+        let err = rmst_optimal_threshold(vec![1.0], vec![1], Some(0.0), None, None).unwrap_err();
+        assert!(err.to_string().contains("alpha must be greater than 0"));
+
+        let err = rmst_optimal_threshold(vec![1.0], vec![1], None, Some(1), None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("min_events_per_interval must be at least 2")
+        );
+    }
 }

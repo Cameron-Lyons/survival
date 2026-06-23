@@ -25,6 +25,40 @@ def test_cipoisson():
     assert isinstance(result_anscombe, tuple)
 
 
+def test_model_selection_public_apis_and_validation():
+    criteria = survival.compute_model_selection_criteria(-100.0, 5, 200, 50, None)
+    comparison = survival.compare_models(["m1", "m2"], [-100.0, -95.0], [3, 5], 200)
+    cv_score = survival.compute_cv_score([0.75, 0.8, 0.7], "c_index")
+
+    assert criteria.aic > 0.0
+    assert "Model Selection Criteria" in criteria.summary()
+    assert comparison.best_model_aic == "m2"
+    assert len(comparison.likelihood_ratio_tests) == 1
+    assert cv_score.n_folds == 3
+    assert cv_score.confidence_interval(0.05)[0] < cv_score.mean_score
+
+    with pytest.raises(ValueError, match="log_likelihood must be finite"):
+        survival.compute_model_selection_criteria(float("nan"), 5, 200, 50, None)
+
+    with pytest.raises(ValueError, match="n_obs must be greater than 1"):
+        survival.compute_model_selection_criteria(-100.0, 5, 1, 1, None)
+
+    with pytest.raises(ValueError, match="n_events cannot exceed n_obs"):
+        survival.compute_model_selection_criteria(-100.0, 5, 20, 21, None)
+
+    with pytest.raises(ValueError, match="log_likelihoods contains non-finite"):
+        survival.compare_models(["m1"], [float("inf")], [1], 10)
+
+    with pytest.raises(ValueError, match="n_obs must be greater than 0"):
+        survival.compare_models(["m1"], [-10.0], [1], 0)
+
+    with pytest.raises(ValueError, match="fold_scores contains non-finite"):
+        survival.compute_cv_score([0.7, float("nan")], "c_index")
+
+    with pytest.raises(ValueError, match="metric cannot be empty"):
+        survival.compute_cv_score([0.7], " ")
+
+
 def test_norisk():
     time1 = [0.0, 1.0, 2.0, 3.0, 4.0]
     time2 = [1.0, 2.0, 3.0, 4.0, 5.0]
@@ -50,6 +84,9 @@ def test_norisk_validates_public_inputs():
 
     with pytest.raises(ValueError, match="sort1 index out of bounds"):
         survival.norisk([0.0], [1.0], [1], [-1], [0], [])
+
+    with pytest.raises(ValueError, match="sort1 must be a permutation"):
+        survival.norisk([0.0, 1.0], [1.0, 2.0], [1, 0], [0, 0], [0, 1], [])
 
     with pytest.raises(ValueError, match="strata values"):
         survival.norisk([0.0], [1.0], [1], [0], [0], [2])
@@ -200,6 +237,72 @@ def test_survexp_validates_method():
             method="bad",
         )
 
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.survexp(
+            time=[float("nan")],
+            age=[18250.0],
+            year=[2000.0],
+            ratetable=ratetable,
+        )
+
+    with pytest.raises(ValueError, match="age contains negative"):
+        survival.survexp(
+            time=[365.0],
+            age=[-1.0],
+            year=[2000.0],
+            ratetable=ratetable,
+        )
+
+    with pytest.raises(ValueError, match="sex values must be non-negative"):
+        survival.survexp(
+            time=[365.0],
+            age=[18250.0],
+            year=[2000.0],
+            ratetable=ratetable,
+            sex=[-1],
+        )
+
+    with pytest.raises(ValueError, match="times must be sorted"):
+        survival.survexp(
+            time=[365.0, 730.0],
+            age=[18250.0, 21900.0],
+            year=[2000.0, 2000.0],
+            ratetable=ratetable,
+            times=[730.0, 365.0],
+            method="conditional",
+        )
+
+    with pytest.raises(ValueError, match="sex must have same length"):
+        survival.survexp_individual(
+            time=[365.0],
+            age=[18250.0],
+            year=[2000.0],
+            ratetable=ratetable,
+            sex=[0, 1],
+        )
+
+    with pytest.raises(ValueError, match="age_breaks"):
+        survival.create_simple_ratetable(
+            age_breaks=[0.0],
+            year_breaks=[1990.0, 2020.0],
+            rates_male=[0.00001],
+            rates_female=[0.000008],
+        )
+
+    with pytest.raises(ValueError, match="rates_male contains non-finite"):
+        survival.create_simple_ratetable(
+            age_breaks=[0.0, 36500.0],
+            year_breaks=[1990.0, 2020.0],
+            rates_male=[float("nan")],
+            rates_female=[0.000008],
+        )
+
+    with pytest.raises(ValueError, match="age coordinate must be finite"):
+        ratetable.lookup({"age": float("nan"), "year": 2000.0, "sex": 0.0})
+
+    with pytest.raises(ValueError, match="age_start, age_end, and year_start must be finite"):
+        ratetable.expected_survival(0.0, float("inf"), 2000.0, 0)
+
 
 def test_ratetable_date_roundtrip():
     result = survival.ratetable_date(2000, 2, 29, 1960)
@@ -207,6 +310,12 @@ def test_ratetable_date_roundtrip():
     assert result.days == pytest.approx(14669.0)
     assert result.origin_year == 1960
     assert survival.days_to_date(result.days, result.origin_year) == (2000, 2, 29)
+
+    with pytest.raises(ValueError, match="days must be a finite non-negative value"):
+        survival.days_to_date(float("nan"), 1960)
+
+    with pytest.raises(ValueError, match="day is invalid"):
+        survival.ratetable_date(2001, 2, 29, 1960)
 
 
 def test_pyears_summary_and_cells():
@@ -234,6 +343,21 @@ def test_pyears_summary_and_cells():
     assert cells[0].smr == pytest.approx(2.0)
     assert smr == pytest.approx(2.0)
     assert lower < smr < upper
+
+    with pytest.raises(ValueError, match="must have the same length"):
+        survival.summary_pyears([1.0], [], [1.0], [1.0], 0.0)
+
+    with pytest.raises(ValueError, match="pyears contains non-finite"):
+        survival.summary_pyears([float("inf")], [1.0], [1.0], [1.0], 0.0)
+
+    with pytest.raises(ValueError, match="pcount contains negative"):
+        survival.pyears_by_cell([1.0], [1.0], [-1.0], [1.0])
+
+    with pytest.raises(ValueError, match="expected must be a finite positive value"):
+        survival.pyears_ci(1.0, 0.0, 0.95)
+
+    with pytest.raises(ValueError, match="conf_level"):
+        survival.pyears_ci(1.0, 1.0, 1.0)
 
 
 def test_reference_ratetables_and_expected_survival_helpers():
@@ -263,6 +387,15 @@ def test_reference_ratetables_and_expected_survival_helpers():
     assert len(expected.expected_survival) == 2
     assert all(0.0 < value <= 1.0 for value in expected.expected_survival)
     assert expected.expected_survival[0] >= expected.expected_survival[1]
+
+    with pytest.raises(ValueError, match="age contains non-finite"):
+        survival.compute_expected_survival([float("nan")], [0], [2000.0], [365.25])
+
+    with pytest.raises(ValueError, match="sex values must be non-negative"):
+        survival.compute_expected_survival([365.25 * 50.0], [-1], [2000.0], [365.25])
+
+    with pytest.raises(ValueError, match="times contains non-finite"):
+        survival.compute_expected_survival([365.25 * 50.0], [0], [2000.0], [float("inf")])
 
 
 def test_compute_expected_survival_validates_lengths():

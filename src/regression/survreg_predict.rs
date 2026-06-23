@@ -1,6 +1,10 @@
 use crate::internal::statistical::normal_inverse_cdf;
 use pyo3::prelude::*;
 
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum SurvregPredictType {
     Response,
@@ -221,6 +225,34 @@ fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
+fn validate_rectangular_matrix(name: &str, matrix: &[Vec<f64>]) -> PyResult<usize> {
+    let width = matrix.first().map_or(0, Vec::len);
+    for (row_idx, row) in matrix.iter().enumerate() {
+        if row.len() != width {
+            return Err(value_error(format!(
+                "{name} row {row_idx} has length {}, expected {width}",
+                row.len()
+            )));
+        }
+        validate_finite_values(name, row)?;
+    }
+    Ok(width)
+}
+
+fn validate_square_matrix(name: &str, matrix: &[Vec<f64>]) -> PyResult<usize> {
+    let width = matrix.len();
+    for (row_idx, row) in matrix.iter().enumerate() {
+        if row.len() != width {
+            return Err(value_error(format!(
+                "{name} row {row_idx} has length {}, expected {width}",
+                row.len()
+            )));
+        }
+        validate_finite_values(name, row)?;
+    }
+    Ok(width)
+}
+
 fn validate_scale(scale: f64) -> PyResult<()> {
     if !scale.is_finite() || scale <= 0.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -228,6 +260,88 @@ fn validate_scale(scale: f64) -> PyResult<()> {
         ));
     }
     Ok(())
+}
+
+#[pyfunction]
+pub fn survreg_quantile_prediction_se_matrix(
+    rows: Vec<Vec<f64>>,
+    scales: Vec<f64>,
+    strata: Vec<usize>,
+    variance: Vec<Vec<f64>>,
+    quantile_scores: Vec<f64>,
+    predictions: Vec<Vec<f64>>,
+    transform_se: bool,
+) -> PyResult<Vec<Vec<f64>>> {
+    let nvar = validate_rectangular_matrix("rows", &rows)?;
+    let n = rows.len();
+    if strata.len() != n {
+        return Err(value_error("strata length must match rows length"));
+    }
+    if predictions.len() != n {
+        return Err(value_error("predictions length must match rows length"));
+    }
+    if scales.is_empty() {
+        return Err(value_error("scales must not be empty"));
+    }
+    validate_finite_values("scales", &scales)?;
+    validate_finite_values("quantile_scores", &quantile_scores)?;
+    for (row_idx, row) in predictions.iter().enumerate() {
+        if row.len() != quantile_scores.len() {
+            return Err(value_error(format!(
+                "predictions row {row_idx} has length {}, expected {}",
+                row.len(),
+                quantile_scores.len()
+            )));
+        }
+        validate_finite_values("predictions", row)?;
+    }
+
+    let width = validate_square_matrix("variance", &variance)?;
+    let full_width = nvar + scales.len();
+    if width != nvar && width != full_width {
+        return Err(value_error(
+            "variance width must match row width or row width plus scale count",
+        ));
+    }
+    for (row_idx, &stratum) in strata.iter().enumerate() {
+        if stratum >= scales.len() {
+            return Err(value_error(format!(
+                "strata contains value {stratum} at row {row_idx}, expected < {}",
+                scales.len()
+            )));
+        }
+    }
+
+    let has_scale_variance = width == full_width;
+    let mut result = Vec::with_capacity(n);
+    for (row_idx, row) in rows.iter().enumerate() {
+        let mut result_row = Vec::with_capacity(quantile_scores.len());
+        for (score_idx, &score) in quantile_scores.iter().enumerate() {
+            let mut variance_value = 0.0;
+            for left in 0..nvar {
+                for right in 0..nvar {
+                    variance_value += row[left] * variance[left][right] * row[right];
+                }
+            }
+            if has_scale_variance {
+                let stratum = strata[row_idx];
+                let scale_col = nvar + stratum;
+                let scale_value = score * scales[stratum];
+                for col in 0..nvar {
+                    variance_value += row[col] * variance[col][scale_col] * scale_value;
+                    variance_value += scale_value * variance[scale_col][col] * row[col];
+                }
+                variance_value += scale_value * variance[scale_col][scale_col] * scale_value;
+            }
+            let mut se = variance_value.max(0.0).sqrt();
+            if transform_se {
+                se *= predictions[row_idx][score_idx].abs();
+            }
+            result_row.push(se);
+        }
+        result.push(result_row);
+    }
+    Ok(result)
 }
 
 fn validate_covariates(covariates: &[Vec<f64>], nvar: usize) -> PyResult<()> {
@@ -429,6 +543,46 @@ mod tests {
 
         assert!((gaussian[0][0] - (1.0 + scale * normal_inverse_cdf(0.5))).abs() < 1e-10);
         assert!((lognormal[0][0] - gaussian[0][0].exp()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_survreg_quantile_prediction_se_matrix_uses_scale_columns() {
+        let se = survreg_quantile_prediction_se_matrix(
+            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            vec![2.0, 3.0],
+            vec![0, 1],
+            vec![
+                vec![1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0, 0.0],
+                vec![0.0, 0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 0.0, 1.0],
+            ],
+            vec![0.5, 1.0],
+            vec![vec![10.0, 20.0], vec![30.0, 40.0]],
+            false,
+        )
+        .expect("quantile SE matrix should compute");
+
+        assert!((se[0][0] - 6.0_f64.sqrt()).abs() < 1e-12);
+        assert!((se[0][1] - 3.0).abs() < 1e-12);
+        assert!((se[1][0] - 27.25_f64.sqrt()).abs() < 1e-12);
+        assert!((se[1][1] - 34.0_f64.sqrt()).abs() < 1e-12);
+
+        let transformed = survreg_quantile_prediction_se_matrix(
+            vec![vec![1.0, 2.0]],
+            vec![2.0],
+            vec![0],
+            vec![
+                vec![1.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 1.0],
+            ],
+            vec![0.5],
+            vec![vec![10.0]],
+            true,
+        )
+        .expect("transformed quantile SE matrix should compute");
+        assert!((transformed[0][0] - 10.0 * 6.0_f64.sqrt()).abs() < 1e-12);
     }
 
     #[test]

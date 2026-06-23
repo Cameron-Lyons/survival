@@ -1,4 +1,4 @@
-from math import exp
+from math import exp, log
 from statistics import NormalDist
 
 import pytest
@@ -411,11 +411,23 @@ def test_survfit_matrix_public_apis_validate_shapes_and_values():
     assert result.get_cumhaz_at_state(0) == pytest.approx([0.1, 0.3])
     assert result.get_surv_at_state(0) == pytest.approx([exp(-0.1), exp(-0.3)])
 
+    multistate = survival.survfit_multistate(
+        [1.0],
+        [[[0.0, 0.25], [0.10, 0.0]]],
+        0,
+    )
+    assert multistate.n_states == 2
+    assert multistate.surv[0] == pytest.approx([0.75, 0.25])
+    assert sum(multistate.surv[0]) == pytest.approx(1.0)
+
     with pytest.raises(IndexError, match="out of range"):
         result.get_surv_at_state(1)
 
     with pytest.raises(ValueError, match="surv length must match time length"):
         survival.SurvfitMatrixResult([1.0], [], [[0.1]], None, [], [], 1)
+
+    with pytest.raises(ValueError, match="surv values must be between 0 and 1"):
+        survival.SurvfitMatrixResult([1.0], [[1.2]], [[0.1]], None, [], [], 1)
 
     with pytest.raises(ValueError, match="hazard contains non-finite"):
         survival.survfit_from_hazard([1.0], [float("nan")])
@@ -426,10 +438,26 @@ def test_survfit_matrix_public_apis_validate_shapes_and_values():
     with pytest.raises(ValueError, match="hazard_matrix must be non-negative"):
         survival.survfit_from_matrix([1.0], [[-0.1]])
 
+    with pytest.raises(ValueError, match="hazard_matrix length must match time length"):
+        survival.survfit_from_matrix([1.0, 2.0], [[0.1]])
+
+    with pytest.raises(ValueError, match="hazard_matrix must have at least one column"):
+        survival.survfit_from_matrix([1.0], [[]])
+
     with pytest.raises(ValueError, match="off-diagonal entries must be non-negative"):
         survival.survfit_multistate(
             [1.0],
             [[[0.0, -0.1], [0.0, 0.0]]],
+            0,
+        )
+
+    with pytest.raises(ValueError, match="transition_hazards must have at least one state"):
+        survival.survfit_multistate([1.0], [[]], 0)
+
+    with pytest.raises(ValueError, match="outgoing row sums"):
+        survival.survfit_multistate(
+            [1.0],
+            [[[0.0, 0.8, 0.3], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]],
             0,
         )
 
@@ -450,6 +478,43 @@ def test_compute_logrank_components():
     assert hasattr(result, "expected")
     assert hasattr(result, "chi_squared")
     assert len(result.observed) > 0
+
+
+def test_compute_logrank_components_aggregates_stratified_variance():
+    stratified = survival.compute_logrank_components(
+        [1.0, 2.0, 1.0, 2.0],
+        [1, 0, 0, 1],
+        [1, 2, 1, 2],
+        [0, 1, 0, 1],
+        None,
+    )
+    first = survival.compute_logrank_components([1.0, 2.0], [1, 0], [1, 2], None, None)
+    second = survival.compute_logrank_components([1.0, 2.0], [0, 1], [1, 2], None, None)
+
+    assert len(stratified.variance) == 2
+    assert all(len(row) == 2 for row in stratified.variance)
+    for row in range(2):
+        for col in range(2):
+            assert stratified.variance[row][col] == pytest.approx(
+                first.variance[row][col] + second.variance[row][col]
+            )
+
+
+def test_compute_logrank_components_multigroup_matches_r_survdiff_chisquare():
+    result = survival.compute_logrank_components(
+        [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+        [1, 1, 1, 0, 1, 0, 1, 1, 0],
+        [1, 1, 2, 1, 3, 2, 3, 2, 3],
+        None,
+        None,
+    )
+
+    assert result.degrees_of_freedom == 2
+    assert result.observed == pytest.approx([2.0, 2.0, 2.0])
+    assert result.expected == pytest.approx([1.0, 2.25, 2.75])
+    assert result.variance[0][0] == pytest.approx(0.6825396825396826)
+    assert result.variance[0][1] == pytest.approx(-0.3273809523809524)
+    assert result.chi_squared == pytest.approx(1.5105257668985863)
 
 
 def test_aggregate_survfit_public_apis():
@@ -632,6 +697,39 @@ def test_concordance_metric_public_apis_and_validation():
         survival.uno_c_index([1.0], [1], [0.1, 0.2])
 
 
+def test_time_dependent_auc_public_apis_and_validation():
+    time = [1.0, 2.0, 3.0, 4.0]
+    status = [1, 0, 1, 0]
+    marker = [0.9, 0.2, 0.7, 0.1]
+
+    auc = survival.time_dependent_auc(time, status, marker, 2.5)
+    cumulative = survival.cumulative_dynamic_auc(time, status, marker, [1.5, 2.5, 3.5])
+
+    assert 0.0 <= auc.auc <= 1.0
+    assert auc.n_cases == 1
+    assert auc.n_controls == 2
+    assert len(cumulative.auc) == 3
+    assert 0.0 <= cumulative.mean_auc <= 1.0
+
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.time_dependent_auc([float("nan")], [1], [0.5], 1.0)
+
+    with pytest.raises(ValueError, match="time contains negative value"):
+        survival.time_dependent_auc([-1.0], [1], [0.5], 1.0)
+
+    with pytest.raises(ValueError, match="status.*0/1"):
+        survival.time_dependent_auc([1.0], [2], [0.5], 1.0)
+
+    with pytest.raises(ValueError, match="marker contains non-finite"):
+        survival.time_dependent_auc([1.0], [1], [float("inf")], 1.0)
+
+    with pytest.raises(ValueError, match="t contains non-finite"):
+        survival.time_dependent_auc([1.0], [1], [0.5], float("nan"))
+
+    with pytest.raises(ValueError, match="times must be sorted"):
+        survival.cumulative_dynamic_auc(time, status, marker, [2.5, 1.5])
+
+
 def test_rcll_public_apis_and_validation():
     result = survival.rcll(
         survival_predictions=[
@@ -662,6 +760,81 @@ def test_rcll_public_apis_and_validation():
 
     with pytest.raises(ValueError, match="survival_predictions row 0 has 1 elements, expected 2"):
         survival.rcll([[0.9]], [1.0, 2.0], [1.0], [1], None)
+
+    duplicate_times = survival.rcll(
+        survival_predictions=[
+            [0.95, 0.8, 0.7, 0.5],
+            [0.95, 0.8, 0.7, 0.5],
+        ],
+        prediction_times=[1.0, 2.0, 2.0, 3.0],
+        event_times=[2.0, 2.0],
+        status=[1, 0],
+    )
+
+    assert duplicate_times.event_contribution == pytest.approx(-log(0.15))
+    assert duplicate_times.censored_contribution == pytest.approx(-log(0.7))
+
+    with pytest.raises(ValueError, match="prediction_times must be sorted"):
+        survival.rcll([[0.9, 0.8]], [2.0, 1.0], [1.0], [1])
+
+    with pytest.raises(ValueError, match="status.*0/1"):
+        survival.rcll([[0.9]], [1.0], [1.0], [2])
+
+    with pytest.raises(ValueError, match="probabilities between 0 and 1"):
+        survival.rcll([[1.2]], [1.0], [1.0], [1])
+
+    with pytest.raises(ValueError, match="weights contains negative value"):
+        survival.rcll([[0.9]], [1.0], [1.0], [1], [-1.0])
+
+    with pytest.raises(ValueError, match="prediction_time contains non-finite"):
+        survival.rcll_single_time([0.9], [1.0], [1], float("nan"))
+
+
+def test_rmst_family_public_apis_and_validation():
+    time = [1.0, 2.0, 3.0, 4.0]
+    status = [1, 1, 0, 1]
+    group = [0, 0, 1, 1]
+
+    rmst = survival.rmst(time, status, 4.0)
+    comparison = survival.rmst_comparison(time, status, group, 4.0)
+    quantile = survival.survival_quantile(time, status, 0.5)
+    incidence = survival.cumulative_incidence(time, [1, 2, 0, 1])
+    nnt = survival.number_needed_to_treat(time, status, group, 4.0)
+    threshold = survival.rmst_optimal_threshold(time, status)
+
+    assert 0.0 <= rmst.rmst <= 4.0
+    assert comparison.rmst_group1.rmst >= 0.0
+    assert quantile.quantile == pytest.approx(0.5)
+    assert incidence.event_types == [1, 2]
+    assert nnt.time_horizon == pytest.approx(4.0)
+    assert threshold.max_followup == pytest.approx(4.0)
+
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.rmst([float("nan")], [1], 1.0)
+
+    with pytest.raises(ValueError, match="status.*0/1"):
+        survival.rmst([1.0], [2], 1.0)
+
+    with pytest.raises(ValueError, match="tau must be non-negative"):
+        survival.rmst([1.0], [1], -1.0)
+
+    with pytest.raises(ValueError, match="confidence_level must be greater than 0"):
+        survival.survival_quantile([1.0], [1], 0.5, 1.0)
+
+    with pytest.raises(ValueError, match="quantile must be greater than 0"):
+        survival.survival_quantile([1.0], [1], 0.0)
+
+    with pytest.raises(ValueError, match="non-negative event codes"):
+        survival.cumulative_incidence([1.0], [-1])
+
+    with pytest.raises(ValueError, match="time, status, and group must have the same length"):
+        survival.number_needed_to_treat([1.0], [1], [0, 1], 1.0)
+
+    with pytest.raises(ValueError, match="alpha must be greater than 0"):
+        survival.rmst_optimal_threshold([1.0], [1], 0.0)
+
+    with pytest.raises(ValueError, match="min_events_per_interval must be at least 2"):
+        survival.rmst_optimal_threshold([1.0], [1], None, 1)
 
 
 def test_pseudo_public_apis_and_validation():

@@ -1,3 +1,115 @@
+fn uncertainty_value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_probability_open(value: f64, field: &str) -> PyResult<()> {
+    if !value.is_finite() || value <= 0.0 || value >= 1.0 {
+        return Err(uncertainty_value_error(format!(
+            "{field} must be a finite value between 0 and 1"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_prediction_cube(
+    predictions: &[Vec<Vec<f64>>],
+    field: &str,
+) -> PyResult<(usize, usize, usize)> {
+    if predictions.is_empty() {
+        return Err(uncertainty_value_error(format!("{field} must not be empty")));
+    }
+
+    let n_models = predictions.len();
+    let n_obs = predictions[0].len();
+    if n_obs == 0 {
+        return Err(uncertainty_value_error(format!(
+            "{field} must contain at least one observation"
+        )));
+    }
+
+    let n_times = predictions[0].first().map(|p| p.len()).unwrap_or(0);
+    if n_times == 0 {
+        return Err(uncertainty_value_error(format!(
+            "{field} must contain at least one time point"
+        )));
+    }
+
+    for (model_idx, model) in predictions.iter().enumerate() {
+        if model.len() != n_obs {
+            return Err(uncertainty_value_error(format!(
+                "{field} must be rectangular; model {model_idx} has {} observations, expected {n_obs}",
+                model.len()
+            )));
+        }
+        for (obs_idx, row) in model.iter().enumerate() {
+            if row.len() != n_times {
+                return Err(uncertainty_value_error(format!(
+                    "{field} must be rectangular; model {model_idx}, observation {obs_idx} has {} time points, expected {n_times}",
+                    row.len()
+                )));
+            }
+            for (time_idx, &value) in row.iter().enumerate() {
+                if !value.is_finite() {
+                    return Err(uncertainty_value_error(format!(
+                        "{field} contains non-finite value {value} at model {model_idx}, observation {obs_idx}, time {time_idx}"
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok((n_models, n_obs, n_times))
+}
+
+fn validate_quantiles(quantiles: &[f64]) -> PyResult<()> {
+    if quantiles.len() != 3 {
+        return Err(uncertainty_value_error(
+            "quantiles must contain exactly three values: lower, median, and upper",
+        ));
+    }
+    for (idx, &value) in quantiles.iter().enumerate() {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(uncertainty_value_error(format!(
+                "quantiles must contain finite values between 0 and 1; got {value} at index {idx}"
+            )));
+        }
+    }
+    for (idx, pair) in quantiles.windows(2).enumerate() {
+        if pair[0] > pair[1] {
+            return Err(uncertainty_value_error(format!(
+                "quantiles must be nondecreasing; got {} then {} at positions {} and {}",
+                pair[0],
+                pair[1],
+                idx,
+                idx + 1
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_finite_vector(values: &[f64], field: &str) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(uncertainty_value_error(format!(
+                "{field} contains non-finite value {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_binary_events(values: &[i32], field: &str) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(uncertainty_value_error(format!(
+                "{field} values must be 0 or 1; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     model_predictions,
@@ -7,15 +119,9 @@ pub fn ensemble_uncertainty(
     model_predictions: Vec<Vec<Vec<f64>>>,
     confidence_level: f64,
 ) -> PyResult<EnsembleUncertaintyResult> {
-    if model_predictions.is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "model_predictions must not be empty",
-        ));
-    }
-
-    let n_models = model_predictions.len();
-    let n_obs = model_predictions[0].len();
-    let n_times = model_predictions[0].first().map(|p| p.len()).unwrap_or(0);
+    validate_probability_open(confidence_level, "confidence_level")?;
+    let (n_models, n_obs, n_times) =
+        validate_prediction_cube(&model_predictions, "model_predictions")?;
 
     let mean_prediction: Vec<Vec<f64>> = (0..n_obs)
         .into_par_iter()
@@ -56,7 +162,11 @@ pub fn ensemble_uncertainty(
                 }
             }
             let n_pairs = (n_models * (n_models - 1) / 2) as f64;
-            total_disagreement / (n_pairs * n_times as f64)
+            if n_pairs > 0.0 {
+                total_disagreement / (n_pairs * n_times as f64)
+            } else {
+                0.0
+            }
         })
         .collect();
 
@@ -136,18 +246,10 @@ pub fn quantile_regression_intervals(
     quantiles: Option<Vec<f64>>,
 ) -> PyResult<QuantileRegressionResult> {
     let quantiles = quantiles.unwrap_or_else(|| vec![0.025, 0.5, 0.975]);
+    validate_quantiles(&quantiles)?;
 
-    if bootstrap_predictions.is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "bootstrap_predictions must not be empty",
-        ));
-    }
-
-    let n_obs = bootstrap_predictions[0].len();
-    let n_times = bootstrap_predictions[0]
-        .first()
-        .map(|p| p.len())
-        .unwrap_or(0);
+    let (_, n_obs, n_times) =
+        validate_prediction_cube(&bootstrap_predictions, "bootstrap_predictions")?;
 
     let lower_q = quantiles.first().copied().unwrap_or(0.025);
     let median_q = quantiles.get(1).copied().unwrap_or(0.5);
@@ -162,7 +264,7 @@ pub fn quantile_regression_intervals(
 
             for t in 0..n_times {
                 let mut values: Vec<f64> = bootstrap_predictions.iter().map(|p| p[i][t]).collect();
-                values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                values.sort_by(f64::total_cmp);
                 let lower_idx = quantile_index(values.len(), lower_q);
                 let median_idx = quantile_index(values.len(), median_q);
                 let upper_idx = quantile_index(values.len(), upper_q);
@@ -238,15 +340,26 @@ pub fn calibrate_prediction_intervals(
 ) -> PyResult<CalibrationUncertaintyResult> {
     let n = true_times.len();
     if n == 0 || true_events.len() != n || lower_bounds.len() != n || upper_bounds.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(uncertainty_value_error(
             "All inputs must have the same non-zero length",
         ));
     }
+    validate_finite_vector(&true_times, "true_times")?;
+    validate_binary_events(&true_events, "true_events")?;
+    validate_finite_vector(&lower_bounds, "lower_bounds")?;
+    validate_finite_vector(&upper_bounds, "upper_bounds")?;
+    validate_probability_open(expected_coverage, "expected_coverage")?;
 
     let mut covered = 0;
     let mut total_width = 0.0;
 
     for i in 0..n {
+        if lower_bounds[i] > upper_bounds[i] {
+            return Err(uncertainty_value_error(format!(
+                "lower_bounds must be less than or equal to upper_bounds; got {} > {} at index {i}",
+                lower_bounds[i], upper_bounds[i]
+            )));
+        }
         if true_events[i] == 1
             && true_times[i] >= lower_bounds[i]
             && true_times[i] <= upper_bounds[i]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from bisect import bisect_left, bisect_right
+from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -57,7 +57,6 @@ _EXP_CLAMP_MAX = 709.0
 _SURVFIT_TIME_EPSILON = 1e-9
 _VARIANCE_SCALE_FLOOR = 1e-12
 _COX_DFBETAS_SCALE_FLOOR = 1e-10
-_CONCORDANCE_RISK_TIE_FLOOR = 1e-10
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2")
 
 
@@ -2390,11 +2389,12 @@ def _encode_groups(group: Any, n: int) -> list[int]:
     values = _materialize_labels(group, "group")
     if len(values) != n:
         raise ValueError("group must have the same length as the Surv response")
-    labels = {value: idx for idx, value in enumerate(_label_levels(values, "group"))}
-    encoded = []
-    for value in values:
-        encoded.append(labels[value])
-    return encoded
+    return _encode_labels(values, "group")
+
+
+def _encode_labels(values: list[Any], name: str) -> list[int]:
+    labels = {value: idx for idx, value in enumerate(_label_levels(values, name))}
+    return [labels[value] for value in values]
 
 
 def _group_indices(group: Any, n: int) -> dict[Any, list[int]]:
@@ -3136,147 +3136,6 @@ def _survfit_confidence_interval(
     raise AssertionError("conf_type is validated before confidence intervals are computed")
 
 
-def _unweighted_survfit_event_counts(
-    output_times: list[float],
-    time: list[float],
-    status: list[int],
-    *,
-    reverse: bool,
-    timefix: bool,
-) -> list[float]:
-    if not timefix:
-        event_counts: dict[float, float] = {}
-        for event_time, event in zip(time, status, strict=True):
-            if event <= 0 if reverse else event > 0:
-                event_counts[event_time] = event_counts.get(event_time, 0.0) + 1.0
-        return [event_counts.get(output_time, 0.0) for output_time in output_times]
-
-    event_times = sorted(
-        float(event_time)
-        for event_time, event in zip(time, status, strict=True)
-        if (event <= 0 if reverse else event > 0)
-    )
-    counts: list[float] = []
-    cursor = 0
-    for output_time in output_times:
-        while (
-            cursor < len(event_times) and event_times[cursor] < output_time - _SURVFIT_TIME_EPSILON
-        ):
-            cursor += 1
-        matched = cursor
-        while (
-            matched < len(event_times)
-            and abs(event_times[matched] - output_time) < _SURVFIT_TIME_EPSILON
-        ):
-            matched += 1
-        counts.append(float(matched - cursor))
-    return counts
-
-
-def _exact_survfitkm(
-    time: list[float],
-    status: list[int],
-    weights: list[float] | None,
-    entry_times: list[float] | None,
-    *,
-    reverse: bool,
-    conf_level: float,
-    conf_type: str,
-) -> SurvfitResult:
-    n = len(time)
-    case_weights = [1.0] * n if weights is None else weights
-    order = sorted(range(n), key=lambda idx: (time[idx], idx))
-    entry_order = (
-        sorted(range(n), key=lambda idx: (entry_times[idx], idx)) if entry_times is not None else []
-    )
-    entry_cursor = 0
-    current_risk = 0.0 if entry_times is not None else float(sum(case_weights))
-    current_estimate = 1.0
-    cumulative_variance = 0.0
-    cumulative_hazard = 0.0
-    cumulative_hazard_variance = 0.0
-    alpha = 1.0 - conf_level
-    z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
-
-    output_time: list[float] = []
-    n_risk: list[float] = []
-    n_event: list[float] = []
-    n_censor: list[float] = []
-    estimate: list[float] = []
-    std_err: list[float] = []
-    cumhaz: list[float] = []
-    std_chaz: list[float] = []
-    conf_lower: list[float] = []
-    conf_upper: list[float] = []
-
-    cursor = 0
-    while cursor < n:
-        current_time = time[order[cursor]]
-        if entry_times is not None:
-            while entry_cursor < n and entry_times[entry_order[entry_cursor]] < current_time:
-                current_risk += case_weights[entry_order[entry_cursor]]
-                entry_cursor += 1
-
-        weighted_events = 0.0
-        weighted_censor = 0.0
-        scan = cursor
-        while scan < n and time[order[scan]] == current_time:
-            idx = order[scan]
-            is_event = status[idx] <= 0 if reverse else status[idx] > 0
-            if is_event:
-                weighted_events += case_weights[idx]
-            else:
-                weighted_censor += case_weights[idx]
-            scan += 1
-
-        if weighted_events > 0.0 or weighted_censor > 0.0:
-            risk_at_time = current_risk
-            if weighted_events > 0.0 and risk_at_time > 0.0:
-                hazard = weighted_events / risk_at_time
-                cumulative_hazard += hazard
-                cumulative_hazard_variance += weighted_events / (risk_at_time * risk_at_time)
-                current_estimate *= 1.0 - hazard
-                if risk_at_time > weighted_events:
-                    cumulative_variance += weighted_events / (
-                        risk_at_time * (risk_at_time - weighted_events)
-                    )
-
-            se = current_estimate * math.sqrt(max(cumulative_variance, 0.0))
-            output_time.append(current_time)
-            n_risk.append(risk_at_time)
-            n_event.append(weighted_events)
-            n_censor.append(weighted_censor)
-            estimate.append(current_estimate)
-            std_err.append(se)
-            cumhaz.append(cumulative_hazard)
-            std_chaz.append(math.sqrt(max(cumulative_hazard_variance, 0.0)))
-            if conf_type != "none":
-                lower, upper = _survfit_confidence_interval(
-                    current_estimate,
-                    se,
-                    z,
-                    conf_type,
-                )
-                conf_lower.append(lower)
-                conf_upper.append(upper)
-
-        current_risk -= weighted_events + weighted_censor
-        cursor = scan
-
-    return SurvfitResult(
-        time=output_time,
-        n_risk=n_risk,
-        n_event=n_event,
-        n_censor=n_censor,
-        estimate=estimate,
-        std_err=std_err,
-        conf_lower=conf_lower,
-        conf_upper=conf_upper,
-        cumhaz=cumhaz,
-        std_chaz=std_chaz,
-    )
-
-
 def _survfitkm(
     time: list[float],
     status: list[int],
@@ -3288,16 +3147,6 @@ def _survfitkm(
     conf_type: str,
     timefix: bool,
 ) -> Any:
-    if not timefix:
-        return _exact_survfitkm(
-            time,
-            status,
-            weights,
-            entry_times,
-            reverse=reverse,
-            conf_level=conf_level,
-            conf_type=conf_type,
-        )
     return _core.survfitkm(
         time,
         status,
@@ -3307,6 +3156,7 @@ def _survfitkm(
         computation_type=0,
         conf_level=conf_level,
         conf_type=conf_type,
+        timefix=timefix,
     )
 
 
@@ -3314,171 +3164,40 @@ def _survfit_from_km_counts(
     km: Any,
     conf_level: float,
     computation: _SurvfitComputation,
-    event_counts: list[float],
     conf_type: str,
 ) -> SurvfitResult:
-    n_risk = [float(value) for value in km.n_risk]
-    n_event = [float(value) for value in km.n_event]
-    n_censor = [float(value) for value in km.n_censor]
-    cumhaz: list[float] = []
-    estimate: list[float] = []
-    std_err: list[float] = []
-    std_chaz: list[float] = []
-    conf_lower: list[float] = []
-    conf_upper: list[float] = []
-    hazard = 0.0
-    variance = 0.0
-    alpha = 1.0 - conf_level
-    z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
-
-    for risk, events, unweighted_events in zip(
-        n_risk,
-        n_event,
-        event_counts,
-        strict=True,
-    ):
-        if risk > 0.0 and events > 0.0 and unweighted_events > 0.0:
-            if computation.ctype == 1:
-                hazard += events / risk
-                variance += events / (risk * risk)
-            else:
-                for step in range(int(unweighted_events)):
-                    denominator = risk - step * events / unweighted_events
-                    if denominator > 0.0:
-                        hazard += events / (unweighted_events * denominator)
-                        variance += events / (unweighted_events * denominator * denominator)
-        se_hazard = math.sqrt(max(variance, 0.0))
-        survival = (
-            _safe_exp(-hazard) if computation.stype == 2 else float(km.estimate[len(estimate)])
-        )
-        cumhaz.append(hazard)
-        std_chaz.append(se_hazard)
-        estimate.append(survival)
-        if computation.stype == 2:
-            std_err.append(survival * se_hazard)
-            if conf_type != "none":
-                lower, upper = _survfit_confidence_interval(
-                    survival,
-                    survival * se_hazard,
-                    z,
-                    conf_type,
-                )
-                conf_lower.append(lower)
-                conf_upper.append(upper)
-        else:
-            std_err.append(float(km.std_err[len(std_err)]))
-            if conf_type != "none":
-                conf_lower.append(float(km.conf_lower[len(conf_lower)]))
-                conf_upper.append(float(km.conf_upper[len(conf_upper)]))
+    curve = _core.survfit_curve_from_tables(
+        [float(value) for value in km.time],
+        [float(value) for value in km.n_risk],
+        [float(value) for value in km.n_event],
+        [float(value) for value in km.n_event_count],
+        [float(value) for value in km.n_censor],
+        [float(value) for value in km.n_censor_count],
+        None if getattr(km, "n_enter", None) is None else [float(value) for value in km.n_enter],
+        False,
+        computation.stype,
+        computation.ctype,
+        conf_level,
+        conf_type,
+    )
 
     return SurvfitResult(
-        time=[float(value) for value in km.time],
-        n_risk=n_risk,
-        n_event=n_event,
-        n_censor=n_censor,
-        estimate=estimate,
-        std_err=std_err,
-        conf_lower=conf_lower,
-        conf_upper=conf_upper,
-        cumhaz=cumhaz,
-        std_chaz=std_chaz,
+        time=[float(value) for value in curve.time],
+        n_risk=[float(value) for value in curve.n_risk],
+        n_event=[float(value) for value in curve.n_event],
+        n_censor=[float(value) for value in curve.n_censor],
+        estimate=[float(value) for value in curve.estimate],
+        std_err=[float(value) for value in curve.std_err],
+        conf_lower=[float(value) for value in curve.conf_lower],
+        conf_upper=[float(value) for value in curve.conf_upper],
+        cumhaz=[float(value) for value in curve.cumhaz],
+        std_chaz=[float(value) for value in curve.std_chaz],
         n_enter=(
-            [float(value) for value in km.n_enter]
-            if getattr(km, "n_enter", None) is not None
+            [float(value) for value in curve.n_enter]
+            if getattr(curve, "n_enter", None) is not None
             else None
         ),
     )
-
-
-def _survfit_time_equal(left: float, right: float, timefix: bool) -> bool:
-    return abs(left - right) < _SURVFIT_TIME_EPSILON if timefix else left == right
-
-
-def _survfit_time_less(left: float, right: float, timefix: bool) -> bool:
-    return left < right - _SURVFIT_TIME_EPSILON if timefix else left < right
-
-
-def _survfit_positions(
-    response: Surv,
-    id_values: list[Any],
-    timefix: bool,
-) -> list[int]:
-    if response.start is None:
-        return [3] * len(response)
-
-    id_labels = _label_levels(id_values, "id")
-    id_codes = {value: idx for idx, value in enumerate(id_labels)}
-    starts = [float(value) for value in response.start]
-    stops = [float(value) for value in response.time]
-    order = sorted(
-        range(len(response)),
-        key=lambda idx: (id_codes[id_values[idx]], stops[idx], idx),
-    )
-    positions = [0] * len(response)
-    for sorted_idx, row_idx in enumerate(order):
-        current_id = id_codes[id_values[row_idx]]
-        previous_row = order[sorted_idx - 1] if sorted_idx > 0 else None
-        next_row = order[sorted_idx + 1] if sorted_idx + 1 < len(order) else None
-
-        first = previous_row is None or id_codes[id_values[previous_row]] != current_id
-        if previous_row is not None and not first:
-            first = _survfit_time_less(stops[previous_row], starts[row_idx], timefix)
-
-        last = next_row is None or id_codes[id_values[next_row]] != current_id
-        if next_row is not None and not last:
-            last = _survfit_time_less(stops[row_idx], starts[next_row], timefix)
-
-        positions[row_idx] = (1 if first else 0) + (2 if last else 0)
-    return positions
-
-
-def _survfit_counting_times(
-    starts: list[float],
-    stops: list[float],
-    status: list[int],
-    positions: list[int],
-    include_entry: bool,
-    timefix: bool,
-) -> list[float]:
-    n = len(stops)
-    sort_stop = sorted(range(n), key=lambda idx: (stops[idx], idx))
-    if not include_entry:
-        times: list[float] = []
-        for idx in sort_stop:
-            if (positions[idx] > 1 or status[idx] > 0 or not times) and (
-                not times or not _survfit_time_equal(stops[idx], times[-1], timefix)
-            ):
-                times.append(stops[idx])
-        return times
-
-    sort_start = sorted(range(n), key=lambda idx: (starts[idx], idx))
-    times = [starts[sort_start[0]]]
-    current = times[0]
-    entry_cursor = 1
-    for stop_idx in sort_stop:
-        while entry_cursor < n and _survfit_time_less(
-            starts[sort_start[entry_cursor]],
-            stops[stop_idx],
-            timefix,
-        ):
-            start_idx = sort_start[entry_cursor]
-            if positions[start_idx] & 1 and not _survfit_time_equal(
-                starts[start_idx],
-                current,
-                timefix,
-            ):
-                current = starts[start_idx]
-                times.append(current)
-            entry_cursor += 1
-
-        if (positions[stop_idx] > 1 or status[stop_idx] > 0) and not _survfit_time_equal(
-            stops[stop_idx],
-            current,
-            timefix,
-        ):
-            current = stops[stop_idx]
-            times.append(current)
-    return times
 
 
 def _survfit_from_count_tables(
@@ -3495,72 +3214,37 @@ def _survfit_from_count_tables(
     conf_type: str,
     computation: _SurvfitComputation,
 ) -> SurvfitResult:
-    current_survival = 1.0
-    greenwood_variance = 0.0
-    cumulative_hazard = 0.0
-    cumulative_hazard_variance = 0.0
-    alpha = 1.0 - conf_level
-    z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
-
-    estimate: list[float] = []
-    std_err: list[float] = []
-    cumhaz: list[float] = []
-    std_chaz: list[float] = []
-    conf_lower: list[float] = []
-    conf_upper: list[float] = []
-
-    for idx, risk_count in enumerate(n_risk):
-        event_weight = n_censor[idx] if reverse else n_event[idx]
-        event_count = n_censor_count[idx] if reverse else n_event_count[idx]
-        risk_for_curve = risk_count - n_event[idx] if reverse else risk_count
-
-        if event_weight > 0.0 and event_count > 0.0 and risk_for_curve > 0.0:
-            if computation.ctype == 1:
-                cumulative_hazard += event_weight / risk_for_curve
-                cumulative_hazard_variance += event_weight / (risk_for_curve * risk_for_curve)
-            else:
-                for step in range(int(event_count)):
-                    denominator = risk_for_curve - step * event_weight / event_count
-                    if denominator > 0.0:
-                        cumulative_hazard += event_weight / (event_count * denominator)
-                        cumulative_hazard_variance += event_weight / (
-                            event_count * denominator * denominator
-                        )
-
-        if computation.stype == 1:
-            if event_weight > 0.0 and event_count > 0.0 and risk_for_curve > 0.0:
-                current_survival *= max((risk_for_curve - event_weight) / risk_for_curve, 0.0)
-                if risk_for_curve > event_weight:
-                    greenwood_variance += event_weight / (
-                        risk_for_curve * (risk_for_curve - event_weight)
-                    )
-            survival = current_survival
-            survival_se = survival * math.sqrt(max(greenwood_variance, 0.0))
-        else:
-            survival = _safe_exp(-cumulative_hazard)
-            survival_se = survival * math.sqrt(max(cumulative_hazard_variance, 0.0))
-
-        estimate.append(survival)
-        std_err.append(survival_se)
-        cumhaz.append(cumulative_hazard)
-        std_chaz.append(math.sqrt(max(cumulative_hazard_variance, 0.0)))
-        if conf_type != "none":
-            lower, upper = _survfit_confidence_interval(survival, survival_se, z, conf_type)
-            conf_lower.append(lower)
-            conf_upper.append(upper)
+    curve = _core.survfit_curve_from_tables(
+        times,
+        n_risk,
+        n_event,
+        n_event_count,
+        n_censor,
+        n_censor_count,
+        n_enter,
+        reverse,
+        computation.stype,
+        computation.ctype,
+        conf_level,
+        conf_type,
+    )
 
     return SurvfitResult(
-        time=times,
-        n_risk=n_risk,
-        n_event=n_event,
-        n_censor=n_censor,
-        estimate=estimate,
-        std_err=std_err,
-        conf_lower=conf_lower,
-        conf_upper=conf_upper,
-        cumhaz=cumhaz,
-        std_chaz=std_chaz,
-        n_enter=n_enter,
+        time=[float(value) for value in curve.time],
+        n_risk=[float(value) for value in curve.n_risk],
+        n_event=[float(value) for value in curve.n_event],
+        n_censor=[float(value) for value in curve.n_censor],
+        estimate=[float(value) for value in curve.estimate],
+        std_err=[float(value) for value in curve.std_err],
+        conf_lower=[float(value) for value in curve.conf_lower],
+        conf_upper=[float(value) for value in curve.conf_upper],
+        cumhaz=[float(value) for value in curve.cumhaz],
+        std_chaz=[float(value) for value in curve.std_chaz],
+        n_enter=(
+            [float(value) for value in curve.n_enter]
+            if getattr(curve, "n_enter", None) is not None
+            else None
+        ),
     )
 
 
@@ -3584,74 +3268,25 @@ def _survfit_counting_with_id(
     stops = [float(value) for value in response.time]
     status = [int(value) for value in response.event]
     case_weights = [1.0] * n if weights is None else [float(value) for value in weights]
-    positions = _survfit_positions(response, id_values, timefix)
-    times = _survfit_counting_times(starts, stops, status, positions, include_entry, timefix)
-    sort_start = sorted(range(n), key=lambda idx: (starts[idx], idx))
-    sort_stop = sorted(range(n), key=lambda idx: (stops[idx], idx))
-
-    n_risk = [0.0] * len(times)
-    n_event = [0.0] * len(times)
-    n_event_count = [0.0] * len(times)
-    n_censor = [0.0] * len(times)
-    n_censor_count = [0.0] * len(times)
-    n_enter = [0.0] * len(times) if include_entry else None
-
-    stop_cursor = n - 1
-    start_cursor = n - 1
-    weighted_risk = 0.0
-    for time_idx in range(len(times) - 1, -1, -1):
-        current_time = times[time_idx]
-        event_weight = 0.0
-        event_count = 0.0
-        censor_weight = 0.0
-        censor_count = 0.0
-        while stop_cursor >= 0 and not _survfit_time_less(
-            stops[sort_stop[stop_cursor]],
-            current_time,
-            timefix,
-        ):
-            row_idx = sort_stop[stop_cursor]
-            weighted_risk += case_weights[row_idx]
-            if status[row_idx] > 0:
-                event_count += 1.0
-                event_weight += case_weights[row_idx]
-            elif positions[row_idx] & 2:
-                censor_count += 1.0
-                censor_weight += case_weights[row_idx]
-            stop_cursor -= 1
-
-        enter_weight = 0.0
-        while start_cursor >= 0 and not _survfit_time_less(
-            starts[sort_start[start_cursor]],
-            current_time,
-            timefix,
-        ):
-            row_idx = sort_start[start_cursor]
-            weighted_risk -= case_weights[row_idx]
-            if (
-                include_entry
-                and positions[row_idx] & 1
-                and _survfit_time_equal(starts[row_idx], current_time, timefix)
-            ):
-                enter_weight += case_weights[row_idx]
-            start_cursor -= 1
-
-        n_risk[time_idx] = max(weighted_risk, 0.0)
-        n_event[time_idx] = event_weight
-        n_event_count[time_idx] = event_count
-        n_censor[time_idx] = censor_weight
-        n_censor_count[time_idx] = censor_count
-        if n_enter is not None:
-            n_enter[time_idx] = enter_weight
+    id_codes = _encode_labels(id_values, "id")
+    tables = _core.counting_survfit_tables(
+        starts,
+        stops,
+        status,
+        id_codes,
+        case_weights,
+        include_entry,
+        timefix,
+    )
 
     return _survfit_from_count_tables(
-        times,
-        n_risk,
-        n_event,
-        n_event_count,
-        n_censor,
-        n_censor_count,
-        n_enter,
+        [float(value) for value in tables.time],
+        [float(value) for value in tables.n_risk],
+        [float(value) for value in tables.n_event],
+        [float(value) for value in tables.n_event_count],
+        [float(value) for value in tables.n_censor],
+        [float(value) for value in tables.n_censor_count],
+        None if tables.n_enter is None else [float(value) for value in tables.n_enter],
         reverse=reverse,
         conf_level=conf_level,
         conf_type=conf_type,
@@ -3935,7 +3570,7 @@ def _cox_flat_basehaz_with_training_times(
         times = [float(value) for value in base_times]
         return CoxBaseHazardResult(
             time=training_times,
-            cumhaz=[_step_hazard_at(times, hazards, time) for time in training_times],
+            cumhaz=_core.step_values_at(times, hazards, training_times, 0.0),
             centered=centered,
         )
 
@@ -3962,9 +3597,16 @@ def _cox_flat_basehaz_with_training_times(
 
     for stratum, stratum_stop_times in sorted(stop_times_by_stratum.items()):
         stratum_times, stratum_hazards = baselines.get(stratum, ([], []))
-        for time in sorted(stratum_stop_times):
+        requested_times = sorted(stratum_stop_times)
+        requested_hazards = _core.step_values_at(
+            stratum_times,
+            stratum_hazards,
+            requested_times,
+            0.0,
+        )
+        for time, hazard in zip(requested_times, requested_hazards, strict=True):
             expanded_times.append(time)
-            expanded_hazards.append(_step_hazard_at(stratum_times, stratum_hazards, time))
+            expanded_hazards.append(hazard)
             expanded_strata.append(stratum)
 
     return CoxBaseHazardResult(
@@ -4253,18 +3895,10 @@ def survfit(
                 if model_frame is not None
                 else result
             )
-        event_counts = _unweighted_survfit_event_counts(
-            [float(value) for value in km.time],
-            list(response.time),
-            list(response.event),
-            reverse=reverse_curve,
-            timefix=fix_time,
-        )
         result = _survfit_from_km_counts(
             km,
             normalized_conf_level,
             computation,
-            event_counts,
             normalized_conf_type,
         )
         result = (
@@ -4325,18 +3959,10 @@ def survfit(
                 else km
             )
         else:
-            event_counts = _unweighted_survfit_event_counts(
-                [float(value) for value in km.time],
-                list(group_response.time),
-                list(group_response.event),
-                reverse=reverse_curve,
-                timefix=fix_time,
-            )
             result = _survfit_from_km_counts(
                 km,
                 normalized_conf_level,
                 computation,
-                event_counts,
                 normalized_conf_type,
             )
             results[label] = (
@@ -4370,14 +3996,6 @@ def _survdiff_formula_groups(
     group = _combined_formula_groups(data, [], terms.covariates, n)
     strata = _combined_columns(data, terms.strata, n) if terms.strata else None
     return group, strata
-
-
-def _survdiff_strata_markers(strata: list[int]) -> list[int]:
-    markers = [0] * len(strata)
-    for idx, value in enumerate(strata):
-        if idx + 1 == len(strata) or strata[idx + 1] != value:
-            markers[idx] = 1
-    return markers
 
 
 def _survdiff_timefix_values(times: list[float], timefix: bool) -> list[float]:
@@ -4435,101 +4053,6 @@ def _survdiff_result_from_components(components: Any, rho: float) -> Any:
     )
 
 
-def _survdiff_result_from_summary(
-    observed: list[float],
-    expected: list[float],
-    variance: float,
-    rho: float,
-) -> Any:
-    df = max(len(observed) - 1, 0)
-    statistic = (observed[0] - expected[0]) ** 2 / variance if df > 0 and variance > 0.0 else 0.0
-    p_value = 1.0 if df == 0 else float(_core.lrt_test(statistic / 2.0, 0.0, df).p_value)
-    return _core.LogRankResult(
-        statistic,
-        p_value,
-        df,
-        observed,
-        expected,
-        variance,
-        _survdiff_weight_type(rho),
-    )
-
-
-def _exact_counting_survdiff_result(
-    stop_times: list[float],
-    status: list[int],
-    entry_times: list[float],
-    group_codes: list[int],
-    n_groups: int,
-    rho: float,
-) -> Any:
-    observed = [0.0] * n_groups
-    expected = [0.0] * n_groups
-    variance = 0.0
-    if n_groups < 2:
-        return _survdiff_result_from_summary(observed, expected, variance, rho)
-
-    event_times = sorted(
-        {time for time, event in zip(stop_times, status, strict=True) if event == 1}
-    )
-    km_survival = 1.0
-    for event_time in event_times:
-        at_risk = [0.0] * n_groups
-        events = [0.0] * n_groups
-        total_events = 0.0
-        for idx, stop_time in enumerate(stop_times):
-            group_idx = group_codes[idx]
-            if entry_times[idx] < event_time <= stop_time:
-                at_risk[group_idx] += 1.0
-            if status[idx] == 1 and stop_time == event_time:
-                events[group_idx] += 1.0
-                total_events += 1.0
-
-        total_at_risk = sum(at_risk)
-        if total_events <= 0.0 or total_at_risk <= 0.0:
-            continue
-
-        weight = km_survival**rho
-        for group_idx in range(n_groups):
-            observed[group_idx] += weight * events[group_idx]
-            expected[group_idx] += weight * total_events * at_risk[group_idx] / total_at_risk
-
-        if total_at_risk > 1.0:
-            var_factor = (
-                total_events
-                * (total_at_risk - total_events)
-                / (total_at_risk * total_at_risk * (total_at_risk - 1.0))
-            )
-            for n_group in at_risk[: n_groups - 1]:
-                variance += weight * weight * var_factor * n_group * (total_at_risk - n_group)
-
-        km_survival *= 1.0 - total_events / total_at_risk
-
-    return _survdiff_result_from_summary(observed, expected, variance, rho)
-
-
-def _exact_survdiff(response: Surv, group: Any, rho: float, timefix: bool) -> Any:
-    group_codes = _encode_groups(group, len(response))
-    if response.start is not None:
-        return _exact_counting_survdiff_result(
-            list(response.time),
-            list(response.event),
-            list(response.start),
-            group_codes,
-            len(set(group_codes)),
-            rho,
-        )
-
-    components = _core.survdiff2(
-        _survdiff_timefix_values(list(response.time), timefix),
-        list(response.event),
-        [code + 1 for code in group_codes],
-        None,
-        rho,
-    )
-    return _survdiff_result_from_components(components, rho)
-
-
 def _stratified_survdiff(
     response: Surv,
     group: Any,
@@ -4540,62 +4063,26 @@ def _stratified_survdiff(
     n = len(response)
     group_codes = _encode_groups(group, n)
     strata_codes = _encode_groups(strata, n)
-    times = _survdiff_timefix_values(list(response.time), timefix)
+    times = list(response.time)
     if response.start is not None:
-        n_groups = len(set(group_codes))
-        observed = [0.0] * n_groups
-        expected = [0.0] * n_groups
-        variance = 0.0
-        starts = list(response.start)
-        for indices in _group_indices(strata_codes, n).values():
-            local_groups = [group_codes[idx] for idx in indices]
-            if not timefix:
-                local_result = _exact_counting_survdiff_result(
-                    [times[idx] for idx in indices],
-                    [response.event[idx] for idx in indices],
-                    [starts[idx] for idx in indices],
-                    local_groups,
-                    n_groups,
-                    rho,
-                )
-            else:
-                local_result = (
-                    _core.logrank_test(
-                        [times[idx] for idx in indices],
-                        [response.event[idx] for idx in indices],
-                        local_groups,
-                        entry_times=[starts[idx] for idx in indices],
-                    )
-                    if rho == 0.0
-                    else _core.fleming_harrington_test(
-                        [times[idx] for idx in indices],
-                        [response.event[idx] for idx in indices],
-                        local_groups,
-                        rho,
-                        0.0,
-                        entry_times=[starts[idx] for idx in indices],
-                    )
-                )
-            if not timefix:
-                for group_idx in range(n_groups):
-                    observed[group_idx] += float(local_result.observed[group_idx])
-                    expected[group_idx] += float(local_result.expected[group_idx])
-            else:
-                for local_idx, group_code in enumerate(sorted(set(local_groups))):
-                    observed[group_code] += float(local_result.observed[local_idx])
-                    expected[group_code] += float(local_result.expected[local_idx])
-            variance += float(local_result.variance)
+        components = _core.stratified_counting_logrank_components(
+            times,
+            list(response.event),
+            [code + 1 for code in group_codes],
+            list(response.start),
+            strata_codes,
+            rho,
+            timefix,
+        )
+        return _survdiff_result_from_components(components, rho)
 
-        return _survdiff_result_from_summary(observed, expected, variance, rho)
-
-    order = sorted(range(n), key=lambda idx: (strata_codes[idx], times[idx], idx))
-    sorted_strata = [strata_codes[idx] for idx in order]
-    components = _core.survdiff2(
-        [times[idx] for idx in order],
-        [response.event[idx] for idx in order],
-        [group_codes[idx] + 1 for idx in order],
-        _survdiff_strata_markers(sorted_strata),
+    components = _core.stratified_logrank_components(
+        times,
+        list(response.event),
+        [code + 1 for code in group_codes],
+        strata_codes,
         rho,
+        timefix,
     )
     return _survdiff_result_from_components(components, rho)
 
@@ -4655,26 +4142,29 @@ def survdiff(
     fix_time = _normalize_bool_option(timefix, "timefix")
     if formula_strata is not None:
         return _stratified_survdiff(response, group, formula_strata, rho_value, fix_time)
-    if not fix_time:
-        return _exact_survdiff(response, group, rho_value, fix_time)
 
     groups = _encode_groups(group, len(response))
-    entry_times = list(response.start) if response.start is not None else None
-    if rho_value == 0.0:
-        return _core.logrank_test(
+    group_codes = [code + 1 for code in groups]
+    if response.start is not None:
+        components = _core.compute_counting_logrank_components(
             list(response.time),
             list(response.event),
-            groups,
-            entry_times=entry_times,
+            group_codes,
+            list(response.start),
+            None,
+            rho_value,
+            fix_time,
         )
-    return _core.fleming_harrington_test(
-        list(response.time),
-        list(response.event),
-        groups,
-        rho_value,
-        0.0,
-        entry_times=entry_times,
-    )
+    else:
+        components = _core.survdiff2(
+            list(response.time),
+            list(response.event),
+            group_codes,
+            None,
+            rho_value,
+            fix_time,
+        )
+    return _survdiff_result_from_components(components, rho_value)
 
 
 def basehaz(
@@ -5274,32 +4764,7 @@ def _cox_event_indices(fit: Any) -> list[int]:
     times = [float(value) for value in fit.event_times]
     strata_values = fit.strata if hasattr(fit, "strata") else [0] * len(status)
     strata = [int(value) for value in strata_values]
-    if len(times) != len(status) or len(strata) != len(status):
-        raise ValueError("fitted Cox model event arrays have inconsistent lengths")
-
-    order = sorted(range(len(status)), key=lambda idx: (strata[idx], times[idx], idx))
-    event_indices: list[int] = []
-    stratum_start = 0
-    while stratum_start < len(order):
-        stratum = strata[order[stratum_start]]
-        stratum_end = stratum_start
-        while stratum_end + 1 < len(order) and strata[order[stratum_end + 1]] == stratum:
-            stratum_end += 1
-
-        time_start = stratum_start
-        while time_start <= stratum_end:
-            event_time = times[order[time_start]]
-            time_end = time_start
-            while time_end < stratum_end and times[order[time_end + 1]] == event_time:
-                time_end += 1
-            event_indices.extend(
-                order[pos] for pos in range(time_start, time_end + 1) if status[order[pos]] == 1
-            )
-            time_start = time_end + 1
-
-        stratum_start = stratum_end + 1
-
-    return event_indices
+    return [int(idx) for idx in _core.cox_event_indices(times, status, strata)]
 
 
 def _cox_scaled_schoenfeld_from_raw(fit: Any, raw: list[list[float]]) -> list[list[float]]:
@@ -5311,20 +4776,7 @@ def _cox_scaled_schoenfeld_from_raw(fit: Any, raw: list[list[float]]) -> list[li
     if variance is None:
         raise TypeError("model does not expose coefficient variance")
     matrix = [list(row) for row in variance]
-    if len(matrix) != nvar or any(len(row) != nvar for row in matrix):
-        raise ValueError("fitted Cox model information matrix does not match coefficient width")
-    if any(len(row) != nvar for row in raw):
-        raise ValueError("Schoenfeld residuals do not match coefficient width")
-    event_count = len(raw)
-    return [
-        [
-            beta[col_idx]
-            + event_count
-            * sum(row[inner_idx] * matrix[inner_idx][col_idx] for inner_idx in range(nvar))
-            for col_idx in range(nvar)
-        ]
-        for row in raw
-    ]
+    return _core.scale_schoenfeld_residuals(raw, beta, matrix)
 
 
 def _cox_dfbeta_from_score_residuals(fit: Any, *, scaled: bool) -> list[list[float]]:
@@ -5340,27 +4792,7 @@ def _cox_dfbeta_from_score_residuals(fit: Any, *, scaled: bool) -> list[list[flo
     if variance is None:
         raise TypeError("model does not expose coefficient variance")
     matrix = [list(row) for row in variance]
-    if len(matrix) != nvar or any(len(row) != nvar for row in matrix):
-        raise ValueError("fitted Cox model information matrix does not match coefficient width")
-    if any(len(row) != nvar for row in score):
-        raise ValueError("score residuals do not match coefficient width")
-
-    scales = (
-        [
-            max(math.sqrt(abs(matrix[col_idx][col_idx])), _COX_DFBETAS_SCALE_FLOOR)
-            for col_idx in range(nvar)
-        ]
-        if scaled
-        else [1.0] * nvar
-    )
-    return [
-        [
-            sum(matrix[col_idx][inner_idx] * row[inner_idx] for inner_idx in range(nvar))
-            / scales[col_idx]
-            for col_idx in range(nvar)
-        ]
-        for row in score
-    ]
+    return _core.cox_dfbeta_from_score_residuals(score, matrix, scaled)
 
 
 def _average_ranks(values: list[float]) -> list[float]:
@@ -5472,16 +4904,7 @@ def _cox_zph_term_matrix(
     groups: list[tuple[str, list[int]]],
     beta: list[float],
 ) -> list[list[float]]:
-    result: list[list[float]] = []
-    for row in scaled:
-        grouped_row: list[float] = []
-        for _name, columns in groups:
-            if len(columns) == 1:
-                grouped_row.append(float(row[columns[0]]))
-            else:
-                grouped_row.append(sum(float(row[col_idx]) * beta[col_idx] for col_idx in columns))
-        result.append(grouped_row)
-    return result
+    return _core.cox_zph_term_matrix(scaled, [columns for _name, columns in groups], beta)
 
 
 def _cox_zph_group_variance(
@@ -5496,20 +4919,7 @@ def _cox_zph_group_variance(
     nvar = len(beta)
     if len(variance) != nvar or any(len(row) != nvar for row in variance):
         return []
-
-    loadings: list[list[float]] = []
-    for _name, columns in groups:
-        loading = [0.0] * nvar
-        for col_idx in columns:
-            loading[col_idx] = beta[col_idx] if len(columns) > 1 else 1.0
-        loadings.append(loading)
-    return [
-        [
-            sum(left[i] * variance[i][j] * right[j] for i in range(nvar) for j in range(nvar))
-            for right in loadings
-        ]
-        for left in loadings
-    ]
+    return _core.cox_zph_group_variance(variance, [columns for _name, columns in groups], beta)
 
 
 def _cox_beta(fit: Any) -> list[float]:
@@ -6913,20 +6323,6 @@ def _quadratic_form(values: list[float], variance: list[list[float]]) -> float:
     )
 
 
-def _matrix_multiply(left: list[list[float]], right: list[list[float]]) -> list[list[float]]:
-    if not left or not right:
-        return []
-    width = len(right[0])
-    inner = len(right)
-    return [
-        [
-            sum(left[row_idx][inner_idx] * right[inner_idx][col_idx] for inner_idx in range(inner))
-            for col_idx in range(width)
-        ]
-        for row_idx in range(len(left))
-    ]
-
-
 def _cox_robust_variance_matrix(
     fit: Any,
     cluster: Any,
@@ -6946,32 +6342,9 @@ def _cox_robust_variance_matrix(
     if len(weights) != n:
         raise ValueError("fitted Cox model weights do not match residual length")
 
-    _label_levels(cluster_values, "cluster")
-    cluster_scores: dict[Any, list[float]] = {}
-    for row_idx, label in enumerate(cluster_values):
-        score_row = cluster_scores.setdefault(label, [0.0] * nvar)
-        for col_idx in range(nvar):
-            score_row[col_idx] += weights[row_idx] * float(score[row_idx][col_idx])
-
-    meat = [[0.0 for _ in range(nvar)] for _ in range(nvar)]
-    for score_row in cluster_scores.values():
-        for row_idx in range(nvar):
-            for col_idx in range(nvar):
-                meat[row_idx][col_idx] += score_row[row_idx] * score_row[col_idx]
-
-    robust = _matrix_multiply(_matrix_multiply(naive, meat), naive)
+    cluster_codes = _encode_labels(cluster_values, "cluster")
+    robust = _core.clustered_sandwich_variance(score, weights, cluster_codes, naive)
     return robust, naive, cluster_values
-
-
-def _crossprod_rows(rows: list[list[float]], width: int, name: str) -> list[list[float]]:
-    if any(len(row) != width for row in rows):
-        raise ValueError(f"{name} rows must be rectangular")
-    result = [[0.0 for _ in range(width)] for _ in range(width)]
-    for row in rows:
-        for row_idx in range(width):
-            for col_idx in range(width):
-                result[row_idx][col_idx] += row[row_idx] * row[col_idx]
-    return result
 
 
 def _survreg_robust_variance_matrix(
@@ -6988,9 +6361,8 @@ def _survreg_robust_variance_matrix(
     width = len(dfbeta_rows[0]) if dfbeta_rows else len(list(getattr(fit, "variance_matrix", [])))
     naive = _survreg_variance_matrix(fit, width)
     weights = _model_residual_weights(fit, n)
-    weighted_rows = _weight_residual_result(dfbeta_rows, weights)
-    collapsed_rows = _collapse_residual_result(weighted_rows, cluster_values, n)
-    robust = _crossprod_rows(collapsed_rows, width, "survreg dfbeta")
+    cluster_codes = _encode_labels(cluster_values, "cluster")
+    robust = _core.clustered_crossprod(dfbeta_rows, weights, cluster_codes, width)
     return robust, naive, cluster_values
 
 
@@ -7002,11 +6374,7 @@ def _cox_linear_prediction_se(
 ) -> list[float]:
     design_rows = _cox_prediction_design_rows(fit, rows, reference, newdata)
     variance = _cox_variance_matrix(fit, len(_cox_beta(fit)))
-    return [math.sqrt(max(_quadratic_form(row, variance), 0.0)) for row in design_rows]
-
-
-def _submatrix(matrix: list[list[float]], columns: list[int]) -> list[list[float]]:
-    return [[matrix[row_idx][col_idx] for col_idx in columns] for row_idx in columns]
+    return _core.prediction_se_from_variance(design_rows, variance)
 
 
 def _cox_term_prediction_se(
@@ -7021,17 +6389,11 @@ def _cox_term_prediction_se(
     variance = _cox_variance_matrix(fit, len(beta))
     groups = _cox_predict_term_groups(fit, len(beta))
     selected = _predict_terms_selection(terms, [name for name, _columns in groups])
-    result: list[list[float]] = []
-    for row in design_rows:
-        result_row: list[float] = []
-        for group_idx in selected:
-            columns = groups[group_idx][1]
-            values = [row[col_idx] for col_idx in columns]
-            result_row.append(
-                math.sqrt(max(_quadratic_form(values, _submatrix(variance, columns)), 0.0))
-            )
-        result.append(result_row)
-    return result
+    return _core.term_prediction_se_from_variance(
+        design_rows,
+        variance,
+        [groups[group_idx][1] for group_idx in selected],
+    )
 
 
 def _survreg_predict_terms(
@@ -7062,17 +6424,11 @@ def _survreg_term_prediction_se(
     variance = _location_variance_matrix(fit, len(beta))
     groups = _cox_predict_term_groups(fit, len(beta))
     selected = _predict_terms_selection(terms, [name for name, _columns in groups])
-    result: list[list[float]] = []
-    for row in prediction_rows:
-        result_row: list[float] = []
-        for group_idx in selected:
-            columns = groups[group_idx][1]
-            values = [float(row[col_idx]) for col_idx in columns]
-            result_row.append(
-                math.sqrt(max(_quadratic_form(values, _submatrix(variance, columns)), 0.0))
-            )
-        result.append(result_row)
-    return result
+    return _core.term_prediction_se_from_variance(
+        prediction_rows,
+        variance,
+        [groups[group_idx][1] for group_idx in selected],
+    )
 
 
 def _survreg_linear_prediction_se(
@@ -7082,7 +6438,7 @@ def _survreg_linear_prediction_se(
     beta = _location_beta(fit)
     prediction_rows = _survreg_prediction_rows(fit, rows, "prediction SEs")
     variance = _location_variance_matrix(fit, len(beta))
-    return [math.sqrt(max(_quadratic_form(row, variance), 0.0)) for row in prediction_rows]
+    return _core.prediction_se_from_variance(prediction_rows, variance)
 
 
 def _survreg_response_uses_log_transform(fit: Any) -> bool:
@@ -7269,25 +6625,16 @@ def _survreg_quantile_prediction_se_matrix(
     scales = _survreg_scales(fit)
     strata = _survreg_prediction_strata(fit, newdata, len(prediction_rows))
     variance = _survreg_quantile_variance_matrix(fit, len(beta), len(scales))
-    has_scale_variance = len(variance) >= len(beta) + len(scales)
     transform_se = predict_type == "quantile" and _survreg_response_uses_log_transform(fit)
-
-    se_matrix: list[list[float]] = []
-    for row_idx, row in enumerate(prediction_rows):
-        se_row: list[float] = []
-        for score_idx, score in enumerate(quantile_scores):
-            values = list(row)
-            if has_scale_variance:
-                scale_values = [0.0] * len(scales)
-                stratum = strata[row_idx]
-                scale_values[stratum] = score * scales[stratum]
-                values.extend(scale_values)
-            linear_se = math.sqrt(max(_quadratic_form(values, variance), 0.0))
-            if transform_se:
-                linear_se *= abs(float(predictions[row_idx][score_idx]))
-            se_row.append(linear_se)
-        se_matrix.append(se_row)
-    return se_matrix
+    return _core.survreg_quantile_prediction_se_matrix(
+        prediction_rows,
+        scales,
+        strata,
+        variance,
+        quantile_scores,
+        predictions,
+        transform_se,
+    )
 
 
 def _drop_single_quantile(values: list[list[float]], probabilities: list[float]) -> Any:
@@ -7478,110 +6825,35 @@ def _cox_expected_baseline_by_stratum(fit: Any) -> dict[int, _CoxExpectedBaselin
     strata = _cox_training_strata(model, n)
     offsets = _cox_prediction_offset_vector(model, n)
     means = _cox_reference_means(model, "sample")
-    centered_rows = [
-        [float(value) - means[col_idx] for col_idx, value in enumerate(row)] for row in rows
-    ]
-    risk_weights = [
-        weights[idx]
-        * _safe_exp(
-            offsets[idx]
-            + sum(value * coefficient for value, coefficient in zip(row, beta, strict=True))
-        )
-        for idx, row in enumerate(rows)
-    ]
     method = _cox_detail_method(model)
-    baselines: dict[int, _CoxExpectedBaseline] = {}
-    strata_values = sorted(set(strata))
-
-    for stratum in strata_values:
-        event_times = sorted(
-            {
-                times[idx]
-                for idx, event in enumerate(status)
-                if event == 1 and strata[idx] == stratum
-            }
+    strata_values, baseline_times, cumhaz, varhaz, xbar = _core.cox_expected_baseline_by_stratum(
+        times,
+        status,
+        rows,
+        beta,
+        weights,
+        strata,
+        offsets,
+        means,
+        entry,
+        method,
+    )
+    return {
+        int(stratum): _CoxExpectedBaseline(
+            times=[float(value) for value in stratum_times],
+            cumhaz=[float(value) for value in stratum_cumhaz],
+            varhaz=[float(value) for value in stratum_varhaz],
+            xbar=[[float(value) for value in row] for row in stratum_xbar],
         )
-        out_times: list[float] = []
-        out_hazard: list[float] = []
-        out_varhaz: list[float] = []
-        out_xbar: list[list[float]] = []
-        cumulative_hazard = 0.0
-        cumulative_varhaz = 0.0
-        cumulative_xbar = [0.0] * nvar
-
-        for event_time in event_times:
-            at_risk = [
-                idx
-                for idx in range(n)
-                if strata[idx] == stratum
-                and times[idx] >= event_time
-                and (entry is None or entry[idx] < event_time)
-            ]
-            deaths = [
-                idx
-                for idx in at_risk
-                if status[idx] == 1 and abs(times[idx] - event_time) < _SURVFIT_TIME_EPSILON
-            ]
-            if not deaths:
-                continue
-            event_weight = sum(weights[idx] for idx in deaths)
-            denom = sum(risk_weights[idx] for idx in at_risk)
-            if denom <= 0.0:
-                hazard = 0.0
-                varhaz = 0.0
-                xbar_increment = [0.0] * nvar
-            else:
-                risk_xsum = [
-                    sum(risk_weights[idx] * centered_rows[idx][col_idx] for idx in at_risk)
-                    for col_idx in range(nvar)
-                ]
-                if method == "efron" and len(deaths) > 1:
-                    death_risk = sum(risk_weights[idx] for idx in deaths)
-                    death_xsum = [
-                        sum(risk_weights[idx] * centered_rows[idx][col_idx] for idx in deaths)
-                        for col_idx in range(nvar)
-                    ]
-                    step_weight = event_weight / len(deaths)
-                    hazard = 0.0
-                    varhaz = 0.0
-                    xbar_increment = [0.0] * nvar
-                    for step in range(len(deaths)):
-                        fraction = step / len(deaths)
-                        step_denom = denom - fraction * death_risk
-                        if step_denom <= 0.0:
-                            continue
-                        hazard += step_weight / step_denom
-                        varhaz += step_weight / (step_denom * step_denom)
-                        for col_idx in range(nvar):
-                            step_xsum = risk_xsum[col_idx] - fraction * death_xsum[col_idx]
-                            xbar_increment[col_idx] += (
-                                step_weight * step_xsum / (step_denom * step_denom)
-                            )
-                else:
-                    hazard = event_weight / denom
-                    varhaz = event_weight / (denom * denom)
-                    xbar_increment = [
-                        hazard * risk_xsum[col_idx] / denom for col_idx in range(nvar)
-                    ]
-
-            cumulative_hazard += hazard
-            cumulative_varhaz += varhaz
-            cumulative_xbar = [
-                cumulative_xbar[col_idx] + xbar_increment[col_idx] for col_idx in range(nvar)
-            ]
-            out_times.append(event_time)
-            out_hazard.append(cumulative_hazard)
-            out_varhaz.append(cumulative_varhaz)
-            out_xbar.append(list(cumulative_xbar))
-
-        baselines[stratum] = _CoxExpectedBaseline(
-            times=out_times,
-            cumhaz=out_hazard,
-            varhaz=out_varhaz,
-            xbar=out_xbar,
+        for stratum, stratum_times, stratum_cumhaz, stratum_varhaz, stratum_xbar in zip(
+            strata_values,
+            baseline_times,
+            cumhaz,
+            varhaz,
+            xbar,
+            strict=True,
         )
-
-    return baselines
+    }
 
 
 def _cox_expected_baseline_at(
@@ -7642,7 +6914,14 @@ def _cox_expected_events_with_se(
     baselines = _cox_expected_baseline_by_stratum(model)
 
     predictions: list[float] = []
-    se: list[float] = []
+    centered_rows: list[list[float]] = []
+    start_hazards: list[float] = []
+    start_varhazes: list[float] = []
+    start_xbars: list[list[float]] = []
+    stop_hazards: list[float] = []
+    stop_varhazes: list[float] = []
+    stop_xbars: list[list[float]] = []
+    risks: list[float] = []
     for row_idx, (row, stop, stratum, linear_predictor) in enumerate(
         zip(rows, response.time, prediction_strata, linear_predictors, strict=True)
     ):
@@ -7661,17 +6940,27 @@ def _cox_expected_events_with_se(
             nvar,
         )
         centered_row = [float(value) - means[col_idx] for col_idx, value in enumerate(row)]
-        start_delta = [
-            start_hazard * centered_row[col_idx] - start_xbar[col_idx] for col_idx in range(nvar)
-        ]
-        stop_delta = [
-            stop_hazard * centered_row[col_idx] - stop_xbar[col_idx] for col_idx in range(nvar)
-        ]
-        interval_delta = [stop_delta[col_idx] - start_delta[col_idx] for col_idx in range(nvar)]
-        variance_value = stop_varhaz - start_varhaz + _quadratic_form(interval_delta, variance)
         risk = _safe_exp(float(linear_predictor))
         predictions.append(max(stop_hazard - start_hazard, 0.0) * risk)
-        se.append(math.sqrt(max(variance_value, 0.0)) * risk)
+        centered_rows.append(centered_row)
+        start_hazards.append(start_hazard)
+        start_varhazes.append(start_varhaz)
+        start_xbars.append(start_xbar)
+        stop_hazards.append(stop_hazard)
+        stop_varhazes.append(stop_varhaz)
+        stop_xbars.append(stop_xbar)
+        risks.append(risk)
+    se = _core.cox_interval_cumulative_hazard_se(
+        centered_rows,
+        start_hazards,
+        start_varhazes,
+        start_xbars,
+        stop_hazards,
+        stop_varhazes,
+        stop_xbars,
+        risks,
+        variance,
+    )
     return PredictResult(predictions, se)
 
 
@@ -7724,11 +7013,7 @@ def _step_curve_at(
     curve: list[float],
     requested_times: list[float],
 ) -> list[float]:
-    values: list[float] = []
-    for time in requested_times:
-        pos = bisect_right(times, time)
-        values.append(1.0 if pos == 0 else curve[pos - 1])
-    return values
+    return _core.step_values_at(times, curve, requested_times, 1.0)
 
 
 def _step_std_err_at(
@@ -7736,11 +7021,7 @@ def _step_std_err_at(
     curve: list[float],
     requested_times: list[float],
 ) -> list[float]:
-    values: list[float] = []
-    for time in requested_times:
-        pos = bisect_right(times, time)
-        values.append(0.0 if pos == 0 else curve[pos - 1])
-    return values
+    return _core.step_values_at(times, curve, requested_times, 0.0)
 
 
 def _step_hazard_at(times: list[float], hazards: list[float], time: float) -> float:
@@ -7761,6 +7042,31 @@ def _cox_baselines_by_stratum(
     return baselines
 
 
+def _cox_baseline_survival_curves(
+    base_times: list[float],
+    base_hazards: list[float],
+    linear_predictors: list[float],
+    center: float,
+    base_strata: list[int] | None = None,
+    curve_strata: list[int] | None = None,
+    requested_times: list[float] | None = None,
+) -> tuple[list[float], list[list[float]], list[list[float]]]:
+    times, curves, cumhaz = _core.cox_survfit_from_baseline(
+        [float(value) for value in base_times],
+        [float(value) for value in base_hazards],
+        [float(value) for value in linear_predictors],
+        float(center),
+        None if base_strata is None else [int(value) for value in base_strata],
+        None if curve_strata is None else [int(value) for value in curve_strata],
+        None if requested_times is None else [float(value) for value in requested_times],
+    )
+    return (
+        [float(value) for value in times],
+        [[float(value) for value in curve] for curve in curves],
+        [[float(value) for value in curve] for curve in cumhaz],
+    )
+
+
 def _cox_survival_curve(
     fit: Any,
     rows: list[list[float]] | None,
@@ -7779,32 +7085,16 @@ def _cox_survival_curve(
         if basehaz_with_strata is None:
             raise TypeError("model does not support stratified baseline hazard prediction")
         base_times, base_hazards, base_strata = basehaz_with_strata(centered)
-        requested_strata = set(prediction_strata)
-        baselines = _cox_baselines_by_stratum(base_times, base_hazards, base_strata)
-        curve_times = sorted(
-            {time for stratum in requested_strata for time in baselines.get(stratum, ([], []))[0]}
-        )
         linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
         center = _training_linear_predictor_center(fit) if centered else 0.0
-        curves = []
-        for linear_predictor, stratum in zip(linear_predictors, prediction_strata, strict=True):
-            risk_multiplier = _safe_exp(linear_predictor - center)
-            stratum_times, stratum_hazards = baselines.get(stratum, ([], []))
-            curves.append(
-                [
-                    min(
-                        max(
-                            _safe_exp(
-                                -_step_hazard_at(stratum_times, stratum_hazards, time)
-                                * risk_multiplier,
-                            ),
-                            0.0,
-                        ),
-                        1.0,
-                    )
-                    for time in curve_times
-                ]
-            )
+        curve_times, curves, _ = _cox_baseline_survival_curves(
+            [float(value) for value in base_times],
+            [float(value) for value in base_hazards],
+            linear_predictors,
+            center,
+            [int(value) for value in base_strata],
+            prediction_strata,
+        )
         return curve_times, curves
 
     if offsets is None:
@@ -7824,13 +7114,13 @@ def _cox_survival_curve(
     curve_times, hazards = fit.basehaz(centered)
     linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
     center = _training_linear_predictor_center(fit) if centered else 0.0
-    curves = []
-    for linear_predictor in linear_predictors:
-        risk_multiplier = _safe_exp(linear_predictor - center)
-        curves.append(
-            [min(max(_safe_exp(-float(hazard) * risk_multiplier), 0.0), 1.0) for hazard in hazards]
-        )
-    return [float(value) for value in curve_times], curves
+    curve_times, curves, _ = _cox_baseline_survival_curves(
+        [float(value) for value in curve_times],
+        [float(value) for value in hazards],
+        linear_predictors,
+        center,
+    )
+    return curve_times, curves
 
 
 def _cox_default_survfit_linear_predictor(fit: Any) -> float:
@@ -7904,7 +7194,7 @@ def _cox_survfit_with_censor_times(
     expanded_surv: list[list[float]] = []
     for hazards in result.cumhaz:
         hazard_values = [float(value) for value in hazards]
-        curve_hazards = [_step_hazard_at(result.time, hazard_values, time) for time in times]
+        curve_hazards = _core.step_values_at(result.time, hazard_values, times, 0.0)
         expanded_cumhaz.append(curve_hazards)
         expanded_surv.append([_clamp_probability(_safe_exp(-hazard)) for hazard in curve_hazards])
 
@@ -7934,30 +7224,14 @@ def _cox_survfit_conditioned(
 
     t0 = start_time if start_time is not None else _cox_survfit_default_time0(fit)
     times = [float(value) for value in result.time]
-    if start_time is None:
-        keep_indices = list(range(len(times)))
-    else:
-        keep_indices = [idx for idx, time in enumerate(times) if time >= t0 - _SURVFIT_TIME_EPSILON]
-        if not keep_indices:
-            raise ValueError("start_time argument has removed all endpoints")
-
-    start_pos = bisect_left(times, t0)
-    kept_times = [times[idx] for idx in keep_indices]
-    conditioned_surv: list[list[float]] = []
-    conditioned_cumhaz: list[list[float]] = []
-    for _curve, hazards in zip(result.surv, result.cumhaz, strict=True):
-        hazard_values = [float(value) for value in hazards]
-        start_hazard = hazard_values[start_pos - 1] if start_pos > 0 else 0.0
-        curve_hazards = [max(hazard_values[idx] - start_hazard, 0.0) for idx in keep_indices]
-        conditioned_cumhaz.append(curve_hazards)
-        conditioned_surv.append(
-            [_clamp_probability(_safe_exp(-hazard)) for hazard in curve_hazards]
-        )
-
-    if include_time0 and not (kept_times and abs(kept_times[0] - t0) < _SURVFIT_TIME_EPSILON):
-        kept_times = [t0, *kept_times]
-        conditioned_surv = [[1.0, *curve] for curve in conditioned_surv]
-        conditioned_cumhaz = [[0.0, *curve] for curve in conditioned_cumhaz]
+    kept_times, conditioned_surv, conditioned_cumhaz = _core.condition_cox_survfit_curves(
+        times,
+        [[float(value) for value in curve] for curve in result.cumhaz],
+        float(t0),
+        include_time0,
+        start_time is not None,
+        _SURVFIT_TIME_EPSILON,
+    )
 
     return CoxSurvfitResult(
         time=kept_times,
@@ -8112,31 +7386,24 @@ def _cox_survfit_result(
     basehaz_with_strata = getattr(fit, "basehaz_with_strata", None)
     if curve_strata is not None and basehaz_with_strata is not None:
         base_times, base_hazards, base_strata = basehaz_with_strata(centered)
-        baselines = _cox_baselines_by_stratum(base_times, base_hazards, base_strata)
-        cumhaz = []
-        for linear_predictor, stratum in zip(linear_predictors, curve_strata, strict=True):
-            stratum_times, stratum_hazards = baselines.get(stratum, ([], []))
-            risk_multiplier = _safe_exp(linear_predictor - center)
-            cumhaz.append(
-                [
-                    _step_hazard_at(stratum_times, stratum_hazards, time) * risk_multiplier
-                    for time in times
-                ]
-            )
+        _, _, cumhaz = _cox_baseline_survival_curves(
+            [float(value) for value in base_times],
+            [float(value) for value in base_hazards],
+            linear_predictors,
+            center,
+            [int(value) for value in base_strata],
+            curve_strata,
+            times,
+        )
     else:
         baseline_times, baseline_hazards = fit.basehaz(centered)
-        baseline_times = [float(value) for value in baseline_times]
-        hazards = [float(value) for value in baseline_hazards]
-        if len(baseline_times) != len(times) or any(
-            abs(left - right) > _SURVFIT_TIME_EPSILON
-            for left, right in zip(baseline_times, times, strict=False)
-        ):
-            hazards = [
-                0.0 if (pos := bisect_right(baseline_times, time)) == 0 else hazards[pos - 1]
-                for time in times
-            ]
-        risk_multipliers = [_safe_exp(value - center) for value in linear_predictors]
-        cumhaz = [[hazard * risk for hazard in hazards] for risk in risk_multipliers]
+        _, _, cumhaz = _cox_baseline_survival_curves(
+            [float(value) for value in baseline_times],
+            [float(value) for value in baseline_hazards],
+            linear_predictors,
+            center,
+            requested_times=times,
+        )
     result = CoxSurvfitResult(
         time=times,
         surv=[[float(value) for value in curve] for curve in curves],
@@ -8305,112 +7572,6 @@ def _concordance_weight_values(weights: Any | None, n: int) -> list[float] | Non
     return values
 
 
-def _exact_counting_concordance_summary(
-    start: list[float],
-    stop: list[float],
-    status: list[int],
-    risk_values: list[float],
-    weights: list[float] | None,
-    timewt: str,
-) -> dict[str, float]:
-    event_time_multipliers = _counting_time_weight_multipliers(
-        start,
-        stop,
-        status,
-        weights,
-        timewt,
-    )
-    concordant = 0.0
-    comparable = 0.0
-    for event_idx, event in enumerate(status):
-        if event != 1:
-            continue
-        event_time = stop[event_idx]
-        event_time_multiplier = event_time_multipliers.get(event_time, 0.0)
-        if event_time_multiplier <= 0.0:
-            continue
-        for risk_idx in range(len(stop)):
-            if risk_idx == event_idx:
-                continue
-            if start[risk_idx] < event_time < stop[risk_idx]:
-                pair_weight = (
-                    1.0 if weights is None else float(weights[event_idx]) * float(weights[risk_idx])
-                ) * event_time_multiplier
-                comparable += pair_weight
-                diff = risk_values[event_idx] - risk_values[risk_idx]
-                if diff > 0.0:
-                    concordant += pair_weight
-                elif abs(diff) < _CONCORDANCE_RISK_TIE_FLOOR:
-                    concordant += 0.5 * pair_weight
-    return {
-        "concordance": concordant / comparable if comparable > 0.0 else 0.5,
-        "concordant": concordant,
-        "comparable": comparable,
-    }
-
-
-def _concordance_time_weight_multiplier(
-    timewt: str,
-    total_weight: float,
-    survival: float,
-    censoring_survival: float,
-    nrisk: float,
-) -> float:
-    if nrisk <= 0.0:
-        return 0.0
-    if timewt == "S":
-        return total_weight * survival / nrisk
-    if timewt == "S/G":
-        return (
-            total_weight * survival / (censoring_survival * nrisk)
-            if censoring_survival > 0.0
-            else 0.0
-        )
-    if timewt == "n/G2":
-        return 1.0 / (censoring_survival * censoring_survival) if censoring_survival > 0.0 else 0.0
-    if timewt == "I":
-        return 1.0 / nrisk
-    return 1.0
-
-
-def _counting_time_weight_multipliers(
-    start: list[float],
-    stop: list[float],
-    status: list[int],
-    weights: list[float] | None,
-    timewt: str,
-) -> dict[float, float]:
-    if timewt == "n":
-        return dict.fromkeys(
-            {stop[idx] for idx, event in enumerate(status) if event == 1},
-            1.0,
-        )
-    total_weight = float(len(stop)) if weights is None else sum(float(value) for value in weights)
-    survival = 1.0
-    multipliers: dict[float, float] = {}
-    for event_time in sorted({stop[idx] for idx, event in enumerate(status) if event == 1}):
-        nrisk = sum(
-            (1.0 if weights is None else float(weights[idx]))
-            for idx, (entry, exit_time) in enumerate(zip(start, stop, strict=True))
-            if entry < event_time <= exit_time
-        )
-        multipliers[event_time] = _concordance_time_weight_multiplier(
-            timewt,
-            total_weight,
-            survival,
-            1.0,
-            nrisk,
-        )
-        death_weight = sum(
-            (1.0 if weights is None else float(weights[idx]))
-            for idx, event in enumerate(status)
-            if event == 1 and stop[idx] == event_time
-        )
-        if nrisk > 0.0:
-            survival *= max((nrisk - death_weight) / nrisk, 0.0)
-    return multipliers
-
-
 def _concordance_bounded_times_and_status(
     times: list[float],
     status: list[int],
@@ -8427,60 +7588,18 @@ def _concordance_bounded_times_and_status(
     return bounded_times, bounded_status
 
 
-def _right_concordance_time_weight_multipliers(
-    time: list[float],
-    status: list[int],
-    weights: list[float],
-    timewt: str,
-) -> dict[float, float]:
-    if timewt == "n":
-        return dict.fromkeys(
-            {time[idx] for idx, event in enumerate(status) if event == 1},
-            1.0,
-        )
-    total_weight = math.fsum(weights)
-    survival = 1.0
-    censoring_survival = 1.0
-    multipliers: dict[float, float] = {}
-    for event_time in sorted(set(time)):
-        indices = [idx for idx, value in enumerate(time) if value == event_time]
-        nrisk = math.fsum(weights[idx] for idx, value in enumerate(time) if value >= event_time)
-        death_weight = math.fsum(weights[idx] for idx in indices if status[idx] == 1)
-        censor_weight = math.fsum(weights[idx] for idx in indices if status[idx] != 1)
-        if death_weight > 0.0:
-            multipliers[event_time] = _concordance_time_weight_multiplier(
-                timewt,
-                total_weight,
-                survival,
-                censoring_survival,
-                nrisk,
-            )
-            if nrisk > 0.0:
-                survival *= max((nrisk - death_weight) / nrisk, 0.0)
-        if censor_weight > 0.0 and nrisk > 0.0:
-            censoring_survival *= max((nrisk - censor_weight) / nrisk, 0.0)
-    return multipliers
-
-
-def _concordance_rank_at_event(
-    risk_values: list[float],
-    weights: list[float],
-    event_idx: int,
-    at_risk: list[int],
-) -> tuple[float, float] | None:
-    risk_weight = math.fsum(weights[idx] for idx in at_risk)
-    if risk_weight <= 0.0:
-        return None
-    event_risk = risk_values[event_idx]
-    greater = 0.0
-    lower = 0.0
-    for idx in at_risk:
-        diff = risk_values[idx] - event_risk
-        if diff > _CONCORDANCE_RISK_TIE_FLOOR:
-            greater += weights[idx]
-        elif diff < -_CONCORDANCE_RISK_TIE_FLOOR:
-            lower += weights[idx]
-    return (lower - greater) / risk_weight, risk_weight
+def _concordance_rank_row_dicts(
+    rows: list[tuple[float, float, float, float]],
+) -> list[dict[str, float]]:
+    return [
+        {
+            "time": float(time),
+            "rank": float(rank),
+            "timewt": float(time_weight),
+            "casewt": float(case_weight),
+        }
+        for time, rank, time_weight, case_weight in rows
+    ]
 
 
 def _single_concordance_ranks(
@@ -8492,46 +7611,20 @@ def _single_concordance_ranks(
     ymin: float | None,
     ymax: float | None,
 ) -> list[dict[str, float]]:
-    case_weights = [1.0] * len(response) if weights is None else list(weights)
-    rows: list[dict[str, float]] = []
+    case_weights = None if weights is None else list(weights)
     if response.type == "right":
         times = _survdiff_timefix_values(list(response.time), timefix)
         status = list(response.event)
         times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-        multipliers = _right_concordance_time_weight_multipliers(
-            times,
-            status,
-            case_weights,
-            timewt,
-        )
-        event_indices = sorted(
-            (idx for idx, event in enumerate(status) if event == 1),
-            key=lambda idx: (times[idx], idx),
-        )
-        for event_idx in event_indices:
-            event_time = times[event_idx]
-            multiplier = multipliers.get(event_time, 0.0)
-            if multiplier <= 0.0:
-                continue
-            at_risk = [idx for idx, value in enumerate(times) if value >= event_time]
-            rank_result = _concordance_rank_at_event(
+        return _concordance_rank_row_dicts(
+            _core.concordance_rank_rows(
+                times,
+                status,
                 risk_values,
                 case_weights,
-                event_idx,
-                at_risk,
+                timewt,
             )
-            if rank_result is None:
-                continue
-            rank, risk_weight = rank_result
-            rows.append(
-                {
-                    "time": event_time,
-                    "rank": rank,
-                    "timewt": risk_weight * multiplier,
-                    "casewt": case_weights[event_idx],
-                }
-            )
-        return rows
+        )
     if response.type == "counting":
         if timewt in {"S/G", "n/G2"}:
             raise ValueError(
@@ -8545,45 +7638,17 @@ def _single_concordance_ranks(
             start, stop = _timefix_vectors(start, stop)
         status = list(response.event)
         stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
-        multipliers = _counting_time_weight_multipliers(
-            start,
-            stop,
-            status,
-            case_weights,
-            timewt,
-        )
-        event_indices = sorted(
-            (idx for idx, event in enumerate(status) if event == 1),
-            key=lambda idx: (stop[idx], idx),
-        )
-        for event_idx in event_indices:
-            event_time = stop[event_idx]
-            multiplier = multipliers.get(event_time, 0.0)
-            if multiplier <= 0.0:
-                continue
-            at_risk = [
-                idx
-                for idx, (entry, exit_time) in enumerate(zip(start, stop, strict=True))
-                if entry < event_time <= exit_time
-            ]
-            rank_result = _concordance_rank_at_event(
+        return _concordance_rank_row_dicts(
+            _core.counting_concordance_rank_rows(
+                start,
+                stop,
+                status,
                 risk_values,
                 case_weights,
-                event_idx,
-                at_risk,
+                timewt,
+                False,
             )
-            if rank_result is None:
-                continue
-            rank, risk_weight = rank_result
-            rows.append(
-                {
-                    "time": event_time,
-                    "rank": rank,
-                    "timewt": risk_weight * multiplier,
-                    "casewt": case_weights[event_idx],
-                }
-            )
-        return rows
+        )
     raise NotImplementedError(
         "concordance currently supports right-censored and counting Surv responses"
     )
@@ -8609,123 +7674,22 @@ def _concordance_ranks(
             ymin,
             ymax,
         )
-    rows: list[dict[str, float]] = []
-    for indices in _group_indices(strata, len(response)).values():
-        group_response = _subset_surv(response, indices)
-        group_risk = [risk_values[idx] for idx in indices]
-        group_weights = [weights[idx] for idx in indices] if weights is not None else None
-        rows.extend(
-            _single_concordance_ranks(
-                group_response,
-                group_risk,
-                group_weights,
-                timefix,
-                timewt,
-                ymin,
-                ymax,
-            )
-        )
-    return sorted(rows, key=lambda row: row["time"])
-
-
-def _add_concordance_pair_influence(
-    influence_rows: list[list[float]],
-    left: int,
-    right: int,
-    column: int,
-    value: float,
-) -> None:
-    share = 0.5 * value
-    influence_rows[left][column] += share
-    influence_rows[right][column] += share
-
-
-def _concordance_influence_from_rows(
-    influence_rows: list[list[float]],
-    concordant: float,
-    comparable: float,
-) -> tuple[list[list[float]], list[float], float | None]:
-    if comparable <= 0.0:
-        return influence_rows, [0.0 for _ in influence_rows], 0.0
-    somer = (2.0 * concordant - comparable) / comparable
-    dfbeta = []
-    for row in influence_rows:
-        comparable_row = row[0] + row[1] + row[2]
-        dfbeta.append(((row[0] - row[1]) - comparable_row * somer) / (2.0 * comparable))
-    return influence_rows, dfbeta, math.fsum(value * value for value in dfbeta)
-
-
-def _single_concordance_influence(
-    response: Surv,
-    risk_values: list[float],
-    weights: list[float] | None,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-) -> tuple[list[list[float]], list[float], float | None]:
-    case_weights = [1.0] * len(response) if weights is None else list(weights)
-    influence_rows = [[0.0, 0.0, 0.0, 0.0, 0.0] for _ in range(len(response))]
-    concordant = 0.0
-    comparable = 0.0
+    strata_codes = _encode_groups(strata, len(response))
+    case_weights = None if weights is None else list(weights)
     if response.type == "right":
         times = _survdiff_timefix_values(list(response.time), timefix)
         status = list(response.event)
         times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-        multipliers = _right_concordance_time_weight_multipliers(
-            times,
-            status,
-            case_weights,
-            timewt,
+        return _concordance_rank_row_dicts(
+            _core.stratified_concordance_rank_rows(
+                times,
+                status,
+                risk_values,
+                strata_codes,
+                case_weights,
+                timewt,
+            )
         )
-        for left in range(len(times)):
-            for right in range(left + 1, len(times)):
-                if status[left] == 1 and status[right] == 1 and times[left] == times[right]:
-                    multiplier = multipliers.get(times[left], 0.0)
-                    pair_weight = case_weights[left] * case_weights[right] * multiplier
-                    if pair_weight <= 0.0:
-                        continue
-                    column = (
-                        4
-                        if abs(risk_values[left] - risk_values[right]) < _CONCORDANCE_RISK_TIE_FLOOR
-                        else 3
-                    )
-                    _add_concordance_pair_influence(
-                        influence_rows,
-                        left,
-                        right,
-                        column,
-                        pair_weight,
-                    )
-                    continue
-                if status[left] == 1 and times[left] < times[right]:
-                    event_idx, risk_idx = left, right
-                elif status[right] == 1 and times[right] < times[left]:
-                    event_idx, risk_idx = right, left
-                else:
-                    continue
-                multiplier = multipliers.get(times[event_idx], 0.0)
-                pair_weight = case_weights[event_idx] * case_weights[risk_idx] * multiplier
-                if pair_weight <= 0.0:
-                    continue
-                comparable += pair_weight
-                diff = risk_values[event_idx] - risk_values[risk_idx]
-                if diff > _CONCORDANCE_RISK_TIE_FLOOR:
-                    concordant += pair_weight
-                    column = 0
-                elif diff < -_CONCORDANCE_RISK_TIE_FLOOR:
-                    column = 1
-                else:
-                    concordant += 0.5 * pair_weight
-                    column = 2
-                _add_concordance_pair_influence(
-                    influence_rows,
-                    event_idx,
-                    risk_idx,
-                    column,
-                    pair_weight,
-                )
-        return _concordance_influence_from_rows(influence_rows, concordant, comparable)
     if response.type == "counting":
         if timewt in {"S/G", "n/G2"}:
             raise ValueError(
@@ -8739,62 +7703,81 @@ def _single_concordance_influence(
             start, stop = _timefix_vectors(start, stop)
         status = list(response.event)
         stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
-        multipliers = _counting_time_weight_multipliers(
-            start,
-            stop,
-            status,
-            case_weights,
-            timewt,
+        return _concordance_rank_row_dicts(
+            _core.stratified_counting_concordance_rank_rows(
+                start,
+                stop,
+                status,
+                risk_values,
+                strata_codes,
+                case_weights,
+                timewt,
+                False,
+            )
         )
-        for event_idx, event in enumerate(status):
-            if event != 1:
-                continue
-            event_time = stop[event_idx]
-            multiplier = multipliers.get(event_time, 0.0)
-            if multiplier <= 0.0:
-                continue
-            for risk_idx in range(len(stop)):
-                if risk_idx == event_idx:
-                    continue
-                pair_weight = case_weights[event_idx] * case_weights[risk_idx] * multiplier
-                if pair_weight <= 0.0:
-                    continue
-                if status[risk_idx] == 1 and stop[risk_idx] == event_time:
-                    if event_idx < risk_idx:
-                        column = (
-                            4
-                            if abs(risk_values[event_idx] - risk_values[risk_idx])
-                            < _CONCORDANCE_RISK_TIE_FLOOR
-                            else 3
-                        )
-                        _add_concordance_pair_influence(
-                            influence_rows,
-                            event_idx,
-                            risk_idx,
-                            column,
-                            pair_weight,
-                        )
-                    continue
-                if not (start[risk_idx] < event_time < stop[risk_idx]):
-                    continue
-                comparable += pair_weight
-                diff = risk_values[event_idx] - risk_values[risk_idx]
-                if diff > _CONCORDANCE_RISK_TIE_FLOOR:
-                    concordant += pair_weight
-                    column = 0
-                elif diff < -_CONCORDANCE_RISK_TIE_FLOOR:
-                    column = 1
-                else:
-                    concordant += 0.5 * pair_weight
-                    column = 2
-                _add_concordance_pair_influence(
-                    influence_rows,
-                    event_idx,
-                    risk_idx,
-                    column,
-                    pair_weight,
-                )
-        return _concordance_influence_from_rows(influence_rows, concordant, comparable)
+    raise NotImplementedError(
+        "concordance currently supports right-censored and counting Surv responses"
+    )
+
+
+def _concordance_influence_result(
+    result: tuple[list[list[float]], list[float], float],
+) -> tuple[list[list[float]], list[float], float]:
+    influence_rows, dfbeta, variance = result
+    return (
+        [[float(value) for value in row] for row in influence_rows],
+        [float(value) for value in dfbeta],
+        float(variance),
+    )
+
+
+def _single_concordance_influence(
+    response: Surv,
+    risk_values: list[float],
+    weights: list[float] | None,
+    timefix: bool,
+    timewt: str,
+    ymin: float | None,
+    ymax: float | None,
+) -> tuple[list[list[float]], list[float], float | None]:
+    case_weights = None if weights is None else list(weights)
+    if response.type == "right":
+        times = _survdiff_timefix_values(list(response.time), timefix)
+        status = list(response.event)
+        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        return _concordance_influence_result(
+            _core.concordance_influence_rows(
+                times,
+                status,
+                risk_values,
+                case_weights,
+                timewt,
+            )
+        )
+    if response.type == "counting":
+        if timewt in {"S/G", "n/G2"}:
+            raise ValueError(
+                "S/G and n/G2 timewt options are not supported for counting-process data"
+            )
+        if response.start is None:
+            raise ValueError("counting-process concordance requires start times")
+        start = list(response.start)
+        stop = list(response.time)
+        if timefix:
+            start, stop = _timefix_vectors(start, stop)
+        status = list(response.event)
+        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        return _concordance_influence_result(
+            _core.counting_concordance_influence_rows(
+                start,
+                stop,
+                status,
+                risk_values,
+                case_weights,
+                timewt,
+                False,
+            )
+        )
     raise NotImplementedError(
         "concordance currently supports right-censored and counting Surv responses"
     )
@@ -8820,28 +7803,50 @@ def _concordance_influence(
             ymin,
             ymax,
         )
-    influence_rows = [[0.0, 0.0, 0.0, 0.0, 0.0] for _ in range(len(response))]
-    dfbeta = [0.0 for _ in range(len(response))]
-    variance = 0.0
-    for indices in _group_indices(strata, len(response)).values():
-        group_response = _subset_surv(response, indices)
-        group_risk = [risk_values[idx] for idx in indices]
-        group_weights = [weights[idx] for idx in indices] if weights is not None else None
-        group_influence, group_dfbeta, group_variance = _single_concordance_influence(
-            group_response,
-            group_risk,
-            group_weights,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
+    strata_codes = _encode_groups(strata, len(response))
+    case_weights = None if weights is None else list(weights)
+    if response.type == "right":
+        times = _survdiff_timefix_values(list(response.time), timefix)
+        status = list(response.event)
+        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        return _concordance_influence_result(
+            _core.stratified_concordance_influence_rows(
+                times,
+                status,
+                risk_values,
+                strata_codes,
+                case_weights,
+                timewt,
+            )
         )
-        for local_idx, original_idx in enumerate(indices):
-            influence_rows[original_idx] = group_influence[local_idx]
-            dfbeta[original_idx] = group_dfbeta[local_idx]
-        if group_variance is not None:
-            variance += group_variance
-    return influence_rows, dfbeta, variance
+    if response.type == "counting":
+        if timewt in {"S/G", "n/G2"}:
+            raise ValueError(
+                "S/G and n/G2 timewt options are not supported for counting-process data"
+            )
+        if response.start is None:
+            raise ValueError("counting-process concordance requires start times")
+        start = list(response.start)
+        stop = list(response.time)
+        if timefix:
+            start, stop = _timefix_vectors(start, stop)
+        status = list(response.event)
+        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        return _concordance_influence_result(
+            _core.stratified_counting_concordance_influence_rows(
+                start,
+                stop,
+                status,
+                risk_values,
+                strata_codes,
+                case_weights,
+                timewt,
+                False,
+            )
+        )
+    raise NotImplementedError(
+        "concordance currently supports right-censored and counting Surv responses"
+    )
 
 
 def _concordance_cluster_values(cluster: Any, n: int) -> list[Any]:
@@ -8898,21 +7903,8 @@ def _single_concordance_summary(
             raise ValueError("counting-process concordance requires start times")
         start = list(response.start)
         stop = list(response.time)
-        if timefix:
-            start, stop = _timefix_vectors(start, stop)
         status = list(response.event)
         stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
-        if not timefix:
-            summary = _exact_counting_concordance_summary(
-                start,
-                stop,
-                status,
-                risk_values,
-                weights,
-                timewt,
-            )
-            summary["n_event"] = float(sum(1 for event in status if event == 1))
-            return summary
         summary = _core.counting_concordance_summary(
             start,
             stop,
@@ -8920,6 +7912,7 @@ def _single_concordance_summary(
             risk_values,
             weights,
             timewt,
+            timefix,
         )
         summary["n_event"] = float(sum(1 for event in status if event == 1))
         return summary
@@ -8949,32 +7942,49 @@ def _concordance_summary(
             ymax,
         )
 
-    concordant = 0.0
-    comparable = 0.0
-    n_event = 0.0
-    for indices in _group_indices(strata, len(response)).values():
-        group_response = _subset_surv(response, indices)
-        group_risk = [risk_values[idx] for idx in indices]
-        group_weights = [weights[idx] for idx in indices] if weights is not None else None
-        summary = _single_concordance_summary(
-            group_response,
-            group_risk,
-            group_weights,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-        )
-        concordant += float(summary["concordant"])
-        comparable += float(summary["comparable"])
-        n_event += float(summary["n_event"])
-
-    return {
-        "concordance": concordant / comparable if comparable > 0.0 else 0.5,
-        "concordant": concordant,
-        "comparable": comparable,
-        "n_event": n_event,
-    }
+    strata_codes = _encode_groups(strata, len(response))
+    if response.type == "right":
+        times = _survdiff_timefix_values(list(response.time), timefix)
+        status = list(response.event)
+        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+        return {
+            key: float(value)
+            for key, value in _core.stratified_concordance_summary(
+                times,
+                status,
+                risk_values,
+                strata_codes,
+                weights,
+                timewt,
+            ).items()
+        }
+    if response.type == "counting":
+        if timewt in {"S/G", "n/G2"}:
+            raise ValueError(
+                "S/G and n/G2 timewt options are not supported for counting-process data"
+            )
+        if response.start is None:
+            raise ValueError("counting-process concordance requires start times")
+        start = list(response.start)
+        stop = list(response.time)
+        status = list(response.event)
+        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        return {
+            key: float(value)
+            for key, value in _core.stratified_counting_concordance_summary(
+                start,
+                stop,
+                status,
+                risk_values,
+                strata_codes,
+                weights,
+                timewt,
+                timefix,
+            ).items()
+        }
+    raise NotImplementedError(
+        "concordance currently supports right-censored and counting Surv responses"
+    )
 
 
 def _single_score_concordance_result(

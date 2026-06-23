@@ -40,6 +40,75 @@ def test_pspline_creation():
     assert pspline.eps == 1e-6
 
 
+def test_pspline_rejects_malformed_inputs():
+    with pytest.raises(ValueError, match="x contains non-finite"):
+        survival.PSpline(
+            x=[1.0, float("nan")],
+            df=1,
+            theta=0.1,
+            eps=1e-6,
+            method="GCV",
+            boundary_knots=(0.0, 5.0),
+            intercept=True,
+            penalty=False,
+        )
+    with pytest.raises(ValueError, match="boundary_knots must be finite"):
+        survival.PSpline(
+            x=[1.0, 2.0],
+            df=1,
+            theta=0.1,
+            eps=1e-6,
+            method="GCV",
+            boundary_knots=(1.0, 1.0),
+            intercept=True,
+            penalty=False,
+        )
+    with pytest.raises(ValueError, match="df must be positive"):
+        survival.PSpline(
+            x=[1.0, 2.0],
+            df=0,
+            theta=0.1,
+            eps=1e-6,
+            method="GCV",
+            boundary_knots=(0.0, 5.0),
+            intercept=True,
+            penalty=False,
+        )
+    with pytest.raises(ValueError, match="theta must be non-negative"):
+        survival.PSpline(
+            x=[1.0, 2.0],
+            df=1,
+            theta=-0.1,
+            eps=1e-6,
+            method="GCV",
+            boundary_knots=(0.0, 5.0),
+            intercept=True,
+            penalty=False,
+        )
+    with pytest.raises(ValueError, match="eps must be positive"):
+        survival.PSpline(
+            x=[1.0, 2.0],
+            df=1,
+            theta=0.1,
+            eps=0.0,
+            method="GCV",
+            boundary_knots=(0.0, 5.0),
+            intercept=True,
+            penalty=False,
+        )
+    with pytest.raises(ValueError, match="x length"):
+        survival.PSpline(
+            x=[1.0, 2.0],
+            df=3,
+            theta=0.1,
+            eps=1e-6,
+            method="GCV",
+            boundary_knots=(0.0, 5.0),
+            intercept=True,
+            penalty=False,
+        )
+
+
 def test_pspline_invalid_method():
     x = [float(i) for i in range(1, 21)]
 
@@ -72,6 +141,23 @@ def test_pspline_predict_without_fit():
     )
     with pytest.raises(Exception, match="(?i)not fitted"):
         pspline_unfitted.predict([5.0])
+
+
+def test_pspline_predict_rejects_non_finite_values():
+    pspline = survival.PSpline(
+        x=[1.0, 2.0, 3.0, 4.0],
+        df=1,
+        theta=0.1,
+        eps=1e-6,
+        method="GCV",
+        boundary_knots=(0.0, 5.0),
+        intercept=True,
+        penalty=False,
+    )
+    pspline.fit()
+
+    with pytest.raises(ValueError, match="new_x contains non-finite"):
+        pspline.predict([1.0, float("inf")])
 
 
 def test_pspline_singular_fit():

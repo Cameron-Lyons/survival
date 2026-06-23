@@ -179,6 +179,10 @@ pub fn smoothed_calibration(
             "All input vectors must have the same length",
         ));
     }
+    validate_calibration_observations(&time, &status)?;
+    validate_survival_probabilities(&predicted_survival_at_t, "predicted_survival_at_t")?;
+    validate_time_point(time_point)?;
+    validate_bandwidth(bandwidth)?;
 
     let n_grid_points = n_grid_points.unwrap_or(100);
     if n_grid_points < 10 {

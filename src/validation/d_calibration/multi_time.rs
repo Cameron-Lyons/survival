@@ -149,6 +149,8 @@ pub fn multi_time_calibration(
             "time, status, and survival_predictions must have the same length",
         ));
     }
+    validate_calibration_observations(&time, &status)?;
+    validate_prediction_times(&prediction_times)?;
 
     for (i, row) in survival_predictions.iter().enumerate() {
         if row.len() != prediction_times.len() {
@@ -159,6 +161,7 @@ pub fn multi_time_calibration(
                 prediction_times.len()
             )));
         }
+        validate_survival_probabilities(row, &format!("survival_predictions row {i}"))?;
     }
 
     let n_groups = n_groups.unwrap_or(10);

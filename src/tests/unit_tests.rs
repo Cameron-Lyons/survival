@@ -27,6 +27,7 @@ mod tests {
             vec![1, 2, 1, 2],
             None,
             None,
+            None,
         )
         .unwrap();
 

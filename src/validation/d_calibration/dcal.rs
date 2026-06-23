@@ -139,6 +139,8 @@ pub fn d_calibration(
             "survival_probs and status must have the same length",
         ));
     }
+    validate_survival_probabilities(&survival_probs, "survival_probs")?;
+    validate_binary_i32(&status, "status")?;
 
     let n_bins = n_bins.unwrap_or(10);
     if n_bins < 2 {

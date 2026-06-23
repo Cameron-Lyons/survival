@@ -31,12 +31,18 @@ pub use aggregate_survfit_module::{
 };
 pub use agsurv4_module::agsurv4;
 pub use agsurv5_module::agsurv5;
-pub use cox_baseline::{compute_baseline_survival_steps, compute_tied_baseline_summaries};
+pub use cox_baseline::{
+    compute_baseline_survival_steps, compute_tied_baseline_summaries,
+    cox_expected_baseline_by_stratum,
+};
 pub use illness_death::{
     IllnessDeathConfig, IllnessDeathPrediction, IllnessDeathResult, IllnessDeathType,
     TransitionHazard, fit_illness_death, predict_illness_death,
 };
-pub use logrank_components::{SurvDiffResult, compute_logrank_components, survdiff2};
+pub use logrank_components::{
+    SurvDiffResult, compute_counting_logrank_components, compute_logrank_components,
+    stratified_counting_logrank_components, stratified_logrank_components, survdiff2,
+};
 pub use multi_state::{
     MarkovMSMResult, MultiStateConfig, MultiStateResult, TransitionIntensityResult,
     estimate_transition_intensities, fit_markov_msm, fit_multi_state_model,
@@ -57,7 +63,8 @@ pub use statefig_module::{
     StateFigData, statefig, statefig_matplotlib_code, statefig_transition_matrix, statefig_validate,
 };
 pub use survfit_matrix::{
-    SurvfitMatrixResult, basehaz, survfit_from_cumhaz, survfit_from_hazard, survfit_from_matrix,
+    SurvfitMatrixResult, basehaz, condition_cox_survfit_curves, cox_survfit_from_baseline,
+    step_values_at, survfit_from_cumhaz, survfit_from_hazard, survfit_from_matrix,
     survfit_multistate,
 };
 pub use survfitaj_extended_module::{
@@ -66,6 +73,7 @@ pub use survfitaj_extended_module::{
 };
 pub use survfitaj_module::{SurvFitAJ, survfitaj};
 pub use survfitkm_module::{
-    KaplanMeierConfig, SurvFitKMOutput, SurvfitKMOptions, compute_survfitkm, survfitkm,
-    survfitkm_with_options,
+    CountingSurvfitTables, KaplanMeierConfig, SurvFitKMOutput, SurvfitCurveResult,
+    SurvfitKMOptions, compute_survfitkm, counting_survfit_tables, survfit_curve_from_tables,
+    survfitkm, survfitkm_with_options,
 };

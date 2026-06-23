@@ -326,6 +326,19 @@ pub fn rmst_optimal_threshold(
     let alpha = alpha.unwrap_or(0.05);
     let min_events = min_events_per_interval.unwrap_or(5);
     let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
+    if time.len() != status.len() {
+        return Err(PyValueError::new_err(
+            "time and status must have the same length",
+        ));
+    }
+    validate_time_status(&time, &status)?;
+    validate_probability_open(alpha, "alpha")?;
+    if min_events < 2 {
+        return Err(PyValueError::new_err(
+            "min_events_per_interval must be at least 2",
+        ));
+    }
+    validate_probability_open(conf, "confidence_level")?;
     Ok(compute_rmst_optimal_threshold(
         &time, &status, alpha, min_events, conf,
     ))

@@ -1,4 +1,6 @@
-use super::common::{build_concordance_result, validate_concordance_inputs};
+use super::common::{
+    build_concordance_result, validate_concordance_inputs, validate_i32_tree_indices,
+};
 use crate::constants::CONCORDANCE_COUNT_SIZE;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -177,6 +179,7 @@ pub fn perform_concordance1_calculation(
 ) -> PyResult<Py<PyAny>> {
     let n = weights.len();
     validate_concordance_inputs(time_data.len(), n, indices.len(), weights.len())?;
+    validate_i32_tree_indices(&indices, ntree, "indices")?;
     let count = concordance1(&time_data, &weights, &indices, ntree);
     Python::attach(|py| {
         let dict = build_concordance_result(py, &count, None, None, None)?;

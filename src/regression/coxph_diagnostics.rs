@@ -9,6 +9,454 @@ use ndarray::Array2;
 use pyo3::prelude::*;
 use std::cmp::Ordering;
 
+fn value_error(message: impl Into<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+fn validate_finite_slice(values: &[f64], name: &str) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{name} contains non-finite value at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_matrix_width(matrix: &[Vec<f64>], width: usize, name: &str) -> PyResult<()> {
+    for (row_idx, row) in matrix.iter().enumerate() {
+        if row.len() != width {
+            return Err(value_error(format!(
+                "{name} row {row_idx} has length {}, expected {width}",
+                row.len()
+            )));
+        }
+        validate_finite_slice(row, name)?;
+    }
+    Ok(())
+}
+
+fn validate_square_matrix(matrix: &[Vec<f64>], width: usize, name: &str) -> PyResult<()> {
+    if matrix.len() != width {
+        return Err(value_error(format!("{name} length must be {width}")));
+    }
+    validate_matrix_width(matrix, width, name)
+}
+
+fn validate_column_groups(groups: &[Vec<usize>], width: usize) -> PyResult<()> {
+    for (group_idx, columns) in groups.iter().enumerate() {
+        if columns.is_empty() {
+            return Err(value_error(format!("groups[{group_idx}] cannot be empty")));
+        }
+        for &col_idx in columns {
+            if col_idx >= width {
+                return Err(value_error(format!(
+                    "groups[{group_idx}] contains column {col_idx}, expected < {width}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_cluster_codes(codes: &[usize], nrows: usize, name: &str) -> PyResult<usize> {
+    if codes.len() != nrows {
+        return Err(value_error(format!("{name} length must match row count")));
+    }
+    Ok(codes
+        .iter()
+        .copied()
+        .max()
+        .map_or(0, |max_code| max_code + 1))
+}
+
+fn collapse_weighted_rows_by_cluster(
+    rows: &[Vec<f64>],
+    weights: &[f64],
+    cluster: &[usize],
+    width: usize,
+    name: &str,
+) -> PyResult<Vec<Vec<f64>>> {
+    validate_matrix_width(rows, width, name)?;
+    if weights.len() != rows.len() {
+        return Err(value_error("weights length must match row count"));
+    }
+    validate_finite_slice(weights, "weights")?;
+    let cluster_count = validate_cluster_codes(cluster, rows.len(), "cluster")?;
+    let mut collapsed = vec![vec![0.0; width]; cluster_count];
+    for ((row, &weight), &cluster_idx) in rows.iter().zip(weights).zip(cluster) {
+        let target = &mut collapsed[cluster_idx];
+        for (col_idx, value) in row.iter().enumerate() {
+            target[col_idx] += weight * value;
+        }
+    }
+    Ok(collapsed)
+}
+
+fn row_crossprod(rows: &[Vec<f64>], width: usize, name: &str) -> PyResult<Vec<Vec<f64>>> {
+    validate_matrix_width(rows, width, name)?;
+    let mut result = vec![vec![0.0; width]; width];
+    for row in rows {
+        for (left_idx, &left) in row.iter().enumerate() {
+            for (right_idx, &right) in row.iter().enumerate() {
+                result[left_idx][right_idx] += left * right;
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn sandwich_from_meat(variance: &[Vec<f64>], meat: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let width = variance.len();
+    let mut left = vec![vec![0.0; width]; width];
+    for (row_idx, variance_row) in variance.iter().enumerate() {
+        for col_idx in 0..width {
+            left[row_idx][col_idx] = variance_row
+                .iter()
+                .enumerate()
+                .map(|(inner_idx, &value)| value * meat[inner_idx][col_idx])
+                .sum();
+        }
+    }
+
+    let mut result = vec![vec![0.0; width]; width];
+    for (row_idx, left_row) in left.iter().enumerate() {
+        for col_idx in 0..width {
+            result[row_idx][col_idx] = left_row
+                .iter()
+                .enumerate()
+                .map(|(inner_idx, &value)| value * variance[inner_idx][col_idx])
+                .sum();
+        }
+    }
+    result
+}
+
+fn quadratic_form(row: &[f64], variance: &[Vec<f64>]) -> f64 {
+    row.iter()
+        .enumerate()
+        .map(|(left_idx, &left)| {
+            row.iter()
+                .enumerate()
+                .map(|(right_idx, &right)| left * variance[left_idx][right_idx] * right)
+                .sum::<f64>()
+        })
+        .sum()
+}
+
+fn grouped_quadratic_form(row: &[f64], variance: &[Vec<f64>], columns: &[usize]) -> f64 {
+    columns
+        .iter()
+        .map(|&left_idx| {
+            columns
+                .iter()
+                .map(|&right_idx| row[left_idx] * variance[left_idx][right_idx] * row[right_idx])
+                .sum::<f64>()
+        })
+        .sum()
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, status, strata=None))]
+pub fn cox_event_indices(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    strata: Option<Vec<i32>>,
+) -> PyResult<Vec<usize>> {
+    let n = time.len();
+    if status.len() != n {
+        return Err(value_error("status length must match time length"));
+    }
+    validate_finite_slice(&time, "time")?;
+    let strata = strata.unwrap_or_else(|| vec![0; n]);
+    if strata.len() != n {
+        return Err(value_error("strata length must match time length"));
+    }
+    for (idx, &value) in status.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(value_error(format!(
+                "status must contain only 0/1 values; got {value} at index {idx}"
+            )));
+        }
+    }
+
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&left, &right| {
+        strata[left]
+            .cmp(&strata[right])
+            .then_with(|| time[left].total_cmp(&time[right]))
+            .then_with(|| left.cmp(&right))
+    });
+    Ok(order.into_iter().filter(|&idx| status[idx] == 1).collect())
+}
+
+#[pyfunction]
+pub fn scale_schoenfeld_residuals(
+    raw: Vec<Vec<f64>>,
+    beta: Vec<f64>,
+    information_matrix: Vec<Vec<f64>>,
+) -> PyResult<Vec<Vec<f64>>> {
+    let nvar = beta.len();
+    if nvar == 0 || raw.is_empty() {
+        return Ok(raw);
+    }
+    validate_finite_slice(&beta, "beta")?;
+    validate_matrix_width(&raw, nvar, "raw")?;
+    validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
+    let event_count = raw.len() as f64;
+    Ok(raw
+        .iter()
+        .map(|row| {
+            (0..nvar)
+                .map(|col_idx| {
+                    beta[col_idx]
+                        + event_count
+                            * (0..nvar)
+                                .map(|inner_idx| {
+                                    row[inner_idx] * information_matrix[inner_idx][col_idx]
+                                })
+                                .sum::<f64>()
+                })
+                .collect()
+        })
+        .collect())
+}
+
+#[pyfunction]
+#[pyo3(signature = (score, information_matrix, scaled=false))]
+pub fn cox_dfbeta_from_score_residuals(
+    score: Vec<Vec<f64>>,
+    information_matrix: Vec<Vec<f64>>,
+    scaled: bool,
+) -> PyResult<Vec<Vec<f64>>> {
+    let nvar = information_matrix.len();
+    if nvar == 0 {
+        return Ok(score);
+    }
+    validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
+    validate_matrix_width(&score, nvar, "score")?;
+    let scales: Vec<f64> = if scaled {
+        (0..nvar)
+            .map(|idx| {
+                information_matrix[idx][idx]
+                    .abs()
+                    .sqrt()
+                    .max(crate::constants::DIVISION_FLOOR)
+            })
+            .collect()
+    } else {
+        vec![1.0; nvar]
+    };
+
+    Ok(score
+        .iter()
+        .map(|row| {
+            (0..nvar)
+                .map(|col_idx| {
+                    (0..nvar)
+                        .map(|inner_idx| information_matrix[col_idx][inner_idx] * row[inner_idx])
+                        .sum::<f64>()
+                        / scales[col_idx]
+                })
+                .collect()
+        })
+        .collect())
+}
+
+#[pyfunction]
+pub fn cox_zph_term_matrix(
+    scaled: Vec<Vec<f64>>,
+    groups: Vec<Vec<usize>>,
+    beta: Vec<f64>,
+) -> PyResult<Vec<Vec<f64>>> {
+    let nvar = beta.len();
+    validate_finite_slice(&beta, "beta")?;
+    validate_matrix_width(&scaled, nvar, "scaled")?;
+    validate_column_groups(&groups, nvar)?;
+    Ok(scaled
+        .iter()
+        .map(|row| {
+            groups
+                .iter()
+                .map(|columns| {
+                    if columns.len() == 1 {
+                        row[columns[0]]
+                    } else {
+                        columns
+                            .iter()
+                            .map(|&col_idx| row[col_idx] * beta[col_idx])
+                            .sum()
+                    }
+                })
+                .collect()
+        })
+        .collect())
+}
+
+#[pyfunction]
+pub fn cox_zph_group_variance(
+    information_matrix: Vec<Vec<f64>>,
+    groups: Vec<Vec<usize>>,
+    beta: Vec<f64>,
+) -> PyResult<Vec<Vec<f64>>> {
+    let nvar = beta.len();
+    validate_finite_slice(&beta, "beta")?;
+    validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
+    validate_column_groups(&groups, nvar)?;
+    let loadings: Vec<Vec<f64>> = groups
+        .iter()
+        .map(|columns| {
+            let mut loading = vec![0.0; nvar];
+            for &col_idx in columns {
+                loading[col_idx] = if columns.len() > 1 {
+                    beta[col_idx]
+                } else {
+                    1.0
+                };
+            }
+            loading
+        })
+        .collect();
+    let mut result = vec![vec![0.0; loadings.len()]; loadings.len()];
+    for (left_idx, left) in loadings.iter().enumerate() {
+        for (right_idx, right) in loadings.iter().enumerate() {
+            let mut value = 0.0;
+            for row in 0..nvar {
+                for col in 0..nvar {
+                    value += left[row] * information_matrix[row][col] * right[col];
+                }
+            }
+            result[left_idx][right_idx] = value;
+        }
+    }
+    Ok(result)
+}
+
+#[pyfunction]
+pub fn clustered_sandwich_variance(
+    rows: Vec<Vec<f64>>,
+    weights: Vec<f64>,
+    cluster: Vec<usize>,
+    variance: Vec<Vec<f64>>,
+) -> PyResult<Vec<Vec<f64>>> {
+    let width = variance.len();
+    validate_square_matrix(&variance, width, "variance")?;
+    let collapsed = collapse_weighted_rows_by_cluster(&rows, &weights, &cluster, width, "rows")?;
+    let meat = row_crossprod(&collapsed, width, "clustered rows")?;
+    Ok(sandwich_from_meat(&variance, &meat))
+}
+
+#[pyfunction]
+#[pyo3(signature = (rows, weights, cluster, width=None))]
+pub fn clustered_crossprod(
+    rows: Vec<Vec<f64>>,
+    weights: Vec<f64>,
+    cluster: Vec<usize>,
+    width: Option<usize>,
+) -> PyResult<Vec<Vec<f64>>> {
+    let width = width.unwrap_or_else(|| rows.first().map_or(0, Vec::len));
+    let collapsed = collapse_weighted_rows_by_cluster(&rows, &weights, &cluster, width, "rows")?;
+    row_crossprod(&collapsed, width, "clustered rows")
+}
+
+#[pyfunction]
+pub fn prediction_se_from_variance(
+    rows: Vec<Vec<f64>>,
+    variance: Vec<Vec<f64>>,
+) -> PyResult<Vec<f64>> {
+    let width = variance.len();
+    validate_square_matrix(&variance, width, "variance")?;
+    validate_matrix_width(&rows, width, "rows")?;
+    Ok(rows
+        .iter()
+        .map(|row| quadratic_form(row, &variance).max(0.0).sqrt())
+        .collect())
+}
+
+#[pyfunction]
+pub fn term_prediction_se_from_variance(
+    rows: Vec<Vec<f64>>,
+    variance: Vec<Vec<f64>>,
+    groups: Vec<Vec<usize>>,
+) -> PyResult<Vec<Vec<f64>>> {
+    let width = variance.len();
+    validate_square_matrix(&variance, width, "variance")?;
+    validate_matrix_width(&rows, width, "rows")?;
+    validate_column_groups(&groups, width)?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            groups
+                .iter()
+                .map(|columns| {
+                    grouped_quadratic_form(row, &variance, columns)
+                        .max(0.0)
+                        .sqrt()
+                })
+                .collect()
+        })
+        .collect())
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn cox_interval_cumulative_hazard_se(
+    centered_rows: Vec<Vec<f64>>,
+    start_hazard: Vec<f64>,
+    start_varhaz: Vec<f64>,
+    start_xbar: Vec<Vec<f64>>,
+    stop_hazard: Vec<f64>,
+    stop_varhaz: Vec<f64>,
+    stop_xbar: Vec<Vec<f64>>,
+    risk: Vec<f64>,
+    variance: Vec<Vec<f64>>,
+) -> PyResult<Vec<f64>> {
+    let width = variance.len();
+    let n = centered_rows.len();
+    validate_square_matrix(&variance, width, "variance")?;
+    validate_matrix_width(&centered_rows, width, "centered_rows")?;
+    validate_matrix_width(&start_xbar, width, "start_xbar")?;
+    validate_matrix_width(&stop_xbar, width, "stop_xbar")?;
+
+    let lengths = [
+        ("start_hazard", start_hazard.len()),
+        ("start_varhaz", start_varhaz.len()),
+        ("start_xbar", start_xbar.len()),
+        ("stop_hazard", stop_hazard.len()),
+        ("stop_varhaz", stop_varhaz.len()),
+        ("stop_xbar", stop_xbar.len()),
+        ("risk", risk.len()),
+    ];
+    for (name, len) in lengths {
+        if len != n {
+            return Err(value_error(format!(
+                "{name} length must match centered_rows length"
+            )));
+        }
+    }
+    validate_finite_slice(&start_hazard, "start_hazard")?;
+    validate_finite_slice(&start_varhaz, "start_varhaz")?;
+    validate_finite_slice(&stop_hazard, "stop_hazard")?;
+    validate_finite_slice(&stop_varhaz, "stop_varhaz")?;
+    validate_finite_slice(&risk, "risk")?;
+
+    Ok((0..n)
+        .map(|row_idx| {
+            let hazard_delta = stop_hazard[row_idx] - start_hazard[row_idx];
+            let interval_delta: Vec<f64> = (0..width)
+                .map(|col_idx| {
+                    hazard_delta * centered_rows[row_idx][col_idx]
+                        - (stop_xbar[row_idx][col_idx] - start_xbar[row_idx][col_idx])
+                })
+                .collect();
+            let variance_value = stop_varhaz[row_idx] - start_varhaz[row_idx]
+                + quadratic_form(&interval_delta, &variance);
+            variance_value.max(0.0).sqrt() * risk[row_idx]
+        })
+        .collect())
+}
+
 impl CoxPHFit {
     pub(crate) fn expected_events_internal(&self) -> PyResult<Vec<f64>> {
         let (times, hazards, hazard_strata) = self.basehaz_with_strata_internal(false)?;
@@ -961,5 +1409,115 @@ impl CoxPHFit {
                     .collect()
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cox_diagnostic_helpers_match_python_formulas() {
+        let indices = cox_event_indices(
+            vec![2.0, 1.0, 2.0, 3.0],
+            vec![1, 0, 1, 1],
+            Some(vec![1, 0, 0, 1]),
+        )
+        .expect("event indices should compute");
+        assert_eq!(indices, vec![2, 0, 3]);
+
+        let scaled = scale_schoenfeld_residuals(
+            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            vec![0.5, -0.5],
+            vec![vec![0.1, 0.2], vec![0.3, 0.4]],
+        )
+        .expect("scaled Schoenfeld residuals should compute");
+        assert!((scaled[0][0] - 1.9).abs() < 1e-12);
+        assert!((scaled[0][1] - 1.5).abs() < 1e-12);
+        assert!((scaled[1][0] - 3.5).abs() < 1e-12);
+        assert!((scaled[1][1] - 3.9).abs() < 1e-12);
+
+        let dfbeta = cox_dfbeta_from_score_residuals(
+            vec![vec![1.0, 2.0]],
+            vec![vec![0.1, 0.2], vec![0.3, 0.4]],
+            false,
+        )
+        .expect("dfbeta should compute");
+        assert!((dfbeta[0][0] - 0.5).abs() < 1e-12);
+        assert!((dfbeta[0][1] - 1.1).abs() < 1e-12);
+
+        let grouped = cox_zph_term_matrix(
+            vec![vec![1.0, 2.0, 3.0]],
+            vec![vec![0, 1], vec![2]],
+            vec![0.5, 2.0, 7.0],
+        )
+        .expect("term matrix should compute");
+        assert_eq!(grouped, vec![vec![4.5, 3.0]]);
+
+        let variance = cox_zph_group_variance(
+            vec![
+                vec![1.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 1.0],
+            ],
+            vec![vec![0, 1], vec![2]],
+            vec![0.5, 2.0, 7.0],
+        )
+        .expect("group variance should compute");
+        assert_eq!(variance, vec![vec![4.25, 0.0], vec![0.0, 1.0]]);
+
+        let crossprod = clustered_crossprod(
+            vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]],
+            vec![1.0, 0.5, 2.0],
+            vec![0, 0, 1],
+            Some(2),
+        )
+        .expect("clustered cross-product should compute");
+        assert_eq!(crossprod, vec![vec![106.25, 130.0], vec![130.0, 160.0]]);
+
+        let sandwich = clustered_sandwich_variance(
+            vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]],
+            vec![1.0, 0.5, 2.0],
+            vec![0, 0, 1],
+            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
+        )
+        .expect("clustered sandwich variance should compute");
+        assert_eq!(sandwich, vec![vec![725.0, 478.75], vec![478.75, 316.5625]]);
+
+        let prediction_se = prediction_se_from_variance(
+            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
+        )
+        .expect("prediction SEs should compute");
+        assert!((prediction_se[0] - 8.0_f64.sqrt()).abs() < 1e-12);
+        assert!((prediction_se[1] - 46.0_f64.sqrt()).abs() < 1e-12);
+
+        let term_prediction_se = term_prediction_se_from_variance(
+            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
+            vec![vec![0], vec![1], vec![0, 1]],
+        )
+        .expect("term prediction SEs should compute");
+        assert!((term_prediction_se[0][0] - 2.0_f64.sqrt()).abs() < 1e-12);
+        assert!((term_prediction_se[0][1] - 2.0).abs() < 1e-12);
+        assert!((term_prediction_se[0][2] - 8.0_f64.sqrt()).abs() < 1e-12);
+        assert!((term_prediction_se[1][0] - 18.0_f64.sqrt()).abs() < 1e-12);
+        assert!((term_prediction_se[1][1] - 4.0).abs() < 1e-12);
+        assert!((term_prediction_se[1][2] - 46.0_f64.sqrt()).abs() < 1e-12);
+
+        let interval_se = cox_interval_cumulative_hazard_se(
+            vec![vec![1.0, 2.0], vec![0.0, 0.0]],
+            vec![0.25, 0.0],
+            vec![0.04, 0.50],
+            vec![vec![0.1, 0.2], vec![0.0, 0.0]],
+            vec![1.0, 0.0],
+            vec![0.25, 0.25],
+            vec![vec![0.4, 0.8], vec![0.0, 0.0]],
+            vec![3.0, 2.0],
+            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
+        )
+        .expect("interval SEs should compute");
+        assert!((interval_se[0] - 3.0 * 1.83_f64.sqrt()).abs() < 1e-12);
+        assert_eq!(interval_se[1], 0.0);
     }
 }

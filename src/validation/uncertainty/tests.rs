@@ -21,6 +21,83 @@ mod tests {
     }
 
     #[test]
+    fn test_ensemble_uncertainty_validates_prediction_cube() {
+        let predictions = vec![
+            vec![vec![0.9, 0.8], vec![0.7, 0.6]],
+            vec![vec![0.85, 0.75], vec![0.65, 0.55]],
+        ];
+        let result = ensemble_uncertainty(predictions, 0.95).unwrap();
+
+        assert_eq!(result.mean_prediction.len(), 2);
+        assert_eq!(result.mean_prediction[0].len(), 2);
+        assert!(result.model_disagreement.iter().all(|value| value.is_finite()));
+
+        assert!(ensemble_uncertainty(vec![], 0.95).is_err());
+        assert!(ensemble_uncertainty(vec![vec![vec![0.5]], vec![]], 0.95).is_err());
+        assert!(ensemble_uncertainty(vec![vec![vec![f64::NAN]], vec![vec![0.5]]], 0.95).is_err());
+        assert!(ensemble_uncertainty(vec![vec![vec![0.5]], vec![vec![0.6]]], 1.0).is_err());
+    }
+
+    #[test]
+    fn test_quantile_regression_intervals_validate_inputs() {
+        let predictions = vec![
+            vec![vec![0.9, 0.8], vec![0.7, 0.6]],
+            vec![vec![0.85, 0.75], vec![0.65, 0.55]],
+            vec![vec![0.95, 0.82], vec![0.75, 0.62]],
+        ];
+        let result =
+            quantile_regression_intervals(predictions.clone(), Some(vec![0.1, 0.5, 0.9])).unwrap();
+
+        assert_eq!(result.median.len(), 2);
+        assert_eq!(result.quantiles, vec![0.1, 0.5, 0.9]);
+
+        assert!(quantile_regression_intervals(predictions.clone(), Some(vec![0.1, 0.9])).is_err());
+        assert!(
+            quantile_regression_intervals(predictions.clone(), Some(vec![0.5, 0.1, 0.9]))
+                .is_err()
+        );
+        assert!(quantile_regression_intervals(vec![vec![vec![]]], None).is_err());
+        assert!(quantile_regression_intervals(vec![vec![vec![f64::INFINITY]]], None).is_err());
+    }
+
+    #[test]
+    fn test_calibrate_prediction_intervals_validates_inputs() {
+        let result = calibrate_prediction_intervals(
+            vec![1.0, 2.0, 3.0],
+            vec![1, 0, 1],
+            vec![0.5, 1.5, 2.5],
+            vec![1.5, 2.5, 3.5],
+            0.9,
+        )
+        .unwrap();
+
+        assert_eq!(result.observed_coverage, 1.0);
+
+        assert!(
+            calibrate_prediction_intervals(vec![1.0], vec![2], vec![0.0], vec![2.0], 0.9)
+                .is_err()
+        );
+        assert!(
+            calibrate_prediction_intervals(
+                vec![1.0],
+                vec![1],
+                vec![f64::NAN],
+                vec![2.0],
+                0.9
+            )
+            .is_err()
+        );
+        assert!(
+            calibrate_prediction_intervals(vec![1.0], vec![1], vec![2.0], vec![1.0], 0.9)
+                .is_err()
+        );
+        assert!(
+            calibrate_prediction_intervals(vec![1.0], vec![1], vec![0.0], vec![2.0], 1.0)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn test_apply_dropout() {
         let mut rng = fastrand::Rng::new();
         rng.seed(42);

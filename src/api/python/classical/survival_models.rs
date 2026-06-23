@@ -5,8 +5,13 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agsurv5, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_with_options, m)?)?;
+    m.add_function(wrap_pyfunction!(counting_survfit_tables, m)?)?;
+    m.add_function(wrap_pyfunction!(survfit_curve_from_tables, m)?)?;
     m.add_function(wrap_pyfunction!(survfitaj, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_counting_logrank_components, m)?)?;
     m.add_function(wrap_pyfunction!(compute_logrank_components, m)?)?;
+    m.add_function(wrap_pyfunction!(stratified_counting_logrank_components, m)?)?;
+    m.add_function(wrap_pyfunction!(stratified_logrank_components, m)?)?;
     m.add_function(wrap_pyfunction!(survdiff2, m)?)?;
     m.add_function(wrap_pyfunction!(finegray, m)?)?;
     m.add_function(wrap_pyfunction!(finegray_regression, m)?)?;
@@ -80,6 +85,9 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfit_from_cumhaz, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_from_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_multistate, m)?)?;
+    m.add_function(wrap_pyfunction!(condition_cox_survfit_curves, m)?)?;
+    m.add_function(wrap_pyfunction!(step_values_at, m)?)?;
+    m.add_function(wrap_pyfunction!(cox_survfit_from_baseline, m)?)?;
     m.add_function(wrap_pyfunction!(basehaz, m)?)?;
     m.add_function(wrap_pyfunction!(statefig, m)?)?;
     m.add_function(wrap_pyfunction!(statefig_matplotlib_code, m)?)?;
@@ -91,6 +99,8 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         GEEConfig,
         GEEResult,
         SurvFitKMOutput,
+        CountingSurvfitTables,
+        SurvfitCurveResult,
         SurvfitKMOptions,
         KaplanMeierConfig,
         SurvFitAJ,

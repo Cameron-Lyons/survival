@@ -1,3 +1,5 @@
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::fmt;
 
@@ -52,9 +54,8 @@ fn compute_density_from_survival(survival_probs: &[f64], times: &[f64], event_ti
     }
 
     let idx = times
-        .iter()
-        .position(|&t| t >= event_time)
-        .unwrap_or(times.len() - 1);
+        .partition_point(|&time| time < event_time)
+        .min(times.len() - 1);
 
     if idx == 0 {
         let s_t = survival_probs[0];
@@ -71,31 +72,41 @@ fn get_survival_at_time(survival_probs: &[f64], times: &[f64], t: f64) -> f64 {
         return 1.0;
     }
 
-    if t < times[0] {
-        return 1.0;
-    }
+    let index = times.partition_point(|&time| time <= t);
+    index
+        .checked_sub(1)
+        .map_or(1.0, |idx| survival_probs[idx].max(MIN_PROB))
+}
 
-    if t >= times[times.len() - 1] {
-        return survival_probs[survival_probs.len() - 1].max(MIN_PROB);
-    }
-
-    let mut left = 0;
-    let mut right = times.len();
-
-    while left < right {
-        let mid = (left + right) / 2;
-        if times[mid] <= t {
-            left = mid + 1;
-        } else {
-            right = mid;
+fn validate_prediction_times(prediction_times: &[f64]) -> PyResult<()> {
+    validate_finite(prediction_times, "prediction_times")?;
+    for (index, pair) in prediction_times.windows(2).enumerate() {
+        if pair[1] < pair[0] {
+            return Err(PyValueError::new_err(format!(
+                "prediction_times must be sorted in nondecreasing order; index {} has {} before {}",
+                index + 1,
+                pair[1],
+                pair[0]
+            )));
         }
     }
+    Ok(())
+}
 
-    if left == 0 {
-        1.0
-    } else {
-        survival_probs[left - 1].max(MIN_PROB)
+fn validate_probability_slice(values: &[f64], field: &str) -> PyResult<()> {
+    for (index, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "{field} contains non-finite value {value} at index {index}"
+            )));
+        }
+        if !(0.0..=1.0).contains(&value) {
+            return Err(PyValueError::new_err(format!(
+                "{field} must contain probabilities between 0 and 1; got {value} at index {index}"
+            )));
+        }
     }
+    Ok(())
 }
 
 pub fn compute_rcll(
@@ -251,13 +262,13 @@ pub fn rcll(
     let n = event_times.len();
 
     if n != status.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "event_times and status must have the same length",
         ));
     }
 
     if survival_predictions.len() != n {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "survival_predictions must have one row per observation",
         ));
     }
@@ -265,20 +276,29 @@ pub fn rcll(
     if let Some(ref w) = weights
         && w.len() != n
     {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "weights must have the same length as event_times",
         ));
     }
 
+    validate_prediction_times(&prediction_times)?;
+    validate_finite(&event_times, "event_times")?;
+    validate_binary_i32(&status, "status")?;
+    if let Some(ref w) = weights {
+        validate_finite(w, "weights")?;
+        validate_non_negative(w, "weights")?;
+    }
+
     for (i, row) in survival_predictions.iter().enumerate() {
         if row.len() != prediction_times.len() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            return Err(PyValueError::new_err(format!(
                 "survival_predictions row {} has {} elements, expected {}",
                 i,
                 row.len(),
                 prediction_times.len()
             )));
         }
+        validate_probability_slice(row, &format!("survival_predictions row {i}"))?;
     }
 
     Ok(compute_rcll(
@@ -302,7 +322,7 @@ pub fn rcll_single_time(
     let n = event_times.len();
 
     if n != status.len() || n != survival_probs.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "survival_probs, event_times, and status must have the same length",
         ));
     }
@@ -310,15 +330,21 @@ pub fn rcll_single_time(
     if let Some(ref w) = weights
         && w.len() != n
     {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "weights must have the same length as event_times",
         ));
     }
 
+    validate_probability_slice(&survival_probs, "survival_probs")?;
+    validate_finite(&event_times, "event_times")?;
+    validate_binary_i32(&status, "status")?;
+    if let Some(ref w) = weights {
+        validate_finite(w, "weights")?;
+        validate_non_negative(w, "weights")?;
+    }
+    validate_finite(&[prediction_time], "prediction_time")?;
     if prediction_time <= 0.0 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "prediction_time must be positive",
-        ));
+        return Err(PyValueError::new_err("prediction_time must be positive"));
     }
 
     Ok(compute_rcll_single_time(
@@ -433,6 +459,15 @@ mod tests {
         assert!((get_survival_at_time(&survival_probs, &times, 1.5) - 0.9).abs() < 1e-10);
         assert!((get_survival_at_time(&survival_probs, &times, 2.5) - 0.8).abs() < 1e-10);
         assert!((get_survival_at_time(&survival_probs, &times, 5.0) - 0.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_survival_and_density_at_duplicate_time() {
+        let survival_probs = vec![0.95, 0.8, 0.7, 0.5];
+        let times = vec![1.0, 2.0, 2.0, 3.0];
+
+        assert!((get_survival_at_time(&survival_probs, &times, 2.0) - 0.7).abs() < 1e-10);
+        assert!((compute_density_from_survival(&survival_probs, &times, 2.0) - 0.15).abs() < 1e-10);
     }
 
     #[test]

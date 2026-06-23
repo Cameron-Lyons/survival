@@ -84,4 +84,62 @@ mod tests {
 
         assert!(result.ici >= 0.0 && result.ici <= 1.0);
     }
+
+    #[test]
+    fn public_d_calibration_validates_probabilities_and_status() {
+        let err = d_calibration(vec![1.2], vec![1], None).unwrap_err();
+        assert!(err.to_string().contains("probabilities between 0 and 1"));
+
+        let err = d_calibration(vec![0.8], vec![2], None).unwrap_err();
+        assert!(err.to_string().contains("status must contain only 0/1"));
+    }
+
+    #[test]
+    fn public_timepoint_calibration_validates_shared_inputs() {
+        let err = one_calibration(vec![f64::NAN], vec![1], vec![0.8], 1.0, Some(2)).unwrap_err();
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = calibration_plot(vec![1.0], vec![2], vec![0.8], 1.0, Some(2)).unwrap_err();
+        assert!(err.to_string().contains("status must contain only 0/1"));
+
+        let err = brier_calibration(vec![1.0], vec![1], vec![1.2], 1.0, Some(2)).unwrap_err();
+        assert!(err.to_string().contains("probabilities between 0 and 1"));
+
+        let err = smoothed_calibration(
+            vec![1.0],
+            vec![1],
+            vec![0.8],
+            f64::INFINITY,
+            Some(10),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("time_point contains non-finite"));
+    }
+
+    #[test]
+    fn public_multi_time_calibration_validates_times_and_rows() {
+        let err =
+            multi_time_calibration(vec![1.0], vec![1], vec![vec![0.8, 0.7]], vec![2.0, 1.0], Some(2))
+                .unwrap_err();
+        assert!(err.to_string().contains("prediction_times must be sorted"));
+
+        let err =
+            multi_time_calibration(vec![1.0], vec![1], vec![vec![1.2]], vec![1.0], Some(2))
+                .unwrap_err();
+        assert!(err.to_string().contains("probabilities between 0 and 1"));
+    }
+
+    #[test]
+    fn public_smoothed_calibration_validates_bandwidth() {
+        let err =
+            smoothed_calibration(vec![1.0], vec![1], vec![0.8], 1.0, Some(10), Some(f64::NAN))
+                .unwrap_err();
+        assert!(err.to_string().contains("bandwidth contains non-finite"));
+
+        let err =
+            smoothed_calibration(vec![1.0], vec![1], vec![0.8], 1.0, Some(10), Some(0.0))
+                .unwrap_err();
+        assert!(err.to_string().contains("bandwidth must be positive"));
+    }
 }

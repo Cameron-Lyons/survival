@@ -1,7 +1,13 @@
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
 
 use crate::constants::same_time;
+
+const PY_EXP_CLAMP_MIN: f64 = -745.0;
+const PY_EXP_CLAMP_MAX: f64 = 709.0;
+
+type CoxBaselineCurveOutput = (Vec<f64>, Vec<Vec<f64>>, Vec<Vec<f64>>);
 
 fn value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<PyValueError, _>(message.into())
@@ -32,6 +38,156 @@ fn validate_nonnegative_finite_slice(name: &str, values: &[f64]) -> PyResult<()>
         }
     }
     Ok(())
+}
+
+fn validate_step_times(name: &str, times: &[f64]) -> PyResult<()> {
+    validate_finite_slice(name, times)?;
+    if times.windows(2).any(|window| window[1] < window[0]) {
+        return Err(value_error(format!("{name} must be sorted ascending")));
+    }
+    Ok(())
+}
+
+fn step_value_at_with_initial(
+    times: &[f64],
+    values: &[f64],
+    requested_time: f64,
+    initial: f64,
+) -> f64 {
+    let pos = times.partition_point(|&time| time <= requested_time);
+    if pos == 0 { initial } else { values[pos - 1] }
+}
+
+fn requested_times_are_sorted(values: &[f64]) -> bool {
+    values.windows(2).all(|window| window[1] >= window[0])
+}
+
+fn step_values_at_sorted_requests(
+    times: &[f64],
+    values: &[f64],
+    requested_times: &[f64],
+    initial: f64,
+) -> Vec<f64> {
+    let mut cursor = 0;
+    let mut output = Vec::with_capacity(requested_times.len());
+    for &requested_time in requested_times {
+        while cursor < times.len() && times[cursor] <= requested_time {
+            cursor += 1;
+        }
+        output.push(if cursor == 0 {
+            initial
+        } else {
+            values[cursor - 1]
+        });
+    }
+    output
+}
+
+#[pyfunction]
+pub fn step_values_at(
+    times: Vec<f64>,
+    values: Vec<f64>,
+    requested_times: Vec<f64>,
+    initial: f64,
+) -> PyResult<Vec<f64>> {
+    if times.len() != values.len() {
+        return Err(value_error("times and values must have the same length"));
+    }
+    validate_step_times("times", &times)?;
+    validate_finite_slice("values", &values)?;
+    validate_finite_slice("requested_times", &requested_times)?;
+    if !initial.is_finite() {
+        return Err(value_error("initial must be finite"));
+    }
+    if requested_times_are_sorted(&requested_times) {
+        return Ok(step_values_at_sorted_requests(
+            &times,
+            &values,
+            &requested_times,
+            initial,
+        ));
+    }
+    Ok(requested_times
+        .iter()
+        .map(|&requested_time| step_value_at_with_initial(&times, &values, requested_time, initial))
+        .collect())
+}
+
+type ConditionedCoxSurvfitOutput = (Vec<f64>, Vec<Vec<f64>>, Vec<Vec<f64>>);
+
+#[pyfunction]
+pub fn condition_cox_survfit_curves(
+    times: Vec<f64>,
+    cumhaz: Vec<Vec<f64>>,
+    t0: f64,
+    include_time0: bool,
+    filter_start_time: bool,
+    time_epsilon: f64,
+) -> PyResult<ConditionedCoxSurvfitOutput> {
+    validate_step_times("times", &times)?;
+    validate_matrix_nonnegative_finite("cumhaz", &cumhaz)?;
+    if cumhaz.iter().any(|row| row.len() != times.len()) {
+        return Err(value_error(
+            "cumhaz rows must have the same length as times",
+        ));
+    }
+    if !t0.is_finite() {
+        return Err(value_error("t0 must be finite"));
+    }
+    if !time_epsilon.is_finite() || time_epsilon < 0.0 {
+        return Err(value_error("time_epsilon must be non-negative and finite"));
+    }
+
+    let start_idx = if filter_start_time {
+        let cutoff = t0 - time_epsilon;
+        let idx = times.partition_point(|&time| time < cutoff);
+        if idx == times.len() {
+            return Err(value_error("start_time argument has removed all endpoints"));
+        }
+        idx
+    } else {
+        0
+    };
+    let start_pos = times.partition_point(|&time| time < t0);
+    let mut kept_times = times[start_idx..].to_vec();
+
+    let mut conditioned_cumhaz = Vec::with_capacity(cumhaz.len());
+    let mut conditioned_surv = Vec::with_capacity(cumhaz.len());
+    for row in &cumhaz {
+        let start_hazard = if start_pos > 0 {
+            row[start_pos - 1]
+        } else {
+            0.0
+        };
+        let mut curve_hazards: Vec<f64> = row[start_idx..]
+            .iter()
+            .map(|&hazard| (hazard - start_hazard).max(0.0))
+            .collect();
+        let mut curve_survival: Vec<f64> = curve_hazards
+            .iter()
+            .map(|&hazard| safe_exp(-hazard).clamp(0.0, 1.0))
+            .collect();
+        if include_time0
+            && kept_times
+                .first()
+                .is_none_or(|&first_time| (first_time - t0).abs() >= time_epsilon)
+        {
+            curve_hazards.insert(0, 0.0);
+            curve_survival.insert(0, 1.0);
+        }
+        conditioned_cumhaz.push(curve_hazards);
+        conditioned_surv.push(curve_survival);
+    }
+
+    if include_time0
+        && kept_times
+            .first()
+            .is_none_or(|&first_time| (first_time - t0).abs() >= time_epsilon)
+    {
+        kept_times.insert(0, t0);
+    }
+
+    Ok((kept_times, conditioned_surv, conditioned_cumhaz))
 }
 
 fn validate_nonnegative_cumhaz_slice(name: &str, values: &[f64]) -> PyResult<()> {
@@ -96,12 +252,17 @@ fn validate_matrix_width(
     Ok(())
 }
 
-fn validate_matrix_finite(name: &str, matrix: &[Vec<f64>]) -> PyResult<()> {
+fn validate_survival_matrix(name: &str, matrix: &[Vec<f64>]) -> PyResult<()> {
     for (row_idx, row) in matrix.iter().enumerate() {
         for (col_idx, &value) in row.iter().enumerate() {
             if !value.is_finite() {
                 return Err(value_error(format!(
                     "{name} contains non-finite value at row {row_idx}, column {col_idx}"
+                )));
+            }
+            if !(0.0..=1.0).contains(&value) {
+                return Err(value_error(format!(
+                    "{name} values must be between 0 and 1; got {value} at row {row_idx}, column {col_idx}"
                 )));
             }
         }
@@ -145,8 +306,24 @@ fn validate_matrix_nonnegative_or_infinite(name: &str, matrix: &[Vec<f64>]) -> P
     Ok(())
 }
 
-fn validate_transition_hazards(transition_hazards: &[Vec<Vec<f64>>]) -> PyResult<()> {
+fn validate_transition_hazards(
+    transition_hazards: &[Vec<Vec<f64>>],
+    n_times: usize,
+) -> PyResult<usize> {
+    if transition_hazards.is_empty() {
+        return Err(value_error("transition_hazards cannot be empty"));
+    }
+    if transition_hazards.len() != n_times {
+        return Err(value_error(
+            "transition_hazards length must match time length",
+        ));
+    }
     let n_states = transition_hazards[0].len();
+    if n_states == 0 {
+        return Err(value_error(
+            "transition_hazards must have at least one state",
+        ));
+    }
     for (time_idx, haz) in transition_hazards.iter().enumerate() {
         if haz.len() != n_states {
             return Err(value_error(
@@ -157,21 +334,30 @@ fn validate_transition_hazards(transition_hazards: &[Vec<Vec<f64>>]) -> PyResult
             if row.len() != n_states {
                 return Err(value_error("Transition matrices must be square"));
             }
+            let mut outgoing = 0.0;
             for (col_idx, &value) in row.iter().enumerate() {
                 if !value.is_finite() {
                     return Err(value_error(format!(
                         "transition_hazards contains non-finite value at time {time_idx}, row {row_idx}, column {col_idx}"
                     )));
                 }
-                if row_idx != col_idx && value < 0.0 {
-                    return Err(value_error(format!(
-                        "transition_hazards off-diagonal entries must be non-negative; got {value} at time {time_idx}, row {row_idx}, column {col_idx}"
-                    )));
+                if row_idx != col_idx {
+                    if value < 0.0 {
+                        return Err(value_error(format!(
+                            "transition_hazards off-diagonal entries must be non-negative; got {value} at time {time_idx}, row {row_idx}, column {col_idx}"
+                        )));
+                    }
+                    outgoing += value;
                 }
+            }
+            if outgoing > 1.0 + 1e-12 {
+                return Err(value_error(format!(
+                    "transition_hazards outgoing row sums must be less than or equal to 1; got {outgoing} at time {time_idx}, row {row_idx}"
+                )));
             }
         }
     }
-    Ok(())
+    Ok(n_states)
 }
 
 fn validate_matrix_result_parts(
@@ -189,7 +375,7 @@ fn validate_matrix_result_parts(
     validate_finite_slice("time", time)?;
     validate_matrix_width("surv", surv, time.len(), n_states)?;
     validate_matrix_width("cumhaz", cumhaz, time.len(), n_states)?;
-    validate_matrix_finite("surv", surv)?;
+    validate_survival_matrix("surv", surv)?;
     validate_matrix_nonnegative_or_infinite("cumhaz", cumhaz)?;
     if let Some(std_err) = std_err {
         validate_matrix_width("std_err", std_err, time.len(), n_states)?;
@@ -216,6 +402,27 @@ fn scaled_hazard_increment(events: f64, scaled_risk_sum: f64, risk_scale: f64) -
     } else {
         0.0
     }
+}
+
+fn safe_exp(value: f64) -> f64 {
+    value.clamp(PY_EXP_CLAMP_MIN, PY_EXP_CLAMP_MAX).exp()
+}
+
+fn step_value_at(times: &[f64], values: &[f64], time: f64) -> f64 {
+    let idx = times.partition_point(|value| *value <= time);
+    if idx == 0 { 0.0 } else { values[idx - 1] }
+}
+
+fn validate_sorted_step_times(name: &str, times: &[f64], stratum: i32) -> PyResult<()> {
+    for window in times.windows(2) {
+        if window[1] < window[0] {
+            return Err(value_error(format!(
+                "{name} must be sorted within each stratum; stratum {stratum} has {} before {}",
+                window[1], window[0]
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -415,19 +622,7 @@ pub fn survfit_from_matrix(
     }
     validate_finite_slice("time", &time)?;
 
-    if hazard_matrix.len() != n_times {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "hazard_matrix rows must match time length",
-        ));
-    }
-
-    for row in &hazard_matrix {
-        if row.len() != n_states {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "All rows in hazard_matrix must have the same number of columns",
-            ));
-        }
-    }
+    validate_matrix_width("hazard_matrix", &hazard_matrix, n_times, n_states)?;
     validate_matrix_nonnegative_finite("hazard_matrix", &hazard_matrix)?;
 
     let mut cumhaz = Vec::with_capacity(n_times);
@@ -467,20 +662,9 @@ pub fn survfit_multistate(
     }
 
     let n_times = time.len();
-    let n_states = transition_hazards[0].len();
-    if n_states == 0 {
-        return Err(value_error(
-            "transition_hazards must have at least one state",
-        ));
-    }
     validate_finite_slice("time", &time)?;
 
-    if transition_hazards.len() != n_times {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "transition_hazards length must match time length",
-        ));
-    }
-    validate_transition_hazards(&transition_hazards)?;
+    let n_states = validate_transition_hazards(&transition_hazards, n_times)?;
 
     if initial_state >= n_states {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -527,6 +711,111 @@ pub fn survfit_multistate(
         n_event: vec![0.0; n_times],
         n_states,
     })
+}
+
+#[pyfunction]
+#[pyo3(signature = (base_times, base_hazards, linear_predictors, center=0.0, base_strata=None, curve_strata=None, requested_times=None))]
+pub fn cox_survfit_from_baseline(
+    base_times: Vec<f64>,
+    base_hazards: Vec<f64>,
+    linear_predictors: Vec<f64>,
+    center: f64,
+    base_strata: Option<Vec<i32>>,
+    curve_strata: Option<Vec<i32>>,
+    requested_times: Option<Vec<f64>>,
+) -> PyResult<CoxBaselineCurveOutput> {
+    if base_times.len() != base_hazards.len() {
+        return Err(value_error(
+            "base_times and base_hazards must have the same length",
+        ));
+    }
+    validate_finite_slice("base_times", &base_times)?;
+    validate_nonnegative_finite_slice("base_hazards", &base_hazards)?;
+    validate_finite_slice("linear_predictors", &linear_predictors)?;
+    if !center.is_finite() {
+        return Err(value_error("center must be finite"));
+    }
+
+    let base_strata_values = match base_strata {
+        Some(values) => {
+            if values.len() != base_times.len() {
+                return Err(value_error(
+                    "base_strata must have the same length as base_times",
+                ));
+            }
+            values
+        }
+        None => vec![0; base_times.len()],
+    };
+    let curve_strata_values = match curve_strata {
+        Some(values) => {
+            if values.len() != linear_predictors.len() {
+                return Err(value_error(
+                    "curve_strata must have the same length as linear_predictors",
+                ));
+            }
+            values
+        }
+        None => vec![0; linear_predictors.len()],
+    };
+
+    let mut baselines: BTreeMap<i32, (Vec<f64>, Vec<f64>)> = BTreeMap::new();
+    for ((&time, &hazard), &stratum) in base_times
+        .iter()
+        .zip(base_hazards.iter())
+        .zip(base_strata_values.iter())
+    {
+        let (times, hazards) = baselines.entry(stratum).or_default();
+        times.push(time);
+        hazards.push(hazard);
+    }
+    for (&stratum, (times, _)) in &baselines {
+        validate_sorted_step_times("base_times", times, stratum)?;
+    }
+
+    let output_times = match requested_times {
+        Some(values) => {
+            validate_finite_slice("requested_times", &values)?;
+            values
+        }
+        None => {
+            let mut values = Vec::new();
+            let mut selected_strata = curve_strata_values.clone();
+            selected_strata.sort_unstable();
+            selected_strata.dedup();
+            for stratum in selected_strata {
+                if let Some((times, _)) = baselines.get(&stratum) {
+                    values.extend(times.iter().copied());
+                }
+            }
+            values.sort_by(|left, right| left.total_cmp(right));
+            values.dedup_by(|left, right| *left == *right);
+            values
+        }
+    };
+
+    let mut survival_curves = Vec::with_capacity(linear_predictors.len());
+    let mut cumulative_hazards = Vec::with_capacity(linear_predictors.len());
+    for (&linear_predictor, &stratum) in linear_predictors.iter().zip(curve_strata_values.iter()) {
+        let risk_multiplier = safe_exp(linear_predictor - center);
+        let empty_times: &[f64] = &[];
+        let empty_hazards: &[f64] = &[];
+        let (times, hazards) = baselines
+            .get(&stratum)
+            .map(|(times, hazards)| (times.as_slice(), hazards.as_slice()))
+            .unwrap_or((empty_times, empty_hazards));
+        let mut curve = Vec::with_capacity(output_times.len());
+        let mut cumhaz = Vec::with_capacity(output_times.len());
+        for &time in &output_times {
+            let hazard = step_value_at(times, hazards, time) * risk_multiplier;
+            cumhaz.push(hazard);
+            curve.push(safe_exp(-hazard).clamp(0.0, 1.0));
+        }
+        survival_curves.push(curve);
+        cumulative_hazards.push(cumhaz);
+    }
+
+    Ok((output_times, survival_curves, cumulative_hazards))
 }
 
 #[pyfunction]
@@ -763,9 +1052,74 @@ mod tests {
     }
 
     #[test]
+    fn test_survfit_multistate_preserves_probability_mass() {
+        let result =
+            survfit_multistate(vec![1.0], vec![vec![vec![0.0, 0.25], vec![0.10, 0.0]]], 0).unwrap();
+
+        assert_eq!(result.n_states, 2);
+        assert_eq!(result.surv[0], vec![0.75, 0.25]);
+        assert!((result.surv[0].iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_step_values_at_uses_right_continuous_steps() {
+        let sorted = step_values_at(
+            vec![1.0, 3.0, 5.0],
+            vec![10.0, 30.0, 50.0],
+            vec![0.5, 1.0, 4.0, 6.0],
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(sorted, vec![0.0, 10.0, 30.0, 50.0]);
+
+        let unsorted = step_values_at(
+            vec![1.0, 3.0, 5.0],
+            vec![10.0, 30.0, 50.0],
+            vec![6.0, 0.5, 3.0],
+            -1.0,
+        )
+        .unwrap();
+        assert_eq!(unsorted, vec![50.0, -1.0, 30.0]);
+    }
+
+    #[test]
+    fn test_condition_cox_survfit_curves_rebases_cumulative_hazard() {
+        let (time, surv, cumhaz) = condition_cox_survfit_curves(
+            vec![1.0, 3.0, 5.0],
+            vec![vec![0.2, 0.6, 1.1], vec![0.0, 0.4, 0.8]],
+            2.5,
+            true,
+            true,
+            1e-9,
+        )
+        .unwrap();
+
+        assert_eq!(time, vec![2.5, 3.0, 5.0]);
+        assert_eq!(cumhaz[0][0], 0.0);
+        assert!((cumhaz[0][1] - 0.4).abs() < 1e-12);
+        assert!((cumhaz[0][2] - 0.9).abs() < 1e-12);
+        assert_eq!(cumhaz[1], vec![0.0, 0.4, 0.8]);
+        assert_eq!(surv[0][0], 1.0);
+        assert!((surv[0][1] - (-0.4_f64).exp()).abs() < 1e-12);
+        assert!((surv[1][2] - (-0.8_f64).exp()).abs() < 1e-12);
+    }
+
+    #[test]
     fn test_survfit_matrix_result_constructor_validates_shape() {
         let result =
             SurvfitMatrixResult::new(vec![1.0], vec![], vec![vec![0.1]], None, vec![], vec![], 1);
+
+        assert!(result.is_err());
+
+        let result = SurvfitMatrixResult::new(
+            vec![1.0],
+            vec![vec![1.2]],
+            vec![vec![0.1]],
+            None,
+            vec![],
+            vec![],
+            1,
+        );
 
         assert!(result.is_err());
     }
@@ -790,9 +1144,45 @@ mod tests {
     fn test_survfit_hazard_builders_reject_invalid_values() {
         assert!(survfit_from_hazard(vec![1.0], vec![f64::NAN], None, None).is_err());
         assert!(survfit_from_matrix(vec![1.0], vec![vec![-0.1]]).is_err());
+        assert!(survfit_from_matrix(vec![1.0, 2.0], vec![vec![0.1]]).is_err());
+        assert!(survfit_from_matrix(vec![1.0], vec![vec![]]).is_err());
         assert!(
             survfit_multistate(vec![1.0], vec![vec![vec![0.0, -0.1], vec![0.0, 0.0]]], 0).is_err()
         );
+        assert!(survfit_multistate(vec![1.0], vec![vec![]], 0).is_err());
+        assert!(
+            survfit_multistate(
+                vec![1.0],
+                vec![vec![
+                    vec![0.0, 0.8, 0.3],
+                    vec![0.0, 0.0, 0.0],
+                    vec![0.0, 0.0, 0.0]
+                ]],
+                0
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_cox_survfit_from_baseline_steps_by_stratum() {
+        let (times, curves, cumhaz) = cox_survfit_from_baseline(
+            vec![1.0, 3.0, 2.0, 4.0],
+            vec![0.2, 0.5, 0.1, 0.4],
+            vec![0.0, 2.0_f64.ln()],
+            0.0,
+            Some(vec![0, 0, 1, 1]),
+            Some(vec![1, 0]),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(times, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(cumhaz[0], vec![0.0, 0.1, 0.1, 0.4]);
+        assert_eq!(cumhaz[1], vec![0.4, 0.4, 1.0, 1.0]);
+        for (survival, hazard) in curves[0].iter().zip(cumhaz[0].iter()) {
+            assert!((*survival - (-*hazard).exp()).abs() < 1e-12);
+        }
     }
 
     #[test]

@@ -1,6 +1,23 @@
 use pyo3::prelude::*;
 
 use super::ratetable::{DimType, RateDimension, RateTable};
+use crate::internal::validation::{validate_finite, validate_non_negative};
+use pyo3::exceptions::PyValueError;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn validate_non_negative_i32(values: &[i32], field: &'static str) -> PyResult<()> {
+    for (index, &value) in values.iter().enumerate() {
+        if value < 0 {
+            return Err(value_error(format!(
+                "{field} values must be non-negative; got {value} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
 
 #[pyfunction]
 pub fn survexp_us() -> PyResult<RateTable> {
@@ -171,10 +188,14 @@ pub fn compute_expected_survival(
 ) -> PyResult<ExpectedSurvivalResult> {
     let n = age.len();
     if sex.len() != n || year.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "age, sex, and year must have the same length",
-        ));
+        return Err(value_error("age, sex, and year must have the same length"));
     }
+    validate_finite(&age, "age")?;
+    validate_non_negative(&age, "age")?;
+    validate_non_negative_i32(&sex, "sex")?;
+    validate_finite(&year, "year")?;
+    validate_finite(&times, "times")?;
+    validate_non_negative(&times, "times")?;
 
     let rt = match ratetable {
         Some(rt) => rt,
@@ -244,5 +265,27 @@ mod tests {
         assert_eq!(result.time.len(), 3);
         assert!(result.expected_survival[0] > 0.9);
         assert!(result.expected_survival[0] < 1.0);
+    }
+
+    #[test]
+    fn compute_expected_survival_validates_inputs() {
+        assert!(
+            compute_expected_survival(vec![f64::NAN], vec![0], vec![2000.0], vec![1.0], None)
+                .expect_err("non-finite age should fail")
+                .to_string()
+                .contains("age contains non-finite")
+        );
+        assert!(
+            compute_expected_survival(vec![1.0], vec![-1], vec![2000.0], vec![1.0], None)
+                .expect_err("negative sex should fail")
+                .to_string()
+                .contains("sex values must be non-negative")
+        );
+        assert!(
+            compute_expected_survival(vec![1.0], vec![0], vec![2000.0], vec![f64::INFINITY], None)
+                .expect_err("non-finite time should fail")
+                .to_string()
+                .contains("times contains non-finite")
+        );
     }
 }

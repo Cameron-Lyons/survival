@@ -18,6 +18,21 @@ def test_collapse():
     assert "matrix" in result
     assert "dimnames" in result
 
+    with pytest.raises(ValueError, match="y must have 3 columns"):
+        survival.collapse(y[:-1], x, istate, subject_id, wt, order)
+    with pytest.raises(ValueError, match="x length mismatch"):
+        survival.collapse(y, x[:-1], istate, subject_id, wt, order)
+    with pytest.raises(ValueError, match="y values must be finite"):
+        survival.collapse([float("nan"), *y[1:]], x, istate, subject_id, wt, order)
+    with pytest.raises(ValueError, match="wt values must be finite"):
+        survival.collapse(y, x, istate, subject_id, [float("inf"), 1.0, 1.0, 1.0], order)
+    with pytest.raises(ValueError, match="order values must be non-negative"):
+        survival.collapse(y, x, istate, subject_id, wt, [-1, 1, 2, 3])
+    with pytest.raises(ValueError, match="order values must be less than"):
+        survival.collapse(y, x, istate, subject_id, wt, [0, 1, 2, 4])
+    with pytest.raises(ValueError, match="order must be a permutation"):
+        survival.collapse(y, x, istate, subject_id, wt, [0, 1, 1, 3])
+
 
 def test_tmerge_family_public_apis():
     merged = survival.tmerge(
@@ -80,12 +95,19 @@ def test_survsplit_public_api_and_validation():
         [10.0],
         [7.0, float("nan"), 3.0, 3.0, float("inf")],
     )
+    boundary_result = survival.survsplit([0.0], [10.0], [0.0, 3.0, 10.0])
 
     assert result.row == [1, 1, 1]
     assert result.interval == [1, 2, 3]
     assert result.start == pytest.approx([0.0, 3.0, 7.0])
     assert result.end == pytest.approx([3.0, 7.0, 10.0])
     assert result.censor == [True, True, False]
+
+    assert boundary_result.row == [1, 1]
+    assert boundary_result.interval == [1, 2]
+    assert boundary_result.start == pytest.approx([0.0, 3.0])
+    assert boundary_result.end == pytest.approx([3.0, 10.0])
+    assert boundary_result.censor == [True, False]
 
     with pytest.raises(ValueError, match="tstart and tstop must have same length"):
         survival.survsplit([0.0], [], [1.0])
@@ -155,9 +177,17 @@ def test_surv2data_and_survcondense_public_apis():
 def test_aeq_surv_neardate_and_tcut_public_apis():
     adjusted = survival.aeq_surv([1.0, 1.0 + 1e-10, 2.0], 1e-8)
     nearest = survival.neardate([1, 1, 2], [4.0, 12.0, 7.0], [1, 1, 2], [5.0, 10.0, 9.0])
+    nearest_tie = survival.neardate(
+        [1, 1, 1],
+        [15.0, 10.0, 11.0],
+        [1, 1, 1, 1],
+        [10.0, 20.0, 10.0, 12.0],
+    )
     nearest_str = survival.neardate_str(["a"], [4.0], ["a"], [1.0], "prior")
     cut = survival.tcut([5.0, 15.0, 30.0], [0.0, 10.0, 20.0, 30.0])
+    cut_boundaries = survival.tcut([0.0, 10.0, 20.0, 30.0], [0.0, 10.0, 20.0, 30.0])
     expanded = survival.tcut_expand([0.0], [25.0], [0.0, 10.0, 20.0, 30.0])
+    expanded_edges = survival.tcut_expand([-5.0, 35.0], [25.0, 40.0], [0.0, 10.0, 20.0])
 
     assert adjusted.time[0] == pytest.approx(adjusted.time[1])
     assert adjusted.adjusted_count == 1
@@ -166,18 +196,27 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
     assert nearest.indices == [0, 1, 2]
     assert nearest.distances == pytest.approx([1.0, 2.0, 2.0])
     assert nearest.n_matched == 3
+    assert nearest_tie.indices == [3, 0, 0]
+    assert nearest_tie.distances == pytest.approx([3.0, 0.0, 1.0])
     assert nearest_str.indices == [0]
     assert nearest_str.distances == pytest.approx([3.0])
 
     assert cut.codes == [0, 1, 2]
     assert cut.counts == [1, 1, 1]
     assert cut.breaks == pytest.approx([0.0, 10.0, 20.0, 30.0])
+    assert cut_boundaries.codes == [0, 1, 2, 2]
+    assert cut_boundaries.counts == [1, 1, 2]
 
     start, stop, codes, original = expanded
     assert start == pytest.approx([0.0, 10.0, 20.0])
     assert stop == pytest.approx([10.0, 20.0, 25.0])
     assert codes == [0, 1, 2]
     assert original == [0, 0, 0]
+    edge_start, edge_stop, edge_codes, edge_original = expanded_edges
+    assert edge_start == pytest.approx([-5.0, 0.0, 10.0, 20.0, 35.0])
+    assert edge_stop == pytest.approx([0.0, 10.0, 20.0, 25.0, 40.0])
+    assert edge_codes == [-1, 0, 1, 2, 2]
+    assert edge_original == [0, 0, 0, 0, 1]
 
     with pytest.raises(ValueError, match="best must be 'prior', 'after', or 'closest'"):
         survival.neardate([1], [1.0], [1], [1.0], "sideways")

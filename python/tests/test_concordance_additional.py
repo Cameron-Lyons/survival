@@ -18,6 +18,30 @@ def test_concordance():
     assert "count" in result
 
 
+def test_legacy_concordance_validates_index_inputs():
+    y = [1.0, 2.0, 3.0]
+    wt = [1.0, 1.0, 1.0]
+    timewt = [1.0, 1.0, 1.0]
+
+    with pytest.raises(ValueError, match="x length mismatch"):
+        survival.core.concordance(y, [0, 1], wt, timewt, None, [0, 1, 2])
+
+    with pytest.raises(ValueError, match="x contains negative value"):
+        survival.core.concordance(y, [0, -1, 2], wt, timewt, None, [0, 1, 2])
+
+    with pytest.raises(ValueError, match="x value 3 .* outside observation count"):
+        survival.core.concordance(y, [0, 1, 3], wt, timewt, None, [0, 1, 2])
+
+    with pytest.raises(ValueError, match="sortstop value 3 .* outside observation count"):
+        survival.core.concordance(y, [0, 1, 2], wt, timewt, None, [0, 1, 3])
+
+    with pytest.raises(ValueError, match="sortstart length mismatch"):
+        survival.core.concordance(y, [0, 1, 2], wt, timewt, [0, 1], [0, 1, 2])
+
+    with pytest.raises(ValueError, match="sortstart value 3 .* outside observation count"):
+        survival.core.concordance(y, [0, 1, 2], wt, timewt, [0, 1, 3], [0, 1, 2])
+
+
 def test_concordance_summary_counts_near_tied_risk_scores():
     summary = survival.core.concordance_summary(
         [1.0, 2.0, 3.0],
@@ -91,3 +115,70 @@ def test_perform_concordance_calculation():
     )
     assert isinstance(result, dict)
     assert "concordance_index" in result
+
+
+def test_low_level_concordance_wrappers_validate_index_inputs():
+    time_data = [1.0, 2.0, 3.0, 1.0, 1.0, 0.0]
+    weights = [1.0, 1.0, 1.0]
+
+    with pytest.raises(RuntimeError, match="ntree must be positive"):
+        survival.perform_concordance1_calculation(time_data, weights, [0, 1, 2], 0)
+
+    with pytest.raises(RuntimeError, match="indices contains negative value"):
+        survival.perform_concordance1_calculation(time_data, weights, [0, -1, 2], 4)
+
+    with pytest.raises(RuntimeError, match="indices value 4 .* outside ntree"):
+        survival.perform_concordance1_calculation(time_data, weights, [0, 1, 4], 4)
+
+    extended_time_data = [1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 0.0, 1.0]
+    extended_weights = [1.0, 1.0, 1.0, 1.0]
+    time_weights = [1.0, 1.0, 1.0, 1.0]
+
+    with pytest.raises(RuntimeError, match="indices contains negative value"):
+        survival.perform_concordance3_calculation(
+            extended_time_data,
+            [0, -1, 2, 3],
+            extended_weights,
+            time_weights,
+            [0, 1, 2, 3],
+            False,
+        )
+
+    with pytest.raises(RuntimeError, match="sort_stop value 4 .* outside observation count"):
+        survival.perform_concordance3_calculation(
+            extended_time_data,
+            [0, 1, 2, 3],
+            extended_weights,
+            time_weights,
+            [0, 1, 2, 4],
+            False,
+        )
+
+    with pytest.raises(RuntimeError, match="predictor_values contains negative value"):
+        survival.perform_concordance_calculation(
+            extended_time_data,
+            [0, -1, 2, 3],
+            extended_weights,
+            time_weights,
+            [0, 1, 2, 3],
+        )
+
+    with pytest.raises(RuntimeError, match="sort_start length"):
+        survival.perform_concordance_calculation(
+            extended_time_data,
+            [0, 1, 2, 3],
+            extended_weights,
+            time_weights,
+            [0, 1, 2, 3],
+            [0, 1, 2],
+        )
+
+    with pytest.raises(RuntimeError, match="sort_start value 4 .* outside observation count"):
+        survival.perform_concordance_calculation(
+            extended_time_data,
+            [0, 1, 2, 3],
+            extended_weights,
+            time_weights,
+            [0, 1, 2, 3],
+            [0, 1, 2, 4],
+        )

@@ -47,6 +47,47 @@ impl From<PSplineError> for PyErr {
         PyValueError::new_err(err.to_string())
     }
 }
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn validate_finite_slice(values: &[f64], field: &str) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{field} contains non-finite value {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_boundary_knots(boundary_knots: (f64, f64)) -> PyResult<()> {
+    let (lower, upper) = boundary_knots;
+    if !lower.is_finite() || !upper.is_finite() || lower >= upper {
+        return Err(value_error(
+            "boundary_knots must be finite and strictly increasing",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_scalar(value: f64, field: &str) -> PyResult<()> {
+    if !value.is_finite() {
+        return Err(value_error(format!("{field} must be finite")));
+    }
+    Ok(())
+}
+
+fn validate_positive_scalar(value: f64, field: &str) -> PyResult<()> {
+    validate_scalar(value, field)?;
+    if value <= 0.0 {
+        return Err(value_error(format!("{field} must be positive")));
+    }
+    Ok(())
+}
+
 #[pyclass]
 pub struct PSpline {
     x: Vec<f64>,
@@ -133,13 +174,14 @@ impl PSplineBuilder {
     }
 
     pub fn build(&self) -> PyResult<PSpline> {
+        validate_finite_slice(&self.x, "x")?;
         let boundary_knots = self.boundary_knots.unwrap_or_else(|| {
             let min = self.x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
             let max = self.x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
             (min, max)
         });
 
-        Ok(PSpline::new(
+        PSpline::try_new(
             self.x.clone(),
             self.df,
             self.theta,
@@ -148,7 +190,7 @@ impl PSplineBuilder {
             boundary_knots,
             self.intercept,
             self.penalty,
-        ))
+        )
     }
 }
 #[pymethods]
@@ -164,25 +206,20 @@ impl PSpline {
         boundary_knots: (f64, f64),
         intercept: bool,
         penalty: bool,
-    ) -> Self {
-        let nterm = df + 1;
-        let degree = 3;
-        PSpline {
+    ) -> PyResult<Self> {
+        Self::try_new(
             x,
             df,
             theta,
-            nterm,
-            degree,
             eps,
             method,
             boundary_knots,
             intercept,
             penalty,
-            coefficients: None,
-            fitted: false,
-        }
+        )
     }
     pub fn fit(&mut self) -> PyResult<Vec<f64>> {
+        self.validate()?;
         let basis = self.create_basis();
         let penalized_basis = self
             .apply_penalty(basis)
@@ -199,6 +236,7 @@ impl PSpline {
             .coefficients
             .as_ref()
             .ok_or_else(|| PyValueError::new_err("Model not fitted. Call fit() first."))?;
+        validate_finite_slice(&new_x, "new_x")?;
         let mut predictions = Vec::with_capacity(new_x.len());
         for x_val in &new_x {
             let mut pred = 0.0;
@@ -220,6 +258,81 @@ impl PSpline {
 }
 
 impl PSpline {
+    #[allow(clippy::too_many_arguments)]
+    fn try_new(
+        x: Vec<f64>,
+        df: u32,
+        theta: f64,
+        eps: f64,
+        method: String,
+        boundary_knots: (f64, f64),
+        intercept: bool,
+        penalty: bool,
+    ) -> PyResult<Self> {
+        validate_finite_slice(&x, "x")?;
+        validate_boundary_knots(boundary_knots)?;
+        validate_scalar(theta, "theta")?;
+        if theta < 0.0 {
+            return Err(value_error("theta must be non-negative"));
+        }
+        validate_positive_scalar(eps, "eps")?;
+        if df == 0 {
+            return Err(value_error("df must be positive"));
+        }
+        let nterm = df
+            .checked_add(1)
+            .ok_or_else(|| value_error("df is too large"))?;
+        if x.len() < nterm as usize {
+            return Err(value_error(format!(
+                "x length ({}) must be at least df + 1 ({nterm})",
+                x.len()
+            )));
+        }
+        let degree = 3;
+        Ok(PSpline {
+            x,
+            df,
+            theta,
+            nterm,
+            degree,
+            eps,
+            method,
+            boundary_knots,
+            intercept,
+            penalty,
+            coefficients: None,
+            fitted: false,
+        })
+    }
+
+    fn validate(&self) -> PyResult<()> {
+        validate_finite_slice(&self.x, "x")?;
+        validate_boundary_knots(self.boundary_knots)?;
+        validate_scalar(self.theta, "theta")?;
+        if self.theta < 0.0 {
+            return Err(value_error("theta must be non-negative"));
+        }
+        validate_positive_scalar(self.eps, "eps")?;
+        if self.df == 0 {
+            return Err(value_error("df must be positive"));
+        }
+        let expected_nterm = self
+            .df
+            .checked_add(1)
+            .ok_or_else(|| value_error("df is too large"))?;
+        if self.nterm != expected_nterm {
+            return Err(value_error("nterm must equal df + 1"));
+        }
+        if self.x.len() < self.nterm as usize {
+            return Err(value_error(format!(
+                "x length ({}) must be at least df + 1 ({})",
+                self.x.len(),
+                self.nterm
+            )));
+        }
+        Ok(())
+    }
+
     fn create_basis(&self) -> Vec<Vec<f64>> {
         let n = self.x.len();
         let mut basis = vec![vec![0.0; self.nterm as usize]; n];
@@ -409,5 +522,125 @@ impl PSpline {
         let b_array = Array1::from_vec(b);
         let x = lu_solve(&a_array, &b_array).ok_or(PSplineError::LinearSolveError)?;
         Ok(x.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_pspline() -> PSpline {
+        PSpline::new(
+            vec![1.0, 2.0, 3.0, 4.0],
+            1,
+            0.1,
+            1e-6,
+            "GCV".to_string(),
+            (0.0, 5.0),
+            false,
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn pspline_rejects_malformed_constructor_inputs() {
+        assert!(
+            PSpline::new(
+                vec![1.0, f64::NAN],
+                1,
+                0.1,
+                1e-6,
+                "GCV".to_string(),
+                (0.0, 5.0),
+                false,
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            PSpline::new(
+                vec![1.0, 2.0],
+                1,
+                0.1,
+                1e-6,
+                "GCV".to_string(),
+                (5.0, 5.0),
+                false,
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            PSpline::new(
+                vec![1.0, 2.0],
+                0,
+                0.1,
+                1e-6,
+                "GCV".to_string(),
+                (0.0, 5.0),
+                false,
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            PSpline::new(
+                vec![1.0, 2.0],
+                1,
+                -0.1,
+                1e-6,
+                "GCV".to_string(),
+                (0.0, 5.0),
+                false,
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            PSpline::new(
+                vec![1.0, 2.0],
+                1,
+                0.1,
+                0.0,
+                "GCV".to_string(),
+                (0.0, 5.0),
+                false,
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            PSpline::new(
+                vec![1.0, 2.0],
+                3,
+                0.1,
+                1e-6,
+                "GCV".to_string(),
+                (0.0, 5.0),
+                false,
+                false,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn pspline_builder_rejects_bad_auto_boundary() {
+        let builder = PSplineBuilder::new(vec![1.0, 1.0]);
+
+        assert!(builder.build().is_err());
+    }
+
+    #[test]
+    fn pspline_predict_rejects_non_finite_new_x() {
+        let mut spline = valid_pspline();
+        spline.coefficients = Some(vec![1.0; spline.nterm as usize]);
+        spline.fitted = true;
+        let err = spline
+            .predict(vec![1.0, f64::INFINITY])
+            .expect_err("non-finite prediction input should be rejected");
+
+        assert!(err.to_string().contains("new_x contains non-finite"));
     }
 }

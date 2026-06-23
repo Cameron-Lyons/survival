@@ -130,36 +130,39 @@ fn find_nearest(refs: &[(usize, f64)], target: f64, direction: &str) -> Option<(
 
     match direction {
         "prior" => {
-            let mut best: Option<(usize, f64)> = None;
-            for &(idx, val) in refs {
-                if val <= target {
-                    best = Some((idx, target - val));
-                } else {
-                    break;
-                }
+            let pos = refs.partition_point(|entry| entry.1 <= target);
+            if pos == 0 {
+                None
+            } else {
+                let (idx, val) = refs[pos - 1];
+                Some((idx, target - val))
             }
-            best
         }
         "after" => {
-            for &(idx, val) in refs {
-                if val >= target {
-                    return Some((idx, val - target));
-                }
-            }
-            None
+            let pos = refs.partition_point(|entry| entry.1 < target);
+            refs.get(pos).map(|&(idx, val)| (idx, val - target))
         }
         "closest" => {
-            let mut best_idx = 0;
-            let mut best_dist = (refs[0].1 - target).abs();
-
-            for (i, &(_, val)) in refs.iter().enumerate() {
-                let dist = (val - target).abs();
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_idx = i;
-                }
+            let pos = refs.partition_point(|entry| entry.1 < target);
+            if pos == 0 {
+                let (idx, val) = refs[0];
+                return Some((idx, val - target));
             }
-            Some((refs[best_idx].0, best_dist))
+            if pos == refs.len() {
+                let (idx, val) = refs[refs.len() - 1];
+                return Some((idx, target - val));
+            }
+
+            let (_, before_val) = refs[pos - 1];
+            let (after_idx, after_val) = refs[pos];
+            let before_dist = target - before_val;
+            let after_dist = after_val - target;
+            if before_dist <= after_dist {
+                let first_before_pos = refs.partition_point(|entry| entry.1 < before_val);
+                Some((refs[first_before_pos].0, before_dist))
+            } else {
+                Some((after_idx, after_dist))
+            }
         }
         _ => None,
     }
@@ -283,6 +286,44 @@ mod tests {
         let result = neardate(id1, date1, id2, date2, None, None).unwrap();
         assert_eq!(result.n_matched, 0);
         assert_eq!(result.indices[0], None);
+    }
+
+    #[test]
+    fn test_neardate_preserves_tie_and_duplicate_behavior() {
+        let result = neardate(
+            vec![1, 1, 1],
+            vec![15.0, 10.0, 11.0],
+            vec![1, 1, 1, 1],
+            vec![10.0, 20.0, 10.0, 12.0],
+            Some("closest"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.indices, vec![Some(3), Some(0), Some(0)]);
+        assert_eq!(result.distances, vec![Some(3.0), Some(0.0), Some(1.0)]);
+
+        let prior = neardate(
+            vec![1],
+            vec![10.0],
+            vec![1, 1],
+            vec![10.0, 10.0],
+            Some("prior"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(prior.indices[0], Some(1));
+
+        let after = neardate(
+            vec![1],
+            vec![10.0],
+            vec![1, 1],
+            vec![10.0, 10.0],
+            Some("after"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(after.indices[0], Some(0));
     }
 
     #[test]

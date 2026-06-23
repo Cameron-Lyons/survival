@@ -1,6 +1,117 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_probability_slice(values: &[f64], field: &'static str) -> PyResult<()> {
+    validate_finite(values, field)?;
+    for (index, &value) in values.iter().enumerate() {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(value_error(format!(
+                "{field} must contain probabilities between 0 and 1; got {value} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_threshold_value(value: f64, field: &'static str, index: usize) -> PyResult<()> {
+    if !value.is_finite() || value <= 0.0 || value >= 1.0 {
+        return Err(value_error(format!(
+            "{field} must contain finite values between 0 and 1 exclusive; got {value} at index {index}"
+        )));
+    }
+    Ok(())
+}
+
+fn normalize_thresholds(thresholds: Option<Vec<f64>>) -> PyResult<Vec<f64>> {
+    let thresholds = thresholds.unwrap_or_else(|| (1..100).map(|i| i as f64 / 100.0).collect());
+    if thresholds.is_empty() {
+        return Err(value_error("thresholds cannot be empty"));
+    }
+    for (index, &threshold) in thresholds.iter().enumerate() {
+        validate_threshold_value(threshold, "thresholds", index)?;
+    }
+    Ok(thresholds)
+}
+
+fn validate_time_event_inputs(time: &[f64], event: &[i32]) -> PyResult<()> {
+    if time.is_empty() || event.len() != time.len() {
+        return Err(value_error("All inputs must have the same non-zero length"));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(event, "event")?;
+    Ok(())
+}
+
+fn validate_time_horizon(time_horizon: f64) -> PyResult<()> {
+    if !time_horizon.is_finite() || time_horizon < 0.0 {
+        return Err(value_error(
+            "time_horizon must be a finite non-negative value",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_decision_inputs(
+    predicted_risk: &[f64],
+    time: &[f64],
+    event: &[i32],
+    time_horizon: f64,
+) -> PyResult<()> {
+    if predicted_risk.is_empty()
+        || time.len() != predicted_risk.len()
+        || event.len() != predicted_risk.len()
+    {
+        return Err(value_error("All inputs must have the same non-zero length"));
+    }
+    validate_probability_slice(predicted_risk, "predicted_risk")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(event, "event")?;
+    validate_time_horizon(time_horizon)?;
+    Ok(())
+}
+
+fn binary_outcomes(time: &[f64], event: &[i32], time_horizon: f64) -> Vec<i32> {
+    time.iter()
+        .zip(event.iter())
+        .map(|(&t, &e)| if t <= time_horizon && e == 1 { 1 } else { 0 })
+        .collect()
+}
+
+fn compute_net_benefit(predicted_risk: &[f64], outcomes: &[i32], thresholds: &[f64]) -> Vec<f64> {
+    let n = predicted_risk.len();
+    thresholds
+        .par_iter()
+        .map(|&pt| {
+            let mut tp = 0;
+            let mut fp = 0;
+
+            for i in 0..n {
+                if predicted_risk[i] >= pt {
+                    if outcomes[i] == 1 {
+                        tp += 1;
+                    } else {
+                        fp += 1;
+                    }
+                }
+            }
+
+            let tpr = tp as f64 / n as f64;
+            let fpr = fp as f64 / n as f64;
+            let odds = pt / (1.0 - pt);
+
+            tpr - fpr * odds
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct DecisionCurveResult {
@@ -66,20 +177,10 @@ pub fn decision_curve_analysis(
     time_horizon: f64,
     thresholds: Option<Vec<f64>>,
 ) -> PyResult<DecisionCurveResult> {
+    validate_decision_inputs(&predicted_risk, &time, &event, time_horizon)?;
+    let thresholds = normalize_thresholds(thresholds)?;
     let n = predicted_risk.len();
-    if n == 0 || time.len() != n || event.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All inputs must have the same non-zero length",
-        ));
-    }
-
-    let thresholds = thresholds.unwrap_or_else(|| (1..100).map(|i| i as f64 / 100.0).collect());
-
-    let outcomes: Vec<i32> = time
-        .iter()
-        .zip(event.iter())
-        .map(|(&t, &e)| if t <= time_horizon && e == 1 { 1 } else { 0 })
-        .collect();
+    let outcomes = binary_outcomes(&time, &event, time_horizon);
 
     let n_events = outcomes.iter().filter(|&&o| o == 1).count();
     let prevalence = n_events as f64 / n as f64;
@@ -87,36 +188,13 @@ pub fn decision_curve_analysis(
     let net_benefit_all: Vec<f64> = thresholds
         .iter()
         .map(|&pt| {
-            let odds = pt / (1.0 - pt).max(1e-10);
+            let odds = pt / (1.0 - pt);
             prevalence - (1.0 - prevalence) * odds
         })
         .collect();
 
     let net_benefit_none: Vec<f64> = vec![0.0; thresholds.len()];
-
-    let net_benefit: Vec<f64> = thresholds
-        .par_iter()
-        .map(|&pt| {
-            let mut tp = 0;
-            let mut fp = 0;
-
-            for i in 0..n {
-                if predicted_risk[i] >= pt {
-                    if outcomes[i] == 1 {
-                        tp += 1;
-                    } else {
-                        fp += 1;
-                    }
-                }
-            }
-
-            let tpr = tp as f64 / n as f64;
-            let fpr = fp as f64 / n as f64;
-            let odds = pt / (1.0 - pt).max(1e-10);
-
-            tpr - fpr * odds
-        })
-        .collect();
+    let net_benefit = compute_net_benefit(&predicted_risk, &outcomes, &thresholds);
 
     let interventions_avoided: Vec<f64> = net_benefit
         .iter()
@@ -183,18 +261,10 @@ pub fn clinical_utility_at_threshold(
     time_horizon: f64,
     threshold: f64,
 ) -> PyResult<ClinicalUtilityResult> {
+    validate_decision_inputs(&predicted_risk, &time, &event, time_horizon)?;
+    validate_threshold_value(threshold, "threshold", 0)?;
     let n = predicted_risk.len();
-    if n == 0 || time.len() != n || event.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All inputs must have the same non-zero length",
-        ));
-    }
-
-    let outcomes: Vec<i32> = time
-        .iter()
-        .zip(event.iter())
-        .map(|(&t, &e)| if t <= time_horizon && e == 1 { 1 } else { 0 })
-        .collect();
+    let outcomes = binary_outcomes(&time, &event, time_horizon);
 
     let mut tp = 0;
     let mut fp = 0;
@@ -239,7 +309,7 @@ pub fn clinical_utility_at_threshold(
 
     let nnt = if ppv > 0.0 { 1.0 / ppv } else { f64::INFINITY };
 
-    let odds = threshold / (1.0 - threshold).max(1e-10);
+    let odds = threshold / (1.0 - threshold);
     let net_benefit = (tp as f64 / n as f64) - (fp as f64 / n as f64) * odds;
 
     Ok(ClinicalUtilityResult {
@@ -296,25 +366,31 @@ pub fn compare_decision_curves(
 ) -> PyResult<ModelComparisonResult> {
     let n_models = model_predictions.len();
     if n_models == 0 || model_names.len() != n_models {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(value_error(
             "model_predictions and model_names must have the same non-zero length",
         ));
     }
+    validate_time_event_inputs(&time, &event)?;
+    validate_time_horizon(time_horizon)?;
 
-    let thresholds = thresholds.unwrap_or_else(|| (1..100).map(|i| i as f64 / 100.0).collect());
+    let thresholds = normalize_thresholds(thresholds)?;
+    let n = time.len();
+    let outcomes = binary_outcomes(&time, &event, time_horizon);
 
-    let mut model_net_benefits: Vec<Vec<f64>> = Vec::new();
-
-    for predictions in &model_predictions {
-        let result = decision_curve_analysis(
-            predictions.clone(),
-            time.clone(),
-            event.clone(),
-            time_horizon,
-            Some(thresholds.clone()),
-        )?;
-        model_net_benefits.push(result.net_benefit);
+    for (model_index, predictions) in model_predictions.iter().enumerate() {
+        if predictions.len() != n {
+            return Err(value_error(format!(
+                "model_predictions row {model_index} length mismatch: expected {n}, got {}",
+                predictions.len()
+            )));
+        }
+        validate_probability_slice(predictions, "model_predictions")?;
     }
+
+    let model_net_benefits: Vec<Vec<f64>> = model_predictions
+        .iter()
+        .map(|predictions| compute_net_benefit(predictions, &outcomes, &thresholds))
+        .collect();
 
     let net_benefit_difference: Vec<Vec<f64>> = (0..n_models)
         .map(|i| {
@@ -383,5 +459,64 @@ mod tests {
         let result = clinical_utility_at_threshold(predicted, time, event, 3.0, 0.5).unwrap();
         assert!(result.sensitivity >= 0.0 && result.sensitivity <= 1.0);
         assert!(result.specificity >= 0.0 && result.specificity <= 1.0);
+    }
+
+    #[test]
+    fn public_decision_curve_apis_validate_inputs() {
+        assert!(
+            decision_curve_analysis(vec![1.2], vec![1.0], vec![1], 1.0, Some(vec![0.5]))
+                .expect_err("invalid risk probability should fail")
+                .to_string()
+                .contains("predicted_risk must contain probabilities")
+        );
+        assert!(
+            decision_curve_analysis(vec![0.2], vec![f64::NAN], vec![1], 1.0, Some(vec![0.5]))
+                .expect_err("non-finite time should fail")
+                .to_string()
+                .contains("time contains non-finite")
+        );
+        assert!(
+            decision_curve_analysis(vec![0.2], vec![1.0], vec![2], 1.0, Some(vec![0.5]))
+                .expect_err("non-binary event should fail")
+                .to_string()
+                .contains("event values must be 0 or 1")
+        );
+        assert!(
+            decision_curve_analysis(
+                vec![0.2],
+                vec![1.0],
+                vec![1],
+                f64::INFINITY,
+                Some(vec![0.5])
+            )
+            .expect_err("invalid time horizon should fail")
+            .to_string()
+            .contains("time_horizon")
+        );
+        assert!(
+            decision_curve_analysis(vec![0.2], vec![1.0], vec![1], 1.0, Some(vec![]))
+                .expect_err("empty thresholds should fail")
+                .to_string()
+                .contains("thresholds cannot be empty")
+        );
+        assert!(
+            clinical_utility_at_threshold(vec![0.2], vec![1.0], vec![1], 1.0, 1.0)
+                .expect_err("boundary threshold should fail")
+                .to_string()
+                .contains("threshold must contain finite values")
+        );
+        assert!(
+            compare_decision_curves(
+                vec![vec![0.2], vec![0.3, 0.4]],
+                vec!["a".to_string(), "b".to_string()],
+                vec![1.0],
+                vec![1],
+                1.0,
+                Some(vec![0.5]),
+            )
+            .expect_err("model row length mismatch should fail")
+            .to_string()
+            .contains("model_predictions row 1 length mismatch")
+        );
     }
 }

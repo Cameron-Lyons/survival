@@ -112,6 +112,14 @@ pub fn survival_quantile(
 ) -> PyResult<MedianSurvivalResult> {
     let q = quantile.unwrap_or(0.5);
     let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
+    if time.len() != status.len() {
+        return Err(PyValueError::new_err(
+            "time and status must have the same length",
+        ));
+    }
+    validate_time_status(&time, &status)?;
+    validate_probability_open(q, "quantile")?;
+    validate_probability_open(conf, "confidence_level")?;
     Ok(compute_survival_quantile(&time, &status, q, conf))
 }
 #[derive(Debug, Clone)]
@@ -237,6 +245,12 @@ pub fn cumulative_incidence(
     time: Vec<f64>,
     status: Vec<i32>,
 ) -> PyResult<CumulativeIncidenceResult> {
+    if time.len() != status.len() {
+        return Err(PyValueError::new_err(
+            "time and status must have the same length",
+        ));
+    }
+    validate_time_and_nonnegative_status(&time, &status)?;
     Ok(compute_cumulative_incidence(&time, &status))
 }
 #[derive(Debug, Clone)]
@@ -388,5 +402,13 @@ pub fn number_needed_to_treat(
     confidence_level: Option<f64>,
 ) -> PyResult<NNTResult> {
     let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
+    if time.len() != status.len() || time.len() != group.len() {
+        return Err(PyValueError::new_err(
+            "time, status, and group must have the same length",
+        ));
+    }
+    validate_time_status(&time, &status)?;
+    validate_nonnegative_time_horizon(time_horizon, "time_horizon")?;
+    validate_probability_open(conf, "confidence_level")?;
     Ok(compute_nnt(&time, &status, &group, time_horizon, conf))
 }

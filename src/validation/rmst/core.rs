@@ -301,6 +301,14 @@ pub fn rmst(
     confidence_level: Option<f64>,
 ) -> PyResult<RMSTResult> {
     let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
+    if time.len() != status.len() {
+        return Err(PyValueError::new_err(
+            "time and status must have the same length",
+        ));
+    }
+    validate_time_status(&time, &status)?;
+    validate_nonnegative_time_horizon(tau, "tau")?;
+    validate_probability_open(conf, "confidence_level")?;
     Ok(compute_rmst(&time, &status, tau, conf))
 }
 
@@ -333,5 +341,13 @@ pub fn rmst_comparison(
     confidence_level: Option<f64>,
 ) -> PyResult<RMSTComparisonResult> {
     let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
+    if time.len() != status.len() || time.len() != group.len() {
+        return Err(PyValueError::new_err(
+            "time, status, and group must have the same length",
+        ));
+    }
+    validate_time_status(&time, &status)?;
+    validate_nonnegative_time_horizon(tau, "tau")?;
+    validate_probability_open(conf, "confidence_level")?;
     Ok(compare_rmst(&time, &status, &group, tau, conf))
 }

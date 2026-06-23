@@ -14,6 +14,17 @@ pub struct SplitResult {
     #[pyo3(get)]
     pub censor: Vec<bool>,
 }
+
+fn interior_cut_bounds(cutpoints: &[f64], start: f64, stop: f64) -> (usize, usize) {
+    if start >= stop {
+        return (0, 0);
+    }
+
+    let first = cutpoints.partition_point(|&cutpoint| cutpoint <= start);
+    let last = cutpoints.partition_point(|&cutpoint| cutpoint < stop);
+    (first, last)
+}
+
 #[pyfunction]
 pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> PyResult<SplitResult> {
     let n = tstart.len();
@@ -34,11 +45,8 @@ pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> PyResult<S
         if tstart[i].is_nan() || tstop[i].is_nan() {
             continue;
         }
-        for &c in &cutpoints {
-            if c > tstart[i] && c < tstop[i] {
-                extra += 1;
-            }
-        }
+        let (first, last) = interior_cut_bounds(&cutpoints, tstart[i], tstop[i]);
+        extra += last - first;
     }
     let n2 = n + extra;
     let mut result = SplitResult {
@@ -61,22 +69,15 @@ pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> PyResult<S
         }
         let mut current = current_start;
         let mut interval_num = 1;
-        for &cutpoint in &cutpoints {
-            if cutpoint <= current_start {
-                continue;
-            }
-            if cutpoint >= current_stop {
-                break;
-            }
-            if cutpoint > current {
-                result.row.push(i + 1);
-                result.interval.push(interval_num);
-                result.start.push(current);
-                result.end.push(cutpoint);
-                result.censor.push(true);
-                current = cutpoint;
-                interval_num += 1;
-            }
+        let (first, last) = interior_cut_bounds(&cutpoints, current_start, current_stop);
+        for &cutpoint in &cutpoints[first..last] {
+            result.row.push(i + 1);
+            result.interval.push(interval_num);
+            result.start.push(current);
+            result.end.push(cutpoint);
+            result.censor.push(true);
+            current = cutpoint;
+            interval_num += 1;
         }
         result.row.push(i + 1);
         result.interval.push(interval_num);
@@ -135,6 +136,28 @@ mod tests {
         assert_eq!(result.row.len(), 1);
         assert_eq!(result.start, vec![0.0]);
         assert_eq!(result.end, vec![5.0]);
+    }
+
+    #[test]
+    fn cuts_equal_to_interval_boundaries_do_not_split() {
+        let result = survsplit(vec![0.0], vec![10.0], vec![0.0, 3.0, 10.0]).unwrap();
+
+        assert_eq!(result.row, vec![1, 1]);
+        assert_eq!(result.interval, vec![1, 2]);
+        assert_eq!(result.start, vec![0.0, 3.0]);
+        assert_eq!(result.end, vec![3.0, 10.0]);
+        assert_eq!(result.censor, vec![true, false]);
+    }
+
+    #[test]
+    fn reversed_or_zero_length_intervals_are_not_split() {
+        let result = survsplit(vec![5.0, 2.0], vec![5.0, 1.0], vec![1.5, 3.0, 4.0]).unwrap();
+
+        assert_eq!(result.row, vec![1, 2]);
+        assert_eq!(result.interval, vec![1, 1]);
+        assert_eq!(result.start, vec![5.0, 2.0]);
+        assert_eq!(result.end, vec![5.0, 1.0]);
+        assert_eq!(result.censor, vec![false, false]);
     }
 
     #[test]

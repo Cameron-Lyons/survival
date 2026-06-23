@@ -425,6 +425,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
         "survreg",
         "predict_survreg",
         "predict_survreg_quantile",
+        "survreg_quantile_prediction_se_matrix",
     } <= stub_names
 
     expected_args = {
@@ -460,6 +461,15 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
             "distribution",
             "quantiles",
             "offset",
+        ],
+        "survreg_quantile_prediction_se_matrix": [
+            "rows",
+            "scales",
+            "strata",
+            "variance",
+            "quantile_scores",
+            "predictions",
+            "transform_se",
         ],
     }
     for name, args in expected_args.items():
@@ -572,6 +582,22 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
     assert quantiles.quantiles == pytest.approx([0.25, 0.5])
     assert len(quantiles.predictions) == 2
     assert all(len(row) == 2 for row in quantiles.predictions)
+    quantile_se = core.survreg_quantile_prediction_se_matrix(
+        [[1.0, 2.0], [3.0, 4.0]],
+        [2.0, 3.0],
+        [0, 1],
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        [0.5, 1.0],
+        [[10.0, 20.0], [30.0, 40.0]],
+        False,
+    )
+    assert quantile_se[0] == pytest.approx([math.sqrt(6.0), 3.0])
+    assert quantile_se[1] == pytest.approx([math.sqrt(27.25), math.sqrt(34.0)])
 
     covariates = [
         [1.0, 2.0],
@@ -2786,8 +2812,18 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
         "ModelInfluenceResult",
         "GofTestResult",
         "residuals_survfit",
+        "clustered_crossprod",
+        "clustered_sandwich_variance",
         "dfbeta_cox",
+        "cox_dfbeta_from_score_residuals",
+        "cox_event_indices",
+        "cox_interval_cumulative_hazard_se",
+        "cox_zph_group_variance",
+        "cox_zph_term_matrix",
         "leverage_cox",
+        "prediction_se_from_variance",
+        "scale_schoenfeld_residuals",
+        "term_prediction_se_from_variance",
         "smooth_schoenfeld",
         "outlier_detection_cox",
         "model_influence_cox",
@@ -2797,6 +2833,8 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
 
     expected_args = {
         "residuals_survfit": ["time", "status", "surv_time", "surv", "residual_type"],
+        "clustered_crossprod": ["rows", "weights", "cluster", "width"],
+        "clustered_sandwich_variance": ["rows", "weights", "cluster", "variance"],
         "dfbeta_cox": [
             "time",
             "event",
@@ -2805,6 +2843,24 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
             "coefficients",
             "threshold",
         ],
+        "cox_event_indices": ["time", "status", "strata"],
+        "cox_interval_cumulative_hazard_se": [
+            "centered_rows",
+            "start_hazard",
+            "start_varhaz",
+            "start_xbar",
+            "stop_hazard",
+            "stop_varhaz",
+            "stop_xbar",
+            "risk",
+            "variance",
+        ],
+        "scale_schoenfeld_residuals": ["raw", "beta", "information_matrix"],
+        "cox_dfbeta_from_score_residuals": ["score", "information_matrix", "scaled"],
+        "cox_zph_term_matrix": ["scaled", "groups", "beta"],
+        "cox_zph_group_variance": ["information_matrix", "groups", "beta"],
+        "prediction_se_from_variance": ["rows", "variance"],
+        "term_prediction_se_from_variance": ["rows", "variance", "groups"],
         "leverage_cox": [
             "time",
             "event",
@@ -2854,6 +2910,74 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
         "n_events",
         "n_vars",
     }
+
+    assert core.cox_event_indices([2.0, 1.0, 2.0, 3.0], [1, 0, 1, 1], [1, 0, 0, 1]) == [
+        2,
+        0,
+        3,
+    ]
+    scaled = core.scale_schoenfeld_residuals(
+        [[1.0, 2.0], [3.0, 4.0]],
+        [0.5, -0.5],
+        [[0.1, 0.2], [0.3, 0.4]],
+    )
+    assert scaled[0] == pytest.approx([1.9, 1.5])
+    assert scaled[1] == pytest.approx([3.5, 3.9])
+    assert core.cox_dfbeta_from_score_residuals(
+        [[1.0, 2.0]],
+        [[0.1, 0.2], [0.3, 0.4]],
+        False,
+    )[0] == pytest.approx([0.5, 1.1])
+    assert core.cox_zph_term_matrix([[1.0, 2.0, 3.0]], [[0, 1], [2]], [0.5, 2.0, 7.0])[
+        0
+    ] == pytest.approx([4.5, 3.0])
+    group_variance = core.cox_zph_group_variance(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        [[0, 1], [2]],
+        [0.5, 2.0, 7.0],
+    )
+    assert group_variance[0] == pytest.approx([4.25, 0.0])
+    assert group_variance[1] == pytest.approx([0.0, 1.0])
+    crossprod = core.clustered_crossprod(
+        [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+        [1.0, 0.5, 2.0],
+        [0, 0, 1],
+        2,
+    )
+    assert crossprod[0] == pytest.approx([106.25, 130.0])
+    assert crossprod[1] == pytest.approx([130.0, 160.0])
+    sandwich = core.clustered_sandwich_variance(
+        [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+        [1.0, 0.5, 2.0],
+        [0, 0, 1],
+        [[2.0, 0.5], [0.5, 1.0]],
+    )
+    assert sandwich[0] == pytest.approx([725.0, 478.75])
+    assert sandwich[1] == pytest.approx([478.75, 316.5625])
+    prediction_se = core.prediction_se_from_variance(
+        [[1.0, 2.0], [3.0, 4.0]],
+        [[2.0, 0.5], [0.5, 1.0]],
+    )
+    assert prediction_se == pytest.approx([math.sqrt(8.0), math.sqrt(46.0)])
+    term_prediction_se = core.term_prediction_se_from_variance(
+        [[1.0, 2.0], [3.0, 4.0]],
+        [[2.0, 0.5], [0.5, 1.0]],
+        [[0], [1], [0, 1]],
+    )
+    assert term_prediction_se[0] == pytest.approx([math.sqrt(2.0), 2.0, math.sqrt(8.0)])
+    assert term_prediction_se[1] == pytest.approx([math.sqrt(18.0), 4.0, math.sqrt(46.0)])
+    interval_se = core.cox_interval_cumulative_hazard_se(
+        [[1.0, 2.0], [0.0, 0.0]],
+        [0.25, 0.0],
+        [0.04, 0.50],
+        [[0.1, 0.2], [0.0, 0.0]],
+        [1.0, 0.0],
+        [0.25, 0.25],
+        [[0.4, 0.8], [0.0, 0.0]],
+        [3.0, 2.0],
+        [[2.0, 0.5], [0.5, 1.0]],
+    )
+    assert interval_se == pytest.approx([3.0 * math.sqrt(1.83), 0.0])
 
 
 def test_data_prep_low_level_bindings_are_typed():
@@ -3019,12 +3143,35 @@ def test_survdiff_low_level_bindings_are_typed():
     stub_path = PACKAGE_ROOT / "_survival.pyi"
     stub_names = _pyi_top_level_names(stub_path)
 
-    assert {"SurvDiffResult", "compute_logrank_components", "survdiff2"} <= stub_names
+    assert {
+        "SurvDiffResult",
+        "compute_counting_logrank_components",
+        "compute_logrank_components",
+        "stratified_counting_logrank_components",
+        "stratified_logrank_components",
+        "survdiff2",
+    } <= stub_names
 
-    expected_args = ["time", "status", "group", "strata", "rho"]
-    for name in ("compute_logrank_components", "survdiff2"):
+    expected_args = ["time", "status", "group", "strata", "rho", "timefix"]
+    for name in ("compute_logrank_components", "stratified_logrank_components", "survdiff2"):
         assert list(inspect.signature(getattr(core, name)).parameters) == expected_args
         assert _pyi_function_arg_names(stub_path, name) == expected_args
+
+    counting_expected_args = [
+        "time",
+        "status",
+        "group",
+        "entry_times",
+        "strata",
+        "rho",
+        "timefix",
+    ]
+    for name in (
+        "compute_counting_logrank_components",
+        "stratified_counting_logrank_components",
+    ):
+        assert list(inspect.signature(getattr(core, name)).parameters) == counting_expected_args
+        assert _pyi_function_arg_names(stub_path, name) == counting_expected_args
 
     assert _pyi_class_property_names(stub_path, "SurvDiffResult") == {
         "observed",
@@ -3040,6 +3187,7 @@ def test_survdiff_low_level_bindings_are_typed():
         [1, 2, 1, 2],
         None,
         0.0,
+        False,
     )
     alias_result = core.survdiff2(
         [1.0, 2.0, 3.0, 4.0],
@@ -3047,15 +3195,108 @@ def test_survdiff_low_level_bindings_are_typed():
         [1, 2, 1, 2],
         None,
         0.0,
+        None,
+    )
+    counting_result = core.compute_counting_logrank_components(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 1, 0, 1],
+        [1, 2, 1, 2],
+        [0.0, 0.0, 1.0, 1.0],
+        None,
+        0.0,
+        True,
+    )
+    strata_time = [2.0, 1.0, 3.0, 1.5, 2.5, 3.5]
+    strata_status = [0, 1, 1, 1, 1, 0]
+    strata_group = [2, 1, 2, 1, 2, 1]
+    strata_codes = [1, 0, 0, 1, 0, 1]
+    marker_order = sorted(range(len(strata_time)), key=lambda idx: (strata_codes[idx], idx))
+    marker_strata = [
+        int(
+            idx + 1 == len(marker_order)
+            or strata_codes[marker_order[idx + 1]] != strata_codes[marker_order[idx]]
+        )
+        for idx in range(len(marker_order))
+    ]
+    marker_result = core.compute_logrank_components(
+        [strata_time[idx] for idx in marker_order],
+        [strata_status[idx] for idx in marker_order],
+        [strata_group[idx] for idx in marker_order],
+        marker_strata,
+        0.0,
+        True,
+    )
+    stratified_result = core.stratified_logrank_components(
+        strata_time,
+        strata_status,
+        strata_group,
+        strata_codes,
+        0.0,
+        True,
+    )
+    stratified_counting_result = core.stratified_counting_logrank_components(
+        strata_time,
+        strata_status,
+        strata_group,
+        [0.0, 0.0, 1.0, 0.5, 1.5, 2.5],
+        strata_codes,
+        0.0,
+        True,
+    )
+    marker_counting_result = core.compute_counting_logrank_components(
+        [strata_time[idx] for idx in marker_order],
+        [strata_status[idx] for idx in marker_order],
+        [strata_group[idx] for idx in marker_order],
+        [[0.0, 0.0, 1.0, 0.5, 1.5, 2.5][idx] for idx in marker_order],
+        marker_strata,
+        0.0,
+        True,
+    )
+    fixed_result = core.compute_logrank_components(
+        [1.0, 1.0 + 5e-10, 2.0, 3.0],
+        [1, 1, 0, 1],
+        [1, 2, 1, 2],
+        None,
+        0.0,
+        True,
+    )
+    exact_result = core.compute_logrank_components(
+        [1.0, 1.0 + 5e-10, 2.0, 3.0],
+        [1, 1, 0, 1],
+        [1, 2, 1, 2],
+        None,
+        0.0,
+        False,
     )
 
     assert type(result).__name__ == "SurvDiffResult"
     assert len(result.observed) == 2
     assert len(result.expected) == 2
     assert len(result.variance) == 2
+    assert type(counting_result).__name__ == "SurvDiffResult"
+    assert len(counting_result.observed) == 2
+    assert len(counting_result.variance) == 2
+    assert fixed_result.chi_squared == 0.0
+    assert exact_result.chi_squared > fixed_result.chi_squared
     assert alias_result.observed == result.observed
     assert alias_result.expected == result.expected
     assert alias_result.chi_squared == result.chi_squared
+    assert stratified_result.observed == pytest.approx(marker_result.observed)
+    assert stratified_result.expected == pytest.approx(marker_result.expected)
+    for actual_row, expected_row in zip(
+        stratified_result.variance,
+        marker_result.variance,
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    assert stratified_counting_result.observed == pytest.approx(marker_counting_result.observed)
+    assert stratified_counting_result.expected == pytest.approx(marker_counting_result.expected)
+    for actual_row, expected_row in zip(
+        stratified_counting_result.variance,
+        marker_counting_result.variance,
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
 
 
 def test_survobrien_and_trend_bindings_are_typed():
@@ -3220,18 +3461,39 @@ def test_baseline_survival_step_bindings_are_typed():
         "agsurv4",
         "compute_tied_baseline_summaries",
         "agsurv5",
+        "cox_expected_baseline_by_stratum",
     } <= stub_names
 
     step_args = ["ndeath", "risk", "wt", "sn", "denom"]
     tied_args = ["n", "nvar", "dd", "x1", "x2", "xsum", "xsum2"]
+    expected_baseline_args = [
+        "time",
+        "status",
+        "covariates",
+        "beta",
+        "weights",
+        "strata",
+        "offset",
+        "means",
+        "entry_times",
+        "method",
+    ]
     assert list(inspect.signature(core.compute_baseline_survival_steps).parameters) == step_args
     assert list(inspect.signature(core.agsurv4).parameters) == step_args
     assert list(inspect.signature(core.compute_tied_baseline_summaries).parameters) == tied_args
     assert list(inspect.signature(core.agsurv5).parameters) == tied_args
+    assert (
+        list(inspect.signature(core.cox_expected_baseline_by_stratum).parameters)
+        == expected_baseline_args
+    )
     assert _pyi_function_arg_names(stub_path, "compute_baseline_survival_steps") == step_args
     assert _pyi_function_arg_names(stub_path, "agsurv4") == step_args
     assert _pyi_function_arg_names(stub_path, "compute_tied_baseline_summaries") == tied_args
     assert _pyi_function_arg_names(stub_path, "agsurv5") == tied_args
+    assert (
+        _pyi_function_arg_names(stub_path, "cox_expected_baseline_by_stratum")
+        == expected_baseline_args
+    )
 
     ndeath = [1, 2, 0]
     risk = [1.0, 1.0, 1.0]
@@ -3255,6 +3517,33 @@ def test_baseline_survival_step_bindings_are_typed():
     assert set(alias_tied) == {"sum1", "sum2", "xbar"}
     assert alias_tied == direct_tied
 
+    baseline_args = (
+        [1.0, 2.0, 2.0, 3.0],
+        [1, 1, 1, 0],
+        [[0.0], [1.0], [2.0], [3.0]],
+        [0.0],
+        [1.0, 1.0, 1.0, 1.0],
+        [0, 0, 0, 0],
+        [0.0, 0.0, 0.0, 0.0],
+        [1.5],
+        None,
+    )
+    strata, times, cumhaz, varhaz, xbar = core.cox_expected_baseline_by_stratum(
+        *baseline_args,
+        "breslow",
+    )
+    efron = core.cox_expected_baseline_by_stratum(*baseline_args, "efron")
+
+    assert strata == [0]
+    assert times[0] == pytest.approx([1.0, 2.0])
+    assert cumhaz[0] == pytest.approx([0.25, 11.0 / 12.0])
+    assert varhaz[0] == pytest.approx([0.0625, 41.0 / 144.0])
+    assert xbar[0][0] == pytest.approx([0.0])
+    assert xbar[0][1] == pytest.approx([1.0 / 3.0])
+    assert efron[2][0] == pytest.approx([0.25, 13.0 / 12.0])
+    assert efron[3][0] == pytest.approx([0.0625, 61.0 / 144.0])
+    assert efron[4][0][1] == pytest.approx([13.0 / 24.0])
+
 
 def test_survfitkm_bindings_are_typed():
     setup_survival_import()
@@ -3264,10 +3553,14 @@ def test_survfitkm_bindings_are_typed():
 
     assert {
         "SurvFitKMOutput",
+        "CountingSurvfitTables",
+        "SurvfitCurveResult",
         "KaplanMeierConfig",
         "SurvfitKMOptions",
         "survfitkm",
         "survfitkm_with_options",
+        "counting_survfit_tables",
+        "survfit_curve_from_tables",
     } <= stub_names
 
     assert list(inspect.signature(core.survfitkm).parameters) == [
@@ -3280,6 +3573,7 @@ def test_survfitkm_bindings_are_typed():
         "computation_type",
         "conf_level",
         "conf_type",
+        "timefix",
     ]
     assert _pyi_function_arg_names(stub_path, "survfitkm") == [
         "time",
@@ -3291,6 +3585,7 @@ def test_survfitkm_bindings_are_typed():
         "computation_type",
         "conf_level",
         "conf_type",
+        "timefix",
     ]
     assert list(inspect.signature(core.survfitkm_with_options).parameters) == [
         "time",
@@ -3301,6 +3596,52 @@ def test_survfitkm_bindings_are_typed():
         "time",
         "status",
         "options",
+    ]
+    assert list(inspect.signature(core.counting_survfit_tables).parameters) == [
+        "start",
+        "stop",
+        "status",
+        "id",
+        "weights",
+        "include_entry",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "counting_survfit_tables") == [
+        "start",
+        "stop",
+        "status",
+        "id",
+        "weights",
+        "include_entry",
+        "timefix",
+    ]
+    assert list(inspect.signature(core.survfit_curve_from_tables).parameters) == [
+        "time",
+        "n_risk",
+        "n_event",
+        "n_event_count",
+        "n_censor",
+        "n_censor_count",
+        "n_enter",
+        "reverse",
+        "stype",
+        "ctype",
+        "conf_level",
+        "conf_type",
+    ]
+    assert _pyi_function_arg_names(stub_path, "survfit_curve_from_tables") == [
+        "time",
+        "n_risk",
+        "n_event",
+        "n_event_count",
+        "n_censor",
+        "n_censor_count",
+        "n_enter",
+        "reverse",
+        "stype",
+        "ctype",
+        "conf_level",
+        "conf_type",
     ]
 
     assert list(inspect.signature(core.KaplanMeierConfig).parameters) == [
@@ -3330,6 +3671,7 @@ def test_survfitkm_bindings_are_typed():
         "computation_type",
         "conf_level",
         "conf_type",
+        "timefix",
     ]
     assert _pyi_class_method_arg_names(stub_path, "SurvfitKMOptions", "__init__") == [
         "self",
@@ -3340,6 +3682,7 @@ def test_survfitkm_bindings_are_typed():
         "computation_type",
         "conf_level",
         "conf_type",
+        "timefix",
     ]
     assert _pyi_class_annotation_names(stub_path, "SurvfitKMOptions") == {
         "weights",
@@ -3349,6 +3692,7 @@ def test_survfitkm_bindings_are_typed():
         "computation_type",
         "conf_level",
         "conf_type",
+        "timefix",
     }
     for method_name, expected_arg in {
         "with_weights": "weights",
@@ -3358,6 +3702,7 @@ def test_survfitkm_bindings_are_typed():
         "with_computation_type": "computation_type",
         "with_conf_level": "conf_level",
         "with_conf_type": "conf_type",
+        "with_timefix": "timefix",
     }.items():
         assert list(inspect.signature(getattr(core.SurvfitKMOptions, method_name)).parameters) == [
             "self",
@@ -3372,7 +3717,9 @@ def test_survfitkm_bindings_are_typed():
         "time",
         "n_risk",
         "n_event",
+        "n_event_count",
         "n_censor",
+        "n_censor_count",
         "estimate",
         "std_err",
         "cumhaz",
@@ -3381,6 +3728,28 @@ def test_survfitkm_bindings_are_typed():
         "cumulative_hazard_std_err",
         "conf_lower",
         "conf_upper",
+    }
+    assert _pyi_class_property_names(stub_path, "CountingSurvfitTables") == {
+        "time",
+        "n_risk",
+        "n_event",
+        "n_event_count",
+        "n_censor",
+        "n_censor_count",
+        "n_enter",
+    }
+    assert _pyi_class_property_names(stub_path, "SurvfitCurveResult") == {
+        "time",
+        "n_risk",
+        "n_event",
+        "n_censor",
+        "estimate",
+        "std_err",
+        "conf_lower",
+        "conf_upper",
+        "cumhaz",
+        "std_chaz",
+        "n_enter",
     }
 
     result = core.survfitkm([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 0.0, 1.0])
@@ -3391,12 +3760,63 @@ def test_survfitkm_bindings_are_typed():
         options,
     )
     config = core.KaplanMeierConfig(None, None, 0.9, "plain")
+    exact = core.survfitkm(
+        [1.0, 1.0 + 5e-10, 2.0],
+        [1.0, 1.0, 0.0],
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        False,
+    )
+    exact_with_options = core.survfitkm_with_options(
+        [1.0, 1.0 + 5e-10, 2.0],
+        [1.0, 1.0, 0.0],
+        core.SurvfitKMOptions().with_timefix(False),
+    )
+    counting_tables = core.counting_survfit_tables(
+        [0.0, 10.0, 25.0, 0.0, 5.0],
+        [10.0, 20.0, 30.0, 15.0, 25.0],
+        [0, 0, 1, 1, 0],
+        [0, 0, 0, 1, 2],
+        None,
+        True,
+        True,
+    )
+    exact_counting_tables = core.counting_survfit_tables(
+        [0.0, 0.0, 1.0, 1.0 + 5e-10],
+        [1.0, 1.0 + 5e-10, 2.0, 2.0],
+        [1, 1, 0, 0],
+        [0, 1, 2, 3],
+        None,
+        False,
+        False,
+    )
+    styled_curve = core.survfit_curve_from_tables(
+        [1.0, 2.0],
+        [4.0, 1.0],
+        [3.0, 1.0],
+        [2.0, 1.0],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        None,
+        False,
+        2,
+        2,
+        0.95,
+        "log",
+    )
 
     assert type(result).__name__ == "SurvFitKMOutput"
     assert result.time == pytest.approx([1.0, 2.0, 3.0, 4.0])
     assert result.n_risk == pytest.approx([4.0, 3.0, 2.0, 1.0])
     assert result.n_event == pytest.approx([1.0, 1.0, 0.0, 1.0])
+    assert result.n_event_count == pytest.approx([1.0, 1.0, 0.0, 1.0])
     assert result.n_censor == pytest.approx([0.0, 0.0, 1.0, 0.0])
+    assert result.n_censor_count == pytest.approx([0.0, 0.0, 1.0, 0.0])
     assert result.estimate == pytest.approx([0.75, 0.5, 0.5, 0.0])
     assert result.cumulative_hazard == pytest.approx(result.cumhaz)
     assert result.cumulative_hazard_std_err == pytest.approx(result.std_chaz)
@@ -3407,6 +3827,24 @@ def test_survfitkm_bindings_are_typed():
     assert config.computation_type == 0
     assert config.conf_level == pytest.approx(0.9)
     assert config.conf_type == "plain"
+    assert exact.time == pytest.approx([1.0, 1.0 + 5e-10, 2.0])
+    assert exact.n_event == pytest.approx([1.0, 1.0, 0.0])
+    assert exact.n_event_count == pytest.approx([1.0, 1.0, 0.0])
+    assert exact_with_options.time == pytest.approx(exact.time)
+    assert type(counting_tables).__name__ == "CountingSurvfitTables"
+    assert counting_tables.time == pytest.approx([0.0, 5.0, 15.0, 20.0, 25.0, 30.0])
+    assert counting_tables.n_risk == pytest.approx([0.0, 2.0, 3.0, 2.0, 1.0, 1.0])
+    assert counting_tables.n_event == pytest.approx([0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
+    assert counting_tables.n_censor == pytest.approx([0.0, 0.0, 0.0, 1.0, 1.0, 0.0])
+    assert counting_tables.n_enter == pytest.approx([2.0, 1.0, 0.0, 0.0, 1.0, 0.0])
+    assert exact_counting_tables.time == pytest.approx([1.0, 1.0 + 5e-10, 2.0])
+    assert exact_counting_tables.n_event == pytest.approx([1.0, 1.0, 0.0])
+    assert exact_with_options.estimate == pytest.approx(exact.estimate)
+    assert type(styled_curve).__name__ == "SurvfitCurveResult"
+    assert styled_curve.n_event == pytest.approx([3.0, 1.0])
+    assert styled_curve.n_censor == pytest.approx([0.0, 0.0])
+    assert styled_curve.cumhaz[0] == pytest.approx(3.0 / (2.0 * 4.0) + 3.0 / (2.0 * 2.5))
+    assert styled_curve.n_enter is None
 
 
 def test_survfit_matrix_bindings_are_typed():
@@ -3421,12 +3859,24 @@ def test_survfit_matrix_bindings_are_typed():
         "survfit_from_cumhaz",
         "survfit_from_matrix",
         "survfit_multistate",
+        "step_values_at",
+        "condition_cox_survfit_curves",
+        "cox_survfit_from_baseline",
     } <= stub_names
     assert list(inspect.signature(core.survfit_from_hazard).parameters) == [
         "time",
         "hazard",
         "n_risk",
         "n_event",
+    ]
+    assert list(inspect.signature(core.cox_survfit_from_baseline).parameters) == [
+        "base_times",
+        "base_hazards",
+        "linear_predictors",
+        "center",
+        "base_strata",
+        "curve_strata",
+        "requested_times",
     ]
     assert _pyi_class_method_arg_names(stub_path, "SurvfitMatrixResult", "__init__") == [
         "self",
@@ -3459,10 +3909,77 @@ def test_survfit_matrix_bindings_are_typed():
         "transition_hazards",
         "initial_state",
     ]
+    assert list(inspect.signature(core.step_values_at).parameters) == [
+        "times",
+        "values",
+        "requested_times",
+        "initial",
+    ]
+    assert _pyi_function_arg_names(stub_path, "step_values_at") == [
+        "times",
+        "values",
+        "requested_times",
+        "initial",
+    ]
+    assert list(inspect.signature(core.condition_cox_survfit_curves).parameters) == [
+        "times",
+        "cumhaz",
+        "t0",
+        "include_time0",
+        "filter_start_time",
+        "time_epsilon",
+    ]
+    assert _pyi_function_arg_names(stub_path, "condition_cox_survfit_curves") == [
+        "times",
+        "cumhaz",
+        "t0",
+        "include_time0",
+        "filter_start_time",
+        "time_epsilon",
+    ]
+    assert _pyi_function_arg_names(stub_path, "cox_survfit_from_baseline") == [
+        "base_times",
+        "base_hazards",
+        "linear_predictors",
+        "center",
+        "base_strata",
+        "curve_strata",
+        "requested_times",
+    ]
 
     result = core.survfit_from_hazard([1.0, 2.0], [0.1, 0.2])
+    curve_times, curves, cumhaz = core.cox_survfit_from_baseline(
+        [1.0, 3.0, 2.0, 4.0],
+        [0.2, 0.5, 0.1, 0.4],
+        [0.0, math.log(2.0)],
+        0.0,
+        [0, 0, 1, 1],
+        [1, 0],
+        None,
+    )
     assert result.n_states == 1
     assert len(result.get_surv_at_state(0)) == 2
+    assert curve_times == pytest.approx([1.0, 2.0, 3.0, 4.0])
+    assert cumhaz[0] == pytest.approx([0.0, 0.1, 0.1, 0.4])
+    assert cumhaz[1] == pytest.approx([0.4, 0.4, 1.0, 1.0])
+    assert curves[0] == pytest.approx([math.exp(-value) for value in cumhaz[0]])
+    assert core.step_values_at(
+        [1.0, 3.0, 5.0],
+        [10.0, 30.0, 50.0],
+        [0.5, 1.0, 4.0, 6.0],
+        0.0,
+    ) == pytest.approx([0.0, 10.0, 30.0, 50.0])
+    conditioned_time, conditioned_surv, conditioned_cumhaz = core.condition_cox_survfit_curves(
+        [1.0, 3.0, 5.0],
+        [[0.2, 0.6, 1.1]],
+        2.5,
+        True,
+        True,
+        1e-9,
+    )
+    assert conditioned_time == pytest.approx([2.5, 3.0, 5.0])
+    assert conditioned_cumhaz[0] == pytest.approx([0.0, 0.4, 0.9])
+    assert conditioned_surv[0] == pytest.approx([1.0, math.exp(-0.4), math.exp(-0.9)])
 
 
 def test_survfitaj_binding_is_typed():
@@ -7979,17 +8496,52 @@ def test_counting_concordance_binding_is_typed():
     assert {
         "concordance_index",
         "concordance_summary",
+        "stratified_concordance_summary",
+        "concordance_rank_rows",
+        "stratified_concordance_rank_rows",
+        "concordance_influence_rows",
+        "stratified_concordance_influence_rows",
         "counting_concordance_index",
         "counting_concordance_summary",
+        "stratified_counting_concordance_summary",
+        "counting_concordance_rank_rows",
+        "stratified_counting_concordance_rank_rows",
+        "counting_concordance_influence_rows",
+        "stratified_counting_concordance_influence_rows",
     } <= stub_names
     assert "time" in inspect.signature(core.concordance_index).parameters
     assert "time" in inspect.signature(core.concordance_summary).parameters
+    assert "time" in inspect.signature(core.stratified_concordance_summary).parameters
+    assert "time" in inspect.signature(core.concordance_rank_rows).parameters
+    assert "time" in inspect.signature(core.stratified_concordance_rank_rows).parameters
+    assert "time" in inspect.signature(core.concordance_influence_rows).parameters
+    assert "time" in inspect.signature(core.stratified_concordance_influence_rows).parameters
     assert "start" in inspect.signature(core.counting_concordance_index).parameters
     assert "start" in inspect.signature(core.counting_concordance_summary).parameters
+    assert "start" in inspect.signature(core.stratified_counting_concordance_summary).parameters
+    assert "start" in inspect.signature(core.counting_concordance_rank_rows).parameters
+    assert "start" in inspect.signature(core.stratified_counting_concordance_rank_rows).parameters
+    assert "start" in inspect.signature(core.counting_concordance_influence_rows).parameters
+    assert (
+        "start" in inspect.signature(core.stratified_counting_concordance_influence_rows).parameters
+    )
     assert "timewt" in inspect.signature(core.concordance_index).parameters
     assert "timewt" in inspect.signature(core.concordance_summary).parameters
+    assert "timewt" in inspect.signature(core.stratified_concordance_summary).parameters
+    assert "timewt" in inspect.signature(core.concordance_rank_rows).parameters
+    assert "timewt" in inspect.signature(core.stratified_concordance_rank_rows).parameters
+    assert "timewt" in inspect.signature(core.concordance_influence_rows).parameters
+    assert "timewt" in inspect.signature(core.stratified_concordance_influence_rows).parameters
     assert "timewt" in inspect.signature(core.counting_concordance_index).parameters
     assert "timewt" in inspect.signature(core.counting_concordance_summary).parameters
+    assert "timewt" in inspect.signature(core.stratified_counting_concordance_summary).parameters
+    assert "timewt" in inspect.signature(core.counting_concordance_rank_rows).parameters
+    assert "timewt" in inspect.signature(core.stratified_counting_concordance_rank_rows).parameters
+    assert "timewt" in inspect.signature(core.counting_concordance_influence_rows).parameters
+    assert (
+        "timewt"
+        in inspect.signature(core.stratified_counting_concordance_influence_rows).parameters
+    )
     assert _pyi_function_arg_names(stub_path, "concordance_index") == [
         "time",
         "status",
@@ -8004,6 +8556,44 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
     ]
+    assert _pyi_function_arg_names(stub_path, "stratified_concordance_summary") == [
+        "time",
+        "status",
+        "risk_scores",
+        "strata",
+        "weights",
+        "timewt",
+    ]
+    assert _pyi_function_arg_names(stub_path, "concordance_rank_rows") == [
+        "time",
+        "status",
+        "risk_scores",
+        "weights",
+        "timewt",
+    ]
+    assert _pyi_function_arg_names(stub_path, "stratified_concordance_rank_rows") == [
+        "time",
+        "status",
+        "risk_scores",
+        "strata",
+        "weights",
+        "timewt",
+    ]
+    assert _pyi_function_arg_names(stub_path, "concordance_influence_rows") == [
+        "time",
+        "status",
+        "risk_scores",
+        "weights",
+        "timewt",
+    ]
+    assert _pyi_function_arg_names(stub_path, "stratified_concordance_influence_rows") == [
+        "time",
+        "status",
+        "risk_scores",
+        "strata",
+        "weights",
+        "timewt",
+    ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_index") == [
         "start",
         "stop",
@@ -8011,6 +8601,7 @@ def test_counting_concordance_binding_is_typed():
         "risk_scores",
         "weights",
         "timewt",
+        "timefix",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_summary") == [
         "start",
@@ -8019,7 +8610,182 @@ def test_counting_concordance_binding_is_typed():
         "risk_scores",
         "weights",
         "timewt",
+        "timefix",
     ]
+    assert _pyi_function_arg_names(stub_path, "stratified_counting_concordance_summary") == [
+        "start",
+        "stop",
+        "status",
+        "risk_scores",
+        "strata",
+        "weights",
+        "timewt",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "counting_concordance_rank_rows") == [
+        "start",
+        "stop",
+        "status",
+        "risk_scores",
+        "weights",
+        "timewt",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "stratified_counting_concordance_rank_rows") == [
+        "start",
+        "stop",
+        "status",
+        "risk_scores",
+        "strata",
+        "weights",
+        "timewt",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "counting_concordance_influence_rows") == [
+        "start",
+        "stop",
+        "status",
+        "risk_scores",
+        "weights",
+        "timewt",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "stratified_counting_concordance_influence_rows") == [
+        "start",
+        "stop",
+        "status",
+        "risk_scores",
+        "strata",
+        "weights",
+        "timewt",
+        "timefix",
+    ]
+    assert "timefix" in inspect.signature(core.counting_concordance_index).parameters
+    assert "timefix" in inspect.signature(core.counting_concordance_summary).parameters
+    assert "timefix" in inspect.signature(core.stratified_counting_concordance_summary).parameters
+    assert "timefix" in inspect.signature(core.counting_concordance_rank_rows).parameters
+    assert "timefix" in inspect.signature(core.stratified_counting_concordance_rank_rows).parameters
+    assert "timefix" in inspect.signature(core.counting_concordance_influence_rows).parameters
+    assert (
+        "timefix"
+        in inspect.signature(core.stratified_counting_concordance_influence_rows).parameters
+    )
+    with pytest.raises(ValueError, match="start must be less than stop"):
+        core.counting_concordance_summary(
+            [1.0],
+            [1.0 + 5e-10],
+            [1],
+            [0.4],
+        )
+    exact = core.counting_concordance_summary(
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0 + 5e-10, 2.0],
+        [1, 0, 0],
+        [0.5, 0.9, 0.1],
+        None,
+        "n",
+        False,
+    )
+    right_ranks = core.concordance_rank_rows(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 1, 1, 0],
+        [0.9, 0.6, 0.4, 0.1],
+        [2.0, 1.0, 3.0, 1.0],
+    )
+    stratified_right = core.stratified_concordance_summary(
+        [1.0, 2.0, 1.0, 2.0],
+        [1, 0, 1, 0],
+        [0.9, 0.1, 0.2, 0.8],
+        [0, 0, 1, 1],
+    )
+    stratified_right_ranks = core.stratified_concordance_rank_rows(
+        [1.0, 2.0, 1.0, 2.0],
+        [1, 0, 1, 0],
+        [0.9, 0.1, 0.2, 0.8],
+        [0, 0, 1, 1],
+    )
+    stratified_right_influence, stratified_right_dfbeta, stratified_right_variance = (
+        core.stratified_concordance_influence_rows(
+            [1.0, 2.0, 1.0, 2.0],
+            [1, 0, 1, 0],
+            [0.9, 0.1, 0.2, 0.8],
+            [0, 0, 1, 1],
+        )
+    )
+    right_influence, right_dfbeta, right_variance = core.concordance_influence_rows(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 1, 1, 0],
+        [0.9, 0.1, 0.4, 0.2],
+        [2.0, 1.0, 3.0, 1.0],
+    )
+    counting_ranks = core.counting_concordance_rank_rows(
+        [0.0, 0.0, 0.5, 1.5],
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 1, 1, 0],
+        [0.9, 0.7, 0.4, 0.1],
+    )
+    stratified_counting = core.stratified_counting_concordance_summary(
+        [0.0, 0.0, 0.0, 0.0],
+        [1.0, 2.0, 1.0, 2.0],
+        [1, 0, 1, 0],
+        [0.9, 0.1, 0.2, 0.8],
+        [0, 0, 1, 1],
+    )
+    stratified_counting_ranks = core.stratified_counting_concordance_rank_rows(
+        [0.0, 0.0, 0.0, 0.0],
+        [1.0, 2.0, 1.0, 2.0],
+        [1, 0, 1, 0],
+        [0.9, 0.1, 0.2, 0.8],
+        [0, 0, 1, 1],
+    )
+    stratified_counting_influence, stratified_counting_dfbeta, stratified_counting_variance = (
+        core.stratified_counting_concordance_influence_rows(
+            [0.0, 0.0, 0.0, 0.0],
+            [1.0, 2.0, 1.0, 2.0],
+            [1, 0, 1, 0],
+            [0.9, 0.1, 0.2, 0.8],
+            [0, 0, 1, 1],
+        )
+    )
+    counting_influence, counting_dfbeta, counting_variance = (
+        core.counting_concordance_influence_rows(
+            [0.0, 0.0, 0.5, 1.5],
+            [1.0, 2.0, 3.0, 4.0],
+            [1, 1, 1, 0],
+            [0.9, 0.1, 0.4, 0.2],
+        )
+    )
+    fixed = core.counting_concordance_summary(
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0 + 5e-10, 2.0],
+        [1, 0, 0],
+        [0.5, 0.9, 0.1],
+        None,
+        "n",
+        True,
+    )
+    assert exact["concordance"] == pytest.approx(0.5)
+    assert fixed["comparable"] == pytest.approx(1.0)
+    assert stratified_right["concordance"] == pytest.approx(0.5)
+    assert stratified_right["n_event"] == pytest.approx(2.0)
+    assert stratified_right_ranks == pytest.approx([(1.0, 0.5, 2.0, 1.0), (1.0, -0.5, 2.0, 1.0)])
+    assert len(stratified_right_influence) == 4
+    assert stratified_right_variance == pytest.approx(
+        sum(value * value for value in stratified_right_dfbeta)
+    )
+    assert stratified_counting["concordance"] == pytest.approx(0.5)
+    assert stratified_counting["n_event"] == pytest.approx(2.0)
+    assert stratified_counting_ranks == pytest.approx([(1.0, 0.5, 2.0, 1.0), (1.0, -0.5, 2.0, 1.0)])
+    assert len(stratified_counting_influence) == 4
+    assert stratified_counting_variance == pytest.approx(
+        sum(value * value for value in stratified_counting_dfbeta)
+    )
+    assert right_ranks[0] == pytest.approx((1.0, 5.0 / 7.0, 7.0, 2.0))
+    assert counting_ranks[0] == pytest.approx((1.0, 2.0 / 3.0, 3.0, 1.0))
+    assert len(right_influence) == 4
+    assert len(counting_influence) == 4
+    assert right_variance == pytest.approx(sum(value * value for value in right_dfbeta))
+    assert counting_variance == pytest.approx(sum(value * value for value in counting_dfbeta))
 
 
 def test_core_utility_bindings_are_typed():
@@ -8214,6 +8980,28 @@ def test_core_utility_bindings_are_typed():
         [-1.5, -1.0, 3.0, 0.0]
     )
     assert concordance["count"] == pytest.approx([0.0, 0.0, 5.0, 0.0, 0.0])
+
+
+def test_core_nsk_rejects_malformed_inputs():
+    setup_survival_import()
+    core = importlib.import_module("survival._survival")
+
+    with pytest.raises(ValueError, match="x contains non-finite"):
+        core.nsk([1.0, float("nan")], 3, None, None)
+    with pytest.raises(ValueError, match="non-zero finite range"):
+        core.nsk([1.0, 1.0], 3, None, None)
+    with pytest.raises(ValueError, match="df must be at least 1"):
+        core.nsk([1.0, 2.0], 0, None, None)
+    with pytest.raises(ValueError, match="boundary_knots must be finite"):
+        core.NaturalSplineKnot(None, (1.0, 1.0), 3, False)
+    with pytest.raises(ValueError, match="knots must be strictly increasing"):
+        core.NaturalSplineKnot([2.0, 2.0], (0.0, 3.0), None, False)
+    with pytest.raises(ValueError, match="knots must lie strictly inside"):
+        core.NaturalSplineKnot([3.5], (0.0, 3.0), None, False)
+
+    spline = core.NaturalSplineKnot(None, (0.0, 2.0), 1, False)
+    with pytest.raises(ValueError, match="coef contains non-finite"):
+        spline.predict([0.0, 1.0], [1.0, float("inf")])
 
 
 def test_qol_bindings_are_typed_to_runtime_surface():

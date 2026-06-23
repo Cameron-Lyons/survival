@@ -186,6 +186,9 @@ pub fn calibration_plot(
             "All input vectors must have the same length",
         ));
     }
+    validate_calibration_observations(&time, &status)?;
+    validate_survival_probabilities(&predicted_survival_at_t, "predicted_survival_at_t")?;
+    validate_time_point(time_point)?;
 
     let n_groups = n_groups.unwrap_or(10);
     if n_groups < 2 {
