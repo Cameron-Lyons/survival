@@ -1,3 +1,4 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::constants::{
@@ -8,6 +9,72 @@ use crate::internal::statistical::normal_cdf;
 
 const REML_MAX_ITERATIONS: usize = 100;
 const REML_TOLERANCE: f64 = 1e-8;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn validate_finite_slice(values: &[f64], field: &str) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{field} contains non-finite value {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_positive_slice(values: &[f64], field: &str) -> PyResult<()> {
+    validate_finite_slice(values, field)?;
+    for (idx, &value) in values.iter().enumerate() {
+        if value <= 0.0 {
+            return Err(value_error(format!(
+                "{field} must contain positive values; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_confidence_level(confidence_level: f64) -> PyResult<()> {
+    if !confidence_level.is_finite() || confidence_level <= 0.0 || confidence_level >= 1.0 {
+        return Err(value_error(
+            "confidence_level must be a finite value between 0 and 1",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_method(method: &str) -> PyResult<()> {
+    match method {
+        "fixed" | "random" => Ok(()),
+        _ => Err(value_error("method must be 'fixed' or 'random'")),
+    }
+}
+
+fn validate_tau_method(tau_method: &str) -> PyResult<()> {
+    match tau_method {
+        "dl" | "reml" | "pm" => Ok(()),
+        _ => Err(value_error("tau_method must be 'dl', 'reml', or 'pm'")),
+    }
+}
+
+fn validate_config(config: &MetaAnalysisConfig) -> PyResult<()> {
+    validate_method(&config.method)?;
+    validate_confidence_level(config.confidence_level)?;
+    validate_tau_method(&config.tau_method)
+}
+
+fn validate_meta_inputs(effects: &[f64], std_errors: &[f64], min_studies: usize) -> PyResult<()> {
+    if effects.len() < min_studies || std_errors.len() != effects.len() {
+        return Err(value_error(format!(
+            "Need at least {min_studies} studies with matching effect sizes and standard errors",
+        )));
+    }
+    validate_finite_slice(effects, "effects")?;
+    validate_positive_slice(std_errors, "std_errors")
+}
 
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
@@ -24,12 +91,14 @@ pub struct MetaAnalysisConfig {
 impl MetaAnalysisConfig {
     #[new]
     #[pyo3(signature = (method="random".to_string(), confidence_level=0.95, tau_method="dl".to_string()))]
-    pub fn new(method: String, confidence_level: f64, tau_method: String) -> Self {
-        Self {
+    pub fn new(method: String, confidence_level: f64, tau_method: String) -> PyResult<Self> {
+        let config = Self {
             method,
             confidence_level,
             tau_method,
-        }
+        };
+        validate_config(&config)?;
+        Ok(config)
     }
 }
 
@@ -112,20 +181,15 @@ pub fn survival_meta_analysis(
     std_errors: Vec<f64>,
     config: Option<MetaAnalysisConfig>,
 ) -> PyResult<MetaAnalysisResult> {
-    let config = config.unwrap_or_else(|| {
-        MetaAnalysisConfig::new(
-            "random".to_string(),
-            DEFAULT_CONFIDENCE_LEVEL,
-            "dl".to_string(),
-        )
+    let config = config.unwrap_or(MetaAnalysisConfig {
+        method: "random".to_string(),
+        confidence_level: DEFAULT_CONFIDENCE_LEVEL,
+        tau_method: "dl".to_string(),
     });
+    validate_config(&config)?;
 
     let k = effects.len();
-    if k < 2 || std_errors.len() != k {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "Need at least 2 studies with matching effect sizes and standard errors",
-        ));
-    }
+    validate_meta_inputs(&effects, &std_errors, 2)?;
 
     let variances: Vec<f64> = std_errors.iter().map(|se| se * se).collect();
 
@@ -136,13 +200,13 @@ pub fn survival_meta_analysis(
         "dl" => compute_tau_squared_dl(&effects, &variances, q_stat, k),
         "reml" => compute_tau_squared_reml(&effects, &variances),
         "pm" => compute_tau_squared_pm(&effects, &variances),
-        _ => compute_tau_squared_dl(&effects, &variances, q_stat, k),
+        _ => return Err(value_error("tau_method must be 'dl', 'reml', or 'pm'")),
     };
 
     let (pooled_effect, pooled_se, study_weights) = match config.method.as_str() {
         "fixed" => compute_fixed_effects(&effects, &variances),
         "random" => compute_random_effects(&effects, &variances, tau_squared),
-        _ => compute_random_effects(&effects, &variances, tau_squared),
+        _ => return Err(value_error("method must be 'fixed' or 'random'")),
     };
 
     let z = z_score_for_confidence(config.confidence_level);
@@ -408,18 +472,16 @@ pub fn generate_forest_plot_data(
 ) -> PyResult<MetaForestPlotData> {
     let k = effects.len();
     if k != study_names.len() || k != std_errors.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "All input vectors must have the same length",
-        ));
+        return Err(value_error("All input vectors must have the same length"));
     }
+    validate_meta_inputs(&effects, &std_errors, 2)?;
 
-    let config = config.unwrap_or_else(|| {
-        MetaAnalysisConfig::new(
-            "random".to_string(),
-            DEFAULT_CONFIDENCE_LEVEL,
-            "dl".to_string(),
-        )
+    let config = config.unwrap_or(MetaAnalysisConfig {
+        method: "random".to_string(),
+        confidence_level: DEFAULT_CONFIDENCE_LEVEL,
+        tau_method: "dl".to_string(),
     });
+    validate_config(&config)?;
     let z = z_score_for_confidence(config.confidence_level);
     let (lower_ci, upper_ci) = normal_ci_bounds(&effects, &std_errors, z);
 
@@ -493,11 +555,7 @@ pub fn publication_bias_tests(
     std_errors: Vec<f64>,
 ) -> PyResult<PublicationBiasResult> {
     let k = effects.len();
-    if k < 3 || std_errors.len() != k {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "Need at least 3 studies",
-        ));
-    }
+    validate_meta_inputs(&effects, &std_errors, 3)?;
 
     let precisions: Vec<f64> = std_errors.iter().map(|se| 1.0 / se).collect();
     let standardized: Vec<f64> = effects
@@ -660,7 +718,7 @@ mod tests {
         let effects = vec![0.5, 0.7, 0.4, 0.6, 0.55];
         let std_errors = vec![0.1, 0.15, 0.12, 0.11, 0.13];
 
-        let config = MetaAnalysisConfig::new("fixed".to_string(), 0.95, "dl".to_string());
+        let config = MetaAnalysisConfig::new("fixed".to_string(), 0.95, "dl".to_string()).unwrap();
         let result = survival_meta_analysis(effects, std_errors, Some(config)).unwrap();
 
         assert!(result.pooled_effect > 0.0);
@@ -673,7 +731,7 @@ mod tests {
         let effects = vec![0.5, 0.7, 0.4, 0.6, 0.55];
         let std_errors = vec![0.1, 0.15, 0.12, 0.11, 0.13];
 
-        let config = MetaAnalysisConfig::new("random".to_string(), 0.95, "dl".to_string());
+        let config = MetaAnalysisConfig::new("random".to_string(), 0.95, "dl".to_string()).unwrap();
         let result = survival_meta_analysis(effects, std_errors, Some(config)).unwrap();
 
         assert!(result.pooled_effect > 0.0);
@@ -706,5 +764,27 @@ mod tests {
 
         assert!(result.egger_p >= 0.0 && result.egger_p <= 1.0);
         assert!(result.begg_p >= 0.0 && result.begg_p <= 1.0);
+    }
+
+    #[test]
+    fn meta_analysis_rejects_malformed_public_inputs() {
+        assert!(MetaAnalysisConfig::new("weird".to_string(), 0.95, "dl".to_string()).is_err());
+        assert!(MetaAnalysisConfig::new("random".to_string(), f64::NAN, "dl".to_string()).is_err());
+        assert!(MetaAnalysisConfig::new("random".to_string(), 0.95, "bad".to_string()).is_err());
+
+        assert!(survival_meta_analysis(vec![0.5], vec![0.1], None).is_err());
+        assert!(survival_meta_analysis(vec![0.5, f64::NAN], vec![0.1, 0.2], None).is_err());
+        assert!(survival_meta_analysis(vec![0.5, 0.7], vec![0.1, 0.0], None).is_err());
+        assert!(survival_meta_analysis(vec![0.5, 0.7], vec![0.1], None).is_err());
+        assert!(
+            generate_forest_plot_data(
+                vec!["A".to_string(), "B".to_string()],
+                vec![0.5, 0.7],
+                vec![0.1, f64::INFINITY],
+                None,
+            )
+            .is_err()
+        );
+        assert!(publication_bias_tests(vec![0.5, 0.7, 0.4], vec![0.1, -0.2, 0.3]).is_err());
     }
 }

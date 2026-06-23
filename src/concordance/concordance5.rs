@@ -1,8 +1,13 @@
 #![allow(clippy::items_after_test_module)]
 
-use super::common::{build_concordance_result, validate_extended_concordance_inputs};
+use super::common::{
+    build_concordance_result, validate_extended_concordance_inputs,
+    validate_non_negative_i32_indices, validate_usize_order_indices,
+};
 use crate::constants::{CONCORDANCE_COUNT_SIZE_EXTENDED, PARALLEL_THRESHOLD_SMALL};
 use crate::internal::fenwick::FenwickTree;
+use crate::internal::validation::{ValidationError, validate_length};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 #[inline]
@@ -12,7 +17,11 @@ fn addin(nwt: &mut [f64], fenwick: &mut FenwickTree, x: usize, weight: f64) {
 }
 #[inline]
 fn walkup(nwt: &[f64], fenwick: &FenwickTree, x: usize) -> [f64; 3] {
-    let sum_less = fenwick.prefix_sum(x.saturating_sub(1));
+    let sum_less = if x == 0 {
+        0.0
+    } else {
+        fenwick.prefix_sum(x - 1)
+    };
     let sum_greater = fenwick.total() - fenwick.prefix_sum(x);
     let sum_equal = nwt[x];
     [sum_greater, sum_less, sum_equal]
@@ -141,6 +150,25 @@ mod tests {
     }
 
     #[test]
+    fn walkup_lowest_rank_has_no_lower_weight() {
+        let mut nwt = vec![0.0; 3];
+        let mut fenwick = FenwickTree::new(3);
+        addin(&mut nwt, &mut fenwick, 0, 2.0);
+        addin(&mut nwt, &mut fenwick, 1, 3.0);
+        addin(&mut nwt, &mut fenwick, 2, 5.0);
+
+        let lowest = walkup(&nwt, &fenwick, 0);
+        assert!((lowest[0] - 8.0).abs() < 1e-10);
+        assert!((lowest[1]).abs() < 1e-10);
+        assert!((lowest[2] - 2.0).abs() < 1e-10);
+
+        let middle = walkup(&nwt, &fenwick, 1);
+        assert!((middle[0] - 5.0).abs() < 1e-10);
+        assert!((middle[1] - 2.0).abs() < 1e-10);
+        assert!((middle[2] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
     fn imat_length_3n() {
         let n = 3;
         let y = vec![1.0, 2.0, 3.0, 1.0, 1.0, 1.0];
@@ -220,6 +248,13 @@ pub fn perform_concordance_calculation(
         time_weights.len(),
         sort_stop.len(),
     )?;
+    validate_non_negative_i32_indices(&predictor_values, "predictor_values")?;
+    validate_usize_order_indices(&sort_stop, n, "sort_stop")?;
+    if let Some(values) = sort_start.as_deref() {
+        validate_length(n, values.len(), "sort_start")
+            .map_err(|error: ValidationError| PyRuntimeError::new_err(error.to_string()))?;
+        validate_usize_order_indices(values, n, "sort_start")?;
+    }
     let doresid = do_residuals.unwrap_or(false);
     let (count, imat, resid) = concordance5(
         &time_data,

@@ -489,6 +489,17 @@ def test_survfit_and_survreg_residual_public_apis():
     assert survreg_residuals.n == 3
 
 
+def test_survfit_residuals_use_last_duplicate_survival_time():
+    result = survival.residuals_survfit(
+        time=[2.0],
+        status=[1],
+        surv_time=[1.0, 2.0, 2.0, 3.0],
+        surv=[0.9, 0.8, 0.7, 0.6],
+    )
+
+    assert result.residuals == pytest.approx([1.0 + math.log(0.7)])
+
+
 def test_survreg_residual_matrix_public_api_returns_derivative_columns():
     matrix = survival.survreg_residual_matrix(
         time=[1.5],

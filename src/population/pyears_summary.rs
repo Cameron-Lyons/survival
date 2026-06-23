@@ -1,4 +1,6 @@
 use crate::constants::z_score_for_confidence;
+use crate::internal::validation::{validate_finite, validate_non_negative};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::fmt;
 
@@ -75,6 +77,43 @@ impl PyearsSummary {
     }
 }
 
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn validate_same_lengths(
+    pyears: &[f64],
+    pn: &[f64],
+    pcount: &[f64],
+    pexpect: &[f64],
+) -> PyResult<()> {
+    let n = pyears.len();
+    if pn.len() != n || pcount.len() != n || pexpect.len() != n {
+        return Err(value_error(
+            "pyears, pn, pcount, and pexpect must have the same length",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pyears_components(
+    pyears: &[f64],
+    pn: &[f64],
+    pcount: &[f64],
+    pexpect: &[f64],
+) -> PyResult<()> {
+    validate_same_lengths(pyears, pn, pcount, pexpect)?;
+    validate_finite(pyears, "pyears")?;
+    validate_non_negative(pyears, "pyears")?;
+    validate_finite(pn, "pn")?;
+    validate_non_negative(pn, "pn")?;
+    validate_finite(pcount, "pcount")?;
+    validate_non_negative(pcount, "pcount")?;
+    validate_finite(pexpect, "pexpect")?;
+    validate_non_negative(pexpect, "pexpect")?;
+    Ok(())
+}
+
 #[pyfunction]
 pub fn summary_pyears(
     pyears: Vec<f64>,
@@ -83,6 +122,11 @@ pub fn summary_pyears(
     pexpect: Vec<f64>,
     offtable: f64,
 ) -> PyResult<PyearsSummary> {
+    validate_pyears_components(&pyears, &pn, &pcount, &pexpect)?;
+    if !offtable.is_finite() || offtable < 0.0 {
+        return Err(value_error("offtable must be a finite non-negative value"));
+    }
+
     let total_person_years: f64 = pyears.iter().sum();
     let total_events: f64 = pcount.iter().sum();
     let total_expected: f64 = pexpect.iter().sum();
@@ -155,6 +199,7 @@ pub fn pyears_by_cell(
     pcount: Vec<f64>,
     pexpect: Vec<f64>,
 ) -> PyResult<Vec<PyearsCell>> {
+    validate_pyears_components(&pyears, &pn, &pcount, &pexpect)?;
     let n = pyears.len();
     let mut cells = Vec::with_capacity(n);
 
@@ -185,11 +230,19 @@ pub fn pyears_by_cell(
 
 #[pyfunction]
 pub fn pyears_ci(observed: f64, expected: f64, conf_level: f64) -> PyResult<(f64, f64, f64)> {
-    let smr = if expected > 0.0 {
-        observed / expected
-    } else {
-        f64::NAN
-    };
+    if !observed.is_finite() || observed < 0.0 {
+        return Err(value_error("observed must be a finite non-negative value"));
+    }
+    if !expected.is_finite() || expected <= 0.0 {
+        return Err(value_error("expected must be a finite positive value"));
+    }
+    if !conf_level.is_finite() || conf_level <= 0.0 || conf_level >= 1.0 {
+        return Err(value_error(
+            "conf_level must be a finite value between 0 and 1",
+        ));
+    }
+
+    let smr = observed / expected;
 
     let z = z_score_for_confidence(conf_level);
 
@@ -237,5 +290,39 @@ mod tests {
         assert!((smr - 2.0).abs() < 1e-10);
         assert!(lower < smr);
         assert!(upper > smr);
+    }
+
+    #[test]
+    fn pyears_helpers_validate_public_inputs() {
+        assert!(
+            summary_pyears(vec![1.0], vec![], vec![1.0], vec![1.0], 0.0)
+                .expect_err("length mismatch should fail")
+                .to_string()
+                .contains("must have the same length")
+        );
+        assert!(
+            summary_pyears(vec![f64::INFINITY], vec![1.0], vec![1.0], vec![1.0], 0.0)
+                .expect_err("non-finite pyears should fail")
+                .to_string()
+                .contains("pyears contains non-finite")
+        );
+        assert!(
+            pyears_by_cell(vec![1.0], vec![1.0], vec![-1.0], vec![1.0])
+                .expect_err("negative event count should fail")
+                .to_string()
+                .contains("pcount contains negative")
+        );
+        assert!(
+            pyears_ci(1.0, 0.0, 0.95)
+                .expect_err("zero expected should fail")
+                .to_string()
+                .contains("expected must be a finite positive value")
+        );
+        assert!(
+            pyears_ci(1.0, 1.0, 1.0)
+                .expect_err("invalid confidence should fail")
+                .to_string()
+                .contains("conf_level")
+        );
     }
 }

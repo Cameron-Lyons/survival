@@ -518,6 +518,103 @@ fn test_conformal_coverage_cv() {
 }
 
 #[test]
+fn test_conformal_coverage_cv_validates_inputs() {
+    let time = vec![1.0, 2.0, 3.0];
+    let status = vec![1, 0, 1];
+    let predicted = vec![1.1, 2.1, 3.1];
+
+    let default_result = conformal_coverage_cv(
+        time.clone(),
+        status.clone(),
+        predicted.clone(),
+        None,
+        None,
+        Some(1),
+    )
+    .unwrap();
+    assert_eq!(default_result.coverage_candidates.len(), 5);
+
+    assert!(conformal_coverage_cv(vec![1.0], vec![1], vec![1.0], None, None, None).is_err());
+    assert!(
+        conformal_coverage_cv(time.clone(), vec![1], predicted.clone(), None, None, None).is_err()
+    );
+    assert!(
+        conformal_coverage_cv(
+            vec![f64::NAN, 2.0],
+            vec![1, 1],
+            vec![1.0, 2.0],
+            None,
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        conformal_coverage_cv(vec![1.0, 2.0], vec![1, 2], vec![1.0, 2.0], None, None, None)
+            .is_err()
+    );
+    assert!(
+        conformal_coverage_cv(
+            vec![1.0, 2.0],
+            vec![1, 1],
+            vec![1.0, f64::INFINITY],
+            None,
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        conformal_coverage_cv(
+            time.clone(),
+            status.clone(),
+            predicted.clone(),
+            Some(1),
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        conformal_coverage_cv(
+            time.clone(),
+            status.clone(),
+            predicted.clone(),
+            Some(4),
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        conformal_coverage_cv(
+            time.clone(),
+            status.clone(),
+            predicted.clone(),
+            None,
+            Some(vec![]),
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        conformal_coverage_cv(
+            time.clone(),
+            status.clone(),
+            predicted.clone(),
+            None,
+            Some(vec![0.8, 1.0]),
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        conformal_coverage_cv(vec![1.0, 2.0], vec![0, 0], vec![1.0, 2.0], None, None, None)
+            .is_err()
+    );
+}
+
+#[test]
 fn test_conformal_survival_parallel() {
     let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
     let status = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1];

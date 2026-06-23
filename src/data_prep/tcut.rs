@@ -128,25 +128,21 @@ fn find_interval(breaks: &[f64], value: f64) -> i32 {
         return -1;
     }
 
-    if value < breaks[0] {
+    if value < breaks[0] || value > breaks[n - 1] {
         return -1;
     }
 
-    if value > breaks[n - 1] {
-        return -1;
+    if value == breaks[n - 1] {
+        return (n - 2) as i32;
     }
 
-    for i in 0..(n - 1) {
-        if i == n - 2 {
-            if value >= breaks[i] && value <= breaks[i + 1] {
-                return i as i32;
-            }
-        } else if value >= breaks[i] && value < breaks[i + 1] {
-            return i as i32;
-        }
-    }
+    let pos = breaks.partition_point(|&breakpoint| breakpoint <= value);
+    (pos.saturating_sub(1)) as i32
+}
 
-    -1
+fn find_expanded_interval_code(cuts: &[f64], midpoint: f64) -> i32 {
+    let pos = cuts.partition_point(|&cut| cut <= midpoint);
+    if pos == 0 { -1 } else { (pos - 1) as i32 }
 }
 
 /// Split time intervals for person-years analysis.
@@ -187,12 +183,12 @@ pub fn tcut_expand(start: Vec<f64>, stop: Vec<f64>, cuts: Vec<f64>) -> PyResult<
             continue;
         }
 
-        let mut split_points = vec![t1];
-        for &c in &sorted_cuts {
-            if c > t1 && c < t2 {
-                split_points.push(c);
-            }
-        }
+        let first_cut = sorted_cuts.partition_point(|&c| c <= t1);
+        let last_cut = sorted_cuts.partition_point(|&c| c < t2);
+
+        let mut split_points = Vec::with_capacity(last_cut.saturating_sub(first_cut) + 2);
+        split_points.push(t1);
+        split_points.extend_from_slice(&sorted_cuts[first_cut..last_cut]);
         split_points.push(t2);
 
         for j in 0..(split_points.len() - 1) {
@@ -202,23 +198,8 @@ pub fn tcut_expand(start: Vec<f64>, stop: Vec<f64>, cuts: Vec<f64>) -> PyResult<
             new_start.push(s);
             new_stop.push(e);
 
-            let midpoint = (s + e) / 2.0;
-            let mut code = -1i32;
-            for (k, window) in sorted_cuts.windows(2).enumerate() {
-                if midpoint >= window[0] && midpoint < window[1] {
-                    code = k as i32;
-                    break;
-                }
-            }
-            if code == -1 && !sorted_cuts.is_empty() {
-                if midpoint >= sorted_cuts[sorted_cuts.len() - 1] {
-                    code = (sorted_cuts.len() - 1) as i32;
-                } else if midpoint < sorted_cuts[0] {
-                    code = -1;
-                }
-            }
-
-            interval_codes.push(code);
+            let midpoint = s + (e - s) / 2.0;
+            interval_codes.push(find_expanded_interval_code(&sorted_cuts, midpoint));
             original_indices.push(i);
         }
     }
@@ -262,6 +243,16 @@ mod tests {
     }
 
     #[test]
+    fn test_tcut_breakpoint_boundaries_are_left_closed() {
+        let values = vec![0.0, 10.0, 20.0, 30.0];
+        let breaks = vec![0.0, 10.0, 20.0, 30.0];
+
+        let result = tcut(values, breaks, None).unwrap();
+        assert_eq!(result.codes, vec![0, 1, 2, 2]);
+        assert_eq!(result.counts, vec![1, 1, 2]);
+    }
+
+    #[test]
     fn test_tcut_expand_basic() {
         let start = vec![0.0, 5.0];
         let stop = vec![25.0, 15.0];
@@ -273,6 +264,17 @@ mod tests {
         assert_eq!(new_start.len(), new_stop.len());
         assert_eq!(new_start.len(), codes.len());
         assert_eq!(new_start.len(), indices.len());
+    }
+
+    #[test]
+    fn test_tcut_expand_codes_before_between_and_after_cuts() {
+        let (new_start, new_stop, codes, indices) =
+            tcut_expand(vec![-5.0, 35.0], vec![25.0, 40.0], vec![0.0, 10.0, 20.0]).unwrap();
+
+        assert_eq!(new_start, vec![-5.0, 0.0, 10.0, 20.0, 35.0]);
+        assert_eq!(new_stop, vec![0.0, 10.0, 20.0, 25.0, 40.0]);
+        assert_eq!(codes, vec![-1, 0, 1, 2, 2]);
+        assert_eq!(indices, vec![0, 0, 0, 0, 1]);
     }
 
     #[test]

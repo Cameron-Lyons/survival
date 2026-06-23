@@ -67,13 +67,10 @@ pub(crate) fn compute_deviance_survfit(
 }
 
 fn get_cumhaz_at_time(t: f64, surv_time: &[f64], surv: &[f64]) -> f64 {
-    for i in (0..surv_time.len()).rev() {
-        if surv_time[i] <= t {
-            let s = surv[i];
-            if s > 0.0 && s <= 1.0 {
-                return -s.ln();
-            }
-            return 0.0;
+    if let Some(index) = survival_index_at_or_before(t, surv_time) {
+        let s = surv[index];
+        if s > 0.0 && s <= 1.0 {
+            return -s.ln();
         }
     }
     0.0
@@ -112,12 +109,12 @@ pub(crate) fn compute_quantile_residuals(
 }
 
 fn get_surv_at_time(t: f64, surv_time: &[f64], surv: &[f64]) -> f64 {
-    for i in (0..surv_time.len()).rev() {
-        if surv_time[i] <= t {
-            return surv[i];
-        }
-    }
-    1.0
+    survival_index_at_or_before(t, surv_time).map_or(1.0, |index| surv[index])
+}
+
+fn survival_index_at_or_before(t: f64, surv_time: &[f64]) -> Option<usize> {
+    let index = surv_time.partition_point(|&time| time <= t);
+    index.checked_sub(1)
 }
 
 fn validate_survival_probabilities(surv: &[f64]) -> PyResult<()> {
@@ -226,5 +223,23 @@ mod tests {
         let resid = compute_deviance_survfit(&time, &status, &surv_time, &surv);
 
         assert_eq!(resid.len(), 5);
+    }
+
+    #[test]
+    fn lookup_uses_last_duplicate_time() {
+        let surv_time = vec![1.0, 2.0, 2.0, 3.0];
+        let surv = vec![0.9, 0.8, 0.7, 0.6];
+
+        assert_eq!(get_surv_at_time(2.0, &surv_time, &surv), 0.7);
+        assert!((get_cumhaz_at_time(2.0, &surv_time, &surv) + 0.7_f64.ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lookup_before_first_time_returns_baseline() {
+        let surv_time = vec![1.0, 2.0, 3.0];
+        let surv = vec![0.9, 0.8, 0.7];
+
+        assert_eq!(get_surv_at_time(0.5, &surv_time, &surv), 1.0);
+        assert_eq!(get_cumhaz_at_time(0.5, &surv_time, &surv), 0.0);
     }
 }

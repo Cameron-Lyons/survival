@@ -2,7 +2,7 @@
 
 use super::common::{
     add_to_binary_tree, build_concordance_result, validate_extended_concordance_inputs,
-    walkup_binary_tree,
+    validate_i32_order_indices, validate_non_negative_i32_indices, walkup_binary_tree,
 };
 use crate::constants::{CONCORDANCE_COUNT_SIZE_EXTENDED, PARALLEL_THRESHOLD_LARGE};
 use pyo3::prelude::*;
@@ -205,6 +205,8 @@ pub fn perform_concordance3_calculation(
         time_weights.len(),
         sort_stop.len(),
     )?;
+    validate_non_negative_i32_indices(&indices, "indices")?;
+    validate_i32_order_indices(&sort_stop, n, "sort_stop")?;
     let (count, imat, resid_opt) = concordance3(
         &time_data,
         &indices,

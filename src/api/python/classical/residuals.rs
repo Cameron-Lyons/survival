@@ -9,6 +9,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(residuals_survfit, m)?)?;
     m.add_function(wrap_pyfunction!(predict_survreg, m)?)?;
     m.add_function(wrap_pyfunction!(predict_survreg_quantile, m)?)?;
+    m.add_function(wrap_pyfunction!(survreg_quantile_prediction_se_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(coxph_detail, m)?)?;
 
     register_classes!(

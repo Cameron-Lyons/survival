@@ -1,5 +1,76 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn minimum_df(intercept: bool) -> usize {
+    if intercept { 2 } else { 1 }
+}
+
+fn validate_df(df: usize, intercept: bool) -> PyResult<()> {
+    let minimum = minimum_df(intercept);
+    if df < minimum {
+        return Err(value_error(format!(
+            "df must be at least {minimum} when intercept is {intercept}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_finite_slice(values: &[f64], field: &str) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{field} contains non-finite value {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_strictly_increasing(values: &[f64], field: &str) -> PyResult<()> {
+    for (idx, pair) in values.windows(2).enumerate() {
+        if pair[0] >= pair[1] {
+            return Err(value_error(format!(
+                "{field} must be strictly increasing; got {} then {} at positions {} and {}",
+                pair[0],
+                pair[1],
+                idx,
+                idx + 1
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_boundary_knots(boundary_knots: (f64, f64)) -> PyResult<()> {
+    let (lower, upper) = boundary_knots;
+    if !lower.is_finite() || !upper.is_finite() || lower >= upper {
+        return Err(value_error(
+            "boundary_knots must be finite and strictly increasing",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_knots_inside_boundary(knots: &[f64], boundary_knots: (f64, f64)) -> PyResult<()> {
+    let (lower, upper) = boundary_knots;
+    for (idx, &knot) in knots.iter().enumerate() {
+        if knot <= lower || knot >= upper {
+            return Err(value_error(format!(
+                "knots must lie strictly inside boundary_knots; got {knot} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn uses_data_boundary(boundary_knots: (f64, f64)) -> bool {
+    boundary_knots.0 == f64::NEG_INFINITY && boundary_knots.1 == f64::INFINITY
+}
 
 /// Natural spline with knot heights as basis coefficients.
 ///
@@ -41,19 +112,27 @@ impl NaturalSplineKnot {
         intercept: Option<bool>,
     ) -> PyResult<Self> {
         let intercept_val = intercept.unwrap_or(false);
+        let bounds = boundary_knots.unwrap_or((f64::NEG_INFINITY, f64::INFINITY));
+        if !uses_data_boundary(bounds) {
+            validate_boundary_knots(bounds)?;
+        }
 
         let (interior_knots, computed_df) = match knots {
             Some(k) => {
+                validate_finite_slice(&k, "knots")?;
+                validate_strictly_increasing(&k, "knots")?;
+                if !uses_data_boundary(bounds) {
+                    validate_knots_inside_boundary(&k, bounds)?;
+                }
                 let d = k.len() + 1 + if intercept_val { 1 } else { 0 };
                 (k, d)
             }
             None => {
                 let d = df.unwrap_or(3);
+                validate_df(d, intercept_val)?;
                 (vec![], d)
             }
         };
-
-        let bounds = boundary_knots.unwrap_or((f64::NEG_INFINITY, f64::INFINITY));
 
         Ok(NaturalSplineKnot {
             knots: interior_knots,
@@ -72,6 +151,15 @@ impl NaturalSplineKnot {
     /// Matrix of basis function values (n x df), flattened row-major
     pub fn basis(&self, x: Vec<f64>) -> PyResult<SplineBasisResult> {
         let n = x.len();
+        validate_df(self.df, self.intercept)?;
+        validate_finite_slice(&x, "x")?;
+        validate_finite_slice(&self.knots, "knots")?;
+        validate_strictly_increasing(&self.knots, "knots")?;
+        if !uses_data_boundary(self.boundary_knots) {
+            validate_boundary_knots(self.boundary_knots)?;
+            validate_knots_inside_boundary(&self.knots, self.boundary_knots)?;
+        }
+
         if n == 0 {
             return Ok(SplineBasisResult {
                 basis: vec![],
@@ -82,20 +170,42 @@ impl NaturalSplineKnot {
             });
         }
 
-        let (bk_low, bk_high) = if self.boundary_knots.0.is_infinite() {
+        let (bk_low, bk_high) = if uses_data_boundary(self.boundary_knots) {
             let min_x = x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
             let max_x = x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            if min_x >= max_x {
+                return Err(value_error(
+                    "x must span a non-zero finite range when boundary_knots are not provided",
+                ));
+            }
             (min_x, max_x)
         } else {
             self.boundary_knots
         };
+        validate_boundary_knots((bk_low, bk_high))?;
 
         let interior_knots = if self.knots.is_empty() {
-            let n_interior = self.df - 1 - if self.intercept { 1 } else { 0 };
-            compute_quantile_knots(&x, n_interior, bk_low, bk_high)
+            let n_interior = self
+                .df
+                .checked_sub(minimum_df(self.intercept))
+                .ok_or_else(|| {
+                    value_error(format!(
+                        "df must be at least {} when intercept is {}",
+                        minimum_df(self.intercept),
+                        self.intercept
+                    ))
+                })?;
+            let computed = compute_quantile_knots(&x, n_interior, bk_low, bk_high);
+            if computed.len() != n_interior {
+                return Err(value_error(format!(
+                    "not enough x values inside boundary_knots to compute {n_interior} interior knots"
+                )));
+            }
+            computed
         } else {
             self.knots.clone()
         };
+        validate_knots_inside_boundary(&interior_knots, (bk_low, bk_high))?;
 
         let mut all_knots = vec![bk_low];
         all_knots.extend(interior_knots.iter().copied());
@@ -128,10 +238,11 @@ impl NaturalSplineKnot {
     /// # Returns
     /// Predicted values at each x
     pub fn predict(&self, x: Vec<f64>, coef: Vec<f64>) -> PyResult<Vec<f64>> {
+        validate_finite_slice(&coef, "coef")?;
         let basis_result = self.basis(x)?;
 
         if coef.len() != basis_result.n_cols {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            return Err(value_error(format!(
                 "coef length ({}) must match number of basis functions ({})",
                 coef.len(),
                 basis_result.n_cols
@@ -312,6 +423,28 @@ mod tests {
         let predictions = spline.predict(x, coef).unwrap();
 
         assert_eq!(predictions.len(), 5);
+    }
+
+    #[test]
+    fn test_nsk_rejects_malformed_inputs() {
+        assert!(nsk(vec![1.0, f64::NAN], Some(3), None, None).is_err());
+        assert!(nsk(vec![1.0, 1.0], Some(3), None, None).is_err());
+        assert!(nsk(vec![1.0, 2.0], Some(0), None, None).is_err());
+        assert!(nsk(vec![1.0, 2.0], Some(3), None, Some((2.0, 2.0))).is_err());
+        assert!(nsk(vec![1.0, 2.0], None, Some(vec![f64::NAN]), Some((0.0, 3.0))).is_err());
+        assert!(nsk(vec![1.0, 2.0], None, Some(vec![1.5, 1.5]), Some((0.0, 3.0))).is_err());
+        assert!(nsk(vec![1.0, 2.0], None, Some(vec![2.5]), Some((0.0, 2.0))).is_err());
+        assert!(NaturalSplineKnot::new(None, Some((0.0, 10.0)), Some(1), Some(true)).is_err());
+    }
+
+    #[test]
+    fn test_natural_spline_knot_predict_rejects_non_finite_coef() {
+        let spline = NaturalSplineKnot::new(None, Some((0.0, 2.0)), Some(1), None).unwrap();
+        let err = spline
+            .predict(vec![0.0, 1.0], vec![1.0, f64::INFINITY])
+            .expect_err("non-finite coefficient should be rejected");
+
+        assert!(err.to_string().contains("coef contains non-finite"));
     }
 
     #[test]

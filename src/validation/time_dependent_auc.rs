@@ -2,6 +2,8 @@ use crate::constants::{
     DIVISION_FLOOR, IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE, clamped_normal_ci_95,
 };
 use crate::internal::statistical::{compute_censoring_km, km_step_prob_at};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::fmt;
@@ -302,6 +304,44 @@ pub fn cumulative_dynamic_auc_core(
     }
 }
 
+fn validate_auc_input_values(time: &[f64], status: &[i32], marker: &[f64]) -> PyResult<()> {
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(status, "status")?;
+    validate_finite(marker, "marker")?;
+    Ok(())
+}
+
+fn validate_positive_time_point(value: f64, field: &'static str) -> PyResult<()> {
+    validate_finite(&[value], field)?;
+    if value <= 0.0 {
+        return Err(PyValueError::new_err(format!("{field} must be positive")));
+    }
+    Ok(())
+}
+
+fn validate_cumulative_auc_times(times: &[f64]) -> PyResult<()> {
+    validate_finite(times, "times")?;
+    for (index, &value) in times.iter().enumerate() {
+        if value <= 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "times must contain only positive values; got {value} at index {index}"
+            )));
+        }
+    }
+    for (index, pair) in times.windows(2).enumerate() {
+        if pair[1] < pair[0] {
+            return Err(PyValueError::new_err(format!(
+                "times must be sorted in nondecreasing order; index {} has {} before {}",
+                index + 1,
+                pair[1],
+                pair[0]
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[pyfunction]
 #[pyo3(signature = (time, status, marker, t))]
 pub fn time_dependent_auc(
@@ -312,20 +352,15 @@ pub fn time_dependent_auc(
 ) -> PyResult<TimeDepAUCResult> {
     let n = time.len();
     if n != status.len() || n != marker.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "time, status, and marker must have the same length",
         ));
     }
     if n == 0 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "input arrays must not be empty",
-        ));
+        return Err(PyValueError::new_err("input arrays must not be empty"));
     }
-    if t <= 0.0 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "time point t must be positive",
-        ));
-    }
+    validate_auc_input_values(&time, &status, &marker)?;
+    validate_positive_time_point(t, "t")?;
 
     Ok(time_dependent_auc_core(&time, &status, &marker, t))
 }
@@ -340,28 +375,19 @@ pub fn cumulative_dynamic_auc(
 ) -> PyResult<CumulativeDynamicAUCResult> {
     let n = time.len();
     if n != status.len() || n != marker.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "time, status, and marker must have the same length",
         ));
     }
     if n == 0 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "input arrays must not be empty",
-        ));
+        return Err(PyValueError::new_err("input arrays must not be empty"));
     }
     if times.is_empty() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "times array must not be empty",
-        ));
+        return Err(PyValueError::new_err("times array must not be empty"));
     }
 
-    for &t in &times {
-        if t <= 0.0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "all time points must be positive",
-            ));
-        }
-    }
+    validate_auc_input_values(&time, &status, &marker)?;
+    validate_cumulative_auc_times(&times)?;
 
     Ok(cumulative_dynamic_auc_core(&time, &status, &marker, &times))
 }
@@ -420,6 +446,39 @@ mod tests {
         assert_eq!(result.auc.len(), 3);
         assert!(result.mean_auc >= 0.0 && result.mean_auc <= 1.0);
         assert!(result.integrated_auc >= 0.0 && result.integrated_auc <= 1.0);
+    }
+
+    #[test]
+    fn public_time_dependent_auc_validates_numeric_inputs() {
+        let err = time_dependent_auc(vec![f64::NAN], vec![1], vec![0.5], 1.0).unwrap_err();
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = time_dependent_auc(vec![-1.0], vec![1], vec![0.5], 1.0).unwrap_err();
+        assert!(err.to_string().contains("time contains negative value"));
+
+        let err = time_dependent_auc(vec![1.0], vec![2], vec![0.5], 1.0).unwrap_err();
+        assert!(err.to_string().contains("status must contain only 0/1"));
+
+        let err = time_dependent_auc(vec![1.0], vec![1], vec![f64::INFINITY], 1.0).unwrap_err();
+        assert!(err.to_string().contains("marker contains non-finite"));
+
+        let err = time_dependent_auc(vec![1.0], vec![1], vec![0.5], f64::NAN).unwrap_err();
+        assert!(err.to_string().contains("t contains non-finite"));
+    }
+
+    #[test]
+    fn public_cumulative_dynamic_auc_validates_eval_times() {
+        let err =
+            cumulative_dynamic_auc(vec![1.0, 2.0], vec![1, 0], vec![0.8, 0.2], vec![2.0, 1.0])
+                .unwrap_err();
+        assert!(err.to_string().contains("times must be sorted"));
+
+        let err =
+            cumulative_dynamic_auc(vec![1.0], vec![1], vec![0.5], vec![f64::INFINITY]).unwrap_err();
+        assert!(err.to_string().contains("times contains non-finite"));
+
+        let err = cumulative_dynamic_auc(vec![1.0], vec![1], vec![0.5], vec![0.0]).unwrap_err();
+        assert!(err.to_string().contains("times must contain only positive"));
     }
 
     #[test]

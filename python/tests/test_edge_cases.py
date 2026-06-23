@@ -108,6 +108,94 @@ def test_logrank_trend_rejects_invalid_shapes_without_panicking(call, message):
 @pytest.mark.parametrize(
     ("call", "message"),
     [
+        (
+            lambda: survival.sample_size_survival(float("nan")),
+            "hazard_ratio must be finite",
+        ),
+        (
+            lambda: survival.sample_size_survival(1.0),
+            "hazard_ratio must be positive and not equal to 1",
+        ),
+        (
+            lambda: survival.sample_size_survival(0.7, power=1.0),
+            "power must be greater than 0 and less than 1",
+        ),
+        (
+            lambda: survival.sample_size_survival(0.7, alpha=0.0),
+            "alpha must be greater than 0 and less than 1",
+        ),
+        (
+            lambda: survival.sample_size_survival(0.7, allocation_ratio=0.0),
+            "allocation_ratio must be positive",
+        ),
+        (
+            lambda: survival.sample_size_survival(0.7, sided=3),
+            "sided must be 1 or 2",
+        ),
+        (
+            lambda: survival.sample_size_survival_freedman(0.7, float("inf")),
+            "prob_event must be finite",
+        ),
+        (
+            lambda: survival.sample_size_survival_freedman(0.7, 0.0),
+            "prob_event must be greater than 0 and less than 1",
+        ),
+        (
+            lambda: survival.power_survival(0, 0.7),
+            "n_events must be positive",
+        ),
+        (
+            lambda: survival.power_survival(10, 0.7, allocation_ratio=-1.0),
+            "allocation_ratio must be positive",
+        ),
+    ],
+)
+def test_power_apis_reject_invalid_parameters(call, message):
+    with pytest.raises(ValueError, match=message):
+        call()
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        (
+            lambda: survival.expected_events(0, 0.1, 0.7, 12.0, 6.0),
+            "n_total must be positive",
+        ),
+        (
+            lambda: survival.expected_events(100, float("nan"), 0.7, 12.0, 6.0),
+            "hazard_control must be finite",
+        ),
+        (
+            lambda: survival.expected_events(100, 0.1, 0.0, 12.0, 6.0),
+            "hazard_ratio must be positive",
+        ),
+        (
+            lambda: survival.expected_events(100, 0.1, 0.7, -1.0, 6.0),
+            "accrual_time must be non-negative",
+        ),
+        (
+            lambda: survival.expected_events(100, 0.1, 0.7, 0.0, 0.0),
+            "accrual_time and followup_time cannot both be zero",
+        ),
+        (
+            lambda: survival.expected_events(100, 0.1, 0.7, 12.0, 6.0, allocation_ratio=0.0),
+            "allocation_ratio must be positive",
+        ),
+        (
+            lambda: survival.expected_events(100, 0.1, 0.7, 12.0, 6.0, dropout_rate=-0.1),
+            "dropout_rate must be non-negative",
+        ),
+    ],
+)
+def test_expected_events_rejects_invalid_parameters(call, message):
+    with pytest.raises(ValueError, match=message):
+        call()
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
         (lambda: survival.survobrien([1.0, 2.0], [1], [0.1, 0.2]), "status length mismatch"),
         (
             lambda: survival.survobrien([1.0, 2.0], [1, 0], [0.1]),

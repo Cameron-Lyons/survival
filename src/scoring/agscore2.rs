@@ -145,18 +145,10 @@ pub fn perform_score_calculation(
     weights: Vec<f64>,
     method: i32,
 ) -> PyResult<Py<PyAny>> {
-    let n = weights.len();
-    validate_scoring_inputs(
-        n,
-        time_data.len(),
-        covariates.len(),
-        strata.len(),
-        score.len(),
-        weights.len(),
-    )?;
+    let (n, nvar) =
+        validate_scoring_inputs(&time_data, &covariates, &strata, &score, &weights, method)?;
     let residuals = agscore2(&time_data, &covariates, &strata, &score, &weights, method)
         .map_err(PyRuntimeError::new_err)?;
-    let nvar = covariates.len() / n;
     Python::attach(|py| build_score_result(py, residuals, n, nvar, method).map(|d| d.into()))
 }
 

@@ -21,11 +21,51 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::stratified_concordance_summary,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::concordance_rank_rows,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::stratified_concordance_rank_rows,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::concordance_influence_rows,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::stratified_concordance_influence_rows,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
         crate::concordance::basic::counting_concordance_index,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
         crate::concordance::basic::counting_concordance_summary,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::stratified_counting_concordance_summary,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::counting_concordance_rank_rows,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::stratified_counting_concordance_rank_rows,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::counting_concordance_influence_rows,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::stratified_counting_concordance_influence_rows,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
@@ -40,6 +80,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agexact, m)?)?;
     m.add_function(wrap_pyfunction!(compute_baseline_survival_steps, m)?)?;
     m.add_function(wrap_pyfunction!(compute_tied_baseline_summaries, m)?)?;
+    m.add_function(wrap_pyfunction!(cox_expected_baseline_by_stratum, m)?)?;
     m.add_function(wrap_pyfunction!(
         crate::residuals::agmart_module::agmart_typed,
         m

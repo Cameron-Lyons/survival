@@ -1,4 +1,10 @@
 use pyo3::prelude::*;
+
+use crate::internal::validation::{
+    ValidationError, validate_binary_f64, validate_binary_i32, validate_finite,
+    validate_non_negative,
+};
+
 pub(crate) struct CoxSchoInput<'a> {
     pub y: &'a [f64],
     pub score: &'a [f64],
@@ -9,6 +15,57 @@ pub(crate) struct CoxSchoParams {
     pub nvar: usize,
     pub method: i32,
 }
+
+fn validation_err_to_py(err: ValidationError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(err.to_string())
+}
+
+fn validate_schoenfeld_inputs(
+    y: &[f64],
+    score: &[f64],
+    strata: &[i32],
+    covar: &[f64],
+    nvar: usize,
+    method: i32,
+) -> PyResult<()> {
+    let nused = score.len();
+    let expected_y_len = 3usize.checked_mul(nused).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("3 * n exceeds supported array size")
+    })?;
+    let expected_covar_len = nvar.checked_mul(nused).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("nvar * n exceeds supported array size")
+    })?;
+    if y.len() < expected_y_len {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "y array must have length >= 3 * n (start, stop, event)",
+        ));
+    }
+    if strata.len() < nused {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "strata array length must match score length",
+        ));
+    }
+    if covar.len() < expected_covar_len {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "covar array must have length >= nvar * n",
+        ));
+    }
+    if method != 0 && method != 1 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "method must be 0 (Breslow) or 1 (Efron)",
+        ));
+    }
+
+    validate_finite(&y[..expected_y_len], "y").map_err(validation_err_to_py)?;
+    validate_finite(score, "score").map_err(validation_err_to_py)?;
+    validate_non_negative(score, "score").map_err(validation_err_to_py)?;
+    validate_binary_i32(&strata[..nused], "strata").map_err(validation_err_to_py)?;
+    validate_finite(&covar[..expected_covar_len], "covar").map_err(validation_err_to_py)?;
+    validate_binary_f64(&y[2 * nused..expected_y_len], "event").map_err(validation_err_to_py)?;
+
+    Ok(())
+}
+
 pub(crate) fn coxscho(
     params: CoxSchoParams,
     input: CoxSchoInput,
@@ -117,23 +174,12 @@ pub fn schoenfeld_residuals(
     method: i32,
 ) -> PyResult<Vec<f64>> {
     let nused = score.len();
-    if y.len() < 3 * nused {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "y array must have length >= 3 * n (start, stop, event)",
-        ));
-    }
-    if strata.len() < nused {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "strata array length must match score length",
-        ));
-    }
-    if covar.len() < nvar * nused {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "covar array must have length >= nvar * n",
-        ));
-    }
+    validate_schoenfeld_inputs(&y, &score, &strata, &covar, nvar, method)?;
+    let work_len = 3usize.checked_mul(nvar).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("3 * nvar exceeds supported array size")
+    })?;
     let mut covar_copy = covar.clone();
-    let mut work = vec![0.0; 3 * nvar];
+    let mut work = vec![0.0; work_len];
     let params = CoxSchoParams {
         nused,
         nvar,
@@ -146,4 +192,68 @@ pub fn schoenfeld_residuals(
     };
     coxscho(params, input, &mut covar_copy, &mut work);
     Ok(covar_copy)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_inputs() -> (Vec<f64>, Vec<f64>, Vec<i32>, Vec<f64>) {
+        (
+            vec![
+                0.0, 0.0, 0.0, 0.0, // start
+                1.0, 2.0, 3.0, 4.0, // stop
+                1.0, 1.0, 0.0, 1.0, // event
+            ],
+            vec![1.0, 1.0, 1.0, 1.0],
+            vec![0, 0, 0, 0],
+            vec![1.0, 2.0, 3.0, 4.0],
+        )
+    }
+
+    #[test]
+    fn schoenfeld_wrapper_rejects_invalid_method() {
+        let (y, score, strata, covar) = valid_inputs();
+
+        let err = schoenfeld_residuals(y, score, strata, covar, 1, 2)
+            .expect_err("unsupported method should fail");
+
+        assert!(
+            err.to_string()
+                .contains("method must be 0 (Breslow) or 1 (Efron)")
+        );
+    }
+
+    #[test]
+    fn schoenfeld_wrapper_rejects_non_finite_inputs() {
+        let (mut y, score, strata, covar) = valid_inputs();
+        y[1] = f64::NAN;
+
+        let err = schoenfeld_residuals(y, score, strata, covar, 1, 0)
+            .expect_err("NaN y value should fail");
+
+        assert!(err.to_string().contains("y contains non-finite"));
+    }
+
+    #[test]
+    fn schoenfeld_wrapper_rejects_negative_score() {
+        let (y, mut score, strata, covar) = valid_inputs();
+        score[2] = -1.0;
+
+        let err = schoenfeld_residuals(y, score, strata, covar, 1, 0)
+            .expect_err("negative score should fail");
+
+        assert!(err.to_string().contains("score contains negative value"));
+    }
+
+    #[test]
+    fn schoenfeld_wrapper_rejects_non_binary_event() {
+        let (mut y, score, strata, covar) = valid_inputs();
+        y[9] = 0.5;
+
+        let err = schoenfeld_residuals(y, score, strata, covar, 1, 0)
+            .expect_err("non-binary event should fail");
+
+        assert!(err.to_string().contains("event values must be 0 or 1"));
+    }
 }

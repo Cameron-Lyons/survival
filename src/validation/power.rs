@@ -1,6 +1,71 @@
 use crate::constants::{DEFAULT_ALLOCATION_RATIO, DEFAULT_ALPHA, DEFAULT_POWER, DEFAULT_SIDED};
 use crate::internal::statistical::{normal_cdf as norm_cdf, normal_inverse_cdf as norm_ppf};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+fn validate_probability_open(value: f64, field: &'static str) -> PyResult<()> {
+    if !value.is_finite() {
+        return Err(PyValueError::new_err(format!("{field} must be finite")));
+    }
+    if !(value > 0.0 && value < 1.0) {
+        return Err(PyValueError::new_err(format!(
+            "{field} must be greater than 0 and less than 1"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_positive_finite(value: f64, field: &'static str) -> PyResult<()> {
+    if !value.is_finite() {
+        return Err(PyValueError::new_err(format!("{field} must be finite")));
+    }
+    if value <= 0.0 {
+        return Err(PyValueError::new_err(format!("{field} must be positive")));
+    }
+    Ok(())
+}
+
+fn validate_nonnegative_finite(value: f64, field: &'static str) -> PyResult<()> {
+    if !value.is_finite() {
+        return Err(PyValueError::new_err(format!("{field} must be finite")));
+    }
+    if value < 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "{field} must be non-negative"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_hazard_ratio(value: f64) -> PyResult<()> {
+    validate_positive_finite(value, "hazard_ratio")?;
+    if value == 1.0 {
+        return Err(PyValueError::new_err(
+            "hazard_ratio must be positive and not equal to 1",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sided(value: usize) -> PyResult<()> {
+    if value != 1 && value != 2 {
+        return Err(PyValueError::new_err("sided must be 1 or 2"));
+    }
+    Ok(())
+}
+
+fn validate_sample_size_options(
+    power: f64,
+    alpha: f64,
+    allocation_ratio: f64,
+    sided: usize,
+) -> PyResult<()> {
+    validate_probability_open(power, "power")?;
+    validate_probability_open(alpha, "alpha")?;
+    validate_positive_finite(allocation_ratio, "allocation_ratio")?;
+    validate_sided(sided)
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SampleSizeResult {
@@ -128,11 +193,8 @@ pub fn sample_size_survival(
     let alpha = alpha.unwrap_or(DEFAULT_ALPHA);
     let allocation_ratio = allocation_ratio.unwrap_or(DEFAULT_ALLOCATION_RATIO);
     let sided = sided.unwrap_or(DEFAULT_SIDED);
-    if hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "hazard_ratio must be positive and not equal to 1",
-        ));
-    }
+    validate_hazard_ratio(hazard_ratio)?;
+    validate_sample_size_options(power, alpha, allocation_ratio, sided)?;
     Ok(sample_size_logrank(
         hazard_ratio,
         power,
@@ -155,16 +217,9 @@ pub fn sample_size_survival_freedman(
     let alpha = alpha.unwrap_or(DEFAULT_ALPHA);
     let allocation_ratio = allocation_ratio.unwrap_or(DEFAULT_ALLOCATION_RATIO);
     let sided = sided.unwrap_or(DEFAULT_SIDED);
-    if hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "hazard_ratio must be positive and not equal to 1",
-        ));
-    }
-    if prob_event <= 0.0 || prob_event >= 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "prob_event must be between 0 and 1",
-        ));
-    }
+    validate_hazard_ratio(hazard_ratio)?;
+    validate_probability_open(prob_event, "prob_event")?;
+    validate_sample_size_options(power, alpha, allocation_ratio, sided)?;
     Ok(sample_size_freedman(
         hazard_ratio,
         power,
@@ -186,11 +241,13 @@ pub fn power_survival(
     let alpha = alpha.unwrap_or(DEFAULT_ALPHA);
     let allocation_ratio = allocation_ratio.unwrap_or(DEFAULT_ALLOCATION_RATIO);
     let sided = sided.unwrap_or(DEFAULT_SIDED);
-    if hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "hazard_ratio must be positive and not equal to 1",
-        ));
+    if n_events == 0 {
+        return Err(PyValueError::new_err("n_events must be positive"));
     }
+    validate_hazard_ratio(hazard_ratio)?;
+    validate_probability_open(alpha, "alpha")?;
+    validate_positive_finite(allocation_ratio, "allocation_ratio")?;
+    validate_sided(sided)?;
     Ok(power_logrank(
         n_events,
         hazard_ratio,
@@ -273,6 +330,20 @@ pub fn expected_events(
 ) -> PyResult<AccrualResult> {
     let allocation_ratio = allocation_ratio.unwrap_or(1.0);
     let dropout_rate = dropout_rate.unwrap_or(0.0);
+    if n_total == 0 {
+        return Err(PyValueError::new_err("n_total must be positive"));
+    }
+    validate_positive_finite(hazard_control, "hazard_control")?;
+    validate_positive_finite(hazard_ratio, "hazard_ratio")?;
+    validate_nonnegative_finite(accrual_time, "accrual_time")?;
+    validate_nonnegative_finite(followup_time, "followup_time")?;
+    if accrual_time == 0.0 && followup_time == 0.0 {
+        return Err(PyValueError::new_err(
+            "accrual_time and followup_time cannot both be zero",
+        ));
+    }
+    validate_positive_finite(allocation_ratio, "allocation_ratio")?;
+    validate_nonnegative_finite(dropout_rate, "dropout_rate")?;
     let events = expected_events_exponential(
         n_total,
         hazard_control,
@@ -289,4 +360,43 @@ pub fn expected_events(
         study_duration: accrual_time + followup_time,
         expected_events: events,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_sample_size_survival_validates_parameters() {
+        assert!(sample_size_survival(0.7, None, None, None, None).is_ok());
+        assert!(sample_size_survival(f64::NAN, None, None, None, None).is_err());
+        assert!(sample_size_survival(1.0, None, None, None, None).is_err());
+        assert!(sample_size_survival(0.7, Some(1.0), None, None, None).is_err());
+        assert!(sample_size_survival(0.7, None, Some(0.0), None, None).is_err());
+        assert!(sample_size_survival(0.7, None, None, Some(0.0), None).is_err());
+        assert!(sample_size_survival(0.7, None, None, None, Some(3)).is_err());
+    }
+
+    #[test]
+    fn public_freedman_and_power_validate_parameters() {
+        assert!(sample_size_survival_freedman(0.7, 0.6, None, None, None, None).is_ok());
+        assert!(sample_size_survival_freedman(0.7, f64::INFINITY, None, None, None, None).is_err());
+        assert!(sample_size_survival_freedman(0.7, 0.0, None, None, None, None).is_err());
+        assert!(power_survival(64, 0.7, None, None, None).is_ok());
+        assert!(power_survival(0, 0.7, None, None, None).is_err());
+        assert!(power_survival(64, 0.7, Some(f64::NAN), None, None).is_err());
+        assert!(power_survival(64, 0.7, None, Some(-1.0), None).is_err());
+    }
+
+    #[test]
+    fn public_expected_events_validates_parameters() {
+        assert!(expected_events(100, 0.1, 0.7, 12.0, 6.0, None, None).is_ok());
+        assert!(expected_events(0, 0.1, 0.7, 12.0, 6.0, None, None).is_err());
+        assert!(expected_events(100, f64::NAN, 0.7, 12.0, 6.0, None, None).is_err());
+        assert!(expected_events(100, 0.1, 0.0, 12.0, 6.0, None, None).is_err());
+        assert!(expected_events(100, 0.1, 0.7, -1.0, 6.0, None, None).is_err());
+        assert!(expected_events(100, 0.1, 0.7, 0.0, 0.0, None, None).is_err());
+        assert!(expected_events(100, 0.1, 0.7, 12.0, 6.0, Some(0.0), None).is_err());
+        assert!(expected_events(100, 0.1, 0.7, 12.0, 6.0, None, Some(-0.1)).is_err());
+    }
 }

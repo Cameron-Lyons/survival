@@ -27,12 +27,20 @@ fn validate_finite(values: &[f64], name: &str) -> PyResult<()> {
 }
 
 fn validate_sort_indices(values: &[i32], n: usize, name: &str) -> PyResult<()> {
+    let mut seen = vec![false; n];
     for (idx, &value) in values.iter().enumerate() {
         if value < 0 || value as usize >= n {
             return Err(value_error(format!(
                 "{name} index out of bounds at position {idx}: {value}"
             )));
         }
+        let value = value as usize;
+        if seen[value] {
+            return Err(value_error(format!(
+                "{name} must be a permutation of 0..{n}; duplicate index {value} at position {idx}"
+            )));
+        }
+        seen[value] = true;
     }
     Ok(())
 }
@@ -151,6 +159,23 @@ mod tests {
         };
 
         assert!(err.to_string().contains("sort1 index out of bounds"));
+    }
+
+    #[test]
+    fn norisk_rejects_duplicate_sort_index() {
+        let err = match norisk(
+            vec![0.0, 1.0],
+            vec![1.0, 2.0],
+            vec![1, 0],
+            vec![0, 0],
+            vec![0, 1],
+            vec![],
+        ) {
+            Ok(_) => panic!("duplicate sort1 index should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("sort1 must be a permutation"));
     }
 
     #[test]

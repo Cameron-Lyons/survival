@@ -1,6 +1,47 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn validate_cutpoints(cutpoints: &[f64], field: &str) -> PyResult<()> {
+    for (index, &value) in cutpoints.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{field} contains non-finite value at index {index}"
+            )));
+        }
+    }
+    for (index, pair) in cutpoints.windows(2).enumerate() {
+        if pair[1] <= pair[0] {
+            return Err(value_error(format!(
+                "{field} must be strictly increasing; index {} is not greater than index {}",
+                index + 1,
+                index
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_rates(rates: &[f64], field: &str) -> PyResult<()> {
+    for (index, &rate) in rates.iter().enumerate() {
+        if !rate.is_finite() {
+            return Err(value_error(format!(
+                "{field} contains non-finite value at index {index}"
+            )));
+        }
+        if rate < 0.0 {
+            return Err(value_error(format!(
+                "{field} contains negative value {rate} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Type of dimension in a rate table
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +128,28 @@ impl RateTable {
         rates: Vec<f64>,
         summary: Option<String>,
     ) -> PyResult<Self> {
+        if dimensions.is_empty() {
+            return Err(value_error("dimensions cannot be empty"));
+        }
+        for dim in &dimensions {
+            if dim.name.trim().is_empty() {
+                return Err(value_error("dimension names cannot be empty"));
+            }
+            if dim.dim_type == DimType::Factor {
+                if let Some(levels) = &dim.levels
+                    && levels.is_empty()
+                {
+                    return Err(value_error(format!(
+                        "factor dimension '{}' must have at least one level",
+                        dim.name
+                    )));
+                }
+            } else {
+                validate_cutpoints(&dim.cutpoints, &format!("{} cutpoints", dim.name))?;
+            }
+        }
+        validate_rates(&rates, "rates")?;
+
         let shape: Vec<usize> = dimensions
             .iter()
             .map(|d| {
@@ -161,6 +224,17 @@ impl RateTable {
         year_start: f64,
         sex: Option<i32>,
     ) -> PyResult<f64> {
+        if !age_start.is_finite() || !age_end.is_finite() || !year_start.is_finite() {
+            return Err(value_error(
+                "age_start, age_end, and year_start must be finite",
+            ));
+        }
+        if age_start < 0.0 || age_end < 0.0 {
+            return Err(value_error("age_start and age_end must be non-negative"));
+        }
+        if matches!(sex, Some(value) if value < 0) {
+            return Err(value_error("sex must be non-negative"));
+        }
         if age_end <= age_start {
             return Ok(0.0);
         }
@@ -232,9 +306,21 @@ impl RateTable {
 
         for dim in &self.dimensions {
             let value = coords.get(&dim.name).copied().unwrap_or(0.0);
+            if !value.is_finite() {
+                return Err(value_error(format!(
+                    "{} coordinate must be finite",
+                    dim.name
+                )));
+            }
 
             let idx = match dim.dim_type {
                 DimType::Factor => {
+                    if value < 0.0 {
+                        return Err(value_error(format!(
+                            "{} coordinate must be non-negative",
+                            dim.name
+                        )));
+                    }
                     let max_idx = dim.levels.as_ref().map_or(0, |l| l.len().saturating_sub(1));
                     (value as usize).min(max_idx)
                 }
@@ -301,6 +387,21 @@ pub fn create_simple_ratetable(
     rates_male: Vec<f64>,
     rates_female: Vec<f64>,
 ) -> PyResult<RateTable> {
+    if age_breaks.len() < 2 {
+        return Err(value_error(
+            "age_breaks must contain at least two cutpoints",
+        ));
+    }
+    if year_breaks.len() < 2 {
+        return Err(value_error(
+            "year_breaks must contain at least two cutpoints",
+        ));
+    }
+    validate_cutpoints(&age_breaks, "age_breaks")?;
+    validate_cutpoints(&year_breaks, "year_breaks")?;
+    validate_rates(&rates_male, "rates_male")?;
+    validate_rates(&rates_female, "rates_female")?;
+
     let n_age = age_breaks.len().saturating_sub(1).max(1);
     let n_year = year_breaks.len().saturating_sub(1).max(1);
 
@@ -385,6 +486,15 @@ pub fn ratetable_date(
         if is_leap_year(y) { 366.0 } else { 365.0 }
     }
 
+    let max_day = if month == 2 && is_leap_year(year) {
+        29
+    } else {
+        days_per_month[(month - 1) as usize]
+    };
+    if day > max_day {
+        return Err(value_error("day is invalid for the given month and year"));
+    }
+
     let mut total_days: f64 = 0.0;
 
     for y in origin_year..year {
@@ -412,6 +522,10 @@ pub fn ratetable_date(
 
 #[pyfunction]
 pub fn days_to_date(days: f64, origin_year: i32) -> PyResult<(i32, u32, u32)> {
+    if !days.is_finite() || days < 0.0 {
+        return Err(value_error("days must be a finite non-negative value"));
+    }
+
     fn is_leap_year(y: i32) -> bool {
         (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
     }
@@ -489,5 +603,77 @@ mod tests {
         let mut coords = HashMap::new();
         coords.insert("age".to_string(), 15.0);
         assert_eq!(rt.lookup(coords).unwrap(), 0.02);
+    }
+
+    #[test]
+    fn ratetable_validates_public_inputs() {
+        assert!(
+            RateTable::new(vec![], vec![], None)
+                .expect_err("empty dimensions should fail")
+                .to_string()
+                .contains("dimensions cannot be empty")
+        );
+        assert!(
+            create_simple_ratetable(vec![0.0], vec![1990.0, 2000.0], vec![0.1], vec![0.1])
+                .expect_err("short age breaks should fail")
+                .to_string()
+                .contains("age_breaks")
+        );
+        assert!(
+            create_simple_ratetable(
+                vec![0.0, 10.0, 5.0],
+                vec![1990.0, 2000.0],
+                vec![0.1, 0.2],
+                vec![0.1, 0.2],
+            )
+            .expect_err("unsorted age breaks should fail")
+            .to_string()
+            .contains("age_breaks must be strictly increasing")
+        );
+        assert!(
+            create_simple_ratetable(
+                vec![0.0, 10.0],
+                vec![1990.0, 2000.0],
+                vec![f64::NAN],
+                vec![0.1],
+            )
+            .expect_err("non-finite rate should fail")
+            .to_string()
+            .contains("rates_male contains non-finite")
+        );
+
+        let rt = create_simple_ratetable(
+            vec![0.0, 365.0],
+            vec![1990.0, 2000.0],
+            vec![0.001],
+            vec![0.0008],
+        )
+        .unwrap();
+        let mut coords = HashMap::new();
+        coords.insert("age".to_string(), f64::NAN);
+        assert!(
+            rt.lookup(coords)
+                .expect_err("non-finite coordinate should fail")
+                .to_string()
+                .contains("age coordinate must be finite")
+        );
+        assert!(
+            rt.cumulative_hazard(0.0, f64::INFINITY, 2000.0, Some(0))
+                .expect_err("non-finite age end should fail")
+                .to_string()
+                .contains("must be finite")
+        );
+        assert!(
+            days_to_date(-1.0, 1960)
+                .expect_err("negative days should fail")
+                .to_string()
+                .contains("days must be a finite non-negative value")
+        );
+        assert!(
+            ratetable_date(2001, 2, 29, 1960)
+                .expect_err("invalid calendar date should fail")
+                .to_string()
+                .contains("day is invalid")
+        );
     }
 }

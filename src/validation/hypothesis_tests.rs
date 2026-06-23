@@ -1,7 +1,67 @@
 use crate::internal::matrix::matrix_inverse;
 use crate::internal::statistical::chi2_sf;
 use ndarray::Array2;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn invalid_test_result(test_name: &'static str, df: usize) -> TestResult {
+    TestResult {
+        statistic: f64::NAN,
+        df,
+        p_value: f64::NAN,
+        test_name: test_name.to_string(),
+    }
+}
+
+fn validate_finite_slice(values: &[f64], field: &'static str) -> PyResult<()> {
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "{field} contains non-finite value at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_positive_finite_slice(values: &[f64], field: &'static str) -> PyResult<()> {
+    validate_finite_slice(values, field)?;
+    for (idx, &value) in values.iter().enumerate() {
+        if value <= 0.0 {
+            return Err(value_error(format!(
+                "{field} must contain positive values; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_square_finite_matrix(
+    matrix: &[Vec<f64>],
+    expected_width: usize,
+    field: &'static str,
+) -> PyResult<()> {
+    if matrix.len() != expected_width {
+        return Err(value_error(format!(
+            "{field} must have {expected_width} rows"
+        )));
+    }
+    for (row_idx, row) in matrix.iter().enumerate() {
+        if row.len() != expected_width {
+            return Err(value_error(format!(
+                "{field} must be a square matrix; row {row_idx} has length {}, expected {expected_width}",
+                row.len()
+            )));
+        }
+        validate_finite_slice(row, field)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct TestResult {
@@ -74,17 +134,13 @@ pub fn score_test(score_vector: &[f64], information_matrix: &[Vec<f64>]) -> Test
         };
     }
 
-    let mat = vec_to_array2(information_matrix);
+    let mat = match vec_to_square_array2(information_matrix, n) {
+        Some(mat) if score_vector.iter().all(|value| value.is_finite()) => mat,
+        _ => return invalid_test_result("ScoreTest", n),
+    };
     let inv_info = match matrix_inverse(&mat) {
         Some(inv) => inv,
-        None => {
-            return TestResult {
-                statistic: f64::NAN,
-                df: n,
-                p_value: f64::NAN,
-                test_name: "ScoreTest".to_string(),
-            };
-        }
+        None => return invalid_test_result("ScoreTest", n),
     };
 
     let mut statistic = 0.0;
@@ -93,7 +149,13 @@ pub fn score_test(score_vector: &[f64], information_matrix: &[Vec<f64>]) -> Test
             statistic += score_vector[i] * inv_info[[i, j]] * score_vector[j];
         }
     }
+    if !statistic.is_finite() {
+        return invalid_test_result("ScoreTest", n);
+    }
     let p_value = chi2_sf(statistic, n);
+    if !p_value.is_finite() {
+        return invalid_test_result("ScoreTest", n);
+    }
     TestResult {
         statistic,
         df: n,
@@ -102,22 +164,35 @@ pub fn score_test(score_vector: &[f64], information_matrix: &[Vec<f64>]) -> Test
     }
 }
 
-fn vec_to_array2(matrix: &[Vec<f64>]) -> Array2<f64> {
-    let n = matrix.len();
+fn vec_to_square_array2(matrix: &[Vec<f64>], n: usize) -> Option<Array2<f64>> {
     if n == 0 {
-        return Array2::zeros((0, 0));
+        return Some(Array2::zeros((0, 0)));
     }
-    let m = matrix[0].len();
-    let mut arr = Array2::zeros((n, m));
+    if matrix.len() != n || matrix.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    let mut arr = Array2::zeros((n, n));
     for (i, row) in matrix.iter().enumerate() {
         for (j, &val) in row.iter().enumerate() {
+            if !val.is_finite() {
+                return None;
+            }
             arr[[i, j]] = val;
         }
     }
-    arr
+    Some(arr)
 }
 #[pyfunction]
 pub fn lrt_test(loglik_full: f64, loglik_reduced: f64, df: usize) -> PyResult<TestResult> {
+    if !loglik_full.is_finite() {
+        return Err(value_error("loglik_full must be finite"));
+    }
+    if !loglik_reduced.is_finite() {
+        return Err(value_error("loglik_reduced must be finite"));
+    }
+    if df == 0 {
+        return Err(value_error("df must be positive"));
+    }
     Ok(likelihood_ratio_test(loglik_full, loglik_reduced, df))
 }
 #[pyfunction]
@@ -127,6 +202,11 @@ pub(crate) fn wald_test_py(coefficients: Vec<f64>, std_errors: Vec<f64>) -> PyRe
             "coefficients and std_errors must have the same length",
         ));
     }
+    if coefficients.is_empty() {
+        return Err(value_error("coefficients cannot be empty"));
+    }
+    validate_finite_slice(&coefficients, "coefficients")?;
+    validate_positive_finite_slice(&std_errors, "std_errors")?;
     Ok(wald_test(&coefficients, &std_errors))
 }
 #[pyfunction]
@@ -135,11 +215,26 @@ pub(crate) fn score_test_py(
     information_matrix: Vec<Vec<f64>>,
 ) -> PyResult<TestResult> {
     if score_vector.len() != information_matrix.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(PyErr::new::<PyValueError, _>(
             "score_vector length must match information_matrix dimensions",
         ));
     }
-    Ok(score_test(&score_vector, &information_matrix))
+    if score_vector.is_empty() {
+        return Err(value_error("score_vector cannot be empty"));
+    }
+    validate_finite_slice(&score_vector, "score_vector")?;
+    validate_square_finite_matrix(
+        &information_matrix,
+        score_vector.len(),
+        "information_matrix",
+    )?;
+    let result = score_test(&score_vector, &information_matrix);
+    if !result.statistic.is_finite() || !result.p_value.is_finite() {
+        return Err(value_error(
+            "information_matrix is singular or invalid for score test",
+        ));
+    }
+    Ok(result)
 }
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -189,7 +284,7 @@ pub(crate) fn proportional_hazards_test(
     } else {
         0
     };
-    if n_events == 0 || n_vars == 0 {
+    if n_events < 2 || n_vars == 0 {
         return ProportionalityTest {
             variable_names: vec![],
             chi2_values: vec![],
@@ -262,13 +357,33 @@ pub fn ph_test(
             "event_times must have the same length as schoenfeld_residuals",
         ));
     }
+    if event_times.len() < 2 {
+        return Err(value_error("at least two event_times are required"));
+    }
+    validate_finite_slice(&event_times, "event_times")?;
     if let Some(first_row) = schoenfeld_residuals.first() {
         let width = first_row.len();
+        if width == 0 {
+            return Err(value_error("schoenfeld_residuals rows cannot be empty"));
+        }
         if schoenfeld_residuals.iter().any(|row| row.len() != width) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "schoenfeld_residuals must be rectangular",
             ));
         }
+        for row in &schoenfeld_residuals {
+            validate_finite_slice(row, "schoenfeld_residuals")?;
+        }
+    } else {
+        return Err(value_error("schoenfeld_residuals cannot be empty"));
+    }
+    if let Some(weights) = weights.as_ref() {
+        if weights.len() != event_times.len() {
+            return Err(value_error(
+                "weights must have the same length as event_times",
+            ));
+        }
+        validate_finite_slice(weights, "weights")?;
     }
     let weights_ref = weights.as_deref();
     Ok(proportional_hazards_test(
@@ -298,5 +413,36 @@ mod tests {
     fn ph_test_validates_time_length_and_rectangular_residuals() {
         assert!(ph_test(vec![vec![1.0], vec![2.0]], vec![1.0], None).is_err());
         assert!(ph_test(vec![vec![1.0], vec![2.0, 3.0]], vec![1.0, 2.0], None).is_err());
+    }
+
+    #[test]
+    fn public_hypothesis_tests_validate_numeric_inputs() {
+        assert!(lrt_test(f64::NAN, -12.0, 1).is_err());
+        assert!(lrt_test(-10.0, -12.0, 0).is_err());
+        assert!(wald_test_py(vec![], vec![]).is_err());
+        assert!(wald_test_py(vec![f64::INFINITY], vec![1.0]).is_err());
+        assert!(wald_test_py(vec![1.0], vec![0.0]).is_err());
+        assert!(score_test_py(vec![], vec![]).is_err());
+        assert!(score_test_py(vec![1.0], vec![vec![f64::NAN]]).is_err());
+        assert!(score_test_py(vec![1.0, 2.0], vec![vec![1.0], vec![0.0, 1.0]]).is_err());
+        assert!(ph_test(vec![vec![1.0]], vec![1.0], None).is_err());
+        assert!(ph_test(vec![vec![f64::NAN], vec![2.0]], vec![1.0, 2.0], None).is_err());
+        assert!(ph_test(vec![vec![1.0], vec![2.0]], vec![1.0, 2.0], Some(vec![1.0])).is_err());
+        assert!(
+            ph_test(
+                vec![vec![1.0], vec![2.0]],
+                vec![1.0, 2.0],
+                Some(vec![1.0, f64::INFINITY]),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn direct_score_test_handles_bad_matrix_shape_without_panicking() {
+        let result = score_test(&[1.0, 2.0], &[vec![1.0], vec![0.0, 1.0]]);
+
+        assert!(result.statistic.is_nan());
+        assert!(result.p_value.is_nan());
     }
 }

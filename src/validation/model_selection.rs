@@ -3,8 +3,20 @@ use rayon::prelude::*;
 
 use crate::constants::Z_SCORE_95;
 use crate::internal::statistical::chi2_cdf;
+use crate::internal::validation::validate_finite;
 
 type LikelihoodRatioTest = (String, String, f64, f64, f64);
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_finite_scalar(value: f64, field: &'static str) -> PyResult<()> {
+    if !value.is_finite() {
+        return Err(value_error(format!("{field} must be finite")));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -83,10 +95,20 @@ pub fn compute_model_selection_criteria(
     n_events: usize,
     null_log_likelihood: Option<f64>,
 ) -> PyResult<ModelSelectionCriteria> {
-    if n_obs == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "n_obs must be greater than 0",
+    validate_finite_scalar(log_likelihood, "log_likelihood")?;
+    if let Some(null_ll) = null_log_likelihood {
+        validate_finite_scalar(null_ll, "null_log_likelihood")?;
+    }
+    if n_obs <= 1 {
+        return Err(value_error("n_obs must be greater than 1"));
+    }
+    if n_events == 0 && null_log_likelihood.is_none() {
+        return Err(value_error(
+            "n_events must be greater than 0 when null_log_likelihood is not provided",
         ));
+    }
+    if n_events > n_obs {
+        return Err(value_error("n_events cannot exceed n_obs"));
     }
 
     let k = n_params as f64;
@@ -213,16 +235,17 @@ pub fn compare_models(
 ) -> PyResult<SurvivalModelComparison> {
     let n_models = model_names.len();
     if log_likelihoods.len() != n_models || n_params.len() != n_models {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All input vectors must have the same length",
-        ));
+        return Err(value_error("All input vectors must have the same length"));
     }
 
     if n_models == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "At least one model is required",
-        ));
+        return Err(value_error("At least one model is required"));
     }
+
+    if n_obs == 0 {
+        return Err(value_error("n_obs must be greater than 0"));
+    }
+    validate_finite(&log_likelihoods, "log_likelihoods")?;
 
     let n = n_obs as f64;
 
@@ -284,9 +307,10 @@ pub fn compare_models(
                 (j, i)
             };
 
-            let lr_stat = 2.0 * (log_likelihoods[full_idx] - log_likelihoods[nested_idx]);
+            let lr_stat =
+                (2.0 * (log_likelihoods[full_idx] - log_likelihoods[nested_idx])).max(0.0);
             let df = (n_params[full_idx] - n_params[nested_idx]) as f64;
-            let p_value = 1.0 - chi2_cdf(lr_stat.max(0.0), df);
+            let p_value = 1.0 - chi2_cdf(lr_stat, df);
 
             Some((
                 model_names[nested_idx].clone(),
@@ -351,9 +375,11 @@ impl CrossValidatedScore {
 pub fn compute_cv_score(fold_scores: Vec<f64>, metric: String) -> PyResult<CrossValidatedScore> {
     let n_folds = fold_scores.len();
     if n_folds == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "At least one fold score is required",
-        ));
+        return Err(value_error("At least one fold score is required"));
+    }
+    validate_finite(&fold_scores, "fold_scores")?;
+    if metric.trim().is_empty() {
+        return Err(value_error("metric cannot be empty"));
     }
 
     let mean_score = fold_scores.iter().sum::<f64>() / n_folds as f64;
@@ -427,6 +453,74 @@ mod tests {
         let (_, _, lr_stat, df, p_value) = &result.likelihood_ratio_tests[0];
         assert!(*lr_stat > 0.0);
         assert!(*df == 2.0);
+        assert!(*p_value >= 0.0 && *p_value <= 1.0);
+    }
+
+    #[test]
+    fn public_model_selection_apis_validate_inputs() {
+        assert!(
+            compute_model_selection_criteria(f64::NAN, 5, 200, 50, None)
+                .expect_err("non-finite log likelihood should fail")
+                .to_string()
+                .contains("log_likelihood must be finite")
+        );
+        assert!(
+            compute_model_selection_criteria(-100.0, 5, 1, 1, None)
+                .expect_err("single observation should fail")
+                .to_string()
+                .contains("n_obs must be greater than 1")
+        );
+        assert!(
+            compute_model_selection_criteria(-100.0, 5, 20, 21, None)
+                .expect_err("too many events should fail")
+                .to_string()
+                .contains("n_events cannot exceed n_obs")
+        );
+        assert!(
+            compute_model_selection_criteria(-100.0, 5, 20, 0, None)
+                .expect_err("missing null likelihood with no events should fail")
+                .to_string()
+                .contains("n_events must be greater than 0")
+        );
+        assert!(compute_model_selection_criteria(-100.0, 5, 20, 0, Some(-10.0)).is_ok());
+        assert!(
+            compare_models(vec!["m1".to_string()], vec![f64::INFINITY], vec![1], 10)
+                .expect_err("non-finite model log likelihood should fail")
+                .to_string()
+                .contains("log_likelihoods contains non-finite")
+        );
+        assert!(
+            compare_models(vec!["m1".to_string()], vec![-10.0], vec![1], 0)
+                .expect_err("zero observations should fail")
+                .to_string()
+                .contains("n_obs must be greater than 0")
+        );
+        assert!(
+            compute_cv_score(vec![0.7, f64::NAN], "c_index".to_string())
+                .expect_err("non-finite fold score should fail")
+                .to_string()
+                .contains("fold_scores contains non-finite")
+        );
+        assert!(
+            compute_cv_score(vec![0.7], " ".to_string())
+                .expect_err("empty metric should fail")
+                .to_string()
+                .contains("metric cannot be empty")
+        );
+    }
+
+    #[test]
+    fn likelihood_ratio_statistics_are_non_negative() {
+        let result = compare_models(
+            vec!["Nested".to_string(), "Full".to_string()],
+            vec![-100.0, -105.0],
+            vec![3, 5],
+            200,
+        )
+        .unwrap();
+
+        let (_, _, lr_stat, _, p_value) = &result.likelihood_ratio_tests[0];
+        assert_eq!(*lr_stat, 0.0);
         assert!(*p_value >= 0.0 && *p_value <= 1.0);
     }
 }

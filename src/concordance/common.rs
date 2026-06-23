@@ -35,6 +35,62 @@ pub(crate) fn validate_extended_concordance_inputs(
     validation_err_to_pyresult(validate_length(n, sort_stop_len, "sort_stop"))?;
     Ok(())
 }
+
+pub(crate) fn validate_non_negative_i32_indices(values: &[i32], field: &str) -> PyResult<()> {
+    if let Some((index, value)) = values.iter().enumerate().find(|(_, value)| **value < 0) {
+        return Err(PyRuntimeError::new_err(format!(
+            "{field} contains negative value {value} at index {index}"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_i32_tree_indices(values: &[i32], ntree: i32, field: &str) -> PyResult<()> {
+    if ntree <= 0 {
+        return Err(PyRuntimeError::new_err("ntree must be positive"));
+    }
+
+    validate_non_negative_i32_indices(values, field)?;
+    let ntree = ntree as usize;
+    if let Some((index, value)) = values
+        .iter()
+        .enumerate()
+        .find(|(_, value)| **value as usize >= ntree)
+    {
+        return Err(PyRuntimeError::new_err(format!(
+            "{field} value {value} at index {index} is outside ntree {ntree}"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_i32_order_indices(values: &[i32], n: usize, field: &str) -> PyResult<()> {
+    validate_non_negative_i32_indices(values, field)?;
+    if let Some((index, value)) = values
+        .iter()
+        .enumerate()
+        .find(|(_, value)| **value as usize >= n)
+    {
+        return Err(PyRuntimeError::new_err(format!(
+            "{field} value {value} at index {index} is outside observation count {n}"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_usize_order_indices(
+    values: &[usize],
+    n: usize,
+    field: &str,
+) -> PyResult<()> {
+    if let Some((index, value)) = values.iter().enumerate().find(|(_, value)| **value >= n) {
+        return Err(PyRuntimeError::new_err(format!(
+            "{field} value {value} at index {index} is outside observation count {n}"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn build_concordance_result(
     py: Python<'_>,
     count: &[f64],
@@ -183,5 +239,44 @@ mod tests {
         assert!(result[1] > 0.0);
         assert!((result[0] - 7.0).abs() < 1e-10);
         assert!((result[1] - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn validate_i32_tree_indices_rejects_invalid_values() {
+        assert!(validate_i32_tree_indices(&[0, 1], 2, "indices").is_ok());
+
+        let negative = validate_i32_tree_indices(&[0, -1], 2, "indices")
+            .expect_err("negative rank should fail");
+        assert!(negative.to_string().contains("negative value"));
+
+        let out_of_bounds = validate_i32_tree_indices(&[0, 2], 2, "indices")
+            .expect_err("rank outside tree should fail");
+        assert!(out_of_bounds.to_string().contains("outside ntree"));
+    }
+
+    #[test]
+    fn validate_order_indices_rejects_invalid_values() {
+        assert!(validate_i32_order_indices(&[0, 1], 2, "sort_stop").is_ok());
+        assert!(validate_usize_order_indices(&[0, 1], 2, "sort_stop").is_ok());
+
+        let negative = validate_i32_order_indices(&[0, -1], 2, "sort_stop")
+            .expect_err("negative order index should fail");
+        assert!(negative.to_string().contains("negative value"));
+
+        let i32_out_of_bounds = validate_i32_order_indices(&[0, 2], 2, "sort_stop")
+            .expect_err("order index outside observations should fail");
+        assert!(
+            i32_out_of_bounds
+                .to_string()
+                .contains("outside observation count")
+        );
+
+        let usize_out_of_bounds = validate_usize_order_indices(&[0, 2], 2, "sort_stop")
+            .expect_err("order index outside observations should fail");
+        assert!(
+            usize_out_of_bounds
+                .to_string()
+                .contains("outside observation count")
+        );
     }
 }

@@ -45,16 +45,127 @@ def test_statistical_test_helpers():
     with pytest.raises(ValueError, match="coefficients and std_errors must have the same length"):
         survival.wald_test_py([1.0], [1.0, 2.0])
 
+    with pytest.raises(ValueError, match="loglik_full must be finite"):
+        survival.lrt_test(float("nan"), -12.0, 1)
+
+    with pytest.raises(ValueError, match="df must be positive"):
+        survival.lrt_test(-10.0, -12.0, 0)
+
+    with pytest.raises(ValueError, match="coefficients cannot be empty"):
+        survival.wald_test_py([], [])
+
+    with pytest.raises(ValueError, match="coefficients contains non-finite"):
+        survival.wald_test_py([float("inf")], [1.0])
+
+    with pytest.raises(ValueError, match="std_errors must contain positive values"):
+        survival.wald_test_py([1.0], [0.0])
+
     with pytest.raises(
         ValueError, match="score_vector length must match information_matrix dimensions"
     ):
         survival.score_test_py([1.0, 2.0], [[1.0]])
+
+    with pytest.raises(ValueError, match="score_vector cannot be empty"):
+        survival.score_test_py([], [])
+
+    with pytest.raises(ValueError, match="information_matrix must be a square matrix"):
+        survival.score_test_py([1.0, 2.0], [[1.0, 0.0], [1.0]])
+
+    with pytest.raises(ValueError, match="information_matrix contains non-finite"):
+        survival.score_test_py([1.0], [[float("nan")]])
 
     with pytest.raises(ValueError, match="event_times"):
         survival.ph_test([[1.0], [2.0]], [1.0], None)
 
     with pytest.raises(ValueError, match="rectangular"):
         survival.ph_test([[1.0], [2.0, 3.0]], [1.0, 2.0], None)
+
+    with pytest.raises(ValueError, match="at least two event_times"):
+        survival.ph_test([[1.0]], [1.0], None)
+
+    with pytest.raises(ValueError, match="schoenfeld_residuals contains non-finite"):
+        survival.ph_test([[float("nan")], [2.0]], [1.0, 2.0], None)
+
+    with pytest.raises(ValueError, match="weights must have the same length"):
+        survival.ph_test([[1.0], [2.0]], [1.0, 2.0], [1.0])
+
+    with pytest.raises(ValueError, match="weights contains non-finite"):
+        survival.ph_test([[1.0], [2.0]], [1.0, 2.0], [1.0, float("inf")])
+
+
+def test_meta_analysis_public_apis_and_validation():
+    effects = [0.5, 0.7, 0.4, 0.6]
+    std_errors = [0.1, 0.15, 0.12, 0.11]
+    config = survival.MetaAnalysisConfig("fixed", 0.95, "dl")
+
+    result = survival.survival_meta_analysis(effects, std_errors, config)
+    assert result.pooled_effect > 0.0
+    assert result.pooled_se > 0.0
+    assert sum(result.study_weights) == pytest.approx(1.0)
+    assert 0.0 <= result.i_squared <= 100.0
+
+    forest = survival.generate_forest_plot_data(["A", "B", "C", "D"], effects, std_errors, None)
+    assert forest.study_names == ["A", "B", "C", "D"]
+    assert len(forest.weights) == 4
+    assert forest.pooled_effect == pytest.approx(
+        survival.survival_meta_analysis(effects, std_errors, None).pooled_effect
+    )
+
+    bias = survival.publication_bias_tests(effects, std_errors)
+    assert 0.0 <= bias.egger_p <= 1.0
+    assert 0.0 <= bias.begg_p <= 1.0
+
+    with pytest.raises(ValueError, match="method must be"):
+        survival.MetaAnalysisConfig("bad", 0.95, "dl")
+    with pytest.raises(ValueError, match="confidence_level"):
+        survival.MetaAnalysisConfig("random", 1.0, "dl")
+    with pytest.raises(ValueError, match="tau_method must be"):
+        survival.MetaAnalysisConfig("random", 0.95, "bad")
+    with pytest.raises(ValueError, match="effects contains non-finite"):
+        survival.survival_meta_analysis([0.5, float("nan")], [0.1, 0.2], None)
+    with pytest.raises(ValueError, match="std_errors must contain positive values"):
+        survival.survival_meta_analysis([0.5, 0.7], [0.1, 0.0], None)
+    with pytest.raises(ValueError, match="Need at least 3 studies"):
+        survival.publication_bias_tests([0.5, 0.7], [0.1, 0.2])
+
+
+def test_uncertainty_interval_helpers_validate_inputs():
+    predictions = [
+        [[0.9, 0.8], [0.7, 0.6]],
+        [[0.85, 0.75], [0.65, 0.55]],
+        [[0.95, 0.82], [0.75, 0.62]],
+    ]
+
+    ensemble = survival.ensemble_uncertainty(predictions, 0.95)
+    quantiles = survival.quantile_regression_intervals(predictions, [0.1, 0.5, 0.9])
+    calibration = survival.calibrate_prediction_intervals(
+        [1.0, 2.0, 3.0],
+        [1, 0, 1],
+        [0.5, 1.5, 2.5],
+        [1.5, 2.5, 3.5],
+        0.9,
+    )
+
+    assert len(ensemble.mean_prediction) == 2
+    assert len(ensemble.prediction_intervals[0]) == 2
+    assert quantiles.quantiles == [0.1, 0.5, 0.9]
+    assert quantiles.prediction_interval_width()[0][0] >= 0.0
+    assert calibration.observed_coverage == pytest.approx(1.0)
+
+    with pytest.raises(ValueError, match="model_predictions must be rectangular"):
+        survival.ensemble_uncertainty([[[0.9]], []], 0.95)
+    with pytest.raises(ValueError, match="confidence_level"):
+        survival.ensemble_uncertainty([[[0.9]], [[0.8]]], 1.0)
+    with pytest.raises(ValueError, match="quantiles must contain exactly three"):
+        survival.quantile_regression_intervals(predictions, [0.1, 0.9])
+    with pytest.raises(ValueError, match="quantiles must be nondecreasing"):
+        survival.quantile_regression_intervals(predictions, [0.5, 0.1, 0.9])
+    with pytest.raises(ValueError, match="bootstrap_predictions contains non-finite"):
+        survival.quantile_regression_intervals([[[float("nan")]]], None)
+    with pytest.raises(ValueError, match="true_events values"):
+        survival.calibrate_prediction_intervals([1.0], [2], [0.0], [2.0], 0.9)
+    with pytest.raises(ValueError, match="lower_bounds must be less than or equal"):
+        survival.calibrate_prediction_intervals([1.0], [1], [2.0], [1.0], 0.9)
 
 
 def test_cox_diagnostic_helpers_validate_inputs():

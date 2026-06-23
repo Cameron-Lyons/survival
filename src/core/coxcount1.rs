@@ -43,12 +43,19 @@ fn validate_strata_markers(values: &[i32], n: usize) -> PyResult<()> {
 }
 
 fn validate_sort_indices(values: &[usize], n: usize, name: &str) -> PyResult<()> {
+    let mut seen = vec![false; n];
     for (idx, &value) in values.iter().enumerate() {
         if value >= n {
             return Err(value_error(format!(
                 "{name} index out of bounds at position {idx}: {value} >= {n}"
             )));
         }
+        if seen[value] {
+            return Err(value_error(format!(
+                "{name} must be a permutation of 0..{n}; duplicate index {value} at position {idx}"
+            )));
+        }
+        seen[value] = true;
     }
     Ok(())
 }
@@ -354,5 +361,24 @@ mod tests {
         };
 
         assert!(err.to_string().contains("sort1 index out of bounds"));
+    }
+
+    #[test]
+    fn coxcount2_rejects_duplicate_sort_index() {
+        initialize_python();
+
+        let err = match coxcount2(
+            vec![0.0, 1.0],
+            vec![1.0, 2.0],
+            vec![1.0, 0.0],
+            vec![0, 0],
+            vec![0, 1],
+            vec![1, 0],
+        ) {
+            Ok(_) => panic!("duplicate sort1 index should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("sort1 must be a permutation"));
     }
 }

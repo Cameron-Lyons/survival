@@ -56,6 +56,59 @@ def test_calibration_prediction_and_risk_public_apis():
         survival.d_calibration([0.1], [1], 1)
 
 
+def test_conformal_coverage_cv_public_api_and_validation():
+    time = [1.0, 2.0, 3.0, 4.0]
+    status = [1, 0, 1, 1]
+    predicted = [1.1, 2.1, 3.1, 4.1]
+
+    result = survival.conformal_coverage_cv(
+        time,
+        status,
+        predicted,
+        n_folds=2,
+        coverage_candidates=[0.8, 0.9],
+        seed=42,
+    )
+
+    assert result.coverage_candidates == pytest.approx([0.8, 0.9])
+    assert len(result.mean_widths) == 2
+    assert len(result.empirical_coverages) == 2
+    assert result.optimal_coverage in result.coverage_candidates
+
+    default_result = survival.conformal_coverage_cv(time[:3], status[:3], predicted[:3])
+    assert default_result.coverage_candidates == pytest.approx([0.8, 0.85, 0.9, 0.95, 0.99])
+
+    with pytest.raises(ValueError, match="At least two observations"):
+        survival.conformal_coverage_cv([1.0], [1], [1.0])
+
+    with pytest.raises(ValueError, match="same length"):
+        survival.conformal_coverage_cv([1.0, 2.0], [1], [1.0, 2.0])
+
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.conformal_coverage_cv([float("nan"), 2.0], [1, 1], [1.0, 2.0])
+
+    with pytest.raises(ValueError, match="status must contain only 0/1"):
+        survival.conformal_coverage_cv([1.0, 2.0], [1, 2], [1.0, 2.0])
+
+    with pytest.raises(ValueError, match="predicted contains non-finite"):
+        survival.conformal_coverage_cv([1.0, 2.0], [1, 1], [1.0, float("inf")])
+
+    with pytest.raises(ValueError, match="n_folds must be between 2"):
+        survival.conformal_coverage_cv(time, status, predicted, n_folds=1)
+
+    with pytest.raises(ValueError, match="n_folds must be between 2"):
+        survival.conformal_coverage_cv(time, status, predicted, n_folds=5)
+
+    with pytest.raises(ValueError, match="coverage_candidates cannot be empty"):
+        survival.conformal_coverage_cv(time, status, predicted, coverage_candidates=[])
+
+    with pytest.raises(ValueError, match="coverage_candidates must contain finite"):
+        survival.conformal_coverage_cv(time, status, predicted, coverage_candidates=[0.9, 1.0])
+
+    with pytest.raises(ValueError, match="At least one uncensored"):
+        survival.conformal_coverage_cv([1.0, 2.0], [0, 0], [1.0, 2.0])
+
+
 def test_timepoint_calibration_public_apis_and_validation():
     time = list(range(1, 21))
     status = [1] * 20
@@ -135,6 +188,24 @@ def test_timepoint_calibration_public_apis_and_validation():
     with pytest.raises(ValueError, match="n_grid_points must be at least 10"):
         survival.smoothed_calibration([1.0], [1], [0.9], 1.0, 5, None)
 
+    with pytest.raises(ValueError, match="probabilities between 0 and 1"):
+        survival.d_calibration([1.2], [1])
+
+    with pytest.raises(ValueError, match="status.*0/1"):
+        survival.d_calibration([0.8], [2])
+
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.one_calibration([float("nan")], [1], [0.9], 1.0, 2)
+
+    with pytest.raises(ValueError, match="predicted_survival_at_t.*probabilities"):
+        survival.brier_calibration([1.0], [1], [1.1], 1.0, 2)
+
+    with pytest.raises(ValueError, match="prediction_times must be sorted"):
+        survival.multi_time_calibration([1.0], [1], [[0.9, 0.8]], [2.0, 1.0], 2)
+
+    with pytest.raises(ValueError, match="bandwidth must be positive"):
+        survival.smoothed_calibration([1.0], [1], [0.9], 1.0, 10, 0.0)
+
 
 def test_reporting_public_apis_and_validation():
     km = survival.km_plot_data([1.0, 2.0, 3.0, 4.0, 5.0], [1, 0, 1, 0, 1], 0.95, "Test")
@@ -182,8 +253,26 @@ def test_reporting_public_apis_and_validation():
     with pytest.raises(ValueError, match="time and event must have the same non-zero length"):
         survival.km_plot_data([], [], 0.95, None)
 
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.km_plot_data([float("nan")], [1], 0.95, None)
+
+    with pytest.raises(ValueError, match="event.*0/1"):
+        survival.km_plot_data([1.0], [2], 0.95, None)
+
+    with pytest.raises(ValueError, match="confidence_level"):
+        survival.km_plot_data([1.0], [1], 1.0, None)
+
     with pytest.raises(ValueError, match="All input vectors must have the same length"):
         survival.forest_plot_data(["x"], [0.1, 0.2], [0.1], 0.95)
+
+    with pytest.raises(ValueError, match="coefficients contains non-finite"):
+        survival.forest_plot_data(["x"], [float("nan")], [0.1], 0.95)
+
+    with pytest.raises(ValueError, match="standard_errors must contain positive values"):
+        survival.forest_plot_data(["x"], [0.1], [0.0], 0.95)
+
+    with pytest.raises(ValueError, match="confidence_level"):
+        survival.forest_plot_data(["x"], [0.1], [0.1], float("nan"))
 
     with pytest.raises(
         ValueError,
@@ -191,8 +280,33 @@ def test_reporting_public_apis_and_validation():
     ):
         survival.calibration_plot_data([0.1], [0, 1], 2)
 
+    with pytest.raises(ValueError, match="n_bins must be between 1 and the number of observations"):
+        survival.calibration_plot_data([0.1], [0], 0)
+
+    with pytest.raises(ValueError, match="n_bins must be between 1 and the number of observations"):
+        survival.calibration_plot_data([0.1], [0], 2)
+
+    with pytest.raises(ValueError, match="predicted.*probabilities between 0 and 1"):
+        survival.calibration_plot_data([1.1], [1], 1)
+
+    with pytest.raises(ValueError, match="observed.*0/1"):
+        survival.calibration_plot_data([0.1], [2], 1)
+
+    with pytest.raises(ValueError, match="landmark_times contains non-finite"):
+        survival.generate_survival_report("bad", [1.0], [1], [float("inf")])
+
     with pytest.raises(ValueError, match="Both positive and negative labels required"):
         survival.roc_plot_data([0.1, 0.2], [1, 1])
+
+    with pytest.raises(ValueError, match="scores contains non-finite"):
+        survival.roc_plot_data([float("nan"), 0.2], [1, 0])
+
+    with pytest.raises(ValueError, match="labels.*0/1"):
+        survival.roc_plot_data([0.1, 0.2], [1, 2])
+
+    tied_roc = survival.roc_plot_data([0.5, 0.5, 0.2, 0.8], [1, 0, 0, 1])
+    assert tied_roc.thresholds == pytest.approx([float("inf"), 0.8, 0.5, 0.2])
+    assert tied_roc.auc == pytest.approx(0.875)
 
 
 def test_decision_curve_public_apis_and_validation():
@@ -228,8 +342,35 @@ def test_decision_curve_public_apis_and_validation():
     with pytest.raises(ValueError, match="All inputs must have the same non-zero length"):
         survival.decision_curve_analysis([], [], [], 1.0, None)
 
+    with pytest.raises(ValueError, match="predicted_risk.*probabilities between 0 and 1"):
+        survival.decision_curve_analysis([1.2], [1.0], [1], 1.0, [0.5])
+
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.decision_curve_analysis([0.2], [float("nan")], [1], 1.0, [0.5])
+
+    with pytest.raises(ValueError, match="event.*0/1"):
+        survival.decision_curve_analysis([0.2], [1.0], [2], 1.0, [0.5])
+
+    with pytest.raises(ValueError, match="time_horizon"):
+        survival.decision_curve_analysis([0.2], [1.0], [1], float("inf"), [0.5])
+
+    with pytest.raises(ValueError, match="thresholds cannot be empty"):
+        survival.decision_curve_analysis([0.2], [1.0], [1], 1.0, [])
+
+    with pytest.raises(ValueError, match="thresholds.*between 0 and 1 exclusive"):
+        survival.decision_curve_analysis([0.2], [1.0], [1], 1.0, [1.0])
+
+    with pytest.raises(ValueError, match="threshold.*between 0 and 1 exclusive"):
+        survival.clinical_utility_at_threshold([0.2], [1.0], [1], 1.0, 0.0)
+
     with pytest.raises(
         ValueError,
         match="model_predictions and model_names must have the same non-zero length",
     ):
         survival.compare_decision_curves([[0.1]], [], [1.0], [1], 1.0, None)
+
+    with pytest.raises(ValueError, match="model_predictions row 1 length mismatch"):
+        survival.compare_decision_curves([[0.1], [0.1, 0.2]], ["m1", "m2"], [1.0], [1], 1.0, [0.5])
+
+    with pytest.raises(ValueError, match="model_predictions.*probabilities between 0 and 1"):
+        survival.compare_decision_curves([[1.2]], ["m1"], [1.0], [1], 1.0, [0.5])

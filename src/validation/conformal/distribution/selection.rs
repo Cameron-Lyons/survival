@@ -27,14 +27,72 @@ pub fn conformal_coverage_cv(
     seed: Option<u64>,
 ) -> PyResult<CoverageSelectionResult> {
     let n = time.len();
-    if n == 0 {
+    if n < 2 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input arrays cannot be empty",
+            "At least two observations are required for cross-validation",
+        ));
+    }
+    if status.len() != n || predicted.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "time, status, and predicted must have the same length",
+        ));
+    }
+    for (idx, &value) in time.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "time contains non-finite value at index {idx}"
+            )));
+        }
+        if value < 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "time must be non-negative; got {value} at index {idx}"
+            )));
+        }
+    }
+    for (idx, &value) in status.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "status must contain only 0/1 values; got {value} at index {idx}"
+            )));
+        }
+    }
+    for (idx, &value) in predicted.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "predicted contains non-finite value at index {idx}"
+            )));
+        }
+        if value < 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "predicted must be non-negative; got {value} at index {idx}"
+            )));
+        }
+    }
+    if !status.contains(&1) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "At least one uncensored observation is required",
         ));
     }
 
-    let k = n_folds.unwrap_or(5);
+    let k = n_folds.unwrap_or_else(|| 5.min(n));
+    if k < 2 || k > n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "n_folds must be between 2 and the number of observations ({n})"
+        )));
+    }
     let candidates = coverage_candidates.unwrap_or_else(|| vec![0.80, 0.85, 0.90, 0.95, 0.99]);
+    if candidates.is_empty() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "coverage_candidates cannot be empty",
+        ));
+    }
+    for (idx, &coverage) in candidates.iter().enumerate() {
+        if !coverage.is_finite() || !(0.0..1.0).contains(&coverage) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "coverage_candidates must contain finite values between 0 and 1; got {coverage} at index {idx}"
+            )));
+        }
+    }
     let base_seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let mut indices: Vec<usize> = (0..n).collect();
@@ -48,11 +106,15 @@ pub fn conformal_coverage_cv(
     }
 
     let fold_size = n / k;
+    let remainder = n % k;
+    let mut start = 0;
     let folds: Vec<Vec<usize>> = (0..k)
         .map(|i| {
-            let start = i * fold_size;
-            let end = if i == k - 1 { n } else { (i + 1) * fold_size };
-            indices[start..end].to_vec()
+            let size = fold_size + usize::from(i < remainder);
+            let end = start + size;
+            let fold = indices[start..end].to_vec();
+            start = end;
+            fold
         })
         .collect();
 

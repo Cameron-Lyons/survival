@@ -5,6 +5,31 @@ use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
+fn validate_one_based_sort1(sort1: &[i32], n: usize) -> Result<Vec<usize>, String> {
+    if sort1.len() != n {
+        return Err("Sort1 length does not match observations".to_string());
+    }
+    let mut seen = vec![false; n];
+    let mut normalized = Vec::with_capacity(n);
+    for (idx, &value) in sort1.iter().enumerate() {
+        if value < 1 || value as usize > n {
+            return Err(format!(
+                "Sort1 value {value} at position {idx} is outside 1..={n}"
+            ));
+        }
+        let value = value as usize - 1;
+        if seen[value] {
+            return Err(format!(
+                "Sort1 must be a permutation of 1..={n}; duplicate index {} at position {idx}",
+                value + 1
+            ));
+        }
+        seen[value] = true;
+        normalized.push(value);
+    }
+    Ok(normalized)
+}
+
 #[inline]
 pub(crate) fn agscore3(
     y: &[f64],
@@ -41,7 +66,7 @@ pub(crate) fn agscore3(
     let mut denom = 0.0;
     let mut current_stratum = *strata.last().unwrap_or(&0);
     let mut i1 = n - 1;
-    let sort1: Vec<usize> = sort1.iter().map(|&x| (x - 1) as usize).collect();
+    let sort1 = validate_one_based_sort1(sort1, n)?;
 
     let mut person = n - 1;
     while person > 0 {
@@ -192,20 +217,8 @@ pub fn perform_agscore3_calculation(
     method: i32,
     sort1: Vec<i32>,
 ) -> PyResult<Py<PyAny>> {
-    let n = weights.len();
-    validate_scoring_inputs(
-        n,
-        time_data.len(),
-        covariates.len(),
-        strata.len(),
-        score.len(),
-        weights.len(),
-    )?;
-    if sort1.len() != n {
-        return Err(PyRuntimeError::new_err(
-            "Sort1 length does not match observations",
-        ));
-    }
+    let (n, nvar) =
+        validate_scoring_inputs(&time_data, &covariates, &strata, &score, &weights, method)?;
     let residuals = agscore3(
         &time_data,
         &covariates,
@@ -216,7 +229,6 @@ pub fn perform_agscore3_calculation(
         &sort1,
     )
     .map_err(PyRuntimeError::new_err)?;
-    let nvar = covariates.len() / n;
     Python::attach(|py| build_score_result(py, residuals, n, nvar, method).map(|d| d.into()))
 }
 
@@ -250,5 +262,22 @@ mod tests {
         let sort1 = vec![1, 2, 3];
         let result = agscore3(&y, &covar, &strata, &score, &weights, 0, &sort1).unwrap();
         assert_eq!(result.len(), n * nvar);
+    }
+
+    #[test]
+    fn rejects_invalid_sort1_values() {
+        let y = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0];
+        let covar = vec![0.5, 1.0, 1.5];
+        let strata = vec![0, 0, 0];
+        let score = vec![1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0];
+
+        let zero = agscore3(&y, &covar, &strata, &score, &weights, 0, &[1, 0, 3])
+            .expect_err("zero sort1 index should fail");
+        assert!(zero.contains("outside 1..=3"));
+
+        let duplicate = agscore3(&y, &covar, &strata, &score, &weights, 0, &[1, 1, 3])
+            .expect_err("duplicate sort1 index should fail");
+        assert!(duplicate.contains("Sort1 must be a permutation"));
     }
 }

@@ -1,4 +1,7 @@
 use super::ratetable::RateTable;
+use crate::constants::same_time;
+use crate::internal::validation::{validate_finite, validate_non_negative};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -24,6 +27,51 @@ pub struct SurvExpResult {
     /// Number of subjects
     #[pyo3(get)]
     pub n: usize,
+}
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn validate_survexp_inputs(time: &[f64], age: &[f64], year: &[f64]) -> PyResult<()> {
+    if age.len() != time.len() || year.len() != time.len() {
+        return Err(value_error("time, age, and year must have same length"));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_finite(age, "age")?;
+    validate_non_negative(age, "age")?;
+    validate_finite(year, "year")?;
+    Ok(())
+}
+
+fn validate_sex(sex: &[i32], n: usize) -> PyResult<()> {
+    if sex.len() != n {
+        return Err(value_error("sex must have same length as time"));
+    }
+    for (index, &value) in sex.iter().enumerate() {
+        if value < 0 {
+            return Err(value_error(format!(
+                "sex values must be non-negative; got {value} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_eval_times(eval_times: &[f64]) -> PyResult<()> {
+    validate_finite(eval_times, "times")?;
+    validate_non_negative(eval_times, "times")?;
+    for (index, pair) in eval_times.windows(2).enumerate() {
+        if pair[1] < pair[0] && !same_time(pair[0], pair[1]) {
+            return Err(value_error(format!(
+                "times must be sorted in nondecreasing order; index {} is less than index {}",
+                index + 1,
+                index
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Compute expected survival based on population mortality.
@@ -54,23 +102,14 @@ pub fn survexp(
     method: Option<&str>,
 ) -> PyResult<SurvExpResult> {
     let n = time.len();
-
-    if age.len() != n || year.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time, age, and year must have same length",
-        ));
-    }
+    validate_survexp_inputs(&time, &age, &year)?;
 
     let sex_vec = sex.unwrap_or_else(|| vec![0; n]);
-    if sex_vec.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "sex must have same length as time",
-        ));
-    }
+    validate_sex(&sex_vec, n)?;
 
     let calc_method = method.unwrap_or("hakulinen");
     if !["hakulinen", "conditional", "individual"].contains(&calc_method) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(value_error(
             "method must be 'hakulinen', 'conditional', or 'individual'",
         ));
     }
@@ -90,11 +129,12 @@ pub fn survexp(
         Some(t) => t,
         None => {
             let mut unique_times: Vec<f64> = time.clone();
-            unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            unique_times.dedup();
+            unique_times.sort_by(|a, b| a.total_cmp(b));
+            unique_times.dedup_by(|left, right| same_time(*left, *right));
             unique_times
         }
     };
+    validate_eval_times(&eval_times)?;
 
     match calc_method {
         "hakulinen" => compute_hakulinen(&time, &age, &year, &sex_vec, ratetable, &eval_times),
@@ -178,21 +218,14 @@ fn compute_conditional(
     let mut prev_surv: f64 = 1.0;
 
     for (t_idx, &eval_t) in eval_times.iter().enumerate() {
-        let at_risk: Vec<usize> = (0..n).filter(|&i| time[i] >= eval_t).collect();
-        n_risk[t_idx] = at_risk.len() as f64;
-
-        if at_risk.is_empty() {
-            surv[t_idx] = prev_surv;
-            cumhaz[t_idx] = if prev_surv > 0.0 {
-                -prev_surv.ln()
-            } else {
-                f64::INFINITY
-            };
-            continue;
-        }
-
+        let mut at_risk_count = 0usize;
         let mut total_hazard = 0.0;
-        for &i in &at_risk {
+
+        for i in 0..n {
+            if time[i] < eval_t {
+                continue;
+            }
+            at_risk_count += 1;
             let age_start = age[i] + prev_time;
             let age_end = age[i] + eval_t;
             let year_start = year[i] + prev_time / 365.25;
@@ -203,7 +236,19 @@ fn compute_conditional(
             total_hazard += interval_hazard;
         }
 
-        let avg_hazard = total_hazard / at_risk.len() as f64;
+        n_risk[t_idx] = at_risk_count as f64;
+
+        if at_risk_count == 0 {
+            surv[t_idx] = prev_surv;
+            cumhaz[t_idx] = if prev_surv > 0.0 {
+                -prev_surv.ln()
+            } else {
+                f64::INFINITY
+            };
+            continue;
+        }
+
+        let avg_hazard = total_hazard / at_risk_count as f64;
         let interval_surv = (-avg_hazard).exp();
 
         surv[t_idx] = prev_surv * interval_surv;
@@ -300,14 +345,10 @@ pub fn survexp_individual(
     sex: Option<Vec<i32>>,
 ) -> PyResult<Vec<f64>> {
     let n = time.len();
-
-    if age.len() != n || year.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time, age, and year must have same length",
-        ));
-    }
+    validate_survexp_inputs(&time, &age, &year)?;
 
     let sex_vec = sex.unwrap_or_else(|| vec![0; n]);
+    validate_sex(&sex_vec, n)?;
 
     let mut expected = Vec::with_capacity(n);
 
@@ -363,5 +404,71 @@ mod tests {
 
         assert_eq!(result.n, 0);
         assert!(result.time.is_empty());
+    }
+
+    #[test]
+    fn survexp_validates_public_inputs() {
+        let rt = create_test_ratetable();
+
+        assert!(
+            survexp(
+                vec![f64::NAN],
+                vec![18250.0],
+                vec![2000.0],
+                &rt,
+                None,
+                None,
+                None,
+            )
+            .expect_err("non-finite time should fail")
+            .to_string()
+            .contains("time contains non-finite")
+        );
+        assert!(
+            survexp(vec![365.0], vec![-1.0], vec![2000.0], &rt, None, None, None,)
+                .expect_err("negative age should fail")
+                .to_string()
+                .contains("age contains negative")
+        );
+        assert!(
+            survexp(
+                vec![365.0],
+                vec![18250.0],
+                vec![2000.0],
+                &rt,
+                Some(vec![-1]),
+                None,
+                None,
+            )
+            .expect_err("negative sex should fail")
+            .to_string()
+            .contains("sex values must be non-negative")
+        );
+        assert!(
+            survexp(
+                vec![365.0, 730.0],
+                vec![18250.0, 21900.0],
+                vec![2000.0, 2000.0],
+                &rt,
+                None,
+                Some(vec![730.0, 365.0]),
+                Some("conditional"),
+            )
+            .expect_err("unsorted eval times should fail")
+            .to_string()
+            .contains("times must be sorted")
+        );
+        assert!(
+            survexp_individual(
+                vec![365.0],
+                vec![18250.0],
+                vec![2000.0],
+                &rt,
+                Some(vec![0, 1]),
+            )
+            .expect_err("sex length mismatch should fail")
+            .to_string()
+            .contains("sex must have same length")
+        );
     }
 }

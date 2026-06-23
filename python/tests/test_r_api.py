@@ -926,15 +926,16 @@ def test_survfit_fh2_weighted_ties_use_unweighted_event_count():
     expected_cumhaz, expected_estimate = _manual_fh_from_km(
         km,
         ctype=2,
-        event_counts=[2.0, 1.0],
+        event_counts=km.n_event_count,
     )
     expected_std_chaz = _manual_fh_std_chaz_from_km(
         km,
         ctype=2,
-        event_counts=[2.0, 1.0],
+        event_counts=km.n_event_count,
     )
 
     assert km.n_event == pytest.approx([3.0, 1.0])
+    assert km.n_event_count == pytest.approx([2.0, 1.0])
     assert fh2.cumhaz == pytest.approx(expected_cumhaz)
     assert fh2.std_chaz == pytest.approx(expected_std_chaz)
     assert fh2.estimate == pytest.approx(expected_estimate)
@@ -1157,6 +1158,7 @@ def test_survfit_timefix_false_uses_exact_event_times():
         **{"time.fix": False},
     )
     exact_fh2 = survival.survfit(response, timefix=False, type="fh2")
+    low_level_exact = survival.survfitkm(times, status, timefix=False)
 
     assert default.time == pytest.approx([1.0, 2.0])
     assert default.n_risk == pytest.approx([3.0, 1.0])
@@ -1176,6 +1178,8 @@ def test_survfit_timefix_false_uses_exact_event_times():
     )
     assert exact_dotted.time == pytest.approx(exact.time)
     assert exact_dotted.estimate == pytest.approx(exact.estimate)
+    assert low_level_exact.time == pytest.approx(exact.time)
+    assert low_level_exact.estimate == pytest.approx(exact.estimate)
     assert exact_fh2.cumhaz == pytest.approx([1.0 / 3.0, 5.0 / 6.0, 5.0 / 6.0])
 
 
@@ -1223,6 +1227,12 @@ def test_survfit_counting_process_timefix_false_uses_exact_risk_sets():
         data=data,
         timefix=False,
     )
+    low_level_exact = survival.survfitkm(
+        data["stop"],
+        data["status"],
+        entry_times=data["start"],
+        timefix=False,
+    )
 
     assert default.time == pytest.approx([1.0, 2.0])
     assert default.n_risk == pytest.approx([2.0, 2.0])
@@ -1233,6 +1243,9 @@ def test_survfit_counting_process_timefix_false_uses_exact_risk_sets():
     assert exact.n_risk == pytest.approx([2.0, 2.0, 2.0])
     assert exact.n_event == pytest.approx([1.0, 1.0, 0.0])
     assert exact.n_censor == pytest.approx([0.0, 0.0, 2.0])
+    assert low_level_exact.time == pytest.approx(exact.time)
+    assert low_level_exact.n_risk == pytest.approx(exact.n_risk)
+    assert low_level_exact.estimate == pytest.approx(exact.estimate)
     assert exact.estimate == pytest.approx([0.5, 0.25, 0.25])
     assert exact_formula.estimate == pytest.approx(exact.estimate)
 
@@ -1889,6 +1902,25 @@ def test_logrank_binding_validates_status_and_groups_near_ties():
 
     with pytest.raises(ValueError, match="status must contain only 0/1"):
         survival.logrank_trend([1.0, 2.0], [1, 2], [0, 1])
+
+
+def test_logrank_multigroup_matches_r_survdiff_chisquare():
+    data = {
+        "time": [1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 5.0, 7.0],
+        "status": [1, 1, 0, 1, 0, 1, 1, 1, 0],
+        "group": ["A", "A", "A", "B", "B", "B", "C", "C", "C"],
+    }
+    group_codes = [0, 0, 0, 1, 1, 1, 2, 2, 2]
+
+    direct = survival.logrank_test(data["time"], data["status"], group_codes)
+    formula = survival.survdiff("Surv(time, status) ~ group", data=data)
+
+    for result in (direct, formula):
+        assert result.df == 2
+        assert result.observed == pytest.approx([2.0, 2.0, 2.0])
+        assert result.expected == pytest.approx([1.0, 2.25, 2.75])
+        assert result.statistic == pytest.approx(1.5105257668985863)
+        assert result.p_value == pytest.approx(0.4698870729581883)
 
 
 def test_survdiff_formula_accepts_general_rho():
@@ -2566,6 +2598,16 @@ def test_concordance_formula_accepts_strata_wrapper():
         data=data,
         keepstrata=True,
     )
+    ranked = survival.concordance(
+        "Surv(time, status) ~ score + strata(group)",
+        data=data,
+        ranks=True,
+    )
+    influential = survival.concordance(
+        "Surv(time, status) ~ score + strata(group)",
+        data=data,
+        influence=3,
+    )
     unstratified = survival.concordance("Surv(time, status) ~ score", data=data)
 
     assert stratified.concordance == pytest.approx(1.0)
@@ -2575,6 +2617,54 @@ def test_concordance_formula_accepts_strata_wrapper():
     assert unstratified.concordance < stratified.concordance
     assert stratified.n == len(data["time"])
     assert stratified.n_event == sum(data["status"])
+    assert ranked.ranks == [
+        {"time": 1.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
+        {"time": 2.0, "rank": 0.0, "timewt": 1.0, "casewt": 1.0},
+        {"time": 3.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
+        {"time": 4.0, "rank": 0.0, "timewt": 1.0, "casewt": 1.0},
+    ]
+    assert influential.influence == [
+        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.5, 0.0, 0.0, 0.0, 0.0],
+    ]
+    assert influential.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
+    assert influential.variance == pytest.approx(0.0)
+
+
+def test_concordance_formula_strata_ranks_support_counting_process_response():
+    data = {
+        "start": [0.0, 0.0, 0.0, 0.0],
+        "stop": [1.0, 2.0, 1.0, 2.0],
+        "status": [1, 0, 1, 0],
+        "score": [0.9, 0.1, 0.2, 0.8],
+        "group": ["A", "A", "B", "B"],
+    }
+
+    ranked = survival.concordance(
+        "Surv(start, stop, status) ~ score + strata(group)",
+        data=data,
+        ranks=True,
+    )
+    influential = survival.concordance(
+        "Surv(start, stop, status) ~ score + strata(group)",
+        data=data,
+        influence=3,
+    )
+
+    assert ranked.ranks == [
+        {"time": 1.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
+        {"time": 1.0, "rank": -0.5, "timewt": 2.0, "casewt": 1.0},
+    ]
+    assert influential.influence == [
+        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.5, 0.0, 0.0, 0.0],
+        [0.0, 0.5, 0.0, 0.0, 0.0],
+    ]
+    assert influential.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
+    assert influential.variance == pytest.approx(0.0)
 
 
 def test_concordance_counting_process_uses_delayed_entry_risk_sets():
@@ -2708,10 +2798,26 @@ def test_concordance_counting_process_timefix_false_uses_exact_risk_sets():
         data["status"],
         data["score"],
     )
+    fixed_low_level = survival.core.counting_concordance_summary(
+        data["start"],
+        data["stop"],
+        data["status"],
+        data["score"],
+        timefix=True,
+    )
+    exact_low_level = survival.core.counting_concordance_summary(
+        data["start"],
+        data["stop"],
+        data["status"],
+        data["score"],
+        timefix=False,
+    )
 
     assert default.concordance == pytest.approx(fixed_expected)
     assert exact.concordance == pytest.approx(exact_expected)
     assert exact_formula.concordance == pytest.approx(exact.concordance)
+    assert default.concordance == pytest.approx(fixed_low_level["concordance"])
+    assert exact.concordance == pytest.approx(exact_low_level["concordance"])
     assert default.concordance != pytest.approx(exact.concordance)
 
 
@@ -3125,6 +3231,15 @@ def test_survdiff_counting_process_timefix_false_uses_exact_event_times():
     exact = survival.survdiff(response, group=group, timefix=False)
     exact_dotted = survival.survdiff(response, group=group, **{"time.fix": False})
     fh_exact = survival.survdiff(response, group=group, rho=0.5, timefix=False)
+    low_level = survival.surv_analysis.compute_counting_logrank_components(
+        stop,
+        status,
+        [code + 1 for code in group_codes],
+        start,
+        None,
+        0.0,
+        False,
+    )
     observed, expected, variance, statistic = manual_exact()
     fh_observed, fh_expected, fh_variance, fh_statistic = manual_exact(0.5)
 
@@ -3132,6 +3247,8 @@ def test_survdiff_counting_process_timefix_false_uses_exact_event_times():
     assert exact.expected == pytest.approx(expected)
     assert exact.variance == pytest.approx(variance)
     assert exact.statistic == pytest.approx(statistic)
+    assert exact.statistic == pytest.approx(low_level.chi_squared)
+    assert exact.variance == pytest.approx(low_level.variance[0][0])
     assert exact_dotted.observed == pytest.approx(exact.observed)
     assert exact_dotted.expected == pytest.approx(exact.expected)
     assert exact_dotted.statistic == pytest.approx(exact.statistic)
@@ -3144,13 +3261,14 @@ def test_survdiff_counting_process_timefix_false_uses_exact_event_times():
 
 def test_survdiff_counting_process_formula_strata_combines_delayed_entry_components():
     data = {
-        "start": [0.0, 0.0, 1.0, 2.0, 0.0, 1.0],
-        "stop": [2.0, 4.0, 3.0, 5.0, 2.5, 4.5],
-        "status": [1, 0, 1, 1, 1, 0],
-        "group": ["treated", "control", "treated", "control", "treated", "control"],
-        "site": ["x", "x", "x", "x", "y", "y"],
+        "start": [0.0, 0.0, 0.0, 1.0, 1.0, 2.0],
+        "stop": [2.0, 2.5, 4.0, 4.5, 3.0, 5.0],
+        "status": [1, 1, 0, 0, 1, 1],
+        "group": ["treated", "treated", "control", "control", "treated", "control"],
+        "site": ["x", "y", "x", "y", "x", "x"],
     }
     group_codes = [0 if value == "treated" else 1 for value in data["group"]]
+    strata_codes = [0 if value == "x" else 1 for value in data["site"]]
 
     def combine(rho=0.0):
         observed = [0.0, 0.0]
@@ -3195,6 +3313,15 @@ def test_survdiff_counting_process_formula_strata_combines_delayed_entry_compone
         data=data,
         timefix=False,
     )
+    low_level = survival.surv_analysis.stratified_counting_logrank_components(
+        data["stop"],
+        data["status"],
+        [code + 1 for code in group_codes],
+        data["start"],
+        strata_codes,
+        0.0,
+        False,
+    )
 
     assert result.observed == pytest.approx(observed)
     assert result.expected == pytest.approx(expected)
@@ -3208,12 +3335,14 @@ def test_survdiff_counting_process_formula_strata_combines_delayed_entry_compone
     assert exact.expected == pytest.approx(expected)
     assert exact.variance == pytest.approx(variance)
     assert exact.statistic == pytest.approx(statistic)
+    assert exact.statistic == pytest.approx(low_level.chi_squared)
+    assert exact.variance == pytest.approx(low_level.variance[0][0])
 
 
 def test_survdiff_timefix_false_uses_exact_event_times():
     times = [1.0, 1.0 + 5e-10, 2.0, 3.0]
-    status = [0, 0, 1, 1]
-    groups = ["control", "control", "control", "treated"]
+    status = [1, 1, 0, 0]
+    groups = ["control", "treated", "control", "treated"]
     response = survival.Surv(times, status)
 
     default = survival.survdiff(response, group=groups)
@@ -3223,11 +3352,11 @@ def test_survdiff_timefix_false_uses_exact_event_times():
         data={"time": times, "status": status, "group": groups},
         **{"time.fix": False},
     )
-    low_level = survival.survdiff2(times, status, [1, 1, 1, 2], None, None)
+    low_level = survival.survdiff2(times, status, [1, 2, 1, 2], None, None, False)
 
-    assert default.statistic == pytest.approx(1.0)
+    assert default.statistic == pytest.approx(0.0)
     assert exact.statistic == pytest.approx(low_level.chi_squared)
-    assert exact.statistic == pytest.approx(0.5)
+    assert exact.statistic == pytest.approx(0.05882352941176476)
     assert exact.statistic != pytest.approx(default.statistic)
     assert exact_formula.statistic == pytest.approx(exact.statistic)
     assert exact.observed == pytest.approx(low_level.observed)
@@ -3260,27 +3389,23 @@ def test_survdiff_formula_strata_requires_comparison_group():
 
 def test_survdiff_formula_supports_stratified_groups():
     data = {
-        "time": [1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
-        "status": [1, 0, 1, 0, 1, 1],
-        "group": ["treated", "control", "treated", "treated", "control", "control"],
-        "site": ["north", "north", "north", "south", "south", "south"],
+        "time": [1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+        "status": [1, 0, 0, 1, 1, 1],
+        "group": ["treated", "treated", "control", "control", "treated", "control"],
+        "site": ["north", "south", "north", "south", "north", "south"],
     }
     group_codes = {"treated": 1, "control": 2}
-    order = sorted(
-        range(len(data["time"])), key=lambda idx: (data["site"][idx], data["time"][idx], idx)
-    )
-    markers = [
-        int(idx + 1 == len(order) or data["site"][order[idx + 1]] != data["site"][order[idx]])
-        for idx in range(len(order))
-    ]
+    strata_codes = [0 if site == "north" else 1 for site in data["site"]]
+    encoded_groups = [group_codes[value] for value in data["group"]]
 
     result = survival.survdiff("Surv(time, status) ~ group + strata(site)", data=data)
-    low_level = survival.survdiff2(
-        [data["time"][idx] for idx in order],
-        [data["status"][idx] for idx in order],
-        [group_codes[data["group"][idx]] for idx in order],
-        markers,
+    low_level = survival.surv_analysis.stratified_logrank_components(
+        data["time"],
+        data["status"],
+        encoded_groups,
+        strata_codes,
         None,
+        True,
     )
     expected_p = survival.lrt_test(
         low_level.chi_squared / 2.0,
@@ -3296,12 +3421,13 @@ def test_survdiff_formula_supports_stratified_groups():
     assert result.weight_type == "LogRank"
 
     weighted = survival.survdiff("Surv(time, status) ~ group + strata(site)", data=data, rho=0.5)
-    weighted_low_level = survival.survdiff2(
-        [data["time"][idx] for idx in order],
-        [data["status"][idx] for idx in order],
-        [group_codes[data["group"][idx]] for idx in order],
-        markers,
+    weighted_low_level = survival.surv_analysis.stratified_logrank_components(
+        data["time"],
+        data["status"],
+        encoded_groups,
+        strata_codes,
         0.5,
+        True,
     )
     assert weighted.statistic == pytest.approx(weighted_low_level.chi_squared)
     assert weighted.observed == pytest.approx(weighted_low_level.observed)
@@ -3317,15 +3443,8 @@ def test_survdiff_formula_strata_honors_timefix():
         "site": ["north"] * 4 + ["south"] * 4,
     }
     group_codes = {"control": 1, "treated": 2}
-    fixed_times = [1.0, 1.0, 2.0, 3.0, 1.0, 1.0, 2.0, 3.0]
-    order = sorted(
-        range(len(data["time"])),
-        key=lambda idx: (data["site"][idx], data["time"][idx], idx),
-    )
-    markers = [
-        int(idx + 1 == len(order) or data["site"][order[idx + 1]] != data["site"][order[idx]])
-        for idx in range(len(order))
-    ]
+    strata_codes = [0 if site == "north" else 1 for site in data["site"]]
+    encoded_groups = [group_codes[value] for value in data["group"]]
 
     default = survival.survdiff("Surv(time, status) ~ group + strata(site)", data=data)
     exact = survival.survdiff(
@@ -3333,19 +3452,21 @@ def test_survdiff_formula_strata_honors_timefix():
         data=data,
         timefix=False,
     )
-    default_low_level = survival.survdiff2(
-        [fixed_times[idx] for idx in order],
-        [data["status"][idx] for idx in order],
-        [group_codes[data["group"][idx]] for idx in order],
-        markers,
+    default_low_level = survival.surv_analysis.stratified_logrank_components(
+        data["time"],
+        data["status"],
+        encoded_groups,
+        strata_codes,
         None,
+        True,
     )
-    exact_low_level = survival.survdiff2(
-        [data["time"][idx] for idx in order],
-        [data["status"][idx] for idx in order],
-        [group_codes[data["group"][idx]] for idx in order],
-        markers,
+    exact_low_level = survival.surv_analysis.stratified_logrank_components(
+        data["time"],
+        data["status"],
+        encoded_groups,
+        strata_codes,
         None,
+        False,
     )
 
     assert default.statistic == pytest.approx(default_low_level.chi_squared)
@@ -4348,6 +4469,48 @@ def test_survfit_coxph_formula_offset_accepts_newdata_mapping():
     for actual, linear_predictor in zip(result.cumhaz, linear_predictors, strict=True):
         expected_hazard = [hazard * math.exp(linear_predictor - center) for hazard in hazards]
         assert actual == pytest.approx(expected_hazard)
+
+
+def test_survfit_coxph_formula_offset_uses_stratified_baseline_steps():
+    data = _toy_data()
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + offset(offset) + strata(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    rows = [[0.5], [1.0]]
+    offsets = [0.2, -0.1]
+    newdata = {"x1": [0.5, 1.0], "offset": offsets, "group": ["A", "B"]}
+    linear_predictors = [
+        value + offset for value, offset in zip(fit.predict(rows), offsets, strict=True)
+    ]
+    center = sum(fit.linear_predictors) / len(fit.linear_predictors)
+    base_times, base_hazards, base_strata = fit.basehaz_with_strata(True)
+    expected_times = sorted(set(base_times))
+
+    result = survival.survfit(fit, newdata=newdata, censor=False, se_fit=False)
+
+    assert result.time == pytest.approx(expected_times)
+    for curve_idx, stratum in enumerate([0, 1]):
+        stratum_times = [
+            time for time, label in zip(base_times, base_strata, strict=True) if label == stratum
+        ]
+        stratum_hazards = [
+            hazard
+            for hazard, label in zip(base_hazards, base_strata, strict=True)
+            if label == stratum
+        ]
+        risk = math.exp(linear_predictors[curve_idx] - center)
+        expected_hazard = [
+            (0.0 if (pos := bisect_right(stratum_times, time)) == 0 else stratum_hazards[pos - 1])
+            * risk
+            for time in expected_times
+        ]
+        assert result.cumhaz[curve_idx] == pytest.approx(expected_hazard)
+        assert result.surv[curve_idx] == pytest.approx(
+            [math.exp(-hazard) for hazard in expected_hazard]
+        )
 
 
 def test_predict_coxph_r_style_generic_types():

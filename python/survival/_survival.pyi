@@ -2208,7 +2208,11 @@ class SurvFitKMOutput:
     @property
     def n_event(self) -> list[float]: ...
     @property
+    def n_event_count(self) -> list[float]: ...
+    @property
     def n_censor(self) -> list[float]: ...
+    @property
+    def n_censor_count(self) -> list[float]: ...
     @property
     def estimate(self) -> list[float]: ...
     @property
@@ -2225,6 +2229,46 @@ class SurvFitKMOutput:
     def conf_lower(self) -> list[float]: ...
     @property
     def conf_upper(self) -> list[float]: ...
+
+class CountingSurvfitTables:
+    @property
+    def time(self) -> list[float]: ...
+    @property
+    def n_risk(self) -> list[float]: ...
+    @property
+    def n_event(self) -> list[float]: ...
+    @property
+    def n_event_count(self) -> list[float]: ...
+    @property
+    def n_censor(self) -> list[float]: ...
+    @property
+    def n_censor_count(self) -> list[float]: ...
+    @property
+    def n_enter(self) -> list[float] | None: ...
+
+class SurvfitCurveResult:
+    @property
+    def time(self) -> list[float]: ...
+    @property
+    def n_risk(self) -> list[float]: ...
+    @property
+    def n_event(self) -> list[float]: ...
+    @property
+    def n_censor(self) -> list[float]: ...
+    @property
+    def estimate(self) -> list[float]: ...
+    @property
+    def std_err(self) -> list[float]: ...
+    @property
+    def conf_lower(self) -> list[float]: ...
+    @property
+    def conf_upper(self) -> list[float]: ...
+    @property
+    def cumhaz(self) -> list[float]: ...
+    @property
+    def std_chaz(self) -> list[float]: ...
+    @property
+    def n_enter(self) -> list[float] | None: ...
 
 class SurvFitAJ:
     @property
@@ -2340,6 +2384,7 @@ class SurvfitKMOptions:
     computation_type: int | None
     conf_level: float | None
     conf_type: str | None
+    timefix: bool | None
 
     def __init__(
         self,
@@ -2350,6 +2395,7 @@ class SurvfitKMOptions:
         computation_type: int | None = None,
         conf_level: float | None = None,
         conf_type: str | None = None,
+        timefix: bool | None = None,
     ) -> None: ...
     def with_weights(self, weights: list[float]) -> SurvfitKMOptions: ...
     def with_entry_times(self, entry_times: list[float]) -> SurvfitKMOptions: ...
@@ -2358,6 +2404,7 @@ class SurvfitKMOptions:
     def with_computation_type(self, computation_type: int) -> SurvfitKMOptions: ...
     def with_conf_level(self, conf_level: float) -> SurvfitKMOptions: ...
     def with_conf_type(self, conf_type: str) -> SurvfitKMOptions: ...
+    def with_timefix(self, timefix: bool) -> SurvfitKMOptions: ...
 
 class SurvfitMatrixResult:
     @property
@@ -5490,6 +5537,24 @@ def agsurv5(
     xsum: list[float],
     xsum2: list[float],
 ) -> dict[str, list[float]]: ...
+def cox_expected_baseline_by_stratum(
+    time: list[float],
+    status: list[int],
+    covariates: list[list[float]],
+    beta: list[float],
+    weights: list[float],
+    strata: list[int],
+    offset: list[float],
+    means: list[float],
+    entry_times: list[float] | None = None,
+    method: str | None = None,
+) -> tuple[
+    list[int],
+    list[list[float]],
+    list[list[float]],
+    list[list[float]],
+    list[list[list[float]]],
+]: ...
 def coxcount1(
     time: list[float],
     status: list[float],
@@ -5607,6 +5672,29 @@ def survfit_multistate(
     transition_hazards: list[list[list[float]]],
     initial_state: int,
 ) -> SurvfitMatrixResult: ...
+def step_values_at(
+    times: list[float],
+    values: list[float],
+    requested_times: list[float],
+    initial: float,
+) -> list[float]: ...
+def condition_cox_survfit_curves(
+    times: list[float],
+    cumhaz: list[list[float]],
+    t0: float,
+    include_time0: bool,
+    filter_start_time: bool,
+    time_epsilon: float,
+) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
+def cox_survfit_from_baseline(
+    base_times: list[float],
+    base_hazards: list[float],
+    linear_predictors: list[float],
+    center: float = 0.0,
+    base_strata: list[int] | None = None,
+    curve_strata: list[int] | None = None,
+    requested_times: list[float] | None = None,
+) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
 def survfitkm(
     time: list[float],
     status: list[int],
@@ -5617,12 +5705,36 @@ def survfitkm(
     computation_type: int | None = None,
     conf_level: float | None = None,
     conf_type: str | None = None,
+    timefix: bool | None = None,
 ) -> SurvFitKMOutput: ...
 def survfitkm_with_options(
     time: list[float],
     status: list[int],
     options: SurvfitKMOptions | None = None,
 ) -> SurvFitKMOutput: ...
+def counting_survfit_tables(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    id: list[int],
+    weights: list[float] | None = None,
+    include_entry: bool = False,
+    timefix: bool | None = None,
+) -> CountingSurvfitTables: ...
+def survfit_curve_from_tables(
+    time: list[float],
+    n_risk: list[float],
+    n_event: list[float],
+    n_event_count: list[float],
+    n_censor: list[float],
+    n_censor_count: list[float],
+    n_enter: list[float] | None = None,
+    reverse: bool = False,
+    stype: int = 1,
+    ctype: int = 1,
+    conf_level: float | None = None,
+    conf_type: str | None = None,
+) -> SurvfitCurveResult: ...
 def survfitaj(
     y: list[float],
     sort1: list[int],
@@ -5711,15 +5823,43 @@ def compute_logrank_components(
     time: list[float],
     status: list[int],
     group: list[int],
-    strata: list[int] | None,
-    rho: float | None,
+    strata: list[int] | None = None,
+    rho: float | None = None,
+    timefix: bool = False,
+) -> SurvDiffResult: ...
+def compute_counting_logrank_components(
+    time: list[float],
+    status: list[int],
+    group: list[int],
+    entry_times: list[float],
+    strata: list[int] | None = None,
+    rho: float | None = None,
+    timefix: bool = True,
+) -> SurvDiffResult: ...
+def stratified_logrank_components(
+    time: list[float],
+    status: list[int],
+    group: list[int],
+    strata: list[int],
+    rho: float | None = None,
+    timefix: bool = False,
+) -> SurvDiffResult: ...
+def stratified_counting_logrank_components(
+    time: list[float],
+    status: list[int],
+    group: list[int],
+    entry_times: list[float],
+    strata: list[int],
+    rho: float | None = None,
+    timefix: bool = True,
 ) -> SurvDiffResult: ...
 def survdiff2(
     time: list[float],
     status: list[int],
     group: list[int],
-    strata: list[int] | None,
-    rho: float | None,
+    strata: list[int] | None = None,
+    rho: float | None = None,
+    timefix: bool | None = None,
 ) -> SurvDiffResult: ...
 def logrank_test(
     time: list[float],
@@ -6436,6 +6576,38 @@ def coxph_detail(
     method: str = "breslow",
     center: float = 0.0,
 ) -> CoxphDetail: ...
+def clustered_crossprod(
+    rows: list[list[float]],
+    weights: list[float],
+    cluster: list[int],
+    width: int | None = None,
+) -> list[list[float]]: ...
+def clustered_sandwich_variance(
+    rows: list[list[float]],
+    weights: list[float],
+    cluster: list[int],
+    variance: list[list[float]],
+) -> list[list[float]]: ...
+def prediction_se_from_variance(
+    rows: list[list[float]],
+    variance: list[list[float]],
+) -> list[float]: ...
+def term_prediction_se_from_variance(
+    rows: list[list[float]],
+    variance: list[list[float]],
+    groups: list[list[int]],
+) -> list[list[float]]: ...
+def cox_interval_cumulative_hazard_se(
+    centered_rows: list[list[float]],
+    start_hazard: list[float],
+    start_varhaz: list[float],
+    start_xbar: list[list[float]],
+    stop_hazard: list[float],
+    stop_varhaz: list[float],
+    stop_xbar: list[list[float]],
+    risk: list[float],
+    variance: list[list[float]],
+) -> list[float]: ...
 def dfbeta_cox(
     time: list[float],
     event: list[int],
@@ -6444,6 +6616,31 @@ def dfbeta_cox(
     coefficients: list[float],
     threshold: float | None = None,
 ) -> DfbetaResult: ...
+def cox_event_indices(
+    time: list[float],
+    status: list[int],
+    strata: list[int] | None = None,
+) -> list[int]: ...
+def scale_schoenfeld_residuals(
+    raw: list[list[float]],
+    beta: list[float],
+    information_matrix: list[list[float]],
+) -> list[list[float]]: ...
+def cox_dfbeta_from_score_residuals(
+    score: list[list[float]],
+    information_matrix: list[list[float]],
+    scaled: bool = False,
+) -> list[list[float]]: ...
+def cox_zph_term_matrix(
+    scaled: list[list[float]],
+    groups: list[list[int]],
+    beta: list[float],
+) -> list[list[float]]: ...
+def cox_zph_group_variance(
+    information_matrix: list[list[float]],
+    groups: list[list[int]],
+    beta: list[float],
+) -> list[list[float]]: ...
 def leverage_cox(
     time: list[float],
     event: list[int],
@@ -6515,6 +6712,15 @@ def predict_survreg_quantile(
     quantiles: list[float],
     offset: list[float] | None = None,
 ) -> SurvregQuantilePrediction: ...
+def survreg_quantile_prediction_se_matrix(
+    rows: list[list[float]],
+    scales: list[float],
+    strata: list[int],
+    variance: list[list[float]],
+    quantile_scores: list[float],
+    predictions: list[list[float]],
+    transform_se: bool,
+) -> list[list[float]]: ...
 def residuals_survfit(
     time: list[float],
     status: list[int],
@@ -6650,6 +6856,44 @@ def concordance_summary(
     weights: list[float] | None = None,
     timewt: str = "n",
 ) -> dict[str, float]: ...
+def stratified_concordance_summary(
+    time: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    strata: list[int],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+) -> dict[str, float]: ...
+def concordance_rank_rows(
+    time: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+) -> list[tuple[float, float, float, float]]: ...
+def stratified_concordance_rank_rows(
+    time: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    strata: list[int],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+) -> list[tuple[float, float, float, float]]: ...
+def concordance_influence_rows(
+    time: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+) -> tuple[list[list[float]], list[float], float]: ...
+def stratified_concordance_influence_rows(
+    time: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    strata: list[int],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+) -> tuple[list[list[float]], list[float], float]: ...
 def counting_concordance_index(
     start: list[float],
     stop: list[float],
@@ -6657,6 +6901,7 @@ def counting_concordance_index(
     risk_scores: list[float],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool | None = None,
 ) -> float: ...
 def counting_concordance_summary(
     start: list[float],
@@ -6665,7 +6910,56 @@ def counting_concordance_summary(
     risk_scores: list[float],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool | None = None,
 ) -> dict[str, float]: ...
+def stratified_counting_concordance_summary(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    strata: list[int],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+    timefix: bool | None = None,
+) -> dict[str, float]: ...
+def counting_concordance_rank_rows(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+    timefix: bool | None = None,
+) -> list[tuple[float, float, float, float]]: ...
+def stratified_counting_concordance_rank_rows(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    strata: list[int],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+    timefix: bool | None = None,
+) -> list[tuple[float, float, float, float]]: ...
+def counting_concordance_influence_rows(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+    timefix: bool | None = None,
+) -> tuple[list[list[float]], list[float], float]: ...
+def stratified_counting_concordance_influence_rows(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    risk_scores: list[float],
+    strata: list[int],
+    weights: list[float] | None = None,
+    timewt: str = "n",
+    timefix: bool | None = None,
+) -> tuple[list[list[float]], list[float], float]: ...
 def brier(
     time: list[float],
     status: list[int],

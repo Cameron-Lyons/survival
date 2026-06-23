@@ -1,5 +1,10 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+use crate::internal::validation::{
+    ValidationError, validate_binary_f64, validate_finite, validate_non_negative,
+};
+
 pub(crate) struct CoxScoreData<'a> {
     pub y: &'a [f64],
     pub strata: &'a [i32],
@@ -12,6 +17,64 @@ pub(crate) struct CoxScoreParams {
     pub n: usize,
     pub nvar: usize,
 }
+
+fn validation_err_to_py(err: ValidationError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(err.to_string())
+}
+
+fn validate_cox_score_inputs(
+    y: &[f64],
+    strata: &[i32],
+    covar: &[f64],
+    score: &[f64],
+    weights: &[f64],
+    nvar: usize,
+    method: i32,
+) -> PyResult<usize> {
+    let n = score.len();
+    let expected_y_len = 2usize.checked_mul(n).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("2 * n exceeds supported array size")
+    })?;
+    let expected_covar_len = n.checked_mul(nvar).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("n * nvar exceeds supported array size")
+    })?;
+    if y.len() < expected_y_len {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "y array must have length >= 2 * n (time, status)",
+        ));
+    }
+    if strata.len() < n {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "strata array length must match n",
+        ));
+    }
+    if covar.len() < expected_covar_len {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "covar array must have length >= n * nvar",
+        ));
+    }
+    if weights.len() < n {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "weights array length must match n",
+        ));
+    }
+    if method != 0 && method != 1 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "method must be 0 (Breslow) or 1 (Efron)",
+        ));
+    }
+
+    validate_finite(&y[..expected_y_len], "y").map_err(validation_err_to_py)?;
+    validate_binary_f64(&y[n..expected_y_len], "status").map_err(validation_err_to_py)?;
+    validate_finite(&covar[..expected_covar_len], "covar").map_err(validation_err_to_py)?;
+    validate_finite(score, "score").map_err(validation_err_to_py)?;
+    validate_non_negative(score, "score").map_err(validation_err_to_py)?;
+    validate_finite(&weights[..n], "weights").map_err(validation_err_to_py)?;
+    validate_non_negative(&weights[..n], "weights").map_err(validation_err_to_py)?;
+
+    Ok(n)
+}
+
 fn find_strata_boundaries(strata: &[i32], n: usize) -> Vec<(usize, usize)> {
     if n == 0 {
         return vec![];
@@ -292,27 +355,7 @@ pub fn cox_score_residuals(
     nvar: usize,
     method: i32,
 ) -> PyResult<Vec<f64>> {
-    let n = score.len();
-    if y.len() < 2 * n {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "y array must have length >= 2 * n (time, status)",
-        ));
-    }
-    if strata.len() < n {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "strata array length must match n",
-        ));
-    }
-    if covar.len() < n * nvar {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "covar array must have length >= n * nvar",
-        ));
-    }
-    if weights.len() < n {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "weights array length must match n",
-        ));
-    }
+    let n = validate_cox_score_inputs(&y, &strata, &covar, &score, &weights, nvar, method)?;
     let data = CoxScoreData {
         y: &y,
         strata: &strata,
@@ -425,5 +468,106 @@ mod tests {
         for &r in &result {
             assert_eq!(r, 0.0);
         }
+    }
+
+    #[test]
+    fn wrapper_accepts_strata_labels() {
+        let result = cox_score_residuals(
+            vec![1.0, 2.0, 1.5, 2.5, 1.0, 0.0, 1.0, 0.0],
+            vec![2, 2, 4, 4],
+            vec![0.5, 1.0, 1.5, 2.0],
+            vec![1.0, 1.0, 1.0, 1.0],
+            vec![1.0, 1.0, 1.0, 1.0],
+            1,
+            0,
+        )
+        .expect("strata are labels, not binary flags");
+
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn wrapper_rejects_invalid_public_inputs() {
+        let y = vec![1.0, 1.0, 2.0, 3.0, 1.0, 1.0, 0.0, 0.0];
+        let strata = vec![0, 0, 0, 0];
+        let covar = vec![1.0, 2.0, 3.0, 4.0];
+        let score = vec![1.0, 1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+
+        let method_err = cox_score_residuals(
+            y.clone(),
+            strata.clone(),
+            covar.clone(),
+            score.clone(),
+            weights.clone(),
+            1,
+            2,
+        )
+        .expect_err("unsupported method should fail");
+        assert!(
+            method_err
+                .to_string()
+                .contains("method must be 0 (Breslow) or 1 (Efron)")
+        );
+
+        let mut y_nan = y.clone();
+        y_nan[0] = f64::NAN;
+        let y_err = cox_score_residuals(
+            y_nan,
+            strata.clone(),
+            covar.clone(),
+            score.clone(),
+            weights.clone(),
+            1,
+            0,
+        )
+        .expect_err("NaN y value should fail");
+        assert!(y_err.to_string().contains("y contains non-finite"));
+
+        let mut y_bad_status = y.clone();
+        y_bad_status[5] = 0.5;
+        let status_err = cox_score_residuals(
+            y_bad_status,
+            strata.clone(),
+            covar.clone(),
+            score.clone(),
+            weights.clone(),
+            1,
+            0,
+        )
+        .expect_err("non-binary status should fail");
+        assert!(
+            status_err
+                .to_string()
+                .contains("status values must be 0 or 1")
+        );
+
+        let mut score_bad = score.clone();
+        score_bad[1] = -1.0;
+        let score_err = cox_score_residuals(
+            y.clone(),
+            strata.clone(),
+            covar.clone(),
+            score_bad,
+            weights.clone(),
+            1,
+            0,
+        )
+        .expect_err("negative score should fail");
+        assert!(
+            score_err
+                .to_string()
+                .contains("score contains negative value")
+        );
+
+        let mut weights_bad = weights;
+        weights_bad[2] = -1.0;
+        let weight_err = cox_score_residuals(y, strata, covar, score, weights_bad, 1, 0)
+            .expect_err("negative weight should fail");
+        assert!(
+            weight_err
+                .to_string()
+                .contains("weights contains negative value")
+        );
     }
 }

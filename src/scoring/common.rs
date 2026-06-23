@@ -1,5 +1,7 @@
 use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
-use crate::internal::validation::{ValidationError, validate_length};
+use crate::internal::validation::{
+    ValidationError, validate_binary_f64, validate_finite, validate_length, validate_non_negative,
+};
 use ndarray::Array2;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -69,26 +71,51 @@ fn validation_err_to_pyresult<T>(result: Result<T, ValidationError>) -> PyResult
 }
 
 pub(crate) fn validate_scoring_inputs(
-    n: usize,
-    time_data_len: usize,
-    covariates_len: usize,
-    strata_len: usize,
-    score_len: usize,
-    weights_len: usize,
-) -> PyResult<()> {
+    time_data: &[f64],
+    covariates: &[f64],
+    strata: &[i32],
+    score: &[f64],
+    weights: &[f64],
+    method: i32,
+) -> PyResult<(usize, usize)> {
+    let n = weights.len();
     if n == 0 {
         return Err(PyValueError::new_err("No observations provided"));
     }
-    validation_err_to_pyresult(validate_length(3 * n, time_data_len, "time_data"))?;
-    if !covariates_len.is_multiple_of(n) {
+    let expected_time_len = 3usize
+        .checked_mul(n)
+        .ok_or_else(|| PyValueError::new_err("3 * n exceeds supported array size"))?;
+    validation_err_to_pyresult(validate_length(
+        expected_time_len,
+        time_data.len(),
+        "time_data",
+    ))?;
+    if !covariates.len().is_multiple_of(n) {
         return Err(PyValueError::new_err(
             "Covariates length should be divisible by number of observations",
         ));
     }
-    validation_err_to_pyresult(validate_length(n, strata_len, "strata"))?;
-    validation_err_to_pyresult(validate_length(n, score_len, "score"))?;
-    validation_err_to_pyresult(validate_length(n, weights_len, "weights"))?;
-    Ok(())
+    let nvar = covariates.len() / n;
+    validation_err_to_pyresult(validate_length(n, strata.len(), "strata"))?;
+    validation_err_to_pyresult(validate_length(n, score.len(), "score"))?;
+    if method != 0 && method != 1 {
+        return Err(PyValueError::new_err(
+            "method must be 0 (Breslow) or 1 (Efron)",
+        ));
+    }
+
+    validation_err_to_pyresult(validate_finite(time_data, "time_data"))?;
+    validation_err_to_pyresult(validate_binary_f64(
+        &time_data[2 * n..expected_time_len],
+        "event",
+    ))?;
+    validation_err_to_pyresult(validate_finite(covariates, "covariates"))?;
+    validation_err_to_pyresult(validate_finite(score, "score"))?;
+    validation_err_to_pyresult(validate_non_negative(score, "score"))?;
+    validation_err_to_pyresult(validate_finite(weights, "weights"))?;
+    validation_err_to_pyresult(validate_non_negative(weights, "weights"))?;
+
+    Ok((n, nvar))
 }
 pub(crate) fn compute_summary_stats(residuals: &[f64], n: usize, nvar: usize) -> Vec<f64> {
     if n > PARALLEL_THRESHOLD_MEDIUM && nvar > 1 {
@@ -200,5 +227,82 @@ mod tests {
         assert!((stats[1] - 1.0).abs() < 1e-12);
         assert!((stats[2] - 20.0).abs() < 1e-12);
         assert!((stats[3] - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn validate_scoring_inputs_accepts_strata_labels() {
+        let result = validate_scoring_inputs(
+            &[0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0],
+            &[0.5, 1.0, 1.5],
+            &[2, 2, 4],
+            &[1.0, 1.0, 1.0],
+            &[1.0, 1.0, 1.0],
+            0,
+        )
+        .expect("strata are labels, not binary flags");
+
+        assert_eq!(result, (3, 1));
+    }
+
+    #[test]
+    fn validate_scoring_inputs_rejects_bad_public_values() {
+        let time_data = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0];
+        let covariates = vec![0.5, 1.0, 1.5];
+        let strata = vec![0, 0, 0];
+        let score = vec![1.0, 1.0, 1.0];
+        let weights = vec![1.0, 1.0, 1.0];
+
+        let method_err =
+            validate_scoring_inputs(&time_data, &covariates, &strata, &score, &weights, 2)
+                .expect_err("unsupported method should fail");
+        assert!(
+            method_err
+                .to_string()
+                .contains("method must be 0 (Breslow) or 1 (Efron)")
+        );
+
+        let mut bad_time = time_data.clone();
+        bad_time[0] = f64::NAN;
+        let time_err =
+            validate_scoring_inputs(&bad_time, &covariates, &strata, &score, &weights, 0)
+                .expect_err("NaN time_data should fail");
+        assert!(
+            time_err
+                .to_string()
+                .contains("time_data contains non-finite")
+        );
+
+        let mut bad_event = time_data.clone();
+        bad_event[7] = 0.5;
+        let event_err =
+            validate_scoring_inputs(&bad_event, &covariates, &strata, &score, &weights, 0)
+                .expect_err("non-binary event should fail");
+        assert!(
+            event_err
+                .to_string()
+                .contains("event values must be 0 or 1")
+        );
+
+        let mut bad_score = score.clone();
+        bad_score[1] = -1.0;
+        let score_err =
+            validate_scoring_inputs(&time_data, &covariates, &strata, &bad_score, &weights, 0)
+                .expect_err("negative score should fail");
+        assert!(
+            score_err
+                .to_string()
+                .contains("score contains negative value")
+        );
+
+        let mut bad_weights = weights;
+        bad_weights[2] = -1.0;
+        let weight_err =
+            validate_scoring_inputs(&time_data, &covariates, &strata, &score, &bad_weights, 0)
+                .expect_err("negative weight should fail");
+        assert!(
+            weight_err
+                .to_string()
+                .contains("weights contains negative value")
+        );
     }
 }

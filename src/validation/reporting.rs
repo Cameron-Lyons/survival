@@ -4,10 +4,103 @@ use crate::constants::{
     DIVISION_FLOOR, Z_SCORE_95, exp_ci, exp_ci_bounds, same_time, z_score_for_confidence,
 };
 use crate::internal::statistical::{lower_incomplete_gamma, normal_cdf};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
 
 const MEDIAN_CI_LOWER_FACTOR: f64 = 0.8;
 const MEDIAN_CI_UPPER_FACTOR: f64 = 1.2;
 const DEFAULT_LANDMARK_FRACTIONS: [f64; 4] = [0.25, 0.5, 0.75, 1.0];
+
+#[derive(Debug, Clone, Copy)]
+struct SurvivalTimeSummary {
+    time: f64,
+    at_risk: usize,
+    n_events: usize,
+    n_censored: usize,
+}
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_confidence_level(confidence_level: f64) -> PyResult<()> {
+    if !confidence_level.is_finite() || confidence_level <= 0.0 || confidence_level >= 1.0 {
+        return Err(value_error(
+            "confidence_level must be a finite value between 0 and 1",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_probability_slice(values: &[f64], field: &'static str) -> PyResult<()> {
+    validate_finite(values, field)?;
+    for (index, &value) in values.iter().enumerate() {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(value_error(format!(
+                "{field} must contain probabilities between 0 and 1; got {value} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_positive_finite_slice(values: &[f64], field: &'static str) -> PyResult<()> {
+    validate_finite(values, field)?;
+    for (index, &value) in values.iter().enumerate() {
+        if value <= 0.0 {
+            return Err(value_error(format!(
+                "{field} must contain positive values; got {value} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_survival_plot_inputs(time: &[f64], event: &[i32]) -> PyResult<()> {
+    if time.is_empty() || event.len() != time.len() {
+        return Err(value_error(
+            "time and event must have the same non-zero length",
+        ));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(event, "event")?;
+    Ok(())
+}
+
+fn survival_time_summaries(time: &[f64], event: &[i32]) -> Vec<SurvivalTimeSummary> {
+    let mut observations: Vec<(f64, i32)> =
+        time.iter().copied().zip(event.iter().copied()).collect();
+    observations.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+    let mut summaries = Vec::new();
+    let mut at_risk = observations.len();
+    let mut index = 0;
+    while index < observations.len() {
+        let current_time = observations[index].0;
+        let risk_at_time = at_risk;
+        let mut n_events = 0;
+        let mut n_censored = 0;
+
+        while index < observations.len() && same_time(observations[index].0, current_time) {
+            if observations[index].1 == 1 {
+                n_events += 1;
+            } else {
+                n_censored += 1;
+            }
+            index += 1;
+        }
+
+        summaries.push(SurvivalTimeSummary {
+            time: current_time,
+            at_risk: risk_at_time,
+            n_events,
+            n_censored,
+        });
+        at_risk -= n_events + n_censored;
+    }
+
+    summaries
+}
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -70,16 +163,10 @@ pub fn km_plot_data(
     confidence_level: f64,
     group_name: Option<String>,
 ) -> PyResult<KaplanMeierPlotData> {
+    validate_survival_plot_inputs(&time, &event)?;
+    validate_confidence_level(confidence_level)?;
     let n = time.len();
-    if n == 0 || event.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and event must have the same non-zero length",
-        ));
-    }
-
-    let mut unique_times: Vec<f64> = time.to_vec();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    unique_times.dedup();
+    let summaries = survival_time_summaries(&time, &event);
 
     let z = z_score_for_confidence(confidence_level);
 
@@ -94,45 +181,31 @@ pub fn km_plot_data(
     let mut surv = 1.0;
     let mut var_sum = 0.0;
 
-    for &t in &unique_times {
-        let risk_count = time.iter().filter(|&&ti| ti >= t).count();
-        let event_count = time
-            .iter()
-            .zip(event.iter())
-            .filter(|&(&ti, &ei)| same_time(ti, t) && ei == 1)
-            .count();
-        let censored_count = time
-            .iter()
-            .zip(event.iter())
-            .filter(|&(&ti, &ei)| same_time(ti, t) && ei == 0)
-            .count();
+    for summary in summaries {
+        let d = summary.n_events as f64;
+        let n_r = summary.at_risk as f64;
 
-        if risk_count > 0 {
-            let d = event_count as f64;
-            let n_r = risk_count as f64;
-
-            if d > 0.0 {
-                surv *= 1.0 - d / n_r;
-                var_sum += d / (n_r * (n_r - d).max(1.0));
-            }
-
-            let se = surv * var_sum.sqrt();
-            let bounded_surv = surv.max(DIVISION_FLOOR);
-            let log_surv = bounded_surv.ln();
-            let log_se = se / bounded_surv;
-
-            let (lower, upper) = exp_ci(log_surv, log_se, z);
-            let lower = lower.clamp(0.0, 1.0);
-            let upper = upper.clamp(0.0, 1.0);
-
-            time_points.push(t);
-            survival_prob.push(surv);
-            lower_ci.push(lower);
-            upper_ci.push(upper);
-            at_risk.push(risk_count);
-            n_events.push(event_count);
-            n_censored.push(censored_count);
+        if d > 0.0 {
+            surv *= 1.0 - d / n_r;
+            var_sum += d / (n_r * (n_r - d).max(1.0));
         }
+
+        let se = surv * var_sum.sqrt();
+        let bounded_surv = surv.max(DIVISION_FLOOR);
+        let log_surv = bounded_surv.ln();
+        let log_se = se / bounded_surv;
+
+        let (lower, upper) = exp_ci(log_surv, log_se, z);
+        let lower = lower.clamp(0.0, 1.0);
+        let upper = upper.clamp(0.0, 1.0);
+
+        time_points.push(summary.time);
+        survival_prob.push(surv);
+        lower_ci.push(lower);
+        upper_ci.push(upper);
+        at_risk.push(summary.at_risk);
+        n_events.push(summary.n_events);
+        n_censored.push(summary.n_censored);
     }
 
     Ok(KaplanMeierPlotData {
@@ -190,10 +263,11 @@ pub fn forest_plot_data(
 ) -> PyResult<ForestPlotData> {
     let n = variable_names.len();
     if coefficients.len() != n || standard_errors.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All input vectors must have the same length",
-        ));
+        return Err(value_error("All input vectors must have the same length"));
     }
+    validate_finite(&coefficients, "coefficients")?;
+    validate_positive_finite_slice(&standard_errors, "standard_errors")?;
+    validate_confidence_level(confidence_level)?;
 
     let z = z_score_for_confidence(confidence_level);
 
@@ -259,19 +333,21 @@ pub fn calibration_plot_data(
 ) -> PyResult<CalibrationCurveData> {
     let n = predicted.len();
     if n == 0 || observed.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(value_error(
             "predicted and observed must have the same non-zero length",
         ));
     }
+    if n_bins == 0 || n_bins > n {
+        return Err(value_error(
+            "n_bins must be between 1 and the number of observations",
+        ));
+    }
+    validate_probability_slice(&predicted, "predicted")?;
+    validate_binary_i32(&observed, "observed")?;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        predicted[a]
-            .partial_cmp(&predicted[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| predicted[a].total_cmp(&predicted[b]));
 
-    let bin_size = n / n_bins;
     let mut predicted_prob = Vec::new();
     let mut observed_prob = Vec::new();
     let mut n_per_bin = Vec::new();
@@ -280,13 +356,9 @@ pub fn calibration_plot_data(
     let mut hl_stat = 0.0;
 
     for i in 0..n_bins {
-        let start = i * bin_size;
-        let end = if i == n_bins - 1 {
-            n
-        } else {
-            (i + 1) * bin_size
-        };
-        let bin_indices: Vec<usize> = sorted_indices[start..end].to_vec();
+        let start = i * n / n_bins;
+        let end = (i + 1) * n / n_bins;
+        let bin_indices = &sorted_indices[start..end];
 
         let bin_n = bin_indices.len();
         let pred_mean: f64 = bin_indices.iter().map(|&j| predicted[j]).sum::<f64>() / bin_n as f64;
@@ -310,7 +382,7 @@ pub fn calibration_plot_data(
     }
     bin_boundaries.push(1.0);
 
-    let df = (n_bins - 2).max(1) as f64;
+    let df = n_bins.saturating_sub(2).max(1) as f64;
     let hl_p = 1.0 - lower_incomplete_gamma(df / 2.0, hl_stat / 2.0);
 
     Ok(CalibrationCurveData {
@@ -449,18 +521,15 @@ pub fn generate_survival_report(
     event: Vec<i32>,
     landmark_times: Option<Vec<f64>>,
 ) -> PyResult<SurvivalReport> {
-    let n = time.len();
-    if n == 0 || event.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and event must have the same non-zero length",
-        ));
+    validate_survival_plot_inputs(&time, &event)?;
+    if let Some(ref times) = landmark_times {
+        validate_finite(times, "landmark_times")?;
+        validate_non_negative(times, "landmark_times")?;
     }
+    let n = time.len();
 
     let n_events = event.iter().filter(|&&e| e == 1).count();
-
-    let mut sorted_times: Vec<f64> = time.to_vec();
-    sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    sorted_times.dedup();
+    let summaries = survival_time_summaries(&time, &event);
 
     let mut surv = 1.0;
     let mut median_survival = None;
@@ -468,36 +537,27 @@ pub fn generate_survival_report(
 
     let mut survival_at_times: Vec<(f64, f64, f64, f64)> = Vec::new();
 
-    for &t in &sorted_times {
-        let risk_count = time.iter().filter(|&&ti| ti >= t).count();
-        let event_count = time
-            .iter()
-            .zip(event.iter())
-            .filter(|&(&ti, &ei)| same_time(ti, t) && ei == 1)
-            .count();
+    for summary in &summaries {
+        let d = summary.n_events as f64;
+        let n_r = summary.at_risk as f64;
 
-        if risk_count > 0 {
-            let d = event_count as f64;
-            let n_r = risk_count as f64;
+        if d > 0.0 {
+            surv *= 1.0 - d / n_r;
+            var_sum += d / (n_r * (n_r - d).max(1.0));
+        }
 
-            if d > 0.0 {
-                surv *= 1.0 - d / n_r;
-                var_sum += d / (n_r * (n_r - d).max(1.0));
-            }
+        let se = surv * var_sum.sqrt();
+        let bounded_surv = surv.max(DIVISION_FLOOR);
+        let log_surv = bounded_surv.ln();
+        let log_se = se / bounded_surv;
+        let (lower, upper) = exp_ci(log_surv, log_se, Z_SCORE_95);
+        let lower = lower.clamp(0.0, 1.0);
+        let upper = upper.clamp(0.0, 1.0);
 
-            let se = surv * var_sum.sqrt();
-            let bounded_surv = surv.max(DIVISION_FLOOR);
-            let log_surv = bounded_surv.ln();
-            let log_se = se / bounded_surv;
-            let (lower, upper) = exp_ci(log_surv, log_se, Z_SCORE_95);
-            let lower = lower.clamp(0.0, 1.0);
-            let upper = upper.clamp(0.0, 1.0);
+        survival_at_times.push((summary.time, surv, lower, upper));
 
-            survival_at_times.push((t, surv, lower, upper));
-
-            if surv <= 0.5 && median_survival.is_none() {
-                median_survival = Some(t);
-            }
+        if surv <= 0.5 && median_survival.is_none() {
+            median_survival = Some(summary.time);
         }
     }
 
@@ -505,7 +565,7 @@ pub fn generate_survival_report(
         median_survival.map(|m| (m * MEDIAN_CI_LOWER_FACTOR, m * MEDIAN_CI_UPPER_FACTOR));
 
     let landmarks = landmark_times.unwrap_or_else(|| {
-        let max_time = sorted_times.last().cloned().unwrap_or(1.0);
+        let max_time = summaries.last().map(|summary| summary.time).unwrap_or(1.0);
         DEFAULT_LANDMARK_FRACTIONS
             .iter()
             .map(|fraction| max_time * *fraction)
@@ -527,7 +587,7 @@ pub fn generate_survival_report(
 
     let rmst = {
         let mut rmst_val = 0.0;
-        let tau = sorted_times.last().cloned().unwrap_or(1.0);
+        let tau = summaries.last().map(|summary| summary.time).unwrap_or(1.0);
         let mut prev_t = 0.0;
         let mut prev_s = 1.0;
 
@@ -613,26 +673,22 @@ impl ROCPlotData {
 pub fn roc_plot_data(scores: Vec<f64>, labels: Vec<i32>) -> PyResult<ROCPlotData> {
     let n = scores.len();
     if n == 0 || labels.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(value_error(
             "scores and labels must have the same non-zero length",
         ));
     }
+    validate_finite(&scores, "scores")?;
+    validate_binary_i32(&labels, "labels")?;
 
     let n_pos = labels.iter().filter(|&&l| l == 1).count() as f64;
     let n_neg = labels.iter().filter(|&&l| l == 0).count() as f64;
 
     if n_pos == 0.0 || n_neg == 0.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Both positive and negative labels required",
-        ));
+        return Err(value_error("Both positive and negative labels required"));
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        scores[b]
-            .partial_cmp(&scores[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
 
     let mut fpr = vec![0.0];
     let mut tpr = vec![0.0];
@@ -641,15 +697,28 @@ pub fn roc_plot_data(scores: Vec<f64>, labels: Vec<i32>) -> PyResult<ROCPlotData
     let mut tp = 0.0;
     let mut fp = 0.0;
 
-    for &idx in &sorted_indices {
-        if labels[idx] == 1 {
-            tp += 1.0;
-        } else {
-            fp += 1.0;
+    let mut index = 0;
+    while index < sorted_indices.len() {
+        let threshold = scores[sorted_indices[index]];
+        let mut threshold_pos = 0.0;
+        let mut threshold_neg = 0.0;
+
+        while index < sorted_indices.len()
+            && scores[sorted_indices[index]].total_cmp(&threshold) == std::cmp::Ordering::Equal
+        {
+            if labels[sorted_indices[index]] == 1 {
+                threshold_pos += 1.0;
+            } else {
+                threshold_neg += 1.0;
+            }
+            index += 1;
         }
+
+        tp += threshold_pos;
+        fp += threshold_neg;
         tpr.push(tp / n_pos);
         fpr.push(fp / n_neg);
-        thresholds.push(scores[idx]);
+        thresholds.push(threshold);
     }
 
     let auc = fpr
@@ -722,5 +791,82 @@ mod tests {
 
         let result = roc_plot_data(scores, labels).unwrap();
         assert!(result.auc >= 0.0 && result.auc <= 1.0);
+    }
+
+    #[test]
+    fn reporting_apis_validate_public_inputs() {
+        assert!(
+            km_plot_data(vec![f64::NAN], vec![1], 0.95, None)
+                .expect_err("non-finite time should fail")
+                .to_string()
+                .contains("time contains non-finite")
+        );
+        assert!(
+            km_plot_data(vec![1.0], vec![2], 0.95, None)
+                .expect_err("non-binary event should fail")
+                .to_string()
+                .contains("event values must be 0 or 1")
+        );
+        assert!(
+            km_plot_data(vec![1.0], vec![1], 1.0, None)
+                .expect_err("invalid confidence should fail")
+                .to_string()
+                .contains("confidence_level")
+        );
+        assert!(
+            km_plot_data(vec![1.0], vec![1], 0.0, None)
+                .expect_err("zero confidence should fail")
+                .to_string()
+                .contains("confidence_level")
+        );
+        assert!(
+            forest_plot_data(vec!["x".to_string()], vec![1.0], vec![0.0], 0.95)
+                .expect_err("non-positive standard error should fail")
+                .to_string()
+                .contains("standard_errors must contain positive values")
+        );
+        assert!(
+            calibration_plot_data(vec![0.2], vec![1], 0)
+                .expect_err("zero bins should fail")
+                .to_string()
+                .contains("n_bins")
+        );
+        assert!(
+            calibration_plot_data(vec![1.2], vec![1], 1)
+                .expect_err("probabilities outside range should fail")
+                .to_string()
+                .contains("probabilities between 0 and 1")
+        );
+        assert!(
+            generate_survival_report(
+                "bad".to_string(),
+                vec![1.0],
+                vec![1],
+                Some(vec![f64::INFINITY]),
+            )
+            .expect_err("non-finite landmark should fail")
+            .to_string()
+            .contains("landmark_times contains non-finite")
+        );
+        assert!(
+            roc_plot_data(vec![f64::NAN], vec![1])
+                .expect_err("non-finite score should fail")
+                .to_string()
+                .contains("scores contains non-finite")
+        );
+        assert!(
+            roc_plot_data(vec![0.5], vec![2])
+                .expect_err("non-binary label should fail")
+                .to_string()
+                .contains("labels values must be 0 or 1")
+        );
+    }
+
+    #[test]
+    fn roc_plot_data_groups_tied_scores() {
+        let result = roc_plot_data(vec![0.5, 0.5, 0.2, 0.8], vec![1, 0, 0, 1]).unwrap();
+
+        assert_eq!(result.thresholds, vec![f64::INFINITY, 0.8, 0.5, 0.2]);
+        assert!((result.auc - 0.875).abs() < 1e-12);
     }
 }
