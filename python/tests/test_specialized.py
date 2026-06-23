@@ -10,12 +10,8 @@ def test_cipoisson_exact():
     assert isinstance(result, tuple)
     assert len(result) == 2
     assert result == pytest.approx((0.1623486, 1.1668332), abs=1e-6)
-    assert survival.cipoisson_exact(20, 4.0, 0.90) == pytest.approx(
-        (3.313663, 7.265505), abs=1e-6
-    )
-    assert survival.cipoisson_exact(0, 10.0, 0.95) == pytest.approx(
-        (0.0, 0.3688879), abs=1e-6
-    )
+    assert survival.cipoisson_exact(20, 4.0, 0.90) == pytest.approx((3.313663, 7.265505), abs=1e-6)
+    assert survival.cipoisson_exact(0, 10.0, 0.95) == pytest.approx((0.0, 0.3688879), abs=1e-6)
 
 
 def test_cipoisson_anscombe():
@@ -241,15 +237,11 @@ def test_relative_survival_public_apis_and_validation():
     with pytest.raises(ValueError, match="x length must equal n_obs"):
         survival.excess_hazard_regression([1.0], [1], [], 1, 1, [0.01], 10, 1e-5)
     with pytest.raises(ValueError, match="time contains non-finite"):
-        survival.excess_hazard_regression(
-            [float("inf")], [1], [0.5], 1, 1, [0.01], 10, 1e-5
-        )
+        survival.excess_hazard_regression([float("inf")], [1], [0.5], 1, 1, [0.01], 10, 1e-5)
     with pytest.raises(ValueError, match="status.*0/1"):
         survival.excess_hazard_regression([1.0], [2], [0.5], 1, 1, [0.01], 10, 1e-5)
     with pytest.raises(ValueError, match="x contains non-finite"):
-        survival.excess_hazard_regression(
-            [1.0], [1], [float("nan")], 1, 1, [0.01], 10, 1e-5
-        )
+        survival.excess_hazard_regression([1.0], [1], [float("nan")], 1, 1, [0.01], 10, 1e-5)
     with pytest.raises(ValueError, match="expected_hazard contains negative"):
         survival.excess_hazard_regression([1.0], [1], [0.5], 1, 1, [-0.01], 10, 1e-5)
     with pytest.raises(ValueError, match="max_iter must be greater than 0"):

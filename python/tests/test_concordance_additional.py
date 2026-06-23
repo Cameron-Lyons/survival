@@ -89,17 +89,17 @@ def test_concordance_diagnostic_rows_group_near_tied_event_times():
     exact_ranks = core.concordance_rank_rows(exact_time, status, risk, weights, timewt="S")
     near_ranks = core.concordance_rank_rows(near_time, status, risk, weights, timewt="S")
     assert len(near_ranks) == len(exact_ranks)
-    for near_row, exact_row in zip(near_ranks, exact_ranks):
+    for near_row, exact_row in zip(near_ranks, exact_ranks, strict=True):
         assert near_row[1:] == pytest.approx(exact_row[1:])
 
-    exact_influence, exact_dfbeta, exact_variance = (
-        core.concordance_influence_rows(exact_time, status, risk, weights, timewt="S")
+    exact_influence, exact_dfbeta, exact_variance = core.concordance_influence_rows(
+        exact_time, status, risk, weights, timewt="S"
     )
-    near_influence, near_dfbeta, near_variance = (
-        core.concordance_influence_rows(near_time, status, risk, weights, timewt="S")
+    near_influence, near_dfbeta, near_variance = core.concordance_influence_rows(
+        near_time, status, risk, weights, timewt="S"
     )
     assert len(near_influence) == len(exact_influence)
-    for near_row, exact_row in zip(near_influence, exact_influence):
+    for near_row, exact_row in zip(near_influence, exact_influence, strict=True):
         assert near_row == pytest.approx(exact_row)
     assert near_dfbeta == pytest.approx(exact_dfbeta)
     assert near_variance == pytest.approx(exact_variance)

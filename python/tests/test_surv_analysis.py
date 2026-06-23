@@ -900,9 +900,7 @@ def test_time_dependent_auc_public_apis_and_validation():
     boundary_status = [1, 1, 0, 0]
     boundary_marker = [0.9, 0.8, 0.2, 0.1]
 
-    exact_auc = survival.time_dependent_auc(
-        exact_time, boundary_status, boundary_marker, 1.0
-    )
+    exact_auc = survival.time_dependent_auc(exact_time, boundary_status, boundary_marker, 1.0)
     near_auc = survival.time_dependent_auc(near_time, boundary_status, boundary_marker, 1.0)
     assert near_auc.n_cases == exact_auc.n_cases
     assert near_auc.n_controls == exact_auc.n_controls

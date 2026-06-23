@@ -4215,12 +4215,8 @@ def _concordance_core_time_values(
         return times, None
 
     step = _SURVFIT_TIME_EPSILON * 2.0
-    display_by_core_time = {
-        index * step: value for index, value in enumerate(unique_times)
-    }
-    core_by_display_time = {
-        value: index * step for index, value in enumerate(unique_times)
-    }
+    display_by_core_time = {index * step: value for index, value in enumerate(unique_times)}
+    core_by_display_time = {value: index * step for index, value in enumerate(unique_times)}
     return [core_by_display_time[value] for value in times], display_by_core_time
 
 
