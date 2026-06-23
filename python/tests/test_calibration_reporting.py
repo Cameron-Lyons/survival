@@ -158,9 +158,7 @@ def test_calibration_prediction_and_risk_public_apis():
     assert near_calibration.ici == pytest.approx(exact_calibration.ici)
     assert near_calibration.e50 == pytest.approx(exact_calibration.e50)
     assert near_calibration.e90 == pytest.approx(exact_calibration.e90)
-    assert near_calibration.calibration_slope == pytest.approx(
-        exact_calibration.calibration_slope
-    )
+    assert near_calibration.calibration_slope == pytest.approx(exact_calibration.calibration_slope)
     assert near_calibration.calibration_intercept == pytest.approx(
         exact_calibration.calibration_intercept
     )
@@ -322,17 +320,13 @@ def test_timepoint_calibration_public_apis_and_validation():
     boundary_status = [1, 1, 0, 0, 1, 0, 1, 0, 1, 0]
     boundary_predicted = [0.92, 0.84, 0.78, 0.7, 0.62, 0.56, 0.48, 0.4, 0.32, 0.24]
 
-    exact_one = survival.one_calibration(
-        exact_time, boundary_status, boundary_predicted, 2.0, 2
-    )
+    exact_one = survival.one_calibration(exact_time, boundary_status, boundary_predicted, 2.0, 2)
     near_one = survival.one_calibration(near_time, boundary_status, boundary_predicted, 2.0, 2)
     assert near_one.n_events_per_group == exact_one.n_events_per_group
     assert near_one.observed_survival == pytest.approx(exact_one.observed_survival)
     assert near_one.statistic == pytest.approx(exact_one.statistic)
 
-    exact_plot = survival.calibration_plot(
-        exact_time, boundary_status, boundary_predicted, 2.0, 2
-    )
+    exact_plot = survival.calibration_plot(exact_time, boundary_status, boundary_predicted, 2.0, 2)
     near_plot = survival.calibration_plot(near_time, boundary_status, boundary_predicted, 2.0, 2)
     assert near_plot.observed == pytest.approx(exact_plot.observed)
     assert near_plot.ici == pytest.approx(exact_plot.ici)
@@ -343,9 +337,7 @@ def test_timepoint_calibration_public_apis_and_validation():
     exact_brier = survival.brier_calibration(
         exact_time, boundary_status, boundary_predicted, 2.0, 2
     )
-    near_brier = survival.brier_calibration(
-        near_time, boundary_status, boundary_predicted, 2.0, 2
-    )
+    near_brier = survival.brier_calibration(near_time, boundary_status, boundary_predicted, 2.0, 2)
     assert near_brier.brier_score == pytest.approx(exact_brier.brier_score)
     assert near_brier.observed == pytest.approx(exact_brier.observed)
 
@@ -358,9 +350,7 @@ def test_timepoint_calibration_public_apis_and_validation():
     assert near_smooth.predicted_grid == pytest.approx(exact_smooth.predicted_grid)
     assert near_smooth.smoothed_observed == pytest.approx(exact_smooth.smoothed_observed)
 
-    boundary_survival_predictions = [
-        [value, max(value - 0.1, 0.0)] for value in boundary_predicted
-    ]
+    boundary_survival_predictions = [[value, max(value - 0.1, 0.0)] for value in boundary_predicted]
     exact_multi = survival.multi_time_calibration(
         exact_time, boundary_status, boundary_survival_predictions, [2.0, 3.0], 2
     )

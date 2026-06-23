@@ -257,9 +257,7 @@ def test_conformal_and_jackknife_uncertainty_validate_inputs():
     with pytest.raises(ValueError, match="one row per observation"):
         survival.jackknife_plus_survival([1.0, 2.0], [1, 0], [[0.0]], jackknife_config)
     with pytest.raises(ValueError, match="covariates must be rectangular"):
-        survival.jackknife_plus_survival(
-            [1.0, 2.0], [1, 0], [[0.0], [1.0, 2.0]], jackknife_config
-        )
+        survival.jackknife_plus_survival([1.0, 2.0], [1, 0], [[0.0], [1.0, 2.0]], jackknife_config)
     with pytest.raises(ValueError, match="covariates contains non-finite"):
         survival.jackknife_plus_survival(
             [1.0, 2.0], [1, 0], [[0.0], [float("nan")]], jackknife_config
