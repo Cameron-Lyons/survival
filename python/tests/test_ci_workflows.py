@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH_WORKFLOW = ROOT / ".github" / "workflows" / "bench.yml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "rust.yml"
 
 
 def _workflow_block(workflow: str, start: str, end: str) -> str:
@@ -30,3 +31,15 @@ def test_benchmark_workflow_keeps_full_comparison_nonblocking():
     assert "cargo bench 2>&1 | tee pr-bench.txt || true" in pr_block
     assert "continue-on-error: true" in base_block
     assert "cargo bench 2>&1 | tee base-bench.txt || true" in base_block
+
+
+def test_wheel_ci_tests_import_installed_package():
+    workflow = CI_WORKFLOW.read_text()
+
+    build_block = _workflow_block(workflow, "build-and-test:", "python-matrix:")
+    matrix_block = _workflow_block(workflow, "python-matrix:", "python-source-tree:")
+    source_block = _workflow_block(workflow, "python-source-tree:", "r-validation:")
+
+    assert "python -m pytest --import-mode=importlib python/tests/ -v" in build_block
+    assert "python -m pytest --import-mode=importlib python/tests/ -v" in matrix_block
+    assert ".venv/bin/python -m pytest python/tests/ -v" in source_block

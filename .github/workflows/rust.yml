@@ -77,7 +77,7 @@ jobs:
           pip install $wheel.FullName
 
       - name: Run Python tests
-        run: python -m pytest python/tests/ -v
+        run: python -m pytest --import-mode=importlib python/tests/ -v
 
   python-matrix:
     name: Python ${{ matrix.python-version }}
@@ -130,7 +130,7 @@ jobs:
           cargo test --lib --features python,ml
 
       - name: Run Python tests
-        run: python -m pytest python/tests/ -v
+        run: python -m pytest --import-mode=importlib python/tests/ -v
 
   python-source-tree:
     name: Python Source Tree
