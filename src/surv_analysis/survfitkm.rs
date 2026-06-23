@@ -132,13 +132,8 @@ impl KaplanMeierConfig {
         computation_type: Option<i32>,
         conf_level: Option<f64>,
         conf_type: Option<String>,
-    ) -> Self {
-        Self {
-            reverse: reverse.unwrap_or(false),
-            computation_type: computation_type.unwrap_or(0),
-            conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
-            conf_type: conf_type.unwrap_or_else(|| "log".to_string()),
-        }
+    ) -> PyResult<Self> {
+        build_kaplan_meier_config(reverse, computation_type, conf_level, conf_type)
     }
 }
 
@@ -159,13 +154,8 @@ impl KaplanMeierConfig {
         computation_type: Option<i32>,
         conf_level: Option<f64>,
         conf_type: Option<String>,
-    ) -> Self {
-        Self {
-            reverse: reverse.unwrap_or(false),
-            computation_type: computation_type.unwrap_or(0),
-            conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
-            conf_type: conf_type.unwrap_or_else(|| "log".to_string()),
-        }
+    ) -> PyResult<Self> {
+        build_kaplan_meier_config(reverse, computation_type, conf_level, conf_type)
     }
 }
 
@@ -190,6 +180,23 @@ fn normalize_conf_type(conf_type: Option<&str>) -> PyResult<String> {
             "conf_type must be 'plain', 'log', 'log-log', 'logit', 'arcsin', or 'none'",
         )),
     }
+}
+
+fn build_kaplan_meier_config(
+    reverse: Option<bool>,
+    computation_type: Option<i32>,
+    conf_level: Option<f64>,
+    conf_type: Option<String>,
+) -> PyResult<KaplanMeierConfig> {
+    let conf_level = conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
+    validate_conf_level(conf_level)?;
+
+    Ok(KaplanMeierConfig {
+        reverse: reverse.unwrap_or(false),
+        computation_type: computation_type.unwrap_or(0),
+        conf_level,
+        conf_type: normalize_conf_type(conf_type.as_deref())?,
+    })
 }
 
 fn compute_confidence_interval(survival: f64, std_err: f64, z: f64, conf_type: &str) -> (f64, f64) {
@@ -1137,11 +1144,23 @@ mod tests {
     #[test]
     fn test_kaplan_meier_config_create() {
         let config =
-            KaplanMeierConfig::create(Some(true), Some(1), Some(0.99), Some("plain".to_string()));
+            KaplanMeierConfig::create(Some(true), Some(1), Some(0.99), Some("plain".to_string()))
+                .unwrap();
         assert!(config.reverse);
         assert_eq!(config.computation_type, 1);
         assert!((config.conf_level - 0.99).abs() < 1e-10);
         assert_eq!(config.conf_type, "plain");
+    }
+
+    #[test]
+    fn test_kaplan_meier_config_validates_confidence_options() {
+        assert!(KaplanMeierConfig::new(None, None, Some(1.0), None).is_err());
+        assert!(KaplanMeierConfig::new(None, None, Some(f64::NAN), None).is_err());
+        assert!(KaplanMeierConfig::new(None, None, None, Some("weird".to_string())).is_err());
+        assert!(KaplanMeierConfig::create(None, None, Some(-0.1), None).is_err());
+
+        let config = KaplanMeierConfig::new(None, None, None, Some("log_log".to_string())).unwrap();
+        assert_eq!(config.conf_type, "log-log");
     }
 
     #[test]
@@ -1380,7 +1399,7 @@ mod tests {
         let status = vec![1.0, 0.0, 1.0, 0.0, 1.0];
         let weights = vec![1.0; 5];
         let position = vec![0; 5];
-        let config = KaplanMeierConfig::create(Some(true), None, None, None);
+        let config = KaplanMeierConfig::create(Some(true), None, None, None).unwrap();
 
         let result = compute_survfitkm(&time, &status, &weights, None, &position, &config);
 

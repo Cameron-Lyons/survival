@@ -21,6 +21,24 @@ pub fn conformal_survival(
             "Calibration and test sets must be non-empty",
         ));
     }
+    crate::internal::validation::validate_length(n_cal, cal_event.len(), "cal_event")?;
+    crate::internal::validation::validate_length(n_cal, cal_predictions.len(), "cal_predictions")?;
+    crate::internal::validation::validate_finite(&cal_time, "cal_time")?;
+    crate::internal::validation::validate_non_negative(&cal_time, "cal_time")?;
+    crate::internal::validation::validate_binary_i32(&cal_event, "cal_event")?;
+    validate_finite_vector(&cal_predictions, "cal_predictions")?;
+    validate_finite_vector(&test_predictions, "test_predictions")?;
+    validate_probability_open(config.alpha, "alpha")?;
+    validate_conformal_method(&config.method)?;
+
+    if config.n_bootstrap == 0 {
+        return Err(uncertainty_value_error("n_bootstrap must be positive"));
+    }
+    if config.method == "censoring_adjusted" && !cal_time.iter().any(|&time| time > 0.0) {
+        return Err(uncertainty_value_error(
+            "cal_time must contain a positive value for censoring_adjusted method",
+        ));
+    }
 
     let scores = compute_conformity_scores(&cal_time, &cal_event, &cal_predictions, &config.method);
 
@@ -28,7 +46,7 @@ pub fn conformal_survival(
     let quantile_idx = quantile_idx.min(scores.len()).saturating_sub(1);
 
     let mut sorted_scores = scores.clone();
-    sorted_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_scores.sort_by(f64::total_cmp);
     let q = sorted_scores[quantile_idx];
 
     let mut lower_bounds = Vec::with_capacity(n_test);
@@ -79,43 +97,96 @@ fn weighted_kaplan_meier(
     eval_times: &[f64],
 ) -> Vec<f64> {
     let mut indices: Vec<usize> = (0..time.len()).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
+
+    let mut eval_order: Vec<usize> = (0..eval_times.len()).collect();
+    eval_order.sort_by(|&a, &b| eval_times[a].total_cmp(&eval_times[b]));
 
     let mut survival = vec![1.0; eval_times.len()];
     let mut surv_prob = 1.0;
     let mut at_risk_weight: f64 = weights.iter().sum();
-    let mut last_time = 0.0;
+    let mut eval_cursor = 0usize;
+    let mut group_start = 0usize;
 
-    for &idx in &indices {
-        let t = time[idx];
-        let e = event[idx];
-        let w = weights[idx];
+    while group_start < indices.len() {
+        let current_time = time[indices[group_start]];
 
-        if t > last_time && at_risk_weight > 0.0 && e == 1 {
-            surv_prob *= 1.0 - w / at_risk_weight;
-        }
-
-        for (i, &eval_t) in eval_times.iter().enumerate() {
-            if t > eval_t && last_time <= eval_t {
-                survival[i] = surv_prob;
+        while eval_cursor < eval_order.len() {
+            let eval_idx = eval_order[eval_cursor];
+            let eval_t = eval_times[eval_idx];
+            if eval_t < current_time && !crate::constants::same_time(eval_t, current_time) {
+                survival[eval_idx] = surv_prob;
+                eval_cursor += 1;
+            } else {
+                break;
             }
         }
 
-        at_risk_weight -= w;
-        last_time = t;
+        let mut group_end = group_start + 1;
+        while group_end < indices.len()
+            && crate::constants::same_time(time[indices[group_end]], current_time)
+        {
+            group_end += 1;
+        }
+
+        let mut event_weight = 0.0;
+        let mut group_weight = 0.0;
+        for &idx in &indices[group_start..group_end] {
+            let w = weights[idx];
+            group_weight += w;
+            if event[idx] == 1 {
+                event_weight += w;
+            }
+        }
+
+        if at_risk_weight > 0.0 && event_weight > 0.0 {
+            surv_prob *= 1.0 - (event_weight / at_risk_weight).min(1.0);
+        }
+
+        while eval_cursor < eval_order.len() {
+            let eval_idx = eval_order[eval_cursor];
+            if crate::constants::same_time(eval_times[eval_idx], current_time) {
+                survival[eval_idx] = surv_prob;
+                eval_cursor += 1;
+            } else {
+                break;
+            }
+        }
+
+        at_risk_weight = (at_risk_weight - group_weight).max(0.0);
+        group_start = group_end;
     }
 
-    for (i, &eval_t) in eval_times.iter().enumerate() {
-        if eval_t >= last_time {
-            survival[i] = surv_prob;
-        }
+    for &eval_idx in &eval_order[eval_cursor..] {
+        survival[eval_idx] = surv_prob;
     }
 
     survival
+}
+
+fn validate_bayesian_bootstrap_inputs(
+    time: &[f64],
+    event: &[i32],
+    eval_times: &[f64],
+    config: &BayesianBootstrapConfig,
+) -> PyResult<()> {
+    crate::internal::validation::validate_non_empty(time, "time")?;
+    crate::internal::validation::validate_length(time.len(), event.len(), "event")?;
+    crate::internal::validation::validate_non_empty(eval_times, "eval_times")?;
+    crate::internal::validation::validate_finite(time, "time")?;
+    crate::internal::validation::validate_non_negative(time, "time")?;
+    crate::internal::validation::validate_finite(eval_times, "eval_times")?;
+    crate::internal::validation::validate_non_negative(eval_times, "eval_times")?;
+    crate::internal::validation::validate_binary_i32(event, "event")?;
+    crate::internal::validation::validate_confidence_level(config.confidence_level)?;
+
+    if config.n_bootstrap == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "n_bootstrap must be positive",
+        ));
+    }
+
+    Ok(())
 }
 
 fn compute_quantile_posterior(samples: &[Vec<f64>], q: f64) -> Vec<f64> {
@@ -128,7 +199,7 @@ fn compute_quantile_posterior(samples: &[Vec<f64>], q: f64) -> Vec<f64> {
 
     for t in 0..n_times {
         let mut values: Vec<f64> = samples.iter().map(|s| s[t]).collect();
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.sort_by(f64::total_cmp);
 
         let idx = (values.len() as f64 * q).floor() as usize;
         result[t] = values[idx.min(values.len() - 1)];
@@ -150,13 +221,7 @@ pub fn bayesian_bootstrap_survival(
     eval_times: Vec<f64>,
     config: BayesianBootstrapConfig,
 ) -> PyResult<BayesianBootstrapResult> {
-    let n = time.len();
-
-    if n == 0 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "Time vector must be non-empty",
-        ));
-    }
+    validate_bayesian_bootstrap_inputs(&time, &event, &eval_times, &config)?;
 
     let mut rng = if let Some(seed) = config.seed {
         fastrand::Rng::with_seed(seed)
@@ -168,7 +233,7 @@ pub fn bayesian_bootstrap_survival(
     let mut posterior_samples: Vec<Vec<f64>> = vec![vec![0.0; n_times]; config.n_bootstrap];
 
     for sample in posterior_samples.iter_mut() {
-        let weights = generate_dirichlet_weights(n, &mut rng);
+        let weights = generate_dirichlet_weights(time.len(), &mut rng);
         let survival = weighted_kaplan_meier(&time, &event, &weights, &eval_times);
         *sample = survival;
     }
@@ -186,7 +251,7 @@ pub fn bayesian_bootstrap_survival(
 
     for t in 0..n_times {
         let mut values: Vec<f64> = posterior_samples.iter().map(|s| s[t]).collect();
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.sort_by(f64::total_cmp);
 
         lower_ci[t] = values[lower_idx.min(values.len() - 1)];
         upper_ci[t] = values[upper_idx.min(values.len() - 1)];
@@ -268,11 +333,7 @@ fn estimate_cox_coefficients(time: &[f64], event: &[i32], covariates: &[Vec<f64>
     let max_iter = 100;
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     for _ in 0..max_iter {
         let mut gradient: Vec<f64> = vec![0.0; p];

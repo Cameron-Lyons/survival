@@ -76,6 +76,18 @@ def test_coxcount2_validates_public_inputs():
         )
 
 
+def test_norisk_validates_public_inputs():
+    with pytest.raises(ValueError, match="strata values must be strictly increasing"):
+        survival.norisk(
+            [0.0, 1.0, 2.0],
+            [1.0, 2.0, 3.0],
+            [1, 0, 1],
+            [0, 1, 2],
+            [0, 1, 2],
+            [2, 1],
+        )
+
+
 def test_score_calculation_public_api():
     result = survival.perform_score_calculation(
         time_data=[0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0],

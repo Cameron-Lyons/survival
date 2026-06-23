@@ -1,22 +1,13 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+use crate::constants::same_time;
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_non_negative, validate_probability_slice,
+};
 
 fn value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
-}
-
-fn validate_probability_slice(values: &[f64], field: &'static str) -> PyResult<()> {
-    validate_finite(values, field)?;
-    for (index, &value) in values.iter().enumerate() {
-        if !(0.0..=1.0).contains(&value) {
-            return Err(value_error(format!(
-                "{field} must contain probabilities between 0 and 1; got {value} at index {index}"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn validate_threshold_value(value: f64, field: &'static str, index: usize) -> PyResult<()> {
@@ -81,7 +72,13 @@ fn validate_decision_inputs(
 fn binary_outcomes(time: &[f64], event: &[i32], time_horizon: f64) -> Vec<i32> {
     time.iter()
         .zip(event.iter())
-        .map(|(&t, &e)| if t <= time_horizon && e == 1 { 1 } else { 0 })
+        .map(|(&t, &e)| {
+            if e == 1 && (t <= time_horizon || same_time(t, time_horizon)) {
+                1
+            } else {
+                0
+            }
+        })
         .collect()
 }
 
@@ -141,7 +138,7 @@ impl DecisionCurveResult {
             .net_benefit
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
             .map(|(i, _)| i)
             .unwrap_or(0);
         self.thresholds[max_idx]
@@ -418,9 +415,7 @@ pub fn compare_decision_curves(
         .map(|(t_idx, _)| {
             let best_idx = (0..n_models)
                 .max_by(|&a, &b| {
-                    model_net_benefits[a][t_idx]
-                        .partial_cmp(&model_net_benefits[b][t_idx])
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                    model_net_benefits[a][t_idx].total_cmp(&model_net_benefits[b][t_idx])
                 })
                 .unwrap_or(0);
             model_names[best_idx].clone()
@@ -459,6 +454,88 @@ mod tests {
         let result = clinical_utility_at_threshold(predicted, time, event, 3.0, 0.5).unwrap();
         assert!(result.sensitivity >= 0.0 && result.sensitivity <= 1.0);
         assert!(result.specificity >= 0.0 && result.specificity <= 1.0);
+    }
+
+    #[test]
+    fn test_decision_curve_apis_group_near_tied_time_horizon_events() {
+        let exact_time = vec![1.0, 2.0, 2.0, 3.0, 4.0];
+        let near_time = vec![
+            1.0,
+            2.0 + crate::constants::TIME_EPSILON / 2.0,
+            2.0 + crate::constants::TIME_EPSILON / 2.0,
+            3.0,
+            4.0,
+        ];
+        let event = vec![0, 1, 0, 1, 0];
+        let risk = vec![0.1, 0.8, 0.6, 0.7, 0.2];
+        let challenger = vec![0.2, 0.7, 0.4, 0.8, 0.3];
+        let thresholds = vec![0.25, 0.5, 0.75];
+
+        let expected = decision_curve_analysis(
+            risk.clone(),
+            exact_time.clone(),
+            event.clone(),
+            2.0,
+            Some(thresholds.clone()),
+        )
+        .unwrap();
+        let actual = decision_curve_analysis(
+            risk.clone(),
+            near_time.clone(),
+            event.clone(),
+            2.0,
+            Some(thresholds.clone()),
+        )
+        .unwrap();
+        assert_eq!(actual.thresholds, expected.thresholds);
+        assert_eq!(actual.net_benefit, expected.net_benefit);
+        assert_eq!(actual.net_benefit_all, expected.net_benefit_all);
+        assert_eq!(actual.net_benefit_none, expected.net_benefit_none);
+        assert_eq!(actual.interventions_avoided, expected.interventions_avoided);
+
+        let expected_clinical = clinical_utility_at_threshold(
+            risk.clone(),
+            exact_time.clone(),
+            event.clone(),
+            2.0,
+            0.5,
+        )
+        .unwrap();
+        let actual_clinical =
+            clinical_utility_at_threshold(risk.clone(), near_time.clone(), event.clone(), 2.0, 0.5)
+                .unwrap();
+        assert_eq!(actual_clinical.sensitivity, expected_clinical.sensitivity);
+        assert_eq!(actual_clinical.specificity, expected_clinical.specificity);
+        assert_eq!(actual_clinical.ppv, expected_clinical.ppv);
+        assert_eq!(actual_clinical.npv, expected_clinical.npv);
+        assert_eq!(actual_clinical.net_benefit, expected_clinical.net_benefit);
+
+        let expected_comparison = compare_decision_curves(
+            vec![risk.clone(), challenger.clone()],
+            vec!["m1".to_string(), "m2".to_string()],
+            exact_time,
+            event.clone(),
+            2.0,
+            Some(thresholds.clone()),
+        )
+        .unwrap();
+        let actual_comparison = compare_decision_curves(
+            vec![risk, challenger],
+            vec!["m1".to_string(), "m2".to_string()],
+            near_time,
+            event,
+            2.0,
+            Some(thresholds),
+        )
+        .unwrap();
+        assert_eq!(
+            actual_comparison.net_benefit_difference,
+            expected_comparison.net_benefit_difference
+        );
+        assert_eq!(
+            actual_comparison.best_model_per_threshold,
+            expected_comparison.best_model_per_threshold
+        );
     }
 
     #[test]

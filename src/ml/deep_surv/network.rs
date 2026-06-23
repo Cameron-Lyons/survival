@@ -83,7 +83,7 @@ fn compute_cox_gradient_cpu(
     sorted_order.sort_by(|&a, &b| {
         let ta = time[batch_indices[b]];
         let tb = time[batch_indices[a]];
-        ta.partial_cmp(&tb).unwrap_or(std::cmp::Ordering::Equal)
+        ta.total_cmp(&tb)
     });
 
     let max_risk = risk_scores
@@ -145,7 +145,7 @@ fn compute_cox_loss_cpu(
     sorted_order.sort_by(|&a, &b| {
         let ta = time[indices[b]];
         let tb = time[indices[a]];
-        ta.partial_cmp(&tb).unwrap_or(std::cmp::Ordering::Equal)
+        ta.total_cmp(&tb)
     });
 
     let max_risk = risk_scores
@@ -293,4 +293,3 @@ fn predict_with_weights(
 
     results
 }
-

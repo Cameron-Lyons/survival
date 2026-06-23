@@ -4,17 +4,9 @@ use rayon::prelude::*;
 pub(crate) fn descending_time_indices(time: &[f64]) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..time.len()).collect();
     if time.len() > PARALLEL_THRESHOLD_LARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.par_sort_by(|&a, &b| time[b].total_cmp(&time[a]));
     } else {
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
     }
     indices
 }

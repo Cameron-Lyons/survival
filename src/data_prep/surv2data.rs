@@ -153,6 +153,14 @@ pub fn surv2data(
             j += 1;
         }
 
+        for pair in subject_times.windows(2) {
+            if pair[0].0 == pair[1].0 {
+                return Err(PyValueError::new_err(
+                    "duplicated time values for a single id",
+                ));
+            }
+        }
+
         let (subj_event_time, subj_event_status) = subject_event
             .get(&current_id)
             .copied()
@@ -322,5 +330,11 @@ mod tests {
 
         let err = surv2data(vec![1], vec![2.0], Some(vec![1.0]), Some(vec![1])).unwrap_err();
         assert!(err.to_string().contains("event_time must be >= time"));
+
+        let err = surv2data(vec![1, 1], vec![2.0, 2.0], None, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("duplicated time values for a single id")
+        );
     }
 }

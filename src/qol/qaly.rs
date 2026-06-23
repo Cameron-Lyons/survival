@@ -34,7 +34,7 @@ fn qaly_calculation_internal(
         let mut times = utility_times.to_vec();
         times.push(0.0);
         times.push(tau);
-        times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        times.sort_by(f64::total_cmp);
         times.dedup();
         times.into_iter().filter(|&t| t <= tau).collect()
     };
@@ -149,11 +149,7 @@ fn kaplan_meier_estimate(time: &[f64], status: &[i32], eval_times: &[f64]) -> Ve
     let n = time.len();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut survival = Vec::with_capacity(eval_times.len());
     let mut cum_surv = 1.0;
@@ -216,7 +212,7 @@ fn bootstrap_qaly_ci(
     let se = var.sqrt();
 
     let mut sorted = qalys.clone();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(f64::total_cmp);
 
     let ci_lower = sorted[(qalys.len() as f64 * 0.025) as usize];
     let ci_upper = sorted[(qalys.len() as f64 * 0.975) as usize];
@@ -318,7 +314,7 @@ pub fn qaly_comparison(
         .collect();
 
     let mut sorted_diffs = boot_diffs.clone();
-    sorted_diffs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_diffs.sort_by(f64::total_cmp);
 
     let ci_lower = sorted_diffs[(boot_diffs.len() as f64 * 0.025) as usize];
     let ci_upper = sorted_diffs[(boot_diffs.len() as f64 * 0.975) as usize];

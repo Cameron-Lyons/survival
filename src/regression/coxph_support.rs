@@ -1,5 +1,4 @@
 use crate::constants::TIME_EPSILON;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 pub(super) struct StratifiedBaselineLookup {
@@ -31,7 +30,7 @@ impl StratifiedBaselineLookup {
                 times.extend(curve_times.iter().copied());
             }
         }
-        times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        times.sort_by(f64::total_cmp);
         times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
         times
     }
@@ -64,8 +63,7 @@ impl<'a> ActiveRiskSet<'a> {
         stop_order.sort_by(|&lhs, &rhs| {
             rows[lhs]
                 .stop
-                .partial_cmp(&rows[rhs].stop)
-                .unwrap_or(Ordering::Equal)
+                .total_cmp(&rows[rhs].stop)
                 .then_with(|| lhs.cmp(&rhs))
         });
         let entry_order = if use_entry_times {
@@ -73,8 +71,7 @@ impl<'a> ActiveRiskSet<'a> {
             order.sort_by(|&lhs, &rhs| {
                 rows[lhs]
                     .entry
-                    .partial_cmp(&rows[rhs].entry)
-                    .unwrap_or(Ordering::Equal)
+                    .total_cmp(&rows[rhs].entry)
                     .then_with(|| lhs.cmp(&rhs))
             });
             order
@@ -145,9 +142,37 @@ impl<'a> ActiveRiskSet<'a> {
 }
 
 pub(super) fn cumulative_step_at(times: &[f64], values: &[f64], time: f64) -> f64 {
-    match times.binary_search_by(|probe| probe.partial_cmp(&time).unwrap_or(Ordering::Less)) {
+    match times.binary_search_by(|probe| probe.total_cmp(&time)) {
         Ok(idx) => values[idx],
         Err(0) => 0.0,
         Err(idx) => values[idx - 1],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cumulative_step_at_uses_last_prior_value() {
+        let times = [1.0, 2.0, 4.0];
+        let values = [0.2, 0.5, 0.9];
+
+        assert_eq!(cumulative_step_at(&times, &values, 0.5), 0.0);
+        assert_eq!(cumulative_step_at(&times, &values, 1.0), 0.2);
+        assert_eq!(cumulative_step_at(&times, &values, 3.0), 0.5);
+        assert_eq!(cumulative_step_at(&times, &values, 5.0), 0.9);
+    }
+
+    #[test]
+    fn stratified_lookup_times_are_sorted_and_deduped() {
+        let lookup = StratifiedBaselineLookup::from_components(
+            &[2.0, 1.0 + TIME_EPSILON / 2.0, 1.0, 3.0],
+            &[0.2, 0.15, 0.1, 0.3],
+            &[0, 0, 0, 1],
+        );
+
+        assert_eq!(lookup.times_for_strata(&[0]), vec![1.0, 2.0]);
+        assert_eq!(lookup.times_for_strata(&[1, 0]), vec![1.0, 2.0, 3.0]);
     }
 }

@@ -44,6 +44,13 @@ fn validate_binary_censoring(censoring: &[u8]) -> PyResult<()> {
     Ok(())
 }
 
+fn sorted_unique_times(values: &[f64]) -> Vec<f64> {
+    let mut times = values.to_vec();
+    times.sort_by(f64::total_cmp);
+    times.dedup_by(|left, right| (*left - *right).abs() < TIME_EPSILON);
+    times
+}
+
 fn validate_covariate_rows(
     covariates: &[Vec<f64>],
     expected_rows: usize,
@@ -208,8 +215,7 @@ impl CoxPHModel {
         let mut indices: Vec<usize> = (0..self.event_times.len()).collect();
         indices.sort_by(|&lhs, &rhs| {
             self.event_times[rhs]
-                .partial_cmp(&self.event_times[lhs])
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&self.event_times[lhs])
                 .then_with(|| lhs.cmp(&rhs))
         });
         indices
@@ -456,8 +462,7 @@ impl CoxPHModel {
             (0..n).filter(|&idx| self.censoring[idx] == 1).collect();
         event_indices.sort_by(|&lhs, &rhs| {
             self.event_times[lhs]
-                .partial_cmp(&self.event_times[rhs])
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&self.event_times[rhs])
                 .then_with(|| lhs.cmp(&rhs))
         });
         let n_events_estimate = self.censoring.iter().filter(|&&c| c == 1).count();
@@ -540,12 +545,7 @@ impl CoxPHModel {
         time_points: Option<Vec<f64>>,
     ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
         self.validate_prediction_rows(&covariates)?;
-        let times = time_points.unwrap_or_else(|| {
-            let mut t = self.event_times.clone();
-            t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            t.dedup();
-            t
-        });
+        let times = time_points.unwrap_or_else(|| sorted_unique_times(&self.event_times));
         let risk_scores = self.compute_exp_risk_scores(&covariates);
         let baseline_hazards: Vec<f64> = times
             .iter()
@@ -660,9 +660,7 @@ impl CoxPHModel {
         covariates: Vec<Vec<f64>>,
     ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
         self.validate_prediction_rows(&covariates)?;
-        let mut unique_times: Vec<f64> = self.event_times.clone();
-        unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        unique_times.dedup();
+        let unique_times = sorted_unique_times(&self.event_times);
         let risk_scores = self.compute_exp_risk_scores(&covariates);
         let baseline_hazards: Vec<f64> = unique_times
             .iter()
@@ -958,6 +956,34 @@ mod tests {
         assert_eq!(model.baseline_hazard_lookup_times, vec![1.0, 2.0]);
         assert!((model.baseline_hazard_lookup_values[0] - 1.0 / 14.0).abs() < 1e-12);
         assert!((model.baseline_hazard_lookup_values[1] - (1.0 / 14.0 + 2.0 / 12.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_default_prediction_times_are_total_ordered() {
+        let mut model = CoxPHModel::new();
+        model.coefficients =
+            Array2::from_shape_vec((1, 1), vec![0.0]).expect("coefficient shape is valid");
+        model.covariates =
+            Array2::from_shape_vec((4, 1), vec![0.0; 4]).expect("covariate shape is valid");
+        model.n_covariates = 1;
+        model.event_times = vec![3.0, 1.0, 2.0, 2.0 + TIME_EPSILON / 2.0];
+        model.censoring = vec![0, 1, 1, 1];
+        model.risk_scores = vec![4.0, 2.0, 3.0, 5.0];
+
+        model.calculate_baseline_hazard();
+        assert_eq!(model.baseline_hazard_lookup_times, vec![1.0, 2.0]);
+
+        let (survival_times, survival) = model
+            .survival_curve(vec![vec![0.0]], None)
+            .expect("survival curve should use default event times");
+        let (hazard_times, cumulative_hazard) = model
+            .cumulative_hazard(vec![vec![0.0]])
+            .expect("cumulative hazard should use default event times");
+
+        assert_eq!(survival_times, vec![1.0, 2.0, 3.0]);
+        assert_eq!(hazard_times, vec![1.0, 2.0, 3.0]);
+        assert_eq!(survival.len(), 1);
+        assert_eq!(cumulative_hazard.len(), 1);
     }
 
     #[test]

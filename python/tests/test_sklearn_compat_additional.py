@@ -44,6 +44,43 @@ def _toy_data():
     return x, y
 
 
+class _StreamingDummy(sklearn_compat.StreamingMixin):
+    def __init__(self):
+        self.predict_shapes = []
+        self.survival_shapes = []
+
+    def predict(self, x):
+        x = np.asarray(x)
+        self.predict_shapes.append(x.shape)
+        return np.zeros(x.shape[0], dtype=np.float64)
+
+    def predict_survival_function(self, x):
+        x = np.asarray(x)
+        self.survival_shapes.append(x.shape)
+        times = np.array([1.0, 2.0], dtype=np.float64)
+        survival = np.ones((x.shape[0], times.shape[0]), dtype=np.float64)
+        return times, survival
+
+
+class _LazyRows:
+    def __init__(self, data):
+        self._data = np.asarray(data)
+        self.full_materializations = 0
+        self.slices = []
+
+    @property
+    def shape(self):
+        return self._data.shape
+
+    def __getitem__(self, key):
+        self.slices.append(key)
+        return self._data[key]
+
+    def __array__(self, dtype=None):
+        self.full_materializations += 1
+        return np.asarray(self._data, dtype=dtype)
+
+
 def test_score_uses_rust_concordance(monkeypatch):
     common = importlib.import_module("survival._sklearn_common")
     calls = []
@@ -209,6 +246,129 @@ def test_streaming_helpers_and_disk_io(tmp_path):
     assert survival.shape == (x.shape[0], x.shape[0])
 
 
+def test_iter_chunks_materializes_only_requested_slices():
+    x, _ = _toy_data()
+    rows = _LazyRows(x)
+
+    chunks = list(iter_chunks(rows, batch_size=3))
+
+    assert rows.full_materializations == 0
+    assert [(key.start, key.stop, key.step) for key in rows.slices] == [
+        (0, 3, None),
+        (3, 6, None),
+        (6, 8, None),
+    ]
+    assert [start for start, _ in chunks] == [0, 3, 6]
+    assert [chunk.shape[0] for _, chunk in chunks] == [3, 3, 2]
+    assert chunks[0][1] == pytest.approx(x[:3])
+
+
+def test_disk_helpers_materialize_only_requested_slices(tmp_path):
+    x, _ = _toy_data()
+    rows = _LazyRows(x)
+    estimator = _StreamingDummy()
+
+    prediction_file = tmp_path / "predictions.dat"
+    predictions = predict_large_dataset(
+        estimator,
+        rows,
+        batch_size=3,
+        output_file=str(prediction_file),
+    )
+
+    assert rows.full_materializations == 0
+    assert prediction_file.exists()
+    assert predictions.shape == (x.shape[0],)
+    assert [(key.start, key.stop, key.step) for key in rows.slices] == [
+        (0, 3, None),
+        (3, 6, None),
+        (6, 8, None),
+    ]
+
+    rows = _LazyRows(x)
+    survival_file = tmp_path / "survival_curves.dat"
+    times, survival = survival_curves_to_disk(
+        estimator,
+        rows,
+        str(survival_file),
+        batch_size=3,
+    )
+
+    assert rows.full_materializations == 0
+    assert survival_file.exists()
+    assert times.shape == (2,)
+    assert survival.shape == (x.shape[0], 2)
+    assert estimator.survival_shapes == [(3, 1), (3, 1), (2, 1)]
+    assert [(key.start, key.stop, key.step) for key in rows.slices] == [
+        (0, 3, None),
+        (3, 6, None),
+        (6, 8, None),
+    ]
+
+
+def test_survival_curves_to_disk_rejects_empty_input(tmp_path):
+    estimator = _StreamingDummy()
+    survival_file = tmp_path / "survival_curves.dat"
+
+    with pytest.raises(ValueError, match="at least one row"):
+        survival_curves_to_disk(
+            estimator,
+            np.empty((0, 1), dtype=np.float64),
+            str(survival_file),
+        )
+
+    assert estimator.survival_shapes == []
+    assert not survival_file.exists()
+
+
+def test_survival_curves_to_disk_verbose_batches_are_numbered(tmp_path, capsys):
+    x, _ = _toy_data()
+    estimator = _StreamingDummy()
+    survival_file = tmp_path / "survival_curves.dat"
+
+    survival_curves_to_disk(estimator, x, str(survival_file), batch_size=3, verbose=True)
+
+    assert capsys.readouterr().out.splitlines() == [
+        "Processed batch 1/3 (samples 0-3)",
+        "Processed batch 2/3 (samples 3-6)",
+        "Processed batch 3/3 (samples 6-8)",
+    ]
+
+
+@pytest.mark.parametrize("batch_size", [0, -1, False, 1.5])
+def test_streaming_helpers_validate_batch_size(tmp_path, batch_size):
+    x, _ = _toy_data()
+    estimator = _StreamingDummy()
+    prediction_file = tmp_path / "predictions.dat"
+    survival_file = tmp_path / "survival_curves.dat"
+
+    with pytest.raises((TypeError, ValueError), match="batch_size must"):
+        list(iter_chunks(x, batch_size=batch_size))
+    with pytest.raises((TypeError, ValueError), match="batch_size must"):
+        list(estimator.predict_batched(x, batch_size=batch_size))
+    with pytest.raises((TypeError, ValueError), match="batch_size must"):
+        list(estimator.predict_survival_batched(x, batch_size=batch_size))
+    with pytest.raises((TypeError, ValueError), match="batch_size must"):
+        estimator.predict_to_array(x, batch_size=batch_size)
+    with pytest.raises((TypeError, ValueError), match="batch_size must"):
+        predict_large_dataset(
+            estimator,
+            x,
+            batch_size=batch_size,
+            output_file=str(prediction_file),
+        )
+    with pytest.raises((TypeError, ValueError), match="batch_size must"):
+        survival_curves_to_disk(
+            estimator,
+            x,
+            str(survival_file),
+            batch_size=batch_size,
+        )
+
+    assert not prediction_file.exists()
+    assert not survival_file.exists()
+
+
 @pytest.mark.skipif(
     not HAS_TREE_BINDINGS,
     reason="tree survival estimators require the Rust extension to be built with the ml feature",
@@ -245,6 +405,8 @@ def test_predict_to_array_validates_output_shape():
 
     with pytest.raises(ValueError, match=r"expected \(8,\)"):
         estimator.predict_to_array(x, out=np.empty(4, dtype=np.float64))
+    with pytest.raises(ValueError, match=r"expected \(8,\)"):
+        estimator.predict_to_array(x, out=np.empty((x.shape[0], 1), dtype=np.float64))
 
 
 def test_sklearn_compat_fallback_without_sklearn(monkeypatch):
@@ -266,6 +428,14 @@ def test_sklearn_compat_fallback_without_sklearn(monkeypatch):
     spec.loader.exec_module(module)
 
     assert module._HAS_SKLEARN is False
+    common = sys.modules["survival._sklearn_common"]
+    checked = common.check_array([["1.0"], ["2.0"]], dtype=np.float64, ensure_2d=True)
+
+    assert checked.dtype == np.float64
+    assert checked.shape == (2, 1)
+
+    with pytest.raises(ValueError, match="Expected 2D array"):
+        common.check_array([1.0, 2.0], dtype=np.float64, ensure_2d=True)
 
     estimator = module.CoxPHEstimator()
     assert estimator.get_params() == {"n_iters": 20}

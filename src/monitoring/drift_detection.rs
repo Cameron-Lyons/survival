@@ -101,10 +101,10 @@ fn compute_ks_statistic(reference: &[f64], current: &[f64]) -> (f64, f64) {
     }
 
     let mut ref_sorted = reference.to_vec();
-    ref_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ref_sorted.sort_by(f64::total_cmp);
 
     let mut cur_sorted = current.to_vec();
-    cur_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    cur_sorted.sort_by(f64::total_cmp);
 
     let n1 = reference.len() as f64;
     let n2 = current.len() as f64;
@@ -114,7 +114,7 @@ fn compute_ks_statistic(reference: &[f64], current: &[f64]) -> (f64, f64) {
         .chain(cur_sorted.iter())
         .cloned()
         .collect();
-    all_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_values.sort_by(f64::total_cmp);
     all_values.dedup();
 
     let mut max_diff = 0.0f64;

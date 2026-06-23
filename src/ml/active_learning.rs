@@ -3,6 +3,45 @@ use rayon::prelude::*;
 
 use crate::internal::statistical::normal_cdf;
 
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_open_probability(name: &str, value: f64) -> PyResult<()> {
+    if !value.is_finite() || value <= 0.0 || value >= 1.0 {
+        return Err(value_error(format!("{name} must be between 0 and 1")));
+    }
+    Ok(())
+}
+
+fn validate_closed_probability(name: &str, value: f64) -> PyResult<()> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(value_error(format!("{name} must be between 0 and 1")));
+    }
+    Ok(())
+}
+
+fn validate_positive_probability(name: &str, value: f64) -> PyResult<()> {
+    if !value.is_finite() || value <= 0.0 || value > 1.0 {
+        return Err(value_error(format!("{name} must be between 0 and 1")));
+    }
+    Ok(())
+}
+
+fn validate_positive_finite(name: &str, value: f64) -> PyResult<()> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(value_error(format!("{name} must be positive")));
+    }
+    Ok(())
+}
+
+fn validate_nonnegative_finite(name: &str, value: f64) -> PyResult<()> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(value_error(format!("{name} must be non-negative")));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct ActiveLearningConfig {
@@ -194,7 +233,7 @@ pub fn active_learning_selection(
             .iter()
             .enumerate()
             .filter(|(_, s)| s.is_finite())
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
         {
             selected_indices.push(best_idx);
             diversity_scores = current_diversity;
@@ -260,7 +299,7 @@ pub fn query_by_committee(
         .map(|(i, &s)| (i, s))
         .collect();
 
-    scored_indices.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    scored_indices.sort_by(|(_, a), (_, b)| b.total_cmp(a));
 
     let selected_indices: Vec<usize> = scored_indices
         .iter()
@@ -376,25 +415,26 @@ pub fn sample_size_logrank(
     accrual_time: Option<f64>,
     follow_up_time: Option<f64>,
 ) -> PyResult<LogrankSampleSizeResult> {
-    if hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
+    if !hazard_ratio.is_finite() || hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "hazard_ratio must be positive and not equal to 1",
         ));
     }
-    if power <= 0.0 || power >= 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "power must be between 0 and 1",
-        ));
+    validate_open_probability("power", power)?;
+    validate_open_probability("alpha", alpha)?;
+    validate_positive_finite("allocation_ratio", allocation_ratio)?;
+    if let Some(rate) = event_rate {
+        validate_positive_probability("event_rate", rate)?;
     }
-    if alpha <= 0.0 || alpha >= 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "alpha must be between 0 and 1",
-        ));
+    validate_closed_probability("dropout_rate", dropout_rate)?;
+    if dropout_rate >= 1.0 {
+        return Err(value_error("dropout_rate must be less than 1"));
     }
-    if allocation_ratio <= 0.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "allocation_ratio must be positive",
-        ));
+    if let Some(accrual) = accrual_time {
+        validate_nonnegative_finite("accrual_time", accrual)?;
+    }
+    if let Some(follow_up) = follow_up_time {
+        validate_nonnegative_finite("follow_up_time", follow_up)?;
     }
 
     let z_alpha = standard_normal_quantile(1.0 - alpha / 2.0);
@@ -470,11 +510,17 @@ pub fn power_logrank(
     allocation_ratio: f64,
     event_rate: f64,
 ) -> PyResult<LogrankPowerResult> {
-    if hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
+    if sample_size == 0 {
+        return Err(value_error("sample_size must be positive"));
+    }
+    if !hazard_ratio.is_finite() || hazard_ratio <= 0.0 || hazard_ratio == 1.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "hazard_ratio must be positive and not equal to 1",
         ));
     }
+    validate_open_probability("alpha", alpha)?;
+    validate_positive_finite("allocation_ratio", allocation_ratio)?;
+    validate_positive_probability("event_rate", event_rate)?;
 
     let n_events = (sample_size as f64 * event_rate).ceil() as usize;
 
@@ -565,17 +611,37 @@ pub fn group_sequential_analysis(
     futility_bound: f64,
     boundary_type: &str,
 ) -> PyResult<AdaptiveDesignResult> {
+    if n_stages == 0 {
+        return Err(value_error("n_stages must be positive"));
+    }
     if stage == 0 || stage > n_stages {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "stage must be between 1 and n_stages",
+        return Err(value_error("stage must be between 1 and n_stages"));
+    }
+    if total_events == 0 {
+        return Err(value_error("total_events must be positive"));
+    }
+    if current_events == 0 || current_events > total_events {
+        return Err(value_error(
+            "current_events must be between 1 and total_events",
         ));
+    }
+    if !current_z_stat.is_finite() {
+        return Err(value_error("current_z_stat must be finite"));
+    }
+    validate_open_probability("alpha", alpha)?;
+    if !futility_bound.is_finite() {
+        return Err(value_error("futility_bound must be finite"));
     }
 
     let info_fraction = current_events as f64 / total_events as f64;
+    let boundary_name = boundary_type.trim().to_ascii_lowercase().replace('-', "_");
 
-    let efficacy_boundary = match boundary_type {
+    let efficacy_boundary = match boundary_name.as_str() {
+        "obf" | "obrien_fleming" | "o_brien_fleming" | "o'brien_fleming" => {
+            obf_boundary(alpha, info_fraction)
+        }
         "pocock" => pocock_boundary(alpha, info_fraction, n_stages),
-        _ => obf_boundary(alpha, info_fraction),
+        _ => return Err(value_error("boundary_type must be 'obf' or 'pocock'")),
     };
 
     let futility_boundary = futility_bound;
@@ -665,6 +731,13 @@ mod tests {
     }
 
     #[test]
+    fn test_group_sequential_obrien_fleming_alias() {
+        let result =
+            group_sequential_analysis(50, 200, 1.5, 1, 4, 0.05, 0.0, "obrien-fleming").unwrap();
+        assert!(result.efficacy_boundary > 0.0);
+    }
+
+    #[test]
     fn test_active_learning_config_zero_batch_size() {
         let result = ActiveLearningConfig::new("uncertainty", 0, 0.5, 0.3, None);
         assert!(result.is_err());
@@ -733,11 +806,65 @@ mod tests {
 
         let result = sample_size_logrank(-0.5, 0.8, 0.05, 1.0, Some(0.5), 0.0, None, None);
         assert!(result.is_err());
+
+        let result = sample_size_logrank(f64::NAN, 0.8, 0.05, 1.0, Some(0.5), 0.0, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sample_size_logrank_rejects_nonfinite_design_inputs() {
+        let result = sample_size_logrank(0.7, f64::NAN, 0.05, 1.0, Some(0.5), 0.0, None, None);
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(0.7, 0.8, f64::INFINITY, 1.0, Some(0.5), 0.0, None, None);
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(0.7, 0.8, 0.05, f64::NAN, Some(0.5), 0.0, None, None);
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(0.7, 0.8, 0.05, 1.0, Some(f64::NAN), 0.0, None, None);
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(0.7, 0.8, 0.05, 1.0, Some(0.0), 0.0, None, None);
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(0.7, 0.8, 0.05, 1.0, Some(0.5), f64::NAN, None, None);
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(0.7, 0.8, 0.05, 1.0, Some(0.5), 1.0, None, None);
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(0.7, 0.8, 0.05, 1.0, None, 0.0, Some(f64::NAN), Some(1.0));
+        assert!(result.is_err());
+
+        let result = sample_size_logrank(0.7, 0.8, 0.05, 1.0, None, 0.0, Some(1.0), Some(-1.0));
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_power_logrank_invalid_hr() {
+        let result = power_logrank(0, 0.7, 0.05, 1.0, 0.5);
+        assert!(result.is_err());
+
         let result = power_logrank(200, 1.0, 0.05, 1.0, 0.5);
+        assert!(result.is_err());
+
+        let result = power_logrank(200, f64::NAN, 0.05, 1.0, 0.5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_power_logrank_rejects_nonfinite_design_inputs() {
+        let result = power_logrank(200, 0.7, f64::NAN, 1.0, 0.5);
+        assert!(result.is_err());
+
+        let result = power_logrank(200, 0.7, 0.05, f64::INFINITY, 0.5);
+        assert!(result.is_err());
+
+        let result = power_logrank(200, 0.7, 0.05, 1.0, f64::NAN);
+        assert!(result.is_err());
+
+        let result = power_logrank(200, 0.7, 0.05, 1.0, 0.0);
         assert!(result.is_err());
     }
 
@@ -748,6 +875,24 @@ mod tests {
 
         let result = group_sequential_analysis(50, 200, 1.5, 5, 4, 0.05, 0.0, "obf");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_group_sequential_rejects_invalid_design_inputs() {
+        let invalid_cases = [
+            group_sequential_analysis(0, 200, 1.5, 1, 4, 0.05, 0.0, "obf"),
+            group_sequential_analysis(50, 0, 1.5, 1, 4, 0.05, 0.0, "obf"),
+            group_sequential_analysis(250, 200, 1.5, 1, 4, 0.05, 0.0, "obf"),
+            group_sequential_analysis(50, 200, f64::NAN, 1, 4, 0.05, 0.0, "obf"),
+            group_sequential_analysis(50, 200, 1.5, 1, 0, 0.05, 0.0, "obf"),
+            group_sequential_analysis(50, 200, 1.5, 1, 4, f64::NAN, 0.0, "obf"),
+            group_sequential_analysis(50, 200, 1.5, 1, 4, 0.05, f64::NAN, "obf"),
+            group_sequential_analysis(50, 200, 1.5, 1, 4, 0.05, 0.0, "unknown"),
+        ];
+
+        for result in invalid_cases {
+            assert!(result.is_err());
+        }
     }
 
     #[test]

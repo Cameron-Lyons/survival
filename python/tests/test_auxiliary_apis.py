@@ -168,6 +168,118 @@ def test_uncertainty_interval_helpers_validate_inputs():
         survival.calibrate_prediction_intervals([1.0], [1], [2.0], [1.0], 0.9)
 
 
+def test_bayesian_bootstrap_survival_groups_near_tied_event_times():
+    exact_time = [1.0, 1.0, 2.0, 3.0]
+    near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
+    event = [1, 1, 0, 0]
+    eval_times = [1.0, 2.0, 3.0]
+    config = survival.BayesianBootstrapConfig(25, 0.8, 7)
+
+    exact = survival.bayesian_bootstrap_survival(exact_time, event, eval_times, config)
+    near = survival.bayesian_bootstrap_survival(near_time, event, eval_times, config)
+
+    assert near.mean_survival == pytest.approx(exact.mean_survival)
+    assert near.lower_ci == pytest.approx(exact.lower_ci)
+    assert near.upper_ci == pytest.approx(exact.upper_ci)
+    for near_row, exact_row in zip(near.posterior_samples, exact.posterior_samples, strict=True):
+        assert near_row == pytest.approx(exact_row)
+
+    with pytest.raises(ValueError, match="event length mismatch"):
+        survival.bayesian_bootstrap_survival([1.0], [1, 0], [1.0], config)
+
+    with pytest.raises(ValueError, match="event.*0/1"):
+        survival.bayesian_bootstrap_survival([1.0], [2], [1.0], config)
+
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.bayesian_bootstrap_survival([float("nan")], [1], [1.0], config)
+
+    bad_config = survival.BayesianBootstrapConfig(0, 0.95, 1)
+    with pytest.raises(ValueError, match="n_bootstrap must be positive"):
+        survival.bayesian_bootstrap_survival([1.0], [1], [1.0], bad_config)
+
+
+def test_conformal_and_jackknife_uncertainty_validate_inputs():
+    conformal_config = survival.ConformalSurvivalConfig(0.1, "cqr", 100, 7)
+    conformal = survival.conformal_survival(
+        [1.0, 2.0, 3.0],
+        [1, 0, 1],
+        [1.1, 2.2, 2.8],
+        [1.5, 2.5],
+        conformal_config,
+    )
+    assert len(conformal.lower_bounds) == 2
+    assert len(conformal.calibration_scores) == 3
+
+    with pytest.raises(ValueError, match="cal_event length mismatch"):
+        survival.conformal_survival([1.0], [1, 0], [1.0], [1.0], conformal_config)
+    with pytest.raises(ValueError, match="cal_predictions contains non-finite"):
+        survival.conformal_survival([1.0], [1], [float("nan")], [1.0], conformal_config)
+    with pytest.raises(ValueError, match="cal_event.*0/1"):
+        survival.conformal_survival([1.0], [2], [1.0], [1.0], conformal_config)
+    with pytest.raises(ValueError, match="test_predictions contains non-finite"):
+        survival.conformal_survival([1.0], [1], [1.0], [float("inf")], conformal_config)
+    with pytest.raises(ValueError, match="method must be"):
+        survival.conformal_survival(
+            [1.0],
+            [1],
+            [1.0],
+            [1.0],
+            survival.ConformalSurvivalConfig(0.1, "unknown", 100, None),
+        )
+    with pytest.raises(ValueError, match="positive value"):
+        survival.conformal_survival(
+            [0.0],
+            [0],
+            [0.0],
+            [1.0],
+            survival.ConformalSurvivalConfig(0.1, "censoring_adjusted", 100, None),
+        )
+
+    jackknife_config = survival.JackknifePlusConfig(0.1, True, 5)
+    jackknife = survival.jackknife_plus_survival(
+        [1.0, 2.0, 3.0],
+        [1, 0, 1],
+        [[], [], []],
+        jackknife_config,
+    )
+    assert len(jackknife.point_predictions) == 3
+
+    with pytest.raises(ValueError, match="Need at least 2 observations"):
+        survival.jackknife_plus_survival([1.0], [1], [[0.0]], jackknife_config)
+    with pytest.raises(ValueError, match="event length mismatch"):
+        survival.jackknife_plus_survival([1.0, 2.0], [1], [[0.0], [1.0]], jackknife_config)
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.jackknife_plus_survival(
+            [1.0, float("inf")], [1, 0], [[0.0], [1.0]], jackknife_config
+        )
+    with pytest.raises(ValueError, match="event.*0/1"):
+        survival.jackknife_plus_survival([1.0, 2.0], [1, 2], [[0.0], [1.0]], jackknife_config)
+    with pytest.raises(ValueError, match="one row per observation"):
+        survival.jackknife_plus_survival([1.0, 2.0], [1, 0], [[0.0]], jackknife_config)
+    with pytest.raises(ValueError, match="covariates must be rectangular"):
+        survival.jackknife_plus_survival(
+            [1.0, 2.0], [1, 0], [[0.0], [1.0, 2.0]], jackknife_config
+        )
+    with pytest.raises(ValueError, match="covariates contains non-finite"):
+        survival.jackknife_plus_survival(
+            [1.0, 2.0], [1, 0], [[0.0], [float("nan")]], jackknife_config
+        )
+    with pytest.raises(ValueError, match="alpha"):
+        survival.jackknife_plus_survival(
+            [1.0, 2.0],
+            [1, 0],
+            [[0.0], [1.0]],
+            survival.JackknifePlusConfig(1.0, True, 5),
+        )
+    with pytest.raises(ValueError, match="cv_folds must be positive"):
+        survival.jackknife_plus_survival(
+            [1.0, 2.0],
+            [1, 0],
+            [[0.0], [1.0]],
+            survival.JackknifePlusConfig(0.1, True, 0),
+        )
+
+
 def test_cox_diagnostic_helpers_validate_inputs():
     with pytest.raises(ValueError, match="at least two observations"):
         survival.dfbeta_cox([1.0], [1], [0.1], 1, [0.5])
@@ -352,6 +464,18 @@ def test_bootstrap_ci_helpers_validate_inputs():
     with pytest.raises(ValueError, match="n_bootstrap must be at least 2"):
         survival.bootstrap_cox_ci(time, status_i32, covariates, n_bootstrap=1)
 
+    with pytest.raises(ValueError, match="status length mismatch"):
+        survival.bootstrap_cox_ci(time, status_i32[:-1], covariates, n_bootstrap=8)
+
+    with pytest.raises(ValueError, match="weights length mismatch"):
+        survival.bootstrap_cox_ci(
+            time,
+            status_i32,
+            covariates,
+            weights=[1.0, 1.0],
+            n_bootstrap=8,
+        )
+
     with pytest.raises(ValueError, match="confidence_level must be between 0 and 1"):
         survival.bootstrap_survreg_ci(
             time,
@@ -360,6 +484,43 @@ def test_bootstrap_ci_helpers_validate_inputs():
             distribution="weibull",
             n_bootstrap=8,
             confidence_level=1.2,
+        )
+
+    with pytest.raises(ValueError, match="time\\[0\\] must be positive"):
+        survival.bootstrap_survreg_ci(
+            [0.0, 2.0, 3.0, 4.0],
+            status_f64,
+            covariates,
+            distribution="weibull",
+            n_bootstrap=8,
+        )
+
+    with pytest.raises(ValueError, match="covariates row count mismatch"):
+        survival.bootstrap_survreg_ci(
+            time,
+            status_f64,
+            covariates[:-1],
+            distribution="weibull",
+            n_bootstrap=8,
+        )
+
+    bad_covariates = [[0.1], [0.2], [float("inf")], [0.4]]
+    with pytest.raises(ValueError, match="covariates contains non-finite"):
+        survival.bootstrap_survreg_ci(
+            time,
+            status_f64,
+            bad_covariates,
+            distribution="weibull",
+            n_bootstrap=8,
+        )
+
+    with pytest.raises(ValueError, match="distribution must be one of"):
+        survival.bootstrap_survreg_ci(
+            time,
+            status_f64,
+            covariates,
+            distribution="mystery",
+            n_bootstrap=8,
         )
 
 

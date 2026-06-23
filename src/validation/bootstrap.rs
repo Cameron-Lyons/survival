@@ -1,7 +1,10 @@
 use crate::constants::{COX_MAX_ITER, DEFAULT_BOOTSTRAP_SAMPLES};
 use ndarray::Array2;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+const SURVREG_DISTRIBUTION_ERROR: &str = "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic";
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -59,18 +62,150 @@ fn bootstrap_sample_indices(n: usize, seed: u64, iteration: usize) -> Vec<usize>
 
 fn validate_bootstrap_inputs(n_bootstrap: usize, confidence_level: f64) -> PyResult<()> {
     if n_bootstrap < 2 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "n_bootstrap must be at least 2",
-        ));
+        return Err(PyValueError::new_err("n_bootstrap must be at least 2"));
     }
 
     if !(0.0 < confidence_level && confidence_level < 1.0) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(PyValueError::new_err(
             "confidence_level must be between 0 and 1",
         ));
     }
 
     Ok(())
+}
+
+fn validate_bootstrap_time(time: &[f64], require_positive: bool) -> PyResult<()> {
+    if time.is_empty() {
+        return Err(PyValueError::new_err("time must not be empty"));
+    }
+    for (idx, &value) in time.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "time contains non-finite value at index {idx}"
+            )));
+        }
+        if require_positive {
+            if value <= 0.0 {
+                return Err(PyValueError::new_err(format!(
+                    "time[{idx}] must be positive"
+                )));
+            }
+        } else if value < 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "time contains negative value {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_bootstrap_status_i32(status: &[i32], n: usize) -> PyResult<()> {
+    if status.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "status length mismatch: expected {n}, got {}",
+            status.len()
+        )));
+    }
+    for (idx, &value) in status.iter().enumerate() {
+        if value != 0 && value != 1 {
+            return Err(PyValueError::new_err(format!(
+                "status must contain only 0/1 values; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_bootstrap_status_f64(status: &[f64], n: usize) -> PyResult<()> {
+    if status.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "status length mismatch: expected {n}, got {}",
+            status.len()
+        )));
+    }
+    for (idx, &value) in status.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "status contains non-finite value at index {idx}"
+            )));
+        }
+        if value != 0.0 && value != 1.0 && value != 2.0 {
+            return Err(PyValueError::new_err(format!(
+                "status must contain only 0/1/2 values for bootstrap_survreg_ci; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_bootstrap_covariates(covariates: &[Vec<f64>], n: usize) -> PyResult<usize> {
+    if covariates.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "covariates row count mismatch: expected {n}, got {}",
+            covariates.len()
+        )));
+    }
+    let nvar = covariates.first().map_or(0, Vec::len);
+    for (row_idx, row) in covariates.iter().enumerate() {
+        if row.len() != nvar {
+            return Err(PyValueError::new_err(format!(
+                "covariates row {row_idx} length mismatch: expected {nvar}, got {}",
+                row.len()
+            )));
+        }
+        for (col_idx, &value) in row.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(PyValueError::new_err(format!(
+                    "covariates contains non-finite value at row {row_idx}, column {col_idx}"
+                )));
+            }
+        }
+    }
+    Ok(nvar)
+}
+
+fn validate_bootstrap_weights(weights: Option<&[f64]>, n: usize) -> PyResult<()> {
+    let Some(weights) = weights else {
+        return Ok(());
+    };
+    if weights.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "weights length mismatch: expected {n}, got {}",
+            weights.len()
+        )));
+    }
+    for (idx, &value) in weights.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "weights contains non-finite value at index {idx}"
+            )));
+        }
+        if value < 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "weights contains negative value {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn canonical_survreg_bootstrap_distribution(distribution: &str) -> Option<&'static str> {
+    let normalized = distribution.trim().to_lowercase().replace(['-', ' '], "_");
+    match normalized.as_str() {
+        "weibull" => Some("weibull"),
+        "exponential" => Some("exponential"),
+        "extreme" | "extreme_value" | "extremevalue" => Some("extreme_value"),
+        "gaussian" | "normal" => Some("gaussian"),
+        "logistic" => Some("logistic"),
+        "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => Some("lognormal"),
+        "loglogistic" | "log_logistic" => Some("loglogistic"),
+        _ => None,
+    }
+}
+
+fn validate_survreg_bootstrap_distribution(distribution: &str) -> PyResult<&'static str> {
+    canonical_survreg_bootstrap_distribution(distribution)
+        .ok_or_else(|| PyValueError::new_err(SURVREG_DISTRIBUTION_ERROR))
 }
 
 pub(crate) fn bootstrap_cox(
@@ -87,11 +222,7 @@ pub(crate) fn bootstrap_cox(
     let default_weights: Vec<f64> = vec![1.0; n];
     let weights = weights.unwrap_or(&default_weights);
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
     let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| status[i]).collect();
     let sorted_weights: Vec<f64> = sorted_indices.iter().map(|&i| weights[i]).collect();
@@ -128,11 +259,7 @@ pub(crate) fn bootstrap_cox(
                 }
             }
             let mut boot_indices: Vec<usize> = (0..n).collect();
-            boot_indices.sort_by(|&a, &b| {
-                boot_time[b]
-                    .partial_cmp(&boot_time[a])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            boot_indices.sort_by(|&a, &b| boot_time[b].total_cmp(&boot_time[a]));
             let resorted_time: Vec<f64> = boot_indices.iter().map(|&i| boot_time[i]).collect();
             let resorted_status: Vec<i32> = boot_indices.iter().map(|&i| boot_status[i]).collect();
             let resorted_weights: Vec<f64> =
@@ -204,7 +331,7 @@ pub(crate) fn bootstrap_cox(
     let ci_results: Vec<(f64, f64)> = transposed
         .into_par_iter()
         .map(|mut var_coefs| {
-            var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            var_coefs.sort_by(f64::total_cmp);
             (
                 var_coefs[lower_percentile.min(actual_n_bootstrap - 1)],
                 var_coefs[upper_percentile.min(actual_n_bootstrap - 1)],
@@ -260,15 +387,14 @@ pub fn bootstrap_cox_ci(
     validate_bootstrap_inputs(n_bootstrap, confidence_level)?;
 
     let n = time.len();
-    let nvar = if !covariates.is_empty() {
-        covariates[0].len()
-    } else {
-        0
-    };
+    validate_bootstrap_time(&time, false)?;
+    validate_bootstrap_status_i32(&status, n)?;
+    let nvar = validate_bootstrap_covariates(&covariates, n)?;
+    validate_bootstrap_weights(weights.as_deref(), n)?;
     let cov_array = if nvar > 0 {
         let flat: Vec<f64> = covariates.into_iter().flatten().collect();
         let temp = Array2::from_shape_vec((n, nvar), flat)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?;
+            .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         temp.t().to_owned()
     } else {
         Array2::zeros((0, n))
@@ -289,32 +415,15 @@ pub(crate) fn bootstrap_survreg(
     distribution: &str,
     config: &BootstrapConfig,
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::parametric_survival::{DistributionType, survreg};
+    use crate::regression::parametric_survival::survreg;
     let n = time.len();
     let nvar = covariates.nrows();
     let cov_vecs: Vec<Vec<f64>> = (0..n)
         .map(|i| (0..nvar).map(|j| covariates[[j, i]]).collect())
         .collect();
-
-    let dist_type = match distribution {
-        "logistic" | "Logistic" => DistributionType::Logistic,
-        "gaussian" | "Gaussian" | "normal" | "Normal" => DistributionType::Gaussian,
-        "weibull" | "Weibull" => DistributionType::Weibull,
-        "lognormal" | "LogNormal" | "lognorm" | "LogNorm" => DistributionType::LogNormal,
-        "loglogistic" | "LogLogistic" | "log_logistic" | "log-logistic" => {
-            DistributionType::LogLogistic
-        }
-        _ => DistributionType::ExtremeValue,
-    };
-
-    let dist_str = match dist_type {
-        DistributionType::Weibull => "weibull",
-        DistributionType::ExtremeValue => "extreme_value",
-        DistributionType::Gaussian => "gaussian",
-        DistributionType::Logistic => "logistic",
-        DistributionType::LogNormal => "lognormal",
-        DistributionType::LogLogistic => "loglogistic",
-    };
+    let dist_str = canonical_survreg_bootstrap_distribution(distribution).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, SURVREG_DISTRIBUTION_ERROR)
+    })?;
 
     let original = survreg(
         time.to_vec(),
@@ -403,7 +512,7 @@ pub(crate) fn bootstrap_survreg(
             if var_coefs.is_empty() {
                 return (0.0, 0.0);
             }
-            var_coefs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            var_coefs.sort_by(f64::total_cmp);
             (
                 var_coefs[lower_percentile.min(var_coefs.len() - 1)],
                 var_coefs[upper_percentile.min(var_coefs.len() - 1)],
@@ -436,15 +545,13 @@ pub fn bootstrap_survreg_ci(
     validate_bootstrap_inputs(n_bootstrap, confidence_level)?;
 
     let n = time.len();
-    let nvar = if !covariates.is_empty() {
-        covariates[0].len()
-    } else {
-        0
-    };
+    validate_bootstrap_time(&time, true)?;
+    validate_bootstrap_status_f64(&status, n)?;
+    let nvar = validate_bootstrap_covariates(&covariates, n)?;
     let cov_array = if nvar > 0 {
         let flat: Vec<f64> = covariates.into_iter().flatten().collect();
         let temp = Array2::from_shape_vec((n, nvar), flat)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?;
+            .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         temp.t().to_owned()
     } else {
         Array2::zeros((0, n))
@@ -454,15 +561,40 @@ pub fn bootstrap_survreg_ci(
         confidence_level,
         seed,
     };
-    let dist = distribution.unwrap_or("weibull");
+    let dist = validate_survreg_bootstrap_distribution(distribution.unwrap_or("weibull"))?;
     bootstrap_survreg(&time, &status, &cov_array, dist, &config)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BootstrapConfig, bootstrap_survreg};
+    use super::{BootstrapConfig, bootstrap_survreg, canonical_survreg_bootstrap_distribution};
     use ndarray::Array2;
+
+    #[test]
+    fn test_survreg_bootstrap_distribution_aliases_are_explicit() {
+        assert_eq!(
+            canonical_survreg_bootstrap_distribution("weibull"),
+            Some("weibull")
+        );
+        assert_eq!(
+            canonical_survreg_bootstrap_distribution(" exponential "),
+            Some("exponential")
+        );
+        assert_eq!(
+            canonical_survreg_bootstrap_distribution("normal"),
+            Some("gaussian")
+        );
+        assert_eq!(
+            canonical_survreg_bootstrap_distribution("log-normal"),
+            Some("lognormal")
+        );
+        assert_eq!(
+            canonical_survreg_bootstrap_distribution("log logistic"),
+            Some("loglogistic")
+        );
+        assert_eq!(canonical_survreg_bootstrap_distribution("mystery"), None);
+    }
 
     #[test]
     fn test_bootstrap_survreg_transposed_covariates_smoke() {

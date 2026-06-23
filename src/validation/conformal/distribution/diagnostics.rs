@@ -147,7 +147,7 @@ pub fn conformal_width_analysis(
     let mean_width = widths.iter().sum::<f64>() / n_finite as f64;
 
     let mut sorted_widths = widths.clone();
-    sorted_widths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_widths.sort_by(f64::total_cmp);
 
     let median_width = if n_finite.is_multiple_of(2) {
         (sorted_widths[n_finite / 2 - 1] + sorted_widths[n_finite / 2]) / 2.0
@@ -173,7 +173,7 @@ pub fn conformal_width_analysis(
         .filter(|(_, (_, u))| u.is_finite())
         .map(|(p, (l, u))| (*p, *u - *l))
         .collect();
-    width_by_predicted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    width_by_predicted.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     Ok(ConformalWidthAnalysis {
         mean_width,

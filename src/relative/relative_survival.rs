@@ -3,6 +3,82 @@
 use pyo3::prelude::*;
 
 use crate::constants::exp_ci_bounds_95;
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_expected_hazard(values: &[f64]) -> PyResult<()> {
+    validate_finite(values, "expected_hazard")?;
+    validate_non_negative(values, "expected_hazard")?;
+    Ok(())
+}
+
+fn validate_relative_inputs(
+    time: &[f64],
+    status: &[i32],
+    expected_hazard: &[f64],
+    age_at_diagnosis: &[f64],
+    follow_up_years: Option<&[f64]>,
+) -> PyResult<()> {
+    let n = time.len();
+    if n == 0 || status.len() != n || expected_hazard.len() != n || age_at_diagnosis.len() != n {
+        return Err(value_error(
+            "All input arrays must have same non-zero length",
+        ));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(status, "status")?;
+    validate_expected_hazard(expected_hazard)?;
+    validate_finite(age_at_diagnosis, "age_at_diagnosis")?;
+    validate_non_negative(age_at_diagnosis, "age_at_diagnosis")?;
+    if let Some(follow_up) = follow_up_years {
+        if follow_up.len() != n {
+            return Err(value_error(
+                "follow_up_years must have length n when provided",
+            ));
+        }
+        validate_finite(follow_up, "follow_up_years")?;
+        validate_non_negative(follow_up, "follow_up_years")?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_excess_hazard_inputs(
+    time: &[f64],
+    status: &[i32],
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    expected_hazard: &[f64],
+    max_iter: usize,
+    tol: f64,
+) -> PyResult<()> {
+    if n_obs == 0 {
+        return Err(value_error("n_obs must be greater than 0"));
+    }
+    if time.len() != n_obs || status.len() != n_obs || expected_hazard.len() != n_obs {
+        return Err(value_error("Input arrays must have length n_obs"));
+    }
+    if x.len() != n_obs * n_vars {
+        return Err(value_error("x length must equal n_obs * n_vars"));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(status, "status")?;
+    validate_expected_hazard(expected_hazard)?;
+    validate_finite(x, "x")?;
+    if max_iter == 0 {
+        return Err(value_error("max_iter must be greater than 0"));
+    }
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(value_error("tol must be finite and positive"));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -42,22 +118,17 @@ pub fn relative_survival(
     age_at_diagnosis: Vec<f64>,
     follow_up_years: Option<Vec<f64>>,
 ) -> PyResult<RelativeSurvivalResult> {
+    validate_relative_inputs(
+        &time,
+        &status,
+        &expected_hazard,
+        &age_at_diagnosis,
+        follow_up_years.as_deref(),
+    )?;
     let n = time.len();
-    if status.len() != n || expected_hazard.len() != n || age_at_diagnosis.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All input arrays must have same length",
-        ));
-    }
-    if let Some(ref follow_up) = follow_up_years
-        && follow_up.len() != n
-    {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "follow_up_years must have length n when provided",
-        ));
-    }
 
     let mut unique_times: Vec<f64> = time.clone();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     let n_times = unique_times.len();
@@ -72,11 +143,7 @@ pub fn relative_survival(
     let mut relative_survival_se = Vec::with_capacity(n_times);
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut obs_surv = 1.0;
     let mut at_risk = n;
@@ -209,16 +276,16 @@ pub fn excess_hazard_regression(
     max_iter: usize,
     tol: f64,
 ) -> PyResult<ExcessHazardModelResult> {
-    if time.len() != n_obs || status.len() != n_obs || expected_hazard.len() != n_obs {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input arrays must have length n_obs",
-        ));
-    }
-    if x.len() != n_obs * n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "x length must equal n_obs * n_vars",
-        ));
-    }
+    validate_excess_hazard_inputs(
+        &time,
+        &status,
+        &x,
+        n_obs,
+        n_vars,
+        &expected_hazard,
+        max_iter,
+        tol,
+    )?;
 
     let mut beta = vec![0.0; n_vars];
 
@@ -234,11 +301,7 @@ pub fn excess_hazard_regression(
         let mut loglik = 0.0;
 
         let mut indices: Vec<usize> = (0..n_obs).collect();
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
         let eta: Vec<f64> = (0..n_obs)
             .map(|i| {
@@ -301,7 +364,7 @@ pub fn excess_hazard_regression(
     let (ehr_ci_lower, ehr_ci_upper) = exp_ci_bounds_95(&beta, &std_errors);
 
     let mut unique_times: Vec<f64> = time.clone();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     let baseline_excess_hazard = compute_baseline_excess_hazard(
@@ -355,11 +418,7 @@ fn compute_baseline_excess_hazard(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut risk_sum = exp_eta.iter().sum::<f64>();
     let mut baseline = Vec::with_capacity(unique_times.len());
@@ -388,6 +447,7 @@ fn compute_baseline_excess_hazard(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::common::initialize_python;
 
     #[test]
     fn test_relative_survival_basic() {
@@ -404,6 +464,161 @@ mod tests {
                 .relative_survival
                 .iter()
                 .all(|&s| (0.0..=2.0).contains(&s))
+        );
+    }
+
+    #[test]
+    fn relative_survival_validates_public_inputs() {
+        initialize_python();
+
+        assert!(
+            relative_survival(vec![], vec![], vec![], vec![], None)
+                .expect_err("empty input should fail")
+                .to_string()
+                .contains("same non-zero length")
+        );
+
+        assert!(
+            relative_survival(vec![1.0], vec![1, 0], vec![0.01], vec![60.0], None)
+                .expect_err("length mismatch should fail")
+                .to_string()
+                .contains("same non-zero length")
+        );
+
+        assert!(
+            relative_survival(vec![f64::NAN], vec![1], vec![0.01], vec![60.0], None,)
+                .expect_err("non-finite time should fail")
+                .to_string()
+                .contains("time contains non-finite")
+        );
+
+        assert!(
+            relative_survival(vec![1.0], vec![2], vec![0.01], vec![60.0], None)
+                .expect_err("non-binary status should fail")
+                .to_string()
+                .contains("status must contain only 0/1")
+        );
+
+        assert!(
+            relative_survival(vec![1.0], vec![1], vec![-0.01], vec![60.0], None)
+                .expect_err("negative expected hazard should fail")
+                .to_string()
+                .contains("expected_hazard contains negative")
+        );
+
+        assert!(
+            relative_survival(vec![1.0], vec![1], vec![0.01], vec![f64::INFINITY], None)
+                .expect_err("non-finite age should fail")
+                .to_string()
+                .contains("age_at_diagnosis contains non-finite")
+        );
+
+        assert!(
+            relative_survival(
+                vec![1.0],
+                vec![1],
+                vec![0.01],
+                vec![60.0],
+                Some(vec![1.0, 2.0]),
+            )
+            .expect_err("follow-up length mismatch should fail")
+            .to_string()
+            .contains("follow_up_years must have length n")
+        );
+    }
+
+    #[test]
+    fn excess_hazard_regression_validates_public_inputs() {
+        initialize_python();
+
+        assert!(
+            excess_hazard_regression(vec![], vec![], vec![], 0, 0, vec![], 100, 1e-6)
+                .expect_err("zero observations should fail")
+                .to_string()
+                .contains("n_obs must be greater than 0")
+        );
+
+        assert!(
+            excess_hazard_regression(
+                vec![1.0],
+                vec![1, 0],
+                vec![0.5],
+                1,
+                1,
+                vec![0.01],
+                100,
+                1e-6
+            )
+            .expect_err("status length mismatch should fail")
+            .to_string()
+            .contains("Input arrays must have length n_obs")
+        );
+
+        assert!(
+            excess_hazard_regression(vec![1.0], vec![1], vec![], 1, 1, vec![0.01], 100, 1e-6)
+                .expect_err("x length mismatch should fail")
+                .to_string()
+                .contains("x length must equal n_obs")
+        );
+
+        assert!(
+            excess_hazard_regression(
+                vec![f64::INFINITY],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                vec![0.01],
+                100,
+                1e-6,
+            )
+            .expect_err("non-finite time should fail")
+            .to_string()
+            .contains("time contains non-finite")
+        );
+
+        assert!(
+            excess_hazard_regression(vec![1.0], vec![2], vec![0.5], 1, 1, vec![0.01], 100, 1e-6)
+                .expect_err("non-binary status should fail")
+                .to_string()
+                .contains("status must contain only 0/1")
+        );
+
+        assert!(
+            excess_hazard_regression(
+                vec![1.0],
+                vec![1],
+                vec![f64::NAN],
+                1,
+                1,
+                vec![0.01],
+                100,
+                1e-6
+            )
+            .expect_err("non-finite x should fail")
+            .to_string()
+            .contains("x contains non-finite")
+        );
+
+        assert!(
+            excess_hazard_regression(vec![1.0], vec![1], vec![0.5], 1, 1, vec![-0.01], 100, 1e-6)
+                .expect_err("negative expected hazard should fail")
+                .to_string()
+                .contains("expected_hazard contains negative")
+        );
+
+        assert!(
+            excess_hazard_regression(vec![1.0], vec![1], vec![0.5], 1, 1, vec![0.01], 0, 1e-6)
+                .expect_err("zero max_iter should fail")
+                .to_string()
+                .contains("max_iter must be greater than 0")
+        );
+
+        assert!(
+            excess_hazard_regression(vec![1.0], vec![1], vec![0.5], 1, 1, vec![0.01], 100, 0.0)
+                .expect_err("non-positive tolerance should fail")
+                .to_string()
+                .contains("tol must be finite and positive")
         );
     }
 }

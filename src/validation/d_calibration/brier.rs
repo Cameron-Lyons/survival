@@ -121,11 +121,7 @@ pub(crate) fn brier_calibration_core(
     let mut brier_count = 0;
 
     for i in 0..n {
-        let outcome = if time[i] <= time_point && status[i] == 1 {
-            0.0
-        } else if time[i] > time_point {
-            1.0
-        } else {
+        let Some(outcome) = observed_survival_at_time_point(time[i], status[i], time_point) else {
             continue;
         };
 

@@ -41,7 +41,6 @@ mod internal;
 pub mod interpretability;
 pub mod interval;
 pub mod joint;
-mod matrix;
 pub mod missing;
 #[cfg(feature = "ml")]
 pub mod ml;

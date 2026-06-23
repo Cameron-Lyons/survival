@@ -156,7 +156,7 @@ pub fn dynamic_prediction(
     let survival_lower: Vec<f64> = (0..n_times)
         .map(|t| {
             let mut vals: Vec<f64> = survival_samples.iter().map(|s| s[t]).collect();
-            vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            vals.sort_by(f64::total_cmp);
             vals[(n_monte_carlo as f64 * 0.025) as usize]
         })
         .collect();
@@ -164,7 +164,7 @@ pub fn dynamic_prediction(
     let survival_upper: Vec<f64> = (0..n_times)
         .map(|t| {
             let mut vals: Vec<f64> = survival_samples.iter().map(|s| s[t]).collect();
-            vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            vals.sort_by(f64::total_cmp);
             vals[(n_monte_carlo as f64 * 0.975) as usize]
         })
         .collect();

@@ -419,11 +419,7 @@ pub fn prune_survival_model(
     let original_params = weights.iter().map(|w| w.len()).sum::<usize>();
 
     let mut all_weights: Vec<f64> = weights.iter().flat_map(|w| w.iter().cloned()).collect();
-    all_weights.sort_by(|a, b| {
-        a.abs()
-            .partial_cmp(&b.abs())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    all_weights.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
 
     let threshold_idx = (all_weights.len() as f64 * sparsity_target) as usize;
     let threshold = all_weights.get(threshold_idx).cloned().unwrap_or(0.0).abs();

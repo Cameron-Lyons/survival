@@ -1,8 +1,7 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::constants::Z_SCORE_95;
-use crate::internal::statistical::chi2_cdf;
+use crate::internal::statistical::{chi2_cdf, two_sided_normal_quantile};
 use crate::internal::validation::validate_finite;
 
 type LikelihoodRatioTest = (String, String, f64, f64, f64);
@@ -16,6 +15,11 @@ fn validate_finite_scalar(value: f64, field: &'static str) -> PyResult<()> {
         return Err(value_error(format!("{field} must be finite")));
     }
     Ok(())
+}
+
+fn validate_alpha_quantile(alpha: f64) -> PyResult<f64> {
+    two_sided_normal_quantile(alpha)
+        .ok_or_else(|| value_error("alpha must be finite and between 0 and 1"))
 }
 
 #[derive(Debug, Clone)]
@@ -209,7 +213,7 @@ impl SurvivalModelComparison {
             .zip(self.aic_values.iter())
             .map(|(n, &a)| (n.clone(), a))
             .collect();
-        ranking.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranking.sort_by(|a, b| a.1.total_cmp(&b.1));
         ranking
     }
 
@@ -220,7 +224,7 @@ impl SurvivalModelComparison {
             .zip(self.bic_values.iter())
             .map(|(n, &b)| (n.clone(), b))
             .collect();
-        ranking.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranking.sort_by(|a, b| a.1.total_cmp(&b.1));
         ranking
     }
 }
@@ -278,14 +282,14 @@ pub fn compare_models(
     let best_aic_idx = aic_values
         .iter()
         .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .unwrap_or(0);
 
     let best_bic_idx = bic_values
         .iter()
         .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .unwrap_or(0);
 
@@ -365,9 +369,10 @@ impl CrossValidatedScore {
         )
     }
 
-    fn confidence_interval(&self, _alpha: f64) -> (f64, f64) {
-        let margin = Z_SCORE_95 * self.std_score / (self.n_folds as f64).sqrt();
-        (self.mean_score - margin, self.mean_score + margin)
+    fn confidence_interval(&self, alpha: f64) -> PyResult<(f64, f64)> {
+        let z = validate_alpha_quantile(alpha)?;
+        let margin = z * self.std_score / (self.n_folds as f64).sqrt();
+        Ok((self.mean_score - margin, self.mean_score + margin))
     }
 }
 
@@ -442,6 +447,33 @@ mod tests {
     }
 
     #[test]
+    fn cv_score_confidence_interval_respects_alpha() {
+        pyo3::Python::initialize();
+        let result =
+            compute_cv_score(vec![0.75, 0.78, 0.72, 0.76, 0.74], "c_index".to_string()).unwrap();
+
+        let ci_95 = result.confidence_interval(0.05).unwrap();
+        let ci_90 = result.confidence_interval(0.10).unwrap();
+
+        assert!(ci_95.0 < ci_90.0);
+        assert!(ci_95.1 > ci_90.1);
+        assert!(
+            result
+                .confidence_interval(0.0)
+                .expect_err("zero alpha should fail")
+                .to_string()
+                .contains("alpha must be finite and between 0 and 1")
+        );
+        assert!(
+            result
+                .confidence_interval(f64::NAN)
+                .expect_err("non-finite alpha should fail")
+                .to_string()
+                .contains("alpha must be finite and between 0 and 1")
+        );
+    }
+
+    #[test]
     fn test_likelihood_ratio_test() {
         let model_names = vec!["Nested".to_string(), "Full".to_string()];
         let log_likelihoods = vec![-105.0, -100.0];
@@ -458,6 +490,7 @@ mod tests {
 
     #[test]
     fn public_model_selection_apis_validate_inputs() {
+        pyo3::Python::initialize();
         assert!(
             compute_model_selection_criteria(f64::NAN, 5, 200, 50, None)
                 .expect_err("non-finite log likelihood should fail")

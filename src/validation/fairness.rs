@@ -1,4 +1,6 @@
+use crate::constants::same_time;
 use crate::internal::statistical::concordance_index_with_horizon;
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -35,6 +37,70 @@ fn compute_c_index(risk: &[f64], time: &[f64], event: &[i32]) -> f64 {
     concordance_index_with_horizon(risk, time, event, None)
 }
 
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_survival_inputs(risk_scores: &[f64], time: &[f64], event: &[i32]) -> PyResult<()> {
+    if risk_scores.is_empty() || time.len() != risk_scores.len() || event.len() != risk_scores.len()
+    {
+        return Err(value_error(
+            "risk_scores, time, and event must have the same non-zero length",
+        ));
+    }
+    validate_finite(risk_scores, "risk_scores")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(event, "event")?;
+    Ok(())
+}
+
+fn validate_threshold_time(threshold_time: Option<f64>) -> PyResult<()> {
+    if let Some(value) = threshold_time
+        && (!value.is_finite() || value < 0.0)
+    {
+        return Err(value_error(
+            "threshold_time must be finite and non-negative",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_noise_levels(noise_levels: &[f64]) -> PyResult<()> {
+    if noise_levels.is_empty() {
+        return Err(value_error("noise_levels must not be empty"));
+    }
+    for (idx, &value) in noise_levels.iter().enumerate() {
+        if !value.is_finite() || value < 0.0 {
+            return Err(value_error(format!(
+                "noise_levels must contain finite non-negative values; got {value} at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_subgroup_labels(subgroup_labels: &[String], n: usize) -> PyResult<()> {
+    if subgroup_labels.len() != n {
+        return Err(value_error(
+            "risk_scores, time, event, and subgroup_labels must have the same non-zero length",
+        ));
+    }
+    for (idx, label) in subgroup_labels.iter().enumerate() {
+        if label.trim().is_empty() {
+            return Err(value_error(format!(
+                "subgroup_labels must not contain empty labels; got empty label at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[inline]
+fn at_or_before_threshold(time: f64, threshold_time: f64) -> bool {
+    time <= threshold_time || same_time(time, threshold_time)
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     risk_scores,
@@ -51,11 +117,13 @@ pub fn compute_fairness_metrics(
     threshold_time: Option<f64>,
 ) -> PyResult<FairnessMetrics> {
     let n = risk_scores.len();
-    if n == 0 || time.len() != n || event.len() != n || protected_attribute.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All inputs must have the same non-zero length",
+    validate_survival_inputs(&risk_scores, &time, &event)?;
+    if protected_attribute.len() != n {
+        return Err(value_error(
+            "risk_scores, time, event, and protected_attribute must have the same non-zero length",
         ));
     }
+    validate_threshold_time(threshold_time)?;
 
     let threshold_time =
         threshold_time.unwrap_or_else(|| time.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
@@ -94,7 +162,7 @@ pub fn compute_fairness_metrics(
 
     let median_risk: f64 = {
         let mut sorted: Vec<f64> = risk_scores.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(f64::total_cmp);
         sorted[sorted.len() / 2]
     };
 
@@ -108,12 +176,8 @@ pub fn compute_fairness_metrics(
 
     let demographic_parity = if group_high_risk_rates.len() >= 2 {
         if let (Some(max_rate), Some(min_rate)) = (
-            group_high_risk_rates
-                .iter()
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
-            group_high_risk_rates
-                .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+            group_high_risk_rates.iter().max_by(|a, b| a.total_cmp(b)),
+            group_high_risk_rates.iter().min_by(|a, b| a.total_cmp(b)),
         ) {
             max_rate - min_rate
         } else {
@@ -130,12 +194,14 @@ pub fn compute_fairness_metrics(
                 .iter()
                 .zip(times.iter())
                 .zip(events.iter())
-                .filter(|((r, t), e)| **r > median_risk && **t <= threshold_time && **e == 1)
+                .filter(|((r, t), e)| {
+                    **r > median_risk && at_or_before_threshold(**t, threshold_time) && **e == 1
+                })
                 .count();
             let high_risk_total: usize = risks
                 .iter()
                 .zip(times.iter())
-                .filter(|(r, t)| **r > median_risk && **t <= threshold_time)
+                .filter(|(r, t)| **r > median_risk && at_or_before_threshold(**t, threshold_time))
                 .count();
             if high_risk_total > 0 {
                 high_risk_events as f64 / high_risk_total as f64
@@ -147,12 +213,8 @@ pub fn compute_fairness_metrics(
 
     let equalized_odds = if group_event_rates.len() >= 2 {
         if let (Some(max_rate), Some(min_rate)) = (
-            group_event_rates
-                .iter()
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
-            group_event_rates
-                .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+            group_event_rates.iter().max_by(|a, b| a.total_cmp(b)),
+            group_event_rates.iter().min_by(|a, b| a.total_cmp(b)),
         ) {
             max_rate - min_rate
         } else {
@@ -164,12 +226,8 @@ pub fn compute_fairness_metrics(
 
     let calibration_difference = if group_c_indices.len() >= 2 {
         if let (Some(max_c), Some(min_c)) = (
-            group_c_indices
-                .iter()
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
-            group_c_indices
-                .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+            group_c_indices.iter().max_by(|a, b| a.total_cmp(b)),
+            group_c_indices.iter().min_by(|a, b| a.total_cmp(b)),
         ) {
             max_c - min_c
         } else {
@@ -230,14 +288,14 @@ pub fn assess_model_robustness(
     n_perturbations: usize,
     seed: Option<u64>,
 ) -> PyResult<RobustnessResult> {
-    let n = risk_scores.len();
-    if n == 0 || time.len() != n || event.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All inputs must have the same non-zero length",
-        ));
+    validate_survival_inputs(&risk_scores, &time, &event)?;
+    if n_perturbations == 0 {
+        return Err(value_error("n_perturbations must be positive"));
     }
+    let n = risk_scores.len();
 
     let noise_levels = noise_levels.unwrap_or_else(|| vec![0.01, 0.05, 0.1, 0.2]);
+    validate_noise_levels(&noise_levels)?;
 
     let mut rng = fastrand::Rng::new();
     if let Some(s) = seed {
@@ -260,7 +318,7 @@ pub fn assess_model_robustness(
                     let perturbed: Vec<f64> = risk_scores
                         .iter()
                         .map(|&r| {
-                            let u1: f64 = rng.f64();
+                            let u1: f64 = rng.f64().max(1e-10);
                             let u2: f64 = rng.f64();
                             let normal =
                                 (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
@@ -334,11 +392,8 @@ pub fn subgroup_analysis(
     subgroup_labels: Vec<String>,
 ) -> PyResult<SubgroupAnalysisResult> {
     let n = risk_scores.len();
-    if n == 0 || time.len() != n || event.len() != n || subgroup_labels.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "All inputs must have the same non-zero length",
-        ));
-    }
+    validate_survival_inputs(&risk_scores, &time, &event)?;
+    validate_subgroup_labels(&subgroup_labels, n)?;
 
     let unique_subgroups: Vec<String> = {
         let mut groups: Vec<String> = subgroup_labels.clone();
@@ -432,6 +487,148 @@ mod tests {
 
         let result = compute_fairness_metrics(risk, time, event, protected, None).unwrap();
         assert!(result.group_sizes.len() == 2);
+    }
+
+    #[test]
+    fn test_fairness_metrics_groups_near_tied_threshold_events() {
+        let risk = vec![0.1, 0.9, 0.7, 0.6, 0.95, 0.2];
+        let exact_time = vec![1.0, 2.0, 2.0, 3.0, 2.0, 4.0];
+        let near_time = vec![
+            1.0,
+            2.0 + crate::constants::TIME_EPSILON / 2.0,
+            2.0,
+            3.0,
+            2.0,
+            4.0,
+        ];
+        let event = vec![0, 1, 0, 1, 1, 0];
+        let protected = vec![0, 0, 0, 1, 1, 1];
+
+        let exact = compute_fairness_metrics(
+            risk.clone(),
+            exact_time,
+            event.clone(),
+            protected.clone(),
+            Some(2.0),
+        )
+        .unwrap();
+        let near = compute_fairness_metrics(risk, near_time, event, protected, Some(2.0)).unwrap();
+
+        assert_eq!(near.group_sizes, exact.group_sizes);
+        assert!((near.demographic_parity - exact.demographic_parity).abs() < 1e-12);
+        assert!((near.equalized_odds - exact.equalized_odds).abs() < 1e-12);
+    }
+
+    #[test]
+    fn public_fairness_apis_validate_inputs() {
+        pyo3::Python::initialize();
+        let risk = vec![0.9, 0.7, 0.5, 0.3];
+        let time = vec![1.0, 2.0, 3.0, 4.0];
+        let event = vec![1, 0, 1, 0];
+        let protected = vec![0, 0, 1, 1];
+        let labels = vec![
+            "a".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "b".to_string(),
+        ];
+
+        assert!(
+            compute_fairness_metrics(
+                vec![0.9, f64::NAN, 0.5, 0.3],
+                time.clone(),
+                event.clone(),
+                protected.clone(),
+                None,
+            )
+            .expect_err("non-finite risk should fail")
+            .to_string()
+            .contains("risk_scores contains non-finite")
+        );
+        assert!(
+            compute_fairness_metrics(
+                risk.clone(),
+                vec![1.0, -1.0, 3.0, 4.0],
+                event.clone(),
+                protected.clone(),
+                None,
+            )
+            .expect_err("negative time should fail")
+            .to_string()
+            .contains("time contains negative")
+        );
+        assert!(
+            compute_fairness_metrics(
+                risk.clone(),
+                time.clone(),
+                vec![1, 2, 1, 0],
+                protected.clone(),
+                None,
+            )
+            .expect_err("non-binary event should fail")
+            .to_string()
+            .contains("event values must be 0 or 1")
+        );
+        assert!(
+            compute_fairness_metrics(risk.clone(), time.clone(), event.clone(), vec![0, 1], None,)
+                .expect_err("protected attribute length should fail")
+                .to_string()
+                .contains("protected_attribute")
+        );
+        assert!(
+            compute_fairness_metrics(
+                risk.clone(),
+                time.clone(),
+                event.clone(),
+                protected,
+                Some(f64::INFINITY),
+            )
+            .expect_err("invalid threshold should fail")
+            .to_string()
+            .contains("threshold_time must be finite and non-negative")
+        );
+
+        assert!(
+            assess_model_robustness(
+                risk.clone(),
+                time.clone(),
+                event.clone(),
+                Some(vec![]),
+                10,
+                Some(42),
+            )
+            .expect_err("empty noise levels should fail")
+            .to_string()
+            .contains("noise_levels must not be empty")
+        );
+        assert!(
+            assess_model_robustness(
+                risk.clone(),
+                time.clone(),
+                event.clone(),
+                Some(vec![f64::NAN]),
+                10,
+                Some(42),
+            )
+            .expect_err("non-finite noise level should fail")
+            .to_string()
+            .contains("noise_levels must contain finite non-negative")
+        );
+        assert!(
+            assess_model_robustness(risk.clone(), time.clone(), event.clone(), None, 0, Some(42),)
+                .expect_err("zero perturbations should fail")
+                .to_string()
+                .contains("n_perturbations must be positive")
+        );
+
+        let mut bad_labels = labels.clone();
+        bad_labels[1] = " ".to_string();
+        assert!(
+            subgroup_analysis(risk, time, event, bad_labels)
+                .expect_err("blank subgroup label should fail")
+                .to_string()
+                .contains("subgroup_labels must not contain empty labels")
+        );
     }
 
     #[test]

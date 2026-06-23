@@ -187,6 +187,15 @@ impl JackknifePlusResult {
     }
 }
 
+fn validate_conformal_method(method: &str) -> PyResult<()> {
+    match method {
+        "cqr" | "weighted" | "censoring_adjusted" => Ok(()),
+        _ => Err(uncertainty_value_error(
+            "method must be 'cqr', 'weighted', or 'censoring_adjusted'",
+        )),
+    }
+}
+
 fn compute_conformity_scores(
     time: &[f64],
     event: &[i32],

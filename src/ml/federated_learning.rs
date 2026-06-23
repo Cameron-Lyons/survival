@@ -2,6 +2,61 @@ use crate::internal::statistical::lcg64_next;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+const DEFAULT_DP_DELTA: f64 = 1e-5;
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn normalize_aggregation_strategy(strategy: &str) -> PyResult<&'static str> {
+    match strategy
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+        .as_str()
+    {
+        "fedavg" | "fed_avg" | "federated_average" => Ok("fedavg"),
+        "fedprox" | "fed_prox" => Ok("fedprox"),
+        _ => Err(value_error(
+            "aggregation_strategy must be 'fedavg' or 'fedprox'",
+        )),
+    }
+}
+
+fn validate_federated_config(config: &FederatedConfig) -> PyResult<()> {
+    if config.n_rounds == 0 {
+        return Err(value_error("n_rounds must be positive"));
+    }
+    if config.n_clients == 0 {
+        return Err(value_error("n_clients must be positive"));
+    }
+    if !config.client_fraction.is_finite()
+        || config.client_fraction <= 0.0
+        || config.client_fraction > 1.0
+    {
+        return Err(value_error("client_fraction must be in (0, 1]"));
+    }
+    if config.local_epochs == 0 {
+        return Err(value_error("local_epochs must be positive"));
+    }
+    if !config.learning_rate.is_finite() || config.learning_rate <= 0.0 {
+        return Err(value_error("learning_rate must be positive"));
+    }
+    normalize_aggregation_strategy(&config.aggregation_strategy)?;
+    if !config.noise_multiplier.is_finite() || config.noise_multiplier < 0.0 {
+        return Err(value_error("noise_multiplier must be non-negative"));
+    }
+    if config.differential_privacy && config.noise_multiplier == 0.0 {
+        return Err(value_error(
+            "noise_multiplier must be positive when differential_privacy is enabled",
+        ));
+    }
+    if !config.clip_norm.is_finite() || config.clip_norm <= 0.0 {
+        return Err(value_error("clip_norm must be positive"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct FederatedConfig {
@@ -51,17 +106,8 @@ impl FederatedConfig {
         noise_multiplier: f64,
         clip_norm: f64,
     ) -> PyResult<Self> {
-        if n_clients == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "n_clients must be positive",
-            ));
-        }
-        if client_fraction <= 0.0 || client_fraction > 1.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "client_fraction must be in (0, 1]",
-            ));
-        }
-        Ok(Self {
+        let aggregation_strategy = normalize_aggregation_strategy(aggregation_strategy)?;
+        let config = Self {
             n_rounds,
             n_clients,
             client_fraction,
@@ -71,7 +117,9 @@ impl FederatedConfig {
             differential_privacy,
             noise_multiplier,
             clip_norm,
-        })
+        };
+        validate_federated_config(&config)?;
+        Ok(config)
     }
 }
 
@@ -95,9 +143,11 @@ fn add_gaussian_noise(values: &mut [f64], noise_multiplier: f64, clip_norm: f64,
     let mut rng_state = seed;
     for v in values.iter_mut() {
         lcg64_next(&mut rng_state);
-        let u1 = (rng_state as f64) / (u64::MAX as f64);
+        let u1 =
+            ((rng_state as f64) / (u64::MAX as f64)).clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
         lcg64_next(&mut rng_state);
-        let u2 = (rng_state as f64) / (u64::MAX as f64);
+        let u2 =
+            ((rng_state as f64) / (u64::MAX as f64)).clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
         let noise = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
         *v += noise * noise_multiplier * clip_norm;
     }
@@ -126,11 +176,7 @@ fn train_local_cox_model(
     let mut weights = initial_weights.to_vec();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     for _epoch in 0..n_epochs {
         let mut gradient = vec![0.0; n_features];
@@ -266,6 +312,9 @@ pub fn federated_cox(
     config: FederatedConfig,
     seed: Option<u64>,
 ) -> PyResult<FederatedSurvivalResult> {
+    validate_federated_config(&config)?;
+    let aggregation_strategy = normalize_aggregation_strategy(&config.aggregation_strategy)?;
+
     let n_clients = client_times.len();
     if n_clients == 0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -329,9 +378,10 @@ pub fn federated_cox(
             })
             .collect();
 
-        let new_weights = match config.aggregation_strategy.as_str() {
+        let new_weights = match aggregation_strategy {
             "fedprox" => fedprox_aggregate(&client_models, &global_weights, 0.01),
-            _ => fedavg_aggregate(&client_models),
+            "fedavg" => fedavg_aggregate(&client_models),
+            _ => unreachable!("aggregation strategy was already validated"),
         };
 
         let weight_change: f64 = global_weights
@@ -351,9 +401,9 @@ pub fn federated_cox(
     }
 
     let privacy_budget = if config.differential_privacy {
-        let epsilon =
-            (2.0 * (1.25_f64 / config.n_rounds as f64).ln()).sqrt() / config.noise_multiplier;
-        Some(epsilon * config.n_rounds as f64)
+        let per_round_epsilon =
+            (2.0 * (1.25_f64 / DEFAULT_DP_DELTA).ln()).sqrt() / config.noise_multiplier;
+        Some(per_round_epsilon * config.n_rounds as f64)
     } else {
         None
     };
@@ -406,6 +456,27 @@ pub fn secure_aggregate(
             "Must have at least one client",
         ));
     }
+    if !threshold.is_finite() || threshold <= 0.0 || threshold > 1.0 {
+        return Err(value_error("threshold must be in (0, 1]"));
+    }
+    let n_features = client_gradients[0].len();
+    for (client_idx, gradient) in client_gradients.iter().enumerate() {
+        if gradient.len() != n_features {
+            return Err(value_error(format!(
+                "client_gradients must be rectangular; client {client_idx} has {} values, expected {n_features}",
+                gradient.len()
+            )));
+        }
+        if let Some((feature_idx, _)) = gradient
+            .iter()
+            .enumerate()
+            .find(|(_, value)| !value.is_finite())
+        {
+            return Err(value_error(format!(
+                "client_gradients[{client_idx}][{feature_idx}] must be finite"
+            )));
+        }
+    }
 
     let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let mut rng_state = seed;
@@ -426,7 +497,6 @@ pub fn secure_aggregate(
         ));
     }
 
-    let n_features = client_gradients[0].len();
     let mut aggregated = vec![0.0; n_features];
 
     for (_, gradient) in &active_clients {
@@ -569,7 +639,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.privacy_budget.is_some());
+        let privacy_budget = result.privacy_budget.unwrap();
+        assert!(privacy_budget.is_finite());
+        assert!(privacy_budget > 0.0);
     }
 
     #[test]
@@ -608,6 +680,36 @@ mod tests {
 
         let result = FederatedConfig::new(10, 5, 1.5, 5, 0.01, "fedavg", false, 1.0, 1.0);
         assert!(result.is_err());
+
+        let result = FederatedConfig::new(10, 5, f64::NAN, 5, 0.01, "fedavg", false, 1.0, 1.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_federated_config_validates_training_controls() {
+        let invalid_configs = [
+            FederatedConfig::new(0, 5, 1.0, 5, 0.01, "fedavg", false, 1.0, 1.0),
+            FederatedConfig::new(10, 5, 1.0, 0, 0.01, "fedavg", false, 1.0, 1.0),
+            FederatedConfig::new(10, 5, 1.0, 5, 0.0, "fedavg", false, 1.0, 1.0),
+            FederatedConfig::new(10, 5, 1.0, 5, f64::NAN, "fedavg", false, 1.0, 1.0),
+            FederatedConfig::new(10, 5, 1.0, 5, 0.01, "bogus", false, 1.0, 1.0),
+            FederatedConfig::new(10, 5, 1.0, 5, 0.01, "fedavg", false, f64::NAN, 1.0),
+            FederatedConfig::new(10, 5, 1.0, 5, 0.01, "fedavg", false, -1.0, 1.0),
+            FederatedConfig::new(10, 5, 1.0, 5, 0.01, "fedavg", true, 0.0, 1.0),
+            FederatedConfig::new(10, 5, 1.0, 5, 0.01, "fedavg", false, 1.0, f64::NAN),
+            FederatedConfig::new(10, 5, 1.0, 5, 0.01, "fedavg", false, 1.0, 0.0),
+        ];
+
+        for config in invalid_configs {
+            assert!(config.is_err());
+        }
+    }
+
+    #[test]
+    fn test_federated_config_canonicalizes_aggregation_strategy() {
+        let config =
+            FederatedConfig::new(10, 5, 1.0, 5, 0.01, "fed-prox", false, 1.0, 1.0).unwrap();
+        assert_eq!(config.aggregation_strategy, "fedprox");
     }
 
     #[test]
@@ -714,6 +816,21 @@ mod tests {
     fn test_secure_aggregate_empty() {
         let result = secure_aggregate(vec![], 0.5, Some(42));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_secure_aggregate_rejects_invalid_inputs() {
+        let gradients = vec![vec![0.1, 0.2], vec![0.2, 0.3]];
+
+        assert!(secure_aggregate(gradients.clone(), 0.0, Some(42)).is_err());
+        assert!(secure_aggregate(gradients.clone(), 1.5, Some(42)).is_err());
+        assert!(secure_aggregate(gradients.clone(), f64::NAN, Some(42)).is_err());
+
+        let ragged = vec![vec![0.1, 0.2], vec![0.3]];
+        assert!(secure_aggregate(ragged, 0.5, Some(42)).is_err());
+
+        let nonfinite = vec![vec![0.1, f64::NAN], vec![0.2, 0.3]];
+        assert!(secure_aggregate(nonfinite, 0.5, Some(42)).is_err());
     }
 
     #[test]

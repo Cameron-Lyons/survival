@@ -40,6 +40,112 @@ def test_survreg():
     assert isinstance(result.coefficients, list)
 
 
+def test_survival_fit_predict_quantile_rejects_nonfinite_quantiles():
+    fit = survival.survreg(
+        time=[1.0, 2.0, 3.0, 4.0],
+        status=[1.0, 1.0, 0.0, 1.0],
+        covariates=[[1.0], [2.0], [3.0], [4.0]],
+        distribution="weibull",
+        max_iter=5,
+        eps=1e-5,
+        tol_chol=1e-9,
+    )
+
+    with pytest.raises(ValueError, match="Quantiles must be between 0 and 1"):
+        fit.predict_quantile(quantiles=[float("nan")])
+
+
+def test_spline_config_validates_public_inputs():
+    config = survival.SplineConfig(3, 3, " Uniform ", (1.0, 10.0))
+    assert config.knot_placement == "equal"
+
+    with pytest.raises(ValueError, match="n_knots"):
+        survival.SplineConfig(0, 3, "quantile", None)
+    with pytest.raises(ValueError, match="degree"):
+        survival.SplineConfig(3, 0, "quantile", None)
+    with pytest.raises(ValueError, match="knot_placement"):
+        survival.SplineConfig(3, 3, "unknown", None)
+    with pytest.raises(ValueError, match="boundary_knots"):
+        survival.SplineConfig(3, 3, "quantile", (0.0, 10.0))
+    with pytest.raises(ValueError, match="boundary_knots"):
+        survival.SplineConfig(3, 3, "quantile", (10.0, 10.0))
+
+
+def test_flexible_parametric_model_revalidates_mutated_spline_config():
+    config = survival.SplineConfig(3, 3, "quantile", None)
+    config.knot_placement = "unknown"
+    time = [float(value) for value in range(1, 21)]
+    event = [1 if idx % 3 == 0 else 0 for idx in range(20)]
+    covariates = [[idx * 0.1] for idx in range(20)]
+
+    with pytest.raises(ValueError, match="knot_placement"):
+        survival.flexible_parametric_model(time, event, covariates, config)
+
+
+def test_restricted_cubic_spline_validates_public_inputs():
+    x = [float(value) for value in range(1, 6)]
+
+    with pytest.raises(ValueError, match="x must contain only finite"):
+        survival.restricted_cubic_spline([1.0, 2.0, float("nan"), 4.0, 5.0], 4, None)
+    with pytest.raises(ValueError, match="n_knots"):
+        survival.restricted_cubic_spline(x, 2, None)
+    with pytest.raises(ValueError, match="knots must contain only finite"):
+        survival.restricted_cubic_spline(x, None, [1.0, 2.0, float("inf")])
+    with pytest.raises(ValueError, match="strictly increasing"):
+        survival.restricted_cubic_spline(x, None, [1.0, 2.0, 2.0])
+    with pytest.raises(ValueError, match="strictly increasing"):
+        survival.restricted_cubic_spline([1.0] * 5, 4, None)
+
+
+def test_predict_hazard_spline_validates_public_inputs():
+    time = [float(value) for value in range(1, 21)]
+    event = [1 if idx % 3 == 0 else 0 for idx in range(20)]
+    covariates = [[idx * 0.1] for idx in range(20)]
+    config = survival.SplineConfig(3, 3, "quantile", None)
+    model = survival.flexible_parametric_model(time, event, covariates, config)
+
+    with pytest.raises(ValueError, match="eval_times"):
+        survival.predict_hazard_spline(model, [], [0.5])
+    with pytest.raises(ValueError, match="eval_times must contain only finite"):
+        survival.predict_hazard_spline(model, [1.0, float("nan")], [0.5])
+    with pytest.raises(ValueError, match="non-negative"):
+        survival.predict_hazard_spline(model, [-1.0, 2.0], [0.5])
+    with pytest.raises(ValueError, match="strictly increasing"):
+        survival.predict_hazard_spline(model, [1.0, 1.0], [0.5])
+    with pytest.raises(ValueError, match="covariate_values length"):
+        survival.predict_hazard_spline(model, [1.0, 2.0], [0.5, 1.0])
+    with pytest.raises(ValueError, match="covariate_values must contain only finite"):
+        survival.predict_hazard_spline(model, [1.0, 2.0], [float("nan")])
+
+    bad_coefficients = survival.FlexibleParametricResult(
+        [float("nan")],
+        model.spline_coefficients,
+        model.std_errors,
+        model.knots,
+        model.log_likelihood,
+        model.aic,
+        model.bic,
+        model.n_iterations,
+        model.converged,
+    )
+    with pytest.raises(ValueError, match="coefficients must contain only finite"):
+        survival.predict_hazard_spline(bad_coefficients, [1.0, 2.0], [0.5])
+
+    bad_spline_coefficients = survival.FlexibleParametricResult(
+        model.coefficients,
+        model.spline_coefficients[:-1],
+        model.std_errors,
+        model.knots,
+        model.log_likelihood,
+        model.aic,
+        model.bic,
+        model.n_iterations,
+        model.converged,
+    )
+    with pytest.raises(ValueError, match="spline_coefficients length"):
+        survival.predict_hazard_spline(bad_spline_coefficients, [1.0, 2.0], [0.5])
+
+
 def test_coxmart():
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
     status = [1, 1, 0, 1, 0, 1, 1, 0]
@@ -766,4 +872,158 @@ def test_survreg_residual_apis_validate_numeric_inputs():
             scale=1.0,
             var_matrix=[[1.0, 0.0], [0.0, 1.0]],
             distribution="mystery",
+        )
+
+
+def test_recurrent_event_regression_validates_public_inputs():
+    with pytest.raises(ValueError, match="x length"):
+        survival.gap_time_model([0, 1], [0.0, 0.0], [1.0, 1.0], [1, 0], [0.5], 2, 1, 10, 1e-6)
+    with pytest.raises(ValueError, match="stop_time"):
+        survival.gap_time_model([0], [1.0], [1.0], [1], [0.5], 1, 1, 10, 1e-6)
+    with pytest.raises(ValueError, match="event_status"):
+        survival.pwp_gap_time([0], [1.0], [2], [0.5], 1, 1, False)
+    with pytest.raises(ValueError, match="max_iter"):
+        survival.gap_time_model([0], [0.0], [1.0], [1], [0.5], 1, 1, 0, 1e-6)
+
+    gap = survival.gap_time_model(
+        [10, 10, 42],
+        [0.0, 2.0, 0.0],
+        [2.0, 5.0, 3.0],
+        [1, 0, 1],
+        [1.0, 0.5, 0.0],
+        3,
+        1,
+        20,
+        1e-4,
+    )
+    assert gap.n_subjects == 2
+
+    method = survival.MarginalMethod("andersen_gill")
+    with pytest.raises(ValueError, match="x length"):
+        survival.marginal_recurrent_model(
+            [0, 1],
+            [0.0, 0.0],
+            [1.0, 1.0],
+            [1, 0],
+            [0.5],
+            2,
+            1,
+            method,
+            10,
+            1e-6,
+        )
+    with pytest.raises(ValueError, match="event_status"):
+        survival.wei_lin_weissfeld([0], [1.0], [2], [0.5], 1, 1)
+
+    marginal = survival.marginal_recurrent_model(
+        [10, 10, 42],
+        [0.0, 2.0, 0.0],
+        [2.0, 5.0, 3.0],
+        [1, 0, 1],
+        [1.0, 0.5, 0.0],
+        3,
+        1,
+        method,
+        20,
+        1e-4,
+    )
+    assert marginal.n_subjects == 2
+
+    with pytest.raises(ValueError, match="covariates length"):
+        survival.anderson_gill_model(
+            [1, 2],
+            [0.0, 0.0],
+            [1.0, 1.0],
+            [1, 0],
+            [0.5],
+            10,
+            1e-6,
+        )
+
+    pwp_config = survival.PWPConfig(survival.PWPTimescale("gap"), 10, 1e-6, True, True)
+    with pytest.raises(ValueError, match="stop must be greater than start"):
+        survival.pwp_model([1], [0.0], [0.0], [1], [1], [], pwp_config)
+    with pytest.raises(ValueError, match="event_number"):
+        survival.pwp_model([1], [0.0], [1.0], [1], [0], [], pwp_config)
+
+    wlw_config = survival.WLWConfig(10, 1e-6, True, False)
+    with pytest.raises(ValueError, match="event must contain only 0/1"):
+        survival.wlw_model([1], [1.0], [2], [1], [], wlw_config)
+
+    bad_wlw_config = survival.WLWConfig(0, 1e-6, True, False)
+    with pytest.raises(ValueError, match="max_iter"):
+        survival.wlw_model([1], [1.0], [1], [1], [], bad_wlw_config)
+
+    nb_config = survival.NegativeBinomialFrailtyConfig(10, 1e-6, 10)
+    with pytest.raises(ValueError, match="same length"):
+        survival.negative_binomial_frailty([1, 2], [1.0, 1.0], [1, 0], [], [0.0], nb_config)
+    with pytest.raises(ValueError, match="event counts"):
+        survival.negative_binomial_frailty([1], [1.0], [-1], [], None, nb_config)
+
+    bad_nb_config = survival.NegativeBinomialFrailtyConfig(10, 1e-6, 0)
+    with pytest.raises(ValueError, match="em_max_iter"):
+        survival.negative_binomial_frailty([1], [1.0], [1], [], None, bad_nb_config)
+
+    with pytest.raises(ValueError, match="x length"):
+        survival.joint_frailty_model(
+            [0, 1],
+            [0.0, 0.0],
+            [1.0, 1.0],
+            [1, 0],
+            [0.5],
+            2,
+            1,
+            [1.0, 1.0],
+            [1, 0],
+            [0.5, 0.2],
+            2,
+            1,
+        )
+    with pytest.raises(ValueError, match="subject_id values"):
+        survival.joint_frailty_model(
+            [2],
+            [0.0],
+            [1.0],
+            [1],
+            [0.5],
+            1,
+            1,
+            [1.0, 1.0],
+            [1, 0],
+            [0.5, 0.2],
+            2,
+            1,
+        )
+    with pytest.raises(ValueError, match="term_status"):
+        survival.joint_frailty_model(
+            [0],
+            [0.0],
+            [1.0],
+            [1],
+            [0.5],
+            1,
+            1,
+            [1.0],
+            [2],
+            [0.5],
+            1,
+            1,
+        )
+    with pytest.raises(ValueError, match="max_iter"):
+        survival.joint_frailty_model(
+            [0],
+            [0.0],
+            [1.0],
+            [1],
+            [0.5],
+            1,
+            1,
+            [1.0],
+            [1],
+            [0.5],
+            1,
+            1,
+            survival.FrailtyDistribution("gamma"),
+            0,
+            1e-4,
         )

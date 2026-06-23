@@ -40,6 +40,22 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_rmst_groups_near_tied_event_times() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let status = vec![1, 1, 0, 0];
+
+        let expected = compute_rmst(&exact_time, &status, 4.0, 0.95);
+        let actual = compute_rmst(&near_time, &status, 4.0, 0.95);
+
+        assert!((actual.rmst - expected.rmst).abs() < 1e-12);
+        assert!((actual.variance - expected.variance).abs() < 1e-12);
+        assert!((actual.se - expected.se).abs() < 1e-12);
+        assert!((actual.ci_lower - expected.ci_lower).abs() < 1e-12);
+        assert!((actual.ci_upper - expected.ci_upper).abs() < 1e-12);
+    }
+
+    #[test]
     fn test_compare_rmst_two_groups() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 1.5, 2.5, 3.5, 4.5];
         let status = vec![1, 1, 0, 1, 1, 0, 1, 0];
@@ -86,6 +102,20 @@ mod tests {
     }
 
     #[test]
+    fn test_survival_quantile_groups_near_tied_event_times() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let status = vec![1, 1, 0, 0];
+
+        let expected = compute_survival_quantile(&exact_time, &status, 0.5, 0.95);
+        let actual = compute_survival_quantile(&near_time, &status, 0.5, 0.95);
+
+        assert_eq!(actual.median, expected.median);
+        assert_eq!(actual.ci_lower, expected.ci_lower);
+        assert_eq!(actual.ci_upper, expected.ci_upper);
+    }
+
+    #[test]
     fn test_cumulative_incidence_basic() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 2, 1, 0, 2];
@@ -119,6 +149,25 @@ mod tests {
     }
 
     #[test]
+    fn test_cumulative_incidence_groups_near_tied_event_times() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let status = vec![1, 2, 0, 0];
+
+        let expected = compute_cumulative_incidence(&exact_time, &status);
+        let actual = compute_cumulative_incidence(&near_time, &status);
+
+        assert_eq!(actual.time, expected.time);
+        assert_eq!(actual.n_risk, expected.n_risk);
+        assert_eq!(actual.event_types, expected.event_types);
+        for (actual_curve, expected_curve) in actual.cif.iter().zip(expected.cif.iter()) {
+            for (actual_value, expected_value) in actual_curve.iter().zip(expected_curve.iter()) {
+                assert!((*actual_value - *expected_value).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
     fn test_compute_nnt_basic() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 0, 1, 1, 1, 1, 0];
@@ -128,6 +177,31 @@ mod tests {
 
         assert!(result.nnt.is_finite() || result.nnt.is_infinite());
         assert_eq!(result.time_horizon, 5.0);
+    }
+
+    #[test]
+    fn test_compute_nnt_groups_near_tied_event_times_at_horizon() {
+        let exact_time = vec![1.0, 1.0, 3.0, 2.0, 2.0, 3.0];
+        let near_time = vec![
+            1.0,
+            1.0 + crate::constants::TIME_EPSILON / 2.0,
+            3.0,
+            2.0 + crate::constants::TIME_EPSILON / 2.0,
+            2.0,
+            3.0,
+        ];
+        let status = vec![1, 1, 0, 1, 0, 0];
+        let group = vec![0, 0, 0, 1, 1, 1];
+
+        let expected = compute_nnt(&exact_time, &status, &group, 2.0, 0.95);
+        let actual = compute_nnt(&near_time, &status, &group, 2.0, 0.95);
+
+        assert!((actual.nnt - expected.nnt).abs() < 1e-12);
+        assert!(
+            (actual.absolute_risk_reduction - expected.absolute_risk_reduction).abs() < 1e-12
+        );
+        assert!((actual.arr_ci_lower - expected.arr_ci_lower).abs() < 1e-12);
+        assert!((actual.arr_ci_upper - expected.arr_ci_upper).abs() < 1e-12);
     }
 
     #[test]
@@ -221,6 +295,27 @@ mod tests {
         let result = compute_rmst_optimal_threshold(&time, &status, 0.05, 5, 0.95);
         assert_eq!(result.optimal_tau, 5.0);
         assert_eq!(result.n_changepoints, 0);
+    }
+
+    #[test]
+    fn test_rmst_optimal_threshold_groups_near_tied_event_candidates() {
+        let exact_time = vec![1.0, 1.0, 2.0, 3.0, 4.0, 4.5];
+        let near_time = vec![
+            1.0,
+            1.0 + crate::constants::TIME_EPSILON / 2.0,
+            2.0,
+            3.0,
+            4.0,
+            4.5,
+        ];
+        let status = vec![1, 1, 1, 1, 0, 0];
+
+        let expected = compute_rmst_optimal_threshold(&exact_time, &status, 1.0, 2, 0.95);
+        let actual = compute_rmst_optimal_threshold(&near_time, &status, 1.0, 2, 0.95);
+
+        assert!((actual.optimal_tau - expected.optimal_tau).abs() < crate::constants::TIME_EPSILON);
+        assert_eq!(actual.n_changepoints, expected.n_changepoints);
+        assert!((actual.rmst_at_optimal.rmst - expected.rmst_at_optimal.rmst).abs() < 1e-12);
     }
 
     #[test]

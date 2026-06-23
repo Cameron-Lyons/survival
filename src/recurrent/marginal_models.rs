@@ -1,6 +1,10 @@
 use pyo3::prelude::*;
 
-use crate::constants::exp_ci_bounds_95;
+use crate::constants::{exp_ci_bounds_95, exp_clamped};
+use crate::recurrent::validation::{
+    compact_subject_index, unique_subject_count, validate_counting_process_design,
+    validate_event_time_design, validate_solver_controls,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -78,18 +82,19 @@ pub fn marginal_recurrent_model(
     max_iter: usize,
     tol: f64,
 ) -> PyResult<MarginalModelResult> {
-    if subject_id.len() != n_obs
-        || start_time.len() != n_obs
-        || stop_time.len() != n_obs
-        || event_status.len() != n_obs
-    {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input arrays must have length n_obs",
-        ));
-    }
+    validate_counting_process_design(
+        &subject_id,
+        &start_time,
+        &stop_time,
+        &event_status,
+        &x,
+        n_obs,
+        n_vars,
+    )?;
+    validate_solver_controls(max_iter, tol)?;
 
     let n_events = event_status.iter().filter(|&&s| s == 1).count();
-    let n_subjects = subject_id.iter().copied().max().map(|x| x + 1).unwrap_or(0);
+    let n_subjects = unique_subject_count(&subject_id);
     let mean_events = n_events as f64 / n_subjects.max(1) as f64;
 
     let mut beta = vec![0.0; n_vars];
@@ -98,18 +103,13 @@ pub fn marginal_recurrent_model(
         MarginalMethod::WeiLinWeissfeld => stop_time.clone(),
         MarginalMethod::AndersenGill => stop_time.clone(),
     };
+    let mut indices: Vec<usize> = (0..n_obs).collect();
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let mut prev_loglik = f64::NEG_INFINITY;
     for _iter in 0..max_iter {
         let mut gradient = vec![0.0; n_vars];
         let mut hessian_diag = vec![0.0; n_vars];
-
-        let mut indices: Vec<usize> = (0..n_obs).collect();
-        indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
 
         let eta: Vec<f64> = (0..n_obs)
             .map(|i| {
@@ -170,6 +170,7 @@ pub fn marginal_recurrent_model(
         }
 
         if max_change < tol || (loglik - prev_loglik).abs() < tol {
+            prev_loglik = loglik;
             break;
         }
         prev_loglik = loglik;
@@ -188,7 +189,7 @@ pub fn marginal_recurrent_model(
         &info_matrix,
     );
 
-    let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
+    let hazard_ratios: Vec<f64> = beta.iter().map(|&b| exp_clamped(b)).collect();
 
     let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&beta, &robust_se);
 
@@ -237,11 +238,7 @@ fn compute_naive_se(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let mut risk_sum = 0.0;
     let mut weighted_x = vec![0.0; p];
@@ -302,15 +299,11 @@ fn compute_robust_se(
     let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
-    let n_subjects = subject_id.iter().copied().max().map(|x| x + 1).unwrap_or(0);
+    let subject_index = compact_subject_index(subject_id);
 
-    let mut subject_scores: Vec<Vec<f64>> = vec![vec![0.0; p]; n_subjects];
+    let mut subject_scores: Vec<Vec<f64>> = vec![vec![0.0; p]; subject_index.len()];
 
     let mut risk_sum = 0.0;
     let mut weighted_x = vec![0.0; p];
@@ -322,7 +315,7 @@ fn compute_robust_se(
         }
 
         if status[i] == 1 && risk_sum > 0.0 {
-            let subj = subject_id[i];
+            let subj = subject_index[&subject_id[i]];
             for j in 0..p {
                 let x_bar = weighted_x[j] / risk_sum;
                 subject_scores[subj][j] += x[i * p + j] - x_bar;
@@ -331,7 +324,7 @@ fn compute_robust_se(
     }
 
     let mut meat = vec![0.0; p];
-    for scores in subject_scores.iter().take(n_subjects) {
+    for scores in &subject_scores {
         for j in 0..p {
             meat[j] += scores[j].powi(2);
         }
@@ -383,6 +376,7 @@ pub fn wei_lin_weissfeld(
     n_obs: usize,
     n_vars: usize,
 ) -> PyResult<MarginalModelResult> {
+    validate_event_time_design(&subject_id, &event_time, &event_status, &x, n_obs, n_vars)?;
     let start_time = vec![0.0; n_obs];
     marginal_recurrent_model(
         subject_id,
@@ -416,5 +410,121 @@ mod tests {
         assert_eq!(result.coefficients.len(), 1);
         assert_eq!(result.n_events, 4);
         assert!(result.robust_se[0].is_finite());
+    }
+
+    #[test]
+    fn marginal_models_validate_public_inputs() {
+        assert!(
+            marginal_recurrent_model(
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                0,
+                1,
+                &MarginalMethod::AndersenGill,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            marginal_recurrent_model(
+                vec![0, 1],
+                vec![0.0, 0.0],
+                vec![1.0, 1.0],
+                vec![1, 0],
+                vec![0.5],
+                2,
+                1,
+                &MarginalMethod::AndersenGill,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            marginal_recurrent_model(
+                vec![0],
+                vec![0.0],
+                vec![0.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                &MarginalMethod::AndersenGill,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            marginal_recurrent_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![2],
+                vec![0.5],
+                1,
+                1,
+                &MarginalMethod::AndersenGill,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            marginal_recurrent_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![f64::NAN],
+                1,
+                1,
+                &MarginalMethod::AndersenGill,
+                50,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(
+            marginal_recurrent_model(
+                vec![0],
+                vec![0.0],
+                vec![1.0],
+                vec![1],
+                vec![0.5],
+                1,
+                1,
+                &MarginalMethod::AndersenGill,
+                0,
+                1e-4,
+            )
+            .is_err()
+        );
+        assert!(wei_lin_weissfeld(vec![0], vec![1.0], vec![2], vec![0.5], 1, 1).is_err());
+    }
+
+    #[test]
+    fn marginal_model_handles_sparse_subject_ids() {
+        let result = marginal_recurrent_model(
+            vec![10, 10, 42],
+            vec![0.0, 2.0, 0.0],
+            vec![2.0, 5.0, 3.0],
+            vec![1, 0, 1],
+            vec![1.0, 0.5, 0.0],
+            3,
+            1,
+            &MarginalMethod::AndersenGill,
+            20,
+            1e-4,
+        )
+        .unwrap();
+
+        assert_eq!(result.n_subjects, 2);
+        assert_eq!(result.n_events, 2);
+        assert_eq!(result.robust_se.len(), 1);
     }
 }

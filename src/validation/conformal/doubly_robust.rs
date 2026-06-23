@@ -37,11 +37,7 @@ impl CensoringModel {
         }
 
         let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
         let mut unique_times = Vec::new();
         let mut survival_probs = Vec::new();
@@ -230,7 +226,7 @@ pub fn doubly_robust_conformal_calibrate(
 
     let cutoff_val = cutoff.unwrap_or_else(|| {
         let mut sorted_imputed: Vec<f64> = imputed_censoring.clone();
-        sorted_imputed.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted_imputed.sort_by(f64::total_cmp);
         let idx = (0.9 * n as f64) as usize;
         sorted_imputed[idx.min(n - 1)]
     });

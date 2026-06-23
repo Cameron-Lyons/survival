@@ -77,8 +77,10 @@ pub fn wlw_model(
 ) -> PyResult<WLWResult> {
     let n = id.len();
     validate_recurrent_lengths(n, &[time.len(), event.len(), stratum.len()])?;
+    validate_time_event_inputs(&time, &event)?;
+    validate_recurrent_solver_controls(config.max_iter, config.tol)?;
 
-    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n);
+    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n)?;
 
     let unique_ids = sorted_unique_i32(&id);
     let n_subjects = unique_ids.len();
@@ -107,9 +109,7 @@ pub fn wlw_model(
 
             let mut sorted_indices = strata_indices.clone();
             sorted_indices.sort_by(|&a, &b| {
-                time[b]
-                    .partial_cmp(&time[a])
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                time[b].total_cmp(&time[a])
             });
 
             for &i in &sorted_indices {
@@ -187,9 +187,7 @@ pub fn wlw_model(
         let strata_indices: Vec<usize> = (0..n).filter(|&i| stratum[i] == strat).collect();
         let mut sorted_indices = strata_indices.clone();
         sorted_indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
+            time[b].total_cmp(&time[a])
         });
 
         for &i in &sorted_indices {

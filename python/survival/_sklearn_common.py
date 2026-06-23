@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 
-from survival import _survival as _surv
+from . import _survival as _surv
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike, NDArray
@@ -49,7 +49,11 @@ else:
             pass
 
         def check_array(X, **kwargs):
-            return np.asarray(X)
+            array = np.asarray(X, dtype=kwargs.get("dtype"))
+            if kwargs.get("ensure_2d", True) and array.ndim != 2:
+                shape = "scalar" if array.ndim == 0 else f"{array.ndim}D"
+                raise ValueError(f"Expected 2D array, got {shape} array instead")
+            return array
 
         def check_is_fitted(estimator, attributes=None):
             if not hasattr(estimator, "is_fitted_") or not estimator.is_fitted_:

@@ -8,7 +8,9 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::constants::TIME_EPSILON;
-use crate::internal::validation::{validate_finite, validate_no_nan};
+use crate::internal::validation::{
+    validate_finite, validate_no_nan, validate_non_overlapping_intervals_i32,
+};
 
 /// Result of converting to timeline (wide) format
 #[pyclass(from_py_object)]
@@ -124,6 +126,7 @@ pub fn to_timeline(
             )));
         }
     }
+    validate_non_overlapping_intervals_i32(&id, &time1, &time2, TIME_EPSILON)?;
 
     if n == 0 {
         return Ok(TimelineResult {
@@ -357,6 +360,13 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("time_points must be strictly increasing")
+        );
+
+        let err =
+            to_timeline(vec![1, 1], vec![0.0, 4.0], vec![5.0, 6.0], vec![0, 1], None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("intervals must not overlap within id")
         );
     }
 

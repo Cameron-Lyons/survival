@@ -335,11 +335,7 @@ pub fn fit_cox_time(
     );
 
     let mut time_order: Vec<usize> = (0..n).collect();
-    time_order.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    time_order.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let weights = extract_weights(&model, n_features);
 

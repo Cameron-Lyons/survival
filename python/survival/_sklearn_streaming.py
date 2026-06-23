@@ -2,16 +2,34 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from importlib import import_module
+from operator import index as _index
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 
-from ._sklearn_aft import AFTEstimator
-from ._sklearn_cox import CoxPHEstimator
-from ._sklearn_ensemble import GradientBoostSurvivalEstimator, SurvivalForestEstimator
-
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike, NDArray
+
+_PUBLIC_EXPORTS = (
+    "StreamingAFTEstimator",
+    "StreamingCoxPHEstimator",
+    "StreamingGradientBoostSurvivalEstimator",
+    "StreamingMixin",
+    "StreamingSurvivalForestEstimator",
+    "iter_chunks",
+    "predict_large_dataset",
+    "survival_curves_to_disk",
+)
+
+_STREAMING_WRAPPER_MODULES = {
+    "StreamingAFTEstimator": "._sklearn_streaming_aft",
+    "StreamingCoxPHEstimator": "._sklearn_streaming_cox",
+    "StreamingGradientBoostSurvivalEstimator": "._sklearn_streaming_ensemble",
+    "StreamingSurvivalForestEstimator": "._sklearn_streaming_ensemble",
+}
+
+__all__ = list(_PUBLIC_EXPORTS)
 
 
 class _Predictor(Protocol):
@@ -23,6 +41,45 @@ class _SurvivalFunctionPredictor(Protocol):
         self,
         X: ArrayLike,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+
+
+def _check_batch_size(batch_size: int) -> int:
+    if isinstance(batch_size, (bool, np.bool_)):
+        raise TypeError("batch_size must be an integer")
+    try:
+        normalized = _index(batch_size)
+    except TypeError as exc:
+        raise TypeError("batch_size must be an integer") from exc
+    if normalized <= 0:
+        raise ValueError("batch_size must be a positive integer")
+    return normalized
+
+
+def _num_samples(X: ArrayLike) -> int:
+    shape = getattr(X, "shape", None)
+    if shape is not None and len(shape) > 0:
+        return int(shape[0])
+    try:
+        return len(cast(Any, X))
+    except TypeError as exc:
+        raise TypeError("X must be an indexable array-like object with rows") from exc
+
+
+def _slice_rows(X: ArrayLike, start_idx: int, end_idx: int) -> NDArray[np.float64]:
+    iloc = getattr(X, "iloc", None)
+    chunk = iloc[start_idx:end_idx] if iloc is not None else cast(Any, X)[start_idx:end_idx]
+    return np.asarray(chunk)
+
+
+def _iter_chunks_from(
+    X: ArrayLike,
+    n_samples: int,
+    batch_size: int,
+    start_idx: int = 0,
+) -> Iterator[tuple[int, NDArray[np.float64]]]:
+    for chunk_start in range(start_idx, n_samples, batch_size):
+        chunk_end = min(chunk_start + batch_size, n_samples)
+        yield chunk_start, _slice_rows(X, chunk_start, chunk_end)
 
 
 def iter_chunks(X: ArrayLike, batch_size: int = 1000) -> Iterator[tuple[int, NDArray[np.float64]]]:
@@ -49,11 +106,9 @@ def iter_chunks(X: ArrayLike, batch_size: int = 1000) -> Iterator[tuple[int, NDA
     >>> for start_idx, chunk in iter_chunks(X, batch_size=1000):
     ...     print(f"Processing samples {start_idx} to {start_idx + len(chunk)}")
     """
-    X = np.asarray(X)
-    n_samples = X.shape[0]
-    for start_idx in range(0, n_samples, batch_size):
-        end_idx = min(start_idx + batch_size, n_samples)
-        yield start_idx, X[start_idx:end_idx]
+    batch_size = _check_batch_size(batch_size)
+    n_samples = _num_samples(X)
+    yield from _iter_chunks_from(X, n_samples, batch_size)
 
 
 class StreamingMixin:
@@ -140,67 +195,19 @@ class StreamingMixin:
         >>> model.predict_to_array(X_large, batch_size=10000, out=out)
         >>> out.flush()  # Write to disk
         """
-        X = np.asarray(X)
-        n_samples = X.shape[0]
+        batch_size = _check_batch_size(batch_size)
+        n_samples = _num_samples(X)
 
         if out is None:
             out = np.empty(n_samples, dtype=np.float64)
-        elif out.shape[0] != n_samples:
+        elif out.shape != (n_samples,):
             raise ValueError(f"out has shape {out.shape}, expected ({n_samples},)")
 
-        for start_idx, chunk in iter_chunks(X, batch_size):
+        for start_idx, chunk in _iter_chunks_from(X, n_samples, batch_size):
             end_idx = start_idx + chunk.shape[0]
             out[start_idx:end_idx] = cast(_Predictor, self).predict(chunk)
 
         return out
-
-
-class StreamingCoxPHEstimator(CoxPHEstimator, StreamingMixin):
-    """Cox PH Estimator with streaming/batched prediction support.
-
-    This class extends CoxPHEstimator with methods for processing large
-    datasets that don't fit in memory.
-
-    See CoxPHEstimator for full documentation.
-    """
-
-    pass
-
-
-class StreamingGradientBoostSurvivalEstimator(GradientBoostSurvivalEstimator, StreamingMixin):
-    """Gradient Boosting Survival Estimator with streaming support.
-
-    This class extends GradientBoostSurvivalEstimator with methods for
-    processing large datasets that don't fit in memory.
-
-    See GradientBoostSurvivalEstimator for full documentation.
-    """
-
-    pass
-
-
-class StreamingSurvivalForestEstimator(SurvivalForestEstimator, StreamingMixin):
-    """Survival Forest Estimator with streaming support.
-
-    This class extends SurvivalForestEstimator with methods for processing
-    large datasets that don't fit in memory.
-
-    See SurvivalForestEstimator for full documentation.
-    """
-
-    pass
-
-
-class StreamingAFTEstimator(AFTEstimator, StreamingMixin):
-    """AFT Estimator with streaming/batched prediction support.
-
-    This class extends AFTEstimator with methods for processing large
-    datasets that don't fit in memory.
-
-    See AFTEstimator for full documentation.
-    """
-
-    pass
 
 
 def predict_large_dataset(
@@ -244,8 +251,8 @@ def predict_large_dataset(
     ...     output_file='predictions.mmap', verbose=True
     ... )
     """
-    X = np.asarray(X)
-    n_samples = X.shape[0]
+    batch_size = _check_batch_size(batch_size)
+    n_samples = _num_samples(X)
 
     predictions: Any
     if output_file is not None:
@@ -255,7 +262,7 @@ def predict_large_dataset(
 
     n_batches = (n_samples + batch_size - 1) // batch_size
 
-    for batch_idx, (start_idx, chunk) in enumerate(iter_chunks(X, batch_size)):
+    for batch_idx, (start_idx, chunk) in enumerate(_iter_chunks_from(X, n_samples, batch_size)):
         end_idx = start_idx + chunk.shape[0]
         predictions[start_idx:end_idx] = estimator.predict(chunk)
 
@@ -310,24 +317,46 @@ def survival_curves_to_disk(
     >>> # Access individual survival curves without loading all into memory
     >>> curve_0 = survival_curves[0]  # Loads only first curve
     """
-    X = np.asarray(X)
-    n_samples = X.shape[0]
+    batch_size = _check_batch_size(batch_size)
+    n_samples = _num_samples(X)
+    if n_samples == 0:
+        raise ValueError("X must contain at least one row")
 
-    first_times, first_surv = estimator.predict_survival_function(X[:1])
+    first_end_idx = min(batch_size, n_samples)
+    first_times, first_surv = estimator.predict_survival_function(_slice_rows(X, 0, first_end_idx))
     n_times = len(first_times)
     times = first_times
 
     survival = np.memmap(output_file, dtype=np.float64, mode="w+", shape=(n_samples, n_times))
 
     n_batches = (n_samples + batch_size - 1) // batch_size
+    survival[0:first_end_idx] = first_surv
+    if verbose:
+        print(f"Processed batch 1/{n_batches} (samples 0-{first_end_idx})")
 
-    for batch_idx, (start_idx, chunk) in enumerate(iter_chunks(X, batch_size)):
+    for batch_idx, (start_idx, chunk) in enumerate(
+        _iter_chunks_from(X, n_samples, batch_size, first_end_idx),
+        start=2,
+    ):
         end_idx = start_idx + chunk.shape[0]
         _, batch_surv = estimator.predict_survival_function(chunk)
         survival[start_idx:end_idx] = batch_surv
 
         if verbose:
-            print(f"Processed batch {batch_idx + 1}/{n_batches} (samples {start_idx}-{end_idx})")
+            print(f"Processed batch {batch_idx}/{n_batches} (samples {start_idx}-{end_idx})")
 
     survival.flush()
     return times, survival
+
+
+def __getattr__(name: str) -> Any:
+    module_path = _STREAMING_WRAPPER_MODULES.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_path, __package__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(__all__))

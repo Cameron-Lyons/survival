@@ -108,6 +108,36 @@ fn validate_distribution(distribution: &str) -> PyResult<()> {
     ))
 }
 
+fn validated_distribution_key(distribution: &str) -> String {
+    debug_assert!(
+        validate_distribution(distribution).is_ok(),
+        "distribution was validated"
+    );
+    distribution_key(distribution)
+}
+
+fn response_uses_log_transform(key: &str) -> bool {
+    match key {
+        "weibull" | "exponential" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian"
+        | "loglogistic" | "log_logistic" => true,
+        "extreme" | "extreme_value" | "extremevalue" | "gaussian" | "normal" | "logistic" => false,
+        _ => unreachable!("distribution was validated"),
+    }
+}
+
+fn quantile_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
+    match key {
+        "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
+            extreme_value_quantile
+        }
+        "logistic" | "loglogistic" | "log_logistic" => logistic_quantile,
+        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
+            normal_inverse_cdf
+        }
+        _ => unreachable!("distribution was validated"),
+    }
+}
+
 pub(crate) fn compute_linear_predictor(
     covariates: &[Vec<f64>],
     coefficients: &[f64],
@@ -133,13 +163,11 @@ pub(crate) fn compute_linear_predictor(
 }
 
 pub(crate) fn compute_response_prediction(linear_pred: &[f64], distribution: &str) -> Vec<f64> {
-    match distribution_key(distribution).as_str() {
-        "weibull" | "exponential" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian"
-        | "loglogistic" | "log_logistic" => linear_pred.iter().map(|&lp| lp.exp()).collect(),
-        "extreme" | "extreme_value" | "extremevalue" | "gaussian" | "normal" | "logistic" => {
-            linear_pred.to_vec()
-        }
-        _ => linear_pred.to_vec(),
+    let key = validated_distribution_key(distribution);
+    if response_uses_log_transform(&key) {
+        linear_pred.iter().map(|&lp| lp.exp()).collect()
+    } else {
+        linear_pred.to_vec()
     }
 }
 
@@ -152,28 +180,9 @@ pub(crate) fn compute_quantile_prediction(
     let n = linear_pred.len();
     let nq = quantiles.len();
 
-    let key = distribution_key(distribution);
-    let quantile_fn: fn(f64) -> f64 = match key.as_str() {
-        "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
-            extreme_value_quantile
-        }
-        "logistic" | "loglogistic" | "log_logistic" => logistic_quantile,
-        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            normal_inverse_cdf
-        }
-        _ => extreme_value_quantile,
-    };
-    let uses_log_transform = matches!(
-        key.as_str(),
-        "weibull"
-            | "exponential"
-            | "lognormal"
-            | "log_normal"
-            | "loggaussian"
-            | "log_gaussian"
-            | "loglogistic"
-            | "log_logistic"
-    );
+    let key = validated_distribution_key(distribution);
+    let quantile_fn = quantile_fn_for_distribution(&key);
+    let uses_log_transform = response_uses_log_transform(&key);
 
     let mut predictions = Vec::with_capacity(n);
     for lp in linear_pred.iter().take(n) {
@@ -608,6 +617,27 @@ mod tests {
             compute_response_prediction(&linear_pred, "extreme_value"),
             linear_pred
         );
+    }
+
+    #[test]
+    fn test_prediction_distribution_aliases_are_canonicalized() {
+        let linear_pred = vec![1.0];
+
+        assert!(
+            (compute_response_prediction(&linear_pred, "log-normal")[0] - std::f64::consts::E)
+                .abs()
+                < 1e-10
+        );
+        assert_eq!(
+            compute_response_prediction(&linear_pred, "extreme-value"),
+            linear_pred
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "distribution was validated")]
+    fn test_prediction_helpers_do_not_default_unknown_distribution() {
+        let _ = compute_quantile_prediction(&[0.0], 1.0, &[0.5], "mystery");
     }
 
     #[test]

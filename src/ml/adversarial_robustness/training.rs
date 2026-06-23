@@ -136,11 +136,7 @@ fn train_cox_with_data(
         let exp_pred: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
 
         let mut sorted_indices: Vec<usize> = (0..n).collect();
-        sorted_indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
         let mut risk_set_sum = 0.0;
         let mut risk_set_x = vec![0.0; p];
@@ -339,7 +335,7 @@ pub fn evaluate_robustness(
     let predictions: Vec<f64> = x.iter().map(|xi| predict_risk(xi, &coefficients)).collect();
     let median_pred = {
         let mut sorted = predictions.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(f64::total_cmp);
         sorted[n / 2]
     };
 
@@ -419,4 +415,3 @@ pub fn evaluate_robustness(
         epsilon_values,
     })
 }
-

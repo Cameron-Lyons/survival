@@ -106,8 +106,8 @@ fn _compute_wasserstein_distance(repr_treated: &[Vec<f64>], repr_control: &[Vec<
         let mut treated_vals: Vec<f64> = repr_treated.iter().map(|r| r[d]).collect();
         let mut control_vals: Vec<f64> = repr_control.iter().map(|r| r[d]).collect();
 
-        treated_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        control_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        treated_vals.sort_by(f64::total_cmp);
+        control_vals.sort_by(f64::total_cmp);
 
         let n_t = treated_vals.len();
         let n_c = control_vals.len();

@@ -171,7 +171,7 @@ pub(crate) fn compute_rmst_optimal_threshold(
             censor_times.push(time[i]);
         }
     }
-    event_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    event_times.sort_by(f64::total_cmp);
     let max_followup = time.iter().fold(0.0_f64, |a, &b| a.max(b));
     if event_times.is_empty() {
         let rmst_result = compute_rmst(time, status, max_followup, confidence_level);
@@ -184,12 +184,12 @@ pub(crate) fn compute_rmst_optimal_threshold(
         };
     }
     let mut unique_event_times: Vec<f64> = event_times.clone();
-    unique_event_times.dedup();
+    unique_event_times.dedup_by(|left, right| same_time(*left, *right));
     let min_events = min_events_per_interval.max(2);
     let mut candidate_changepoints: Vec<f64> = Vec::new();
     let mut cumulative_events = 0usize;
     for &t in &unique_event_times {
-        let events_at_t = event_times.iter().filter(|&&et| et == t).count();
+        let events_at_t = event_times.iter().filter(|&&et| same_time(et, t)).count();
         cumulative_events += events_at_t;
         let events_after = event_times.len() - cumulative_events;
         if cumulative_events >= min_events && events_after >= min_events {
@@ -222,7 +222,7 @@ pub(crate) fn compute_rmst_optimal_threshold(
         .iter()
         .map(|&(cp, _, _)| cp)
         .collect();
-    selected_changepoints.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    selected_changepoints.sort_by(f64::total_cmp);
     loop {
         if selected_changepoints.len() <= 1 {
             break;
@@ -264,7 +264,7 @@ pub(crate) fn compute_rmst_optimal_threshold(
             compute_hazard_in_interval(&event_times, &censor_times, t_start_after, t_end_after);
         let (lr_stat, p_val) = significant_changepoints
             .iter()
-            .find(|&&(c, _, _)| (c - cp).abs() < 1e-10)
+            .find(|&&(c, _, _)| same_time(c, cp))
             .map(|&(_, lr, p)| (lr, p))
             .unwrap_or((0.0, 1.0));
         changepoint_info.push(ChangepointInfo {

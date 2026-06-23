@@ -1,5 +1,8 @@
-use crate::constants::{Z_SCORE_90, Z_SCORE_95, Z_SCORE_99, normal_ci, normal_ci_bounds_95};
-use crate::internal::statistical::normal_cdf;
+use crate::constants::{normal_ci, normal_ci_bounds_95};
+use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
+use crate::internal::validation::{
+    validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
+};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
@@ -55,11 +58,14 @@ pub fn yates(
 ) -> PyResult<YatesResult> {
     let n = predictions.len();
 
+    validate_non_empty(&predictions, "predictions")?;
     if factor.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "predictions and factor must have same length",
         ));
     }
+    validate_no_nan(&predictions, "predictions")?;
+    validate_finite(&predictions, "predictions")?;
 
     let wts = weights.unwrap_or_else(|| vec![1.0; n]);
     if wts.len() != n {
@@ -67,9 +73,12 @@ pub fn yates(
             "weights must have same length as predictions",
         ));
     }
+    validate_no_nan(&wts, "weights")?;
+    validate_finite(&wts, "weights")?;
+    validate_non_negative(&wts, "weights")?;
 
     let conf = conf_level.unwrap_or(0.95);
-    let z = z_score(conf);
+    let z = z_score(conf)?;
 
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, level) in factor.iter().enumerate() {
@@ -112,7 +121,13 @@ pub fn yates(
             sum_wx += w * x;
         }
 
-        let mean = if sum_w > 0.0 { sum_wx / sum_w } else { 0.0 };
+        if sum_w <= 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "weights must have positive total weight within each factor level",
+            ));
+        }
+
+        let mean = sum_wx / sum_w;
 
         let mut sum_w2_dev2 = 0.0;
         for &i in indices {
@@ -121,11 +136,7 @@ pub fn yates(
             sum_w2_dev2 += w * w * dev * dev;
         }
 
-        let variance = if sum_w > 0.0 {
-            sum_w2_dev2 / (sum_w * sum_w)
-        } else {
-            0.0
-        };
+        let variance = sum_w2_dev2 / (sum_w * sum_w);
         let se = variance.sqrt();
 
         means.push(mean);
@@ -174,6 +185,16 @@ pub fn yates_contrast(
     factor_levels: Vec<f64>,
     predict_type: Option<&str>,
 ) -> PyResult<YatesResult> {
+    if n_obs == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_obs must be greater than 0",
+        ));
+    }
+    if n_vars == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_vars must be greater than 0",
+        ));
+    }
     if x.len() != n_obs * n_vars {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "x length must equal n_obs * n_vars",
@@ -189,8 +210,16 @@ pub fn yates_contrast(
             "factor_col must be < n_vars",
         ));
     }
+    validate_non_empty(&factor_levels, "factor_levels")?;
+    validate_no_nan(&x, "x")?;
+    validate_finite(&x, "x")?;
+    validate_no_nan(&coef, "coef")?;
+    validate_finite(&coef, "coef")?;
+    validate_no_nan(&factor_levels, "factor_levels")?;
+    validate_finite(&factor_levels, "factor_levels")?;
 
     let pred_type = predict_type.unwrap_or("linear");
+    validate_predict_type(pred_type)?;
 
     let mut levels = Vec::with_capacity(factor_levels.len());
     let mut means = Vec::with_capacity(factor_levels.len());
@@ -217,15 +246,21 @@ pub fn yates_contrast(
             let pred = match pred_type {
                 "risk" => eta.exp(),
                 "survival" => (-eta.exp()).exp(),
-                _ => eta,
+                "linear" => eta,
+                _ => unreachable!("predict_type was validated"),
             };
+            if !pred.is_finite() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "computed predictions are non-finite; check x and coef scale",
+                ));
+            }
 
             sum_pred += pred;
             sum_pred2 += pred * pred;
         }
 
         let mean = sum_pred / n_obs as f64;
-        let variance = sum_pred2 / n_obs as f64 - mean * mean;
+        let variance = (sum_pred2 / n_obs as f64 - mean * mean).max(0.0);
         let se = (variance / n_obs as f64).sqrt();
 
         means.push(mean);
@@ -314,12 +349,21 @@ pub struct YatesPairwiseResult {
     pub p_value: Vec<f64>,
 }
 
-fn z_score(conf_level: f64) -> f64 {
-    match conf_level {
-        c if (c - 0.90).abs() < 0.001 => Z_SCORE_90,
-        c if (c - 0.95).abs() < 0.001 => Z_SCORE_95,
-        c if (c - 0.99).abs() < 0.001 => Z_SCORE_99,
-        _ => Z_SCORE_95,
+fn z_score(conf_level: f64) -> PyResult<f64> {
+    if !conf_level.is_finite() || conf_level <= 0.0 || conf_level >= 1.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "conf_level must be a finite value between 0 and 1",
+        ));
+    }
+    Ok(normal_inverse_cdf(0.5 + conf_level / 2.0))
+}
+
+fn validate_predict_type(predict_type: &str) -> PyResult<()> {
+    match predict_type {
+        "linear" | "risk" | "survival" => Ok(()),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "predict_type must be one of 'linear', 'risk', or 'survival'",
+        )),
     }
 }
 
@@ -363,6 +407,45 @@ mod tests {
     }
 
     #[test]
+    fn test_yates_confidence_level_controls_interval_width() {
+        let predictions = vec![1.0, 2.0, 3.0, 4.0];
+        let factor = vec![
+            "A".to_string(),
+            "A".to_string(),
+            "A".to_string(),
+            "A".to_string(),
+        ];
+
+        let narrow = yates(predictions.clone(), factor.clone(), None, Some(0.80)).unwrap();
+        let wide = yates(predictions, factor, None, Some(0.99)).unwrap();
+
+        let narrow_width = narrow.upper[0] - narrow.lower[0];
+        let wide_width = wide.upper[0] - wide.lower[0];
+        assert!(wide_width > narrow_width);
+    }
+
+    #[test]
+    fn test_yates_rejects_malformed_inputs() {
+        let err = yates(vec![], vec![], None, None).unwrap_err();
+        assert!(err.to_string().contains("predictions cannot be empty"));
+
+        let err = yates(vec![f64::NAN], vec!["A".to_string()], None, None).unwrap_err();
+        assert!(err.to_string().contains("predictions contains NaN"));
+
+        let err = yates(vec![1.0], vec!["A".to_string()], Some(vec![-1.0]), None).unwrap_err();
+        assert!(err.to_string().contains("weights contains negative value"));
+
+        let err = yates(vec![1.0], vec!["A".to_string()], Some(vec![0.0]), None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("weights must have positive total weight")
+        );
+
+        let err = yates(vec![1.0], vec!["A".to_string()], None, Some(1.0)).unwrap_err();
+        assert!(err.to_string().contains("conf_level"));
+    }
+
+    #[test]
     fn test_yates_contrast() {
         let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let coef = vec![0.5, 1.0];
@@ -371,6 +454,57 @@ mod tests {
         let result = yates_contrast(x, coef, 3, 2, 0, factor_levels, Some("linear")).unwrap();
 
         assert_eq!(result.levels.len(), 2);
+    }
+
+    #[test]
+    fn test_yates_contrast_rejects_malformed_inputs() {
+        let err =
+            yates_contrast(vec![], vec![0.5], 0, 1, 0, vec![0.0], Some("linear")).unwrap_err();
+        assert!(err.to_string().contains("n_obs must be greater than 0"));
+
+        let err =
+            yates_contrast(vec![1.0], vec![0.5], 1, 1, 0, vec![], Some("linear")).unwrap_err();
+        assert!(err.to_string().contains("factor_levels cannot be empty"));
+
+        let err = yates_contrast(
+            vec![f64::NAN],
+            vec![0.5],
+            1,
+            1,
+            0,
+            vec![0.0],
+            Some("linear"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("x contains NaN"));
+
+        let err = yates_contrast(
+            vec![1.0],
+            vec![f64::INFINITY],
+            1,
+            1,
+            0,
+            vec![0.0],
+            Some("linear"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("coef contains non-finite"));
+
+        let err = yates_contrast(
+            vec![1.0],
+            vec![0.5],
+            1,
+            1,
+            0,
+            vec![f64::NAN],
+            Some("linear"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("factor_levels contains NaN"));
+
+        let err =
+            yates_contrast(vec![1.0], vec![0.5], 1, 1, 0, vec![0.0], Some("bogus")).unwrap_err();
+        assert!(err.to_string().contains("predict_type must be one of"));
     }
 
     #[test]

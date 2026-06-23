@@ -213,6 +213,48 @@ def test_cv_cox_concordance_with_pandas():
     assert hasattr(result, "mean_score")
 
 
+def test_crossval_wrappers_validate_inputs_and_survreg_covariates():
+    time = [float(i) for i in range(1, 31)]
+    status_i32 = [1 if i % 3 != 0 else 0 for i in range(30)]
+    status_f64 = [float(value) for value in status_i32]
+    covariates = [[i / 30.0] for i in range(30)]
+
+    cox = survival.cv_cox_concordance(time, status_i32, covariates, n_folds=3, seed=42)
+    survreg = survival.cv_survreg_loglik(time, status_f64, covariates, "weibull", 3, True, 42)
+
+    assert len(cox.fold_scores) == 3
+    assert len(survreg.fold_scores) == 3
+    assert all(len(coefficients) > 0 for coefficients in survreg.fold_coefficients)
+
+    with pytest.raises(ValueError, match="n_folds must be between 2"):
+        survival.cv_cox_concordance(time, status_i32, covariates, n_folds=1)
+
+    with pytest.raises(ValueError, match="time and status must have the same non-zero length"):
+        survival.cv_cox_concordance(time, status_i32[:-1], covariates, n_folds=3)
+
+    bad_time = list(time)
+    bad_time[1] = float("nan")
+    with pytest.raises(ValueError, match="time contains non-finite"):
+        survival.cv_cox_concordance(bad_time, status_i32, covariates, n_folds=3)
+
+    bad_status = list(status_i32)
+    bad_status[2] = 2
+    with pytest.raises(ValueError, match="status values must be 0 or 1"):
+        survival.cv_cox_concordance(time, bad_status, covariates, n_folds=3)
+
+    with pytest.raises(ValueError, match="covariates length must match time length"):
+        survival.cv_survreg_loglik(time, status_f64, covariates[:-1], "weibull", 3, True, 42)
+
+    ragged_covariates = [row[:] for row in covariates]
+    ragged_covariates[3] = [0.1, 0.2]
+    with pytest.raises(ValueError, match="covariates row 3 length"):
+        survival.cv_survreg_loglik(time, status_f64, ragged_covariates, "weibull", 3, True, 42)
+
+    bad_weights = [1.0] * 29 + [float("inf")]
+    with pytest.raises(ValueError, match="weights contains non-finite"):
+        survival.cv_cox_concordance(time, status_i32, covariates, weights=bad_weights, n_folds=3)
+
+
 def test_survfitkm_with_numpy_weights():
     weights_np = np.array([1.0, 1.0, 2.0, 1.0, 1.5])
     result = survival.survfitkm(

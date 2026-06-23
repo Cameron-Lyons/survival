@@ -170,7 +170,7 @@ fn compute_censoring_weights(
     }
 
     let mut unique_times = censored_times.clone();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     for clone in clones.iter_mut() {
@@ -365,11 +365,7 @@ fn estimate_hazard_ratio(clones: &[ClonedObservation], _n_vars: usize) -> f64 {
         let mut hessian = 0.0;
 
         let mut sorted_clones: Vec<&ClonedObservation> = clones.iter().collect();
-        sorted_clones.sort_by(|a, b| {
-            b.followup_time
-                .partial_cmp(&a.followup_time)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted_clones.sort_by(|a, b| b.followup_time.total_cmp(&a.followup_time));
 
         let mut risk_sum = 0.0;
         let mut weighted_trt = 0.0;

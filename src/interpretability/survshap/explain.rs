@@ -274,7 +274,7 @@ pub fn survshap_bootstrap(
                     .sum::<f64>()
                     / n_bootstrap as f64;
 
-                values_buffer.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                values_buffer.sort_by(f64::total_cmp);
 
                 shap_values_mean[i][f][t] = mean;
                 shap_values_std[i][f][t] = variance.sqrt();
@@ -549,4 +549,3 @@ pub fn compute_shap_interactions(
         aggregated_interactions,
     })
 }
-

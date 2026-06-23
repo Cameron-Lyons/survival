@@ -1,6 +1,12 @@
 use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 
+fn sorted_issue_ids(ids: &HashSet<i64>) -> Vec<i64> {
+    let mut values: Vec<i64> = ids.iter().copied().collect();
+    values.sort_unstable();
+    values
+}
+
 /// Result of survival data validation
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -114,11 +120,7 @@ pub fn survcheck(
 
     for (&subj_id, indices) in &subject_obs {
         let mut sorted_indices = indices.clone();
-        sorted_indices.sort_by(|&a, &b| {
-            time1[a]
-                .partial_cmp(&time1[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted_indices.sort_by(|&a, &b| time1[a].total_cmp(&time1[b]));
 
         let mut prev_end: Option<f64> = None;
         let mut prev_state: Option<i32> = None;
@@ -129,6 +131,20 @@ pub fn survcheck(
             let state = status[idx];
             let istate_val = initial_state[idx];
 
+            let trans_key = format!("{} -> {}", istate_val, state);
+            *transitions.entry(trans_key).or_insert(0) += 1;
+            n_transitions += 1;
+
+            if !t1.is_finite() || !t2.is_finite() {
+                flags[idx] = 4;
+                invalid_ids.insert(subj_id);
+                messages.push(format!(
+                    "Subject {}: non-finite time at observation {}",
+                    subj_id, idx
+                ));
+                continue;
+            }
+
             if t2 < t1 {
                 flags[idx] = 4;
                 invalid_ids.insert(subj_id);
@@ -136,6 +152,7 @@ pub fn survcheck(
                     "Subject {}: time2 ({}) < time1 ({}) at observation {}",
                     subj_id, t2, t1, idx
                 ));
+                continue;
             }
 
             if let Some(pe) = prev_end {
@@ -169,16 +186,18 @@ pub fn survcheck(
                 ));
             }
 
-            let trans_key = format!("{} -> {}", istate_val, state);
-            *transitions.entry(trans_key).or_insert(0) += 1;
-            n_transitions += 1;
-
             prev_end = Some(t2);
             prev_state = Some(state);
         }
     }
 
-    let n_problems = overlap_ids.len() + gap_ids.len() + teleport_ids.len() + invalid_ids.len();
+    let mut problem_ids = HashSet::new();
+    problem_ids.extend(overlap_ids.iter().copied());
+    problem_ids.extend(gap_ids.iter().copied());
+    problem_ids.extend(teleport_ids.iter().copied());
+    problem_ids.extend(invalid_ids.iter().copied());
+
+    let n_problems = problem_ids.len();
     let is_valid = n_problems == 0;
 
     if is_valid {
@@ -192,10 +211,10 @@ pub fn survcheck(
         n_subjects,
         n_transitions,
         n_problems,
-        overlap_ids: overlap_ids.into_iter().collect(),
-        gap_ids: gap_ids.into_iter().collect(),
-        teleport_ids: teleport_ids.into_iter().collect(),
-        invalid_ids: invalid_ids.into_iter().collect(),
+        overlap_ids: sorted_issue_ids(&overlap_ids),
+        gap_ids: sorted_issue_ids(&gap_ids),
+        teleport_ids: sorted_issue_ids(&teleport_ids),
+        invalid_ids: sorted_issue_ids(&invalid_ids),
         transitions,
         flags,
         is_valid,
@@ -240,12 +259,12 @@ pub fn survcheck_simple(time: Vec<f64>, status: Vec<i32>) -> PyResult<SurvCheckR
     }
 
     for (i, &t) in time.iter().enumerate() {
-        if t.is_nan() {
+        if !t.is_finite() {
             if flags[i] == 0 {
                 flags[i] = 4;
                 invalid_count += 1;
             }
-            messages.push(format!("Observation {}: time is NaN", i));
+            messages.push(format!("Observation {}: time is non-finite", i));
         }
     }
 
@@ -319,6 +338,44 @@ mod tests {
     }
 
     #[test]
+    fn test_survcheck_counts_unique_problem_subjects() {
+        let id = vec![2, 2, 1, 1, 1];
+        let time1 = vec![0.0, 5.0, 0.0, 5.0, 20.0];
+        let time2 = vec![10.0, 15.0, 10.0, 15.0, 25.0];
+        let status = vec![0, 1, 0, 1, 0];
+
+        let result = survcheck(id, time1, time2, status, None).unwrap();
+
+        assert_eq!(result.n_problems, 2);
+        assert_eq!(result.overlap_ids, vec![1, 2]);
+        assert_eq!(result.gap_ids, vec![1]);
+    }
+
+    #[test]
+    fn test_survcheck_non_finite_times_are_invalid_without_cascading() {
+        let result = survcheck(
+            vec![1, 1, 1],
+            vec![0.0, f64::NAN, 1.0],
+            vec![1.0, 2.0, 2.0],
+            vec![0, 1, 0],
+            None,
+        )
+        .unwrap();
+
+        assert!(!result.is_valid);
+        assert_eq!(result.invalid_ids, vec![1]);
+        assert_eq!(result.overlap_ids, Vec::<i64>::new());
+        assert_eq!(result.gap_ids, Vec::<i64>::new());
+        assert_eq!(result.flags, vec![0, 4, 0]);
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|message| message.contains("non-finite time"))
+        );
+    }
+
+    #[test]
     fn test_survcheck_simple() {
         let time = vec![1.0, 2.0, 3.0];
         let status = vec![1, 0, 1];
@@ -334,5 +391,14 @@ mod tests {
 
         let result = survcheck_simple(time, status).unwrap();
         assert!(!result.is_valid);
+    }
+
+    #[test]
+    fn test_survcheck_simple_infinite_time_is_invalid() {
+        let result = survcheck_simple(vec![1.0, f64::INFINITY], vec![1, 0]).unwrap();
+
+        assert!(!result.is_valid);
+        assert_eq!(result.invalid_ids, vec![1]);
+        assert_eq!(result.flags, vec![0, 4]);
     }
 }

@@ -7,11 +7,7 @@ fn compute_baseline_hazard(
     let n = time.len();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let exp_risks: Vec<f64> = risk_scores
         .iter()
@@ -148,7 +144,7 @@ fn fit_deep_surv_inner(
     let all_risks = predict_with_weights(x, n_obs, n_vars, &final_weights, config.activation);
 
     let mut unique_times: Vec<f64> = time.to_vec();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     let baseline_hazard = compute_baseline_hazard(time, status, &all_risks, &unique_times);

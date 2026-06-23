@@ -44,12 +44,32 @@
 
 .as_python_vector <- function(value) {
   if (is.factor(value)) {
-    as.character(value)
+    value <- as.character(value)
   } else if (inherits(value, "Date")) {
-    as.numeric(value)
+    value <- as.numeric(value)
   } else {
-    as.vector(value)
+    value <- as.vector(value)
   }
+  if (is.atomic(value) && anyNA(value)) {
+    return(lapply(value, function(item) {
+      if (is.na(item)) {
+        reticulate::py_none()
+      } else {
+        item
+      }
+    }))
+  }
+  value
+}
+
+.as_python_optional_vector <- function(value) {
+  if (is.null(value)) {
+    return(NULL)
+  }
+  if (is.matrix(value) || is.data.frame(value)) {
+    return(value)
+  }
+  .as_python_vector(value)
 }
 
 .as_python_data <- function(data) {
@@ -463,13 +483,41 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   values
 }
 
-Surv <- function(time, time2, event, type = NULL, origin = 0) {
-  args <- list(time)
-  if (!missing(time2)) {
-    args <- c(args, list(time2))
-  }
-  if (!missing(event)) {
-    args <- c(args, list(event))
+Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop, status) {
+  use_named_response <- !missing(time1) || !missing(start) ||
+    !missing(stop) || !missing(status)
+
+  if (use_named_response) {
+    args <- list()
+    if (!missing(time)) {
+      args$time <- time
+    }
+    if (!missing(time1)) {
+      args$time1 <- time1
+    }
+    if (!missing(start)) {
+      args$start <- start
+    }
+    if (!missing(time2)) {
+      args$time2 <- time2
+    }
+    if (!missing(stop)) {
+      args$stop <- stop
+    }
+    if (!missing(event)) {
+      args$event <- event
+    }
+    if (!missing(status)) {
+      args$status <- status
+    }
+  } else {
+    args <- list(time)
+    if (!missing(time2)) {
+      args <- c(args, list(time2))
+    }
+    if (!missing(event)) {
+      args <- c(args, list(event))
+    }
   }
   args <- c(args, .compact_null(list(type = type, origin = origin)))
   .wrap_python(do.call(.python_attr("Surv"), args), c("survival_py_surv", "survival_py_object"))
@@ -550,6 +598,18 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
   )
 }
 
+survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, na.action = "fail") {
+  .call_r_api(
+    "survfit",
+    response = formula,
+    group = if (is.null(group)) NULL else .as_python_vector(group),
+    subset = subset,
+    `na.action` = .as_na_action(na.action),
+    ...,
+    .wrap = c("survival_py_survfit", "survival_py_object")
+  )
+}
+
 survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRUE) {
   .call_r_api(
     "survfit",
@@ -566,7 +626,7 @@ survdiff <- function(formula, data = NULL, ..., group = NULL, subset = NULL, na.
     "survdiff",
     response = .as_formula_string(formula),
     data = .as_python_data(data),
-    group = group,
+    group = if (is.null(group)) NULL else .as_python_vector(group),
     subset = subset,
     `na.action` = .as_na_action(na.action),
     ...,
@@ -608,11 +668,16 @@ basehaz <- function(fit, ..., centered = TRUE) {
   )
 }
 
-concordance <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
+concordance <- function(formula, data = NULL, ..., scores = NULL, risk.scores = NULL,
+                        weights = NULL, cluster = NULL, subset = NULL, na.action = "fail") {
   .call_r_api(
     "concordance",
     response = .as_formula_string(formula),
     data = .as_python_data(data),
+    scores = .as_python_optional_vector(scores),
+    risk_scores = .as_python_optional_vector(risk.scores),
+    weights = .as_python_optional_vector(weights),
+    cluster = .as_python_optional_vector(cluster),
     subset = subset,
     `na.action` = .as_na_action(na.action),
     ...,

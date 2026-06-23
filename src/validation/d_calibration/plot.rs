@@ -76,9 +76,7 @@ pub(crate) fn calibration_plot_data_core(
 
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
-        predicted_survival_at_t[a]
-            .partial_cmp(&predicted_survival_at_t[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        predicted_survival_at_t[a].total_cmp(&predicted_survival_at_t[b])
     });
 
     let group_size = n / n_groups;
@@ -111,7 +109,7 @@ pub(crate) fn calibration_plot_data_core(
 
         let events_before_t: usize = group_indices
             .iter()
-            .filter(|&&i| time[i] <= time_point && status[i] == 1)
+            .filter(|&&i| event_at_or_before_time_point(time[i], status[i], time_point))
             .count();
 
         let obs_surv = 1.0 - (events_before_t as f64 / n_in_group as f64);
@@ -140,7 +138,7 @@ pub(crate) fn calibration_plot_data_core(
         0.0
     };
 
-    absolute_errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    absolute_errors.sort_by(f64::total_cmp);
 
     let e50 = if !absolute_errors.is_empty() {
         let idx = absolute_errors.len() / 2;

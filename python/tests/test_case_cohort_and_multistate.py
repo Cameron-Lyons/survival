@@ -166,6 +166,28 @@ def test_conditional_logistic_regression_uses_strata():
     assert matched.coefficients[0] != pytest.approx(pooled.coefficients[0])
 
 
+def test_conditional_logistic_regression_handles_multi_case_strata():
+    dataset = survival.ClogitDataSet()
+    for case_status, stratum, covariates in [
+        (1, 0, [3.0]),
+        (1, 0, [2.5]),
+        (0, 0, [0.5]),
+        (0, 0, [0.0]),
+        (1, 1, [4.0]),
+        (1, 1, [3.0]),
+        (0, 1, [1.0]),
+        (0, 1, [0.0]),
+    ]:
+        dataset.add_observation(case_status, stratum, covariates)
+
+    model = survival.ConditionalLogisticRegression(dataset, max_iter=40, tol=1e-9)
+    model.fit()
+
+    assert len(model.coefficients) == 1
+    assert model.coefficients[0] > 0.0
+    assert model.predict([3.0]) > model.predict([0.0])
+
+
 def test_case_cohort_prentice_accepts_public_enum_value():
     cohort = survival.CohortData.new()
     assert len(cohort) == 0

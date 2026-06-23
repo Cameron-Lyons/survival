@@ -151,7 +151,7 @@ pub fn g_computation(
 
     let time_points: Vec<f64> = {
         let mut tp: Vec<f64> = time.clone();
-        tp.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        tp.sort_by(f64::total_cmp);
         tp.dedup();
         tp.into_iter().filter(|&t| t <= tau_val).collect()
     };
@@ -290,7 +290,7 @@ fn bootstrap_se(
 
             let time_points: Vec<f64> = {
                 let mut tp: Vec<f64> = boot_time.clone();
-                tp.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                tp.sort_by(f64::total_cmp);
                 tp.dedup();
                 tp.into_iter().filter(|&t| t <= tau).collect()
             };

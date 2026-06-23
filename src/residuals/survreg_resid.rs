@@ -88,9 +88,9 @@ fn distribution_key(distribution: &str) -> String {
     distribution.to_lowercase().replace('-', "_")
 }
 
-fn validate_distribution(distribution: &str) -> PyResult<()> {
-    if matches!(
-        distribution_key(distribution).as_str(),
+fn is_valid_distribution_key(key: &str) -> bool {
+    matches!(
+        key,
         "weibull"
             | "exponential"
             | "extreme"
@@ -105,17 +105,35 @@ fn validate_distribution(distribution: &str) -> PyResult<()> {
             | "log_gaussian"
             | "loglogistic"
             | "log_logistic"
-    ) {
-        return Ok(());
-    }
-    Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic",
-    ))
+    )
 }
 
-fn response_uses_log_transform(distribution: &str) -> bool {
-    matches!(
-        distribution_key(distribution).as_str(),
+fn invalid_distribution_error() -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic",
+    )
+}
+
+fn validate_distribution(distribution: &str) -> PyResult<()> {
+    let key = distribution_key(distribution);
+    if is_valid_distribution_key(&key) {
+        return Ok(());
+    }
+    Err(invalid_distribution_error())
+}
+
+fn validated_distribution_key(distribution: &str) -> String {
+    let key = distribution_key(distribution);
+    debug_assert!(
+        is_valid_distribution_key(&key),
+        "distribution was validated"
+    );
+    key
+}
+
+fn response_uses_log_transform_key(key: &str) -> bool {
+    if matches!(
+        key,
         "weibull"
             | "exponential"
             | "lognormal"
@@ -124,7 +142,17 @@ fn response_uses_log_transform(distribution: &str) -> bool {
             | "log_gaussian"
             | "loglogistic"
             | "log_logistic"
-    )
+    ) {
+        return true;
+    }
+    match key {
+        "extreme" | "extreme_value" | "extremevalue" | "gaussian" | "normal" | "logistic" => false,
+        _ => unreachable!("distribution was validated"),
+    }
+}
+
+fn response_uses_log_transform(distribution: &str) -> bool {
+    response_uses_log_transform_key(&validated_distribution_key(distribution))
 }
 
 fn response_time_value(time: f64, distribution: &str) -> f64 {
@@ -143,8 +171,24 @@ fn inverse_response_time_value(value: f64, distribution: &str) -> f64 {
     }
 }
 
-fn distribution_functions(distribution: &str) -> (DistFn, DistFn) {
-    match distribution_key(distribution).as_str() {
+fn response_time_value_for_key(time: f64, key: &str) -> f64 {
+    if response_uses_log_transform_key(key) {
+        time.ln()
+    } else {
+        time
+    }
+}
+
+fn inverse_response_time_value_for_key(value: f64, key: &str) -> f64 {
+    if response_uses_log_transform_key(key) {
+        value.exp()
+    } else {
+        value
+    }
+}
+
+fn distribution_functions_for_key(key: &str) -> (DistFn, DistFn) {
+    match key {
         "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
             (extreme_value_cdf, extreme_value_pdf)
         }
@@ -152,8 +196,12 @@ fn distribution_functions(distribution: &str) -> (DistFn, DistFn) {
         "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
             (gaussian_cdf, gaussian_pdf)
         }
-        _ => (extreme_value_cdf, extreme_value_pdf),
+        _ => unreachable!("distribution was validated"),
     }
+}
+
+fn distribution_functions(distribution: &str) -> (DistFn, DistFn) {
+    distribution_functions_for_key(&validated_distribution_key(distribution))
 }
 
 fn log_expm1_positive(value: f64) -> f64 {
@@ -459,11 +507,12 @@ pub(crate) fn compute_response_residuals(
     linear_pred: &[f64],
     distribution: &str,
 ) -> Vec<f64> {
+    let key = validated_distribution_key(distribution);
     time.iter()
         .zip(linear_pred.iter())
         .map(|(&t, &lp)| {
-            inverse_response_time_value(response_time_value(t, distribution), distribution)
-                - inverse_response_time_value(lp, distribution)
+            inverse_response_time_value_for_key(response_time_value_for_key(t, &key), &key)
+                - inverse_response_time_value_for_key(lp, &key)
         })
         .collect()
 }
@@ -550,15 +599,16 @@ pub(crate) fn compute_working_residuals(
     let n = time.len();
     let mut residuals = Vec::with_capacity(n);
 
-    let (cdf_fn, pdf_fn) = distribution_functions(distribution);
+    let key = validated_distribution_key(distribution);
+    let (cdf_fn, pdf_fn) = distribution_functions_for_key(&key);
 
     for i in 0..n {
-        let y = response_time_value(time[i], distribution);
+        let y = response_time_value_for_key(time[i], &key);
         let z = (y - linear_pred[i]) / scale;
 
         let resid = if status[i] == 1 {
             let f = pdf_fn(z);
-            let f_prime = match distribution_key(distribution).as_str() {
+            let f_prime = match key.as_str() {
                 "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
                     let ez = z.exp();
                     ez * (-ez).exp() * (1.0 - ez)
@@ -568,7 +618,9 @@ pub(crate) fn compute_working_residuals(
                     let denom = (1.0 + ez).powi(3);
                     ez * (ez - 1.0) / denom
                 }
-                _ => -z * f,
+                "gaussian" | "normal" | "lognormal" | "log_normal" | "loggaussian"
+                | "log_gaussian" => -z * f,
+                _ => unreachable!("distribution was validated"),
             };
             if f.abs() > 1e-300 { -f_prime / f } else { 0.0 }
         } else {
@@ -1187,6 +1239,24 @@ mod tests {
         assert_eq!(gaussian.len(), 5);
         assert!((gaussian[0] - 1.0).abs() < 1e-10);
         assert!((gaussian[1] - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_residual_distribution_aliases_are_canonicalized() {
+        let response = compute_response_residuals(&[2.0], &[0.0], "log-normal");
+        assert!((response[0] - 1.0).abs() < 1e-12);
+
+        let matrix =
+            compute_survreg_residual_matrix(&[1.0], None, &[1], &[0.0], 1.0, "extreme-value")
+                .unwrap();
+        assert_eq!(matrix.len(), 1);
+        assert!(matrix[0].iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    #[should_panic(expected = "distribution was validated")]
+    fn test_residual_helpers_do_not_default_unknown_distribution() {
+        let _ = compute_working_residuals(&[1.0], &[1], &[0.0], 1.0, "mystery");
     }
 
     #[test]

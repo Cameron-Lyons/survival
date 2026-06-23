@@ -86,6 +86,89 @@ mod tests {
     }
 
     #[test]
+    fn test_timepoint_calibration_groups_near_tied_time_points() {
+        let exact_time = vec![1.0, 2.0, 2.0, 2.0, 3.0, 1.5, 2.0, 2.5, 3.5, 4.0];
+        let near_time = vec![
+            1.0,
+            2.0 + crate::constants::TIME_EPSILON / 2.0,
+            2.0 + crate::constants::TIME_EPSILON / 2.0,
+            2.0,
+            3.0,
+            1.5,
+            2.0,
+            2.5,
+            3.5,
+            4.0,
+        ];
+        let status = vec![1, 1, 0, 0, 1, 0, 1, 0, 1, 0];
+        let predicted = vec![0.92, 0.84, 0.78, 0.7, 0.62, 0.56, 0.48, 0.4, 0.32, 0.24];
+        let time_point = 2.0;
+        let n_groups = 2;
+
+        let exact_one = one_calibration_core(&exact_time, &status, &predicted, time_point, n_groups);
+        let near_one = one_calibration_core(&near_time, &status, &predicted, time_point, n_groups);
+        assert_eq!(near_one.n_events_per_group, exact_one.n_events_per_group);
+        assert_eq!(near_one.n_per_group, exact_one.n_per_group);
+        assert_eq!(near_one.observed_survival, exact_one.observed_survival);
+        assert!((near_one.statistic - exact_one.statistic).abs() < 1e-12);
+
+        let exact_plot =
+            calibration_plot_data_core(&exact_time, &status, &predicted, time_point, n_groups);
+        let near_plot =
+            calibration_plot_data_core(&near_time, &status, &predicted, time_point, n_groups);
+        assert_eq!(near_plot.n_per_group, exact_plot.n_per_group);
+        assert_eq!(near_plot.observed, exact_plot.observed);
+        assert!((near_plot.ici - exact_plot.ici).abs() < 1e-12);
+        assert!((near_plot.e50 - exact_plot.e50).abs() < 1e-12);
+        assert!((near_plot.e90 - exact_plot.e90).abs() < 1e-12);
+        assert!((near_plot.emax - exact_plot.emax).abs() < 1e-12);
+
+        let exact_brier =
+            brier_calibration_core(&exact_time, &status, &predicted, time_point, n_groups);
+        let near_brier =
+            brier_calibration_core(&near_time, &status, &predicted, time_point, n_groups);
+        assert!((near_brier.brier_score - exact_brier.brier_score).abs() < 1e-12);
+        assert_eq!(near_brier.observed, exact_brier.observed);
+
+        let exact_smooth =
+            smoothed_calibration_core(&exact_time, &status, &predicted, time_point, 10, Some(0.2));
+        let near_smooth =
+            smoothed_calibration_core(&near_time, &status, &predicted, time_point, 10, Some(0.2));
+        assert_eq!(near_smooth.predicted_grid, exact_smooth.predicted_grid);
+        for (actual, expected) in near_smooth
+            .smoothed_observed
+            .iter()
+            .zip(exact_smooth.smoothed_observed.iter())
+        {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+
+        let survival_predictions = predicted
+            .iter()
+            .map(|&value| vec![value, (value - 0.1_f64).max(0.0)])
+            .collect::<Vec<_>>();
+        let prediction_times = vec![2.0, 3.0];
+        let exact_multi = multi_time_calibration_core(
+            &exact_time,
+            &status,
+            &survival_predictions,
+            &prediction_times,
+            n_groups,
+        );
+        let near_multi = multi_time_calibration_core(
+            &near_time,
+            &status,
+            &survival_predictions,
+            &prediction_times,
+            n_groups,
+        );
+        assert_eq!(near_multi.time_points, exact_multi.time_points);
+        assert_eq!(near_multi.brier_scores, exact_multi.brier_scores);
+        assert_eq!(near_multi.ici_values, exact_multi.ici_values);
+        assert!((near_multi.integrated_brier - exact_multi.integrated_brier).abs() < 1e-12);
+    }
+
+    #[test]
     fn public_d_calibration_validates_probabilities_and_status() {
         let err = d_calibration(vec![1.2], vec![1], None).unwrap_err();
         assert!(err.to_string().contains("probabilities between 0 and 1"));

@@ -220,11 +220,7 @@ pub(crate) fn finegray_regression_core(
     let (km_times, km_values) = compute_censoring_km(time, status);
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut beta = vec![0.0; p];
     let mut converged = false;
@@ -562,11 +558,7 @@ pub(crate) fn competing_risks_cif_core(
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut unique_times = Vec::new();
     let mut cif_values = Vec::new();

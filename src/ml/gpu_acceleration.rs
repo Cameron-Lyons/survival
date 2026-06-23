@@ -207,11 +207,7 @@ fn parallel_log_likelihood(
     let exp_pred: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let mut log_likelihood = 0.0;
     let mut risk_set_sum = 0.0;
@@ -257,11 +253,7 @@ fn parallel_gradient_hessian(
     let exp_pred: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let mut gradient = vec![0.0; p];
     let mut hessian = vec![vec![0.0; p]; p];

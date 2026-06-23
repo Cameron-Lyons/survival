@@ -7,7 +7,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::constants::TIME_EPSILON;
-use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_no_nan, validate_non_overlapping_intervals_i32,
+};
 
 /// Result of condensing survival data
 #[pyclass(from_py_object)]
@@ -83,6 +85,7 @@ pub fn survcondense(
             )));
         }
     }
+    validate_non_overlapping_intervals_i32(&id, &time1, &time2, TIME_EPSILON)?;
 
     if n == 0 {
         return Ok(CondenseResult {
@@ -277,6 +280,12 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("status must contain only 0/1 values")
+        );
+
+        let err = survcondense(vec![1, 1], vec![0.0, 4.0], vec![5.0, 6.0], vec![0, 0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("intervals must not overlap within id")
         );
     }
 }

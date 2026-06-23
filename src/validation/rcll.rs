@@ -1,4 +1,6 @@
-use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_non_negative, validate_probability_slice,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::fmt;
@@ -87,22 +89,6 @@ fn validate_prediction_times(prediction_times: &[f64]) -> PyResult<()> {
                 index + 1,
                 pair[1],
                 pair[0]
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_probability_slice(values: &[f64], field: &str) -> PyResult<()> {
-    for (index, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(PyValueError::new_err(format!(
-                "{field} contains non-finite value {value} at index {index}"
-            )));
-        }
-        if !(0.0..=1.0).contains(&value) {
-            return Err(PyValueError::new_err(format!(
-                "{field} must contain probabilities between 0 and 1; got {value} at index {index}"
             )));
         }
     }

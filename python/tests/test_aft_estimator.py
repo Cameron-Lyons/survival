@@ -210,6 +210,16 @@ class TestAFTEstimator:
         assert len(quantiles) == n
         assert all(quantiles > 0)
 
+    def test_predict_quantile_rejects_nonfinite_q(self):
+        X = np.array([[0.1], [0.2], [0.3], [0.4]], dtype=np.float64)
+        y = np.column_stack([[1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 1.0, 1.0]])
+
+        model = AFTEstimator(distribution="weibull", max_iter=10)
+        model.fit(X, y)
+
+        with pytest.raises(ValueError, match="q must be between 0 and 1"):
+            model.predict_quantile(X[:2], q=np.nan)
+
     def test_acceleration_factors(self):
         np.random.seed(42)
         n = 100

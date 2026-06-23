@@ -102,17 +102,9 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
     }
     let mut indices: Vec<usize> = (0..n).collect();
     if n > PARALLEL_THRESHOLD_XLARGE {
-        indices.par_sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.par_sort_by(|&a, &b| time[a].total_cmp(&time[b]));
     } else {
-        indices.sort_by(|&a, &b| {
-            time[a]
-                .partial_cmp(&time[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
     }
     let mut unique_times: Vec<f64> = Vec::new();
     let mut n_events: Vec<f64> = Vec::new();
@@ -126,7 +118,7 @@ pub fn compute_rmst(time: &[f64], status: &[i32], tau: f64, confidence_level: f6
         }
         let mut events = 0.0;
         let mut removed = 0.0;
-        while i < n && time[indices[i]] == current_time {
+        while i < n && same_time(time[indices[i]], current_time) {
             removed += 1.0;
             if status[indices[i]] == 1 {
                 events += 1.0;

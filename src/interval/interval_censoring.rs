@@ -420,7 +420,7 @@ pub fn turnbull_estimator(
             all_points.push(right[i]);
         }
     }
-    all_points.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_points.sort_by(f64::total_cmp);
     all_points.dedup();
 
     if all_points.is_empty() {

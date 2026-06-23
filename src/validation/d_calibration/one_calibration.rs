@@ -81,9 +81,7 @@ pub(crate) fn one_calibration_core(
 
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| {
-        predicted_survival_at_t[a]
-            .partial_cmp(&predicted_survival_at_t[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        predicted_survival_at_t[a].total_cmp(&predicted_survival_at_t[b])
     });
 
     let group_size = n / n_groups;
@@ -114,7 +112,7 @@ pub(crate) fn one_calibration_core(
 
         let events_before_t: usize = group_indices
             .iter()
-            .filter(|&&i| time[i] <= time_point && status[i] == 1)
+            .filter(|&&i| event_at_or_before_time_point(time[i], status[i], time_point))
             .count();
 
         let obs_surv = if n_in_group > 0 {

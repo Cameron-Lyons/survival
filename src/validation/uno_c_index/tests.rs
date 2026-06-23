@@ -59,6 +59,53 @@ mod tests {
     }
 
     #[test]
+    fn test_uno_c_index_parallel_path_is_finite() {
+        let n = PARALLEL_THRESHOLD_LARGE + 5;
+        let time: Vec<f64> = (0..n).map(|i| i as f64 + 1.0).collect();
+        let status = vec![1; n];
+        let risk_score: Vec<f64> = (0..n).rev().map(|i| i as f64).collect();
+
+        let result = uno_c_index_core(&time, &status, &risk_score, None);
+
+        assert!(result.c_index.is_finite());
+        assert!((result.c_index - 1.0).abs() < 1e-12);
+        assert!(result.comparable_pairs > 0.0);
+        assert!(result.std_error.is_finite());
+    }
+
+    #[test]
+    fn test_uno_public_apis_reject_malformed_inputs() {
+        let err = uno_c_index(vec![], vec![], vec![], None).unwrap_err();
+        assert!(err.to_string().contains("time cannot be empty"));
+
+        let err = uno_c_index(vec![f64::NAN], vec![1], vec![0.5], None).unwrap_err();
+        assert!(err.to_string().contains("time contains NaN"));
+
+        let err = uno_c_index(vec![1.0], vec![2], vec![0.5], None).unwrap_err();
+        assert!(err.to_string().contains("status must contain only 0/1"));
+
+        let err = uno_c_index(vec![1.0], vec![1], vec![f64::INFINITY], None).unwrap_err();
+        assert!(err.to_string().contains("risk_score contains non-finite"));
+
+        let err = uno_c_index(vec![1.0], vec![1], vec![0.5], Some(-1.0)).unwrap_err();
+        assert!(err.to_string().contains("tau must be non-negative"));
+
+        let err = compare_uno_c_indices(
+            vec![1.0],
+            vec![1],
+            vec![0.5],
+            vec![f64::NAN],
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("risk_score_2 contains NaN"));
+
+        let err = c_index_decomposition(vec![1.0], vec![1], vec![0.5], Some(f64::INFINITY))
+            .unwrap_err();
+        assert!(err.to_string().contains("tau must be finite"));
+    }
+
+    #[test]
     fn test_compare_uno_c_indices() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let status = vec![1, 1, 1, 1, 1, 1, 1, 1];
@@ -71,6 +118,73 @@ mod tests {
         assert!((0.0..=1.0).contains(&result.c_index_2));
         assert!((result.difference - (result.c_index_1 - result.c_index_2)).abs() < 1e-10);
         assert!((0.0..=1.0).contains(&result.p_value));
+    }
+
+    #[test]
+    fn test_compare_uno_c_indices_parallel_path_is_finite() {
+        let n = PARALLEL_THRESHOLD_LARGE + 5;
+        let time: Vec<f64> = (0..n).map(|i| i as f64 + 1.0).collect();
+        let status = vec![1; n];
+        let risk_score_1: Vec<f64> = (0..n).rev().map(|i| i as f64).collect();
+        let risk_score_2: Vec<f64> = (0..n).map(|i| i as f64).collect();
+
+        let result =
+            compare_uno_c_indices_core(&time, &status, &risk_score_1, &risk_score_2, None);
+
+        assert!((result.c_index_1 - 1.0).abs() < 1e-12);
+        assert!(result.c_index_2.abs() < 1e-12);
+        assert!(result.difference.is_finite());
+        assert!(result.std_error_diff.is_finite());
+    }
+
+    #[test]
+    fn test_uno_family_groups_near_tied_event_and_tau_times() {
+        let exact_time = vec![1.0, 2.0, 2.0, 3.0, 4.0];
+        let near_time = vec![
+            1.0,
+            2.0 + crate::constants::TIME_EPSILON / 2.0,
+            2.0,
+            3.0,
+            4.0,
+        ];
+        let status = vec![1, 1, 1, 0, 0];
+        let risk_score = vec![0.9, 0.7, 0.8, 0.4, 0.2];
+        let reverse_risk_score = vec![0.2, 0.4, 0.3, 0.7, 0.9];
+        let tau = Some(2.0);
+
+        let expected = uno_c_index_core(&exact_time, &status, &risk_score, tau);
+        let actual = uno_c_index_core(&near_time, &status, &risk_score, tau);
+        assert_eq!(actual.comparable_pairs, expected.comparable_pairs);
+        assert_eq!(actual.concordant, expected.concordant);
+        assert_eq!(actual.discordant, expected.discordant);
+        assert_eq!(actual.tied_risk, expected.tied_risk);
+        assert!((actual.c_index - expected.c_index).abs() < 1e-12);
+
+        let expected_comparison =
+            compare_uno_c_indices_core(&exact_time, &status, &risk_score, &reverse_risk_score, tau);
+        let actual_comparison =
+            compare_uno_c_indices_core(&near_time, &status, &risk_score, &reverse_risk_score, tau);
+        assert!((actual_comparison.c_index_1 - expected_comparison.c_index_1).abs() < 1e-12);
+        assert!((actual_comparison.c_index_2 - expected_comparison.c_index_2).abs() < 1e-12);
+        assert!((actual_comparison.difference - expected_comparison.difference).abs() < 1e-12);
+        assert!(
+            (actual_comparison.variance_diff - expected_comparison.variance_diff).abs() < 1e-12
+        );
+
+        let expected_decomp = c_index_decomposition_core(&exact_time, &status, &risk_score, tau);
+        let actual_decomp = c_index_decomposition_core(&near_time, &status, &risk_score, tau);
+        assert_eq!(
+            actual_decomp.n_event_event_pairs,
+            expected_decomp.n_event_event_pairs
+        );
+        assert_eq!(
+            actual_decomp.n_event_censored_pairs,
+            expected_decomp.n_event_censored_pairs
+        );
+        assert!((actual_decomp.c_index - expected_decomp.c_index).abs() < 1e-12);
+        assert!((actual_decomp.c_index_ee - expected_decomp.c_index_ee).abs() < 1e-12);
+        assert!((actual_decomp.c_index_ec - expected_decomp.c_index_ec).abs() < 1e-12);
+        assert!((actual_decomp.alpha - expected_decomp.alpha).abs() < 1e-12);
     }
 
     #[test]
@@ -142,6 +256,22 @@ mod tests {
         assert!((result.c_index_ec - 0.5).abs() < 1e-10);
         assert_eq!(result.n_event_event_pairs, 0);
         assert_eq!(result.n_event_censored_pairs, 0);
+    }
+
+    #[test]
+    fn test_c_index_decomposition_parallel_path_is_finite() {
+        let n = PARALLEL_THRESHOLD_LARGE + 5;
+        let time: Vec<f64> = (0..n).map(|i| i as f64 + 1.0).collect();
+        let status = vec![1; n];
+        let risk_score: Vec<f64> = (0..n).rev().map(|i| i as f64).collect();
+
+        let result = c_index_decomposition_core(&time, &status, &risk_score, None);
+
+        assert!((result.c_index - 1.0).abs() < 1e-12);
+        assert!((result.c_index_ee - 1.0).abs() < 1e-12);
+        assert_eq!(result.n_event_event_pairs, n * (n - 1) / 2);
+        assert_eq!(result.n_event_censored_pairs, 0);
+        assert!(result.alpha.is_finite());
     }
 
     #[test]
@@ -218,5 +348,34 @@ mod tests {
 
         assert!((result.cpe - 0.5).abs() < 1e-10);
         assert_eq!(result.n_pairs, 0);
+    }
+
+    #[test]
+    fn test_gonen_heller_parallel_path_is_finite() {
+        let n = PARALLEL_THRESHOLD_LARGE + 5;
+        let lp: Vec<f64> = (0..n).map(|i| i as f64 / 10.0).collect();
+
+        let result = gonen_heller_core(&lp);
+
+        assert!(result.cpe.is_finite());
+        assert!((0.0..=1.0).contains(&result.cpe));
+        assert_eq!(result.n_pairs, n * (n - 1) / 2);
+        assert_eq!(result.n_ties, 0);
+        assert!(result.std_error.is_finite());
+    }
+
+    #[test]
+    fn test_gonen_heller_public_api_rejects_malformed_inputs() {
+        let err = gonen_heller_concordance(vec![]).unwrap_err();
+        assert!(err.to_string().contains("linear_predictor must not be empty"));
+
+        let err = gonen_heller_concordance(vec![0.1, f64::NAN]).unwrap_err();
+        assert!(err.to_string().contains("linear_predictor contains NaN"));
+
+        let err = gonen_heller_concordance(vec![0.1, f64::INFINITY]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("linear_predictor contains non-finite")
+        );
     }
 }

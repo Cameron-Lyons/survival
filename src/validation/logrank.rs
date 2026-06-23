@@ -277,6 +277,24 @@ fn weight_name(weight_type: &WeightType) -> String {
         WeightType::FlemingHarrington { p, q } => format!("FlemingHarrington(p={}, q={})", p, q),
     }
 }
+
+fn parse_logrank_weight_type(weight_type: Option<&str>) -> PyResult<WeightType> {
+    let Some(weight_type) = weight_type else {
+        return Ok(WeightType::LogRank);
+    };
+
+    let normalized = weight_type.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "" | "logrank" | "log-rank" => Ok(WeightType::LogRank),
+        "wilcoxon" => Ok(WeightType::Wilcoxon),
+        "tarone-ware" | "taroneware" => Ok(WeightType::TaroneWare),
+        "peto-peto" | "petopeto" | "peto" => Ok(WeightType::PetoPeto),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            "weight_type must be one of 'logrank', 'wilcoxon', 'tarone-ware', or 'peto-peto'",
+        )),
+    }
+}
+
 /// Perform log-rank test comparing survival between groups.
 ///
 /// Parameters
@@ -313,12 +331,7 @@ pub fn logrank_test(
     let group = extract_vec_i32(group)?;
     let entry_times = extract_optional_vec_f64(entry_times)?;
     validate_logrank_inputs(&time, &status, &group, entry_times.as_deref())?;
-    let wt = match weight_type {
-        Some("wilcoxon") | Some("Wilcoxon") => WeightType::Wilcoxon,
-        Some("tarone-ware") | Some("TaroneWare") => WeightType::TaroneWare,
-        Some("peto-peto") | Some("PetoPeto") | Some("peto") => WeightType::PetoPeto,
-        _ => WeightType::LogRank,
-    };
+    let wt = parse_logrank_weight_type(weight_type)?;
     Ok(weighted_logrank_test_with_entry_times(
         &time,
         &status,
@@ -485,6 +498,33 @@ pub fn logrank_trend(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_logrank_weight_type_accepts_aliases_and_rejects_unknown() {
+        assert!(matches!(
+            parse_logrank_weight_type(None).unwrap(),
+            WeightType::LogRank
+        ));
+        assert!(matches!(
+            parse_logrank_weight_type(Some(" log-rank ")).unwrap(),
+            WeightType::LogRank
+        ));
+        assert!(matches!(
+            parse_logrank_weight_type(Some("Wilcoxon")).unwrap(),
+            WeightType::Wilcoxon
+        ));
+        assert!(matches!(
+            parse_logrank_weight_type(Some("tarone_ware")).unwrap(),
+            WeightType::TaroneWare
+        ));
+        assert!(matches!(
+            parse_logrank_weight_type(Some("PetoPeto")).unwrap(),
+            WeightType::PetoPeto
+        ));
+
+        let err = parse_logrank_weight_type(Some("bogus")).unwrap_err();
+        assert!(err.to_string().contains("weight_type must be one of"));
+    }
 
     #[test]
     fn delayed_entry_logrank_updates_risk_sets() {

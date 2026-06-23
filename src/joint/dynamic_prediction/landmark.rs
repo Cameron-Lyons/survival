@@ -95,9 +95,7 @@ pub fn super_landmark_model(
 
             let mut indices: Vec<usize> = (0..n_eligible).collect();
             indices.sort_by(|&a, &b| {
-                lm_time[b]
-                    .partial_cmp(&lm_time[a])
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                lm_time[b].total_cmp(&lm_time[a])
             });
 
             let eta: Vec<f64> = (0..n_eligible)

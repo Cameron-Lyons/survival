@@ -1,116 +1,34 @@
-# ruff: noqa: F401
-
 from importlib import import_module as _import_module
 
-from . import bayesian as _bayesian_module
-from . import causal as _causal_module
-from . import core as _core_module
-from . import data_prep as _data_prep_module
-from . import datasets as _datasets_module
-from . import interpretability as _interpretability_module
-from . import interval as _interval_module
-from . import joint as _joint_module
-from . import missing as _missing_module
-from . import ml as _ml_module
-from . import monitoring as _monitoring_module
-from . import population as _population_module
-from . import pybridge as _pybridge_module
-from . import qol as _qol_module
-from . import r_api as _r_api_module
-from . import recurrent as _recurrent_module
-from . import regression as _regression_module
-from . import relative as _relative_module
-from . import reliability_tools as _reliability_tools_module
-from . import residuals as _residuals_module
-from . import spatial as _spatial_module
-from . import surv_analysis as _surv_analysis_module
-from . import validation as _validation_module
-from .r_api import (
-    Surv,
-    aic,
-    anova,
-    as_data_frame,
-    basehaz,
-    bic,
-    coef,
-    coef_names,
-    concordance,
-    confint,
-    cox_zph,
-    coxph,
-    coxph_detail,
-    degrees_freedom,
-    df_residual,
-    extract_aic,
-    fitted,
-    is_surv,
-    loglik,
-    model_formula,
-    model_frame,
-    model_matrix,
-    model_summary,
-    model_weights,
-    nobs,
-    predict,
-    survdiff,
-    survfit,
-    survreg,
-    vcov,
-)
+from ._binding_manifest import MODULE_BINDINGS
 
 __version__ = "2.0.0"
 
 _PUBLIC_MODULES = {
-    "bayesian": _bayesian_module,
-    "causal": _causal_module,
-    "core": _core_module,
-    "data_prep": _data_prep_module,
-    "datasets": _datasets_module,
-    "interpretability": _interpretability_module,
-    "interval": _interval_module,
-    "joint": _joint_module,
-    "missing": _missing_module,
-    "ml": _ml_module,
-    "monitoring": _monitoring_module,
-    "population": _population_module,
-    "pybridge": _pybridge_module,
-    "qol": _qol_module,
-    "recurrent": _recurrent_module,
-    "regression": _regression_module,
-    "relative": _relative_module,
-    "reliability_tools": _reliability_tools_module,
-    "residuals": _residuals_module,
-    "r_api": _r_api_module,
-    "spatial": _spatial_module,
-    "surv_analysis": _surv_analysis_module,
-    "validation": _validation_module,
+    "bayesian": ".bayesian",
+    "causal": ".causal",
+    "core": ".core",
+    "data_prep": ".data_prep",
+    "datasets": ".datasets",
+    "interpretability": ".interpretability",
+    "interval": ".interval",
+    "joint": ".joint",
+    "missing": ".missing",
+    "ml": ".ml",
+    "monitoring": ".monitoring",
+    "population": ".population",
+    "pybridge": ".pybridge",
+    "qol": ".qol",
+    "recurrent": ".recurrent",
+    "regression": ".regression",
+    "relative": ".relative",
+    "reliability_tools": ".reliability_tools",
+    "residuals": ".residuals",
+    "r_api": ".r_api",
+    "spatial": ".spatial",
+    "surv_analysis": ".surv_analysis",
+    "validation": ".validation",
 }
-
-_DOMAIN_MODULES = (
-    _datasets_module,
-    _data_prep_module,
-    _core_module,
-    _monitoring_module,
-    _population_module,
-    _regression_module,
-    _residuals_module,
-    _bayesian_module,
-    _causal_module,
-    _interpretability_module,
-    _interval_module,
-    _joint_module,
-    _missing_module,
-    _ml_module,
-    _pybridge_module,
-    _qol_module,
-    _recurrent_module,
-    _relative_module,
-    _reliability_tools_module,
-    _spatial_module,
-    _r_api_module,
-    _surv_analysis_module,
-    _validation_module,
-)
 
 _SKLEARN_EXPORTS = [
     "AFTEstimator",
@@ -165,14 +83,11 @@ _R_EXPORTS = [
 _PREFERRED_EXPORTS = list(_PUBLIC_MODULES) + _R_EXPORTS + _SKLEARN_EXPORTS
 
 _LEGACY_EXPORT_MODULES = {
-    name: _module
-    for _module in _DOMAIN_MODULES
-    for name in _module.__all__
+    name: module_name
+    for module_name in _PUBLIC_MODULES
+    for name in MODULE_BINDINGS.get(module_name, ())
     if name not in _PREFERRED_EXPORTS
 }
-
-for _name, _module in _PUBLIC_MODULES.items():
-    globals()[_name] = _module
 
 __preferred__ = tuple(_PREFERRED_EXPORTS)
 __legacy_root_exports__ = tuple(_LEGACY_EXPORT_MODULES)
@@ -186,24 +101,39 @@ __deprecated_root_export_reason__ = (
 __all__ = list(dict.fromkeys(_PREFERRED_EXPORTS))
 
 
+def _load_public_module(name):
+    module_path = _PUBLIC_MODULES[name]
+    module = globals().get(name)
+    if module is None:
+        module = _import_module(module_path, __name__)
+        globals()[name] = module
+    return module
+
+
 def __getattr__(name):
+    if name == "_survival":
+        value = _import_module("._survival", __name__)
+        globals()[name] = value
+        return value
+
+    if name in _PUBLIC_MODULES:
+        return _load_public_module(name)
+
+    if name in _R_EXPORTS:
+        value = getattr(_load_public_module("r_api"), name)
+        globals()[name] = value
+        return value
+
     if name in _SKLEARN_EXPORTS:
         value = getattr(_import_module(".sklearn_compat", __name__), name)
         globals()[name] = value
         return value
 
-    module = _LEGACY_EXPORT_MODULES.get(name)
-    if module is not None:
-        return getattr(module, name)
+    module_name = _LEGACY_EXPORT_MODULES.get(name)
+    if module_name is not None:
+        return getattr(_load_public_module(module_name), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__():
     return sorted(set(__all__) | {"__preferred__", "__deprecated_root_exports__", "__version__"})
-
-
-del _name
-del _module
-del _DOMAIN_MODULES
-del _PUBLIC_MODULES
-del _PREFERRED_EXPORTS

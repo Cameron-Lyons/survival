@@ -29,14 +29,22 @@ fn validate_dates(name: &str, values: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
-fn validate_direction(best: Option<&str>) -> PyResult<&str> {
+fn validate_direction(best: Option<&str>) -> PyResult<&'static str> {
     let direction = best.unwrap_or("closest");
-    if !["prior", "after", "closest"].contains(&direction) {
+    let mut matches = ["prior", "after", "closest"]
+        .into_iter()
+        .filter(|choice| choice.starts_with(direction));
+    let Some(first) = matches.next() else {
+        return Err(PyErr::new::<PyValueError, _>(
+            "best must be 'prior', 'after', or 'closest'",
+        ));
+    };
+    if direction.is_empty() || matches.next().is_some() {
         return Err(PyErr::new::<PyValueError, _>(
             "best must be 'prior', 'after', or 'closest'",
         ));
     }
-    Ok(direction)
+    Ok(first)
 }
 
 /// Find the closest matching date/value in a reference set.
@@ -277,6 +285,42 @@ mod tests {
     }
 
     #[test]
+    fn test_neardate_accepts_unique_best_prefixes() {
+        let after = neardate(
+            vec![1],
+            vec![15.0],
+            vec![1, 1],
+            vec![10.0, 20.0],
+            Some("a"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(after.indices, vec![Some(1)]);
+
+        let prior = neardate(
+            vec![1],
+            vec![15.0],
+            vec![1, 1],
+            vec![10.0, 20.0],
+            Some("pr"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(prior.indices, vec![Some(0)]);
+
+        let closest = neardate(
+            vec![1],
+            vec![18.0],
+            vec![1, 1],
+            vec![10.0, 20.0],
+            Some("cl"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(closest.indices, vec![Some(1)]);
+    }
+
+    #[test]
     fn test_neardate_no_match() {
         let id1 = vec![1];
         let date1 = vec![10.0];
@@ -340,5 +384,6 @@ mod tests {
             )
             .is_err()
         );
+        assert!(neardate(vec![1], vec![1.0], vec![1], vec![1.0], Some(""), None).is_err());
     }
 }

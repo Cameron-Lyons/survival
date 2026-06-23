@@ -76,14 +76,25 @@ pub fn negative_binomial_frailty(
 ) -> PyResult<NegativeBinomialFrailtyResult> {
     let n = id.len();
     validate_recurrent_lengths(n, &[time.len(), event.len()])?;
+    validate_finite_nonnegative("time", &time)?;
+    validate_nonnegative_event_counts(&event)?;
+    validate_recurrent_solver_controls(config.max_iter, config.tol)?;
+    if config.em_max_iter == 0 {
+        return Err(recurrent_value_error("em_max_iter must be positive"));
+    }
 
-    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n);
+    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n)?;
 
-    let offset_vec = offset.unwrap_or_else(|| {
-        time.iter()
+    let offset_vec = match offset {
+        Some(values) => {
+            validate_offset(&values, n)?;
+            values
+        }
+        None => time
+            .iter()
             .map(|&t| t.max(DIVISION_FLOOR).ln())
-            .collect()
-    });
+            .collect(),
+    };
 
     let unique_ids = sorted_unique_i32(&id);
     let n_subjects = unique_ids.len();

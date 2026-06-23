@@ -1,6 +1,8 @@
 use crate::constants::DIVISION_FLOOR;
 use crate::internal::statistical::normal_inverse_cdf;
-use crate::internal::validation::{validate_binary_i32, validate_finite};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_probability_slice,
+};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -118,16 +120,7 @@ fn survival_index_at_or_before(t: f64, surv_time: &[f64]) -> Option<usize> {
 }
 
 fn validate_survival_probabilities(surv: &[f64]) -> PyResult<()> {
-    validate_finite(surv, "surv")?;
-    for (index, &value) in surv.iter().enumerate() {
-        if !(0.0..=1.0).contains(&value) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "surv must contain probabilities between 0 and 1; got {} at index {}",
-                value, index
-            )));
-        }
-    }
-    Ok(())
+    validate_probability_slice(surv, "surv")
 }
 
 fn validate_survfit_residual_inputs(

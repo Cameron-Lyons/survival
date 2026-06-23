@@ -166,11 +166,7 @@ fn estimate_hazard_ratio(time: &[f64], event: &[i32], treatment: &[i32]) -> f64 
     let mut beta = 0.0;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     for _ in 0..50 {
         let mut gradient = 0.0;

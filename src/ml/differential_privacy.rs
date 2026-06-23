@@ -118,7 +118,7 @@ pub fn dp_kaplan_meier(
     let seed = seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let mut unique_times: Vec<f64> = time.to_vec();
-    unique_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     let n_times = unique_times.len();
@@ -242,11 +242,7 @@ pub fn dp_cox_regression(
     let learning_rate = 0.01;
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let mut convergence_iterations = max_iter;
 
@@ -338,11 +334,7 @@ fn compute_fisher_information(
     let n_features = coefficients.len();
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let linear_pred: Vec<f64> = covariates
         .iter()

@@ -1,6 +1,9 @@
 use crate::constants::{COX_MAX_ITER, PARALLEL_THRESHOLD_SMALL};
 use crate::internal::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::lcg64_shuffle_per_index_seed;
+use crate::internal::validation::{
+    validate_binary_f64, validate_binary_i32, validate_finite, validate_non_negative,
+};
 use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -47,6 +50,79 @@ impl Default for CVConfig {
         }
     }
 }
+
+fn value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn validate_cv_config(n_folds: usize, n_obs: usize) -> PyResult<()> {
+    if n_folds < 2 || n_folds > n_obs {
+        return Err(value_error(
+            "n_folds must be between 2 and the number of observations",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_time_status_i32(time: &[f64], status: &[i32]) -> PyResult<()> {
+    if time.is_empty() || status.len() != time.len() {
+        return Err(value_error(
+            "time and status must have the same non-zero length",
+        ));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_binary_i32(status, "status")?;
+    Ok(())
+}
+
+fn validate_time_status_f64(time: &[f64], status: &[f64]) -> PyResult<()> {
+    if time.is_empty() || status.len() != time.len() {
+        return Err(value_error(
+            "time and status must have the same non-zero length",
+        ));
+    }
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_finite(status, "status")?;
+    validate_binary_f64(status, "status")?;
+    Ok(())
+}
+
+fn validate_covariates(covariates: &[Vec<f64>], n_obs: usize) -> PyResult<usize> {
+    if covariates.len() != n_obs {
+        return Err(value_error("covariates length must match time length"));
+    }
+    let nvar = covariates.first().map_or(0, Vec::len);
+    for (row_idx, row) in covariates.iter().enumerate() {
+        if row.len() != nvar {
+            return Err(value_error(format!(
+                "covariates row {row_idx} length must match the first row"
+            )));
+        }
+        for (col_idx, &value) in row.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(value_error(format!(
+                    "covariates contains non-finite value {value} at row {row_idx}, column {col_idx}"
+                )));
+            }
+        }
+    }
+    Ok(nvar)
+}
+
+fn validate_weights(weights: Option<&[f64]>, n_obs: usize) -> PyResult<()> {
+    let Some(weights) = weights else {
+        return Ok(());
+    };
+    if weights.len() != n_obs {
+        return Err(value_error("weights length must match time length"));
+    }
+    validate_finite(weights, "weights")?;
+    validate_non_negative(weights, "weights")?;
+    Ok(())
+}
+
 fn create_folds(n: usize, n_folds: usize, shuffle: bool, seed: Option<u64>) -> Vec<Vec<usize>> {
     let mut indices: Vec<usize> = (0..n).collect();
     if shuffle {
@@ -101,11 +177,7 @@ pub(crate) fn cv_cox(
                 }
             }
             let mut sorted_indices: Vec<usize> = (0..train_n).collect();
-            sorted_indices.sort_by(|&a, &b| {
-                train_time[b]
-                    .partial_cmp(&train_time[a])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            sorted_indices.sort_by(|&a, &b| train_time[b].total_cmp(&train_time[a]));
             let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| train_time[i]).collect();
             let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| train_status[i]).collect();
             let sorted_weights: Vec<f64> =
@@ -236,11 +308,11 @@ pub fn cv_cox_concordance(
     let status = extract_vec_i32(status)?;
     let weights = extract_optional_vec_f64(weights)?;
     let n = time.len();
-    let nvar = if !covariates.is_empty() {
-        covariates[0].len()
-    } else {
-        0
-    };
+    validate_time_status_i32(&time, &status)?;
+    validate_weights(weights.as_deref(), n)?;
+    let n_folds = n_folds.unwrap_or_else(|| 5.min(n));
+    validate_cv_config(n_folds, n)?;
+    let nvar = validate_covariates(&covariates, n)?;
     let cov_array = if nvar > 0 {
         let flat: Vec<f64> = covariates.into_iter().flatten().collect();
         let temp = Array2::from_shape_vec((n, nvar), flat)
@@ -250,7 +322,7 @@ pub fn cv_cox_concordance(
         Array2::zeros((0, n))
     };
     let config = CVConfig {
-        n_folds: n_folds.unwrap_or(5),
+        n_folds,
         shuffle: shuffle.unwrap_or(true),
         seed,
     };
@@ -267,7 +339,7 @@ pub(crate) fn cv_survreg(
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::regression::parametric_survival::survreg;
     let n = time.len();
-    let nvar = covariates.ncols();
+    let nvar = covariates.nrows();
     let cov_vecs: Vec<Vec<f64>> = (0..n)
         .map(|i| (0..nvar).map(|j| covariates[[j, i]]).collect())
         .collect();
@@ -328,6 +400,9 @@ pub(crate) fn cv_survreg(
     if results.is_empty() {
         return Err("All CV folds failed".into());
     }
+    if results.len() < 2 {
+        return Err("At least two CV folds must complete successfully".into());
+    }
     let (fold_scores, fold_coefficients): (Vec<f64>, Vec<Vec<f64>>) = results.into_iter().unzip();
     let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
     let variance = fold_scores
@@ -357,11 +432,10 @@ pub fn cv_survreg_loglik(
     let time = extract_vec_f64(time)?;
     let status = extract_vec_f64(status)?;
     let n = time.len();
-    let nvar = if !covariates.is_empty() {
-        covariates[0].len()
-    } else {
-        0
-    };
+    validate_time_status_f64(&time, &status)?;
+    let n_folds = n_folds.unwrap_or_else(|| 5.min(n));
+    validate_cv_config(n_folds, n)?;
+    let nvar = validate_covariates(&covariates, n)?;
     let cov_array = if nvar > 0 {
         let flat: Vec<f64> = covariates.into_iter().flatten().collect();
         let temp = Array2::from_shape_vec((n, nvar), flat)
@@ -371,7 +445,7 @@ pub fn cv_survreg_loglik(
         Array2::zeros((0, n))
     };
     let config = CVConfig {
-        n_folds: n_folds.unwrap_or(5),
+        n_folds,
         shuffle: shuffle.unwrap_or(true),
         seed,
     };
@@ -455,5 +529,73 @@ mod tests {
             .zip(&result2.fold_scores)
             .all(|(a, b)| (a - b).abs() < 1e-10);
         assert!(!all_same);
+    }
+
+    #[test]
+    fn cv_survreg_uses_covariate_rows_as_variable_count() {
+        let n = 30;
+        let time: Vec<f64> = (1..=n as i64).map(|i| i as f64).collect();
+        let status: Vec<f64> = vec![1.0; n];
+        let mut covariates = Array2::zeros((1, n));
+        for i in 0..n {
+            covariates[[0, i]] = i as f64 / n as f64;
+        }
+        let config = CVConfig {
+            n_folds: 3,
+            shuffle: true,
+            seed: Some(42),
+        };
+
+        let result = cv_survreg(&time, &status, &covariates, "weibull", &config).unwrap();
+
+        assert_eq!(result.fold_scores.len(), 3);
+        assert_eq!(result.fold_coefficients.len(), 3);
+        assert!(
+            result
+                .fold_coefficients
+                .iter()
+                .all(|coefficients| !coefficients.is_empty())
+        );
+    }
+
+    #[test]
+    fn public_crossval_helpers_validate_inputs() {
+        pyo3::Python::initialize();
+        assert!(
+            validate_cv_config(1, 10)
+                .expect_err("single fold should fail")
+                .to_string()
+                .contains("n_folds must be between 2")
+        );
+        assert!(
+            validate_cv_config(11, 10)
+                .expect_err("too many folds should fail")
+                .to_string()
+                .contains("n_folds must be between 2")
+        );
+        assert!(
+            validate_time_status_i32(&[1.0, f64::NAN], &[1, 0])
+                .expect_err("non-finite time should fail")
+                .to_string()
+                .contains("time contains non-finite")
+        );
+        assert!(
+            validate_time_status_i32(&[1.0, 2.0], &[1, 2])
+                .expect_err("non-binary status should fail")
+                .to_string()
+                .contains("status values must be 0 or 1")
+        );
+        assert!(
+            validate_covariates(&[vec![0.1], vec![0.2, 0.3]], 2)
+                .expect_err("ragged covariates should fail")
+                .to_string()
+                .contains("covariates row 1 length")
+        );
+        assert!(
+            validate_weights(Some(&[1.0, f64::INFINITY]), 2)
+                .expect_err("non-finite weights should fail")
+                .to_string()
+                .contains("weights contains non-finite")
+        );
     }
 }

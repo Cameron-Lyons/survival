@@ -54,9 +54,7 @@ pub fn landmarking_analysis(
 
             let mut indices: Vec<usize> = (0..n_lm).collect();
             indices.sort_by(|&a, &b| {
-                lm_time[b]
-                    .partial_cmp(&lm_time[a])
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                lm_time[b].total_cmp(&lm_time[a])
             });
 
             let eta: Vec<f64> = (0..n_lm)
@@ -449,11 +447,7 @@ pub fn ipcw_auc(
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        event_time[a]
-            .partial_cmp(&event_time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| event_time[a].total_cmp(&event_time[b]));
 
     let mut km_surv = vec![1.0; n];
     let mut at_risk = n as f64;

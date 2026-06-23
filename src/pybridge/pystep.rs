@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
-    match cuts.binary_search_by(|&cut| cut.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal)) {
+    match cuts.binary_search_by(|cut| cut.total_cmp(&x)) {
         Ok(i) => {
             if i < cuts.len() - 1 {
                 Some(i)

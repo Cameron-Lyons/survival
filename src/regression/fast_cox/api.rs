@@ -461,7 +461,7 @@ pub(crate) fn fast_cox_cv_typed(
     let (min_idx, &min_dev) = mean_deviances
         .iter()
         .enumerate()
-        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
         .unwrap_or((0, &f64::INFINITY));
 
     let lambda_min = path.lambdas[min_idx];

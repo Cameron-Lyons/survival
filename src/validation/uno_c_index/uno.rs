@@ -56,6 +56,87 @@ impl UnoCIndexResult {
     }
 }
 
+struct UnoCIndexAccumulator {
+    concordant: f64,
+    discordant: f64,
+    tied: f64,
+    total_weight: f64,
+    influence_sums: Vec<f64>,
+}
+
+impl UnoCIndexAccumulator {
+    fn new(n: usize) -> Self {
+        Self {
+            concordant: 0.0,
+            discordant: 0.0,
+            tied: 0.0,
+            total_weight: 0.0,
+            influence_sums: vec![0.0; n],
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.concordant += other.concordant;
+        self.discordant += other.discordant;
+        self.tied += other.tied;
+        self.total_weight += other.total_weight;
+        for (left, right) in self
+            .influence_sums
+            .iter_mut()
+            .zip(other.influence_sums.iter())
+        {
+            *left += right;
+        }
+    }
+}
+
+struct UnoCIndexContext<'a> {
+    time: &'a [f64],
+    status: &'a [i32],
+    risk_score: &'a [f64],
+    km_times: &'a [f64],
+    km_values: &'a [f64],
+    tau: f64,
+    min_g: f64,
+}
+
+fn accumulate_uno_c_index_row(
+    accumulator: &mut UnoCIndexAccumulator,
+    context: &UnoCIndexContext<'_>,
+    i: usize,
+) {
+    if context.status[i] != 1 || !at_or_before_tau(context.time[i], context.tau) {
+        return;
+    }
+
+    let g_ti = km_step_prob_at(context.time[i], context.km_times, context.km_values).max(context.min_g);
+    let weight = 1.0 / (g_ti * g_ti);
+
+    for j in 0..context.time.len() {
+        if i == j {
+            continue;
+        }
+
+        if !after_event_time(context.time[j], context.time[i]) {
+            continue;
+        }
+
+        accumulator.total_weight += weight;
+
+        if context.risk_score[i] > context.risk_score[j] {
+            accumulator.concordant += weight;
+            accumulator.influence_sums[i] += weight;
+            accumulator.influence_sums[j] -= weight;
+        } else if context.risk_score[i] < context.risk_score[j] {
+            accumulator.discordant += weight;
+            accumulator.influence_sums[i] -= weight;
+            accumulator.influence_sums[j] += weight;
+        } else {
+            accumulator.tied += weight;
+        }
+    }
+}
+
 pub(crate) fn uno_c_index_core(
     time: &[f64],
     status: &[i32],
@@ -85,84 +166,53 @@ pub(crate) fn uno_c_index_core(
 
     let min_g = IPCW_SURVIVAL_FLOOR;
 
-    let compute_pair_contributions = |i: usize| -> (f64, f64, f64, f64, Vec<f64>) {
-        let mut concordant = 0.0;
-        let mut discordant = 0.0;
-        let mut tied = 0.0;
-        let mut total_weight = 0.0;
-        let mut influence = vec![0.0; n];
-
-        if status[i] != 1 || time[i] > tau_val {
-            return (concordant, discordant, tied, total_weight, influence);
-        }
-
-        let g_ti = km_step_prob_at(time[i], &km_times, &km_values).max(min_g);
-        let weight = 1.0 / (g_ti * g_ti);
-
-        for j in 0..n {
-            if i == j {
-                continue;
-            }
-
-            if time[j] <= time[i] {
-                continue;
-            }
-
-            total_weight += weight;
-
-            if risk_score[i] > risk_score[j] {
-                concordant += weight;
-                influence[i] += weight;
-                influence[j] -= weight;
-            } else if risk_score[i] < risk_score[j] {
-                discordant += weight;
-                influence[i] -= weight;
-                influence[j] += weight;
-            } else {
-                tied += weight;
-            }
-        }
-
-        (concordant, discordant, tied, total_weight, influence)
+    let context = UnoCIndexContext {
+        time,
+        status,
+        risk_score,
+        km_times: &km_times,
+        km_values: &km_values,
+        tau: tau_val,
+        min_g,
     };
 
-    let results: Vec<(f64, f64, f64, f64, Vec<f64>)> = if n > PARALLEL_THRESHOLD_LARGE {
+    let accumulator = if n > PARALLEL_THRESHOLD_LARGE {
         (0..n)
             .into_par_iter()
-            .map(compute_pair_contributions)
-            .collect()
+            .fold(
+                || UnoCIndexAccumulator::new(n),
+                |mut accumulator, i| {
+                    accumulate_uno_c_index_row(&mut accumulator, &context, i);
+                    accumulator
+                },
+            )
+            .reduce(
+                || UnoCIndexAccumulator::new(n),
+                |mut left, right| {
+                    left.merge(right);
+                    left
+                },
+            )
     } else {
-        (0..n).map(compute_pair_contributions).collect()
+        let mut accumulator = UnoCIndexAccumulator::new(n);
+        for i in 0..n {
+            accumulate_uno_c_index_row(&mut accumulator, &context, i);
+        }
+        accumulator
     };
 
-    let mut total_concordant = 0.0;
-    let mut total_discordant = 0.0;
-    let mut total_tied = 0.0;
-    let mut total_pairs = 0.0;
-    let mut influence_sums = vec![0.0; n];
-
-    for (concordant, discordant, tied, pairs, influence) in results {
-        total_concordant += concordant;
-        total_discordant += discordant;
-        total_tied += tied;
-        total_pairs += pairs;
-        for (k, &inf) in influence.iter().enumerate() {
-            influence_sums[k] += inf;
-        }
-    }
-
-    let c_index = if total_pairs > 0.0 {
-        (total_concordant + 0.5 * total_tied) / total_pairs
+    let c_index = if accumulator.total_weight > 0.0 {
+        (accumulator.concordant + 0.5 * accumulator.tied) / accumulator.total_weight
     } else {
         0.5
     };
 
-    let variance = if total_pairs > 0.0 {
+    let variance = if accumulator.total_weight > 0.0 {
         let n_f = n as f64;
         let mut var_sum = 0.0;
 
-        for &inf in &influence_sums {
-            let normalized_inf = inf / total_pairs;
+        for &inf in &accumulator.influence_sums {
+            let normalized_inf = inf / accumulator.total_weight;
             var_sum += normalized_inf * normalized_inf;
         }
 
@@ -176,10 +226,10 @@ pub(crate) fn uno_c_index_core(
 
     UnoCIndexResult {
         c_index,
-        concordant: total_concordant,
-        discordant: total_discordant,
-        tied_risk: total_tied,
-        comparable_pairs: total_pairs,
+        concordant: accumulator.concordant,
+        discordant: accumulator.discordant,
+        tied_risk: accumulator.tied,
+        comparable_pairs: accumulator.total_weight,
         variance,
         std_error,
         ci_lower,
@@ -201,6 +251,9 @@ pub fn uno_c_index(
             "time, status, and risk_score must have the same length",
         ));
     }
+    validate_uno_time_status(&time, &status)?;
+    validate_uno_risk_score(&risk_score, "risk_score")?;
+    validate_uno_tau(tau)?;
 
     Ok(uno_c_index_core(&time, &status, &risk_score, tau))
 }

@@ -1,5 +1,6 @@
 use crate::constants::{ROYSTON_KAPPA_FACTOR, ROYSTON_VARIANCE_FACTOR};
 use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
 use pyo3::prelude::*;
 
 /// Result of Royston's D statistic calculation
@@ -63,6 +64,11 @@ pub fn royston(
             "linear_predictor, time, and status must have same length",
         ));
     }
+    validate_no_nan(&linear_predictor, "linear_predictor")?;
+    validate_finite(&linear_predictor, "linear_predictor")?;
+    validate_no_nan(&time, "time")?;
+    validate_finite(&time, "time")?;
+    validate_binary_i32(&status, "status")?;
 
     let n_events = status.iter().filter(|&&s| s == 1).count();
 
@@ -160,6 +166,10 @@ pub fn royston_from_model(
             "x length must equal n_obs * n_vars",
         ));
     }
+    validate_no_nan(&x, "x")?;
+    validate_finite(&x, "x")?;
+    validate_no_nan(&coef, "coef")?;
+    validate_finite(&coef, "coef")?;
 
     let mut linear_predictor = vec![0.0; n_obs];
     for i in 0..n_obs {
@@ -174,7 +184,7 @@ pub fn royston_from_model(
 fn compute_ranks(values: &[f64]) -> Vec<f64> {
     let n = values.len();
     let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     let mut ranks = vec![0.0; n];
 
@@ -233,6 +243,41 @@ mod tests {
         let result = royston(lp, time, status).unwrap();
 
         assert!(result.d.abs() < 0.1);
+    }
+
+    #[test]
+    fn test_royston_rejects_malformed_inputs() {
+        let err = royston(vec![f64::NAN, 0.2], vec![1.0, 2.0], vec![1, 1]).unwrap_err();
+        assert!(err.to_string().contains("linear_predictor contains NaN"));
+
+        let err = royston(vec![0.1, 0.2], vec![1.0, f64::INFINITY], vec![1, 1]).unwrap_err();
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = royston(vec![0.1, 0.2], vec![1.0, 2.0], vec![1, 2]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("status must contain only 0/1 values")
+        );
+
+        let err = royston_from_model(
+            vec![f64::NAN, 1.0],
+            vec![0.5],
+            2,
+            vec![1.0, 2.0],
+            vec![1, 1],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("x contains NaN"));
+
+        let err = royston_from_model(
+            vec![1.0, 1.0],
+            vec![f64::INFINITY],
+            2,
+            vec![1.0, 2.0],
+            vec![1, 1],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("coef contains non-finite"));
     }
 
     #[test]

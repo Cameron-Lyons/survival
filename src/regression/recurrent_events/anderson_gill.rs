@@ -12,8 +12,10 @@ pub fn anderson_gill_model(
 ) -> PyResult<AndersonGillResult> {
     let n = id.len();
     validate_recurrent_lengths(n, &[start.len(), stop.len(), event.len()])?;
+    validate_counting_process_inputs(&start, &stop, &event)?;
+    validate_recurrent_solver_controls(max_iter, tol)?;
 
-    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n);
+    let (p, x_mat) = covariate_matrix_or_intercept(covariates, n)?;
 
     let unique_ids = sorted_unique_i32(&id);
     let n_subjects = unique_ids.len();
@@ -31,11 +33,7 @@ pub fn anderson_gill_model(
     let mut prev_loglik = f64::NEG_INFINITY;
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        stop[b]
-            .partial_cmp(&stop[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| stop[b].total_cmp(&stop[a]));
 
     for iter in 0..max_iter {
         n_iter = iter + 1;

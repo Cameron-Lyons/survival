@@ -4,7 +4,10 @@ use crate::constants::{
     DIVISION_FLOOR, Z_SCORE_95, exp_ci, exp_ci_bounds, same_time, z_score_for_confidence,
 };
 use crate::internal::statistical::{lower_incomplete_gamma, normal_cdf};
-use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
+use crate::internal::validation::{
+    validate_binary_i32, validate_confidence_level, validate_finite, validate_non_negative,
+    validate_positive_finite_slice, validate_probability_slice,
+};
 
 const MEDIAN_CI_LOWER_FACTOR: f64 = 0.8;
 const MEDIAN_CI_UPPER_FACTOR: f64 = 1.2;
@@ -22,39 +25,6 @@ fn value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
 }
 
-fn validate_confidence_level(confidence_level: f64) -> PyResult<()> {
-    if !confidence_level.is_finite() || confidence_level <= 0.0 || confidence_level >= 1.0 {
-        return Err(value_error(
-            "confidence_level must be a finite value between 0 and 1",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_probability_slice(values: &[f64], field: &'static str) -> PyResult<()> {
-    validate_finite(values, field)?;
-    for (index, &value) in values.iter().enumerate() {
-        if !(0.0..=1.0).contains(&value) {
-            return Err(value_error(format!(
-                "{field} must contain probabilities between 0 and 1; got {value} at index {index}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_positive_finite_slice(values: &[f64], field: &'static str) -> PyResult<()> {
-    validate_finite(values, field)?;
-    for (index, &value) in values.iter().enumerate() {
-        if value <= 0.0 {
-            return Err(value_error(format!(
-                "{field} must contain positive values; got {value} at index {index}"
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn validate_survival_plot_inputs(time: &[f64], event: &[i32]) -> PyResult<()> {
     if time.is_empty() || event.len() != time.len() {
         return Err(value_error(
@@ -65,6 +35,61 @@ fn validate_survival_plot_inputs(time: &[f64], event: &[i32]) -> PyResult<()> {
     validate_non_negative(time, "time")?;
     validate_binary_i32(event, "event")?;
     Ok(())
+}
+
+fn validate_forest_plot_inputs(variable_names: &[String]) -> PyResult<()> {
+    if variable_names.is_empty() {
+        return Err(value_error("variable_names must be non-empty"));
+    }
+    for (idx, name) in variable_names.iter().enumerate() {
+        if name.trim().is_empty() {
+            return Err(value_error(format!(
+                "variable_names must not contain empty names (invalid value at index {idx})"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_forest_plot_outputs(
+    hazard_ratios: &[f64],
+    lower_ci: &[f64],
+    upper_ci: &[f64],
+) -> PyResult<()> {
+    if hazard_ratios
+        .iter()
+        .chain(lower_ci.iter())
+        .chain(upper_ci.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(value_error(
+            "forest plot hazard ratios and confidence intervals must be finite",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_report_title(title: &str) -> PyResult<()> {
+    if title.trim().is_empty() {
+        return Err(value_error("title must be non-empty"));
+    }
+    Ok(())
+}
+
+fn validate_alpha(alpha: f64) -> PyResult<()> {
+    if !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0 {
+        return Err(value_error("alpha must be finite and between 0 and 1"));
+    }
+    Ok(())
+}
+
+fn normalize_roc_threshold_method(method: &str) -> PyResult<&'static str> {
+    let normalized = method.trim().to_ascii_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "youden" => Ok("youden"),
+        "closest" | "closest_topleft" | "closest_top_left" => Ok("closest_topleft"),
+        _ => Err(value_error("method must be 'youden' or 'closest_topleft'")),
+    }
 }
 
 fn survival_time_summaries(time: &[f64], event: &[i32]) -> Vec<SurvivalTimeSummary> {
@@ -243,8 +268,9 @@ impl ForestPlotData {
         format!("ForestPlotData(n_variables={})", self.variable_names.len())
     }
 
-    fn significant_at(&self, alpha: f64) -> Vec<bool> {
-        self.p_values.iter().map(|&p| p < alpha).collect()
+    fn significant_at(&self, alpha: f64) -> PyResult<Vec<bool>> {
+        validate_alpha(alpha)?;
+        Ok(self.p_values.iter().map(|&p| p < alpha).collect())
     }
 }
 
@@ -262,6 +288,7 @@ pub fn forest_plot_data(
     confidence_level: f64,
 ) -> PyResult<ForestPlotData> {
     let n = variable_names.len();
+    validate_forest_plot_inputs(&variable_names)?;
     if coefficients.len() != n || standard_errors.len() != n {
         return Err(value_error("All input vectors must have the same length"));
     }
@@ -273,6 +300,7 @@ pub fn forest_plot_data(
 
     let hazard_ratios: Vec<f64> = coefficients.iter().map(|&c| c.exp()).collect();
     let (lower_ci, upper_ci) = exp_ci_bounds(&coefficients, &standard_errors, z);
+    validate_forest_plot_outputs(&hazard_ratios, &lower_ci, &upper_ci)?;
     let p_values: Vec<f64> = coefficients
         .iter()
         .zip(standard_errors.iter())
@@ -521,6 +549,7 @@ pub fn generate_survival_report(
     event: Vec<i32>,
     landmark_times: Option<Vec<f64>>,
 ) -> PyResult<SurvivalReport> {
+    validate_report_title(&title)?;
     validate_survival_plot_inputs(&time, &event)?;
     if let Some(ref times) = landmark_times {
         validate_finite(times, "landmark_times")?;
@@ -635,32 +664,39 @@ impl ROCPlotData {
         format!("ROCPlotData(AUC={:.4})", self.auc)
     }
 
-    fn optimal_threshold(&self, method: &str) -> f64 {
-        match method {
+    fn optimal_threshold(&self, method: &str) -> PyResult<f64> {
+        let finite_indices = self
+            .thresholds
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, threshold)| threshold.is_finite().then_some(idx));
+
+        match normalize_roc_threshold_method(method)? {
             "youden" => {
-                let mut best_idx = 0;
-                let mut best_j = 0.0f64;
-                for i in 0..self.fpr.len() {
+                let mut best: Option<(usize, f64)> = None;
+                for i in finite_indices {
                     let j = self.tpr[i] - self.fpr[i];
-                    if j > best_j {
-                        best_j = j;
-                        best_idx = i;
+                    if best.is_none_or(|(_, best_j)| j > best_j) {
+                        best = Some((i, j));
                     }
                 }
-                self.thresholds[best_idx]
+                let (best_idx, _) =
+                    best.ok_or_else(|| value_error("ROC thresholds must contain a finite value"))?;
+                Ok(self.thresholds[best_idx])
             }
-            _ => {
-                let mut best_idx = 0;
-                let mut min_dist = f64::MAX;
-                for i in 0..self.fpr.len() {
+            "closest_topleft" => {
+                let mut best: Option<(usize, f64)> = None;
+                for i in finite_indices {
                     let dist = self.fpr[i].powi(2) + (1.0 - self.tpr[i]).powi(2);
-                    if dist < min_dist {
-                        min_dist = dist;
-                        best_idx = i;
+                    if best.is_none_or(|(_, best_dist)| dist < best_dist) {
+                        best = Some((i, dist));
                     }
                 }
-                self.thresholds[best_idx]
+                let (best_idx, _) =
+                    best.ok_or_else(|| value_error("ROC thresholds must contain a finite value"))?;
+                Ok(self.thresholds[best_idx])
             }
+            _ => unreachable!("ROC threshold method was validated"),
         }
     }
 }
@@ -756,12 +792,36 @@ mod tests {
 
     #[test]
     fn test_forest_plot_data() {
+        Python::initialize();
+
         let names = vec!["Age".to_string(), "Sex".to_string()];
         let coefs = vec![0.5, -0.3];
         let ses = vec![0.1, 0.15];
 
         let result = forest_plot_data(names, coefs, ses, 0.95).unwrap();
         assert_eq!(result.hazard_ratios.len(), 2);
+        assert_eq!(result.significant_at(0.05).unwrap(), vec![true, true]);
+        assert!(
+            result
+                .significant_at(f64::NAN)
+                .expect_err("non-finite alpha should fail")
+                .to_string()
+                .contains("alpha must be finite and between 0 and 1")
+        );
+        assert!(
+            result
+                .significant_at(0.0)
+                .expect_err("zero alpha should fail")
+                .to_string()
+                .contains("alpha must be finite and between 0 and 1")
+        );
+        assert!(
+            result
+                .significant_at(1.0)
+                .expect_err("unit alpha should fail")
+                .to_string()
+                .contains("alpha must be finite and between 0 and 1")
+        );
     }
 
     #[test]
@@ -786,15 +846,43 @@ mod tests {
 
     #[test]
     fn test_roc_plot_data() {
+        Python::initialize();
+
         let scores = vec![0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05];
         let labels = vec![1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
 
         let result = roc_plot_data(scores, labels).unwrap();
         assert!(result.auc >= 0.0 && result.auc <= 1.0);
+        assert!(result.optimal_threshold("youden").unwrap().is_finite());
+        assert!(
+            result
+                .optimal_threshold("closest_topleft")
+                .unwrap()
+                .is_finite()
+        );
+        assert!(
+            result
+                .optimal_threshold("closest-top-left")
+                .unwrap()
+                .is_finite()
+        );
+        assert!(
+            result
+                .optimal_threshold("typo")
+                .expect_err("unknown ROC threshold method should fail")
+                .to_string()
+                .contains("method must be 'youden' or 'closest_topleft'")
+        );
+
+        let reversed = roc_plot_data(vec![0.1, 0.9], vec![1, 0]).unwrap();
+        assert_eq!(reversed.optimal_threshold("youden").unwrap(), 0.1);
+        assert_eq!(reversed.optimal_threshold("closest_topleft").unwrap(), 0.1);
     }
 
     #[test]
     fn reporting_apis_validate_public_inputs() {
+        Python::initialize();
+
         assert!(
             km_plot_data(vec![f64::NAN], vec![1], 0.95, None)
                 .expect_err("non-finite time should fail")
@@ -826,6 +914,24 @@ mod tests {
                 .contains("standard_errors must contain positive values")
         );
         assert!(
+            forest_plot_data(vec!["x".to_string()], vec![1000.0], vec![0.1], 0.95)
+                .expect_err("overflowing hazard ratio should fail")
+                .to_string()
+                .contains("hazard ratios and confidence intervals must be finite")
+        );
+        assert!(
+            forest_plot_data(vec![], vec![], vec![], 0.95)
+                .expect_err("empty forest plot variables should fail")
+                .to_string()
+                .contains("variable_names must be non-empty")
+        );
+        assert!(
+            forest_plot_data(vec![" ".to_string()], vec![1.0], vec![0.1], 0.95)
+                .expect_err("blank forest plot variable should fail")
+                .to_string()
+                .contains("variable_names must not contain empty names")
+        );
+        assert!(
             calibration_plot_data(vec![0.2], vec![1], 0)
                 .expect_err("zero bins should fail")
                 .to_string()
@@ -836,6 +942,12 @@ mod tests {
                 .expect_err("probabilities outside range should fail")
                 .to_string()
                 .contains("probabilities between 0 and 1")
+        );
+        assert!(
+            generate_survival_report(" ".to_string(), vec![1.0], vec![1], None)
+                .expect_err("blank report title should fail")
+                .to_string()
+                .contains("title must be non-empty")
         );
         assert!(
             generate_survival_report(

@@ -117,9 +117,7 @@ pub fn sparse_boosting_cox(
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        time[b].total_cmp(&time[a])
     });
 
     for iter in 0..config.n_iterations {
@@ -168,11 +166,7 @@ pub fn sparse_boosting_cox(
         let Some((best_j, best_grad)) = gradients
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| {
-                a.abs()
-                    .partial_cmp(&b.abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
             .map(|(j, &g)| (j, g))
         else {
             return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -236,9 +230,7 @@ fn compute_partial_likelihood(
 ) -> f64 {
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     sorted_indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        time[b].total_cmp(&time[a])
     });
 
     let eta: Vec<f64> = (0..n)

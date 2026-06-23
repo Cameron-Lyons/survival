@@ -6,6 +6,7 @@ use crate::constants::{
     z_score_for_confidence,
 };
 use crate::internal::statistical::normal_cdf;
+use crate::internal::validation::{validate_confidence_level, validate_positive_finite_slice};
 
 const REML_MAX_ITERATIONS: usize = 100;
 const REML_TOLERANCE: f64 = 1e-8;
@@ -21,27 +22,6 @@ fn validate_finite_slice(values: &[f64], field: &str) -> PyResult<()> {
                 "{field} contains non-finite value {value} at index {idx}"
             )));
         }
-    }
-    Ok(())
-}
-
-fn validate_positive_slice(values: &[f64], field: &str) -> PyResult<()> {
-    validate_finite_slice(values, field)?;
-    for (idx, &value) in values.iter().enumerate() {
-        if value <= 0.0 {
-            return Err(value_error(format!(
-                "{field} must contain positive values; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_confidence_level(confidence_level: f64) -> PyResult<()> {
-    if !confidence_level.is_finite() || confidence_level <= 0.0 || confidence_level >= 1.0 {
-        return Err(value_error(
-            "confidence_level must be a finite value between 0 and 1",
-        ));
     }
     Ok(())
 }
@@ -73,7 +53,7 @@ fn validate_meta_inputs(effects: &[f64], std_errors: &[f64], min_studies: usize)
         )));
     }
     validate_finite_slice(effects, "effects")?;
-    validate_positive_slice(std_errors, "std_errors")
+    validate_positive_finite_slice(std_errors, "std_errors")
 }
 
 #[pyclass(from_py_object)]

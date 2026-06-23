@@ -455,11 +455,7 @@ pub fn landmark_cox_analysis(
         let exp_lp: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
 
         let mut indices: Vec<usize> = (0..filtered_time.len()).collect();
-        indices.sort_by(|&a, &b| {
-            filtered_time[b]
-                .partial_cmp(&filtered_time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indices.sort_by(|&a, &b| filtered_time[b].total_cmp(&filtered_time[a]));
 
         let mut gradient = vec![0.0; n_features];
         let mut risk_sum = 0.0;

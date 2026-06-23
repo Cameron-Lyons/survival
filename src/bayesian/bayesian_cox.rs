@@ -157,11 +157,7 @@ fn log_likelihood(
     beta: &[f64],
 ) -> f64 {
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let eta: Vec<f64> = (0..n)
         .map(|i| {
@@ -199,11 +195,7 @@ fn log_likelihood_gradient(
     let mut gradient = vec![0.0; p];
 
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        time[b]
-            .partial_cmp(&time[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
     let eta: Vec<f64> = (0..n)
         .map(|i| {
@@ -492,7 +484,7 @@ pub fn bayesian_cox(
         .into_par_iter()
         .map(|j| {
             let mut vals: Vec<f64> = all_samples.iter().map(|s| s[j]).collect();
-            vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            vals.sort_by(f64::total_cmp);
             let lower_idx = (n_total as f64 * 0.025) as usize;
             let upper_idx = (n_total as f64 * 0.975) as usize;
             (vals[lower_idx], vals[upper_idx])
@@ -585,7 +577,7 @@ pub fn bayesian_cox_predict_survival(
             (0..n_times)
                 .map(|t| {
                     let mut vals: Vec<f64> = all_survival[i].iter().map(|s| s[t]).collect();
-                    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    vals.sort_by(f64::total_cmp);
                     vals[(n_samples as f64 * 0.025) as usize]
                 })
                 .collect()
@@ -597,7 +589,7 @@ pub fn bayesian_cox_predict_survival(
             (0..n_times)
                 .map(|t| {
                     let mut vals: Vec<f64> = all_survival[i].iter().map(|s| s[t]).collect();
-                    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    vals.sort_by(f64::total_cmp);
                     vals[(n_samples as f64 * 0.975) as usize]
                 })
                 .collect()

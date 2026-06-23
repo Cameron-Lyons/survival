@@ -309,7 +309,7 @@ impl SurvivalFit {
     ) -> PyResult<SurvregQuantilePrediction> {
         let quantiles = quantiles.unwrap_or_else(|| vec![0.5]);
         for &q in &quantiles {
-            if q <= 0.0 || q >= 1.0 {
+            if !q.is_finite() || q <= 0.0 || q >= 1.0 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                     "Quantiles must be between 0 and 1 (exclusive)",
                 ));

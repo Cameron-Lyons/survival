@@ -222,11 +222,7 @@ fn compute_cvar_weights(losses: &[f64], alpha: f64) -> Vec<f64> {
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        losses[a]
-            .partial_cmp(&losses[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| losses[a].total_cmp(&losses[b]));
 
     let threshold_idx = ((1.0 - alpha) * n as f64).ceil() as usize;
     let threshold_idx = threshold_idx.min(n - 1);
@@ -270,11 +266,7 @@ fn weighted_cox_partial_likelihood(
     }
 
     let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time[a]
-            .partial_cmp(&time[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
     let mut log_likelihood = 0.0;
     let mut risk_set_sum = 0.0;
@@ -366,11 +358,7 @@ fn dro_cox_optimization(
         let exp_pred: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
 
         let mut sorted_indices: Vec<usize> = (0..n).collect();
-        sorted_indices.sort_by(|&a, &b| {
-            time[b]
-                .partial_cmp(&time[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
         let mut risk_set_sum = 0.0;
         let mut risk_set_x = vec![0.0; p];

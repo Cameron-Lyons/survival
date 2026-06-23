@@ -763,6 +763,12 @@ mod tests {
         }
     }
 
+    fn near_tied_test_fit(method: &str) -> CoxPHFit {
+        let mut fit = baseline_test_fit(method);
+        fit.event_times[2] += TIME_EPSILON / 2.0;
+        fit
+    }
+
     fn brute_force_basehaz(fit: &CoxPHFit, centered: bool) -> (Vec<f64>, Vec<f64>, Vec<i32>) {
         let n = fit.event_times.len();
         let row_strata = fit.row_strata();
@@ -990,5 +996,50 @@ mod tests {
 
             assert_close_matrix(&actual, &expected);
         }
+    }
+
+    #[test]
+    fn test_coxph_schoenfeld_residuals_treat_near_ties_as_ties() {
+        for method in ["breslow", "efron", "exact"] {
+            let expected = baseline_test_fit(method)
+                .schoenfeld_residuals_internal()
+                .expect("exact-tied Schoenfeld residuals should compute");
+            let actual = near_tied_test_fit(method)
+                .schoenfeld_residuals_internal()
+                .expect("near-tied Schoenfeld residuals should compute");
+
+            assert_close_matrix(&actual, &expected);
+        }
+    }
+
+    #[test]
+    fn test_coxph_score_residuals_treat_near_ties_as_ties() {
+        for method in ["breslow", "efron", "exact"] {
+            let expected = baseline_test_fit(method)
+                .score_residuals_internal()
+                .expect("exact-tied score residuals should compute");
+            let actual = near_tied_test_fit(method)
+                .score_residuals_internal()
+                .expect("near-tied score residuals should compute");
+
+            assert_close_matrix(&actual, &expected);
+        }
+    }
+
+    #[test]
+    fn test_coxph_exact_score_residuals_treat_right_censored_near_ties_as_ties() {
+        let mut expected_fit = baseline_test_fit("exact");
+        expected_fit.entry_times = None;
+        let expected = expected_fit
+            .score_residuals_internal()
+            .expect("exact-tied right-censored score residuals should compute");
+
+        let mut actual_fit = near_tied_test_fit("exact");
+        actual_fit.entry_times = None;
+        let actual = actual_fit
+            .score_residuals_internal()
+            .expect("near-tied right-censored score residuals should compute");
+
+        assert_close_matrix(&actual, &expected);
     }
 }

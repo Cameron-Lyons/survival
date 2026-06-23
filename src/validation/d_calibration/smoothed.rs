@@ -65,27 +65,13 @@ pub(crate) fn smoothed_calibration_core(
         };
     }
 
-    let outcomes: Vec<f64> = (0..n)
+    let observed_pairs: Vec<(f64, f64)> = (0..n)
         .filter_map(|i| {
-            if time[i] <= time_point && status[i] == 1 {
-                Some(0.0)
-            } else if time[i] > time_point {
-                Some(1.0)
-            } else {
-                None
-            }
+            observed_survival_at_time_point(time[i], status[i], time_point)
+                .map(|outcome| (predicted_survival_at_t[i], outcome))
         })
         .collect();
-
-    let preds: Vec<f64> = (0..n)
-        .filter_map(|i| {
-            if time[i] > time_point || (time[i] <= time_point && status[i] == 1) {
-                Some(predicted_survival_at_t[i])
-            } else {
-                None
-            }
-        })
-        .collect();
+    let (preds, outcomes): (Vec<f64>, Vec<f64>) = observed_pairs.into_iter().unzip();
 
     if preds.is_empty() {
         return SmoothedCalibrationCurve {
@@ -100,7 +86,7 @@ pub(crate) fn smoothed_calibration_core(
     let h = bandwidth
         .unwrap_or_else(|| {
             let mut sorted_preds = preds.clone();
-            sorted_preds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted_preds.sort_by(f64::total_cmp);
             let q1_idx = sorted_preds.len() / 4;
             let q3_idx = 3 * sorted_preds.len() / 4;
             let iqr = sorted_preds[q3_idx] - sorted_preds[q1_idx];
