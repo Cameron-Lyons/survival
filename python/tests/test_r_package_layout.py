@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 R_PACKAGE = ROOT / "r" / "survivalr"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "rust.yml"
+R_BRIDGE_DATA_EXPORTS = {"survreg.distributions"}
 
 
 def _namespace_exports() -> set[str]:
@@ -20,6 +21,8 @@ def _namespace_s3_methods() -> set[tuple[str, str]]:
         line = line.strip()
         if line.startswith("S3method(") and line.endswith(")"):
             generic, cls = line.removeprefix("S3method(").removesuffix(")").split(", ")
+            generic = generic.strip('"')
+            cls = cls.strip('"')
             methods.add((generic, cls))
     return methods
 
@@ -45,17 +48,75 @@ def test_r_bridge_exports_core_survival_entry_points():
 
     assert {
         "Surv",
+        "Surv2data",
+        "aareg",
+        "aeqSurv",
+        "agexact.fit",
+        "agreg.fit",
         "is.Surv",
+        "is.ratetable",
+        "ratetableDate",
+        "ratetable",
+        "match.ratetable",
+        "ridge",
+        "frailty",
+        "frailty.gamma",
+        "frailty.gaussian",
+        "frailty.t",
+        "blogit",
+        "bprobit",
+        "bcloglog",
+        "blog",
+        "brier",
+        "cch",
+        "cipoisson",
+        "clogit",
         "survfit",
+        "survfit0",
+        "survfit_confint",
+        "survSplit",
+        "survcondense",
+        "survcheck",
         "survdiff",
+        "survexp",
+        "survobrien",
         "coxph",
         "coxph.control",
+        "coxph.fit",
+        "coxsurv.fit",
+        "finegray",
+        "fromtimeline",
+        "nsk",
+        "pyears",
+        "pseudo",
+        "pspline",
         "survreg",
         "survreg.control",
+        "survreg.distributions",
+        "survregDtest",
+        "totimeline",
+        "dsurvreg",
+        "psurvreg",
+        "qsurvreg",
+        "royston",
+        "rsurvreg",
+        "rttright",
+        "statefig",
+        "strata",
+        "survConcordance",
+        "survConcordance.fit",
         "basehaz",
         "concordance",
+        "concordancefit",
         "cox.zph",
         "coxph.detail",
+        "survfitKM",
+        "survfitcoxph.fit",
+        "survpenal.fit",
+        "survreg.fit",
+        "tmerge",
+        "yates",
+        "yates_setup",
     } <= exports
     for name in exports:
         assert f"\\alias{{{name}}}" in manual
@@ -81,8 +142,10 @@ def test_r_bridge_defines_exported_functions():
     assert "survreg.control <- function" in bridge
     assert "response = formula" in bridge
     assert "NextMethod()" in bridge
-    for name in _namespace_exports() - {"anova"}:
+    for name in _namespace_exports() - {"anova"} - R_BRIDGE_DATA_EXPORTS:
         assert f"{name} <- function" in bridge
+    for name in R_BRIDGE_DATA_EXPORTS:
+        assert f"{name} <- list" in bridge
 
 
 def test_r_bridge_registers_model_s3_methods():
@@ -99,6 +162,8 @@ def test_r_bridge_registers_model_s3_methods():
         ("df.residual", "survival_py_survreg"),
         ("extractAIC", "survival_py_model"),
         ("formula", "survival_py_model"),
+        ("format", "survival_py_surv"),
+        ("is.na", "survival_py_surv"),
         ("terms", "survival_py_model"),
         ("weights", "survival_py_model"),
         ("model.matrix", "survival_py_model"),
@@ -139,7 +204,7 @@ def test_r_bridge_registers_model_s3_methods():
     } <= methods
     for generic, cls in methods:
         method = f"{generic}.{cls}"
-        assert f"{method} <- function" in bridge
+        assert f"{method} <- function" in bridge or f"`{method}` <- function" in bridge
         assert f"\\alias{{{method}}}" in manual
 
 

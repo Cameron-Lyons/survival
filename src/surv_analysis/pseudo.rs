@@ -82,10 +82,149 @@ pub fn pseudo(
         });
     }
 
-    let full_km = compute_km(&time, &status, &times, pseudo_type);
-    let n_f64 = n as f64;
+    let pseudo_matrix = if matches!(pseudo_type, "survival" | "cumhaz") {
+        compute_ij_pseudo(&time, &status, &times, pseudo_type)
+    } else {
+        compute_jackknife_pseudo(&time, &status, &times, pseudo_type)
+    };
 
-    let pseudo_matrix: Vec<Vec<f64>> = (0..n)
+    Ok(PseudoResult {
+        pseudo: pseudo_matrix,
+        time: times,
+        type_: pseudo_type.to_string(),
+        n,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct EventBlock {
+    time: f64,
+    risk: f64,
+    events: f64,
+    survival: f64,
+    cumhaz: f64,
+}
+
+fn event_blocks(time: &[f64], status: &[i32]) -> Vec<EventBlock> {
+    let n = time.len();
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
+
+    let mut blocks = Vec::new();
+    let mut n_at_risk = n as f64;
+    let mut surv = 1.0;
+    let mut cumhaz = 0.0;
+    let mut start = 0;
+
+    while start < n {
+        let current_time = time[indices[start]];
+        let mut end = start + 1;
+        while end < n && same_time(time[indices[end]], current_time) {
+            end += 1;
+        }
+
+        let n_events = indices[start..end]
+            .iter()
+            .filter(|&&idx| status[idx] == 1)
+            .count() as f64;
+        let n_removed = (end - start) as f64;
+        if n_events > 0.0 && n_at_risk > 0.0 {
+            let hazard = n_events / n_at_risk;
+            surv *= 1.0 - hazard;
+            cumhaz += hazard;
+            blocks.push(EventBlock {
+                time: current_time,
+                risk: n_at_risk,
+                events: n_events,
+                survival: surv,
+                cumhaz,
+            });
+        }
+
+        n_at_risk -= n_removed;
+        start = end;
+    }
+
+    blocks
+}
+
+fn event_block_index(blocks: &[EventBlock], eval_time: f64) -> Option<usize> {
+    blocks
+        .iter()
+        .position(|block| block.time > eval_time + TIME_EPSILON)
+        .map_or_else(
+            || blocks.len().checked_sub(1),
+            |idx| if idx == 0 { None } else { Some(idx - 1) },
+        )
+}
+
+fn subject_at_risk(subject_time: f64, event_time: f64) -> bool {
+    subject_time + TIME_EPSILON >= event_time
+}
+
+fn subject_event_at_time(subject_time: f64, subject_status: i32, event_time: f64) -> bool {
+    subject_status == 1 && same_time(subject_time, event_time)
+}
+
+fn compute_ij_pseudo(
+    time: &[f64],
+    status: &[i32],
+    eval_times: &[f64],
+    type_: &str,
+) -> Vec<Vec<f64>> {
+    let n = time.len();
+    let n_f64 = n as f64;
+    let blocks = event_blocks(time, status);
+
+    (0..n)
+        .into_par_iter()
+        .map(|row| {
+            eval_times
+                .iter()
+                .map(|&eval_time| {
+                    let Some(last_idx) = event_block_index(&blocks, eval_time) else {
+                        return if type_ == "survival" { 1.0 } else { 0.0 };
+                    };
+                    let mut influence = 0.0;
+                    for block in &blocks[..=last_idx] {
+                        if !subject_at_risk(time[row], block.time) {
+                            continue;
+                        }
+                        if type_ == "survival" {
+                            if subject_event_at_time(time[row], status[row], block.time) {
+                                influence -= 1.0 / block.risk;
+                            } else if block.risk > block.events + DIVISION_FLOOR {
+                                influence +=
+                                    block.events / (block.risk * (block.risk - block.events));
+                            }
+                        } else if subject_event_at_time(time[row], status[row], block.time) {
+                            influence += (block.risk - block.events) / (block.risk * block.risk);
+                        } else {
+                            influence -= block.events / (block.risk * block.risk);
+                        }
+                    }
+                    let block = &blocks[last_idx];
+                    if type_ == "survival" {
+                        block.survival + n_f64 * block.survival * influence
+                    } else {
+                        block.cumhaz + n_f64 * influence
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn compute_jackknife_pseudo(
+    time: &[f64],
+    status: &[i32],
+    eval_times: &[f64],
+    type_: &str,
+) -> Vec<Vec<f64>> {
+    let n_f64 = time.len() as f64;
+    let full_km = compute_km(time, status, eval_times, type_);
+
+    (0..time.len())
         .into_par_iter()
         .map(|i| {
             let loo_time: Vec<f64> = time
@@ -101,7 +240,7 @@ pub fn pseudo(
                 .map(|(_, &s)| s)
                 .collect();
 
-            let loo_km = compute_km(&loo_time, &loo_status, &times, pseudo_type);
+            let loo_km = compute_km(&loo_time, &loo_status, eval_times, type_);
 
             full_km
                 .iter()
@@ -109,14 +248,7 @@ pub fn pseudo(
                 .map(|(&full_val, &loo_val)| n_f64 * full_val - (n_f64 - 1.0) * loo_val)
                 .collect()
         })
-        .collect();
-
-    Ok(PseudoResult {
-        pseudo: pseudo_matrix,
-        time: times,
-        type_: pseudo_type.to_string(),
-        n,
-    })
+        .collect()
 }
 
 fn validate_pseudo_type(type_: Option<&str>) -> PyResult<&'static str> {

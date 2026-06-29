@@ -11,8 +11,10 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 SystemRequirements: Python (>= 3.11) with the survival Python package
 Imports:
+    graphics,
     reticulate,
-    stats
+    stats,
+    utils
 Suggests:
     survival,
     testthat (>= 3.0.0)

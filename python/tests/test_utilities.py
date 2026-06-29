@@ -2,7 +2,8 @@ import pytest
 
 from .helpers import setup_survival_import
 
-survival = setup_survival_import()
+survival_package = setup_survival_import()
+survival = survival_package.data_prep
 
 
 def test_collapse():
@@ -414,7 +415,7 @@ def test_rttright_public_apis_and_validation():
 
 
 def test_agexact_public_api_and_validation():
-    result = survival.agexact(
+    result = survival_package.agexact(
         0,
         1,
         1,
@@ -452,7 +453,7 @@ def test_agexact_public_api_and_validation():
     assert result["flag"] == 0
 
     with pytest.raises(ValueError, match="work must have length at least 5"):
-        survival.agexact(
+        survival_package.agexact(
             1,
             1,
             1,

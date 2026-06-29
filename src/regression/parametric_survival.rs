@@ -9,10 +9,11 @@ use crate::regression::survreg_predict::{
 };
 use crate::regression::survregc1::{SurvivalDist, survregc1};
 use crate::residuals::survreg_resid::{
-    SurvregResidType, SurvregResiduals, compute_deviance_residuals_survreg, compute_dfbeta_survreg,
-    compute_ldcase, compute_response_residuals, compute_response_residuals_censored,
-    compute_survreg_dfbeta_residuals, compute_survreg_residual_matrix, compute_working_residuals,
-    compute_working_residuals_from_derivative_matrix,
+    SurvregResidType, SurvregResiduals, compute_deviance_residuals_survreg_with_parameter,
+    compute_dfbeta_survreg_with_parameter, compute_ldcase_with_parameter,
+    compute_response_residuals, compute_response_residuals_censored_with_parameter,
+    compute_survreg_dfbeta_residuals, compute_survreg_residual_matrix_with_parameter,
+    compute_working_residuals_from_derivative_matrix, compute_working_residuals_with_parameter,
 };
 use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
@@ -95,6 +96,8 @@ pub struct SurvivalFit {
     #[pyo3(get)]
     pub distribution: String,
     #[pyo3(get)]
+    pub distribution_parameters: Vec<f64>,
+    #[pyo3(get)]
     pub n_covariates: usize,
     #[pyo3(get)]
     pub n_strata: usize,
@@ -133,6 +136,7 @@ impl DistributionType {
             DistributionType::Weibull => "weibull",
             DistributionType::LogNormal => "lognormal",
             DistributionType::LogLogistic => "loglogistic",
+            DistributionType::StudentT => "t",
         }
     }
 
@@ -150,12 +154,21 @@ fn requested_distribution_name(requested: Option<&str>, distribution: Distributi
     };
     match name.to_lowercase().replace('-', "_").as_str() {
         "exponential" => "exponential".to_string(),
+        "rayleigh" => "rayleigh".to_string(),
         "normal" => "gaussian".to_string(),
         "log_logistic" => "loglogistic".to_string(),
-        "log_gaussian" | "lognormal" | "log_normal" => "lognormal".to_string(),
+        "loggaussian" | "log_gaussian" | "lognormal" | "log_normal" => "lognormal".to_string(),
         "extreme" | "extremevalue" => "extreme_value".to_string(),
+        "student" | "student_t" | "studentt" => "t".to_string(),
         _ => distribution.canonical_name().to_string(),
     }
+}
+
+fn is_student_t_distribution_name(distribution: &str) -> bool {
+    matches!(
+        distribution.to_lowercase().replace('-', "_").as_str(),
+        "t" | "student" | "student_t" | "studentt"
+    )
 }
 
 fn parse_distribution_type(distribution: Option<&str>) -> PyResult<DistributionType> {
@@ -165,6 +178,7 @@ fn parse_distribution_type(distribution: Option<&str>) -> PyResult<DistributionT
     match name.to_lowercase().replace('-', "_").as_str() {
         "weibull" => Ok(DistributionType::Weibull),
         "exponential" => Ok(DistributionType::Weibull),
+        "rayleigh" => Ok(DistributionType::Weibull),
         "extreme" | "extreme_value" | "extremevalue" => Ok(DistributionType::ExtremeValue),
         "gaussian" | "normal" => Ok(DistributionType::Gaussian),
         "logistic" => Ok(DistributionType::Logistic),
@@ -172,9 +186,35 @@ fn parse_distribution_type(distribution: Option<&str>) -> PyResult<DistributionT
             Ok(DistributionType::LogNormal)
         }
         "loglogistic" | "log_logistic" => Ok(DistributionType::LogLogistic),
+        "t" | "student" | "student_t" | "studentt" => Ok(DistributionType::StudentT),
         _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic",
+            "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, loglogistic, or t",
         )),
+    }
+}
+
+fn validate_distribution_parameter(
+    distribution: DistributionType,
+    distribution_parameter: Option<f64>,
+) -> PyResult<Option<f64>> {
+    match distribution {
+        DistributionType::StudentT => {
+            let df = distribution_parameter.unwrap_or(4.0);
+            if !df.is_finite() || df <= 2.0 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Degrees of freedom must be >=3",
+                ));
+            }
+            Ok(Some(df))
+        }
+        _ => {
+            if distribution_parameter.is_some() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "distribution_parameter is only supported for distribution='t'",
+                ));
+            }
+            Ok(None)
+        }
     }
 }
 
@@ -198,6 +238,10 @@ impl SurvivalFit {
             }
         }
         Ok(())
+    }
+
+    fn distribution_parameter(&self) -> Option<f64> {
+        self.distribution_parameters.first().copied()
     }
 
     fn validate_offset(offset: Option<Vec<f64>>, n: usize) -> PyResult<Option<Vec<f64>>> {
@@ -375,13 +419,14 @@ impl SurvivalFit {
         let residuals = match resid_type {
             SurvregResidType::Response => {
                 if has_interval_censoring {
-                    compute_response_residuals_censored(
+                    compute_response_residuals_censored_with_parameter(
                         &self.time,
                         self.time2.as_deref(),
                         &self.status,
                         &self.linear_predictors,
                         self.scale,
                         &self.distribution,
+                        self.distribution_parameter(),
                     )?
                 } else {
                     compute_response_residuals(
@@ -391,43 +436,47 @@ impl SurvivalFit {
                     )
                 }
             }
-            SurvregResidType::Deviance => compute_deviance_residuals_survreg(
+            SurvregResidType::Deviance => compute_deviance_residuals_survreg_with_parameter(
                 &self.time,
                 self.time2.as_deref(),
                 &self.status,
                 &self.linear_predictors,
                 self.scale,
                 &self.distribution,
+                self.distribution_parameter(),
             )?,
             SurvregResidType::Working => {
-                if has_interval_censoring {
-                    let derivative_matrix = compute_survreg_residual_matrix(
+                if has_interval_censoring || is_student_t_distribution_name(&self.distribution) {
+                    let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
                         &self.time,
                         self.time2.as_deref(),
                         &self.status,
                         &self.linear_predictors,
                         self.scale,
                         &self.distribution,
+                        self.distribution_parameter(),
                     )?;
                     compute_working_residuals_from_derivative_matrix(&derivative_matrix)?
                 } else {
-                    compute_working_residuals(
+                    compute_working_residuals_with_parameter(
                         &self.time,
                         &self.status,
                         &self.linear_predictors,
                         self.scale,
                         &self.distribution,
+                        self.distribution_parameter(),
                     )
                 }
             }
             SurvregResidType::Ldcase | SurvregResidType::Ldresp | SurvregResidType::Ldshape => {
-                compute_ldcase(
+                compute_ldcase_with_parameter(
                     &self.time,
                     self.time2.as_deref(),
                     &self.status,
                     &self.linear_predictors,
                     self.scale,
                     &self.distribution,
+                    self.distribution_parameter(),
                 )?
             }
             SurvregResidType::Dfbeta | SurvregResidType::Dfbetas => unreachable!(),
@@ -443,13 +492,14 @@ impl SurvivalFit {
 
     pub fn dfbeta(&self) -> PyResult<Vec<Vec<f64>>> {
         if self.status.iter().any(|&value| value == 2 || value == 3) {
-            let derivative_matrix = compute_survreg_residual_matrix(
+            let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
                 &self.time,
                 self.time2.as_deref(),
                 &self.status,
                 &self.linear_predictors,
                 self.scale,
                 &self.distribution,
+                self.distribution_parameter(),
             )?;
             return compute_survreg_dfbeta_residuals(
                 &derivative_matrix,
@@ -461,7 +511,7 @@ impl SurvivalFit {
                 false,
             );
         }
-        Ok(compute_dfbeta_survreg(
+        Ok(compute_dfbeta_survreg_with_parameter(
             &self.time,
             &self.status,
             &self.covariates,
@@ -469,6 +519,7 @@ impl SurvivalFit {
             self.scale,
             &self.location_variance_matrix(),
             &self.distribution,
+            self.distribution_parameter(),
         ))
     }
 }
@@ -478,6 +529,7 @@ struct LikelihoodInput<'a> {
     nstrat: usize,
     beta: &'a [f64],
     distribution: &'a DistributionType,
+    distribution_parameter: Option<f64>,
     strata: &'a [usize],
     offsets: &'a Array1<f64>,
     time1: &'a ArrayView1<'a, f64>,
@@ -519,6 +571,11 @@ fn calculate_likelihood(
         DistributionType::Weibull => SurvivalDist::Weibull,
         DistributionType::LogNormal => SurvivalDist::LogNormal,
         DistributionType::LogLogistic => SurvivalDist::LogLogistic,
+        DistributionType::StudentT => SurvivalDist::StudentT(
+            input
+                .distribution_parameter
+                .ok_or_else(|| "Student-t degrees of freedom are missing".to_string())?,
+        ),
     };
     let strat_vec: Vec<i32> = strata.iter().map(|&s| (s + 1) as i32).collect();
     let strat_arr = Array1::from_vec(strat_vec);
@@ -763,6 +820,8 @@ pub enum DistributionType {
     LogNormal,
     #[pyo3(name = "loglogistic")]
     LogLogistic,
+    #[pyo3(name = "t")]
+    StudentT,
 }
 
 /// Fit a parametric survival regression model.
@@ -784,7 +843,8 @@ pub enum DistributionType {
 /// strata : array-like, optional
 ///     Stratum indicators for stratified analysis.
 /// distribution : str, optional
-///     Error distribution: "weibull" (default), "lognormal", "loglogistic", "gaussian", "exponential".
+///     Error distribution: "weibull" (default), "exponential", "rayleigh", "extreme_value",
+///     "lognormal", "loglogistic", "gaussian", "logistic", or "t".
 /// max_iter : int, optional
 ///     Maximum iterations (default 30).
 /// eps : float, optional
@@ -795,13 +855,15 @@ pub enum DistributionType {
 ///     Interval upper-bound times. Required for rows with status=3.
 /// fixed_scale : float, optional
 ///     Fixed scale parameter. When supplied, the scale is not estimated.
+/// distribution_parameter : float, optional
+///     Distribution-specific parameter. For "t", the Student-t degrees of freedom.
 ///
 /// Returns
 /// -------
 /// SurvivalFit
 ///     Object with: coefficients, std_errors, variance_matrix, log_likelihood, convergence info.
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None, fixed_scale=None))]
+#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None, fixed_scale=None, distribution_parameter=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survreg(
     time: Vec<f64>,
@@ -817,16 +879,18 @@ pub fn survreg(
     tol_chol: Option<f64>,
     time2: Option<Vec<f64>>,
     fixed_scale: Option<f64>,
+    distribution_parameter: Option<f64>,
 ) -> PyResult<SurvivalFit> {
     let requested_distribution_key = distribution.map(|name| name.to_lowercase().replace('-', "_"));
     let dist_type = parse_distribution_type(distribution)?;
-    let fixed_scale =
-        if requested_distribution_key.as_deref() == Some("exponential") && fixed_scale.is_none() {
-            Some(1.0)
-        } else {
-            fixed_scale
-        };
+    let fixed_scale = match (requested_distribution_key.as_deref(), fixed_scale) {
+        (Some("exponential"), None) => Some(1.0),
+        (Some("rayleigh"), None) => Some(0.5),
+        (_, value) => value,
+    };
     let config = SurvregConfig::create(Some(dist_type), max_iter, eps, tol_chol);
+    let distribution_parameter =
+        validate_distribution_parameter(config.distribution, distribution_parameter)?;
     let n = time.len();
     if status.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -955,6 +1019,7 @@ pub fn survreg(
         eps: config.eps,
         tol_chol: config.tol_chol,
         distribution: distribution_type,
+        distribution_parameter,
         fixed_scale,
     })
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
@@ -990,6 +1055,7 @@ pub fn survreg(
         scale: scales.first().copied().unwrap_or(1.0),
         scales,
         distribution: distribution_name,
+        distribution_parameters: distribution_parameter.into_iter().collect(),
         n_covariates: nvar,
         n_strata: nstrat,
         linear_predictors,
@@ -1022,6 +1088,7 @@ fn compute_survreg(
         eps,
         tol_chol,
         distribution,
+        distribution_parameter,
         fixed_scale,
     } = input;
     let n = y.nrows();
@@ -1064,6 +1131,7 @@ fn compute_survreg(
         nstrat: estimated_scale_count,
         beta: &beta,
         distribution: &distribution,
+        distribution_parameter,
         strata,
         offsets,
         time1: &time1,
@@ -1108,6 +1176,7 @@ fn compute_survreg(
                 nstrat: estimated_scale_count,
                 beta: &candidate_beta,
                 distribution: &distribution,
+                distribution_parameter,
                 strata,
                 offsets,
                 time1: &time1,
@@ -1187,6 +1256,7 @@ struct ComputeSurvregInput<'a> {
     eps: f64,
     tol_chol: f64,
     distribution: DistributionType,
+    distribution_parameter: Option<f64>,
     fixed_scale: Option<f64>,
 }
 
@@ -1225,8 +1295,9 @@ mod tests {
             DistributionType::Logistic,
             DistributionType::LogNormal,
             DistributionType::LogLogistic,
+            DistributionType::StudentT,
         ];
-        assert_eq!(variants.len(), 6);
+        assert_eq!(variants.len(), 7);
     }
 
     #[test]
@@ -1236,8 +1307,20 @@ mod tests {
             "exponential"
         );
         assert_eq!(
+            parse_distribution_type(Some("rayleigh")).unwrap(),
+            DistributionType::Weibull
+        );
+        assert_eq!(
+            requested_distribution_name(Some("rayleigh"), DistributionType::Weibull),
+            "rayleigh"
+        );
+        assert_eq!(
             requested_distribution_name(Some("normal"), DistributionType::Gaussian),
             "gaussian"
+        );
+        assert_eq!(
+            requested_distribution_name(Some("loggaussian"), DistributionType::LogNormal),
+            "lognormal"
         );
         assert_eq!(
             requested_distribution_name(Some("log-logistic"), DistributionType::LogLogistic),
@@ -1246,6 +1329,10 @@ mod tests {
         assert_eq!(
             requested_distribution_name(Some("extreme"), DistributionType::ExtremeValue),
             "extreme_value"
+        );
+        assert_eq!(
+            requested_distribution_name(Some("student-t"), DistributionType::StudentT),
+            "t"
         );
     }
 
@@ -1297,6 +1384,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            distribution_parameter: None,
             fixed_scale: None,
         });
 
@@ -1332,6 +1420,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            distribution_parameter: None,
             fixed_scale: None,
         });
 
@@ -1367,6 +1456,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::LogNormal,
+            distribution_parameter: None,
             fixed_scale: None,
         });
 
@@ -1401,6 +1491,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::LogLogistic,
+            distribution_parameter: None,
             fixed_scale: None,
         });
 
@@ -1440,6 +1531,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            distribution_parameter: None,
             fixed_scale: None,
         });
 
@@ -1478,6 +1570,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            distribution_parameter: None,
             fixed_scale: None,
         });
 
@@ -1512,6 +1605,7 @@ mod tests {
             eps: 1e-6,
             tol_chol: 1e-10,
             distribution: DistributionType::Weibull,
+            distribution_parameter: None,
             fixed_scale: Some(1.25),
         });
 

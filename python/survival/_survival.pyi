@@ -2206,6 +2206,8 @@ class SurvFitKMOutput:
     @property
     def n_risk(self) -> list[float]: ...
     @property
+    def n_risk_count(self) -> list[float]: ...
+    @property
     def n_event(self) -> list[float]: ...
     @property
     def n_event_count(self) -> list[float]: ...
@@ -2230,11 +2232,21 @@ class SurvFitKMOutput:
     @property
     def conf_upper(self) -> list[float]: ...
 
+class SurvFitKMInfluenceOutput:
+    @property
+    def time(self) -> list[float]: ...
+    @property
+    def influence_surv(self) -> list[list[float]]: ...
+    @property
+    def influence_chaz(self) -> list[list[float]]: ...
+
 class CountingSurvfitTables:
     @property
     def time(self) -> list[float]: ...
     @property
     def n_risk(self) -> list[float]: ...
+    @property
+    def n_risk_count(self) -> list[float]: ...
     @property
     def n_event(self) -> list[float]: ...
     @property
@@ -2245,6 +2257,8 @@ class CountingSurvfitTables:
     def n_censor_count(self) -> list[float]: ...
     @property
     def n_enter(self) -> list[float] | None: ...
+    @property
+    def n_enter_count(self) -> list[float] | None: ...
 
 class SurvfitCurveResult:
     @property
@@ -3333,6 +3347,7 @@ class SurvivalFit:
     scale: float
     scales: list[float]
     distribution: str
+    distribution_parameters: list[float]
     n_covariates: int
     n_strata: int
     linear_predictors: list[float]
@@ -5711,6 +5726,58 @@ def survfitkm(
     conf_type: str | None = None,
     timefix: bool | None = None,
 ) -> SurvFitKMOutput: ...
+def robust_survfitkm(
+    time: list[float],
+    status: list[int],
+    cluster: list[int],
+    weights: list[float] | None = None,
+    reverse: bool | None = None,
+    conf_level: float | None = None,
+    conf_type: str | None = None,
+    timefix: bool | None = None,
+) -> SurvFitKMOutput: ...
+def survfitkm_influence(
+    time: list[float],
+    status: list[int],
+    cluster: list[int],
+    weights: list[float] | None = None,
+    reverse: bool | None = None,
+    stype: int = 1,
+    ctype: int = 1,
+    conf_level: float | None = None,
+    conf_type: str | None = None,
+    timefix: bool | None = None,
+) -> SurvFitKMInfluenceOutput: ...
+def survfitkm_counting_influence(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    curve_time: list[float],
+    curve_estimate: list[float],
+    cluster: list[int],
+    weights: list[float] | None = None,
+    reverse: bool | None = None,
+    stype: int = 1,
+    ctype: int = 1,
+    conf_level: float | None = None,
+    conf_type: str | None = None,
+    timefix: bool | None = None,
+) -> SurvFitKMInfluenceOutput: ...
+def robust_counting_survfit_variance(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    curve_time: list[float],
+    curve_estimate: list[float],
+    cluster: list[int],
+    weights: list[float] | None = None,
+    reverse: bool | None = None,
+    conf_level: float | None = None,
+    conf_type: str | None = None,
+    timefix: bool | None = None,
+    stype: int = 1,
+    ctype: int = 1,
+) -> tuple[list[float], list[float], list[float], list[float]]: ...
 def survfitkm_with_options(
     time: list[float],
     status: list[int],
@@ -6702,6 +6769,7 @@ def survreg(
     tol_chol: float | None = None,
     time2: list[float] | None = None,
     fixed_scale: float | None = None,
+    distribution_parameter: float | None = None,
 ) -> SurvivalFit: ...
 def predict_survreg(
     covariates: list[list[float]],
@@ -6721,6 +6789,13 @@ def predict_survreg_quantile(
     quantiles: list[float],
     offset: list[float] | None = None,
 ) -> SurvregQuantilePrediction: ...
+def survreg_distribution(
+    values: list[float],
+    mean: list[float],
+    scale: list[float],
+    distribution: str,
+    kind: str,
+) -> list[float]: ...
 def survreg_quantile_prediction_se_matrix(
     rows: list[list[float]],
     scales: list[float],
@@ -6745,6 +6820,7 @@ def residuals_survreg(
     distribution: str,
     residual_type: str = "deviance",
     time2: list[float] | None = None,
+    distribution_parameter: float | None = None,
 ) -> SurvregResiduals: ...
 def survreg_residual_matrix(
     time: list[float],
@@ -6753,6 +6829,7 @@ def survreg_residual_matrix(
     scale: float,
     distribution: str,
     time2: list[float] | None = None,
+    distribution_parameter: float | None = None,
 ) -> list[list[float]]: ...
 def survreg_influence_residuals(
     derivative_matrix: list[list[float]],
@@ -6781,6 +6858,7 @@ def dfbeta_survreg(
     var_matrix: list[list[float]],
     distribution: str,
     time2: list[float] | None = None,
+    distribution_parameter: float | None = None,
 ) -> list[list[float]]: ...
 def calibration(
     predicted: list[float],

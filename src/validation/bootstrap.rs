@@ -4,7 +4,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-const SURVREG_DISTRIBUTION_ERROR: &str = "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic";
+const SURVREG_DISTRIBUTION_ERROR: &str = "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, or loglogistic";
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -194,6 +194,7 @@ fn canonical_survreg_bootstrap_distribution(distribution: &str) -> Option<&'stat
     match normalized.as_str() {
         "weibull" => Some("weibull"),
         "exponential" => Some("exponential"),
+        "rayleigh" => Some("rayleigh"),
         "extreme" | "extreme_value" | "extremevalue" => Some("extreme_value"),
         "gaussian" | "normal" => Some("gaussian"),
         "logistic" => Some("logistic"),
@@ -439,6 +440,7 @@ pub(crate) fn bootstrap_survreg(
         Some(1e-9),
         None,
         None,
+        None,
     )?;
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
@@ -461,6 +463,7 @@ pub(crate) fn bootstrap_survreg(
                 Some(COX_MAX_ITER),
                 Some(1e-5),
                 Some(1e-9),
+                None,
                 None,
                 None,
             ) {
@@ -580,6 +583,10 @@ mod tests {
         assert_eq!(
             canonical_survreg_bootstrap_distribution(" exponential "),
             Some("exponential")
+        );
+        assert_eq!(
+            canonical_survreg_bootstrap_distribution("rayleigh"),
+            Some("rayleigh")
         );
         assert_eq!(
             canonical_survreg_bootstrap_distribution("normal"),
