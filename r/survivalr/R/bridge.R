@@ -1169,8 +1169,8 @@ nsk <- function(x, df = NULL, knots = NULL, intercept = FALSE, b = 0.05,
                 Boundary.knots = stats::quantile(x, c(b, 1 - b), na.rm = TRUE)) {
   nx <- names(x)
   x <- as.numeric(as.vector(x))
-  nax <- is.na(x)
-  x_fit <- x[!nax]
+  na_x <- is.na(x)
+  x_fit <- x[!na_x]
   if (length(x_fit) == 0L) {
     stop("x must contain at least one non-missing value", call. = FALSE)
   }
@@ -1251,7 +1251,7 @@ nsk <- function(x, df = NULL, knots = NULL, intercept = FALSE, b = 0.05,
   basis_values <- as.numeric(.result_field(result, "basis"))
   fit_matrix <- matrix(basis_values, nrow = length(x_fit), ncol = n_cols, byrow = TRUE)
   out <- matrix(NA_real_, nrow = length(x), ncol = n_cols)
-  out[!nax, ] <- fit_matrix
+  out[!na_x, ] <- fit_matrix
   dimnames(out) <- list(nx, as.character(seq_len(n_cols)))
 
   boundary_attr <- as.numeric(.result_field(result, "boundary_knots"))
@@ -2343,9 +2343,9 @@ ratetable <- function(...) {
     if (lengths[[i]] == 1L) {
       args[[i]] <- rep(args[[i]], n)
     } else if (lengths[[i]] != n) {
-      stop(paste("Aguments do not all have the same length (arg ", i, ")", sep = ""))
+      stop(paste("Arguments do not all have the same length (arg ", i, ")", sep = ""))
     }
-    if (inherits(args[[i]], "cateogory") || is.character(args[[i]])) {
+    if (inherits(args[[i]], "category") || is.character(args[[i]])) {
       args[[i]] <- as.factor(args[[i]])
     }
     if (is.factor(args[[i]])) {
