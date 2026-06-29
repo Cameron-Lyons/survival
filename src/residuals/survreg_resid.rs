@@ -1,7 +1,5 @@
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::{ln_gamma, normal_cdf};
 use pyo3::prelude::*;
-
-type DistFn = fn(f64) -> f64;
 
 const LOG_PROBABILITY_FLOOR: f64 = -690.0;
 const PROBABILITY_FLOOR: f64 = 1e-300;
@@ -84,6 +82,99 @@ fn gaussian_pdf(z: f64) -> f64 {
     (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
 }
 
+fn regularized_beta(a: f64, b: f64, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let bt = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
+    if x < (a + 1.0) / (a + b + 2.0) {
+        bt * beta_continued_fraction(a, b, x) / a
+    } else {
+        1.0 - bt * beta_continued_fraction(b, a, 1.0 - x) / b
+    }
+}
+
+fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
+    let qab = a + b;
+    let qap = a + 1.0;
+    let qam = a - 1.0;
+    let mut c = 1.0;
+    let mut d = 1.0 - qab * x / qap;
+    if d.abs() < 1e-30 {
+        d = 1e-30;
+    }
+    d = 1.0 / d;
+    let mut h = d;
+    for m in 1..=200 {
+        let m = m as f64;
+        let m2 = 2.0 * m;
+        let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < 1e-30 {
+            d = 1e-30;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < 1e-30 {
+            c = 1e-30;
+        }
+        d = 1.0 / d;
+        h *= d * c;
+
+        let aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < 1e-30 {
+            d = 1e-30;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < 1e-30 {
+            c = 1e-30;
+        }
+        d = 1.0 / d;
+        let delta = d * c;
+        h *= delta;
+        if (delta - 1.0).abs() < 1e-12 {
+            break;
+        }
+    }
+    h
+}
+
+fn student_t_pdf(z: f64, df: f64) -> f64 {
+    if !z.is_finite() {
+        return if z.is_nan() { f64::NAN } else { 0.0 };
+    }
+    let log_coef = ln_gamma((df + 1.0) / 2.0)
+        - ln_gamma(df / 2.0)
+        - 0.5 * (df.ln() + std::f64::consts::PI.ln());
+    (log_coef - ((df + 1.0) / 2.0) * (1.0 + z * z / df).ln()).exp()
+}
+
+fn student_t_cdf(z: f64, df: f64) -> f64 {
+    if z == f64::INFINITY {
+        return 1.0;
+    }
+    if z == f64::NEG_INFINITY {
+        return 0.0;
+    }
+    if z == 0.0 {
+        return 0.5;
+    }
+    let x = df / (df + z * z);
+    let ibeta = regularized_beta(df / 2.0, 0.5, x);
+    if z > 0.0 {
+        1.0 - 0.5 * ibeta
+    } else {
+        0.5 * ibeta
+    }
+}
+
+fn student_t_pdf_derivative(z: f64, df: f64) -> f64 {
+    student_t_pdf(z, df) * (-(df + 1.0) * z / (df + z * z))
+}
+
 fn distribution_key(distribution: &str) -> String {
     distribution.to_lowercase().replace('-', "_")
 }
@@ -93,6 +184,7 @@ fn is_valid_distribution_key(key: &str) -> bool {
         key,
         "weibull"
             | "exponential"
+            | "rayleigh"
             | "extreme"
             | "extreme_value"
             | "extremevalue"
@@ -105,12 +197,20 @@ fn is_valid_distribution_key(key: &str) -> bool {
             | "log_gaussian"
             | "loglogistic"
             | "log_logistic"
+            | "t"
+            | "student"
+            | "student_t"
+            | "studentt"
     )
+}
+
+fn is_student_t_distribution_key(key: &str) -> bool {
+    matches!(key, "t" | "student" | "student_t" | "studentt")
 }
 
 fn invalid_distribution_error() -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic",
+        "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, loglogistic, or t",
     )
 }
 
@@ -136,6 +236,7 @@ fn response_uses_log_transform_key(key: &str) -> bool {
         key,
         "weibull"
             | "exponential"
+            | "rayleigh"
             | "lognormal"
             | "log_normal"
             | "loggaussian"
@@ -146,7 +247,8 @@ fn response_uses_log_transform_key(key: &str) -> bool {
         return true;
     }
     match key {
-        "extreme" | "extreme_value" | "extremevalue" | "gaussian" | "normal" | "logistic" => false,
+        "extreme" | "extreme_value" | "extremevalue" | "gaussian" | "normal" | "logistic" | "t"
+        | "student" | "student_t" | "studentt" => false,
         _ => unreachable!("distribution was validated"),
     }
 }
@@ -187,21 +289,85 @@ fn inverse_response_time_value_for_key(value: f64, key: &str) -> f64 {
     }
 }
 
-fn distribution_functions_for_key(key: &str) -> (DistFn, DistFn) {
+fn validated_distribution_parameter_for_key(
+    key: &str,
+    distribution_parameter: Option<f64>,
+) -> PyResult<Option<f64>> {
     match key {
-        "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
-            (extreme_value_cdf, extreme_value_pdf)
+        key if is_student_t_distribution_key(key) => {
+            let df = distribution_parameter.unwrap_or(4.0);
+            if !df.is_finite() || df <= 0.0 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "distribution_parameter for Student-t residuals must be a positive finite degrees-of-freedom value",
+                ));
+            }
+            Ok(Some(df))
         }
-        "logistic" | "loglogistic" | "log_logistic" => (logistic_cdf, logistic_pdf),
+        _ => {
+            if distribution_parameter.is_some() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "distribution_parameter is only supported for distribution='t'",
+                ));
+            }
+            Ok(None)
+        }
+    }
+}
+
+fn cdf_for_key(key: &str, distribution_parameter: Option<f64>, z: f64) -> f64 {
+    match key {
+        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
+            extreme_value_cdf(z)
+        }
+        "logistic" | "loglogistic" | "log_logistic" => logistic_cdf(z),
         "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            (gaussian_cdf, gaussian_pdf)
+            gaussian_cdf(z)
         }
+        "t" | "student" | "student_t" | "studentt" => student_t_cdf(
+            z,
+            distribution_parameter.expect("Student-t df was validated"),
+        ),
         _ => unreachable!("distribution was validated"),
     }
 }
 
-fn distribution_functions(distribution: &str) -> (DistFn, DistFn) {
-    distribution_functions_for_key(&validated_distribution_key(distribution))
+fn pdf_for_key(key: &str, distribution_parameter: Option<f64>, z: f64) -> f64 {
+    match key {
+        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
+            extreme_value_pdf(z)
+        }
+        "logistic" | "loglogistic" | "log_logistic" => logistic_pdf(z),
+        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
+            gaussian_pdf(z)
+        }
+        "t" | "student" | "student_t" | "studentt" => student_t_pdf(
+            z,
+            distribution_parameter.expect("Student-t df was validated"),
+        ),
+        _ => unreachable!("distribution was validated"),
+    }
+}
+
+fn pdf_derivative_for_key(key: &str, distribution_parameter: Option<f64>, z: f64) -> f64 {
+    match key {
+        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
+            let ez = z.exp();
+            ez * (-ez).exp() * (1.0 - ez)
+        }
+        "logistic" | "loglogistic" | "log_logistic" => {
+            let ez = (-z).exp();
+            let denom = (1.0 + ez).powi(3);
+            ez * (ez - 1.0) / denom
+        }
+        "gaussian" | "normal" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => {
+            -z * gaussian_pdf(z)
+        }
+        "t" | "student" | "student_t" | "studentt" => student_t_pdf_derivative(
+            z,
+            distribution_parameter.expect("Student-t df was validated"),
+        ),
+        _ => unreachable!("distribution was validated"),
+    }
 }
 
 fn log_expm1_positive(value: f64) -> f64 {
@@ -239,22 +405,30 @@ fn survreg_saturated_center_loglik(
     idx: usize,
     scale: f64,
     distribution: &str,
+    distribution_parameter: Option<f64>,
 ) -> PyResult<(f64, f64)> {
     let y = response_time_value(time[idx], distribution);
     let event = status[idx];
+    let key = validated_distribution_key(distribution);
+    let distribution_parameter =
+        validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
     if event != 3 {
         let loglik = if event == 1 {
-            match distribution_key(distribution).as_str() {
-                "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
-                    -(1.0 + scale.ln())
-                }
+            match key.as_str() {
+                "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value"
+                | "extremevalue" => -(1.0 + scale.ln()),
                 "logistic" | "loglogistic" | "log_logistic" => -(4.0 * scale).ln(),
                 "gaussian" | "normal" | "lognormal" | "log_normal" | "loggaussian"
                 | "log_gaussian" => -(std::f64::consts::TAU.sqrt() * scale).ln(),
+                "t" | "student" | "student_t" | "studentt" => -(student_t_pdf(
+                    0.0,
+                    distribution_parameter.expect("Student-t df was validated"),
+                ) * scale)
+                    .ln(),
                 _ => {
                     return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic",
+                        "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, loglogistic, or t",
                     ));
                 }
             }
@@ -266,8 +440,8 @@ fn survreg_saturated_center_loglik(
 
     let width = transformed_interval_width(time, time2, idx, scale, distribution);
     let upper = response_time_value(time2.expect("validated time2 length")[idx], distribution);
-    match distribution_key(distribution).as_str() {
-        "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
+    match key.as_str() {
+        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
             let log_temp = width.ln() - log_expm1_positive(width);
             let center = y - log_temp;
             let temp = log_temp.exp();
@@ -284,8 +458,13 @@ fn survreg_saturated_center_loglik(
             let probability = 2.0 * normal_cdf(width / 2.0) - 1.0;
             Ok((center, log_positive(probability)))
         }
+        "t" | "student" | "student_t" | "studentt" => {
+            let center = (y + upper) / 2.0;
+            let df = distribution_parameter.expect("Student-t df was validated");
+            Ok((center, (1.0 - 2.0 * student_t_cdf(width / 2.0, df)).ln()))
+        }
         _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic",
+            "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, loglogistic, or t",
         )),
     }
 }
@@ -298,11 +477,18 @@ fn log_positive(value: f64) -> f64 {
     }
 }
 
-fn interval_probability(cdf_fn: DistFn, lower_z: f64, upper_z: f64) -> f64 {
+fn interval_probability_for_key(
+    key: &str,
+    distribution_parameter: Option<f64>,
+    lower_z: f64,
+    upper_z: f64,
+) -> f64 {
     if lower_z > 0.0 {
-        (1.0 - cdf_fn(lower_z)) - (1.0 - cdf_fn(upper_z))
+        (1.0 - cdf_for_key(key, distribution_parameter, lower_z))
+            - (1.0 - cdf_for_key(key, distribution_parameter, upper_z))
     } else {
-        cdf_fn(upper_z) - cdf_fn(lower_z)
+        cdf_for_key(key, distribution_parameter, upper_z)
+            - cdf_for_key(key, distribution_parameter, lower_z)
     }
 }
 
@@ -517,7 +703,8 @@ pub(crate) fn compute_response_residuals(
         .collect()
 }
 
-pub(crate) fn compute_response_residuals_censored(
+#[cfg(test)]
+fn compute_response_residuals_censored(
     time: &[f64],
     time2: Option<&[f64]>,
     status: &[i32],
@@ -525,11 +712,38 @@ pub(crate) fn compute_response_residuals_censored(
     scale: f64,
     distribution: &str,
 ) -> PyResult<Vec<f64>> {
+    compute_response_residuals_censored_with_parameter(
+        time,
+        time2,
+        status,
+        linear_pred,
+        scale,
+        distribution,
+        None,
+    )
+}
+
+pub(crate) fn compute_response_residuals_censored_with_parameter(
+    time: &[f64],
+    time2: Option<&[f64]>,
+    status: &[i32],
+    linear_pred: &[f64],
+    scale: f64,
+    distribution: &str,
+    distribution_parameter: Option<f64>,
+) -> PyResult<Vec<f64>> {
     validate_time2_for_interval_residuals(time, status, time2)?;
     let mut residuals = Vec::with_capacity(time.len());
     for (idx, &linear_predictor) in linear_pred.iter().enumerate().take(time.len()) {
-        let (center, _) =
-            survreg_saturated_center_loglik(time, time2, status, idx, scale, distribution)?;
+        let (center, _) = survreg_saturated_center_loglik(
+            time,
+            time2,
+            status,
+            idx,
+            scale,
+            distribution,
+            distribution_parameter,
+        )?;
         residuals.push(
             inverse_response_time_value(center, distribution)
                 - inverse_response_time_value(linear_predictor, distribution),
@@ -538,7 +752,8 @@ pub(crate) fn compute_response_residuals_censored(
     Ok(residuals)
 }
 
-pub(crate) fn compute_deviance_residuals_survreg(
+#[cfg(test)]
+fn compute_deviance_residuals_survreg(
     time: &[f64],
     time2: Option<&[f64]>,
     status: &[i32],
@@ -546,19 +761,48 @@ pub(crate) fn compute_deviance_residuals_survreg(
     scale: f64,
     distribution: &str,
 ) -> PyResult<Vec<f64>> {
-    let derivative_matrix =
-        compute_survreg_residual_matrix(time, time2, status, linear_pred, scale, distribution)?;
-    compute_deviance_residuals_from_derivative_matrix(
+    compute_deviance_residuals_survreg_with_parameter(
+        time,
+        time2,
+        status,
+        linear_pred,
+        scale,
+        distribution,
+        None,
+    )
+}
+
+pub(crate) fn compute_deviance_residuals_survreg_with_parameter(
+    time: &[f64],
+    time2: Option<&[f64]>,
+    status: &[i32],
+    linear_pred: &[f64],
+    scale: f64,
+    distribution: &str,
+    distribution_parameter: Option<f64>,
+) -> PyResult<Vec<f64>> {
+    let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
+        time,
+        time2,
+        status,
+        linear_pred,
+        scale,
+        distribution,
+        distribution_parameter,
+    )?;
+    compute_deviance_residuals_from_derivative_matrix_with_parameter(
         &derivative_matrix,
         time,
         time2,
         status,
         scale,
         distribution,
+        distribution_parameter,
     )
 }
 
-pub(crate) fn compute_deviance_residuals_from_derivative_matrix(
+#[cfg(test)]
+fn compute_deviance_residuals_from_derivative_matrix(
     derivative_matrix: &[Vec<f64>],
     time: &[f64],
     time2: Option<&[f64]>,
@@ -566,14 +810,41 @@ pub(crate) fn compute_deviance_residuals_from_derivative_matrix(
     scale: f64,
     distribution: &str,
 ) -> PyResult<Vec<f64>> {
+    compute_deviance_residuals_from_derivative_matrix_with_parameter(
+        derivative_matrix,
+        time,
+        time2,
+        status,
+        scale,
+        distribution,
+        None,
+    )
+}
+
+pub(crate) fn compute_deviance_residuals_from_derivative_matrix_with_parameter(
+    derivative_matrix: &[Vec<f64>],
+    time: &[f64],
+    time2: Option<&[f64]>,
+    status: &[i32],
+    scale: f64,
+    distribution: &str,
+    distribution_parameter: Option<f64>,
+) -> PyResult<Vec<f64>> {
     validate_derivative_matrix(derivative_matrix)?;
     validate_time2_for_interval_residuals(time, status, time2)?;
     let working = compute_working_residuals_from_derivative_matrix(derivative_matrix)?;
     let mut residuals = Vec::with_capacity(time.len());
 
     for idx in 0..time.len() {
-        let (_, saturated_loglik) =
-            survreg_saturated_center_loglik(time, time2, status, idx, scale, distribution)?;
+        let (_, saturated_loglik) = survreg_saturated_center_loglik(
+            time,
+            time2,
+            status,
+            idx,
+            scale,
+            distribution,
+            distribution_parameter,
+        )?;
         let magnitude = (2.0 * (saturated_loglik - derivative_matrix[idx][0]))
             .max(0.0)
             .sqrt();
@@ -589,43 +860,44 @@ pub(crate) fn compute_deviance_residuals_from_derivative_matrix(
     Ok(residuals)
 }
 
-pub(crate) fn compute_working_residuals(
+#[cfg(test)]
+fn compute_working_residuals(
     time: &[f64],
     status: &[i32],
     linear_pred: &[f64],
     scale: f64,
     distribution: &str,
 ) -> Vec<f64> {
+    compute_working_residuals_with_parameter(time, status, linear_pred, scale, distribution, None)
+}
+
+pub(crate) fn compute_working_residuals_with_parameter(
+    time: &[f64],
+    status: &[i32],
+    linear_pred: &[f64],
+    scale: f64,
+    distribution: &str,
+    distribution_parameter: Option<f64>,
+) -> Vec<f64> {
     let n = time.len();
     let mut residuals = Vec::with_capacity(n);
 
     let key = validated_distribution_key(distribution);
-    let (cdf_fn, pdf_fn) = distribution_functions_for_key(&key);
+    let distribution_parameter =
+        validated_distribution_parameter_for_key(&key, distribution_parameter)
+            .expect("distribution parameter was validated");
 
     for i in 0..n {
         let y = response_time_value_for_key(time[i], &key);
         let z = (y - linear_pred[i]) / scale;
 
         let resid = if status[i] == 1 {
-            let f = pdf_fn(z);
-            let f_prime = match key.as_str() {
-                "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
-                    let ez = z.exp();
-                    ez * (-ez).exp() * (1.0 - ez)
-                }
-                "logistic" | "loglogistic" | "log_logistic" => {
-                    let ez = (-z).exp();
-                    let denom = (1.0 + ez).powi(3);
-                    ez * (ez - 1.0) / denom
-                }
-                "gaussian" | "normal" | "lognormal" | "log_normal" | "loggaussian"
-                | "log_gaussian" => -z * f,
-                _ => unreachable!("distribution was validated"),
-            };
+            let f = pdf_for_key(&key, distribution_parameter, z);
+            let f_prime = pdf_derivative_for_key(&key, distribution_parameter, z);
             if f.abs() > 1e-300 { -f_prime / f } else { 0.0 }
         } else {
-            let surv = 1.0 - cdf_fn(z);
-            let f = pdf_fn(z);
+            let surv = 1.0 - cdf_for_key(&key, distribution_parameter, z);
+            let f = pdf_for_key(&key, distribution_parameter, z);
             if surv.abs() > 1e-300 { f / surv } else { 0.0 }
         };
 
@@ -635,7 +907,7 @@ pub(crate) fn compute_working_residuals(
     residuals
 }
 
-pub(crate) fn compute_dfbeta_survreg(
+pub(crate) fn compute_dfbeta_survreg_with_parameter(
     time: &[f64],
     status: &[i32],
     covariates: &[Vec<f64>],
@@ -643,6 +915,7 @@ pub(crate) fn compute_dfbeta_survreg(
     scale: f64,
     var_matrix: &[Vec<f64>],
     distribution: &str,
+    distribution_parameter: Option<f64>,
 ) -> Vec<Vec<f64>> {
     let n = time.len();
     let nvar = if n > 0 && !covariates.is_empty() {
@@ -651,7 +924,14 @@ pub(crate) fn compute_dfbeta_survreg(
         return vec![];
     };
 
-    let working = compute_working_residuals(time, status, linear_pred, scale, distribution);
+    let working = compute_working_residuals_with_parameter(
+        time,
+        status,
+        linear_pred,
+        scale,
+        distribution,
+        distribution_parameter,
+    );
 
     let mut dfbeta = Vec::with_capacity(n);
 
@@ -672,43 +952,47 @@ pub(crate) fn compute_dfbeta_survreg(
     dfbeta
 }
 
-pub(crate) fn compute_ldcase(
+pub(crate) fn compute_ldcase_with_parameter(
     time: &[f64],
     time2: Option<&[f64]>,
     status: &[i32],
     linear_pred: &[f64],
     scale: f64,
     distribution: &str,
+    distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<f64>> {
     validate_time2_for_interval_residuals(time, status, time2)?;
     let n = time.len();
 
     let mut ld = Vec::with_capacity(n);
 
-    let (cdf_fn, pdf_fn) = distribution_functions(distribution);
+    let key = validated_distribution_key(distribution);
+    let distribution_parameter =
+        validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
     for i in 0..n {
-        let y = response_time_value(time[i], distribution);
+        let y = response_time_value_for_key(time[i], &key);
         let z = (y - linear_pred[i]) / scale;
 
         let contrib = match status[i] {
             1 => {
-                let f = pdf_fn(z) / scale;
+                let f = pdf_for_key(&key, distribution_parameter, z) / scale;
                 if f > 1e-300 { f.ln() } else { -690.0 }
             }
             0 => {
-                let surv = 1.0 - cdf_fn(z);
+                let surv = 1.0 - cdf_for_key(&key, distribution_parameter, z);
                 if surv > 1e-300 { surv.ln() } else { -690.0 }
             }
             2 => {
-                let cdf = cdf_fn(z);
+                let cdf = cdf_for_key(&key, distribution_parameter, z);
                 if cdf > 1e-300 { cdf.ln() } else { -690.0 }
             }
             3 => {
                 let end =
-                    response_time_value(time2.expect("validated time2 length")[i], distribution);
+                    response_time_value_for_key(time2.expect("validated time2 length")[i], &key);
                 let z2 = (end - linear_pred[i]) / scale;
-                let prob = cdf_fn(z2) - cdf_fn(z);
+                let prob = cdf_for_key(&key, distribution_parameter, z2)
+                    - cdf_for_key(&key, distribution_parameter, z);
                 if prob > 1e-300 { prob.ln() } else { -690.0 }
             }
             _ => {
@@ -731,24 +1015,36 @@ fn survreg_loglik_contribution(
     linear_pred: f64,
     log_scale: f64,
     distribution: &str,
+    distribution_parameter: Option<f64>,
 ) -> PyResult<f64> {
     let scale = log_scale.exp();
-    let y = response_time_value(time, distribution);
+    let key = validated_distribution_key(distribution);
+    let distribution_parameter =
+        validated_distribution_parameter_for_key(&key, distribution_parameter)?;
+    let y = response_time_value_for_key(time, &key);
     let z = (y - linear_pred) / scale;
-    let (cdf_fn, pdf_fn) = distribution_functions(distribution);
 
     match status {
-        1 => Ok(log_positive(pdf_fn(z) / scale)),
-        0 => Ok(log_positive(1.0 - cdf_fn(z))),
-        2 => Ok(log_positive(cdf_fn(z))),
+        1 => Ok(log_positive(
+            pdf_for_key(&key, distribution_parameter, z) / scale,
+        )),
+        0 => Ok(log_positive(
+            1.0 - cdf_for_key(&key, distribution_parameter, z),
+        )),
+        2 => Ok(log_positive(cdf_for_key(&key, distribution_parameter, z))),
         3 => {
             let Some(end) = time2 else {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                     "time2 is required for interval-censored rows",
                 ));
             };
-            let z2 = (response_time_value(end, distribution) - linear_pred) / scale;
-            Ok(log_positive(interval_probability(cdf_fn, z, z2)))
+            let z2 = (response_time_value_for_key(end, &key) - linear_pred) / scale;
+            Ok(log_positive(interval_probability_for_key(
+                &key,
+                distribution_parameter,
+                z,
+                z2,
+            )))
         }
         _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "status must contain only 0/1/2/3 values",
@@ -760,7 +1056,8 @@ fn eta_derivative_step(scale: f64) -> f64 {
     (SURVREG_MATRIX_STEP * scale).clamp(1e-6, 1e-3)
 }
 
-pub(crate) fn compute_survreg_residual_matrix(
+#[cfg(test)]
+fn compute_survreg_residual_matrix(
     time: &[f64],
     time2: Option<&[f64]>,
     status: &[i32],
@@ -768,7 +1065,30 @@ pub(crate) fn compute_survreg_residual_matrix(
     scale: f64,
     distribution: &str,
 ) -> PyResult<Vec<Vec<f64>>> {
+    compute_survreg_residual_matrix_with_parameter(
+        time,
+        time2,
+        status,
+        linear_pred,
+        scale,
+        distribution,
+        None,
+    )
+}
+
+pub(crate) fn compute_survreg_residual_matrix_with_parameter(
+    time: &[f64],
+    time2: Option<&[f64]>,
+    status: &[i32],
+    linear_pred: &[f64],
+    scale: f64,
+    distribution: &str,
+    distribution_parameter: Option<f64>,
+) -> PyResult<Vec<Vec<f64>>> {
     validate_time2_for_interval_residuals(time, status, time2)?;
+    let key = validated_distribution_key(distribution);
+    let distribution_parameter =
+        validated_distribution_parameter_for_key(&key, distribution_parameter)?;
     let log_scale = scale.ln();
     let h_eta = eta_derivative_step(scale);
     let h_scale = SURVREG_MATRIX_STEP;
@@ -785,6 +1105,7 @@ pub(crate) fn compute_survreg_residual_matrix(
                 eta + eta_shift,
                 log_scale + scale_shift,
                 distribution,
+                distribution_parameter,
             )
         };
 
@@ -980,7 +1301,7 @@ pub(crate) fn compute_survreg_dfbeta_residuals(
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, linear_pred, scale, distribution, time2=None))]
+#[pyo3(signature = (time, status, linear_pred, scale, distribution, time2=None, distribution_parameter=None))]
 pub fn survreg_residual_matrix(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -988,6 +1309,7 @@ pub fn survreg_residual_matrix(
     scale: f64,
     distribution: String,
     time2: Option<Vec<f64>>,
+    distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<Vec<f64>>> {
     let n = time.len();
     if status.len() != n || linear_pred.len() != n {
@@ -997,14 +1319,17 @@ pub fn survreg_residual_matrix(
     }
     validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
     validate_distribution(&distribution)?;
+    let key = validated_distribution_key(&distribution);
+    validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
-    compute_survreg_residual_matrix(
+    compute_survreg_residual_matrix_with_parameter(
         &time,
         time2.as_deref(),
         &status,
         &linear_pred,
         scale,
         &distribution,
+        distribution_parameter,
     )
 }
 
@@ -1067,7 +1392,7 @@ pub fn survreg_influence_residuals(
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, linear_pred, scale, distribution, residual_type="deviance".to_string(), time2=None))]
+#[pyo3(signature = (time, status, linear_pred, scale, distribution, residual_type="deviance".to_string(), time2=None, distribution_parameter=None))]
 pub fn residuals_survreg(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -1076,6 +1401,7 @@ pub fn residuals_survreg(
     distribution: String,
     residual_type: String,
     time2: Option<Vec<f64>>,
+    distribution_parameter: Option<f64>,
 ) -> PyResult<SurvregResiduals> {
     let n = time.len();
     if status.len() != n || linear_pred.len() != n {
@@ -1105,53 +1431,66 @@ pub fn residuals_survreg(
     }
     validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
     validate_distribution(&distribution)?;
+    let key = validated_distribution_key(&distribution);
+    validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
     let residuals = match resid_type {
         SurvregResidType::Response => {
             if has_interval_censoring(&status) {
-                compute_response_residuals_censored(
+                compute_response_residuals_censored_with_parameter(
                     &time,
                     time2.as_deref(),
                     &status,
                     &linear_pred,
                     scale,
                     &distribution,
+                    distribution_parameter,
                 )?
             } else {
                 compute_response_residuals(&time, &linear_pred, &distribution)
             }
         }
-        SurvregResidType::Deviance => compute_deviance_residuals_survreg(
+        SurvregResidType::Deviance => compute_deviance_residuals_survreg_with_parameter(
             &time,
             time2.as_deref(),
             &status,
             &linear_pred,
             scale,
             &distribution,
+            distribution_parameter,
         )?,
         SurvregResidType::Working => {
-            if has_interval_censoring(&status) {
-                let derivative_matrix = compute_survreg_residual_matrix(
+            if has_interval_censoring(&status) || is_student_t_distribution_key(&key) {
+                let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
                     &time,
                     time2.as_deref(),
                     &status,
                     &linear_pred,
                     scale,
                     &distribution,
+                    distribution_parameter,
                 )?;
                 compute_working_residuals_from_derivative_matrix(&derivative_matrix)?
             } else {
-                compute_working_residuals(&time, &status, &linear_pred, scale, &distribution)
+                compute_working_residuals_with_parameter(
+                    &time,
+                    &status,
+                    &linear_pred,
+                    scale,
+                    &distribution,
+                    distribution_parameter,
+                )
             }
         }
         SurvregResidType::Ldcase | SurvregResidType::Ldresp | SurvregResidType::Ldshape => {
-            compute_ldcase(
+            compute_ldcase_with_parameter(
                 &time,
                 time2.as_deref(),
                 &status,
                 &linear_pred,
                 scale,
                 &distribution,
+                distribution_parameter,
             )?
         }
         SurvregResidType::Dfbeta | SurvregResidType::Dfbetas => unreachable!(),
@@ -1166,7 +1505,7 @@ pub fn residuals_survreg(
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, linear_pred, scale, var_matrix, distribution, time2=None))]
+#[pyo3(signature = (time, status, covariates, linear_pred, scale, var_matrix, distribution, time2=None, distribution_parameter=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn dfbeta_survreg(
     time: Vec<f64>,
@@ -1177,6 +1516,7 @@ pub fn dfbeta_survreg(
     var_matrix: Vec<Vec<f64>>,
     distribution: String,
     time2: Option<Vec<f64>>,
+    distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<Vec<f64>>> {
     let n = time.len();
     if status.len() != n || linear_pred.len() != n || covariates.len() != n {
@@ -1186,17 +1526,20 @@ pub fn dfbeta_survreg(
     }
     validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
     validate_distribution(&distribution)?;
+    let key = validated_distribution_key(&distribution);
+    validated_distribution_parameter_for_key(&key, distribution_parameter)?;
     let width = validate_covariates(&covariates)?;
     validate_variance_matrix(&var_matrix, width)?;
 
     if has_interval_censoring(&status) {
-        let derivative_matrix = compute_survreg_residual_matrix(
+        let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
             &time,
             time2.as_deref(),
             &status,
             &linear_pred,
             scale,
             &distribution,
+            distribution_parameter,
         )?;
         let scales = vec![scale];
         let strata = vec![0; n];
@@ -1211,7 +1554,7 @@ pub fn dfbeta_survreg(
         );
     }
 
-    Ok(compute_dfbeta_survreg(
+    Ok(compute_dfbeta_survreg_with_parameter(
         &time,
         &status,
         &covariates,
@@ -1219,6 +1562,7 @@ pub fn dfbeta_survreg(
         scale,
         &var_matrix,
         &distribution,
+        distribution_parameter,
     ))
 }
 
@@ -1231,11 +1575,13 @@ mod tests {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let linear_pred = vec![0.0, 0.5, 1.0, 1.2, 1.5];
         let weibull = compute_response_residuals(&time, &linear_pred, "weibull");
+        let rayleigh = compute_response_residuals(&time, &linear_pred, "rayleigh");
         let gaussian = compute_response_residuals(&time, &linear_pred, "gaussian");
 
         assert_eq!(weibull.len(), 5);
         assert!((weibull[0] - 0.0).abs() < 1e-10);
         assert!((weibull[1] - (2.0 - 0.5_f64.exp())).abs() < 1e-10);
+        assert_eq!(rayleigh, weibull);
         assert_eq!(gaussian.len(), 5);
         assert!((gaussian[0] - 1.0).abs() < 1e-10);
         assert!((gaussian[1] - 1.5).abs() < 1e-10);
@@ -1246,11 +1592,19 @@ mod tests {
         let response = compute_response_residuals(&[2.0], &[0.0], "log-normal");
         assert!((response[0] - 1.0).abs() < 1e-12);
 
+        let loggaussian = compute_response_residuals(&[2.0], &[0.0], "loggaussian");
+        assert!((loggaussian[0] - 1.0).abs() < 1e-12);
+
         let matrix =
             compute_survreg_residual_matrix(&[1.0], None, &[1], &[0.0], 1.0, "extreme-value")
                 .unwrap();
         assert_eq!(matrix.len(), 1);
         assert!(matrix[0].iter().all(|value| value.is_finite()));
+
+        let rayleigh =
+            compute_survreg_residual_matrix(&[1.0], None, &[1], &[0.0], 0.5, "rayleigh").unwrap();
+        assert_eq!(rayleigh.len(), 1);
+        assert!(rayleigh[0].iter().all(|value| value.is_finite()));
     }
 
     #[test]

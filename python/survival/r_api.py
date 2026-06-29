@@ -1,55 +1,123 @@
 from __future__ import annotations
 
 import math
-from bisect import bisect_right
+import random
+import warnings
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date as _Date  # noqa: N812
+from datetime import datetime as _DateTime  # noqa: N812
 from functools import lru_cache
 from itertools import combinations, product
 from operator import index
 from statistics import NormalDist
-from typing import Any
+from typing import Any, NoReturn
 
 from . import _survival as _core
 
 __all__ = [
     "Surv",
+    "Surv2",
+    "Surv2data",
     "CoxSurvfitResult",
     "CoxBaseHazardResult",
     "CoxPHDetailResult",
+    "CoxPHWTestResult",
     "CoxZPHResult",
+    "FineGrayOutput",
     "PredictResult",
+    "PyearsResult",
+    "RateTable",
+    "StrataFactor",
+    "SurvObrienResult",
+    "SurvExpResult",
     "SurvfitResult",
+    "SurvfitConfidenceIntervalResult",
+    "TcutResult",
     "aic",
+    "aeqSurv",
     "as_data_frame",
     "basehaz",
     "anova",
+    "aggregate_survfit_result",
+    "brier",
+    "bcloglog",
     "coef",
     "coef_names",
     "confint",
     "concordance",
     "coxph",
     "coxph_detail",
+    "coxph_wtest",
     "cox_zph",
+    "dsurvreg",
     "df_residual",
     "degrees_freedom",
     "bic",
+    "blog",
+    "blogit",
+    "bprobit",
+    "cipoisson",
     "extract_aic",
     "fitted",
+    "finegray",
+    "fromtimeline",
+    "format_surv",
     "is_surv",
+    "is_na_surv",
+    "is_ratetable",
     "loglik",
+    "lvcf",
     "model_formula",
     "model_summary",
     "model_frame",
     "model_matrix",
     "model_weights",
+    "neardate",
     "nobs",
+    "nostutter",
+    "nsk",
+    "pyears",
+    "pspline",
+    "pseudo",
     "predict",
+    "psurvreg",
+    "qsurvreg",
+    "ratetableDate",
     "residuals",
+    "royston",
+    "rsurvreg",
+    "rttright",
+    "statefig",
+    "strata",
     "survdiff",
+    "survConcordance",
+    "survConcordance_fit",
+    "survcondense",
+    "survcheck",
+    "survexp",
+    "survexp_individual",
+    "survexp_mn",
+    "survobrien",
+    "survexp_us",
+    "survexp_usr",
     "survfit",
+    "survfit0",
+    "survfit_confint",
+    "survfit_residuals",
+    "survfitkm_counting_influence",
+    "survfitkm_influence",
+    "survSplit",
     "survreg",
+    "tcut",
+    "totimeline",
+    "yates",
+    "yates_contrast",
+    "yates_pairwise",
     "vcov",
+    "YatesPairwiseResult",
+    "YatesResult",
 ]
 
 _EXP_CLAMP_MIN = -745.0
@@ -58,6 +126,13 @@ _SURVFIT_TIME_EPSILON = 1e-9
 _VARIANCE_SCALE_FLOOR = 1e-12
 _COX_DFBETAS_SCALE_FLOOR = 1e-10
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2")
+
+FineGrayOutput = _core.FineGrayOutput
+RateTable = _core.RateTable
+SurvObrienResult = _core.SurvObrienResult
+TcutResult = _core.TcutResult
+YatesPairwiseResult = _core.YatesPairwiseResult
+YatesResult = _core.YatesResult
 
 
 class _MissingArgument:
@@ -87,11 +162,35 @@ _CovariateSpec = _CovariateTerm | _InteractionTerm
 
 
 @dataclass(frozen=True)
+class _ModelCovariateTerm:
+    term: _CovariateSpec
+
+
+@dataclass(frozen=True)
+class _ModelStrataTerm:
+    columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ModelOffsetTerm:
+    term: _CovariateTerm
+
+
+@dataclass(frozen=True)
+class _ModelClusterTerm:
+    column: str
+
+
+_FormulaModelTerm = _ModelCovariateTerm | _ModelStrataTerm | _ModelOffsetTerm | _ModelClusterTerm
+
+
+@dataclass(frozen=True)
 class _FormulaTerms:
     covariates: list[_CovariateSpec]
     strata: list[str]
     offsets: list[_CovariateTerm]
     clusters: list[str]
+    model_terms: list[_FormulaModelTerm] = field(default_factory=list)
     intercept: bool = True
 
 
@@ -101,6 +200,7 @@ class _CachedFormulaTerms:
     strata: tuple[str, ...]
     offsets: tuple[_CovariateTerm, ...]
     clusters: tuple[str, ...]
+    model_terms: tuple[_FormulaModelTerm, ...] = ()
     intercept: bool = True
 
 
@@ -234,6 +334,9 @@ class ConcordanceResult:
     reverse: bool = False
     concordant: float | list[float] = 0.0
     comparable: float | list[float] = 0.0
+    tied_x: float | list[float] = 0.0
+    tied_y: float | list[float] = 0.0
+    tied_xy: float | list[float] = 0.0
     ranks: list[dict[str, float]] | list[list[dict[str, float]] | None] | None = None
     dfbeta: list[float] | list[list[float] | None] | None = None
     influence: list[list[float]] | list[list[list[float]] | None] | None = None
@@ -265,6 +368,42 @@ class PredictResult:
     @property
     def se(self) -> Any:
         return self.se_fit
+
+
+@dataclass(frozen=True)
+class StrataFactor:
+    codes: list[int | None]
+    levels: list[str]
+    labels: list[str | None]
+    counts: list[int]
+
+    def __iter__(self):
+        return iter(self.labels)
+
+    def __len__(self) -> int:
+        return len(self.codes)
+
+
+@dataclass(frozen=True)
+class SurvExpResult:
+    time: list[float]
+    surv: list[float]
+    n_risk: list[float]
+    cumhaz: list[float]
+    method: str
+    n: int
+
+
+@dataclass(frozen=True)
+class PyearsResult:
+    pyears: list[float]
+    n: list[float]
+    offtable: float
+    group: list[str]
+    observations: int
+    event: list[float] | None = None
+    expected: list[float] | None = None
+    tcut: bool = False
 
 
 @dataclass(frozen=True)
@@ -363,6 +502,13 @@ class CoxPHDetailResult:
 
 
 @dataclass(frozen=True)
+class CoxPHWTestResult:
+    test: list[float]
+    df: int
+    solve: list[float] | list[list[float]] | float
+
+
+@dataclass(frozen=True)
 class CoxBaseHazardResult:
     time: list[float]
     cumhaz: list[float] | list[list[float]]
@@ -435,6 +581,10 @@ class SurvfitResult:
     cumhaz: list[float]
     std_chaz: list[float]
     n_enter: list[float] | None = None
+    n_risk_count: list[float] | None = None
+    n_event_count: list[float] | None = None
+    n_censor_count: list[float] | None = None
+    n_enter_count: list[float] | None = None
     model: dict[str, Any] | None = None
 
     @property
@@ -451,6 +601,16 @@ class SurvfitResult:
 
 
 @dataclass(frozen=True)
+class SurvfitConfidenceIntervalResult:
+    lower: list[float]
+    upper: list[float]
+
+    def __iter__(self):
+        yield self.lower
+        yield self.upper
+
+
+@dataclass(frozen=True)
 class TurnbullSurvfitResult:
     time_points: list[float]
     survival: list[float]
@@ -459,6 +619,12 @@ class TurnbullSurvfitResult:
     n_iter: int
     converged: bool
     model: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _PseudoMatrixResult:
+    pseudo: list[list[float]]
+    time: list[float]
 
 
 @dataclass(frozen=True)
@@ -569,6 +735,15 @@ def _integer_code_vector(values: Any, name: str, description: str) -> list[int]:
         if not math.isfinite(numeric) or not numeric.is_integer():
             raise ValueError(f"{name} must use {description}")
         result.append(int(numeric))
+    return result
+
+
+def _bool_vector(values: Any, name: str) -> list[bool]:
+    result = []
+    for value in _materialize_1d(values, name):
+        if not _is_bool_like(value):
+            raise TypeError(f"{name} must contain only True or False values")
+        result.append(bool(value))
     return result
 
 
@@ -785,6 +960,417 @@ def _as_matrix_rows(
     if any(len(row) != width for row in matrix):
         raise ValueError(f"{name} must be rectangular")
     return matrix
+
+
+def _statefig_layout_matrix(layout: Any) -> tuple[list[list[float]], bool]:
+    rows = _coerce_array_like(layout, "layout")
+    if not rows:
+        raise ValueError("layout must not be empty")
+    if isinstance(rows[0], list | tuple):
+        width = len(rows[0])
+        matrix = [[_finite_float(value, "layout") for value in row] for row in rows]
+        if any(len(row) != width for row in matrix):
+            raise ValueError("layout must be rectangular")
+        return matrix, True
+    return [[_finite_float(value, "layout") for value in rows]], False
+
+
+def _statefig_space(n: int) -> list[float]:
+    return [(idx + 0.5) / n for idx in range(n)]
+
+
+def _statefig_positions_from_layout(
+    layout: Any,
+    n_states: int,
+) -> tuple[list[list[float]], list[int]]:
+    matrix, is_matrix = _statefig_layout_matrix(layout)
+    n_row = len(matrix)
+    n_col = len(matrix[0]) if matrix else 0
+
+    if is_matrix and n_col == 2 and n_row > 1:
+        if n_row != n_states:
+            raise ValueError("layout matrix should have one row per state")
+        positions = []
+        for row in matrix:
+            x, y = row
+            if x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0:
+                raise ValueError("layout coordinates must be between 0 and 1")
+            positions.append([x, y])
+        return positions, [n_states]
+
+    values = [value for row in matrix for value in row]
+    layout_counts = []
+    for value in values:
+        if value <= 0.0 or not float(value).is_integer():
+            raise ValueError("non-integer number of states in layout argument")
+        layout_counts.append(int(value))
+    if sum(layout_counts) != n_states:
+        raise ValueError("number of boxes != number of states")
+
+    positions = [[0.0, 0.0] for _ in range(n_states)]
+    group_space = _statefig_space(len(layout_counts))
+    state_idx = 0
+    column_layout = (not is_matrix) or n_col > 1
+    for group_idx, count in enumerate(layout_counts):
+        within = _statefig_space(count)
+        for offset in range(count):
+            if column_layout:
+                positions[state_idx] = [group_space[group_idx], 1.0 - within[offset]]
+            else:
+                positions[state_idx] = [within[offset], 1.0 - group_space[group_idx]]
+            state_idx += 1
+    return positions, layout_counts
+
+
+def statefig(
+    layout: Any,
+    connect: Any,
+    states: Any | None = None,
+    *,
+    margin: Any = 0.03,
+    box: Any = True,
+    cex: Any = 1,
+    col: Any = 1,
+    lwd: Any = 1,
+    lty: Any = 1,
+    bcol: Any | None = None,
+    acol: Any | None = None,
+    alwd: Any | None = None,
+    alty: Any | None = None,
+    offset: Any = 0,
+) -> dict[str, Any]:
+    """Return R ``survival::statefig`` state coordinates from layout/connect inputs."""
+
+    del cex, col, lwd, lty, bcol, acol, alwd, alty
+    _finite_float(margin, "margin")
+    _finite_float(offset, "offset")
+    _normalize_bool_option(box, "box")
+
+    connect_rows = _as_rows(connect, "connect")
+    n_states = len(connect_rows)
+    if n_states == 0 or any(len(row) != n_states for row in connect_rows):
+        raise ValueError("connect must be a square matrix")
+    state_names = (
+        [str(value) for value in _materialize_1d(states, "states")]
+        if states is not None
+        else [str(idx + 1) for idx in range(n_states)]
+    )
+    if len(state_names) != n_states:
+        raise ValueError("states must have one entry per connect row")
+
+    positions, layout_counts = _statefig_positions_from_layout(layout, n_states)
+    edges = [
+        [row_idx, col_idx, int(value)]
+        for row_idx, row in enumerate(connect_rows)
+        for col_idx, value in enumerate(row)
+        if row_idx != col_idx and value != 0.0
+    ]
+    return {
+        "states": state_names,
+        "positions": positions,
+        "layout": layout_counts,
+        "edges": edges,
+    }
+
+
+def _brier_response_from_model_frame(frame: Mapping[str, Any]) -> Surv | None:
+    for value in frame.values():
+        if isinstance(value, Surv):
+            return value
+    return None
+
+
+def _brier_fit_response_and_data(fit: Any, newdata: Any | None) -> tuple[Surv, Any | None]:
+    if newdata is not None:
+        if not isinstance(fit, _FormulaFit) or fit.formula is None:
+            raise ValueError("newdata brier calculations require a formula Cox model")
+        response, _terms = _parse_formula(fit.formula, newdata)
+        return response, newdata
+
+    if isinstance(fit, _FormulaFit):
+        if fit.y_response is not None:
+            return fit.y_response, fit.model_frame
+        if fit.model_frame is not None:
+            response = _brier_response_from_model_frame(fit.model_frame)
+            if response is not None:
+                return response, fit.model_frame
+        raise ValueError("fitted Cox model does not retain its response; refit with y/model data")
+
+    model = _unwrap_formula_fit(fit)
+    if not hasattr(model, "event_times") or not hasattr(model, "status"):
+        raise ValueError("fitted Cox model does not expose response data")
+    return Surv(list(model.event_times), list(model.status)), None
+
+
+def _brier_case_weights(fit: Any, n: int) -> list[float]:
+    weights = _model_residual_weights(fit, n)
+    if any(not math.isfinite(weight) for weight in weights):
+        raise ValueError("weights must be finite")
+    if any(weight < 0.0 for weight in weights):
+        raise ValueError("weights must be non-negative")
+    total = sum(weights)
+    if total <= 0.0:
+        raise ValueError("weights must have positive sum")
+    return weights
+
+
+def _brier_id_column(data: Any | None, name: str) -> list[Any] | None:
+    if data is None:
+        return None
+    if isinstance(data, Mapping) and name not in data:
+        return None
+    try:
+        return _materialize_labels(_column(data, name), name)
+    except KeyError:
+        return None
+
+
+def _brier_id_values(fit: Any, model_data: Any | None, n: int) -> list[Any] | None:
+    for name in ("(id)", "id"):
+        values = _brier_id_column(model_data, name)
+        if values is not None:
+            if len(values) != n:
+                raise ValueError("id must have the same length as the Surv response")
+            return values
+
+    if isinstance(fit, _FormulaFit) and fit.id_values is not None:
+        values = _materialize_labels(fit.id_values, "id")
+        if len(values) == n:
+            return values
+    return None
+
+
+def _brier_counting_has_gaps_or_overlaps(
+    starts: Sequence[float],
+    stops: Sequence[float],
+    id_values: Sequence[Any],
+) -> bool:
+    intervals_by_id: dict[Any, list[tuple[float, float]]] = {}
+    for start, stop, id_value in zip(starts, stops, id_values, strict=True):
+        intervals_by_id.setdefault(_hashable_group_value(id_value), []).append(
+            (float(stop), float(start))
+        )
+
+    for intervals in intervals_by_id.values():
+        previous_stop: float | None = None
+        for stop, start in sorted(intervals):
+            if start > stop:
+                return True
+            if previous_stop is not None and start != previous_stop:
+                return True
+            previous_stop = stop
+    return False
+
+
+def _brier_validate_counting_response(
+    starts: Sequence[float],
+    stops: Sequence[float],
+    status: Sequence[int],
+    id_values: Sequence[Any] | None,
+) -> None:
+    if id_values is None:
+        raise ValueError("id is required for start-stop data")
+    if len(id_values) != len(stops):
+        raise ValueError("id must have the same length as the Surv response")
+    if any(value not in (0, 1) for value in status):
+        raise ValueError("response must be right censored")
+    if _brier_counting_has_gaps_or_overlaps(starts, stops, id_values):
+        raise ValueError("one or more flags are >0 in survcheck")
+    if not _rttright_counting_common_start(starts, id_values):
+        raise NotImplementedError("delayed entry is not yet implemented")
+
+
+def _brier_event_times(
+    response: Surv,
+    timefix: bool,
+    id_values: Sequence[Any] | None = None,
+) -> tuple[list[float], list[int]]:
+    if response.type not in {"right", "counting"}:
+        raise ValueError("response must be right censored")
+    times = [float(value) for value in response.time]
+    status = [int(value) for value in response.event]
+    if response.start is not None:
+        starts = [float(value) for value in response.start]
+        if any(not math.isfinite(value) for value in starts):
+            raise ValueError("start times must be finite")
+        if timefix:
+            starts, times = _timefix_vectors(starts, times)
+        _brier_validate_counting_response(starts, times, status, id_values)
+    elif timefix:
+        times = [float(value) for value in _core.aeq_surv(times, None).time]
+    return times, status
+
+
+def _brier_prediction_curves(
+    fit: Any,
+    prediction_data: Any | None,
+) -> tuple[list[float], list[list[float]]]:
+    if prediction_data is not None:
+        cox_survfit = survfit(fit, newdata=prediction_data, se_fit=False)
+        if not isinstance(cox_survfit, CoxSurvfitResult):
+            raise TypeError("brier requires Cox survival curves")
+        return cox_survfit.time, cox_survfit.surv
+
+    model = _unwrap_formula_fit(fit)
+    beta = _cox_beta(model)
+    rows = _cox_training_rows(model, len(beta))
+    return _cox_survival_curve(model, rows, None, True, None)
+
+
+def _brier_default_times(response: Surv, weights: list[float], efron: bool) -> list[float]:
+    baseline = survfit(
+        response,
+        weights=weights,
+        se_fit=False,
+        stype=2 if efron else 1,
+        ctype=2 if efron else 1,
+    )
+    if not isinstance(baseline, SurvfitResult):
+        raise TypeError("brier baseline curve must be a Kaplan-Meier survfit result")
+    return [
+        float(time)
+        for time, event_count in zip(baseline.time, baseline.n_event, strict=True)
+        if float(event_count) > 0.0
+    ]
+
+
+def _brier_censoring_survival(
+    dtime: list[float],
+    dstat: list[int],
+    weights: list[float],
+) -> SurvfitResult:
+    censor_response = Surv(dtime, [1 - int(value) for value in dstat])
+    censor_fit = survfit(censor_response, weights=weights, se_fit=False)
+    censor_fit0 = survfit0(censor_fit)
+    if not isinstance(censor_fit0, SurvfitResult):
+        raise TypeError("brier censoring curve must be a Kaplan-Meier survfit result")
+    return censor_fit0
+
+
+def _brier_apply_ties(dtime: list[float], dstat: list[int], ties: bool) -> list[float]:
+    if not ties:
+        return list(dtime)
+    unique_times = sorted(set(dtime))
+    if len(unique_times) < 2:
+        return list(dtime)
+    mindiff = min(b - a for a, b in zip(unique_times[:-1], unique_times[1:], strict=True))
+    return [
+        time + mindiff / 2.0 if status == 0 else time
+        for time, status in zip(dtime, dstat, strict=True)
+    ]
+
+
+def _brier_weighted_mean(values: Sequence[float], weights: Sequence[float]) -> float:
+    denominator = sum(weights)
+    if denominator == 0.0:
+        return math.nan
+    return sum(weight * value for weight, value in zip(weights, values, strict=True)) / denominator
+
+
+def _brier_rsquared(model_brier: float, null_brier: float) -> float:
+    if null_brier == 0.0:
+        if model_brier == 0.0:
+            return math.nan
+        return math.inf if model_brier < 0.0 else -math.inf
+    return 1.0 - model_brier / null_brier
+
+
+def brier(
+    fit: Any,
+    times: Any | None = None,
+    newdata: Any | None = None,
+    ties: Any = True,
+    detail: Any = False,
+    timefix: Any = True,
+    efron: Any = False,
+) -> dict[str, Any]:
+    """Compute R ``survival::brier`` IPCW Brier scores for Cox model fits."""
+
+    if not _is_coxph_fit(fit):
+        raise TypeError("fit must be a coxph object")
+    ties_value = _normalize_bool_option(ties, "ties")
+    detail_value = _normalize_bool_option(detail, "detail")
+    timefix_value = _normalize_bool_option(timefix, "timefix")
+    efron_value = _normalize_bool_option(efron, "efron")
+    response, prediction_data = _brier_fit_response_and_data(fit, newdata)
+    id_values = _brier_id_values(fit, prediction_data, len(response))
+    dtime, dstat = _brier_event_times(response, timefix_value, id_values)
+    n = len(dtime)
+    weights = _brier_case_weights(fit, n)
+    eval_times = (
+        _float_vector(times, "times")
+        if times is not None
+        else _brier_default_times(
+            response,
+            weights,
+            efron_value and getattr(_unwrap_formula_fit(fit), "method", None) == "efron",
+        )
+    )
+
+    baseline = survfit(response, weights=weights, se_fit=False, stype=1)
+    if not isinstance(baseline, SurvfitResult):
+        raise TypeError("brier baseline curve must be a Kaplan-Meier survfit result")
+    p0 = [1.0 - value for value in _step_curve_at(baseline.time, baseline.estimate, eval_times)]
+
+    curve_times, curves = _brier_prediction_curves(fit, prediction_data)
+    if len(curves) != n:
+        raise ValueError("Cox survival predictions do not match response length")
+    survival_by_subject = [
+        _step_curve_at(curve_times, [float(value) for value in curve], eval_times)
+        for curve in curves
+    ]
+    phat = [
+        [1.0 - survival_by_subject[row_idx][time_idx] for row_idx in range(n)]
+        for time_idx in range(len(eval_times))
+    ]
+
+    adjusted_time = _brier_apply_ties(dtime, dstat, ties_value)
+    censor_fit = _brier_censoring_survival(adjusted_time, dstat, weights)
+    normalized_weights = [weight / sum(weights) for weight in weights]
+    brier_values: list[float] = []
+    rsquared_values: list[float] = []
+    eff_n: list[float] = []
+
+    for time_idx, eval_time in enumerate(eval_times):
+        censor_survival = _step_curve_at(
+            censor_fit.time,
+            censor_fit.estimate,
+            [min(time_value, eval_time) for time_value in adjusted_time],
+        )
+        ipcw = [
+            0.0
+            if time_value < eval_time and status == 0
+            else normalized_weights[row_idx] / censor_survival[row_idx]
+            if censor_survival[row_idx] > 0.0
+            else math.inf
+            for row_idx, (time_value, status) in enumerate(zip(adjusted_time, dstat, strict=True))
+        ]
+        eff_n.append(1.0 / sum(weight * weight for weight in ipcw))
+        null_loss = [
+            p0[time_idx] ** 2 if time_value > eval_time else (status - p0[time_idx]) ** 2
+            for time_value, status in zip(adjusted_time, dstat, strict=True)
+        ]
+        model_loss = [
+            phat[time_idx][row_idx] ** 2
+            if time_value > eval_time
+            else (status - phat[time_idx][row_idx]) ** 2
+            for row_idx, (time_value, status) in enumerate(zip(adjusted_time, dstat, strict=True))
+        ]
+        null_brier = _brier_weighted_mean(null_loss, ipcw)
+        model_brier = _brier_weighted_mean(model_loss, ipcw)
+        brier_values.append(model_brier)
+        rsquared_values.append(_brier_rsquared(model_brier, null_brier))
+
+    result: dict[str, Any] = {
+        "rsquared": rsquared_values,
+        "brier": brier_values,
+        "times": eval_times,
+    }
+    if detail_value:
+        result["p0"] = p0
+        result["phat"] = phat
+        result["eff.n"] = eff_n
+    return result
 
 
 def _cox_centered_design_rank(
@@ -1040,6 +1626,9 @@ def _parse_formula_literal(value: str) -> Any:
         return True
     if lowered in {"false", "f"}:
         return False
+    if lowered.endswith("l") and len(value) > 1:
+        value = value[:-1]
+        lowered = value.lower()
 
     try:
         numeric = float(value)
@@ -1063,6 +1652,45 @@ def _unwrap_response_identity(expression: str) -> str:
     return expression
 
 
+def _response_rep_call(expression: str) -> tuple[Any, str] | None:
+    expression = _unwrap_response_identity(expression)
+    if not expression.startswith("rep(") or not expression.endswith(")"):
+        return None
+
+    arguments = _formula_response_parts(expression[4:-1])
+    repeated_value: Any = _MISSING
+    count_expression: str | None = None
+    positional: list[str] = []
+    for argument in arguments:
+        option_spec = _formula_named_option(argument)
+        if option_spec is None:
+            positional.append(argument)
+            continue
+        option, value = option_spec
+        option = option.strip().lower()
+        if option in {"x", "value"}:
+            if repeated_value is not _MISSING:
+                raise ValueError("rep(...) formula response contains multiple value arguments")
+            repeated_value = _parse_formula_literal(value)
+        elif option in {"times", "length.out"}:
+            if count_expression is not None:
+                raise ValueError("rep(...) formula response contains multiple length arguments")
+            count_expression = value
+        else:
+            raise ValueError("rep(...) formula response supports only value and times arguments")
+
+    if positional:
+        if repeated_value is _MISSING:
+            repeated_value = _parse_formula_literal(positional.pop(0))
+        if positional and count_expression is None:
+            count_expression = positional.pop(0)
+        if positional:
+            raise ValueError("rep(...) formula response supports only value and length arguments")
+    if repeated_value is _MISSING or count_expression is None:
+        raise ValueError("rep(...) formula response requires value and length arguments")
+    return repeated_value, count_expression
+
+
 def _response_operand(expression: str, *, allow_literal: bool) -> _ResponseOperand:
     expression = _unwrap_response_identity(expression)
     if not expression:
@@ -1083,6 +1711,8 @@ def _response_operand(expression: str, *, allow_literal: bool) -> _ResponseOpera
 
 def _response_arg_columns(part: str) -> list[str]:
     part = _unwrap_response_identity(part)
+    if _response_rep_call(part) is not None:
+        return []
     comparison = _top_level_comparison(part)
     if comparison is None:
         operand = _response_operand(part, allow_literal=False)
@@ -1132,8 +1762,28 @@ def _compare_response_values(left: Any, operator: str, right: Any) -> bool | Non
     raise ValueError(f"unsupported formula response comparison {operator!r}")
 
 
-def _response_arg_values(data: Any, part: str) -> list[Any]:
+def _response_rep_count(count_expression: str, inferred_length: int | None) -> int:
+    count_expression = count_expression.strip()
+    try:
+        count = _parse_formula_literal(count_expression)
+    except ValueError:
+        if inferred_length is None:
+            raise ValueError(
+                f"unsupported formula response rep(...) length expression: {count_expression}"
+            ) from None
+        return inferred_length
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError("rep(...) formula response length must be a non-negative integer")
+    return count
+
+
+def _response_arg_values(data: Any, part: str, inferred_length: int | None = None) -> list[Any]:
     part = _unwrap_response_identity(part)
+    rep_call = _response_rep_call(part)
+    if rep_call is not None:
+        repeated_value, count_expression = rep_call
+        return [repeated_value] * _response_rep_count(count_expression, inferred_length)
+
     comparison = _top_level_comparison(part)
     if comparison is None:
         operand = _response_operand(part, allow_literal=False)
@@ -1164,7 +1814,10 @@ def _response_arg_values(data: Any, part: str) -> list[Any]:
 
 
 def _formula_response_values(data: Any, spec: _SurvResponseSpec) -> list[list[Any]]:
-    return [_response_arg_values(data, argument) for argument in spec.arguments]
+    inferred_length: int | None = None
+    if spec.columns:
+        inferred_length = len(_column(data, spec.columns[0]))
+    return [_response_arg_values(data, argument, inferred_length) for argument in spec.arguments]
 
 
 def _parse_formula_type_option(value: str) -> str:
@@ -1255,7 +1908,11 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
         raise ValueError("formula must contain '~'")
 
     lhs = lhs.strip()
-    if not lhs.startswith("Surv(") or not lhs.endswith(")"):
+    if lhs.startswith("Surv(") and lhs.endswith(")"):
+        response_inner = lhs[5:-1]
+    elif lhs.startswith("survival::Surv(") and lhs.endswith(")"):
+        response_inner = lhs[15:-1]
+    else:
         raise ValueError("formula response must be Surv(...)")
 
     columns: list[str] = []
@@ -1264,7 +1921,7 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
     has_origin = False
     arguments: list[str] = []
     named_arguments: dict[str, str] = {}
-    for part in _formula_response_parts(lhs[5:-1]):
+    for part in _formula_response_parts(response_inner):
         option_spec = _formula_named_option(part)
         if option_spec is not None:
             option, value = option_spec
@@ -1961,6 +2618,7 @@ def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
         strata=list(terms.strata),
         offsets=list(terms.offsets),
         clusters=list(terms.clusters),
+        model_terms=list(terms.model_terms),
         intercept=terms.intercept,
     )
 
@@ -1974,6 +2632,7 @@ def _split_terms_cached(
     strata: list[str] = []
     offsets: list[_CovariateTerm] = []
     clusters: list[str] = []
+    model_terms: list[_FormulaModelTerm] = []
     unsupported: list[str] = []
     intercept = True
 
@@ -1990,10 +2649,13 @@ def _split_terms_cached(
             if dot_terms is None:
                 raise ValueError("formula '.' requires named tabular data")
             terms = [_CovariateTerm(column) for column in dot_terms]
+            model_items = [_ModelCovariateTerm(item) for item in terms]
             if op == "-":
                 _remove_values(covariates, terms)
+                _remove_values(model_terms, model_items)
             else:
                 _append_unique(covariates, terms)
+                _append_unique(model_terms, model_items)
             continue
         if term.startswith("strata(") and term.endswith(")"):
             column_items = _formula_name_items(term[7:-1])
@@ -2007,8 +2669,10 @@ def _split_terms_cached(
             )
             if op == "-":
                 _remove_values(strata, columns)
+                _remove_values(model_terms, [_ModelStrataTerm(tuple(columns))])
             else:
                 _append_unique(strata, columns)
+                _append_unique(model_terms, [_ModelStrataTerm(tuple(columns))])
             continue
         if term.startswith("cluster(") and term.endswith(")"):
             column_items = _formula_name_items(term[8:-1])
@@ -2022,21 +2686,29 @@ def _split_terms_cached(
             )
             if op == "-":
                 _remove_values(clusters, columns)
+                _remove_values(model_terms, [_ModelClusterTerm(column) for column in columns])
             else:
                 _append_unique(clusters, columns)
+                _append_unique(model_terms, [_ModelClusterTerm(column) for column in columns])
             continue
         if term.startswith("offset(") and term.endswith(")"):
             offset_term = _parse_offset_term(term[7:-1])
+            model_item = _ModelOffsetTerm(offset_term)
             if op == "-":
                 _remove_values(offsets, [offset_term])
+                _remove_values(model_terms, [model_item])
             else:
                 _append_unique(offsets, [offset_term])
+                _append_unique(model_terms, [model_item])
             continue
         covariate_terms = _parse_covariate_expression(term, dot_terms)
+        model_items = [_ModelCovariateTerm(item) for item in covariate_terms]
         if op == "-":
             _remove_values(covariates, covariate_terms)
+            _remove_values(model_terms, model_items)
         else:
             _append_unique(covariates, covariate_terms)
+            _append_unique(model_terms, model_items)
 
     if unsupported:
         joined = ", ".join(unsupported)
@@ -2046,6 +2718,7 @@ def _split_terms_cached(
         strata=tuple(strata),
         offsets=tuple(offsets),
         clusters=tuple(clusters),
+        model_terms=tuple(model_terms),
         intercept=intercept,
     )
 
@@ -2443,6 +3116,8 @@ def _survfit_formula_model_frame(
     weights: Any | None,
     id: Any | None = None,  # noqa: A002
     id_column: str | None = None,
+    cluster: Any | None = None,
+    cluster_column: str | None = None,
 ) -> dict[str, Any]:
     response_spec = _formula_response_spec(formula)
     frame: dict[str, Any] = {_surv_response_model_name(response_spec): response}
@@ -2450,10 +3125,14 @@ def _survfit_formula_model_frame(
         frame[column] = _column(data, column)
     if id_column is not None and id_column not in frame:
         frame[id_column] = _column(data, id_column)
+    if cluster_column is not None and cluster_column not in frame:
+        frame[cluster_column] = _column(data, cluster_column)
     if weights is not None:
         frame["(weights)"] = _materialize_1d(weights, "(weights)")
     if id is not None:
         frame["(id)"] = _materialize_1d(id, "(id)")
+    if cluster is not None:
+        frame["(cluster)"] = _materialize_1d(cluster, "(cluster)")
     return frame
 
 
@@ -2462,14 +3141,17 @@ def _survfit_model_frame(
     group: Any | None,
     weights: Any | None,
     id: Any | None = None,  # noqa: A002
+    cluster: Any | None = None,
 ) -> dict[str, Any]:
     frame: dict[str, Any] = {"response": response}
     if group is not None:
-        frame["group"] = _materialize_1d(group, "group")
+        frame["group"] = _materialize_labels(group, "group")
     if weights is not None:
         frame["(weights)"] = _materialize_1d(weights, "(weights)")
     if id is not None:
-        frame["(id)"] = _materialize_1d(id, "(id)")
+        frame["(id)"] = _materialize_labels(id, "id")
+    if cluster is not None:
+        frame["(cluster)"] = _materialize_labels(cluster, "cluster")
     return frame
 
 
@@ -2540,10 +3222,17 @@ def _label_levels(values: list[Any], name: str) -> tuple[Any, ...]:
     return tuple(labels)
 
 
-def _encode_groups(group: Any, n: int) -> list[int]:
+def _encode_groups(
+    group: Any,
+    n: int,
+    *,
+    levels: Sequence[Any] | None = None,
+) -> list[int]:
     values = _materialize_labels(group, "group")
     if len(values) != n:
         raise ValueError("group must have the same length as the Surv response")
+    if levels is not None:
+        return _encode_labels_with_levels(values, levels, "group")
     return _encode_labels(values, "group")
 
 
@@ -2552,7 +3241,27 @@ def _encode_labels(values: list[Any], name: str) -> list[int]:
     return [labels[value] for value in values]
 
 
-def _group_indices(group: Any, n: int) -> dict[Any, list[int]]:
+def _encode_labels_with_levels(
+    values: list[Any],
+    levels: Sequence[Any],
+    name: str,
+) -> list[int]:
+    try:
+        labels = {value: idx for idx, value in enumerate(levels)}
+    except TypeError as exc:
+        raise TypeError(f"{name} contains unhashable labels") from exc
+    try:
+        return [labels[value] for value in values]
+    except KeyError as exc:
+        raise ValueError(f"{name} contains a value outside the supplied levels") from exc
+
+
+def _group_indices(
+    group: Any,
+    n: int,
+    *,
+    levels: Sequence[Any] | None = None,
+) -> dict[Any, list[int]]:
     values = _materialize_labels(group, "group")
     if len(values) != n:
         raise ValueError("group must have the same length as the Surv response")
@@ -2563,7 +3272,15 @@ def _group_indices(group: Any, n: int) -> dict[Any, list[int]]:
             indices.setdefault(value, []).append(idx)
         except TypeError as exc:
             raise TypeError("group contains unhashable labels") from exc
-    return indices
+    if levels is None:
+        return indices
+    ordered: dict[Any, list[int]] = {}
+    for level in levels:
+        if level in indices:
+            ordered[level] = indices[level]
+    if len(ordered) != len(indices):
+        raise ValueError("group contains a value outside the supplied levels")
+    return ordered
 
 
 def _cox_tie_method(method: str | None, ties: str | None) -> str:
@@ -2786,6 +3503,852 @@ def _survreg_response_arrays(response: Surv) -> tuple[list[float], list[float], 
     )
 
 
+def _strata_is_vector_sequence(value: Any) -> bool:
+    if isinstance(value, str | bytes | Mapping):
+        return False
+    try:
+        items = list(value)
+    except TypeError:
+        return False
+    if not items or isinstance(items[0], str | bytes | Mapping):
+        return False
+    try:
+        list(items[0])
+    except TypeError:
+        return False
+    return True
+
+
+def _strata_legacy_core_call(
+    variables: tuple[Any, ...],
+    na_group: bool,
+    shortlabel: Any,
+    sep: str,
+    labels: Any,
+) -> bool:
+    if na_group or shortlabel is not None or sep != ", " or labels is not None:
+        return False
+    if len(variables) != 1 or not _strata_is_vector_sequence(variables[0]):
+        return False
+    try:
+        columns = [list(column) for column in variables[0]]
+    except TypeError:
+        return False
+    if not columns:
+        return False
+    for column in columns:
+        for value in column:
+            if isinstance(value, bool) or _is_missing_value(value):
+                return False
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(numeric) or not numeric.is_integer():
+                return False
+    return True
+
+
+def _strata_variables_from_args(variables: tuple[Any, ...]) -> list[list[Any]]:
+    if not variables:
+        raise ValueError("strata requires at least one variable")
+    if len(variables) == 1 and _strata_is_vector_sequence(variables[0]):
+        variables = tuple(variables[0])
+    columns = [
+        _materialize_1d(variable, f"variable {idx + 1}") for idx, variable in enumerate(variables)
+    ]
+    n = len(columns[0])
+    if any(len(column) != n for column in columns):
+        raise ValueError("all arguments must be the same length")
+    return columns
+
+
+def _strata_value_label(value: Any) -> str:
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return _surv_format_number(value)
+    return str(value)
+
+
+def _strata_level_sort_key(value: Any) -> tuple[int, Any]:
+    if isinstance(value, bool):
+        return (0, int(value))
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return (1, str(value))
+    if math.isfinite(numeric):
+        return (0, numeric)
+    return (1, str(value))
+
+
+def _strata_column_levels(column: Sequence[Any], na_group: bool) -> tuple[list[Any], list[str]]:
+    values: dict[Any, None] = {}
+    saw_missing = False
+    for value in column:
+        if _is_missing_value(value):
+            saw_missing = True
+            continue
+        try:
+            values.setdefault(value, None)
+        except TypeError as exc:
+            raise TypeError("strata variables must contain hashable values") from exc
+    levels = sorted(values, key=_strata_level_sort_key)
+    labels = [_strata_value_label(value) for value in levels]
+    if na_group and saw_missing:
+        levels.append(None)
+        labels.append("NA")
+    return levels, labels
+
+
+def _strata_default_labels(n_terms: int) -> list[str]:
+    return [f"v{idx + 1}" for idx in range(n_terms)]
+
+
+def _strata_normalize_labels(labels: Any, n_terms: int) -> list[str]:
+    if labels is None:
+        return _strata_default_labels(n_terms)
+    result = [str(label) for label in _materialize_1d(labels, "labels")]
+    if len(result) != n_terms:
+        raise ValueError("labels must have one entry per strata variable")
+    return result
+
+
+def _strata_default_shortlabel(columns: Sequence[Sequence[Any]], labels: Any) -> bool:
+    if labels is not None:
+        return False
+    return all(
+        all(_is_missing_value(value) or isinstance(value, str) for value in column)
+        for column in columns
+    )
+
+
+def strata(
+    *variables: Any,
+    na_group: bool = False,
+    shortlabel: bool | None = None,
+    sep: str = ", ",
+    labels: Any | None = None,
+) -> Any:
+    """Create R-style strata factor codes and labels."""
+
+    if _strata_legacy_core_call(variables, na_group, shortlabel, sep, labels):
+        return _core.strata([[int(value) for value in column] for column in variables[0]])
+    if not isinstance(na_group, bool):
+        raise TypeError("na_group must be True or False")
+    if shortlabel is not None and not isinstance(shortlabel, bool):
+        raise TypeError("shortlabel must be True, False, or None")
+    if not isinstance(sep, str):
+        raise TypeError("sep must be a string")
+
+    columns = _strata_variables_from_args(variables)
+    n = len(columns[0])
+    term_labels = _strata_normalize_labels(labels, len(columns))
+    short = _strata_default_shortlabel(columns, labels) if shortlabel is None else shortlabel
+
+    column_levels: list[list[Any]] = []
+    column_level_labels: list[list[str]] = []
+    column_maps: list[dict[Any, int]] = []
+    for column in columns:
+        levels, level_labels = _strata_column_levels(column, na_group)
+        column_levels.append(levels)
+        column_level_labels.append(level_labels)
+        column_maps.append({value: idx for idx, value in enumerate(levels)})
+
+    raw_codes: list[int | None] = []
+    raw_to_parts: dict[int, list[int]] = {}
+    for row_idx in range(n):
+        raw_code = 0
+        parts: list[int] = []
+        missing = False
+        for column_idx, column in enumerate(columns):
+            value = column[row_idx]
+            if _is_missing_value(value):
+                if not na_group:
+                    missing = True
+                    break
+                value = None
+            try:
+                part = column_maps[column_idx][value]
+            except KeyError as exc:
+                raise ValueError("missing strata level could not be encoded") from exc
+            raw_code = part if column_idx == 0 else part + raw_code * len(column_levels[column_idx])
+            parts.append(part)
+        if missing:
+            raw_codes.append(None)
+            continue
+        raw_codes.append(raw_code)
+        raw_to_parts.setdefault(raw_code, parts)
+
+    observed_raw = sorted(raw_to_parts)
+    compact = {raw_code: idx + 1 for idx, raw_code in enumerate(observed_raw)}
+    codes = [None if raw_code is None else compact[raw_code] for raw_code in raw_codes]
+    levels: list[str] = []
+    for raw_code in observed_raw:
+        pieces: list[str] = []
+        for term_idx, part_idx in enumerate(raw_to_parts[raw_code]):
+            level_label = column_level_labels[term_idx][part_idx]
+            pieces.append(level_label if short else f"{term_labels[term_idx]}={level_label}")
+        levels.append(sep.join(pieces))
+    row_labels = [None if code is None else levels[code - 1] for code in codes]
+    counts = [sum(1 for code in codes if code == idx + 1) for idx in range(len(levels))]
+    return StrataFactor(codes=codes, levels=levels, labels=row_labels, counts=counts)
+
+
+def _lvcf_order_key(value: Any) -> tuple[int, Any]:
+    if _is_missing_value(value):
+        raise ValueError("id must not contain missing values")
+    if isinstance(value, bool):
+        return (0, int(value))
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return (1, str(value))
+    if math.isfinite(numeric):
+        return (0, numeric)
+    return (1, str(value))
+
+
+def _integerish_vector_or_none(values: Any, name: str) -> list[int] | None:
+    try:
+        return _integer_code_vector(values, name, "integer id values")
+    except (TypeError, ValueError):
+        return None
+
+
+def neardate(
+    id1: Any,
+    id2: Any,
+    y1: Any,
+    y2: Any,
+    best: Any = "after",
+    nomatch: Any | None = None,
+) -> list[int | None]:
+    """Find nearest matching dates by id, returning R-style 1-based indices."""
+
+    best_value = _match_string_arg(
+        best,
+        "best",
+        ("after", "prior", "closest"),
+        "best must be 'after', 'prior', or 'closest'",
+    )
+    y1_values = _float_vector(y1, "y1")
+    y2_values = _float_vector(y2, "y2")
+    id1_integer = _integerish_vector_or_none(id1, "id1")
+    id2_integer = _integerish_vector_or_none(id2, "id2")
+    nomatch_value = None if nomatch is None else _integer_scalar(nomatch, "nomatch")
+
+    if id1_integer is not None and id2_integer is not None:
+        result = _core.neardate(
+            id1_integer,
+            y1_values,
+            id2_integer,
+            y2_values,
+            best_value,
+            None,
+        )
+    else:
+        result = _core.neardate_str(
+            [str(value) for value in _materialize_1d(id1, "id1")],
+            y1_values,
+            [str(value) for value in _materialize_1d(id2, "id2")],
+            y2_values,
+            best_value,
+            None,
+        )
+
+    return [nomatch_value if idx is None else int(idx) + 1 for idx in result.indices]
+
+
+def _tcut_default_labels(breaks: list[float]) -> list[str]:
+    return [f"{breaks[idx]:g}+ thru {breaks[idx + 1]:g}" for idx in range(len(breaks) - 1)]
+
+
+def tcut(
+    x: Any,
+    breaks: Any,
+    labels: Any | None = None,
+    scale: Any = 1,
+) -> TcutResult:
+    """Create a Rust-backed R-style ``tcut`` interval result."""
+
+    x_values = _float_vector(x, "x")
+    break_values = _float_vector(breaks, "breaks")
+    if len(break_values) < 2:
+        raise ValueError("breaks must have at least 2 elements")
+    if any(
+        later <= earlier for earlier, later in zip(break_values[:-1], break_values[1:], strict=True)
+    ):
+        raise ValueError("breaks must be strictly increasing")
+    scale_value = _normalize_positive_scale(scale)
+    label_values = (
+        _tcut_default_labels(break_values)
+        if labels is None
+        else [str(value) for value in _materialize_1d(labels, "labels")]
+    )
+    if len(label_values) != len(break_values) - 1:
+        raise ValueError("labels length must equal length(breaks) - 1")
+    return _core.tcut(
+        [value * scale_value for value in x_values],
+        [value * scale_value for value in break_values],
+        label_values,
+    )
+
+
+def _quantile_type7(sorted_values: list[float], probability: float) -> float:
+    if not sorted_values:
+        raise ValueError("x must contain at least one value")
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    p = min(max(probability, 0.0), 1.0)
+    position = p * (len(sorted_values) - 1)
+    lower_idx = int(math.floor(position))
+    upper_idx = int(math.ceil(position))
+    weight = position - lower_idx
+    return sorted_values[lower_idx] * (1.0 - weight) + sorted_values[upper_idx] * weight
+
+
+def _unique_sorted_floats(values: Sequence[float]) -> list[float]:
+    return sorted(set(values))
+
+
+def _validate_nsk_boundary_pair(boundary_knots: tuple[float, float]) -> tuple[float, float]:
+    low, high = boundary_knots
+    if not math.isfinite(low) or not math.isfinite(high) or low >= high:
+        raise ValueError("Boundary.knots must be finite and strictly increasing")
+    return boundary_knots
+
+
+def _normalize_nsk_knots(knots: Any | None) -> list[float] | None:
+    if knots is None:
+        return None
+    knot_values = _normalize_numeric_sequence_or_none(knots, "knots") or []
+    return _unique_sorted_floats(knot_values)
+
+
+def _default_nsk_boundary_knots(x: list[float], b: Any) -> tuple[float, float]:
+    b_value = _finite_float(b, "b")
+    if b_value < 0.0 or b_value > 1.0:
+        raise ValueError("b must be between 0 and 1")
+    sorted_x = sorted(x)
+    return _validate_nsk_boundary_pair(
+        tuple(
+            sorted(
+                (
+                    _quantile_type7(sorted_x, b_value),
+                    _quantile_type7(sorted_x, 1.0 - b_value),
+                )
+            )
+        )
+    )
+
+
+def _nsk_boundary_from_knots(knots: list[float] | None) -> tuple[tuple[float, float], list[float]]:
+    if knots is None or len(knots) < 2:
+        raise ValueError("wrong length for Boundary.knots")
+    return _validate_nsk_boundary_pair((knots[0], knots[-1])), knots[1:-1]
+
+
+def _adjust_nsk_boundary_for_knots(
+    boundary_knots: tuple[float, float],
+    knots: list[float] | None,
+) -> tuple[tuple[float, float], list[float] | None]:
+    if not knots:
+        return boundary_knots, None
+
+    kept_boundary = [boundary_knots[0], boundary_knots[1]]
+    if kept_boundary[1] <= max(knots):
+        kept_boundary = kept_boundary[:1]
+    if kept_boundary and kept_boundary[0] >= min(knots):
+        kept_boundary = kept_boundary[1:]
+
+    all_knots = _unique_sorted_floats([*knots, *kept_boundary])
+    if len(all_knots) < 2:
+        raise ValueError("at least two distinct finite knots are required")
+    return _validate_nsk_boundary_pair((all_knots[0], all_knots[-1])), all_knots[1:-1]
+
+
+def _pop_nsk_boundary_alias(kwargs: dict[str, Any], current: Any, alias: str) -> Any:
+    if alias not in kwargs:
+        return current
+    value = kwargs.pop(alias)
+    if current is not _MISSING:
+        raise ValueError(f"use only one of Boundary_knots or {alias}")
+    return value
+
+
+def _normalize_nsk_boundary_knots(
+    x: list[float],
+    knots: list[float] | None,
+    b: Any,
+    boundary_arg: Any,
+) -> tuple[tuple[float, float], list[float] | None]:
+    if boundary_arg is _MISSING:
+        boundary_knots = _default_nsk_boundary_knots(x, b)
+        return _adjust_nsk_boundary_for_knots(boundary_knots, knots)
+
+    if _is_bool_like(boundary_arg):
+        if bool(boundary_arg):
+            boundary_knots = _validate_nsk_boundary_pair((min(x), max(x)))
+            return _adjust_nsk_boundary_for_knots(boundary_knots, knots)
+        return _nsk_boundary_from_knots(knots)
+
+    if boundary_arg is None:
+        return _nsk_boundary_from_knots(knots)
+
+    boundary_values = _normalize_numeric_sequence_or_none(boundary_arg, "Boundary.knots") or []
+    if len(boundary_values) == 0:
+        return _nsk_boundary_from_knots(knots)
+    if len(boundary_values) != 2:
+        raise ValueError("wrong length for Boundary.knots")
+
+    boundary_knots = _validate_nsk_boundary_pair(tuple(sorted(boundary_values)))
+    return _adjust_nsk_boundary_for_knots(boundary_knots, knots)
+
+
+def _computed_nsk_knots(
+    x: list[float],
+    boundary_knots: tuple[float, float],
+    df: int | None,
+    intercept: bool,
+) -> list[float] | None:
+    minimum_df = 2 if intercept else 1
+    effective_df = minimum_df if df is None else df
+    if effective_df < minimum_df:
+        return None
+
+    n_interior = effective_df - minimum_df
+    if n_interior == 0:
+        return None
+
+    low, high = boundary_knots
+    inside = sorted(value for value in x if low <= value <= high)
+    if not inside:
+        raise ValueError(
+            f"not enough x values inside Boundary.knots to compute {n_interior} interior knots"
+        )
+    return [_quantile_type7(inside, idx / (n_interior + 1)) for idx in range(1, n_interior + 1)]
+
+
+def _pspline_basis_row(knots: Sequence[float], x: float, order: int) -> list[float]:
+    n_basis = len(knots) - order
+    values = [0.0] * (len(knots) - 1)
+    for idx in range(len(knots) - 1):
+        if knots[idx] <= x < knots[idx + 1] or (
+            x == knots[-1] and knots[idx] <= x <= knots[idx + 1]
+        ):
+            values[idx] = 1.0
+
+    for current_order in range(2, order + 1):
+        next_values = [0.0] * (len(knots) - current_order)
+        for idx in range(len(next_values)):
+            left_denominator = knots[idx + current_order - 1] - knots[idx]
+            right_denominator = knots[idx + current_order] - knots[idx + 1]
+            left = (
+                0.0
+                if left_denominator == 0.0
+                else (x - knots[idx]) / left_denominator * values[idx]
+            )
+            right = (
+                0.0
+                if right_denominator == 0.0
+                else (knots[idx + current_order] - x) / right_denominator * values[idx + 1]
+            )
+            next_values[idx] = left + right
+        values = next_values
+    return values[:n_basis]
+
+
+def _pspline_basis_derivative_row(
+    knots: Sequence[float],
+    x: float,
+    order: int,
+) -> list[float]:
+    lower_order = _pspline_basis_row(knots, x, order - 1)
+    n_basis = len(knots) - order
+    result: list[float] = []
+    for idx in range(n_basis):
+        left_denominator = knots[idx + order - 1] - knots[idx]
+        right_denominator = knots[idx + order] - knots[idx + 1]
+        left = 0.0 if left_denominator == 0.0 else (order - 1) / left_denominator * lower_order[idx]
+        right = (
+            0.0
+            if right_denominator == 0.0
+            else (order - 1) / right_denominator * lower_order[idx + 1]
+        )
+        result.append(left - right)
+    return result
+
+
+def _pspline_difference_penalty(n_cols: int) -> list[list[float]]:
+    if n_cols == 0:
+        return []
+    diff_rows = []
+    for row_idx in range(n_cols - 2):
+        row = [0.0] * n_cols
+        row[row_idx] = 1.0
+        row[row_idx + 1] = -2.0
+        row[row_idx + 2] = 1.0
+        diff_rows.append(row)
+
+    penalty = [[0.0] * n_cols for _ in range(n_cols)]
+    for row in diff_rows:
+        for i, left in enumerate(row):
+            if left == 0.0:
+                continue
+            for j, right in enumerate(row):
+                if right != 0.0:
+                    penalty[i][j] += left * right
+    return penalty
+
+
+def _frailty_missing(value: Any) -> bool:
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
+def _frailty_encoding(
+    x: Any,
+    *,
+    levels: Any | None = None,
+    sparse: Any | None = None,
+) -> dict[str, Any]:
+    values = _materialize_labels(x, "x")
+    if levels is None:
+        level_values = sorted({str(value) for value in values if not _frailty_missing(value)})
+    else:
+        level_values = [str(value) for value in _materialize_1d(levels, "levels")]
+    level_index = {level: idx + 1 for idx, level in enumerate(level_values)}
+
+    codes: list[int | None] = []
+    for value in values:
+        if _frailty_missing(value):
+            codes.append(None)
+        else:
+            key = str(value)
+            if key not in level_index:
+                raise ValueError(f"x contains value {key!r} outside supplied levels")
+            codes.append(level_index[key])
+
+    sparse_value = (
+        len(level_values) > 5 if sparse is None else _normalize_bool_option(sparse, "sparse")
+    )
+    return {
+        "codes": codes,
+        "levels": level_values,
+        "nclass": len(level_values),
+        "sparse": sparse_value,
+    }
+
+
+def _normalize_pspline_method(
+    df: Any,
+    theta: Any | None,
+    nterm: Any | None,
+    method: Any | None,
+    eps: Any,
+) -> tuple[int | float, float | None, int, float, str]:
+    df_value = float(df)
+    if not math.isfinite(df_value):
+        raise ValueError("df must be finite")
+    if df_value.is_integer():
+        df_value = int(df_value)
+
+    eps_value = 0.1 if eps is None else _finite_float(eps, "eps")
+    nterm_value = None if nterm is None else int(round(_finite_float(nterm, "nterm")))
+    if theta is not None:
+        theta_value = _finite_float(theta, "theta")
+        if theta_value <= 0.0 or theta_value >= 1.0:
+            raise ValueError("Invalid value for theta")
+        if nterm_value is None:
+            nterm_value = int(round(2.5 * float(df_value)))
+        return df_value, theta_value, nterm_value, eps_value, "fixed"
+
+    method_value = None if method is None else str(method).lower()
+    if float(df_value) == 0.0 or method_value == "aic":
+        return df_value, None, 15, 1e-5, "aic"
+
+    if float(df_value) <= 1.0:
+        raise ValueError("Too few degrees of freedom")
+    if nterm_value is None:
+        nterm_value = int(round(2.5 * float(df_value)))
+    if float(df_value) > nterm_value:
+        raise ValueError(f"`nterm' too small for df={df_value:g}")
+    return df_value, None, nterm_value, eps_value, "df"
+
+
+def _pspline_combine_matrix(
+    matrix: list[list[float]],
+    combine: Any | None,
+    intercept: bool,
+) -> tuple[list[list[float]], list[int] | None]:
+    if combine is None:
+        return matrix, None
+
+    raw_values = [float(value) for value in _materialize_1d(combine, "combine")]
+    combine_values = [int(value) for value in raw_values]
+    if any(value != math.floor(value) or value < 0.0 for value in raw_values):
+        raise ValueError("combine must be an increasing vector of positive integers")
+    if any(
+        later < earlier for earlier, later in zip(combine_values, combine_values[1:], strict=False)
+    ):
+        raise ValueError("combine must be an increasing vector of positive integers")
+
+    n_cols = len(matrix[0]) if matrix else 0
+    column_groups = combine_values if intercept else [0, *combine_values]
+    if len(column_groups) != n_cols:
+        raise ValueError("wrong length for combine")
+
+    unique_groups = sorted(set(column_groups))
+    group_index = {group: idx for idx, group in enumerate(unique_groups)}
+    combined = [[0.0] * len(unique_groups) for _ in matrix]
+    for row_idx, row in enumerate(matrix):
+        for col_idx, value in enumerate(row):
+            combined[row_idx][group_index[column_groups[col_idx]]] += value
+    return combined, combine_values
+
+
+def pspline(
+    x: Any,
+    df: Any = 4,
+    theta: Any | None = None,
+    nterm: Any | None = None,
+    degree: Any = 3,
+    eps: Any = 0.1,
+    method: Any | None = None,
+    Boundary_knots: Any | None = None,  # noqa: N803
+    *,
+    boundary_knots: Any | None = None,
+    intercept: Any = False,
+    penalty: Any = True,
+    combine: Any | None = None,
+) -> dict[str, Any]:
+    """Create R-compatible ``survival::pspline`` basis data."""
+
+    if Boundary_knots is not None and boundary_knots is not None:
+        raise ValueError("use only one of Boundary_knots or boundary_knots")
+    boundary_arg = boundary_knots if boundary_knots is not None else Boundary_knots
+
+    x_values = _float_vector(x, "x")
+    finite_x = [value for value in x_values if not math.isnan(value)]
+    if not finite_x:
+        raise ValueError("x must contain at least one non-missing value")
+    if any(math.isinf(value) for value in finite_x):
+        raise ValueError("x must contain only finite values")
+
+    degree_value = _integer_scalar(degree, "degree")
+    if degree_value < 1:
+        raise ValueError("degree must be positive")
+    order = degree_value + 1
+    intercept_value = _normalize_bool_option(intercept, "intercept")
+    penalty_value = _normalize_bool_option(penalty, "penalty")
+
+    df_value, theta_value, nterm_value, eps_value, method_value = _normalize_pspline_method(
+        df,
+        theta,
+        nterm,
+        method,
+        eps,
+    )
+    if nterm_value < 3:
+        raise ValueError("Too few basis functions")
+
+    if boundary_arg is None:
+        boundary = (min(finite_x), max(finite_x))
+    else:
+        boundary_values = _float_vector(boundary_arg, "Boundary.knots")
+        if len(boundary_values) != 2:
+            raise ValueError("Invalid values for Boundary.knots")
+        boundary = (boundary_values[0], boundary_values[1])
+    if (
+        not math.isfinite(boundary[0])
+        or not math.isfinite(boundary[1])
+        or boundary[0] >= boundary[1]
+    ):
+        raise ValueError("Invalid values for Boundary.knots")
+
+    dx = (boundary[1] - boundary[0]) / nterm_value
+    knots = [boundary[0] + dx * idx for idx in range(-degree_value, nterm_value)] + [
+        boundary[1] + dx * idx for idx in range(0, degree_value + 1)
+    ]
+
+    left_basis = _pspline_basis_row(knots, boundary[0], order)
+    left_derivative = _pspline_basis_derivative_row(knots, boundary[0], order)
+    right_basis = _pspline_basis_row(knots, boundary[1], order)
+    right_derivative = _pspline_basis_derivative_row(knots, boundary[1], order)
+
+    full_matrix: list[list[float]] = []
+    for value in x_values:
+        if math.isnan(value):
+            full_matrix.append([math.nan] * (nterm_value + degree_value))
+        elif value < boundary[0]:
+            full_matrix.append(
+                [
+                    basis + (value - boundary[0]) * derivative
+                    for basis, derivative in zip(left_basis, left_derivative, strict=True)
+                ]
+            )
+        elif value > boundary[1]:
+            full_matrix.append(
+                [
+                    basis + (value - boundary[1]) * derivative
+                    for basis, derivative in zip(right_basis, right_derivative, strict=True)
+                ]
+            )
+        else:
+            full_matrix.append(_pspline_basis_row(knots, value, order))
+
+    full_matrix, combine_values = _pspline_combine_matrix(
+        full_matrix,
+        combine,
+        intercept_value,
+    )
+    dmat = _pspline_difference_penalty(len(full_matrix[0]) if full_matrix else 0)
+    if not intercept_value:
+        full_matrix = [row[1:] for row in full_matrix]
+        dmat = [row[1:] for row in dmat[1:]]
+
+    n_cols = len(full_matrix[0]) if full_matrix else 0
+    cbase_length = max(0, n_cols - 1) if intercept_value else n_cols
+    return {
+        "basis": full_matrix,
+        "n_cols": n_cols,
+        "nterm": nterm_value,
+        "degree": degree_value,
+        "df": df_value,
+        "theta": theta_value,
+        "eps": eps_value,
+        "method": method_value,
+        "boundary_knots": [boundary[0], boundary[1]],
+        "dmat": dmat,
+        "combine": combine_values,
+        "penalty": penalty_value,
+        "intercept": intercept_value,
+        "cbase": [knots[idx] + (boundary[0] - knots[0]) for idx in range(1, cbase_length + 1)],
+    }
+
+
+def nsk(
+    x: Any,
+    df: Any | None = None,
+    knots: Any | None = None,
+    intercept: Any = False,
+    b: Any = 0.05,
+    Boundary_knots: Any = _MISSING,  # noqa: N803
+    **kwargs: Any,
+) -> Any:
+    """Create a Rust-backed natural spline basis with R ``survival::nsk`` arguments."""
+
+    boundary_arg = _pop_nsk_boundary_alias(kwargs, Boundary_knots, "Boundary.knots")
+    boundary_arg = _pop_nsk_boundary_alias(kwargs, boundary_arg, "boundary_knots")
+    if kwargs:
+        unexpected = next(iter(kwargs))
+        raise TypeError(f"nsk got an unexpected keyword argument {unexpected!r}")
+
+    x_values = _float_vector(x, "x")
+    if not x_values:
+        raise ValueError("x must contain at least one value")
+    if any(not math.isfinite(value) for value in x_values):
+        raise ValueError("x must contain only finite values")
+
+    intercept_value = _normalize_bool_option(intercept, "intercept")
+    df_value: int | None = None
+    if df is not None:
+        df_value = _integer_scalar(df, "df")
+        if df_value <= 0:
+            raise ValueError("df must be positive")
+
+    normalized_knots = _normalize_nsk_knots(knots)
+    boundary_knots, core_knots = _normalize_nsk_boundary_knots(
+        x_values,
+        normalized_knots,
+        b,
+        boundary_arg,
+    )
+    if not normalized_knots and core_knots is None:
+        core_knots = _computed_nsk_knots(x_values, boundary_knots, df_value, intercept_value)
+    spline = _core.NaturalSplineKnot(core_knots, boundary_knots, df_value, intercept_value)
+    return spline.basis(x_values)
+
+
+def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:  # noqa: A002
+    """Carry the last non-missing value forward within each id, like R's ``lvcf``."""
+
+    id_values = _materialize_labels(id, "id")
+    result = _materialize_1d(x, "x")
+    if len(result) != len(id_values):
+        raise ValueError("x must have the same length as id")
+    if time is None:
+        order = sorted(
+            range(len(id_values)),
+            key=lambda idx: (_lvcf_order_key(id_values[idx]), idx),
+        )
+    else:
+        time_values = _float_vector(time, "time")
+        if len(time_values) != len(id_values):
+            raise ValueError("time must have the same length as id")
+        if any(not math.isfinite(value) for value in time_values):
+            raise ValueError("time must contain only finite values")
+        order = sorted(
+            range(len(id_values)),
+            key=lambda idx: (_lvcf_order_key(id_values[idx]), time_values[idx], idx),
+        )
+
+    current: Any = None
+    previous_id: Any = None
+    for position, row_idx in enumerate(order):
+        id_key = _hashable_group_value(id_values[row_idx])
+        value = result[row_idx]
+        if position == 0 or not _is_missing_value(value) or id_key != previous_id:
+            current = value
+        else:
+            result[row_idx] = current
+        previous_id = id_key
+    return result
+
+
+def nostutter(
+    id: Any,  # noqa: A002
+    x: Any,
+    censor: Any = 0,
+    single: bool = False,
+) -> list[Any]:
+    """Replace repeated adjacent states within each id by the censor value."""
+
+    id_values = _materialize_labels(id, "id")
+    result = _materialize_1d(x, "x")
+    if len(result) != len(id_values):
+        raise ValueError("x must have the same length as id")
+    if any(_is_missing_value(value) for value in id_values):
+        raise ValueError("id must not contain missing values")
+
+    current: Any = None
+    previous_id: Any = None
+    censor_key = _hashable_group_value(censor)
+    used_for_id: set[Any] = set()
+    for row_idx, (id_value, value) in enumerate(zip(id_values, result, strict=True)):
+        id_key = _hashable_group_value(id_value)
+        if row_idx == 0 or id_key != previous_id:
+            used_for_id = set()
+            current = censor if _is_missing_value(value) else value
+            current_key = _hashable_group_value(current)
+            if single and current_key != censor_key and not _is_missing_value(value):
+                used_for_id.add(current_key)
+        elif not _is_missing_value(value):
+            value_key = _hashable_group_value(value)
+            current_key = _hashable_group_value(current)
+            if value_key == current_key or (single and value_key in used_for_id):
+                result[row_idx] = censor
+            elif value_key != censor_key:
+                current = value
+                if single:
+                    used_for_id.add(value_key)
+        previous_id = id_key
+    return result
+
+
 @dataclass(frozen=True, init=False)
 class Surv:
     """Survival response container, like R's Surv."""
@@ -2903,10 +4466,3310 @@ class Surv:
         return self.event
 
 
+@dataclass(frozen=True, init=False)
+class Surv2:
+    """Multi-state response container, like R's ``Surv2``."""
+
+    time: tuple[float, ...]
+    status: tuple[int | None, ...]
+    states: tuple[str, ...]
+    repeated: bool
+
+    def __init__(self, time: Any, event: Any, repeated: Any = False) -> None:
+        time_values = [
+            math.nan if _is_missing_value(value) else float(value)
+            for value in _materialize_1d(time, "time")
+        ]
+        event_values = _materialize_1d(event, "event")
+        if len(event_values) != len(time_values):
+            raise ValueError("Time and event are different lengths")
+        if not _is_bool_like(repeated):
+            raise ValueError("invalid value for repeated option")
+        repeated_value = bool(repeated)
+
+        levels = _surv2_levels(event_values)
+        states = levels[1:]
+        if any(state == "" for state in states):
+            raise ValueError("each state must have a non-blank name")
+        level_index = {level: idx for idx, level in enumerate(levels)}
+        status = [
+            None if _is_missing_value(value) else level_index[_surv2_event_label(value)]
+            for value in event_values
+        ]
+
+        object.__setattr__(self, "time", tuple(time_values))
+        object.__setattr__(self, "status", tuple(status))
+        object.__setattr__(self, "states", tuple(states))
+        object.__setattr__(self, "repeated", repeated_value)
+
+    def __len__(self) -> int:
+        return len(self.time)
+
+
+def _surv2_event_label(value: Any) -> str:
+    if isinstance(value, bool):
+        return "FALSE" if not value else "TRUE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return _surv_format_number(value)
+    return str(value)
+
+
+def _surv2_level_sort_key(label: str) -> tuple[int, Any]:
+    try:
+        numeric = float(label)
+    except ValueError:
+        return (1, label)
+    if math.isfinite(numeric):
+        return (0, numeric)
+    return (1, label)
+
+
+def _surv2_levels(events: Sequence[Any]) -> list[str]:
+    levels: dict[str, None] = {}
+    for value in events:
+        if not _is_missing_value(value):
+            levels.setdefault(_surv2_event_label(value), None)
+    return sorted(levels, key=_surv2_level_sort_key)
+
+
+def _surv2data_status_values(status: Any) -> list[int | None]:
+    values: list[int | None] = []
+    for value in _materialize_1d(status, "status"):
+        if _is_missing_value(value):
+            values.append(None)
+            continue
+        numeric = float(value)
+        if not math.isfinite(numeric) or not numeric.is_integer():
+            raise ValueError("Surv2 status values must be integer codes")
+        values.append(int(numeric))
+    return values
+
+
+def _surv2data_sort_value(value: Any) -> tuple[int, Any]:
+    if isinstance(value, bool):
+        return (0, int(value))
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return (1, str(value))
+    if math.isfinite(numeric):
+        return (0, numeric)
+    return (1, str(value))
+
+
+def Surv2data(  # noqa: N802
+    time: Any,
+    status: Any,
+    *,
+    states: Any | None = None,
+    repeated: Any = False,
+    id: Any,  # noqa: A002
+) -> dict[str, Any]:
+    """Convert R ``Surv2`` timeline rows into start-stop transition rows."""
+
+    time_values = _float_vector(time, "time")
+    status_values = _surv2data_status_values(status)
+    id_values = _materialize_labels(id, "id")
+    if len(status_values) != len(time_values) or len(id_values) != len(time_values):
+        raise ValueError("time, status, and id must have the same length")
+    if any(_is_missing_value(value) for value in id_values) or any(
+        math.isnan(value) for value in time_values
+    ):
+        raise ValueError("id and time cannot be missing")
+    repeated_value = _normalize_bool_option(repeated, "repeated")
+    state_values = (
+        [str(value) for value in _materialize_1d(states, "states")] if states is not None else []
+    )
+
+    order = sorted(
+        range(len(time_values)),
+        key=lambda idx: (_surv2data_sort_value(id_values[idx]), time_values[idx], idx),
+    )
+    intervals: list[dict[str, Any]] = []
+    for pos, row_idx in enumerate(order):
+        if pos + 1 >= len(order):
+            continue
+        next_idx = order[pos + 1]
+        if _hashable_group_value(id_values[row_idx]) != _hashable_group_value(id_values[next_idx]):
+            continue
+        if time_values[row_idx] == time_values[next_idx]:
+            raise ValueError("duplicated time values for a single id")
+        event = status_values[next_idx]
+        current_state = status_values[row_idx]
+        event_code = 0 if event is None else int(event)
+        istate_code = None if current_state is None else int(current_state)
+        if not repeated_value and istate_code is not None and event_code == istate_code:
+            event_code = 0
+        intervals.append(
+            {
+                "row": row_idx,
+                "start": time_values[row_idx],
+                "stop": time_values[next_idx],
+                "status": event_code,
+                "id": id_values[row_idx],
+                "istate": istate_code,
+            }
+        )
+
+    intervals.sort(key=lambda item: item["row"])
+    starts = [float(item["start"]) for item in intervals]
+    response_type = (
+        "mright"
+        if state_values and starts and all(value == 0.0 for value in starts)
+        else "mcounting"
+        if state_values
+        else "right"
+        if starts and all(value == 0.0 for value in starts)
+        else "counting"
+    )
+    return {
+        "row": [int(item["row"]) for item in intervals],
+        "start": starts,
+        "stop": [float(item["stop"]) for item in intervals],
+        "status": [int(item["status"]) for item in intervals],
+        "id": [item["id"] for item in intervals],
+        "istate": [item["istate"] for item in intervals],
+        "states": state_values,
+        "type": response_type,
+    }
+
+
+def _totimeline_state_values(states: Any | None) -> list[str]:
+    return [str(value) for value in _materialize_1d(states, "states")] if states is not None else []
+
+
+def _totimeline_check_states(
+    event_states: Sequence[str],
+    istate_levels: Any | None,
+) -> list[str]:
+    if istate_levels is None:
+        return ["(s0)", *event_states]
+    levels = [str(value) for value in _materialize_1d(istate_levels, "istate_levels")]
+    return [level for level in levels if level not in event_states] + list(event_states)
+
+
+def _totimeline_istate_codes(
+    istate: Any | None,
+    check_states: Sequence[str],
+    n: int,
+) -> list[int]:
+    if istate is None:
+        return [1] * n
+    labels = [
+        None if _is_missing_value(value) else str(value)
+        for value in _materialize_1d(istate, "istate")
+    ]
+    if len(labels) != n:
+        raise ValueError("istate must have the same length as the Surv response")
+    code_by_state = {state: idx + 1 for idx, state in enumerate(check_states)}
+    result: list[int] = []
+    for label in labels:
+        if label is None:
+            raise ValueError("istate contains missing values")
+        try:
+            result.append(code_by_state[label])
+        except KeyError as exc:
+            raise ValueError(f"istate level {label!r} is not a recognized state") from exc
+    return result
+
+
+def totimeline(
+    start: Any,
+    stop: Any,
+    status: Any,
+    *,
+    states: Any,
+    id: Any,  # noqa: A002
+    istate: Any | None = None,
+    istate_levels: Any | None = None,
+) -> dict[str, Any]:
+    """Convert start-stop multi-state rows into R ``totimeline`` rows."""
+
+    start_values = _float_vector(start, "start")
+    stop_values = _float_vector(stop, "stop")
+    status_values = [int(value) for value in _int_vector(status, "status")]
+    id_values = _materialize_labels(id, "id")
+    n = len(start_values)
+    if len(stop_values) != n or len(status_values) != n or len(id_values) != n:
+        raise ValueError("start, stop, status, and id must have the same length")
+    if any(not math.isfinite(value) for value in [*start_values, *stop_values]):
+        raise ValueError("start and stop times must be finite")
+    event_states = _totimeline_state_values(states)
+    if not event_states:
+        raise ValueError("states must contain at least one event state")
+    check_states = _totimeline_check_states(event_states, istate_levels)
+    istate_codes = _totimeline_istate_codes(istate, check_states, n)
+    event_code_by_status = {
+        status_idx + 1: check_states.index(state) + 1
+        for status_idx, state in enumerate(event_states)
+    }
+
+    first = []
+    seen: set[Any] = set()
+    for id_value in id_values:
+        key = _hashable_group_value(id_value)
+        first.append(key not in seen)
+        seen.add(key)
+
+    last = [False] * n
+    seen.clear()
+    for row_idx in range(n - 1, -1, -1):
+        key = _hashable_group_value(id_values[row_idx])
+        last[row_idx] = key not in seen
+        seen.add(key)
+
+    times: list[float] = []
+    state_codes: list[int] = []
+    data_rows: list[int] = []
+    for row_idx in range(n):
+        if first[row_idx]:
+            times.append(start_values[row_idx])
+            state_codes.append(istate_codes[row_idx])
+            data_rows.append(row_idx)
+
+        times.append(stop_values[row_idx])
+        status_value = status_values[row_idx]
+        if status_value < 0 or status_value > len(event_states):
+            raise ValueError("status code is outside the event state range")
+        state_codes.append(0 if status_value == 0 else event_code_by_status[status_value])
+        data_rows.append(row_idx if last[row_idx] else row_idx + 1)
+
+    state_levels = (
+        ["(censor)", *check_states]
+        if any(state == "censor" for state in check_states)
+        else ["censor", *check_states]
+    )
+    return {
+        "time": times,
+        "status": state_codes,
+        "data_row": data_rows,
+        "state_levels": state_levels,
+    }
+
+
+def _fromtimeline_data_columns(data: Any | None, n: int) -> tuple[list[str], list[list[Any]]]:
+    if data is None:
+        return [], []
+    if not isinstance(data, Mapping):
+        raise TypeError("data must be mapping-like")
+    names = [str(name) for name in data]
+    columns = [_materialize_1d(data[name], str(name)) for name in data]
+    for name, column in zip(names, columns, strict=True):
+        if len(column) != n:
+            raise ValueError(f"{name} must have the same length as the Surv response")
+    return names, columns
+
+
+def _fromtimeline_static_columns(
+    columns: Sequence[Sequence[Any]],
+    id_values: Sequence[Any],
+    column_names: Sequence[str],
+    id_name: str,
+) -> list[bool]:
+    result: list[bool] = []
+    for name, column in zip(column_names, columns, strict=True):
+        if name == id_name:
+            result.append(True)
+            continue
+        if any(_is_missing_value(value) for value in column):
+            result.append(False)
+            continue
+        first_by_id: dict[Any, Any] = {}
+        static = True
+        for value, id_value in zip(column, id_values, strict=True):
+            key = _hashable_group_value(id_value)
+            if key not in first_by_id:
+                first_by_id[key] = value
+            elif value != first_by_id[key]:
+                static = False
+                break
+        result.append(static)
+    return result
+
+
+def fromtimeline(
+    time: Any,
+    status: Any,
+    *,
+    id: Any,  # noqa: A002
+    states: Any | None = None,
+    data: Any | None = None,
+    id_name: Any = "id",
+) -> dict[str, Any]:
+    """Convert right-censored timeline rows into R ``fromtimeline`` intervals."""
+
+    time_values = _float_vector(time, "time")
+    status_values = [int(value) for value in _int_vector(status, "status")]
+    id_values = _materialize_labels(id, "id")
+    n = len(time_values)
+    if len(status_values) != n or len(id_values) != n:
+        raise ValueError("time, status, and id must have the same length")
+    if any(not math.isfinite(value) for value in time_values):
+        raise ValueError("time values must be finite")
+    id_name_value = str(id_name)
+    column_names, columns = _fromtimeline_data_columns(data, n)
+    static_columns = _fromtimeline_static_columns(columns, id_values, column_names, id_name_value)
+
+    groups: dict[Any, list[int]] = {}
+    ordered_keys: list[Any] = []
+    for row_idx, id_value in enumerate(id_values):
+        key = _hashable_group_value(id_value)
+        if key not in groups:
+            ordered_keys.append(key)
+            groups[key] = []
+        groups[key].append(row_idx)
+
+    output_start: list[float] = []
+    output_stop: list[float] = []
+    output_status: list[int] = []
+    output_istate: list[int] = []
+    static_rows: list[int] = []
+    dynamic_rows: list[int] = []
+    removed_ids: list[Any] = []
+
+    for key in ordered_keys:
+        rows = sorted(groups[key], key=lambda idx: (time_values[idx], idx))
+        if len(rows) < 2 or time_values[rows[0]] == time_values[rows[-1]]:
+            removed_ids.append(id_values[rows[0]])
+            continue
+        if status_values[rows[0]] == 0:
+            raise ValueError("no observation should start in a censored state")
+        first_row = rows[0]
+        for position, row_idx in enumerate(rows[:-1]):
+            next_idx = rows[position + 1]
+            output_start.append(time_values[row_idx])
+            output_stop.append(time_values[next_idx])
+            output_status.append(status_values[next_idx])
+            output_istate.append(status_values[row_idx])
+            static_rows.append(first_row)
+            dynamic_rows.append(row_idx)
+
+    state_values = _totimeline_state_values(states) if states is not None else []
+    if state_values:
+        state_levels = ["censor", *state_values]
+        istate_levels = state_values
+    else:
+        state_levels = []
+        istate_levels = []
+
+    return {
+        "start": output_start,
+        "stop": output_stop,
+        "status": output_status,
+        "istate": output_istate,
+        "static": static_columns,
+        "static_row": static_rows,
+        "dynamic_row": dynamic_rows,
+        "state_levels": state_levels,
+        "istate_levels": istate_levels,
+        "removed_id": removed_ids,
+    }
+
+
 def is_surv(value: Any) -> bool:
     """Return whether *value* is a survival response object, like R's is.Surv."""
 
     return isinstance(value, Surv)
+
+
+def _surv_missing_row(response: Surv, idx: int) -> bool:
+    if response.start is not None and math.isnan(response.start[idx]):
+        return True
+    if math.isnan(response.time[idx]):
+        return True
+    return response.time2 is not None and math.isnan(response.time2[idx])
+
+
+def is_na_surv(x: Any) -> list[bool]:
+    """Return row-wise missingness for a ``Surv`` response, like R's ``is.na.Surv``."""
+
+    if isinstance(x, Surv2):
+        return [
+            math.isnan(time) or status is None
+            for time, status in zip(x.time, x.status, strict=True)
+        ]
+    if not isinstance(x, Surv):
+        raise TypeError("argument is not a Surv object")
+    return [_surv_missing_row(x, idx) for idx in range(len(x))]
+
+
+def _surv_format_number(value: float) -> str:
+    if math.isnan(value):
+        return "NA"
+    if math.isinf(value):
+        return "Inf" if value > 0.0 else "-Inf"
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:g}"
+
+
+def _format_surv_right_or_left(response: Surv) -> list[str]:
+    suffix = "+" if response.type == "right" else "-"
+    times = [_surv_format_number(value) for value in response.time]
+    width = max(len(value) for value in times)
+    return [
+        f"{time.rjust(width)}{' ' if event else suffix}"
+        for time, event in zip(times, response.event, strict=True)
+    ]
+
+
+def _format_surv_counting(response: Surv) -> list[str]:
+    if response.start is None:
+        raise ValueError("counting Surv response is missing start times")
+    starts = [_surv_format_number(value) for value in response.start]
+    stops = [_surv_format_number(value) for value in response.time]
+    start_width = max(len(value) for value in starts)
+    stop_width = max(len(value) for value in stops)
+    labels = [
+        f"({start.rjust(start_width)}, {stop.rjust(stop_width)}{'' if event else '+'}]"
+        for start, stop, event in zip(starts, stops, response.event, strict=True)
+    ]
+    width = max(len(value) for value in labels)
+    return [value.ljust(width) for value in labels]
+
+
+def _format_surv_interval(response: Surv) -> list[str]:
+    if response.time2 is None:
+        raise ValueError(f"{response.type} Surv response is missing time2")
+    labels: list[str] = []
+    for left, right, status in zip(response.time, response.time2, response.event, strict=True):
+        left_label = _surv_format_number(left)
+        right_label = _surv_format_number(right)
+        if status == 0:
+            labels.append(f"{left_label}+")
+        elif status == 1:
+            labels.append(left_label)
+        elif status == 2:
+            labels.append(f"{right_label}-")
+        else:
+            labels.append(f"[{left_label}, {right_label}]")
+    width = max(len(value) for value in labels)
+    return [value.ljust(width) for value in labels]
+
+
+def _format_surv2(response: Surv2) -> list[str]:
+    labels: list[str] = []
+    suffixes = ["+", *(f":{state}" for state in response.states)]
+    for time, status in zip(response.time, response.status, strict=True):
+        suffix = "?" if status is None else suffixes[status]
+        labels.append(f"{_surv_format_number(time)}{suffix}")
+    width = max(len(value) for value in labels) if labels else 0
+    return [value.ljust(width) for value in labels]
+
+
+def format_surv(x: Any) -> list[str]:
+    """Return R-style display strings for a ``Surv`` response."""
+
+    if isinstance(x, Surv2):
+        return _format_surv2(x)
+    if not isinstance(x, Surv):
+        raise TypeError("argument is not a Surv object")
+    if x.type in {"right", "left"}:
+        return _format_surv_right_or_left(x)
+    if x.type == "counting":
+        return _format_surv_counting(x)
+    if x.type in {"interval", "interval2"}:
+        return _format_surv_interval(x)
+    raise ValueError(f"unsupported Surv type {x.type!r}")
+
+
+def is_ratetable(
+    x: Any,
+    has_rates: Any | None = None,
+    has_dims: Any | None = None,
+    verbose: Any = False,
+) -> bool:
+    """Return whether *x* is a population rate table, like R's ``is.ratetable``."""
+
+    _normalize_bool_option(verbose, "verbose")
+    if has_rates is not None or has_dims is not None:
+        if has_rates is None or has_dims is None:
+            raise TypeError("has_rates and has_dims must be supplied together")
+        return _core.is_ratetable(
+            _integer_scalar(x, "ndim"),
+            _normalize_bool_option(has_rates, "has_rates"),
+            _normalize_bool_option(has_dims, "has_dims"),
+        )
+    return isinstance(x, RateTable)
+
+
+def _ratetable_date_from_components(
+    year: Any,
+    month: Any,
+    day: Any,
+    origin_year: Any,
+) -> float:
+    result = _core.ratetable_date(
+        _integer_scalar(year, "year"),
+        _integer_scalar(month, "month"),
+        _integer_scalar(day, "day"),
+        _integer_scalar(origin_year, "origin_year"),
+    )
+    return float(result.days)
+
+
+def _ratetable_date_value(value: Any, origin_year: Any) -> float:
+    if value is None or _is_missing_value(value):
+        return math.nan
+    if isinstance(value, _DateTime):
+        return _ratetable_date_from_components(
+            value.year,
+            value.month,
+            value.day,
+            origin_year,
+        )
+    if isinstance(value, _Date):
+        return _ratetable_date_from_components(
+            value.year,
+            value.month,
+            value.day,
+            origin_year,
+        )
+    if isinstance(value, str):
+        parsed = _Date.fromisoformat(value[:10])
+        return _ratetable_date_from_components(
+            parsed.year,
+            parsed.month,
+            parsed.day,
+            origin_year,
+        )
+    return float(value)
+
+
+def ratetableDate(  # noqa: N802
+    x: Any,
+    month: Any | None = None,
+    day: Any | None = None,
+    *,
+    origin_year: Any = 1970,
+) -> Any:
+    """Convert dates to rate-table day counts, matching R's ``ratetableDate``."""
+
+    if month is not None or day is not None:
+        if month is None or day is None:
+            raise TypeError("month and day must be supplied together")
+        return _ratetable_date_from_components(x, month, day, origin_year)
+    if isinstance(x, Sequence) and not isinstance(x, str | bytes | bytearray):
+        return [_ratetable_date_value(value, origin_year) for value in x]
+    return _ratetable_date_value(x, origin_year)
+
+
+def _survexp_ratetable(ratetable: Any | None) -> RateTable:
+    if ratetable is None:
+        return _core.survexp_us()
+    if not isinstance(ratetable, RateTable):
+        raise TypeError("ratetable must be a RateTable")
+    return ratetable
+
+
+def _normalize_survexp_method(
+    method: Any | None,
+    cohort: Any,
+    conditional: Any,
+) -> str:
+    cohort_value = _normalize_bool_option_with_default(cohort, "cohort", True)
+    conditional_value = _normalize_bool_option(conditional, "conditional")
+    if method is None:
+        if conditional_value:
+            return "conditional"
+        if not cohort_value:
+            return "individual.s"
+        return "hakulinen"
+    if not isinstance(method, str):
+        raise TypeError("method must be a string")
+    value = method.strip().lower().replace("_", ".")
+    aliases = {
+        "ederer": "hakulinen",
+        "hakulinen": "hakulinen",
+        "conditional": "conditional",
+        "individual": "individual",
+        "individual.h": "individual.h",
+        "individual.s": "individual.s",
+    }
+    if value not in aliases:
+        raise ValueError(
+            "method must be 'ederer', 'hakulinen', 'conditional', "
+            "'individual.h', 'individual.s', or 'individual'"
+        )
+    return aliases[value]
+
+
+def _normalize_positive_scale(value: Any) -> float:
+    scale = _finite_float(value, "scale")
+    if scale <= 0.0:
+        raise ValueError("scale must be positive")
+    return scale
+
+
+def _survexp_result_from_core(result: Any, scale: float) -> SurvExpResult:
+    return SurvExpResult(
+        time=[float(value) / scale for value in result.time],
+        surv=[float(value) for value in result.surv],
+        n_risk=[float(value) for value in result.n_risk],
+        cumhaz=[float(value) for value in result.cumhaz],
+        method=str(result.method),
+        n=int(result.n),
+    )
+
+
+def survexp(
+    time: Any,
+    age: Any,
+    year: Any,
+    ratetable: Any | None = None,
+    sex: Any | None = None,
+    times: Any | None = None,
+    method: Any | None = None,
+    *,
+    cohort: Any = True,
+    conditional: Any = False,
+    scale: Any = 1.0,
+    se_fit: Any | None = None,
+) -> SurvExpResult | list[float]:
+    """Compute expected survival from direct vectors and a population rate table."""
+
+    if se_fit is not None and _normalize_bool_option(se_fit, "se_fit"):
+        warnings.warn("se_fit value ignored", RuntimeWarning, stacklevel=2)
+    method_value = _normalize_survexp_method(method, cohort, conditional)
+    scale_value = _normalize_positive_scale(scale)
+    table = _survexp_ratetable(ratetable)
+    time_values = _float_vector(time, "time")
+    age_values = _float_vector(age, "age")
+    year_values = _float_vector(year, "year")
+    sex_values = None if sex is None else _int_vector(sex, "sex")
+
+    if method_value in {"individual.h", "individual.s"}:
+        individual = _core.survexp_individual(
+            time_values,
+            age_values,
+            year_values,
+            table,
+            sex_values,
+        )
+        values = [float(value) for value in individual]
+        if method_value == "individual.s":
+            return values
+        return [-math.log(value) if value > 0.0 else math.inf for value in values]
+
+    result = _core.survexp(
+        time_values,
+        age_values,
+        year_values,
+        table,
+        sex_values,
+        None if times is None else _float_vector(times, "times"),
+        method_value,
+    )
+    return _survexp_result_from_core(result, scale_value)
+
+
+def survexp_individual(
+    time: Any,
+    age: Any,
+    year: Any,
+    ratetable: Any | None = None,
+    sex: Any | None = None,
+) -> list[float]:
+    """Return per-subject expected survival from direct vectors."""
+
+    return [
+        float(value)
+        for value in _core.survexp_individual(
+            _float_vector(time, "time"),
+            _float_vector(age, "age"),
+            _float_vector(year, "year"),
+            _survexp_ratetable(ratetable),
+            None if sex is None else _int_vector(sex, "sex"),
+        )
+    ]
+
+
+def _pyears_response_from_direct(
+    response: Any,
+    *,
+    time: Any,
+    start: Any,
+    stop: Any,
+    event: Any,
+) -> tuple[list[float], list[float], list[float] | None, int, bool]:
+    if response is not None:
+        if isinstance(response, Surv):
+            if response.type == "right":
+                return [], list(response.time), list(response.event), 2, True
+            if response.type == "counting":
+                if response.start is None:
+                    raise ValueError("counting Surv response is missing start times")
+                return list(response.start), list(response.time), list(response.event), 3, True
+            raise ValueError("pyears supports only right-censored and counting Surv responses")
+        if time is not _MISSING or stop is not _MISSING:
+            raise ValueError("use either response or explicit time/start/stop inputs")
+        stop_values = _float_vector(response, "time")
+        event_values = None if event is _MISSING or event is None else _event_vector(event, "event")
+        return [], stop_values, event_values, 2, True
+
+    if stop is not _MISSING:
+        if start is _MISSING:
+            raise TypeError("start must be supplied with stop")
+        start_values = _float_vector(start, "start")
+        stop_values = _float_vector(stop, "stop")
+        event_values = None if event is _MISSING or event is None else _event_vector(event, "event")
+        return (
+            start_values,
+            stop_values,
+            event_values,
+            3 if event_values is not None else 2,
+            (event_values is not None),
+        )
+    if start is not _MISSING:
+        raise TypeError("stop must be supplied with start")
+    if time is _MISSING:
+        raise TypeError("pyears requires a response or time vector")
+    stop_values = _float_vector(time, "time")
+    event_values = None if event is _MISSING or event is None else _event_vector(event, "event")
+    return [], stop_values, event_values, 2, True
+
+
+def _pyears_validate_time_columns(
+    start: list[float],
+    stop: list[float],
+    event: list[float] | None,
+) -> None:
+    n = len(stop)
+    if start and len(start) != n:
+        raise ValueError("start and stop must have the same length")
+    if event is not None and len(event) != n:
+        raise ValueError("event must have the same length as time")
+    if n == 0:
+        raise ValueError("pyears requires at least one observation")
+    for idx, value in enumerate(stop):
+        if not math.isfinite(value):
+            raise ValueError(f"time contains non-finite value at index {idx}")
+        if value < 0.0:
+            raise ValueError(f"time contains negative value at index {idx}")
+    for idx, value in enumerate(start):
+        if not math.isfinite(value):
+            raise ValueError(f"start contains non-finite value at index {idx}")
+        if value < 0.0:
+            raise ValueError(f"start contains negative value at index {idx}")
+        if stop[idx] < value:
+            raise ValueError(f"stop must be greater than or equal to start at index {idx}")
+
+
+def _pyears_weights(weights: Any | None, n: int) -> list[float]:
+    if weights is None:
+        return [1.0] * n
+    values = [_finite_float(value, "weights") for value in _materialize_1d(weights, "weights")]
+    if len(values) != n:
+        raise ValueError("weights must have the same length as the response")
+    for idx, value in enumerate(values):
+        if value < 0.0:
+            raise ValueError(f"weights contains negative value at index {idx}")
+    return values
+
+
+def _pyears_group_codes(
+    group: Any | None,
+    n: int,
+    *,
+    levels: Sequence[Any] | None = None,
+) -> tuple[list[float], list[str]]:
+    if group is None:
+        return [1.0] * n, ["(all)"]
+    values = _materialize_labels(group, "group")
+    if len(values) != n:
+        raise ValueError("group must have the same length as the response")
+    group_levels = tuple(levels) if levels is not None else _label_levels(values, "group")
+    labels = {value: idx + 1 for idx, value in enumerate(group_levels)}
+    try:
+        codes = [float(labels[value]) for value in values]
+    except KeyError as exc:
+        raise ValueError("group contains a value outside the supplied levels") from exc
+    return codes, [str(value) for value in group_levels]
+
+
+def _pyears_formula_group_and_levels(
+    data: Any,
+    terms: _FormulaTerms,
+    n: int,
+) -> tuple[list[Any] | None, tuple[Any, ...] | None]:
+    columns: list[list[Any]] = []
+    if terms.model_terms:
+        for model_term in terms.model_terms:
+            if isinstance(model_term, _ModelCovariateTerm):
+                columns.append(_term_values(data, model_term.term, n))
+            elif isinstance(model_term, _ModelStrataTerm):
+                columns.append(_survcondense_strata_values(data, model_term.columns, n))
+            elif isinstance(model_term, _ModelClusterTerm):
+                columns.append(_column(data, model_term.column))
+    else:
+        columns = [
+            *[_column(data, term) for term in terms.strata],
+            *[_term_values(data, term, n) for term in terms.covariates],
+            *[_column(data, term) for term in terms.clusters],
+        ]
+    if not columns:
+        return None, None
+    group = _combine_aligned_columns(columns, n)
+    column_levels = [
+        _r_formula_ordered_levels(column, "pyears formula groups") for column in columns
+    ]
+    if len(column_levels) == 1:
+        return group, column_levels[0]
+    levels = tuple(tuple(reversed(parts)) for parts in product(*reversed(column_levels)))
+    return group, levels
+
+
+def _pyears_formula_inputs(
+    formula: str,
+    data: Any,
+    weights: Any | None,
+    subset: Any | None,
+    na_action: str | None,
+) -> tuple[Surv, list[Any] | None, tuple[Any, ...] | None, list[float] | None]:
+    if data is None:
+        raise ValueError("data is required when pyears response is a formula")
+    aligned_weights = None if weights is None else _materialize_1d(weights, "weights")
+    if subset is not None:
+        data, aligned = _subset_formula_inputs(formula, data, subset, weights=aligned_weights)
+        aligned_weights = aligned["weights"]
+    data, aligned = _apply_formula_na_action(formula, data, na_action, weights=aligned_weights)
+    aligned_weights = aligned["weights"]
+    response, terms = _parse_formula(formula, data)
+    if any(isinstance(term, _InteractionTerm) for term in terms.covariates):
+        raise ValueError("pyears formula does not support interaction terms")
+    group, group_levels = _pyears_formula_group_and_levels(data, terms, len(response))
+    return (
+        response,
+        group,
+        group_levels,
+        None if aligned_weights is None else [float(value) for value in aligned_weights],
+    )
+
+
+def _pyears_result_frame(result: PyearsResult) -> dict[str, list[Any]]:
+    frame: dict[str, list[Any]] = {
+        "group": result.group,
+        "pyears": result.pyears,
+        "n": result.n,
+    }
+    if result.expected is not None:
+        frame["expected"] = result.expected
+    if result.event is not None:
+        frame["event"] = result.event
+    return frame
+
+
+def _finegray_frame(result: Any) -> dict[str, list[Any]]:
+    return {
+        "row": [int(value) for value in result.row],
+        "start": [float(value) for value in result.start],
+        "end": [float(value) for value in result.end],
+        "wt": [float(value) for value in result.wt],
+        "add": [int(value) for value in result.add],
+    }
+
+
+def pyears(
+    response: Any = None,
+    data: Any | None = None,
+    *,
+    time: Any = _MISSING,
+    start: Any = _MISSING,
+    stop: Any = _MISSING,
+    event: Any = _MISSING,
+    group: Any | None = None,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = None,
+    scale: Any = 365.25,
+    data_frame: Any = False,
+) -> PyearsResult | dict[str, list[Any]]:
+    """Tabulate person-years for direct ``Surv``/formula inputs, like R's ``pyears``."""
+
+    if isinstance(response, str) and "~" in response:
+        response, formula_group, formula_group_levels, formula_weights = _pyears_formula_inputs(
+            response,
+            data,
+            weights,
+            subset,
+            na_action,
+        )
+        if group is not None:
+            raise ValueError("group must not be supplied separately when response is a formula")
+        group = formula_group
+        weights = formula_weights
+    else:
+        formula_group_levels = None
+        start_values, stop_values, event_values, _ny, _do_event = _pyears_response_from_direct(
+            response,
+            time=time,
+            start=start,
+            stop=stop,
+            event=event,
+        )
+        n_direct = len(stop_values)
+        if subset is not None:
+            keep = _subset_indices(subset, n_direct)
+            response = (
+                Surv([stop_values[idx] for idx in keep], [event_values[idx] for idx in keep])
+                if not start_values and event_values is not None
+                else None
+            )
+            start = [start_values[idx] for idx in keep] if start_values else _MISSING
+            stop = [stop_values[idx] for idx in keep]
+            event = [event_values[idx] for idx in keep] if event_values is not None else _MISSING
+            group = _subset_optional_sequence(group, keep, "group")
+            weights = _subset_optional_sequence(weights, keep, "weights")
+    start_values, stop_values, event_values, ny, do_event = _pyears_response_from_direct(
+        response,
+        time=time,
+        start=start,
+        stop=stop,
+        event=event,
+    )
+    n = len(stop_values)
+    event_for_core = [0.0] * n if event_values is None else [float(value) for value in event_values]
+    _pyears_validate_time_columns(start_values, stop_values, event_values)
+    weight_values = _pyears_weights(weights, n)
+    group_codes, group_labels = _pyears_group_codes(group, n, levels=formula_group_levels)
+    scale_value = _normalize_positive_scale(scale)
+    _normalize_bool_option(data_frame, "data_frame")
+
+    time_data = (
+        [*start_values, *stop_values, *event_for_core]
+        if start_values and event_values is not None
+        else [*start_values, *stop_values]
+        if start_values
+        else [*stop_values, *event_for_core]
+    )
+    raw = _core.perform_pyears_calculation(
+        time_data,
+        weight_values,
+        1,
+        [1],
+        [1],
+        [],
+        [0.0],
+        [1.0] * n,
+        1,
+        [1],
+        [len(group_labels)],
+        [],
+        1,
+        group_codes,
+        1 if do_event else 0,
+        ny,
+    )
+    result = PyearsResult(
+        pyears=[float(value) / scale_value for value in raw["pyears"]],
+        n=[float(value) for value in raw["pn"]],
+        offtable=float(raw["offtable"]) / scale_value,
+        group=group_labels,
+        observations=n,
+        event=[float(value) for value in raw["pcount"]] if event_values is not None else None,
+        expected=None,
+        tcut=False,
+    )
+    return _pyears_result_frame(result) if data_frame else result
+
+
+def finegray(
+    tstart: Any,
+    tstop: Any,
+    ctime: Any,
+    cprob: Any,
+    extend: Any,
+    keep: Any,
+) -> FineGrayOutput:
+    """Expand intervals for Fine-Gray competing-risk data, like R's internal kernel."""
+
+    return _core.finegray(
+        _float_vector(tstart, "tstart"),
+        _float_vector(tstop, "tstop"),
+        _float_vector(ctime, "ctime"),
+        _float_vector(cprob, "cprob"),
+        _bool_vector(extend, "extend"),
+        _bool_vector(keep, "keep"),
+    )
+
+
+def _survobrien_default_transform(values: Sequence[float]) -> list[float]:
+    n = len(values)
+    if n == 0:
+        return []
+    order = sorted(range(n), key=lambda idx: (values[idx], idx))
+    ranks = [0.0] * n
+    start = 0
+    while start < n:
+        end = start + 1
+        while end < n and values[order[end]] == values[order[start]]:
+            end += 1
+        rank_sum = sum(range(start + 1, end + 1))
+        rank = rank_sum / (end - start)
+        for pos in range(start, end):
+            ranks[order[pos]] = float(rank)
+        start = end
+    transformed = []
+    for rank in ranks:
+        probability = (rank - 0.5) / n
+        transformed.append(math.log(probability / (1.0 - probability)))
+    return transformed
+
+
+def _survobrien_transform_values(
+    values: Sequence[float],
+    transform: Any | None,
+) -> list[float]:
+    if transform is None:
+        return _survobrien_default_transform(values)
+    if not callable(transform):
+        raise TypeError("transform must be callable")
+    raw_result = transform(list(values))
+    try:
+        result = _materialize_1d(raw_result, "transform")
+    except TypeError:
+        if len(values) != 1:
+            raise
+        result = [raw_result]
+    if len(result) != len(values):
+        raise ValueError("Transform function must be 1 to 1")
+    try:
+        transformed = [float(value) for value in result]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("transform must return numeric values") from exc
+    if any(not math.isfinite(value) for value in transformed):
+        raise ValueError("transform must return finite values")
+    return transformed
+
+
+def _survobrien_term_name(term: _CovariateTerm) -> str:
+    if term.transform is not None:
+        return f"{term.transform}({term.column})"
+    return term.column
+
+
+def _survobrien_formula_terms(
+    data: Any,
+    terms: _FormulaTerms,
+    n: int,
+) -> tuple[list[tuple[str, list[Any]]], list[tuple[str, list[float]]]]:
+    keepers: list[tuple[str, list[Any]]] = []
+    continuous: list[tuple[str, list[float]]] = []
+    for term in terms.covariates:
+        if isinstance(term, _InteractionTerm):
+            raise ValueError("This function cannot deal with interaction terms")
+        values = _term_values(data, term, n)
+        if term.categorical:
+            keepers.append((_survobrien_term_name(term), values))
+            continue
+        try:
+            numeric = [float(value) for value in values]
+        except (TypeError, ValueError):
+            keepers.append((_survobrien_term_name(term), values))
+            continue
+        if any(not math.isfinite(value) for value in numeric):
+            raise ValueError(f"formula term {term.column!r} must be finite")
+        continuous.append((_survobrien_term_name(term), numeric))
+    if not continuous:
+        raise ValueError("No continuous variables to modify")
+    return keepers, continuous
+
+
+def _survobrien_event_sets(
+    response: Surv,
+    strata_values: list[Any] | None,
+) -> list[tuple[float, list[int]]]:
+    if response.type == "right":
+        if strata_values is None:
+            event_times = sorted(
+                {
+                    float(time)
+                    for time, event in zip(response.time, response.event, strict=True)
+                    if event == 1
+                }
+            )
+            return [
+                (
+                    event_time,
+                    [idx for idx, time in enumerate(response.time) if float(time) >= event_time],
+                )
+                for event_time in event_times
+            ]
+
+        seen: set[tuple[float, Any]] = set()
+        result: list[tuple[float, list[int]]] = []
+        for event_time, event, stratum in zip(
+            response.time,
+            response.event,
+            strata_values,
+            strict=True,
+        ):
+            if event != 1:
+                continue
+            key = (float(event_time), _hashable_group_value(stratum))
+            if key in seen:
+                continue
+            seen.add(key)
+            # Match survival::survobrien's right-censored strata branch, including
+            # its status-column risk-set test.
+            result.append(
+                (
+                    float(event_time),
+                    [
+                        idx
+                        for idx, (row_event, row_stratum) in enumerate(
+                            zip(response.event, strata_values, strict=True)
+                        )
+                        if float(row_event) >= float(event_time) and row_stratum == stratum
+                    ],
+                )
+            )
+        return result
+
+    if response.type == "counting":
+        if response.start is None:
+            raise ValueError("counting Surv response is missing start times")
+        if strata_values is None:
+            event_times = sorted(
+                {
+                    float(stop)
+                    for stop, event in zip(response.time, response.event, strict=True)
+                    if event == 1
+                }
+            )
+            return [
+                (
+                    event_time,
+                    [
+                        idx
+                        for idx, (start, stop) in enumerate(
+                            zip(response.start, response.time, strict=True)
+                        )
+                        if float(start) < event_time <= float(stop)
+                    ],
+                )
+                for event_time in event_times
+            ]
+
+        seen: set[tuple[float, Any]] = set()
+        result: list[tuple[float, list[int]]] = []
+        for event_time, event, stratum in zip(
+            response.time,
+            response.event,
+            strata_values,
+            strict=True,
+        ):
+            if event != 1:
+                continue
+            event_time_float = float(event_time)
+            stratum_key = _hashable_group_value(stratum)
+            key = (event_time_float, stratum_key)
+            if key in seen:
+                continue
+            seen.add(key)
+            # Match survival::survobrien's counting-process strata branch,
+            # whose risk-set predicate uses rows outside the event stratum.
+            result.append(
+                (
+                    event_time_float,
+                    [
+                        idx
+                        for idx, (start, stop, row_stratum) in enumerate(
+                            zip(
+                                response.start,
+                                response.time,
+                                strata_values,
+                                strict=True,
+                            )
+                        )
+                        if float(start) < event_time_float <= float(stop)
+                        and _hashable_group_value(row_stratum) != stratum_key
+                    ],
+                )
+            )
+        return result
+
+    raise ValueError("Response must be right censored or (start, stop] data")
+
+
+def _survobrien_formula_frame(
+    formula: str,
+    data: Any,
+    *,
+    subset: Any | None,
+    na_action: Any | None,
+    transform: Any | None,
+) -> dict[str, list[Any]]:
+    if data is None:
+        raise ValueError("survobrien formula requires data")
+    if subset is not None:
+        data, _aligned = _subset_formula_inputs(formula, data, subset)
+    data, _aligned = _apply_formula_na_action(formula, data, na_action)
+    response, terms = _parse_formula(formula, data)
+    if len(terms.clusters) > 1:
+        raise ValueError("Can have only 1 cluster term")
+    n = len(response)
+    keepers, continuous = _survobrien_formula_terms(data, terms, n)
+    strata_values = _combined_columns(data, terms.strata, n) if terms.strata else None
+    event_sets = _survobrien_event_sets(response, strata_values)
+
+    row_indices: list[int] = []
+    set_numbers: list[int] = []
+    event_times: list[float] = []
+    for set_idx, (event_time, indices) in enumerate(event_sets, start=1):
+        row_indices.extend(indices)
+        set_numbers.extend([set_idx] * len(indices))
+        event_times.extend([event_time] * len(indices))
+
+    frame: dict[str, list[Any]] = {}
+    if response.type == "counting":
+        if response.start is None:
+            raise ValueError("counting Surv response is missing start times")
+        frame["start"] = [float(response.start[idx]) for idx in row_indices]
+        frame["stop"] = [float(response.time[idx]) for idx in row_indices]
+    else:
+        frame["time"] = [float(response.time[idx]) for idx in row_indices]
+    frame["status"] = [
+        1 if response.event[idx] == 1 and float(response.time[idx]) == event_time else 0
+        for idx, event_time in zip(row_indices, event_times, strict=True)
+    ]
+    for name, values in keepers:
+        frame[name] = [values[idx] for idx in row_indices]
+    if not terms.clusters:
+        frame[".id."] = [idx + 1 for idx in row_indices]
+
+    grouped_indices: list[list[int]] = []
+    start = 0
+    for _event_time, indices in event_sets:
+        grouped_indices.append(list(range(start, start + len(indices))))
+        start += len(indices)
+
+    for name, values in continuous:
+        output = [0.0] * len(row_indices)
+        for positions in grouped_indices:
+            transformed = _survobrien_transform_values(
+                [values[row_indices[pos]] for pos in positions],
+                transform,
+            )
+            for pos, value in zip(positions, transformed, strict=True):
+                output[pos] = value
+        frame[name] = output
+    frame[".strata."] = set_numbers
+    return frame
+
+
+def survobrien(
+    time: Any,
+    status: Any | None = None,
+    covariate: Any | None = None,
+    strata: Any | None = None,
+    *,
+    data: Any | None = None,
+    subset: Any | None = None,
+    na_action: Any | None = "fail",
+    transform: Any | None = None,
+) -> SurvObrienResult | dict[str, list[Any]]:
+    """Run O'Brien's direct statistic or build R-style formula transformed rows."""
+
+    if isinstance(time, str) and "~" in time:
+        formula_data = data if data is not None else status
+        return _survobrien_formula_frame(
+            time,
+            formula_data,
+            subset=subset,
+            na_action=na_action,
+            transform=transform,
+        )
+    if status is None or covariate is None:
+        raise TypeError("direct survobrien calls require time, status, and covariate")
+
+    time_values = _float_vector(time, "time")
+    strata_groups = None
+    if strata is not None:
+        strata_values = _materialize_labels(strata, "strata")
+        if len(strata_values) != len(time_values):
+            raise ValueError("strata length mismatch")
+        strata_groups = _encode_groups(strata_values, len(time_values))
+    return _core.survobrien(
+        time_values,
+        _integer_code_vector(status, "status", "0/1 event coding"),
+        _float_vector(covariate, "covariate"),
+        strata_groups,
+    )
+
+
+def yates(
+    predictions: Any,
+    factor: Any,
+    weights: Any | None = None,
+    conf_level: Any | None = None,
+) -> YatesResult:
+    """Compute direct Yates-style adjusted means from predictions and a factor."""
+
+    prediction_values = _float_vector(predictions, "predictions")
+    factor_values = [str(value) for value in _materialize_labels(factor, "factor")]
+    weight_values = None if weights is None else _float_vector(weights, "weights")
+    confidence = None if conf_level is None else _normalize_conf_level(conf_level)
+    return _core.yates(prediction_values, factor_values, weight_values, confidence)
+
+
+def yates_contrast(
+    x: Any,
+    coef: Any,
+    n_obs: Any,
+    n_vars: Any,
+    factor_col: Any,
+    factor_levels: Any,
+    predict_type: str | None = None,
+) -> YatesResult:
+    """Compute model-based direct Yates contrasts from a flattened design matrix."""
+
+    return _core.yates_contrast(
+        _float_vector(x, "x"),
+        _float_vector(coef, "coef"),
+        _integer_scalar(n_obs, "n_obs"),
+        _integer_scalar(n_vars, "n_vars"),
+        _integer_scalar(factor_col, "factor_col"),
+        _float_vector(factor_levels, "factor_levels"),
+        predict_type,
+    )
+
+
+def yates_pairwise(result: YatesResult) -> YatesPairwiseResult:
+    """Compute pairwise differences from a direct Yates result."""
+
+    return _core.yates_pairwise(result)
+
+
+def _scalar_or_vector_with_flag(values: Any, name: str) -> tuple[list[Any], bool]:
+    try:
+        return _materialize_1d(values, name), False
+    except TypeError:
+        if isinstance(values, str | bytes):
+            raise
+        return [values], True
+
+
+def _scalar_or_vector(values: Any, name: str) -> list[Any]:
+    values, _is_scalar = _scalar_or_vector_with_flag(values, name)
+    return values
+
+
+def _recycle_r_vector(values: list[Any], n: int, name: str) -> list[Any]:
+    if not values:
+        return []
+    if len(values) == n:
+        return values
+    if n == 1:
+        return [values[0]]
+    return [values[idx % len(values)] for idx in range(n)]
+
+
+def _cipoisson_count(value: Any) -> int | None:
+    if _is_missing_value(value):
+        return None
+    count = _integer_scalar(value, "k")
+    if count < 0:
+        raise ValueError("k must be non-negative")
+    return count
+
+
+def _cipoisson_float(value: Any, name: str) -> float | None:
+    if _is_missing_value(value):
+        return None
+    return float(value)
+
+
+def cipoisson(
+    k: Any,
+    time: Any = 1.0,
+    p: Any = 0.95,
+    method: Any = "exact",
+) -> tuple[float, float] | list[tuple[float, float]]:
+    """Return Poisson rate confidence intervals, like R's ``cipoisson``."""
+
+    if not isinstance(method, str):
+        raise TypeError("method must be a string")
+    method_value = method.strip().lower()
+    k_values = _scalar_or_vector(k, "k")
+    time_values = _scalar_or_vector(time, "time")
+    p_values = _scalar_or_vector(p, "p")
+    n = max(len(k_values), len(time_values), len(p_values))
+    if n == 0:
+        return []
+
+    k_values = _recycle_r_vector(k_values, n, "k")
+    time_values = _recycle_r_vector(time_values, n, "time")
+    p_values = _recycle_r_vector(p_values, n, "p")
+    if not k_values or not time_values or not p_values:
+        return []
+
+    intervals: list[tuple[float, float]] = []
+    for raw_k, raw_time, raw_p in zip(k_values, time_values, p_values, strict=True):
+        count = _cipoisson_count(raw_k)
+        exposure = _cipoisson_float(raw_time, "time")
+        confidence = _cipoisson_float(raw_p, "p")
+        if count is None or exposure is None or confidence is None or exposure <= 0.0:
+            intervals.append((math.nan, math.nan))
+            continue
+        lower, upper = _core.cipoisson(count, exposure, confidence, method_value)
+        intervals.append((float(lower), float(upper)))
+
+    return intervals[0] if n == 1 else intervals
+
+
+def _bounded_link_transform(x: Any, edge: Any, method_name: str) -> float | list[float]:
+    edge_value = _finite_float(edge, "edge")
+    values, is_scalar = _scalar_or_vector_with_flag(x, "x")
+    link = _core.LinkFunctionParams(edge_value)
+    transform = getattr(link, method_name)
+    result = [
+        math.nan if _is_missing_value(value) else float(transform(float(value))) for value in values
+    ]
+    return result[0] if is_scalar else result
+
+
+def blogit(x: Any, edge: Any = 0.05) -> float | list[float]:
+    """Return R survival's bounded logit link transform."""
+
+    return _bounded_link_transform(x, edge, "blogit")
+
+
+def bprobit(x: Any, edge: Any = 0.05) -> float | list[float]:
+    """Return R survival's bounded probit link transform."""
+
+    return _bounded_link_transform(x, edge, "bprobit")
+
+
+def bcloglog(x: Any, edge: Any = 0.05) -> float | list[float]:
+    """Return R survival's bounded complementary log-log link transform."""
+
+    return _bounded_link_transform(x, edge, "bcloglog")
+
+
+def blog(x: Any, edge: Any = 0.05) -> float | list[float]:
+    """Return R survival's bounded log link transform."""
+
+    return _bounded_link_transform(x, edge, "blog")
+
+
+def survexp_us() -> RateTable:
+    """Return the bundled US population mortality rate table."""
+
+    return _core.survexp_us()
+
+
+def survexp_mn() -> RateTable:
+    """Return the bundled Minnesota population mortality rate table."""
+
+    return _core.survexp_mn()
+
+
+def survexp_usr() -> RateTable:
+    """Return the rural US population mortality rate table alias."""
+
+    return _core.survexp_usr()
+
+
+def _survcheck_integer_labels(values: Any, name: str) -> list[int]:
+    labels = _materialize_labels(values, name)
+    if not labels:
+        return []
+    result: list[int] = []
+    for value in labels:
+        if isinstance(value, bool):
+            break
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            break
+        if not math.isfinite(numeric) or not numeric.is_integer():
+            break
+        result.append(int(numeric))
+    else:
+        return result
+    return [code + 1 for code in _encode_labels(labels, name)]
+
+
+def _survcheck_old_style_call(
+    id_values: Any,
+    time1: Any,
+    time2: Any,
+    status: Any,
+    istate: Any | None,
+):
+    return _core.survcheck(
+        _survcheck_integer_labels(id_values, "id"),
+        _float_vector(time1, "time1"),
+        _float_vector(time2, "time2"),
+        _int_vector(status, "status"),
+        None if istate is None else _survcheck_integer_labels(istate, "istate"),
+    )
+
+
+def _column_or_values(data: Any, values: Any, name: str) -> Any:
+    if isinstance(values, str):
+        if data is None:
+            raise ValueError(f"{name} column lookup requires data")
+        return _column(data, values)
+    return values
+
+
+def _survcheck_response_from_formula(
+    formula: str,
+    data: Any,
+    subset: Any | None,
+    na_action: str | None,
+    id_values: Any | None,
+    istate: Any | None,
+) -> tuple[Surv, Any | None, Any | None]:
+    if data is None:
+        raise ValueError("survcheck formula requires data")
+    id_values = _column_or_values(data, id_values, "id") if id_values is not None else None
+    istate = _column_or_values(data, istate, "istate") if istate is not None else None
+    if subset is not None:
+        data, aligned = _subset_formula_inputs(
+            formula,
+            data,
+            subset,
+            id=id_values,
+            istate=istate,
+        )
+        id_values = aligned["id"]
+        istate = aligned["istate"]
+    data, aligned = _apply_formula_na_action(
+        formula,
+        data,
+        na_action,
+        id=id_values,
+        istate=istate,
+    )
+    response, _terms = _parse_formula(formula, data)
+    return response, aligned["id"], aligned["istate"]
+
+
+def _survcondense_legacy_call(
+    id_values: Any,
+    time1: Any,
+    time2: Any,
+    status: Any,
+) -> Any:
+    return _core.survcondense(
+        _int_vector(id_values, "id"),
+        _float_vector(time1, "time1"),
+        _float_vector(time2, "time2"),
+        _int_vector(status, "status"),
+    )
+
+
+def _survcondense_term_name(term: _CovariateSpec) -> str:
+    if isinstance(term, _InteractionTerm):
+        return ":".join(_survcondense_term_name(factor) for factor in term.factors)
+    if term.arithmetic is not None:
+        return term.arithmetic
+    if term.transform is not None:
+        return f"{term.transform}({term.column})"
+    if term.categorical:
+        return f"factor({term.column})"
+    return term.column
+
+
+def _survcondense_strata_name(columns: Sequence[str]) -> str:
+    return f"strata({', '.join(columns)})"
+
+
+def _survcondense_strata_values(data: Any, columns: Sequence[str], n: int) -> list[Any]:
+    values = [_column(data, column) for column in columns]
+    if any(len(column) != n for column in values):
+        raise ValueError("formula columns must have the same length as the Surv response")
+    if len(values) == 1:
+        return list(values[0])
+    return [
+        ", ".join(_strata_value_label(column[row_idx]) for column in values) for row_idx in range(n)
+    ]
+
+
+def _survcondense_model_columns(
+    data: Any,
+    terms: _FormulaTerms,
+    n: int,
+) -> list[tuple[str, list[Any]]]:
+    columns: list[tuple[str, list[Any]]] = []
+    model_terms: Sequence[_FormulaModelTerm]
+    model_terms = terms.model_terms or [_ModelCovariateTerm(term) for term in terms.covariates]
+    for model_term in model_terms:
+        if isinstance(model_term, _ModelCovariateTerm):
+            columns.append(
+                (
+                    _survcondense_term_name(model_term.term),
+                    _term_values(data, model_term.term, n),
+                )
+            )
+        elif isinstance(model_term, _ModelStrataTerm):
+            columns.append(
+                (
+                    _survcondense_strata_name(model_term.columns),
+                    _survcondense_strata_values(data, model_term.columns, n),
+                )
+            )
+        elif isinstance(model_term, _ModelOffsetTerm):
+            name = f"offset({_survcondense_term_name(model_term.term)})"
+            values = _numeric_term_values(
+                _term_raw_values(data, model_term.term, n),
+                model_term.term,
+            )
+            columns.append((name, values))
+        else:
+            continue
+    return columns
+
+
+def _hashable_group_value(value: Any) -> Any:
+    try:
+        hash(value)
+    except TypeError:
+        if isinstance(value, Mapping):
+            return tuple(
+                sorted(
+                    (_hashable_group_value(key), _hashable_group_value(item))
+                    for key, item in value.items()
+                )
+            )
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+            return tuple(_hashable_group_value(item) for item in value)
+        return repr(value)
+    return value
+
+
+def _survcondense_same_or_missing(left: Any, right: Any) -> bool:
+    left_missing = _is_missing_value(left)
+    right_missing = _is_missing_value(right)
+    if left_missing or right_missing:
+        return left_missing and right_missing
+    return left == right
+
+
+def _survcondense_order_key(value: Any) -> tuple[int, int, Any]:
+    if _is_missing_value(value):
+        return (1, 0, "")
+    if isinstance(value, bool):
+        return (0, 0, int(value))
+    if isinstance(value, int | float):
+        numeric = float(value)
+        if math.isfinite(numeric):
+            return (0, 0, numeric)
+    return (0, 1, str(value))
+
+
+def _survcondense_rle(values: Sequence[bool]) -> tuple[list[bool], list[int], list[int]]:
+    if not values:
+        return [], [], []
+
+    run_values = [bool(values[0])]
+    run_lengths = [1]
+    for value in values[1:]:
+        value = bool(value)
+        if value == run_values[-1]:
+            run_lengths[-1] += 1
+        else:
+            run_values.append(value)
+            run_lengths.append(1)
+
+    cumulative: list[int] = []
+    total = 0
+    for length in run_lengths:
+        total += length
+        cumulative.append(total)
+    return run_values, run_lengths, cumulative
+
+
+def _survcondense_adjust_starts_like_r(
+    starts: list[float],
+    order: Sequence[int],
+    droprow: Sequence[bool],
+) -> None:
+    if not any(droprow):
+        return
+
+    run_values, run_lengths, cumulative = _survcondense_rle(droprow)
+    del run_lengths
+    if len(cumulative) == 2:
+        starts[cumulative[0]] = starts[0]
+        return
+    if len(cumulative) == 3:
+        starts[cumulative[1]] = starts[cumulative[0]]
+        return
+
+    run_start = 0
+    for value, run_end_exclusive in zip(run_values, cumulative, strict=True):
+        run_end = run_end_exclusive - 1
+        if value and run_end + 1 < len(order):
+            starts[order[run_end + 1]] = starts[order[run_start]]
+        run_start = run_end_exclusive
+
+
+def _survcondense_unique_columns(
+    columns: Sequence[tuple[str, list[Any]]],
+) -> list[tuple[str, list[Any]]]:
+    seen: set[str] = set()
+    unique: list[tuple[str, list[Any]]] = []
+    for name, values in columns:
+        if name in seen:
+            continue
+        seen.add(name)
+        unique.append((name, values))
+    return unique
+
+
+def _survcondense_from_formula(
+    formula: str,
+    data: Any,
+    subset: Any | None,
+    na_action: str | None,
+    id_values: Any,
+    weights: Any | None,
+    start: str,
+    end: str,
+    event: str,
+    id_name: str | None = None,
+    weights_name: str | None = None,
+) -> dict[str, list[Any]]:
+    if data is None:
+        raise ValueError("survcondense formula requires data")
+    if id_values is None:
+        raise ValueError("survcondense requires an id argument")
+    if not isinstance(start, str) or not start:
+        raise ValueError("start must be a non-empty string")
+    if not isinstance(end, str) or not end:
+        raise ValueError("end must be a non-empty string")
+    if not isinstance(event, str) or not event:
+        raise ValueError("event must be a non-empty string")
+
+    id_output_name = id_name or (id_values if isinstance(id_values, str) else "id")
+    weights_output_name = weights_name or (weights if isinstance(weights, str) else "(weights)")
+    id_values = _column_or_values(data, id_values, "id")
+    weights = _column_or_values(data, weights, "weights") if weights is not None else None
+    if subset is not None:
+        data, aligned = _subset_formula_inputs(
+            formula,
+            data,
+            subset,
+            id=id_values,
+            weights=weights,
+        )
+        id_values = aligned["id"]
+        weights = aligned["weights"]
+    data, aligned = _apply_formula_na_action(
+        formula,
+        data,
+        na_action,
+        id=id_values,
+        weights=weights,
+    )
+    id_values = _materialize_1d(aligned["id"], "id")
+    weights = aligned["weights"]
+    response, terms = _parse_formula(formula, data)
+    _reject_formula_clusters("survcondense", terms)
+    if response.type != "counting":
+        raise ValueError("survcondense requires a counting-process Surv response")
+    if response.start is None:
+        raise ValueError("counting Surv response is missing start times")
+    if len(id_values) != len(response):
+        raise ValueError("id must have the same length as the Surv response")
+    if weights is not None:
+        weights = _materialize_1d(weights, "weights")
+        if len(weights) != len(response):
+            raise ValueError("weights must have the same length as the Surv response")
+
+    model_columns = _survcondense_model_columns(data, terms, len(response))
+
+    comparison_columns = [values for _name, values in model_columns]
+    if weights is not None:
+        comparison_columns.append(weights)
+    comparison_columns.append(id_values)
+
+    order = sorted(
+        range(len(response)),
+        key=lambda idx: (_survcondense_order_key(id_values[idx]), response.time[idx]),
+    )
+    droprow = [False] * len(response)
+    if len(response) > 1:
+        for sorted_idx, current_idx in enumerate(order[:-1]):
+            next_idx = order[sorted_idx + 1]
+            xdup = all(
+                _survcondense_same_or_missing(values[next_idx], values[current_idx])
+                for values in comparison_columns
+            )
+            ydup = response.start[next_idx] == response.time[current_idx]
+            droprow[sorted_idx] = bool(xdup and ydup)
+
+    starts = list(response.start)
+    _survcondense_adjust_starts_like_r(starts, order, droprow)
+    drop_indices = {order[pos] for pos, drop in enumerate(droprow) if drop}
+    keep_indices = (
+        [idx for idx in range(len(response)) if idx not in drop_indices] if any(droprow) else []
+    )
+
+    if weights is not None:
+        model_columns.append((str(weights_output_name), weights))
+    model_columns.append((str(id_output_name), id_values))
+
+    output: dict[str, list[Any]] = {
+        name: [values[idx] for idx in keep_indices]
+        for name, values in _survcondense_unique_columns(model_columns)
+    }
+    output[start] = [starts[idx] for idx in keep_indices]
+    output[end] = [response.time[idx] for idx in keep_indices]
+    output[event] = [response.event[idx] for idx in keep_indices]
+    return output
+
+
+def survcondense(
+    formula: Any,
+    data: Any | None = None,
+    subset: Any | None = None,
+    weights: Any | None = None,
+    na_action: Any | None = "pass",
+    *,
+    id: Any | None = None,  # noqa: A002
+    start: str = "tstart",
+    end: str = "tstop",
+    event: str = "event",
+    **kwargs: Any,
+) -> Any:
+    """Condense counting-process survival data, preserving the legacy vector API."""
+
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "pass")
+    id_name = kwargs.pop("_id_name", None)
+    weights_name = kwargs.pop("_weights_name", None)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"survcondense got unexpected keyword argument(s): {unexpected}")
+
+    if not isinstance(formula, str):
+        if data is None or subset is None or weights is None or id is not None:
+            raise TypeError(
+                "survcondense requires a formula/data/id call or legacy "
+                "(id, time1, time2, status) vectors"
+            )
+        return _survcondense_legacy_call(formula, data, subset, weights)
+
+    return _survcondense_from_formula(
+        formula,
+        data,
+        subset,
+        _normalize_na_action(na_action),
+        id,
+        weights,
+        start,
+        end,
+        event,
+        id_name,
+        weights_name,
+    )
+
+
+def survcheck(
+    response: Any = _MISSING,
+    data: Any | None = None,
+    subset: Any | None = None,
+    na_action: Any | None = "pass",
+    id: Any | None = None,  # noqa: A002
+    istate: Any | None = None,
+    istate0: str = "(s0)",
+    timefix: bool = True,
+    *,
+    time1: Any = _MISSING,
+    time2: Any = _MISSING,
+    status: Any = _MISSING,
+    **kwargs: Any,
+):
+    """Check survival response consistency, like R's ``survcheck`` for common inputs."""
+
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "pass")
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"survcheck got unexpected keyword argument(s): {unexpected}")
+
+    if response is _MISSING:
+        if time1 is _MISSING or time2 is _MISSING or status is _MISSING or id is None:
+            raise TypeError(
+                "survcheck requires a Surv response/formula or low-level "
+                "id=, time1=, time2=, and status= vectors"
+            )
+        return _survcheck_old_style_call(id, time1, time2, status, istate)
+    if time1 is not _MISSING or time2 is not _MISSING or status is not _MISSING:
+        raise TypeError("time1, time2, and status are only valid for low-level survcheck calls")
+
+    # Backward compatibility for the legacy low-level root call:
+    # survcheck(id, time1, time2, status, istate=None).
+    if not isinstance(response, Surv | str):
+        if data is None or subset is None or na_action is None:
+            raise TypeError(
+                "survcheck requires a Surv response/formula or low-level "
+                "(id, time1, time2, status) vectors"
+            )
+        return _survcheck_old_style_call(response, data, subset, na_action, id)
+
+    if not isinstance(timefix, bool):
+        raise TypeError("timefix must be True or False")
+    if not isinstance(istate0, str):
+        raise TypeError("istate0 must be a string")
+
+    id_values = id
+    if isinstance(response, str):
+        response, id_values, istate = _survcheck_response_from_formula(
+            response,
+            data,
+            subset,
+            _normalize_na_action(na_action),
+            id_values,
+            istate,
+        )
+        subset = None
+        na_action = "pass"
+    elif subset is not None:
+        indices = _subset_indices(subset, len(response))
+        response = _subset_surv(response, indices)
+        id_values = _subset_optional_sequence(id_values, indices, "id")
+        istate = _subset_optional_sequence(istate, indices, "istate")
+        subset = None
+
+    response, aligned = _apply_surv_na_action(
+        response,
+        _normalize_na_action(na_action),
+        "survcheck inputs",
+        id=id_values,
+        istate=istate,
+    )
+    id_values = aligned["id"]
+    istate = aligned["istate"]
+
+    if response.type == "right":
+        times = list(response.time)
+        if timefix:
+            times = _survdiff_timefix_values(times, True)
+        return _core.survcheck_simple(times, list(response.event))
+    if response.type != "counting":
+        raise ValueError(f"survcheck is not valid for {response.type} censored survival data")
+    if response.start is None:
+        raise ValueError("counting Surv response is missing start times")
+    if id_values is None:
+        raise ValueError("an id argument is required")
+    if len(_materialize_labels(id_values, "id")) != len(response):
+        raise ValueError("id must have the same length as the Surv response")
+    if istate is not None and len(_materialize_labels(istate, "istate")) != len(response):
+        raise ValueError("istate must have the same length as the Surv response")
+
+    start = list(response.start)
+    stop = list(response.time)
+    if timefix:
+        start, stop = _timefix_vectors(start, stop)
+    return _core.survcheck(
+        _survcheck_integer_labels(id_values, "id"),
+        start,
+        stop,
+        list(response.event),
+        None if istate is None else _survcheck_integer_labels(istate, "istate"),
+    )
+
+
+def _rttright_original_order_weights(result: Any, n: int) -> list[float]:
+    weights = [0.0] * n
+    for sorted_pos, original_idx in enumerate(result.order):
+        weights[int(original_idx)] = float(result.weights[sorted_pos])
+    return weights
+
+
+def _rttright_formula_groups(data: Any, terms: _FormulaTerms, n: int) -> list[int] | None:
+    if not terms.strata and not terms.covariates:
+        return None
+    labels = _combined_formula_groups(data, terms.strata, terms.covariates, n)
+    return _encode_labels(labels, "rttright strata")
+
+
+def _rttright_response_from_formula(
+    formula: str,
+    data: Any,
+    subset: Any | None,
+    na_action: str | None,
+    weights: Any | None,
+    id: Any | None,  # noqa: A002
+    *,
+    warn_offset: bool = True,
+) -> tuple[Surv, Any | None, Any | None, list[int] | None]:
+    if data is None:
+        raise ValueError("rttright formula requires data")
+    weights = _column_or_values(data, weights, "weights") if weights is not None else None
+    id_values = _column_or_values(data, id, "id") if id is not None else None
+    if subset is not None:
+        data, aligned = _subset_formula_inputs(
+            formula,
+            data,
+            subset,
+            weights=weights,
+            id=id_values,
+        )
+        weights = aligned["weights"]
+        id_values = aligned["id"]
+    data, aligned = _apply_formula_na_action(
+        formula,
+        data,
+        na_action,
+        weights=weights,
+        id=id_values,
+    )
+    response, terms = _parse_formula(formula, data)
+    if terms.offsets and warn_offset:
+        warnings.warn("Offset term ignored", RuntimeWarning, stacklevel=2)
+    return (
+        response,
+        aligned["weights"],
+        aligned["id"],
+        _rttright_formula_groups(data, terms, len(response)),
+    )
+
+
+def _rttright_initial_weights(weights: Any | None, n: int) -> list[float]:
+    if weights is None:
+        return [1.0] * n
+    result = _float_vector(weights, "weights")
+    if len(result) != n:
+        raise ValueError("weights must have same length as time")
+    if any(not math.isfinite(value) for value in result):
+        raise ValueError("weights must be finite")
+    if any(value < 0.0 for value in result):
+        raise ValueError("weights must be non-negative")
+    return result
+
+
+def _rttright_times_vector(times: Any) -> list[float]:
+    if isinstance(times, str | bytes):
+        raise TypeError("times must be numeric")
+    try:
+        result = [float(times)]
+    except (TypeError, ValueError):
+        result = _float_vector(times, "times")
+    if any(not math.isfinite(value) for value in result):
+        raise ValueError("times must be finite")
+    return result
+
+
+def _rttright_validate_id(response: Surv, id: Any | None) -> list[Any] | None:  # noqa: A002
+    if id is None:
+        return None
+    id_values = _materialize_labels(id, "id")
+    if len(id_values) != len(response):
+        raise ValueError("id must have the same length as the Surv response")
+    if response.type not in {"right", "counting"}:
+        raise NotImplementedError("rttright id handling is currently supported only for right data")
+
+    seen: set[Any] = set()
+    for value in id_values:
+        try:
+            key = _hashable_group_value(value)
+        except TypeError as exc:
+            raise TypeError("id values must be hashable") from exc
+        if response.type == "counting":
+            continue
+        if key in seen:
+            raise ValueError("one or more flags are >0 in survcheck")
+        seen.add(key)
+    return id_values
+
+
+def _rttright_divide(numerator: float, denominator: float) -> float:
+    if denominator != 0.0:
+        return numerator / denominator
+    if numerator == 0.0:
+        return math.nan
+    return math.inf
+
+
+def _rttright_apply_timefix(time: list[float], timefix: bool) -> list[float]:
+    if not timefix or not time:
+        return time
+    return [float(value) for value in _core.aeq_surv(time, None).time]
+
+
+def _rttright_counting_common_start(
+    start: Sequence[float],
+    id_values: Sequence[Any],
+) -> bool:
+    first_by_id: dict[Any, float] = {}
+    for row_idx, id_value in enumerate(id_values):
+        key = _hashable_group_value(id_value)
+        first_by_id[key] = min(first_by_id.get(key, start[row_idx]), start[row_idx])
+    if not first_by_id:
+        return False
+    first_start = next(iter(first_by_id.values()))
+    return all(value == first_start for value in first_by_id.values())
+
+
+def _rttright_counting_last_rows(
+    stop: Sequence[float],
+    id_values: Sequence[Any],
+) -> list[bool]:
+    last_by_id: dict[Any, tuple[float, int]] = {}
+    for row_idx, id_value in enumerate(id_values):
+        key = _hashable_group_value(id_value)
+        candidate = (float(stop[row_idx]), row_idx)
+        if key not in last_by_id or candidate > last_by_id[key]:
+            last_by_id[key] = candidate
+    return [
+        row_idx == last_by_id[_hashable_group_value(id_value)][1]
+        for row_idx, id_value in enumerate(id_values)
+    ]
+
+
+def _rttright_counting_validate_subject_weights(
+    weights: Sequence[float],
+    id_values: Sequence[Any],
+) -> None:
+    ranges: dict[Any, list[float]] = {}
+    for weight, id_value in zip(weights, id_values, strict=True):
+        key = _hashable_group_value(id_value)
+        if key not in ranges:
+            ranges[key] = [float(weight), float(weight)]
+        else:
+            ranges[key][0] = min(ranges[key][0], float(weight))
+            ranges[key][1] = max(ranges[key][1], float(weight))
+    if any(high > low for low, high in ranges.values()):
+        raise ValueError("there are subjects with multiple weights")
+
+
+def _rttright_counting_group_values(group: Sequence[int] | None, n: int) -> list[int]:
+    if group is None:
+        return [0] * n
+    group_values = [int(value) for value in group]
+    if len(group_values) != n:
+        raise ValueError("rttright strata must have the same length as the Surv response")
+    return group_values
+
+
+def _rttright_counting_case_weights(
+    weights: Any | None,
+    id_values: Sequence[Any],
+    group_values: Sequence[int],
+    n: int,
+    renorm: bool,
+) -> list[float]:
+    case_weights = _rttright_initial_weights(weights, n)
+    _rttright_counting_validate_subject_weights(case_weights, id_values)
+    if not renorm:
+        return case_weights
+
+    normalized = list(case_weights)
+    group_indices: dict[int, list[int]] = {}
+    for row_idx, group_value in enumerate(group_values):
+        group_indices.setdefault(group_value, []).append(row_idx)
+
+    for indices in group_indices.values():
+        seen_ids: set[Any] = set()
+        denominator = 0.0
+        for row_idx in indices:
+            key = _hashable_group_value(id_values[row_idx])
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            denominator += case_weights[row_idx]
+        if denominator <= 0.0:
+            raise ValueError("weights must have positive sum when renorm is true")
+        for row_idx in indices:
+            normalized[row_idx] = case_weights[row_idx] / denominator
+    return normalized
+
+
+def _rttright_counting_delta(
+    start: Sequence[float],
+    stop: Sequence[float],
+    query_times: Sequence[float] | None,
+) -> float:
+    values = [*map(float, start), *map(float, stop)]
+    if query_times is not None:
+        values.extend(float(value) for value in query_times)
+    unique = sorted(set(values))
+    diffs = [right - left for left, right in zip(unique, unique[1:], strict=False) if right > left]
+    if not diffs:
+        raise NotImplementedError("function not defined for delayed entry or multistate data")
+    return min(diffs) / 2.0
+
+
+def _rttright_counting_km(
+    start: Sequence[float],
+    stop: Sequence[float],
+    censor: Sequence[int],
+    weights: Sequence[float],
+) -> tuple[list[float], list[float]]:
+    event_times = sorted({float(stop[idx]) for idx, value in enumerate(censor) if value == 1})
+    survival_times: list[float] = []
+    survival_values: list[float] = []
+    current = 1.0
+    for event_time in event_times:
+        risk = sum(
+            float(weight)
+            for left, right, weight in zip(start, stop, weights, strict=True)
+            if float(left) < event_time <= float(right)
+        )
+        events = sum(
+            float(weights[idx])
+            for idx, value in enumerate(censor)
+            if value == 1 and float(stop[idx]) == event_time
+        )
+        if risk > 0.0:
+            current *= 1.0 - events / risk
+        survival_times.append(event_time)
+        survival_values.append(current)
+    return survival_times, survival_values
+
+
+def _rttright_km_survival_at(
+    survival_times: Sequence[float],
+    survival_values: Sequence[float],
+    time: float,
+) -> float:
+    index = bisect_left(survival_times, float(time))
+    return 1.0 if index == 0 else float(survival_values[index - 1])
+
+
+def _rttright_group_case_weights(
+    weights: Sequence[float],
+    indices: Sequence[int],
+    renorm: bool,
+) -> list[float]:
+    group_weights = [float(weights[idx]) for idx in indices]
+    if not renorm:
+        return group_weights
+    total = sum(group_weights)
+    if total <= 0.0:
+        raise ValueError("weights must have positive sum when renorm is true")
+    return [weight / total for weight in group_weights]
+
+
+def _rttright_group_time_matrix(
+    time: Sequence[float],
+    status: Sequence[int],
+    weights: Sequence[float],
+    query_times: Sequence[float],
+) -> list[list[float]]:
+    n = len(time)
+    n_times = len(query_times)
+    if n == 0:
+        return []
+
+    order = sorted(range(n), key=lambda idx: (time[idx], idx))
+    sorted_time = [float(time[idx]) for idx in order]
+    sorted_status = [int(status[idx]) for idx in order]
+    sorted_weights = [float(weights[idx]) for idx in order]
+
+    event_g = [1.0] * n
+    block_times: list[float] = []
+    post_block_g: list[float] = []
+    current_g = 1.0
+    n_at_risk = sum(sorted_weights)
+
+    start = 0
+    while start < n:
+        block_time = sorted_time[start]
+        end = start + 1
+        while end < n and sorted_time[end] == block_time:
+            end += 1
+
+        event_weight = 0.0
+        censor_weight = 0.0
+        for sorted_pos in range(start, end):
+            local_idx = order[sorted_pos]
+            event_g[local_idx] = current_g
+            if sorted_status[sorted_pos] == 1:
+                event_weight += sorted_weights[sorted_pos]
+            else:
+                censor_weight += sorted_weights[sorted_pos]
+
+        risk_after_events = n_at_risk - event_weight
+        if risk_after_events > 0.0 and censor_weight > 0.0:
+            current_g *= 1.0 - censor_weight / risk_after_events
+        n_at_risk = risk_after_events - censor_weight
+        block_times.append(block_time)
+        post_block_g.append(current_g)
+        start = end
+
+    query_g: list[float] = []
+    for query_time in query_times:
+        block_idx = bisect_left(block_times, query_time)
+        query_g.append(1.0 if block_idx == 0 else post_block_g[block_idx - 1])
+
+    matrix = [[0.0] * n_times for _ in range(n)]
+    for row_idx, (row_time, row_status, row_weight) in enumerate(
+        zip(time, status, weights, strict=True)
+    ):
+        for col_idx, g_at_time in enumerate(query_g):
+            if row_status == 1:
+                matrix[row_idx][col_idx] = _rttright_divide(
+                    float(row_weight),
+                    max(event_g[row_idx], g_at_time),
+                )
+            elif float(row_time) >= float(query_times[col_idx]):
+                matrix[row_idx][col_idx] = _rttright_divide(float(row_weight), g_at_time)
+    return matrix
+
+
+def _rttright_time_matrix(
+    time: Sequence[float],
+    status: Sequence[int],
+    weights: Any | None,
+    times: Any,
+    group: Sequence[int] | None,
+    timefix: bool,
+    renorm: bool,
+) -> list[float] | list[list[float]]:
+    time_values = _rttright_apply_timefix([float(value) for value in time], timefix)
+    status_values = [int(value) for value in status]
+    n = len(time_values)
+    if len(status_values) != n:
+        raise ValueError("time and status must have same length")
+    if any(value not in (0, 1) for value in status_values):
+        raise ValueError("status must contain only 0/1 values")
+    if any(not math.isfinite(value) for value in time_values):
+        raise ValueError("time must be finite")
+
+    query_times = _rttright_times_vector(times)
+    case_weights = _rttright_initial_weights(weights, n)
+    matrix = [[0.0] * len(query_times) for _ in range(n)]
+
+    if group is None:
+        group_values = [0] * n
+    else:
+        group_values = [int(value) for value in group]
+        if len(group_values) != n:
+            raise ValueError("rttright strata must have the same length as the Surv response")
+
+    group_indices: dict[int, list[int]] = {}
+    for idx, group_value in enumerate(group_values):
+        group_indices.setdefault(group_value, []).append(idx)
+
+    for indices in group_indices.values():
+        group_weights = _rttright_group_case_weights(case_weights, indices, renorm)
+        group_matrix = _rttright_group_time_matrix(
+            [time_values[idx] for idx in indices],
+            [status_values[idx] for idx in indices],
+            group_weights,
+            query_times,
+        )
+        for local_idx, row_idx in enumerate(indices):
+            matrix[row_idx] = group_matrix[local_idx]
+
+    if len(query_times) == 1:
+        return [row[0] for row in matrix]
+    return matrix
+
+
+def _rttright_counting_group_result(
+    start: Sequence[float],
+    stop: Sequence[float],
+    status: Sequence[int],
+    weights: Sequence[float],
+    last: Sequence[bool],
+    query_times: Sequence[float] | None,
+    delta: float,
+) -> list[float] | list[list[float]]:
+    km_stop = [float(value) for value in stop]
+    censor = [
+        1 if is_last and int(event) == 0 else 0 for is_last, event in zip(last, status, strict=True)
+    ]
+    for row_idx, value in enumerate(censor):
+        if value == 1:
+            km_stop[row_idx] += delta
+    survival_times, survival_values = _rttright_counting_km(start, km_stop, censor, weights)
+
+    if query_times is None:
+        result: list[float] = []
+        for row_stop, row_status, row_weight, is_last in zip(
+            stop,
+            status,
+            weights,
+            last,
+            strict=True,
+        ):
+            if is_last and int(row_status) > 0:
+                gwt = _rttright_km_survival_at(survival_times, survival_values, float(row_stop))
+                result.append(_rttright_divide(float(row_weight), gwt))
+            else:
+                result.append(0.0)
+        return result
+
+    matrix = [[0.0] * len(query_times) for _ in range(len(start))]
+    gwt = [_rttright_km_survival_at(survival_times, survival_values, time) for time in query_times]
+    gwt2 = [
+        _rttright_km_survival_at(survival_times, survival_values, row_stop) for row_stop in stop
+    ]
+    for row_idx, (row_start, row_stop, _row_status, row_weight, is_last) in enumerate(
+        zip(start, stop, status, weights, last, strict=True)
+    ):
+        for col_idx, query_time in enumerate(query_times):
+            if float(row_start) < float(query_time) <= float(row_stop):
+                matrix[row_idx][col_idx] = _rttright_divide(float(row_weight), gwt[col_idx])
+        # R's timed counting branch tests the stop column, so final censored rows
+        # also receive redistributed weights across all requested times.
+        if is_last and float(row_stop) > 0.0:
+            for col_idx, query_gwt in enumerate(gwt):
+                matrix[row_idx][col_idx] = _rttright_divide(
+                    float(row_weight),
+                    max(gwt2[row_idx], query_gwt),
+                )
+    return matrix
+
+
+def _rttright_counting_result(
+    response: Surv,
+    weights: Any | None,
+    times: Any | None,
+    group: Sequence[int] | None,
+    id_values: Sequence[Any] | None,
+    timefix: bool,
+    renorm: bool,
+) -> list[float] | list[list[float]]:
+    if response.start is None:
+        raise ValueError("counting Surv response is missing start times")
+    if id_values is None:
+        raise ValueError("id is required for start-stop data")
+
+    id_labels = _materialize_labels(id_values, "id")
+    n = len(response)
+    if len(id_labels) != n:
+        raise ValueError("id must have the same length as the Surv response")
+    start = [float(value) for value in response.start]
+    stop = [float(value) for value in response.time]
+    status_values = [int(value) for value in response.event]
+    if any(value not in (0, 1) for value in status_values):
+        raise ValueError("rttright counting response must contain only 0/1 status values")
+    if timefix:
+        start, stop = _timefix_vectors(start, stop)
+
+    check = _core.survcheck(
+        _survcheck_integer_labels(id_labels, "id"),
+        start,
+        stop,
+        status_values,
+        None,
+    )
+    if any(flag > 0 for flag in check.flags):
+        raise ValueError("one or more flags are >0 in survcheck")
+    if not _rttright_counting_common_start(start, id_labels):
+        raise NotImplementedError("function not defined for delayed entry or multistate data")
+
+    last = _rttright_counting_last_rows(stop, id_labels)
+    if (
+        sum(1 for is_last, event in zip(last, status_values, strict=True) if is_last and event > 0)
+        <= 1
+    ):
+        raise NotImplementedError("function not defined for delayed entry or multistate data")
+
+    query_times = None if times is None else _rttright_times_vector(times)
+    group_values = _rttright_counting_group_values(group, n)
+    case_weights = _rttright_counting_case_weights(weights, id_labels, group_values, n, renorm)
+    delta = _rttright_counting_delta(start, stop, query_times)
+
+    matrix: list[list[float]] | None = None
+    vector = [0.0] * n
+    if query_times is not None:
+        matrix = [[0.0] * len(query_times) for _ in range(n)]
+
+    group_indices: dict[int, list[int]] = {}
+    for row_idx, group_value in enumerate(group_values):
+        group_indices.setdefault(group_value, []).append(row_idx)
+
+    for indices in group_indices.values():
+        group_result = _rttright_counting_group_result(
+            [start[idx] for idx in indices],
+            [stop[idx] for idx in indices],
+            [status_values[idx] for idx in indices],
+            [case_weights[idx] for idx in indices],
+            [last[idx] for idx in indices],
+            query_times,
+            delta,
+        )
+        if query_times is None:
+            for local_idx, row_idx in enumerate(indices):
+                vector[row_idx] = float(group_result[local_idx])
+        else:
+            if matrix is None:
+                raise RuntimeError("rttright counting matrix was not initialized")
+            for local_idx, row_idx in enumerate(indices):
+                matrix[row_idx] = [float(value) for value in group_result[local_idx]]
+
+    if query_times is None:
+        return vector
+    if matrix is None:
+        raise RuntimeError("rttright counting matrix was not initialized")
+    if len(query_times) == 1:
+        return [row[0] for row in matrix]
+    return matrix
+
+
+def _rttright_core_weights(
+    response: Surv,
+    weights: Any | None,
+    group: Sequence[int] | None,
+    timefix: bool,
+    renorm: bool,
+) -> list[float]:
+    if group is not None:
+        result = _core.rttright_stratified(
+            list(response.time),
+            list(response.event),
+            list(group),
+            None if weights is None else _float_vector(weights, "weights"),
+            timefix,
+            renorm,
+        )
+        return [float(weight) for weight in result.weights]
+    result = _core.rttright(
+        list(response.time),
+        list(response.event),
+        None if weights is None else _float_vector(weights, "weights"),
+        timefix,
+        renorm,
+    )
+    return _rttright_original_order_weights(result, len(response))
+
+
+def _normalize_pseudo_type(value: Any | None) -> str:
+    if value is None:
+        return "survival"
+    if not isinstance(value, str):
+        raise TypeError("type must be a string or None")
+    normalized = value.strip().lower()
+    aliases = {
+        "pstate": "survival",
+        "survival": "survival",
+        "cumhaz": "cumhaz",
+        "chaz": "cumhaz",
+        "rmst": "rmst",
+        "rmts": "rmst",
+        "auc": "rmst",
+        "sojourn": "rmst",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise ValueError(
+            "type must be 'pstate', 'survival', 'cumhaz', 'chaz', 'rmst', 'rmts', 'auc', "
+            "or 'sojourn'"
+        ) from exc
+
+
+def _pseudo_eval_times(times: Any | None, eval_times: Any | None) -> list[float] | None:
+    if times is not None and eval_times is not None:
+        raise TypeError("use at most one of times or eval_times")
+    values = times if times is not None else eval_times
+    if values is None:
+        return None
+    if isinstance(values, str | bytes):
+        raise TypeError("times must be numeric")
+    try:
+        result = [float(values)]
+    except (TypeError, ValueError):
+        result = _float_vector(values, "times")
+    if any(not math.isfinite(value) for value in result):
+        raise ValueError("times must be finite")
+    return result
+
+
+def _pseudo_model_response(fit: Any) -> Surv:
+    model = getattr(fit, "model", None)
+    if model is None:
+        raise TypeError("pseudo requires a survfit result with a stored model frame")
+    if not isinstance(model, Mapping):
+        raise TypeError("stored survfit model frame must be mapping-like")
+    responses = [value for value in model.values() if isinstance(value, Surv)]
+    if len(responses) != 1:
+        raise TypeError("stored survfit model frame must contain exactly one Surv response")
+    return responses[0]
+
+
+def _pseudo_group_values_from_model(model: Mapping[Any, Any], response: Surv) -> list[Any]:
+    n = len(response)
+    if "group" in model:
+        group_values = _materialize_1d(model["group"], "group")
+        if len(group_values) == n:
+            return group_values
+
+    response_columns: set[str] = {"time", "time1", "time2", "start", "stop", "event", "status"}
+    for name, value in model.items():
+        if value is response and isinstance(name, str) and "~" in name:
+            response_columns.update(_formula_response_args(name))
+
+    candidate_columns: list[list[Any]] = []
+    for name, values in model.items():
+        if values is response or (isinstance(name, str) and name.startswith("(")):
+            continue
+        if isinstance(name, str) and name in response_columns:
+            continue
+        try:
+            column = _materialize_1d(values, str(name))
+        except TypeError:
+            continue
+        if len(column) == n:
+            candidate_columns.append(column)
+
+    if not candidate_columns:
+        raise TypeError("stored grouped survfit model frame does not contain grouping columns")
+    return _combine_aligned_columns(candidate_columns, n)
+
+
+def _pseudo_model_id_values(model: Mapping[Any, Any], response: Surv) -> list[Any] | None:
+    values = model.get("(id)")
+    if values is None:
+        return None
+    id_values = _materialize_labels(values, "id")
+    if len(id_values) != len(response):
+        raise TypeError("stored survfit model frame id does not match response length")
+    return id_values
+
+
+def _pseudo_model_weights(model: Mapping[Any, Any], response: Surv) -> list[float] | None:
+    values = model.get("(weights)")
+    if values is None:
+        return None
+    weights = _float_vector(values, "weights")
+    if len(weights) != len(response):
+        raise TypeError("stored survfit model frame weights do not match response length")
+    return weights
+
+
+def _pseudo_subset_model_frame(
+    model: Mapping[Any, Any],
+    response: Surv,
+    indices: Sequence[int],
+) -> dict[str, Any]:
+    subset: dict[str, Any] = {"response": response}
+    for name in ("(weights)", "(id)", "(cluster)"):
+        values = model.get(name)
+        if values is not None:
+            materialized = _materialize_1d(values, name)
+            subset[name] = [materialized[idx] for idx in indices]
+    return subset
+
+
+def _pseudo_rmst_values(
+    curve_time: Sequence[float],
+    curve_survival: Sequence[float],
+    eval_times: Sequence[float],
+) -> list[float]:
+    result: list[float] = []
+    times = [float(value) for value in curve_time]
+    survival = [float(value) for value in curve_survival]
+    for eval_time in eval_times:
+        target = float(eval_time)
+        area = 0.0
+        previous_time = 0.0
+        previous_survival = 1.0
+        for time, estimate in zip(times, survival, strict=True):
+            if target <= previous_time:
+                break
+            upper = min(target, time)
+            if upper > previous_time:
+                area += previous_survival * (upper - previous_time)
+                previous_time = upper
+            if time > target:
+                break
+            previous_survival = estimate
+        if target > previous_time:
+            area += previous_survival * (target - previous_time)
+        result.append(area)
+    return result
+
+
+def _pseudo_curve_values(
+    curve: SurvfitResult,
+    eval_times: Sequence[float],
+    pseudo_type: str,
+) -> list[float]:
+    times = [float(value) for value in curve.time]
+    if pseudo_type == "survival":
+        return _step_curve_at(times, [float(value) for value in curve.estimate], list(eval_times))
+    if pseudo_type == "cumhaz":
+        return _core.step_values_at(
+            times,
+            [float(value) for value in curve.cumhaz],
+            [float(value) for value in eval_times],
+            0.0,
+        )
+    return _pseudo_rmst_values(times, [float(value) for value in curve.estimate], eval_times)
+
+
+def _pseudo_integrated_step_values(
+    curve_time: Sequence[float],
+    step_values: Sequence[float],
+    eval_times: Sequence[float],
+) -> list[float]:
+    result: list[float] = []
+    times = [float(value) for value in curve_time]
+    values = [float(value) for value in step_values]
+    for eval_time in eval_times:
+        target = float(eval_time)
+        area = 0.0
+        previous_time = 0.0
+        previous_value = 0.0
+        for time, value in zip(times, values, strict=True):
+            if target <= previous_time:
+                break
+            upper = min(target, time)
+            if upper > previous_time:
+                area += previous_value * (upper - previous_time)
+                previous_time = upper
+            if time > target:
+                break
+            previous_value = value
+        if target > previous_time:
+            area += previous_value * (target - previous_time)
+        result.append(area)
+    return result
+
+
+def _pseudo_counting_candidate_cumhaz(fit: SurvfitResult, ctype: int) -> list[float]:
+    hazard = 0.0
+    cumhaz: list[float] = []
+    event_counts = fit.n_event_count if fit.n_event_count is not None else fit.n_event
+    for risk, events, event_count in zip(
+        fit.n_risk,
+        fit.n_event,
+        event_counts,
+        strict=True,
+    ):
+        risk_value = float(risk)
+        event_value = float(events)
+        event_count_value = float(event_count)
+        if risk_value > 0.0 and event_value > 0.0 and event_count_value > 0.0:
+            if ctype == 1:
+                hazard += event_value / risk_value
+            else:
+                unweighted_events = int(round(event_count_value))
+                if unweighted_events > 0:
+                    event_step = event_value / unweighted_events
+                    for step in range(unweighted_events):
+                        denominator = risk_value - step * event_step
+                        if denominator > 0.0:
+                            hazard += event_step / denominator
+        cumhaz.append(hazard)
+    return cumhaz
+
+
+def _pseudo_values_close(
+    left: Sequence[float],
+    right: Sequence[float],
+    *,
+    rel_tol: float = 1e-7,
+    abs_tol: float = 1e-10,
+) -> bool:
+    return len(left) == len(right) and all(
+        math.isclose(float(left_value), float(right_value), rel_tol=rel_tol, abs_tol=abs_tol)
+        for left_value, right_value in zip(left, right, strict=True)
+    )
+
+
+def _pseudo_counting_computation(fit: SurvfitResult) -> _SurvfitComputation:
+    ctype1_hazard = _pseudo_counting_candidate_cumhaz(fit, 1)
+    ctype2_hazard = _pseudo_counting_candidate_cumhaz(fit, 2)
+    ctype = 2 if _pseudo_values_close(fit.cumhaz, ctype2_hazard) else 1
+    hazard = ctype2_hazard if ctype == 2 else ctype1_hazard
+    fh_survival = [math.exp(-value) for value in hazard]
+    stype = 2 if _pseudo_values_close(fit.estimate, fh_survival) else 1
+    return _SurvfitComputation(stype, ctype)
+
+
+def _pseudo_counting_residual_rows(
+    influence: Any,
+    fit: SurvfitResult,
+    eval_times: Sequence[float],
+    pseudo_type: str,
+) -> list[list[float]]:
+    times = [float(value) for value in fit.time]
+    requested_times = [float(value) for value in eval_times]
+    if pseudo_type == "survival":
+        return [
+            _core.step_values_at(times, [float(value) for value in row], requested_times, 0.0)
+            for row in influence.influence_surv
+        ]
+    if pseudo_type == "cumhaz":
+        return [
+            _core.step_values_at(times, [float(value) for value in row], requested_times, 0.0)
+            for row in influence.influence_chaz
+        ]
+    return [
+        _pseudo_integrated_step_values(times, [float(value) for value in row], requested_times)
+        for row in influence.influence_surv
+    ]
+
+
+def _pseudo_counting_survfit(
+    fit: SurvfitResult,
+    response: Surv,
+    model: Mapping[Any, Any],
+    eval_times: list[float] | None,
+    pseudo_type: str,
+    collapse: bool,
+    data_frame: bool,
+) -> Any:
+    if eval_times is None:
+        raise TypeError("times are required for counting-process pseudo-values")
+    id_values = _pseudo_model_id_values(model, response)
+    weights = _pseudo_model_weights(model, response)
+    n_rows = len(response)
+    if id_values is None:
+        id_values = list(range(n_rows))
+        subject_count = n_rows
+    else:
+        subject_count = len(_label_levels(id_values, "id"))
+    if subject_count == 0:
+        result = _PseudoMatrixResult([], [float(value) for value in eval_times])
+        return _pseudo_matrix_or_frame(result, data_frame)
+
+    full_values = _pseudo_curve_values(fit, eval_times, pseudo_type)
+    computation = _pseudo_counting_computation(fit)
+    start_values = [] if response.start is None else list(response.start)
+    influence = survfitkm_counting_influence(
+        start_values,
+        list(response.time),
+        [int(value) for value in response.event],
+        [float(value) for value in fit.time],
+        [float(value) for value in fit.estimate],
+        cluster=id_values if collapse else list(range(n_rows)),
+        weights=weights,
+        stype=computation.stype,
+        ctype=computation.ctype,
+    )
+    residual_rows = _pseudo_counting_residual_rows(influence, fit, eval_times, pseudo_type)
+    scale = float(subject_count)
+    pseudo_matrix: list[list[float]] = []
+    for residuals in residual_rows:
+        pseudo_matrix.append(
+            [
+                full_value + scale * residual
+                for full_value, residual in zip(full_values, residuals, strict=True)
+            ]
+        )
+
+    result = _PseudoMatrixResult(pseudo_matrix, [float(value) for value in eval_times])
+    return _pseudo_matrix_or_frame(result, data_frame)
+
+
+def _pseudo_for_grouped_survfit(
+    fit: Mapping[Any, Any],
+    eval_times: list[float] | None,
+    pseudo_type: str,
+    collapse: bool,
+    data_frame: bool,
+) -> Any:
+    grouped_result: dict[Any, Any] = {}
+    for label, curve in fit.items():
+        response = _pseudo_model_response(curve)
+        if response.type not in {"right", "counting"}:
+            raise NotImplementedError(
+                "pseudo currently supports right-censored or counting survfit results"
+            )
+        group_values = _pseudo_group_values_from_model(curve.model, response)
+        indices = [idx for idx, value in enumerate(group_values) if value == label]
+        if not indices:
+            raise TypeError("stored grouped survfit model frame does not match curve labels")
+        group_response = _subset_surv(response, indices)
+        if response.type == "counting":
+            group_model = _pseudo_subset_model_frame(curve.model, group_response, indices)
+            grouped_result[label] = _pseudo_counting_survfit(
+                curve,
+                group_response,
+                group_model,
+                eval_times,
+                pseudo_type,
+                collapse,
+                data_frame,
+            )
+            continue
+        result = _core.pseudo(
+            list(group_response.time),
+            list(group_response.event),
+            eval_times,
+            pseudo_type,
+        )
+        grouped_result[label] = _pseudo_matrix_or_frame(result, data_frame)
+
+    if not data_frame:
+        return grouped_result
+
+    frame: dict[str, list[Any]] = {"strata": [], "id": [], "time": [], "pseudo": []}
+    for label, group_frame in grouped_result.items():
+        row_count = len(group_frame["pseudo"])
+        frame["strata"].extend([str(label)] * row_count)
+        frame["id"].extend(group_frame["id"])
+        frame["time"].extend(group_frame["time"])
+        frame["pseudo"].extend(group_frame["pseudo"])
+    return frame
+
+
+def _pseudo_matrix_or_frame(result: Any, data_frame: bool) -> Any:
+    matrix = [[float(value) for value in row] for row in result.pseudo]
+    if not data_frame:
+        return matrix
+    frame: dict[str, list[float | int]] = {"id": [], "time": [], "pseudo": []}
+    for row_idx, row in enumerate(matrix, start=1):
+        for time, value in zip(result.time, row, strict=True):
+            frame["id"].append(row_idx)
+            frame["time"].append(float(time))
+            frame["pseudo"].append(float(value))
+    return frame
+
+
+def pseudo(
+    fit: Any = None,
+    status: Any | None = None,
+    eval_times: Any | None = None,
+    type_: Any | None = None,
+    *,
+    times: Any | None = None,
+    type: Any | None = None,  # noqa: A002
+    collapse: bool = True,
+    data_frame: bool = False,
+    time: Any | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Compute pseudo-values, preserving direct vector and R-style ``survfit`` calls."""
+
+    data_frame = _pop_dotted_keyword(kwargs, "data.frame", "data_frame", data_frame, False)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"pseudo got unexpected keyword argument(s): {unexpected}")
+    if type is not None and type_ is not None:
+        raise TypeError("use at most one of type or type_")
+    pseudo_type = _normalize_pseudo_type(type if type is not None else type_)
+    eval_time_values = _pseudo_eval_times(times, eval_times)
+
+    if time is not None:
+        if fit is not None:
+            raise TypeError("time= cannot be combined with fit")
+        fit = time
+    if status is not None:
+        return _core.pseudo(
+            _float_vector(fit, "time"),
+            _int_vector(status, "status"),
+            eval_time_values,
+            pseudo_type,
+        )
+    if fit is None:
+        raise TypeError("pseudo requires a survfit result or time/status vectors")
+    _normalize_bool_option(collapse, "collapse")
+    data_frame = _normalize_bool_option(data_frame, "data_frame")
+    if isinstance(fit, Mapping):
+        return _pseudo_for_grouped_survfit(
+            fit,
+            eval_time_values,
+            pseudo_type,
+            _normalize_bool_option(collapse, "collapse"),
+            data_frame,
+        )
+
+    response = _pseudo_model_response(fit)
+    model = getattr(fit, "model", None)
+    if response.type == "counting":
+        if not isinstance(fit, SurvfitResult) or not isinstance(model, Mapping):
+            raise TypeError(
+                "counting-process pseudo-values require a survfit result with a stored model frame"
+            )
+        return _pseudo_counting_survfit(
+            fit,
+            response,
+            model,
+            eval_time_values,
+            pseudo_type,
+            _normalize_bool_option(collapse, "collapse"),
+            data_frame,
+        )
+    if response.type != "right":
+        raise NotImplementedError("pseudo currently supports right-censored survfit results")
+    result = _core.pseudo(
+        list(response.time),
+        list(response.event),
+        eval_time_values,
+        pseudo_type,
+    )
+    return _pseudo_matrix_or_frame(result, data_frame)
+
+
+def rttright(
+    response: Any,
+    status: Any | None = None,
+    weights: Any | None = None,
+    *,
+    data: Any | None = None,
+    subset: Any | None = None,
+    na_action: Any | None = "pass",
+    times: Any | None = None,
+    id: Any | None = None,  # noqa: A002
+    timefix: bool = True,
+    renorm: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """Redistribute censored mass to the right, like R's ``rttright``."""
+
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "pass")
+    warn_offset = kwargs.pop("_warn_offset", True)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"rttright got unexpected keyword argument(s): {unexpected}")
+    if not isinstance(warn_offset, bool):
+        raise TypeError("_warn_offset must be True or False")
+    if not isinstance(timefix, bool):
+        raise TypeError("timefix must be True or False")
+    if not isinstance(renorm, bool):
+        raise TypeError("renorm must be True or False")
+
+    group: list[int] | None = None
+    id_values = id
+    if isinstance(response, str):
+        surv_response, weights, id_values, group = _rttright_response_from_formula(
+            response,
+            data,
+            subset,
+            _normalize_na_action(na_action),
+            weights,
+            id,
+            warn_offset=warn_offset,
+        )
+        response = surv_response
+        subset = None
+        na_action = "pass"
+    elif isinstance(response, Surv):
+        if subset is not None:
+            indices = _subset_indices(subset, len(response))
+            response = _subset_surv(response, indices)
+            weights = _subset_optional_sequence(weights, indices, "weights")
+            id_values = _subset_optional_sequence(id_values, indices, "id")
+            subset = None
+        response, aligned = _apply_surv_na_action(
+            response,
+            _normalize_na_action(na_action),
+            "rttright inputs",
+            weights=weights,
+            id=id_values,
+        )
+        weights = aligned["weights"]
+        id_values = aligned["id"]
+    else:
+        if status is None:
+            raise TypeError("rttright direct-vector calls require status")
+        time_values = _float_vector(response, "time")
+        status_values = _int_vector(status, "status")
+        if len(time_values) != len(status_values):
+            raise ValueError("time and status must have same length")
+        if any(value not in (0, 1) for value in status_values):
+            raise ValueError("status must contain only 0/1 values")
+        response_values = Surv(time_values, status_values)
+        _rttright_validate_id(response_values, id_values)
+        if times is not None:
+            return _rttright_time_matrix(
+                list(response_values.time),
+                list(response_values.event),
+                weights,
+                times,
+                None,
+                timefix,
+                renorm,
+            )
+        return _core.rttright(
+            list(response_values.time),
+            list(response_values.event),
+            None if weights is None else _float_vector(weights, "weights"),
+            timefix,
+            renorm,
+        )
+
+    if not isinstance(response, Surv):
+        raise TypeError("rttright response must be a Surv object, formula, or time vector")
+    _rttright_validate_id(response, id_values)
+    if response.type == "counting":
+        return _rttright_counting_result(
+            response,
+            weights,
+            times,
+            group,
+            id_values,
+            timefix,
+            renorm,
+        )
+    if response.type != "right":
+        raise ValueError(f"rttright is not valid for {response.type} censored survival data")
+    if times is not None:
+        return _rttright_time_matrix(
+            list(response.time),
+            list(response.event),
+            weights,
+            times,
+            group,
+            timefix,
+            renorm,
+        )
+    return _rttright_core_weights(
+        response,
+        weights,
+        group,
+        timefix,
+        renorm,
+    )
+
+
+def _aeq_adjust_time_columns(
+    columns: Sequence[Sequence[float]],
+    tolerance: float | None,
+) -> list[list[float]]:
+    adjusted = [[float(value) for value in column] for column in columns]
+    finite_values: list[float] = []
+    finite_positions: list[tuple[int, int]] = []
+
+    for col_idx, column in enumerate(adjusted):
+        for row_idx, value in enumerate(column):
+            if math.isfinite(value):
+                finite_values.append(value)
+                finite_positions.append((col_idx, row_idx))
+
+    if not finite_values:
+        return adjusted
+
+    result = _core.aeq_surv(finite_values, tolerance)
+    for (col_idx, row_idx), value in zip(finite_positions, result.time, strict=True):
+        adjusted[col_idx][row_idx] = float(value)
+    return adjusted
+
+
+def _raise_if_aeq_zero_interval(
+    original_left: Sequence[float],
+    original_right: Sequence[float],
+    adjusted_left: Sequence[float],
+    adjusted_right: Sequence[float],
+) -> None:
+    for left, right, new_left, new_right in zip(
+        original_left,
+        original_right,
+        adjusted_left,
+        adjusted_right,
+        strict=True,
+    ):
+        if left != right and new_left == new_right:
+            raise ValueError("aeqSurv exception, an interval has effective length 0")
+
+
+def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:  # noqa: N802
+    """Adjudicate near-tied times in a ``Surv`` response, like R's ``aeqSurv``."""
+
+    if not isinstance(x, Surv):
+        raise TypeError("argument is not a Surv object")
+    tolerance_value = None if tolerance is None else _finite_float(tolerance, "tolerance")
+    if tolerance_value is not None and tolerance_value <= 0.0:
+        return x
+
+    if x.start is not None:
+        start, stop = _aeq_adjust_time_columns((x.start, x.time), tolerance_value)
+        _raise_if_aeq_zero_interval(x.start, x.time, start, stop)
+        return Surv(start, stop, list(x.event), type="counting")
+
+    if x.time2 is not None:
+        left, right = _aeq_adjust_time_columns((x.time, x.time2), tolerance_value)
+        _raise_if_aeq_zero_interval(x.time, x.time2, left, right)
+        if x.type == "interval2":
+            return Surv(left, right, type="interval2")
+        return Surv(left, right, list(x.event), type=x.type)
+
+    (time,) = _aeq_adjust_time_columns((x.time,), tolerance_value)
+    return Surv(time, list(x.event), type=x.type)
+
+
+def _survsplit_output_name(value: Any, name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a variable name")
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError(f"{name} must be a variable name")
+    return stripped
+
+
+def _survsplit_data_columns(data: Any | None, n: int) -> dict[str, list[Any]]:
+    if data is None:
+        return {}
+    if not isinstance(data, Mapping):
+        raise TypeError("data must be a mapping of column names to values")
+    columns: dict[str, list[Any]] = {}
+    for key, values in data.items():
+        column_name = str(key)
+        column = _materialize_1d(values, column_name)
+        if len(column) != n:
+            raise ValueError(f"data column {column_name!r} must have length {n}")
+        columns[column_name] = column
+    return columns
+
+
+def survSplit(  # noqa: N802
+    response: Surv,
+    data: Any | None = None,
+    *,
+    cut: Any,
+    start: str = "tstart",
+    end: str = "tstop",
+    event: str = "event",
+    episode: str | None = None,
+    id: str | None = None,  # noqa: A002
+    zero: Any = 0,
+) -> dict[str, list[Any]]:
+    """Split right or counting-process survival data at fixed cut points."""
+
+    if not isinstance(response, Surv):
+        raise TypeError("survSplit response must be a Surv object")
+    if response.type not in {"right", "counting"}:
+        raise ValueError(f"not valid for {response.type} censored survival data")
+
+    cut_values = _float_vector(cut, "cut")
+    if any(not math.isfinite(value) for value in cut_values):
+        raise ValueError("cut must be a vector of finite numbers")
+    start_name = _survsplit_output_name(start, "start")
+    end_name = _survsplit_output_name(end, "end")
+    event_name = _survsplit_output_name(event, "event")
+    episode_name = _survsplit_output_name(episode, "episode") if episode is not None else None
+    id_name = _survsplit_output_name(id, "id") if id is not None else None
+
+    n = len(response)
+    frame = _survsplit_data_columns(data, n)
+    if id_name is not None and id_name in frame:
+        raise ValueError("the suggested id name is already present")
+
+    if response.start is None:
+        zero_value = _finite_float(zero, "zero")
+        stop_values = list(response.time)
+        observed_times = [value for value in stop_values if not math.isnan(value)]
+        if any(value <= zero_value for value in observed_times):
+            raise ValueError("'zero' parameter must be less than any observed times")
+        start_values = [zero_value] * n
+    else:
+        start_values = list(response.start)
+        stop_values = list(response.time)
+
+    split = _core.survsplit(start_values, stop_values, cut_values)
+    row_indices = [int(row) - 1 for row in split.row]
+
+    result: dict[str, list[Any]] = {
+        name: [column[row_idx] for row_idx in row_indices] for name, column in frame.items()
+    }
+    if id_name is not None:
+        result[id_name] = [row_idx + 1 for row_idx in row_indices]
+
+    original_status = list(response.event)
+    result[start_name] = [float(value) for value in split.start]
+    result[end_name] = [float(value) for value in split.end]
+    result[event_name] = [
+        0 if censor else int(original_status[row_idx])
+        for censor, row_idx in zip(split.censor, row_indices, strict=True)
+    ]
+    if episode_name is not None:
+        result[episode_name] = [int(value) for value in split.interval]
+    return result
 
 
 def _subset_surv(response: Surv, indices: list[int]) -> Surv:
@@ -3320,6 +8183,282 @@ def _survfit_confidence_interval(
     raise AssertionError("conf_type is validated before confidence intervals are computed")
 
 
+def _r_numeric_vector(values: Any, name: str) -> list[float]:
+    result: list[float] = []
+    for value in _scalar_or_vector(values, name):
+        if _is_missing_value(value):
+            result.append(math.nan)
+        else:
+            try:
+                result.append(float(value))
+            except (TypeError, ValueError) as exc:
+                raise TypeError(f"{name} must be numeric") from exc
+    return result
+
+
+def _r_output_length(*vectors: Sequence[float]) -> int:
+    if any(len(vector) == 0 for vector in vectors):
+        return 0
+    return max((len(vector) for vector in vectors), default=0)
+
+
+def _r_value(vector: Sequence[float], idx: int) -> float:
+    return float(vector[idx % len(vector)])
+
+
+def _r_unary(vector: Sequence[float], op: Any) -> list[float]:
+    return [op(value) for value in vector]
+
+
+def _r_binary(left: Sequence[float], right: Sequence[float], op: Any) -> list[float]:
+    n = _r_output_length(left, right)
+    return [op(_r_value(left, idx), _r_value(right, idx)) for idx in range(n)]
+
+
+def _r_add(left: Sequence[float], right: Sequence[float]) -> list[float]:
+    return _r_binary(left, right, lambda x, y: x + y)
+
+
+def _r_sub(left: Sequence[float], right: Sequence[float]) -> list[float]:
+    return _r_binary(left, right, lambda x, y: x - y)
+
+
+def _r_mul(left: Sequence[float], right: Sequence[float]) -> list[float]:
+    return _r_binary(left, right, lambda x, y: x * y)
+
+
+def _r_div(left: Sequence[float], right: Sequence[float]) -> list[float]:
+    def divide(x: float, y: float) -> float:
+        try:
+            return x / y
+        except ZeroDivisionError:
+            if x == 0.0:
+                return math.nan
+            return math.copysign(math.inf, x * y if y else x)
+
+    return _r_binary(left, right, divide)
+
+
+def _r_scalar_mul(vector: Sequence[float], scalar: float) -> list[float]:
+    return [value * scalar for value in vector]
+
+
+def _r_eq_zero(vector: Sequence[float]) -> list[bool | float]:
+    return [math.nan if math.isnan(value) else value == 0.0 for value in vector]
+
+
+def _r_eq_one(vector: Sequence[float]) -> list[bool | float]:
+    return [math.nan if math.isnan(value) else value == 1.0 for value in vector]
+
+
+def _r_or(left: Sequence[bool | float], right: Sequence[bool | float]) -> list[bool | float]:
+    n = _r_output_length(left, right)
+    result: list[bool | float] = []
+    for idx in range(n):
+        lval = left[idx % len(left)]
+        rval = right[idx % len(right)]
+        if lval is True or rval is True:
+            result.append(True)
+        elif lval is False and rval is False:
+            result.append(False)
+        else:
+            result.append(math.nan)
+    return result
+
+
+def _r_ifelse(
+    condition: Sequence[bool | float],
+    yes: Sequence[float],
+    no: Sequence[float],
+) -> list[float]:
+    if len(condition) == 0 or len(yes) == 0 or len(no) == 0:
+        return []
+    result: list[float] = []
+    for idx, cond in enumerate(condition):
+        if cond is True:
+            result.append(_r_value(yes, idx))
+        elif cond is False:
+            result.append(_r_value(no, idx))
+        else:
+            result.append(math.nan)
+    return result
+
+
+def _r_log(value: float) -> float:
+    if math.isnan(value) or value <= 0.0:
+        return math.nan
+    return math.log(value)
+
+
+def _r_sqrt(value: float) -> float:
+    if math.isnan(value) or value < 0.0:
+        return math.nan
+    return math.sqrt(value)
+
+
+def _r_asin(value: float) -> float:
+    if math.isnan(value) or value < -1.0 or value > 1.0:
+        return math.nan
+    return math.asin(value)
+
+
+def _r_exp(value: float) -> float:
+    return math.nan if math.isnan(value) else _safe_exp(value)
+
+
+def _r_pmax_zero(values: Sequence[float]) -> list[float]:
+    return [math.nan if math.isnan(value) else max(value, 0.0) for value in values]
+
+
+def _r_pmin(values: Sequence[float], limit: float) -> list[float]:
+    return [math.nan if math.isnan(value) else min(value, limit) for value in values]
+
+
+def _survfit_confint_scale(se: list[float], selow: Any | None) -> list[float]:
+    if selow is None:
+        return [1.0]
+    selow_values = _r_numeric_vector(selow, "selow")
+    return _r_ifelse(
+        _r_eq_zero(selow_values),
+        [1.0],
+        _r_div(selow_values, se),
+    )
+
+
+def _survfit_confint_prepared_se(p: list[float], se: list[float], logse: bool) -> list[float]:
+    if logse:
+        return se
+    return _r_ifelse(_r_eq_zero(se), [0.0], _r_div(se, p))
+
+
+def survfit_confint(
+    p: Any,
+    se: Any,
+    logse: Any = True,
+    conf_type: str | None = None,
+    conf_int: Any = 0.95,
+    selow: Any | None = None,
+    ulimit: Any = True,
+    **kwargs: Any,
+) -> SurvfitConfidenceIntervalResult:
+    """Return R ``survival::survfit_confint`` confidence bounds."""
+
+    conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, None)
+    conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"unexpected survfit_confint argument(s): {unexpected}")
+    if conf_type is None:
+        raise TypeError("conf_type is required")
+    if not isinstance(conf_type, str):
+        raise TypeError("conf_type must be a string")
+    if conf_type not in {"plain", "log", "log-log", "logit", "arcsin"}:
+        raise ValueError("invalid conf.int type")
+    if not _is_bool_like(logse):
+        raise TypeError("logse must be True or False")
+    if not _is_bool_like(ulimit):
+        raise TypeError("ulimit must be True or False")
+
+    p_values = _r_numeric_vector(p, "p")
+    se_values = _r_numeric_vector(se, "se")
+    confidence = _normalize_conf_level(conf_int, "conf_int")
+    zval = NormalDist().inv_cdf(1.0 - (1.0 - confidence) / 2.0)
+    scale = _survfit_confint_scale(se_values, selow)
+    se_values = _survfit_confint_prepared_se(p_values, se_values, bool(logse))
+
+    if conf_type == "plain":
+        se2 = _r_scalar_mul(_r_mul(se_values, p_values), zval)
+        lower = _r_pmax_zero(_r_sub(p_values, _r_mul(se2, scale)))
+        upper_raw = _r_add(p_values, se2)
+        upper = _r_pmin(upper_raw, 1.0) if bool(ulimit) else upper_raw
+        return SurvfitConfidenceIntervalResult(lower=lower, upper=upper)
+
+    if conf_type == "log":
+        xx = _r_ifelse(_r_eq_zero(p_values), [math.nan], p_values)
+        se2 = _r_scalar_mul(se_values, zval)
+        log_xx = _r_unary(xx, _r_log)
+        temp1 = _r_ifelse(
+            _r_eq_zero(se_values),
+            p_values,
+            _r_unary(_r_sub(log_xx, _r_mul(se2, scale)), _r_exp),
+        )
+        temp2 = _r_ifelse(
+            _r_eq_zero(se_values),
+            p_values,
+            _r_unary(_r_add(log_xx, se2), _r_exp),
+        )
+        upper = _r_pmin(temp2, 1.0) if bool(ulimit) else temp2
+        return SurvfitConfidenceIntervalResult(lower=temp1, upper=upper)
+
+    if conf_type == "log-log":
+        xx = _r_ifelse(_r_or(_r_eq_zero(p_values), _r_eq_one(p_values)), [math.nan], p_values)
+        log_xx = _r_unary(xx, _r_log)
+        se2 = _r_scalar_mul(_r_div(se_values, log_xx), zval)
+        log_neg_log_xx = _r_unary(_r_scalar_mul(log_xx, -1.0), _r_log)
+        temp1 = _r_ifelse(
+            _r_eq_zero(se_values),
+            p_values,
+            _r_unary(
+                _r_scalar_mul(
+                    _r_unary(_r_sub(log_neg_log_xx, _r_mul(se2, scale)), _r_exp),
+                    -1.0,
+                ),
+                _r_exp,
+            ),
+        )
+        temp2 = _r_ifelse(
+            _r_eq_zero(se_values),
+            p_values,
+            _r_unary(
+                _r_scalar_mul(_r_unary(_r_add(log_neg_log_xx, se2), _r_exp), -1.0),
+                _r_exp,
+            ),
+        )
+        return SurvfitConfidenceIntervalResult(lower=temp1, upper=temp2)
+
+    if conf_type == "logit":
+        xx = _r_ifelse(_r_eq_zero(p_values), [math.nan], p_values)
+        one_minus_xx = _r_sub([1.0], xx)
+        se2 = _r_scalar_mul(_r_mul(se_values, _r_add([1.0], _r_div(xx, one_minus_xx))), zval)
+        logit_p = _r_unary(_r_div(p_values, _r_sub([1.0], p_values)), _r_log)
+        temp1 = _r_ifelse(
+            _r_eq_zero(se_values),
+            p_values,
+            _r_sub(
+                [1.0],
+                _r_div(
+                    [1.0],
+                    _r_add(
+                        [1.0],
+                        _r_unary(_r_sub(logit_p, _r_mul(se2, scale)), _r_exp),
+                    ),
+                ),
+            ),
+        )
+        temp2 = _r_ifelse(
+            _r_eq_zero(se_values),
+            p_values,
+            _r_sub(
+                [1.0],
+                _r_div([1.0], _r_add([1.0], _r_unary(_r_add(logit_p, se2), _r_exp))),
+            ),
+        )
+        return SurvfitConfidenceIntervalResult(lower=temp1, upper=temp2)
+
+    xx = _r_ifelse(_r_eq_zero(p_values), [math.nan], p_values)
+    sqrt_xx = _r_unary(xx, _r_sqrt)
+    se2 = _r_scalar_mul(
+        _r_mul(se_values, _r_unary(_r_div(xx, _r_sub([1.0], xx)), _r_sqrt)),
+        0.5 * zval,
+    )
+    asin_sqrt_xx = _r_unary(sqrt_xx, _r_asin)
+    lower_angle = _r_pmax_zero(_r_sub(asin_sqrt_xx, _r_mul(se2, scale)))
+    upper_angle = _r_pmin(_r_add(asin_sqrt_xx, se2), math.pi / 2.0)
+    lower = [math.sin(value) ** 2 if not math.isnan(value) else math.nan for value in lower_angle]
+    upper = [math.sin(value) ** 2 if not math.isnan(value) else math.nan for value in upper_angle]
+    return SurvfitConfidenceIntervalResult(lower=lower, upper=upper)
+
+
 def _survfitkm(
     time: list[float],
     status: list[int],
@@ -3342,6 +8481,420 @@ def _survfitkm(
         conf_type=conf_type,
         timefix=timefix,
     )
+
+
+def survfitkm_influence(
+    time: Any,
+    status: Any,
+    cluster: Any | None = None,
+    *,
+    weights: Any | None = None,
+    reverse: Any = False,
+    stype: Any = 1,
+    ctype: Any = 1,
+    conf_level: Any = 0.95,
+    conf_type: Any = "log",
+    timefix: Any = True,
+) -> Any:
+    """Return right-censored ``survfitKM`` influence matrices."""
+
+    time_values = _float_vector(time, "time")
+    status_values = _float_vector(status, "status")
+    if len(status_values) != len(time_values):
+        raise ValueError("status must have the same length as time")
+    if cluster is None:
+        cluster_values = list(range(len(time_values)))
+    else:
+        labels = _materialize_labels(cluster, "cluster")
+        if len(labels) != len(time_values):
+            raise ValueError("cluster must have the same length as time")
+        cluster_values = _encode_labels(labels, "cluster")
+    weight_values = None if weights is None else _float_vector(weights, "weights")
+    if weight_values is not None and len(weight_values) != len(time_values):
+        raise ValueError("weights must have the same length as time")
+    return _core.survfitkm_influence(
+        time_values,
+        status_values,
+        cluster_values,
+        weights=weight_values,
+        reverse=_normalize_bool_option(reverse, "reverse"),
+        stype=_normalize_survfit_style(stype, "stype"),
+        ctype=_normalize_survfit_style(ctype, "ctype"),
+        conf_level=_normalize_conf_level(conf_level),
+        conf_type=_normalize_survfit_conf_type(conf_type),
+        timefix=_normalize_bool_option(timefix, "timefix"),
+    )
+
+
+def survfitkm_counting_influence(
+    start: Any,
+    stop: Any,
+    status: Any,
+    curve_time: Any,
+    curve_estimate: Any,
+    cluster: Any | None = None,
+    *,
+    weights: Any | None = None,
+    reverse: Any = False,
+    stype: Any = 1,
+    ctype: Any = 1,
+    conf_level: Any = 0.95,
+    conf_type: Any = "log",
+    timefix: Any = True,
+) -> Any:
+    """Return counting-process ``survfitKM`` influence matrices."""
+
+    start_values = _float_vector(start, "start")
+    stop_values = _float_vector(stop, "stop")
+    status_values = _integer_code_vector(status, "status", "status")
+    if len(stop_values) != len(start_values):
+        raise ValueError("stop must have the same length as start")
+    if len(status_values) != len(start_values):
+        raise ValueError("status must have the same length as start")
+    curve_time_values = _float_vector(curve_time, "curve_time")
+    curve_estimate_values = _float_vector(curve_estimate, "curve_estimate")
+    if len(curve_estimate_values) != len(curve_time_values):
+        raise ValueError("curve_estimate must have the same length as curve_time")
+    if cluster is None:
+        cluster_values = list(range(len(start_values)))
+    else:
+        labels = _materialize_labels(cluster, "cluster")
+        if len(labels) != len(start_values):
+            raise ValueError("cluster must have the same length as start")
+        cluster_values = _encode_labels(labels, "cluster")
+    weight_values = None if weights is None else _float_vector(weights, "weights")
+    if weight_values is not None and len(weight_values) != len(start_values):
+        raise ValueError("weights must have the same length as start")
+    return _core.survfitkm_counting_influence(
+        start_values,
+        stop_values,
+        status_values,
+        curve_time_values,
+        curve_estimate_values,
+        cluster_values,
+        weights=weight_values,
+        reverse=_normalize_bool_option(reverse, "reverse"),
+        stype=_normalize_survfit_style(stype, "stype"),
+        ctype=_normalize_survfit_style(ctype, "ctype"),
+        conf_level=_normalize_conf_level(conf_level),
+        conf_type=_normalize_survfit_conf_type(conf_type),
+        timefix=_normalize_bool_option(timefix, "timefix"),
+    )
+
+
+def _survfit_residual_type(value: str) -> str:
+    choices = ("pstate", "cumhaz", "sojourn", "survival", "chaz", "rmst", "rmts", "auc")
+    normalized = value.casefold().replace("-", "_")
+    if normalized in choices:
+        matched = normalized
+    else:
+        matches = [choice for choice in choices if choice.startswith(normalized)]
+        if len(matches) != 1:
+            raise ValueError(
+                "type must be one of pstate, cumhaz, sojourn, survival, chaz, rmst, rmts, or auc"
+            )
+        matched = matches[0]
+    if matched in {"pstate", "survival"}:
+        return "pstate"
+    if matched in {"cumhaz", "chaz"}:
+        return "cumhaz"
+    return "auc"
+
+
+def _survfit_residual_times(times: Any | None) -> list[float]:
+    if times is None:
+        raise TypeError("the times argument is required")
+    if isinstance(times, int | float) and not isinstance(times, bool):
+        return [float(times)]
+    return sorted(set(_float_vector(times, "times")))
+
+
+def _survfit_residual_model_frame(fit: Any) -> Mapping[Any, Any]:
+    if isinstance(fit, Mapping):
+        if not fit:
+            raise TypeError("residuals.survfit requires a non-empty survfit result")
+        return _survfit_residual_model_frame(next(iter(fit.values())))
+    frame = getattr(fit, "model", None)
+    if frame is None:
+        raise TypeError("residuals.survfit requires a survfit result with a stored model frame")
+    if not isinstance(frame, Mapping):
+        raise TypeError("stored survfit model frame must be mapping-like")
+    return frame
+
+
+def _survfit_residual_response(frame: Mapping[Any, Any]) -> Surv:
+    for value in frame.values():
+        if isinstance(value, Surv):
+            if value.type not in {"right", "counting"}:
+                raise NotImplementedError(
+                    "residuals.survfit currently supports right-censored or counting "
+                    "Kaplan-Meier fits"
+                )
+            return value
+    raise TypeError("stored survfit model frame does not contain a Surv response")
+
+
+def _survfit_residual_weights(
+    frame: Mapping[Any, Any],
+    n: int,
+) -> tuple[list[float], bool]:
+    if "(weights)" not in frame:
+        return [1.0] * n, False
+    weights = _float_vector(frame["(weights)"], "weights")
+    if len(weights) != n:
+        raise ValueError("weights must have the same length as the Surv response")
+    return weights, True
+
+
+def _survfit_residual_ids(frame: Mapping[Any, Any], n: int) -> tuple[list[Any], str | None, bool]:
+    if "(id)" not in frame:
+        return list(range(1, n + 1)), None, False
+    values = _materialize_labels(frame["(id)"], "id")
+    if len(values) != n:
+        raise ValueError("id must have the same length as the Surv response")
+    return values, "(id)", True
+
+
+def _survfit_residual_group_values(frame: Mapping[Any, Any], n: int) -> list[Any] | None:
+    if "group" in frame:
+        values = _materialize_labels(frame["group"], "group")
+        if len(values) != n:
+            raise ValueError("group must have the same length as the Surv response")
+        return values
+
+    columns: list[list[Any]] = []
+    for name, values in frame.items():
+        text_name = str(name)
+        if isinstance(values, (Surv, Mapping)) or text_name.startswith("("):
+            continue
+        if text_name in {"response", "time", "status", "start", "stop", "time2"}:
+            continue
+        materialized = _materialize_1d(values, text_name)
+        if len(materialized) != n:
+            continue
+        if materialized and isinstance(materialized[0], list | tuple):
+            continue
+        columns.append(materialized)
+
+    if not columns:
+        return None
+    return _combine_aligned_columns(columns, n)
+
+
+def _survfit_residual_grouped_indices(
+    fit: Mapping[Any, Any],
+    group_values: list[Any] | None,
+    n: int,
+) -> list[tuple[Any, Any, list[int], int]]:
+    if group_values is None:
+        raise TypeError("grouped survfit residuals require stored grouping columns")
+    grouped = _group_indices(group_values, n)
+    ordered_groups = list(grouped.items())
+    curves: list[tuple[Any, Any, list[int], int]] = []
+    for curve_idx, (label, curve) in enumerate(fit.items(), start=1):
+        indices = grouped.get(label)
+        if indices is None:
+            matching = [values for key, values in grouped.items() if str(key) == str(label)]
+            if len(matching) == 1:
+                indices = matching[0]
+        if indices is None and curve_idx <= len(ordered_groups):
+            indices = ordered_groups[curve_idx - 1][1]
+        if indices is None:
+            raise ValueError(f"could not match grouped survfit curve {label!r} to model rows")
+        curves.append((label, curve, indices, curve_idx))
+    return curves
+
+
+def _survfit_residual_curve_specs(
+    fit: Any,
+    frame: Mapping[Any, Any],
+    n: int,
+) -> list[tuple[Any, Any, list[int], int]]:
+    if isinstance(fit, Mapping):
+        return _survfit_residual_grouped_indices(
+            fit,
+            _survfit_residual_group_values(frame, n),
+            n,
+        )
+    return [(None, fit, list(range(n)), 1)]
+
+
+def _survfit_residual_rows_at_times(
+    influence: Any,
+    times: Sequence[float],
+    residual_type: str,
+) -> list[list[float]]:
+    curve_times = [float(value) for value in influence.time]
+    eval_times = [float(value) for value in times]
+    if residual_type == "cumhaz":
+        return [
+            _core.step_values_at(curve_times, [float(value) for value in row], eval_times, 0.0)
+            for row in influence.influence_chaz
+        ]
+    if residual_type == "auc":
+        return [
+            _pseudo_integrated_step_values(curve_times, [float(value) for value in row], eval_times)
+            for row in influence.influence_surv
+        ]
+    return [
+        _core.step_values_at(curve_times, [float(value) for value in row], eval_times, 0.0)
+        for row in influence.influence_surv
+    ]
+
+
+def _survfit_residual_matrix(
+    response: Surv,
+    weights: list[float],
+    curve_specs: list[tuple[Any, Any, list[int], int]],
+    times: Sequence[float],
+    residual_type: str,
+) -> tuple[list[list[float]], list[int] | None]:
+    matrix = [[0.0 for _ in times] for _ in range(len(response))]
+    curve_numbers = [0 for _ in range(len(response))] if len(curve_specs) > 1 else None
+    for _label, curve, indices, curve_idx in curve_specs:
+        if not isinstance(curve, SurvfitResult):
+            raise TypeError("residuals.survfit currently supports Kaplan-Meier survfit results")
+        group_response = _subset_surv(response, indices)
+        if group_response.type == "counting":
+            if group_response.start is None:
+                raise ValueError("counting-process Surv response is missing start times")
+            group_weights = [weights[idx] for idx in indices]
+            computation = _pseudo_counting_computation(curve)
+            influence = survfitkm_counting_influence(
+                list(group_response.start),
+                list(group_response.time),
+                [int(value) for value in group_response.event],
+                [float(value) for value in curve.time],
+                [float(value) for value in curve.estimate],
+                list(range(len(indices))),
+                weights=group_weights,
+                stype=computation.stype,
+                ctype=computation.ctype,
+            )
+        elif group_response.type == "right" and group_response.start is None:
+            group_weights = [weights[idx] for idx in indices]
+            computation = _pseudo_counting_computation(curve)
+            influence = survfitkm_influence(
+                list(group_response.time),
+                [int(value) for value in group_response.event],
+                list(range(len(indices))),
+                weights=group_weights,
+                stype=computation.stype,
+                ctype=computation.ctype,
+            )
+        else:
+            raise NotImplementedError(
+                "residuals.survfit currently supports right-censored or counting Kaplan-Meier fits"
+            )
+        rows = _survfit_residual_rows_at_times(influence, times, residual_type)
+        for local_idx, source_idx in enumerate(indices):
+            matrix[source_idx] = rows[local_idx]
+            if curve_numbers is not None:
+                curve_numbers[source_idx] = curve_idx
+    return matrix, curve_numbers
+
+
+def _collapse_survfit_residual_matrix(
+    matrix: list[list[float]],
+    ids: list[Any],
+    weights: list[float],
+    curve_numbers: list[int] | None,
+) -> tuple[list[list[float]], list[Any], list[int] | None]:
+    levels = _label_levels(ids, "id")
+    index_by_id = {value: idx for idx, value in enumerate(levels)}
+    collapsed = [[0.0 for _ in matrix[0]] for _ in levels] if matrix else [[] for _ in levels]
+    collapsed_curve = [0 for _ in levels] if curve_numbers is not None else None
+    for row_idx, id_value in enumerate(ids):
+        target = index_by_id[id_value]
+        collapsed[target] = [
+            current + float(weights[row_idx]) * float(value)
+            for current, value in zip(collapsed[target], matrix[row_idx], strict=True)
+        ]
+        if collapsed_curve is not None and collapsed_curve[target] == 0:
+            collapsed_curve[target] = curve_numbers[row_idx]
+    return collapsed, list(levels), collapsed_curve
+
+
+def _weight_survfit_residual_matrix(
+    matrix: list[list[float]],
+    weights: list[float],
+) -> list[list[float]]:
+    return [
+        [float(weight) * float(value) for value in row]
+        for row, weight in zip(matrix, weights, strict=True)
+    ]
+
+
+def survfit_residuals(
+    fit: Any,
+    times: Any | None = None,
+    *,
+    type: str = "pstate",  # noqa: A002
+    collapse: Any = False,
+    weighted: Any = False,
+    data_frame: Any = False,
+    extra: Any = False,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Return R-style ``residuals.survfit`` influence residuals for KM curves."""
+
+    data_frame = _pop_dotted_keyword(kwargs, "data.frame", "data_frame", data_frame, False)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"survfit_residuals got unexpected keyword argument(s): {unexpected}")
+    if isinstance(fit, CoxSurvfitResult):
+        raise TypeError("residuals method for coxph survival curve not found")
+    if isinstance(fit, TurnbullSurvfitResult):
+        raise NotImplementedError("residuals for interval-censored data are not available")
+
+    eval_times = _survfit_residual_times(times)
+    residual_type = _survfit_residual_type(type)
+    collapse_value = _normalize_bool_option(collapse, "collapse")
+    weighted_value = _normalize_bool_option(weighted, "weighted")
+    data_frame_value = _normalize_bool_option(data_frame, "data_frame")
+    extra_value = _normalize_bool_option(extra, "extra")
+    if collapse_value and not weighted_value:
+        raise ValueError("invalid combination of options: collapse=True and weighted=False")
+
+    frame = _survfit_residual_model_frame(fit)
+    response = _survfit_residual_response(frame)
+    n = len(response)
+    if n == 0:
+        raise ValueError("data set has no non-missing observations")
+    weights_values, has_case_weights = _survfit_residual_weights(frame, n)
+    id_values, id_name, has_id = _survfit_residual_ids(frame, n)
+    if not has_case_weights:
+        weighted_value = False
+    if not has_id or len(_label_levels(id_values, "id")) == n:
+        collapse_value = False
+
+    matrix, curve_numbers = _survfit_residual_matrix(
+        response,
+        weights_values,
+        _survfit_residual_curve_specs(fit, frame, n),
+        eval_times,
+        residual_type,
+    )
+
+    if collapse_value:
+        matrix, id_values, curve_numbers = _collapse_survfit_residual_matrix(
+            matrix,
+            id_values,
+            weights_values,
+            curve_numbers,
+        )
+    elif weighted_value and any(weight != 1.0 for weight in weights_values):
+        matrix = _weight_survfit_residual_matrix(matrix, weights_values)
+
+    return {
+        "resid": matrix,
+        "id": id_values,
+        "id_name": id_name,
+        "time": eval_times,
+        "curve": curve_numbers,
+        "data_frame": data_frame_value,
+        "extra": extra_value,
+    }
 
 
 def _survfit_from_km_counts(
@@ -3381,6 +8934,26 @@ def _survfit_from_km_counts(
             if getattr(curve, "n_enter", None) is not None
             else None
         ),
+        n_risk_count=(
+            [float(value) for value in km.n_risk_count]
+            if getattr(km, "n_risk_count", None) is not None
+            else None
+        ),
+        n_event_count=(
+            [float(value) for value in km.n_event_count]
+            if getattr(km, "n_event_count", None) is not None
+            else None
+        ),
+        n_censor_count=(
+            [float(value) for value in km.n_censor_count]
+            if getattr(km, "n_censor_count", None) is not None
+            else None
+        ),
+        n_enter_count=(
+            [float(value) for value in km.n_enter_count]
+            if getattr(km, "n_enter_count", None) is not None
+            else None
+        ),
     )
 
 
@@ -3392,6 +8965,8 @@ def _survfit_from_count_tables(
     n_censor: list[float],
     n_censor_count: list[float],
     n_enter: list[float] | None,
+    n_risk_count: list[float] | None = None,
+    n_enter_count: list[float] | None = None,
     *,
     reverse: bool,
     conf_level: float,
@@ -3429,6 +9004,267 @@ def _survfit_from_count_tables(
             if getattr(curve, "n_enter", None) is not None
             else None
         ),
+        n_risk_count=(None if n_risk_count is None else [float(value) for value in n_risk_count]),
+        n_event_count=[float(value) for value in n_event_count],
+        n_censor_count=[float(value) for value in n_censor_count],
+        n_enter_count=(
+            None if n_enter_count is None else [float(value) for value in n_enter_count]
+        ),
+    )
+
+
+def _survfit_cluster_values(cluster: Any, n: int) -> list[Any]:
+    values = _materialize_labels(cluster, "cluster")
+    if len(values) != n:
+        raise ValueError("cluster must have the same length as the Surv response")
+    _label_levels(values, "cluster")
+    return values
+
+
+def _survfit_robust_cluster_values(
+    response: Surv,
+    cluster: Any | None,
+    id_values: list[Any] | None,
+    weights: list[float] | None,
+    robust: bool | None,
+) -> list[Any] | None:
+    if robust is False:
+        if cluster is not None:
+            warnings.warn(
+                "cluster specified with robust=False; cluster will be ignored",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        return None
+    if cluster is not None:
+        return _survfit_cluster_values(cluster, len(response))
+    if robust is not True:
+        if weights is not None and any(not float(weight).is_integer() for weight in weights):
+            return list(range(len(response)))
+        return None
+    if id_values is not None:
+        return _survfit_cluster_values(id_values, len(response))
+    if response.start is not None:
+        raise NotImplementedError(
+            "survfit robust variance for counting-process data requires cluster or id"
+        )
+    return list(range(len(response)))
+
+
+def _survfit_robust_km_result(
+    result: Any,
+    response: Surv,
+    weights: list[float] | None,
+    cluster_values: list[Any],
+    *,
+    reverse: bool,
+    conf_level: float,
+    conf_type: str,
+    timefix: bool,
+) -> SurvfitResult:
+    if response.type not in {"right", "counting"}:
+        raise NotImplementedError(
+            "survfit robust variance is currently supported only for right-censored or "
+            "counting-process Kaplan-Meier curves"
+        )
+    if len(cluster_values) != len(response):
+        raise ValueError("cluster must have the same length as the Surv response")
+
+    if response.start is not None:
+        std_err, std_chaz, conf_lower, conf_upper = _core.robust_counting_survfit_variance(
+            list(response.start),
+            list(response.time),
+            [int(value) for value in response.event],
+            [float(value) for value in result.time],
+            [float(value) for value in result.estimate],
+            _encode_labels(cluster_values, "cluster"),
+            weights=weights,
+            reverse=reverse,
+            conf_level=conf_level,
+            conf_type=conf_type,
+            timefix=timefix,
+        )
+        return SurvfitResult(
+            time=[float(value) for value in result.time],
+            n_risk=[float(value) for value in result.n_risk],
+            n_event=[float(value) for value in result.n_event],
+            n_censor=[float(value) for value in result.n_censor],
+            estimate=[float(value) for value in result.estimate],
+            std_err=[float(value) for value in std_err],
+            conf_lower=[float(value) for value in conf_lower],
+            conf_upper=[float(value) for value in conf_upper],
+            cumhaz=[float(value) for value in result.cumhaz],
+            std_chaz=[float(value) for value in std_chaz],
+            n_enter=(
+                [float(value) for value in result.n_enter]
+                if getattr(result, "n_enter", None) is not None
+                else None
+            ),
+            n_risk_count=_optional_float_list(result, "n_risk_count"),
+            n_event_count=_optional_float_list(result, "n_event_count"),
+            n_censor_count=_optional_float_list(result, "n_censor_count"),
+            n_enter_count=_optional_float_list(result, "n_enter_count"),
+            model=getattr(result, "model", None),
+        )
+
+    robust = _core.robust_survfitkm(
+        list(response.time),
+        list(response.event),
+        _encode_labels(cluster_values, "cluster"),
+        weights=weights,
+        reverse=reverse,
+        conf_level=conf_level,
+        conf_type=conf_type,
+        timefix=timefix,
+    )
+    return SurvfitResult(
+        time=[float(value) for value in robust.time],
+        n_risk=[float(value) for value in robust.n_risk],
+        n_event=[float(value) for value in robust.n_event],
+        n_censor=[float(value) for value in robust.n_censor],
+        estimate=[float(value) for value in robust.estimate],
+        std_err=[float(value) for value in robust.std_err],
+        conf_lower=[float(value) for value in robust.conf_lower],
+        conf_upper=[float(value) for value in robust.conf_upper],
+        cumhaz=[float(value) for value in robust.cumhaz],
+        std_chaz=[float(value) for value in robust.std_chaz],
+        n_enter=None,
+        n_risk_count=_optional_float_list(robust, "n_risk_count"),
+        n_event_count=_optional_float_list(robust, "n_event_count"),
+        n_censor_count=_optional_float_list(robust, "n_censor_count"),
+        n_enter_count=_optional_float_list(robust, "n_enter_count"),
+        model=getattr(result, "model", None),
+    )
+
+
+def _matrix_column_norms(matrix: list[list[float]]) -> list[float]:
+    if not matrix:
+        return []
+    width = len(matrix[0])
+    return [
+        math.sqrt(sum(float(row[col]) * float(row[col]) for row in matrix)) for col in range(width)
+    ]
+
+
+def _survfit_robust_right_result(
+    result: SurvfitResult,
+    response: Surv,
+    weights: list[float] | None,
+    cluster_values: list[Any],
+    *,
+    reverse: bool,
+    conf_level: float,
+    conf_type: str,
+    computation: _SurvfitComputation,
+    timefix: bool,
+) -> SurvfitResult:
+    if response.start is not None or response.type != "right":
+        raise NotImplementedError(
+            "survfit robust variance for non-Kaplan-Meier curves is currently supported only "
+            "for right-censored data"
+        )
+    if len(cluster_values) != len(response):
+        raise ValueError("cluster must have the same length as the Surv response")
+
+    influence = survfitkm_influence(
+        list(response.time),
+        list(response.event),
+        cluster_values,
+        weights=weights,
+        reverse=reverse,
+        stype=computation.stype,
+        ctype=computation.ctype,
+        conf_level=conf_level,
+        conf_type=conf_type,
+        timefix=timefix,
+    )
+    std_err = _matrix_column_norms(influence.influence_surv)
+    std_chaz = _matrix_column_norms(influence.influence_chaz)
+    if conf_type == "none":
+        conf_lower: list[float] = []
+        conf_upper: list[float] = []
+    else:
+        alpha = 1.0 - conf_level
+        z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+        intervals = [
+            _survfit_confidence_interval(estimate, se, z, conf_type)
+            for estimate, se in zip(result.estimate, std_err, strict=True)
+        ]
+        conf_lower = [lower for lower, _upper in intervals]
+        conf_upper = [upper for _lower, upper in intervals]
+
+    return SurvfitResult(
+        time=result.time,
+        n_risk=result.n_risk,
+        n_event=result.n_event,
+        n_censor=result.n_censor,
+        estimate=result.estimate,
+        std_err=std_err,
+        conf_lower=conf_lower,
+        conf_upper=conf_upper,
+        cumhaz=result.cumhaz,
+        std_chaz=std_chaz,
+        n_enter=result.n_enter,
+        n_risk_count=result.n_risk_count,
+        n_event_count=result.n_event_count,
+        n_censor_count=result.n_censor_count,
+        n_enter_count=result.n_enter_count,
+        model=result.model,
+    )
+
+
+def _survfit_robust_counting_result(
+    result: SurvfitResult,
+    response: Surv,
+    weights: list[float] | None,
+    cluster_values: list[Any],
+    *,
+    reverse: bool,
+    conf_level: float,
+    conf_type: str,
+    computation: _SurvfitComputation,
+    timefix: bool,
+) -> SurvfitResult:
+    if response.start is None or response.type != "counting":
+        raise NotImplementedError(
+            "survfit robust variance for counting-process curves requires counting-process data"
+        )
+    if len(cluster_values) != len(response):
+        raise ValueError("cluster must have the same length as the Surv response")
+
+    std_err, std_chaz, conf_lower, conf_upper = _core.robust_counting_survfit_variance(
+        list(response.start),
+        list(response.time),
+        [int(value) for value in response.event],
+        [float(value) for value in result.time],
+        [float(value) for value in result.estimate],
+        _encode_labels(cluster_values, "cluster"),
+        weights=weights,
+        reverse=reverse,
+        conf_level=conf_level,
+        conf_type=conf_type,
+        timefix=timefix,
+        stype=computation.stype,
+        ctype=computation.ctype,
+    )
+
+    return SurvfitResult(
+        time=result.time,
+        n_risk=result.n_risk,
+        n_event=result.n_event,
+        n_censor=result.n_censor,
+        estimate=result.estimate,
+        std_err=[float(value) for value in std_err],
+        conf_lower=[float(value) for value in conf_lower],
+        conf_upper=[float(value) for value in conf_upper],
+        cumhaz=result.cumhaz,
+        std_chaz=[float(value) for value in std_chaz],
+        n_enter=result.n_enter,
+        n_risk_count=result.n_risk_count,
+        n_event_count=result.n_event_count,
+        n_censor_count=result.n_censor_count,
+        n_enter_count=result.n_enter_count,
+        model=result.model,
     )
 
 
@@ -3471,6 +9307,12 @@ def _survfit_counting_with_id(
         [float(value) for value in tables.n_censor],
         [float(value) for value in tables.n_censor_count],
         None if tables.n_enter is None else [float(value) for value in tables.n_enter],
+        n_risk_count=[float(value) for value in tables.n_risk_count],
+        n_enter_count=(
+            [float(value) for value in tables.n_enter_count]
+            if getattr(tables, "n_enter_count", None) is not None
+            else None
+        ),
         reverse=reverse,
         conf_level=conf_level,
         conf_type=conf_type,
@@ -3596,7 +9438,410 @@ def _survfit_with_time0(
         cumhaz=[0.0, *cumhaz],
         std_chaz=[0.0, *std_chaz],
         n_enter=([0.0, *result.n_enter] if getattr(result, "n_enter", None) is not None else None),
+        n_risk_count=(
+            [result.n_risk_count[0] if result.n_risk_count else 0.0, *result.n_risk_count]
+            if getattr(result, "n_risk_count", None) is not None
+            else None
+        ),
+        n_event_count=(
+            [0.0, *result.n_event_count]
+            if getattr(result, "n_event_count", None) is not None
+            else None
+        ),
+        n_censor_count=(
+            [0.0, *result.n_censor_count]
+            if getattr(result, "n_censor_count", None) is not None
+            else None
+        ),
+        n_enter_count=(
+            [0.0, *result.n_enter_count]
+            if getattr(result, "n_enter_count", None) is not None
+            else None
+        ),
     )
+
+
+def _needs_time0_insert(times: Sequence[float], t0: float) -> bool:
+    return not times or abs(float(times[0]) - t0) >= _SURVFIT_TIME_EPSILON
+
+
+def _prepend_curve_time0(values: list[float], initial: float) -> list[float]:
+    return [initial, *[float(value) for value in values]]
+
+
+def _prepend_curve_time0_optional(values: list[float], initial: float) -> list[float]:
+    return _prepend_curve_time0(values, initial) if values else []
+
+
+def _optional_float_list(value: Any, name: str) -> list[float] | None:
+    items = getattr(value, name, None)
+    if items is None:
+        return None
+    return [float(item) for item in items]
+
+
+def _prepend_matrix_time0(values: list[list[float]], initial: float) -> list[list[float]]:
+    return [[initial, *[float(value) for value in row]] for row in values] if values else []
+
+
+def _survfit0_default_time(result: Any) -> float:
+    if isinstance(result, CoxSurvfitResult) and result.start_time is not None:
+        return float(result.start_time)
+    times = getattr(result, "time", None)
+    if times is None:
+        times = getattr(result, "time_points", None)
+    values = [0.0]
+    if times is not None:
+        values.extend(float(value) for value in times)
+    return min(values)
+
+
+def _survfit0_result(result: SurvfitResult, t0: float | None = None) -> SurvfitResult:
+    initial_time = _survfit0_default_time(result) if t0 is None else float(t0)
+    if not _needs_time0_insert(result.time, initial_time):
+        return result
+    n_risk0 = float(result.n_risk[0]) if result.n_risk else 0.0
+    return SurvfitResult(
+        time=_prepend_curve_time0(result.time, initial_time),
+        n_risk=_prepend_curve_time0(result.n_risk, n_risk0),
+        n_event=_prepend_curve_time0(result.n_event, 0.0),
+        n_censor=_prepend_curve_time0(result.n_censor, 0.0),
+        estimate=_prepend_curve_time0(result.estimate, 1.0),
+        std_err=_prepend_curve_time0_optional(result.std_err, 0.0),
+        conf_lower=_prepend_curve_time0_optional(result.conf_lower, 1.0),
+        conf_upper=_prepend_curve_time0_optional(result.conf_upper, 1.0),
+        cumhaz=_prepend_curve_time0(result.cumhaz, 0.0),
+        std_chaz=_prepend_curve_time0_optional(result.std_chaz, 0.0),
+        n_enter=(_prepend_curve_time0(result.n_enter, 0.0) if result.n_enter is not None else None),
+        n_risk_count=(
+            _prepend_curve_time0(
+                result.n_risk_count,
+                result.n_risk_count[0] if result.n_risk_count else 0.0,
+            )
+            if result.n_risk_count is not None
+            else None
+        ),
+        n_event_count=(
+            _prepend_curve_time0(result.n_event_count, 0.0)
+            if result.n_event_count is not None
+            else None
+        ),
+        n_censor_count=(
+            _prepend_curve_time0(result.n_censor_count, 0.0)
+            if result.n_censor_count is not None
+            else None
+        ),
+        n_enter_count=(
+            _prepend_curve_time0(result.n_enter_count, 0.0)
+            if result.n_enter_count is not None
+            else None
+        ),
+        model=result.model,
+    )
+
+
+def _survfit0_cox_result(
+    result: CoxSurvfitResult,
+    t0: float | None = None,
+) -> CoxSurvfitResult:
+    initial_time = _survfit0_default_time(result) if t0 is None else float(t0)
+    if not _needs_time0_insert(result.time, initial_time):
+        return result
+    return CoxSurvfitResult(
+        time=_prepend_curve_time0(result.time, initial_time),
+        surv=_prepend_matrix_time0(result.surv, 1.0),
+        cumhaz=_prepend_matrix_time0(result.cumhaz, 0.0),
+        linear_predictors=result.linear_predictors,
+        centered=result.centered,
+        strata=result.strata,
+        strata_labels=result.strata_labels,
+        start_time=result.start_time,
+        std_err=_prepend_matrix_time0(result.std_err, 0.0),
+        std_chaz=_prepend_matrix_time0(result.std_chaz, 0.0),
+        conf_lower=_prepend_matrix_time0(result.conf_lower, 1.0),
+        conf_upper=_prepend_matrix_time0(result.conf_upper, 1.0),
+        model=result.model,
+    )
+
+
+def _survfit0_turnbull_result(
+    result: TurnbullSurvfitResult,
+    t0: float | None = None,
+) -> TurnbullSurvfitResult:
+    initial_time = _survfit0_default_time(result) if t0 is None else float(t0)
+    if not _needs_time0_insert(result.time_points, initial_time):
+        return result
+    return TurnbullSurvfitResult(
+        time_points=_prepend_curve_time0(result.time_points, initial_time),
+        survival=_prepend_curve_time0(result.survival, 1.0),
+        survival_lower=_prepend_curve_time0_optional(result.survival_lower, 1.0),
+        survival_upper=_prepend_curve_time0_optional(result.survival_upper, 1.0),
+        n_iter=result.n_iter,
+        converged=result.converged,
+        model=result.model,
+    )
+
+
+def _is_survfit_result_like(value: Any) -> bool:
+    return all(
+        hasattr(value, name)
+        for name in ("time", "n_risk", "n_event", "n_censor", "estimate", "cumhaz")
+    )
+
+
+def _coerce_survfit_result_like(value: Any) -> SurvfitResult:
+    if isinstance(value, SurvfitResult):
+        return value
+    return SurvfitResult(
+        time=[float(item) for item in value.time],
+        n_risk=[float(item) for item in value.n_risk],
+        n_event=[float(item) for item in value.n_event],
+        n_censor=[float(item) for item in value.n_censor],
+        estimate=[float(item) for item in value.estimate],
+        std_err=[float(item) for item in getattr(value, "std_err", [])],
+        conf_lower=[float(item) for item in getattr(value, "conf_lower", [])],
+        conf_upper=[float(item) for item in getattr(value, "conf_upper", [])],
+        cumhaz=[float(item) for item in value.cumhaz],
+        std_chaz=[float(item) for item in getattr(value, "std_chaz", [])],
+        n_enter=(
+            [float(item) for item in value.n_enter]
+            if getattr(value, "n_enter", None) is not None
+            else None
+        ),
+        n_risk_count=_optional_float_list(value, "n_risk_count"),
+        n_event_count=_optional_float_list(value, "n_event_count"),
+        n_censor_count=_optional_float_list(value, "n_censor_count"),
+        n_enter_count=_optional_float_list(value, "n_enter_count"),
+        model=getattr(value, "model", None),
+    )
+
+
+def _is_turnbull_result_like(value: Any) -> bool:
+    return all(
+        hasattr(value, name)
+        for name in ("time_points", "survival", "survival_lower", "survival_upper")
+    )
+
+
+def _coerce_turnbull_result_like(value: Any) -> TurnbullSurvfitResult:
+    if isinstance(value, TurnbullSurvfitResult):
+        return value
+    return TurnbullSurvfitResult(
+        time_points=[float(item) for item in value.time_points],
+        survival=[float(item) for item in value.survival],
+        survival_lower=[float(item) for item in value.survival_lower],
+        survival_upper=[float(item) for item in value.survival_upper],
+        n_iter=int(getattr(value, "n_iter", 0)),
+        converged=bool(getattr(value, "converged", True)),
+        model=getattr(value, "model", None),
+    )
+
+
+def _survfit0_any_result(value: Any, t0: float | None = None) -> Any:
+    if isinstance(value, SurvfitResult) or _is_survfit_result_like(value):
+        result = _coerce_survfit_result_like(value)
+        initial_time = _survfit0_default_time(result) if t0 is None else float(t0)
+        return (
+            value
+            if not _needs_time0_insert(result.time, initial_time)
+            else _survfit0_result(
+                result,
+                initial_time,
+            )
+        )
+    if isinstance(value, CoxSurvfitResult):
+        return _survfit0_cox_result(value, t0)
+    if isinstance(value, TurnbullSurvfitResult) or _is_turnbull_result_like(value):
+        result = _coerce_turnbull_result_like(value)
+        initial_time = _survfit0_default_time(result) if t0 is None else float(t0)
+        return (
+            value
+            if not _needs_time0_insert(
+                result.time_points,
+                initial_time,
+            )
+            else _survfit0_turnbull_result(result, initial_time)
+        )
+    return value
+
+
+def _mapping_survfit0_time(results: Mapping[Any, Any]) -> float:
+    values = [0.0]
+    for result in results.values():
+        times = getattr(result, "time", None)
+        if times is None:
+            times = getattr(result, "time_points", None)
+        if times is not None:
+            values.extend(float(value) for value in times)
+    return min(values)
+
+
+def survfit0(x: Any, *args: Any, **kwargs: Any) -> Any:
+    """Insert an initial survival row into an existing survfit result."""
+
+    if args or kwargs:
+        raise TypeError("survfit0 got unexpected arguments")
+    if isinstance(x, Mapping):
+        t0 = _mapping_survfit0_time(x)
+        return {label: _survfit0_any_result(result, t0) for label, result in x.items()}
+    result = _survfit0_any_result(x)
+    if result is not x or isinstance(x, SurvfitResult | CoxSurvfitResult | TurnbullSurvfitResult):
+        return result
+    if _is_survfit_result_like(x) or _is_turnbull_result_like(x):
+        return result
+    raise TypeError("survfit0 requires a survfit result")
+
+
+def _cox_survfit_result_cumhaz(surv: list[float]) -> list[float]:
+    return [math.inf if value <= 0.0 else -math.log(value) for value in surv]
+
+
+def _cox_survfit_result_std_chaz(
+    surv: list[float],
+    std_err: list[float],
+) -> list[float]:
+    result: list[float] = []
+    for survival, se in zip(surv, std_err, strict=True):
+        if survival > 0.0:
+            result.append(float(se) / float(survival))
+        else:
+            result.append(math.inf if se > 0.0 else 0.0)
+    return result
+
+
+def _weighted_average(values: Sequence[float], weights: Sequence[float] | None) -> float:
+    if not values:
+        return math.nan
+    if weights is None:
+        return sum(float(value) for value in values) / len(values)
+    total = sum(float(weight) for weight in weights)
+    if total <= 0.0:
+        return math.nan
+    return (
+        sum(float(value) * float(weight) for value, weight in zip(values, weights, strict=True))
+        / total
+    )
+
+
+def _cox_survfit_from_aggregates(
+    source: CoxSurvfitResult,
+    aggregates: Sequence[Any],
+    linear_predictors: Sequence[float],
+) -> CoxSurvfitResult:
+    surv = [[float(value) for value in aggregate.surv] for aggregate in aggregates]
+    std_err = (
+        [[float(value) for value in aggregate.std_err] for aggregate in aggregates]
+        if source.std_err
+        else []
+    )
+    std_chaz = (
+        [
+            _cox_survfit_result_std_chaz(surv_curve, se_curve)
+            for surv_curve, se_curve in zip(surv, std_err, strict=True)
+        ]
+        if source.std_chaz and std_err
+        else []
+    )
+    conf_lower = (
+        [[float(value) for value in aggregate.lower] for aggregate in aggregates]
+        if source.conf_lower and source.conf_upper and std_err
+        else []
+    )
+    conf_upper = (
+        [[float(value) for value in aggregate.upper] for aggregate in aggregates]
+        if source.conf_lower and source.conf_upper and std_err
+        else []
+    )
+
+    return CoxSurvfitResult(
+        time=[float(value) for value in aggregates[0].time] if aggregates else [],
+        surv=surv,
+        cumhaz=[_cox_survfit_result_cumhaz(curve) for curve in surv],
+        linear_predictors=[float(value) for value in linear_predictors],
+        centered=source.centered,
+        start_time=source.start_time,
+        std_err=std_err,
+        std_chaz=std_chaz,
+        conf_lower=conf_lower,
+        conf_upper=conf_upper,
+        model=source.model,
+    )
+
+
+def aggregate_survfit_result(
+    result: CoxSurvfitResult,
+    groups: Any | None = None,
+    weights: Any | None = None,
+) -> CoxSurvfitResult:
+    """Average Cox survfit prediction curves, optionally by group code."""
+
+    if not isinstance(result, CoxSurvfitResult):
+        raise TypeError("survfit object does not have a 'data' margin")
+
+    n_curves = len(result.surv)
+    if len(result.cumhaz) != n_curves or len(result.linear_predictors) != n_curves:
+        raise ValueError("Cox survfit result has inconsistent curve counts")
+    if n_curves == 0:
+        return CoxSurvfitResult(
+            time=[float(value) for value in result.time],
+            surv=[],
+            cumhaz=[],
+            linear_predictors=[],
+            centered=result.centered,
+            start_time=result.start_time,
+            model=result.model,
+        )
+
+    curve_times = [[float(value) for value in result.time] for _ in range(n_curves)]
+    curve_survs = [[float(value) for value in curve] for curve in result.surv]
+    curve_std_errs = (
+        [[float(value) for value in curve] for curve in result.std_err] if result.std_err else None
+    )
+    curve_weights = _float_vector(weights, "weights") if weights is not None else None
+
+    if groups is None:
+        aggregate = _core.aggregate_survfit(
+            curve_times,
+            curve_survs,
+            curve_std_errs,
+            curve_weights,
+            None,
+        )
+        linear_predictor = _weighted_average(result.linear_predictors, curve_weights)
+        return _cox_survfit_from_aggregates(result, [aggregate], [linear_predictor])
+
+    group_codes = _integer_code_vector(groups, "groups", "integer group codes")
+    if len(group_codes) != n_curves:
+        raise ValueError("groups must have same length as number of curves")
+    if any(code < 1 for code in group_codes):
+        raise ValueError("groups must use positive integer group codes")
+
+    if len(set(group_codes)) == 1:
+        return aggregate_survfit_result(result, weights=curve_weights)
+
+    aggregates = []
+    linear_predictors = []
+    for code in sorted(set(group_codes)):
+        indices = [idx for idx, group_code in enumerate(group_codes) if group_code == code]
+        group_weights = (
+            [curve_weights[idx] for idx in indices] if curve_weights is not None else None
+        )
+        aggregate = _core.aggregate_survfit(
+            [curve_times[idx] for idx in indices],
+            [curve_survs[idx] for idx in indices],
+            [curve_std_errs[idx] for idx in indices] if curve_std_errs is not None else None,
+            group_weights,
+            None,
+        )
+        aggregates.append(aggregate)
+        linear_predictors.append(
+            _weighted_average(
+                [float(result.linear_predictors[idx]) for idx in indices],
+                group_weights,
+            )
+        )
+
+    return _cox_survfit_from_aggregates(result, aggregates, linear_predictors)
 
 
 def _survfit_without_standard_errors(result: Any) -> Any:
@@ -3613,6 +9858,10 @@ def _survfit_without_standard_errors(result: Any) -> Any:
             cumhaz=result.cumhaz,
             std_chaz=[],
             n_enter=result.n_enter,
+            n_risk_count=result.n_risk_count,
+            n_event_count=result.n_event_count,
+            n_censor_count=result.n_censor_count,
+            n_enter_count=result.n_enter_count,
             model=result.model,
         )
     if all(
@@ -3635,6 +9884,10 @@ def _survfit_without_standard_errors(result: Any) -> Any:
                 if getattr(result, "n_enter", None) is not None
                 else None
             ),
+            n_risk_count=_optional_float_list(result, "n_risk_count"),
+            n_event_count=_optional_float_list(result, "n_event_count"),
+            n_censor_count=_optional_float_list(result, "n_censor_count"),
+            n_enter_count=_optional_float_list(result, "n_enter_count"),
             model=getattr(result, "model", None),
         )
     if isinstance(result, CoxSurvfitResult):
@@ -3671,6 +9924,10 @@ def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
             cumhaz=result.cumhaz,
             std_chaz=result.std_chaz,
             n_enter=result.n_enter,
+            n_risk_count=result.n_risk_count,
+            n_event_count=result.n_event_count,
+            n_censor_count=result.n_censor_count,
+            n_enter_count=result.n_enter_count,
             model=model_frame,
         )
     if all(
@@ -3713,6 +9970,10 @@ def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
                 if getattr(result, "n_enter", None) is not None
                 else None
             ),
+            n_risk_count=_optional_float_list(result, "n_risk_count"),
+            n_event_count=_optional_float_list(result, "n_event_count"),
+            n_censor_count=_optional_float_list(result, "n_censor_count"),
+            n_enter_count=_optional_float_list(result, "n_enter_count"),
             model=model_frame,
         )
     if isinstance(result, CoxSurvfitResult):
@@ -3853,10 +10114,6 @@ def survfit(
     include_se = _normalize_bool_option_with_default(se_fit, "se_fit", True)
     robust_value = _normalize_optional_bool_option(robust, "robust")
     id_arg = id
-    if cluster is not None:
-        raise NotImplementedError("survfit cluster is not supported")
-    if robust_value is True:
-        raise NotImplementedError("survfit robust variance is not supported")
     if istate is not None or etype is not None:
         raise NotImplementedError("survfit multi-state istate/etype inputs are not supported")
     # R's survival keeps `error` for backward compatibility but no longer uses it.
@@ -3870,11 +10127,15 @@ def survfit(
     include_censor = _normalize_bool_option(censor, "censor")
     fix_time = _normalize_bool_option(timefix, "timefix")
     model_frame = None
+    formula_group_levels: tuple[Any, ...] | None = None
     if isinstance(response, str):
         formula = response
         id_column = id_arg if isinstance(id_arg, str) else None
+        cluster_column = cluster if isinstance(cluster, str) else None
         if id_column is not None:
             id_arg = _column(data, id_column)
+        if cluster_column is not None:
+            cluster = _column(data, cluster_column)
         if subset is not None:
             data, aligned = _subset_formula_inputs(
                 formula,
@@ -3882,9 +10143,11 @@ def survfit(
                 subset,
                 weights=weights,
                 id=id_arg,
+                cluster=cluster,
             )
             weights = aligned["weights"]
             id_arg = aligned["id"]
+            cluster = aligned["cluster"]
             subset = None
         data, aligned = _apply_formula_na_action(
             formula,
@@ -3892,23 +10155,30 @@ def survfit(
             na_action,
             weights=weights,
             id=id_arg,
+            cluster=cluster,
         )
         weights = aligned["weights"]
         id_arg = aligned["id"]
+        cluster = aligned["cluster"]
         na_action = "pass"
         response, terms = _parse_formula(formula, data)
-        _reject_formula_clusters("survfit", terms)
-        if keep_model:
-            model_frame = _survfit_formula_model_frame(
-                formula,
-                data,
-                response,
-                weights,
-                id_arg,
-                id_column,
-            )
+        if terms.clusters:
+            if cluster is not None:
+                raise ValueError("survfit formula cluster() cannot be combined with cluster")
+            cluster = _combined_columns(data, terms.clusters, len(response))
+        model_frame = _survfit_formula_model_frame(
+            formula,
+            data,
+            response,
+            weights,
+            id_arg,
+            id_column,
+            cluster,
+            cluster_column,
+        )
         if terms.strata or terms.covariates:
             group = _combined_formula_groups(data, terms.strata, terms.covariates, len(response))
+            formula_group_levels = _r_formula_ordered_levels(group, "survfit formula groups")
 
     if not isinstance(response, Surv) and hasattr(response, "survival_curve"):
         if not computation.is_kaplan_meier:
@@ -3963,6 +10233,7 @@ def survfit(
         group = _subset_optional_sequence(group, indices, "group")
         weights = _subset_optional_sequence(weights, indices, "weights")
         id_arg = _subset_optional_sequence(id_arg, indices, "id")
+        cluster = _subset_optional_sequence(cluster, indices, "cluster")
     response, aligned = _apply_surv_na_action(
         response,
         na_action,
@@ -3970,15 +10241,17 @@ def survfit(
         group=group,
         weights=weights,
         id=id_arg,
+        cluster=cluster,
     )
     group = aligned["group"]
     weights = aligned["weights"]
     id_arg = aligned["id"]
+    cluster = aligned["cluster"]
     id_values = _materialize_labels(id_arg, "id") if id_arg is not None else None
     if id_values is not None and len(id_values) != len(response):
         raise ValueError("id must have the same length as the Surv response")
-    if keep_model and model_frame is None:
-        model_frame = _survfit_model_frame(response, group, weights, id_values)
+    if model_frame is None:
+        model_frame = _survfit_model_frame(response, group, weights, id_values, cluster)
     if newdata is not None:
         raise ValueError("newdata is only supported for fitted Cox models")
     if not include_censor:
@@ -3986,6 +10259,15 @@ def survfit(
     if include_entry and (response.start is None or id_values is None):
         raise ValueError("survfit entry=TRUE requires counting-process Surv input and id")
     if response.type in {"left", "interval", "interval2"}:
+        if (
+            include_se
+            and _survfit_robust_cluster_values(response, cluster, id_values, None, robust_value)
+            is not None
+        ):
+            raise NotImplementedError(
+                "survfit robust variance is currently supported only for right-censored or "
+                "counting-process Kaplan-Meier curves"
+            )
         if not computation.is_kaplan_meier:
             raise ValueError(
                 "non-Kaplan-Meier survfit styles are only supported for right-censored data"
@@ -4013,7 +10295,9 @@ def survfit(
             )
 
         turnbull_results: dict[Any, Any] = {}
-        for label, indices in _group_indices(group, len(response)).items():
+        for label, indices in _group_indices(
+            group, len(response), levels=formula_group_levels
+        ).items():
             group_response = _subset_surv(response, indices)
             left, right = _turnbull_intervals(group_response)
             group_weights = [wt[idx] for idx in indices] if wt is not None else None
@@ -4038,8 +10322,18 @@ def survfit(
         group = _subset_optional_sequence(group, indices, "group")
         wt = _subset_optional_sequence(wt, indices, "weights")
         id_values = _subset_optional_sequence(id_values, indices, "id")
+        cluster = _subset_optional_sequence(cluster, indices, "cluster")
     entry_times = list(response.start) if response.start is not None else None
-
+    robust_clusters = (
+        _survfit_robust_cluster_values(response, cluster, id_values, wt, robust_value)
+        if include_se
+        else None
+    )
+    if robust_clusters is not None and response.type not in {"right", "counting"}:
+        raise NotImplementedError(
+            "survfit robust variance is currently supported only for right-censored or "
+            "counting-process curves"
+        )
     if group is None:
         km = (
             _survfit_counting_with_id(
@@ -4066,6 +10360,17 @@ def survfit(
             )
         )
         if computation.is_kaplan_meier:
+            if robust_clusters is not None:
+                km = _survfit_robust_km_result(
+                    km,
+                    response,
+                    wt,
+                    robust_clusters,
+                    reverse=reverse_curve,
+                    conf_level=normalized_conf_level,
+                    conf_type=normalized_conf_type,
+                    timefix=fix_time,
+                )
             result = (
                 _survfit_with_time0(
                     km,
@@ -4089,6 +10394,31 @@ def survfit(
             computation,
             normalized_conf_type,
         )
+        if robust_clusters is not None:
+            if response.start is not None:
+                result = _survfit_robust_counting_result(
+                    result,
+                    response,
+                    wt,
+                    robust_clusters,
+                    reverse=reverse_curve,
+                    conf_level=normalized_conf_level,
+                    conf_type=normalized_conf_type,
+                    computation=computation,
+                    timefix=fix_time,
+                )
+            else:
+                result = _survfit_robust_right_result(
+                    result,
+                    response,
+                    wt,
+                    robust_clusters,
+                    reverse=reverse_curve,
+                    conf_level=normalized_conf_level,
+                    conf_type=normalized_conf_type,
+                    computation=computation,
+                    timefix=fix_time,
+                )
         result = (
             _survfit_with_time0(
                 result,
@@ -4104,10 +10434,13 @@ def survfit(
         return _survfit_with_model_frame(result, model_frame) if model_frame is not None else result
 
     results: dict[Any, Any] = {}
-    for label, indices in _group_indices(group, len(response)).items():
+    for label, indices in _group_indices(group, len(response), levels=formula_group_levels).items():
         group_response = _subset_surv(response, indices)
         group_weights = [wt[idx] for idx in indices] if wt is not None else None
         group_ids = [id_values[idx] for idx in indices] if id_values is not None else None
+        group_clusters = (
+            [robust_clusters[idx] for idx in indices] if robust_clusters is not None else None
+        )
         km = (
             _survfit_counting_with_id(
                 group_response,
@@ -4135,6 +10468,17 @@ def survfit(
             )
         )
         if computation.is_kaplan_meier:
+            if group_clusters is not None:
+                km = _survfit_robust_km_result(
+                    km,
+                    group_response,
+                    group_weights,
+                    group_clusters,
+                    reverse=reverse_curve,
+                    conf_level=normalized_conf_level,
+                    conf_type=normalized_conf_type,
+                    timefix=fix_time,
+                )
             results[label] = (
                 _survfit_with_time0(
                     km,
@@ -4153,6 +10497,31 @@ def survfit(
                 computation,
                 normalized_conf_type,
             )
+            if group_clusters is not None:
+                if group_response.start is not None:
+                    result = _survfit_robust_counting_result(
+                        result,
+                        group_response,
+                        group_weights,
+                        group_clusters,
+                        reverse=reverse_curve,
+                        conf_level=normalized_conf_level,
+                        conf_type=normalized_conf_type,
+                        computation=computation,
+                        timefix=fix_time,
+                    )
+                else:
+                    result = _survfit_robust_right_result(
+                        result,
+                        group_response,
+                        group_weights,
+                        group_clusters,
+                        reverse=reverse_curve,
+                        conf_level=normalized_conf_level,
+                        conf_type=normalized_conf_type,
+                        computation=computation,
+                        timefix=fix_time,
+                    )
             results[label] = (
                 _survfit_with_time0(
                     result,
@@ -4172,18 +10541,54 @@ def _survdiff_weight_type(rho: float) -> str:
     return "LogRank" if rho == 0.0 else f"FlemingHarrington(p={rho}, q=0)"
 
 
+def _survdiff_r_level_sort_key(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return tuple(_survdiff_r_level_sort_key(part) for part in value)
+    return _strata_level_sort_key(value)
+
+
+def _r_formula_ordered_levels(values: list[Any], name: str) -> tuple[Any, ...]:
+    levels: dict[Any, None] = {}
+    for value in values:
+        try:
+            levels.setdefault(value, None)
+        except TypeError as exc:
+            raise TypeError(f"{name} contain unhashable labels") from exc
+    return tuple(sorted(levels, key=_survdiff_r_level_sort_key))
+
+
+def _survdiff_r_ordered_levels(values: list[Any]) -> tuple[Any, ...]:
+    return _r_formula_ordered_levels(values, "survdiff formula groups")
+
+
 def _survdiff_formula_groups(
     data: Any,
     terms: _FormulaTerms,
     n: int,
-) -> tuple[list[Any], list[Any] | None]:
+) -> tuple[list[Any], tuple[Any, ...], list[Any] | None]:
     if not terms.covariates:
         if terms.strata:
             raise ValueError("survdiff formula has no groups to test")
         raise ValueError("survdiff formula requires at least one grouping term")
     group = _combined_formula_groups(data, [], terms.covariates, n)
+    group_levels = _survdiff_r_ordered_levels(group)
     strata = _combined_columns(data, terms.strata, n) if terms.strata else None
-    return group, strata
+    return group, group_levels, strata
+
+
+def _survdiff_offset_formula_values(
+    data: Any,
+    terms: _FormulaTerms,
+    n: int,
+) -> list[float] | None:
+    if not terms.offsets:
+        return None
+    if terms.covariates or terms.strata:
+        raise ValueError("Cannot have both an offset and groups")
+    values = _offset_vector(data, terms.offsets, n)
+    if values is None:
+        raise ValueError("offset formula did not produce values")
+    return values
 
 
 def _survdiff_timefix_values(times: list[float], timefix: bool) -> list[float]:
@@ -4258,15 +10663,68 @@ def _survdiff_result_from_components(components: Any, rho: float) -> Any:
     )
 
 
+def _survdiff_offset_expected(offsets: Sequence[float]) -> float:
+    total = 0.0
+    for value in offsets:
+        if value == 0.0:
+            return math.inf
+        total += -math.log(value)
+    return total
+
+
+def _survdiff_divide_statistic(numerator: float, variance: float) -> float:
+    squared = numerator * numerator
+    if variance == 0.0:
+        return math.nan if squared == 0.0 else math.inf
+    return squared / variance
+
+
+def _survdiff_chisq_p_value(statistic: float) -> float:
+    return math.erfc(math.sqrt(statistic / 2.0))
+
+
+def _survdiff_offset_result(response: Surv, offsets: Sequence[float], rho: float) -> Any:
+    if response.type != "right":
+        raise NotImplementedError("survdiff offset formulas require right-censored Surv responses")
+    if len(offsets) != len(response):
+        raise ValueError("offset must have the same length as the Surv response")
+    if any(value < 0.0 or value > 1.0 for value in offsets):
+        raise ValueError("The offset must be a survival probability")
+
+    observed = float(sum(response.event))
+    expected = _survdiff_offset_expected(offsets)
+    if rho == 0.0:
+        variance = expected
+        numerator = observed - variance
+    else:
+        inverse_rho = 1.0 / rho
+        numerator = sum(
+            inverse_rho - ((inverse_rho + float(event)) * (offset**rho))
+            for offset, event in zip(offsets, response.event, strict=True)
+        )
+        variance = sum((1.0 - (offset ** (2.0 * rho))) / (2.0 * rho) for offset in offsets)
+    statistic = _survdiff_divide_statistic(numerator, variance)
+    return _core.LogRankResult(
+        statistic,
+        _survdiff_chisq_p_value(statistic),
+        1,
+        [observed],
+        [expected],
+        variance,
+        _survdiff_weight_type(rho),
+    )
+
+
 def _stratified_survdiff(
     response: Surv,
     group: Any,
     strata: Any,
     rho: float,
     timefix: bool,
+    group_levels: Sequence[Any] | None = None,
 ) -> Any:
     n = len(response)
-    group_codes = _encode_groups(group, n)
+    group_codes = _encode_groups(group, n, levels=group_levels)
     strata_codes = _encode_groups(strata, n)
     times = list(response.time)
     if response.start is not None:
@@ -4312,6 +10770,8 @@ def survdiff(
         raise TypeError(f"survdiff got unexpected keyword argument(s): {unexpected}")
 
     formula_strata: Any | None = None
+    formula_group_levels: Sequence[Any] | None = None
+    formula_offsets: list[float] | None = None
     if isinstance(response, str):
         if subset is not None:
             data, _aligned = _subset_formula_inputs(response, data, subset)
@@ -4320,7 +10780,13 @@ def survdiff(
         na_action = "pass"
         response, terms = _parse_formula(response, data)
         _reject_formula_clusters("survdiff", terms)
-        group, formula_strata = _survdiff_formula_groups(data, terms, len(response))
+        formula_offsets = _survdiff_offset_formula_values(data, terms, len(response))
+        if formula_offsets is None:
+            group, formula_group_levels, formula_strata = _survdiff_formula_groups(
+                data,
+                terms,
+                len(response),
+            )
 
     if not isinstance(response, Surv):
         raise TypeError("survdiff response must be a Surv object or formula")
@@ -4337,18 +10803,27 @@ def survdiff(
     )
     group = aligned["group"]
     formula_strata = aligned["strata"]
-    if group is None:
-        raise ValueError("group is required")
     if response.type not in {"right", "counting"}:
         raise NotImplementedError(
             "survdiff currently supports right-censored and counting Surv responses"
         )
     rho_value = _finite_float(rho, "rho")
     fix_time = _normalize_bool_option(timefix, "timefix")
+    if formula_offsets is not None:
+        return _survdiff_offset_result(response, formula_offsets, rho_value)
+    if group is None:
+        raise ValueError("group is required")
     if formula_strata is not None:
-        return _stratified_survdiff(response, group, formula_strata, rho_value, fix_time)
+        return _stratified_survdiff(
+            response,
+            group,
+            formula_strata,
+            rho_value,
+            fix_time,
+            formula_group_levels,
+        )
 
-    groups = _encode_groups(group, len(response))
+    groups = _encode_groups(group, len(response), levels=formula_group_levels)
     group_codes = [code + 1 for code in groups]
     if response.start is not None:
         components = _core.compute_counting_logrank_components(
@@ -4370,6 +10845,157 @@ def survdiff(
             fix_time,
         )
     return _survdiff_result_from_components(components, rho_value)
+
+
+def _coxph_wtest_b_matrix(b: Any) -> tuple[list[list[float | None]], bool]:
+    raw = _coerce_array_like(b, "b")
+    if raw and isinstance(raw[0], list | tuple):
+        rows: list[list[float | None]] = []
+        width = len(raw[0])
+        for row in raw:
+            if not isinstance(row, list | tuple) or len(row) != width:
+                raise ValueError("b matrix rows must be rectangular")
+            rows.append([None if _is_missing_value(value) else float(value) for value in row])
+        return rows, True
+    return [[None if _is_missing_value(value) else float(value)] for value in raw], False
+
+
+def _coxph_wtest_var_matrix(var: Any) -> tuple[list[list[float]], int]:
+    raw = _coerce_array_like(var, "var")
+    if raw and isinstance(raw[0], list | tuple):
+        rows = _as_matrix_rows(raw, "var", allow_empty_columns=False)
+        return rows, len(raw) * (len(raw[0]) if raw else 0)
+    values = [float(value) for value in raw]
+    if len(values) == 1:
+        return [[values[0]]], 1
+    return [], len(values)
+
+
+def _coxph_solve_linear_system(matrix: list[list[float]], rhs: Sequence[float]) -> list[float]:
+    n = len(matrix)
+    if n == 0:
+        return []
+    augmented = [list(row) + [float(rhs[idx])] for idx, row in enumerate(matrix)]
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda row: abs(augmented[row][col]))
+        if abs(augmented[pivot][col]) <= 1e-14:
+            raise ValueError("First argument must be a square matrix")
+        if pivot != col:
+            augmented[col], augmented[pivot] = augmented[pivot], augmented[col]
+        pivot_value = augmented[col][col]
+        for row in range(col + 1, n):
+            factor = augmented[row][col] / pivot_value
+            if factor == 0.0:
+                continue
+            for idx in range(col, n + 1):
+                augmented[row][idx] -= factor * augmented[col][idx]
+    solution = [0.0] * n
+    for row in range(n - 1, -1, -1):
+        total = augmented[row][n] - sum(
+            augmented[row][col] * solution[col] for col in range(row + 1, n)
+        )
+        solution[row] = total / augmented[row][row]
+    return solution
+
+
+def _coxph_wtest_active_indices(matrix: list[list[float]], toler_chol: float) -> list[int]:
+    n = len(matrix)
+    max_diag = max((abs(matrix[idx][idx]) for idx in range(n)), default=0.0)
+    threshold = toler_chol * max_diag
+    active: list[int] = []
+    for idx in range(n):
+        variance = matrix[idx][idx]
+        if active:
+            submatrix = [[matrix[row][col] for col in active] for row in active]
+            covariance = [matrix[idx][col] for col in active]
+            projected = _coxph_solve_linear_system(submatrix, covariance)
+            variance -= sum(value * coef for value, coef in zip(covariance, projected, strict=True))
+        if variance > threshold and variance > 0.0:
+            active.append(idx)
+    return active
+
+
+def _coxph_wtest_solve(
+    matrix: list[list[float]],
+    b_columns: list[list[float]],
+    toler_chol: float,
+) -> tuple[list[float], int, list[list[float]]]:
+    n = len(matrix)
+    active = _coxph_wtest_active_indices(matrix, toler_chol)
+    if not active:
+        return [0.0 for _ in b_columns], 0, [[0.0 for _ in b_columns] for _ in range(n)]
+
+    submatrix = [[matrix[row][col] for col in active] for row in active]
+    solve_columns: list[list[float]] = []
+    tests: list[float] = []
+    for column in b_columns:
+        rhs = [column[idx] for idx in active]
+        active_solution = _coxph_solve_linear_system(submatrix, rhs)
+        solution = [0.0] * n
+        for idx, value in zip(active, active_solution, strict=True):
+            solution[idx] = value
+        solve_columns.append(solution)
+        tests.append(sum(value * coef for value, coef in zip(column, solution, strict=True)))
+
+    solve_rows = [
+        [solve_columns[col_idx][row_idx] for col_idx in range(len(solve_columns))]
+        for row_idx in range(n)
+    ]
+    return tests, len(active), solve_rows
+
+
+def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
+    """Compute the Wald test helper exported as R's ``coxph.wtest``."""
+
+    toler_value = _finite_float(toler_chol, "toler_chol")
+    if toler_value < 0.0:
+        raise ValueError("toler_chol must be non-negative")
+    b_rows, b_is_matrix = _coxph_wtest_b_matrix(b)
+    if any(value is None for row in b_rows for value in row):
+        return CoxPHWTestResult(test=[], df=0, solve=0.0)
+    b_numeric = [[float(value) for value in row] for row in b_rows]
+    if any(not math.isfinite(value) for row in b_numeric for value in row):
+        raise ValueError("infinite argument in coxph.wtest")
+
+    nvar = len(b_rows)
+    ntest = len(b_rows[0]) if b_rows and b_is_matrix else 1
+    matrix, raw_var_length = _coxph_wtest_var_matrix(var)
+    if raw_var_length == 0:
+        if nvar == 0:
+            return CoxPHWTestResult(test=[], df=0, solve=0.0)
+        raise ValueError("Argument lengths do not match")
+    if raw_var_length == 1:
+        if nvar != 1:
+            raise ValueError("Argument lengths do not match")
+        if b_is_matrix and ntest != 1:
+            raise ValueError("non-conformable arrays")
+        variance = matrix[0][0]
+        if not math.isfinite(variance):
+            raise ValueError("infinite argument in coxph.wtest")
+        if variance == 0.0:
+            raise ZeroDivisionError("division by zero")
+        values = [row[0] for row in b_numeric]
+        return CoxPHWTestResult(
+            test=[value * value / variance for value in values],
+            df=1,
+            solve=[value / variance for value in values],
+        )
+
+    if not matrix or any(len(row) != len(matrix) for row in matrix):
+        raise ValueError("First argument must be a square matrix")
+    if len(matrix) != nvar:
+        raise ValueError("Argument lengths do not match")
+    if any(not math.isfinite(value) for row in matrix for value in row):
+        raise ValueError("infinite argument in coxph.wtest")
+
+    b_columns = [
+        [b_numeric[row_idx][col_idx] for row_idx in range(nvar)] for col_idx in range(ntest)
+    ]
+    tests, df, solve_rows = _coxph_wtest_solve(matrix, b_columns, toler_value)
+    solve: list[float] | list[list[float]] = (
+        solve_rows if b_is_matrix and ntest > 1 else [row[0] for row in solve_rows]
+    )
+    return CoxPHWTestResult(test=tests, df=df, solve=solve)
 
 
 def basehaz(
@@ -4692,33 +11318,40 @@ def _normalize_survreg_distribution(distribution: Any | None) -> str | None:
     aliases = {
         "normal": "gaussian",
         "log-normal": "lognormal",
+        "loggaussian": "lognormal",
         "log-gaussian": "lognormal",
         "log-logistic": "loglogistic",
         "extreme": "extreme_value",
         "extreme value": "extreme_value",
         "extreme-value": "extreme_value",
         "extremevalue": "extreme_value",
+        "student": "t",
+        "student-t": "t",
     }
     if value in aliases:
         return aliases[value]
     message = (
-        "distribution must be one of weibull, exponential, extreme, gaussian, "
-        "logistic, lognormal, or loglogistic"
+        "distribution must be one of weibull, exponential, rayleigh, extreme, "
+        "gaussian, logistic, loggaussian, lognormal, loglogistic, or t"
     )
-    return _match_string_arg(
+    matched = _match_string_arg(
         value,
         "distribution",
         (
             "weibull",
             "exponential",
+            "rayleigh",
             "extreme_value",
             "gaussian",
             "logistic",
+            "loggaussian",
             "lognormal",
             "loglogistic",
+            "t",
         ),
         message,
     )
+    return "lognormal" if matched == "loggaussian" else matched
 
 
 def _collapse_is_false(collapse: Any) -> bool:
@@ -5330,6 +11963,150 @@ def bic(fit: Any) -> float:
     return aic(fit, k=math.log(nobs(fit)))
 
 
+def _sample_variance(values: Sequence[float]) -> float:
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = math.fsum(values) / n
+    return math.fsum((value - mean) ** 2 for value in values) / (n - 1)
+
+
+def _rank_average(values: Sequence[float]) -> list[float]:
+    indexed = sorted(enumerate(values), key=lambda item: (item[1], item[0]))
+    ranks = [0.0] * len(values)
+    idx = 0
+    while idx < len(indexed):
+        end = idx + 1
+        while end < len(indexed) and indexed[end][1] == indexed[idx][1]:
+            end += 1
+        rank = (idx + 1 + end) / 2.0
+        for pos in range(idx, end):
+            ranks[indexed[pos][0]] = rank
+        idx = end
+    return ranks
+
+
+def _rank_first(values: Sequence[float]) -> list[int]:
+    indexed = sorted(enumerate(values), key=lambda item: (item[1], item[0]))
+    ranks = [0] * len(values)
+    for rank, (original_idx, _value) in enumerate(indexed, start=1):
+        ranks[original_idx] = rank
+    return ranks
+
+
+def _royston_normal_scores(eta: Sequence[float], ties: bool) -> list[float]:
+    n = len(eta)
+    normal = NormalDist()
+    if ties and len(set(eta)) != n:
+        z = [normal.inv_cdf((rank - 0.375) / (n + 0.25)) for rank in range(1, n + 1)]
+        rank_first = _rank_first(eta)
+        grouped: dict[float, list[float]] = {value: [] for value in sorted(set(eta))}
+        for value, rank in zip(eta, rank_first, strict=True):
+            grouped[value].append(z[rank - 1])
+        means = {value: math.fsum(scores) / len(scores) for value, scores in grouped.items()}
+        return [means[value] for value in eta]
+
+    return [normal.inv_cdf((rank - 0.375) / (n + 0.25)) for rank in _rank_average(eta)]
+
+
+def _royston_gonen_heller(eta: Sequence[float]) -> float:
+    if len(eta) < 2:
+        return math.nan
+    ordered = sorted(eta)
+    total = 0.0
+    for idx, value in enumerate(ordered[:-1]):
+        total += math.fsum(1.0 / (1.0 + math.exp(value - later)) for later in ordered[idx + 1 :])
+    return total * 2.0 / (len(ordered) * (len(ordered) - 1))
+
+
+def _royston_response_for_fit(fit: Any, newdata: Any | None) -> Surv:
+    if newdata is None:
+        response = getattr(fit, "y", None)
+        return response if isinstance(response, Surv) else _cox_training_response(fit)
+    design = _formula_design_for_fit(fit)
+    if design is None:
+        raise ValueError("newdata royston predictions require a formula Cox model")
+    return _surv_from_formula_design(newdata, design)
+
+
+def royston(
+    fit: Any,
+    newdata: Any | None = None,
+    ties: Any = True,
+    adjust: Any = False,
+) -> dict[str, float]:
+    """R-compatible ``survival::royston`` statistics for fitted Cox models."""
+
+    if not _is_coxph_fit(fit):
+        raise TypeError("function defined only for coxph models")
+    ties_value = _normalize_bool_option(ties, "ties")
+    adjust_value = _normalize_bool_option(adjust, "adjust")
+    response = _royston_response_for_fit(fit, newdata)
+    if response.type not in {"right", "counting"}:
+        raise ValueError("royston requires a right-censored or counting-process response")
+
+    eta = [float(value) for value in predict(fit, newdata, type="lp")]
+    if newdata is not None:
+        preliminary = coxph(response, x=[[value] for value in eta])
+        eta = [float(value) for value in predict(preliminary, type="lp")]
+
+    n = len(eta)
+    if n != len(response):
+        raise ValueError("linear predictor length must match response length")
+    if n < 2:
+        raise ValueError("at least two observations are required")
+
+    qhat = _royston_normal_scores(eta, ties_value)
+    rfit = coxph(response, x=[[value] for value in qhat])
+    beta_values = _cox_beta(rfit)
+    if len(beta_values) != 1:
+        raise ValueError("internal royston Cox fit did not return one coefficient")
+    beta = beta_values[0]
+    variance = _cox_variance_matrix(_unwrap_formula_fit(rfit), 1)[0][0]
+
+    pi = math.pi
+    d_value = beta * math.sqrt(8.0 / pi)
+    se_d = math.sqrt(max(variance, 0.0) * 8.0 / pi)
+    r_d = beta * beta / (pi * pi / 6.0 + beta * beta)
+    r_i = beta * beta / (1.0 + beta * beta)
+
+    if adjust_value:
+        n_events = sum(1 for value in response.event if value == 1)
+        n_coef = len(_cox_beta(fit))
+        if n_events <= n_coef:
+            raise ValueError("adjusted royston statistic requires events > model coefficients")
+        ratio = n_events / (n_events - n_coef)
+        temp = (1.0 + beta * beta - ratio) / ratio
+        d_value = math.copysign(math.sqrt(abs(temp) * 8.0 / pi), beta * temp)
+        se_d = se_d * abs(beta) / (ratio * math.sqrt(abs(temp))) if temp != 0.0 else math.inf
+        r_d = 1.0 - ratio * (1.0 - r_i)
+
+    eta_variance = _sample_variance(eta)
+    result = {
+        "D": d_value,
+        "se(D)": se_d,
+        "R.D": r_d,
+        "R.KO": eta_variance / (pi * pi / 6.0 + eta_variance),
+        "C.GH": _royston_gonen_heller(eta),
+    }
+    if newdata is None:
+        loglik_values = _cox_loglik_values(_unwrap_formula_fit(fit))
+        logtest = -2.0 * (loglik_values[0] - loglik_values[1])
+        denominator = 1.0 - math.exp(2.0 * loglik_values[0] / n)
+        result["R.N"] = (
+            (1.0 - math.exp(-logtest / n)) / denominator if denominator != 0.0 else math.nan
+        )
+        return {
+            "D": result["D"],
+            "se(D)": result["se(D)"],
+            "R.D": result["R.D"],
+            "R.KO": result["R.KO"],
+            "R.N": result["R.N"],
+            "C.GH": result["C.GH"],
+        }
+    return result
+
+
 def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]:
     """Return ``[df, AIC]`` like R's ``extractAIC`` generic."""
 
@@ -5410,12 +12187,16 @@ def _model_frame_surv_columns(response: Surv, existing: set[str]) -> dict[str, l
 
 
 def model_frame(fit: Any) -> dict[str, list[Any]]:
-    """Return a plain stored model frame for fits created with ``model=True``."""
+    """Return a plain stored model frame for compatible fitted objects."""
 
-    _require_model_fit(fit, "model_frame")
+    if isinstance(fit, Mapping):
+        if not fit:
+            raise TypeError("model_frame requires a non-empty grouped survfit result")
+        return model_frame(next(iter(fit.values())))
+
     frame = getattr(fit, "model", None)
     if frame is None:
-        raise TypeError("model_frame requires fitting with model=True")
+        raise TypeError("model_frame requires a stored model frame")
     if not isinstance(frame, Mapping):
         raise TypeError("stored model frame must be mapping-like")
 
@@ -5426,10 +12207,14 @@ def model_frame(fit: Any) -> dict[str, list[Any]]:
             continue
         if isinstance(values, Mapping):
             continue
-        materialized = _materialize_1d(values, str(name))
+        text_name = str(name)
+        if text_name in {"group", "(id)", "(cluster)", "(strata)"}:
+            columns[text_name] = _materialize_labels(values, text_name)
+            continue
+        materialized = _materialize_1d(values, text_name)
         if materialized and isinstance(materialized[0], list | tuple):
             continue
-        columns[str(name)] = list(materialized)
+        columns[text_name] = list(materialized)
     return columns
 
 
@@ -5604,6 +12389,11 @@ def model_summary(fit: Any) -> dict[str, Any]:
         distribution = getattr(fit, "distribution", None)
         if distribution is not None:
             result["distribution"] = str(distribution)
+        distribution_parameters = getattr(fit, "distribution_parameters", None)
+        if distribution_parameters is not None:
+            parameter_values = [float(value) for value in distribution_parameters]
+            if parameter_values:
+                result["distribution_parameters"] = parameter_values
     else:
         model = _unwrap_formula_fit(fit)
         logliks = _cox_loglik_values(model)
@@ -5707,6 +12497,10 @@ def _raw_survfit_frame(result: Any) -> dict[str, list[Any]]:
                 if getattr(result, "n_enter", None) is not None
                 else None
             ),
+            n_risk_count=_optional_float_list(result, "n_risk_count"),
+            n_event_count=_optional_float_list(result, "n_event_count"),
+            n_censor_count=_optional_float_list(result, "n_censor_count"),
+            n_enter_count=_optional_float_list(result, "n_enter_count"),
         )
     )
 
@@ -5882,11 +12676,19 @@ def _concordance_frame(result: ConcordanceResult) -> dict[str, list[Any]]:
         n_scores = len(result.concordance)
         score_names = result.score_names or [f"score{idx + 1}" for idx in range(n_scores)]
         variance = result.variance if isinstance(result.variance, list) else [math.nan] * n_scores
+        tied_x = result.tied_x if isinstance(result.tied_x, list) else [result.tied_x] * n_scores
+        tied_y = result.tied_y if isinstance(result.tied_y, list) else [result.tied_y] * n_scores
+        tied_xy = (
+            result.tied_xy if isinstance(result.tied_xy, list) else [result.tied_xy] * n_scores
+        )
         return {
             "score": score_names,
             "concordance": [float(value) for value in result.concordance],
             "concordant": [float(value) for value in result.concordant],
             "comparable": [float(value) for value in result.comparable],
+            "tied.x": [float(value) for value in tied_x],
+            "tied.y": [float(value) for value in tied_y],
+            "tied.xy": [float(value) for value in tied_xy],
             "n": [result.n] * n_scores,
             "n.event": [result.n_event] * n_scores,
             "variance": [math.nan if value is None else float(value) for value in variance],
@@ -5898,6 +12700,9 @@ def _concordance_frame(result: ConcordanceResult) -> dict[str, list[Any]]:
         "concordance": [float(result.concordance)],
         "concordant": [float(result.concordant)],
         "comparable": [float(result.comparable)],
+        "tied.x": [float(result.tied_x)],
+        "tied.y": [float(result.tied_y)],
+        "tied.xy": [float(result.tied_xy)],
         "n": [result.n],
         "n.event": [result.n_event],
         "variance": [float(variance_value)],
@@ -5951,6 +12756,10 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _coxph_detail_frame(result)
     if isinstance(result, ConcordanceResult):
         return _concordance_frame(result)
+    if isinstance(result, PyearsResult):
+        return _pyears_result_frame(result)
+    if isinstance(result, FineGrayOutput):
+        return _finegray_frame(result)
     if isinstance(result, Mapping):
         return _grouped_survfit_frame(result)
     if hasattr(result, "observed") and hasattr(result, "expected") and hasattr(result, "variance"):
@@ -6457,6 +13266,11 @@ def _survreg_derivative_context(
         fit.scale,
         fit.distribution,
         time2=getattr(fit, "time2", None),
+        distribution_parameter=(
+            _survreg_t_fit_degrees_of_freedom(getattr(fit, "distribution_parameters", None))
+            if _survreg_distribution_family(fit) == "t"
+            else None
+        ),
     )
     scales = _survreg_scales(fit)
     strata = _survreg_strata(fit, len(matrix), len(scales))
@@ -6683,6 +13497,7 @@ def _survreg_response_uses_log_transform(fit: Any) -> bool:
     return distribution in {
         "weibull",
         "exponential",
+        "rayleigh",
         "lognormal",
         "log_normal",
         "loggaussian",
@@ -6730,6 +13545,8 @@ def _survreg_distribution_family(fit: Any) -> str:
         return "logistic"
     if distribution in {"gaussian", "normal", "lognormal", "log_normal", "loggaussian"}:
         return "gaussian"
+    if distribution in {"t", "student", "student_t", "studentt"}:
+        return "t"
     return "extreme"
 
 
@@ -6747,7 +13564,308 @@ def _survreg_quantile_scores(fit: Any, probabilities: list[float]) -> list[float
     if family == "gaussian":
         normal = NormalDist()
         return [normal.inv_cdf(value) for value in probabilities]
+    if family == "t":
+        df = _survreg_t_fit_degrees_of_freedom(
+            getattr(fit, "distribution_parameters", None),
+        )
+        return [_student_t_ppf(value, df) for value in probabilities]
     return [math.log(-math.log1p(-value)) for value in probabilities]
+
+
+def _normalize_survreg_distribution_helper(distribution: Any | None) -> str:
+    if distribution is None:
+        return "weibull"
+    if not isinstance(distribution, str):
+        raise TypeError("distribution must be a string")
+    value = distribution.strip().lower().replace("_", "-")
+    if value in {"t", "student", "student-t"}:
+        return "t"
+    normalized = _normalize_survreg_distribution(distribution)
+    return normalized or "weibull"
+
+
+def _survreg_numeric_vector(values: Any, name: str) -> list[float]:
+    return _quantile_vector(values, name)
+
+
+def _survreg_t_degrees_of_freedom(parms: Any | None) -> float:
+    if parms is None:
+        raise TypeError("parms is required for distribution='t'")
+    values = _survreg_numeric_vector(parms, "parms")
+    if len(values) != 1:
+        raise ValueError("parms for distribution='t' must be a single degrees-of-freedom value")
+    df = values[0]
+    if not math.isfinite(df) or df <= 0.0:
+        raise ValueError("parms for distribution='t' must be a positive finite value")
+    return df
+
+
+def _survreg_t_fit_degrees_of_freedom(parms: Any | None) -> float:
+    df = 4.0 if parms is None else _survreg_t_degrees_of_freedom(parms)
+    if df <= 2.0:
+        raise ValueError("Degrees of freedom must be >=3")
+    return df
+
+
+def _regularized_beta_continued_fraction(a: float, b: float, x: float) -> float:
+    eps = 3e-14
+    fpmin = 1e-300
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < fpmin:
+        d = fpmin
+    d = 1.0 / d
+    h = d
+    for m in range(1, 201):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) <= eps:
+            break
+    return h
+
+
+def _regularized_incomplete_beta(x: float, a: float, b: float) -> float:
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    log_beta = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+    front = math.exp(a * math.log(x) + b * math.log1p(-x) - log_beta)
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _regularized_beta_continued_fraction(a, b, x) / a
+    return 1.0 - front * _regularized_beta_continued_fraction(b, a, 1.0 - x) / b
+
+
+def _student_t_pdf(value: float, df: float) -> float:
+    if math.isinf(value):
+        return 0.0
+    coefficient = math.exp(
+        math.lgamma((df + 1.0) / 2.0)
+        - math.lgamma(df / 2.0)
+        - 0.5 * (math.log(df) + math.log(math.pi))
+    )
+    return coefficient * (1.0 + value * value / df) ** (-(df + 1.0) / 2.0)
+
+
+def _student_t_cdf(value: float, df: float) -> float:
+    if math.isinf(value):
+        return 0.0 if value < 0.0 else 1.0
+    if value == 0.0:
+        return 0.5
+    x = df / (df + value * value)
+    ibeta = _regularized_incomplete_beta(x, df / 2.0, 0.5)
+    return 1.0 - 0.5 * ibeta if value > 0.0 else 0.5 * ibeta
+
+
+def _student_t_ppf(probability: float, df: float) -> float:
+    if probability < 0.0 or probability > 1.0 or math.isnan(probability):
+        raise ValueError("p must be between 0 and 1")
+    if probability == 0.0:
+        return float("-inf")
+    if probability == 1.0:
+        return float("inf")
+    if probability == 0.5:
+        return 0.0
+    if probability < 0.5:
+        return -_student_t_ppf(1.0 - probability, df)
+    low = 0.0
+    high = 1.0
+    while _student_t_cdf(high, df) < probability:
+        high *= 2.0
+    for _ in range(120):
+        mid = (low + high) / 2.0
+        if _student_t_cdf(mid, df) < probability:
+            low = mid
+        else:
+            high = mid
+    return (low + high) / 2.0
+
+
+def _survreg_t_distribution_values(
+    values: list[float],
+    means: list[float],
+    scales: list[float],
+    df: float,
+    kind: str,
+) -> list[float]:
+    result: list[float] = []
+    for value, mean, scale in zip(values, means, scales, strict=True):
+        if not math.isfinite(scale) or scale <= 0.0:
+            raise ValueError("scale must contain positive finite values")
+        if kind == "density":
+            result.append(_student_t_pdf((value - mean) / scale, df) / scale)
+        elif kind == "distribution":
+            result.append(_student_t_cdf((value - mean) / scale, df))
+        elif kind == "quantile":
+            result.append(mean + scale * _student_t_ppf(value, df))
+        else:
+            raise ValueError("kind must be density, distribution, or quantile")
+    return result
+
+
+def _expand_survreg_distribution_inputs(
+    values: Any,
+    value_name: str,
+    mean: Any,
+    scale: Any,
+    *,
+    target_length: int | None = None,
+) -> tuple[list[float], list[float], list[float]]:
+    vectors = {
+        value_name: _survreg_numeric_vector(values, value_name),
+        "mean": _survreg_numeric_vector(mean, "mean"),
+        "scale": _survreg_numeric_vector(scale, "scale"),
+    }
+    main_length = len(vectors[value_name])
+    n = (
+        target_length
+        if target_length is not None
+        else main_length
+        if main_length > 1
+        else max(len(vector) for vector in vectors.values())
+    )
+    if n < 0:
+        raise ValueError("n must be non-negative")
+
+    expanded: dict[str, list[float]] = {}
+    for name, vector in vectors.items():
+        if len(vector) == n:
+            expanded[name] = vector
+        elif len(vector) == 1:
+            expanded[name] = vector * n
+        else:
+            raise ValueError(f"{name} must have length 1 or {n}")
+    return expanded[value_name], expanded["mean"], expanded["scale"]
+
+
+def _survreg_distribution_values(
+    values: Any,
+    value_name: str,
+    mean: Any,
+    scale: Any,
+    distribution: Any | None,
+    parms: Any | None,
+    kind: str,
+) -> list[float]:
+    distribution_name = _normalize_survreg_distribution_helper(distribution)
+    value_values, mean_values, scale_values = _expand_survreg_distribution_inputs(
+        values,
+        value_name,
+        mean,
+        scale,
+    )
+    if distribution_name == "t":
+        return _survreg_t_distribution_values(
+            value_values,
+            mean_values,
+            scale_values,
+            _survreg_t_degrees_of_freedom(parms),
+            kind,
+        )
+    return _core.survreg_distribution(
+        value_values,
+        mean_values,
+        scale_values,
+        distribution_name,
+        kind,
+    )
+
+
+def dsurvreg(
+    x: Any,
+    mean: Any,
+    scale: Any = 1,
+    distribution: str = "weibull",
+    parms: Any | None = None,
+) -> list[float]:
+    """Density for R ``survreg`` location-scale distributions."""
+
+    return _survreg_distribution_values(x, "x", mean, scale, distribution, parms, "density")
+
+
+def psurvreg(
+    q: Any,
+    mean: Any,
+    scale: Any = 1,
+    distribution: str = "weibull",
+    parms: Any | None = None,
+) -> list[float]:
+    """Distribution function for R ``survreg`` location-scale distributions."""
+
+    return _survreg_distribution_values(q, "q", mean, scale, distribution, parms, "distribution")
+
+
+def qsurvreg(
+    p: Any,
+    mean: Any,
+    scale: Any = 1,
+    distribution: str = "weibull",
+    parms: Any | None = None,
+) -> list[float]:
+    """Quantiles for R ``survreg`` location-scale distributions."""
+
+    return _survreg_distribution_values(p, "p", mean, scale, distribution, parms, "quantile")
+
+
+def rsurvreg(
+    n: Any,
+    mean: Any,
+    scale: Any = 1,
+    distribution: str = "weibull",
+    parms: Any | None = None,
+) -> list[float]:
+    """Random draws from R ``survreg`` location-scale distributions."""
+
+    count = _integer_scalar(n, "n")
+    if count < 0:
+        raise ValueError("n must be non-negative")
+    distribution_name = _normalize_survreg_distribution_helper(distribution)
+    if count == 0:
+        return []
+    probabilities = [random.random() for _ in range(count)]  # noqa: S311
+    probability_values, mean_values, scale_values = _expand_survreg_distribution_inputs(
+        probabilities,
+        "p",
+        mean,
+        scale,
+        target_length=count,
+    )
+    if distribution_name == "t":
+        return _survreg_t_distribution_values(
+            probability_values,
+            mean_values,
+            scale_values,
+            _survreg_t_degrees_of_freedom(parms),
+            "quantile",
+        )
+    return _core.survreg_distribution(
+        probability_values,
+        mean_values,
+        scale_values,
+        distribution_name,
+        "quantile",
+    )
 
 
 def _survreg_training_strata(fit: Any, n: int) -> list[int]:
@@ -7762,8 +14880,10 @@ def _concordance_score_columns(
     terms: _FormulaTerms,
     n: int,
 ) -> tuple[list[list[float]], list[str]]:
-    if not terms.covariates and not terms.offsets:
-        raise ValueError("concordance formula requires a risk score or offset term")
+    if terms.offsets:
+        raise ValueError("Offset terms not allowed")
+    if not terms.covariates:
+        raise ValueError("concordance formula requires a risk score")
 
     columns: list[list[float]] = []
     names: list[str] = []
@@ -7773,14 +14893,8 @@ def _concordance_score_columns(
         columns.extend(term_columns)
         names.extend(_design_term_output_names(design_term))
 
-    offsets = _offset_vector(data, terms.offsets, n) if terms.offsets else None
     if not columns:
-        if offsets is None:
-            raise ValueError("concordance formula requires a risk score or offset term")
-        return [offsets], ["offset"]
-
-    if offsets is not None:
-        columns = [[value + offsets[idx] for idx, value in enumerate(column)] for column in columns]
+        raise ValueError("concordance formula requires a risk score")
     return columns, names
 
 
@@ -7888,6 +15002,62 @@ def _concordance_rank_row_dicts(
     ]
 
 
+@dataclass(frozen=True)
+class _RightConcordanceData:
+    times: list[float]
+    status: list[int]
+    display_by_core_time: dict[float, float] | None
+
+
+@dataclass(frozen=True)
+class _CountingConcordanceData:
+    start: list[float]
+    stop: list[float]
+    status: list[int]
+
+
+def _unsupported_concordance_response() -> NoReturn:
+    raise NotImplementedError(
+        "concordance currently supports right-censored and counting Surv responses"
+    )
+
+
+def _right_concordance_data(
+    response: Surv,
+    timefix: bool,
+    ymin: float | None,
+    ymax: float | None,
+) -> _RightConcordanceData:
+    times = _survdiff_timefix_values(list(response.time), timefix)
+    status = list(response.event)
+    times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
+    core_times, display_by_core_time = _concordance_core_time_values(times, timefix)
+    return _RightConcordanceData(core_times, status, display_by_core_time)
+
+
+def _counting_concordance_data(
+    response: Surv,
+    timefix: bool,
+    timewt: str,
+    ymin: float | None,
+    ymax: float | None,
+    *,
+    preapply_timefix: bool,
+) -> _CountingConcordanceData:
+    if timewt in {"S/G", "n/G2"}:
+        raise ValueError("S/G and n/G2 timewt options are not supported for counting-process data")
+    if response.start is None:
+        raise ValueError("counting-process concordance requires start times")
+
+    start = list(response.start)
+    stop = list(response.time)
+    if preapply_timefix and timefix:
+        start, stop = _timefix_vectors(start, stop)
+    status = list(response.event)
+    stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+    return _CountingConcordanceData(start, stop, status)
+
+
 def _single_concordance_ranks(
     response: Surv,
     risk_values: list[float],
@@ -7899,47 +15069,38 @@ def _single_concordance_ranks(
 ) -> list[dict[str, float]]:
     case_weights = None if weights is None else list(weights)
     if response.type == "right":
-        times = _survdiff_timefix_values(list(response.time), timefix)
-        status = list(response.event)
-        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-        core_times, display_by_core_time = _concordance_core_time_values(times, timefix)
+        data = _right_concordance_data(response, timefix, ymin, ymax)
         return _concordance_rank_row_dicts(
             _core.concordance_rank_rows(
-                core_times,
-                status,
+                data.times,
+                data.status,
                 risk_values,
                 case_weights,
                 timewt,
             ),
-            display_by_core_time,
+            data.display_by_core_time,
         )
     if response.type == "counting":
-        if timewt in {"S/G", "n/G2"}:
-            raise ValueError(
-                "S/G and n/G2 timewt options are not supported for counting-process data"
-            )
-        if response.start is None:
-            raise ValueError("counting-process concordance requires start times")
-        start = list(response.start)
-        stop = list(response.time)
-        if timefix:
-            start, stop = _timefix_vectors(start, stop)
-        status = list(response.event)
-        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        data = _counting_concordance_data(
+            response,
+            timefix,
+            timewt,
+            ymin,
+            ymax,
+            preapply_timefix=True,
+        )
         return _concordance_rank_row_dicts(
             _core.counting_concordance_rank_rows(
-                start,
-                stop,
-                status,
+                data.start,
+                data.stop,
+                data.status,
                 risk_values,
                 case_weights,
                 timewt,
                 False,
             )
         )
-    raise NotImplementedError(
-        "concordance currently supports right-censored and counting Surv responses"
-    )
+    return _unsupported_concordance_response()
 
 
 def _concordance_ranks(
@@ -7965,39 +15126,32 @@ def _concordance_ranks(
     strata_codes = _encode_groups(strata, len(response))
     case_weights = None if weights is None else list(weights)
     if response.type == "right":
-        times = _survdiff_timefix_values(list(response.time), timefix)
-        status = list(response.event)
-        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-        core_times, display_by_core_time = _concordance_core_time_values(times, timefix)
+        data = _right_concordance_data(response, timefix, ymin, ymax)
         return _concordance_rank_row_dicts(
             _core.stratified_concordance_rank_rows(
-                core_times,
-                status,
+                data.times,
+                data.status,
                 risk_values,
                 strata_codes,
                 case_weights,
                 timewt,
             ),
-            display_by_core_time,
+            data.display_by_core_time,
         )
     if response.type == "counting":
-        if timewt in {"S/G", "n/G2"}:
-            raise ValueError(
-                "S/G and n/G2 timewt options are not supported for counting-process data"
-            )
-        if response.start is None:
-            raise ValueError("counting-process concordance requires start times")
-        start = list(response.start)
-        stop = list(response.time)
-        if timefix:
-            start, stop = _timefix_vectors(start, stop)
-        status = list(response.event)
-        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        data = _counting_concordance_data(
+            response,
+            timefix,
+            timewt,
+            ymin,
+            ymax,
+            preapply_timefix=True,
+        )
         return _concordance_rank_row_dicts(
             _core.stratified_counting_concordance_rank_rows(
-                start,
-                stop,
-                status,
+                data.start,
+                data.stop,
+                data.status,
                 risk_values,
                 strata_codes,
                 case_weights,
@@ -8005,9 +15159,7 @@ def _concordance_ranks(
                 False,
             )
         )
-    raise NotImplementedError(
-        "concordance currently supports right-censored and counting Surv responses"
-    )
+    return _unsupported_concordance_response()
 
 
 def _concordance_influence_result(
@@ -8032,46 +15184,37 @@ def _single_concordance_influence(
 ) -> tuple[list[list[float]], list[float], float | None]:
     case_weights = None if weights is None else list(weights)
     if response.type == "right":
-        times = _survdiff_timefix_values(list(response.time), timefix)
-        status = list(response.event)
-        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-        core_times, _display_by_core_time = _concordance_core_time_values(times, timefix)
+        data = _right_concordance_data(response, timefix, ymin, ymax)
         return _concordance_influence_result(
             _core.concordance_influence_rows(
-                core_times,
-                status,
+                data.times,
+                data.status,
                 risk_values,
                 case_weights,
                 timewt,
             )
         )
     if response.type == "counting":
-        if timewt in {"S/G", "n/G2"}:
-            raise ValueError(
-                "S/G and n/G2 timewt options are not supported for counting-process data"
-            )
-        if response.start is None:
-            raise ValueError("counting-process concordance requires start times")
-        start = list(response.start)
-        stop = list(response.time)
-        if timefix:
-            start, stop = _timefix_vectors(start, stop)
-        status = list(response.event)
-        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        data = _counting_concordance_data(
+            response,
+            timefix,
+            timewt,
+            ymin,
+            ymax,
+            preapply_timefix=True,
+        )
         return _concordance_influence_result(
             _core.counting_concordance_influence_rows(
-                start,
-                stop,
-                status,
+                data.start,
+                data.stop,
+                data.status,
                 risk_values,
                 case_weights,
                 timewt,
                 False,
             )
         )
-    raise NotImplementedError(
-        "concordance currently supports right-censored and counting Surv responses"
-    )
+    return _unsupported_concordance_response()
 
 
 def _concordance_influence(
@@ -8097,14 +15240,11 @@ def _concordance_influence(
     strata_codes = _encode_groups(strata, len(response))
     case_weights = None if weights is None else list(weights)
     if response.type == "right":
-        times = _survdiff_timefix_values(list(response.time), timefix)
-        status = list(response.event)
-        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-        core_times, _display_by_core_time = _concordance_core_time_values(times, timefix)
+        data = _right_concordance_data(response, timefix, ymin, ymax)
         return _concordance_influence_result(
             _core.stratified_concordance_influence_rows(
-                core_times,
-                status,
+                data.times,
+                data.status,
                 risk_values,
                 strata_codes,
                 case_weights,
@@ -8112,23 +15252,19 @@ def _concordance_influence(
             )
         )
     if response.type == "counting":
-        if timewt in {"S/G", "n/G2"}:
-            raise ValueError(
-                "S/G and n/G2 timewt options are not supported for counting-process data"
-            )
-        if response.start is None:
-            raise ValueError("counting-process concordance requires start times")
-        start = list(response.start)
-        stop = list(response.time)
-        if timefix:
-            start, stop = _timefix_vectors(start, stop)
-        status = list(response.event)
-        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        data = _counting_concordance_data(
+            response,
+            timefix,
+            timewt,
+            ymin,
+            ymax,
+            preapply_timefix=True,
+        )
         return _concordance_influence_result(
             _core.stratified_counting_concordance_influence_rows(
-                start,
-                stop,
-                status,
+                data.start,
+                data.stop,
+                data.status,
                 risk_values,
                 strata_codes,
                 case_weights,
@@ -8136,9 +15272,7 @@ def _concordance_influence(
                 False,
             )
         )
-    raise NotImplementedError(
-        "concordance currently supports right-censored and counting Surv responses"
-    )
+    return _unsupported_concordance_response()
 
 
 def _concordance_cluster_values(cluster: Any, n: int) -> list[Any]:
@@ -8174,44 +15308,37 @@ def _single_concordance_summary(
     ymax: float | None,
 ) -> dict[str, float]:
     if response.type == "right":
-        times = _survdiff_timefix_values(list(response.time), timefix)
-        status = list(response.event)
-        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-        core_times, _display_by_core_time = _concordance_core_time_values(times, timefix)
+        data = _right_concordance_data(response, timefix, ymin, ymax)
         summary = _core.concordance_summary(
-            core_times,
-            status,
+            data.times,
+            data.status,
             risk_values,
             weights,
             timewt,
         )
-        summary["n_event"] = float(sum(1 for event in status if event == 1))
+        summary["n_event"] = float(sum(1 for event in data.status if event == 1))
         return summary
     if response.type == "counting":
-        if timewt in {"S/G", "n/G2"}:
-            raise ValueError(
-                "S/G and n/G2 timewt options are not supported for counting-process data"
-            )
-        if response.start is None:
-            raise ValueError("counting-process concordance requires start times")
-        start = list(response.start)
-        stop = list(response.time)
-        status = list(response.event)
-        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        data = _counting_concordance_data(
+            response,
+            timefix,
+            timewt,
+            ymin,
+            ymax,
+            preapply_timefix=False,
+        )
         summary = _core.counting_concordance_summary(
-            start,
-            stop,
-            status,
+            data.start,
+            data.stop,
+            data.status,
             risk_values,
             weights,
             timewt,
             timefix,
         )
-        summary["n_event"] = float(sum(1 for event in status if event == 1))
+        summary["n_event"] = float(sum(1 for event in data.status if event == 1))
         return summary
-    raise NotImplementedError(
-        "concordance currently supports right-censored and counting Surv responses"
-    )
+    return _unsupported_concordance_response()
 
 
 def _concordance_summary(
@@ -8237,15 +15364,12 @@ def _concordance_summary(
 
     strata_codes = _encode_groups(strata, len(response))
     if response.type == "right":
-        times = _survdiff_timefix_values(list(response.time), timefix)
-        status = list(response.event)
-        times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-        core_times, _display_by_core_time = _concordance_core_time_values(times, timefix)
+        data = _right_concordance_data(response, timefix, ymin, ymax)
         return {
             key: float(value)
             for key, value in _core.stratified_concordance_summary(
-                core_times,
-                status,
+                data.times,
+                data.status,
                 risk_values,
                 strata_codes,
                 weights,
@@ -8253,22 +15377,20 @@ def _concordance_summary(
             ).items()
         }
     if response.type == "counting":
-        if timewt in {"S/G", "n/G2"}:
-            raise ValueError(
-                "S/G and n/G2 timewt options are not supported for counting-process data"
-            )
-        if response.start is None:
-            raise ValueError("counting-process concordance requires start times")
-        start = list(response.start)
-        stop = list(response.time)
-        status = list(response.event)
-        stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
+        data = _counting_concordance_data(
+            response,
+            timefix,
+            timewt,
+            ymin,
+            ymax,
+            preapply_timefix=False,
+        )
         return {
             key: float(value)
             for key, value in _core.stratified_counting_concordance_summary(
-                start,
-                stop,
-                status,
+                data.start,
+                data.stop,
+                data.status,
                 risk_values,
                 strata_codes,
                 weights,
@@ -8276,9 +15398,154 @@ def _concordance_summary(
                 timefix,
             ).items()
         }
-    raise NotImplementedError(
-        "concordance currently supports right-censored and counting Surv responses"
-    )
+    return _unsupported_concordance_response()
+
+
+def _concordance_time_multiplier(
+    timewt: str,
+    total_weight: float,
+    survival: float,
+    censoring_survival: float,
+    nrisk: float,
+) -> float:
+    if nrisk <= 0.0:
+        return 0.0
+    if timewt == "S":
+        return total_weight * survival / nrisk
+    if timewt == "S/G":
+        if censoring_survival > 0.0:
+            return total_weight * survival / (censoring_survival * nrisk)
+        return 0.0
+    if timewt == "n/G2":
+        if censoring_survival > 0.0:
+            return 1.0 / (censoring_survival * censoring_survival)
+        return 0.0
+    if timewt == "I":
+        return 1.0 / nrisk
+    return 1.0
+
+
+def _right_concordance_time_multipliers(
+    time: list[float],
+    status: list[int],
+    weights: list[float] | None,
+    timewt: str,
+) -> dict[float, float]:
+    if timewt == "n":
+        return {time[idx]: 1.0 for idx, event in enumerate(status) if event == 1}
+
+    case_weights = [1.0] * len(time) if weights is None else weights
+    total_weight = math.fsum(case_weights)
+    survival = 1.0
+    censoring_survival = 1.0
+    multipliers: dict[float, float] = {}
+    for event_time in sorted(set(time)):
+        indices = [idx for idx, value in enumerate(time) if value == event_time]
+        nrisk = math.fsum(
+            weight for weight, value in zip(case_weights, time, strict=True) if value >= event_time
+        )
+        death_weight = math.fsum(case_weights[idx] for idx in indices if status[idx] == 1)
+        censor_weight = math.fsum(case_weights[idx] for idx in indices if status[idx] != 1)
+        if death_weight > 0.0:
+            multipliers[event_time] = _concordance_time_multiplier(
+                timewt,
+                total_weight,
+                survival,
+                censoring_survival,
+                nrisk,
+            )
+            if nrisk > 0.0:
+                survival *= max((nrisk - death_weight) / nrisk, 0.0)
+        if censor_weight > 0.0 and nrisk > 0.0:
+            censoring_survival *= max((nrisk - censor_weight) / nrisk, 0.0)
+    return multipliers
+
+
+def _right_concordance_tie_counts(
+    response: Surv,
+    risk_values: list[float],
+    weights: list[float] | None,
+    timefix: bool,
+    timewt: str,
+    ymin: float | None,
+    ymax: float | None,
+) -> tuple[float, float, float]:
+    data = _right_concordance_data(response, timefix, ymin, ymax)
+    case_weights = [1.0] * len(data.times) if weights is None else weights
+    multipliers = _right_concordance_time_multipliers(data.times, data.status, weights, timewt)
+    tied_x = 0.0
+    tied_y = 0.0
+    tied_xy = 0.0
+    for left in range(len(data.times)):
+        for right in range(left + 1, len(data.times)):
+            pair_weight = case_weights[left] * case_weights[right]
+            same_event_time = (
+                data.status[left] == 1
+                and data.status[right] == 1
+                and data.times[left] == data.times[right]
+            )
+            if same_event_time:
+                pair_weight *= multipliers.get(data.times[left], 0.0)
+                if pair_weight <= 0.0:
+                    continue
+                if abs(risk_values[left] - risk_values[right]) < 1e-12:
+                    tied_xy += pair_weight
+                else:
+                    tied_y += pair_weight
+                continue
+
+            if data.status[left] == 1 and data.times[left] < data.times[right]:
+                event_idx, risk_idx = left, right
+            elif data.status[right] == 1 and data.times[right] < data.times[left]:
+                event_idx, risk_idx = right, left
+            else:
+                continue
+            pair_weight *= multipliers.get(data.times[event_idx], 0.0)
+            if pair_weight > 0.0 and abs(risk_values[event_idx] - risk_values[risk_idx]) < 1e-12:
+                tied_x += pair_weight
+    return tied_x, tied_y, tied_xy
+
+
+def _concordance_tie_counts(
+    response: Surv,
+    risk_values: list[float],
+    weights: list[float] | None,
+    strata: Any | None,
+    timefix: bool,
+    timewt: str,
+    ymin: float | None,
+    ymax: float | None,
+) -> tuple[float, float, float]:
+    if response.type != "right":
+        return 0.0, 0.0, 0.0
+    if strata is None:
+        return _right_concordance_tie_counts(
+            response,
+            risk_values,
+            weights,
+            timefix,
+            timewt,
+            ymin,
+            ymax,
+        )
+    strata_codes = _encode_groups(strata, len(response))
+    totals = [0.0, 0.0, 0.0]
+    for indices in _group_indices(strata_codes, len(response)).values():
+        group_response = _subset_surv(response, indices)
+        group_risk = [risk_values[idx] for idx in indices]
+        group_weights = [weights[idx] for idx in indices] if weights is not None else None
+        counts = _right_concordance_tie_counts(
+            group_response,
+            group_risk,
+            group_weights,
+            timefix,
+            timewt,
+            ymin,
+            ymax,
+        )
+        for idx, value in enumerate(counts):
+            totals[idx] += value
+    return tuple(totals)
 
 
 def _single_score_concordance_result(
@@ -8300,6 +15567,16 @@ def _single_score_concordance_result(
 
     risk_values = [-value for value in score_values] if reverse_scores else score_values
     summary = _concordance_summary(
+        response,
+        risk_values,
+        weight_values,
+        strata_values,
+        fix_time,
+        time_weight,
+        lower_bound,
+        upper_bound,
+    )
+    tied_x, tied_y, tied_xy = _concordance_tie_counts(
         response,
         risk_values,
         weight_values,
@@ -8346,6 +15623,9 @@ def _single_score_concordance_result(
         reverse=reverse_scores,
         concordant=float(summary["concordant"]),
         comparable=float(summary["comparable"]),
+        tied_x=tied_x,
+        tied_y=tied_y,
+        tied_xy=tied_xy,
         ranks=rank_rows,
         dfbeta=dfbeta if influence_value in {1, 3} else None,
         influence=influence_rows if influence_value in {2, 3} else None,
@@ -8392,6 +15672,9 @@ def _multi_score_concordance_result(
         reverse=reverse_scores,
         concordant=[float(result.concordant) for result in results],
         comparable=[float(result.comparable) for result in results],
+        tied_x=[float(result.tied_x) for result in results],
+        tied_y=[float(result.tied_y) for result in results],
+        tied_xy=[float(result.tied_xy) for result in results],
         ranks=[result.ranks for result in results] if include_ranks else None,
         dfbeta=[result.dfbeta for result in results] if influence_value in {1, 3} else None,
         influence=[result.influence for result in results] if influence_value in {2, 3} else None,
@@ -8446,8 +15729,11 @@ def concordance(
     strata_values = None
     cluster_values = None
     score_names: list[str] | None = None
+    formula_input = isinstance(response, str)
+    effective_reverse_scores = reverse_scores
 
-    if isinstance(response, str):
+    if formula_input:
+        effective_reverse_scores = not reverse_scores
         if external_scores is not None:
             raise ValueError("concordance formula input cannot be combined with scores")
         weights = _formula_weight_values(data, weights)
@@ -8520,7 +15806,7 @@ def concordance(
             weight_values,
             strata_values,
             cluster_values,
-            reverse_scores,
+            effective_reverse_scores,
             fix_time,
             time_weight,
             lower_bound,
@@ -8536,6 +15822,9 @@ def concordance(
                 reverse=result.reverse,
                 concordant=result.concordant,
                 comparable=result.comparable,
+                tied_x=result.tied_x,
+                tied_y=result.tied_y,
+                tied_xy=result.tied_xy,
                 ranks=result.ranks,
                 dfbeta=result.dfbeta,
                 influence=result.influence,
@@ -8553,7 +15842,7 @@ def concordance(
         weight_values,
         strata_values,
         cluster_values,
-        reverse_scores,
+        effective_reverse_scores,
         fix_time,
         time_weight,
         lower_bound,
@@ -8561,6 +15850,93 @@ def concordance(
         influence_value,
         include_ranks,
     )
+
+
+def survConcordance(  # noqa: N802
+    formula: Any,
+    data: Any | None = None,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: Any | None = "fail",
+    **kwargs: Any,
+) -> ConcordanceResult:
+    """Deprecated R-compatible alias for ``concordance``."""
+
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    warnings.warn(
+        "survConcordance is deprecated; use concordance instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    kwargs.setdefault("reverse", True)
+    return concordance(
+        formula,
+        data=data,
+        weights=weights,
+        subset=subset,
+        na_action=na_action,
+        **kwargs,
+    )
+
+
+def _survConcordance_legacy_stats(  # noqa: N802
+    result: ConcordanceResult,
+) -> dict[str, float]:
+    if isinstance(result.concordance, list):
+        raise ValueError("survConcordance.fit expects a single score vector")
+    concordant = float(result.concordant)
+    comparable = float(result.comparable)
+    discordant = max(comparable - concordant, 0.0)
+    variance = result.variance
+    if isinstance(variance, list):
+        variance = variance[0] if variance else None
+    std_cd = math.nan
+    if variance is not None and math.isfinite(float(variance)) and variance >= 0.0:
+        std_cd = math.sqrt(float(variance)) * 2.0 * comparable
+    return {
+        "concordant": concordant,
+        "discordant": discordant,
+        "tied.risk": 0.0,
+        "tied.time": 0.0,
+        "std(c-d)": std_cd,
+    }
+
+
+def survConcordance_fit(  # noqa: N802
+    y: Any,
+    x: Any,
+    strata: Any | None = None,
+    weight: Any | None = None,
+    **kwargs: Any,
+) -> dict[str, float]:
+    """Deprecated R-compatible ``survConcordance.fit`` statistics helper."""
+
+    timefix = _pop_dotted_keyword(kwargs, "time.fix", "timefix", True, True)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"survConcordance.fit got unexpected keyword argument(s): {unexpected}")
+    if not isinstance(y, Surv):
+        raise TypeError("y must be a Surv object")
+    result = _single_score_concordance_result(
+        y,
+        _float_vector(x, "x"),
+        _concordance_weight_values(weight, len(y)),
+        None if strata is None else _materialize_labels(strata, "strata"),
+        None,
+        False,
+        _normalize_bool_option(timefix, "timefix"),
+        "n",
+        None,
+        None,
+        1,
+        False,
+    )
+    warnings.warn(
+        "survConcordance.fit is deprecated; use concordance instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _survConcordance_legacy_stats(result)
 
 
 def predict(
@@ -8793,6 +16169,13 @@ def residuals(
                 fit.scale,
                 fit.distribution,
                 time2=getattr(fit, "time2", None),
+                distribution_parameter=(
+                    _survreg_t_fit_degrees_of_freedom(
+                        getattr(fit, "distribution_parameters", None),
+                    )
+                    if _survreg_distribution_family(fit) == "t"
+                    else None
+                ),
             )
             if weighted_value:
                 matrix_values = _weight_residual_result(
@@ -9340,8 +16723,6 @@ def survreg(
     scale_value = _finite_float(scale, "scale")
     if scale_value < 0.0:
         raise ValueError("scale must be non-negative")
-    if parms is not None:
-        raise NotImplementedError("survreg distribution parameters via parms are not supported")
     keep_model = _normalize_bool_option_with_default(model, "model", False)
     keep_y = _normalize_bool_option_with_default(y, "y", True)
     keep_score = _normalize_bool_option_with_default(score, "score", False)
@@ -9563,11 +16944,34 @@ def survreg(
     if normalized_distribution is None:
         normalized_distribution = "weibull"
     distribution_name = normalized_distribution
+    distribution_parameter = None
+    if distribution_name == "t":
+        distribution_parameter = _survreg_t_fit_degrees_of_freedom(parms)
+    elif parms is not None:
+        raise ValueError("parms is only supported for distribution='t'")
+    exponential_fixed_scale = distribution_name == "exponential"
+    rayleigh_fixed_scale = distribution_name == "rayleigh"
+    if exponential_fixed_scale and scale_value > 0.0:
+        warnings.warn(
+            "Exponential has a fixed scale; user specified value ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    if rayleigh_fixed_scale and scale_value > 0.0:
+        warnings.warn(
+            "Rayleigh has a fixed scale; user specified value ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     offset_values = _optional_float_vector(offsets if offsets is not None else offset, "offsets", n)
     weight_values = _optional_float_vector(weights, "weights", n)
     case_weights = weight_values if explicit_weights else None
     strata_values = _encode_groups(strata, n) if strata is not None else None
-    if scale_value > 0.0 and strata_values is not None and len(set(strata_values)) > 1:
+    if (
+        (scale_value > 0.0 or exponential_fixed_scale or rayleigh_fixed_scale)
+        and strata_values is not None
+        and len(set(strata_values)) > 1
+    ):
         raise ValueError("cannot have both a fixed scale and strata")
     cluster_values_for_validation = (
         _materialize_labels(cluster, "cluster") if cluster is not None else None
@@ -9623,6 +17027,13 @@ def survreg(
         _float_vector(initial_source, initial_name) if initial_source is not None else None
     )
 
+    fixed_scale = (
+        0.5
+        if rayleigh_fixed_scale
+        else 1.0
+        if exponential_fixed_scale
+        else (scale_value if scale_value > 0.0 else None)
+    )
     fit = _core.survreg(
         response_time,
         response_status,
@@ -9636,7 +17047,8 @@ def survreg(
         eps=eps,
         tol_chol=tol_chol,
         time2=response_time2,
-        fixed_scale=scale_value if scale_value > 0.0 else None,
+        fixed_scale=fixed_scale,
+        distribution_parameter=distribution_parameter,
     )
     robust_cluster = cluster_values_for_validation
     if robust_value and robust_cluster is None:

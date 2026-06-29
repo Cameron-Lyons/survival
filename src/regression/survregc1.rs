@@ -1,5 +1,5 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, PARALLEL_THRESHOLD_MEDIUM};
-use crate::internal::statistical::{erf, erfc};
+use crate::internal::statistical::{erf, erfc, ln_gamma};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
 use std::fmt;
@@ -37,6 +37,7 @@ pub(crate) enum SurvivalDist {
     Weibull,
     LogNormal,
     LogLogistic,
+    StudentT(f64),
 }
 pub(crate) struct SurvivalLikelihood {
     pub loglik: f64,
@@ -299,6 +300,7 @@ fn compute_exact(
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 1)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 1)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 1)?,
+        SurvivalDist::StudentT(df) => student_t_d(z, 1, df)?,
     };
     if funs[1] <= 0.0 {
         Ok((SMALL, -z / sigma, -1.0 / sigma, 0.0, 0.0, 0.0))
@@ -325,6 +327,7 @@ fn compute_right_censored(
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
+        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
     };
     if funs[1] <= 0.0 {
         Ok((SMALL, z / sigma, 0.0, 0.0, 0.0, 0.0))
@@ -351,6 +354,7 @@ fn compute_left_censored(
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
+        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
     };
     if funs[0] <= 0.0 {
         Ok((SMALL, -z / sigma, 0.0, 0.0, 0.0, 0.0))
@@ -380,11 +384,13 @@ fn compute_interval_censored(
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
+        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
     };
     let ufun = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z2, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z2, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z2, 2)?,
+        SurvivalDist::StudentT(df) => student_t_d(z2, 2, df)?,
     };
     let diff = if z > 0.0 {
         funs[1] - ufun[1]
@@ -486,6 +492,126 @@ fn exvalue_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
         }),
     }
 }
+
+#[inline]
+fn regularized_beta(a: f64, b: f64, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let bt = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
+    if x < (a + 1.0) / (a + b + 2.0) {
+        bt * beta_continued_fraction(a, b, x) / a
+    } else {
+        1.0 - bt * beta_continued_fraction(b, a, 1.0 - x) / b
+    }
+}
+
+#[inline]
+fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
+    let qab = a + b;
+    let qap = a + 1.0;
+    let qam = a - 1.0;
+    let mut c = 1.0;
+    let mut d = 1.0 - qab * x / qap;
+    if d.abs() < 1e-30 {
+        d = 1e-30;
+    }
+    d = 1.0 / d;
+    let mut h = d;
+    for m in 1..=200 {
+        let m = m as f64;
+        let m2 = 2.0 * m;
+        let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < 1e-30 {
+            d = 1e-30;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < 1e-30 {
+            c = 1e-30;
+        }
+        d = 1.0 / d;
+        h *= d * c;
+
+        let aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < 1e-30 {
+            d = 1e-30;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < 1e-30 {
+            c = 1e-30;
+        }
+        d = 1.0 / d;
+        let delta = d * c;
+        h *= delta;
+        if (delta - 1.0).abs() < 1e-12 {
+            break;
+        }
+    }
+    h
+}
+
+#[inline]
+fn student_t_pdf(z: f64, df: f64) -> f64 {
+    if !z.is_finite() {
+        return if z.is_nan() { f64::NAN } else { 0.0 };
+    }
+    let log_coef = ln_gamma((df + 1.0) / 2.0)
+        - ln_gamma(df / 2.0)
+        - 0.5 * (df.ln() + std::f64::consts::PI.ln());
+    (log_coef - ((df + 1.0) / 2.0) * (1.0 + z * z / df).ln()).exp()
+}
+
+#[inline]
+fn student_t_cdf(z: f64, df: f64) -> f64 {
+    if z == f64::INFINITY {
+        return 1.0;
+    }
+    if z == f64::NEG_INFINITY {
+        return 0.0;
+    }
+    if z == 0.0 {
+        return 0.5;
+    }
+    let x = df / (df + z * z);
+    let ibeta = regularized_beta(df / 2.0, 0.5, x);
+    if z > 0.0 {
+        1.0 - 0.5 * ibeta
+    } else {
+        0.5 * ibeta
+    }
+}
+
+#[inline]
+fn student_t_d(z: f64, case: i32, df: f64) -> Result<DistributionEval, DistributionError> {
+    let mut ans = [0.0; 4];
+    let f = student_t_pdf(z, df);
+    let denom = df + z * z;
+    let score = -((df + 1.0) * z) / denom;
+    match case {
+        1 => {
+            ans[1] = f;
+            ans[2] = score;
+            ans[3] = ((df + 1.0) * (df + 3.0) * z * z / denom.powi(2)) - ((df + 1.0) / denom);
+            Ok(ans)
+        }
+        2 => {
+            ans[0] = student_t_cdf(z, df);
+            ans[1] = 1.0 - ans[0];
+            ans[2] = f;
+            ans[3] = f * score;
+            Ok(ans)
+        }
+        _ => Err(DistributionError::InvalidCase {
+            case,
+            distribution: "Student-t".to_string(),
+        }),
+    }
+}
 #[allow(clippy::too_many_arguments)]
 fn update_derivatives(
     res: &mut SurvivalLikelihood,
@@ -558,8 +684,9 @@ mod tests {
             SurvivalDist::Weibull,
             SurvivalDist::LogNormal,
             SurvivalDist::LogLogistic,
+            SurvivalDist::StudentT(4.0),
         ];
-        assert_eq!(variants.len(), 6);
+        assert_eq!(variants.len(), 7);
     }
 
     #[test]

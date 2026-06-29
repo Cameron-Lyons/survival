@@ -105,5 +105,5 @@ pub use spline_hazard::{
 };
 pub use survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, predict_survreg, predict_survreg_quantile,
-    survreg_quantile_prediction_se_matrix,
+    survreg_distribution, survreg_quantile_prediction_se_matrix,
 };

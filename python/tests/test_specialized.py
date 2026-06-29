@@ -304,6 +304,14 @@ def test_finegray():
     assert hasattr(result, "end")
     assert hasattr(result, "wt")
     assert len(result.row) > 0
+    assert isinstance(result, survival.FineGrayOutput)
+    assert survival.as_data_frame(result) == {
+        "row": result.row,
+        "start": pytest.approx(result.start),
+        "end": pytest.approx(result.end),
+        "wt": pytest.approx(result.wt),
+        "add": result.add,
+    }
 
 
 def test_finegray_validates_public_inputs():
@@ -418,7 +426,7 @@ def test_survexp_validates_method():
 
     with pytest.raises(
         ValueError,
-        match="method must be 'hakulinen', 'conditional', or 'individual'",
+        match="method must",
     ):
         survival.survexp(
             time=[365.0],

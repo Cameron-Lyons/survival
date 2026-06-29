@@ -341,6 +341,7 @@ def test_survreg_residual_low_level_bindings_are_typed():
         "distribution",
         "residual_type",
         "time2",
+        "distribution_parameter",
     ]
     assert _pyi_function_arg_names(stub_path, "survreg_residual_matrix") == [
         "time",
@@ -349,6 +350,7 @@ def test_survreg_residual_low_level_bindings_are_typed():
         "scale",
         "distribution",
         "time2",
+        "distribution_parameter",
     ]
     assert _pyi_function_arg_names(stub_path, "survreg_influence_residuals") == [
         "derivative_matrix",
@@ -377,6 +379,7 @@ def test_survreg_residual_low_level_bindings_are_typed():
         "var_matrix",
         "distribution",
         "time2",
+        "distribution_parameter",
     ]
     assert list(inspect.signature(core.coxmart).parameters) == ["input", "method"]
     assert _pyi_function_arg_names(stub_path, "coxmart") == ["input", "method"]
@@ -489,6 +492,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
         "SurvregPrediction",
         "SurvregQuantilePrediction",
         "survreg",
+        "survreg_distribution",
         "predict_survreg",
         "predict_survreg_quantile",
         "survreg_quantile_prediction_se_matrix",
@@ -509,6 +513,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
             "tol_chol",
             "time2",
             "fixed_scale",
+            "distribution_parameter",
         ],
         "predict_survreg": [
             "covariates",
@@ -527,6 +532,13 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
             "distribution",
             "quantiles",
             "offset",
+        ],
+        "survreg_distribution": [
+            "values",
+            "mean",
+            "scale",
+            "distribution",
+            "kind",
         ],
         "survreg_quantile_prediction_se_matrix": [
             "rows",
@@ -585,6 +597,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
         "scale",
         "scales",
         "distribution",
+        "distribution_parameters",
         "n_covariates",
         "n_strata",
         "linear_predictors",
@@ -701,6 +714,72 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
     assert fit_prediction.n == 2
     assert type(fit_quantiles).__name__ == "SurvregQuantilePrediction"
     assert fit_quantiles.n == 2
+
+    rayleigh_covariates = [
+        [1.0, 0.2],
+        [1.0, 0.4],
+        [1.0, 0.1],
+        [1.0, 0.8],
+        [1.0, 1.0],
+        [1.0, 1.2],
+        [1.0, 0.6],
+        [1.0, 1.4],
+    ]
+    rayleigh_fit = core.survreg(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+        rayleigh_covariates,
+        None,
+        None,
+        None,
+        None,
+        "rayleigh",
+        200,
+        1e-8,
+        1e-9,
+        None,
+        None,
+    )
+    weibull_half_fit = core.survreg(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+        rayleigh_covariates,
+        None,
+        None,
+        None,
+        None,
+        "weibull",
+        200,
+        1e-8,
+        1e-9,
+        None,
+        0.5,
+    )
+
+    assert rayleigh_fit.distribution == "rayleigh"
+    assert rayleigh_fit.scale == pytest.approx(0.5)
+    assert rayleigh_fit.coefficients == pytest.approx(weibull_half_fit.coefficients)
+    assert rayleigh_fit.predict(rayleigh_covariates[:2], "response").predictions == pytest.approx(
+        weibull_half_fit.predict(rayleigh_covariates[:2], "response").predictions
+    )
+
+    loggaussian_fit = core.survreg(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+        rayleigh_covariates,
+        None,
+        None,
+        None,
+        None,
+        "loggaussian",
+        20,
+        1e-5,
+        1e-9,
+        None,
+        None,
+    )
+
+    assert loggaussian_fit.distribution == "lognormal"
 
 
 def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
@@ -3630,11 +3709,16 @@ def test_survfitkm_bindings_are_typed():
 
     assert {
         "SurvFitKMOutput",
+        "SurvFitKMInfluenceOutput",
         "CountingSurvfitTables",
         "SurvfitCurveResult",
         "KaplanMeierConfig",
         "SurvfitKMOptions",
         "survfitkm",
+        "survfitkm_influence",
+        "survfitkm_counting_influence",
+        "robust_survfitkm",
+        "robust_counting_survfit_variance",
         "survfitkm_with_options",
         "counting_survfit_tables",
         "survfit_curve_from_tables",
@@ -3663,6 +3747,110 @@ def test_survfitkm_bindings_are_typed():
         "conf_level",
         "conf_type",
         "timefix",
+    ]
+    assert list(inspect.signature(core.robust_survfitkm).parameters) == [
+        "time",
+        "status",
+        "cluster",
+        "weights",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "robust_survfitkm") == [
+        "time",
+        "status",
+        "cluster",
+        "weights",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+    ]
+    assert list(inspect.signature(core.survfitkm_influence).parameters) == [
+        "time",
+        "status",
+        "cluster",
+        "weights",
+        "reverse",
+        "stype",
+        "ctype",
+        "conf_level",
+        "conf_type",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "survfitkm_influence") == [
+        "time",
+        "status",
+        "cluster",
+        "weights",
+        "reverse",
+        "stype",
+        "ctype",
+        "conf_level",
+        "conf_type",
+        "timefix",
+    ]
+    assert list(inspect.signature(core.survfitkm_counting_influence).parameters) == [
+        "start",
+        "stop",
+        "status",
+        "curve_time",
+        "curve_estimate",
+        "cluster",
+        "weights",
+        "reverse",
+        "stype",
+        "ctype",
+        "conf_level",
+        "conf_type",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "survfitkm_counting_influence") == [
+        "start",
+        "stop",
+        "status",
+        "curve_time",
+        "curve_estimate",
+        "cluster",
+        "weights",
+        "reverse",
+        "stype",
+        "ctype",
+        "conf_level",
+        "conf_type",
+        "timefix",
+    ]
+    assert list(inspect.signature(core.robust_counting_survfit_variance).parameters) == [
+        "start",
+        "stop",
+        "status",
+        "curve_time",
+        "curve_estimate",
+        "cluster",
+        "weights",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+        "stype",
+        "ctype",
+    ]
+    assert _pyi_function_arg_names(stub_path, "robust_counting_survfit_variance") == [
+        "start",
+        "stop",
+        "status",
+        "curve_time",
+        "curve_estimate",
+        "cluster",
+        "weights",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+        "stype",
+        "ctype",
     ]
     assert list(inspect.signature(core.survfitkm_with_options).parameters) == [
         "time",
@@ -3793,6 +3981,7 @@ def test_survfitkm_bindings_are_typed():
     assert _pyi_class_property_names(stub_path, "SurvFitKMOutput") == {
         "time",
         "n_risk",
+        "n_risk_count",
         "n_event",
         "n_event_count",
         "n_censor",
@@ -3806,14 +3995,21 @@ def test_survfitkm_bindings_are_typed():
         "conf_lower",
         "conf_upper",
     }
+    assert _pyi_class_property_names(stub_path, "SurvFitKMInfluenceOutput") == {
+        "time",
+        "influence_surv",
+        "influence_chaz",
+    }
     assert _pyi_class_property_names(stub_path, "CountingSurvfitTables") == {
         "time",
         "n_risk",
+        "n_risk_count",
         "n_event",
         "n_event_count",
         "n_censor",
         "n_censor_count",
         "n_enter",
+        "n_enter_count",
     }
     assert _pyi_class_property_names(stub_path, "SurvfitCurveResult") == {
         "time",
@@ -3830,6 +4026,33 @@ def test_survfitkm_bindings_are_typed():
     }
 
     result = core.survfitkm([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 0.0, 1.0])
+    influence = core.survfitkm_influence(
+        [1.0, 2.0, 3.0, 4.0],
+        [1.0, 0.0, 1.0, 0.0],
+        [0, 1, 2, 3],
+    )
+    counting_influence = core.survfitkm_counting_influence(
+        [0.0, 10.0, 25.0, 0.0, 5.0],
+        [10.0, 20.0, 30.0, 15.0, 25.0],
+        [0, 0, 1, 1, 0],
+        [10.0, 15.0, 20.0, 25.0, 30.0],
+        [1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.0],
+        [0, 0, 0, 1, 2],
+    )
+    assert counting_influence.time == pytest.approx([10.0, 15.0, 20.0, 25.0, 30.0])
+    robust = core.robust_survfitkm(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        [1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+        [0, 0, 1, 1, 2, 2],
+    )
+    robust_counting = core.robust_counting_survfit_variance(
+        [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
+        [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+        [0, 1, 1, 0, 0, 1],
+        [2.0, 3.0, 5.0, 6.0, 7.0],
+        [1.0, 2.0 / 3.0, 4.0 / 9.0, 4.0 / 9.0, 0.0],
+        [0, 0, 1, 1, 2, 2],
+    )
     options = core.SurvfitKMOptions(conf_level=0.9).with_conf_type("plain")
     with_options = core.survfitkm_with_options(
         [1.0, 2.0, 3.0, 4.0],
@@ -3890,6 +4113,7 @@ def test_survfitkm_bindings_are_typed():
     assert type(result).__name__ == "SurvFitKMOutput"
     assert result.time == pytest.approx([1.0, 2.0, 3.0, 4.0])
     assert result.n_risk == pytest.approx([4.0, 3.0, 2.0, 1.0])
+    assert result.n_risk_count == pytest.approx([4.0, 3.0, 2.0, 1.0])
     assert result.n_event == pytest.approx([1.0, 1.0, 0.0, 1.0])
     assert result.n_event_count == pytest.approx([1.0, 1.0, 0.0, 1.0])
     assert result.n_censor == pytest.approx([0.0, 0.0, 1.0, 0.0])
@@ -3897,6 +4121,15 @@ def test_survfitkm_bindings_are_typed():
     assert result.estimate == pytest.approx([0.75, 0.5, 0.5, 0.0])
     assert result.cumulative_hazard == pytest.approx(result.cumhaz)
     assert result.cumulative_hazard_std_err == pytest.approx(result.std_chaz)
+    assert type(influence).__name__ == "SurvFitKMInfluenceOutput"
+    assert influence.time == pytest.approx([1.0, 2.0, 3.0, 4.0])
+    assert influence.influence_chaz[0] == pytest.approx([0.1875, 0.1875, 0.1875, 0.1875])
+    assert influence.influence_surv[3] == pytest.approx([0.0625, 0.0625, 0.21875, 0.21875])
+    assert robust.std_err == pytest.approx(
+        [0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0]
+    )
+    assert robust_counting[0] == pytest.approx([0.0, 0.2721655, 0.1814437, 0.1814437, 0.0])
+    assert robust_counting[1] == pytest.approx([0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655])
     assert with_options.conf_lower != pytest.approx(result.conf_lower)
     assert options.conf_level == pytest.approx(0.9)
     assert options.conf_type == "plain"
@@ -3905,15 +4138,18 @@ def test_survfitkm_bindings_are_typed():
     assert config.conf_level == pytest.approx(0.9)
     assert config.conf_type == "plain"
     assert exact.time == pytest.approx([1.0, 1.0 + 5e-10, 2.0])
+    assert exact.n_risk_count == pytest.approx([3.0, 2.0, 1.0])
     assert exact.n_event == pytest.approx([1.0, 1.0, 0.0])
     assert exact.n_event_count == pytest.approx([1.0, 1.0, 0.0])
     assert exact_with_options.time == pytest.approx(exact.time)
     assert type(counting_tables).__name__ == "CountingSurvfitTables"
     assert counting_tables.time == pytest.approx([0.0, 5.0, 15.0, 20.0, 25.0, 30.0])
     assert counting_tables.n_risk == pytest.approx([0.0, 2.0, 3.0, 2.0, 1.0, 1.0])
+    assert counting_tables.n_risk_count == pytest.approx([0.0, 2.0, 3.0, 2.0, 1.0, 1.0])
     assert counting_tables.n_event == pytest.approx([0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
     assert counting_tables.n_censor == pytest.approx([0.0, 0.0, 0.0, 1.0, 1.0, 0.0])
     assert counting_tables.n_enter == pytest.approx([2.0, 1.0, 0.0, 0.0, 1.0, 0.0])
+    assert counting_tables.n_enter_count == pytest.approx([2.0, 1.0, 0.0, 0.0, 1.0, 0.0])
     assert exact_counting_tables.time == pytest.approx([1.0, 1.0 + 5e-10, 2.0])
     assert exact_counting_tables.n_event == pytest.approx([1.0, 1.0, 0.0])
     assert exact_with_options.estimate == pytest.approx(exact.estimate)
@@ -4776,10 +5012,18 @@ def test_frailty_cox_and_link_function_bindings_are_typed_to_runtime_surface():
     link = core.LinkFunctionParams(0.001)
     assert link.blogit(0.5) == pytest.approx(0.0)
     assert link.bprobit(0.5) == pytest.approx(0.0)
-    assert link.bcloglog(0.5) == pytest.approx(0.0)
+    assert link.bcloglog(0.5) == pytest.approx(math.log(-math.log(0.5)))
     assert link.blog(0.5) == pytest.approx(math.log(0.5))
     assert math.isfinite(link.blogit(0.0))
     assert math.isfinite(link.blogit(1.0))
+
+    bounded = core.LinkFunctionParams(0.05)
+    assert bounded.bprobit(0.0) == pytest.approx(-1.6448536)
+    assert bounded.bcloglog(0.0) == pytest.approx(-2.9701952)
+    large_edge = core.LinkFunctionParams(0.6)
+    assert large_edge.blogit(0.75) == pytest.approx(0.4054651)
+    assert large_edge.bprobit(0.75) == pytest.approx(0.2533471)
+    assert large_edge.bcloglog(0.75) == pytest.approx(-0.08742157)
 
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     event = [1, 0, 1, 0, 1, 0]
@@ -8991,8 +9235,10 @@ def test_core_utility_bindings_are_typed():
     covariates = core.CovariateMatrix([1.0, 0.0, 0.0, 1.0], 2, 2)
     survival_data = core.SurvivalData([1.0, 2.0], [1, 0])
     cox_input = core.CoxRegressionInput(covariates, survival_data)
-    basis = core.nsk([1.0, 2.0, 3.0, 4.0], 3, None, None)
-    spline = core.NaturalSplineKnot(None, (0.0, 5.0), 3, False)
+    default_basis = core.nsk([1.0, 2.0, 3.0, 4.0, 5.0], None, None, None)
+    basis = core.nsk([1.0, 2.0, 3.0, 4.0, 5.0], 3, None, None)
+    explicit_basis = core.nsk([1.0, 2.0, 3.0, 4.0], None, [2.0, 3.0], (1.0, 4.0))
+    spline = core.NaturalSplineKnot([2.0, 3.0], (1.0, 4.0), None, False)
     spline_basis = spline.basis([1.0, 2.0, 3.0])
     pspline = core.PSpline([1.0, 2.0, 3.0, 4.0], 3, 0.1, 1e-6, "GCV", (0.0, 5.0), False, False)
 
@@ -9001,17 +9247,34 @@ def test_core_utility_bindings_are_typed():
     assert cox_input.n_obs == 2
     assert cox_input.n_vars == 2
     assert type(basis).__name__ == "SplineBasisResult"
-    assert basis.n_rows == 4
-    assert basis.n_cols == 4
-    assert basis.knots == pytest.approx([2.0, 3.0])
-    assert basis.boundary_knots == pytest.approx((1.0, 4.0))
-    expected_identity = [1.0 if row == col else 0.0 for row in range(4) for col in range(4)]
-    assert basis.basis == pytest.approx(expected_identity)
+    assert default_basis.n_cols == 1
+    assert default_basis.basis == pytest.approx(
+        [
+            -0.05555555555555554,
+            0.22222222222222215,
+            0.5,
+            0.7777777777777779,
+            1.0555555555555556,
+        ]
+    )
+    assert basis.n_rows == 5
+    assert basis.n_cols == 3
+    assert basis.knots == pytest.approx([2.6666666666666665, 3.333333333333333])
+    assert basis.boundary_knots == pytest.approx((1.2, 4.8))
+    assert basis.basis[:3] == pytest.approx(
+        [-0.30663390663390683, 0.12972972972972977, -0.007507507507507517]
+    )
+    expected_identity = [
+        1.0 if row > 0 and row - 1 == col else 0.0 for row in range(4) for col in range(3)
+    ]
+    assert explicit_basis.basis == pytest.approx(expected_identity)
     assert spline.df == 3
     assert spline.intercept is False
     assert spline_basis.n_rows == 3
-    assert spline_basis.n_cols == 4
-    assert spline.predict([1.0, 2.0], [0.0, 1.0, 2.0, 3.0]) == pytest.approx([1.0, 2.0])
+    assert spline_basis.n_cols == 3
+    assert spline.predict([1.0, 2.0, 3.0, 4.0], [20.0, 30.0, 40.0]) == pytest.approx(
+        [0.0, 20.0, 30.0, 40.0]
+    )
     assert pspline.df == 3
     assert pspline.eps == pytest.approx(1e-6)
     assert pspline.fitted is False
@@ -9051,14 +9314,13 @@ def test_core_nsk_rejects_malformed_inputs():
         core.nsk([1.0, 1.0], 3, None, None)
     with pytest.raises(ValueError, match="df must be at least 1"):
         core.nsk([1.0, 2.0], 0, None, None)
-    with pytest.raises(ValueError, match="computed knots must be strictly increasing"):
-        core.nsk([0.0, 1.0, 1.0, 1.0, 2.0], 4, None, None)
+    tied = core.nsk([0.0, 1.0, 1.0, 1.0, 2.0], 4, None, None)
+    assert tied.n_cols == 2
+    assert tied.knots == pytest.approx([1.0])
     with pytest.raises(ValueError, match="boundary_knots must be finite"):
         core.NaturalSplineKnot(None, (1.0, 1.0), 3, False)
-    with pytest.raises(ValueError, match="knots must be strictly increasing"):
-        core.NaturalSplineKnot([2.0, 2.0], (0.0, 3.0), None, False)
-    with pytest.raises(ValueError, match="knots must lie strictly inside"):
-        core.NaturalSplineKnot([3.5], (0.0, 3.0), None, False)
+    with pytest.raises(ValueError, match="knots contains non-finite"):
+        core.NaturalSplineKnot([float("inf")], (0.0, 3.0), None, False)
 
     spline = core.NaturalSplineKnot(None, (0.0, 2.0), 1, False)
     with pytest.raises(ValueError, match="coef contains non-finite"):
@@ -10832,11 +11094,23 @@ def test_package_root_marks_curated_and_legacy_exports():
     survival = importlib.import_module("survival")
 
     assert "regression" in survival.__all__
+    assert "StrataFactor" in survival.__all__
     assert "Surv" in survival.__all__
+    assert "FineGrayOutput" in survival.__all__
+    assert "RateTable" in survival.__all__
+    assert "PyearsResult" in survival.__all__
+    assert "SurvObrienResult" in survival.__all__
+    assert "SurvExpResult" in survival.__all__
     assert "aic" in survival.__all__
+    assert "aeqSurv" in survival.__all__
     assert "anova" in survival.__all__
     assert "as_data_frame" in survival.__all__
     assert "basehaz" in survival.__all__
+    assert "bcloglog" in survival.__all__
+    assert "cipoisson" in survival.__all__
+    assert "blog" in survival.__all__
+    assert "blogit" in survival.__all__
+    assert "bprobit" in survival.__all__
     assert "coef" in survival.__all__
     assert "coef_names" in survival.__all__
     assert "confint" in survival.__all__
@@ -10844,9 +11118,14 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "coxph_detail" in survival.__all__
     assert "df_residual" in survival.__all__
     assert "degrees_freedom" in survival.__all__
+    assert "dsurvreg" in survival.__all__
     assert "bic" in survival.__all__
     assert "extract_aic" in survival.__all__
     assert "fitted" in survival.__all__
+    assert "finegray" in survival.__all__
+    assert "format_surv" in survival.__all__
+    assert "is_na_surv" in survival.__all__
+    assert "is_ratetable" in survival.__all__
     assert "is_surv" in survival.__all__
     assert "loglik" in survival.__all__
     assert "model_formula" in survival.__all__
@@ -10855,27 +11134,65 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "model_weights" in survival.__all__
     assert "model_summary" in survival.__all__
     assert "nobs" in survival.__all__
+    assert "pyears" in survival.__all__
+    assert "pseudo" in survival.__all__
+    assert "psurvreg" in survival.__all__
+    assert "qsurvreg" in survival.__all__
+    assert "ratetableDate" in survival.__all__
+    assert "rsurvreg" in survival.__all__
+    assert "rttright" in survival.__all__
+    assert "strata" in survival.__all__
+    assert "survcheck" in survival.__all__
+    assert "survConcordance" in survival.__all__
+    assert "survConcordance_fit" in survival.__all__
+    assert "survcondense" in survival.__all__
+    assert "survexp" in survival.__all__
+    assert "survexp_individual" in survival.__all__
+    assert "survexp_mn" in survival.__all__
+    assert "survobrien" in survival.__all__
+    assert "survexp_us" in survival.__all__
+    assert "survexp_usr" in survival.__all__
+    assert "survfit0" in survival.__all__
+    assert "survSplit" in survival.__all__
     assert "survreg" in survival.__all__
     assert "vcov" in survival.__all__
     assert "validation" in survival.__all__
     assert "ridge_fit" not in survival.__all__
     assert "ridge_fit" in survival.__deprecated_root_exports__
     assert "ridge_fit" not in vars(survival)
+    assert survival.StrataFactor is survival.r_api.StrataFactor
     assert survival.Surv is survival.r_api.Surv
+    assert survival.FineGrayOutput is survival.r_api.FineGrayOutput
+    assert survival.RateTable is survival.r_api.RateTable
+    assert survival.PyearsResult is survival.r_api.PyearsResult
+    assert survival.SurvObrienResult is survival.r_api.SurvObrienResult
+    assert survival.SurvExpResult is survival.r_api.SurvExpResult
     assert survival.aic is survival.r_api.aic
+    assert survival.aeqSurv is survival.r_api.aeqSurv
     assert survival.anova is survival.r_api.anova
     assert survival.as_data_frame is survival.r_api.as_data_frame
     assert survival.basehaz is survival.r_api.basehaz
+    assert survival.bcloglog is survival.r_api.bcloglog
+    assert survival.cipoisson is survival.r_api.cipoisson
+    assert survival.blog is survival.r_api.blog
+    assert survival.blogit is survival.r_api.blogit
+    assert survival.bprobit is survival.r_api.bprobit
     assert survival.coef is survival.r_api.coef
+    assert survival.survfit0 is survival.r_api.survfit0
     assert survival.coef_names is survival.r_api.coef_names
     assert survival.confint is survival.r_api.confint
     assert survival.cox_zph is survival.r_api.cox_zph
     assert survival.coxph_detail is survival.r_api.coxph_detail
     assert survival.df_residual is survival.r_api.df_residual
     assert survival.degrees_freedom is survival.r_api.degrees_freedom
+    assert survival.dsurvreg is survival.r_api.dsurvreg
     assert survival.bic is survival.r_api.bic
     assert survival.extract_aic is survival.r_api.extract_aic
     assert survival.fitted is survival.r_api.fitted
+    assert survival.finegray is survival.r_api.finegray
+    assert survival.format_surv is survival.r_api.format_surv
+    assert survival.is_na_surv is survival.r_api.is_na_surv
+    assert survival.is_ratetable is survival.r_api.is_ratetable
     assert survival.is_surv is survival.r_api.is_surv
     assert survival.is_surv(survival.Surv([1.0])) is True
     assert survival.is_surv([1.0]) is False
@@ -10885,7 +11202,28 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.model_matrix is survival.r_api.model_matrix
     assert survival.model_weights is survival.r_api.model_weights
     assert survival.model_summary is survival.r_api.model_summary
+    assert survival.neardate is survival.r_api.neardate
+    assert survival.neardate is not survival.data_prep.neardate
     assert survival.nobs is survival.r_api.nobs
+    assert survival.pyears is survival.r_api.pyears
+    assert survival.pseudo is survival.r_api.pseudo
+    assert survival.psurvreg is survival.r_api.psurvreg
+    assert survival.qsurvreg is survival.r_api.qsurvreg
+    assert survival.ratetableDate is survival.r_api.ratetableDate
+    assert survival.rsurvreg is survival.r_api.rsurvreg
+    assert survival.rttright is survival.r_api.rttright
+    assert survival.strata is survival.r_api.strata
+    assert survival.survcheck is survival.r_api.survcheck
+    assert survival.survConcordance is survival.r_api.survConcordance
+    assert survival.survConcordance_fit is survival.r_api.survConcordance_fit
+    assert survival.survcondense is survival.r_api.survcondense
+    assert survival.survexp is survival.r_api.survexp
+    assert survival.survexp_individual is survival.r_api.survexp_individual
+    assert survival.survexp_mn is survival.r_api.survexp_mn
+    assert survival.survobrien is survival.r_api.survobrien
+    assert survival.survexp_us is survival.r_api.survexp_us
+    assert survival.survexp_usr is survival.r_api.survexp_usr
+    assert survival.survSplit is survival.r_api.survSplit
     assert survival.survreg is survival.r_api.survreg
     assert survival.survreg is not survival.regression.survreg
     assert survival.vcov is survival.r_api.vcov
@@ -11020,6 +11358,8 @@ def test_r_api_stub_tracks_model_generic_public_signatures():
         "df_residual": ["fit"],
         "aic": ["fit", "k"],
         "bic": ["fit"],
+        "brier": ["fit", "times", "newdata", "ties", "detail", "timefix", "efron"],
+        "royston": ["fit", "newdata", "ties", "adjust"],
         "extract_aic": ["fit", "scale", "k"],
         "model_frame": ["fit"],
         "model_matrix": ["fit"],
@@ -11098,6 +11438,20 @@ def test_r_api_stub_tracks_survfit_public_signature():
     assert survfit_node.args.kwarg is not None
     assert survfit_node.args.kwarg.arg == "kwargs"
 
+    survfit0_params = inspect.signature(survival.r_api.survfit0).parameters
+    assert list(survfit0_params) == ["x", "args", "kwargs"]
+    assert survfit0_params["args"].kind is inspect.Parameter.VAR_POSITIONAL
+    assert survfit0_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "survfit0") == ["x"]
+    tree = ast.parse(stub_path.read_text(), filename=str(stub_path))
+    survfit0_node = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "survfit0"
+    )
+    assert survfit0_node.args.vararg is not None
+    assert survfit0_node.args.vararg.arg == "args"
+    assert survfit0_node.args.kwarg is not None
+    assert survfit0_node.args.kwarg.arg == "kwargs"
+
 
 def test_r_api_stub_tracks_predict_public_signature():
     setup_survival_import()
@@ -11149,6 +11503,342 @@ def test_r_api_stub_tracks_residuals_public_signature():
     runtime_params = inspect.signature(survival.r_api.residuals).parameters
     assert list(runtime_params) == expected
     assert _pyi_function_arg_names(stub_path, "residuals") == expected
+
+
+def test_r_api_stub_tracks_aeqsurv_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = ["x", "tolerance"]
+    assert list(inspect.signature(survival.r_api.aeqSurv).parameters) == expected
+    assert _pyi_function_arg_names(stub_path, "aeqSurv") == expected
+
+
+def test_r_api_stub_tracks_surv_utility_public_signatures():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected_by_name = {
+        "is_na_surv": ["x"],
+        "format_surv": ["x"],
+        "is_ratetable": ["x", "has_rates", "has_dims", "verbose"],
+        "ratetableDate": ["x", "month", "day", "origin_year"],
+        "survexp_us": [],
+        "survexp_mn": [],
+        "survexp_usr": [],
+    }
+    for name, expected in expected_by_name.items():
+        assert list(inspect.signature(getattr(survival.r_api, name)).parameters) == expected
+        assert _pyi_function_arg_names(stub_path, name) == expected
+    assert (
+        inspect.signature(survival.r_api.ratetableDate).parameters["origin_year"].kind
+        is inspect.Parameter.KEYWORD_ONLY
+    )
+
+
+def test_r_api_stub_tracks_survexp_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "time",
+        "age",
+        "year",
+        "ratetable",
+        "sex",
+        "times",
+        "method",
+        "cohort",
+        "conditional",
+        "scale",
+        "se_fit",
+    ]
+    runtime_params = inspect.signature(survival.r_api.survexp).parameters
+    assert list(runtime_params) == expected
+    assert runtime_params["cohort"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["conditional"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["scale"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["se_fit"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert _pyi_function_arg_names(stub_path, "survexp") == expected
+
+    expected_individual = ["time", "age", "year", "ratetable", "sex"]
+    assert (
+        list(inspect.signature(survival.r_api.survexp_individual).parameters) == expected_individual
+    )
+    assert _pyi_function_arg_names(stub_path, "survexp_individual") == expected_individual
+
+
+def test_r_api_stub_tracks_cipoisson_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = ["k", "time", "p", "method"]
+    assert list(inspect.signature(survival.r_api.cipoisson).parameters) == expected
+    assert _pyi_function_arg_names(stub_path, "cipoisson") == expected
+
+
+def test_r_api_stub_tracks_bounded_link_public_signatures():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = ["x", "edge"]
+    for name in ["blogit", "bprobit", "bcloglog", "blog"]:
+        assert list(inspect.signature(getattr(survival.r_api, name)).parameters) == expected
+        assert _pyi_function_arg_names(stub_path, name) == expected
+
+
+def test_r_api_stub_tracks_pyears_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "response",
+        "data",
+        "time",
+        "start",
+        "stop",
+        "event",
+        "group",
+        "weights",
+        "subset",
+        "na_action",
+        "scale",
+        "data_frame",
+    ]
+    runtime_params = inspect.signature(survival.r_api.pyears).parameters
+    assert list(runtime_params) == expected
+    for name in expected[2:]:
+        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert _pyi_function_arg_names(stub_path, "pyears") == expected
+
+
+def test_r_api_stub_tracks_finegray_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = ["tstart", "tstop", "ctime", "cprob", "extend", "keep"]
+    assert list(inspect.signature(survival.r_api.finegray).parameters) == expected
+    assert _pyi_function_arg_names(stub_path, "finegray") == expected
+
+
+def test_r_api_stub_tracks_survobrien_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = ["time", "status", "covariate", "strata", "data", "subset", "na_action", "transform"]
+    runtime_params = inspect.signature(survival.r_api.survobrien).parameters
+    assert list(runtime_params) == expected
+    for name in expected[4:]:
+        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert _pyi_function_arg_names(stub_path, "survobrien") == expected
+    assert _pyi_class_annotation_names(stub_path, "SurvObrienResult") == {
+        "statistic",
+        "p_value",
+        "df",
+        "scores",
+        "score_sum",
+        "expected",
+        "variance",
+    }
+
+
+def test_r_api_stub_tracks_survsplit_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = ["response", "data", "cut", "start", "end", "event", "episode", "id", "zero"]
+    runtime_params = inspect.signature(survival.r_api.survSplit).parameters
+    assert list(runtime_params) == expected
+    assert runtime_params["cut"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert _pyi_function_arg_names(stub_path, "survSplit") == expected
+
+
+def test_r_api_stub_tracks_survcondense_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "formula",
+        "data",
+        "subset",
+        "weights",
+        "na_action",
+        "id",
+        "start",
+        "end",
+        "event",
+    ]
+    runtime_params = inspect.signature(survival.r_api.survcondense).parameters
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    ] == expected
+    assert runtime_params["id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "survcondense") == expected
+    assert _pyi_function_kwarg_name(stub_path, "survcondense") == "kwargs"
+
+
+def test_r_api_stub_tracks_survconcordance_public_signatures():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = ["formula", "data", "weights", "subset", "na_action"]
+    runtime_params = inspect.signature(survival.r_api.survConcordance).parameters
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    ] == expected
+    assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "survConcordance") == expected
+    assert _pyi_function_kwarg_name(stub_path, "survConcordance") == "kwargs"
+
+    fit_expected = ["y", "x", "strata", "weight"]
+    fit_params = inspect.signature(survival.r_api.survConcordance_fit).parameters
+    assert [
+        name
+        for name, parameter in fit_params.items()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    ] == fit_expected
+    assert fit_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "survConcordance_fit") == fit_expected
+    assert _pyi_function_kwarg_name(stub_path, "survConcordance_fit") == "kwargs"
+
+
+def test_r_api_stub_tracks_survcheck_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "response",
+        "data",
+        "subset",
+        "na_action",
+        "id",
+        "istate",
+        "istate0",
+        "timefix",
+        "time1",
+        "time2",
+        "status",
+    ]
+    runtime_params = inspect.signature(survival.r_api.survcheck).parameters
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    ] == expected
+    assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "survcheck") == expected
+    assert _pyi_function_kwarg_name(stub_path, "survcheck") == "kwargs"
+
+
+def test_r_api_stub_tracks_rttright_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "response",
+        "status",
+        "weights",
+        "data",
+        "subset",
+        "na_action",
+        "times",
+        "id",
+        "timefix",
+        "renorm",
+    ]
+    runtime_params = inspect.signature(survival.r_api.rttright).parameters
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    ] == expected
+    assert runtime_params["data"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "rttright") == expected
+    assert _pyi_function_kwarg_name(stub_path, "rttright") == "kwargs"
+
+
+def test_r_api_stub_tracks_pseudo_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "fit",
+        "status",
+        "eval_times",
+        "type_",
+        "times",
+        "type",
+        "collapse",
+        "data_frame",
+        "time",
+    ]
+    runtime_params = inspect.signature(survival.r_api.pseudo).parameters
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    ] == expected
+    assert runtime_params["times"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "pseudo") == expected
+    assert _pyi_function_kwarg_name(stub_path, "pseudo") == "kwargs"
+
+
+def test_r_api_stub_tracks_strata_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+    tree = ast.parse(stub_path.read_text(), filename=str(stub_path))
+    node = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "strata"
+    )
+
+    runtime_params = inspect.signature(survival.r_api.strata).parameters
+    assert runtime_params["variables"].kind is inspect.Parameter.VAR_POSITIONAL
+    assert list(_pyi_function_arg_names(stub_path, "strata")) == [
+        "na_group",
+        "shortlabel",
+        "sep",
+        "labels",
+    ]
+    assert node.args.vararg is not None
+    assert node.args.vararg.arg == "variables"
+
+
+def test_r_api_stub_tracks_survreg_distribution_helper_signatures():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected_by_name = {
+        "dsurvreg": ["x", "mean", "scale", "distribution", "parms"],
+        "psurvreg": ["q", "mean", "scale", "distribution", "parms"],
+        "qsurvreg": ["p", "mean", "scale", "distribution", "parms"],
+        "rsurvreg": ["n", "mean", "scale", "distribution", "parms"],
+    }
+    for name, expected in expected_by_name.items():
+        assert list(inspect.signature(getattr(survival.r_api, name)).parameters) == expected
+        assert _pyi_function_arg_names(stub_path, name) == expected
 
 
 def test_r_api_stub_tracks_survdiff_public_signature():

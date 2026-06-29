@@ -1,4 +1,4 @@
-use crate::internal::statistical::normal_inverse_cdf;
+use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
 use pyo3::prelude::*;
 
 fn value_error(message: impl Into<String>) -> PyErr {
@@ -74,8 +74,53 @@ fn extreme_value_quantile(p: f64) -> f64 {
     (-(1.0 - p).ln()).ln()
 }
 
+fn extreme_value_cdf(z: f64) -> f64 {
+    if z == f64::INFINITY {
+        return 1.0;
+    }
+    if z == f64::NEG_INFINITY {
+        return 0.0;
+    }
+    1.0 - (-z.exp()).exp()
+}
+
+fn extreme_value_pdf(z: f64) -> f64 {
+    if !z.is_finite() {
+        return if z.is_nan() { f64::NAN } else { 0.0 };
+    }
+    if !(-745.0..=709.0).contains(&z) {
+        return 0.0;
+    }
+    let ez = z.exp();
+    ez * (-ez).exp()
+}
+
 fn logistic_quantile(p: f64) -> f64 {
     (p / (1.0 - p)).ln()
+}
+
+fn logistic_cdf(z: f64) -> f64 {
+    if z >= 0.0 {
+        1.0 / (1.0 + (-z).exp())
+    } else {
+        let ez = z.exp();
+        ez / (1.0 + ez)
+    }
+}
+
+fn logistic_pdf(z: f64) -> f64 {
+    if !z.is_finite() {
+        return if z.is_nan() { f64::NAN } else { 0.0 };
+    }
+    let cdf = logistic_cdf(z);
+    cdf * (1.0 - cdf)
+}
+
+fn gaussian_pdf(z: f64) -> f64 {
+    if !z.is_finite() {
+        return if z.is_nan() { f64::NAN } else { 0.0 };
+    }
+    (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
 }
 
 fn distribution_key(distribution: &str) -> String {
@@ -88,6 +133,7 @@ fn validate_distribution(distribution: &str) -> PyResult<()> {
         key.as_str(),
         "weibull"
             | "exponential"
+            | "rayleigh"
             | "extreme"
             | "extreme_value"
             | "extremevalue"
@@ -104,7 +150,7 @@ fn validate_distribution(distribution: &str) -> PyResult<()> {
         return Ok(());
     }
     Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        "distribution must be one of weibull, exponential, gaussian, logistic, lognormal, or loglogistic",
+        "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, or loglogistic",
     ))
 }
 
@@ -116,18 +162,38 @@ fn validated_distribution_key(distribution: &str) -> String {
     distribution_key(distribution)
 }
 
+fn validate_prediction_distribution(distribution: &str) -> PyResult<()> {
+    let key = distribution_key(distribution);
+    if matches!(
+        key.as_str(),
+        "t" | "student" | "student_t" | "studentt" | "student-t"
+    ) {
+        return Ok(());
+    }
+    validate_distribution(distribution)
+}
+
+fn validated_prediction_distribution_key(distribution: &str) -> String {
+    debug_assert!(
+        validate_prediction_distribution(distribution).is_ok(),
+        "prediction distribution was validated"
+    );
+    distribution_key(distribution)
+}
+
 fn response_uses_log_transform(key: &str) -> bool {
     match key {
-        "weibull" | "exponential" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian"
-        | "loglogistic" | "log_logistic" => true,
-        "extreme" | "extreme_value" | "extremevalue" | "gaussian" | "normal" | "logistic" => false,
+        "weibull" | "exponential" | "rayleigh" | "lognormal" | "log_normal" | "loggaussian"
+        | "log_gaussian" | "loglogistic" | "log_logistic" => true,
+        "extreme" | "extreme_value" | "extremevalue" | "gaussian" | "normal" | "logistic" | "t"
+        | "student" | "student_t" | "studentt" => false,
         _ => unreachable!("distribution was validated"),
     }
 }
 
 fn quantile_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
     match key {
-        "weibull" | "exponential" | "extreme" | "extreme_value" | "extremevalue" => {
+        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
             extreme_value_quantile
         }
         "logistic" | "loglogistic" | "log_logistic" => logistic_quantile,
@@ -136,6 +202,197 @@ fn quantile_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
         }
         _ => unreachable!("distribution was validated"),
     }
+}
+
+fn cdf_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
+    match key {
+        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
+            extreme_value_cdf
+        }
+        "logistic" | "loglogistic" | "log_logistic" => logistic_cdf,
+        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
+            normal_cdf
+        }
+        _ => unreachable!("distribution was validated"),
+    }
+}
+
+fn pdf_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
+    match key {
+        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
+            extreme_value_pdf
+        }
+        "logistic" | "loglogistic" | "log_logistic" => logistic_pdf,
+        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
+            gaussian_pdf
+        }
+        _ => unreachable!("distribution was validated"),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SurvregDistributionKind {
+    Density,
+    Distribution,
+    Quantile,
+}
+
+impl SurvregDistributionKind {
+    fn from_str(value: &str) -> Option<Self> {
+        match value.to_lowercase().replace('-', "_").as_str() {
+            "density" | "d" | "pdf" => Some(Self::Density),
+            "distribution" | "cdf" | "p" => Some(Self::Distribution),
+            "quantile" | "q" => Some(Self::Quantile),
+            _ => None,
+        }
+    }
+}
+
+fn validate_equal_lengths(values: &[f64], mean: &[f64], scale: &[f64]) -> PyResult<()> {
+    let n = values.len();
+    if mean.len() != n {
+        return Err(value_error(format!(
+            "mean has {} values but values has {}",
+            mean.len(),
+            n
+        )));
+    }
+    if scale.len() != n {
+        return Err(value_error(format!(
+            "scale has {} values but values has {}",
+            scale.len(),
+            n
+        )));
+    }
+    for (idx, &value) in mean.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(value_error(format!(
+                "mean contains non-finite value at index {idx}"
+            )));
+        }
+    }
+    for (idx, &value) in scale.iter().enumerate() {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(value_error(format!(
+                "scale contains non-positive or non-finite value at index {idx}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn survreg_density_value(
+    value: f64,
+    mean: f64,
+    scale: f64,
+    pdf: fn(f64) -> f64,
+    log_transform: bool,
+) -> f64 {
+    if log_transform {
+        if value <= 0.0 {
+            return f64::NAN;
+        }
+        let z = (value.ln() - mean) / scale;
+        return pdf(z) / (scale * value);
+    }
+    let z = (value - mean) / scale;
+    pdf(z) / scale
+}
+
+fn survreg_distribution_value(
+    value: f64,
+    mean: f64,
+    scale: f64,
+    cdf: fn(f64) -> f64,
+    log_transform: bool,
+) -> f64 {
+    if log_transform {
+        if value <= 0.0 {
+            return 0.0;
+        }
+        let z = (value.ln() - mean) / scale;
+        return cdf(z);
+    }
+    let z = (value - mean) / scale;
+    cdf(z)
+}
+
+fn survreg_quantile_value(
+    probability: f64,
+    mean: f64,
+    scale: f64,
+    quantile: fn(f64) -> f64,
+    log_transform: bool,
+) -> PyResult<f64> {
+    if !probability.is_finite() || !(0.0..=1.0).contains(&probability) {
+        return Err(value_error("p must be between 0 and 1"));
+    }
+    let value = mean + scale * quantile(probability);
+    Ok(if log_transform { value.exp() } else { value })
+}
+
+#[pyfunction]
+#[pyo3(signature = (values, mean, scale, distribution, kind))]
+pub fn survreg_distribution(
+    values: Vec<f64>,
+    mean: Vec<f64>,
+    scale: Vec<f64>,
+    distribution: String,
+    kind: String,
+) -> PyResult<Vec<f64>> {
+    validate_distribution(&distribution)?;
+    validate_equal_lengths(&values, &mean, &scale)?;
+    let key = validated_distribution_key(&distribution);
+    let log_transform = response_uses_log_transform(&key);
+    let kind = SurvregDistributionKind::from_str(&kind)
+        .ok_or_else(|| value_error("kind must be one of density, distribution, or quantile"))?;
+
+    let mut result = Vec::with_capacity(values.len());
+    match kind {
+        SurvregDistributionKind::Density => {
+            let pdf = pdf_fn_for_distribution(&key);
+            for ((&value, &mean_value), &scale_value) in
+                values.iter().zip(mean.iter()).zip(scale.iter())
+            {
+                result.push(survreg_density_value(
+                    value,
+                    mean_value,
+                    scale_value,
+                    pdf,
+                    log_transform,
+                ));
+            }
+        }
+        SurvregDistributionKind::Distribution => {
+            let cdf = cdf_fn_for_distribution(&key);
+            for ((&value, &mean_value), &scale_value) in
+                values.iter().zip(mean.iter()).zip(scale.iter())
+            {
+                result.push(survreg_distribution_value(
+                    value,
+                    mean_value,
+                    scale_value,
+                    cdf,
+                    log_transform,
+                ));
+            }
+        }
+        SurvregDistributionKind::Quantile => {
+            let quantile = quantile_fn_for_distribution(&key);
+            for ((&value, &mean_value), &scale_value) in
+                values.iter().zip(mean.iter()).zip(scale.iter())
+            {
+                result.push(survreg_quantile_value(
+                    value,
+                    mean_value,
+                    scale_value,
+                    quantile,
+                    log_transform,
+                )?);
+            }
+        }
+    }
+    Ok(result)
 }
 
 pub(crate) fn compute_linear_predictor(
@@ -163,7 +420,7 @@ pub(crate) fn compute_linear_predictor(
 }
 
 pub(crate) fn compute_response_prediction(linear_pred: &[f64], distribution: &str) -> Vec<f64> {
-    let key = validated_distribution_key(distribution);
+    let key = validated_prediction_distribution_key(distribution);
     if response_uses_log_transform(&key) {
         linear_pred.iter().map(|&lp| lp.exp()).collect()
     } else {
@@ -549,9 +806,48 @@ mod tests {
 
         let gaussian = compute_quantile_prediction(&linear_pred, scale, &quantiles, "gaussian");
         let lognormal = compute_quantile_prediction(&linear_pred, scale, &quantiles, "lognormal");
+        let rayleigh = compute_quantile_prediction(&linear_pred, scale, &quantiles, "rayleigh");
+        let weibull = compute_quantile_prediction(&linear_pred, scale, &quantiles, "weibull");
 
         assert!((gaussian[0][0] - (1.0 + scale * normal_inverse_cdf(0.5))).abs() < 1e-10);
         assert!((lognormal[0][0] - gaussian[0][0].exp()).abs() < 1e-10);
+        assert!((rayleigh[0][0] - weibull[0][0]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_survreg_distribution_matches_r_reference_values() {
+        let density = survreg_distribution(
+            vec![1.0, 2.0],
+            vec![0.5, 0.5],
+            vec![1.2, 1.2],
+            "weibull".to_string(),
+            "density".to_string(),
+        )
+        .expect("density should compute");
+        let cdf = survreg_distribution(
+            vec![1.0, 2.0],
+            vec![0.5, 0.5],
+            vec![1.2, 1.2],
+            "weibull".to_string(),
+            "distribution".to_string(),
+        )
+        .expect("cdf should compute");
+        let quantiles = survreg_distribution(
+            vec![0.25, 0.5, 0.75],
+            vec![0.5, 0.5, 0.5],
+            vec![1.2, 1.2, 1.2],
+            "weibull".to_string(),
+            "quantile".to_string(),
+        )
+        .expect("quantile should compute");
+
+        assert!((density[0] - 0.2841569).abs() < 1e-7);
+        assert!((density[1] - 0.1512009).abs() < 1e-7);
+        assert!((cdf[0] - 0.4827560).abs() < 1e-7);
+        assert!((cdf[1] - 0.6910677).abs() < 1e-7);
+        assert!((quantiles[0] - 0.3696942).abs() < 1e-7);
+        assert!((quantiles[1] - 1.0620325).abs() < 1e-7);
+        assert!((quantiles[2] - 2.4399099).abs() < 1e-7);
     }
 
     #[test]
@@ -605,6 +901,9 @@ mod tests {
         let exponential = compute_response_prediction(&linear_pred, "exponential");
         assert!((exponential[1] - std::f64::consts::E).abs() < 1e-10);
 
+        let rayleigh = compute_response_prediction(&linear_pred, "rayleigh");
+        assert!((rayleigh[1] - std::f64::consts::E).abs() < 1e-10);
+
         assert_eq!(
             compute_response_prediction(&linear_pred, "gaussian"),
             linear_pred
@@ -625,6 +924,11 @@ mod tests {
 
         assert!(
             (compute_response_prediction(&linear_pred, "log-normal")[0] - std::f64::consts::E)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (compute_response_prediction(&linear_pred, "loggaussian")[0] - std::f64::consts::E)
                 .abs()
                 < 1e-10
         );

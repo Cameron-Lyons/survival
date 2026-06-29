@@ -67,6 +67,964 @@ def test_formula_term_cache_returns_independent_terms():
     assert [term.column for term in third.offsets] == ["x2"]
 
 
+def test_strata_matches_r_factor_codes_and_preserves_low_level_call():
+    single = survival.strata(["b", "a", "b", None])
+    named = survival.strata(["b", "a", "b", None], [2, 1, 1, 1], labels=["x", "y"])
+    na_group = survival.strata(
+        ["b", "a", "b", None],
+        [2, 1, 1, 1],
+        labels=["x", "y"],
+        na_group=True,
+    )
+    short = survival.strata(
+        ["b", "a", "b", None],
+        [2, 1, 1, 1],
+        labels=["x", "y"],
+        shortlabel=True,
+    )
+    separated = survival.strata(
+        ["b", "a", "b", None],
+        [2, 1, 1, 1],
+        labels=["x", "y"],
+        sep="|",
+    )
+    legacy = survival.strata([[2, 1, 2], [1, 2, 1]])
+
+    assert type(single).__name__ == "StrataFactor"
+    assert single.codes == [2, 1, 2, None]
+    assert single.levels == ["a", "b"]
+    assert single.labels == ["b", "a", "b", None]
+    assert single.counts == [1, 2]
+
+    assert named.codes == [3, 1, 2, None]
+    assert named.levels == ["x=a, y=1", "x=b, y=1", "x=b, y=2"]
+    assert na_group.codes == [3, 1, 2, 4]
+    assert na_group.levels == ["x=a, y=1", "x=b, y=1", "x=b, y=2", "x=NA, y=1"]
+    assert short.levels == ["a, 1", "b, 1", "b, 2"]
+    assert separated.levels == ["x=a|y=1", "x=b|y=1", "x=b|y=2"]
+
+    assert type(legacy).__name__ == "StrataResult"
+    assert legacy.strata == [1, 0, 1]
+    with pytest.raises(ValueError, match="same length"):
+        survival.strata(["a", "b"], [1])
+
+
+def test_aeqSurv_adjusts_surv_response_like_r():  # noqa: N802
+    right = survival.Surv([1.0, 1.0 + 1e-8, 2.0], [1, 0, 1])
+    adjusted_right = survival.aeqSurv(right, tolerance=1e-7)
+
+    assert adjusted_right.type == "right"
+    assert adjusted_right.time == pytest.approx((1.0, 1.0, 2.0))
+    assert adjusted_right.event == (1, 0, 1)
+
+    counting = survival.Surv([0.0, 0.0, 1.0], [1.0, 1.0 + 1e-8, 2.0], [1, 0, 1])
+    adjusted_counting = survival.aeqSurv(counting, tolerance=1e-7)
+
+    assert adjusted_counting.type == "counting"
+    assert adjusted_counting.start == pytest.approx((0.0, 0.0, 1.0))
+    assert adjusted_counting.time == pytest.approx((1.0, 1.0, 2.0))
+    assert adjusted_counting.event == (1, 0, 1)
+
+    interval = survival.Surv(
+        [1.0, 1.0 + 1e-8, 2.0],
+        [1.0, 2.0 + 1e-8, 3.0],
+        [1, 3, 3],
+        type="interval",
+    )
+    adjusted_interval = survival.aeqSurv(interval, tolerance=1e-7)
+
+    assert adjusted_interval.type == "interval"
+    assert adjusted_interval.time == pytest.approx((1.0, 1.0, 2.0))
+    assert adjusted_interval.time2 == pytest.approx((1.0, 2.0, 3.0))
+    assert adjusted_interval.event == (1, 3, 3)
+
+    interval2 = survival.Surv(
+        [float("-inf"), 1.0, 2.0],
+        [1.0, 2.0 + 1e-8, float("inf")],
+        type="interval2",
+    )
+    adjusted_interval2 = survival.aeqSurv(interval2, tolerance=1e-7)
+
+    assert adjusted_interval2.type == "interval2"
+    assert math.isinf(adjusted_interval2.time[0])
+    assert adjusted_interval2.time[0] < 0.0
+    assert adjusted_interval2.time[1] == pytest.approx(1.0)
+    assert adjusted_interval2.time2[1] == pytest.approx(2.0)
+    assert math.isinf(adjusted_interval2.time2[2])
+    assert adjusted_interval2.time2[2] > 0.0
+    assert adjusted_interval2.event == interval2.event
+
+    no_adjust = survival.aeqSurv(right, tolerance=0.0)
+    assert no_adjust is right
+    with pytest.raises(TypeError, match="Surv object"):
+        survival.aeqSurv([1.0, 2.0])
+    with pytest.raises(ValueError, match="effective length 0"):
+        survival.aeqSurv(
+            survival.Surv([1.0], [1.0 + 1e-8], [1]),
+            tolerance=1e-7,
+        )
+
+
+def test_survSplit_splits_right_and_counting_surv_responses_like_r():  # noqa: N802
+    right = survival.Surv([5.0, 8.0], [1, 0])
+    right_split = survival.survSplit(
+        right,
+        {"group": ["a", "b"], "x": [10, 20]},
+        cut=[3.0, 6.0],
+        episode="episode",
+        id="rowid",
+        end="time",
+        event="status",
+    )
+
+    assert right_split == {
+        "group": ["a", "a", "b", "b", "b"],
+        "x": [10, 10, 20, 20, 20],
+        "rowid": [1, 1, 2, 2, 2],
+        "tstart": [0.0, 3.0, 0.0, 3.0, 6.0],
+        "time": [3.0, 5.0, 3.0, 6.0, 8.0],
+        "status": [0, 1, 0, 0, 0],
+        "episode": [1, 2, 1, 2, 3],
+    }
+
+    counting = survival.Surv([0.0, 2.0], [5.0, 8.0], [1, 0])
+    counting_split = survival.survSplit(
+        counting,
+        {"group": ["a", "b"]},
+        cut=[3.0, 6.0],
+        start="start",
+        end="stop",
+        event="status",
+        episode="episode",
+        id="rowid",
+    )
+
+    assert counting_split == {
+        "group": ["a", "a", "b", "b", "b"],
+        "rowid": [1, 1, 2, 2, 2],
+        "start": [0.0, 3.0, 2.0, 3.0, 6.0],
+        "stop": [3.0, 5.0, 3.0, 6.0, 8.0],
+        "status": [0, 1, 0, 0, 0],
+        "episode": [1, 2, 1, 2, 3],
+    }
+
+    with pytest.raises(ValueError, match="not valid for interval2"):
+        survival.survSplit(survival.Surv([1.0], [2.0], type="interval2"), cut=[1.5])
+    with pytest.raises(ValueError, match="suggested id name"):
+        survival.survSplit(right, {"rowid": [1, 2]}, cut=[3.0], id="rowid")
+    with pytest.raises(ValueError, match="'zero' parameter"):
+        survival.survSplit(right, cut=[3.0], zero=5.0)
+    with pytest.raises(ValueError, match="finite numbers"):
+        survival.survSplit(right, cut=[math.inf])
+
+
+def test_survcheck_accepts_formula_direct_and_legacy_inputs():
+    counting = survival.Surv([0.0, 1.0, 0.0], [1.0, 2.0, 2.0], [0, 1, 1])
+    direct = survival.survcheck(counting, id=[1, 1, 2])
+    formula = survival.survcheck(
+        "Surv(start, stop, status) ~ 1",
+        data={
+            "id": [1, 1, 2],
+            "start": [0.0, 1.0, 0.0],
+            "stop": [1.0, 2.0, 2.0],
+            "status": [0, 1, 1],
+        },
+        id="id",
+    )
+    overlap = survival.survcheck(
+        survival.Surv([0.0, 0.5], [1.0, 2.0], [0, 1]),
+        id=["subject-a", "subject-a"],
+    )
+    legacy = survival.survcheck([1, 1, 2], [0.0, 1.0, 0.0], [1.0, 2.0, 2.0], [0, 1, 1])
+
+    assert direct.n_subjects == 2
+    assert direct.n_transitions == 3
+    assert direct.n_problems == 0
+    assert direct.transitions == formula.transitions
+    assert direct.flags == formula.flags
+    assert overlap.is_valid is False
+    assert overlap.overlap_ids == [1]
+    assert legacy.n_subjects == 2
+    assert legacy.flags == [0, 0, 0]
+
+    right = survival.survcheck(survival.Surv([1.0, -1.0, 3.0], [1, 0, 1]))
+    assert right.is_valid is False
+    assert right.invalid_ids == [1]
+
+    with pytest.raises(ValueError, match="id argument"):
+        survival.survcheck(counting)
+    with pytest.raises(ValueError, match="not valid for interval2"):
+        survival.survcheck(survival.Surv([1.0], [2.0], type="interval2"), id=[1])
+    with pytest.raises(ValueError, match="formula requires data"):
+        survival.survcheck("Surv(start, stop, status) ~ 1", id=[1])
+
+
+def test_rttright_formula_wrapper_preserves_legacy_direct_api():
+    legacy = survival.rttright([3.0, 1.0, 2.0], [1, 0, 1])
+    formula = survival.rttright(
+        "Surv(time, status) ~ 1",
+        data={"time": [3.0, 1.0, 2.0], "status": [1, 0, 1]},
+    )
+    formula_raw = survival.rttright(
+        "Surv(time, status) ~ 1",
+        data={"time": [3.0, 1.0, 2.0], "status": [1, 0, 1]},
+        renorm=False,
+    )
+    weighted = survival.rttright(
+        "Surv(time, status) ~ 1",
+        data={
+            "time": [1.0, 2.0, 3.0, 4.0],
+            "status": [1, 0, 1, 0],
+            "wt": [1.0, 2.0, 1.0, 1.0],
+        },
+        weights="wt",
+    )
+    with_id = survival.rttright(
+        "Surv(time, status) ~ 1",
+        data={"time": [3.0, 1.0, 2.0], "status": [1, 0, 1], "id": ["c", "a", "b"]},
+        id="id",
+    )
+    timed = survival.rttright(
+        "Surv(time, status) ~ 1",
+        data={"time": [3.0, 1.0, 2.0], "status": [1, 0, 1]},
+        times=[1.0, 2.0, 3.0],
+    )
+    timed_single = survival.rttright(
+        "Surv(time, status) ~ 1",
+        data={"time": [3.0, 1.0, 2.0], "status": [1, 0, 1]},
+        times=[2.0],
+    )
+    direct_timed = survival.rttright(
+        [3.0, 1.0, 2.0],
+        [1, 0, 1],
+        times=[1.0, 2.0, 3.0],
+    )
+    grouped = survival.rttright(
+        "Surv(time, status) ~ group",
+        data={
+            "time": [1.0, 2.0, 3.0, 4.0],
+            "status": [0, 1, 0, 1],
+            "group": ["A", "A", "B", "B"],
+        },
+    )
+    offset_grouped_data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 0, 1, 1],
+        "group": ["treated", "treated", "control", "control"],
+        "off": [1.0, 2.0, 3.0, 4.0],
+    }
+    with pytest.warns(RuntimeWarning, match="Offset term ignored"):
+        offset_grouped = survival.rttright(
+            "Surv(time, status) ~ group + offset(off)",
+            data=offset_grouped_data,
+        )
+    offset_grouped_reference = survival.rttright(
+        "Surv(time, status) ~ group",
+        data=offset_grouped_data,
+    )
+    grouped_timed = survival.rttright(
+        "Surv(time, status) ~ group",
+        data={
+            "time": [1.0, 2.0, 3.0, 4.0],
+            "status": [0, 1, 0, 1],
+            "group": ["A", "A", "B", "B"],
+        },
+        times=[1.0, 2.0, 3.0, 4.0],
+    )
+    counting_data = {
+        "id": ["a", "a", "b", "b"],
+        "start": [0.0, 1.0, 0.0, 2.0],
+        "stop": [1.0, 3.0, 2.0, 4.0],
+        "status": [0, 1, 0, 1],
+    }
+    counting = survival.rttright(
+        "Surv(start, stop, status) ~ 1",
+        data=counting_data,
+        id="id",
+    )
+    counting_raw = survival.rttright(
+        "Surv(start, stop, status) ~ 1",
+        data=counting_data,
+        id="id",
+        renorm=False,
+    )
+    counting_timed = survival.rttright(
+        "Surv(start, stop, status) ~ 1",
+        data=counting_data,
+        id="id",
+        times=[1.0, 2.0, 3.0, 4.0],
+    )
+    counting_grouped_data = {
+        "id": ["a", "a", "b", "b", "c"],
+        "start": [0.0, 1.0, 0.0, 2.0, 0.0],
+        "stop": [1.0, 3.0, 2.0, 4.0, 2.5],
+        "status": [0, 1, 0, 1, 1],
+        "group": ["x", "x", "y", "y", "x"],
+    }
+    counting_grouped = survival.rttright(
+        "Surv(start, stop, status) ~ group",
+        data=counting_grouped_data,
+        id="id",
+    )
+    counting_grouped_timed = survival.rttright(
+        "Surv(start, stop, status) ~ group",
+        data=counting_grouped_data,
+        id="id",
+        times=[1.0, 2.0, 3.0],
+    )
+    weighted_counting_grouped_data = {
+        "id": ["a", "a", "b", "b", "c", "c"],
+        "start": [0.0, 1.0, 0.0, 2.0, 0.0, 1.5],
+        "stop": [1.0, 3.0, 2.0, 4.0, 1.5, 2.5],
+        "status": [0, 1, 0, 1, 0, 0],
+        "weights": [2.0, 2.0, 1.0, 1.0, 3.0, 3.0],
+        "group": ["x", "x", "y", "y", "x", "x"],
+    }
+    weighted_counting_grouped_timed = survival.rttright(
+        "Surv(start, stop, status) ~ group",
+        data=weighted_counting_grouped_data,
+        id="id",
+        weights="weights",
+        times=[1.0, 2.0, 3.0, 4.0],
+    )
+
+    assert legacy.time == pytest.approx([1.0, 2.0, 3.0])
+    assert legacy.weights == pytest.approx([0.0, 0.5, 0.5])
+    assert formula == pytest.approx([0.5, 0.0, 0.5])
+    assert formula_raw == pytest.approx([1.5, 0.0, 1.5])
+    assert weighted == pytest.approx([0.2, 0.0, 0.4, 0.0])
+    assert with_id == pytest.approx(formula)
+    for actual_row, expected_row in zip(
+        timed,
+        [
+            [1.0 / 3.0, 0.5, 0.5],
+            [1.0 / 3.0, 0.0, 0.0],
+            [1.0 / 3.0, 0.5, 0.5],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    assert timed_single == pytest.approx([0.5, 0.0, 0.5])
+    for actual_row, expected_row in zip(direct_timed, timed, strict=True):
+        assert actual_row == pytest.approx(expected_row)
+    assert grouped == pytest.approx([0.0, 1.0, 0.0, 1.0])
+    assert offset_grouped == pytest.approx(offset_grouped_reference)
+    for actual_row, expected_row in zip(
+        grouped_timed,
+        [
+            [0.5, 0.0, 0.0, 0.0],
+            [0.5, 1.0, 1.0, 1.0],
+            [0.5, 0.5, 0.5, 0.0],
+            [0.5, 0.5, 0.5, 1.0],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    assert counting == pytest.approx([0.0, 0.5, 0.0, 0.5])
+    assert counting_raw == pytest.approx([0.0, 1.0, 0.0, 1.0])
+    for actual_row, expected_row in zip(
+        counting_timed,
+        [
+            [0.5, 0.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5, 0.5],
+            [0.5, 0.5, 0.0, 0.0],
+            [0.5, 0.5, 0.5, 0.5],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    assert counting_grouped == pytest.approx([0.0, 0.5, 0.0, 1.0, 0.5])
+    for actual_row, expected_row in zip(
+        counting_grouped_timed,
+        [
+            [0.5, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [0.5, 0.5, 0.5],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    for actual_row, expected_row in zip(
+        weighted_counting_grouped_timed,
+        [
+            [0.4, 0.0, 0.0, 0.0],
+            [0.4, 0.4, 1.0, 1.0],
+            [1.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [0.6, 0.0, 0.0, 0.0],
+            [0.6, 0.6, 0.6, 0.6],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+
+    with pytest.raises(ValueError, match="id is required"):
+        survival.rttright(survival.Surv([0.0], [1.0], [1]))
+    with pytest.raises(ValueError, match="survcheck"):
+        survival.rttright([1.0, 2.0, 3.0], [0, 0, 1], id=["a", "a", "b"])
+    with pytest.raises(ValueError, match="id must have"):
+        survival.rttright([1.0, 2.0], [1, 0], id=["a"])
+    with pytest.raises(ValueError, match="multiple weights"):
+        survival.rttright(
+            survival.Surv([0.0, 1.0, 0.0, 2.0], [1.0, 3.0, 2.0, 4.0], [0, 1, 0, 1]),
+            id=["a", "a", "b", "b"],
+            weights=[1.0, 2.0, 1.0, 1.0],
+        )
+    with pytest.raises(NotImplementedError, match="delayed entry"):
+        survival.rttright(
+            survival.Surv([0.0, 1.0], [2.0, 3.0], [1, 1]),
+            id=["a", "b"],
+        )
+
+
+def test_r_api_statefig_matches_r_coordinate_layouts():
+    connect = [[0.0, 1.0], [0.0, 0.0]]
+
+    vector_layout = survival.r_api.statefig([1, 1], connect, states=["a", "b"])
+    assert vector_layout["states"] == ["a", "b"]
+    for actual_row, expected_row in zip(
+        vector_layout["positions"],
+        [[0.25, 0.5], [0.75, 0.5]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    assert vector_layout["edges"] == [[0, 1, 1]]
+
+    column_layout = survival.r_api.statefig([[1], [1]], connect, states=["a", "b"])
+    for actual_row, expected_row in zip(
+        column_layout["positions"],
+        [[0.5, 0.75], [0.5, 0.25]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+
+    coordinate_layout = survival.r_api.statefig(
+        [[0.2, 0.7], [0.8, 0.3]],
+        connect,
+        states=["a", "b"],
+    )
+    for actual_row, expected_row in zip(
+        coordinate_layout["positions"],
+        [[0.2, 0.7], [0.8, 0.3]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+
+    with pytest.raises(ValueError, match="number of boxes"):
+        survival.r_api.statefig([1, 2], connect, states=["a", "b"])
+    with pytest.raises(ValueError, match="square matrix"):
+        survival.r_api.statefig([2], [[0.0, 1.0]], states=["a"])
+    with pytest.raises(ValueError, match="one entry per connect row"):
+        survival.r_api.statefig([2], connect, states=["a"])
+
+
+def test_r_api_brier_returns_r_style_cox_model_fields():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "x": [0.2, 0.4, 0.1, 0.8, 1.0, 1.2, 0.6, 1.4],
+    }
+    fit = survival.coxph("Surv(time, status) ~ x", data=data, model=True, max_iter=50)
+
+    result = survival.r_api.brier(fit, times=[2.0, 4.0, 6.0], detail=True)
+
+    assert list(result) == ["rsquared", "brier", "times", "p0", "phat", "eff.n"]
+    assert result["times"] == pytest.approx([2.0, 4.0, 6.0])
+    assert result["p0"] == pytest.approx([0.25, 0.4, 0.6])
+    assert result["eff.n"] == pytest.approx([8.0, 6.9565217391304355, 5.755395683453237])
+    assert result["brier"] == pytest.approx([0.1411471269, 0.1370106253, 0.2406258361])
+    assert len(result["phat"]) == 3
+    assert all(len(row) == len(data["time"]) for row in result["phat"])
+
+    counting_data = {
+        "start": [0.0] * len(data["time"]),
+        "stop": data["time"],
+        "status": data["status"],
+        "x": data["x"],
+        "id": list(range(1, len(data["time"]) + 1)),
+    }
+    counting_fit = survival.coxph(
+        "Surv(start, stop, status) ~ x",
+        data=counting_data,
+        id=counting_data["id"],
+        model=True,
+        max_iter=50,
+    )
+    counting_result = survival.r_api.brier(counting_fit, times=[2.0, 4.0, 6.0], detail=True)
+    assert counting_result["p0"] == pytest.approx(result["p0"])
+    assert counting_result["eff.n"] == pytest.approx(result["eff.n"])
+    assert counting_result["brier"] == pytest.approx(result["brier"])
+    assert len(counting_result["phat"]) == len(result["phat"])
+    for counting_row, right_row in zip(counting_result["phat"], result["phat"], strict=True):
+        assert counting_row == pytest.approx(right_row)
+
+    common_start_data = {
+        "start": [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
+        "stop": [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+        "status": [0, 1, 1, 0, 0, 1],
+        "x": [0.2, 0.2, 0.6, 0.6, 1.0, 1.0],
+        "id": [1, 1, 2, 2, 3, 3],
+    }
+    common_start_fit = survival.coxph(
+        "Surv(start, stop, status) ~ x",
+        data=common_start_data,
+        id=common_start_data["id"],
+        model=True,
+        max_iter=0,
+    )
+    common_start_result = survival.r_api.brier(
+        common_start_fit,
+        times=[3.0, 5.0, 7.0],
+        newdata=common_start_data,
+        detail=True,
+    )
+    assert common_start_result["p0"] == pytest.approx([1 / 3, 5 / 9, 1.0])
+    assert common_start_result["eff.n"] == pytest.approx([5.0, 3.9473684211, 2.5280898876])
+    assert common_start_result["brier"] == pytest.approx([0.1669670221, 0.2492855445, 0.0356739933])
+    assert common_start_result["rsquared"][:2] == pytest.approx([0.0608105006, 0.0292245624])
+    assert math.isinf(common_start_result["rsquared"][2])
+    assert common_start_result["rsquared"][2] < 0.0
+    assert common_start_result["phat"][0] == pytest.approx([0.2834686894] * 6)
+
+    gap_data = {**common_start_data, "start": [0.0, 3.0, 0.0, 3.0, 0.0, 4.0]}
+    gap_fit = survival.coxph(
+        "Surv(start, stop, status) ~ x",
+        data=gap_data,
+        id=gap_data["id"],
+        model=True,
+        max_iter=0,
+    )
+    with pytest.raises(ValueError, match="survcheck"):
+        survival.r_api.brier(gap_fit, times=[3.0, 5.0, 7.0])
+
+    staggered_data = {**counting_data, "start": [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]}
+    staggered_fit = survival.coxph(
+        "Surv(start, stop, status) ~ x",
+        data=staggered_data,
+        id=staggered_data["id"],
+        model=True,
+        max_iter=50,
+    )
+    with pytest.raises(NotImplementedError, match="delayed entry"):
+        survival.r_api.brier(staggered_fit, times=[2.0, 4.0, 6.0])
+
+    with pytest.raises(TypeError, match="coxph"):
+        survival.r_api.brier(object())
+
+
+def test_lvcf_and_nostutter_match_r_data_prep_helpers():
+    carried = survival.lvcf([1, 1, 1, 2, 2], [10.0, None, 12.0, None, 20.0])
+    carried_by_time = survival.lvcf([1, 1, 1], [None, 10.0, None], time=[2.0, 1.0, 3.0])
+    stuttered = survival.nostutter([1, 1, 1, 2, 2], [0, 1, 1, 1, 1])
+    stuttered_with_missing = survival.nostutter([1, 1, 1], [None, 1, 1])
+    stuttered_single = survival.nostutter(
+        [1, 1, 1, 1, 2, 2, 2],
+        [1, 2, 1, 3, 1, 1, 2],
+        single=True,
+    )
+    stuttered_single_with_censor_gap = survival.nostutter([1, 1, 1], [1, 0, 1], single=True)
+    stuttered_single_with_missing = survival.nostutter([1, 1, 1, 1], [None, 1, 2, 1], single=True)
+
+    assert carried == [10.0, 10.0, 12.0, None, 20.0]
+    assert carried_by_time == [10.0, 10.0, 10.0]
+    assert stuttered == [0, 1, 0, 1, 0]
+    assert stuttered_with_missing == [None, 1, 0]
+    assert stuttered_single == [1, 2, 0, 3, 1, 0, 2]
+    assert stuttered_single_with_censor_gap == [1, 0, 0]
+    assert stuttered_single_with_missing == [None, 1, 2, 0]
+
+    with pytest.raises(ValueError, match="same length"):
+        survival.lvcf([1], [1, None])
+    with pytest.raises(ValueError, match="finite"):
+        survival.lvcf([1], [1], time=[float("inf")])
+    with pytest.raises(ValueError, match="missing"):
+        survival.nostutter([1, None], [0, 1])
+
+
+def test_coxph_wtest_matches_r_wald_helper_shapes():
+    identity = survival.coxph_wtest([[1.0, 0.0], [0.0, 1.0]], [1.0, 2.0])
+    correlated = survival.coxph_wtest([[2.0, 0.5], [0.5, 1.0]], [1.0, 2.0])
+    singular = survival.coxph_wtest([[1.0, 2.0], [2.0, 4.0]], [1.0, 2.0])
+    trailing = survival.coxph_wtest([[0.0, 0.0], [0.0, 2.0]], [1.0, 2.0])
+    matrix_rhs = survival.coxph_wtest(
+        [[1.0, 0.0], [0.0, 1.0]],
+        [[1.0, 3.0], [2.0, 4.0]],
+    )
+    missing_rhs = survival.coxph_wtest([[1.0, 0.0], [0.0, 1.0]], [None, 2.0])
+    scalar = survival.coxph_wtest([2.0], [4.0])
+
+    assert identity.test == pytest.approx([5.0])
+    assert identity.df == 2
+    assert identity.solve == pytest.approx([1.0, 2.0])
+    assert correlated.test == pytest.approx([4.0])
+    assert correlated.solve == pytest.approx([0.0, 2.0])
+    assert singular.df == 1
+    assert singular.test == pytest.approx([1.0])
+    assert singular.solve == pytest.approx([1.0, 0.0])
+    assert trailing.df == 1
+    assert trailing.test == pytest.approx([2.0])
+    assert trailing.solve == pytest.approx([0.0, 1.0])
+    assert matrix_rhs.test == pytest.approx([5.0, 25.0])
+    assert len(matrix_rhs.solve) == 2
+    for actual_row, expected_row in zip(
+        matrix_rhs.solve,
+        [[1.0, 3.0], [2.0, 4.0]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    assert missing_rhs.test == []
+    assert missing_rhs.df == 0
+    assert missing_rhs.solve == 0.0
+    assert scalar.test == pytest.approx([8.0])
+    assert scalar.solve == pytest.approx([2.0])
+
+    with pytest.raises(ValueError, match="Argument lengths"):
+        survival.coxph_wtest([[1.0]], [1.0, 2.0])
+    with pytest.raises(ValueError, match="square matrix"):
+        survival.coxph_wtest([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [1.0, 2.0])
+    with pytest.raises(ValueError, match="infinite"):
+        survival.coxph_wtest([[1.0, 0.0], [0.0, float("inf")]], [1.0, 2.0])
+
+
+def test_pseudo_accepts_survfit_results_and_preserves_direct_api():
+    response = survival.Surv([1.0, 2.0, 3.0, 4.0], [1, 0, 1, 1])
+    fit = survival.survfit(response)
+    grouped_fit = survival.survfit(response, group=["A", "A", "B", "B"], model=True)
+    formula_fit = survival.survfit(
+        "Surv(time, status) ~ group",
+        data={
+            "time": [1.0, 2.0, 3.0, 4.0],
+            "status": [1, 0, 1, 1],
+            "group": ["A", "A", "B", "B"],
+        },
+        model=True,
+    )
+    matrix = survival.pseudo(fit, times=[1.0, 2.0, 3.0])
+    vector = survival.pseudo(fit, times=[2.0])
+    frame = survival.pseudo(fit, times=[2.0], data_frame=True)
+    uncollapsed = survival.pseudo(fit, times=[1.0, 2.0, 3.0], collapse=False)
+    grouped = survival.pseudo(grouped_fit, times=[1.0, 2.0, 3.0])
+    grouped_frame = survival.pseudo(grouped_fit, times=[2.0], data_frame=True)
+    grouped_uncollapsed = survival.pseudo(
+        grouped_fit,
+        times=[1.0, 2.0, 3.0],
+        collapse=False,
+    )
+    formula_grouped = survival.pseudo(formula_fit, times=[1.0, 2.0, 3.0])
+    direct = survival.pseudo([1.0, 2.0, 3.0], [1, 0, 1], None, "survival")
+
+    for actual_row, expected_row in zip(
+        matrix,
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.5],
+            [1.0, 1.0, -0.25],
+            [1.0, 1.0, 1.25],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    for actual_row, expected_row in zip(uncollapsed, matrix, strict=True):
+        assert actual_row == pytest.approx(expected_row)
+    for actual_row, expected_row in zip(vector, [[0.0], [1.0], [1.0], [1.0]], strict=True):
+        assert actual_row == pytest.approx(expected_row)
+    assert frame == {
+        "id": [1, 2, 3, 4],
+        "time": [2.0, 2.0, 2.0, 2.0],
+        "pseudo": [0.0, 1.0, 1.0, 1.0],
+    }
+    assert list(grouped) == ["A", "B"]
+    for actual_row, expected_row in zip(
+        grouped["A"],
+        [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    for actual_row, expected_row in zip(
+        grouped["B"],
+        [[1.0, 1.0, 0.0], [1.0, 1.0, 1.0]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    assert list(grouped_uncollapsed) == list(grouped)
+    for label in grouped:
+        for actual_row, expected_row in zip(
+            grouped_uncollapsed[label],
+            grouped[label],
+            strict=True,
+        ):
+            assert actual_row == pytest.approx(expected_row)
+    assert list(formula_grouped) == list(grouped)
+    for label in grouped:
+        for actual_row, expected_row in zip(formula_grouped[label], grouped[label], strict=True):
+            assert actual_row == pytest.approx(expected_row)
+    assert grouped_frame == {
+        "strata": ["A", "A", "B", "B"],
+        "id": [1, 2, 1, 2],
+        "time": [2.0, 2.0, 2.0, 2.0],
+        "pseudo": [0.0, 1.0, 1.0, 1.0],
+    }
+    assert type(direct).__name__ == "PseudoResult"
+    default_fit_pseudo = survival.pseudo(survival.survfit(response), times=[1.0])
+    for actual_row, expected_row in zip(
+        default_fit_pseudo,
+        [[0.0], [1.0], [1.0], [1.0]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+
+
+def test_pseudo_supports_counting_process_survfit_results():
+    response = survival.Surv(
+        [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
+        [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+        [0, 1, 1, 0, 0, 1],
+    )
+    ids = [1, 1, 2, 2, 3, 3]
+    fit = survival.survfit(response, id=ids, model=True)
+    no_id_fit = survival.survfit(response, model=True)
+
+    survival_values = survival.pseudo(fit, times=[3.0, 5.0, 7.0])
+    survival_vector = survival.pseudo(fit, times=[5.0])
+    survival_frame = survival.pseudo(fit, times=[5.0], data_frame=True)
+    row_level = survival.pseudo(fit, times=[3.0, 5.0, 7.0], collapse=False)
+    cumhaz = survival.pseudo(fit, times=[3.0, 5.0, 7.0], type="cumhaz")
+    rmst = survival.pseudo(fit, times=[3.0, 5.0, 7.0], type="rmst")
+    no_id = survival.pseudo(no_id_fit, times=[3.0, 5.0])
+
+    for actual_row, expected_row in zip(
+        survival_values,
+        [
+            [1.0, 0.2222222, 0.0],
+            [0.0, 0.2222222, 0.0],
+            [1.0, 0.8888889, 0.0],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    for actual_row, expected_row in zip(
+        survival_vector,
+        [[0.2222222], [0.2222222], [0.8888889]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    assert survival_frame["id"] == [1, 2, 3]
+    assert survival_frame["time"] == [5.0, 5.0, 5.0]
+    assert survival_frame["pseudo"] == pytest.approx([0.2222222, 0.2222222, 0.8888889])
+    for actual_row, expected_row in zip(
+        row_level,
+        [
+            [0.6666667, 0.4444444, 0.0],
+            [1.0, 0.2222222, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.6666667, 0.6666667, 0.0],
+            [1.0, 0.6666667, 0.0],
+            [0.6666667, 0.6666667, 0.0],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    for actual_row, expected_row in zip(
+        cumhaz,
+        [[0.0, 1.0, 2.0], [1.0, 1.0, 2.0], [0.0, 0.0, 1.0]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    for actual_row, expected_row in zip(
+        rmst,
+        [[3.0, 5.0, 5.4444444], [3.0, 3.0, 3.4444444], [3.0, 5.0, 6.7777778]],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    for actual_row, expected_row in zip(
+        no_id,
+        [
+            [0.6666667, 0.4444444],
+            [1.3333333, 0.0],
+            [-0.6666667, -0.4444444],
+            [0.6666667, 0.8888889],
+            [1.3333333, 0.8888889],
+            [0.6666667, 0.8888889],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+    with pytest.raises(TypeError, match="times are required"):
+        survival.pseudo(fit)
+    grouped_response = survival.Surv(
+        [0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0, 5.0],
+        [2.0, 5.0, 3.0, 6.0, 4.0, 7.0, 5.0, 8.0],
+        [0, 1, 1, 0, 0, 1, 1, 0],
+    )
+    grouped_ids = [1, 1, 2, 2, 3, 3, 4, 4]
+    grouped_fit = survival.survfit(
+        grouped_response,
+        group=["A", "A", "A", "A", "B", "B", "B", "B"],
+        id=grouped_ids,
+        model=True,
+    )
+    grouped = survival.pseudo(grouped_fit, times=[3.0, 5.0])
+    grouped_row_level = survival.pseudo(grouped_fit, times=[3.0, 5.0], collapse=False)
+    grouped_cumhaz = survival.pseudo(grouped_fit, times=[3.0, 5.0], type="cumhaz")
+    grouped_rmst = survival.pseudo(grouped_fit, times=[3.0, 5.0], type="rmst")
+
+    for label, expected_rows in {
+        "A": [[1.0, 0.25], [0.0, 0.25]],
+        "B": [[1.0, 1.0], [1.0, 0.0]],
+    }.items():
+        for actual_row, expected_row in zip(grouped[label], expected_rows, strict=True):
+            assert actual_row == pytest.approx(expected_row)
+    for label, expected_rows in {
+        "A": [[0.5, 0.25], [1.0, 0.25], [0.0, 0.0], [0.5, 0.5]],
+        "B": [[1.0, 0.5], [1.0, 1.0], [1.0, 0.0], [1.0, 0.5]],
+    }.items():
+        for actual_row, expected_row in zip(grouped_row_level[label], expected_rows, strict=True):
+            assert actual_row == pytest.approx(expected_row)
+    for label, expected_rows in {
+        "A": [[0.0, 1.0], [1.0, 1.0]],
+        "B": [[0.0, 0.0], [0.0, 1.0]],
+    }.items():
+        for actual_row, expected_row in zip(grouped_cumhaz[label], expected_rows, strict=True):
+            assert actual_row == pytest.approx(expected_row)
+    for label, expected_rows in {
+        "A": [[3.0, 5.0], [3.0, 3.0]],
+        "B": [[3.0, 5.0], [3.0, 5.0]],
+    }.items():
+        for actual_row, expected_row in zip(grouped_rmst[label], expected_rows, strict=True):
+            assert actual_row == pytest.approx(expected_row)
+
+
+def test_survcondense_accepts_formula_and_preserves_direct_api():
+    data = {
+        "id": [2, 1, 1, 2],
+        "tstart": [0.0, 0.0, 5.0, 3.0],
+        "tstop": [3.0, 5.0, 8.0, 5.0],
+        "event": [0, 0, 0, 1],
+        "x": ["a", "b", "b", "a"],
+        "wt": [1, 2, 2, 1],
+    }
+
+    result = survival.survcondense("Surv(tstart, tstop, event) ~ x", data=data, id="id")
+    weighted = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ x",
+        data=data,
+        weights="wt",
+        id="id",
+    )
+    direct = survival.survcondense(
+        [2, 1, 1, 2],
+        [0.0, 0.0, 5.0, 3.0],
+        [3.0, 5.0, 8.0, 5.0],
+        [0, 0, 0, 1],
+    )
+    custom_names = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ x",
+        data=data,
+        id="id",
+        start="begin",
+        end="finish",
+        event="status",
+    )
+    subset = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ x",
+        data=data,
+        subset=[False, True, True, False],
+        id="id",
+    )
+    subset_unsorted = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ x",
+        data=data,
+        subset=[True, True, True, False],
+        id="id",
+    )
+    no_drops = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ x",
+        data={
+            "id": [1, 1, 1],
+            "tstart": [0.0, 1.0, 2.0],
+            "tstop": [1.0, 2.0, 3.0],
+            "event": [0, 0, 0],
+            "x": ["a", "a", "a"],
+            "wt": [1, 2, 1],
+        },
+        weights="wt",
+        id="id",
+    )
+    special_data = {
+        **data,
+        "site": ["south", "north", "north", "south"],
+        "phase": ["late", "early", "early", "late"],
+        "off": [1.0, 2.0, 2.0, 1.0],
+    }
+    strata = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ strata(site)",
+        data=special_data,
+        id="id",
+    )
+    multi_strata = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ strata(site, phase)",
+        data=special_data,
+        id="id",
+    )
+    offset_first = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ offset(off) + x",
+        data=special_data,
+        id="id",
+    )
+
+    assert result == {
+        "x": ["b", "a"],
+        "id": [1, 2],
+        "tstart": [0.0, 0.0],
+        "tstop": [8.0, 5.0],
+        "event": [0, 1],
+    }
+    assert weighted == {
+        "x": ["b", "a"],
+        "wt": [2, 1],
+        "id": [1, 2],
+        "tstart": [0.0, 0.0],
+        "tstop": [8.0, 5.0],
+        "event": [0, 1],
+    }
+    assert direct.id == [1, 2]
+    assert direct.time2 == pytest.approx([8.0, 5.0])
+    assert custom_names["begin"] == pytest.approx([0.0, 0.0])
+    assert custom_names["finish"] == pytest.approx([8.0, 5.0])
+    assert custom_names["status"] == [0, 1]
+    assert subset == {"x": ["b"], "id": [1], "tstart": [0.0], "tstop": [8.0], "event": [0]}
+    assert subset_unsorted == {
+        "x": ["a", "b"],
+        "id": [2, 1],
+        "tstart": [0.0, 5.0],
+        "tstop": [3.0, 8.0],
+        "event": [0, 0],
+    }
+    assert no_drops == {"x": [], "wt": [], "id": [], "tstart": [], "tstop": [], "event": []}
+    assert strata == {
+        "strata(site)": ["north", "south"],
+        "id": [1, 2],
+        "tstart": [0.0, 0.0],
+        "tstop": [8.0, 5.0],
+        "event": [0, 1],
+    }
+    assert multi_strata["strata(site, phase)"] == ["north, early", "south, late"]
+    assert list(offset_first)[:2] == ["offset(off)", "x"]
+    assert offset_first["offset(off)"] == pytest.approx([2.0, 1.0])
+    assert offset_first["x"] == ["b", "a"]
+
+    with pytest.raises(ValueError, match="counting-process"):
+        survival.survcondense(
+            "Surv(time, status) ~ x1",
+            data=_toy_data(),
+            id=list(range(len(_toy_data()["time"]))),
+        )
+    with pytest.raises(ValueError, match="requires an id"):
+        survival.survcondense("Surv(tstart, tstop, event) ~ x", data=data)
+
+
 def _backtick_data():
     data = _toy_data()
     return {
@@ -443,6 +1401,10 @@ def _manual_right_concordance_counts(time, status, scores, weights=None, timewt=
     return concordant, comparable
 
 
+def _formula_predictor_scores(scores):
+    return [-value for value in scores]
+
+
 def _manual_fh_from_km(km, ctype=1, event_counts=None):
     hazard = 0.0
     cumhaz = []
@@ -500,6 +1462,7 @@ def test_surv_right_censored_response():
     response = survival.Surv([1, 2, 3], [1, 0, 1])
     all_observed = survival.Surv([1, 2, 3])
     right_abbrev = survival.Surv([1, 2, 3], [1, 0, 1], type="r")
+    missing_response = survival.Surv([1.0, math.nan, 3.0], [1, 0, 1])
 
     assert len(response) == 3
     assert response.type == "right"
@@ -510,12 +1473,138 @@ def test_surv_right_censored_response():
     assert right_abbrev.type == "right"
     assert survival.r_api.is_surv(response) is True
     assert survival.r_api.is_surv({"time": [1, 2, 3]}) is False
+    assert survival.is_na_surv(response) == [False, False, False]
+    assert survival.is_na_surv(missing_response) == [False, True, False]
+    assert survival.format_surv(response) == ["1 ", "2+", "3 "]
+    assert survival.format_surv(missing_response) == [" 1 ", "NA+", " 3 "]
 
     for explicit_type in ("right", "left"):
         with pytest.raises(ValueError, match="one-argument Surv"):
             survival.Surv([1, 2, 3], type=explicit_type)
     with pytest.raises(ValueError, match="ambiguous"):
         survival.Surv([1, 2], [1, 0], type="i")
+    with pytest.raises(TypeError, match="Surv object"):
+        survival.is_na_surv([1.0, 2.0])
+    with pytest.raises(TypeError, match="Surv object"):
+        survival.format_surv([1.0, 2.0])
+
+
+def test_surv2_response_matches_r_multistate_shape():
+    response = survival.Surv2([1.0, 2.0, 3.0], ["a", "b", "c"])
+    missing = survival.Surv2([1.0, math.nan, 3.0], [None, "b", "c"], repeated=True)
+
+    assert len(response) == 3
+    assert response.time == pytest.approx((1.0, 2.0, 3.0))
+    assert response.status == (0, 1, 2)
+    assert response.states == ("b", "c")
+    assert response.repeated is False
+    assert survival.is_surv(response) is False
+    assert survival.format_surv(response) == ["1+ ", "2:b", "3:c"]
+    assert missing.status == (None, 0, 1)
+    assert missing.states == ("c",)
+    assert missing.repeated is True
+    assert survival.is_na_surv(missing) == [True, True, False]
+    assert survival.format_surv(missing) == ["1? ", "NA+", "3:c"]
+
+    with pytest.raises(ValueError, match="different lengths"):
+        survival.Surv2([1.0, 2.0], ["a"])
+    with pytest.raises(ValueError, match="repeated"):
+        survival.Surv2([1.0], ["a"], repeated=[True])
+
+
+def test_surv2data_converts_timeline_rows_to_counting_transitions():
+    result = survival.Surv2data(
+        [0.0, 2.0, 5.0, 0.0, 3.0],
+        [1, 2, 3, 1, 0],
+        states=["entry", "ill", "death"],
+        id=[1, 1, 1, 2, 2],
+    )
+
+    assert result["row"] == [0, 1, 3]
+    assert result["start"] == pytest.approx([0.0, 2.0, 0.0])
+    assert result["stop"] == pytest.approx([2.0, 5.0, 3.0])
+    assert result["status"] == [2, 3, 0]
+    assert result["id"] == [1, 1, 2]
+    assert result["istate"] == [1, 2, 1]
+    assert result["states"] == ["entry", "ill", "death"]
+    assert result["type"] == "mcounting"
+
+    repeated_result = survival.Surv2data(
+        [0.0, 1.0, 2.0],
+        [1, 1, 2],
+        states=["entry", "death"],
+        id=[1, 1, 1],
+        repeated=False,
+    )
+    assert repeated_result["status"] == [0, 2]
+
+    with pytest.raises(ValueError, match="duplicated time"):
+        survival.Surv2data([0.0, 0.0], [1, 2], states=["a", "b"], id=[1, 1])
+
+
+def test_totimeline_expands_counting_rows_to_state_timeline():
+    result = survival.totimeline(
+        [0.0, 2.0, 0.0],
+        [2.0, 5.0, 3.0],
+        [1, 2, 0],
+        states=["ill", "death"],
+        id=[1, 1, 2],
+        istate=["entry", "ill", "entry"],
+        istate_levels=["entry", "ill", "death"],
+    )
+
+    assert result["time"] == pytest.approx([0.0, 2.0, 5.0, 0.0, 3.0])
+    assert result["status"] == [1, 2, 3, 1, 0]
+    assert result["data_row"] == [0, 1, 1, 2, 2]
+    assert result["state_levels"] == ["censor", "entry", "ill", "death"]
+
+    default_state_result = survival.totimeline(
+        [0.0, 2.0, 0.0],
+        [2.0, 5.0, 3.0],
+        [1, 2, 0],
+        states=["ill", "death"],
+        id=[1, 1, 2],
+    )
+    assert default_state_result["status"] == [1, 2, 3, 1, 0]
+    assert default_state_result["state_levels"] == ["censor", "(s0)", "ill", "death"]
+
+    with pytest.raises(ValueError, match="same length"):
+        survival.totimeline([0.0], [1.0, 2.0], [1], states=["ill"], id=[1])
+
+
+def test_fromtimeline_builds_intervals_and_covariate_row_maps():
+    result = survival.fromtimeline(
+        [0.0, 2.0, 5.0, 0.0, 3.0, 6.0],
+        [1, 1, 1, 1, 1, 0],
+        id=[1, 1, 1, 2, 2, 2],
+        data={
+            "z": ["A", "A", "A", "B", "B", "B"],
+            "x": [10, 11, 12, 20, 21, 22],
+            "id": [1, 1, 1, 2, 2, 2],
+        },
+    )
+
+    assert result["start"] == pytest.approx([0.0, 2.0, 0.0, 3.0])
+    assert result["stop"] == pytest.approx([2.0, 5.0, 3.0, 6.0])
+    assert result["status"] == [1, 1, 1, 0]
+    assert result["istate"] == [1, 1, 1, 1]
+    assert result["static"] == [True, False, True]
+    assert result["static_row"] == [0, 0, 3, 3]
+    assert result["dynamic_row"] == [0, 1, 3, 4]
+
+    multistate_result = survival.fromtimeline(
+        [0.0, 2.0, 5.0, 0.0, 3.0, 6.0],
+        [1, 2, 3, 1, 2, 0],
+        id=[1, 1, 1, 2, 2, 2],
+        states=["entry", "ill", "death"],
+    )
+    assert multistate_result["status"] == [2, 3, 2, 0]
+    assert multistate_result["istate"] == [1, 2, 1, 2]
+    assert multistate_result["state_levels"] == ["censor", "entry", "ill", "death"]
+    assert multistate_result["istate_levels"] == ["entry", "ill", "death"]
+
+    with pytest.raises(ValueError, match="censored state"):
+        survival.fromtimeline([0.0, 1.0], [0, 1], id=[1, 1])
 
 
 def test_surv_accepts_named_response_arguments():
@@ -546,6 +1635,618 @@ def test_surv_accepts_named_response_arguments():
     assert interval.status == (3, 0)
     assert interval2.type == "interval2"
     assert interval2.status == (2, 0)
+
+
+def test_surv_format_and_missingness_cover_censoring_types():
+    left = survival.Surv([1.0, math.nan, 3.0], [1, 0, 1], type="left")
+    counting = survival.Surv([0.0, math.nan, 1.0], [1.0, 2.0, math.nan], [1, 0, 1])
+    interval = survival.Surv(
+        [1.0, math.nan, 3.0],
+        [1.0, 2.0, math.nan],
+        [1, 3, 0],
+        type="interval",
+    )
+    interval2 = survival.Surv(
+        [float("-inf"), 1.0, 2.0],
+        [1.0, 2.0, float("inf")],
+        type="interval2",
+    )
+
+    assert survival.is_na_surv(left) == [False, True, False]
+    assert survival.format_surv(left) == [" 1 ", "NA-", " 3 "]
+
+    assert survival.is_na_surv(counting) == [False, True, True]
+    counting_labels = survival.format_surv(counting)
+    assert counting_labels[0].strip().startswith("(")
+    assert counting_labels[0].strip().endswith("1]")
+    assert "+]" in counting_labels[1]
+
+    assert survival.is_na_surv(interval) == [False, True, True]
+    interval_labels = survival.format_surv(interval)
+    assert interval_labels[0].strip() == "1"
+    assert interval_labels[1].strip() == "[NA, 2]"
+    assert interval_labels[2].strip() == "3+"
+
+    assert survival.is_na_surv(interval2) == [False, False, False]
+    assert [value.strip() for value in survival.format_surv(interval2)] == [
+        "1-",
+        "[1, 2]",
+        "2+",
+    ]
+
+
+def test_r_style_ratetable_helpers_delegate_to_population_core():
+    table = survival.survexp_us()
+    rural = survival.survexp_usr()
+    mn = survival.survexp_mn()
+
+    assert isinstance(table, survival.RateTable)
+    assert survival.is_ratetable(table) is True
+    assert survival.is_ratetable(table.ndim(), True, True) is True
+    assert survival.is_ratetable(object()) is False
+    assert table.ndim() == 3
+    assert mn.ndim() == 3
+    assert rural.summary == table.summary
+
+    scaled = survival.survexp(
+        time=[365.25, 730.5],
+        age=[18262.5, 21915.0],
+        year=[2000.0, 2000.0],
+        sex=[0, 1],
+        times=[365.25, 730.5],
+        method="ederer",
+        scale=365.25,
+    )
+    conditional = survival.survexp(
+        time=[365.25, 730.5],
+        age=[18262.5, 21915.0],
+        year=[2000.0, 2000.0],
+        sex=[0, 1],
+        conditional=True,
+    )
+    direct_individual = survival.survexp_individual(
+        time=[365.25, 730.5],
+        age=[18262.5, 21915.0],
+        year=[2000.0, 2000.0],
+        sex=[0, 1],
+    )
+    individual_surv = survival.survexp(
+        time=[365.25, 730.5],
+        age=[18262.5, 21915.0],
+        year=[2000.0, 2000.0],
+        sex=[0, 1],
+        cohort=False,
+    )
+    individual_hazard = survival.survexp(
+        time=[365.25, 730.5],
+        age=[18262.5, 21915.0],
+        year=[2000.0, 2000.0],
+        sex=[0, 1],
+        method="individual.h",
+    )
+
+    assert isinstance(scaled, survival.SurvExpResult)
+    assert scaled.time == pytest.approx([1.0, 2.0])
+    assert scaled.method == "hakulinen"
+    assert conditional.method == "conditional"
+    assert individual_surv == pytest.approx(direct_individual)
+    assert individual_hazard == pytest.approx([-math.log(value) for value in direct_individual])
+    with pytest.warns(RuntimeWarning, match="se_fit value ignored"):
+        survival.survexp(
+            time=[365.25],
+            age=[18262.5],
+            year=[2000.0],
+            se_fit=True,
+        )
+    with pytest.raises(TypeError, match="ratetable"):
+        survival.survexp([365.25], [18262.5], [2000.0], ratetable=object())
+    with pytest.raises(ValueError, match="method must"):
+        survival.survexp([365.25], [18262.5], [2000.0], method="fancy")
+    with pytest.raises(ValueError, match="scale must be positive"):
+        survival.survexp([365.25], [18262.5], [2000.0], scale=0)
+
+    assert survival.ratetableDate(2000, 2, 29) == pytest.approx(11016.0)
+    assert survival.ratetableDate("2000-02-29") == pytest.approx(11016.0)
+    assert survival.ratetableDate(["2000-02-29", "2001-01-01"]) == pytest.approx([11016.0, 11323.0])
+    assert survival.ratetableDate(11016.0) == pytest.approx(11016.0)
+    with pytest.raises(ValueError, match="day is invalid"):
+        survival.ratetableDate(2001, 2, 29)
+    with pytest.raises(TypeError, match="month and day"):
+        survival.ratetableDate(2000, month=2)
+
+
+def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
+    scalar = survival.cipoisson(5, time=10.0)
+    vector = survival.cipoisson([0, 5, 20], time=[1.0, 10.0, 4.0])
+    recycled = survival.cipoisson([1, 2], time=[1.0, 2.0, 3.0])
+    anscombe = survival.cipoisson(5, time=10.0, method="anscombe")
+    missing_time = survival.cipoisson([1, 2], time=[0.0, 2.0])
+
+    assert scalar == pytest.approx((0.1623486, 1.1668332))
+    assert [value for row in vector for value in row] == pytest.approx(
+        [0.0, 3.688879, 0.1623486, 1.1668332, 3.0541299, 7.722094]
+    )
+    assert [value for row in recycled for value in row] == pytest.approx(
+        [0.025317808, 5.571643, 0.121104639, 3.612344, 0.008439269, 1.857214]
+    )
+    assert anscombe == pytest.approx((0.1507881, 1.1586004))
+    assert math.isnan(missing_time[0][0])
+    assert math.isnan(missing_time[0][1])
+    assert missing_time[1] == pytest.approx((0.121104639, 3.612344))
+    with pytest.raises(ValueError, match="k must be non-negative"):
+        survival.cipoisson(-1)
+    with pytest.raises(ValueError, match="method must"):
+        survival.cipoisson(1, method="fancy")
+
+
+def test_r_style_bounded_link_helpers_match_survival_link_functions():
+    x = [0.0, 0.01, 0.05, 0.5, 0.95, 0.99, 1.0]
+
+    assert survival.blogit(x) == pytest.approx(
+        [-2.94443898, -2.94443898, -2.94443898, 0.0, 2.94443898, 2.94443898, 2.94443898]
+    )
+    assert survival.bprobit(x) == pytest.approx(
+        [-1.64485363, -1.64485363, -1.64485363, 0.0, 1.64485363, 1.64485363, 1.64485363]
+    )
+    assert survival.bcloglog(x) == pytest.approx(
+        [-2.97019525, -2.97019525, -2.97019525, -0.36651292, 1.0971887, 1.0971887, 1.0971887]
+    )
+    assert survival.blog(x) == pytest.approx(
+        [-2.99573227, -2.99573227, -2.99573227, -0.69314718, -0.05129329, -0.01005034, 0.0]
+    )
+    assert survival.blogit(0.5) == pytest.approx(0.0)
+    assert survival.bcloglog(0.5) == pytest.approx(math.log(-math.log(0.5)))
+    assert survival.blogit([0.0, 0.75, 1.0], edge=0.6) == pytest.approx(
+        [0.4054651, 0.4054651, 0.4054651]
+    )
+    assert survival.bprobit([0.0, 0.75, 1.0], edge=0.6) == pytest.approx(
+        [0.2533471, 0.2533471, 0.2533471]
+    )
+    assert survival.bcloglog([0.0, 0.75, 1.0], edge=0.6) == pytest.approx(
+        [-0.08742157, -0.08742157, -0.08742157]
+    )
+
+
+def test_r_style_pyears_tabulates_surv_inputs():
+    data = {
+        "time": [10.0, 20.0, 30.0],
+        "status": [1, 0, 1],
+        "group": ["a", "a", "b"],
+    }
+    formula_result = survival.pyears("Surv(time, status) ~ group", data=data, scale=1)
+    direct_result = survival.pyears(
+        survival.Surv(data["time"], data["status"]),
+        group=data["group"],
+        weights=[2.0, 1.0, 1.0],
+        scale=1,
+    )
+    counting_result = survival.pyears(
+        survival.Surv([0.0, 5.0], [10.0, 15.0], [1, 0]),
+        scale=1,
+    )
+    no_event_result = survival.pyears([10.0, 20.0, 30.0], group=data["group"], scale=1)
+    frame = survival.as_data_frame(formula_result)
+
+    assert isinstance(formula_result, survival.PyearsResult)
+    assert formula_result.group == ["a", "b"]
+    assert formula_result.pyears == pytest.approx([30.0, 30.0])
+    assert formula_result.n == pytest.approx([2.0, 1.0])
+    assert formula_result.event == pytest.approx([1.0, 1.0])
+    assert formula_result.observations == 3
+    assert direct_result.pyears == pytest.approx([40.0, 30.0])
+    assert direct_result.event == pytest.approx([2.0, 1.0])
+    assert counting_result.pyears == pytest.approx([20.0])
+    assert counting_result.event == pytest.approx([1.0])
+    assert no_event_result.event is None
+    assert no_event_result.pyears == pytest.approx([30.0, 30.0])
+    assert frame == {
+        "group": ["a", "b"],
+        "pyears": pytest.approx([30.0, 30.0]),
+        "n": pytest.approx([2.0, 1.0]),
+        "event": pytest.approx([1.0, 1.0]),
+    }
+    assert survival.pyears(
+        "Surv(time, status) ~ group",
+        data=data,
+        subset=[True, False, True],
+        scale=1,
+    ).pyears == pytest.approx([10.0, 30.0])
+
+    order_data = {
+        "time": [10.0, 20.0, 30.0, 40.0],
+        "status": [1, 0, 1, 1],
+        "group": ["treated", "treated", "control", "control"],
+        "id": [1, 2, 3, 4],
+        "off": [0.1, 0.2, 0.3, 0.4],
+    }
+    ordered_formula = survival.pyears("Surv(time, status) ~ group", data=order_data, scale=1)
+    offset_only = survival.pyears("Surv(time, status) ~ offset(off)", data=order_data, scale=1)
+    offset_group = survival.pyears(
+        "Surv(time, status) ~ group + offset(off)",
+        data=order_data,
+        scale=1,
+    )
+    cluster_group = survival.pyears(
+        "Surv(time, status) ~ group + cluster(id)",
+        data=order_data,
+        scale=1,
+    )
+    ordered_direct = survival.pyears(
+        survival.Surv(order_data["time"], order_data["status"]),
+        group=order_data["group"],
+        scale=1,
+    )
+    assert ordered_formula.group == ["control", "treated"]
+    assert ordered_formula.pyears == pytest.approx([70.0, 30.0])
+    assert ordered_formula.event == pytest.approx([2.0, 1.0])
+    assert offset_only.group == ["(all)"]
+    assert offset_only.pyears == pytest.approx([100.0])
+    assert offset_only.event == pytest.approx([3.0])
+    assert offset_group.group == ordered_formula.group
+    assert offset_group.pyears == pytest.approx(ordered_formula.pyears)
+    assert offset_group.event == pytest.approx(ordered_formula.event)
+    assert cluster_group.pyears == pytest.approx([0.0, 10.0, 0.0, 20.0, 30.0, 0.0, 40.0, 0.0])
+    assert cluster_group.n == pytest.approx([0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0])
+    assert cluster_group.event == pytest.approx([0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0])
+    assert ordered_direct.group == ["treated", "control"]
+    assert ordered_direct.pyears == pytest.approx([30.0, 70.0])
+    with pytest.raises(ValueError, match="interaction"):
+        survival.pyears("Surv(time, status) ~ group:status", data=data, scale=1)
+    with pytest.raises(ValueError, match="same length"):
+        survival.pyears([1.0, 2.0], event=[1], scale=1)
+    with pytest.raises(ValueError, match="scale must be positive"):
+        survival.pyears([1.0], scale=0)
+
+
+def test_r_style_survobrien_uses_direct_vectors():
+    result = survival.survobrien(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 1],
+        [0.1, 0.4, 0.2, 0.8],
+        strata=[1, 1, 2, 2],
+    )
+    label_result = survival.survobrien(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 1],
+        [0.1, 0.4, 0.2, 0.8],
+        strata=["a", "a", "b", "b"],
+    )
+
+    assert isinstance(result, survival.SurvObrienResult)
+    assert result.df == 1
+    assert len(result.scores) == 4
+    assert math.isfinite(result.statistic)
+    assert 0.0 <= result.p_value <= 1.0
+    assert label_result.statistic == pytest.approx(result.statistic)
+    assert label_result.p_value == pytest.approx(result.p_value)
+    assert label_result.scores == pytest.approx(result.scores)
+    with pytest.raises(ValueError, match="status must contain only 0/1"):
+        survival.survobrien([1.0, 2.0], [1, 2], [0.1, 0.2])
+
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 0, 1, 1],
+        "x": [0.1, 0.4, 0.2, 0.8],
+        "group": ["a", "a", "b", "b"],
+        "id": [10, 11, 12, 13],
+        "off": [0.1, 0.2, 0.3, 0.4],
+    }
+    formula = survival.survobrien("Surv(time, status) ~ x", data=data)
+    formula_offset = survival.survobrien("Surv(time, status) ~ x + offset(off)", data=data)
+    formula_strata = survival.survobrien(
+        "Surv(time, status) ~ x + strata(group)",
+        data=data,
+    )
+    formula_cluster = survival.survobrien(
+        "Surv(time, status) ~ x + cluster(id)",
+        data=data,
+    )
+    transformed = survival.survobrien(
+        "Surv(time, status) ~ x",
+        data=data,
+        transform=lambda values: (
+            values[0] * 2.0 if len(values) == 1 else [value * 2.0 for value in values]
+        ),
+    )
+    counting = survival.survobrien(
+        "Surv(start, stop, status) ~ x",
+        data={
+            "start": [0.0, 0.0, 1.0, 2.0],
+            "stop": [1.0, 2.0, 3.0, 4.0],
+            "status": [1, 0, 1, 1],
+            "x": [0.1, 0.4, 0.2, 0.8],
+        },
+    )
+    counting_strata = survival.survobrien(
+        "Surv(start, stop, status) ~ x + strata(group)",
+        data={
+            "start": [0.0, 0.0, 1.0, 2.0, 0.0, 3.0],
+            "stop": [1.0, 2.0, 3.0, 4.0, 2.0, 5.0],
+            "status": [1, 0, 1, 1, 1, 0],
+            "x": [0.1, 0.4, 0.2, 0.8, 0.5, 0.7],
+            "group": ["a", "a", "b", "b", "a", "b"],
+        },
+    )
+
+    assert formula["time"] == pytest.approx([1.0, 2.0, 3.0, 4.0, 3.0, 4.0, 4.0])
+    assert formula["status"] == [1, 0, 0, 0, 1, 0, 1]
+    assert formula[".id."] == [1, 2, 3, 4, 3, 4, 4]
+    assert formula["x"] == pytest.approx(
+        [
+            -1.9459101490553135,
+            0.5108256237659907,
+            -0.5108256237659907,
+            1.9459101490553132,
+            -1.0986122886681098,
+            1.0986122886681098,
+            0.0,
+        ]
+    )
+    assert formula[".strata."] == [1, 1, 1, 1, 2, 2, 3]
+    assert formula_offset == formula
+    assert "offset(off)" not in formula_offset
+    assert formula_strata["time"] == pytest.approx([1.0])
+    assert formula_strata["status"] == [1]
+    assert formula_strata[".id."] == [1]
+    assert formula_strata["x"] == pytest.approx([0.0])
+    assert formula_strata[".strata."] == [1]
+    assert list(formula_cluster) == ["time", "status", "x", ".strata."]
+    assert formula_cluster["x"] == pytest.approx(formula["x"])
+    assert transformed["x"] == pytest.approx([0.2, 0.8, 0.4, 1.6, 0.4, 1.6, 1.6])
+    assert counting["start"] == pytest.approx([0.0, 0.0, 1.0, 2.0, 2.0])
+    assert counting["stop"] == pytest.approx([1.0, 2.0, 3.0, 4.0, 4.0])
+    assert counting["status"] == [1, 0, 1, 0, 1]
+    assert counting["x"] == pytest.approx(
+        [
+            -1.0986122886681098,
+            1.0986122886681098,
+            -1.0986122886681098,
+            1.0986122886681098,
+            0.0,
+        ]
+    )
+    assert counting_strata == {
+        "start": [1.0],
+        "stop": [3.0],
+        "status": [0],
+        ".id.": [3],
+        "x": [0.0],
+        ".strata.": [4],
+    }
+
+
+def test_r_style_yates_direct_helpers_wrap_rust_kernels():
+    result = survival.yates(
+        [1.0, 2.0, 4.0, 8.0],
+        ["b", "a", "b", "a"],
+        weights=[1.0, 2.0, 3.0, 4.0],
+        conf_level=0.90,
+    )
+
+    assert isinstance(result, survival.YatesResult)
+    assert survival.yates is survival.r_api.yates
+    assert result.levels == ["a", "b"]
+    assert result.means == pytest.approx([6.0, 3.25])
+    assert result.se == pytest.approx([math.sqrt(128.0 / 36.0), math.sqrt(10.125 / 16.0)])
+    assert result.n == [2, 2]
+    assert result.predict_type == "linear"
+    assert result.lower[0] == pytest.approx(result.means[0] - 1.6448536269514722 * result.se[0])
+    assert result.upper[0] == pytest.approx(result.means[0] + 1.6448536269514722 * result.se[0])
+
+    contrast = survival.yates_contrast(
+        [1.0, 0.0, 1.0, 1.0, 1.0, 2.0],
+        [0.5, 0.25],
+        n_obs=3,
+        n_vars=2,
+        factor_col=1,
+        factor_levels=[0.0, 1.0, 2.0],
+    )
+    assert isinstance(contrast, survival.YatesResult)
+    assert contrast.levels == ["0", "1", "2"]
+    assert contrast.means == pytest.approx([0.5, 0.75, 1.0])
+    assert contrast.se == pytest.approx([0.0, 0.0, 0.0])
+    assert contrast.n == [3, 3, 3]
+
+    risk_contrast = survival.yates_contrast(
+        [1.0, 0.0, 1.0, 1.0],
+        [0.5, 0.25],
+        n_obs=2,
+        n_vars=2,
+        factor_col=1,
+        factor_levels=[0.0, 1.0],
+        predict_type="risk",
+    )
+    assert risk_contrast.means == pytest.approx([math.exp(0.5), math.exp(0.75)])
+
+    pairwise = survival.yates_pairwise(contrast)
+    assert isinstance(pairwise, survival.YatesPairwiseResult)
+    assert pairwise.level1 == ["0", "0", "1"]
+    assert pairwise.level2 == ["1", "2", "2"]
+    assert pairwise.difference == pytest.approx([-0.25, -0.5, -0.25])
+    assert pairwise.se == pytest.approx([0.0, 0.0, 0.0])
+
+    with pytest.raises(ValueError, match="conf_level must be between 0 and 1"):
+        survival.yates([1.0], ["a"], conf_level=1.0)
+
+
+def test_r_style_nsk_wraps_native_spline_basis():
+    basis = survival.nsk([1.0, 2.0, 3.0, 4.0, 5.0], df=3)
+    intercept_basis = survival.nsk(
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        df=4,
+        intercept=True,
+    )
+    explicit = survival.nsk(
+        [1.0, 2.0, 3.0, 4.0],
+        knots=[2.0, 3.0],
+        **{"Boundary.knots": [1.0, 4.0]},
+    )
+    range_boundary = survival.nsk(
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        df=3,
+        Boundary_knots=True,
+    )
+    boundary_from_knots = survival.nsk(
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        knots=[1.0, 2.0, 4.0, 5.0],
+        Boundary_knots=None,
+    )
+    inside_boundary = survival.nsk(
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        knots=[2.0, 4.0],
+        boundary_knots=[2.5, 3.5],
+    )
+
+    assert isinstance(basis, survival._survival.SplineBasisResult)
+    assert survival.nsk is survival.r_api.nsk
+    assert basis.n_rows == 5
+    assert basis.n_cols == 3
+    assert basis.knots == pytest.approx([2.6666666666666665, 3.333333333333333])
+    assert basis.boundary_knots == pytest.approx((1.2, 4.8))
+    assert basis.basis[:3] == pytest.approx(
+        [-0.30663390663390683, 0.12972972972972977, -0.007507507507507517]
+    )
+
+    assert intercept_basis.n_cols == 4
+    assert intercept_basis.basis[:4] == pytest.approx(
+        [1.184411684411685, -0.30663390663390683, 0.12972972972972977, -0.007507507507507517]
+    )
+    assert explicit.boundary_knots == pytest.approx((1.0, 4.0))
+    assert explicit.knots == pytest.approx([2.0, 3.0])
+    assert explicit.basis == pytest.approx(
+        [1.0 if row > 0 and row - 1 == col else 0.0 for row in range(4) for col in range(3)]
+    )
+
+    assert range_boundary.boundary_knots == pytest.approx((1.0, 5.0))
+    assert range_boundary.knots == pytest.approx([2.333333333333333, 3.6666666666666665])
+    assert range_boundary.basis[:3] == pytest.approx([0.0, 0.0, 0.0], abs=1e-14)
+
+    assert boundary_from_knots.boundary_knots == pytest.approx((1.0, 5.0))
+    assert boundary_from_knots.knots == pytest.approx([2.0, 4.0])
+    assert boundary_from_knots.basis[:3] == pytest.approx([0.0, 0.0, 0.0], abs=1e-14)
+
+    assert inside_boundary.n_cols == 1
+    assert inside_boundary.knots == []
+    assert inside_boundary.boundary_knots == pytest.approx((2.0, 4.0))
+    assert inside_boundary.basis[0] == pytest.approx(-0.5)
+
+    with pytest.raises(ValueError, match="Boundary.knots"):
+        survival.nsk([1.0, 2.0, 3.0], knots=[2.0], Boundary_knots=None)
+    with pytest.raises(ValueError, match="x must contain only finite values"):
+        survival.nsk([1.0, math.nan], df=3)
+
+
+def test_r_style_pspline_builds_survival_basis_contract():
+    basis = survival.pspline([1.0, 2.0, 3.0, 4.0, 5.0], df=3)
+    outside = survival.pspline(
+        [0.0, 1.0, 5.0, 6.0],
+        df=3,
+        boundary_knots=[1.0, 5.0],
+        penalty=False,
+    )
+    fixed = survival.pspline([1.0, 2.0, 3.0, 4.0, 5.0], theta=0.5)
+    aic = survival.pspline([1.0, 2.0, 3.0, 4.0, 5.0], df=0)
+    combined = survival.pspline(
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        df=3,
+        combine=[1] * 10,
+    )
+
+    assert survival.pspline is survival.r_api.pspline
+    assert basis["method"] == "df"
+    assert basis["nterm"] == 8
+    assert basis["degree"] == 3
+    assert basis["n_cols"] == 10
+    assert basis["boundary_knots"] == pytest.approx([1.0, 5.0])
+    assert basis["basis"][0] == pytest.approx([2.0 / 3.0, 1.0 / 6.0, *([0.0] * 8)])
+    assert basis["basis"][-1] == pytest.approx([*([0.0] * 7), 1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0])
+    assert basis["dmat"][0][:3] == pytest.approx([5.0, -4.0, 1.0])
+    assert basis["cbase"] == pytest.approx([1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0])
+
+    assert outside["penalty"] is False
+    assert outside["basis"][0] == pytest.approx([2.0 / 3.0, -5.0 / 6.0, *([0.0] * 8)])
+    assert outside["basis"][-1] == pytest.approx([*([0.0] * 7), -5.0 / 6.0, 2.0 / 3.0, 7.0 / 6.0])
+    assert fixed["method"] == "fixed"
+    assert fixed["theta"] == pytest.approx(0.5)
+    assert fixed["n_cols"] == 12
+    assert aic["method"] == "aic"
+    assert aic["eps"] == pytest.approx(1e-5)
+    assert aic["nterm"] == 15
+    assert aic["n_cols"] == 17
+    assert combined["combine"] == [1] * 10
+    assert combined["n_cols"] == 1
+
+    with pytest.raises(ValueError, match="Invalid value for theta"):
+        survival.pspline([1.0, 2.0, 3.0], theta=1.0)
+    with pytest.raises(ValueError, match="Too few degrees"):
+        survival.pspline([1.0, 2.0, 3.0], df=1)
+
+
+def test_r_style_frailty_encoding_normalizes_levels_and_sparse_default():
+    encoded = survival.r_api._frailty_encoding(
+        ["b", "a", None, "b"],
+        levels=["a", "b"],
+        sparse=None,
+    )
+    sparse_encoded = survival.r_api._frailty_encoding(
+        list("abcdef"),
+        levels=list("abcdef"),
+        sparse=None,
+    )
+
+    assert encoded["codes"] == [2, 1, None, 2]
+    assert encoded["levels"] == ["a", "b"]
+    assert encoded["nclass"] == 2
+    assert encoded["sparse"] is False
+    assert sparse_encoded["codes"] == [1, 2, 3, 4, 5, 6]
+    assert sparse_encoded["sparse"] is True
+
+    with pytest.raises(ValueError, match="outside supplied levels"):
+        survival.r_api._frailty_encoding(["c"], levels=["a", "b"])
+
+
+def test_r_style_neardate_and_tcut_use_native_data_prep_helpers():
+    assert survival.neardate(
+        [1, 1, 2],
+        [1, 1, 2],
+        [4.0, 12.0, 7.0],
+        [5.0, 10.0, 9.0],
+    ) == [1, None, 3]
+    assert survival.neardate(
+        [1, 1, 2],
+        [1, 1, 2],
+        [4.0, 12.0, 7.0],
+        [5.0, 10.0, 9.0],
+        best="prior",
+    ) == [None, 2, None]
+    assert survival.neardate(
+        ["a", "b"],
+        ["a", "b"],
+        [4.0, 12.0],
+        [5.0, 10.0],
+        nomatch=0,
+    ) == [1, 0]
+
+    cut = survival.tcut([5.0, 15.0, 30.0], [0.0, 10.0, 20.0, 30.0])
+    assert isinstance(cut, survival.TcutResult)
+    assert cut.codes == [0, 1, 2]
+    assert cut.levels == ["0+ thru 10", "10+ thru 20", "20+ thru 30"]
+    assert cut.breaks == pytest.approx([0.0, 10.0, 20.0, 30.0])
+    assert cut.counts == [1, 1, 1]
+
+    scaled = survival.tcut(
+        [5.0, 15.0, 30.0],
+        [0.0, 10.0, 20.0, 30.0],
+        labels=["a", "b", "c"],
+        scale=365.25,
+    )
+    assert scaled.codes == [0, 1, 2]
+    assert scaled.levels == ["a", "b", "c"]
+    assert scaled.breaks == pytest.approx([0.0, 3652.5, 7305.0, 10957.5])
+    assert survival.tcut is survival.r_api.tcut
+
+    with pytest.raises(ValueError, match="breaks must have at least 2"):
+        survival.tcut([1.0], [0.0])
 
 
 def test_surv_rejects_invalid_named_response_arguments():
@@ -617,6 +2318,480 @@ def test_survfit_matches_low_level_kaplan_meier():
     assert high_level.cumulative_hazard_std_err == pytest.approx(low_level.std_chaz)
 
 
+def test_survfit_formula_groups_use_r_level_order():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": [1, 0, 1, 1, 0, 1],
+        "group": ["treated", "treated", "control", "control", "treated", "control"],
+    }
+    response = survival.Surv(data["time"], data["status"])
+
+    formula = survival.survfit("Surv(time, status) ~ group", data=data, se_fit=False)
+    direct = survival.survfit(response, group=data["group"], se_fit=False)
+    formula_frame = survival.as_data_frame(formula)
+
+    assert list(formula) == ["control", "treated"]
+    assert formula_frame["strata"] == [
+        "control",
+        "control",
+        "control",
+        "treated",
+        "treated",
+        "treated",
+    ]
+    assert list(direct) == ["treated", "control"]
+
+
+def test_survfit_cluster_uses_robust_km_variance():
+    response = survival.Surv([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [1, 1, 0, 1, 0, 1])
+    subject = [1, 1, 2, 2, 3, 3]
+
+    clustered = survival.survfit(response, cluster=subject)
+    robust_id = survival.survfit(response, id=subject, robust=True)
+    row_robust = survival.survfit(response, robust=True)
+    weighted = survival.survfit(
+        response,
+        weights=[1.0, 2.0, 1.0, 1.0, 1.0, 1.0],
+        cluster=subject,
+    )
+    fractional = survival.survfit(
+        response,
+        weights=[1.0, 1.5, 1.0, 1.0, 1.0, 1.0],
+    )
+    fractional_plain = survival.survfit(
+        response,
+        weights=[1.0, 1.5, 1.0, 1.0, 1.0, 1.0],
+        robust=False,
+    )
+    plain = survival.survfit(response)
+    with pytest.warns(RuntimeWarning, match="ignored"):
+        ignored = survival.survfit(response, cluster=subject, robust=False)
+
+    assert clustered.time == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    assert clustered.std_err == pytest.approx(
+        [0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0]
+    )
+    assert clustered.std_chaz == pytest.approx(
+        [0.1360828, 0.3320419, 0.3320419, 0.4571841, 0.4571841, 0.4571841]
+    )
+    assert robust_id.std_err == pytest.approx(clustered.std_err)
+    assert row_robust.std_err == pytest.approx(
+        [0.1521452, 0.1924501, 0.1924501, 0.2222222, 0.2222222, 0.0]
+    )
+    assert weighted.std_err == pytest.approx(
+        [0.09997917, 0.29993752, 0.29993752, 0.26876249, 0.26876249, 0.0]
+    )
+    assert fractional.std_err == pytest.approx(
+        [0.1429946, 0.2076915, 0.2076915, 0.2173089, 0.2173089, 0.0]
+    )
+    assert fractional_plain.std_err != pytest.approx(fractional.std_err)
+    assert ignored.std_err == pytest.approx(plain.std_err)
+    assert clustered.std_err != pytest.approx(plain.std_err)
+
+
+def test_survfitkm_influence_matches_r_right_censored_fixture():
+    influence = survival.survfitkm_influence(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 0],
+    )
+    clustered = survival.survfitkm_influence(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 0],
+        cluster=["z", "z", "a", "b"],
+    )
+    fh = survival.survfitkm_influence(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 0],
+        stype=2,
+    )
+
+    assert influence.time == pytest.approx([1.0, 2.0, 3.0, 4.0])
+    for actual, expected in zip(
+        influence.influence_surv,
+        [
+            [-0.1875, -0.1875, -0.09375, -0.09375],
+            [0.0625, 0.0625, 0.03125, 0.03125],
+            [0.0625, 0.0625, -0.15625, -0.15625],
+            [0.0625, 0.0625, 0.21875, 0.21875],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        influence.influence_chaz,
+        [
+            [0.1875, 0.1875, 0.1875, 0.1875],
+            [-0.0625, -0.0625, -0.0625, -0.0625],
+            [-0.0625, -0.0625, 0.1875, 0.1875],
+            [-0.0625, -0.0625, -0.3125, -0.3125],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        clustered.influence_surv,
+        [
+            [-0.125, -0.125, -0.0625, -0.0625],
+            [0.0625, 0.0625, -0.15625, -0.15625],
+            [0.0625, 0.0625, 0.21875, 0.21875],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(fh.influence_chaz, influence.influence_chaz, strict=True):
+        assert actual == pytest.approx(expected)
+    assert fh.influence_surv[0][0] == pytest.approx(-0.1460251467)
+    assert fh.influence_surv[2][2] == pytest.approx(-0.0885687307)
+    assert fh.influence_surv[3][3] == pytest.approx(0.1476145512)
+
+    tied = survival.survfitkm_influence(
+        [1.0, 1.0, 1.0, 2.0, 2.0, 3.0],
+        [1, 1, 0, 1, 1, 0],
+        ctype=2,
+    )
+    fh2 = survival.survfitkm_influence(
+        [1.0, 1.0, 1.0, 2.0, 2.0, 3.0],
+        [1, 1, 0, 1, 1, 0],
+        stype=2,
+        ctype=2,
+    )
+    assert tied.time == pytest.approx([1.0, 2.0, 3.0])
+    assert tied.influence_surv[0] == pytest.approx([-0.1111111111, -0.0370370370, -0.0370370370])
+    assert tied.influence_chaz[0] == pytest.approx([0.1355555556, 0.1355555556, 0.1355555556])
+    assert tied.influence_chaz[5] == pytest.approx([-0.0677777778, -0.4288888889, -0.4288888889])
+    assert fh2.influence_surv[0] == pytest.approx([-0.0939455051, -0.0408285470, -0.0408285470])
+    assert fh2.influence_surv[5] == pytest.approx([0.0469727526, 0.1291788505, 0.1291788505])
+
+
+def test_survfit_residuals_match_r_right_censored_fixture():
+    response = survival.Surv([1.0, 2.0, 3.0, 4.0], [1, 0, 1, 0])
+    fit = survival.survfit(response)
+
+    survival_residuals = survival.survfit_residuals(
+        fit,
+        times=[1.0, 2.0, 3.0],
+        type="survival",
+    )["resid"]
+    for actual, expected in zip(
+        survival_residuals,
+        [
+            [-0.1875, -0.1875, -0.09375],
+            [0.0625, 0.0625, 0.03125],
+            [0.0625, 0.0625, -0.15625],
+            [0.0625, 0.0625, 0.21875],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    cumhaz_residuals = survival.survfit_residuals(
+        fit,
+        times=[1.0, 2.0, 3.0],
+        type="cumhaz",
+    )["resid"]
+    for actual, expected in zip(
+        cumhaz_residuals,
+        [
+            [0.1875, 0.1875, 0.1875],
+            [-0.0625, -0.0625, -0.0625],
+            [-0.0625, -0.0625, 0.1875],
+            [-0.0625, -0.0625, -0.3125],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    auc_residuals = survival.survfit_residuals(
+        fit,
+        times=[1.0, 2.0, 3.0],
+        type="auc",
+    )["resid"]
+    for actual, expected in zip(
+        auc_residuals,
+        [
+            [0.0, -0.1875, -0.375],
+            [0.0, 0.0625, 0.125],
+            [0.0, 0.0625, 0.125],
+            [0.0, 0.0625, 0.125],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+
+    grouped = survival.survfit(response, group=["a", "a", "b", "b"])
+    grouped_residuals = survival.survfit_residuals(
+        grouped,
+        times=[1.0, 3.0],
+        type="survival",
+        extra=True,
+    )
+    for actual, expected in zip(
+        grouped_residuals["resid"],
+        [
+            [-0.25, -0.25],
+            [0.25, 0.25],
+            [0.0, -0.25],
+            [0.0, 0.25],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert grouped_residuals["curve"] == [1, 1, 2, 2]
+
+    collapsed = survival.survfit(
+        response,
+        id=["a", "a", "b", "b"],
+    )
+    collapsed_residuals = survival.survfit_residuals(
+        collapsed,
+        times=[1.0, 3.0],
+        type="survival",
+        collapse=True,
+        weighted=True,
+    )
+    assert collapsed_residuals["id"] == ["a", "b"]
+    for actual, expected in zip(
+        collapsed_residuals["resid"],
+        [[-0.125, -0.0625], [0.125, 0.0625]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+
+    with pytest.raises(TypeError, match="times argument"):
+        survival.survfit_residuals(fit)
+    default_fit_residuals = survival.survfit_residuals(
+        survival.survfit(response),
+        times=[1.0],
+    )
+    for actual, expected in zip(
+        default_fit_residuals["resid"],
+        [[-0.1875], [0.0625], [0.0625], [0.0625]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+
+    counting_response = survival.Surv(
+        [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
+        [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+        [0, 1, 1, 0, 0, 1],
+    )
+    counting_fit = survival.survfit(counting_response, id=[1, 1, 2, 2, 3, 3])
+    counting_survival = survival.survfit_residuals(
+        counting_fit,
+        times=[3.0, 5.0, 7.0],
+        type="survival",
+    )["resid"]
+    for actual, expected in zip(
+        counting_survival,
+        [
+            [0.0, 0.0, 0.0],
+            [0.1111111, -0.0740741, 0.0],
+            [-0.2222222, -0.1481481, 0.0],
+            [0.0, 0.0740741, 0.0],
+            [0.1111111, 0.0740741, 0.0],
+            [0.0, 0.0740741, 0.0],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    counting_cumhaz = survival.survfit_residuals(
+        counting_fit,
+        times=[3.0, 5.0, 7.0],
+        type="cumhaz",
+    )["resid"]
+    for actual, expected in zip(
+        counting_cumhaz,
+        [
+            [0.0, 0.0, 0.0],
+            [-0.1111111, 0.1111111, 0.1111111],
+            [0.2222222, 0.2222222, 0.2222222],
+            [0.0, -0.1111111, -0.1111111],
+            [-0.1111111, -0.1111111, -0.1111111],
+            [0.0, -0.1111111, -0.1111111],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    counting_collapsed = survival.survfit_residuals(
+        counting_fit,
+        times=[3.0, 5.0, 7.0],
+        type="survival",
+        collapse=True,
+        weighted=True,
+    )
+    assert counting_collapsed["id"] == [1, 2, 3]
+    for actual, expected in zip(
+        counting_collapsed["resid"],
+        [
+            [0.1111111, -0.0740741, 0.0],
+            [-0.2222222, -0.0740741, 0.0],
+            [0.1111111, 0.1481481, 0.0],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+
+    grouped_counting_response = survival.Surv(
+        [0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0, 5.0],
+        [2.0, 5.0, 3.0, 6.0, 4.0, 7.0, 5.0, 8.0],
+        [0, 1, 1, 0, 0, 1, 1, 0],
+    )
+    grouped_counting = survival.survfit(
+        grouped_counting_response,
+        group=["A", "A", "A", "A", "B", "B", "B", "B"],
+        id=[1, 1, 2, 2, 3, 3, 4, 4],
+    )
+    grouped_counting_extra = survival.survfit_residuals(
+        grouped_counting,
+        times=[3.0, 5.0],
+        type="survival",
+        extra=True,
+    )
+    for actual, expected in zip(
+        grouped_counting_extra["resid"],
+        [
+            [0.0, 0.0],
+            [0.25, 0.0],
+            [-0.25, -0.125],
+            [0.0, 0.125],
+            [0.0, 0.0],
+            [0.0, 0.25],
+            [0.0, -0.25],
+            [0.0, 0.0],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert grouped_counting_extra["curve"] == [1, 1, 1, 1, 2, 2, 2, 2]
+
+
+def test_survfit_non_km_right_censored_curves_support_robust_variance():
+    time = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0]
+    status = [1, 1, 0, 1, 1, 0]
+    response = survival.Surv(time, status)
+    cluster = list(range(len(time)))
+
+    fh = survival.survfit(response, cluster=cluster, type="fleming-harrington")
+    fh2 = survival.survfit(response, cluster=cluster, type="fh2")
+    km_survival_fh2_hazard = survival.survfit(response, cluster=cluster, stype=1, ctype=2)
+    grouped = survival.survfit(
+        response,
+        group=["a", "a", "a", "b", "b", "b"],
+        cluster=cluster,
+        type="fh2",
+    )
+    direct_a = survival.survfit(
+        survival.Surv(time[:3], status[:3]),
+        cluster=cluster[:3],
+        type="fh2",
+    )
+    direct_b = survival.survfit(
+        survival.Surv(time[3:], status[3:]),
+        cluster=cluster[3:],
+        type="fh2",
+    )
+
+    assert fh.std_err == pytest.approx([0.1378965150, 0.1226264804, 0.1226264804])
+    assert fh.std_chaz == pytest.approx([0.1924500897, 0.3333333333, 0.3333333333])
+    assert fh.conf_lower == pytest.approx([0.4913843938, 0.1914131059, 0.1914131059])
+    assert fh2.std_err == pytest.approx([0.1627183900, 0.1508161491, 0.1508161491])
+    assert fh2.std_chaz == pytest.approx([0.2347891095, 0.5007272489, 0.5007272489])
+    assert fh2.conf_lower == pytest.approx([0.4374272533, 0.1128825508, 0.1128825508])
+    assert km_survival_fh2_hazard.estimate == pytest.approx([2.0 / 3.0, 2.0 / 9.0, 2.0 / 9.0])
+    assert km_survival_fh2_hazard.std_err == pytest.approx(
+        [0.1924500897, 0.1924500897, 0.1924500897]
+    )
+    assert km_survival_fh2_hazard.std_chaz == pytest.approx(
+        [0.2347891095, 0.5007272489, 0.5007272489]
+    )
+    assert grouped["a"].std_err == pytest.approx(direct_a.std_err)
+    assert grouped["a"].std_chaz == pytest.approx(direct_a.std_chaz)
+    assert grouped["b"].std_err == pytest.approx(direct_b.std_err)
+    assert grouped["b"].std_chaz == pytest.approx(direct_b.std_chaz)
+
+
+def test_survfitkm_counting_influence_matches_r_fixture():
+    start = [0.0, 10.0, 25.0, 0.0, 5.0]
+    stop = [10.0, 20.0, 30.0, 15.0, 25.0]
+    status = [0, 0, 1, 1, 0]
+    cluster = ["a", "a", "a", "b", "c"]
+    curve_time = [0.0, 5.0, 15.0, 20.0, 25.0, 30.0]
+    km_estimate = [1.0, 1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.0]
+    fh_estimate = [1.0, 1.0, 0.7165313, 0.7165313, 0.7165313, 0.2635971]
+
+    km = survival.survfitkm_counting_influence(
+        start,
+        stop,
+        status,
+        curve_time,
+        km_estimate,
+        cluster=cluster,
+    )
+    fh = survival.survfitkm_counting_influence(
+        start,
+        stop,
+        status,
+        curve_time,
+        fh_estimate,
+        cluster=cluster,
+        stype=2,
+    )
+
+    assert km.time == pytest.approx(curve_time)
+    assert km.influence_surv[0] == pytest.approx([0.0, 0.0, 0.1111111, 0.1111111, 0.1111111, 0.0])
+    assert km.influence_surv[1] == pytest.approx(
+        [0.0, 0.0, -0.2222222, -0.2222222, -0.2222222, 0.0]
+    )
+    assert km.influence_chaz[0] == pytest.approx(
+        [0.0, 0.0, -0.1111111, -0.1111111, -0.1111111, -0.1111111]
+    )
+    assert km.influence_chaz[1] == pytest.approx(
+        [0.0, 0.0, 0.2222222, 0.2222222, 0.2222222, 0.2222222]
+    )
+    assert fh.influence_surv[0] == pytest.approx(
+        [0.0, 0.0, 0.0796146, 0.0796146, 0.0796146, 0.0292885667]
+    )
+    assert fh.influence_surv[1] == pytest.approx(
+        [0.0, 0.0, -0.1592292, -0.1592292, -0.1592292, -0.0585771333]
+    )
+    assert fh.influence_chaz[0] == pytest.approx(km.influence_chaz[0])
+
+
+def test_survfit_formula_cluster_terms_supply_robust_variance():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": [1, 1, 0, 1, 0, 1],
+        "id": [1, 1, 2, 2, 3, 3],
+        "group": ["a", "a", "b", "b", "b", "a"],
+    }
+
+    cluster_only = survival.survfit("Surv(time, status) ~ cluster(id)", data=data)
+    grouped = survival.survfit(
+        "Surv(time, status) ~ group + cluster(id)",
+        data=data,
+        model=True,
+    )
+    external = survival.survfit("Surv(time, status) ~ group", data=data, cluster="id")
+
+    assert isinstance(cluster_only, survival.r_api.SurvfitResult)
+    assert cluster_only.std_err == pytest.approx(
+        [0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0]
+    )
+    assert list(grouped) == ["a", "b"]
+    assert grouped["a"].time == pytest.approx([1.0, 2.0, 6.0])
+    assert grouped["a"].std_err == pytest.approx([0.1571348, 0.3142697, 0.0])
+    assert grouped["b"].time == pytest.approx([3.0, 4.0, 5.0])
+    assert grouped["b"].std_err == pytest.approx([0.0, 0.3535534, 0.3535534])
+    for label in grouped:
+        assert external[label].std_err == pytest.approx(grouped[label].std_err)
+        assert grouped[label].model["(cluster)"] == data["id"]
+
+    with pytest.raises(ValueError, match="formula cluster"):
+        survival.survfit(
+            "Surv(time, status) ~ cluster(id)",
+            data=data,
+            cluster=data["id"],
+        )
+
+
 def test_survfit_honors_non_default_conf_level():
     data = _toy_data()
     response = survival.Surv(data["time"], data["status"])
@@ -686,6 +2861,42 @@ def test_survfit_accepts_se_fit_false_for_km_outputs():
     assert fh.conf_upper == []
 
 
+def test_survfit0_adds_initial_row_to_existing_km_outputs():
+    data = _toy_data()
+    response = survival.Surv(data["time"], data["status"])
+    base = survival.survfit(response)
+    direct_time0 = survival.survfit(response, time0=True)
+    no_se = survival.survfit(response, se_fit=False)
+
+    inserted = survival.survfit0(base)
+    inserted_no_se = survival.survfit0(no_se)
+    already_inserted = survival.survfit0(direct_time0)
+
+    assert inserted.time == pytest.approx(direct_time0.time)
+    assert inserted.n_risk == pytest.approx(direct_time0.n_risk)
+    assert inserted.n_event == pytest.approx(direct_time0.n_event)
+    assert inserted.n_censor == pytest.approx(direct_time0.n_censor)
+    assert inserted.estimate == pytest.approx(direct_time0.estimate)
+    assert inserted.std_err == pytest.approx(direct_time0.std_err)
+    assert inserted.conf_lower == pytest.approx(direct_time0.conf_lower)
+    assert inserted.conf_upper == pytest.approx(direct_time0.conf_upper)
+    assert inserted.cumhaz == pytest.approx(direct_time0.cumhaz)
+    assert inserted.std_chaz == pytest.approx(direct_time0.std_chaz)
+
+    assert inserted_no_se.time == pytest.approx(direct_time0.time)
+    assert inserted_no_se.estimate[0] == pytest.approx(1.0)
+    assert inserted_no_se.std_err == []
+    assert inserted_no_se.std_chaz == []
+    assert inserted_no_se.conf_lower == []
+    assert inserted_no_se.conf_upper == []
+    assert already_inserted is direct_time0
+
+    with pytest.raises(TypeError, match="survfit result"):
+        survival.survfit0(object())
+    with pytest.raises(TypeError, match="unexpected"):
+        survival.survfit0(base, "extra")
+
+
 def test_survfit_coxph_accepts_conf_int_alias():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, max_iter=10)
@@ -738,6 +2949,54 @@ def test_survfit_honors_conf_type():
     assert log_log_prefix.conf_upper == pytest.approx(log_log.conf_upper)
     assert logit_prefix.conf_lower == pytest.approx(logit.conf_lower)
     assert logit_prefix.conf_upper == pytest.approx(logit.conf_upper)
+
+
+def test_survfit_confint_matches_r_exported_helper():
+    plain = survival.survfit_confint([0.2, 0.5, 0.9], 0.1, conf_type="plain")
+    log = survival.survfit_confint([0.2, 0.5, 0.9], 0.1, conf_type="log")
+    log_log = survival.survfit_confint([0.2, 0.5, 0.9], 0.1, conf_type="log-log")
+    logit = survival.survfit_confint([0.2, 0.5, 0.9], 0.1, conf_type="logit")
+    arcsin = survival.survfit_confint([0.2, 0.5, 0.9], 0.1, conf_type="arcsin")
+    boundary = survival.survfit_confint([0.0, 1.0, math.nan], [0.1, 0.1, 0.1], conf_type="log-log")
+    recycled = survival.survfit_confint([0.2, 0.5], [0.1, 0.2, 0.3], conf_type="plain")
+    scaled = survival.survfit_confint(
+        0.5,
+        0.1,
+        logse=False,
+        conf_type="plain",
+        selow=0.05,
+        ulimit=False,
+    )
+
+    assert plain.lower == pytest.approx([0.16080072, 0.4020018, 0.7236032])
+    assert plain.upper == pytest.approx([0.23919928, 0.5979982, 1.0])
+    assert log.lower == pytest.approx([0.164403])
+    assert log.upper == pytest.approx([0.2433045])
+    assert log_log.lower == pytest.approx([0.1623716])
+    assert log_log.upper == pytest.approx([0.2405312])
+    assert logit.lower == pytest.approx([0.1636537])
+    assert logit.upper == pytest.approx([0.242082])
+    assert arcsin.lower == pytest.approx([0.1623028, 0.4026280, 0.6664164])
+    assert arcsin.upper == pytest.approx([0.2405760, 0.5973720, 0.9992298])
+    assert all(math.isnan(value) for value in boundary.lower)
+    assert all(math.isnan(value) for value in boundary.upper)
+    assert recycled.lower == pytest.approx([0.16080072, 0.30400360, 0.08240216])
+    assert recycled.upper == pytest.approx([0.23919928, 0.69599640, 0.31759784])
+    assert scaled.lower == pytest.approx([0.4020018])
+    assert scaled.upper == pytest.approx([0.6959964])
+    assert tuple(scaled) == (scaled.lower, scaled.upper)
+    dotted_conf = survival.survfit_confint(
+        0.5,
+        0.1,
+        conf_type="plain",
+        **{"conf.int": 0.9},
+    )
+    assert dotted_conf.lower[0] > plain.lower[1]
+
+    with pytest.raises(ValueError, match="invalid conf.int type"):
+        survival.survfit_confint(0.5, 0.1, conf_type="p")
+    with pytest.raises(ValueError, match="conf_int"):
+        survival.survfit_confint(0.5, 0.1, conf_type="plain", conf_int=1.0)
 
 
 def test_survfit_start_time_conditions_right_censored_curve():
@@ -808,6 +3067,22 @@ def test_survfit_time0_uses_explicit_start_time():
     assert direct.estimate == pytest.approx([1.0, *expected.estimate])
     assert no_insert.time[0] == pytest.approx(4.0)
     assert no_insert.estimate[0] != pytest.approx(1.0)
+
+
+def test_survfit0_adds_initial_row_to_turnbull_outputs():
+    result = survival.survfit(survival.Surv([1.0, 2.0, 3.0], [0, 1, 0], type="left"))
+
+    inserted = survival.survfit0(result)
+    already_inserted = survival.survfit0(inserted)
+
+    assert isinstance(inserted, survival.r_api.TurnbullSurvfitResult)
+    assert inserted.time_points == pytest.approx([0.0, *result.time_points])
+    assert inserted.survival == pytest.approx([1.0, *result.survival])
+    assert inserted.survival_lower == pytest.approx([1.0, *result.survival_lower])
+    assert inserted.survival_upper == pytest.approx([1.0, *result.survival_upper])
+    assert inserted.n_iter == result.n_iter
+    assert inserted.converged == result.converged
+    assert already_inserted is inserted
 
 
 def test_survfit_bool_options_accept_numpy_bool_scalars():
@@ -1012,7 +3287,9 @@ def test_survfit_fh2_weighted_ties_use_unweighted_event_count():
     )
 
     assert km.n_event == pytest.approx([3.0, 1.0])
+    assert km.n_risk_count == pytest.approx([3.0, 1.0])
     assert km.n_event_count == pytest.approx([2.0, 1.0])
+    assert km.n_censor_count == pytest.approx([0.0, 0.0])
     assert fh2.cumhaz == pytest.approx(expected_cumhaz)
     assert fh2.std_chaz == pytest.approx(expected_std_chaz)
     assert fh2.estimate == pytest.approx(expected_estimate)
@@ -1074,14 +3351,14 @@ def test_survfit_accepts_r_style_formula_defaults():
         assert dotted_se[label].std_err == pytest.approx(default[label].std_err)
 
 
-def test_survfit_model_true_stores_direct_and_formula_inputs():
+def test_survfit_stores_direct_and_formula_model_frames():
     data = _toy_data()
     response = survival.Surv(data["time"], data["status"])
     weights = [1.0 + 0.1 * idx for idx in range(len(data["time"]))]
 
-    direct = survival.survfit(response, model=True)
-    grouped = survival.survfit(response, group=data["group"], weights=weights, model=True)
-    formula = survival.survfit("Surv(time, status) ~ group", data=data, model=True)
+    direct = survival.survfit(response)
+    grouped = survival.survfit(response, group=data["group"], weights=weights)
+    formula = survival.survfit("Surv(time, status) ~ group", data=data)
 
     assert isinstance(direct, survival.r_api.SurvfitResult)
     assert direct.model["response"].time == pytest.approx(data["time"])
@@ -1100,6 +3377,25 @@ def test_survfit_model_true_stores_direct_and_formula_inputs():
         assert curve.model["time"] == pytest.approx(data["time"])
         assert curve.model["status"] == data["status"]
         assert curve.model["group"] == data["group"]
+
+    direct_frame = survival.model_frame(direct)
+    assert direct_frame["time"] == pytest.approx(data["time"])
+    assert direct_frame["status"] == list(data["status"])
+
+    grouped_frame = survival.model_frame(grouped)
+    assert grouped_frame["time"] == pytest.approx(data["time"])
+    assert grouped_frame["status"] == list(data["status"])
+    assert grouped_frame["group"] == data["group"]
+    assert grouped_frame["(weights)"] == pytest.approx(weights)
+
+    formula_frame = survival.model_frame(formula)
+    assert formula_frame["time"] == pytest.approx(data["time"])
+    assert formula_frame["status"] == data["status"]
+    assert formula_frame["group"] == data["group"]
+
+    default_frame = survival.model_frame(survival.survfit(response))
+    assert default_frame["time"] == pytest.approx(data["time"])
+    assert default_frame["status"] == list(data["status"])
 
 
 def test_survfit_error_argument_is_accepted_as_noop():
@@ -1122,6 +3418,48 @@ def test_survfit_error_argument_is_accepted_as_noop():
         assert actual == pytest.approx(expected)
     for actual, expected in zip(cox_error.std_err, cox_default.std_err, strict=True):
         assert actual == pytest.approx(expected)
+
+
+def test_aggregate_survfit_result_averages_cox_prediction_curves():
+    data = _toy_data()
+    fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, max_iter=10)
+    curves = survival.survfit(
+        fit,
+        newdata={
+            "x1": [0.2, 0.8, 1.2],
+            "x2": [1.0, 0.7, 0.3],
+        },
+        se_fit=False,
+    )
+
+    aggregated = survival.r_api.aggregate_survfit_result(curves)
+    expected = [sum(values) / len(values) for values in zip(*curves.surv, strict=True)]
+
+    assert isinstance(aggregated, survival.r_api.CoxSurvfitResult)
+    assert aggregated.time == pytest.approx(curves.time)
+    assert len(aggregated.surv) == 1
+    assert aggregated.surv[0] == pytest.approx(expected)
+    assert aggregated.cumhaz[0] == pytest.approx(
+        [math.inf if value <= 0.0 else -math.log(value) for value in expected]
+    )
+    assert aggregated.linear_predictors[0] == pytest.approx(
+        sum(curves.linear_predictors) / len(curves.linear_predictors)
+    )
+
+    grouped = survival.r_api.aggregate_survfit_result(curves, groups=[2, 1, 2])
+    expected_group = [
+        (first + third) / 2.0 for first, third in zip(curves.surv[0], curves.surv[2], strict=True)
+    ]
+    assert len(grouped.surv) == 2
+    assert grouped.surv[0] == pytest.approx(curves.surv[1])
+    assert grouped.surv[1] == pytest.approx(expected_group)
+
+    with pytest.raises(TypeError, match="data.*margin"):
+        survival.r_api.aggregate_survfit_result(object())
+    with pytest.raises(ValueError, match="same length"):
+        survival.r_api.aggregate_survfit_result(curves, groups=[1])
+    with pytest.raises(ValueError, match="positive integer"):
+        survival.r_api.aggregate_survfit_result(curves, groups=[0, 1, 1])
 
 
 def test_survfit_counting_id_reports_entry_counts_without_artificial_censors():
@@ -1158,6 +3496,159 @@ def test_survfit_counting_id_reports_entry_counts_without_artificial_censors():
     assert weighted.n_censor == pytest.approx([0.0, 0.0, 0.0, 2.0, 3.0, 0.0])
     assert weighted.n_enter == pytest.approx([3.0, 3.0, 0.0, 0.0, 2.0, 0.0])
     assert weighted.estimate == pytest.approx([1.0, 1.0, 5 / 6, 5 / 6, 5 / 6, 0.0])
+
+
+def test_survfit_counting_process_id_uses_robust_variance():
+    data = {
+        "start": [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
+        "stop": [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+        "status": [0, 1, 1, 0, 0, 1],
+        "id": [1, 1, 2, 2, 3, 3],
+    }
+    response = survival.Surv(data["start"], data["stop"], data["status"])
+
+    robust = survival.survfit(response, id=data["id"], robust=True)
+    plain = survival.survfit(response, id=data["id"])
+    entry = survival.survfit(response, id=data["id"], robust=True, entry=True)
+
+    assert robust.time == pytest.approx([2.0, 3.0, 5.0, 6.0, 7.0])
+    assert robust.n_risk == pytest.approx([3.0, 3.0, 3.0, 2.0, 1.0])
+    assert robust.n_event == pytest.approx([0.0, 1.0, 1.0, 0.0, 1.0])
+    assert robust.n_censor == pytest.approx([0.0, 0.0, 0.0, 1.0, 0.0])
+    assert robust.std_err == pytest.approx([0.0, 0.2721655, 0.1814437, 0.1814437, 0.0])
+    assert robust.std_chaz == pytest.approx([0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655])
+    assert robust.std_err != pytest.approx(plain.std_err)
+
+    assert entry.time == pytest.approx([0.0, 3.0, 5.0, 6.0, 7.0])
+    assert entry.n_enter == pytest.approx([3.0, 0.0, 0.0, 0.0, 0.0])
+    assert entry.std_err == pytest.approx([0.0, 0.2721655, 0.1814437, 0.1814437, 0.0])
+    assert entry.std_chaz == pytest.approx([0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655])
+
+
+def test_survfit_counting_process_cluster_uses_robust_variance():
+    data = {
+        "start": [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
+        "stop": [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+        "status": [0, 1, 1, 0, 0, 1],
+        "id": [1, 1, 2, 2, 3, 3],
+        "group": ["a", "a", "a", "b", "b", "b"],
+    }
+    response = survival.Surv(data["start"], data["stop"], data["status"])
+
+    clustered = survival.survfit(response, cluster=data["id"])
+    grouped = survival.survfit(
+        "Surv(start, stop, status) ~ group + cluster(id)",
+        data=data,
+        model=True,
+    )
+    external = survival.survfit(
+        "Surv(start, stop, status) ~ group",
+        data=data,
+        cluster="id",
+    )
+
+    assert clustered.time == pytest.approx([2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+    assert clustered.n_risk == pytest.approx([3.0, 3.0, 3.0, 3.0, 2.0, 1.0])
+    assert clustered.n_event == pytest.approx([0.0, 1.0, 0.0, 1.0, 0.0, 1.0])
+    assert clustered.n_censor == pytest.approx([1.0, 0.0, 1.0, 0.0, 1.0, 0.0])
+    assert clustered.std_err == pytest.approx(
+        [0.0, 0.2721655, 0.2721655, 0.1814437, 0.1814437, 0.0]
+    )
+    assert clustered.std_chaz == pytest.approx(
+        [0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655, 0.2721655]
+    )
+
+    assert list(grouped) == ["a", "b"]
+    assert grouped["a"].time == pytest.approx([2.0, 3.0, 5.0])
+    assert grouped["a"].std_err == pytest.approx([0.0, 0.3535534, 0.0])
+    assert grouped["a"].std_chaz == pytest.approx([0.0, 0.3535534, 0.3535534])
+    assert grouped["b"].time == pytest.approx([4.0, 6.0, 7.0])
+    assert grouped["b"].std_err == pytest.approx([0.0, 0.0, 0.0])
+    assert grouped["b"].std_chaz == pytest.approx([0.0, 0.0, 0.0])
+    for label in grouped:
+        assert external[label].std_err == pytest.approx(grouped[label].std_err)
+        assert grouped[label].model["(cluster)"] == data["id"]
+
+
+def test_survfit_non_km_counting_process_curves_support_robust_variance():
+    data = {
+        "start": [0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0, 0.0],
+        "stop": [2.0, 5.0, 3.0, 6.0, 4.0, 7.0, 3.0, 3.0],
+        "status": [0, 1, 1, 0, 0, 1, 1, 1],
+        "id": [1, 1, 2, 2, 3, 3, 4, 5],
+        "group": ["a", "a", "a", "b", "b", "b", "a", "b"],
+    }
+    response = survival.Surv(data["start"], data["stop"], data["status"])
+
+    fh = survival.survfit(response, id=data["id"], robust=True, type="fleming-harrington")
+    fh2 = survival.survfit(response, id=data["id"], robust=True, type="fh2")
+    km_survival_fh2_hazard = survival.survfit(
+        response,
+        id=data["id"],
+        robust=True,
+        stype=1,
+        ctype=2,
+    )
+    grouped = survival.survfit(
+        response,
+        group=data["group"],
+        cluster=data["id"],
+        type="fh2",
+    )
+    direct_a = survival.survfit(
+        survival.Surv(
+            [data["start"][idx] for idx in (0, 1, 2, 6)],
+            [data["stop"][idx] for idx in (0, 1, 2, 6)],
+            [data["status"][idx] for idx in (0, 1, 2, 6)],
+        ),
+        cluster=[data["id"][idx] for idx in (0, 1, 2, 6)],
+        type="fh2",
+    )
+    direct_b = survival.survfit(
+        survival.Surv(
+            [data["start"][idx] for idx in (3, 4, 5, 7)],
+            [data["stop"][idx] for idx in (3, 4, 5, 7)],
+            [data["status"][idx] for idx in (3, 4, 5, 7)],
+        ),
+        cluster=[data["id"][idx] for idx in (3, 4, 5, 7)],
+        type="fh2",
+    )
+
+    assert fh.time == pytest.approx([2.0, 3.0, 5.0, 6.0, 7.0])
+    assert fh.estimate == pytest.approx(
+        [1.0, 0.5488116361, 0.3932407209, 0.3932407209, 0.1446651766]
+    )
+    assert fh.std_err == pytest.approx(
+        [0.0, 0.1202386052, 0.1095651003, 0.1095651003, 0.0403067479]
+    )
+    assert fh.std_chaz == pytest.approx(
+        [0.0, 0.2190890230, 0.2786209426, 0.2786209426, 0.2786209426]
+    )
+    assert fh2.estimate == pytest.approx(
+        [1.0, 0.4568805351, 0.3273692086, 0.3273692086, 0.1204324015]
+    )
+    assert fh2.std_err == pytest.approx(
+        [0.0, 0.1781828362, 0.1255399539, 0.1255399539, 0.0461835681]
+    )
+    assert fh2.std_chaz == pytest.approx(
+        [0.0, 0.3899987470, 0.3834812517, 0.3834812517, 0.3834812517]
+    )
+    assert fh2.conf_lower == pytest.approx(
+        [1.0, 0.2127331254, 0.1543895834, 0.1543895834, 0.0567967537]
+    )
+    assert km_survival_fh2_hazard.estimate == pytest.approx(
+        [1.0, 0.4, 0.2666666667, 0.2666666667, 0.0]
+    )
+    assert km_survival_fh2_hazard.std_err == pytest.approx(
+        [0.0, 0.2190890230, 0.1460593487, 0.1460593487, 0.0]
+    )
+    assert km_survival_fh2_hazard.std_chaz == pytest.approx(
+        [0.0, 0.3899987470, 0.3834812517, 0.3834812517, 0.3834812517]
+    )
+    assert grouped["a"].std_err == pytest.approx(direct_a.std_err)
+    assert grouped["a"].std_chaz == pytest.approx(direct_a.std_chaz)
+    assert grouped["b"].std_err == pytest.approx(direct_b.std_err)
+    assert grouped["b"].std_chaz == pytest.approx(direct_b.std_chaz)
 
 
 def test_survfit_formula_counting_id_aligns_groups_and_model_frame():
@@ -1769,6 +4260,20 @@ def test_survfit_formula_time0_groups_curves_by_label():
         assert grouped[label].std_chaz[0] == pytest.approx(0.0)
 
 
+def test_survfit0_adds_initial_row_to_grouped_curves():
+    data = _toy_data()
+    grouped = survival.survfit("Surv(time, status) ~ group", data=data)
+    grouped_time0 = survival.survfit("Surv(time, status) ~ group", data=data, time0=True)
+
+    inserted = survival.survfit0(grouped)
+
+    assert list(inserted) == list(grouped_time0)
+    for label in inserted:
+        assert inserted[label].time == pytest.approx(grouped_time0[label].time)
+        assert inserted[label].estimate == pytest.approx(grouped_time0[label].estimate)
+        assert inserted[label].cumhaz == pytest.approx(grouped_time0[label].cumhaz)
+
+
 def test_survfit_formula_reverse_groups_curves_by_label():
     data = _toy_data()
     grouped = survival.survfit("Surv(time, status) ~ group", data=data, reverse=True)
@@ -1990,8 +4495,18 @@ def test_survfit_formula_accepts_interaction_groups():
         survival.Surv(data["time"], data["status"]),
         group=[(data["dose"][idx], math.sqrt(data["x1"][idx])) for idx in range(len(data["time"]))],
     )
+    expected_order = [
+        (0, math.sqrt(0.2)),
+        (0, math.sqrt(0.4)),
+        (0, math.sqrt(0.6)),
+        (1, math.sqrt(0.1)),
+        (1, math.sqrt(0.8)),
+        (1, math.sqrt(1.4)),
+        (2, math.sqrt(1.0)),
+        (2, math.sqrt(1.2)),
+    ]
 
-    assert list(interaction) == list(direct)
+    assert list(interaction) == expected_order
     for key in direct:
         assert interaction[key].estimate == pytest.approx(direct[key].estimate)
 
@@ -2073,6 +4588,61 @@ def test_survdiff_formula_accepts_general_rho():
     assert result.expected == pytest.approx(low_level.expected)
 
 
+def test_survdiff_formula_accepts_offset_only_model():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 0, 1, 1],
+        "expected": [0.9, 0.8, 0.7, 0.6],
+    }
+
+    def manual(rho=0.0):
+        observed = float(sum(data["status"]))
+        expected = sum(-math.log(value) for value in data["expected"])
+        if rho == 0.0:
+            variance = expected
+            numerator = observed - variance
+        else:
+            inverse_rho = 1.0 / rho
+            numerator = sum(
+                inverse_rho - ((inverse_rho + event) * (offset**rho))
+                for offset, event in zip(data["expected"], data["status"], strict=True)
+            )
+            variance = sum(
+                (1.0 - offset ** (2.0 * rho)) / (2.0 * rho) for offset in data["expected"]
+            )
+        statistic = numerator * numerator / variance
+        return observed, expected, variance, statistic, math.erfc(math.sqrt(statistic / 2.0))
+
+    result = survival.survdiff("Surv(time, status) ~ offset(expected)", data=data)
+    weighted = survival.survdiff("Surv(time, status) ~ offset(expected)", data=data, rho=0.5)
+    observed, expected, variance, statistic, p_value = manual()
+    weighted_observed, weighted_expected, weighted_variance, weighted_statistic, weighted_p = (
+        manual(0.5)
+    )
+
+    assert result.observed == pytest.approx([observed])
+    assert result.expected == pytest.approx([expected])
+    assert result.variance == pytest.approx(variance)
+    assert result.statistic == pytest.approx(statistic)
+    assert result.p_value == pytest.approx(p_value)
+    assert weighted.observed == pytest.approx([weighted_observed])
+    assert weighted.expected == pytest.approx([weighted_expected])
+    assert weighted.variance == pytest.approx(weighted_variance)
+    assert weighted.statistic == pytest.approx(weighted_statistic)
+    assert weighted.p_value == pytest.approx(weighted_p)
+    assert survival.as_data_frame(result)["observed"] == pytest.approx([observed])
+    with pytest.raises(ValueError, match="Cannot have both an offset and groups"):
+        survival.survdiff(
+            "Surv(time, status) ~ group + offset(expected)",
+            data={**data, "group": ["a"] * 4},
+        )
+    with pytest.raises(ValueError, match="survival probability"):
+        survival.survdiff(
+            "Surv(time, status) ~ offset(expected)",
+            data={**data, "expected": [1.1, 0.8, 0.7, 0.6]},
+        )
+
+
 def test_concordance_direct_surv_uses_rust_c_index():
     data = _toy_data()
     scores = [8.0 - value for value in data["time"]]
@@ -2107,6 +4677,12 @@ def test_concordance_timefix_false_uses_exact_event_times():
 
     default = survival.concordance(response, scores=scores)
     exact = survival.concordance(response, scores=scores, timefix=False)
+    exact_formula_direction = survival.concordance(
+        response,
+        scores=scores,
+        timefix=False,
+        reverse=True,
+    )
     exact_dotted = survival.concordance(
         "Surv(time, status) ~ score",
         data={"time": times, "status": status, "score": scores},
@@ -2126,7 +4702,7 @@ def test_concordance_timefix_false_uses_exact_event_times():
 
     assert default.concordance == pytest.approx(fixed_concordant / fixed_comparable)
     assert exact.concordance == pytest.approx(exact_concordant / exact_comparable)
-    assert exact_dotted.concordance == pytest.approx(exact.concordance)
+    assert exact_dotted.concordance == pytest.approx(exact_formula_direction.concordance)
     assert default.concordant == pytest.approx(fixed_concordant)
     assert default.comparable == pytest.approx(fixed_comparable)
     assert exact.concordant == pytest.approx(exact_concordant)
@@ -2172,6 +4748,53 @@ def test_concordance_accepts_r_style_defaults():
     assert explicit.comparable == pytest.approx(default.comparable)
     assert r_default_timewt.concordance == pytest.approx(default.concordance)
 
+    tied_risk = survival.concordance(
+        survival.Surv([1.0, 2.0, 3.0, 4.0], [1, 1, 0, 1]),
+        scores=[0.2, 0.4, 0.4, 1.0],
+        reverse=True,
+    )
+    assert tied_risk.concordance == pytest.approx(0.9)
+    assert tied_risk.concordant == pytest.approx(4.5)
+    assert tied_risk.comparable == pytest.approx(5.0)
+    assert tied_risk.tied_x == pytest.approx(1.0)
+    assert tied_risk.tied_y == pytest.approx(0.0)
+    assert tied_risk.tied_xy == pytest.approx(0.0)
+    assert survival.as_data_frame(tied_risk)["tied.x"] == pytest.approx([1.0])
+
+    same_event_time = survival.concordance(
+        survival.Surv([1.0, 2.0, 2.0, 3.0, 4.0], [1, 1, 1, 0, 1]),
+        scores=[0.2, 0.4, 0.4, 0.8, 1.0],
+        reverse=True,
+    )
+    assert same_event_time.concordance == pytest.approx(1.0)
+    assert same_event_time.concordant == pytest.approx(8.0)
+    assert same_event_time.comparable == pytest.approx(8.0)
+    assert same_event_time.tied_x == pytest.approx(0.0)
+    assert same_event_time.tied_y == pytest.approx(0.0)
+    assert same_event_time.tied_xy == pytest.approx(1.0)
+
+
+def test_survConcordance_deprecated_wrappers_keep_legacy_direction():  # noqa: N802
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 1, 0, 1],
+        "score": [0.2, 0.8, 0.4, 0.6],
+    }
+
+    with pytest.warns(DeprecationWarning, match="survConcordance"):
+        old = survival.survConcordance("Surv(time, status) ~ score", data=data)
+    modern = survival.concordance("Surv(time, status) ~ score", data=data)
+    with pytest.warns(DeprecationWarning, match="survConcordance.fit"):
+        fit_stats = survival.survConcordance_fit(
+            survival.Surv(data["time"], data["status"]),
+            data["score"],
+        )
+
+    assert old.concordance != pytest.approx(modern.concordance)
+    assert fit_stats["concordant"] == pytest.approx(old.concordant)
+    assert fit_stats["discordant"] == pytest.approx(old.comparable - old.concordant)
+    assert list(fit_stats) == ["concordant", "discordant", "tied.risk", "tied.time", "std(c-d)"]
+
 
 def test_concordance_ranks_return_weighted_event_contributions():
     data = {
@@ -2206,7 +4829,7 @@ def test_concordance_ranks_return_weighted_event_contributions():
     assert [row["rank"] for row in ranked.ranks] == pytest.approx([5.0 / 7.0, 4.0 / 5.0, 0.25])
     assert ranked.concordance == pytest.approx(default.concordance)
     assert formula_ranked.ranks is not None
-    for formula_row, direct_row in zip(formula_ranked.ranks, ranked.ranks, strict=True):
+    for formula_row, direct_row in zip(formula_ranked.ranks, reversed_ranked.ranks, strict=True):
         assert formula_row.keys() == direct_row.keys()
         for key in direct_row:
             assert formula_row[key] == pytest.approx(direct_row[key])
@@ -2299,6 +4922,13 @@ def test_concordance_cluster_collapses_dfbeta_for_robust_variance():
         weights=data["wt"],
         influence=3,
     )
+    unclustered_formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        influence=3,
+        reverse=True,
+    )
     clustered = survival.concordance(
         response,
         scores=data["score"],
@@ -2331,9 +4961,14 @@ def test_concordance_cluster_collapses_dfbeta_for_robust_variance():
         unclustered.dfbeta[2],
         unclustered.dfbeta[3],
     ]
+    expected_formula_dfbeta = [
+        unclustered_formula_direction.dfbeta[0] + unclustered_formula_direction.dfbeta[1],
+        unclustered_formula_direction.dfbeta[2],
+        unclustered_formula_direction.dfbeta[3],
+    ]
     assert clustered.dfbeta == pytest.approx(expected_dfbeta)
-    assert formula_clustered.dfbeta == pytest.approx(expected_dfbeta)
-    assert formula_term_clustered.dfbeta == pytest.approx(expected_dfbeta)
+    assert formula_clustered.dfbeta == pytest.approx(expected_formula_dfbeta)
+    assert formula_term_clustered.dfbeta == pytest.approx(expected_formula_dfbeta)
     assert clustered.variance == pytest.approx(sum(value * value for value in expected_dfbeta))
     assert formula_clustered.variance == pytest.approx(clustered.variance)
     assert formula_term_clustered.variance == pytest.approx(clustered.variance)
@@ -2364,6 +4999,12 @@ def test_concordance_accepts_case_weights():
     )
 
     direct = survival.concordance(response, scores=data["score"], weights=data["wt"])
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        reverse=True,
+    )
     formula = survival.concordance("Surv(time, status) ~ score", data=data, weights="wt")
     formula_vector = survival.concordance(
         "Surv(time, status) ~ score",
@@ -2378,8 +5019,8 @@ def test_concordance_accepts_case_weights():
     )
 
     assert direct.concordance == pytest.approx(expected_concordant / expected_comparable)
-    assert formula.concordance == pytest.approx(direct.concordance)
-    assert formula_vector.concordance == pytest.approx(direct.concordance)
+    assert formula.concordance == pytest.approx(formula_direction.concordance)
+    assert formula_vector.concordance == pytest.approx(formula_direction.concordance)
     assert direct.concordant == pytest.approx(expected_concordant)
     assert direct.comparable == pytest.approx(expected_comparable)
     assert low_level["concordance"] == pytest.approx(direct.concordance)
@@ -2418,6 +5059,13 @@ def test_concordance_accepts_identity_time_weight():
         weights=data["wt"],
         timewt="I",
     )
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        timewt="I",
+        reverse=True,
+    )
     formula = survival.concordance(
         "Surv(time, status) ~ score",
         data=data,
@@ -2435,7 +5083,7 @@ def test_concordance_accepts_identity_time_weight():
     assert direct.concordance == pytest.approx(concordant / comparable)
     assert direct.concordant == pytest.approx(concordant)
     assert direct.comparable == pytest.approx(comparable)
-    assert formula.concordance == pytest.approx(direct.concordance)
+    assert formula.concordance == pytest.approx(formula_direction.concordance)
     assert summary["concordance"] == pytest.approx(direct.concordance)
     assert summary["concordant"] == pytest.approx(concordant)
     assert summary["comparable"] == pytest.approx(comparable)
@@ -2472,6 +5120,13 @@ def test_concordance_accepts_km_time_weights(timewt):
         weights=data["wt"],
         timewt=timewt,
     )
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        timewt=timewt,
+        reverse=True,
+    )
     formula = survival.concordance(
         "Surv(time, status) ~ score",
         data=data,
@@ -2489,7 +5144,7 @@ def test_concordance_accepts_km_time_weights(timewt):
     assert direct.concordance == pytest.approx(concordant / comparable)
     assert direct.concordant == pytest.approx(concordant)
     assert direct.comparable == pytest.approx(comparable)
-    assert formula.concordance == pytest.approx(direct.concordance)
+    assert formula.concordance == pytest.approx(formula_direction.concordance)
     assert summary["concordance"] == pytest.approx(direct.concordance)
     assert summary["concordant"] == pytest.approx(concordant)
     assert summary["comparable"] == pytest.approx(comparable)
@@ -2534,6 +5189,15 @@ def test_concordance_accepts_time_window_restrictions():
         ymax=ymax,
         timewt="S",
     )
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        ymin=ymin,
+        ymax=ymax,
+        timewt="S",
+        reverse=True,
+    )
     formula = survival.concordance(
         "Surv(time, status) ~ score",
         data=data,
@@ -2547,7 +5211,7 @@ def test_concordance_accepts_time_window_restrictions():
     assert direct.concordant == pytest.approx(concordant)
     assert direct.comparable == pytest.approx(comparable)
     assert direct.n_event == sum(bounded_status)
-    assert formula.concordance == pytest.approx(direct.concordance)
+    assert formula.concordance == pytest.approx(formula_direction.concordance)
     assert formula.n_event == direct.n_event
 
 
@@ -2571,7 +5235,7 @@ def test_concordance_formula_applies_subset_and_na_action():
     )
 
     assert result.concordance == pytest.approx(
-        survival.concordance_index([1.0, 3.0, 4.0], [1, 0, 1], [5.0, 3.0, 2.0])
+        survival.concordance_index([1.0, 3.0, 4.0], [1, 0, 1], [-5.0, -3.0, -2.0])
     )
     assert dotted.concordance == pytest.approx(result.concordance)
     assert result.n == 3
@@ -2580,7 +5244,7 @@ def test_concordance_formula_applies_subset_and_na_action():
     assert dotted.n_event == result.n_event
 
 
-def test_concordance_formula_adds_offset_to_risk_score():
+def test_concordance_formula_rejects_offset_terms_like_r():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],
         "status": [1, 1, 1, 0],
@@ -2588,43 +5252,25 @@ def test_concordance_formula_adds_offset_to_risk_score():
         "offset": [1.0, 0.0, 0.0, -1.0],
         "bonus": [0.1, -0.2, 0.3, -0.4],
     }
-    expected_scores = [
-        score + offset for score, offset in zip(data["score"], data["offset"], strict=True)
-    ]
-    expected_arithmetic_scores = [
-        score + offset + bonus
-        for score, offset, bonus in zip(data["score"], data["offset"], data["bonus"], strict=True)
-    ]
 
-    result = survival.concordance("Surv(time, status) ~ score + offset(offset)", data=data)
-    arithmetic_result = survival.concordance(
-        "Surv(time, status) ~ score + offset(offset + bonus)",
-        data=data,
-    )
-
-    assert result.concordance == pytest.approx(
-        survival.concordance_index(data["time"], data["status"], expected_scores)
-    )
-    assert arithmetic_result.concordance == pytest.approx(
-        survival.concordance_index(data["time"], data["status"], expected_arithmetic_scores)
-    )
-    assert result.n_event == sum(data["status"])
-    assert arithmetic_result.n_event == result.n_event
+    with pytest.raises(ValueError, match="Offset terms not allowed"):
+        survival.concordance("Surv(time, status) ~ score + offset(offset)", data=data)
+    with pytest.raises(ValueError, match="Offset terms not allowed"):
+        survival.concordance(
+            "Surv(time, status) ~ score + offset(offset + bonus)",
+            data=data,
+        )
 
 
-def test_concordance_formula_accepts_offset_only_predictor():
+def test_concordance_formula_rejects_offset_only_predictor_like_r():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],
         "status": [1, 1, 0, 1],
         "offset": [1.0, 0.5, 0.2, 0.0],
     }
 
-    result = survival.concordance("Surv(time, status) ~ offset(offset)", data=data)
-
-    assert result.concordance == pytest.approx(
-        survival.concordance_index(data["time"], data["status"], data["offset"])
-    )
-    assert result.n == len(data["time"])
+    with pytest.raises(ValueError, match="Offset terms not allowed"):
+        survival.concordance("Surv(time, status) ~ offset(offset)", data=data)
 
 
 def test_concordance_formula_returns_one_result_per_score_column():
@@ -2635,13 +5281,24 @@ def test_concordance_formula_returns_one_result_per_score_column():
         "x2": [0.1, 0.5, 0.2, 0.7, 0.3],
     }
     result = survival.concordance("Surv(time, status) ~ x1 + x2", data=data)
-    x1 = survival.core.concordance_summary(data["time"], data["status"], data["x1"])
-    x2 = survival.core.concordance_summary(data["time"], data["status"], data["x2"])
+    x1 = survival.core.concordance_summary(
+        data["time"],
+        data["status"],
+        _formula_predictor_scores(data["x1"]),
+    )
+    x2 = survival.core.concordance_summary(
+        data["time"],
+        data["status"],
+        _formula_predictor_scores(data["x2"]),
+    )
 
     assert result.score_names == ["x1", "x2"]
     assert result.concordance == pytest.approx([x1["concordance"], x2["concordance"]])
     assert result.concordant == pytest.approx([x1["concordant"], x2["concordant"]])
     assert result.comparable == pytest.approx([x1["comparable"], x2["comparable"]])
+    assert result.tied_x == pytest.approx([0.0, 0.0])
+    assert result.tied_y == pytest.approx([0.0, 0.0])
+    assert result.tied_xy == pytest.approx([0.0, 0.0])
     assert result.n == len(data["time"])
     assert result.n_event == sum(data["status"])
 
@@ -2681,6 +5338,9 @@ def test_concordance_matrix_scores_return_parallel_cluster_variances():
     assert result.concordance == pytest.approx([x1.concordance, x2.concordance])
     assert result.concordant == pytest.approx([x1.concordant, x2.concordant])
     assert result.comparable == pytest.approx([x1.comparable, x2.comparable])
+    assert result.tied_x == pytest.approx([x1.tied_x, x2.tied_x])
+    assert result.tied_y == pytest.approx([x1.tied_y, x2.tied_y])
+    assert result.tied_xy == pytest.approx([x1.tied_xy, x2.tied_xy])
     assert result.variance == pytest.approx([x1.variance, x2.variance])
 
 
@@ -2742,24 +5402,24 @@ def test_concordance_formula_accepts_strata_wrapper():
     )
     unstratified = survival.concordance("Surv(time, status) ~ score", data=data)
 
-    assert stratified.concordance == pytest.approx(1.0)
+    assert stratified.concordance == pytest.approx(0.0)
     assert collapsed.concordance == pytest.approx(stratified.concordance)
     assert thresholded.concordance == pytest.approx(stratified.concordance)
     assert retained.concordance == pytest.approx(stratified.concordance)
-    assert unstratified.concordance < stratified.concordance
+    assert unstratified.concordance > stratified.concordance
     assert stratified.n == len(data["time"])
     assert stratified.n_event == sum(data["status"])
     assert ranked.ranks == [
-        {"time": 1.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
+        {"time": 1.0, "rank": -0.5, "timewt": 2.0, "casewt": 1.0},
         {"time": 2.0, "rank": 0.0, "timewt": 1.0, "casewt": 1.0},
-        {"time": 3.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
+        {"time": 3.0, "rank": -0.5, "timewt": 2.0, "casewt": 1.0},
         {"time": 4.0, "rank": 0.0, "timewt": 1.0, "casewt": 1.0},
     ]
     assert influential.influence == [
-        [0.5, 0.0, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.5, 0.0, 0.0, 0.0],
+        [0.0, 0.5, 0.0, 0.0, 0.0],
+        [0.0, 0.5, 0.0, 0.0, 0.0],
+        [0.0, 0.5, 0.0, 0.0, 0.0],
     ]
     assert influential.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
     assert influential.variance == pytest.approx(0.0)
@@ -2786,14 +5446,14 @@ def test_concordance_formula_strata_ranks_support_counting_process_response():
     )
 
     assert ranked.ranks == [
-        {"time": 1.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
         {"time": 1.0, "rank": -0.5, "timewt": 2.0, "casewt": 1.0},
+        {"time": 1.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
     ]
     assert influential.influence == [
-        [0.5, 0.0, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0, 0.0],
         [0.0, 0.5, 0.0, 0.0, 0.0],
         [0.0, 0.5, 0.0, 0.0, 0.0],
+        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.5, 0.0, 0.0, 0.0, 0.0],
     ]
     assert influential.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
     assert influential.variance == pytest.approx(0.0)
@@ -2845,6 +5505,12 @@ def test_concordance_counting_process_ranks_use_delayed_entry_risk_sets():
 
     ranked = survival.concordance(response, scores=scores, ranks=True)
     exact_ranked = survival.concordance(response, scores=scores, ranks=True, timefix=False)
+    formula_direction_ranked = survival.concordance(
+        response,
+        scores=scores,
+        ranks=True,
+        reverse=True,
+    )
     formula_ranked = survival.concordance(
         "Surv(start, stop, status) ~ score",
         data={**data, "score": scores},
@@ -2863,7 +5529,11 @@ def test_concordance_counting_process_ranks_use_delayed_entry_risk_sets():
     assert sum(row["rank"] * row["timewt"] * row["casewt"] for row in exact_ranked.ranks) == (
         pytest.approx(2.0 * exact_ranked.concordant - exact_ranked.comparable)
     )
-    for formula_row, direct_row in zip(formula_ranked.ranks, ranked.ranks, strict=True):
+    for formula_row, direct_row in zip(
+        formula_ranked.ranks,
+        formula_direction_ranked.ranks,
+        strict=True,
+    ):
         assert formula_row.keys() == direct_row.keys()
         for key in direct_row:
             assert formula_row[key] == pytest.approx(direct_row[key])
@@ -2880,6 +5550,12 @@ def test_concordance_counting_process_influence_uses_delayed_entry_risk_sets():
 
     result = survival.concordance(response, scores=data["score"], influence=3)
     exact = survival.concordance(response, scores=data["score"], influence=3, timefix=False)
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        influence=3,
+        reverse=True,
+    )
     formula = survival.concordance(
         "Surv(start, stop, status) ~ score",
         data=data,
@@ -2890,10 +5566,10 @@ def test_concordance_counting_process_influence_uses_delayed_entry_risk_sets():
     assert result.influence is not None
     assert exact.dfbeta is not None
     assert exact.influence is not None
-    assert formula.dfbeta == pytest.approx(result.dfbeta)
+    assert formula.dfbeta == pytest.approx(formula_direction.dfbeta)
     assert formula.influence is not None
     assert result.influence is not None
-    for formula_row, result_row in zip(formula.influence, result.influence, strict=True):
+    for formula_row, result_row in zip(formula.influence, formula_direction.influence, strict=True):
         assert formula_row == pytest.approx(result_row)
     assert [sum(row[col] for row in result.influence) for col in range(5)] == pytest.approx(
         [result.concordant, result.comparable - result.concordant, 0.0, 0.0, 0.0]
@@ -3000,6 +5676,12 @@ def test_counting_concordance_accepts_case_weights():
     expected = concordant / comparable
 
     direct = survival.concordance(response, scores=data["score"], weights=data["wt"])
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        reverse=True,
+    )
     formula = survival.concordance(
         "Surv(start, stop, status) ~ score",
         data=data,
@@ -3014,7 +5696,7 @@ def test_counting_concordance_accepts_case_weights():
     )
 
     assert direct.concordance == pytest.approx(expected)
-    assert formula.concordance == pytest.approx(expected)
+    assert formula.concordance == pytest.approx(formula_direction.concordance)
     assert direct.concordant == pytest.approx(concordant)
     assert direct.comparable == pytest.approx(comparable)
     assert low_level["concordance"] == pytest.approx(expected)
@@ -3053,6 +5735,13 @@ def test_counting_concordance_accepts_identity_time_weight():
         weights=data["wt"],
         timewt="I",
     )
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        timewt="I",
+        reverse=True,
+    )
     exact = survival.concordance(
         response,
         scores=data["score"],
@@ -3079,7 +5768,7 @@ def test_counting_concordance_accepts_identity_time_weight():
     assert direct.concordant == pytest.approx(concordant)
     assert direct.comparable == pytest.approx(comparable)
     assert exact.concordance == pytest.approx(direct.concordance)
-    assert formula.concordance == pytest.approx(direct.concordance)
+    assert formula.concordance == pytest.approx(formula_direction.concordance)
     assert summary["concordance"] == pytest.approx(direct.concordance)
     assert summary["concordant"] == pytest.approx(concordant)
     assert summary["comparable"] == pytest.approx(comparable)
@@ -3118,6 +5807,13 @@ def test_counting_concordance_accepts_survival_time_weight():
         weights=data["wt"],
         timewt="S",
     )
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        timewt="S",
+        reverse=True,
+    )
     exact = survival.concordance(
         response,
         scores=data["score"],
@@ -3144,7 +5840,7 @@ def test_counting_concordance_accepts_survival_time_weight():
     assert direct.concordant == pytest.approx(concordant)
     assert direct.comparable == pytest.approx(comparable)
     assert exact.concordance == pytest.approx(direct.concordance)
-    assert formula.concordance == pytest.approx(direct.concordance)
+    assert formula.concordance == pytest.approx(formula_direction.concordance)
     assert summary["concordance"] == pytest.approx(direct.concordance)
     assert summary["concordant"] == pytest.approx(concordant)
     assert summary["comparable"] == pytest.approx(comparable)
@@ -3253,6 +5949,15 @@ def test_counting_concordance_accepts_time_window_restrictions():
         ymax=ymax,
         timewt="S",
     )
+    formula_direction = survival.concordance(
+        response,
+        scores=data["score"],
+        weights=data["wt"],
+        ymin=ymin,
+        ymax=ymax,
+        timewt="S",
+        reverse=True,
+    )
     exact = survival.concordance(
         response,
         scores=data["score"],
@@ -3276,7 +5981,7 @@ def test_counting_concordance_accepts_time_window_restrictions():
     assert direct.comparable == pytest.approx(comparable)
     assert direct.n_event == sum(bounded_status)
     assert exact.concordance == pytest.approx(direct.concordance)
-    assert formula.concordance == pytest.approx(direct.concordance)
+    assert formula.concordance == pytest.approx(formula_direction.concordance)
     assert formula.n_event == direct.n_event
 
 
@@ -3297,7 +6002,7 @@ def test_concordance_formula_strata_supports_counting_process_response():
             [data["start"][idx] for idx in indices],
             [data["stop"][idx] for idx in indices],
             [data["status"][idx] for idx in indices],
-            [data["score"][idx] for idx in indices],
+            [-data["score"][idx] for idx in indices],
         )
         total_concordant += concordant
         total_comparable += comparable
@@ -3317,7 +6022,7 @@ def test_concordance_formula_accepts_counting_process_response():
         data["start"],
         data["stop"],
         data["status"],
-        data["score"],
+        _formula_predictor_scores(data["score"]),
     )
 
     assert result.concordance == pytest.approx(expected)
@@ -3344,7 +6049,7 @@ def test_survdiff_counting_process_uses_delayed_entry():
         "status": [1, 0, 1, 1],
         "group": ["treated", "control", "treated", "control"],
     }
-    groups = [0, 1, 0, 1]
+    formula_groups = [1 if value == "treated" else 0 for value in data["group"]]
 
     direct = survival.survdiff(
         survival.Surv(data["start"], data["stop"], data["status"]),
@@ -3354,14 +6059,14 @@ def test_survdiff_counting_process_uses_delayed_entry():
     low_level = survival.logrank_test(
         data["stop"],
         data["status"],
-        groups,
+        formula_groups,
         entry_times=data["start"],
     )
     fh = survival.survdiff("Surv(start, stop, status) ~ group", data=data, rho=0.5)
     fh_low_level = survival.fleming_harrington_test(
         data["stop"],
         data["status"],
-        groups,
+        formula_groups,
         0.5,
         0.0,
         entry_times=data["start"],
@@ -3372,7 +6077,8 @@ def test_survdiff_counting_process_uses_delayed_entry():
     assert direct.expected == pytest.approx([1.0, 2.0])
     assert direct.variance == pytest.approx(4.0 / 9.0)
     assert formula.statistic == pytest.approx(direct.statistic)
-    assert formula.observed == pytest.approx(direct.observed)
+    assert formula.observed == pytest.approx(low_level.observed)
+    assert formula.expected == pytest.approx(low_level.expected)
     assert low_level.statistic == pytest.approx(direct.statistic)
     assert fh.statistic == pytest.approx(fh_low_level.statistic)
 
@@ -3460,7 +6166,7 @@ def test_survdiff_counting_process_formula_strata_combines_delayed_entry_compone
         "group": ["treated", "treated", "control", "control", "treated", "control"],
         "site": ["x", "y", "x", "y", "x", "x"],
     }
-    group_codes = [0 if value == "treated" else 1 for value in data["group"]]
+    group_codes = [0 if value == "control" else 1 for value in data["group"]]
     strata_codes = [0 if value == "x" else 1 for value in data["site"]]
 
     def combine(rho=0.0):
@@ -3587,7 +6293,7 @@ def test_survdiff_formula_supports_stratified_groups():
         "group": ["treated", "treated", "control", "control", "treated", "control"],
         "site": ["north", "south", "north", "south", "north", "south"],
     }
-    group_codes = {"treated": 1, "control": 2}
+    group_codes = {"control": 1, "treated": 2}
     strata_codes = [0 if site == "north" else 1 for site in data["site"]]
     encoded_groups = [group_codes[value] for value in data["group"]]
 
@@ -3728,14 +6434,21 @@ def test_survdiff_direct_surv_applies_subset_to_group_labels():
 
 def test_survdiff_formula_accepts_interaction_groups():
     data = _factor_data()
+    group_values = [
+        (data["dose"][idx], math.sqrt(data["x1"][idx])) for idx in range(len(data["time"]))
+    ]
     result = survival.survdiff("Surv(time, status) ~ factor(dose):sqrt(x1)", data=data)
     direct = survival.survdiff(
         survival.Surv(data["time"], data["status"]),
-        group=[(data["dose"][idx], math.sqrt(data["x1"][idx])) for idx in range(len(data["time"]))],
+        group=group_values,
     )
+    direct_levels = list(dict.fromkeys(group_values))
+    formula_levels = sorted(set(group_values))
+    direct_order = [direct_levels.index(level) for level in formula_levels]
 
     assert result.statistic == pytest.approx(direct.statistic)
-    assert result.observed == pytest.approx(direct.observed)
+    assert result.observed == pytest.approx([direct.observed[idx] for idx in direct_order])
+    assert result.expected == pytest.approx([direct.expected[idx] for idx in direct_order])
 
 
 def test_survdiff_formula_accepts_identity_wrappers_for_groups():
@@ -3765,6 +6478,38 @@ def test_coxph_formula_returns_fitted_cox_model():
     assert fit.coefficients[0] == pytest.approx(low_level.coefficients[0])
     assert len(fit.risk_scores) == 8
     assert len(fit.predict([[0.5, 0.8]])) == 1
+
+
+def test_coxph_formula_accepts_rep_constant_response_argument():
+    data = {
+        "case": [1, 0, 1, 0, 0, 1, 0, 1],
+        "set": [1, 1, 2, 2, 3, 3, 4, 4],
+        "x": [0.2, 0.4, 0.3, 0.1, 0.5, 0.2, 0.3, 0.7],
+    }
+    formula = survival.coxph(
+        "Surv(rep(1, 8L), case) ~ x + strata(set)",
+        data=data,
+        method="breslow",
+        eps=1e-9,
+    )
+    inferred_length = survival.coxph(
+        "Surv(rep(1, nrow(data)), case) ~ x + strata(set)",
+        data=data,
+        method="breslow",
+        eps=1e-9,
+    )
+    direct = survival.coxph(
+        survival.Surv([1.0] * len(data["case"]), data["case"]),
+        x=[[value] for value in data["x"]],
+        strata=data["set"],
+        method="breslow",
+        eps=1e-9,
+    )
+
+    assert survival.coef(formula) == pytest.approx(survival.coef(direct))
+    assert survival.coef(inferred_length) == pytest.approx(survival.coef(direct))
+    assert survival.loglik(formula) == pytest.approx(survival.loglik(direct))
+    assert survival.nobs(formula) == len(data["case"])
 
 
 def test_coxph_formula_cluster_computes_robust_variance():
@@ -4016,7 +6761,7 @@ def test_model_generic_helpers_report_core_fit_metadata():
         survival.model_weights(survival.Surv([1.0, 2.0], [1, 0]))
     with pytest.raises(TypeError, match="survreg"):
         survival.df_residual(cox)
-    with pytest.raises(TypeError, match="model=True"):
+    with pytest.raises(TypeError, match="stored model frame"):
         survival.model_frame(cox)
 
 
@@ -4675,6 +7420,35 @@ def test_survfit_coxph_start_time_conditions_curve():
     assert with_time0.surv[0] == pytest.approx([1.0, *conditioned.surv[0]])
     assert at_event.time[0] == pytest.approx(4.0)
     assert at_event.surv[0][0] != pytest.approx(1.0)
+
+
+def test_survfit0_adds_initial_row_to_existing_cox_curves():
+    fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=10)
+    base = survival.survfit(fit, newdata=[[0.5, 0.8]])
+    direct_time0 = survival.survfit(fit, newdata=[[0.5, 0.8]], time0=True)
+    conditioned = survival.survfit(fit, newdata=[[0.5, 0.8]], start_time=4.5)
+    conditioned_time0 = survival.survfit(
+        fit,
+        newdata=[[0.5, 0.8]],
+        start_time=4.5,
+        time0=True,
+    )
+
+    inserted = survival.survfit0(base)
+    inserted_conditioned = survival.survfit0(conditioned)
+    already_inserted = survival.survfit0(direct_time0)
+
+    assert inserted.time == pytest.approx(direct_time0.time)
+    assert inserted.surv[0] == pytest.approx(direct_time0.surv[0])
+    assert inserted.cumhaz[0] == pytest.approx(direct_time0.cumhaz[0])
+    assert inserted.std_err[0] == pytest.approx(direct_time0.std_err[0])
+    assert inserted.std_chaz[0] == pytest.approx(direct_time0.std_chaz[0])
+    assert inserted.conf_lower[0] == pytest.approx(direct_time0.conf_lower[0])
+    assert inserted.conf_upper[0] == pytest.approx(direct_time0.conf_upper[0])
+    assert inserted_conditioned.time == pytest.approx(conditioned_time0.time)
+    assert inserted_conditioned.surv[0] == pytest.approx(conditioned_time0.surv[0])
+    assert inserted_conditioned.cumhaz[0] == pytest.approx(conditioned_time0.cumhaz[0])
+    assert already_inserted is direct_time0
 
 
 def test_survfit_coxph_start_time_conditions_stratified_curves():
@@ -7790,6 +10564,133 @@ def test_survreg_fixed_scale_matches_low_level_binding():
     assert len(fit.score_vector) == len(fit.coefficients)
 
 
+def test_survreg_exponential_ignores_user_scale_like_r():
+    data = _toy_data()
+    default = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=data,
+        dist="exponential",
+        max_iter=50,
+        eps=1e-8,
+    )
+    scale_zero = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=data,
+        dist="exponential",
+        scale=0,
+        max_iter=50,
+        eps=1e-8,
+    )
+    with pytest.warns(RuntimeWarning, match="fixed scale"):
+        scale_ignored = survival.survreg(
+            "Surv(time, status) ~ x1",
+            data=data,
+            dist="exponential",
+            scale=2,
+            max_iter=50,
+            eps=1e-8,
+        )
+    low_level = survival.regression.survreg(
+        time=data["time"],
+        status=[float(value) for value in data["status"]],
+        covariates=_with_intercept([[value] for value in data["x1"]]),
+        distribution="exponential",
+        max_iter=50,
+        eps=1e-8,
+    )
+
+    assert default.scale == pytest.approx(1.0)
+    assert default.scales == pytest.approx([1.0])
+    assert default.coefficients == pytest.approx(default.location_coefficients)
+    assert default.coefficients == pytest.approx([0.90128018, 1.3997076], abs=5e-4)
+    assert scale_zero.coefficients == pytest.approx(default.coefficients)
+    assert scale_ignored.coefficients == pytest.approx(default.coefficients)
+    assert scale_ignored.scale == pytest.approx(1.0)
+    assert default.coefficients == pytest.approx(low_level.coefficients)
+    assert default.log_likelihood == pytest.approx(low_level.log_likelihood)
+
+    with pytest.raises(ValueError, match="fixed scale and strata"):
+        survival.survreg(
+            "Surv(time, status) ~ x1 + strata(group)",
+            data=data,
+            dist="exponential",
+            max_iter=50,
+            eps=1e-8,
+        )
+
+
+def test_survreg_rayleigh_matches_weibull_fixed_scale_like_r():
+    data = _toy_data()
+    rayleigh = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=data,
+        dist="rayleigh",
+        max_iter=200,
+        eps=1e-8,
+    )
+    abbreviated = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=data,
+        dist="ray",
+        max_iter=200,
+        eps=1e-8,
+    )
+    weibull_fixed = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=data,
+        dist="weibull",
+        scale=0.5,
+        max_iter=200,
+        eps=1e-8,
+    )
+    with pytest.warns(RuntimeWarning, match="fixed scale"):
+        scale_ignored = survival.survreg(
+            "Surv(time, status) ~ x1",
+            data=data,
+            dist="rayleigh",
+            scale=2,
+            max_iter=200,
+            eps=1e-8,
+        )
+    matrix_rayleigh = survival.survreg(
+        time=data["time"],
+        status=data["status"],
+        covariates=_with_intercept([[value] for value in data["x1"]]),
+        distribution="rayleigh",
+        max_iter=200,
+        eps=1e-8,
+    )
+
+    assert rayleigh.distribution == "rayleigh"
+    assert rayleigh.scale == pytest.approx(0.5)
+    assert rayleigh.scales == pytest.approx([0.5])
+    assert rayleigh.coefficients == pytest.approx([0.95288161, 1.10060316], abs=5e-4)
+    assert rayleigh.coefficients == pytest.approx(weibull_fixed.coefficients)
+    assert rayleigh.log_likelihood == pytest.approx(weibull_fixed.log_likelihood)
+    assert survival.loglik(rayleigh) == pytest.approx(survival.loglik(weibull_fixed))
+    assert abbreviated.distribution == "rayleigh"
+    assert abbreviated.coefficients == pytest.approx(rayleigh.coefficients)
+    assert scale_ignored.distribution == "rayleigh"
+    assert scale_ignored.coefficients == pytest.approx(rayleigh.coefficients)
+    assert scale_ignored.scale == pytest.approx(0.5)
+    assert matrix_rayleigh.distribution == "rayleigh"
+    assert matrix_rayleigh.coefficients == pytest.approx(rayleigh.coefficients)
+    assert survival.model_summary(rayleigh)["distribution"] == "rayleigh"
+    rayleigh_residuals = survival.r_api.residuals(rayleigh, type="matrix")
+    weibull_residuals = survival.r_api.residuals(weibull_fixed, type="matrix")
+    for actual, expected in zip(rayleigh_residuals, weibull_residuals, strict=True):
+        assert actual == pytest.approx(expected)
+
+    with pytest.raises(ValueError, match="fixed scale and strata"):
+        survival.survreg(
+            "Surv(time, status) ~ x1 + strata(group)",
+            data=data,
+            dist="rayleigh",
+            max_iter=200,
+            eps=1e-8,
+        )
+
+
 def test_survreg_score_true_exposes_score_vector_alias():
     data = _toy_data()
     formula_fit = survival.survreg(
@@ -8164,6 +11065,8 @@ def test_survreg_distribution_accepts_r_style_prefixes_and_aliases():
         "gauss": "gaussian",
         "normal": "gaussian",
         "logi": "logistic",
+        "logg": "lognormal",
+        "loggaussian": "lognormal",
         "logn": "lognormal",
         "logl": "loglogistic",
         "log-normal": "lognormal",
@@ -8196,6 +11099,115 @@ def test_survreg_distribution_accepts_r_style_prefixes_and_aliases():
             max_iter=10,
             eps=1e-5,
         )
+
+
+def test_survreg_distribution_helpers_match_r_reference_values(monkeypatch):
+    weibull_density = survival.dsurvreg(
+        [1.0, 2.0],
+        mean=0.5,
+        scale=1.2,
+        distribution="weibull",
+    )
+    weibull_cdf = survival.psurvreg(
+        [1.0, 2.0],
+        mean=0.5,
+        scale=1.2,
+        distribution="weibull",
+    )
+    weibull_quantiles = survival.qsurvreg(
+        [0.25, 0.5, 0.75],
+        mean=0.5,
+        scale=1.2,
+        distribution="weibull",
+    )
+
+    assert weibull_density == pytest.approx([0.2841569, 0.1512009])
+    assert weibull_cdf == pytest.approx([0.4827560, 0.6910677])
+    assert weibull_quantiles == pytest.approx([0.3696942, 1.0620325, 2.4399099])
+
+    assert survival.dsurvreg(
+        [1.0, 2.0],
+        mean=0.5,
+        scale=1.2,
+        distribution="lognormal",
+    ) == pytest.approx([0.3048103, 0.1640866])
+    assert survival.psurvreg(
+        [1.0, 2.0],
+        mean=0.5,
+        scale=1.2,
+        distribution="lognormal",
+    ) == pytest.approx([0.3384611, 0.5639360])
+    assert survival.qsurvreg(
+        [0.25, 0.5, 0.75],
+        mean=0.5,
+        scale=1.2,
+        distribution="lognormal",
+    ) == pytest.approx([0.7338962, 1.6487213, 3.7039051])
+
+    assert survival.dsurvreg([-1.0, 0.0, 1.0], mean=0.0, distribution="gaussian") == (
+        pytest.approx([0.2419707, 0.3989423, 0.2419707])
+    )
+    assert survival.psurvreg([-1.0, 0.0, 1.0], mean=0.0, distribution="gaussian") == (
+        pytest.approx([0.1586553, 0.5, 0.8413447])
+    )
+    assert survival.qsurvreg([0.25, 0.5, 0.75], mean=0.0, distribution="gaussian") == (
+        pytest.approx([-0.6744898, 0.0, 0.6744898])
+    )
+    assert survival.dsurvreg(
+        [1.0, 2.0],
+        mean=0.0,
+        scale=1.0,
+        distribution="t",
+        parms=5,
+    ) == pytest.approx([0.2196798, 0.06509031])
+    assert survival.psurvreg(
+        [1.0, 2.0],
+        mean=0.0,
+        scale=1.0,
+        distribution="t",
+        parms=5,
+    ) == pytest.approx([0.8183913, 0.9490303])
+    assert survival.qsurvreg(
+        [0.25, 0.5],
+        mean=0.0,
+        scale=1.0,
+        distribution="t",
+        parms=5,
+    ) == pytest.approx([-0.7266868, 0.0])
+
+    assert survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="loggaussian") == (
+        pytest.approx(survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="lognormal"))
+    )
+    assert survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="rayleigh") == (
+        pytest.approx(survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="weibull"))
+    )
+    assert survival.dsurvreg([1.0], mean=0.0, distribution="gaussian", parms=5) == pytest.approx(
+        survival.dsurvreg([1.0], mean=0.0, distribution="gaussian")
+    )
+
+    nonpositive_density = survival.dsurvreg([0.0, -1.0], mean=0.0, distribution="weibull")
+    assert all(math.isnan(value) for value in nonpositive_density)
+    assert survival.psurvreg([0.0, -1.0], mean=0.0, distribution="weibull") == [0.0, 0.0]
+    boundary_quantiles = survival.qsurvreg([0.0, 1.0], mean=0.0, distribution="weibull")
+    assert boundary_quantiles[0] == pytest.approx(0.0)
+    assert math.isinf(boundary_quantiles[1])
+    assert boundary_quantiles[1] > 0.0
+
+    draws = iter([0.25, 0.5])
+    monkeypatch.setattr(survival.r_api.random, "random", lambda: next(draws))
+    assert survival.rsurvreg(2, mean=0.5, scale=1.2, distribution="weibull") == pytest.approx(
+        [0.3696942, 1.0620325]
+    )
+    draws = iter([0.25, 0.5])
+    monkeypatch.setattr(survival.r_api.random, "random", lambda: next(draws))
+    assert survival.rsurvreg(2, mean=0.0, scale=1.0, distribution="t", parms=5) == pytest.approx(
+        [-0.7266868, 0.0]
+    )
+
+    with pytest.raises(ValueError, match="length 1 or 2"):
+        survival.dsurvreg([1.0, 2.0], mean=[0.0, 1.0, 2.0], distribution="weibull")
+    with pytest.raises(TypeError, match="parms"):
+        survival.dsurvreg([1.0], mean=0.0, distribution="t")
 
 
 def test_survreg_loglik_and_response_transform_follow_r_distribution_scale():
@@ -10255,12 +13267,8 @@ def test_r_api_rejects_unsupported_formula_features():
     with pytest.raises(ValueError, match="requires positive values"):
         survival.coxph("Surv(time, status) ~ log(x2)", data=data_with_zero)
 
-    for function in (
-        survival.survfit,
-        survival.survdiff,
-    ):
-        with pytest.raises(ValueError, match=r"cluster\(\)"):
-            function("Surv(time, status) ~ x1 + cluster(group)", data=_toy_data())
+    with pytest.raises(ValueError, match=r"cluster\(\)"):
+        survival.survdiff("Surv(time, status) ~ x1 + cluster(group)", data=_toy_data())
 
     with pytest.raises(ValueError, match="method or ties"):
         survival.coxph(
@@ -10317,8 +13325,91 @@ def test_r_api_rejects_unsupported_formula_features():
     with pytest.raises(ValueError, match="fixed scale and strata"):
         survival.survreg("Surv(time, status) ~ x1 + strata(group)", data=_toy_data(), scale=1.0)
 
-    with pytest.raises(NotImplementedError, match="parms"):
+    with pytest.raises(ValueError, match="only supported"):
         survival.survreg("Surv(time, status) ~ x1", data=_toy_data(), parms=[1.0])
+
+    t_fit = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=_toy_data(),
+        distribution="t",
+        parms=[5.0],
+        max_iter=150,
+        eps=1e-10,
+    )
+    assert t_fit.distribution == "t"
+    assert t_fit.distribution_parameters == pytest.approx([5.0])
+    assert survival.coef(t_fit) == pytest.approx(
+        [1.4187299567002853, 4.8815448794131919],
+        abs=1e-3,
+    )
+    assert t_fit.scale == pytest.approx(1.6900377253911552, abs=1e-3)
+    assert t_fit.log_likelihood == pytest.approx(-12.250153810177117, abs=5e-4)
+    assert survival.predict(t_fit, type="response") == pytest.approx(
+        [
+            2.3950389325829233,
+            3.3713479084655620,
+            1.9068844446416042,
+            5.3239658602308388,
+            6.3002748361134771,
+            7.2765838119961153,
+            4.3476568843482006,
+            8.2528927878787535,
+        ],
+        abs=1e-3,
+    )
+    expected_quantiles = [
+        [1.1669107520147790, 2.3950389325829233, 3.6231671131510677],
+        [2.1432197278974177, 3.3713479084655620, 4.5994760890337059],
+        [0.6787562640734599, 1.9068844446416042, 3.1350126252097485],
+        [4.0958376796626945, 5.3239658602308388, 6.5520940407989832],
+        [5.0721466555453327, 6.3002748361134771, 7.5284030166816214],
+        [6.0484556314279709, 7.2765838119961153, 8.5047119925642605],
+        [3.1195287037800563, 4.3476568843482006, 5.5757850649163450],
+        [7.0247646073106091, 8.2528927878787535, 9.4810209684468987],
+    ]
+    actual_quantiles = survival.predict(t_fit, type="quantile", p=[0.25, 0.5, 0.75])
+    assert len(actual_quantiles) == len(expected_quantiles)
+    for actual_row, expected_row in zip(actual_quantiles, expected_quantiles, strict=True):
+        assert actual_row == pytest.approx(expected_row, abs=1e-3)
+    assert survival.r_api.residuals(t_fit, type="response") == pytest.approx(
+        [
+            -1.3950389325829233,
+            -1.3713479084655620,
+            1.0931155553583958,
+            -1.3239658602308388,
+            -1.3002748361134771,
+            -1.2765838119961153,
+            2.6523431156517994,
+            -0.2528927878787535,
+        ],
+        abs=1e-3,
+    )
+    assert survival.r_api.residuals(t_fit, type="deviance") == pytest.approx(
+        [
+            -2.1542980450204676,
+            -2.1486549886724347,
+            1.6110718176140864,
+            -2.1375495641185078,
+            0.7376815970416505,
+            -2.1266948158001666,
+            2.5055150731602964,
+            1.0825873494449951,
+        ],
+        abs=2e-3,
+    )
+    assert survival.r_api.residuals(t_fit, type="working") == pytest.approx(
+        [
+            -1.8352385766643091,
+            -1.7872894113558617,
+            4.4964403406419073,
+            -1.6944502176851766,
+            1.4301227030749066,
+            -1.6054634294757755,
+            7.8023520372610085,
+            1.9841875888800469,
+        ],
+        abs=1e-2,
+    )
 
     concordance_data = _toy_data()
     with pytest.raises(ValueError, match="weights must be non-negative"):
@@ -10647,11 +13738,17 @@ def test_r_api_rejects_unsupported_formula_features():
             id=["a"],
         )
 
-    with pytest.raises(NotImplementedError, match="cluster"):
-        survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), cluster=["a", "b"])
+    with pytest.raises(ValueError, match="cluster must have"):
+        survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), cluster=["a"])
 
-    with pytest.raises(NotImplementedError, match="robust variance"):
-        survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), robust=True)
+    with pytest.raises(NotImplementedError, match="requires cluster or id"):
+        survival.survfit(
+            survival.Surv([0.0, 0.0], [1.0, 2.0], [1, 0]),
+            robust=True,
+        )
+
+    robust_fh = survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), robust=True, type="fh")
+    assert robust_fh.std_err == pytest.approx([0.2144409712, 0.2144409712])
 
     with pytest.raises(NotImplementedError, match="istate"):
         survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), istate=[0, 1])

@@ -225,6 +225,39 @@ def test_survfitkm():
     assert result.cumulative_hazard == pytest.approx(result.cumhaz)
 
 
+def test_robust_survfitkm_matches_r_cluster_variance():
+    result = survival.surv_analysis.robust_survfitkm(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        [1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+        [0, 0, 1, 1, 2, 2],
+    )
+
+    assert result.std_err == pytest.approx(
+        [0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0]
+    )
+    assert result.std_chaz == pytest.approx(
+        [0.1360828, 0.3320419, 0.3320419, 0.4571841, 0.4571841, 0.4571841]
+    )
+
+
+def test_robust_counting_survfit_variance_matches_r_cluster_variance():
+    std_err, std_chaz, conf_lower, conf_upper = (
+        survival.surv_analysis.robust_counting_survfit_variance(
+            [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
+            [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+            [0, 1, 1, 0, 0, 1],
+            [2.0, 3.0, 5.0, 6.0, 7.0],
+            [1.0, 2.0 / 3.0, 4.0 / 9.0, 4.0 / 9.0, 0.0],
+            [0, 0, 1, 1, 2, 2],
+        )
+    )
+
+    assert std_err == pytest.approx([0.0, 0.2721655, 0.1814437, 0.1814437, 0.0])
+    assert std_chaz == pytest.approx([0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655])
+    assert len(conf_lower) == len(std_err)
+    assert len(conf_upper) == len(std_err)
+
+
 def test_survfitkm_groups_near_tied_times():
     result = survival.survfitkm(
         time=[1.0 + 5e-10, 2.0, 1.0],

@@ -73,7 +73,9 @@ pub use survfitaj_extended_module::{
 };
 pub use survfitaj_module::{SurvFitAJ, survfitaj};
 pub use survfitkm_module::{
-    CountingSurvfitTables, KaplanMeierConfig, SurvFitKMOutput, SurvfitCurveResult,
-    SurvfitKMOptions, compute_survfitkm, counting_survfit_tables, survfit_curve_from_tables,
-    survfitkm, survfitkm_with_options,
+    CountingSurvfitTables, KaplanMeierConfig, SurvFitKMInfluenceOutput, SurvFitKMOutput,
+    SurvfitCurveResult, SurvfitKMOptions, compute_robust_survfitkm_with_timefix, compute_survfitkm,
+    counting_survfit_tables, robust_counting_survfit_variance, robust_survfitkm,
+    survfit_curve_from_tables, survfitkm, survfitkm_counting_influence, survfitkm_influence,
+    survfitkm_with_options,
 };
