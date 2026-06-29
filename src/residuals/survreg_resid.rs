@@ -907,6 +907,7 @@ pub(crate) fn compute_working_residuals_with_parameter(
     residuals
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_dfbeta_survreg_with_parameter(
     time: &[f64],
     status: &[i32],
@@ -1393,6 +1394,7 @@ pub fn survreg_influence_residuals(
 
 #[pyfunction]
 #[pyo3(signature = (time, status, linear_pred, scale, distribution, residual_type="deviance".to_string(), time2=None, distribution_parameter=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn residuals_survreg(
     time: Vec<f64>,
     status: Vec<i32>,
