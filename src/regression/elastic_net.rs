@@ -295,8 +295,9 @@ fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64
 
         for j in 0..data.p {
             let xij = data.x[i * data.p + j];
-            let x_bar = risk_data.cumsum_weighted_x[pos][j] / risk_sum;
-            let x_sq_bar = risk_data.cumsum_weighted_x_sq[pos][j] / risk_sum;
+            let cumsum_idx = pos * data.p + j;
+            let x_bar = risk_data.cumsum_weighted_x[cumsum_idx] / risk_sum;
+            let x_sq_bar = risk_data.cumsum_weighted_x_sq[cumsum_idx] / risk_sum;
 
             gradient[j] += data.weights[i] * (xij - x_bar);
             hessian_diag[j] += data.weights[i] * (x_sq_bar - x_bar * x_bar);
