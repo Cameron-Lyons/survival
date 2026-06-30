@@ -220,6 +220,16 @@ def test_low_level_concordance_wrappers_validate_index_inputs():
             False,
         )
 
+    with pytest.raises(RuntimeError, match="sort_stop must be a permutation"):
+        survival.perform_concordance3_calculation(
+            extended_time_data,
+            [0, 1, 2, 3],
+            extended_weights,
+            time_weights,
+            [0, 1, 1, 3],
+            False,
+        )
+
     with pytest.raises(RuntimeError, match="predictor_values contains negative value"):
         survival.perform_concordance_calculation(
             extended_time_data,
@@ -227,6 +237,15 @@ def test_low_level_concordance_wrappers_validate_index_inputs():
             extended_weights,
             time_weights,
             [0, 1, 2, 3],
+        )
+
+    with pytest.raises(RuntimeError, match="sort_stop must be a permutation"):
+        survival.perform_concordance_calculation(
+            extended_time_data,
+            [0, 1, 2, 3],
+            extended_weights,
+            time_weights,
+            [0, 1, 1, 3],
         )
 
     with pytest.raises(RuntimeError, match="sort_start length"):
@@ -247,4 +266,14 @@ def test_low_level_concordance_wrappers_validate_index_inputs():
             time_weights,
             [0, 1, 2, 3],
             [0, 1, 2, 4],
+        )
+
+    with pytest.raises(RuntimeError, match="sort_start must be a permutation"):
+        survival.perform_concordance_calculation(
+            extended_time_data,
+            [0, 1, 2, 3],
+            extended_weights,
+            time_weights,
+            [0, 1, 2, 3],
+            [0, 1, 1, 3],
         )

@@ -1,4 +1,4 @@
-use crate::internal::validation::{ValidationError, validate_length};
+use crate::internal::validation::{validate_length, ValidationError};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -78,6 +78,25 @@ pub(crate) fn validate_i32_order_indices(values: &[i32], n: usize, field: &str) 
     Ok(())
 }
 
+pub(crate) fn validate_i32_permutation_indices(
+    values: &[i32],
+    n: usize,
+    field: &str,
+) -> PyResult<()> {
+    validate_i32_order_indices(values, n, field)?;
+    let mut seen = vec![false; n];
+    for (index, &value) in values.iter().enumerate() {
+        let value = value as usize;
+        if seen[value] {
+            return Err(PyRuntimeError::new_err(format!(
+                "{field} must be a permutation; duplicate index {value} at position {index}"
+            )));
+        }
+        seen[value] = true;
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_usize_order_indices(
     values: &[usize],
     n: usize,
@@ -87,6 +106,24 @@ pub(crate) fn validate_usize_order_indices(
         return Err(PyRuntimeError::new_err(format!(
             "{field} value {value} at index {index} is outside observation count {n}"
         )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_usize_permutation_indices(
+    values: &[usize],
+    n: usize,
+    field: &str,
+) -> PyResult<()> {
+    validate_usize_order_indices(values, n, field)?;
+    let mut seen = vec![false; n];
+    for (index, &value) in values.iter().enumerate() {
+        if seen[value] {
+            return Err(PyRuntimeError::new_err(format!(
+                "{field} must be a permutation; duplicate index {value} at position {index}"
+            )));
+        }
+        seen[value] = true;
     }
     Ok(())
 }
@@ -258,6 +295,8 @@ mod tests {
     fn validate_order_indices_rejects_invalid_values() {
         assert!(validate_i32_order_indices(&[0, 1], 2, "sort_stop").is_ok());
         assert!(validate_usize_order_indices(&[0, 1], 2, "sort_stop").is_ok());
+        assert!(validate_i32_permutation_indices(&[1, 0], 2, "sort_stop").is_ok());
+        assert!(validate_usize_permutation_indices(&[1, 0], 2, "sort_stop").is_ok());
 
         let negative = validate_i32_order_indices(&[0, -1], 2, "sort_stop")
             .expect_err("negative order index should fail");
@@ -265,18 +304,24 @@ mod tests {
 
         let i32_out_of_bounds = validate_i32_order_indices(&[0, 2], 2, "sort_stop")
             .expect_err("order index outside observations should fail");
-        assert!(
-            i32_out_of_bounds
-                .to_string()
-                .contains("outside observation count")
-        );
+        assert!(i32_out_of_bounds
+            .to_string()
+            .contains("outside observation count"));
 
         let usize_out_of_bounds = validate_usize_order_indices(&[0, 2], 2, "sort_stop")
             .expect_err("order index outside observations should fail");
-        assert!(
-            usize_out_of_bounds
-                .to_string()
-                .contains("outside observation count")
-        );
+        assert!(usize_out_of_bounds
+            .to_string()
+            .contains("outside observation count"));
+
+        let i32_duplicate = validate_i32_permutation_indices(&[0, 0], 2, "sort_stop")
+            .expect_err("duplicate order index should fail");
+        assert!(i32_duplicate.to_string().contains("must be a permutation"));
+
+        let usize_duplicate = validate_usize_permutation_indices(&[0, 0], 2, "sort_stop")
+            .expect_err("duplicate order index should fail");
+        assert!(usize_duplicate
+            .to_string()
+            .contains("must be a permutation"));
     }
 }

@@ -2,11 +2,11 @@
 
 use super::common::{
     build_concordance_result, validate_extended_concordance_inputs,
-    validate_non_negative_i32_indices, validate_usize_order_indices,
+    validate_non_negative_i32_indices, validate_usize_permutation_indices,
 };
 use crate::constants::{CONCORDANCE_COUNT_SIZE_EXTENDED, PARALLEL_THRESHOLD_SMALL};
 use crate::internal::fenwick::FenwickTree;
-use crate::internal::validation::{ValidationError, validate_length};
+use crate::internal::validation::{validate_length, ValidationError};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -249,11 +249,11 @@ pub fn perform_concordance_calculation(
         sort_stop.len(),
     )?;
     validate_non_negative_i32_indices(&predictor_values, "predictor_values")?;
-    validate_usize_order_indices(&sort_stop, n, "sort_stop")?;
+    validate_usize_permutation_indices(&sort_stop, n, "sort_stop")?;
     if let Some(values) = sort_start.as_deref() {
         validate_length(n, values.len(), "sort_start")
             .map_err(|error: ValidationError| PyRuntimeError::new_err(error.to_string()))?;
-        validate_usize_order_indices(values, n, "sort_start")?;
+        validate_usize_permutation_indices(values, n, "sort_start")?;
     }
     let doresid = do_residuals.unwrap_or(false);
     let (count, imat, resid) = concordance5(
