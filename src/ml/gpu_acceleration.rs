@@ -3,6 +3,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static GPU_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
+fn available_cpu_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(eq, eq_int, from_py_object)]
 pub enum ComputeBackend {
@@ -58,7 +64,7 @@ impl GPUConfig {
         use_mixed_precision: bool,
     ) -> Self {
         let n_threads = if n_threads == 0 {
-            num_cpus::get()
+            available_cpu_count()
         } else {
             n_threads
         };
@@ -295,13 +301,14 @@ fn parallel_gradient_hessian(
 #[pyfunction]
 pub fn get_available_devices() -> PyResult<Vec<DeviceInfo>> {
     let mut devices = Vec::new();
+    let cpu_count = available_cpu_count();
 
     devices.push(DeviceInfo {
-        name: format!("CPU ({} cores)", num_cpus::get()),
+        name: format!("CPU ({cpu_count} cores)"),
         backend: ComputeBackend::CPU,
         memory_total_mb: 0,
         memory_available_mb: 0,
-        compute_units: num_cpus::get(),
+        compute_units: cpu_count,
         is_available: true,
     });
 

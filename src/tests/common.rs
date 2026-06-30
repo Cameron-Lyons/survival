@@ -32,6 +32,31 @@ pub(crate) fn rel_approx_eq(a: f64, b: f64, rel_tol: f64) -> bool {
     (a - b).abs() / max_abs < rel_tol
 }
 
+pub(crate) fn index_permutations(n: usize) -> Vec<Vec<usize>> {
+    let mut current: Vec<usize> = (0..n).collect();
+    let mut permutations = Vec::new();
+    loop {
+        permutations.push(current.clone());
+        if !next_permutation(&mut current) {
+            break;
+        }
+    }
+    permutations
+}
+
+fn next_permutation(values: &mut [usize]) -> bool {
+    let Some(i) = values.windows(2).rposition(|window| window[0] < window[1]) else {
+        return false;
+    };
+    let j = values
+        .iter()
+        .rposition(|&value| value > values[i])
+        .expect("successor exists after pivot");
+    values.swap(i, j);
+    values[i + 1..].reverse();
+    true
+}
+
 pub(crate) fn aml_maintained() -> (Vec<f64>, Vec<i32>) {
     (
         vec![

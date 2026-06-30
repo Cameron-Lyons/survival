@@ -262,8 +262,7 @@ pub fn rttright_stratified(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::common::initialize_python;
-    use itertools::Itertools;
+    use crate::tests::common::{index_permutations, initialize_python};
 
     fn assert_close_slice(actual: &[f64], expected: &[f64]) {
         assert_eq!(actual.len(), expected.len());
@@ -459,7 +458,7 @@ mod tests {
         )
         .unwrap();
 
-        for permutation in (0..base_time.len()).permutations(base_time.len()) {
+        for permutation in index_permutations(base_time.len()) {
             let time: Vec<f64> = permutation.iter().map(|&i| base_time[i]).collect();
             let status: Vec<i32> = permutation.iter().map(|&i| base_status[i]).collect();
             let weights: Vec<f64> = permutation.iter().map(|&i| base_weights[i]).collect();
