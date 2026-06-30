@@ -132,6 +132,16 @@ def test_logrank_with_numpy_int64():
     assert hasattr(result, "statistic")
 
 
+def test_logrank_with_strided_numpy_arrays():
+    time = np.array([1.0, -1.0, 2.0, -1.0, 3.0, -1.0, 4.0, -1.0, 5.0, -1.0])
+    status = np.array([1, -1, 1, -1, 0, -1, 1, -1, 0, -1], dtype=np.int32)
+    group = np.array([0, -1, 0, -1, 1, -1, 1, -1, 1, -1], dtype=np.int64)
+
+    result = survival.logrank_test(time[::2], status[::2], group[::2])
+
+    assert hasattr(result, "statistic")
+
+
 @pytest.mark.skipif(not HAS_PANDAS, reason="pandas not installed")
 def test_logrank_with_pandas():
     time_list = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
