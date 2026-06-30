@@ -61,10 +61,6 @@ fn compute_gradient_hessian_diag_fast(
         &exp_eta,
     );
 
-    let features_to_process: Vec<usize> = active_set
-        .map(|a| a.to_vec())
-        .unwrap_or_else(|| (0..data.p).collect());
-
     let mut gradient = vec![0.0; data.p];
     let mut hessian_diag = vec![0.0; data.p];
 
@@ -79,7 +75,7 @@ fn compute_gradient_hessian_diag_fast(
             continue;
         }
 
-        for &j in &features_to_process {
+        let mut accumulate_feature = |j: usize| {
             let xij = data.x[i * data.p + j];
             let cumsum_idx = pos * data.p + j;
             let x_bar = risk_data.cumsum_weighted_x[cumsum_idx] / risk_sum;
@@ -87,6 +83,19 @@ fn compute_gradient_hessian_diag_fast(
 
             gradient[j] += data.weights[i] * (xij - x_bar);
             hessian_diag[j] += data.weights[i] * (x_sq_bar - x_bar * x_bar);
+        };
+
+        match active_set {
+            Some(features) => {
+                for &j in features {
+                    accumulate_feature(j);
+                }
+            }
+            None => {
+                for j in 0..data.p {
+                    accumulate_feature(j);
+                }
+            }
         }
     }
 
