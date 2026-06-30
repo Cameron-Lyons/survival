@@ -4,6 +4,7 @@ use crate::internal::validation::{
 use crate::{SurvivalError, SurvivalResult};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use std::borrow::Cow;
 
 fn validate_finite(slice: &[f64], field: &'static str) -> SurvivalResult<()> {
     for (index, value) in slice.iter().enumerate() {
@@ -349,17 +350,18 @@ impl CoxRegressionInput {
         Ok(())
     }
 
-    pub(crate) fn weights_or_unit(&self) -> Vec<f64> {
+    pub(crate) fn weights_or_unit_cow(&self) -> Cow<'_, [f64]> {
         self.weights
             .as_ref()
-            .map(|weights| weights.values.clone())
-            .unwrap_or_else(|| vec![1.0; self.covariates.n_obs])
+            .map(|weights| Cow::Borrowed(weights.values.as_slice()))
+            .unwrap_or_else(|| Cow::Owned(vec![1.0; self.covariates.n_obs]))
     }
 
-    pub(crate) fn offset_or_zero(&self) -> Vec<f64> {
+    pub(crate) fn offset_or_zero_cow(&self) -> Cow<'_, [f64]> {
         self.offset
-            .clone()
-            .unwrap_or_else(|| vec![0.0; self.covariates.n_obs])
+            .as_deref()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(vec![0.0; self.covariates.n_obs]))
     }
 }
 
@@ -498,5 +500,43 @@ impl AndersenGillInput {
         self.strata
             .clone()
             .unwrap_or_else(|| vec![0; self.counting.len()])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cox_input(weights: Option<Weights>, offset: Option<Vec<f64>>) -> CoxRegressionInput {
+        CoxRegressionInput::try_new(
+            CovariateMatrix::try_new(vec![1.0, 2.0, 3.0, 4.0], 2, 2).unwrap(),
+            SurvivalData::try_new(vec![1.0, 2.0], vec![1, 0]).unwrap(),
+            weights,
+            offset,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cox_regression_input_borrows_supplied_weights_and_offset() {
+        let input = cox_input(
+            Some(Weights::try_new(vec![0.5, 1.5]).unwrap()),
+            Some(vec![0.1, 0.2]),
+        );
+
+        assert!(matches!(input.weights_or_unit_cow(), Cow::Borrowed(_)));
+        assert!(matches!(input.offset_or_zero_cow(), Cow::Borrowed(_)));
+        assert_eq!(input.weights_or_unit_cow().as_ref(), [0.5, 1.5]);
+        assert_eq!(input.offset_or_zero_cow().as_ref(), [0.1, 0.2]);
+    }
+
+    #[test]
+    fn cox_regression_input_allocates_missing_defaults() {
+        let input = cox_input(None, None);
+
+        assert!(matches!(input.weights_or_unit_cow(), Cow::Owned(_)));
+        assert!(matches!(input.offset_or_zero_cow(), Cow::Owned(_)));
+        assert_eq!(input.weights_or_unit_cow().as_ref(), [1.0, 1.0]);
+        assert_eq!(input.offset_or_zero_cow().as_ref(), [0.0, 0.0]);
     }
 }

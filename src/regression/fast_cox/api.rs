@@ -194,8 +194,8 @@ pub(crate) fn fast_cox_path_typed(
     let n_vars = input.covariates.n_vars;
     let time = &input.survival.time;
     let status = &input.survival.status;
-    let wt = input.weights_or_unit();
-    let off = input.offset_or_zero();
+    let wt = input.weights_or_unit_cow();
+    let off = input.offset_or_zero_cow();
 
     let (x_std, _means, sds) = standardize_row_major_matrix(x, n_obs, n_vars);
 
@@ -206,8 +206,8 @@ pub(crate) fn fast_cox_path_typed(
         p: n_vars,
         time,
         status,
-        weights: &wt,
-        offset: &off,
+        weights: wt.as_ref(),
+        offset: off.as_ref(),
     };
     let (gradient, _) = compute_gradient_hessian_diag_fast(&fit_data, &beta_zero, None);
 
@@ -270,8 +270,8 @@ pub(crate) fn fast_cox_path_typed(
             p: n_vars,
             time,
             status,
-            weights: &wt,
-            offset: &off,
+            weights: wt.as_ref(),
+            offset: off.as_ref(),
         };
         let deviance = compute_cox_deviance(&deviance_data, &coefficients);
 
@@ -326,8 +326,8 @@ pub(crate) fn fast_cox_cv_typed(
     let n_vars = input.covariates.n_vars;
     let time = &input.survival.time;
     let status = &input.survival.status;
-    let wt = input.weights_or_unit();
-    let offset = input.offset_or_zero();
+    let wt = input.weights_or_unit_cow();
+    let offset = input.offset_or_zero_cow();
 
     let mut rng =
         fastrand::Rng::with_seed(config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED));
@@ -348,7 +348,8 @@ pub(crate) fn fast_cox_cv_typed(
     let x_ref = x;
     let time_ref = time;
     let status_ref = status;
-    let wt_ref = &wt;
+    let wt_ref = wt.as_ref();
+    let offset_ref = offset.as_ref();
     let cv_deviances: Vec<Vec<f64>> = path
         .lambdas
         .par_iter()
@@ -367,7 +368,8 @@ pub(crate) fn fast_cox_cv_typed(
                     let train_time: Vec<f64> = train_idx.iter().map(|&i| time_ref[i]).collect();
                     let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
                     let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt_ref[i]).collect();
-                    let train_offset: Vec<f64> = train_idx.iter().map(|&i| offset[i]).collect();
+                    let train_offset: Vec<f64> =
+                        train_idx.iter().map(|&i| offset_ref[i]).collect();
 
                     let Ok(fit_config) = FastCoxConfig::new(
                         lambda,
@@ -410,7 +412,8 @@ pub(crate) fn fast_cox_cv_typed(
                         let test_status: Vec<i32> =
                             test_idx.iter().map(|&i| status_ref[i]).collect();
                         let test_wt: Vec<f64> = test_idx.iter().map(|&i| wt_ref[i]).collect();
-                        let test_off: Vec<f64> = test_idx.iter().map(|&i| offset[i]).collect();
+                        let test_off: Vec<f64> =
+                            test_idx.iter().map(|&i| offset_ref[i]).collect();
 
                         let test_data = FastCoxData {
                             x: &test_x,
