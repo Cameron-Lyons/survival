@@ -2,6 +2,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use crate::internal::validation::{PermutationIndexError, validate_zero_based_i32_permutation};
+
 fn length_error(field: &str, actual: usize, expected: usize) -> PyErr {
     PyValueError::new_err(format!(
         "{field} length mismatch: got {actual}, expected {expected}"
@@ -20,28 +22,27 @@ fn validate_finite(values: &[f64], field: &str) -> PyResult<()> {
 }
 
 fn validate_order(order: &[i32], n: usize) -> PyResult<()> {
-    let mut seen = vec![false; n];
-    for (position, &raw_index) in order.iter().enumerate() {
-        if raw_index < 0 {
-            return Err(PyValueError::new_err(format!(
-                "order values must be non-negative, got {raw_index} at position {position}"
-            )));
-        }
-
-        let index = raw_index as usize;
-        if index >= n {
-            return Err(PyValueError::new_err(format!(
-                "order values must be less than {n}, got {raw_index} at position {position}"
-            )));
-        }
-        if seen[index] {
-            return Err(PyValueError::new_err(format!(
-                "order must be a permutation; duplicate index {raw_index} at position {position}"
-            )));
-        }
-        seen[index] = true;
+    match validate_zero_based_i32_permutation(order, n) {
+        Ok(()) => Ok(()),
+        Err(PermutationIndexError::Negative {
+            position,
+            value: raw_index,
+        }) => Err(PyValueError::new_err(format!(
+            "order values must be non-negative, got {raw_index} at position {position}"
+        ))),
+        Err(PermutationIndexError::OutOfBounds {
+            position,
+            value: raw_index,
+        }) => Err(PyValueError::new_err(format!(
+            "order values must be less than {n}, got {raw_index} at position {position}"
+        ))),
+        Err(PermutationIndexError::Duplicate {
+            position,
+            value: raw_index,
+        }) => Err(PyValueError::new_err(format!(
+            "order must be a permutation; duplicate index {raw_index} at position {position}"
+        ))),
     }
-    Ok(())
 }
 
 struct CollapseSlices<'a> {

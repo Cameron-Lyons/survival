@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 
-use crate::internal::validation::validate_binary_i32;
+use crate::internal::validation::{
+    PermutationIndexError, validate_binary_i32, validate_zero_based_i32_permutation,
+};
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
@@ -27,22 +29,18 @@ fn validate_finite(values: &[f64], name: &str) -> PyResult<()> {
 }
 
 fn validate_sort_indices(values: &[i32], n: usize, name: &str) -> PyResult<()> {
-    let mut seen = vec![false; n];
-    for (idx, &value) in values.iter().enumerate() {
-        if value < 0 || value as usize >= n {
-            return Err(value_error(format!(
-                "{name} index out of bounds at position {idx}: {value}"
-            )));
-        }
-        let value = value as usize;
-        if seen[value] {
-            return Err(value_error(format!(
-                "{name} must be a permutation of 0..{n}; duplicate index {value} at position {idx}"
-            )));
-        }
-        seen[value] = true;
+    match validate_zero_based_i32_permutation(values, n) {
+        Ok(()) => Ok(()),
+        Err(PermutationIndexError::Negative { position, value }) => Err(value_error(format!(
+            "{name} index out of bounds at position {position}: {value}"
+        ))),
+        Err(PermutationIndexError::OutOfBounds { position, value }) => Err(value_error(format!(
+            "{name} index out of bounds at position {position}: {value}"
+        ))),
+        Err(PermutationIndexError::Duplicate { position, value }) => Err(value_error(format!(
+            "{name} must be a permutation of 0..{n}; duplicate index {value} at position {position}"
+        ))),
     }
-    Ok(())
 }
 
 fn validate_strata_boundaries(values: &[i32], n: usize) -> PyResult<()> {

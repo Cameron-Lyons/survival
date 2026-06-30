@@ -1,6 +1,7 @@
 use super::common::{
     apply_deltas_add, apply_deltas_set, build_score_result, validate_scoring_inputs,
 };
+use crate::internal::validation::{PermutationIndexError, validate_one_based_i32_permutation};
 use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -9,25 +10,18 @@ fn validate_one_based_sort1(sort1: &[i32], n: usize) -> Result<Vec<usize>, Strin
     if sort1.len() != n {
         return Err("Sort1 length does not match observations".to_string());
     }
-    let mut seen = vec![false; n];
-    let mut normalized = Vec::with_capacity(n);
-    for (idx, &value) in sort1.iter().enumerate() {
-        if value < 1 || value as usize > n {
-            return Err(format!(
-                "Sort1 value {value} at position {idx} is outside 1..={n}"
-            ));
-        }
-        let value = value as usize - 1;
-        if seen[value] {
-            return Err(format!(
-                "Sort1 must be a permutation of 1..={n}; duplicate index {} at position {idx}",
-                value + 1
-            ));
-        }
-        seen[value] = true;
-        normalized.push(value);
+    match validate_one_based_i32_permutation(sort1, n) {
+        Ok(normalized) => Ok(normalized),
+        Err(PermutationIndexError::Negative { position, value }) => Err(format!(
+            "Sort1 value {value} at position {position} is outside 1..={n}"
+        )),
+        Err(PermutationIndexError::OutOfBounds { position, value }) => Err(format!(
+            "Sort1 value {value} at position {position} is outside 1..={n}"
+        )),
+        Err(PermutationIndexError::Duplicate { position, value }) => Err(format!(
+            "Sort1 must be a permutation of 1..={n}; duplicate index {value} at position {position}"
+        )),
     }
-    Ok(normalized)
 }
 
 #[inline]
