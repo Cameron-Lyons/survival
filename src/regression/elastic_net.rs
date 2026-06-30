@@ -1,3 +1,4 @@
+use crate::internal::cox_risk::{cox_risk_shift, precompute_cox_risk_set_cumsum, shifted_exp_eta};
 use crate::internal::matrix::standardize_row_major_matrix;
 use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData, Weights};
 use pyo3::prelude::*;
@@ -251,13 +252,6 @@ struct ElasticNetData<'a> {
     offset: &'a [f64],
 }
 
-struct RiskSetData {
-    cumsum_exp_eta: Vec<f64>,
-    cumsum_weighted_x: Vec<Vec<f64>>,
-    cumsum_weighted_x_sq: Vec<Vec<f64>>,
-    risk_set_pos: Vec<usize>,
-}
-
 struct ElasticNetDescentConfig<'a> {
     lambda: f64,
     l1_ratio: f64,
@@ -279,86 +273,6 @@ fn linear_predictors(data: &ElasticNetData, beta: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-fn risk_shift(eta: &[f64], weights: &[f64]) -> f64 {
-    let shift = eta
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(&eta_i, &weight)| {
-            if weight > 0.0 && eta_i.is_finite() {
-                Some(eta_i)
-            } else {
-                None
-            }
-        })
-        .fold(f64::NEG_INFINITY, f64::max);
-
-    if shift.is_finite() { shift } else { 0.0 }
-}
-
-fn shifted_exp_eta(eta: &[f64], weights: &[f64]) -> Vec<f64> {
-    let shift = risk_shift(eta, weights);
-    eta.iter().map(|&eta_i| (eta_i - shift).exp()).collect()
-}
-
-#[allow(clippy::needless_range_loop)]
-fn precompute_risk_set_cumsum(
-    x: &[f64],
-    n: usize,
-    p: usize,
-    time: &[f64],
-    weights: &[f64],
-    exp_eta: &[f64],
-) -> RiskSetData {
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]).then_with(|| a.cmp(&b)));
-
-    let mut cumsum_exp_eta = vec![0.0; n];
-    let mut cumsum_weighted_x = vec![vec![0.0; p]; n];
-    let mut cumsum_weighted_x_sq = vec![vec![0.0; p]; n];
-    let mut risk_set_pos = vec![0usize; n];
-
-    let mut running_exp = 0.0;
-    let mut running_x = vec![0.0; p];
-    let mut running_x_sq = vec![0.0; p];
-
-    for (pos, &idx) in indices.iter().enumerate() {
-        let w = weights[idx] * exp_eta[idx];
-        running_exp += w;
-
-        for j in 0..p {
-            let xij = x[idx * p + j];
-            running_x[j] += w * xij;
-            running_x_sq[j] += w * xij * xij;
-        }
-
-        cumsum_exp_eta[pos] = running_exp;
-        cumsum_weighted_x[pos] = running_x.clone();
-        cumsum_weighted_x_sq[pos] = running_x_sq.clone();
-    }
-
-    let mut start = 0;
-    while start < n {
-        let current_time = time[indices[start]];
-        let mut end = start + 1;
-        while end < n && crate::constants::same_time(time[indices[end]], current_time) {
-            end += 1;
-        }
-
-        let pos = end - 1;
-        for &idx in &indices[start..end] {
-            risk_set_pos[idx] = pos;
-        }
-        start = end;
-    }
-
-    RiskSetData {
-        cumsum_exp_eta,
-        cumsum_weighted_x,
-        cumsum_weighted_x_sq,
-        risk_set_pos,
-    }
-}
-
 #[allow(clippy::needless_range_loop)]
 fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let mut gradient = vec![0.0; data.p];
@@ -366,7 +280,7 @@ fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64
     let eta = linear_predictors(data, beta);
     let exp_eta = shifted_exp_eta(&eta, data.weights);
     let risk_data =
-        precompute_risk_set_cumsum(data.x, data.n, data.p, data.time, data.weights, &exp_eta);
+        precompute_cox_risk_set_cumsum(data.x, data.n, data.p, data.time, data.weights, &exp_eta);
 
     for i in 0..data.n {
         if data.status[i] != 1 {
@@ -395,10 +309,10 @@ fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64
 #[allow(clippy::needless_range_loop)]
 fn compute_cox_deviance(data: &ElasticNetData, beta: &[f64]) -> f64 {
     let eta = linear_predictors(data, beta);
-    let shift = risk_shift(&eta, data.weights);
+    let shift = cox_risk_shift(&eta, data.weights);
     let exp_eta: Vec<f64> = eta.iter().map(|&eta_i| (eta_i - shift).exp()).collect();
     let risk_data =
-        precompute_risk_set_cumsum(data.x, data.n, data.p, data.time, data.weights, &exp_eta);
+        precompute_cox_risk_set_cumsum(data.x, data.n, data.p, data.time, data.weights, &exp_eta);
 
     let mut loglik = 0.0;
 
