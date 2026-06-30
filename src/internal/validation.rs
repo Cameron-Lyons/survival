@@ -205,6 +205,81 @@ pub(crate) fn validate_binary_f64(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PermutationIndexError {
+    Negative { position: usize, value: i32 },
+    OutOfBounds { position: usize, value: String },
+    Duplicate { position: usize, value: usize },
+}
+
+fn mark_permutation_index(
+    seen: &mut [bool],
+    position: usize,
+    zero_based_value: usize,
+    display_value: usize,
+) -> Result<(), PermutationIndexError> {
+    if zero_based_value >= seen.len() {
+        return Err(PermutationIndexError::OutOfBounds {
+            position,
+            value: display_value.to_string(),
+        });
+    }
+    if seen[zero_based_value] {
+        return Err(PermutationIndexError::Duplicate {
+            position,
+            value: display_value,
+        });
+    }
+    seen[zero_based_value] = true;
+    Ok(())
+}
+
+pub(crate) fn validate_zero_based_usize_permutation(
+    values: &[usize],
+    n: usize,
+) -> Result<(), PermutationIndexError> {
+    let mut seen = vec![false; n];
+    for (position, &value) in values.iter().enumerate() {
+        mark_permutation_index(&mut seen, position, value, value)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_zero_based_i32_permutation(
+    values: &[i32],
+    n: usize,
+) -> Result<(), PermutationIndexError> {
+    let mut seen = vec![false; n];
+    for (position, &value) in values.iter().enumerate() {
+        if value < 0 {
+            return Err(PermutationIndexError::Negative { position, value });
+        }
+        let value = value as usize;
+        mark_permutation_index(&mut seen, position, value, value)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_one_based_i32_permutation(
+    values: &[i32],
+    n: usize,
+) -> Result<Vec<usize>, PermutationIndexError> {
+    let mut seen = vec![false; n];
+    let mut normalized = Vec::with_capacity(values.len());
+    for (position, &raw_value) in values.iter().enumerate() {
+        if raw_value < 1 {
+            return Err(PermutationIndexError::OutOfBounds {
+                position,
+                value: raw_value.to_string(),
+            });
+        }
+        let zero_based_value = raw_value as usize - 1;
+        mark_permutation_index(&mut seen, position, zero_based_value, raw_value as usize)?;
+        normalized.push(zero_based_value);
+    }
+    Ok(normalized)
+}
+
 pub(crate) fn validate_non_overlapping_intervals_i32(
     id: &[i32],
     start: &[f64],
@@ -279,4 +354,87 @@ pub(crate) fn validate_confidence_level(confidence_level: f64) -> Result<(), PyE
 
 pub(crate) fn clamp_probability(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_based_usize_permutation_rejects_invalid_indices() {
+        assert!(validate_zero_based_usize_permutation(&[2, 0, 1], 3).is_ok());
+
+        let out_of_bounds = validate_zero_based_usize_permutation(&[0, 3, 1], 3)
+            .expect_err("out-of-bounds index should fail");
+        assert_eq!(
+            out_of_bounds,
+            PermutationIndexError::OutOfBounds {
+                position: 1,
+                value: "3".to_string(),
+            }
+        );
+
+        let duplicate = validate_zero_based_usize_permutation(&[0, 0, 1], 3)
+            .expect_err("duplicate index should fail");
+        assert_eq!(
+            duplicate,
+            PermutationIndexError::Duplicate {
+                position: 1,
+                value: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn zero_based_i32_permutation_rejects_invalid_indices() {
+        assert!(validate_zero_based_i32_permutation(&[2, 0, 1], 3).is_ok());
+
+        let negative = validate_zero_based_i32_permutation(&[0, -1, 1], 3)
+            .expect_err("negative index should fail");
+        assert_eq!(
+            negative,
+            PermutationIndexError::Negative {
+                position: 1,
+                value: -1,
+            }
+        );
+
+        let out_of_bounds = validate_zero_based_i32_permutation(&[0, 3, 1], 3)
+            .expect_err("out-of-bounds index should fail");
+        assert_eq!(
+            out_of_bounds,
+            PermutationIndexError::OutOfBounds {
+                position: 1,
+                value: "3".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn one_based_i32_permutation_normalizes_valid_indices() {
+        assert_eq!(
+            validate_one_based_i32_permutation(&[3, 1, 2], 3).unwrap(),
+            vec![2, 0, 1]
+        );
+
+        let zero = validate_one_based_i32_permutation(&[1, 0, 3], 3)
+            .expect_err("zero one-based index should fail");
+        assert_eq!(
+            zero,
+            PermutationIndexError::OutOfBounds {
+                position: 1,
+                value: "0".to_string(),
+            }
+        );
+
+        let duplicate = validate_one_based_i32_permutation(&[1, 1, 3], 3)
+            .expect_err("duplicate one-based index should fail");
+        assert_eq!(
+            duplicate,
+            PermutationIndexError::Duplicate {
+                position: 1,
+                value: 1,
+            }
+        );
+    }
 }

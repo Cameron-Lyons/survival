@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 
-use crate::internal::validation::validate_binary_f64;
+use crate::internal::validation::{
+    PermutationIndexError, validate_binary_f64, validate_zero_based_usize_permutation,
+};
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
@@ -43,21 +45,18 @@ fn validate_strata_markers(values: &[i32], n: usize) -> PyResult<()> {
 }
 
 fn validate_sort_indices(values: &[usize], n: usize, name: &str) -> PyResult<()> {
-    let mut seen = vec![false; n];
-    for (idx, &value) in values.iter().enumerate() {
-        if value >= n {
-            return Err(value_error(format!(
-                "{name} index out of bounds at position {idx}: {value} >= {n}"
-            )));
+    match validate_zero_based_usize_permutation(values, n) {
+        Ok(()) => Ok(()),
+        Err(PermutationIndexError::OutOfBounds { position, value }) => Err(value_error(format!(
+            "{name} index out of bounds at position {position}: {value} >= {n}"
+        ))),
+        Err(PermutationIndexError::Duplicate { position, value }) => Err(value_error(format!(
+            "{name} must be a permutation of 0..{n}; duplicate index {value} at position {position}"
+        ))),
+        Err(PermutationIndexError::Negative { .. }) => {
+            unreachable!("usize indices are never negative")
         }
-        if seen[value] {
-            return Err(value_error(format!(
-                "{name} must be a permutation of 0..{n}; duplicate index {value} at position {idx}"
-            )));
-        }
-        seen[value] = true;
     }
-    Ok(())
 }
 
 fn validate_coxcount1_inputs(time: &[f64], status: &[f64], strata: &[i32]) -> PyResult<()> {
