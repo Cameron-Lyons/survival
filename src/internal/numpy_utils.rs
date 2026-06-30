@@ -3,9 +3,20 @@ use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
+fn readonly_array1_to_vec<T>(arr: &PyReadonlyArray1<'_, T>) -> Vec<T>
+where
+    T: numpy::Element + Copy,
+{
+    match arr.as_slice() {
+        Ok(slice) => slice.to_vec(),
+        Err(_) => arr.as_array().iter().copied().collect(),
+    }
+}
+
+#[cfg(feature = "python")]
 pub(crate) fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     if let Ok(arr) = obj.extract::<PyReadonlyArray1<'_, f64>>() {
-        return Ok(arr.as_slice()?.to_vec());
+        return Ok(readonly_array1_to_vec(&arr));
     }
     if let Ok(list) = obj.extract::<Vec<f64>>() {
         return Ok(list);
@@ -13,13 +24,13 @@ pub(crate) fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     if let Ok(values) = obj.getattr("values")
         && let Ok(arr) = values.extract::<PyReadonlyArray1<'_, f64>>()
     {
-        return Ok(arr.as_slice()?.to_vec());
+        return Ok(readonly_array1_to_vec(&arr));
     }
     if let Ok(to_numpy) = obj.getattr("to_numpy")
         && let Ok(arr_obj) = to_numpy.call0()
         && let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, f64>>()
     {
-        return Ok(arr.as_slice()?.to_vec());
+        return Ok(readonly_array1_to_vec(&arr));
     }
     let type_name = obj
         .get_type()
@@ -36,10 +47,13 @@ pub(crate) fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
 #[cfg(feature = "python")]
 pub(crate) fn extract_vec_i32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
     if let Ok(arr) = obj.extract::<PyReadonlyArray1<'_, i32>>() {
-        return Ok(arr.as_slice()?.to_vec());
+        return Ok(readonly_array1_to_vec(&arr));
     }
     if let Ok(arr) = obj.extract::<PyReadonlyArray1<'_, i64>>() {
-        return Ok(arr.as_slice()?.iter().map(|&x| x as i32).collect());
+        return Ok(readonly_array1_to_vec(&arr)
+            .into_iter()
+            .map(|x| x as i32)
+            .collect());
     }
     if let Ok(list) = obj.extract::<Vec<i32>>() {
         return Ok(list);
@@ -50,24 +64,30 @@ pub(crate) fn extract_vec_i32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
     if let Ok(values) = obj.getattr("values")
         && let Ok(arr) = values.extract::<PyReadonlyArray1<'_, i32>>()
     {
-        return Ok(arr.as_slice()?.to_vec());
+        return Ok(readonly_array1_to_vec(&arr));
     }
     if let Ok(values) = obj.getattr("values")
         && let Ok(arr) = values.extract::<PyReadonlyArray1<'_, i64>>()
     {
-        return Ok(arr.as_slice()?.iter().map(|&x| x as i32).collect());
+        return Ok(readonly_array1_to_vec(&arr)
+            .into_iter()
+            .map(|x| x as i32)
+            .collect());
     }
     if let Ok(to_numpy) = obj.getattr("to_numpy")
         && let Ok(arr_obj) = to_numpy.call0()
         && let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, i32>>()
     {
-        return Ok(arr.as_slice()?.to_vec());
+        return Ok(readonly_array1_to_vec(&arr));
     }
     if let Ok(to_numpy) = obj.getattr("to_numpy")
         && let Ok(arr_obj) = to_numpy.call0()
         && let Ok(arr) = arr_obj.extract::<PyReadonlyArray1<'_, i64>>()
     {
-        return Ok(arr.as_slice()?.iter().map(|&x| x as i32).collect());
+        return Ok(readonly_array1_to_vec(&arr)
+            .into_iter()
+            .map(|x| x as i32)
+            .collect());
     }
     let type_name = obj
         .get_type()
