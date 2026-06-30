@@ -1,4 +1,6 @@
-use crate::internal::cox_risk::{cox_risk_shift, precompute_cox_risk_set_cumsum, shifted_exp_eta};
+use crate::internal::cox_risk::{
+    cox_risk_shift, precompute_cox_risk_set_cumsum, shifted_exp_eta, shifted_exp_eta_with_shift,
+};
 use crate::internal::matrix::{
     standardize_or_borrow_row_major_matrix, standardize_row_major_matrix,
 };
@@ -313,7 +315,7 @@ fn compute_cox_gradient_hessian(data: &ElasticNetData, beta: &[f64]) -> (Vec<f64
 fn compute_cox_deviance(data: &ElasticNetData, beta: &[f64]) -> f64 {
     let eta = linear_predictors(data, beta);
     let shift = cox_risk_shift(&eta, data.weights);
-    let exp_eta: Vec<f64> = eta.iter().map(|&eta_i| (eta_i - shift).exp()).collect();
+    let exp_eta = shifted_exp_eta_with_shift(&eta, data.weights, shift);
     let risk_data =
         precompute_cox_risk_set_cumsum(data.x, data.n, data.p, data.time, data.weights, &exp_eta);
 

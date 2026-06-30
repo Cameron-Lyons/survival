@@ -149,7 +149,7 @@ fn apply_edpp_screening(
 fn compute_cox_deviance(data: &FastCoxData, beta: &[f64]) -> f64 {
     let eta = linear_predictors(data, beta);
     let risk_shift = cox_risk_shift(&eta, data.weights);
-    let exp_eta: Vec<f64> = eta.iter().map(|&eta_i| (eta_i - risk_shift).exp()).collect();
+    let exp_eta = shifted_exp_eta_with_shift(&eta, data.weights, risk_shift);
     let risk_data = precompute_cox_risk_set_cumsum(
         data.x,
         data.n,
