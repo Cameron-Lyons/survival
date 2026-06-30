@@ -251,14 +251,13 @@ pub(crate) fn fast_cox_path_typed(
             },
         );
 
-        beta_warm = beta_std.clone();
-        lambda_prev = Some(lambda);
-
         let coefficients: Vec<f64> = beta_std
             .iter()
             .zip(sds.iter())
             .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
             .collect();
+        beta_warm = beta_std;
+        lambda_prev = Some(lambda);
 
         let df = coefficients
             .iter()
