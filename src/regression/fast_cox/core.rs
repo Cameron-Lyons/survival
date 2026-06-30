@@ -8,31 +8,6 @@ fn soft_threshold(x: f64, lambda: f64) -> f64 {
     }
 }
 
-fn standardize_matrix(x: &[f64], n: usize, p: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let mut means = vec![0.0; p];
-    let mut sds = vec![1.0; p];
-    let mut x_std = x.to_vec();
-
-    for j in 0..p {
-        let mut sum = 0.0;
-        let mut sum_sq = 0.0;
-        for i in 0..n {
-            let val = x[i * p + j];
-            sum += val;
-            sum_sq += val * val;
-        }
-        means[j] = sum / n as f64;
-        let var = sum_sq / n as f64 - means[j] * means[j];
-        sds[j] = var.sqrt().max(crate::constants::DIVISION_FLOOR);
-
-        for i in 0..n {
-            x_std[i * p + j] = (x[i * p + j] - means[j]) / sds[j];
-        }
-    }
-
-    (x_std, means, sds)
-}
-
 struct RiskSetData {
     cumsum_exp_eta: Vec<f64>,
     cumsum_weighted_x: Vec<Vec<f64>>,

@@ -6,6 +6,36 @@ use faer::{linalg::solvers::DenseSolveCore, prelude::*};
 use ndarray::{Array1, Array2};
 use rayon::prelude::*;
 
+pub(crate) fn standardize_row_major_matrix(
+    x: &[f64],
+    n_rows: usize,
+    n_cols: usize,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let mut means = vec![0.0; n_cols];
+    let mut scales = vec![1.0; n_cols];
+    let mut standardized = x.to_vec();
+
+    for col in 0..n_cols {
+        let mut sum = 0.0;
+        let mut sum_sq = 0.0;
+        for row in 0..n_rows {
+            let value = x[row * n_cols + col];
+            sum += value;
+            sum_sq += value * value;
+        }
+
+        means[col] = sum / n_rows as f64;
+        let variance = sum_sq / n_rows as f64 - means[col] * means[col];
+        scales[col] = variance.sqrt().max(crate::constants::DIVISION_FLOOR);
+
+        for row in 0..n_rows {
+            standardized[row * n_cols + col] = (x[row * n_cols + col] - means[col]) / scales[col];
+        }
+    }
+
+    (standardized, means, scales)
+}
+
 #[inline]
 fn ndarray_to_faer(arr: &Array2<f64>) -> Mat<f64> {
     let (rows, cols) = arr.dim();
@@ -289,6 +319,21 @@ mod tests {
         let result = regularized_lu_solve(&matrix, &vector).unwrap();
         assert!((result[0] - 1.0).abs() < 1e-10);
         assert!((result[1] - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn standardize_row_major_matrix_centers_and_scales_columns() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let (standardized, means, scales) = standardize_row_major_matrix(&x, 3, 2);
+
+        assert_eq!(means, vec![3.0, 4.0]);
+        assert!((scales[0] - (8.0_f64 / 3.0).sqrt()).abs() < 1e-12);
+        assert!((scales[1] - (8.0_f64 / 3.0).sqrt()).abs() < 1e-12);
+
+        for col in 0..2 {
+            let column_sum: f64 = (0..3).map(|row| standardized[row * 2 + col]).sum();
+            assert!(column_sum.abs() < 1e-12);
+        }
     }
 
     #[test]

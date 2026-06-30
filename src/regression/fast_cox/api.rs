@@ -31,7 +31,7 @@ fn fast_cox_slices(
     };
 
     let (x_std, means, sds) = if config.standardize {
-        standardize_matrix(x, n_obs, n_vars)
+        standardize_row_major_matrix(x, n_obs, n_vars)
     } else {
         (x.to_vec(), vec![0.0; n_vars], vec![1.0; n_vars])
     };
@@ -197,7 +197,7 @@ pub(crate) fn fast_cox_path_typed(
     let wt = input.weights_or_unit();
     let off = input.offset_or_zero();
 
-    let (x_std, _means, sds) = standardize_matrix(x, n_obs, n_vars);
+    let (x_std, _means, sds) = standardize_row_major_matrix(x, n_obs, n_vars);
 
     let beta_zero = vec![0.0; n_vars];
     let fit_data = FastCoxData {

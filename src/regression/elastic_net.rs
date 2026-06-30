@@ -1,3 +1,4 @@
+use crate::internal::matrix::standardize_row_major_matrix;
 use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData, Weights};
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -240,31 +241,6 @@ fn soft_threshold(x: f64, lambda: f64) -> f64 {
     }
 }
 
-fn standardize_matrix(x: &[f64], n: usize, p: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let mut means = vec![0.0; p];
-    let mut sds = vec![1.0; p];
-    let mut x_std = x.to_vec();
-
-    for j in 0..p {
-        let mut sum = 0.0;
-        let mut sum_sq = 0.0;
-        for i in 0..n {
-            let val = x[i * p + j];
-            sum += val;
-            sum_sq += val * val;
-        }
-        means[j] = sum / n as f64;
-        let var = sum_sq / n as f64 - means[j] * means[j];
-        sds[j] = var.sqrt().max(crate::constants::DIVISION_FLOOR);
-
-        for i in 0..n {
-            x_std[i * p + j] = (x[i * p + j] - means[j]) / sds[j];
-        }
-    }
-
-    (x_std, means, sds)
-}
-
 struct ElasticNetData<'a> {
     x: &'a [f64],
     n: usize,
@@ -497,7 +473,7 @@ pub(crate) fn elastic_net_cox_typed(
     let off = input.offset_or_zero();
 
     let (x_std, _means, sds) = if config.standardize {
-        standardize_matrix(x, n_obs, n_vars)
+        standardize_row_major_matrix(x, n_obs, n_vars)
     } else {
         (x.to_vec(), vec![0.0; n_vars], vec![1.0; n_vars])
     };
@@ -594,7 +570,7 @@ pub(crate) fn elastic_net_cox_path_typed(
     let wt = input.weights_or_unit();
     let off = input.offset_or_zero();
 
-    let (x_std, _means, sds) = standardize_matrix(x, n_obs, n_vars);
+    let (x_std, _means, sds) = standardize_row_major_matrix(x, n_obs, n_vars);
 
     let beta_zero = vec![0.0; n_vars];
     let fit_data = ElasticNetData {
