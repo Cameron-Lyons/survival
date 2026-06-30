@@ -30,15 +30,12 @@ fn fast_cox_slices(
         }
     };
 
-    let (x_std, means, sds) = if config.standardize {
-        standardize_row_major_matrix(x, n_obs, n_vars)
-    } else {
-        (x.to_vec(), vec![0.0; n_vars], vec![1.0; n_vars])
-    };
+    let (x_std, means, sds) =
+        standardize_or_borrow_row_major_matrix(x, n_obs, n_vars, config.standardize);
 
     let beta_zero = vec![0.0; n_vars];
     let fit_data = FastCoxData {
-        x: &x_std,
+        x: x_std.as_ref(),
         n: n_obs,
         p: n_vars,
         time,

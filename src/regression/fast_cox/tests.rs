@@ -67,6 +67,14 @@ mod tests {
 
         let result = fast_cox_typed(&input, &config).unwrap();
         assert_eq!(result.coefficients.len(), 2);
+
+        let unstandardized_config =
+            FastCoxConfig::new(0.1, 1.0, 100, 1e-5, ScreeningRule::None, None, 10, false, true)
+                .unwrap();
+        let unstandardized = fast_cox_typed(&input, &unstandardized_config).unwrap();
+        assert_eq!(unstandardized.coefficients.len(), 2);
+        assert!(unstandardized.scale_factors.is_none());
+        assert!(unstandardized.center_values.is_none());
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use crate::internal::cox_risk::{cox_risk_shift, precompute_cox_risk_set_cumsum, shifted_exp_eta};
-use crate::internal::matrix::standardize_row_major_matrix;
+use crate::internal::matrix::{
+    standardize_or_borrow_row_major_matrix, standardize_row_major_matrix,
+};
 use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData, Weights};
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -387,14 +389,11 @@ pub(crate) fn elastic_net_cox_typed(
     let wt = input.weights_or_unit_cow();
     let off = input.offset_or_zero_cow();
 
-    let (x_std, _means, sds) = if config.standardize {
-        standardize_row_major_matrix(x, n_obs, n_vars)
-    } else {
-        (x.to_vec(), vec![0.0; n_vars], vec![1.0; n_vars])
-    };
+    let (x_std, _means, sds) =
+        standardize_or_borrow_row_major_matrix(x, n_obs, n_vars, config.standardize);
 
     let fit_data = ElasticNetData {
-        x: &x_std,
+        x: x_std.as_ref(),
         n: n_obs,
         p: n_vars,
         time,
@@ -855,6 +854,12 @@ mod tests {
 
         let result = elastic_net_cox_typed(&input, &config).unwrap();
         assert_eq!(result.coefficients.len(), 2);
+
+        let unstandardized_config =
+            ElasticNetConfig::new(0.1, 0.5, 100, 1e-5, false, false).expect("config is valid");
+        let unstandardized = elastic_net_cox_typed(&input, &unstandardized_config).unwrap();
+        assert_eq!(unstandardized.coefficients.len(), 2);
+        assert!(unstandardized.scale_factors.is_none());
     }
 
     #[test]
