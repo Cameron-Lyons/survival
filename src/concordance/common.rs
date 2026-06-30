@@ -1,4 +1,4 @@
-use crate::internal::validation::{validate_length, ValidationError};
+use crate::internal::validation::{ValidationError, validate_length};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -304,15 +304,19 @@ mod tests {
 
         let i32_out_of_bounds = validate_i32_order_indices(&[0, 2], 2, "sort_stop")
             .expect_err("order index outside observations should fail");
-        assert!(i32_out_of_bounds
-            .to_string()
-            .contains("outside observation count"));
+        assert!(
+            i32_out_of_bounds
+                .to_string()
+                .contains("outside observation count")
+        );
 
         let usize_out_of_bounds = validate_usize_order_indices(&[0, 2], 2, "sort_stop")
             .expect_err("order index outside observations should fail");
-        assert!(usize_out_of_bounds
-            .to_string()
-            .contains("outside observation count"));
+        assert!(
+            usize_out_of_bounds
+                .to_string()
+                .contains("outside observation count")
+        );
 
         let i32_duplicate = validate_i32_permutation_indices(&[0, 0], 2, "sort_stop")
             .expect_err("duplicate order index should fail");
@@ -320,8 +324,10 @@ mod tests {
 
         let usize_duplicate = validate_usize_permutation_indices(&[0, 0], 2, "sort_stop")
             .expect_err("duplicate order index should fail");
-        assert!(usize_duplicate
-            .to_string()
-            .contains("must be a permutation"));
+        assert!(
+            usize_duplicate
+                .to_string()
+                .contains("must be a permutation")
+        );
     }
 }

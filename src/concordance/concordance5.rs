@@ -6,7 +6,7 @@ use super::common::{
 };
 use crate::constants::{CONCORDANCE_COUNT_SIZE_EXTENDED, PARALLEL_THRESHOLD_SMALL};
 use crate::internal::fenwick::FenwickTree;
-use crate::internal::validation::{validate_length, ValidationError};
+use crate::internal::validation::{ValidationError, validate_length};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
