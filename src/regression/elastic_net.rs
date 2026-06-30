@@ -533,13 +533,12 @@ pub(crate) fn elastic_net_cox_path_typed(
             },
         );
 
-        beta_warm = beta_std.clone();
-
         let coefficients: Vec<f64> = beta_std
             .iter()
             .zip(sds.iter())
             .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
             .collect();
+        beta_warm = beta_std;
 
         let df = coefficients
             .iter()
