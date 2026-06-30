@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 pub(crate) struct CoxMartSurvivalData<'a> {
     pub(crate) time: &'a [f64],
     pub(crate) status: &'a [i32],
-    pub(crate) strata: &'a mut [i32],
+    pub(crate) strata: &'a [i32],
 }
 
 pub(crate) struct CoxMartWeights<'a> {
@@ -33,22 +33,28 @@ pub fn coxmart(
 #[pyo3(signature = (input, method=None))]
 pub(crate) fn coxmart_typed(input: &CoxMartInput, method: Option<i32>) -> PyResult<Vec<f64>> {
     let n = input.survival.time.len();
-    let weights_vec = input.weights_or_unit();
-    let mut strata_vec = input.strata_or_default();
+    let weights = input.weights_or_unit_cow();
+    let strata = input.strata_or_default_cow();
     let method_val = method.unwrap_or(0);
     let mut expect = vec![0.0; n];
     let surv_data = CoxMartSurvivalData {
         time: &input.survival.time,
         status: &input.survival.status,
-        strata: &mut strata_vec,
+        strata: strata.as_ref(),
     };
     let weights_data = CoxMartWeights {
         score: &input.score,
-        wt: &weights_vec,
+        wt: weights.as_ref(),
     };
     compute_coxmart(n, method_val, surv_data, weights_data, &mut expect);
     Ok(expect)
 }
+
+#[inline]
+fn is_stratum_end(strata: &[i32], index: usize, n: usize) -> bool {
+    index + 1 == n || strata[index] == 1
+}
+
 pub(crate) fn compute_coxmart(
     n: usize,
     method: i32,
@@ -59,17 +65,17 @@ pub(crate) fn compute_coxmart(
     if n == 0 {
         return;
     }
-    surv_data.strata[n - 1] = 1;
     let mut denom = 0.0;
     for i in (0..n).rev() {
-        if surv_data.strata[i] == 1 {
+        if is_stratum_end(surv_data.strata, i, n) {
             denom = 0.0;
         }
         denom += weights.score[i] * weights.wt[i];
         let condition = if i == 0 {
             true
         } else {
-            surv_data.strata[i - 1] == 1 || (surv_data.time[i - 1] != surv_data.time[i])
+            is_stratum_end(surv_data.strata, i - 1, n)
+                || (surv_data.time[i - 1] != surv_data.time[i])
         };
         expect[i] = if condition { denom } else { 0.0 };
     }
@@ -87,8 +93,8 @@ pub(crate) fn compute_coxmart(
         deaths += surv_data.status[i];
         wtsum += surv_data.status[i] as f64 * weights.wt[i];
         e_denom += weights.score[i] * surv_data.status[i] as f64 * weights.wt[i];
-        let is_last =
-            surv_data.strata[i] == 1 || (i < n - 1 && surv_data.time[i + 1] != surv_data.time[i]);
+        let is_last = is_stratum_end(surv_data.strata, i, n)
+            || (i < n - 1 && surv_data.time[i + 1] != surv_data.time[i]);
         if is_last {
             if deaths < 2 || method == 0 {
                 hazard += wtsum / current_denom;
@@ -118,7 +124,7 @@ pub(crate) fn compute_coxmart(
             wtsum = 0.0;
             e_denom = 0.0;
         }
-        if surv_data.strata[i] == 1 {
+        if is_stratum_end(surv_data.strata, i, n) {
             hazard = 0.0;
         }
     }
