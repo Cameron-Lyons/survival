@@ -207,18 +207,9 @@ pub(crate) fn validate_binary_f64(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermutationIndexError {
-    Negative {
-        position: usize,
-        value: i32,
-    },
-    OutOfBounds {
-        position: usize,
-        value: String,
-    },
-    Duplicate {
-        position: usize,
-        value: usize,
-    },
+    Negative { position: usize, value: i32 },
+    OutOfBounds { position: usize, value: String },
+    Duplicate { position: usize, value: usize },
 }
 
 fn mark_permutation_index(

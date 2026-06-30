@@ -74,11 +74,9 @@ pub(crate) fn validate_i32_permutation_indices(
 ) -> PyResult<()> {
     match validate_zero_based_i32_permutation(values, n) {
         Ok(()) => Ok(()),
-        Err(PermutationIndexError::Negative { position, value }) => {
-            Err(PyRuntimeError::new_err(format!(
-                "{field} contains negative value {value} at index {position}"
-            )))
-        }
+        Err(PermutationIndexError::Negative { position, value }) => Err(PyRuntimeError::new_err(
+            format!("{field} contains negative value {value} at index {position}"),
+        )),
         Err(PermutationIndexError::OutOfBounds { position, value }) => {
             Err(PyRuntimeError::new_err(format!(
                 "{field} value {value} at index {position} is outside observation count {n}"
