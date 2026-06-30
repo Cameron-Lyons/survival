@@ -8,13 +8,6 @@ fn soft_threshold(x: f64, lambda: f64) -> f64 {
     }
 }
 
-struct RiskSetData {
-    cumsum_exp_eta: Vec<f64>,
-    cumsum_weighted_x: Vec<Vec<f64>>,
-    cumsum_weighted_x_sq: Vec<Vec<f64>>,
-    risk_set_pos: Vec<usize>,
-}
-
 struct FastCoxData<'a> {
     x: &'a [f64],
     n: usize,
@@ -37,64 +30,6 @@ struct FastCoxDescentConfig<'a> {
     lambda_max: f64,
 }
 
-fn precompute_risk_set_cumsum(
-    x: &[f64],
-    n: usize,
-    p: usize,
-    time: &[f64],
-    weights: &[f64],
-    exp_eta: &[f64],
-) -> RiskSetData {
-    let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]).then_with(|| a.cmp(&b)));
-
-    let mut cumsum_exp_eta = vec![0.0; n];
-    let mut cumsum_weighted_x = vec![vec![0.0; p]; n];
-    let mut cumsum_weighted_x_sq = vec![vec![0.0; p]; n];
-    let mut risk_set_pos = vec![0usize; n];
-
-    let mut running_exp = 0.0;
-    let mut running_wx = vec![0.0; p];
-    let mut running_wxsq = vec![0.0; p];
-
-    for (pos, &idx) in sorted_indices.iter().enumerate() {
-        let w = weights[idx] * exp_eta[idx];
-        running_exp += w;
-
-        for j in 0..p {
-            let xij = x[idx * p + j];
-            running_wx[j] += w * xij;
-            running_wxsq[j] += w * xij * xij;
-        }
-
-        cumsum_exp_eta[pos] = running_exp;
-        cumsum_weighted_x[pos] = running_wx.clone();
-        cumsum_weighted_x_sq[pos] = running_wxsq.clone();
-    }
-
-    let mut start = 0;
-    while start < n {
-        let current_time = time[sorted_indices[start]];
-        let mut end = start + 1;
-        while end < n && crate::constants::same_time(time[sorted_indices[end]], current_time) {
-            end += 1;
-        }
-
-        let pos = end - 1;
-        for &idx in &sorted_indices[start..end] {
-            risk_set_pos[idx] = pos;
-        }
-        start = end;
-    }
-
-    RiskSetData {
-        cumsum_exp_eta,
-        cumsum_weighted_x,
-        cumsum_weighted_x_sq,
-        risk_set_pos,
-    }
-}
-
 #[allow(clippy::needless_range_loop)]
 fn linear_predictors(data: &FastCoxData, beta: &[f64]) -> Vec<f64> {
     (0..data.n)
@@ -108,29 +43,6 @@ fn linear_predictors(data: &FastCoxData, beta: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-fn shifted_exp_eta(eta: &[f64], weights: &[f64]) -> Vec<f64> {
-    let risk_shift = eta
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(&eta_i, &weight)| {
-            if weight > 0.0 && eta_i.is_finite() {
-                Some(eta_i)
-            } else {
-                None
-            }
-        })
-        .fold(f64::NEG_INFINITY, f64::max);
-    let risk_shift = if risk_shift.is_finite() {
-        risk_shift
-    } else {
-        0.0
-    };
-
-    eta.iter()
-        .map(|&eta_i| (eta_i - risk_shift).exp())
-        .collect()
-}
-
 #[allow(clippy::needless_range_loop)]
 fn compute_gradient_hessian_diag_fast(
     data: &FastCoxData,
@@ -140,7 +52,7 @@ fn compute_gradient_hessian_diag_fast(
     let eta = linear_predictors(data, beta);
     let exp_eta = shifted_exp_eta(&eta, data.weights);
 
-    let risk_data = precompute_risk_set_cumsum(
+    let risk_data = precompute_cox_risk_set_cumsum(
         data.x,
         data.n,
         data.p,
@@ -226,24 +138,9 @@ fn apply_edpp_screening(
 #[allow(clippy::needless_range_loop)]
 fn compute_cox_deviance(data: &FastCoxData, beta: &[f64]) -> f64 {
     let eta = linear_predictors(data, beta);
-    let risk_shift = eta
-        .iter()
-        .zip(data.weights.iter())
-        .filter_map(|(&eta_i, &weight)| {
-            if weight > 0.0 && eta_i.is_finite() {
-                Some(eta_i)
-            } else {
-                None
-            }
-        })
-        .fold(f64::NEG_INFINITY, f64::max);
-    let risk_shift = if risk_shift.is_finite() {
-        risk_shift
-    } else {
-        0.0
-    };
+    let risk_shift = cox_risk_shift(&eta, data.weights);
     let exp_eta: Vec<f64> = eta.iter().map(|&eta_i| (eta_i - risk_shift).exp()).collect();
-    let risk_data = precompute_risk_set_cumsum(
+    let risk_data = precompute_cox_risk_set_cumsum(
         data.x,
         data.n,
         data.p,
