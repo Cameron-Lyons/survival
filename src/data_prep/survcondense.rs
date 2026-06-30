@@ -158,8 +158,7 @@ pub fn survcondense(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::common::initialize_python;
-    use itertools::Itertools;
+    use crate::tests::common::{index_permutations, initialize_python};
 
     #[test]
     fn test_survcondense_basic() {
@@ -225,7 +224,7 @@ mod tests {
         let base_status = [0, 0, 1, 0, 0];
         let expected = vec![(1, 0.0, 6.0, 1), (2, 0.0, 5.0, 0)];
 
-        for permutation in (0..base_id.len()).permutations(base_id.len()) {
+        for permutation in index_permutations(base_id.len()) {
             let id: Vec<i32> = permutation.iter().map(|&i| base_id[i]).collect();
             let time1: Vec<f64> = permutation.iter().map(|&i| base_time1[i]).collect();
             let time2: Vec<f64> = permutation.iter().map(|&i| base_time2[i]).collect();

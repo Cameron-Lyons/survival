@@ -1,5 +1,4 @@
 use crate::constants::{CONVERGENCE_FLAG, PARALLEL_THRESHOLD_LARGE};
-use itertools::Itertools;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
@@ -547,12 +546,64 @@ fn agexact_impl(
     }
 }
 #[inline]
-fn iter_combinations(
+fn iter_combinations(start: usize, end: usize, k: usize) -> IndexCombinations {
+    IndexCombinations::new(start, end, k)
+}
+
+struct IndexCombinations {
     start: usize,
-    end: usize,
+    len: usize,
     k: usize,
-) -> itertools::Combinations<std::ops::Range<usize>> {
-    (start..end).combinations(k)
+    current: Vec<usize>,
+    first: bool,
+    done: bool,
+}
+
+impl IndexCombinations {
+    fn new(start: usize, end: usize, k: usize) -> Self {
+        let len = end.saturating_sub(start);
+        let done = k > len;
+        Self {
+            start,
+            len,
+            k,
+            current: (0..k).map(|i| start + i).collect(),
+            first: !done,
+            done,
+        }
+    }
+}
+
+impl Iterator for IndexCombinations {
+    type Item = Vec<usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        if self.first {
+            self.first = false;
+            return Some(self.current.clone());
+        }
+        if self.k == 0 {
+            self.done = true;
+            return None;
+        }
+
+        for i in (0..self.k).rev() {
+            let max_at_i = self.start + self.len - self.k + i;
+            if self.current[i] < max_at_i {
+                self.current[i] += 1;
+                for j in (i + 1)..self.k {
+                    self.current[j] = self.current[j - 1] + 1;
+                }
+                return Some(self.current.clone());
+            }
+        }
+
+        self.done = true;
+        None
+    }
 }
 #[inline]
 fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
@@ -692,5 +743,26 @@ mod tests {
             err.to_string()
                 .contains("start, stop, event, offset, and strata must all have length nused")
         );
+    }
+
+    #[test]
+    fn iter_combinations_yields_lexicographic_combinations() {
+        let combinations: Vec<Vec<usize>> = iter_combinations(0, 4, 2).collect();
+        assert_eq!(
+            combinations,
+            vec![
+                vec![0, 1],
+                vec![0, 2],
+                vec![0, 3],
+                vec![1, 2],
+                vec![1, 3],
+                vec![2, 3],
+            ]
+        );
+
+        let empty_combination: Vec<Vec<usize>> = iter_combinations(2, 5, 0).collect();
+        assert_eq!(empty_combination, vec![Vec::<usize>::new()]);
+
+        assert!(iter_combinations(0, 2, 3).next().is_none());
     }
 }

@@ -203,8 +203,7 @@ pub fn surv2data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::common::initialize_python;
-    use itertools::Itertools;
+    use crate::tests::common::{index_permutations, initialize_python};
 
     #[test]
     fn test_surv2data_basic() {
@@ -258,7 +257,7 @@ mod tests {
             (2, 3.0, 8.0, 0),
         ];
 
-        for permutation in (0..base_id.len()).permutations(base_id.len()) {
+        for permutation in index_permutations(base_id.len()) {
             let id: Vec<i32> = permutation.iter().map(|&i| base_id[i]).collect();
             let time: Vec<f64> = permutation.iter().map(|&i| base_time[i]).collect();
             let event_time: Vec<f64> = permutation.iter().map(|&i| base_event_time[i]).collect();
