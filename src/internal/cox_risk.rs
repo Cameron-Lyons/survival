@@ -24,7 +24,20 @@ pub(crate) fn cox_risk_shift(eta: &[f64], weights: &[f64]) -> f64 {
 
 pub(crate) fn shifted_exp_eta(eta: &[f64], weights: &[f64]) -> Vec<f64> {
     let shift = cox_risk_shift(eta, weights);
-    eta.iter().map(|&eta_i| (eta_i - shift).exp()).collect()
+    shifted_exp_eta_with_shift(eta, weights, shift)
+}
+
+pub(crate) fn shifted_exp_eta_with_shift(eta: &[f64], weights: &[f64], shift: f64) -> Vec<f64> {
+    eta.iter()
+        .zip(weights.iter())
+        .map(|(&eta_i, &weight)| {
+            if weight > 0.0 {
+                (eta_i - shift).exp()
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -104,6 +117,42 @@ mod tests {
         assert_eq!(cox_risk_shift(&eta, &weights), 3.0);
         assert_eq!(cox_risk_shift(&[f64::INFINITY], &[1.0]), 0.0);
         assert_eq!(cox_risk_shift(&[10.0], &[0.0]), 0.0);
+    }
+
+    #[test]
+    fn shifted_exp_eta_skips_zero_weight_values() {
+        let eta = [2.0, f64::INFINITY, 4.0];
+        let weights = [1.0, 0.0, 0.0];
+
+        let exp_eta = shifted_exp_eta(&eta, &weights);
+
+        assert_eq!(exp_eta, vec![1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn precompute_cox_risk_set_cumsum_ignores_zero_weight_non_finite_eta() {
+        let x = [1.0, 2.0];
+        let time = [1.0, 2.0];
+        let weights = [1.0, 0.0];
+        let eta = [0.0, f64::INFINITY];
+        let exp_eta = shifted_exp_eta(&eta, &weights);
+
+        let risk_data = precompute_cox_risk_set_cumsum(&x, 2, 1, &time, &weights, &exp_eta);
+
+        assert_eq!(risk_data.cumsum_exp_eta, vec![0.0, 1.0]);
+        assert_eq!(risk_data.cumsum_weighted_x, vec![0.0, 1.0]);
+        assert!(
+            risk_data
+                .cumsum_exp_eta
+                .iter()
+                .all(|value| value.is_finite())
+        );
+        assert!(
+            risk_data
+                .cumsum_weighted_x
+                .iter()
+                .all(|value| value.is_finite())
+        );
     }
 
     #[test]
