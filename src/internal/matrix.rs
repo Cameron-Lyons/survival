@@ -12,9 +12,11 @@ pub(crate) fn standardize_row_major_matrix(
     n_rows: usize,
     n_cols: usize,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    debug_assert_eq!(x.len(), n_rows * n_cols);
+
     let mut means = vec![0.0; n_cols];
     let mut scales = vec![1.0; n_cols];
-    let mut standardized = x.to_vec();
+    let mut standardized = vec![0.0; n_rows * n_cols];
 
     for col in 0..n_cols {
         let mut sum = 0.0;
@@ -341,6 +343,7 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let (standardized, means, scales) = standardize_row_major_matrix(&x, 3, 2);
 
+        assert_eq!(standardized.len(), x.len());
         assert_eq!(means, vec![3.0, 4.0]);
         assert!((scales[0] - (8.0_f64 / 3.0).sqrt()).abs() < 1e-12);
         assert!((scales[1] - (8.0_f64 / 3.0).sqrt()).abs() < 1e-12);
