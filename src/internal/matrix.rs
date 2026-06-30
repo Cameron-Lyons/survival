@@ -5,6 +5,7 @@ use crate::internal::validation::MatrixError;
 use faer::{linalg::solvers::DenseSolveCore, prelude::*};
 use ndarray::{Array1, Array2};
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 pub(crate) fn standardize_row_major_matrix(
     x: &[f64],
@@ -34,6 +35,20 @@ pub(crate) fn standardize_row_major_matrix(
     }
 
     (standardized, means, scales)
+}
+
+pub(crate) fn standardize_or_borrow_row_major_matrix(
+    x: &[f64],
+    n_rows: usize,
+    n_cols: usize,
+    standardize: bool,
+) -> (Cow<'_, [f64]>, Vec<f64>, Vec<f64>) {
+    if standardize {
+        let (standardized, means, scales) = standardize_row_major_matrix(x, n_rows, n_cols);
+        (Cow::Owned(standardized), means, scales)
+    } else {
+        (Cow::Borrowed(x), vec![0.0; n_cols], vec![1.0; n_cols])
+    }
 }
 
 #[inline]
@@ -334,6 +349,27 @@ mod tests {
             let column_sum: f64 = (0..3).map(|row| standardized[row * 2 + col]).sum();
             assert!(column_sum.abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn standardize_or_borrow_row_major_matrix_borrows_when_disabled() {
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let (matrix, means, scales) = standardize_or_borrow_row_major_matrix(&x, 2, 2, false);
+
+        assert!(matches!(matrix, Cow::Borrowed(_)));
+        assert_eq!(matrix.as_ref(), x.as_slice());
+        assert_eq!(means, vec![0.0, 0.0]);
+        assert_eq!(scales, vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn standardize_or_borrow_row_major_matrix_owns_when_enabled() {
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let (matrix, means, scales) = standardize_or_borrow_row_major_matrix(&x, 2, 2, true);
+
+        assert!(matches!(matrix, Cow::Owned(_)));
+        assert_eq!(means, vec![2.0, 3.0]);
+        assert_eq!(scales, vec![1.0, 1.0]);
     }
 
     #[test]
