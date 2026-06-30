@@ -113,15 +113,15 @@ pub fn agmart(
 #[pyfunction(name = "agmart")]
 #[pyo3(signature = (input, method=None))]
 pub(crate) fn agmart_typed(input: &AndersenGillInput, method: Option<i32>) -> PyResult<Vec<f64>> {
-    let weights = input.weights_or_unit();
-    let strata = input.strata_or_default();
+    let weights = input.weights_or_unit_cow();
+    let strata = input.strata_or_default_cow();
     let data = AgmartData {
         start: &input.counting.start,
         stop: &input.counting.stop,
         event: &input.counting.event,
         score: &input.score,
-        wt: &weights,
-        strata: &strata,
+        wt: weights.as_ref(),
+        strata: strata.as_ref(),
     };
     Ok(compute_agmart(method.unwrap_or(0), data))
 }

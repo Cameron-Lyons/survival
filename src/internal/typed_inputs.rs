@@ -420,17 +420,18 @@ impl CoxMartInput {
         })
     }
 
-    pub(crate) fn weights_or_unit(&self) -> Vec<f64> {
+    pub(crate) fn weights_or_unit_cow(&self) -> Cow<'_, [f64]> {
         self.weights
             .as_ref()
-            .map(|weights| weights.values.clone())
-            .unwrap_or_else(|| vec![1.0; self.survival.len()])
+            .map(|weights| Cow::Borrowed(weights.values.as_slice()))
+            .unwrap_or_else(|| Cow::Owned(vec![1.0; self.survival.len()]))
     }
 
-    pub(crate) fn strata_or_default(&self) -> Vec<i32> {
+    pub(crate) fn strata_or_default_cow(&self) -> Cow<'_, [i32]> {
         self.strata
-            .clone()
-            .unwrap_or_else(|| vec![0; self.survival.len()])
+            .as_deref()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(vec![0; self.survival.len()]))
     }
 }
 
@@ -489,17 +490,18 @@ impl AndersenGillInput {
         })
     }
 
-    pub(crate) fn weights_or_unit(&self) -> Vec<f64> {
+    pub(crate) fn weights_or_unit_cow(&self) -> Cow<'_, [f64]> {
         self.weights
             .as_ref()
-            .map(|weights| weights.values.clone())
-            .unwrap_or_else(|| vec![1.0; self.counting.len()])
+            .map(|weights| Cow::Borrowed(weights.values.as_slice()))
+            .unwrap_or_else(|| Cow::Owned(vec![1.0; self.counting.len()]))
     }
 
-    pub(crate) fn strata_or_default(&self) -> Vec<i32> {
+    pub(crate) fn strata_or_default_cow(&self) -> Cow<'_, [i32]> {
         self.strata
-            .clone()
-            .unwrap_or_else(|| vec![0; self.counting.len()])
+            .as_deref()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(vec![0; self.counting.len()]))
     }
 }
 
@@ -538,5 +540,54 @@ mod tests {
         assert!(matches!(input.offset_or_zero_cow(), Cow::Owned(_)));
         assert_eq!(input.weights_or_unit_cow().as_ref(), [1.0, 1.0]);
         assert_eq!(input.offset_or_zero_cow().as_ref(), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn residual_inputs_borrow_supplied_weights_and_strata() {
+        let survival = SurvivalData::try_new(vec![1.0, 2.0], vec![1, 0]).unwrap();
+        let cox_input = CoxMartInput::try_new(
+            survival,
+            vec![1.0, 2.0],
+            Some(Weights::try_new(vec![0.5, 1.5]).unwrap()),
+            Some(vec![0, 1]),
+        )
+        .unwrap();
+
+        let counting =
+            CountingProcessData::try_new(vec![0.0, 0.0], vec![1.0, 2.0], vec![1, 0]).unwrap();
+        let ag_input = AndersenGillInput::try_new(
+            counting,
+            vec![1.0, 2.0],
+            Some(Weights::try_new(vec![0.5, 1.5]).unwrap()),
+            Some(vec![0, 1]),
+        )
+        .unwrap();
+
+        assert!(matches!(cox_input.weights_or_unit_cow(), Cow::Borrowed(_)));
+        assert!(matches!(
+            cox_input.strata_or_default_cow(),
+            Cow::Borrowed(_)
+        ));
+        assert!(matches!(ag_input.weights_or_unit_cow(), Cow::Borrowed(_)));
+        assert!(matches!(ag_input.strata_or_default_cow(), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn residual_inputs_allocate_missing_defaults() {
+        let survival = SurvivalData::try_new(vec![1.0, 2.0], vec![1, 0]).unwrap();
+        let cox_input = CoxMartInput::try_new(survival, vec![1.0, 2.0], None, None).unwrap();
+
+        let counting =
+            CountingProcessData::try_new(vec![0.0, 0.0], vec![1.0, 2.0], vec![1, 0]).unwrap();
+        let ag_input = AndersenGillInput::try_new(counting, vec![1.0, 2.0], None, None).unwrap();
+
+        assert!(matches!(cox_input.weights_or_unit_cow(), Cow::Owned(_)));
+        assert!(matches!(cox_input.strata_or_default_cow(), Cow::Owned(_)));
+        assert_eq!(cox_input.weights_or_unit_cow().as_ref(), [1.0, 1.0]);
+        assert_eq!(cox_input.strata_or_default_cow().as_ref(), [0, 0]);
+        assert!(matches!(ag_input.weights_or_unit_cow(), Cow::Owned(_)));
+        assert!(matches!(ag_input.strata_or_default_cow(), Cow::Owned(_)));
+        assert_eq!(ag_input.weights_or_unit_cow().as_ref(), [1.0, 1.0]);
+        assert_eq!(ag_input.strata_or_default_cow().as_ref(), [0, 0]);
     }
 }
