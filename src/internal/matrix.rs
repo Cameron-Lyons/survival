@@ -30,9 +30,10 @@ pub(crate) fn standardize_row_major_matrix(
         means[col] = sum / n_rows as f64;
         let variance = sum_sq / n_rows as f64 - means[col] * means[col];
         scales[col] = variance.sqrt().max(crate::constants::DIVISION_FLOOR);
+        let inv_scale = 1.0 / scales[col];
 
         for row in 0..n_rows {
-            standardized[row * n_cols + col] = (x[row * n_cols + col] - means[col]) / scales[col];
+            standardized[row * n_cols + col] = (x[row * n_cols + col] - means[col]) * inv_scale;
         }
     }
 
