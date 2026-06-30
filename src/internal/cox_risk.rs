@@ -1,8 +1,8 @@
 #[derive(Debug, Clone)]
 pub(crate) struct CoxRiskSetData {
     pub(crate) cumsum_exp_eta: Vec<f64>,
-    pub(crate) cumsum_weighted_x: Vec<Vec<f64>>,
-    pub(crate) cumsum_weighted_x_sq: Vec<Vec<f64>>,
+    pub(crate) cumsum_weighted_x: Vec<f64>,
+    pub(crate) cumsum_weighted_x_sq: Vec<f64>,
     pub(crate) risk_set_pos: Vec<usize>,
 }
 
@@ -45,8 +45,8 @@ pub(crate) fn precompute_cox_risk_set_cumsum(
     sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]).then_with(|| a.cmp(&b)));
 
     let mut cumsum_exp_eta = vec![0.0; n];
-    let mut cumsum_weighted_x = vec![vec![0.0; p]; n];
-    let mut cumsum_weighted_x_sq = vec![vec![0.0; p]; n];
+    let mut cumsum_weighted_x = vec![0.0; n * p];
+    let mut cumsum_weighted_x_sq = vec![0.0; n * p];
     let mut risk_set_pos = vec![0usize; n];
 
     let mut running_exp = 0.0;
@@ -64,8 +64,9 @@ pub(crate) fn precompute_cox_risk_set_cumsum(
         }
 
         cumsum_exp_eta[pos] = running_exp;
-        cumsum_weighted_x[pos] = running_x.clone();
-        cumsum_weighted_x_sq[pos] = running_x_sq.clone();
+        let row_start = pos * p;
+        cumsum_weighted_x[row_start..row_start + p].copy_from_slice(&running_x);
+        cumsum_weighted_x_sq[row_start..row_start + p].copy_from_slice(&running_x_sq);
     }
 
     let mut start = 0;
@@ -116,7 +117,7 @@ mod tests {
 
         assert_eq!(risk_data.cumsum_exp_eta, vec![1.0, 2.0, 3.0]);
         assert_eq!(risk_data.risk_set_pos, vec![2, 1, 1]);
-        assert_eq!(risk_data.cumsum_weighted_x[1], vec![5.0, 50.0]);
-        assert_eq!(risk_data.cumsum_weighted_x_sq[1], vec![13.0, 1300.0]);
+        assert_eq!(risk_data.cumsum_weighted_x[2..4], [5.0, 50.0]);
+        assert_eq!(risk_data.cumsum_weighted_x_sq[2..4], [13.0, 1300.0]);
     }
 }
