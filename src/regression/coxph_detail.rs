@@ -1,6 +1,8 @@
 use crate::constants::TIME_EPSILON;
+use crate::internal::cox_risk::{cox_risk_shift, shifted_exp_eta_with_shift};
 use crate::internal::validation::validate_binary_i32;
 use pyo3::prelude::*;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -281,9 +283,15 @@ pub(crate) fn compute_coxph_detail_with_options(
         )));
     }
 
-    let wts: Vec<f64> = weights.map(|w| w.to_vec()).unwrap_or_else(|| vec![1.0; n]);
-    let strata_values: Vec<i32> = strata.map(|s| s.to_vec()).unwrap_or_else(|| vec![0; n]);
-    let offsets: Vec<f64> = offset.map(|o| o.to_vec()).unwrap_or_else(|| vec![0.0; n]);
+    let wts = weights
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(vec![1.0; n]));
+    let strata_values = strata
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(vec![0; n]));
+    let offsets = offset
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(vec![0.0; n]));
 
     let linear_predictors: Vec<f64> = covariates
         .iter()
@@ -296,30 +304,15 @@ pub(crate) fn compute_coxph_detail_with_options(
             lp
         })
         .collect();
-    let risk_shift = linear_predictors
-        .iter()
-        .zip(wts.iter())
-        .filter_map(|(&lp, &weight)| (weight > 0.0).then_some(lp))
-        .fold(f64::NEG_INFINITY, f64::max);
-    let risk_shift = if risk_shift.is_finite() {
-        risk_shift
-    } else {
-        0.0
-    };
+    let risk_shift = cox_risk_shift(&linear_predictors, wts.as_ref());
+    let risk_weights: Vec<f64> =
+        shifted_exp_eta_with_shift(&linear_predictors, wts.as_ref(), risk_shift)
+            .into_iter()
+            .zip(wts.iter())
+            .map(|(shifted_exp, &weight)| shifted_exp * weight)
+            .collect();
 
-    let risk_weights: Vec<f64> = linear_predictors
-        .iter()
-        .zip(wts.iter())
-        .map(|(&lp, &weight)| {
-            if weight == 0.0 {
-                0.0
-            } else {
-                (lp - risk_shift).exp() * weight
-            }
-        })
-        .collect();
-
-    let groups = event_groups(time, status, &strata_values);
+    let groups = event_groups(time, status, strata_values.as_ref());
     let mut rows = Vec::with_capacity(groups.len());
     let mut total_events = 0;
     let mut current_stratum = None;
@@ -333,8 +326,14 @@ pub(crate) fn compute_coxph_detail_with_options(
             current_stratum = Some(stratum);
             cumhaz = 0.0;
         }
-        let at_risk = at_risk_indices(time, entry_times, &strata_values, stratum, event_time);
-        let deaths = event_indices(time, status, &strata_values, stratum, event_time);
+        let at_risk = at_risk_indices(
+            time,
+            entry_times,
+            strata_values.as_ref(),
+            stratum,
+            event_time,
+        );
+        let deaths = event_indices(time, status, strata_values.as_ref(), stratum, event_time);
         let event_weight = deaths.iter().map(|&idx| wts[idx]).sum::<f64>();
         let mut event_covariates = vec![0.0; nvar];
         for &idx in &deaths {
@@ -410,7 +409,7 @@ pub(crate) fn compute_coxph_detail_with_options(
             time: event_time,
             n_risk: at_risk.len(),
             n_event: deaths.len(),
-            n_censor: censor_count(time, status, &strata_values, stratum, event_time),
+            n_censor: censor_count(time, status, strata_values.as_ref(), stratum, event_time),
             hazard,
             cumhaz,
             varhaz,
@@ -649,5 +648,33 @@ mod tests {
         assert_eq!(detail.rows[0].cumhaz, detail.rows[0].hazard);
         assert!(detail.rows[1].cumhaz > detail.rows[0].cumhaz);
         assert!(detail.rows[2].cumhaz > detail.rows[1].cumhaz);
+    }
+
+    #[test]
+    fn test_coxph_detail_excludes_zero_weight_rows_from_risk() {
+        let time = vec![1.0, 2.0];
+        let status = vec![1, 0];
+        let covariates = vec![vec![0.0], vec![1000.0]];
+        let coefficients = vec![1.0];
+        let weights = vec![1.0, 0.0];
+
+        let detail = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &coefficients,
+            weights: Some(&weights),
+            entry_times: None,
+            strata: None,
+            offset: None,
+            method: "breslow",
+            center: 0.0,
+        })
+        .unwrap();
+
+        assert_eq!(detail.rows.len(), 1);
+        assert_eq!(detail.rows[0].wtrisk, 1.0);
+        assert_eq!(detail.rows[0].hazard, 1.0);
+        assert!(detail.rows[0].cumhaz.is_finite());
     }
 }
