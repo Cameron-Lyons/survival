@@ -1,4 +1,6 @@
-use crate::constants::{DIVISION_FLOOR, same_time};
+use crate::constants::DIVISION_FLOOR;
+use crate::internal::cox_risk::precompute_cox_risk_set_cumsum;
+use crate::internal::matrix::standardize_or_borrow_row_major_matrix;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_empty,
     validate_non_negative,
@@ -6,6 +8,7 @@ use crate::internal::validation::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// Configuration for ridge regression penalty
 #[derive(Debug, Clone)]
@@ -144,15 +147,23 @@ pub fn ridge_fit(
     validate_ridge_inputs(&x, n_obs, n_vars, &time, &status, weights.as_deref())?;
     validate_ridge_penalty(penalty)?;
 
-    let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
-
-    let (scaled_x, scale_factors) = if penalty.scale {
-        scale_predictors(&x, n_obs, n_vars)
-    } else {
-        (x.clone(), None)
+    let wt = match weights.as_deref() {
+        Some(weights) => Cow::Borrowed(weights),
+        None => Cow::Owned(vec![1.0; n_obs]),
     };
 
-    let (beta, info_diag) = fit_unpenalized(&scaled_x, n_obs, n_vars, &time, &status, &wt)?;
+    let (scaled_x, _, scales) =
+        standardize_or_borrow_row_major_matrix(&x, n_obs, n_vars, penalty.scale);
+    let scale_factors = penalty.scale.then_some(scales);
+
+    let (beta, info_diag) = fit_unpenalized(
+        scaled_x.as_ref(),
+        n_obs,
+        n_vars,
+        &time,
+        &status,
+        wt.as_ref(),
+    )?;
 
     let penalized_info: Vec<f64> = info_diag.iter().map(|&i| i + penalty.theta).collect();
 
@@ -181,12 +192,12 @@ pub fn ridge_fit(
         .sum();
 
     let gcv = compute_gcv(
-        &scaled_x,
+        scaled_x.as_ref(),
         n_obs,
         n_vars,
         &time,
         &status,
-        &wt,
+        wt.as_ref(),
         &penalized_beta,
         df,
     );
@@ -219,35 +230,6 @@ pub fn ridge_fit(
         theta: penalty.theta,
         scale_factors,
     })
-}
-
-/// Scale predictors to unit variance
-fn scale_predictors(x: &[f64], n_obs: usize, n_vars: usize) -> (Vec<f64>, Option<Vec<f64>>) {
-    let mut scaled = x.to_vec();
-    let mut scale_factors = Vec::with_capacity(n_vars);
-
-    for j in 0..n_vars {
-        let mut sum = 0.0;
-        let mut sum_sq = 0.0;
-
-        for i in 0..n_obs {
-            let val = x[i * n_vars + j];
-            sum += val;
-            sum_sq += val * val;
-        }
-
-        let mean = sum / n_obs as f64;
-        let variance = (sum_sq / n_obs as f64 - mean * mean).max(0.0);
-        let sd = variance.sqrt().max(DIVISION_FLOOR);
-
-        scale_factors.push(sd);
-
-        for i in 0..n_obs {
-            scaled[i * n_vars + j] = (scaled[i * n_vars + j] - mean) / sd;
-        }
-    }
-
-    (scaled, Some(scale_factors))
 }
 
 fn validate_ridge_penalty(penalty: &RidgePenalty) -> PyResult<()> {
@@ -314,79 +296,33 @@ fn fit_unpenalized(
     status: &[i32],
     weights: &[f64],
 ) -> PyResult<(Vec<f64>, Vec<f64>)> {
-    let mut indices: Vec<usize> = (0..n_obs).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
-
-    let beta = vec![0.0; n_vars];
     let mut info_diag = vec![0.0; n_vars];
     let mut score = vec![0.0; n_vars];
-
-    let mut eta = vec![0.0; n_obs];
-    for i in 0..n_obs {
-        for j in 0..n_vars {
-            eta[i] += x[i * n_vars + j] * beta[j];
-        }
-    }
-
-    let shift = eta
+    let exp_eta: Vec<f64> = weights
         .iter()
-        .zip(weights.iter())
-        .filter_map(|(&eta_i, &weight)| {
-            if weight > 0.0 && eta_i.is_finite() {
-                Some(eta_i)
-            } else {
-                None
-            }
-        })
-        .fold(f64::NEG_INFINITY, f64::max);
-    let shift = if shift.is_finite() { shift } else { 0.0 };
+        .map(|&weight| if weight > 0.0 { 1.0 } else { 0.0 })
+        .collect();
+    let risk_data = precompute_cox_risk_set_cumsum(x, n_obs, n_vars, time, weights, &exp_eta);
 
-    let mut risk_cache = vec![0.0; n_obs];
     for i in 0..n_obs {
-        risk_cache[i] = (eta[i] - shift).exp() * weights[i];
-    }
-
-    let mut risk_sum_at_pos = vec![0.0; n_obs];
-    let mut total_risk = 0.0;
-    for (pos, &i) in indices.iter().enumerate().rev() {
-        total_risk += risk_cache[i];
-        risk_sum_at_pos[pos] = total_risk;
-    }
-
-    let mut risk_set_start_pos = vec![0usize; n_obs];
-    let mut start = 0;
-    while start < n_obs {
-        let current_time = time[indices[start]];
-        let mut end = start + 1;
-        while end < n_obs && same_time(time[indices[end]], current_time) {
-            end += 1;
+        if status[i] != 1 {
+            continue;
         }
-        for &idx in &indices[start..end] {
-            risk_set_start_pos[idx] = start;
+
+        let pos = risk_data.risk_set_pos[i];
+        let risk_sum = risk_data.cumsum_exp_eta[pos];
+        if risk_sum <= 0.0 {
+            continue;
         }
-        start = end;
-    }
 
-    for &i in &indices {
-        let start_pos = risk_set_start_pos[i];
-        let risk_sum = risk_sum_at_pos[start_pos];
-        if status[i] == 1 && risk_sum > 0.0 {
-            for j in 0..n_vars {
-                let xij = x[i * n_vars + j];
+        for j in 0..n_vars {
+            let xij = x[i * n_vars + j];
+            let cumsum_idx = pos * n_vars + j;
+            let x_mean = risk_data.cumsum_weighted_x[cumsum_idx] / risk_sum;
+            let x_sq_mean = risk_data.cumsum_weighted_x_sq[cumsum_idx] / risk_sum;
 
-                let mut x_mean = 0.0;
-                let mut x_sq_mean = 0.0;
-
-                for &k in &indices[start_pos..] {
-                    let xkj = x[k * n_vars + j];
-                    let risk = risk_cache[k];
-                    x_mean += xkj * risk / risk_sum;
-                    x_sq_mean += xkj * xkj * risk / risk_sum;
-                }
-
-                score[j] += weights[i] * (xij - x_mean);
-                info_diag[j] += weights[i] * (x_sq_mean - x_mean * x_mean).max(0.0);
-            }
+            score[j] += weights[i] * (xij - x_mean);
+            info_diag[j] += weights[i] * (x_sq_mean - x_mean * x_mean).max(0.0);
         }
     }
 
@@ -561,6 +497,22 @@ mod tests {
     }
 
     #[test]
+    fn test_ridge_fit_scaled_returns_standardization_scales() {
+        let x = vec![1.0, 1.0, 2.0, 1.0, 3.0, 1.0];
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 1, 1];
+        let penalty = RidgePenalty::new(0.1, Some(true)).unwrap();
+
+        let result = ridge_fit(x, 3, 2, time, status, &penalty, None).unwrap();
+        let scale_factors = result
+            .scale_factors
+            .expect("scaled fit should report scaling factors");
+
+        assert!((scale_factors[0] - (2.0_f64 / 3.0).sqrt()).abs() < 1e-12);
+        assert_eq!(scale_factors[1], DIVISION_FLOOR);
+    }
+
+    #[test]
     fn test_ridge_fit_uses_shared_risk_set_for_tied_times() {
         let x = vec![0.0, 2.0, 2.0];
         let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
@@ -571,6 +523,19 @@ mod tests {
 
         assert!((beta[0] + 1.5).abs() < 1e-12);
         assert!((info_diag[0] - 8.0 / 9.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_ridge_fit_excludes_zero_weight_rows_from_risk_sets() {
+        let x = vec![0.0, 10.0, 2.0];
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 0, 0];
+        let weights = vec![1.0, 0.0, 1.0];
+
+        let (beta, info_diag) = fit_unpenalized(&x, 3, 1, &time, &status, &weights).unwrap();
+
+        assert!((beta[0] + 1.0).abs() < 1e-12);
+        assert!((info_diag[0] - 1.0).abs() < 1e-12);
     }
 
     #[test]
