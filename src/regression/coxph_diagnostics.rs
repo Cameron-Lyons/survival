@@ -512,19 +512,25 @@ impl CoxPHFit {
         let mut prefix = vec![vec![0.0; deaths + 1]; n_risk + 1];
         prefix[0][0] = 1.0;
         for pos in 0..n_risk {
-            prefix[pos + 1] = prefix[pos].clone();
+            let (previous_rows, current_rows) = prefix.split_at_mut(pos + 1);
+            let previous = &previous_rows[pos];
+            let current = &mut current_rows[0];
+            current.copy_from_slice(previous);
             let value = risk[risk_indices[pos]];
             for size in 1..=deaths.min(pos + 1) {
-                prefix[pos + 1][size] += value * prefix[pos][size - 1];
+                current[size] += value * previous[size - 1];
             }
         }
         let mut suffix = vec![vec![0.0; deaths + 1]; n_risk + 1];
         suffix[n_risk][0] = 1.0;
         for pos in (0..n_risk).rev() {
-            suffix[pos] = suffix[pos + 1].clone();
+            let (current_rows, following_rows) = suffix.split_at_mut(pos + 1);
+            let current = &mut current_rows[pos];
+            let following = &following_rows[0];
+            current.copy_from_slice(following);
             let value = risk[risk_indices[pos]];
             for size in 1..=deaths.min(n_risk - pos) {
-                suffix[pos][size] += value * suffix[pos + 1][size - 1];
+                current[size] += value * following[size - 1];
             }
         }
         let denom = prefix[n_risk][deaths];
@@ -1506,5 +1512,17 @@ mod tests {
         .expect("interval SEs should compute");
         assert!((interval_se[0] - 3.0 * 1.83_f64.sqrt()).abs() < 1e-12);
         assert_eq!(interval_se[1], 0.0);
+    }
+
+    #[test]
+    fn exact_inclusion_weights_match_pairwise_tie_probabilities() {
+        let inclusion = CoxPHFit::exact_inclusion_weights(&[0, 1, 2], 2, &[2.0, 3.0, 5.0])
+            .expect("two deaths among three risk scores should compute");
+
+        assert_eq!(inclusion.len(), 3);
+        assert!((inclusion[0].1 - 16.0 / 31.0).abs() < 1e-12);
+        assert!((inclusion[1].1 - 21.0 / 31.0).abs() < 1e-12);
+        assert!((inclusion[2].1 - 25.0 / 31.0).abs() < 1e-12);
+        assert!((inclusion.iter().map(|(_, value)| value).sum::<f64>() - 2.0).abs() < 1e-12);
     }
 }
