@@ -1153,6 +1153,11 @@ impl CoxPHFit {
                 stratum_end += 1;
             }
 
+            let mut death_indices: Vec<usize> = Vec::new();
+            let mut risk_indices: Vec<usize> = Vec::new();
+            let mut mean = vec![0.0; nvar];
+            let mut risk_weighted_covariates = vec![0.0; nvar];
+            let mut death_weighted_covariates = vec![0.0; nvar];
             let mut time_start = stratum_start;
             while time_start <= stratum_end {
                 let event_time = sorted_time[time_start];
@@ -1161,16 +1166,15 @@ impl CoxPHFit {
                     time_end += 1;
                 }
 
-                let death_indices: Vec<usize> = (time_start..=time_end)
-                    .filter(|&idx| sorted_status[idx] == 1)
-                    .collect();
+                death_indices.clear();
+                death_indices
+                    .extend((time_start..=time_end).filter(|&idx| sorted_status[idx] == 1));
                 if !death_indices.is_empty() {
-                    let risk_indices: Vec<usize> = (stratum_start..=stratum_end)
-                        .filter(|&idx| {
-                            sorted_start[idx] < event_time && sorted_time[idx] >= event_time
-                        })
-                        .collect();
-                    let mut mean = vec![0.0; nvar];
+                    risk_indices.clear();
+                    risk_indices.extend((stratum_start..=stratum_end).filter(|&idx| {
+                        sorted_start[idx] < event_time && sorted_time[idx] >= event_time
+                    }));
+                    mean.fill(0.0);
                     if matches!(method, CoxMethod::Exact) && death_indices.len() > 1 {
                         let (denom, a, _cmat) = exact_tied_moments(
                             &risk_indices,
@@ -1185,19 +1189,19 @@ impl CoxPHFit {
                         }
                     } else {
                         let mut denom = 0.0;
-                        let mut a = vec![0.0; nvar];
                         let mut death_denom = 0.0;
-                        let mut death_a = vec![0.0; nvar];
+                        risk_weighted_covariates.fill(0.0);
+                        death_weighted_covariates.fill(0.0);
                         for &idx in &risk_indices {
                             let risk = sorted_risk[idx];
                             denom += risk;
                             for col_idx in 0..nvar {
                                 let value = covar[(idx, col_idx)];
-                                a[col_idx] += risk * value;
+                                risk_weighted_covariates[col_idx] += risk * value;
                                 if same_time(sorted_time[idx], event_time)
                                     && sorted_status[idx] == 1
                                 {
-                                    death_a[col_idx] += risk * value;
+                                    death_weighted_covariates[col_idx] += risk * value;
                                 }
                             }
                             if same_time(sorted_time[idx], event_time) && sorted_status[idx] == 1 {
@@ -1211,7 +1215,8 @@ impl CoxPHFit {
                                 let step_denom = denom - fraction * death_denom;
                                 if step_denom > 0.0 {
                                     for col_idx in 0..nvar {
-                                        mean[col_idx] += (a[col_idx] - fraction * death_a[col_idx])
+                                        mean[col_idx] += (risk_weighted_covariates[col_idx]
+                                            - fraction * death_weighted_covariates[col_idx])
                                             / step_denom
                                             / deaths;
                                     }
@@ -1219,7 +1224,7 @@ impl CoxPHFit {
                             }
                         } else if denom > 0.0 {
                             for col_idx in 0..nvar {
-                                mean[col_idx] = a[col_idx] / denom;
+                                mean[col_idx] = risk_weighted_covariates[col_idx] / denom;
                             }
                         }
                     }
