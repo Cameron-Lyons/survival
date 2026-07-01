@@ -1,7 +1,12 @@
 use crate::constants::{exp_ci_bounds_95, same_time};
 use crate::internal::matrix::invert_matrix;
+use crate::internal::validation::{
+    validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
+};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -186,6 +191,80 @@ impl CauseSpecificCoxResult {
             })
             .collect()
     }
+}
+
+fn validate_cause_specific_config(config: &CauseSpecificCoxConfig) -> PyResult<()> {
+    if config.cause_of_interest < 1 {
+        return Err(PyValueError::new_err("cause_of_interest must be >= 1"));
+    }
+    if config.max_iter == 0 {
+        return Err(PyValueError::new_err("max_iter must be positive"));
+    }
+    if !config.tol.is_finite() || config.tol <= 0.0 {
+        return Err(PyValueError::new_err("tol must be finite and positive"));
+    }
+    if !config.ties.eq_ignore_ascii_case("breslow") && !config.ties.eq_ignore_ascii_case("efron") {
+        return Err(PyValueError::new_err("ties must be 'breslow' or 'efron'"));
+    }
+    Ok(())
+}
+
+fn validate_cause_specific_inputs(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    cause: &[i32],
+    weights: Option<&[f64]>,
+) -> PyResult<()> {
+    if n_obs == 0 {
+        return Err(PyValueError::new_err("n_obs must be positive"));
+    }
+    if n_vars == 0 {
+        return Err(PyValueError::new_err("n_vars must be positive"));
+    }
+
+    let expected_x_len = n_obs.checked_mul(n_vars).ok_or_else(|| {
+        PyValueError::new_err("n_obs * n_vars overflowed while validating x length")
+    })?;
+    if x.len() != expected_x_len {
+        return Err(PyValueError::new_err("x length must equal n_obs * n_vars"));
+    }
+    if time.len() != n_obs || cause.len() != n_obs {
+        return Err(PyValueError::new_err(
+            "time and cause must have length n_obs",
+        ));
+    }
+
+    validate_no_nan(x, "x")?;
+    validate_finite(x, "x")?;
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    for (idx, &value) in cause.iter().enumerate() {
+        if value < 0 {
+            return Err(PyValueError::new_err(format!(
+                "cause must contain non-negative values; got {value} at index {idx}"
+            )));
+        }
+    }
+
+    if let Some(weights) = weights {
+        validate_non_empty(weights, "weights")?;
+        if weights.len() != n_obs {
+            return Err(PyValueError::new_err("weights must have length n_obs"));
+        }
+        validate_no_nan(weights, "weights")?;
+        validate_finite(weights, "weights")?;
+        validate_non_negative(weights, "weights")?;
+        if weights.iter().all(|&weight| weight == 0.0) {
+            return Err(PyValueError::new_err(
+                "weights must include at least one positive value",
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -382,18 +461,31 @@ pub fn cause_specific_cox(
     config: &CauseSpecificCoxConfig,
     weights: Option<Vec<f64>>,
 ) -> PyResult<CauseSpecificCoxResult> {
-    if x.len() != n_obs * n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "x length must equal n_obs * n_vars",
-        ));
-    }
-    if time.len() != n_obs || cause.len() != n_obs {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and cause must have length n_obs",
-        ));
-    }
+    validate_cause_specific_inputs(&x, n_obs, n_vars, &time, &cause, weights.as_deref())?;
+    validate_cause_specific_config(config)?;
 
-    let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
+    let wt = match weights.as_deref() {
+        Some(weights) => Cow::Borrowed(weights),
+        None => Cow::Owned(vec![1.0; n_obs]),
+    };
+
+    cause_specific_cox_fit(&x, n_obs, n_vars, &time, &cause, config, wt.as_ref())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cause_specific_cox_fit(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    cause: &[i32],
+    config: &CauseSpecificCoxConfig,
+    weights: &[f64],
+) -> PyResult<CauseSpecificCoxResult> {
+    debug_assert_eq!(x.len(), n_obs * n_vars);
+    debug_assert_eq!(time.len(), n_obs);
+    debug_assert_eq!(cause.len(), n_obs);
+    debug_assert_eq!(weights.len(), n_obs);
 
     let n_events = cause
         .iter()
@@ -414,12 +506,12 @@ pub fn cause_specific_cox(
         n_iter = iter + 1;
 
         let (gradient, hessian, ll) = compute_cause_specific_gradient_hessian(
-            &x,
+            x,
             n_obs,
             n_vars,
-            &time,
-            &cause,
-            &wt,
+            time,
+            cause,
+            weights,
             &beta,
             config.cause_of_interest,
             config.treat_other_causes_as,
@@ -447,12 +539,12 @@ pub fn cause_specific_cox(
     }
 
     let (_, final_hessian, _) = compute_cause_specific_gradient_hessian(
-        &x,
+        x,
         n_obs,
         n_vars,
-        &time,
-        &cause,
-        &wt,
+        time,
+        cause,
+        weights,
         &beta,
         config.cause_of_interest,
         config.treat_other_causes_as,
@@ -488,9 +580,9 @@ pub fn cause_specific_cox(
 
     let (baseline_times, baseline_hazard, cum_baseline_hazard) = compute_baseline_hazard(
         n_obs,
-        &time,
-        &cause,
-        &wt,
+        time,
+        cause,
+        weights,
         &exp_eta,
         config.cause_of_interest,
         config.treat_other_causes_as,
@@ -530,21 +622,30 @@ pub fn cause_specific_cox_all(
     max_iter: usize,
     tol: f64,
 ) -> PyResult<Vec<CauseSpecificCoxResult>> {
+    if max_cause < 1 {
+        return Err(PyValueError::new_err("max_cause must be >= 1"));
+    }
+    if max_iter == 0 {
+        return Err(PyValueError::new_err("max_iter must be positive"));
+    }
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(PyValueError::new_err("tol must be finite and positive"));
+    }
+    validate_cause_specific_inputs(&x, n_obs, n_vars, &time, &cause, weights.as_deref())?;
+
+    let wt = match weights.as_deref() {
+        Some(weights) => Cow::Borrowed(weights),
+        None => Cow::Owned(vec![1.0; n_obs]),
+    };
+
     let mut results = Vec::with_capacity(max_cause as usize);
 
     for c in 1..=max_cause {
         let config =
             CauseSpecificCoxConfig::new(c, CensoringType::Censored, max_iter, tol, "breslow")?;
 
-        let result = cause_specific_cox(
-            x.clone(),
-            n_obs,
-            n_vars,
-            time.clone(),
-            cause.clone(),
-            &config,
-            weights.clone(),
-        )?;
+        let result =
+            cause_specific_cox_fit(&x, n_obs, n_vars, &time, &cause, &config, wt.as_ref())?;
 
         results.push(result);
     }
@@ -589,6 +690,76 @@ mod tests {
         assert_eq!(result.n_events, 2);
         assert_eq!(result.n_competing, 2);
         assert_eq!(result.n_censored, 1);
+    }
+
+    #[test]
+    fn test_cause_specific_cox_all_keeps_requested_causes() {
+        let x = vec![1.0, 0.0, 0.0, 1.0];
+        let time = vec![1.0, 2.0];
+        let cause = vec![1, 0];
+
+        let results = cause_specific_cox_all(x, 2, 2, time, cause, 3, None, 5, 1e-5).unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].n_events, 1);
+        assert_eq!(results[1].n_events, 0);
+        assert_eq!(results[2].n_events, 0);
+    }
+
+    #[test]
+    fn test_cause_specific_cox_validates_public_inputs() {
+        let config =
+            CauseSpecificCoxConfig::new(1, CensoringType::Censored, 100, 1e-5, "breslow").unwrap();
+
+        let err = cause_specific_cox(
+            vec![1.0, 2.0],
+            2,
+            1,
+            vec![1.0, 2.0],
+            vec![1, -1],
+            &config,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("cause must contain non-negative"));
+
+        let err = cause_specific_cox(
+            vec![1.0, 2.0],
+            2,
+            1,
+            vec![1.0, f64::INFINITY],
+            vec![1, 0],
+            &config,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = cause_specific_cox(
+            vec![1.0, 2.0],
+            2,
+            1,
+            vec![1.0, 2.0],
+            vec![1, 0],
+            &config,
+            Some(vec![1.0]),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("weights must have length n_obs"));
+
+        let err = cause_specific_cox_all(
+            vec![1.0, 2.0],
+            2,
+            1,
+            vec![1.0, 2.0],
+            vec![1, 0],
+            0,
+            None,
+            100,
+            1e-5,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("max_cause must be >= 1"));
     }
 
     #[test]
