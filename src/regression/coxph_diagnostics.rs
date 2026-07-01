@@ -1297,6 +1297,9 @@ impl CoxPHFit {
             }
             let mut active = ActiveRiskSet::new(&rows, use_entry_times);
 
+            let mut deaths: Vec<usize> = Vec::new();
+            let mut mean = vec![0.0; nvar];
+            let mut death_cov = vec![0.0; nvar];
             let mut time_start = 0usize;
             while time_start < rows.len() {
                 let event_time = rows[time_start].stop;
@@ -1317,14 +1320,13 @@ impl CoxPHFit {
                     }
                 });
 
-                let deaths: Vec<usize> = (time_start..=time_end)
-                    .filter(|&idx| rows[idx].status == 1)
-                    .collect();
+                deaths.clear();
+                deaths.extend((time_start..=time_end).filter(|&idx| rows[idx].status == 1));
                 if !deaths.is_empty() && active.risk_sum > 0.0 {
-                    let mut mean = vec![0.0; nvar];
+                    mean.fill(0.0);
                     if matches!(method, CoxMethod::Efron) && deaths.len() > 1 {
                         let mut death_risk = 0.0;
-                        let mut death_cov = vec![0.0; nvar];
+                        death_cov.fill(0.0);
                         for &row_idx in &deaths {
                             death_risk += rows[row_idx].risk;
                             for (col_idx, value) in self.covariates[rows[row_idx].original_idx]
