@@ -66,6 +66,69 @@ impl FastCoxCvFold {
     }
 }
 
+struct FastCoxCvDevianceSummary {
+    sums: Vec<f64>,
+    sum_squares: Vec<f64>,
+    counts: Vec<usize>,
+}
+
+impl FastCoxCvDevianceSummary {
+    fn with_len(n_lambda: usize) -> Self {
+        Self {
+            sums: vec![0.0; n_lambda],
+            sum_squares: vec![0.0; n_lambda],
+            counts: vec![0; n_lambda],
+        }
+    }
+
+    fn record(&mut self, lambda_idx: usize, deviance: f64) {
+        self.sums[lambda_idx] += deviance;
+        self.sum_squares[lambda_idx] += deviance * deviance;
+        self.counts[lambda_idx] += 1;
+    }
+
+    fn merge(&mut self, other: Self) {
+        for lambda_idx in 0..self.sums.len() {
+            self.sums[lambda_idx] += other.sums[lambda_idx];
+            self.sum_squares[lambda_idx] += other.sum_squares[lambda_idx];
+            self.counts[lambda_idx] += other.counts[lambda_idx];
+        }
+    }
+
+    fn mean_deviances(&self) -> Vec<f64> {
+        self.sums
+            .iter()
+            .zip(self.counts.iter())
+            .map(|(&sum, &count)| {
+                if count == 0 {
+                    f64::INFINITY
+                } else {
+                    sum / count as f64
+                }
+            })
+            .collect()
+    }
+
+    fn se_deviances(&self, mean_deviances: &[f64]) -> Vec<f64> {
+        self.counts
+            .iter()
+            .enumerate()
+            .map(|(lambda_idx, &count)| {
+                if count < 2 {
+                    f64::INFINITY
+                } else {
+                    let mean = mean_deviances[lambda_idx];
+                    let centered_sum_squares = self.sum_squares[lambda_idx]
+                        - 2.0 * mean * self.sums[lambda_idx]
+                        + count as f64 * mean * mean;
+                    let variance = centered_sum_squares.max(0.0) / (count - 1) as f64;
+                    (variance / count as f64).sqrt()
+                }
+            })
+            .collect()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fast_cox_slices(
     x: &[f64],
@@ -227,7 +290,10 @@ pub(crate) fn fast_cox_typed(
         &input.survival.time,
         &input.survival.status,
         config,
-        input.weights.as_ref().map(|weights| weights.values.as_slice()),
+        input
+            .weights
+            .as_ref()
+            .map(|weights| weights.values.as_slice()),
         input.offset.as_deref(),
     )
 }
@@ -439,88 +505,78 @@ pub(crate) fn fast_cox_cv_typed(
         })
         .collect();
 
-    let cv_deviances: Vec<Vec<f64>> = path
-        .lambdas
+    let fold_deviance_summaries: Vec<FastCoxCvDevianceSummary> = folds
         .par_iter()
-        .map(|&lambda| {
-            let fold_devs_by_fold: Vec<Option<f64>> = folds
-                .par_iter()
-                .map(|fold| {
-                    let train_n = fold.train_time.len();
-                    let test_n = fold.test_time.len();
-                    if train_n == 0 || test_n == 0 {
-                        return None;
-                    }
-
-                    let Ok(fit_config) = FastCoxConfig::new(
-                        lambda,
-                        config.l1_ratio,
-                        1000,
-                        1e-7,
-                        config.screening,
-                        None,
-                        10,
-                        true,
-                        true,
-                    ) else {
-                        return None;
-                    };
-
-                    if let Ok(result) = fast_cox_slices(
-                        &fold.train_x,
-                        train_n,
-                        n_vars,
-                        &fold.train_time,
-                        &fold.train_status,
-                        &fit_config,
-                        Some(&fold.train_wt),
-                        Some(&fold.train_offset),
-                    ) {
-                        let test_data = FastCoxData {
-                            x: &fold.test_x,
-                            n: test_n,
-                            p: n_vars,
-                            time: &fold.test_time,
-                            status: &fold.test_status,
-                            weights: &fold.test_wt,
-                            offset: &fold.test_offset,
-                        };
-                        let dev = compute_cox_deviance(&test_data, &result.coefficients);
-                        Some(dev)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            fold_devs_by_fold.into_iter().flatten().collect()
-        })
-        .collect();
-
-    let mean_deviances: Vec<f64> = cv_deviances
-        .iter()
-        .map(|devs| {
-            if devs.is_empty() {
-                f64::INFINITY
-            } else {
-                devs.iter().sum::<f64>() / devs.len() as f64
+        .map(|fold| {
+            let mut summary = FastCoxCvDevianceSummary::with_len(path.lambdas.len());
+            let train_n = fold.train_time.len();
+            let test_n = fold.test_time.len();
+            if train_n == 0 || test_n == 0 {
+                return summary;
             }
+
+            let mut deviance_eta = vec![0.0; test_n];
+            let mut deviance_exp_eta = vec![0.0; test_n];
+            let mut deviance_risk_data = CoxRiskSetData::with_capacity(test_n, n_vars);
+            let mut deviance_risk_scratch = CoxRiskSetScratch::with_capacity(test_n, n_vars);
+            let test_data = FastCoxData {
+                x: &fold.test_x,
+                n: test_n,
+                p: n_vars,
+                time: &fold.test_time,
+                status: &fold.test_status,
+                weights: &fold.test_wt,
+                offset: &fold.test_offset,
+            };
+
+            for (lambda_idx, &lambda) in path.lambdas.iter().enumerate() {
+                let Ok(fit_config) = FastCoxConfig::new(
+                    lambda,
+                    config.l1_ratio,
+                    1000,
+                    1e-7,
+                    config.screening,
+                    None,
+                    10,
+                    true,
+                    true,
+                ) else {
+                    continue;
+                };
+
+                if let Ok(result) = fast_cox_slices(
+                    &fold.train_x,
+                    train_n,
+                    n_vars,
+                    &fold.train_time,
+                    &fold.train_status,
+                    &fit_config,
+                    Some(&fold.train_wt),
+                    Some(&fold.train_offset),
+                ) {
+                    let deviance = compute_cox_deviance_into(
+                        &test_data,
+                        &result.coefficients,
+                        &mut deviance_eta,
+                        &mut deviance_exp_eta,
+                        &mut deviance_risk_data,
+                        &mut deviance_risk_scratch,
+                    );
+                    summary.record(lambda_idx, deviance);
+                }
+            }
+
+            summary
         })
         .collect();
 
-    let se_deviances: Vec<f64> = cv_deviances
-        .iter()
-        .zip(mean_deviances.iter())
-        .map(|(devs, &mean)| {
-            if devs.len() < 2 {
-                f64::INFINITY
-            } else {
-                let var =
-                    devs.iter().map(|&d| (d - mean).powi(2)).sum::<f64>() / (devs.len() - 1) as f64;
-                (var / devs.len() as f64).sqrt()
-            }
-        })
-        .collect();
+    let mut cv_deviance_summary = FastCoxCvDevianceSummary::with_len(path.lambdas.len());
+    for fold_summary in fold_deviance_summaries {
+        cv_deviance_summary.merge(fold_summary);
+    }
+
+    let mean_deviances = cv_deviance_summary.mean_deviances();
+    let se_deviances = cv_deviance_summary.se_deviances(&mean_deviances);
 
     let (min_idx, &min_dev) = mean_deviances
         .iter()
