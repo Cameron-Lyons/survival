@@ -158,17 +158,70 @@ fn mean_and_covariance(
     s2: &[Vec<f64>],
     nvar: usize,
 ) -> (Vec<f64>, Vec<Vec<f64>>) {
-    if s0 <= 0.0 {
-        return (vec![0.0; nvar], vec![vec![0.0; nvar]; nvar]);
-    }
-    let means: Vec<f64> = s1.iter().map(|value| value / s0).collect();
+    let mut means = vec![0.0; nvar];
     let mut covariance = vec![vec![0.0; nvar]; nvar];
-    for row in 0..nvar {
-        for col in 0..nvar {
+    mean_and_covariance_into(s0, s1, s2, &mut means, &mut covariance);
+    (means, covariance)
+}
+
+fn mean_and_covariance_into(
+    s0: f64,
+    s1: &[f64],
+    s2: &[Vec<f64>],
+    means: &mut [f64],
+    covariance: &mut [Vec<f64>],
+) {
+    if s0 <= 0.0 {
+        means.fill(0.0);
+        for row in covariance {
+            row.fill(0.0);
+        }
+        return;
+    }
+    for (mean, value) in means.iter_mut().zip(s1) {
+        *mean = value / s0;
+    }
+    for row in 0..means.len() {
+        for col in 0..means.len() {
             covariance[row][col] = s2[row][col] / s0 - means[row] * means[col];
         }
     }
-    (means, covariance)
+}
+
+fn efron_step_mean_and_covariance_into(
+    step_s0: f64,
+    s1: &[f64],
+    death_s1: &[f64],
+    s2: &[Vec<f64>],
+    death_s2: &[Vec<f64>],
+    fraction: f64,
+    means: &mut [f64],
+    covariance: &mut [Vec<f64>],
+) {
+    if step_s0 <= 0.0 {
+        means.fill(0.0);
+        for row in covariance {
+            row.fill(0.0);
+        }
+        return;
+    }
+    for col in 0..means.len() {
+        means[col] = (s1[col] - fraction * death_s1[col]) / step_s0;
+    }
+    for row in 0..means.len() {
+        for col in 0..means.len() {
+            covariance[row][col] =
+                (s2[row][col] - fraction * death_s2[row][col]) / step_s0 - means[row] * means[col];
+        }
+    }
+}
+
+fn scale_matrix_in_place(target: &mut [Vec<f64>], scale: f64) {
+    for row in target {
+        for value in row {
+            *value *= scale;
+        }
+    }
 }
 
 fn add_matrix(target: &mut [Vec<f64>], values: &[Vec<f64>], scale: f64) {
@@ -343,16 +396,13 @@ pub(crate) fn compute_coxph_detail_with_options(
         }
 
         let (s0, s1, s2) = weighted_sums(covariates, &risk_weights, &at_risk, nvar);
-        let (means, covariance) = mean_and_covariance(s0, &s1, &s2, nvar);
+        let (means, mut imat) = mean_and_covariance(s0, &s1, &s2, nvar);
         let mut score = event_covariates
             .iter()
             .zip(means.iter())
             .map(|(&event_sum, &mean)| event_sum - event_weight * mean)
             .collect::<Vec<_>>();
-        let mut imat = covariance
-            .iter()
-            .map(|row| row.iter().map(|value| event_weight * value).collect())
-            .collect::<Vec<Vec<f64>>>();
+        scale_matrix_in_place(&mut imat, event_weight);
         let mut hazard = if s0 > 0.0 {
             event_weight * hazard_scale / s0
         } else {
@@ -366,31 +416,28 @@ pub(crate) fn compute_coxph_detail_with_options(
 
         if method == "efron" && deaths.len() > 1 {
             let (d0, d1, d2) = weighted_sums(covariates, &risk_weights, &deaths, nvar);
-            score = event_covariates.clone();
-            imat = vec![vec![0.0; nvar]; nvar];
+            score.copy_from_slice(&event_covariates);
+            for row in &mut imat {
+                row.fill(0.0);
+            }
             hazard = 0.0;
             varhaz = 0.0;
             let step_weight = event_weight / deaths.len() as f64;
+            let mut step_means = vec![0.0; nvar];
+            let mut step_covariance = vec![vec![0.0; nvar]; nvar];
             for step in 0..deaths.len() {
                 let fraction = step as f64 / deaths.len() as f64;
                 let step_s0 = s0 - fraction * d0;
-                let step_s1 = s1
-                    .iter()
-                    .zip(d1.iter())
-                    .map(|(&value, &death_value)| value - fraction * death_value)
-                    .collect::<Vec<_>>();
-                let step_s2 = s2
-                    .iter()
-                    .zip(d2.iter())
-                    .map(|(row, death_row)| {
-                        row.iter()
-                            .zip(death_row.iter())
-                            .map(|(&value, &death_value)| value - fraction * death_value)
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                let (step_means, step_covariance) =
-                    mean_and_covariance(step_s0, &step_s1, &step_s2, nvar);
+                efron_step_mean_and_covariance_into(
+                    step_s0,
+                    &s1,
+                    &d1,
+                    &s2,
+                    &d2,
+                    fraction,
+                    &mut step_means,
+                    &mut step_covariance,
+                );
                 for col in 0..nvar {
                     score[col] -= step_weight * step_means[col];
                 }
@@ -617,6 +664,38 @@ mod tests {
         assert!(detail.rows[0].varhaz > 0.0);
         assert_ne!(detail.rows[0].score, vec![0.0]);
         assert_ne!(detail.rows[0].imat, vec![vec![0.0]]);
+    }
+
+    #[test]
+    fn test_coxph_detail_efron_tie_matches_hand_computed_values() {
+        let time = vec![1.0, 1.0, 2.0];
+        let status = vec![1, 1, 0];
+        let covariates = vec![vec![0.0], vec![1.0], vec![2.0]];
+        let coefficients = vec![0.0];
+
+        let detail = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &coefficients,
+            weights: None,
+            entry_times: None,
+            strata: None,
+            offset: None,
+            method: "efron",
+            center: 0.0,
+        })
+        .unwrap();
+
+        assert_eq!(detail.rows.len(), 1);
+        let row = &detail.rows[0];
+        assert_eq!(row.n_risk, 3);
+        assert_eq!(row.n_event, 2);
+        assert!((row.hazard - 5.0 / 6.0).abs() < 1e-12);
+        assert!((row.varhaz - 13.0 / 36.0).abs() < 1e-12);
+        assert!((row.score[0] + 1.25).abs() < 1e-12);
+        assert!((row.imat[0][0] - 65.0 / 48.0).abs() < 1e-12);
+        assert_eq!(row.means, vec![1.0]);
     }
 
     #[test]
