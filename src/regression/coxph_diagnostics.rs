@@ -891,8 +891,10 @@ impl CoxPHFit {
                 })
                 .collect();
             let mut active = ActiveRiskSet::new(&rows, true);
-            let mut event_times = Vec::new();
-            let mut cumulative_scalars = Vec::new();
+            let event_count = rows.iter().filter(|row| row.status == 1).count();
+            let mut event_times = Vec::with_capacity(event_count);
+            let mut cumulative_scalars = Vec::with_capacity(event_count);
+            let mut deaths: Vec<usize> = Vec::with_capacity(event_count);
             let mut cumulative_scalar = 0.0;
             let mut time_start = 0usize;
             while time_start < rows.len() {
@@ -904,9 +906,8 @@ impl CoxPHFit {
 
                 active.advance_to(event_time, |_, _| {});
 
-                let deaths: Vec<usize> = (time_start..=time_end)
-                    .filter(|&idx| rows[idx].status == 1)
-                    .collect();
+                deaths.clear();
+                deaths.extend((time_start..=time_end).filter(|&idx| rows[idx].status == 1));
                 if !deaths.is_empty() && active.risk_sum > 0.0 {
                     for &row_idx in &deaths {
                         let original_idx = rows[row_idx].original_idx;
