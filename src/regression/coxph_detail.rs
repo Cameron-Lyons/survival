@@ -3,6 +3,7 @@ use crate::internal::cox_risk::{cox_risk_shift, shifted_exp_eta_with_shift};
 use crate::internal::validation::validate_binary_i32;
 use pyo3::prelude::*;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -180,19 +181,18 @@ fn add_matrix(target: &mut [Vec<f64>], values: &[Vec<f64>], scale: f64) {
 
 fn event_groups(time: &[f64], status: &[i32], strata: &[i32]) -> Vec<(i32, f64)> {
     let mut groups: Vec<(i32, f64)> = Vec::new();
-    let mut strata_values = strata.to_vec();
-    strata_values.sort_unstable();
-    strata_values.dedup();
+    let mut times_by_stratum: BTreeMap<i32, Vec<f64>> = BTreeMap::new();
 
-    for stratum in strata_values {
-        let mut times: Vec<f64> = time
-            .iter()
-            .zip(status.iter())
-            .zip(strata.iter())
-            .filter_map(|((&event_time, &event), &row_stratum)| {
-                (event == 1 && row_stratum == stratum).then_some(event_time)
-            })
-            .collect();
+    for idx in 0..time.len() {
+        if status[idx] == 1 {
+            times_by_stratum
+                .entry(strata[idx])
+                .or_default()
+                .push(time[idx]);
+        }
+    }
+
+    for (stratum, mut times) in times_by_stratum {
         times.sort_by(|a, b| a.total_cmp(b));
         times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
         groups.extend(times.into_iter().map(|event_time| (stratum, event_time)));
@@ -676,5 +676,35 @@ mod tests {
         assert_eq!(detail.rows[0].wtrisk, 1.0);
         assert_eq!(detail.rows[0].hazard, 1.0);
         assert!(detail.rows[0].cumhaz.is_finite());
+    }
+
+    #[test]
+    fn test_coxph_detail_groups_event_times_by_sorted_strata() {
+        let time = vec![2.0, 1.0, 1.0 + TIME_EPSILON / 2.0, 3.0];
+        let status = vec![1, 1, 1, 0];
+        let covariates = vec![vec![0.0], vec![0.0], vec![0.0], vec![0.0]];
+        let coefficients = vec![0.0];
+        let strata = vec![2, 1, 1, 2];
+
+        let detail = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &coefficients,
+            weights: None,
+            entry_times: None,
+            strata: Some(&strata),
+            offset: None,
+            method: "breslow",
+            center: 0.0,
+        })
+        .unwrap();
+
+        assert_eq!(detail.rows.len(), 2);
+        assert_eq!(detail.rows[0].stratum, 1);
+        assert!((detail.rows[0].time - 1.0).abs() < TIME_EPSILON);
+        assert_eq!(detail.rows[0].n_event, 2);
+        assert_eq!(detail.rows[1].stratum, 2);
+        assert_eq!(detail.rows[1].time, 2.0);
     }
 }
