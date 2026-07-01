@@ -515,9 +515,6 @@ pub fn coxph_fit(
     entry_times: Option<Vec<f64>>,
     nocenter: Option<Vec<f64>>,
 ) -> PyResult<CoxPHFit> {
-    let event_times = time.clone();
-    let status_values = status.clone();
-    let entry_values = entry_times.clone();
     let n = time.len();
     if n == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -623,7 +620,6 @@ pub fn coxph_fit(
     let offset_vec = offset.unwrap_or_else(|| vec![0.0; n]);
     let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
     let strata_values = strata.unwrap_or_else(|| vec![0; n]);
-    let original_strata_values = strata_values.clone();
     let nocenter_values = nocenter.unwrap_or_default();
     let doscale: Vec<bool> = if nocenter_values.is_empty() {
         vec![true; nvar]
@@ -717,13 +713,13 @@ pub fn coxph_fit(
         convergence_flag: flag,
         iterations,
         risk_scores,
-        event_times,
-        status: status_values,
+        event_times: time,
+        status,
         linear_predictors,
-        entry_times: entry_values,
+        entry_times,
         weights: weights_vec,
         covariates,
-        strata: original_strata_values,
+        strata: strata_values,
         method: method_name,
         nocenter: nocenter_values,
     })
