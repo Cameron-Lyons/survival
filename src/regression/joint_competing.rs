@@ -408,11 +408,13 @@ fn solve_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
             return None;
         }
 
-        let row_i_tail: Vec<f64> = aug[i][i..n].to_vec();
+        let (pivot_rows, lower_rows) = aug.split_at_mut(i + 1);
+        let pivot_tail = &pivot_rows[i][i..n];
         for k in (i + 1)..n {
-            let factor = aug[k][i] / aug[i][i];
+            let lower_row = &mut lower_rows[k - i - 1];
+            let factor = lower_row[i] / pivot_rows[i][i];
             rhs[k] -= factor * rhs[i];
-            for (aug_kj, &aug_ij) in aug[k][i..n].iter_mut().zip(row_i_tail.iter()) {
+            for (aug_kj, &aug_ij) in lower_row[i..n].iter_mut().zip(pivot_tail) {
                 *aug_kj -= factor * aug_ij;
             }
         }
@@ -608,6 +610,15 @@ mod tests {
             JointCompetingRisksConfig::new(2, CorrelationType::Independent, 1.0, 100, 1e-6, true)
                 .unwrap();
         assert_eq!(config.num_causes, 2);
+    }
+
+    #[test]
+    fn test_solve_system_pivots_without_singular_matrix() {
+        let solution = solve_system(&[vec![0.0, 2.0], vec![1.0, 1.0]], &[4.0, 3.0]).unwrap();
+
+        assert!((solution[0] - 1.0).abs() < 1e-12);
+        assert!((solution[1] - 2.0).abs() < 1e-12);
+        assert!(solve_system(&[vec![0.0, 0.0], vec![0.0, 1.0]], &[1.0, 2.0]).is_none());
     }
 
     #[test]
