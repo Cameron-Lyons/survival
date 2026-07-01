@@ -81,7 +81,7 @@ pub struct CoxPHFit {
 }
 
 impl CoxPHFit {
-    fn row_strata_cow(&self) -> Cow<'_, [i32]> {
+    pub(crate) fn row_strata_cow(&self) -> Cow<'_, [i32]> {
         if self.strata.len() == self.event_times.len() {
             Cow::Borrowed(self.strata.as_slice())
         } else {

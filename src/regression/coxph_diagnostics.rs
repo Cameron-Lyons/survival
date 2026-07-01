@@ -472,7 +472,7 @@ impl CoxPHFit {
         let (times, hazards, hazard_strata) = self.basehaz_with_strata_internal(false)?;
         let baseline = StratifiedBaselineLookup::from_components(&times, &hazards, &hazard_strata);
         let entry_times = self.entry_times.as_deref();
-        let row_strata = self.row_strata();
+        let row_strata = self.row_strata_cow();
 
         Ok(self
             .event_times
