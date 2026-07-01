@@ -32,15 +32,33 @@ struct FastCoxDescentConfig<'a> {
 
 #[allow(clippy::needless_range_loop)]
 fn linear_predictors(data: &FastCoxData, beta: &[f64]) -> Vec<f64> {
-    (0..data.n)
-        .map(|i| {
-            let mut eta = data.offset[i];
-            for j in 0..data.p {
-                eta += data.x[i * data.p + j] * beta[j];
-            }
-            eta
-        })
-        .collect()
+    let mut eta = vec![0.0; data.n];
+    linear_predictors_into(data, beta, &mut eta);
+    eta
+}
+
+#[allow(clippy::needless_range_loop)]
+fn linear_predictors_into(data: &FastCoxData, beta: &[f64], eta: &mut [f64]) {
+    debug_assert_eq!(eta.len(), data.n);
+    for i in 0..data.n {
+        let mut value = data.offset[i];
+        for j in 0..data.p {
+            value += data.x[i * data.p + j] * beta[j];
+        }
+        eta[i] = value;
+    }
+}
+
+fn shifted_exp_eta_with_shift_into(eta: &[f64], weights: &[f64], shift: f64, target: &mut [f64]) {
+    debug_assert_eq!(target.len(), eta.len());
+    debug_assert_eq!(weights.len(), eta.len());
+    for ((target_value, &eta_i), &weight) in target.iter_mut().zip(eta.iter()).zip(weights.iter()) {
+        *target_value = if weight > 0.0 {
+            (eta_i - shift).exp()
+        } else {
+            0.0
+        };
+    }
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -51,12 +69,16 @@ fn compute_gradient_hessian_diag_fast(
 ) -> (Vec<f64>, Vec<f64>) {
     let mut gradient = vec![0.0; data.p];
     let mut hessian_diag = vec![0.0; data.p];
+    let mut eta = vec![0.0; data.n];
+    let mut exp_eta = vec![0.0; data.n];
     compute_gradient_hessian_diag_fast_into(
         data,
         beta,
         active_set,
         &mut gradient,
         &mut hessian_diag,
+        &mut eta,
+        &mut exp_eta,
     );
     (gradient, hessian_diag)
 }
@@ -68,14 +90,19 @@ fn compute_gradient_hessian_diag_fast_into(
     active_set: Option<&[usize]>,
     gradient: &mut [f64],
     hessian_diag: &mut [f64],
+    eta: &mut [f64],
+    exp_eta: &mut [f64],
 ) {
     debug_assert_eq!(gradient.len(), data.p);
     debug_assert_eq!(hessian_diag.len(), data.p);
+    debug_assert_eq!(eta.len(), data.n);
+    debug_assert_eq!(exp_eta.len(), data.n);
     gradient.fill(0.0);
     hessian_diag.fill(0.0);
 
-    let eta = linear_predictors(data, beta);
-    let exp_eta = shifted_exp_eta(&eta, data.weights);
+    linear_predictors_into(data, beta, eta);
+    let shift = cox_risk_shift(eta, data.weights);
+    shifted_exp_eta_with_shift_into(eta, data.weights, shift, exp_eta);
 
     let risk_data = precompute_cox_risk_set_cumsum(
         data.x,
@@ -83,7 +110,7 @@ fn compute_gradient_hessian_diag_fast_into(
         data.p,
         data.time,
         data.weights,
-        &exp_eta,
+        exp_eta,
     );
 
     for i in 0..data.n {
@@ -205,7 +232,17 @@ fn cyclic_coordinate_descent_fast(
 
     let mut gradient = vec![0.0; data.p];
     let mut hessian_diag = vec![0.0; data.p];
-    compute_gradient_hessian_diag_fast_into(data, &beta, None, &mut gradient, &mut hessian_diag);
+    let mut eta = vec![0.0; data.n];
+    let mut exp_eta = vec![0.0; data.n];
+    compute_gradient_hessian_diag_fast_into(
+        data,
+        &beta,
+        None,
+        &mut gradient,
+        &mut hessian_diag,
+        &mut eta,
+        &mut exp_eta,
+    );
 
     let mut active_set: Vec<usize> = match config.screening {
         ScreeningRule::None => (0..data.p).collect(),
@@ -242,6 +279,8 @@ fn cyclic_coordinate_descent_fast(
             Some(&active_set),
             &mut gradient,
             &mut hessian_diag,
+            &mut eta,
+            &mut exp_eta,
         );
 
         let mut max_change: f64 = 0.0;
@@ -265,6 +304,8 @@ fn cyclic_coordinate_descent_fast(
                 None,
                 &mut gradient,
                 &mut hessian_diag,
+                &mut eta,
+                &mut exp_eta,
             );
 
             kkt_violations.clear();
@@ -293,6 +334,8 @@ fn cyclic_coordinate_descent_fast(
                 None,
                 &mut gradient,
                 &mut hessian_diag,
+                &mut eta,
+                &mut exp_eta,
             );
 
             new_active.clear();
