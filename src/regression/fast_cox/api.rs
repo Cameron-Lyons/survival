@@ -297,6 +297,19 @@ pub(crate) fn fast_cox_path_typed(
 
     let mut beta_warm = vec![0.0; n_vars];
     let mut lambda_prev: Option<f64> = None;
+    let mut deviance_eta = vec![0.0; n_obs];
+    let mut deviance_exp_eta = vec![0.0; n_obs];
+    let mut deviance_risk_data = CoxRiskSetData::with_capacity(n_obs, n_vars);
+    let mut deviance_risk_scratch = CoxRiskSetScratch::with_capacity(n_obs, n_vars);
+    let deviance_data = FastCoxData {
+        x,
+        n: n_obs,
+        p: n_vars,
+        time,
+        status,
+        weights: wt.as_ref(),
+        offset: off.as_ref(),
+    };
 
     for &lambda in lambdas.iter() {
         let (beta_std, n_iter, conv, _screened, _active) = cyclic_coordinate_descent_fast(
@@ -326,16 +339,14 @@ pub(crate) fn fast_cox_path_typed(
             .iter()
             .filter(|&&c| c.abs() > crate::constants::DIVISION_FLOOR)
             .count() as f64;
-        let deviance_data = FastCoxData {
-            x,
-            n: n_obs,
-            p: n_vars,
-            time,
-            status,
-            weights: wt.as_ref(),
-            offset: off.as_ref(),
-        };
-        let deviance = compute_cox_deviance(&deviance_data, &coefficients);
+        let deviance = compute_cox_deviance_into(
+            &deviance_data,
+            &coefficients,
+            &mut deviance_eta,
+            &mut deviance_exp_eta,
+            &mut deviance_risk_data,
+            &mut deviance_risk_scratch,
+        );
 
         all_coefficients.push(coefficients);
         all_deviances.push(deviance);
