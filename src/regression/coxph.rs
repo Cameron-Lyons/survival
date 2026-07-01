@@ -128,17 +128,23 @@ impl CoxPHFit {
                 });
         }
 
-        let mut out_times = Vec::new();
-        let mut out_hazards = Vec::new();
-        let mut out_strata = Vec::new();
+        let total_event_count = self.status.iter().filter(|&&status| status == 1).count();
+        let mut out_times = Vec::with_capacity(total_event_count);
+        let mut out_hazards = Vec::with_capacity(total_event_count);
+        let mut out_strata = Vec::with_capacity(total_event_count);
         let use_entry_times = self.entry_times.is_some();
         let use_efron = self.method == "efron";
 
         for (stratum, mut rows) in rows_by_stratum {
-            let mut event_times: Vec<f64> = rows
-                .iter()
-                .filter_map(|row| (row.status == 1).then_some(row.stop))
-                .collect();
+            let stratum_event_count = rows.iter().filter(|row| row.status == 1).count();
+            let mut event_times = Vec::with_capacity(stratum_event_count);
+            let mut death_order = Vec::with_capacity(stratum_event_count);
+            for (row_idx, row) in rows.iter().enumerate() {
+                if row.status == 1 {
+                    event_times.push(row.stop);
+                    death_order.push(row_idx);
+                }
+            }
             event_times.sort_by(|a, b| a.total_cmp(b));
             event_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
             if event_times.is_empty() {
@@ -167,9 +173,6 @@ impl CoxPHFit {
 
             let mut active = ActiveRiskSet::new(&rows, use_entry_times);
 
-            let mut death_order: Vec<usize> = (0..rows.len())
-                .filter(|&idx| rows[idx].status == 1)
-                .collect();
             death_order.sort_by(|&lhs, &rhs| {
                 rows[lhs]
                     .stop
