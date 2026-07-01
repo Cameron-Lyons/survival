@@ -691,6 +691,11 @@ impl CoxFit {
             let mut stop_ptr = stratum_end as isize;
             let mut start_ptr = 0usize;
             let mut time_end = stratum_end;
+            let mut death_a = vec![0.0; nvar];
+            let mut death_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
+            let mut event_a = vec![0.0; nvar];
+            let mut event_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
+            let mut risk_indices: Vec<usize> = Vec::new();
 
             loop {
                 let event_time = self.time[time_end];
@@ -733,8 +738,8 @@ impl CoxFit {
                 let mut ndead = 0usize;
                 let mut deadwt = 0.0;
                 let mut denom2 = 0.0;
-                let mut a2 = vec![0.0; nvar];
-                let mut cmat2: Array2<f64> = Array2::zeros((nvar, nvar));
+                death_a.fill(0.0);
+                death_cmat.fill(0.0);
 
                 for person in time_start..=time_end {
                     if self.status[person] == 0 {
@@ -749,8 +754,8 @@ impl CoxFit {
                         person,
                         risk_vals[person],
                         &mut denom2,
-                        &mut a2,
-                        &mut cmat2,
+                        &mut death_a,
+                        &mut death_cmat,
                     );
                     for i in 0..nvar {
                         self.u[i] += self.weights[person] * self.covar[(person, i)];
@@ -759,20 +764,19 @@ impl CoxFit {
 
                 if ndead > 0 {
                     let denom = stop_denom - unentered_denom;
-                    let mut a = vec![0.0; nvar];
-                    let mut cmat: Array2<f64> = Array2::zeros((nvar, nvar));
+                    event_a.fill(0.0);
+                    event_cmat.fill(0.0);
                     for i in 0..nvar {
-                        a[i] = stop_a[i] - unentered_a[i];
+                        event_a[i] = stop_a[i] - unentered_a[i];
                         for j in 0..=i {
-                            cmat[(i, j)] = stop_cmat[(i, j)] - unentered_cmat[(i, j)];
+                            event_cmat[(i, j)] = stop_cmat[(i, j)] - unentered_cmat[(i, j)];
                         }
                     }
                     if matches!(method, Method::Exact) && ndead > 1 {
-                        let risk_indices: Vec<usize> = (stratum_start..=stratum_end)
-                            .filter(|&idx| {
-                                entry_times[idx] < event_time && self.time[idx] >= event_time
-                            })
-                            .collect();
+                        risk_indices.clear();
+                        risk_indices.extend((stratum_start..=stratum_end).filter(|&idx| {
+                            entry_times[idx] < event_time && self.time[idx] >= event_time
+                        }));
                         let (exact_denom, exact_a, exact_cmat) =
                             exact_tied_moments(&risk_indices, ndead, &risk_vals, &self.covar);
                         loglik -= exact_denom.ln();
@@ -790,10 +794,10 @@ impl CoxFit {
                     } else if matches!(method, Method::Breslow) || ndead == 1 {
                         loglik -= deadwt * denom.ln();
                         for i in 0..nvar {
-                            let temp = a[i] / denom;
+                            let temp = event_a[i] / denom;
                             self.u[i] -= deadwt * temp;
                             for j in 0..=i {
-                                let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
+                                let val = deadwt * (event_cmat[(i, j)] - temp * event_a[j]) / denom;
                                 self.imat[(j, i)] += val;
                                 if i != j {
                                     self.imat[(i, j)] += val;
@@ -805,28 +809,23 @@ impl CoxFit {
                         let risk_fraction = denom2 / death_count;
                         let weight_average = deadwt / death_count;
                         let mut efron_denom = denom - denom2;
-                        let mut efron_a: Vec<f64> = a
-                            .iter()
-                            .zip(a2.iter())
-                            .map(|(&all, &dead)| all - dead)
-                            .collect();
-                        let mut efron_cmat = cmat.clone();
                         for i in 0..nvar {
+                            event_a[i] -= death_a[i];
                             for j in 0..=i {
-                                efron_cmat[(i, j)] -= cmat2[(i, j)];
+                                event_cmat[(i, j)] -= death_cmat[(i, j)];
                             }
                         }
                         for _ in 0..ndead {
                             efron_denom += risk_fraction;
                             loglik -= weight_average * efron_denom.ln();
                             for i in 0..nvar {
-                                efron_a[i] += a2[i] / death_count;
-                                let temp = efron_a[i] / efron_denom;
+                                event_a[i] += death_a[i] / death_count;
+                                let temp = event_a[i] / efron_denom;
                                 self.u[i] -= weight_average * temp;
                                 for j in 0..=i {
-                                    efron_cmat[(i, j)] += cmat2[(i, j)] / death_count;
+                                    event_cmat[(i, j)] += death_cmat[(i, j)] / death_count;
                                     let val = weight_average
-                                        * (efron_cmat[(i, j)] - temp * efron_a[j])
+                                        * (event_cmat[(i, j)] - temp * event_a[j])
                                         / efron_denom;
                                     self.imat[(j, i)] += val;
                                     if i != j {
@@ -1082,6 +1081,37 @@ mod tests {
         assert_eq!(information[(0, 0)], 301.0);
         assert_eq!(information[(1, 0)], 442.0);
         assert_eq!(information[(1, 1)], 724.0);
+    }
+
+    #[test]
+    fn counting_process_tied_methods_fit_with_entry_times() {
+        for method in [Method::Efron, Method::Exact] {
+            let mut cox = CoxFit::new_with_entry_times(
+                Array1::from_vec(vec![2.0, 2.0, 3.0, 4.0, 4.0, 5.0]),
+                Array1::from_vec(vec![1, 1, 0, 1, 1, 0]),
+                Array2::from_shape_vec((6, 1), vec![0.0, 0.4, 0.2, 1.0, 1.4, 0.8]).unwrap(),
+                Some(Array1::from_vec(vec![0.0, 0.5, 0.0, 1.0, 2.0, 0.0])),
+                Array1::from_vec(vec![0, 0, 0, 0, 0, 1]),
+                Array1::from_vec(vec![0.0; 6]),
+                Array1::from_vec(vec![1.0; 6]),
+                method,
+                5,
+                1e-8,
+                1e-8,
+                vec![true],
+                vec![0.0],
+            )
+            .expect("counting-process Cox fit should initialize");
+
+            let result = cox.fit();
+            assert!(result.is_ok());
+            let (beta, _means, _u, information, loglik, _sctest, _flag, _iter) = cox.results();
+            assert_eq!(beta.len(), 1);
+            assert!(beta[0].is_finite());
+            assert!(information[(0, 0)].is_finite());
+            assert!(loglik[0].is_finite());
+            assert!(loglik[1].is_finite());
+        }
     }
 
     #[test]
