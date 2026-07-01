@@ -6,6 +6,50 @@ pub(crate) struct CoxRiskSetData {
     pub(crate) risk_set_pos: Vec<usize>,
 }
 
+impl CoxRiskSetData {
+    pub(crate) fn with_capacity(n: usize, p: usize) -> Self {
+        Self {
+            cumsum_exp_eta: Vec::with_capacity(n),
+            cumsum_weighted_x: Vec::with_capacity(n * p),
+            cumsum_weighted_x_sq: Vec::with_capacity(n * p),
+            risk_set_pos: Vec::with_capacity(n),
+        }
+    }
+
+    fn resize_for(&mut self, n: usize, p: usize) {
+        self.cumsum_exp_eta.resize(n, 0.0);
+        self.cumsum_weighted_x.resize(n * p, 0.0);
+        self.cumsum_weighted_x_sq.resize(n * p, 0.0);
+        self.risk_set_pos.resize(n, 0);
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CoxRiskSetScratch {
+    sorted_indices: Vec<usize>,
+    running_x: Vec<f64>,
+    running_x_sq: Vec<f64>,
+}
+
+impl CoxRiskSetScratch {
+    pub(crate) fn with_capacity(n: usize, p: usize) -> Self {
+        Self {
+            sorted_indices: Vec::with_capacity(n),
+            running_x: Vec::with_capacity(p),
+            running_x_sq: Vec::with_capacity(p),
+        }
+    }
+
+    fn reset_for(&mut self, n: usize, p: usize) {
+        self.sorted_indices.clear();
+        self.sorted_indices.extend(0..n);
+        self.running_x.resize(p, 0.0);
+        self.running_x.fill(0.0);
+        self.running_x_sq.resize(p, 0.0);
+        self.running_x_sq.fill(0.0);
+    }
+}
+
 pub(crate) fn cox_risk_shift(eta: &[f64], weights: &[f64]) -> f64 {
     let shift = eta
         .iter()
@@ -49,59 +93,76 @@ pub(crate) fn precompute_cox_risk_set_cumsum(
     weights: &[f64],
     exp_eta: &[f64],
 ) -> CoxRiskSetData {
+    let mut risk_data = CoxRiskSetData::with_capacity(n, p);
+    let mut scratch = CoxRiskSetScratch::with_capacity(n, p);
+    precompute_cox_risk_set_cumsum_into(
+        x,
+        n,
+        p,
+        time,
+        weights,
+        exp_eta,
+        &mut risk_data,
+        &mut scratch,
+    );
+    risk_data
+}
+
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn precompute_cox_risk_set_cumsum_into(
+    x: &[f64],
+    n: usize,
+    p: usize,
+    time: &[f64],
+    weights: &[f64],
+    exp_eta: &[f64],
+    risk_data: &mut CoxRiskSetData,
+    scratch: &mut CoxRiskSetScratch,
+) {
     debug_assert_eq!(x.len(), n * p);
     debug_assert_eq!(time.len(), n);
     debug_assert_eq!(weights.len(), n);
     debug_assert_eq!(exp_eta.len(), n);
 
-    let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]).then_with(|| a.cmp(&b)));
-
-    let mut cumsum_exp_eta = vec![0.0; n];
-    let mut cumsum_weighted_x = vec![0.0; n * p];
-    let mut cumsum_weighted_x_sq = vec![0.0; n * p];
-    let mut risk_set_pos = vec![0usize; n];
+    risk_data.resize_for(n, p);
+    scratch.reset_for(n, p);
+    scratch
+        .sorted_indices
+        .sort_by(|&a, &b| time[b].total_cmp(&time[a]).then_with(|| a.cmp(&b)));
 
     let mut running_exp = 0.0;
-    let mut running_x = vec![0.0; p];
-    let mut running_x_sq = vec![0.0; p];
-
-    for (pos, &idx) in sorted_indices.iter().enumerate() {
+    for (pos, &idx) in scratch.sorted_indices.iter().enumerate() {
         let weighted_exp = weights[idx] * exp_eta[idx];
         running_exp += weighted_exp;
 
         for col in 0..p {
             let xij = x[idx * p + col];
-            running_x[col] += weighted_exp * xij;
-            running_x_sq[col] += weighted_exp * xij * xij;
+            scratch.running_x[col] += weighted_exp * xij;
+            scratch.running_x_sq[col] += weighted_exp * xij * xij;
         }
 
-        cumsum_exp_eta[pos] = running_exp;
+        risk_data.cumsum_exp_eta[pos] = running_exp;
         let row_start = pos * p;
-        cumsum_weighted_x[row_start..row_start + p].copy_from_slice(&running_x);
-        cumsum_weighted_x_sq[row_start..row_start + p].copy_from_slice(&running_x_sq);
+        risk_data.cumsum_weighted_x[row_start..row_start + p].copy_from_slice(&scratch.running_x);
+        risk_data.cumsum_weighted_x_sq[row_start..row_start + p]
+            .copy_from_slice(&scratch.running_x_sq);
     }
 
     let mut start = 0;
     while start < n {
-        let current_time = time[sorted_indices[start]];
+        let current_time = time[scratch.sorted_indices[start]];
         let mut end = start + 1;
-        while end < n && crate::constants::same_time(time[sorted_indices[end]], current_time) {
+        while end < n
+            && crate::constants::same_time(time[scratch.sorted_indices[end]], current_time)
+        {
             end += 1;
         }
 
         let pos = end - 1;
-        for &idx in &sorted_indices[start..end] {
-            risk_set_pos[idx] = pos;
+        for &idx in &scratch.sorted_indices[start..end] {
+            risk_data.risk_set_pos[idx] = pos;
         }
         start = end;
-    }
-
-    CoxRiskSetData {
-        cumsum_exp_eta,
-        cumsum_weighted_x,
-        cumsum_weighted_x_sq,
-        risk_set_pos,
     }
 }
 
@@ -163,6 +224,32 @@ mod tests {
         let exp_eta = [1.0, 1.0, 1.0];
 
         let risk_data = precompute_cox_risk_set_cumsum(&x, 3, 2, &time, &weights, &exp_eta);
+
+        assert_eq!(risk_data.cumsum_exp_eta, vec![1.0, 2.0, 3.0]);
+        assert_eq!(risk_data.risk_set_pos, vec![2, 1, 1]);
+        assert_eq!(risk_data.cumsum_weighted_x[2..4], [5.0, 50.0]);
+        assert_eq!(risk_data.cumsum_weighted_x_sq[2..4], [13.0, 1300.0]);
+    }
+
+    #[test]
+    fn precompute_cox_risk_set_cumsum_into_reuses_buffers() {
+        let x = [1.0, 10.0, 2.0, 20.0, 3.0, 30.0];
+        let time = [1.0, 2.0, 2.0];
+        let weights = [1.0, 1.0, 1.0];
+        let exp_eta = [1.0, 1.0, 1.0];
+        let mut risk_data = CoxRiskSetData::with_capacity(3, 2);
+        let mut scratch = CoxRiskSetScratch::with_capacity(3, 2);
+
+        precompute_cox_risk_set_cumsum_into(
+            &x,
+            3,
+            2,
+            &time,
+            &weights,
+            &exp_eta,
+            &mut risk_data,
+            &mut scratch,
+        );
 
         assert_eq!(risk_data.cumsum_exp_eta, vec![1.0, 2.0, 3.0]);
         assert_eq!(risk_data.risk_set_pos, vec![2, 1, 1]);

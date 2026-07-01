@@ -71,6 +71,8 @@ fn compute_gradient_hessian_diag_fast(
     let mut hessian_diag = vec![0.0; data.p];
     let mut eta = vec![0.0; data.n];
     let mut exp_eta = vec![0.0; data.n];
+    let mut risk_data = CoxRiskSetData::with_capacity(data.n, data.p);
+    let mut risk_scratch = CoxRiskSetScratch::with_capacity(data.n, data.p);
     compute_gradient_hessian_diag_fast_into(
         data,
         beta,
@@ -79,6 +81,8 @@ fn compute_gradient_hessian_diag_fast(
         &mut hessian_diag,
         &mut eta,
         &mut exp_eta,
+        &mut risk_data,
+        &mut risk_scratch,
     );
     (gradient, hessian_diag)
 }
@@ -92,6 +96,8 @@ fn compute_gradient_hessian_diag_fast_into(
     hessian_diag: &mut [f64],
     eta: &mut [f64],
     exp_eta: &mut [f64],
+    risk_data: &mut CoxRiskSetData,
+    risk_scratch: &mut CoxRiskSetScratch,
 ) {
     debug_assert_eq!(gradient.len(), data.p);
     debug_assert_eq!(hessian_diag.len(), data.p);
@@ -104,13 +110,15 @@ fn compute_gradient_hessian_diag_fast_into(
     let shift = cox_risk_shift(eta, data.weights);
     shifted_exp_eta_with_shift_into(eta, data.weights, shift, exp_eta);
 
-    let risk_data = precompute_cox_risk_set_cumsum(
+    precompute_cox_risk_set_cumsum_into(
         data.x,
         data.n,
         data.p,
         data.time,
         data.weights,
         exp_eta,
+        risk_data,
+        risk_scratch,
     );
 
     for i in 0..data.n {
@@ -234,6 +242,8 @@ fn cyclic_coordinate_descent_fast(
     let mut hessian_diag = vec![0.0; data.p];
     let mut eta = vec![0.0; data.n];
     let mut exp_eta = vec![0.0; data.n];
+    let mut risk_data = CoxRiskSetData::with_capacity(data.n, data.p);
+    let mut risk_scratch = CoxRiskSetScratch::with_capacity(data.n, data.p);
     compute_gradient_hessian_diag_fast_into(
         data,
         &beta,
@@ -242,6 +252,8 @@ fn cyclic_coordinate_descent_fast(
         &mut hessian_diag,
         &mut eta,
         &mut exp_eta,
+        &mut risk_data,
+        &mut risk_scratch,
     );
 
     let mut active_set: Vec<usize> = match config.screening {
@@ -281,6 +293,8 @@ fn cyclic_coordinate_descent_fast(
             &mut hessian_diag,
             &mut eta,
             &mut exp_eta,
+            &mut risk_data,
+            &mut risk_scratch,
         );
 
         let mut max_change: f64 = 0.0;
@@ -306,6 +320,8 @@ fn cyclic_coordinate_descent_fast(
                 &mut hessian_diag,
                 &mut eta,
                 &mut exp_eta,
+                &mut risk_data,
+                &mut risk_scratch,
             );
 
             kkt_violations.clear();
@@ -336,6 +352,8 @@ fn cyclic_coordinate_descent_fast(
                 &mut hessian_diag,
                 &mut eta,
                 &mut exp_eta,
+                &mut risk_data,
+                &mut risk_scratch,
             );
 
             new_active.clear();
