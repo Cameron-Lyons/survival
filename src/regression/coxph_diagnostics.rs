@@ -653,6 +653,7 @@ impl CoxPHFit {
                 stratum_end += 1;
             }
             let mut risk_indices: Vec<usize> = Vec::new();
+            let mut deaths: Vec<usize> = Vec::new();
             let mut time_pos = stratum_end;
             loop {
                 let event_time = self.event_times[order[time_pos]];
@@ -665,9 +666,8 @@ impl CoxPHFit {
                 for sorted_idx in time_start..=time_pos {
                     risk_indices.push(sorted_idx);
                 }
-                let deaths: Vec<usize> = (time_start..=time_pos)
-                    .filter(|&idx| self.status[order[idx]] == 1)
-                    .collect();
+                deaths.clear();
+                deaths.extend((time_start..=time_pos).filter(|&idx| self.status[order[idx]] == 1));
                 if !deaths.is_empty() {
                     for &sorted_idx in &deaths {
                         let original_idx = order[sorted_idx];
