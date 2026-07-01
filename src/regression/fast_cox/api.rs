@@ -1,5 +1,71 @@
 use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData, Weights};
 
+struct FastCoxCvFold {
+    train_x: Vec<f64>,
+    train_time: Vec<f64>,
+    train_status: Vec<i32>,
+    train_wt: Vec<f64>,
+    train_offset: Vec<f64>,
+    test_x: Vec<f64>,
+    test_time: Vec<f64>,
+    test_status: Vec<i32>,
+    test_wt: Vec<f64>,
+    test_offset: Vec<f64>,
+}
+
+impl FastCoxCvFold {
+    fn with_capacity(train_n: usize, test_n: usize, n_vars: usize) -> Self {
+        Self {
+            train_x: Vec::with_capacity(train_n * n_vars),
+            train_time: Vec::with_capacity(train_n),
+            train_status: Vec::with_capacity(train_n),
+            train_wt: Vec::with_capacity(train_n),
+            train_offset: Vec::with_capacity(train_n),
+            test_x: Vec::with_capacity(test_n * n_vars),
+            test_time: Vec::with_capacity(test_n),
+            test_status: Vec::with_capacity(test_n),
+            test_wt: Vec::with_capacity(test_n),
+            test_offset: Vec::with_capacity(test_n),
+        }
+    }
+
+    fn push_train(
+        &mut self,
+        idx: usize,
+        x: &[f64],
+        n_vars: usize,
+        time: &[f64],
+        status: &[i32],
+        wt: &[f64],
+        offset: &[f64],
+    ) {
+        let start = idx * n_vars;
+        self.train_x.extend_from_slice(&x[start..start + n_vars]);
+        self.train_time.push(time[idx]);
+        self.train_status.push(status[idx]);
+        self.train_wt.push(wt[idx]);
+        self.train_offset.push(offset[idx]);
+    }
+
+    fn push_test(
+        &mut self,
+        idx: usize,
+        x: &[f64],
+        n_vars: usize,
+        time: &[f64],
+        status: &[i32],
+        wt: &[f64],
+        offset: &[f64],
+    ) {
+        let start = idx * n_vars;
+        self.test_x.extend_from_slice(&x[start..start + n_vars]);
+        self.test_time.push(time[idx]);
+        self.test_status.push(status[idx]);
+        self.test_wt.push(wt[idx]);
+        self.test_offset.push(offset[idx]);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fast_cox_slices(
     x: &[f64],
@@ -333,39 +399,47 @@ pub(crate) fn fast_cox_cv_typed(
         fold_assign.swap(i, j);
     }
 
-    let fold_indices: Vec<(Vec<usize>, Vec<usize>)> = (0..config.n_folds)
+    let mut fold_counts = vec![0usize; config.n_folds];
+    for &fold in &fold_assign {
+        fold_counts[fold] += 1;
+    }
+
+    let folds: Vec<FastCoxCvFold> = (0..config.n_folds)
         .map(|fold| {
-            let train_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] != fold).collect();
-            let test_idx: Vec<usize> = (0..n_obs).filter(|&i| fold_assign[i] == fold).collect();
-            (train_idx, test_idx)
+            let test_n = fold_counts[fold];
+            let train_n = n_obs - test_n;
+            let mut fold_data = FastCoxCvFold::with_capacity(train_n, test_n, n_vars);
+            for idx in 0..n_obs {
+                if fold_assign[idx] == fold {
+                    fold_data.push_test(idx, x, n_vars, time, status, wt.as_ref(), offset.as_ref());
+                } else {
+                    fold_data.push_train(
+                        idx,
+                        x,
+                        n_vars,
+                        time,
+                        status,
+                        wt.as_ref(),
+                        offset.as_ref(),
+                    );
+                }
+            }
+            fold_data
         })
         .collect();
 
-    let x_ref = x;
-    let time_ref = time;
-    let status_ref = status;
-    let wt_ref = wt.as_ref();
-    let offset_ref = offset.as_ref();
     let cv_deviances: Vec<Vec<f64>> = path
         .lambdas
         .par_iter()
         .map(|&lambda| {
-            let fold_devs_by_fold: Vec<Option<f64>> = fold_indices
+            let fold_devs_by_fold: Vec<Option<f64>> = folds
                 .par_iter()
-                .map(|(train_idx, test_idx)| {
-                    if train_idx.is_empty() || test_idx.is_empty() {
+                .map(|fold| {
+                    let train_n = fold.train_time.len();
+                    let test_n = fold.test_time.len();
+                    if train_n == 0 || test_n == 0 {
                         return None;
                     }
-
-                    let train_x: Vec<f64> = train_idx
-                        .iter()
-                        .flat_map(|&i| (0..n_vars).map(move |j| x_ref[i * n_vars + j]))
-                        .collect();
-                    let train_time: Vec<f64> = train_idx.iter().map(|&i| time_ref[i]).collect();
-                    let train_status: Vec<i32> = train_idx.iter().map(|&i| status_ref[i]).collect();
-                    let train_wt: Vec<f64> = train_idx.iter().map(|&i| wt_ref[i]).collect();
-                    let train_offset: Vec<f64> =
-                        train_idx.iter().map(|&i| offset_ref[i]).collect();
 
                     let Ok(fit_config) = FastCoxConfig::new(
                         lambda,
@@ -381,44 +455,24 @@ pub(crate) fn fast_cox_cv_typed(
                         return None;
                     };
 
-                    let Ok(train_input) = CoxRegressionInput::try_new(
-                        match CovariateMatrix::try_new(train_x, train_idx.len(), n_vars) {
-                            Ok(covariates) => covariates,
-                            Err(_) => return None,
-                        },
-                        match SurvivalData::try_new(train_time, train_status) {
-                            Ok(survival) => survival,
-                            Err(_) => return None,
-                        },
-                        match Weights::try_new(train_wt) {
-                            Ok(weights) => Some(weights),
-                            Err(_) => return None,
-                        },
-                        Some(train_offset),
-                    ) else {
-                        return None;
-                    };
-
-                    if let Ok(result) = fast_cox_typed(&train_input, &fit_config) {
-                        let test_x: Vec<f64> = test_idx
-                            .iter()
-                            .flat_map(|&i| (0..n_vars).map(move |j| x_ref[i * n_vars + j]))
-                            .collect();
-                        let test_time: Vec<f64> = test_idx.iter().map(|&i| time_ref[i]).collect();
-                        let test_status: Vec<i32> =
-                            test_idx.iter().map(|&i| status_ref[i]).collect();
-                        let test_wt: Vec<f64> = test_idx.iter().map(|&i| wt_ref[i]).collect();
-                        let test_off: Vec<f64> =
-                            test_idx.iter().map(|&i| offset_ref[i]).collect();
-
+                    if let Ok(result) = fast_cox_slices(
+                        &fold.train_x,
+                        train_n,
+                        n_vars,
+                        &fold.train_time,
+                        &fold.train_status,
+                        &fit_config,
+                        Some(&fold.train_wt),
+                        Some(&fold.train_offset),
+                    ) {
                         let test_data = FastCoxData {
-                            x: &test_x,
-                            n: test_idx.len(),
+                            x: &fold.test_x,
+                            n: test_n,
                             p: n_vars,
-                            time: &test_time,
-                            status: &test_status,
-                            weights: &test_wt,
-                            offset: &test_off,
+                            time: &fold.test_time,
+                            status: &fold.test_status,
+                            weights: &fold.test_wt,
+                            offset: &fold.test_offset,
                         };
                         let dev = compute_cox_deviance(&test_data, &result.coefficients);
                         Some(dev)

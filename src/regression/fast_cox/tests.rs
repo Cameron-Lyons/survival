@@ -189,4 +189,31 @@ mod tests {
         assert_eq!(path.coefficients.len(), 10);
         assert!(path.lambdas[0] >= path.lambdas[9]);
     }
+
+    #[test]
+    fn test_fast_cox_cv() {
+        use crate::internal::typed_inputs::{CovariateMatrix, CoxRegressionInput, SurvivalData};
+
+        let x: Vec<f64> = (0..36).map(|i| (i as f64 % 7.0) * 0.2).collect();
+        let time: Vec<f64> = (1..=12).map(|value| value as f64).collect();
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1];
+        let input = CoxRegressionInput::try_new(
+            CovariateMatrix::try_new(x, 12, 3).unwrap(),
+            SurvivalData::try_new(time, status).unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+        let config = FastCoxCVConfig::new(1.0, 4, 3, ScreeningRule::None, Some(7)).unwrap();
+
+        let (lambda_min, lambda_1se, mean_deviances, se_deviances) =
+            fast_cox_cv_typed(&input, Some(&config)).unwrap();
+
+        assert!(lambda_min.is_finite());
+        assert!(lambda_1se.is_finite());
+        assert_eq!(mean_deviances.len(), 4);
+        assert_eq!(se_deviances.len(), 4);
+        assert!(mean_deviances.iter().all(|value| value.is_finite()));
+        assert!(se_deviances.iter().all(|value| value.is_finite()));
+    }
 }
