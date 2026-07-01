@@ -208,14 +208,16 @@ fn cyclic_coordinate_descent_fast(
 
     let mut converged = false;
     let mut n_iter = 0;
+    let mut kkt_violations = Vec::new();
+    let mut new_active = Vec::new();
 
     for iter in 0..config.max_iter {
         n_iter = iter + 1;
-        let beta_old = beta.clone();
 
         let (gradient, hessian_diag) =
             compute_gradient_hessian_diag_fast(data, &beta, Some(&active_set));
 
+        let mut max_change: f64 = 0.0;
         for &j in &active_set {
             let h_jj = hessian_diag[j] + l2_penalty;
             if h_jj.abs() < crate::constants::DIVISION_FLOOR {
@@ -223,32 +225,29 @@ fn cyclic_coordinate_descent_fast(
             }
 
             let z = gradient[j] + hessian_diag[j] * beta[j];
-            beta[j] = soft_threshold(z, l1_penalty) / h_jj;
+            let old_beta = beta[j];
+            let new_beta = soft_threshold(z, l1_penalty) / h_jj;
+            beta[j] = new_beta;
+            max_change = max_change.max((new_beta - old_beta).abs());
         }
-
-        let max_change: f64 = active_set
-            .iter()
-            .map(|&j| (beta[j] - beta_old[j]).abs())
-            .fold(0.0, f64::max);
 
         if max_change < config.tol {
             let (full_gradient, _) = compute_gradient_hessian_diag_fast(data, &beta, None);
 
-            let kkt_violations: Vec<usize> = (0..data.p)
-                .filter(|&j| {
-                    if beta[j].abs() > crate::constants::DIVISION_FLOOR {
-                        false
-                    } else {
-                        full_gradient[j].abs() > l1_penalty * 1.01
-                    }
-                })
-                .collect();
+            kkt_violations.clear();
+            kkt_violations.extend((0..data.p).filter(|&j| {
+                if beta[j].abs() > crate::constants::DIVISION_FLOOR {
+                    false
+                } else {
+                    full_gradient[j].abs() > l1_penalty * 1.01
+                }
+            }));
 
             if kkt_violations.is_empty() {
                 converged = true;
                 break;
             } else {
-                active_set.extend(kkt_violations);
+                active_set.extend(kkt_violations.iter().copied());
                 active_set.sort();
                 active_set.dedup();
             }
@@ -257,15 +256,14 @@ fn cyclic_coordinate_descent_fast(
         if iter % config.active_set_update_freq == 0 && iter > 0 {
             let (full_gradient, _) = compute_gradient_hessian_diag_fast(data, &beta, None);
 
-            let new_active: Vec<usize> = (0..data.p)
-                .filter(|&j| {
-                    beta[j].abs() > crate::constants::DIVISION_FLOOR
-                        || full_gradient[j].abs() >= l1_penalty * 0.5
-                })
-                .collect();
+            new_active.clear();
+            new_active.extend((0..data.p).filter(|&j| {
+                beta[j].abs() > crate::constants::DIVISION_FLOOR
+                    || full_gradient[j].abs() >= l1_penalty * 0.5
+            }));
 
             if !new_active.is_empty() {
-                active_set = new_active;
+                std::mem::swap(&mut active_set, &mut new_active);
             }
         }
     }
