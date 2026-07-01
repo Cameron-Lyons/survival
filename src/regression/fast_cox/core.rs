@@ -49,6 +49,31 @@ fn compute_gradient_hessian_diag_fast(
     beta: &[f64],
     active_set: Option<&[usize]>,
 ) -> (Vec<f64>, Vec<f64>) {
+    let mut gradient = vec![0.0; data.p];
+    let mut hessian_diag = vec![0.0; data.p];
+    compute_gradient_hessian_diag_fast_into(
+        data,
+        beta,
+        active_set,
+        &mut gradient,
+        &mut hessian_diag,
+    );
+    (gradient, hessian_diag)
+}
+
+#[allow(clippy::needless_range_loop)]
+fn compute_gradient_hessian_diag_fast_into(
+    data: &FastCoxData,
+    beta: &[f64],
+    active_set: Option<&[usize]>,
+    gradient: &mut [f64],
+    hessian_diag: &mut [f64],
+) {
+    debug_assert_eq!(gradient.len(), data.p);
+    debug_assert_eq!(hessian_diag.len(), data.p);
+    gradient.fill(0.0);
+    hessian_diag.fill(0.0);
+
     let eta = linear_predictors(data, beta);
     let exp_eta = shifted_exp_eta(&eta, data.weights);
 
@@ -60,9 +85,6 @@ fn compute_gradient_hessian_diag_fast(
         data.weights,
         &exp_eta,
     );
-
-    let mut gradient = vec![0.0; data.p];
-    let mut hessian_diag = vec![0.0; data.p];
 
     for i in 0..data.n {
         if data.status[i] != 1 {
@@ -98,8 +120,6 @@ fn compute_gradient_hessian_diag_fast(
             }
         }
     }
-
-    (gradient, hessian_diag)
 }
 
 fn apply_strong_screening(
@@ -183,7 +203,9 @@ fn cyclic_coordinate_descent_fast(
     let l1_penalty = config.lambda * config.l1_ratio;
     let l2_penalty = config.lambda * (1.0 - config.l1_ratio);
 
-    let (gradient, _) = compute_gradient_hessian_diag_fast(data, &beta, None);
+    let mut gradient = vec![0.0; data.p];
+    let mut hessian_diag = vec![0.0; data.p];
+    compute_gradient_hessian_diag_fast_into(data, &beta, None, &mut gradient, &mut hessian_diag);
 
     let mut active_set: Vec<usize> = match config.screening {
         ScreeningRule::None => (0..data.p).collect(),
@@ -214,8 +236,13 @@ fn cyclic_coordinate_descent_fast(
     for iter in 0..config.max_iter {
         n_iter = iter + 1;
 
-        let (gradient, hessian_diag) =
-            compute_gradient_hessian_diag_fast(data, &beta, Some(&active_set));
+        compute_gradient_hessian_diag_fast_into(
+            data,
+            &beta,
+            Some(&active_set),
+            &mut gradient,
+            &mut hessian_diag,
+        );
 
         let mut max_change: f64 = 0.0;
         for &j in &active_set {
@@ -232,14 +259,20 @@ fn cyclic_coordinate_descent_fast(
         }
 
         if max_change < config.tol {
-            let (full_gradient, _) = compute_gradient_hessian_diag_fast(data, &beta, None);
+            compute_gradient_hessian_diag_fast_into(
+                data,
+                &beta,
+                None,
+                &mut gradient,
+                &mut hessian_diag,
+            );
 
             kkt_violations.clear();
             kkt_violations.extend((0..data.p).filter(|&j| {
                 if beta[j].abs() > crate::constants::DIVISION_FLOOR {
                     false
                 } else {
-                    full_gradient[j].abs() > l1_penalty * 1.01
+                    gradient[j].abs() > l1_penalty * 1.01
                 }
             }));
 
@@ -254,12 +287,18 @@ fn cyclic_coordinate_descent_fast(
         }
 
         if iter % config.active_set_update_freq == 0 && iter > 0 {
-            let (full_gradient, _) = compute_gradient_hessian_diag_fast(data, &beta, None);
+            compute_gradient_hessian_diag_fast_into(
+                data,
+                &beta,
+                None,
+                &mut gradient,
+                &mut hessian_diag,
+            );
 
             new_active.clear();
             new_active.extend((0..data.p).filter(|&j| {
                 beta[j].abs() > crate::constants::DIVISION_FLOOR
-                    || full_gradient[j].abs() >= l1_penalty * 0.5
+                    || gradient[j].abs() >= l1_penalty * 0.5
             }));
 
             if !new_active.is_empty() {
