@@ -129,36 +129,27 @@ impl FastCoxCvDevianceSummary {
     }
 }
 
+struct FastCoxCoefficientFit {
+    coefficients: Vec<f64>,
+    n_iter: usize,
+    converged: bool,
+    scale_factors: Option<Vec<f64>>,
+    center_values: Option<Vec<f64>>,
+    screened_out: usize,
+    active_set_size: usize,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn fast_cox_slices(
+fn fit_fast_cox_coefficients(
     x: &[f64],
     n_obs: usize,
     n_vars: usize,
     time: &[f64],
     status: &[i32],
     config: &FastCoxConfig,
-    weights: Option<&[f64]>,
-    offset: Option<&[f64]>,
-) -> SurvivalResult<FastCoxResult> {
-    CoxRegressionInput::validate_slices(x, n_obs, n_vars, time, status, weights, offset)?;
-
-    let wt_owned;
-    let wt = match weights {
-        Some(weights) => weights,
-        None => {
-            wt_owned = vec![1.0; n_obs];
-            &wt_owned
-        }
-    };
-    let off_owned;
-    let off = match offset {
-        Some(offset) => offset,
-        None => {
-            off_owned = vec![0.0; n_obs];
-            &off_owned
-        }
-    };
-
+    wt: &[f64],
+    off: &[f64],
+) -> FastCoxCoefficientFit {
     let (x_std, means, sds) =
         standardize_or_borrow_row_major_matrix(x, n_obs, n_vars, config.standardize);
 
@@ -201,7 +192,55 @@ fn fast_cox_slices(
         beta_std
     };
 
-    let nonzero_indices: Vec<usize> = coefficients
+    FastCoxCoefficientFit {
+        coefficients,
+        n_iter,
+        converged,
+        scale_factors: if config.standardize { Some(sds) } else { None },
+        center_values: if config.standardize {
+            Some(means)
+        } else {
+            None
+        },
+        screened_out,
+        active_set_size,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fast_cox_slices(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    status: &[i32],
+    config: &FastCoxConfig,
+    weights: Option<&[f64]>,
+    offset: Option<&[f64]>,
+) -> SurvivalResult<FastCoxResult> {
+    CoxRegressionInput::validate_slices(x, n_obs, n_vars, time, status, weights, offset)?;
+
+    let wt_owned;
+    let wt = match weights {
+        Some(weights) => weights,
+        None => {
+            wt_owned = vec![1.0; n_obs];
+            &wt_owned
+        }
+    };
+    let off_owned;
+    let off = match offset {
+        Some(offset) => offset,
+        None => {
+            off_owned = vec![0.0; n_obs];
+            &off_owned
+        }
+    };
+
+    let fit = fit_fast_cox_coefficients(x, n_obs, n_vars, time, status, config, wt, off);
+
+    let nonzero_indices: Vec<usize> = fit
+        .coefficients
         .iter()
         .enumerate()
         .filter(|(_, c)| c.abs() > crate::constants::DIVISION_FLOOR)
@@ -218,25 +257,21 @@ fn fast_cox_slices(
         weights: wt,
         offset: off,
     };
-    let deviance = compute_cox_deviance(&deviance_data, &coefficients);
+    let deviance = compute_cox_deviance(&deviance_data, &fit.coefficients);
 
     Ok(FastCoxResult {
-        coefficients,
+        coefficients: fit.coefficients,
         nonzero_indices,
         lambda_used: config.lambda,
         l1_ratio: config.l1_ratio,
-        n_iter,
-        converged,
+        n_iter: fit.n_iter,
+        converged: fit.converged,
         deviance,
         df,
-        scale_factors: if config.standardize { Some(sds) } else { None },
-        center_values: if config.standardize {
-            Some(means)
-        } else {
-            None
-        },
-        screened_out,
-        active_set_size,
+        scale_factors: fit.scale_factors,
+        center_values: fit.center_values,
+        screened_out: fit.screened_out,
+        active_set_size: fit.active_set_size,
     })
 }
 
@@ -544,26 +579,25 @@ pub(crate) fn fast_cox_cv_typed(
                     continue;
                 };
 
-                if let Ok(result) = fast_cox_slices(
+                let fit = fit_fast_cox_coefficients(
                     &fold.train_x,
                     train_n,
                     n_vars,
                     &fold.train_time,
                     &fold.train_status,
                     &fit_config,
-                    Some(&fold.train_wt),
-                    Some(&fold.train_offset),
-                ) {
-                    let deviance = compute_cox_deviance_into(
-                        &test_data,
-                        &result.coefficients,
-                        &mut deviance_eta,
-                        &mut deviance_exp_eta,
-                        &mut deviance_risk_data,
-                        &mut deviance_risk_scratch,
-                    );
-                    summary.record(lambda_idx, deviance);
-                }
+                    &fold.train_wt,
+                    &fold.train_offset,
+                );
+                let deviance = compute_cox_deviance_into(
+                    &test_data,
+                    &fit.coefficients,
+                    &mut deviance_eta,
+                    &mut deviance_exp_eta,
+                    &mut deviance_risk_data,
+                    &mut deviance_risk_scratch,
+                );
+                summary.record(lambda_idx, deviance);
             }
 
             summary
