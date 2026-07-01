@@ -103,15 +103,19 @@ pub(crate) fn exact_tied_moments(
             if base == 0.0 {
                 continue;
             }
-            let prev_a = a[size - 1].clone();
-            let prev_cmat = cmat[size - 1].clone();
+            let (prev_a_rows, current_a_rows) = a.split_at_mut(size);
+            let prev_a = &prev_a_rows[size - 1];
+            let current_a = &mut current_a_rows[0];
+            let (prev_cmat_rows, current_cmat_rows) = cmat.split_at_mut(size);
+            let prev_cmat = &prev_cmat_rows[size - 1];
+            let current_cmat = &mut current_cmat_rows[0];
             denom[size] += risk * base;
             for i in 0..nvar {
                 let xi = covar[(person, i)];
-                a[size][i] += risk * (prev_a[i] + base * xi);
+                current_a[i] += risk * (prev_a[i] + base * xi);
                 for j in 0..=i {
                     let xj = covar[(person, j)];
-                    cmat[size][i * nvar + j] += risk
+                    current_cmat[i * nvar + j] += risk
                         * (prev_cmat[i * nvar + j]
                             + xi * prev_a[j]
                             + xj * prev_a[i]
@@ -121,13 +125,15 @@ pub(crate) fn exact_tied_moments(
         }
     }
 
+    let tied_a = a.pop().expect("exact tied score row must exist");
+    let tied_cmat = cmat.pop().expect("exact tied information row must exist");
     let mut cmat_array = Array2::zeros((nvar, nvar));
     for i in 0..nvar {
         for j in 0..=i {
-            cmat_array[(i, j)] = cmat[deaths][i * nvar + j];
+            cmat_array[(i, j)] = tied_cmat[i * nvar + j];
         }
     }
-    (denom[deaths], a[deaths].clone(), cmat_array)
+    (denom[deaths], tied_a, cmat_array)
 }
 
 pub(crate) struct CoxFit {
@@ -1062,6 +1068,20 @@ mod tests {
         assert_eq!(beta.len(), 1);
         assert!(loglik[0].is_finite());
         assert!(loglik[1].is_finite());
+    }
+
+    #[test]
+    fn exact_tied_moments_match_hand_computed_two_death_set() {
+        let covar = Array2::from_shape_vec((3, 2), vec![1.0, 0.0, 0.0, 2.0, 3.0, 4.0]).unwrap();
+
+        let (denom, score, information) =
+            exact_tied_moments(&[0, 1, 2], 2, &[2.0, 3.0, 5.0], &covar);
+
+        assert_eq!(denom, 31.0);
+        assert_eq!(score, vec![91.0, 142.0]);
+        assert_eq!(information[(0, 0)], 301.0);
+        assert_eq!(information[(1, 0)], 442.0);
+        assert_eq!(information[(1, 1)], 724.0);
     }
 
     #[test]
