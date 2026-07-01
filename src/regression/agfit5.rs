@@ -5,6 +5,7 @@ use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::borrow::Cow;
 
 #[derive(Debug)]
 pub(crate) struct CoxResult {
@@ -38,19 +39,20 @@ pub(crate) struct CoxFitParams {
     pub eps: f64,
 }
 
-struct CoxState {
+struct CoxState<'a> {
     covar: Vec<Vec<f64>>,
     a: Vec<f64>,
     a2: Vec<f64>,
-    offset: Vec<f64>,
-    weights: Vec<f64>,
+    offset: &'a [f64],
+    weights: &'a [f64],
     event: Vec<i32>,
-    frail: Vec<i32>,
+    frail: &'a [i32],
     score: Vec<f64>,
-    strata: Vec<i32>,
+    risk_weighted: Vec<f64>,
+    strata: &'a [i32],
 }
-impl CoxState {
-    fn new(data: &CoxModelData<'_>, _params: &CoxFitParams) -> Self {
+impl<'a> CoxState<'a> {
+    fn new(data: &'a CoxModelData<'a>, _params: &CoxFitParams) -> Self {
         let CoxModelData {
             nused,
             nvar,
@@ -75,12 +77,13 @@ impl CoxState {
             covar,
             a: vec![0.0; 4 * (nvar + nfrail) + 5 * nused],
             a2: vec![0.0; nvar + nfrail],
-            offset: offset2.to_vec(),
-            weights: weights2.to_vec(),
+            offset: offset2,
+            weights: weights2,
             event: yy[2 * nused..3 * nused].iter().map(|&x| x as i32).collect(),
-            frail: frail2.to_vec(),
+            frail: frail2,
             score: vec![0.0; nused],
-            strata: strata.to_vec(),
+            risk_weighted: vec![0.0; nused],
+            strata,
         };
         for i in 0..nvar {
             let mean = state.covar[i].iter().sum::<f64>() / nused as f64;
@@ -108,6 +111,7 @@ impl CoxState {
                 zbeta += beta[nvar] * self.frail[person] as f64;
             }
             self.score[person] = zbeta;
+            self.risk_weighted[person] = self.weights[person] * zbeta.exp();
         }
         *loglik = 0.0;
         let mut istrat = 0;
@@ -117,8 +121,7 @@ impl CoxState {
                 if self.strata[person] != self.strata[istrat] {
                     break;
                 }
-                let risk_score = self.score[person].exp();
-                risk_sum += self.weights[person] * risk_score;
+                risk_sum += self.risk_weighted[person];
             }
             for person in istrat..self.weights.len() {
                 if self.strata[person] != self.strata[istrat] {
@@ -131,7 +134,7 @@ impl CoxState {
                         let mut temp = 0.0;
                         for j in person..self.weights.len() {
                             if self.strata[j] == self.strata[person] {
-                                temp += self.weights[j] * self.score[j].exp() * self.covar[i][j];
+                                temp += self.risk_weighted[j] * self.covar[i][j];
                             }
                         }
                         *u_elem += self.weights[person] * (self.covar[i][person] - temp / risk_sum);
@@ -140,8 +143,7 @@ impl CoxState {
                         let mut temp = 0.0;
                         for j in person..self.weights.len() {
                             if self.strata[j] == self.strata[person] {
-                                temp +=
-                                    self.weights[j] * self.score[j].exp() * self.frail[j] as f64;
+                                temp += self.risk_weighted[j] * self.frail[j] as f64;
                             }
                         }
                         u[nvar] +=
@@ -152,10 +154,8 @@ impl CoxState {
                             let mut temp = 0.0;
                             for k in person..self.weights.len() {
                                 if self.strata[k] == self.strata[person] {
-                                    temp += self.weights[k]
-                                        * self.score[k].exp()
-                                        * self.covar[i][k]
-                                        * self.covar[j][k];
+                                    temp +=
+                                        self.risk_weighted[k] * self.covar[i][k] * self.covar[j][k];
                                 }
                             }
                             let idx = i * nvar2 + j;
@@ -169,8 +169,7 @@ impl CoxState {
                             let mut temp = 0.0;
                             for k in person..self.weights.len() {
                                 if self.strata[k] == self.strata[person] {
-                                    temp += self.weights[k]
-                                        * self.score[k].exp()
+                                    temp += self.risk_weighted[k]
                                         * self.covar[i][k]
                                         * self.frail[k] as f64;
                                 }
@@ -183,9 +182,7 @@ impl CoxState {
                         let mut temp = 0.0;
                         for k in person..self.weights.len() {
                             if self.strata[k] == self.strata[person] {
-                                temp += self.weights[k]
-                                    * self.score[k].exp()
-                                    * (self.frail[k] as f64).powi(2);
+                                temp += self.risk_weighted[k] * (self.frail[k] as f64).powi(2);
                             }
                         }
                         let idx = nvar * nvar2 + nvar;
@@ -196,8 +193,7 @@ impl CoxState {
                 }
                 if person < self.weights.len() - 1 && self.strata[person + 1] == self.strata[person]
                 {
-                    let risk_score = self.score[person].exp();
-                    risk_sum -= self.weights[person] * risk_score;
+                    risk_sum -= self.risk_weighted[person];
                 }
             }
             while istrat < self.strata.len() {
@@ -399,10 +395,26 @@ fn perform_cox_regression(
             "Event vector length does not match time vector",
         ));
     }
-    let offset = config.offset.unwrap_or_else(|| vec![0.0; nused]);
-    let weights = config.weights.unwrap_or_else(|| vec![1.0; nused]);
-    let strata = config.strata.unwrap_or_else(|| vec![1; nused]);
-    let frail = config.frail.unwrap_or_else(|| vec![0; nused]);
+    let offset = config
+        .offset
+        .as_deref()
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(vec![0.0; nused]));
+    let weights = config
+        .weights
+        .as_deref()
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(vec![1.0; nused]));
+    let strata = config
+        .strata
+        .as_deref()
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(vec![1; nused]));
+    let frail = config
+        .frail
+        .as_deref()
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(vec![0; nused]));
     let max_iter = config.max_iter.unwrap_or(20);
     let eps = config.eps.unwrap_or(1e-6);
     let mut yy = Vec::with_capacity(3 * nused);
@@ -421,11 +433,11 @@ fn perform_cox_regression(
         nfrail,
         yy: &yy,
         covar: &covar,
-        offset: &offset,
-        weights: &weights,
-        strata: &strata,
+        offset: offset.as_ref(),
+        weights: weights.as_ref(),
+        strata: strata.as_ref(),
         sort: &sort,
-        frail: &frail,
+        frail: frail.as_ref(),
     };
     let fit_params = CoxFitParams { max_iter, eps };
     match agfit5(&model_data, &fit_params) {
@@ -447,5 +459,49 @@ fn perform_cox_regression(
             "Cox regression failed: {}",
             e
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cox_state_update_caches_weighted_risk_scores() {
+        let yy = vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 1.0, 0.0];
+        let covar = vec![0.0, 1.0, 2.0];
+        let offset = vec![0.0; 3];
+        let weights = vec![1.0, 2.0, 1.0];
+        let strata = vec![1, 1, 1];
+        let sort = vec![1, 2, 3];
+        let frail = vec![0, 0, 0];
+        let data = CoxModelData {
+            nused: 3,
+            nvar: 1,
+            nfrail: 0,
+            yy: &yy,
+            covar: &covar,
+            offset: &offset,
+            weights: &weights,
+            strata: &strata,
+            sort: &sort,
+            frail: &frail,
+        };
+        let params = CoxFitParams {
+            max_iter: 1,
+            eps: 1e-6,
+        };
+        let mut state = CoxState::new(&data, &params);
+        let mut beta = vec![0.0];
+        let mut u = vec![0.0];
+        let mut imat = vec![0.0];
+        let mut loglik = 0.0;
+
+        state.update(&mut beta, &mut u, &mut imat, &mut loglik);
+
+        assert_eq!(state.risk_weighted, weights);
+        assert!(u.iter().all(|value| value.is_finite()));
+        assert!(imat.iter().all(|value| value.is_finite()));
+        assert!(loglik.is_finite());
     }
 }
