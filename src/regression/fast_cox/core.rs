@@ -31,13 +31,6 @@ struct FastCoxDescentConfig<'a> {
 }
 
 #[allow(clippy::needless_range_loop)]
-fn linear_predictors(data: &FastCoxData, beta: &[f64]) -> Vec<f64> {
-    let mut eta = vec![0.0; data.n];
-    linear_predictors_into(data, beta, &mut eta);
-    eta
-}
-
-#[allow(clippy::needless_range_loop)]
 fn linear_predictors_into(data: &FastCoxData, beta: &[f64], eta: &mut [f64]) {
     debug_assert_eq!(eta.len(), data.n);
     for i in 0..data.n {
@@ -202,16 +195,43 @@ fn apply_edpp_screening(
 
 #[allow(clippy::needless_range_loop)]
 fn compute_cox_deviance(data: &FastCoxData, beta: &[f64]) -> f64 {
-    let eta = linear_predictors(data, beta);
-    let risk_shift = cox_risk_shift(&eta, data.weights);
-    let exp_eta = shifted_exp_eta_with_shift(&eta, data.weights, risk_shift);
-    let risk_data = precompute_cox_risk_set_cumsum(
+    let mut eta = vec![0.0; data.n];
+    let mut exp_eta = vec![0.0; data.n];
+    let mut risk_data = CoxRiskSetData::with_capacity(data.n, data.p);
+    let mut risk_scratch = CoxRiskSetScratch::with_capacity(data.n, data.p);
+    compute_cox_deviance_into(
+        data,
+        beta,
+        &mut eta,
+        &mut exp_eta,
+        &mut risk_data,
+        &mut risk_scratch,
+    )
+}
+
+#[allow(clippy::needless_range_loop)]
+fn compute_cox_deviance_into(
+    data: &FastCoxData,
+    beta: &[f64],
+    eta: &mut [f64],
+    exp_eta: &mut [f64],
+    risk_data: &mut CoxRiskSetData,
+    risk_scratch: &mut CoxRiskSetScratch,
+) -> f64 {
+    debug_assert_eq!(eta.len(), data.n);
+    debug_assert_eq!(exp_eta.len(), data.n);
+    linear_predictors_into(data, beta, eta);
+    let risk_shift = cox_risk_shift(eta, data.weights);
+    shifted_exp_eta_with_shift_into(eta, data.weights, risk_shift, exp_eta);
+    precompute_cox_risk_set_cumsum_into(
         data.x,
         data.n,
         data.p,
         data.time,
         data.weights,
-        &exp_eta,
+        exp_eta,
+        risk_data,
+        risk_scratch,
     );
 
     let mut loglik = 0.0;
