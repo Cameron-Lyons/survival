@@ -1144,7 +1144,8 @@ impl CoxPHFit {
             }
         }
 
-        let mut residuals = Vec::new();
+        let event_count = sorted_status.iter().filter(|&&status| status == 1).count();
+        let mut residuals = Vec::with_capacity(event_count);
         let mut stratum_start = 0usize;
         while stratum_start < n {
             let stratum = sorted_strata[stratum_start];
@@ -1257,7 +1258,8 @@ impl CoxPHFit {
         entry_times: Option<&Vec<f64>>,
         method: CoxMethod,
     ) -> Vec<Vec<f64>> {
-        let mut residuals = Vec::new();
+        let event_count = order.iter().filter(|&&idx| self.status[idx] == 1).count();
+        let mut residuals = Vec::with_capacity(event_count);
         let use_entry_times = entry_times.is_some();
         let mut stratum_start = 0usize;
         while stratum_start < order.len() {
