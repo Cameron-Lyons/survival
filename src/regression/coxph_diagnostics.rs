@@ -760,6 +760,9 @@ impl CoxPHFit {
                 stratum_end += 1;
             }
             let stratum_indices = &order[stratum_start..=stratum_end];
+            let mut deaths: Vec<usize> = Vec::new();
+            let mut risk_indices: Vec<usize> = Vec::new();
+            let mut is_death = vec![false; n];
             let mut time_start = stratum_start;
             while time_start <= stratum_end {
                 let event_time = self.event_times[order[time_start]];
@@ -770,22 +773,20 @@ impl CoxPHFit {
                     time_end += 1;
                 }
 
-                let deaths: Vec<usize> = (time_start..=time_end)
-                    .map(|idx| order[idx])
-                    .filter(|&idx| self.status[idx] == 1)
-                    .collect();
+                deaths.clear();
+                deaths.extend(
+                    (time_start..=time_end)
+                        .map(|idx| order[idx])
+                        .filter(|&idx| self.status[idx] == 1),
+                );
                 if !deaths.is_empty() {
-                    let mut is_death = vec![false; n];
                     for &idx in &deaths {
                         is_death[idx] = true;
                     }
-                    let risk_indices: Vec<usize> = stratum_indices
-                        .iter()
-                        .copied()
-                        .filter(|&idx| {
-                            entry_times[idx] < event_time && self.event_times[idx] >= event_time
-                        })
-                        .collect();
+                    risk_indices.clear();
+                    risk_indices.extend(stratum_indices.iter().copied().filter(|&idx| {
+                        entry_times[idx] < event_time && self.event_times[idx] >= event_time
+                    }));
                     let denom: f64 = risk_indices.iter().map(|&idx| risk[idx]).sum();
                     if denom > 0.0 {
                         for &idx in &deaths {
@@ -843,6 +844,9 @@ impl CoxPHFit {
                                 }
                             }
                         }
+                    }
+                    for &idx in &deaths {
+                        is_death[idx] = false;
                     }
                 }
 
