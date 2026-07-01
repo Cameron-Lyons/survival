@@ -5,6 +5,7 @@ pub use crate::regression::coxph_model::{CoxPHModel, Subject};
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 fn scaled_hazard_increment(events: f64, scaled_risk_sum: f64, risk_scale: f64) -> f64 {
@@ -80,12 +81,16 @@ pub struct CoxPHFit {
 }
 
 impl CoxPHFit {
-    pub(crate) fn row_strata(&self) -> Vec<i32> {
+    fn row_strata_cow(&self) -> Cow<'_, [i32]> {
         if self.strata.len() == self.event_times.len() {
-            self.strata.clone()
+            Cow::Borrowed(self.strata.as_slice())
         } else {
-            vec![0; self.event_times.len()]
+            Cow::Owned(vec![0; self.event_times.len()])
         }
+    }
+
+    pub(crate) fn row_strata(&self) -> Vec<i32> {
+        self.row_strata_cow().into_owned()
     }
 
     pub(crate) fn basehaz_with_strata_internal(
@@ -98,7 +103,7 @@ impl CoxPHFit {
                 "time must not be empty",
             ));
         }
-        let row_strata = self.row_strata();
+        let row_strata = self.row_strata_cow();
         let center = if centered && !self.linear_predictors.is_empty() {
             self.linear_predictors.iter().sum::<f64>() / n as f64
         } else {
