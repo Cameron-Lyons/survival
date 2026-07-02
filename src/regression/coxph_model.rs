@@ -772,17 +772,19 @@ impl CoxPHModel {
         residuals
     }
     pub fn deviance_residuals(&self) -> Vec<f64> {
-        let martingale = self.martingale_residuals();
-        martingale
-            .iter()
-            .zip(self.censoring.iter())
-            .map(|(&m, &d)| {
-                let sign = if m >= 0.0 { 1.0 } else { -1.0 };
-                let abs_term =
-                    -2.0 * (m - d as f64 + d as f64 * (d as f64 - m).ln().max(EXP_CLAMP_MIN));
-                sign * abs_term.abs().sqrt()
-            })
-            .collect()
+        let n = self.event_times.len();
+        let mut residuals = Vec::with_capacity(n);
+        for i in 0..n {
+            let status = self.censoring[i] as f64;
+            let cum_haz = self.baseline_hazard.get(i).copied().unwrap_or(0.0)
+                * self.risk_scores.get(i).copied().unwrap_or(1.0);
+            let martingale = status - cum_haz;
+            let sign = if martingale >= 0.0 { 1.0 } else { -1.0 };
+            let abs_term = -2.0
+                * (martingale - status + status * (status - martingale).ln().max(EXP_CLAMP_MIN));
+            residuals.push(sign * abs_term.abs().sqrt());
+        }
+        residuals
     }
     pub fn dfbeta(&self) -> Vec<Vec<f64>> {
         let n = self.event_times.len();
@@ -1052,6 +1054,36 @@ mod tests {
 
         assert_eq!(rmst.len(), 1);
         assert!((rmst[0] - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_deviance_residuals_match_martingale_formula() {
+        let mut model = CoxPHModel::new();
+        model.event_times = vec![1.0, 2.0, 3.0];
+        model.censoring = vec![1, 0, 1];
+        model.baseline_hazard = vec![0.2, 0.3, 0.4];
+        model.risk_scores = vec![2.0, 1.5, 0.5];
+
+        let expected: Vec<f64> = model
+            .martingale_residuals()
+            .iter()
+            .zip(model.censoring.iter())
+            .map(|(&martingale, &status)| {
+                let status = status as f64;
+                let sign = if martingale >= 0.0 { 1.0 } else { -1.0 };
+                let abs_term = -2.0
+                    * (martingale - status
+                        + status * (status - martingale).ln().max(EXP_CLAMP_MIN));
+                sign * abs_term.abs().sqrt()
+            })
+            .collect();
+
+        let residuals = model.deviance_residuals();
+
+        assert_eq!(residuals.len(), expected.len());
+        for (actual, expected) in residuals.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
     }
 
     #[test]
