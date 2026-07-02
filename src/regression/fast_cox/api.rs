@@ -168,6 +168,22 @@ fn fast_cox_lambda_sequence(
         .collect()
 }
 
+fn unstandardize_fast_cox_coefficients(
+    beta_std: Vec<f64>,
+    sds: &[f64],
+    standardize: bool,
+) -> Vec<f64> {
+    if standardize {
+        beta_std
+            .iter()
+            .zip(sds.iter())
+            .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
+            .collect()
+    } else {
+        beta_std
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fit_fast_cox_coefficients(
     x: &[f64],
@@ -209,15 +225,7 @@ fn fit_fast_cox_coefficients(
             },
         );
 
-    let coefficients: Vec<f64> = if config.standardize {
-        beta_std
-            .iter()
-            .zip(sds.iter())
-            .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
-            .collect()
-    } else {
-        beta_std
-    };
+    let coefficients = unstandardize_fast_cox_coefficients(beta_std, &sds, config.standardize);
 
     FastCoxCoefficientFit {
         coefficients,
@@ -581,6 +589,18 @@ pub(crate) fn fast_cox_cv_typed(
                 weights: &fold.test_wt,
                 offset: &fold.test_offset,
             };
+            let (train_x_std, _train_means, train_sds) =
+                standardize_row_major_matrix(&fold.train_x, train_n, n_vars);
+            let train_data = FastCoxData {
+                x: &train_x_std,
+                n: train_n,
+                p: n_vars,
+                time: &fold.train_time,
+                status: &fold.train_status,
+                weights: &fold.train_wt,
+                offset: &fold.train_offset,
+            };
+            let train_lambda_max = fast_cox_lambda_max(&train_data, 1.0);
 
             for (lambda_idx, &lambda) in lambdas.iter().enumerate() {
                 let Ok(fit_config) = FastCoxConfig::new(
@@ -597,19 +617,24 @@ pub(crate) fn fast_cox_cv_typed(
                     continue;
                 };
 
-                let fit = fit_fast_cox_coefficients(
-                    &fold.train_x,
-                    train_n,
-                    n_vars,
-                    &fold.train_time,
-                    &fold.train_status,
-                    &fit_config,
-                    &fold.train_wt,
-                    &fold.train_offset,
+                let (beta_std, _n_iter, _conv, _screened, _active) = cyclic_coordinate_descent_fast(
+                    &train_data,
+                    FastCoxDescentConfig {
+                        lambda: fit_config.lambda,
+                        l1_ratio: fit_config.l1_ratio,
+                        max_iter: fit_config.max_iter,
+                        tol: fit_config.tol,
+                        beta_init: None,
+                        screening: fit_config.screening,
+                        active_set_update_freq: fit_config.active_set_update_freq,
+                        lambda_prev: None,
+                        lambda_max: train_lambda_max,
+                    },
                 );
+                let coefficients = unstandardize_fast_cox_coefficients(beta_std, &train_sds, true);
                 let deviance = compute_cox_deviance_into(
                     &test_data,
-                    &fit.coefficients,
+                    &coefficients,
                     &mut deviance_eta,
                     &mut deviance_exp_eta,
                     &mut deviance_risk_data,
