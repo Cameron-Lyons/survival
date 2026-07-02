@@ -728,26 +728,33 @@ impl CoxPHModel {
             .collect()
     }
     pub fn restricted_mean_survival_time(&self, covariates: Vec<Vec<f64>>, tau: f64) -> Vec<f64> {
-        let (times, survival_curves) = match self.survival_curve(covariates, None) {
-            Ok(result) => result,
-            Err(_) => return vec![],
-        };
-        survival_curves
+        if self.validate_prediction_rows(&covariates).is_err() {
+            return vec![];
+        }
+        let times = sorted_unique_times(&self.event_times);
+        let risk_scores = self.compute_exp_risk_scores(&covariates);
+        let baseline_hazards: Vec<f64> = times
             .iter()
-            .map(|surv| {
+            .map(|&t| self.baseline_cumulative_hazard_at(t))
+            .collect();
+        risk_scores
+            .par_iter()
+            .map(|&risk_exp| {
                 let mut rmst = 0.0;
                 let mut prev_time = 0.0;
                 let mut prev_surv = 1.0;
-                for (i, &t) in times.iter().enumerate() {
-                    if t > tau {
+                for (i, (&time, &baseline_hazard)) in
+                    times.iter().zip(baseline_hazards.iter()).enumerate()
+                {
+                    if time > tau {
                         rmst += prev_surv * (tau - prev_time);
                         break;
                     }
-                    rmst += prev_surv * (t - prev_time);
-                    prev_time = t;
-                    prev_surv = surv[i];
+                    rmst += prev_surv * (time - prev_time);
+                    prev_time = time;
+                    prev_surv = (-baseline_hazard * risk_exp).exp();
                     if i == times.len() - 1 {
-                        rmst += prev_surv * (tau - t);
+                        rmst += prev_surv * (tau - time);
                     }
                 }
                 rmst
@@ -1028,6 +1035,24 @@ mod tests {
 
         assert_eq!(predicted.len(), 1);
         assert!((predicted[0].expect("median should be predicted") - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_restricted_mean_survival_time_integrates_baseline_hazard() {
+        let mut model = CoxPHModel::new();
+        model.coefficients =
+            Array2::from_shape_vec((1, 1), vec![0.0]).expect("coefficient shape is valid");
+        model.event_times = vec![1.0, 2.0, 3.0];
+        model.censoring = vec![1, 1, 1];
+        model.baseline_hazard_lookup_times = vec![1.0, 2.0, 3.0];
+        model.baseline_hazard_lookup_values = vec![0.1, 0.8, 1.2];
+
+        let expected = 1.0 + (-0.1_f64).exp() + (-0.8_f64).exp() * 0.5;
+
+        let rmst = model.restricted_mean_survival_time(vec![vec![0.0]], 2.5);
+
+        assert_eq!(rmst.len(), 1);
+        assert!((rmst[0] - expected).abs() < 1e-12);
     }
 
     #[test]
