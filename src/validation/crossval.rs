@@ -152,40 +152,39 @@ pub(crate) fn cv_cox(
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
-    let default_weights: Vec<f64> = vec![1.0; n];
-    let weights = weights.unwrap_or(&default_weights);
+    let default_weights;
+    let weights = match weights {
+        Some(weights) => weights,
+        None => {
+            default_weights = vec![1.0; n];
+            &default_weights
+        }
+    };
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
     let results: Vec<(f64, Vec<f64>)> = (0..config.n_folds)
         .into_par_iter()
         .map(|fold_idx| {
             let test_indices = &folds[fold_idx];
-            let train_indices: Vec<usize> = folds
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != fold_idx)
-                .flat_map(|(_, f)| f.iter().copied())
-                .collect();
-            let train_n = train_indices.len();
             let test_n = test_indices.len();
-            let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
-            let train_status: Vec<i32> = train_indices.iter().map(|&i| status[i]).collect();
-            let train_weights: Vec<f64> = train_indices.iter().map(|&i| weights[i]).collect();
-            let mut train_covariates = Array2::zeros((train_n, nvar));
-            for (new_idx, &orig_idx) in train_indices.iter().enumerate() {
-                for var in 0..nvar {
-                    train_covariates[[new_idx, var]] = covariates[[var, orig_idx]];
+            let train_n = n - test_n;
+            let mut sorted_train_indices = Vec::with_capacity(train_n);
+            for (idx, fold) in folds.iter().enumerate() {
+                if idx != fold_idx {
+                    sorted_train_indices.extend_from_slice(fold);
                 }
             }
-            let mut sorted_indices: Vec<usize> = (0..train_n).collect();
-            sorted_indices.sort_by(|&a, &b| train_time[b].total_cmp(&train_time[a]));
-            let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| train_time[i]).collect();
-            let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| train_status[i]).collect();
-            let sorted_weights: Vec<f64> =
-                sorted_indices.iter().map(|&i| train_weights[i]).collect();
+            sorted_train_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
+
+            let mut sorted_time = Vec::with_capacity(train_n);
+            let mut sorted_status = Vec::with_capacity(train_n);
+            let mut sorted_weights = Vec::with_capacity(train_n);
             let mut sorted_covariates = Array2::zeros((train_n, nvar));
-            for (new_idx, &orig_idx) in sorted_indices.iter().enumerate() {
+            for (new_idx, &orig_idx) in sorted_train_indices.iter().enumerate() {
+                sorted_time.push(time[orig_idx]);
+                sorted_status.push(status[orig_idx]);
+                sorted_weights.push(weights[orig_idx]);
                 for var in 0..nvar {
-                    sorted_covariates[[new_idx, var]] = train_covariates[[orig_idx, var]];
+                    sorted_covariates[[new_idx, var]] = covariates[[var, orig_idx]];
                 }
             }
             let time_arr = Array1::from_vec(sorted_time);
@@ -209,32 +208,29 @@ pub(crate) fn cv_cox(
                 }
                 Err(_) => vec![0.0; nvar],
             };
-            let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
-            let test_status: Vec<i32> = test_indices.iter().map(|&i| status[i]).collect();
-            let mut test_covariates = Array2::zeros((nvar, test_n));
-            for (new_idx, &orig_idx) in test_indices.iter().enumerate() {
-                for var in 0..nvar {
-                    test_covariates[[var, new_idx]] = covariates[[var, orig_idx]];
-                }
-            }
-            let linear_predictor: Vec<f64> = (0..test_n)
-                .map(|i| {
-                    (0..nvar)
-                        .map(|var| beta[var] * test_covariates[[var, i]])
-                        .sum()
+            let linear_predictor: Vec<f64> = test_indices
+                .iter()
+                .map(|&orig_idx| {
+                    let mut eta = 0.0;
+                    for var in 0..nvar {
+                        eta += beta[var] * covariates[[var, orig_idx]];
+                    }
+                    eta
                 })
                 .collect();
 
             let (concordant, discordant, tied) = if test_n > PARALLEL_THRESHOLD_SMALL {
                 (0..test_n)
                     .into_par_iter()
-                    .filter(|&i| test_status[i] == 1)
+                    .filter(|&i| status[test_indices[i]] == 1)
                     .map(|i| {
                         let mut c = 0.0;
                         let mut d = 0.0;
                         let mut t = 0.0;
+                        let orig_i = test_indices[i];
                         for j in 0..test_n {
-                            if i != j && test_time[j] > test_time[i] {
+                            let orig_j = test_indices[j];
+                            if i != j && time[orig_j] > time[orig_i] {
                                 if linear_predictor[i] > linear_predictor[j] {
                                     c += 1.0;
                                 } else if linear_predictor[i] < linear_predictor[j] {
@@ -252,11 +248,13 @@ pub(crate) fn cv_cox(
                 let mut discordant = 0.0;
                 let mut tied = 0.0;
                 for i in 0..test_n {
-                    if test_status[i] != 1 {
+                    let orig_i = test_indices[i];
+                    if status[orig_i] != 1 {
                         continue;
                     }
                     for j in 0..test_n {
-                        if i != j && test_time[j] > test_time[i] {
+                        let orig_j = test_indices[j];
+                        if i != j && time[orig_j] > time[orig_i] {
                             if linear_predictor[i] > linear_predictor[j] {
                                 concordant += 1.0;
                             } else if linear_predictor[i] < linear_predictor[j] {
