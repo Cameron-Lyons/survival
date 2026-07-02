@@ -529,7 +529,7 @@ impl CoxPHModel {
     }
     #[getter]
     pub fn get_coefficients(&self) -> Vec<Vec<f64>> {
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(self.coefficients.ncols());
         for col in self.coefficients.columns() {
             result.push(col.iter().copied().collect());
         }
@@ -587,7 +587,7 @@ impl CoxPHModel {
     }
     #[pyo3(signature = (confidence_level = 0.95))]
     pub fn hazard_ratios_with_ci(&self, confidence_level: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-        let coefs: Vec<f64> = self.coefficients.column(0).to_vec();
+        let coefs = self.coefficients.column(0);
         let n = coefs.len();
         let z = z_score_for_confidence(confidence_level);
         let se = self.compute_standard_errors();
