@@ -421,11 +421,8 @@ impl CoxPHFit {
             self.basehaz_with_strata_internal(centered)?;
         let baseline =
             StratifiedBaselineLookup::from_components(&base_times, &base_hazards, &base_strata);
-        let mut requested_strata = strata.clone();
-        requested_strata.sort_unstable();
-        requested_strata.dedup();
 
-        let times = baseline.times_for_strata(&requested_strata);
+        let times = baseline.times_for_strata(&strata);
 
         let curves = covariates
             .iter()
