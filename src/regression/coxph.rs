@@ -647,23 +647,31 @@ pub fn coxph_fit(
             .then_with(|| time[lhs].total_cmp(&time[rhs]))
             .then_with(|| lhs.cmp(&rhs))
     });
-    let sorted_time: Vec<f64> = order.iter().map(|&idx| time[idx]).collect();
-    let sorted_status: Vec<i32> = order.iter().map(|&idx| status[idx]).collect();
-    let sorted_entry_times: Option<Vec<f64>> = entry_times
-        .as_ref()
-        .map(|values| order.iter().map(|&idx| values[idx]).collect());
-    let sorted_offset: Vec<f64> = order.iter().map(|&idx| offset_vec[idx]).collect();
-    let sorted_weights: Vec<f64> = order.iter().map(|&idx| weights_vec[idx]).collect();
-    let sorted_strata_values: Vec<i32> = order.iter().map(|&idx| strata_values[idx]).collect();
+    let entry_times_ref = entry_times.as_deref();
+    let mut sorted_time = Vec::with_capacity(n);
+    let mut sorted_status = Vec::with_capacity(n);
+    let mut sorted_entry_times = entry_times_ref.map(|_| Vec::with_capacity(n));
+    let mut sorted_offset = Vec::with_capacity(n);
+    let mut sorted_weights = Vec::with_capacity(n);
+    let mut sorted_strata_values = Vec::with_capacity(n);
+    let mut flat = Vec::with_capacity(n * nvar);
+    for &idx in &order {
+        sorted_time.push(time[idx]);
+        sorted_status.push(status[idx]);
+        if let (Some(values), Some(sorted_values)) = (entry_times_ref, sorted_entry_times.as_mut())
+        {
+            sorted_values.push(values[idx]);
+        }
+        sorted_offset.push(offset_vec[idx]);
+        sorted_weights.push(weights_vec[idx]);
+        sorted_strata_values.push(strata_values[idx]);
+        flat.extend(covariates[idx].iter().copied());
+    }
     let mut strata_boundaries = vec![0; n];
     for idx in 0..n {
         if idx + 1 == n || sorted_strata_values[idx + 1] != sorted_strata_values[idx] {
             strata_boundaries[idx] = 1;
         }
-    }
-    let mut flat = Vec::with_capacity(n * nvar);
-    for &idx in &order {
-        flat.extend(covariates[idx].iter().copied());
     }
     let covar = Array2::from_shape_vec((n, nvar), flat).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("invalid covariate shape: {}", e))
