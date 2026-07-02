@@ -174,14 +174,18 @@ fn unstandardize_fast_cox_coefficients(
     standardize: bool,
 ) -> Vec<f64> {
     if standardize {
-        beta_std
-            .iter()
-            .zip(sds.iter())
-            .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
-            .collect()
+        unstandardize_standard_fast_cox_coefficients(&beta_std, sds)
     } else {
         beta_std
     }
+}
+
+fn unstandardize_standard_fast_cox_coefficients(beta_std: &[f64], sds: &[f64]) -> Vec<f64> {
+    beta_std
+        .iter()
+        .zip(sds.iter())
+        .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -601,37 +605,28 @@ pub(crate) fn fast_cox_cv_typed(
                 offset: &fold.train_offset,
             };
             let train_lambda_max = fast_cox_lambda_max(&train_data, 1.0);
+            let mut beta_warm = vec![0.0; n_vars];
+            let mut lambda_prev: Option<f64> = None;
 
             for (lambda_idx, &lambda) in lambdas.iter().enumerate() {
-                let Ok(fit_config) = FastCoxConfig::new(
-                    lambda,
-                    config.l1_ratio,
-                    1000,
-                    1e-7,
-                    config.screening,
-                    None,
-                    10,
-                    true,
-                    true,
-                ) else {
-                    continue;
-                };
-
                 let (beta_std, _n_iter, _conv, _screened, _active) = cyclic_coordinate_descent_fast(
                     &train_data,
                     FastCoxDescentConfig {
-                        lambda: fit_config.lambda,
-                        l1_ratio: fit_config.l1_ratio,
-                        max_iter: fit_config.max_iter,
-                        tol: fit_config.tol,
-                        beta_init: None,
-                        screening: fit_config.screening,
-                        active_set_update_freq: fit_config.active_set_update_freq,
-                        lambda_prev: None,
+                        lambda,
+                        l1_ratio: config.l1_ratio,
+                        max_iter: 1000,
+                        tol: 1e-7,
+                        beta_init: Some(&beta_warm),
+                        screening: config.screening,
+                        active_set_update_freq: 10,
+                        lambda_prev,
                         lambda_max: train_lambda_max,
                     },
                 );
-                let coefficients = unstandardize_fast_cox_coefficients(beta_std, &train_sds, true);
+                let coefficients =
+                    unstandardize_standard_fast_cox_coefficients(&beta_std, &train_sds);
+                beta_warm = beta_std;
+                lambda_prev = Some(lambda);
                 let deviance = compute_cox_deviance_into(
                     &test_data,
                     &coefficients,
