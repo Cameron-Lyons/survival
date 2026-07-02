@@ -150,47 +150,52 @@ fn compute_gradient_hessian_diag_fast_into(
     }
 }
 
-fn apply_strong_screening(
+fn apply_strong_screening_into(
     gradient: &[f64],
     lambda: f64,
     lambda_prev: Option<f64>,
     beta: &[f64],
     p: usize,
-) -> Vec<usize> {
+    active_set: &mut Vec<usize>,
+) {
     let threshold = match lambda_prev {
         Some(lp) => 2.0 * lambda - lp,
         None => lambda,
     };
 
-    (0..p)
-        .filter(|&j| {
-            beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= threshold
-        })
-        .collect()
+    active_set.clear();
+    active_set.extend((0..p).filter(|&j| {
+        beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= threshold
+    }));
 }
 
-fn apply_safe_screening(gradient: &[f64], lambda: f64, beta: &[f64], p: usize) -> Vec<usize> {
-    (0..p)
-        .filter(|&j| {
-            beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= lambda
-        })
-        .collect()
+fn apply_safe_screening_into(
+    gradient: &[f64],
+    lambda: f64,
+    beta: &[f64],
+    p: usize,
+    active_set: &mut Vec<usize>,
+) {
+    active_set.clear();
+    active_set.extend((0..p).filter(|&j| {
+        beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= lambda
+    }));
 }
 
-fn apply_edpp_screening(
+fn apply_edpp_screening_into(
     gradient: &[f64],
     lambda: f64,
     lambda_max: f64,
     beta: &[f64],
     p: usize,
-) -> Vec<usize> {
+    active_set: &mut Vec<usize>,
+) {
     let threshold = lambda * (1.0 - (lambda / lambda_max).min(1.0));
 
-    (0..p)
-        .filter(|&j| {
-            beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= threshold
-        })
-        .collect()
+    active_set.clear();
+    active_set.extend((0..p).filter(|&j| {
+        beta[j].abs() > crate::constants::DIVISION_FLOOR || gradient[j].abs() >= threshold
+    }));
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -276,22 +281,27 @@ fn cyclic_coordinate_descent_fast(
         &mut risk_scratch,
     );
 
-    let mut active_set: Vec<usize> = match config.screening {
-        ScreeningRule::None => (0..data.p).collect(),
-        ScreeningRule::Safe => apply_safe_screening(&gradient, config.lambda, &beta, data.p),
-        ScreeningRule::Strong => apply_strong_screening(
+    let mut active_set = Vec::with_capacity(data.p);
+    match config.screening {
+        ScreeningRule::None => active_set.extend(0..data.p),
+        ScreeningRule::Safe => {
+            apply_safe_screening_into(&gradient, config.lambda, &beta, data.p, &mut active_set)
+        }
+        ScreeningRule::Strong => apply_strong_screening_into(
             &gradient,
             config.lambda,
             config.lambda_prev,
             &beta,
             data.p,
+            &mut active_set,
         ),
-        ScreeningRule::EDPP => apply_edpp_screening(
+        ScreeningRule::EDPP => apply_edpp_screening_into(
             &gradient,
             config.lambda,
             config.lambda_max,
             &beta,
             data.p,
+            &mut active_set,
         ),
     };
 
@@ -299,8 +309,8 @@ fn cyclic_coordinate_descent_fast(
 
     let mut converged = false;
     let mut n_iter = 0;
-    let mut kkt_violations = Vec::new();
-    let mut new_active = Vec::new();
+    let mut kkt_violations = Vec::with_capacity(data.p);
+    let mut new_active = Vec::with_capacity(data.p);
 
     for iter in 0..config.max_iter {
         n_iter = iter + 1;
