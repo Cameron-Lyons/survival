@@ -204,11 +204,8 @@ impl CoxPHModel {
         risk
     }
 
-    fn compute_exp_risk_scores(&self, covariates: &[Vec<f64>]) -> Vec<f64> {
-        covariates
-            .par_iter()
-            .map(|row| exp_clamped(self.linear_predictor_for_row(row)))
-            .collect()
+    fn exp_risk_for_row(&self, row: &[f64]) -> f64 {
+        exp_clamped(self.linear_predictor_for_row(row))
     }
 
     fn descending_time_indices(&self) -> Vec<usize> {
@@ -562,14 +559,14 @@ impl CoxPHModel {
     ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
         self.validate_prediction_rows(&covariates)?;
         let times = time_points.unwrap_or_else(|| sorted_unique_times(&self.event_times));
-        let risk_scores = self.compute_exp_risk_scores(&covariates);
         let baseline_hazards: Vec<f64> = times
             .iter()
             .map(|&t| self.baseline_cumulative_hazard_at(t))
             .collect();
-        let survival_curves: Vec<Vec<f64>> = risk_scores
+        let survival_curves: Vec<Vec<f64>> = covariates
             .par_iter()
-            .map(|&risk_exp| {
+            .map(|row| {
+                let risk_exp = self.exp_risk_for_row(row);
                 baseline_hazards
                     .iter()
                     .map(|&bh| (-bh * risk_exp).exp())
@@ -678,14 +675,16 @@ impl CoxPHModel {
     ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
         self.validate_prediction_rows(&covariates)?;
         let unique_times = sorted_unique_times(&self.event_times);
-        let risk_scores = self.compute_exp_risk_scores(&covariates);
         let baseline_hazards: Vec<f64> = unique_times
             .iter()
             .map(|&t| self.baseline_cumulative_hazard_at(t))
             .collect();
-        let cumulative_hazards: Vec<Vec<f64>> = risk_scores
+        let cumulative_hazards: Vec<Vec<f64>> = covariates
             .par_iter()
-            .map(|&risk_exp| baseline_hazards.iter().map(|&bh| bh * risk_exp).collect())
+            .map(|row| {
+                let risk_exp = self.exp_risk_for_row(row);
+                baseline_hazards.iter().map(|&bh| bh * risk_exp).collect()
+            })
             .collect();
         Ok((unique_times, cumulative_hazards))
     }
@@ -699,15 +698,15 @@ impl CoxPHModel {
             return vec![];
         }
         let times = sorted_unique_times(&self.event_times);
-        let risk_scores = self.compute_exp_risk_scores(&covariates);
         let baseline_hazards: Vec<f64> = times
             .iter()
             .map(|&t| self.baseline_cumulative_hazard_at(t))
             .collect();
         let target_survival = 1.0 - percentile;
-        risk_scores
+        covariates
             .par_iter()
-            .map(|&risk_exp| {
+            .map(|row| {
+                let risk_exp = self.exp_risk_for_row(row);
                 let mut prev_surv = 1.0;
                 for (i, (&time, &baseline_hazard)) in
                     times.iter().zip(baseline_hazards.iter()).enumerate()
@@ -732,14 +731,14 @@ impl CoxPHModel {
             return vec![];
         }
         let times = sorted_unique_times(&self.event_times);
-        let risk_scores = self.compute_exp_risk_scores(&covariates);
         let baseline_hazards: Vec<f64> = times
             .iter()
             .map(|&t| self.baseline_cumulative_hazard_at(t))
             .collect();
-        risk_scores
+        covariates
             .par_iter()
-            .map(|&risk_exp| {
+            .map(|row| {
+                let risk_exp = self.exp_risk_for_row(row);
                 let mut rmst = 0.0;
                 let mut prev_time = 0.0;
                 let mut prev_surv = 1.0;
