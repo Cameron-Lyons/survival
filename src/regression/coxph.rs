@@ -93,6 +93,54 @@ impl CoxPHFit {
         self.row_strata_cow().into_owned()
     }
 
+    fn survival_curve_for_shared_row(
+        &self,
+        beta: &[f64],
+        row: &[f64],
+        strata: &[i32],
+        centered: bool,
+    ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+        if row.len() != beta.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "covariates must have {} columns",
+                beta.len()
+            )));
+        }
+        validate_finite_values("covariates[0]", row)?;
+
+        let center = if centered && !self.linear_predictors.is_empty() {
+            self.linear_predictors.iter().sum::<f64>() / self.linear_predictors.len() as f64
+        } else {
+            0.0
+        };
+        let (base_times, base_hazards, base_strata) =
+            self.basehaz_with_strata_internal(centered)?;
+        let baseline =
+            StratifiedBaselineLookup::from_components(&base_times, &base_hazards, &base_strata);
+        let times = baseline.times_for_strata(strata);
+        let linear_predictor = row
+            .iter()
+            .zip(beta.iter())
+            .map(|(value, coefficient)| value * coefficient)
+            .sum::<f64>();
+        let risk_multiplier = (linear_predictor - center)
+            .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
+            .exp();
+        let curves = strata
+            .iter()
+            .map(|&stratum| {
+                times
+                    .iter()
+                    .map(|&time| {
+                        let hazard = baseline.cumulative_hazard_at(stratum, time);
+                        (-(hazard * risk_multiplier)).exp().clamp(0.0, 1.0)
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok((times, curves))
+    }
+
     pub(crate) fn basehaz_with_strata_internal(
         &self,
         centered: bool,
@@ -290,51 +338,7 @@ impl CoxPHFit {
                 let mut strata = self.row_strata();
                 strata.sort_unstable();
                 strata.dedup();
-                if strata.len() > 1 {
-                    if self.means.len() != nvar {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "covariates must have {} columns",
-                            nvar
-                        )));
-                    }
-                    let center = if centered && !self.linear_predictors.is_empty() {
-                        self.linear_predictors.iter().sum::<f64>()
-                            / self.linear_predictors.len() as f64
-                    } else {
-                        0.0
-                    };
-                    let (base_times, base_hazards, base_strata) =
-                        self.basehaz_with_strata_internal(centered)?;
-                    let baseline = StratifiedBaselineLookup::from_components(
-                        &base_times,
-                        &base_hazards,
-                        &base_strata,
-                    );
-                    let times = baseline.times_for_strata(&strata);
-                    let linear_predictor = self
-                        .means
-                        .iter()
-                        .zip(beta.iter())
-                        .map(|(value, coefficient)| value * coefficient)
-                        .sum::<f64>();
-                    let risk_multiplier = (linear_predictor - center)
-                        .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-                        .exp();
-                    let curves = strata
-                        .iter()
-                        .map(|&stratum| {
-                            times
-                                .iter()
-                                .map(|&time| {
-                                    let hazard = baseline.cumulative_hazard_at(stratum, time);
-                                    (-(hazard * risk_multiplier)).exp().clamp(0.0, 1.0)
-                                })
-                                .collect()
-                        })
-                        .collect();
-                    return Ok((times, curves));
-                }
-                vec![self.means.clone()]
+                return self.survival_curve_for_shared_row(beta, &self.means, &strata, centered);
             }
         };
         if rows.iter().any(|row| row.len() != nvar) {
@@ -1013,6 +1017,30 @@ mod tests {
             assert_close_vec(&default.0, &explicit.0);
             assert_close_matrix(&default.1, &explicit.1);
         }
+    }
+
+    #[test]
+    fn test_coxph_default_survival_curve_matches_explicit_single_stratum_mean() {
+        let mut fit = baseline_test_fit("breslow");
+        fit.strata = vec![1; fit.event_times.len()];
+
+        let default = fit
+            .survival_curve(None, true)
+            .expect("default single-stratum survival curve should compute");
+        let explicit = fit
+            .survival_curve(Some(vec![fit.means.clone()]), true)
+            .expect("explicit single-stratum survival curve should compute");
+
+        assert_close_vec(&default.0, &explicit.0);
+        assert_close_matrix(&default.1, &explicit.1);
+    }
+
+    #[test]
+    fn test_coxph_default_survival_curve_validates_means() {
+        let mut fit = baseline_test_fit("breslow");
+        fit.means = vec![f64::NAN];
+
+        assert!(fit.survival_curve(None, true).is_err());
     }
 
     #[test]
