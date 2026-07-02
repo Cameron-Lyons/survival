@@ -291,11 +291,48 @@ impl CoxPHFit {
                 strata.sort_unstable();
                 strata.dedup();
                 if strata.len() > 1 {
-                    return self.survival_curve_with_strata(
-                        vec![self.means.clone(); strata.len()],
-                        strata,
-                        centered,
+                    if self.means.len() != nvar {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "covariates must have {} columns",
+                            nvar
+                        )));
+                    }
+                    let center = if centered && !self.linear_predictors.is_empty() {
+                        self.linear_predictors.iter().sum::<f64>()
+                            / self.linear_predictors.len() as f64
+                    } else {
+                        0.0
+                    };
+                    let (base_times, base_hazards, base_strata) =
+                        self.basehaz_with_strata_internal(centered)?;
+                    let baseline = StratifiedBaselineLookup::from_components(
+                        &base_times,
+                        &base_hazards,
+                        &base_strata,
                     );
+                    let times = baseline.times_for_strata(&strata);
+                    let linear_predictor = self
+                        .means
+                        .iter()
+                        .zip(beta.iter())
+                        .map(|(value, coefficient)| value * coefficient)
+                        .sum::<f64>();
+                    let risk_multiplier = (linear_predictor - center)
+                        .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
+                        .exp();
+                    let curves = strata
+                        .iter()
+                        .map(|&stratum| {
+                            times
+                                .iter()
+                                .map(|&time| {
+                                    let hazard = baseline.cumulative_hazard_at(stratum, time);
+                                    (-(hazard * risk_multiplier)).exp().clamp(0.0, 1.0)
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    return Ok((times, curves));
                 }
                 vec![self.means.clone()]
             }
@@ -956,6 +993,26 @@ mod tests {
         assert!((hazards[0] - expected_first).abs() <= expected_first * 1e-12);
         assert!(hazards[1] > hazards[0]);
         assert!(hazards[2] > hazards[1]);
+    }
+
+    #[test]
+    fn test_coxph_default_survival_curve_matches_explicit_strata_means() {
+        for method in ["breslow", "efron"] {
+            let fit = baseline_test_fit(method);
+            let default = fit
+                .survival_curve(None, true)
+                .expect("default stratified survival curve should compute");
+            let explicit = fit
+                .survival_curve_with_strata(
+                    vec![fit.means.clone(), fit.means.clone()],
+                    vec![1, 2],
+                    true,
+                )
+                .expect("explicit stratified survival curve should compute");
+
+            assert_close_vec(&default.0, &explicit.0);
+            assert_close_matrix(&default.1, &explicit.1);
+        }
     }
 
     #[test]
