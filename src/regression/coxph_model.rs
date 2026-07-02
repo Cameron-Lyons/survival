@@ -477,9 +477,8 @@ impl CoxPHModel {
                 .total_cmp(&self.event_times[rhs])
                 .then_with(|| lhs.cmp(&rhs))
         });
-        let n_events_estimate = self.censoring.iter().filter(|&&c| c == 1).count();
-        let mut unique_times = Vec::with_capacity(n_events_estimate);
-        let mut baseline_hazard = Vec::with_capacity(n_events_estimate);
+        let mut unique_times = Vec::with_capacity(event_indices.len());
+        let mut baseline_hazard = Vec::with_capacity(event_indices.len());
         let mut cum_hazard = 0.0;
         let mut i = 0;
         while i < event_indices.len() {
@@ -606,12 +605,12 @@ impl CoxPHModel {
             return vec![0.1; nvar];
         }
         let risk_sets = self.risk_set_cache(true, true, false);
-        let event_indices: Vec<usize> = (0..n).filter(|&i| self.censoring[i] == 1).collect();
-        let fisher_diag = event_indices
-            .par_iter()
+        let fisher_diag = (0..n)
+            .into_par_iter()
+            .filter(|&i| self.censoring[i] == 1)
             .fold(
                 || vec![0.0; nvar],
-                |mut diag, &i| {
+                |mut diag, i| {
                     let risk_set_sum = risk_sets.risk_sum[i];
                     if risk_set_sum <= 0.0 {
                         return diag;
@@ -645,12 +644,10 @@ impl CoxPHModel {
             return 0.0;
         }
         let risk_sets = self.risk_set_cache(false, false, false);
-        let event_indices: Vec<usize> = (0..self.event_times.len())
+        (0..self.event_times.len())
+            .into_par_iter()
             .filter(|&i| self.censoring[i] == 1)
-            .collect();
-        event_indices
-            .par_iter()
-            .map(|&i| {
+            .map(|i| {
                 let risk_score_i = self.risk_scores.get(i).copied().unwrap_or(1.0).ln();
                 let risk_set_sum = risk_sets.risk_sum[i];
                 if risk_set_sum > 0.0 {
