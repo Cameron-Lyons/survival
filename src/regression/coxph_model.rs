@@ -792,13 +792,14 @@ impl CoxPHModel {
         if n == 0 || nvar == 0 {
             return vec![];
         }
-        let martingale = self.martingale_residuals();
         let risk_sets = self.risk_set_cache(true, false, false);
         (0..n)
             .into_par_iter()
             .map(|i| {
-                let mart_i = martingale[i];
+                let status = self.censoring[i] as f64;
                 let risk_i = self.risk_scores.get(i).copied().unwrap_or(1.0);
+                let cum_haz = self.baseline_hazard.get(i).copied().unwrap_or(0.0) * risk_i;
+                let mart_i = status - cum_haz;
                 let risk_sum = risk_sets.risk_sum[i];
                 let base = i * nvar;
                 (0..nvar)
@@ -1084,6 +1085,26 @@ mod tests {
         for (actual, expected) in residuals.iter().zip(expected.iter()) {
             assert!((actual - expected).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn test_dfbeta_computes_martingale_rows_directly() {
+        let mut model = CoxPHModel::new();
+        model.coefficients =
+            Array2::from_shape_vec((1, 1), vec![0.0]).expect("coefficient shape is valid");
+        model.covariates =
+            Array2::from_shape_vec((3, 1), vec![1.0, 2.0, 3.0]).expect("covariate shape is valid");
+        model.event_times = vec![1.0, 2.0, 3.0];
+        model.censoring = vec![1, 0, 1];
+        model.baseline_hazard = vec![0.2, 0.3, 0.4];
+        model.risk_scores = vec![2.0, 1.5, 0.5];
+
+        let dfbeta = model.dfbeta();
+
+        assert_eq!(dfbeta.len(), 3);
+        assert!((dfbeta[0][0] + 0.1875).abs() < 1e-12);
+        assert!((dfbeta[1][0] - 0.075).abs() < 1e-12);
+        assert!(dfbeta[2][0].abs() < 1e-12);
     }
 
     #[test]
