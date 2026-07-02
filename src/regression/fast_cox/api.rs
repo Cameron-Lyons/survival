@@ -188,6 +188,19 @@ fn unstandardize_standard_fast_cox_coefficients(beta_std: &[f64], sds: &[f64]) -
         .collect()
 }
 
+fn unstandardize_standard_fast_cox_coefficients_into(
+    beta_std: &[f64],
+    sds: &[f64],
+    coefficients: &mut Vec<f64>,
+) {
+    debug_assert_eq!(beta_std.len(), sds.len());
+    coefficients.resize(beta_std.len(), 0.0);
+    for ((coefficient, &beta), &sd) in coefficients.iter_mut().zip(beta_std.iter()).zip(sds.iter())
+    {
+        *coefficient = if sd > 0.0 { beta / sd } else { beta };
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fit_fast_cox_coefficients(
     x: &[f64],
@@ -570,7 +583,7 @@ pub(crate) fn fast_cox_cv_typed(
         })
         .collect();
 
-    let fold_deviance_summaries: Vec<FastCoxCvDevianceSummary> = folds
+    let cv_deviance_summary = folds
         .par_iter()
         .map(|fold| {
             let mut summary = FastCoxCvDevianceSummary::with_len(lambdas.len());
@@ -606,6 +619,7 @@ pub(crate) fn fast_cox_cv_typed(
             };
             let train_lambda_max = fast_cox_lambda_max(&train_data, 1.0);
             let mut beta_warm = vec![0.0; n_vars];
+            let mut coefficients = Vec::with_capacity(n_vars);
             let mut lambda_prev: Option<f64> = None;
 
             for (lambda_idx, &lambda) in lambdas.iter().enumerate() {
@@ -623,8 +637,11 @@ pub(crate) fn fast_cox_cv_typed(
                         lambda_max: train_lambda_max,
                     },
                 );
-                let coefficients =
-                    unstandardize_standard_fast_cox_coefficients(&beta_std, &train_sds);
+                unstandardize_standard_fast_cox_coefficients_into(
+                    &beta_std,
+                    &train_sds,
+                    &mut coefficients,
+                );
                 beta_warm = beta_std;
                 lambda_prev = Some(lambda);
                 let deviance = compute_cox_deviance_into(
@@ -640,12 +657,13 @@ pub(crate) fn fast_cox_cv_typed(
 
             summary
         })
-        .collect();
-
-    let mut cv_deviance_summary = FastCoxCvDevianceSummary::with_len(lambdas.len());
-    for fold_summary in fold_deviance_summaries {
-        cv_deviance_summary.merge(fold_summary);
-    }
+        .reduce(
+            || FastCoxCvDevianceSummary::with_len(lambdas.len()),
+            |mut combined, fold_summary| {
+                combined.merge(fold_summary);
+                combined
+            },
+        );
 
     let mean_deviances = cv_deviance_summary.mean_deviances();
     let se_deviances = cv_deviance_summary.se_deviances(&mean_deviances);
