@@ -699,21 +699,18 @@ pub fn coxph_fit(
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e)))?;
     let (beta, means, score_vector, information, log_likelihood, score_test, flag, iterations) =
         cox_fit.results();
-    let linear_predictors: Vec<f64> = covariates
-        .iter()
-        .zip(offset_vec.iter())
-        .map(|(row, offset)| {
-            row.iter()
-                .zip(beta.iter())
-                .map(|(value, coefficient)| value * coefficient)
-                .sum::<f64>()
-                + offset
-        })
-        .collect();
-    let risk_scores = linear_predictors
-        .iter()
-        .map(|value| value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
-        .collect();
+    let mut linear_predictors = Vec::with_capacity(n);
+    let mut risk_scores = Vec::with_capacity(n);
+    for (row, &offset) in covariates.iter().zip(offset_vec.iter()) {
+        let linear_predictor = row
+            .iter()
+            .zip(beta.iter())
+            .map(|(value, coefficient)| value * coefficient)
+            .sum::<f64>()
+            + offset;
+        risk_scores.push(linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp());
+        linear_predictors.push(linear_predictor);
+    }
     let information_matrix = information
         .outer_iter()
         .map(|row| row.iter().copied().collect())
