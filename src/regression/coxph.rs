@@ -81,16 +81,26 @@ pub struct CoxPHFit {
 }
 
 impl CoxPHFit {
+    fn explicit_row_strata(&self) -> Option<&[i32]> {
+        (self.strata.len() == self.event_times.len()).then_some(self.strata.as_slice())
+    }
+
+    fn unique_row_strata(&self) -> Vec<i32> {
+        let Some(strata) = self.explicit_row_strata() else {
+            return vec![0];
+        };
+        let mut unique = strata.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        unique
+    }
+
     pub(crate) fn row_strata_cow(&self) -> Cow<'_, [i32]> {
-        if self.strata.len() == self.event_times.len() {
-            Cow::Borrowed(self.strata.as_slice())
+        if let Some(strata) = self.explicit_row_strata() {
+            Cow::Borrowed(strata)
         } else {
             Cow::Owned(vec![0; self.event_times.len()])
         }
-    }
-
-    pub(crate) fn row_strata(&self) -> Vec<i32> {
-        self.row_strata_cow().into_owned()
     }
 
     fn survival_curve_for_shared_row(
@@ -151,7 +161,7 @@ impl CoxPHFit {
                 "time must not be empty",
             ));
         }
-        let row_strata = self.row_strata_cow();
+        let row_strata = self.explicit_row_strata();
         let center = if centered && !self.linear_predictors.is_empty() {
             self.linear_predictors.iter().sum::<f64>() / n as f64
         } else {
@@ -159,7 +169,8 @@ impl CoxPHFit {
         };
 
         let mut rows_by_stratum: BTreeMap<i32, Vec<CoxSweepRow>> = BTreeMap::new();
-        for (idx, &stratum) in row_strata.iter().enumerate() {
+        for idx in 0..n {
+            let stratum = row_strata.map_or(0, |strata| strata[idx]);
             rows_by_stratum
                 .entry(stratum)
                 .or_default()
@@ -335,9 +346,7 @@ impl CoxPHFit {
         let rows = match covariates {
             Some(rows) => rows,
             None => {
-                let mut strata = self.row_strata();
-                strata.sort_unstable();
-                strata.dedup();
+                let strata = self.unique_row_strata();
                 return self.survival_curve_for_shared_row(beta, &self.means, &strata, centered);
             }
         };
@@ -818,7 +827,7 @@ mod tests {
 
     fn brute_force_basehaz(fit: &CoxPHFit, centered: bool) -> (Vec<f64>, Vec<f64>, Vec<i32>) {
         let n = fit.event_times.len();
-        let row_strata = fit.row_strata();
+        let row_strata = fit.row_strata_cow().into_owned();
         let center = if centered && !fit.linear_predictors.is_empty() {
             fit.linear_predictors.iter().sum::<f64>() / n as f64
         } else {
@@ -997,6 +1006,37 @@ mod tests {
         assert!((hazards[0] - expected_first).abs() <= expected_first * 1e-12);
         assert!(hazards[1] > hazards[0]);
         assert!(hazards[2] > hazards[1]);
+    }
+
+    #[test]
+    fn test_coxph_missing_strata_matches_explicit_zero_strata() {
+        for method in ["breslow", "efron"] {
+            let mut explicit = baseline_test_fit(method);
+            explicit.strata = vec![0; explicit.event_times.len()];
+            let mut implicit = explicit.clone();
+            implicit.strata.clear();
+
+            for centered in [false, true] {
+                let explicit_basehaz = explicit
+                    .basehaz_with_strata_internal(centered)
+                    .expect("explicit zero-strata baseline hazard should compute");
+                let implicit_basehaz = implicit
+                    .basehaz_with_strata_internal(centered)
+                    .expect("implicit zero-strata baseline hazard should compute");
+                assert_close_vec(&implicit_basehaz.0, &explicit_basehaz.0);
+                assert_close_vec(&implicit_basehaz.1, &explicit_basehaz.1);
+                assert_eq!(implicit_basehaz.2, explicit_basehaz.2);
+
+                let explicit_survival = explicit
+                    .survival_curve(None, centered)
+                    .expect("explicit zero-strata survival curve should compute");
+                let implicit_survival = implicit
+                    .survival_curve(None, centered)
+                    .expect("implicit zero-strata survival curve should compute");
+                assert_close_vec(&implicit_survival.0, &explicit_survival.0);
+                assert_close_matrix(&implicit_survival.1, &explicit_survival.1);
+            }
+        }
     }
 
     #[test]
