@@ -1385,8 +1385,8 @@ impl CoxPHFit {
             pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
         })?;
         let nvar = beta.len();
-        let martingale = self.martingale_residuals()?;
-        let n = martingale.len();
+        let expected = self.expected_events_internal()?;
+        let n = expected.len();
         if nvar == 0 {
             return Ok(vec![Vec::new(); n]);
         }
@@ -1404,8 +1404,9 @@ impl CoxPHFit {
         Ok(self
             .covariates
             .iter()
-            .zip(martingale.iter())
-            .map(|(row, &residual)| {
+            .zip(self.status.iter().zip(expected.iter()))
+            .map(|(row, (&status, &expected))| {
+                let residual = status as f64 - expected;
                 row.iter()
                     .zip(beta.iter())
                     .map(|(&value, &coefficient)| residual + value * coefficient)
@@ -1526,6 +1527,57 @@ mod tests {
         .expect("interval SEs should compute");
         assert!((interval_se[0] - 3.0 * 1.83_f64.sqrt()).abs() < 1e-12);
         assert_eq!(interval_se[1], 0.0);
+    }
+
+    #[test]
+    fn partial_residuals_reuse_expected_events() {
+        let fit = CoxPHFit {
+            coefficients: vec![vec![0.5, -0.25]],
+            means: vec![0.0, 0.0],
+            score_vector: vec![],
+            information_matrix: vec![],
+            log_likelihood: vec![],
+            score_test: 0.0,
+            convergence_flag: 0,
+            iterations: 0,
+            risk_scores: vec![],
+            event_times: vec![1.0, 2.0, 3.0],
+            status: vec![1, 0, 1],
+            linear_predictors: vec![0.2, -0.1, 0.3],
+            entry_times: None,
+            weights: vec![1.0, 1.0, 1.0],
+            covariates: vec![vec![1.0, 0.5], vec![0.0, 1.5], vec![2.0, -1.0]],
+            strata: vec![0, 0, 0],
+            method: "breslow".to_string(),
+            nocenter: Vec::new(),
+        };
+        let beta = fit.coefficients.first().expect("test coefficients exist");
+        let martingale = fit
+            .martingale_residuals()
+            .expect("martingale residuals should compute");
+        let expected: Vec<Vec<f64>> = fit
+            .covariates
+            .iter()
+            .zip(martingale.iter())
+            .map(|(row, &residual)| {
+                row.iter()
+                    .zip(beta.iter())
+                    .map(|(&value, &coefficient)| residual + value * coefficient)
+                    .collect()
+            })
+            .collect();
+
+        let actual = fit
+            .partial_residuals_internal()
+            .expect("partial residuals should compute");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual_row, expected_row) in actual.iter().zip(expected.iter()) {
+            assert_eq!(actual_row.len(), expected_row.len());
+            for (&actual, &expected) in actual_row.iter().zip(expected_row.iter()) {
+                assert!((actual - expected).abs() < 1e-12);
+            }
+        }
     }
 
     #[test]
