@@ -607,31 +607,34 @@ impl CoxPHModel {
         }
         let risk_sets = self.risk_set_cache(true, true, false);
         let event_indices: Vec<usize> = (0..n).filter(|&i| self.censoring[i] == 1).collect();
-        let fisher_contributions: Vec<Vec<f64>> = event_indices
+        let fisher_diag = event_indices
             .par_iter()
-            .filter_map(|&i| {
-                let risk_set_sum = risk_sets.risk_sum[i];
-                if risk_set_sum <= 0.0 {
-                    return None;
-                }
-                let base = i * nvar;
-                let contrib: Vec<f64> = (0..nvar)
-                    .map(|k| {
+            .fold(
+                || vec![0.0; nvar],
+                |mut diag, &i| {
+                    let risk_set_sum = risk_sets.risk_sum[i];
+                    if risk_set_sum <= 0.0 {
+                        return diag;
+                    }
+                    let base = i * nvar;
+                    for (k, diag_k) in diag.iter_mut().enumerate().take(nvar) {
                         let weighted_cov = risk_sets.weighted_cov[base + k];
                         let weighted_cov_sq = risk_sets.weighted_cov_sq[base + k];
                         let mean_cov = weighted_cov / risk_set_sum;
-                        weighted_cov_sq / risk_set_sum - mean_cov * mean_cov
-                    })
-                    .collect();
-                Some(contrib)
-            })
-            .collect();
-        let mut fisher_diag = vec![0.0; nvar];
-        for contrib in fisher_contributions {
-            for (k, &val) in contrib.iter().enumerate() {
-                fisher_diag[k] += val;
-            }
-        }
+                        *diag_k += weighted_cov_sq / risk_set_sum - mean_cov * mean_cov;
+                    }
+                    diag
+                },
+            )
+            .reduce(
+                || vec![0.0; nvar],
+                |mut total, diag| {
+                    for (total_k, diag_k) in total.iter_mut().zip(diag) {
+                        *total_k += diag_k;
+                    }
+                    total
+                },
+            );
         fisher_diag
             .iter()
             .map(|&f| if f > 0.0 { (1.0 / f).sqrt() } else { 0.1 })
