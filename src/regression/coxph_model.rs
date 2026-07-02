@@ -254,9 +254,21 @@ impl CoxPHModel {
 
         let sorted_indices = self.descending_time_indices();
         let mut risk_sum = 0.0;
-        let mut weighted_cov = vec![0.0; nvar];
-        let mut weighted_cov_sq = vec![0.0; nvar];
-        let mut weighted_outer = vec![0.0; nvar * nvar];
+        let mut weighted_cov = if track_cov {
+            vec![0.0; nvar]
+        } else {
+            Vec::new()
+        };
+        let mut weighted_cov_sq = if include_cov_sq {
+            vec![0.0; nvar]
+        } else {
+            Vec::new()
+        };
+        let mut weighted_outer = if include_outer {
+            vec![0.0; nvar * nvar]
+        } else {
+            Vec::new()
+        };
         let mut pos = 0usize;
 
         while pos < sorted_indices.len() {
