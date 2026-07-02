@@ -139,6 +139,35 @@ struct FastCoxCoefficientFit {
     active_set_size: usize,
 }
 
+fn fast_cox_lambda_max(data: &FastCoxData, l1_ratio: f64) -> f64 {
+    let beta_zero = vec![0.0; data.p];
+    let (gradient, _) = compute_gradient_hessian_diag_fast(data, &beta_zero, None);
+
+    gradient.iter().map(|g| g.abs()).fold(0.0, f64::max) / (data.n as f64 * l1_ratio.max(0.001))
+}
+
+fn fast_cox_lambda_sequence(
+    data: &FastCoxData,
+    l1_ratio: f64,
+    n_lambda: usize,
+    lambda_min_ratio: Option<f64>,
+) -> Vec<f64> {
+    let lambda_max = fast_cox_lambda_max(data, l1_ratio);
+    if lambda_max == 0.0 {
+        return vec![0.0; n_lambda];
+    }
+
+    let min_ratio = lambda_min_ratio.unwrap_or(if data.n < data.p { 0.01 } else { 0.0001 });
+    let lambda_min = lambda_max * min_ratio;
+
+    (0..n_lambda)
+        .map(|i| {
+            let frac = i as f64 / (n_lambda - 1).max(1) as f64;
+            lambda_max * (lambda_min / lambda_max).powf(frac)
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fit_fast_cox_coefficients(
     x: &[f64],
@@ -153,7 +182,6 @@ fn fit_fast_cox_coefficients(
     let (x_std, means, sds) =
         standardize_or_borrow_row_major_matrix(x, n_obs, n_vars, config.standardize);
 
-    let beta_zero = vec![0.0; n_vars];
     let fit_data = FastCoxData {
         x: x_std.as_ref(),
         n: n_obs,
@@ -163,8 +191,7 @@ fn fit_fast_cox_coefficients(
         weights: wt,
         offset: off,
     };
-    let (gradient, _) = compute_gradient_hessian_diag_fast(&fit_data, &beta_zero, None);
-    let lambda_max = gradient.iter().map(|g| g.abs()).fold(0.0, f64::max) / n_obs as f64;
+    let lambda_max = fast_cox_lambda_max(&fit_data, 1.0);
 
     let (beta_std, n_iter, converged, screened_out, active_set_size) =
         cyclic_coordinate_descent_fast(
@@ -363,7 +390,6 @@ pub(crate) fn fast_cox_path_typed(
 
     let (x_std, _means, sds) = standardize_row_major_matrix(x, n_obs, n_vars);
 
-    let beta_zero = vec![0.0; n_vars];
     let fit_data = FastCoxData {
         x: &x_std,
         n: n_obs,
@@ -373,22 +399,13 @@ pub(crate) fn fast_cox_path_typed(
         weights: wt.as_ref(),
         offset: off.as_ref(),
     };
-    let (gradient, _) = compute_gradient_hessian_diag_fast(&fit_data, &beta_zero, None);
-
-    let lambda_max = gradient.iter().map(|g| g.abs()).fold(0.0, f64::max)
-        / (n_obs as f64 * config.l1_ratio.max(0.001));
-
-    let min_ratio = config
-        .lambda_min_ratio
-        .unwrap_or(if n_obs < n_vars { 0.01 } else { 0.0001 });
-    let lambda_min = lambda_max * min_ratio;
-
-    let lambdas: Vec<f64> = (0..config.n_lambda)
-        .map(|i| {
-            let frac = i as f64 / (config.n_lambda - 1).max(1) as f64;
-            lambda_max * (lambda_min / lambda_max).powf(frac)
-        })
-        .collect();
+    let lambdas = fast_cox_lambda_sequence(
+        &fit_data,
+        config.l1_ratio,
+        config.n_lambda,
+        config.lambda_min_ratio,
+    );
+    let lambda_max = lambdas.first().copied().unwrap_or(0.0);
 
     let mut all_coefficients = Vec::with_capacity(config.n_lambda);
     let mut all_deviances = Vec::with_capacity(config.n_lambda);
@@ -485,16 +502,6 @@ pub(crate) fn fast_cox_cv_typed(
         }
     };
 
-    let path_config = FastCoxPathConfig {
-        l1_ratio: config.l1_ratio,
-        n_lambda: config.n_lambda,
-        lambda_min_ratio: None,
-        max_iter: 1000,
-        tol: 1e-7,
-        screening: config.screening,
-    };
-    let path = fast_cox_path_typed(input, Some(&path_config))?;
-
     let x = &input.covariates.values;
     let n_obs = input.covariates.n_obs;
     let n_vars = input.covariates.n_vars;
@@ -502,6 +509,17 @@ pub(crate) fn fast_cox_cv_typed(
     let status = &input.survival.status;
     let wt = input.weights_or_unit_cow();
     let offset = input.offset_or_zero_cow();
+    let (x_std, _means, _sds) = standardize_row_major_matrix(x, n_obs, n_vars);
+    let lambda_data = FastCoxData {
+        x: &x_std,
+        n: n_obs,
+        p: n_vars,
+        time,
+        status,
+        weights: wt.as_ref(),
+        offset: offset.as_ref(),
+    };
+    let lambdas = fast_cox_lambda_sequence(&lambda_data, config.l1_ratio, config.n_lambda, None);
 
     let mut rng =
         fastrand::Rng::with_seed(config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED));
@@ -543,7 +561,7 @@ pub(crate) fn fast_cox_cv_typed(
     let fold_deviance_summaries: Vec<FastCoxCvDevianceSummary> = folds
         .par_iter()
         .map(|fold| {
-            let mut summary = FastCoxCvDevianceSummary::with_len(path.lambdas.len());
+            let mut summary = FastCoxCvDevianceSummary::with_len(lambdas.len());
             let train_n = fold.train_time.len();
             let test_n = fold.test_time.len();
             if train_n == 0 || test_n == 0 {
@@ -564,7 +582,7 @@ pub(crate) fn fast_cox_cv_typed(
                 offset: &fold.test_offset,
             };
 
-            for (lambda_idx, &lambda) in path.lambdas.iter().enumerate() {
+            for (lambda_idx, &lambda) in lambdas.iter().enumerate() {
                 let Ok(fit_config) = FastCoxConfig::new(
                     lambda,
                     config.l1_ratio,
@@ -604,7 +622,7 @@ pub(crate) fn fast_cox_cv_typed(
         })
         .collect();
 
-    let mut cv_deviance_summary = FastCoxCvDevianceSummary::with_len(path.lambdas.len());
+    let mut cv_deviance_summary = FastCoxCvDevianceSummary::with_len(lambdas.len());
     for fold_summary in fold_deviance_summaries {
         cv_deviance_summary.merge(fold_summary);
     }
@@ -618,14 +636,14 @@ pub(crate) fn fast_cox_cv_typed(
         .min_by(|(_, a), (_, b)| a.total_cmp(b))
         .unwrap_or((0, &f64::INFINITY));
 
-    let lambda_min = path.lambdas[min_idx];
+    let lambda_min = lambdas[min_idx];
 
     let threshold = min_dev + se_deviances[min_idx];
     let lambda_1se = mean_deviances
         .iter()
         .enumerate()
         .filter(|(_, d)| **d <= threshold)
-        .map(|(i, _)| path.lambdas[i])
+        .map(|(i, _)| lambdas[i])
         .next()
         .unwrap_or(lambda_min);
 
