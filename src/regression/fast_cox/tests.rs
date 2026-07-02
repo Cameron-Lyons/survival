@@ -142,6 +142,31 @@ mod tests {
     }
 
     #[test]
+    fn test_fast_cox_lambda_max_matches_zero_gradient() {
+        let x = vec![1.0, 0.0, 0.5, 1.0, 1.5, 0.2, 2.0, 1.2];
+        let time = vec![1.0, 1.0, 2.0, 3.0];
+        let status = vec![1, 0, 1, 1];
+        let weights = vec![1.0, 0.5, 1.5, 1.0];
+        let offset = vec![0.2, -0.1, 0.0, 0.3];
+        let data = FastCoxData {
+            x: &x,
+            n: 4,
+            p: 2,
+            time: &time,
+            status: &status,
+            weights: &weights,
+            offset: &offset,
+        };
+
+        let lambda_max = fast_cox_lambda_max(&data, 1.0);
+        let (gradient, _) = compute_gradient_hessian_diag_fast(&data, &[0.0, 0.0], None);
+        let expected =
+            gradient.iter().map(|value| value.abs()).fold(0.0, f64::max) / data.n as f64;
+
+        assert!((lambda_max - expected).abs() < 1e-12);
+    }
+
+    #[test]
     fn test_screening_rules() {
         let gradient = vec![0.5, 0.1, 0.8, 0.05];
         let lambda = 0.3;

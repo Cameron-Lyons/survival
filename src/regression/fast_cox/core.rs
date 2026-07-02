@@ -54,6 +54,7 @@ fn shifted_exp_eta_with_shift_into(eta: &[f64], weights: &[f64], shift: f64, tar
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::needless_range_loop)]
 fn compute_gradient_hessian_diag_fast(
     data: &FastCoxData,
@@ -146,6 +147,54 @@ fn compute_gradient_hessian_diag_fast_into(
                     accumulate_feature(j);
                 }
             }
+        }
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+fn compute_gradient_at_zero_fast_into(
+    data: &FastCoxData,
+    gradient: &mut [f64],
+    eta: &mut [f64],
+    exp_eta: &mut [f64],
+    risk_data: &mut CoxRiskSetFirstOrderData,
+    risk_scratch: &mut CoxRiskSetFirstOrderScratch,
+) {
+    debug_assert_eq!(gradient.len(), data.p);
+    debug_assert_eq!(eta.len(), data.n);
+    debug_assert_eq!(exp_eta.len(), data.n);
+    gradient.fill(0.0);
+
+    eta.copy_from_slice(data.offset);
+    let shift = cox_risk_shift(eta, data.weights);
+    shifted_exp_eta_with_shift_into(eta, data.weights, shift, exp_eta);
+
+    precompute_cox_risk_set_first_order_cumsum_into(
+        data.x,
+        data.n,
+        data.p,
+        data.time,
+        data.weights,
+        exp_eta,
+        risk_data,
+        risk_scratch,
+    );
+
+    for i in 0..data.n {
+        if data.status[i] != 1 {
+            continue;
+        }
+
+        let pos = risk_data.risk_set_pos[i];
+        let risk_sum = risk_data.cumsum_exp_eta[pos];
+        if risk_sum <= 0.0 {
+            continue;
+        }
+
+        for j in 0..data.p {
+            let xij = data.x[i * data.p + j];
+            let x_bar = risk_data.cumsum_weighted_x[pos * data.p + j] / risk_sum;
+            gradient[j] += data.weights[i] * (xij - x_bar);
         }
     }
 }
