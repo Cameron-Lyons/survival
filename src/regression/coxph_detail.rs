@@ -1,5 +1,5 @@
 use crate::constants::TIME_EPSILON;
-use crate::internal::cox_risk::{cox_risk_shift, shifted_exp_eta_with_shift};
+use crate::internal::cox_risk::{cox_risk_shift, shifted_weighted_exp_eta_with_shift};
 use crate::internal::validation::validate_binary_i32;
 use pyo3::prelude::*;
 use std::borrow::Cow;
@@ -347,12 +347,8 @@ pub(crate) fn compute_coxph_detail_with_options(
         })
         .collect();
     let risk_shift = cox_risk_shift(&linear_predictors, wts.as_ref());
-    let risk_weights: Vec<f64> =
-        shifted_exp_eta_with_shift(&linear_predictors, wts.as_ref(), risk_shift)
-            .into_iter()
-            .zip(wts.iter())
-            .map(|(shifted_exp, &weight)| shifted_exp * weight)
-            .collect();
+    let risk_weights =
+        shifted_weighted_exp_eta_with_shift(&linear_predictors, wts.as_ref(), risk_shift);
 
     let groups = event_groups(time, status, strata_values.as_ref());
     let mut rows = Vec::with_capacity(groups.len());

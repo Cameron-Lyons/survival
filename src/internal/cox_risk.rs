@@ -129,6 +129,23 @@ pub(crate) fn shifted_exp_eta_with_shift(eta: &[f64], weights: &[f64], shift: f6
         .collect()
 }
 
+pub(crate) fn shifted_weighted_exp_eta_with_shift(
+    eta: &[f64],
+    weights: &[f64],
+    shift: f64,
+) -> Vec<f64> {
+    eta.iter()
+        .zip(weights.iter())
+        .map(|(&eta_i, &weight)| {
+            if weight > 0.0 {
+                weight * (eta_i - shift).exp()
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
 #[allow(clippy::needless_range_loop)]
 pub(crate) fn precompute_cox_risk_set_cumsum(
     x: &[f64],
@@ -287,6 +304,16 @@ mod tests {
         let exp_eta = shifted_exp_eta(&eta, &weights);
 
         assert_eq!(exp_eta, vec![1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn shifted_weighted_exp_eta_applies_weights_after_shift() {
+        let eta = [2.0, f64::INFINITY, 4.0];
+        let weights = [2.0, 0.0, 3.0];
+
+        let exp_eta = shifted_weighted_exp_eta_with_shift(&eta, &weights, 2.0);
+
+        assert_eq!(exp_eta, vec![2.0, 0.0, 3.0 * (2.0_f64).exp()]);
     }
 
     #[test]
