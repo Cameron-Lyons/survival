@@ -1,5 +1,5 @@
 use crate::constants::TIME_EPSILON;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) struct StratifiedBaselineLookup {
     curves: BTreeMap<i32, (Vec<f64>, Vec<f64>)>,
@@ -25,8 +25,12 @@ impl StratifiedBaselineLookup {
 
     pub(super) fn times_for_strata(&self, strata: &[i32]) -> Vec<f64> {
         let mut times = Vec::new();
-        for stratum in strata {
-            if let Some((curve_times, _)) = self.curves.get(stratum) {
+        let mut seen = BTreeSet::new();
+        for &stratum in strata {
+            if !seen.insert(stratum) {
+                continue;
+            }
+            if let Some((curve_times, _)) = self.curves.get(&stratum) {
                 times.extend(curve_times.iter().copied());
             }
         }
@@ -174,5 +178,6 @@ mod tests {
 
         assert_eq!(lookup.times_for_strata(&[0]), vec![1.0, 2.0]);
         assert_eq!(lookup.times_for_strata(&[1, 0]), vec![1.0, 2.0, 3.0]);
+        assert_eq!(lookup.times_for_strata(&[1, 0, 1, 0]), vec![1.0, 2.0, 3.0]);
     }
 }
