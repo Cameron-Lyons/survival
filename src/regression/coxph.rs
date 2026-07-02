@@ -416,15 +416,16 @@ impl CoxPHFit {
     }
 
     pub fn deviance_residuals(&self) -> PyResult<Vec<f64>> {
-        let martingale = self.martingale_residuals()?;
-        Ok(martingale
+        let expected = self.expected_events_internal()?;
+        Ok(self
+            .status
             .iter()
-            .zip(self.status.iter())
-            .map(|(&residual, &status)| {
+            .zip(expected.iter())
+            .map(|(&status, &expected)| {
                 let status = status as f64;
+                let residual = status - expected;
                 let log_term = if status > 0.0 {
-                    let expected = (status - residual).max(crate::constants::DIVISION_FLOOR);
-                    status * expected.ln()
+                    status * expected.max(crate::constants::DIVISION_FLOOR).ln()
                 } else {
                     0.0
                 };
@@ -955,6 +956,38 @@ mod tests {
         assert!((hazards[0] - expected_first).abs() <= expected_first * 1e-12);
         assert!(hazards[1] > hazards[0]);
         assert!(hazards[2] > hazards[1]);
+    }
+
+    #[test]
+    fn test_coxph_deviance_residuals_reuse_expected_events() {
+        let fit = baseline_test_fit("breslow");
+        let expected: Vec<f64> = fit
+            .martingale_residuals()
+            .expect("martingale residuals should compute")
+            .iter()
+            .zip(fit.status.iter())
+            .map(|(&residual, &status)| {
+                let status = status as f64;
+                let log_term = if status > 0.0 {
+                    let expected = (status - residual).max(crate::constants::DIVISION_FLOOR);
+                    status * expected.ln()
+                } else {
+                    0.0
+                };
+                let magnitude = (-2.0 * (residual + log_term)).max(0.0).sqrt();
+                if residual >= 0.0 {
+                    magnitude
+                } else {
+                    -magnitude
+                }
+            })
+            .collect();
+
+        let actual = fit
+            .deviance_residuals()
+            .expect("deviance residuals should compute");
+
+        assert_close_vec(&actual, &expected);
     }
 
     #[test]
