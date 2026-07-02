@@ -653,9 +653,9 @@ pub fn coxph_fit(
     let mut sorted_entry_times = entry_times_ref.map(|_| Vec::with_capacity(n));
     let mut sorted_offset = Vec::with_capacity(n);
     let mut sorted_weights = Vec::with_capacity(n);
-    let mut sorted_strata_values = Vec::with_capacity(n);
+    let mut strata_boundaries = vec![0; n];
     let mut flat = Vec::with_capacity(n * nvar);
-    for &idx in &order {
+    for (sorted_idx, &idx) in order.iter().enumerate() {
         sorted_time.push(time[idx]);
         sorted_status.push(status[idx]);
         if let (Some(values), Some(sorted_values)) = (entry_times_ref, sorted_entry_times.as_mut())
@@ -664,14 +664,10 @@ pub fn coxph_fit(
         }
         sorted_offset.push(offset_vec[idx]);
         sorted_weights.push(weights_vec[idx]);
-        sorted_strata_values.push(strata_values[idx]);
-        flat.extend(covariates[idx].iter().copied());
-    }
-    let mut strata_boundaries = vec![0; n];
-    for idx in 0..n {
-        if idx + 1 == n || sorted_strata_values[idx + 1] != sorted_strata_values[idx] {
-            strata_boundaries[idx] = 1;
+        if sorted_idx + 1 == n || strata_values[order[sorted_idx + 1]] != strata_values[idx] {
+            strata_boundaries[sorted_idx] = 1;
         }
+        flat.extend(covariates[idx].iter().copied());
     }
     let covar = Array2::from_shape_vec((n, nvar), flat).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("invalid covariate shape: {}", e))
