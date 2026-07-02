@@ -140,8 +140,19 @@ struct FastCoxCoefficientFit {
 }
 
 fn fast_cox_lambda_max(data: &FastCoxData, l1_ratio: f64) -> f64 {
-    let beta_zero = vec![0.0; data.p];
-    let (gradient, _) = compute_gradient_hessian_diag_fast(data, &beta_zero, None);
+    let mut gradient = vec![0.0; data.p];
+    let mut eta = vec![0.0; data.n];
+    let mut exp_eta = vec![0.0; data.n];
+    let mut risk_data = CoxRiskSetFirstOrderData::with_capacity(data.n, data.p);
+    let mut risk_scratch = CoxRiskSetFirstOrderScratch::with_capacity(data.n, data.p);
+    compute_gradient_at_zero_fast_into(
+        data,
+        &mut gradient,
+        &mut eta,
+        &mut exp_eta,
+        &mut risk_data,
+        &mut risk_scratch,
+    );
 
     gradient.iter().map(|g| g.abs()).fold(0.0, f64::max) / (data.n as f64 * l1_ratio.max(0.001))
 }

@@ -3,7 +3,9 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 use crate::internal::cox_risk::{
-    CoxRiskSetData, CoxRiskSetScratch, cox_risk_shift, precompute_cox_risk_set_cumsum_into,
+    CoxRiskSetData, CoxRiskSetFirstOrderData, CoxRiskSetFirstOrderScratch, CoxRiskSetScratch,
+    cox_risk_shift, precompute_cox_risk_set_cumsum_into,
+    precompute_cox_risk_set_first_order_cumsum_into,
 };
 use crate::internal::matrix::{
     standardize_or_borrow_row_major_matrix, standardize_row_major_matrix,
