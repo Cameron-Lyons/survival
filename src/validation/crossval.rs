@@ -141,6 +141,23 @@ fn create_folds(n: usize, n_folds: usize, shuffle: bool, seed: Option<u64>) -> V
     }
     folds
 }
+
+fn covariate_rows_for_indices(
+    covariates: &Array2<f64>,
+    nvar: usize,
+    indices: &[usize],
+) -> Vec<Vec<f64>> {
+    let mut rows = Vec::with_capacity(indices.len());
+    for &obs_idx in indices {
+        let mut row = Vec::with_capacity(nvar);
+        for var in 0..nvar {
+            row.push(covariates[[var, obs_idx]]);
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 pub(crate) fn cv_cox(
     time: &[f64],
     status: &[i32],
@@ -338,24 +355,20 @@ pub(crate) fn cv_survreg(
     use crate::regression::parametric_survival::survreg;
     let n = time.len();
     let nvar = covariates.nrows();
-    let cov_vecs: Vec<Vec<f64>> = (0..n)
-        .map(|i| (0..nvar).map(|j| covariates[[j, i]]).collect())
-        .collect();
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
     let results: Vec<(f64, Vec<f64>)> = (0..config.n_folds)
         .into_par_iter()
         .filter_map(|fold_idx| {
             let test_indices = &folds[fold_idx];
-            let train_indices: Vec<usize> = folds
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != fold_idx)
-                .flat_map(|(_, f)| f.iter().copied())
-                .collect();
+            let mut train_indices = Vec::with_capacity(n - test_indices.len());
+            for (idx, fold) in folds.iter().enumerate() {
+                if idx != fold_idx {
+                    train_indices.extend_from_slice(fold);
+                }
+            }
             let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
             let train_status: Vec<f64> = train_indices.iter().map(|&i| status[i]).collect();
-            let train_covariates: Vec<Vec<f64>> =
-                train_indices.iter().map(|&i| cov_vecs[i].clone()).collect();
+            let train_covariates = covariate_rows_for_indices(covariates, nvar, &train_indices);
             let fit_result = survreg(
                 train_time,
                 train_status,
@@ -375,8 +388,7 @@ pub(crate) fn cv_survreg(
             .ok()?;
             let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
             let test_status: Vec<f64> = test_indices.iter().map(|&i| status[i]).collect();
-            let test_covariates: Vec<Vec<f64>> =
-                test_indices.iter().map(|&i| cov_vecs[i].clone()).collect();
+            let test_covariates = covariate_rows_for_indices(covariates, nvar, test_indices);
             let test_fit = survreg(
                 test_time,
                 test_status,
