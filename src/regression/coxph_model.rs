@@ -448,16 +448,23 @@ impl CoxPHModel {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e))
         })?;
         let (beta, _means, _u, _imat, _loglik, _sctest, _flag, _iter) = cox_fit.results();
-        let mut coefficients_array = Array2::<f64>::zeros((nvar, 1));
-        for (idx, &beta_val) in beta.iter().enumerate() {
-            coefficients_array[[idx, 0]] = beta_val;
-        }
-        self.coefficients = coefficients_array;
-        self.risk_scores.clear();
+
+        let mut risk_scores = Vec::with_capacity(n);
         for row in self.covariates.outer_iter() {
-            let risk_score = self.coefficients.column(0).dot(&row);
-            self.risk_scores.push(exp_clamped(risk_score));
+            let risk_score = row
+                .iter()
+                .zip(beta.iter())
+                .map(|(&cov, &coef)| coef * cov)
+                .sum::<f64>();
+            risk_scores.push(exp_clamped(risk_score));
         }
+
+        self.coefficients = Array2::from_shape_vec((nvar, 1), beta).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "failed to materialize Cox coefficients: {e}"
+            ))
+        })?;
+        self.risk_scores = risk_scores;
         self.calculate_baseline_hazard();
         Ok(())
     }
