@@ -695,26 +695,33 @@ impl CoxPHModel {
         covariates: Vec<Vec<f64>>,
         percentile: f64,
     ) -> Vec<Option<f64>> {
-        let (times, survival_curves) = match self.survival_curve(covariates, None) {
-            Ok(result) => result,
-            Err(_) => return vec![],
-        };
-        let target_survival = 1.0 - percentile;
-        survival_curves
+        if self.validate_prediction_rows(&covariates).is_err() {
+            return vec![];
+        }
+        let times = sorted_unique_times(&self.event_times);
+        let risk_scores = self.compute_exp_risk_scores(&covariates);
+        let baseline_hazards: Vec<f64> = times
             .iter()
-            .map(|surv| {
-                for (i, &s) in surv.iter().enumerate() {
-                    if s <= target_survival {
+            .map(|&t| self.baseline_cumulative_hazard_at(t))
+            .collect();
+        let target_survival = 1.0 - percentile;
+        risk_scores
+            .par_iter()
+            .map(|&risk_exp| {
+                let mut prev_surv = 1.0;
+                for (i, (&time, &baseline_hazard)) in
+                    times.iter().zip(baseline_hazards.iter()).enumerate()
+                {
+                    let survival = (-baseline_hazard * risk_exp).exp();
+                    if survival <= target_survival {
                         if i == 0 {
-                            return Some(times[0]);
+                            return Some(time);
                         }
-                        let s0 = surv[i - 1];
-                        let s1 = s;
                         let t0 = times[i - 1];
-                        let t1 = times[i];
-                        let frac = (s0 - target_survival) / (s0 - s1);
-                        return Some(t0 + frac * (t1 - t0));
+                        let frac = (prev_surv - target_survival) / (prev_surv - survival);
+                        return Some(t0 + frac * (time - t0));
                     }
+                    prev_surv = survival;
                 }
                 None
             })
@@ -1001,6 +1008,26 @@ mod tests {
         assert_eq!(hazard_times, vec![1.0, 2.0, 3.0]);
         assert_eq!(survival.len(), 1);
         assert_eq!(cumulative_hazard.len(), 1);
+    }
+
+    #[test]
+    fn test_predicted_survival_time_interpolates_from_baseline_hazard() {
+        let mut model = CoxPHModel::new();
+        model.coefficients =
+            Array2::from_shape_vec((1, 1), vec![0.0]).expect("coefficient shape is valid");
+        model.event_times = vec![1.0, 2.0, 3.0];
+        model.censoring = vec![1, 1, 1];
+        model.baseline_hazard_lookup_times = vec![1.0, 2.0, 3.0];
+        model.baseline_hazard_lookup_values = vec![0.1, 0.8, 1.2];
+
+        let survival_at_1 = (-0.1_f64).exp();
+        let survival_at_2 = (-0.8_f64).exp();
+        let expected = 1.0 + (survival_at_1 - 0.5) / (survival_at_1 - survival_at_2) * (2.0 - 1.0);
+
+        let predicted = model.predicted_survival_time(vec![vec![0.0]], 0.5);
+
+        assert_eq!(predicted.len(), 1);
+        assert!((predicted[0].expect("median should be predicted") - expected).abs() < 1e-12);
     }
 
     #[test]
