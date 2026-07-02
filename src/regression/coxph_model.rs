@@ -538,24 +538,22 @@ impl CoxPHModel {
     pub fn brier_score(&self) -> f64 {
         let mut score = 0.0;
         let mut count = 0.0;
+        let avg_risk = if self.baseline_hazard.is_empty() || self.risk_scores.is_empty() {
+            None
+        } else {
+            Some(self.risk_scores.iter().sum::<f64>() / self.risk_scores.len() as f64)
+        };
         for (time, &status) in self.event_times.iter().zip(self.censoring.iter()) {
-            let pred = self.predict_survival(*time);
+            let pred = if let Some(avg_risk) = avg_risk {
+                let baseline_haz = self.baseline_cumulative_hazard_at(*time);
+                (-baseline_haz * avg_risk).exp()
+            } else {
+                0.5
+            };
             score += (pred - status as f64).powi(2);
             count += 1.0;
         }
         if count > 0.0 { score / count } else { 0.0 }
-    }
-    fn predict_survival(&self, time: f64) -> f64 {
-        if self.baseline_hazard.is_empty() || self.risk_scores.is_empty() {
-            return 0.5;
-        }
-        let baseline_haz = self.baseline_cumulative_hazard_at(time);
-        let avg_risk = if !self.risk_scores.is_empty() {
-            self.risk_scores.iter().sum::<f64>() / self.risk_scores.len() as f64
-        } else {
-            1.0
-        };
-        (-baseline_haz * avg_risk).exp()
     }
     pub fn survival_curve(
         &self,
