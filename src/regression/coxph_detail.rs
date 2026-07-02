@@ -134,12 +134,10 @@ fn weighted_sums_into(
     risk_weights: &[f64],
     indices: &[usize],
     s1: &mut [f64],
-    s2: &mut [Vec<f64>],
+    s2: &mut [f64],
 ) -> f64 {
     s1.fill(0.0);
-    for row in s2.iter_mut() {
-        row.fill(0.0);
-    }
+    s2.fill(0.0);
     let mut s0 = 0.0;
     let nvar = s1.len();
     for &idx in indices {
@@ -149,37 +147,23 @@ fn weighted_sums_into(
             let weighted_value = weight * covariates[idx][col];
             s1[col] += weighted_value;
             for inner in 0..nvar {
-                s2[col][inner] += weighted_value * covariates[idx][inner];
+                s2[col * nvar + inner] += weighted_value * covariates[idx][inner];
             }
         }
     }
     s0
 }
 
-fn mean_and_covariance(
-    s0: f64,
-    s1: &[f64],
-    s2: &[Vec<f64>],
-    nvar: usize,
-) -> (Vec<f64>, Vec<Vec<f64>>) {
-    let mut means = vec![0.0; nvar];
-    let mut covariance = vec![vec![0.0; nvar]; nvar];
-    mean_and_covariance_into(s0, s1, s2, &mut means, &mut covariance);
-    (means, covariance)
-}
-
 fn mean_and_covariance_into(
     s0: f64,
     s1: &[f64],
-    s2: &[Vec<f64>],
+    s2: &[f64],
     means: &mut [f64],
-    covariance: &mut [Vec<f64>],
+    covariance: &mut [f64],
 ) {
     if s0 <= 0.0 {
         means.fill(0.0);
-        for row in covariance {
-            row.fill(0.0);
-        }
+        covariance.fill(0.0);
         return;
     }
     for (mean, value) in means.iter_mut().zip(s1) {
@@ -187,7 +171,8 @@ fn mean_and_covariance_into(
     }
     for row in 0..means.len() {
         for col in 0..means.len() {
-            covariance[row][col] = s2[row][col] / s0 - means[row] * means[col];
+            covariance[row * means.len() + col] =
+                s2[row * means.len() + col] / s0 - means[row] * means[col];
         }
     }
 }
@@ -196,17 +181,15 @@ fn efron_step_mean_and_covariance_into(
     step_s0: f64,
     s1: &[f64],
     death_s1: &[f64],
-    s2: &[Vec<f64>],
-    death_s2: &[Vec<f64>],
+    s2: &[f64],
+    death_s2: &[f64],
     fraction: f64,
     means: &mut [f64],
-    covariance: &mut [Vec<f64>],
+    covariance: &mut [f64],
 ) {
     if step_s0 <= 0.0 {
         means.fill(0.0);
-        for row in covariance {
-            row.fill(0.0);
-        }
+        covariance.fill(0.0);
         return;
     }
     for col in 0..means.len() {
@@ -214,26 +197,30 @@ fn efron_step_mean_and_covariance_into(
     }
     for row in 0..means.len() {
         for col in 0..means.len() {
-            covariance[row][col] =
-                (s2[row][col] - fraction * death_s2[row][col]) / step_s0 - means[row] * means[col];
+            let idx = row * means.len() + col;
+            covariance[idx] =
+                (s2[idx] - fraction * death_s2[idx]) / step_s0 - means[row] * means[col];
         }
     }
 }
 
-fn scale_matrix_in_place(target: &mut [Vec<f64>], scale: f64) {
-    for row in target {
-        for value in row {
-            *value *= scale;
-        }
+fn scale_matrix_in_place(target: &mut [f64], scale: f64) {
+    for value in target {
+        *value *= scale;
     }
 }
 
-fn add_matrix(target: &mut [Vec<f64>], values: &[Vec<f64>], scale: f64) {
-    for (row_idx, row) in values.iter().enumerate() {
-        for (col_idx, value) in row.iter().enumerate() {
-            target[row_idx][col_idx] += scale * value;
-        }
+fn add_matrix(target: &mut [f64], values: &[f64], scale: f64) {
+    for (target_value, &value) in target.iter_mut().zip(values.iter()) {
+        *target_value += scale * value;
     }
+}
+
+fn nested_matrix_from_flat(values: &[f64], nvar: usize) -> Vec<Vec<f64>> {
+    if nvar == 0 {
+        return Vec::new();
+    }
+    values.chunks(nvar).map(|row| row.to_vec()).collect()
 }
 
 fn event_groups(time: &[f64], status: &[i32], strata: &[i32]) -> Vec<(i32, f64)> {
@@ -379,11 +366,14 @@ pub(crate) fn compute_coxph_detail_with_options(
     let mut deaths = Vec::with_capacity(status.iter().filter(|&&value| value == 1).count());
     let mut event_covariates = vec![0.0; nvar];
     let mut risk_s1 = vec![0.0; nvar];
-    let mut risk_s2 = vec![vec![0.0; nvar]; nvar];
+    let mut risk_s2 = vec![0.0; nvar * nvar];
     let mut death_s1 = vec![0.0; nvar];
-    let mut death_s2 = vec![vec![0.0; nvar]; nvar];
+    let mut death_s2 = vec![0.0; nvar * nvar];
+    let mut means = vec![0.0; nvar];
+    let mut score = vec![0.0; nvar];
+    let mut imat = vec![0.0; nvar * nvar];
     let mut step_means = vec![0.0; nvar];
-    let mut step_covariance = vec![vec![0.0; nvar]; nvar];
+    let mut step_covariance = vec![0.0; nvar * nvar];
 
     for (stratum, event_time) in groups {
         if current_stratum != Some(stratum) {
@@ -421,12 +411,10 @@ pub(crate) fn compute_coxph_detail_with_options(
             &mut risk_s1,
             &mut risk_s2,
         );
-        let (means, mut imat) = mean_and_covariance(s0, &risk_s1, &risk_s2, nvar);
-        let mut score = event_covariates
-            .iter()
-            .zip(means.iter())
-            .map(|(&event_sum, &mean)| event_sum - event_weight * mean)
-            .collect::<Vec<_>>();
+        mean_and_covariance_into(s0, &risk_s1, &risk_s2, &mut means, &mut imat);
+        for col in 0..nvar {
+            score[col] = event_covariates[col] - event_weight * means[col];
+        }
         scale_matrix_in_place(&mut imat, event_weight);
         let mut hazard = if s0 > 0.0 {
             event_weight * hazard_scale / s0
@@ -448,9 +436,7 @@ pub(crate) fn compute_coxph_detail_with_options(
                 &mut death_s2,
             );
             score.copy_from_slice(&event_covariates);
-            for row in &mut imat {
-                row.fill(0.0);
-            }
+            imat.fill(0.0);
             hazard = 0.0;
             varhaz = 0.0;
             let step_weight = event_weight / deaths.len() as f64;
@@ -496,9 +482,9 @@ pub(crate) fn compute_coxph_detail_with_options(
             },
             n_event_weight: event_weight,
             schoenfeld: Some(score.clone()),
-            means,
-            imat,
-            score,
+            means: means.clone(),
+            imat: nested_matrix_from_flat(&imat, nvar),
+            score: score.clone(),
         });
     }
 
