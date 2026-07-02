@@ -147,8 +147,10 @@ mod tests {
         let lambda = 0.3;
         let beta = vec![0.0, 0.0, 0.0, 0.0];
 
-        let safe = apply_safe_screening(&gradient, lambda, &beta, 4);
-        let strong = apply_strong_screening(&gradient, lambda, None, &beta, 4);
+        let mut safe = Vec::new();
+        apply_safe_screening_into(&gradient, lambda, &beta, 4, &mut safe);
+        let mut strong = Vec::new();
+        apply_strong_screening_into(&gradient, lambda, None, &beta, 4, &mut strong);
 
         assert!(safe.contains(&0));
         assert!(safe.contains(&2));
