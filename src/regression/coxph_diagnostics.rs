@@ -179,8 +179,8 @@ pub fn cox_event_indices(
         return Err(value_error("status length must match time length"));
     }
     validate_finite_slice(&time, "time")?;
-    let strata = strata.unwrap_or_else(|| vec![0; n]);
-    if strata.len() != n {
+    let strata = strata.as_deref();
+    if strata.is_some_and(|values| values.len() != n) {
         return Err(value_error("strata length must match time length"));
     }
     for (idx, &value) in status.iter().enumerate() {
@@ -192,12 +192,20 @@ pub fn cox_event_indices(
     }
 
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&left, &right| {
-        strata[left]
-            .cmp(&strata[right])
-            .then_with(|| time[left].total_cmp(&time[right]))
-            .then_with(|| left.cmp(&right))
-    });
+    if let Some(values) = strata {
+        order.sort_by(|&left, &right| {
+            values[left]
+                .cmp(&values[right])
+                .then_with(|| time[left].total_cmp(&time[right]))
+                .then_with(|| left.cmp(&right))
+        });
+    } else {
+        order.sort_by(|&left, &right| {
+            time[left]
+                .total_cmp(&time[right])
+                .then_with(|| left.cmp(&right))
+        });
+    }
     Ok(order.into_iter().filter(|&idx| status[idx] == 1).collect())
 }
 
@@ -1433,6 +1441,16 @@ mod tests {
             diagnostic_order(&[1, 0, 0, 1], &[2.0, 1.0, 2.0, 1.0]),
             vec![1, 2, 3, 0]
         );
+        let implicit_strata = cox_event_indices(vec![2.0, 1.0, 2.0, 3.0], vec![1, 0, 1, 1], None)
+            .expect("event indices should compute without strata");
+        let explicit_zero_strata = cox_event_indices(
+            vec![2.0, 1.0, 2.0, 3.0],
+            vec![1, 0, 1, 1],
+            Some(vec![0, 0, 0, 0]),
+        )
+        .expect("event indices should compute with explicit zero strata");
+        assert_eq!(implicit_strata, explicit_zero_strata);
+        assert!(cox_event_indices(vec![1.0, 2.0], vec![1, 0], Some(vec![0])).is_err());
 
         let scaled = scale_schoenfeld_residuals(
             vec![vec![1.0, 2.0], vec![3.0, 4.0]],
