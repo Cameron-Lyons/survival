@@ -81,7 +81,7 @@ fn compute_gradient_hessian_diag_fast(
     (gradient, hessian_diag)
 }
 
-#[allow(clippy::needless_range_loop)]
+#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 fn compute_gradient_hessian_diag_fast_into(
     data: &FastCoxData,
     beta: &[f64],
