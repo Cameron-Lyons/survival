@@ -29,6 +29,7 @@ impl FastCoxCvFold {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_train(
         &mut self,
         idx: usize,
@@ -47,6 +48,7 @@ impl FastCoxCvFold {
         self.train_offset.push(offset[idx]);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_test(
         &mut self,
         idx: usize,
@@ -575,8 +577,8 @@ pub(crate) fn fast_cox_cv_typed(
             let test_n = fold_counts[fold];
             let train_n = n_obs - test_n;
             let mut fold_data = FastCoxCvFold::with_capacity(train_n, test_n, n_vars);
-            for idx in 0..n_obs {
-                if fold_assign[idx] == fold {
+            for (idx, &assigned) in fold_assign.iter().enumerate() {
+                if assigned == fold {
                     fold_data.push_test(idx, x, n_vars, time, status, wt.as_ref(), offset.as_ref());
                 } else {
                     fold_data.push_train(

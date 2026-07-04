@@ -177,6 +177,7 @@ fn mean_and_covariance_into(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn efron_step_mean_and_covariance_into(
     step_s0: f64,
     s1: &[f64],

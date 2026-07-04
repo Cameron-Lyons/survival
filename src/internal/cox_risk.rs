@@ -170,7 +170,7 @@ pub(crate) fn precompute_cox_risk_set_cumsum(
     risk_data
 }
 
-#[allow(clippy::needless_range_loop)]
+#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 pub(crate) fn precompute_cox_risk_set_cumsum_into(
     x: &[f64],
     n: usize,
@@ -228,7 +228,7 @@ pub(crate) fn precompute_cox_risk_set_cumsum_into(
     }
 }
 
-#[allow(clippy::needless_range_loop)]
+#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 pub(crate) fn precompute_cox_risk_set_first_order_cumsum_into(
     x: &[f64],
     n: usize,
