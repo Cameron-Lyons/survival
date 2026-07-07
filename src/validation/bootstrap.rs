@@ -220,13 +220,12 @@ pub(crate) fn bootstrap_cox(
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
-    let default_weights: Vec<f64> = vec![1.0; n];
-    let weights = weights.unwrap_or(&default_weights);
     let mut sorted_indices: Vec<usize> = (0..n).collect();
     sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
     let sorted_time: Vec<f64> = sorted_indices.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = sorted_indices.iter().map(|&i| status[i]).collect();
-    let sorted_weights: Vec<f64> = sorted_indices.iter().map(|&i| weights[i]).collect();
+    let sorted_weights: Option<Vec<f64>> =
+        weights.map(|w| sorted_indices.iter().map(|&i| w[i]).collect());
     let mut sorted_covariates = Array2::zeros((n, nvar));
     for (new_idx, &orig_idx) in sorted_indices.iter().enumerate() {
         for var in 0..nvar {
@@ -235,14 +234,15 @@ pub(crate) fn bootstrap_cox(
     }
     let time_arr = Array1::from_vec(sorted_time.clone());
     let status_arr = Array1::from_vec(sorted_status.clone());
-    let weights_arr = Array1::from_vec(sorted_weights.clone());
-    let mut original_fit = CoxFitBuilder::new(time_arr, status_arr, sorted_covariates.clone())
-        .weights(weights_arr)
+    let mut original_builder = CoxFitBuilder::new(time_arr, status_arr, sorted_covariates.clone())
         .method(CoxMethod::Breslow)
         .max_iter(COX_MAX_ITER)
         .eps(1e-9)
-        .toler(1e-9)
-        .build()?;
+        .toler(1e-9);
+    if let Some(weights) = sorted_weights.clone() {
+        original_builder = original_builder.weights(Array1::from_vec(weights));
+    }
+    let mut original_fit = original_builder.build()?;
     original_fit.fit()?;
     let (original_beta, _, _, _, _, _, _, _) = original_fit.results();
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
@@ -252,7 +252,9 @@ pub(crate) fn bootstrap_cox(
             let indices = bootstrap_sample_indices(n, seed, b);
             let boot_time: Vec<f64> = indices.iter().map(|&i| sorted_time[i]).collect();
             let boot_status: Vec<i32> = indices.iter().map(|&i| sorted_status[i]).collect();
-            let boot_weights: Vec<f64> = indices.iter().map(|&i| sorted_weights[i]).collect();
+            let boot_weights: Option<Vec<f64>> = sorted_weights
+                .as_ref()
+                .map(|weights| indices.iter().map(|&i| weights[i]).collect());
             let mut boot_covariates = Array2::zeros((n, nvar));
             for (new_idx, &orig_idx) in indices.iter().enumerate() {
                 for var in 0..nvar {
@@ -263,8 +265,9 @@ pub(crate) fn bootstrap_cox(
             boot_indices.sort_by(|&a, &b| boot_time[b].total_cmp(&boot_time[a]));
             let resorted_time: Vec<f64> = boot_indices.iter().map(|&i| boot_time[i]).collect();
             let resorted_status: Vec<i32> = boot_indices.iter().map(|&i| boot_status[i]).collect();
-            let resorted_weights: Vec<f64> =
-                boot_indices.iter().map(|&i| boot_weights[i]).collect();
+            let resorted_weights: Option<Vec<f64>> = boot_weights
+                .as_ref()
+                .map(|weights| boot_indices.iter().map(|&i| weights[i]).collect());
             let mut resorted_covariates = Array2::zeros((n, nvar));
             for (new_idx, &orig_idx) in boot_indices.iter().enumerate() {
                 for var in 0..nvar {
@@ -273,15 +276,15 @@ pub(crate) fn bootstrap_cox(
             }
             let time_arr = Array1::from_vec(resorted_time);
             let status_arr = Array1::from_vec(resorted_status);
-            let weights_arr = Array1::from_vec(resorted_weights);
-            match CoxFitBuilder::new(time_arr, status_arr, resorted_covariates)
-                .weights(weights_arr)
+            let mut builder = CoxFitBuilder::new(time_arr, status_arr, resorted_covariates)
                 .method(CoxMethod::Breslow)
                 .max_iter(COX_MAX_ITER)
                 .eps(1e-9)
-                .toler(1e-9)
-                .build()
-            {
+                .toler(1e-9);
+            if let Some(weights) = resorted_weights {
+                builder = builder.weights(Array1::from_vec(weights));
+            }
+            match builder.build() {
                 Ok(mut fit) => {
                     if fit.fit().is_ok() {
                         let (beta, _, _, _, _, _, _, _) = fit.results();
@@ -571,8 +574,17 @@ pub fn bootstrap_survreg_ci(
 
 #[cfg(test)]
 mod tests {
-    use super::{BootstrapConfig, bootstrap_survreg, canonical_survreg_bootstrap_distribution};
+    use super::{
+        BootstrapConfig, bootstrap_cox, bootstrap_survreg, canonical_survreg_bootstrap_distribution,
+    };
     use ndarray::Array2;
+
+    fn assert_close_slice(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
 
     #[test]
     fn test_survreg_bootstrap_distribution_aliases_are_explicit() {
@@ -601,6 +613,39 @@ mod tests {
             Some("loglogistic")
         );
         assert_eq!(canonical_survreg_bootstrap_distribution("mystery"), None);
+    }
+
+    #[test]
+    fn test_bootstrap_cox_unweighted_matches_unit_weights() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let status = vec![1, 1, 0, 1, 0, 1];
+        let covariates =
+            Array2::from_shape_vec((1, 6), vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6]).unwrap();
+        let weights = vec![1.0; time.len()];
+        let config = BootstrapConfig {
+            n_bootstrap: 8,
+            confidence_level: 0.9,
+            seed: Some(123),
+        };
+
+        let unweighted = bootstrap_cox(&time, &status, &covariates, None, &config).unwrap();
+        let weighted = bootstrap_cox(&time, &status, &covariates, Some(&weights), &config).unwrap();
+
+        assert_close_slice(&unweighted.coefficients, &weighted.coefficients);
+        assert_close_slice(&unweighted.std_errors, &weighted.std_errors);
+        assert_close_slice(&unweighted.ci_lower, &weighted.ci_lower);
+        assert_close_slice(&unweighted.ci_upper, &weighted.ci_upper);
+        assert_eq!(
+            unweighted.bootstrap_samples.len(),
+            weighted.bootstrap_samples.len()
+        );
+        for (unweighted_sample, weighted_sample) in unweighted
+            .bootstrap_samples
+            .iter()
+            .zip(&weighted.bootstrap_samples)
+        {
+            assert_close_slice(unweighted_sample, weighted_sample);
+        }
     }
 
     #[test]
