@@ -340,6 +340,42 @@ fn test_two_sided_conformal_predict() {
 }
 
 #[test]
+fn test_two_sided_conformal_predict_default_censor_scores_match_zeros() {
+    let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    let status = vec![1, 1, 0, 1, 0, 1, 1, 0, 1, 1];
+    let predicted = vec![1.1, 1.9, 2.8, 4.2, 4.8, 6.1, 6.9, 7.8, 9.2, 9.8];
+
+    let calibration = two_sided_conformal_calibrate(time, status, predicted, Some(0.9)).unwrap();
+
+    let predicted_new = vec![3.0, 5.0, 7.0, 9.0];
+    let default_result =
+        two_sided_conformal_predict(&calibration, predicted_new.clone(), None).unwrap();
+    let explicit_zero_result = two_sided_conformal_predict(
+        &calibration,
+        predicted_new.clone(),
+        Some(vec![0.0; predicted_new.len()]),
+    )
+    .unwrap();
+
+    assert_eq!(default_result.lower_bound, explicit_zero_result.lower_bound);
+    assert_eq!(default_result.upper_bound, explicit_zero_result.upper_bound);
+    assert_eq!(
+        default_result.predicted_time,
+        explicit_zero_result.predicted_time
+    );
+    assert_eq!(
+        default_result.is_two_sided,
+        explicit_zero_result.is_two_sided
+    );
+    assert_eq!(default_result.n_two_sided, explicit_zero_result.n_two_sided);
+    assert_eq!(default_result.n_one_sided, explicit_zero_result.n_one_sided);
+    assert_eq!(
+        default_result.coverage_level,
+        explicit_zero_result.coverage_level
+    );
+}
+
+#[test]
 fn test_two_sided_conformal_survival() {
     let time_calib = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
     let status_calib = vec![1, 1, 0, 1, 0, 1, 1, 0, 1, 1];
