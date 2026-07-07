@@ -20,7 +20,10 @@ fn validate_expected_survival(values: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
-fn validate_weights(weights: &[f64], n: usize) -> PyResult<()> {
+fn validate_weights(weights: Option<&[f64]>, n: usize) -> PyResult<()> {
+    let Some(weights) = weights else {
+        return Ok(());
+    };
     if weights.len() != n {
         return Err(value_error(format!(
             "weights length mismatch: expected {n}, got {}",
@@ -37,11 +40,16 @@ fn validate_weights(weights: &[f64], n: usize) -> PyResult<()> {
     Ok(())
 }
 
+#[inline]
+fn case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
+    weights.map_or(1.0, |w| w[index])
+}
+
 fn validate_net_survival_inputs(
     time: &[f64],
     status: &[i32],
     expected_survival: &[f64],
-    weights: &[f64],
+    weights: Option<&[f64]>,
 ) -> PyResult<()> {
     let n = time.len();
     if n == 0 || status.len() != n || expected_survival.len() != n {
@@ -141,27 +149,42 @@ pub fn net_survival(
     method: NetSurvivalMethod,
     weights: Option<Vec<f64>>,
 ) -> PyResult<NetSurvivalResult> {
-    let n = time.len();
-    let wt = weights.unwrap_or_else(|| vec![1.0; n]);
-    validate_net_survival_inputs(&time, &status, &expected_survival, &wt)?;
+    let weights_ref = weights.as_deref();
+    validate_net_survival_inputs(&time, &status, &expected_survival, weights_ref)?;
 
     let mut unique_times: Vec<f64> = time.clone();
     unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
 
     match method {
-        NetSurvivalMethod::Pohar_Perme => {
-            pohar_perme_estimator(&time, &status, &expected_survival, &wt, &unique_times)
-        }
-        NetSurvivalMethod::EdererII => {
-            ederer_ii_estimator(&time, &status, &expected_survival, &wt, &unique_times)
-        }
-        NetSurvivalMethod::EdererI => {
-            ederer_i_estimator(&time, &status, &expected_survival, &wt, &unique_times)
-        }
-        NetSurvivalMethod::Hakulinen => {
-            hakulinen_estimator(&time, &status, &expected_survival, &wt, &unique_times)
-        }
+        NetSurvivalMethod::Pohar_Perme => pohar_perme_estimator(
+            &time,
+            &status,
+            &expected_survival,
+            weights_ref,
+            &unique_times,
+        ),
+        NetSurvivalMethod::EdererII => ederer_ii_estimator(
+            &time,
+            &status,
+            &expected_survival,
+            weights_ref,
+            &unique_times,
+        ),
+        NetSurvivalMethod::EdererI => ederer_i_estimator(
+            &time,
+            &status,
+            &expected_survival,
+            weights_ref,
+            &unique_times,
+        ),
+        NetSurvivalMethod::Hakulinen => hakulinen_estimator(
+            &time,
+            &status,
+            &expected_survival,
+            weights_ref,
+            &unique_times,
+        ),
     }
 }
 
@@ -169,7 +192,7 @@ fn pohar_perme_estimator(
     time: &[f64],
     status: &[i32],
     expected_survival: &[f64],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     unique_times: &[f64],
 ) -> PyResult<NetSurvivalResult> {
     let n = time.len();
@@ -197,7 +220,7 @@ fn pohar_perme_estimator(
 
         for &i in &at_risk_set {
             if time[i] >= t {
-                let w_i = weights[i] / expected_survival[i].max(1e-10);
+                let w_i = case_weight(weights, i) / expected_survival[i].max(1e-10);
                 at_risk_weighted += w_i;
             }
         }
@@ -205,7 +228,7 @@ fn pohar_perme_estimator(
         while time_idx < n && time[indices[time_idx]] <= t {
             let idx = indices[time_idx];
             if status[idx] == 1 && (time[idx] - t).abs() < 1e-10 {
-                let w_i = weights[idx] / expected_survival[idx].max(1e-10);
+                let w_i = case_weight(weights, idx) / expected_survival[idx].max(1e-10);
                 d_weighted += w_i;
                 events_at_t += 1;
             }
@@ -251,7 +274,7 @@ fn ederer_ii_estimator(
     time: &[f64],
     status: &[i32],
     expected_survival: &[f64],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     unique_times: &[f64],
 ) -> PyResult<NetSurvivalResult> {
     let n = time.len();
@@ -287,15 +310,16 @@ fn ederer_ii_estimator(
             var_term += hazard / (1.0 - hazard) / at_risk as f64;
         }
 
-        let exp_surv_at_t: f64 = (0..n)
-            .filter(|&i| time[i] >= t)
-            .map(|i| expected_survival[i] * weights[i])
-            .sum::<f64>()
-            / (0..n)
-                .filter(|&i| time[i] >= t)
-                .map(|i| weights[i])
-                .sum::<f64>()
-                .max(1e-10);
+        let mut weighted_expected_survival = 0.0;
+        let mut total_weight = 0.0;
+        for i in 0..n {
+            if time[i] >= t {
+                let weight = case_weight(weights, i);
+                weighted_expected_survival += expected_survival[i] * weight;
+                total_weight += weight;
+            }
+        }
+        let exp_surv_at_t = weighted_expected_survival / total_weight.max(1e-10);
 
         let net_surv = if exp_surv_at_t > 0.0 {
             obs_surv / exp_surv_at_t
@@ -334,17 +358,19 @@ fn ederer_i_estimator(
     time: &[f64],
     status: &[i32],
     expected_survival: &[f64],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     unique_times: &[f64],
 ) -> PyResult<NetSurvivalResult> {
     let n = time.len();
 
-    let initial_exp_surv: f64 = expected_survival
-        .iter()
-        .zip(weights.iter())
-        .map(|(&e, &w)| e * w)
-        .sum::<f64>()
-        / weights.iter().sum::<f64>().max(1e-10);
+    let mut weighted_expected_survival = 0.0;
+    let mut total_weight = 0.0;
+    for (idx, &expected) in expected_survival.iter().enumerate() {
+        let weight = case_weight(weights, idx);
+        weighted_expected_survival += expected * weight;
+        total_weight += weight;
+    }
+    let initial_exp_surv = weighted_expected_survival / total_weight.max(1e-10);
 
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
@@ -414,7 +440,7 @@ fn hakulinen_estimator(
     time: &[f64],
     status: &[i32],
     expected_survival: &[f64],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     unique_times: &[f64],
 ) -> PyResult<NetSurvivalResult> {
     ederer_ii_estimator(time, status, expected_survival, weights, unique_times).map(|mut result| {
@@ -465,6 +491,28 @@ mod tests {
     use super::*;
     use crate::tests::common::initialize_python;
 
+    fn assert_close_slice(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
+
+    fn assert_net_survival_close(actual: &NetSurvivalResult, expected: &NetSurvivalResult) {
+        assert_eq!(actual.time_points, expected.time_points);
+        assert_eq!(actual.n_at_risk, expected.n_at_risk);
+        assert_eq!(actual.n_events, expected.n_events);
+        assert_eq!(actual.method, expected.method);
+        assert_close_slice(&actual.net_survival, &expected.net_survival);
+        assert_close_slice(&actual.net_survival_se, &expected.net_survival_se);
+        assert_close_slice(&actual.net_survival_lower, &expected.net_survival_lower);
+        assert_close_slice(&actual.net_survival_upper, &expected.net_survival_upper);
+        assert_close_slice(
+            &actual.cumulative_excess_hazard,
+            &expected.cumulative_excess_hazard,
+        );
+    }
+
     #[test]
     fn test_pohar_perme_basic() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -482,6 +530,41 @@ mod tests {
 
         assert!(!result.time_points.is_empty());
         assert!(result.net_survival.iter().all(|&s| s >= 0.0));
+    }
+
+    #[test]
+    fn net_survival_unweighted_matches_unit_weights() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 0, 1];
+        let expected_survival = vec![0.98, 0.96, 0.94, 0.92, 0.90];
+        let weights = vec![1.0; time.len()];
+        let methods = [
+            NetSurvivalMethod::Pohar_Perme,
+            NetSurvivalMethod::EdererI,
+            NetSurvivalMethod::EdererII,
+            NetSurvivalMethod::Hakulinen,
+        ];
+
+        for method in methods {
+            let unweighted = net_survival(
+                time.clone(),
+                status.clone(),
+                expected_survival.clone(),
+                method,
+                None,
+            )
+            .unwrap();
+            let weighted = net_survival(
+                time.clone(),
+                status.clone(),
+                expected_survival.clone(),
+                method,
+                Some(weights.clone()),
+            )
+            .unwrap();
+
+            assert_net_survival_close(&unweighted, &weighted);
+        }
     }
 
     #[test]
