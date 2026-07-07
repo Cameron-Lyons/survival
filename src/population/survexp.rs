@@ -59,6 +59,18 @@ fn validate_sex(sex: &[i32], n: usize) -> PyResult<()> {
     Ok(())
 }
 
+fn validate_optional_sex(sex: Option<&[i32]>, n: usize) -> PyResult<()> {
+    if let Some(values) = sex {
+        validate_sex(values, n)?;
+    }
+    Ok(())
+}
+
+#[inline]
+fn sex_at(sex: Option<&[i32]>, index: usize) -> i32 {
+    sex.map_or(0, |values| values[index])
+}
+
 fn validate_eval_times(eval_times: &[f64]) -> PyResult<()> {
     validate_finite(eval_times, "times")?;
     validate_non_negative(eval_times, "times")?;
@@ -104,8 +116,8 @@ pub fn survexp(
     let n = time.len();
     validate_survexp_inputs(&time, &age, &year)?;
 
-    let sex_vec = sex.unwrap_or_else(|| vec![0; n]);
-    validate_sex(&sex_vec, n)?;
+    let sex = sex.as_deref();
+    validate_optional_sex(sex, n)?;
 
     let calc_method = method.unwrap_or("hakulinen");
     if !["hakulinen", "conditional", "individual"].contains(&calc_method) {
@@ -137,10 +149,10 @@ pub fn survexp(
     validate_eval_times(&eval_times)?;
 
     match calc_method {
-        "hakulinen" => compute_hakulinen(&time, &age, &year, &sex_vec, ratetable, &eval_times),
-        "conditional" => compute_conditional(&time, &age, &year, &sex_vec, ratetable, &eval_times),
-        "individual" => compute_individual(&time, &age, &year, &sex_vec, ratetable, &eval_times),
-        _ => compute_hakulinen(&time, &age, &year, &sex_vec, ratetable, &eval_times),
+        "hakulinen" => compute_hakulinen(&time, &age, &year, sex, ratetable, &eval_times),
+        "conditional" => compute_conditional(&time, &age, &year, sex, ratetable, &eval_times),
+        "individual" => compute_individual(&time, &age, &year, sex, ratetable, &eval_times),
+        _ => compute_hakulinen(&time, &age, &year, sex, ratetable, &eval_times),
     }
 }
 
@@ -149,7 +161,7 @@ fn compute_hakulinen(
     time: &[f64],
     age: &[f64],
     year: &[f64],
-    sex: &[i32],
+    sex: Option<&[i32]>,
     ratetable: &RateTable,
     eval_times: &[f64],
 ) -> PyResult<SurvExpResult> {
@@ -163,10 +175,10 @@ fn compute_hakulinen(
                 .map(|i| {
                     let age_at_eval = age[i] + eval_t;
                     let exp_surv = ratetable
-                        .expected_survival(age[i], age_at_eval, year[i], Some(sex[i]))
+                        .expected_survival(age[i], age_at_eval, year[i], Some(sex_at(sex, i)))
                         .unwrap_or(1.0);
                     let exp_cumhaz = ratetable
-                        .cumulative_hazard(age[i], age_at_eval, year[i], Some(sex[i]))
+                        .cumulative_hazard(age[i], age_at_eval, year[i], Some(sex_at(sex, i)))
                         .unwrap_or(0.0);
                     (exp_surv, exp_cumhaz, 1.0)
                 })
@@ -203,7 +215,7 @@ fn compute_conditional(
     time: &[f64],
     age: &[f64],
     year: &[f64],
-    sex: &[i32],
+    sex: Option<&[i32]>,
     ratetable: &RateTable,
     eval_times: &[f64],
 ) -> PyResult<SurvExpResult> {
@@ -231,7 +243,7 @@ fn compute_conditional(
             let year_start = year[i] + prev_time / 365.25;
 
             let interval_hazard = ratetable
-                .cumulative_hazard(age_start, age_end, year_start, Some(sex[i]))
+                .cumulative_hazard(age_start, age_end, year_start, Some(sex_at(sex, i)))
                 .unwrap_or(0.0);
             total_hazard += interval_hazard;
         }
@@ -277,7 +289,7 @@ fn compute_individual(
     time: &[f64],
     age: &[f64],
     year: &[f64],
-    sex: &[i32],
+    sex: Option<&[i32]>,
     ratetable: &RateTable,
     eval_times: &[f64],
 ) -> PyResult<SurvExpResult> {
@@ -292,7 +304,7 @@ fn compute_individual(
                 .map(|&eval_t| {
                     let age_at_eval = age[i] + eval_t;
                     ratetable
-                        .expected_survival(age[i], age_at_eval, year[i], Some(sex[i]))
+                        .expected_survival(age[i], age_at_eval, year[i], Some(sex_at(sex, i)))
                         .unwrap_or(1.0)
                 })
                 .collect()
@@ -347,15 +359,15 @@ pub fn survexp_individual(
     let n = time.len();
     validate_survexp_inputs(&time, &age, &year)?;
 
-    let sex_vec = sex.unwrap_or_else(|| vec![0; n]);
-    validate_sex(&sex_vec, n)?;
+    let sex = sex.as_deref();
+    validate_optional_sex(sex, n)?;
 
     let mut expected = Vec::with_capacity(n);
 
     for i in 0..n {
         let age_end = age[i] + time[i];
         let exp_s = ratetable
-            .expected_survival(age[i], age_end, year[i], Some(sex_vec[i]))
+            .expected_survival(age[i], age_end, year[i], Some(sex_at(sex, i)))
             .unwrap_or(1.0);
         expected.push(exp_s);
     }
@@ -404,6 +416,52 @@ mod tests {
 
         assert_eq!(result.n, 0);
         assert!(result.time.is_empty());
+    }
+
+    #[test]
+    fn survexp_default_sex_matches_explicit_zero_sex() {
+        let rt = create_test_ratetable();
+
+        let time = vec![365.0, 730.0, 1095.0];
+        let age = vec![18250.0, 21900.0, 25550.0];
+        let year = vec![2000.0, 2000.0, 2000.0];
+        let times = vec![365.0, 730.0, 1095.0];
+
+        for method in ["hakulinen", "conditional", "individual"] {
+            let default_result = survexp(
+                time.clone(),
+                age.clone(),
+                year.clone(),
+                &rt,
+                None,
+                Some(times.clone()),
+                Some(method),
+            )
+            .unwrap();
+            let explicit_zero_result = survexp(
+                time.clone(),
+                age.clone(),
+                year.clone(),
+                &rt,
+                Some(vec![0; time.len()]),
+                Some(times.clone()),
+                Some(method),
+            )
+            .unwrap();
+
+            assert_eq!(default_result.time, explicit_zero_result.time);
+            assert_eq!(default_result.surv, explicit_zero_result.surv);
+            assert_eq!(default_result.n_risk, explicit_zero_result.n_risk);
+            assert_eq!(default_result.cumhaz, explicit_zero_result.cumhaz);
+            assert_eq!(default_result.method, explicit_zero_result.method);
+            assert_eq!(default_result.n, explicit_zero_result.n);
+        }
+
+        let default_individual =
+            survexp_individual(time.clone(), age.clone(), year.clone(), &rt, None).unwrap();
+        let explicit_zero_individual =
+            survexp_individual(time, age, year, &rt, Some(vec![0; 3])).unwrap();
+        assert_eq!(default_individual, explicit_zero_individual);
     }
 
     #[test]
