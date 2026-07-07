@@ -93,6 +93,16 @@ fn sorted_indices_by_time(time: &[f64]) -> Vec<usize> {
     indices
 }
 
+#[inline]
+fn observation_weight(weights: Option<&[f64]>, index: usize) -> f64 {
+    weights.map_or(1.0, |wts| wts[index])
+}
+
+#[inline]
+fn total_observation_weight(weights: Option<&[f64]>, n: usize) -> f64 {
+    weights.map_or(n as f64, sum_f64)
+}
+
 pub fn nelson_aalen(
     time: &[f64],
     status: &[i32],
@@ -111,15 +121,13 @@ pub fn nelson_aalen(
             n_events: vec![],
         };
     }
-    let default_weights: Vec<f64> = vec![1.0; n];
-    let weights = weights.unwrap_or(&default_weights);
     let indices = sorted_indices_by_time(time);
     let mut unique_times: Vec<f64> = Vec::new();
     let mut events_at_time: Vec<f64> = Vec::new();
     let mut at_risk: Vec<f64> = Vec::new();
     let mut n_events_vec: Vec<usize> = Vec::new();
     let mut n_risk_vec: Vec<usize> = Vec::new();
-    let mut total_weight: f64 = sum_f64(weights);
+    let mut total_weight = total_observation_weight(weights, n);
     let mut total_count = n;
     let mut i = 0;
     while i < n {
@@ -130,11 +138,12 @@ pub fn nelson_aalen(
         let mut censored_count = 0usize;
         while i < n && same_time(time[indices[i]], current_time) {
             let idx = indices[i];
+            let weight = observation_weight(weights, idx);
             if status[idx] == 1 {
-                events += weights[idx];
+                events += weight;
                 event_count += 1;
             } else {
-                censored_weight += weights[idx];
+                censored_weight += weight;
                 censored_count += 1;
             }
             i += 1;
@@ -344,15 +353,13 @@ fn kaplan_meier(
             n_events: vec![],
         };
     }
-    let default_weights: Vec<f64> = vec![1.0; n];
-    let weights = weights.unwrap_or(&default_weights);
     let indices = sorted_indices_by_time(time);
     let mut unique_times: Vec<f64> = Vec::new();
     let mut events_at_time: Vec<f64> = Vec::new();
     let mut at_risk: Vec<f64> = Vec::new();
     let mut n_events_vec: Vec<usize> = Vec::new();
     let mut n_risk_vec: Vec<usize> = Vec::new();
-    let mut total_weight: f64 = sum_f64(weights);
+    let mut total_weight = total_observation_weight(weights, n);
     let mut total_count = n;
     let mut i = 0;
     while i < n {
@@ -363,10 +370,11 @@ fn kaplan_meier(
         let mut removed_count = 0usize;
         while i < n && same_time(time[indices[i]], current_time) {
             let idx = indices[i];
-            removed_weight += weights[idx];
+            let weight = observation_weight(weights, idx);
+            removed_weight += weight;
             removed_count += 1;
             if status[idx] == 1 {
-                events += weights[idx];
+                events += weight;
                 event_count += 1;
             }
             i += 1;
@@ -435,6 +443,13 @@ mod tests {
     use super::*;
     use crate::constants::TIME_EPSILON;
 
+    fn assert_vec_close(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
+
     #[test]
     fn nelson_aalen_empty_input() {
         let result = nelson_aalen(&[], &[], None, 0.95);
@@ -495,6 +510,24 @@ mod tests {
     }
 
     #[test]
+    fn nelson_aalen_unweighted_matches_unit_weights() {
+        let time = vec![1.0, 2.0, 2.0, 3.0];
+        let status = vec![1, 0, 1, 1];
+        let weights = vec![1.0; time.len()];
+
+        let unweighted = nelson_aalen(&time, &status, None, 0.95);
+        let weighted = nelson_aalen(&time, &status, Some(&weights), 0.95);
+
+        assert_eq!(unweighted.time, weighted.time);
+        assert_eq!(unweighted.n_risk, weighted.n_risk);
+        assert_eq!(unweighted.n_events, weighted.n_events);
+        assert_vec_close(&unweighted.cumulative_hazard, &weighted.cumulative_hazard);
+        assert_vec_close(&unweighted.variance, &weighted.variance);
+        assert_vec_close(&unweighted.ci_lower, &weighted.ci_lower);
+        assert_vec_close(&unweighted.ci_upper, &weighted.ci_upper);
+    }
+
+    #[test]
     fn nelson_aalen_groups_near_tied_event_times() {
         let time = vec![1.0 + TIME_EPSILON / 2.0, 2.0, 1.0];
         let status = vec![1, 0, 1];
@@ -505,6 +538,23 @@ mod tests {
         assert_eq!(result.n_events, vec![2]);
         assert!((result.cumulative_hazard[0] - 2.0 / 3.0).abs() < 1e-10);
         assert!((result.variance[0] - 2.0 / 9.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn kaplan_meier_unweighted_matches_unit_weights() {
+        let time = vec![1.0, 2.0, 2.0, 3.0];
+        let status = vec![1, 0, 1, 1];
+        let weights = vec![1.0; time.len()];
+
+        let unweighted = kaplan_meier(&time, &status, None, 0.95);
+        let weighted = kaplan_meier(&time, &status, Some(&weights), 0.95);
+
+        assert_eq!(unweighted.time, weighted.time);
+        assert_eq!(unweighted.n_risk, weighted.n_risk);
+        assert_eq!(unweighted.n_events, weighted.n_events);
+        assert_vec_close(&unweighted.survival, &weighted.survival);
+        assert_vec_close(&unweighted.ci_lower, &weighted.ci_lower);
+        assert_vec_close(&unweighted.ci_upper, &weighted.ci_upper);
     }
 
     #[test]
