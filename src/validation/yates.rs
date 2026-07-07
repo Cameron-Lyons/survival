@@ -67,15 +67,17 @@ pub fn yates(
     validate_no_nan(&predictions, "predictions")?;
     validate_finite(&predictions, "predictions")?;
 
-    let wts = weights.unwrap_or_else(|| vec![1.0; n]);
-    if wts.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "weights must have same length as predictions",
-        ));
+    let weights_ref = weights.as_deref();
+    if let Some(wts) = weights_ref {
+        if wts.len() != n {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "weights must have same length as predictions",
+            ));
+        }
+        validate_no_nan(wts, "weights")?;
+        validate_finite(wts, "weights")?;
+        validate_non_negative(wts, "weights")?;
     }
-    validate_no_nan(&wts, "weights")?;
-    validate_finite(&wts, "weights")?;
-    validate_non_negative(&wts, "weights")?;
 
     let conf = conf_level.unwrap_or(0.95);
     let z = z_score(conf)?;
@@ -115,7 +117,7 @@ pub fn yates(
         let mut sum_wx = 0.0;
 
         for &i in indices {
-            let w = wts[i];
+            let w = weights_ref.map_or(1.0, |wts| wts[i]);
             let x = predictions[i];
             sum_w += w;
             sum_wx += w * x;
@@ -131,7 +133,7 @@ pub fn yates(
 
         let mut sum_w2_dev2 = 0.0;
         for &i in indices {
-            let w = wts[i];
+            let w = weights_ref.map_or(1.0, |wts| wts[i]);
             let dev = predictions[i] - mean;
             sum_w2_dev2 += w * w * dev * dev;
         }
@@ -404,6 +406,30 @@ mod tests {
         let result = yates(predictions, factor, Some(weights), None).unwrap();
 
         assert!((result.means[0] - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_yates_unweighted_matches_unit_weights() {
+        let predictions = vec![1.0, 2.0, 4.0, 8.0];
+        let factor = vec![
+            "A".to_string(),
+            "A".to_string(),
+            "B".to_string(),
+            "B".to_string(),
+        ];
+        let weights = vec![1.0; predictions.len()];
+
+        let unweighted = yates(predictions.clone(), factor.clone(), None, Some(0.95)).unwrap();
+        let weighted = yates(predictions, factor, Some(weights), Some(0.95)).unwrap();
+
+        assert_eq!(unweighted.levels, weighted.levels);
+        assert_eq!(unweighted.n, weighted.n);
+        for i in 0..unweighted.levels.len() {
+            assert!((unweighted.means[i] - weighted.means[i]).abs() < 1e-12);
+            assert!((unweighted.se[i] - weighted.se[i]).abs() < 1e-12);
+            assert!((unweighted.lower[i] - weighted.lower[i]).abs() < 1e-12);
+            assert!((unweighted.upper[i] - weighted.upper[i]).abs() < 1e-12);
+        }
     }
 
     #[test]
