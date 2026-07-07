@@ -93,16 +93,40 @@ pub fn marginal_recurrent_model(
     )?;
     validate_solver_controls(max_iter, tol)?;
 
+    marginal_recurrent_model_impl(
+        &subject_id,
+        Some(&start_time),
+        &stop_time,
+        &event_status,
+        &x,
+        n_obs,
+        n_vars,
+        method,
+        max_iter,
+        tol,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn marginal_recurrent_model_impl(
+    subject_id: &[usize],
+    start_time: Option<&[f64]>,
+    stop_time: &[f64],
+    event_status: &[i32],
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    method: &MarginalMethod,
+    max_iter: usize,
+    tol: f64,
+) -> PyResult<MarginalModelResult> {
     let n_events = event_status.iter().filter(|&&s| s == 1).count();
-    let n_subjects = unique_subject_count(&subject_id);
+    let n_subjects = unique_subject_count(subject_id);
     let mean_events = n_events as f64 / n_subjects.max(1) as f64;
 
     let mut beta = vec![0.0; n_vars];
 
-    let time = match method {
-        MarginalMethod::WeiLinWeissfeld => stop_time.clone(),
-        MarginalMethod::AndersenGill => stop_time.clone(),
-    };
+    let time = stop_time;
     let mut indices: Vec<usize> = (0..n_obs).collect();
     indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
 
@@ -138,7 +162,8 @@ pub fn marginal_recurrent_model(
                     }
                 }
                 MarginalMethod::WeiLinWeissfeld => {
-                    if time[i] >= start_time[i] {
+                    let start = start_time.map_or(0.0, |values| values[i]);
+                    if time[i] >= start {
                         risk_sum += exp_eta[i];
                         for j in 0..n_vars {
                             weighted_x[j] += exp_eta[i] * x[i * n_vars + j];
@@ -176,14 +201,14 @@ pub fn marginal_recurrent_model(
         prev_loglik = loglik;
     }
 
-    let (naive_se, info_matrix) = compute_naive_se(&time, &event_status, &beta, &x, n_obs, n_vars);
+    let (naive_se, info_matrix) = compute_naive_se(time, event_status, &beta, x, n_obs, n_vars);
 
     let robust_se = compute_robust_se(
-        &subject_id,
-        &time,
-        &event_status,
+        subject_id,
+        time,
+        event_status,
         &beta,
-        &x,
+        x,
         n_obs,
         n_vars,
         &info_matrix,
@@ -377,13 +402,12 @@ pub fn wei_lin_weissfeld(
     n_vars: usize,
 ) -> PyResult<MarginalModelResult> {
     validate_event_time_design(&subject_id, &event_time, &event_status, &x, n_obs, n_vars)?;
-    let start_time = vec![0.0; n_obs];
-    marginal_recurrent_model(
-        subject_id,
-        start_time,
-        event_time,
-        event_status,
-        x,
+    marginal_recurrent_model_impl(
+        &subject_id,
+        None,
+        &event_time,
+        &event_status,
+        &x,
         n_obs,
         n_vars,
         &MarginalMethod::WeiLinWeissfeld,
@@ -410,6 +434,53 @@ mod tests {
         assert_eq!(result.coefficients.len(), 1);
         assert_eq!(result.n_events, 4);
         assert!(result.robust_se[0].is_finite());
+    }
+
+    #[test]
+    fn wei_lin_weissfeld_matches_explicit_zero_start_times() {
+        let subject_id = vec![0, 0, 1, 1, 2];
+        let event_time = vec![5.0, 10.0, 3.0, 8.0, 7.0];
+        let event_status = vec![1, 1, 1, 0, 1];
+        let x = vec![1.0, 0.5, 1.0, 0.3, 0.0];
+
+        let wrapper = wei_lin_weissfeld(
+            subject_id.clone(),
+            event_time.clone(),
+            event_status.clone(),
+            x.clone(),
+            5,
+            1,
+        )
+        .unwrap();
+        let explicit_zero = marginal_recurrent_model(
+            subject_id,
+            vec![0.0; event_time.len()],
+            event_time,
+            event_status,
+            x,
+            5,
+            1,
+            &MarginalMethod::WeiLinWeissfeld,
+            100,
+            1e-6,
+        )
+        .unwrap();
+
+        assert_eq!(wrapper.coefficients, explicit_zero.coefficients);
+        assert_eq!(wrapper.robust_se, explicit_zero.robust_se);
+        assert_eq!(wrapper.naive_se, explicit_zero.naive_se);
+        assert_eq!(wrapper.hazard_ratios, explicit_zero.hazard_ratios);
+        assert_eq!(wrapper.hr_ci_lower, explicit_zero.hr_ci_lower);
+        assert_eq!(wrapper.hr_ci_upper, explicit_zero.hr_ci_upper);
+        assert_eq!(wrapper.log_likelihood, explicit_zero.log_likelihood);
+        assert_eq!(wrapper.score_test, explicit_zero.score_test);
+        assert_eq!(wrapper.wald_test, explicit_zero.wald_test);
+        assert_eq!(wrapper.n_events, explicit_zero.n_events);
+        assert_eq!(wrapper.n_subjects, explicit_zero.n_subjects);
+        assert_eq!(
+            wrapper.mean_events_per_subject,
+            explicit_zero.mean_events_per_subject
+        );
     }
 
     #[test]
