@@ -170,6 +170,19 @@ pub(crate) fn precompute_cox_risk_set_cumsum(
     risk_data
 }
 
+pub(crate) fn precompute_cox_unit_risk_set_cumsum(
+    x: &[f64],
+    n: usize,
+    p: usize,
+    time: &[f64],
+    weights: Option<&[f64]>,
+) -> CoxRiskSetData {
+    let mut risk_data = CoxRiskSetData::with_capacity(n, p);
+    let mut scratch = CoxRiskSetScratch::with_capacity(n, p);
+    precompute_cox_unit_risk_set_cumsum_into(x, n, p, time, weights, &mut risk_data, &mut scratch);
+    risk_data
+}
+
 #[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 pub(crate) fn precompute_cox_risk_set_cumsum_into(
     x: &[f64],
@@ -195,6 +208,67 @@ pub(crate) fn precompute_cox_risk_set_cumsum_into(
     let mut running_exp = 0.0;
     for (pos, &idx) in scratch.sorted_indices.iter().enumerate() {
         let weighted_exp = weights[idx] * exp_eta[idx];
+        running_exp += weighted_exp;
+
+        for col in 0..p {
+            let xij = x[idx * p + col];
+            scratch.running_x[col] += weighted_exp * xij;
+            scratch.running_x_sq[col] += weighted_exp * xij * xij;
+        }
+
+        risk_data.cumsum_exp_eta[pos] = running_exp;
+        let row_start = pos * p;
+        risk_data.cumsum_weighted_x[row_start..row_start + p].copy_from_slice(&scratch.running_x);
+        risk_data.cumsum_weighted_x_sq[row_start..row_start + p]
+            .copy_from_slice(&scratch.running_x_sq);
+    }
+
+    let mut start = 0;
+    while start < n {
+        let current_time = time[scratch.sorted_indices[start]];
+        let mut end = start + 1;
+        while end < n
+            && crate::constants::same_time(time[scratch.sorted_indices[end]], current_time)
+        {
+            end += 1;
+        }
+
+        let pos = end - 1;
+        for &idx in &scratch.sorted_indices[start..end] {
+            risk_data.risk_set_pos[idx] = pos;
+        }
+        start = end;
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn precompute_cox_unit_risk_set_cumsum_into(
+    x: &[f64],
+    n: usize,
+    p: usize,
+    time: &[f64],
+    weights: Option<&[f64]>,
+    risk_data: &mut CoxRiskSetData,
+    scratch: &mut CoxRiskSetScratch,
+) {
+    debug_assert_eq!(x.len(), n * p);
+    debug_assert_eq!(time.len(), n);
+    debug_assert!(weights.is_none_or(|values| values.len() == n));
+
+    risk_data.resize_for(n, p);
+    scratch.reset_for(n, p);
+    scratch
+        .sorted_indices
+        .sort_by(|&a, &b| time[b].total_cmp(&time[a]).then_with(|| a.cmp(&b)));
+
+    let mut running_exp = 0.0;
+    for (pos, &idx) in scratch.sorted_indices.iter().enumerate() {
+        let weighted_exp = weights.map_or(
+            1.0,
+            |values| {
+                if values[idx] > 0.0 { values[idx] } else { 0.0 }
+            },
+        );
         running_exp += weighted_exp;
 
         for col in 0..p {
@@ -355,6 +429,22 @@ mod tests {
         assert_eq!(risk_data.risk_set_pos, vec![2, 1, 1]);
         assert_eq!(risk_data.cumsum_weighted_x[2..4], [5.0, 50.0]);
         assert_eq!(risk_data.cumsum_weighted_x_sq[2..4], [13.0, 1300.0]);
+    }
+
+    #[test]
+    fn precompute_cox_unit_risk_set_cumsum_matches_explicit_unit_weights() {
+        let x = [1.0, 10.0, 2.0, 20.0, 3.0, 30.0];
+        let time = [1.0, 2.0, 2.0];
+        let weights = [1.0, 1.0, 1.0];
+        let exp_eta = [1.0, 1.0, 1.0];
+
+        let explicit = precompute_cox_risk_set_cumsum(&x, 3, 2, &time, &weights, &exp_eta);
+        let implicit = precompute_cox_unit_risk_set_cumsum(&x, 3, 2, &time, None);
+
+        assert_eq!(implicit.cumsum_exp_eta, explicit.cumsum_exp_eta);
+        assert_eq!(implicit.cumsum_weighted_x, explicit.cumsum_weighted_x);
+        assert_eq!(implicit.cumsum_weighted_x_sq, explicit.cumsum_weighted_x_sq);
+        assert_eq!(implicit.risk_set_pos, explicit.risk_set_pos);
     }
 
     #[test]
