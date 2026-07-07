@@ -17,6 +17,9 @@ pub fn compute_brier(
     if n != outcomes.len() {
         return None;
     }
+    if weights.is_some_and(|w| w.len() != n) {
+        return None;
+    }
     if n == 0 {
         return Some(0.0);
     }
@@ -58,6 +61,41 @@ pub fn compute_brier(
         } else {
             Some(0.0)
         }
+    }
+}
+
+fn compute_brier_column(
+    predictions: &[Vec<f64>],
+    outcomes: &[i32],
+    column_index: usize,
+    weights: Option<&[f64]>,
+) -> Option<f64> {
+    let n = outcomes.len();
+    if predictions.len() != n || weights.is_some_and(|w| w.len() != n) {
+        return None;
+    }
+    if n == 0 {
+        return Some(0.0);
+    }
+
+    let mut score = 0.0;
+    let mut total_weight = 0.0;
+
+    for (row_index, row) in predictions.iter().enumerate() {
+        let pred = row[column_index];
+        if !(0.0..=1.0).contains(&pred) {
+            return None;
+        }
+        let weight = weights.map_or(1.0, |w| w[row_index]);
+        let diff = pred - outcomes[row_index] as f64;
+        score += weight * diff * diff;
+        total_weight += weight;
+    }
+
+    if total_weight > 0.0 {
+        Some(score / total_weight)
+    } else {
+        Some(0.0)
     }
 }
 
@@ -166,6 +204,13 @@ pub fn integrated_brier(
             ));
         }
     }
+    if let Some(w) = weights.as_ref()
+        && w.len() != n_obs
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "weights must have the same length as predictions",
+        ));
+    }
     let mut time_intervals = Vec::with_capacity(n_times);
     for i in 0..n_times {
         let interval_width = if i == 0 {
@@ -187,8 +232,7 @@ pub fn integrated_brier(
         .par_iter()
         .enumerate()
         .map(|(t_idx, &interval)| {
-            let preds_at_t: Vec<f64> = predictions.iter().map(|row| row[t_idx]).collect();
-            compute_brier(&preds_at_t, &outcomes, weights_ref)
+            compute_brier_column(&predictions, &outcomes, t_idx, weights_ref)
                 .map(|score| score * interval)
                 .ok_or("invalid prediction value")
         })
@@ -204,5 +248,44 @@ pub fn integrated_brier(
         Err(_) => Err(pyo3::exceptions::PyValueError::new_err(
             "predictions must be between 0 and 1",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_brier_rejects_mismatched_weights() {
+        assert_eq!(compute_brier(&[0.2, 0.8], &[0, 1], Some(&[1.0])), None);
+    }
+
+    #[test]
+    fn integrated_brier_uses_weighted_columns_without_scratch_vectors() {
+        let result = integrated_brier(
+            vec![vec![0.1, 0.2, 0.4], vec![0.8, 0.7, 0.6]],
+            vec![0, 1],
+            vec![1.0, 2.0, 4.0],
+            Some(vec![1.0, 3.0]),
+        )
+        .unwrap();
+
+        assert!((result - 0.10416666666666667).abs() < 1e-12);
+    }
+
+    #[test]
+    fn integrated_brier_rejects_mismatched_weights() {
+        let err = integrated_brier(
+            vec![vec![0.1, 0.2], vec![0.8, 0.7]],
+            vec![0, 1],
+            vec![1.0, 2.0],
+            Some(vec![1.0]),
+        )
+        .expect_err("mismatched weights should fail validation");
+
+        assert!(
+            err.to_string()
+                .contains("weights must have the same length")
+        );
     }
 }
