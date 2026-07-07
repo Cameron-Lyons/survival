@@ -18,11 +18,13 @@ fn validate_survobrien_inputs(
     time: &[f64],
     status: &[i32],
     covariate: &[f64],
-    strata: &[i32],
+    strata: Option<&[i32]>,
 ) -> PyResult<()> {
     validate_length(time.len(), status.len(), "status")?;
     validate_length(time.len(), covariate.len(), "covariate")?;
-    validate_length(time.len(), strata.len(), "strata")?;
+    if let Some(strata) = strata {
+        validate_length(time.len(), strata.len(), "strata")?;
+    }
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
     validate_non_negative(time, "time")?;
@@ -108,13 +110,11 @@ pub fn survobrien(
     let time_vec = extract_vec_f64(time)?;
     let status_vec = extract_vec_i32(status)?;
     let covariate_vec = extract_vec_f64(covariate)?;
-    let strata_vec = match strata {
-        Some(s) => extract_vec_i32(s)?,
-        None => vec![1; time_vec.len()],
-    };
+    let strata_vec = strata.map(extract_vec_i32).transpose()?;
+    let strata = strata_vec.as_deref();
 
-    validate_survobrien_inputs(&time_vec, &status_vec, &covariate_vec, &strata_vec)?;
-    let result = compute_survobrien(&time_vec, &status_vec, &covariate_vec, &strata_vec);
+    validate_survobrien_inputs(&time_vec, &status_vec, &covariate_vec, strata)?;
+    let result = compute_survobrien(&time_vec, &status_vec, &covariate_vec, strata);
     Ok(result)
 }
 
@@ -123,7 +123,7 @@ fn compute_survobrien(
     time: &[f64],
     status: &[i32],
     covariate: &[f64],
-    strata: &[i32],
+    strata: Option<&[i32]>,
 ) -> SurvObrienResult {
     let n = time.len();
     if n == 0 {
@@ -138,106 +138,34 @@ fn compute_survobrien(
         };
     }
 
-    let mut unique_strata: Vec<i32> = strata.to_vec();
-    unique_strata.sort();
-    unique_strata.dedup();
-
     let mut scores = vec![0.0; n];
 
     let mut total_score_sum = 0.0;
-    let total_expected = 0.0;
     let mut total_variance = 0.0;
 
-    for &stratum in &unique_strata {
-        let stratum_indices: Vec<usize> = (0..n).filter(|&i| strata[i] == stratum).collect();
+    if let Some(strata) = strata {
+        let mut unique_strata: Vec<i32> = strata.to_vec();
+        unique_strata.sort();
+        unique_strata.dedup();
 
-        if stratum_indices.is_empty() {
-            continue;
+        for &stratum in &unique_strata {
+            let mut sorted_indices: Vec<usize> = (0..n).filter(|&i| strata[i] == stratum).collect();
+            if sorted_indices.is_empty() {
+                continue;
+            }
+            sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
+            let (score_sum, variance) =
+                compute_survobrien_stratum(time, status, covariate, &sorted_indices, &mut scores);
+            total_score_sum += score_sum;
+            total_variance += variance;
         }
-
-        let mut sorted_indices = stratum_indices.clone();
+    } else {
+        let mut sorted_indices: Vec<usize> = (0..n).collect();
         sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-
-        let n_stratum = sorted_indices.len();
-
-        let mut at_risk: Vec<bool> = vec![true; n_stratum];
-
-        let mut i = 0;
-        while i < n_stratum {
-            let current_time = time[sorted_indices[i]];
-
-            let mut event_indices: Vec<usize> = Vec::new();
-            let mut j = i;
-            while j < n_stratum && same_time(time[sorted_indices[j]], current_time) {
-                if status[sorted_indices[j]] == 1 {
-                    event_indices.push(j);
-                }
-                j += 1;
-            }
-
-            if !event_indices.is_empty() {
-                let mut at_risk_values: Vec<(usize, f64)> = Vec::new();
-                for (k, &idx) in sorted_indices.iter().enumerate() {
-                    if at_risk[k] {
-                        at_risk_values.push((k, covariate[idx]));
-                    }
-                }
-
-                let n_at_risk = at_risk_values.len();
-                if n_at_risk > 0 {
-                    at_risk_values.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-                    let mut ranks: std::collections::HashMap<usize, f64> =
-                        std::collections::HashMap::new();
-                    let mut k = 0;
-                    while k < n_at_risk {
-                        let current_value = at_risk_values[k].1;
-                        let mut tie_count = 1;
-                        let mut rank_sum = (k + 1) as f64;
-
-                        while k + tie_count < n_at_risk
-                            && (at_risk_values[k + tie_count].1 - current_value).abs()
-                                < RANK_TIE_TOLERANCE
-                        {
-                            rank_sum += (k + tie_count + 1) as f64;
-                            tie_count += 1;
-                        }
-
-                        let avg_rank = rank_sum / tie_count as f64;
-                        for t in 0..tie_count {
-                            ranks.insert(at_risk_values[k + t].0, avg_rank);
-                        }
-                        k += tie_count;
-                    }
-
-                    let mean_rank = (n_at_risk as f64 + 1.0) / 2.0;
-                    let var_rank = (n_at_risk as f64 * n_at_risk as f64 - 1.0) / 12.0;
-
-                    for &event_local_idx in &event_indices {
-                        if let Some(&rank) = ranks.get(&event_local_idx) {
-                            let orig_idx = sorted_indices[event_local_idx];
-                            if var_rank > 0.0 {
-                                scores[orig_idx] = (rank - mean_rank) / var_rank.sqrt();
-                            } else {
-                                scores[orig_idx] = 0.0;
-                            }
-                            total_score_sum += scores[orig_idx];
-                        }
-                    }
-
-                    let n_events = event_indices.len() as f64;
-                    if var_rank > 0.0 {
-                        total_variance += n_events / var_rank * var_rank;
-                    }
-                }
-            }
-
-            for item in at_risk.iter_mut().take(j).skip(i) {
-                *item = false;
-            }
-
-            i = j;
-        }
+        let (score_sum, variance) =
+            compute_survobrien_stratum(time, status, covariate, &sorted_indices, &mut scores);
+        total_score_sum += score_sum;
+        total_variance += variance;
     }
 
     let statistic = if total_variance > 0.0 {
@@ -254,9 +182,105 @@ fn compute_survobrien(
         df: 1,
         scores,
         score_sum: total_score_sum,
-        expected: total_expected,
+        expected: 0.0,
         variance: total_variance,
     }
+}
+
+fn compute_survobrien_stratum(
+    time: &[f64],
+    status: &[i32],
+    covariate: &[f64],
+    sorted_indices: &[usize],
+    scores: &mut [f64],
+) -> (f64, f64) {
+    let n_stratum = sorted_indices.len();
+    let mut score_sum = 0.0;
+    let mut variance = 0.0;
+
+    if n_stratum == 0 {
+        return (score_sum, variance);
+    }
+
+    let mut at_risk: Vec<bool> = vec![true; n_stratum];
+    let mut at_risk_values: Vec<(usize, f64)> = Vec::with_capacity(n_stratum);
+    let mut ranks = vec![0.0; n_stratum];
+
+    let mut i = 0;
+    while i < n_stratum {
+        let current_time = time[sorted_indices[i]];
+
+        let mut event_indices: Vec<usize> = Vec::new();
+        let mut j = i;
+        while j < n_stratum && same_time(time[sorted_indices[j]], current_time) {
+            if status[sorted_indices[j]] == 1 {
+                event_indices.push(j);
+            }
+            j += 1;
+        }
+
+        if !event_indices.is_empty() {
+            at_risk_values.clear();
+            for (k, &idx) in sorted_indices.iter().enumerate() {
+                if at_risk[k] {
+                    at_risk_values.push((k, covariate[idx]));
+                }
+            }
+
+            let n_at_risk = at_risk_values.len();
+            if n_at_risk > 0 {
+                at_risk_values.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+                let mut k = 0;
+                while k < n_at_risk {
+                    let current_value = at_risk_values[k].1;
+                    let mut tie_count = 1;
+                    let mut rank_sum = (k + 1) as f64;
+
+                    while k + tie_count < n_at_risk
+                        && (at_risk_values[k + tie_count].1 - current_value).abs()
+                            < RANK_TIE_TOLERANCE
+                    {
+                        rank_sum += (k + tie_count + 1) as f64;
+                        tie_count += 1;
+                    }
+
+                    let avg_rank = rank_sum / tie_count as f64;
+                    for t in 0..tie_count {
+                        ranks[at_risk_values[k + t].0] = avg_rank;
+                    }
+                    k += tie_count;
+                }
+
+                let mean_rank = (n_at_risk as f64 + 1.0) / 2.0;
+                let var_rank = (n_at_risk as f64 * n_at_risk as f64 - 1.0) / 12.0;
+
+                for &event_local_idx in &event_indices {
+                    let rank = ranks[event_local_idx];
+                    let orig_idx = sorted_indices[event_local_idx];
+                    if var_rank > 0.0 {
+                        scores[orig_idx] = (rank - mean_rank) / var_rank.sqrt();
+                    } else {
+                        scores[orig_idx] = 0.0;
+                    }
+                    score_sum += scores[orig_idx];
+                }
+
+                let n_events = event_indices.len() as f64;
+                if var_rank > 0.0 {
+                    variance += n_events / var_rank * var_rank;
+                }
+            }
+        }
+
+        for item in at_risk.iter_mut().take(j).skip(i) {
+            *item = false;
+        }
+
+        i = j;
+    }
+
+    (score_sum, variance)
 }
 
 #[cfg(test)]
@@ -270,7 +294,7 @@ mod tests {
         let covariate = vec![10.0, 20.0, 15.0, 30.0, 25.0];
         let strata = vec![1, 1, 1, 1, 1];
 
-        let result = compute_survobrien(&time, &status, &covariate, &strata);
+        let result = compute_survobrien(&time, &status, &covariate, Some(&strata));
 
         assert!(result.statistic >= 0.0);
         assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
@@ -279,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_survobrien_empty() {
-        let result = compute_survobrien(&[], &[], &[], &[]);
+        let result = compute_survobrien(&[], &[], &[], None);
         assert_eq!(result.statistic, 0.0);
         assert_eq!(result.p_value, 1.0);
     }
@@ -291,10 +315,30 @@ mod tests {
         let covariate = vec![10.0, 20.0, 30.0, 40.0];
         let strata = vec![1, 1, 2, 2];
 
-        let result = compute_survobrien(&time, &status, &covariate, &strata);
+        let result = compute_survobrien(&time, &status, &covariate, Some(&strata));
 
         assert!(result.statistic >= 0.0);
         assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+    }
+
+    #[test]
+    fn test_survobrien_default_strata_matches_explicit_single_stratum() {
+        let time = vec![1.0, 2.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 1, 0, 1];
+        let covariate = vec![10.0, 20.0, 15.0, 30.0, 25.0, 35.0];
+        let strata = vec![1; time.len()];
+
+        let default = compute_survobrien(&time, &status, &covariate, None);
+        let explicit = compute_survobrien(&time, &status, &covariate, Some(&strata));
+
+        assert!((default.statistic - explicit.statistic).abs() < 1e-12);
+        assert!((default.p_value - explicit.p_value).abs() < 1e-12);
+        assert!((default.score_sum - explicit.score_sum).abs() < 1e-12);
+        assert!((default.expected - explicit.expected).abs() < 1e-12);
+        assert!((default.variance - explicit.variance).abs() < 1e-12);
+        for (default, explicit) in default.scores.iter().zip(explicit.scores.iter()) {
+            assert!((*default - *explicit).abs() < 1e-12);
+        }
     }
 
     #[test]
@@ -305,8 +349,8 @@ mod tests {
         let covariate = vec![10.0, 30.0, 20.0, 40.0];
         let strata = vec![1, 1, 1, 1];
 
-        let expected = compute_survobrien(&exact_time, &status, &covariate, &strata);
-        let actual = compute_survobrien(&near_time, &status, &covariate, &strata);
+        let expected = compute_survobrien(&exact_time, &status, &covariate, Some(&strata));
+        let actual = compute_survobrien(&near_time, &status, &covariate, Some(&strata));
 
         assert!((actual.statistic - expected.statistic).abs() < 1e-12);
         assert!((actual.p_value - expected.p_value).abs() < 1e-12);
@@ -319,16 +363,20 @@ mod tests {
 
     #[test]
     fn test_survobrien_validates_public_inputs() {
-        let err = validate_survobrien_inputs(&[1.0, 2.0], &[1], &[0.1, 0.2], &[1, 1])
+        let err = validate_survobrien_inputs(&[1.0, 2.0], &[1], &[0.1, 0.2], Some(&[1, 1]))
             .expect_err("status length mismatch should fail");
         assert!(err.to_string().contains("status length mismatch"));
 
-        let err = validate_survobrien_inputs(&[1.0], &[2], &[0.1], &[1])
+        let err = validate_survobrien_inputs(&[1.0], &[2], &[0.1], Some(&[1]))
             .expect_err("non-binary status should fail");
         assert!(err.to_string().contains("status must contain only 0/1"));
 
-        let err = validate_survobrien_inputs(&[1.0], &[1], &[f64::INFINITY], &[1])
+        let err = validate_survobrien_inputs(&[1.0], &[1], &[f64::INFINITY], Some(&[1]))
             .expect_err("non-finite covariate should fail");
         assert!(err.to_string().contains("covariate contains non-finite"));
+
+        let err = validate_survobrien_inputs(&[1.0, 2.0], &[1, 0], &[0.1, 0.2], Some(&[1]))
+            .expect_err("strata length mismatch should fail");
+        assert!(err.to_string().contains("strata length mismatch"));
     }
 }
