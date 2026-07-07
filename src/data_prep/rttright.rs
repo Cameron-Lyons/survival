@@ -69,13 +69,15 @@ fn rttright_impl(
         ));
     }
 
-    let init_weights = weights.unwrap_or_else(|| vec![1.0; n]);
-    if init_weights.len() != n {
+    let weights_ref = weights.as_deref();
+    if let Some(init_weights) = weights_ref
+        && init_weights.len() != n
+    {
         return Err(PyValueError::new_err(
             "weights must have same length as time",
         ));
     }
-    validate_rttright_inputs(&time, &status, &init_weights)?;
+    validate_rttright_inputs(&time, &status, weights_ref)?;
 
     if n == 0 {
         return Ok(RttrightResult {
@@ -91,7 +93,10 @@ fn rttright_impl(
 
     let sorted_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
-    let sorted_weights: Vec<f64> = indices.iter().map(|&i| init_weights[i]).collect();
+    let sorted_weights: Vec<f64> = indices
+        .iter()
+        .map(|&i| rttright_case_weight(weights_ref, i))
+        .collect();
     let sorted_weights = normalize_case_weights(&sorted_weights, renorm)?;
 
     let km_weights = compute_km_weights(&sorted_time, &sorted_status, &sorted_weights, timefix);
@@ -104,16 +109,23 @@ fn rttright_impl(
     })
 }
 
-fn validate_rttright_inputs(time: &[f64], status: &[i32], weights: &[f64]) -> PyResult<()> {
+fn validate_rttright_inputs(time: &[f64], status: &[i32], weights: Option<&[f64]>) -> PyResult<()> {
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
-    validate_no_nan(weights, "weights")?;
-    validate_finite(weights, "weights")?;
-    validate_non_negative(weights, "weights")?;
+    if let Some(weights) = weights {
+        validate_no_nan(weights, "weights")?;
+        validate_finite(weights, "weights")?;
+        validate_non_negative(weights, "weights")?;
+    }
 
     validate_binary_i32(status, "status")?;
 
     Ok(())
+}
+
+#[inline]
+fn rttright_case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
+    weights.map_or(1.0, |wts| wts[index])
 }
 
 fn normalize_case_weights(weights: &[f64], renorm: bool) -> PyResult<Vec<f64>> {
@@ -213,13 +225,15 @@ pub fn rttright_stratified(
         ));
     }
 
-    let init_weights = weights.unwrap_or_else(|| vec![1.0; n]);
-    if init_weights.len() != n {
+    let weights_ref = weights.as_deref();
+    if let Some(init_weights) = weights_ref
+        && init_weights.len() != n
+    {
         return Err(PyValueError::new_err(
             "weights must have same length as time",
         ));
     }
-    validate_rttright_inputs(&time, &status, &init_weights)?;
+    validate_rttright_inputs(&time, &status, weights_ref)?;
 
     let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (i, &s) in strata.iter().enumerate() {
@@ -233,15 +247,10 @@ pub fn rttright_stratified(
     for indices in strata_indices.values() {
         let strata_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
         let strata_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
-        let strata_weights: Vec<f64> = indices.iter().map(|&i| init_weights[i]).collect();
+        let strata_weights =
+            weights_ref.map(|wts| indices.iter().map(|&i| wts[i]).collect::<Vec<_>>());
 
-        let result = rttright_impl(
-            strata_time,
-            strata_status,
-            Some(strata_weights),
-            timefix,
-            renorm,
-        )?;
+        let result = rttright_impl(strata_time, strata_status, strata_weights, timefix, renorm)?;
 
         for (sorted_pos, &local_idx) in result.order.iter().enumerate() {
             let orig_idx = indices[local_idx];
@@ -338,6 +347,21 @@ mod tests {
     }
 
     #[test]
+    fn test_rttright_unweighted_matches_unit_weights() {
+        let time = vec![1.0, 2.0, 2.0, 3.0];
+        let status = vec![0, 1, 1, 1];
+        let weights = vec![1.0; time.len()];
+
+        let unweighted = rttright(time.clone(), status.clone(), None, true, true).unwrap();
+        let weighted = rttright(time, status, Some(weights), true, true).unwrap();
+
+        assert_eq!(unweighted.time, weighted.time);
+        assert_eq!(unweighted.status, weighted.status);
+        assert_eq!(unweighted.order, weighted.order);
+        assert_close_slice(&unweighted.weights, &weighted.weights);
+    }
+
+    #[test]
     fn test_rttright_timefix_controls_near_tie_grouping() {
         let fixed = rttright(
             vec![1.0, 1.0 + 5e-10, 2.0],
@@ -387,6 +411,31 @@ mod tests {
         order.sort_unstable();
         assert_eq!(order, vec![0, 1, 2, 3]);
         assert_eq!(result.order, vec![1, 0, 3, 2]);
+    }
+
+    #[test]
+    fn test_rttright_stratified_unweighted_matches_unit_weights() {
+        let time = vec![3.0, 1.0, 2.0, 1.5];
+        let status = vec![1, 0, 1, 1];
+        let strata = vec![0, 0, 1, 1];
+        let weights = vec![1.0; time.len()];
+
+        let unweighted = rttright_stratified(
+            time.clone(),
+            status.clone(),
+            strata.clone(),
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        let weighted =
+            rttright_stratified(time, status, strata, Some(weights), true, true).unwrap();
+
+        assert_eq!(unweighted.time, weighted.time);
+        assert_eq!(unweighted.status, weighted.status);
+        assert_eq!(unweighted.order, weighted.order);
+        assert_close_slice(&unweighted.weights, &weighted.weights);
     }
 
     #[test]
