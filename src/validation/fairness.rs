@@ -4,6 +4,8 @@ use crate::internal::validation::{validate_binary_i32, validate_finite, validate
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+const DEFAULT_NOISE_LEVELS: &[f64] = &[0.01, 0.05, 0.1, 0.2];
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct FairnessMetrics {
@@ -294,8 +296,8 @@ pub fn assess_model_robustness(
     }
     let n = risk_scores.len();
 
-    let noise_levels = noise_levels.unwrap_or_else(|| vec![0.01, 0.05, 0.1, 0.2]);
-    validate_noise_levels(&noise_levels)?;
+    let noise_levels = noise_levels.as_deref().unwrap_or(DEFAULT_NOISE_LEVELS);
+    validate_noise_levels(noise_levels)?;
 
     let mut rng = fastrand::Rng::new();
     if let Some(s) = seed {
@@ -639,5 +641,52 @@ mod tests {
 
         let result = assess_model_robustness(risk, time, event, None, 10, Some(42)).unwrap();
         assert!(result.robustness_score >= 0.0 && result.robustness_score <= 1.0);
+    }
+
+    #[test]
+    fn default_noise_levels_match_explicit_grid() {
+        let risk = vec![0.9, 0.7, 0.5, 0.3, 0.1];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 1, 1, 1, 1];
+
+        let default_result = assess_model_robustness(
+            risk.clone(),
+            time.clone(),
+            event.clone(),
+            None,
+            10,
+            Some(42),
+        )
+        .unwrap();
+        let explicit_result = assess_model_robustness(
+            risk,
+            time,
+            event,
+            Some(DEFAULT_NOISE_LEVELS.to_vec()),
+            10,
+            Some(42),
+        )
+        .unwrap();
+
+        assert_eq!(
+            default_result.original_c_index,
+            explicit_result.original_c_index
+        );
+        assert_eq!(
+            default_result.perturbed_c_indices,
+            explicit_result.perturbed_c_indices
+        );
+        assert_eq!(
+            default_result.mean_sensitivity,
+            explicit_result.mean_sensitivity
+        );
+        assert_eq!(
+            default_result.max_sensitivity,
+            explicit_result.max_sensitivity
+        );
+        assert_eq!(
+            default_result.robustness_score,
+            explicit_result.robustness_score
+        );
     }
 }
