@@ -7,6 +7,10 @@ fn sorted_issue_ids(ids: &HashSet<i64>) -> Vec<i64> {
     values
 }
 
+fn initial_state_at(istate: Option<&[i32]>, idx: usize) -> i32 {
+    istate.map_or(0, |values| values[idx])
+}
+
 /// Result of survival data validation
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -80,8 +84,8 @@ pub fn survcheck(
         ));
     }
 
-    let initial_state = istate.unwrap_or_else(|| vec![0; n]);
-    if initial_state.len() != n {
+    let istate = istate.as_deref();
+    if istate.is_some_and(|values| values.len() != n) {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "istate must have same length as other inputs",
         ));
@@ -129,7 +133,7 @@ pub fn survcheck(
             let t1 = time1[idx];
             let t2 = time2[idx];
             let state = status[idx];
-            let istate_val = initial_state[idx];
+            let istate_val = initial_state_at(istate, idx);
 
             let trans_key = format!("{} -> {}", istate_val, state);
             *transitions.entry(trans_key).or_insert(0) += 1;
@@ -311,6 +315,37 @@ mod tests {
         let result = survcheck(id, time1, time2, status, None).unwrap();
         assert!(result.is_valid);
         assert_eq!(result.n_subjects, 2);
+    }
+
+    #[test]
+    fn test_survcheck_default_istate_matches_explicit_zero_state() {
+        let id = vec![1, 1, 2, 2];
+        let time1 = vec![0.0, 10.0, 0.0, 8.0];
+        let time2 = vec![10.0, 20.0, 5.0, 12.0];
+        let status = vec![0, 1, 0, 1];
+        let explicit_zero = vec![0; id.len()];
+
+        let default = survcheck(
+            id.clone(),
+            time1.clone(),
+            time2.clone(),
+            status.clone(),
+            None,
+        )
+        .unwrap();
+        let explicit = survcheck(id, time1, time2, status, Some(explicit_zero)).unwrap();
+
+        assert_eq!(default.n_subjects, explicit.n_subjects);
+        assert_eq!(default.n_transitions, explicit.n_transitions);
+        assert_eq!(default.n_problems, explicit.n_problems);
+        assert_eq!(default.overlap_ids, explicit.overlap_ids);
+        assert_eq!(default.gap_ids, explicit.gap_ids);
+        assert_eq!(default.teleport_ids, explicit.teleport_ids);
+        assert_eq!(default.invalid_ids, explicit.invalid_ids);
+        assert_eq!(default.transitions, explicit.transitions);
+        assert_eq!(default.flags, explicit.flags);
+        assert_eq!(default.is_valid, explicit.is_valid);
+        assert_eq!(default.messages, explicit.messages);
     }
 
     #[test]
