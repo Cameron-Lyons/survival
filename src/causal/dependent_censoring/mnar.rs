@@ -81,7 +81,6 @@ pub fn mnar_sensitivity_survival(
             .collect();
 
         let adj_surv = estimate_weighted_km(&time, &event, &weights, &eval_times);
-        adjusted_survival.push(adj_surv.clone());
 
         let rmst = compute_rmst(&adj_surv, &eval_times, max_time);
         adjusted_rmst.push(rmst);
@@ -93,6 +92,7 @@ pub fn mnar_sensitivity_survival(
             .map(|(_, t)| *t)
             .unwrap_or(max_time);
         adjusted_median.push(median);
+        adjusted_survival.push(adj_surv);
     }
 
     Ok(MNARSurvivalResult {
