@@ -45,17 +45,19 @@ pub fn compute_logrank_components(
     validate_non_negative(&time, "time")?;
     validate_binary_i32(&status, "status")?;
     validate_group_codes(&group, n)?;
-    let strata_vec = strata.unwrap_or_else(|| vec![0; n]);
-    validate_length(n, strata_vec.len(), "strata")?;
-    validate_strata_markers(&strata_vec)?;
+    let strata = strata.as_deref();
+    if let Some(strata) = strata {
+        validate_length(n, strata.len(), "strata")?;
+        validate_strata_markers(strata)?;
+    }
     let rho_val = rho.unwrap_or(0.0);
     if !rho_val.is_finite() {
         return Err(value_error("rho must be finite"));
     }
     let max_group = group.iter().max().copied().unwrap_or(0);
     let ngroup = if max_group > 0 { max_group as usize } else { 1 };
-    let nstrat = strata_ranges(&strata_vec).len().max(1);
-    let prepared = prepare_right_logrank_inputs(&time, &status, &group, &strata_vec, timefix);
+    let nstrat = strata_range_count(strata);
+    let prepared = prepare_right_logrank_inputs(&time, &status, &group, strata, timefix);
     let mut obs = vec![0.0; ngroup * nstrat];
     let mut exp = vec![0.0; ngroup * nstrat];
     let mut var = vec![0.0; ngroup * ngroup];
@@ -111,17 +113,17 @@ fn prepare_right_logrank_inputs(
     time: &[f64],
     status: &[i32],
     group: &[i32],
-    strata: &[i32],
+    strata: Option<&[i32]>,
     timefix: bool,
 ) -> PreparedLogrankInput {
     let mut prepared = PreparedLogrankInput {
         time: Vec::with_capacity(time.len()),
         status: Vec::with_capacity(status.len()),
         group: Vec::with_capacity(group.len()),
-        strata: Vec::with_capacity(strata.len()),
+        strata: Vec::with_capacity(time.len()),
     };
 
-    for (start, end) in strata_ranges(strata) {
+    for_each_strata_range(time.len(), strata, |start, end| {
         let mut indices: Vec<usize> = (start..end).collect();
         indices.sort_by(|&left, &right| {
             time[left]
@@ -142,7 +144,7 @@ fn prepare_right_logrank_inputs(
         if timefix {
             coalesce_near_times(&mut prepared.time[range_start..]);
         }
-    }
+    });
 
     prepared
 }
@@ -187,9 +189,11 @@ pub fn compute_counting_logrank_components(
     validate_binary_i32(&status, "status")?;
     validate_group_codes(&group, n)?;
     validate_counting_intervals(&entry_times, &time, timefix)?;
-    let strata_vec = strata.unwrap_or_else(|| vec![0; n]);
-    validate_length(n, strata_vec.len(), "strata")?;
-    validate_strata_markers(&strata_vec)?;
+    let strata = strata.as_deref();
+    if let Some(strata) = strata {
+        validate_length(n, strata.len(), "strata")?;
+        validate_strata_markers(strata)?;
+    }
     let rho_val = rho.unwrap_or(0.0);
     if !rho_val.is_finite() {
         return Err(value_error("rho must be finite"));
@@ -201,7 +205,7 @@ pub fn compute_counting_logrank_components(
     let mut expected = vec![0.0; ngroup];
     let mut variance = vec![0.0; ngroup * ngroup];
 
-    for (start, end) in strata_ranges(&strata_vec) {
+    for_each_strata_range(n, strata, |start, end| {
         accumulate_counting_logrank_stratum(
             start,
             end,
@@ -217,7 +221,7 @@ pub fn compute_counting_logrank_components(
             &mut expected,
             &mut variance,
         );
-    }
+    });
 
     Ok(survdiff_result_from_flat_components(
         observed, expected, variance, ngroup,
@@ -390,19 +394,43 @@ fn survdiff_result_from_flat_components(
     }
 }
 
-fn strata_ranges(strata: &[i32]) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut start = 0;
-    for (idx, &marker) in strata.iter().enumerate() {
-        if marker == 1 {
-            ranges.push((start, idx + 1));
-            start = idx + 1;
+fn for_each_strata_range(n: usize, strata: Option<&[i32]>, mut visit: impl FnMut(usize, usize)) {
+    match strata {
+        Some(strata) => {
+            let mut start = 0;
+            for (idx, &marker) in strata.iter().enumerate() {
+                if marker == 1 {
+                    visit(start, idx + 1);
+                    start = idx + 1;
+                }
+            }
+            if start < strata.len() {
+                visit(start, strata.len());
+            }
         }
+        None if n > 0 => visit(0, n),
+        None => {}
     }
-    if start < strata.len() {
-        ranges.push((start, strata.len()));
+}
+
+fn strata_range_count(strata: Option<&[i32]>) -> usize {
+    match strata {
+        Some(strata) => {
+            let mut count = 0;
+            let mut start = 0;
+            for (idx, &marker) in strata.iter().enumerate() {
+                if marker == 1 {
+                    count += 1;
+                    start = idx + 1;
+                }
+            }
+            if start < strata.len() {
+                count += 1;
+            }
+            count.max(1)
+        }
+        None => 1,
     }
-    ranges
 }
 
 struct CountingLogrankInput<'a> {
@@ -677,6 +705,14 @@ pub(crate) fn compute_survdiff(
 mod tests {
     use super::*;
 
+    fn assert_survdiff_eq(left: &SurvDiffResult, right: &SurvDiffResult) {
+        assert_eq!(left.observed, right.observed);
+        assert_eq!(left.expected, right.expected);
+        assert_eq!(left.variance, right.variance);
+        assert_eq!(left.chi_squared, right.chi_squared);
+        assert_eq!(left.degrees_of_freedom, right.degrees_of_freedom);
+    }
+
     #[test]
     fn compute_logrank_components_all_censored_has_zero_degrees_of_freedom() {
         let result = compute_logrank_components(
@@ -691,6 +727,61 @@ mod tests {
 
         assert_eq!(result.chi_squared, 0.0);
         assert_eq!(result.degrees_of_freedom, 0);
+    }
+
+    #[test]
+    fn compute_logrank_components_default_strata_matches_explicit_markers() {
+        let time = vec![3.0, 1.0, 2.0, 4.0, 5.0];
+        let status = vec![1, 1, 0, 1, 0];
+        let group = vec![2, 1, 1, 2, 1];
+        let strata = vec![0; time.len()];
+
+        let default = compute_logrank_components(
+            time.clone(),
+            status.clone(),
+            group.clone(),
+            None,
+            Some(0.5),
+            true,
+        )
+        .expect("default strata should compute");
+        let explicit =
+            compute_logrank_components(time, status, group, Some(strata), Some(0.5), true)
+                .expect("explicit zero strata should compute");
+
+        assert_survdiff_eq(&default, &explicit);
+    }
+
+    #[test]
+    fn compute_counting_logrank_components_default_strata_matches_explicit_markers() {
+        let time = vec![2.0, 4.0, 3.0, 5.0, 6.0];
+        let status = vec![1, 0, 1, 1, 0];
+        let group = vec![1, 2, 1, 2, 1];
+        let entry_times = vec![0.0, 1.0, 0.5, 2.0, 3.0];
+        let strata = vec![0; time.len()];
+
+        let default = compute_counting_logrank_components(
+            time.clone(),
+            status.clone(),
+            group.clone(),
+            entry_times.clone(),
+            None,
+            Some(0.5),
+            true,
+        )
+        .expect("default counting strata should compute");
+        let explicit = compute_counting_logrank_components(
+            time,
+            status,
+            group,
+            entry_times,
+            Some(strata),
+            Some(0.5),
+            true,
+        )
+        .expect("explicit zero counting strata should compute");
+
+        assert_survdiff_eq(&default, &explicit);
     }
 
     #[test]
