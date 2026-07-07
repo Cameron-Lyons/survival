@@ -30,7 +30,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
 
       - name: Cache Rust dependencies
         uses: actions/cache@v6
@@ -96,7 +96,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
 
       - name: Cache Rust dependencies
         uses: actions/cache@v6
@@ -144,7 +144,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
 
       - name: Cache Rust dependencies
         uses: actions/cache@v6
@@ -233,7 +233,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
 
       - name: Cache Rust dependencies
         uses: actions/cache@v6
@@ -286,7 +286,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
 
       - name: Cache Rust dependencies
         uses: actions/cache@v6
