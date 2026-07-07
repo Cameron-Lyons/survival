@@ -115,9 +115,6 @@ pub fn compute_rcll(
         };
     }
 
-    let default_weights: Vec<f64> = vec![1.0; n];
-    let w = weights.unwrap_or(&default_weights);
-
     let mut total_loss = 0.0;
     let mut total_weight = 0.0;
     let mut n_events = 0usize;
@@ -129,7 +126,7 @@ pub fn compute_rcll(
         let surv_probs = &survival_predictions[i];
         let t_i = event_times[i];
         let delta_i = status[i];
-        let weight = w[i];
+        let weight = weights.map_or(1.0, |w| w[i]);
 
         let loss = if delta_i == 1 {
             let f_t = compute_density_from_survival(surv_probs, prediction_times, t_i);
@@ -185,9 +182,6 @@ pub fn compute_rcll_single_time(
         };
     }
 
-    let default_weights: Vec<f64> = vec![1.0; n];
-    let w = weights.unwrap_or(&default_weights);
-
     let mut total_loss = 0.0;
     let mut total_weight = 0.0;
     let mut n_events = 0usize;
@@ -199,7 +193,7 @@ pub fn compute_rcll_single_time(
         let s_i = survival_probs[i].clamp(MIN_PROB, 1.0 - MIN_PROB);
         let t_i = event_times[i];
         let delta_i = status[i];
-        let weight = w[i];
+        let weight = weights.map_or(1.0, |w| w[i]);
 
         let loss = if delta_i == 1 && t_i <= prediction_time {
             let f_t = (1.0 - s_i).max(MIN_PROB);
@@ -434,6 +428,68 @@ mod tests {
         );
 
         assert!(result.mean_rcll > 0.0);
+    }
+
+    #[test]
+    fn test_rcll_unweighted_matches_unit_weights() {
+        let survival_predictions = vec![
+            vec![0.95, 0.85, 0.70, 0.50],
+            vec![0.90, 0.75, 0.55, 0.35],
+            vec![0.98, 0.92, 0.80, 0.65],
+        ];
+        let prediction_times = vec![1.0, 2.0, 3.0, 4.0];
+        let event_times = vec![2.5, 1.5, 4.0];
+        let status = vec![1, 1, 0];
+        let weights = vec![1.0; event_times.len()];
+
+        let unweighted = compute_rcll(
+            &survival_predictions,
+            &prediction_times,
+            &event_times,
+            &status,
+            None,
+        );
+        let weighted = compute_rcll(
+            &survival_predictions,
+            &prediction_times,
+            &event_times,
+            &status,
+            Some(&weights),
+        );
+
+        assert_eq!(unweighted.n_events, weighted.n_events);
+        assert_eq!(unweighted.n_censored, weighted.n_censored);
+        assert!((unweighted.rcll - weighted.rcll).abs() < 1e-12);
+        assert!((unweighted.mean_rcll - weighted.mean_rcll).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_rcll_single_time_unweighted_matches_unit_weights() {
+        let survival_probs = vec![0.8, 0.6, 0.9, 0.7];
+        let event_times = vec![1.0, 2.0, 3.0, 4.0];
+        let status = vec![1, 1, 0, 0];
+        let weights = vec![1.0; event_times.len()];
+        let prediction_time = 5.0;
+
+        let unweighted = compute_rcll_single_time(
+            &survival_probs,
+            &event_times,
+            &status,
+            prediction_time,
+            None,
+        );
+        let weighted = compute_rcll_single_time(
+            &survival_probs,
+            &event_times,
+            &status,
+            prediction_time,
+            Some(&weights),
+        );
+
+        assert_eq!(unweighted.n_events, weighted.n_events);
+        assert_eq!(unweighted.n_censored, weighted.n_censored);
+        assert!((unweighted.rcll - weighted.rcll).abs() < 1e-12);
+        assert!((unweighted.mean_rcll - weighted.mean_rcll).abs() < 1e-12);
     }
 
     #[test]
