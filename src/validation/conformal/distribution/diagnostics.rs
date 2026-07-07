@@ -64,8 +64,7 @@ pub fn conformal_calibration_plot(
         ));
     }
 
-    let has_upper = upper_bounds.is_some();
-    let upper = upper_bounds.unwrap_or_else(|| vec![vec![f64::INFINITY; n_test]; n_levels_val]);
+    let upper_bounds = upper_bounds.as_deref();
 
     let mut empirical_coverages = Vec::with_capacity(n_levels_val);
     let mut ci_lower = Vec::with_capacity(n_levels_val);
@@ -73,7 +72,7 @@ pub fn conformal_calibration_plot(
 
     for level_idx in 0..n_levels_val {
         let lb = &lower_bounds[level_idx];
-        let ub = &upper[level_idx];
+        let ub = upper_bounds.map(|upper| &upper[level_idx]);
 
         let mut covered = 0usize;
         let mut total = 0usize;
@@ -82,7 +81,10 @@ pub fn conformal_calibration_plot(
             if status_test[i] == 1 {
                 total += 1;
                 let above_lower = time_test[i] >= lb[i];
-                let below_upper = !has_upper || time_test[i] <= ub[i];
+                let below_upper = match ub {
+                    Some(ub) => time_test[i] <= ub[i],
+                    None => true,
+                };
                 if above_lower && below_upper {
                     covered += 1;
                 }
@@ -185,4 +187,50 @@ pub fn conformal_width_analysis(
         quantile_75,
         width_by_predicted,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calibration_plot_missing_upper_bounds_match_infinite_bounds() {
+        let time_test = vec![1.0, 2.0, 3.0, 4.0];
+        let status_test = vec![1, 0, 1, 1];
+        let lower_bounds = vec![
+            vec![0.5, 1.5, 2.5, 3.5],
+            vec![0.25, 1.25, 2.25, 3.25],
+            vec![0.0, 1.0, 2.0, 3.0],
+        ];
+        let upper_bounds = vec![vec![f64::INFINITY; time_test.len()]; lower_bounds.len()];
+
+        let default_result = conformal_calibration_plot(
+            time_test.clone(),
+            status_test.clone(),
+            lower_bounds.clone(),
+            None,
+            Some(3),
+        )
+        .unwrap();
+        let explicit_result = conformal_calibration_plot(
+            time_test,
+            status_test,
+            lower_bounds,
+            Some(upper_bounds),
+            Some(3),
+        )
+        .unwrap();
+
+        assert_eq!(
+            default_result.coverage_levels,
+            explicit_result.coverage_levels
+        );
+        assert_eq!(
+            default_result.empirical_coverages,
+            explicit_result.empirical_coverages
+        );
+        assert_eq!(default_result.ci_lower, explicit_result.ci_lower);
+        assert_eq!(default_result.ci_upper, explicit_result.ci_upper);
+        assert_eq!(default_result.n_test, explicit_result.n_test);
+    }
 }
