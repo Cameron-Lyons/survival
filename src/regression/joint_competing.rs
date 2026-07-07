@@ -264,6 +264,11 @@ impl JointCompetingRisksResult {
     }
 }
 
+#[inline]
+fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
+    weights.map_or(1.0, |values| values[idx])
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fit_cause_specific_cox(
     x: &[f64],
@@ -271,7 +276,7 @@ fn fit_cause_specific_cox(
     p: usize,
     time: &[f64],
     cause: &[i32],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     cause_of_interest: i32,
     max_iter: usize,
     tol: f64,
@@ -328,7 +333,7 @@ fn compute_gradient_hessian(
     p: usize,
     time: &[f64],
     cause: &[i32],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     beta: &[f64],
     cause_of_interest: i32,
 ) -> (Vec<f64>, Vec<Vec<f64>>, f64) {
@@ -356,7 +361,8 @@ fn compute_gradient_hessian(
     let mut weighted_x_outer = vec![vec![0.0; p]; p];
 
     for &idx in &sorted_indices {
-        let w = weights[idx] * exp_eta[idx];
+        let case_weight = observation_weight(weights, idx);
+        let w = case_weight * exp_eta[idx];
         risk_sum += w;
 
         for j in 0..p {
@@ -370,17 +376,17 @@ fn compute_gradient_hessian(
         }
 
         if cause[idx] == cause_of_interest && risk_sum > 0.0 {
-            loglik += weights[idx] * (eta[idx] - risk_sum.ln());
+            loglik += case_weight * (eta[idx] - risk_sum.ln());
 
             for j in 0..p {
                 let xij = x[idx * p + j];
                 let x_bar = weighted_x[j] / risk_sum;
-                gradient[j] += weights[idx] * (xij - x_bar);
+                gradient[j] += case_weight * (xij - x_bar);
 
                 for k in 0..p {
                     let x_bar_k = weighted_x[k] / risk_sum;
                     let x_outer_bar = weighted_x_outer[j][k] / risk_sum;
-                    hessian[j][k] -= weights[idx] * (x_outer_bar - x_bar * x_bar_k);
+                    hessian[j][k] -= case_weight * (x_outer_bar - x_bar * x_bar_k);
                 }
             }
         }
@@ -436,7 +442,7 @@ fn compute_baseline_hazard(
     n: usize,
     time: &[f64],
     cause: &[i32],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     exp_eta: &[f64],
     cause_of_interest: i32,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
@@ -461,7 +467,7 @@ fn compute_baseline_hazard(
 
         while i < n && same_time(time[sorted_indices[i]], current_time) {
             if cause[sorted_indices[i]] == cause_of_interest {
-                n_events += weights[sorted_indices[i]];
+                n_events += observation_weight(weights, sorted_indices[i]);
             }
             i += 1;
         }
@@ -469,7 +475,7 @@ fn compute_baseline_hazard(
         let mut risk_sum = 0.0;
         for &j in &sorted_indices {
             if time[j] >= current_time {
-                risk_sum += weights[j] * exp_eta[j];
+                risk_sum += observation_weight(weights, j) * exp_eta[j];
             }
         }
 
@@ -507,8 +513,15 @@ pub fn joint_competing_risks(
             "time and cause must have length n_obs",
         ));
     }
+    if let Some(values) = weights.as_ref()
+        && values.len() != n_obs
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "weights must have length n_obs",
+        ));
+    }
 
-    let wt = weights.unwrap_or_else(|| vec![1.0; n_obs]);
+    let weights = weights.as_deref();
 
     let n_events_by_cause: Vec<usize> = (1..=config.num_causes as i32)
         .map(|c| cause.iter().filter(|&&cc| cc == c).count())
@@ -527,7 +540,7 @@ pub fn joint_competing_risks(
             n_vars,
             &time,
             &cause,
-            &wt,
+            weights,
             c,
             config.max_iter,
             config.tol,
@@ -548,7 +561,7 @@ pub fn joint_competing_risks(
             .collect();
 
         let (times, baseline, cumulative) =
-            compute_baseline_hazard(n_obs, &time, &cause, &wt, &exp_eta, c);
+            compute_baseline_hazard(n_obs, &time, &cause, weights, &exp_eta, c);
 
         let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
 
@@ -604,6 +617,24 @@ pub fn joint_competing_risks(
 mod tests {
     use super::*;
 
+    fn assert_close(left: f64, right: f64) {
+        if left == right {
+            return;
+        }
+
+        assert!(
+            (left - right).abs() < 1e-12,
+            "expected {left} to equal {right}"
+        );
+    }
+
+    fn assert_vec_close(left: &[f64], right: &[f64]) {
+        assert_eq!(left.len(), right.len());
+        for (&left_value, &right_value) in left.iter().zip(right) {
+            assert_close(left_value, right_value);
+        }
+    }
+
     #[test]
     fn test_config() {
         let config =
@@ -648,5 +679,73 @@ mod tests {
         assert_eq!(result.cause_specific_results.len(), 2);
         assert_eq!(result.n_events_by_cause.len(), 2);
         assert_eq!(result.n_obs, 5);
+    }
+
+    #[test]
+    fn test_joint_competing_risks_unweighted_matches_unit_weights() {
+        let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.5, 0.5];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let cause = vec![1, 2, 0, 1, 2];
+        let config =
+            JointCompetingRisksConfig::new(2, CorrelationType::Independent, 1.0, 100, 1e-5, true)
+                .unwrap();
+
+        let unweighted =
+            joint_competing_risks(x.clone(), 5, 2, time.clone(), cause.clone(), &config, None)
+                .unwrap();
+        let unit_weighted =
+            joint_competing_risks(x, 5, 2, time, cause, &config, Some(vec![1.0; 5])).unwrap();
+
+        assert_eq!(
+            unweighted.cause_specific_results.len(),
+            unit_weighted.cause_specific_results.len()
+        );
+        assert_eq!(
+            unweighted.n_events_by_cause,
+            unit_weighted.n_events_by_cause
+        );
+        assert_eq!(unweighted.n_obs, unit_weighted.n_obs);
+        assert_eq!(unweighted.n_iter, unit_weighted.n_iter);
+        assert_eq!(unweighted.converged, unit_weighted.converged);
+        assert_close(unweighted.log_likelihood, unit_weighted.log_likelihood);
+        assert_close(unweighted.aic, unit_weighted.aic);
+        assert_close(unweighted.bic, unit_weighted.bic);
+
+        for (left, right) in unweighted
+            .cause_specific_results
+            .iter()
+            .zip(&unit_weighted.cause_specific_results)
+        {
+            assert_eq!(left.cause, right.cause);
+            assert_vec_close(&left.coefficients, &right.coefficients);
+            assert_vec_close(&left.std_errors, &right.std_errors);
+            assert_vec_close(&left.hazard_ratios, &right.hazard_ratios);
+            assert_vec_close(&left.baseline_hazard_times, &right.baseline_hazard_times);
+            assert_vec_close(&left.baseline_hazard, &right.baseline_hazard);
+            assert_vec_close(
+                &left.cumulative_baseline_hazard,
+                &right.cumulative_baseline_hazard,
+            );
+        }
+    }
+
+    #[test]
+    fn test_joint_competing_risks_rejects_bad_weights_length() {
+        let config =
+            JointCompetingRisksConfig::new(2, CorrelationType::Independent, 1.0, 100, 1e-5, true)
+                .unwrap();
+
+        let err = joint_competing_risks(
+            vec![0.0, 1.0],
+            2,
+            1,
+            vec![1.0, 2.0],
+            vec![1, 2],
+            &config,
+            Some(vec![1.0]),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("weights must have length n_obs"));
     }
 }
