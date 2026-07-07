@@ -408,6 +408,11 @@ fn safe_exp(value: f64) -> f64 {
     value.clamp(PY_EXP_CLAMP_MIN, PY_EXP_CLAMP_MAX).exp()
 }
 
+#[inline]
+fn case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
+    weights.map_or(1.0, |values| values[index])
+}
+
 fn step_value_at(times: &[f64], values: &[f64], time: f64) -> f64 {
     let idx = times.partition_point(|value| *value <= time);
     if idx == 0 { 0.0 } else { values[idx - 1] }
@@ -417,7 +422,7 @@ fn basehaz_with_entry_times(
     time: &[f64],
     status: &[i32],
     entry: &[f64],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     risk_scores: &[f64],
     risk_scale: f64,
 ) -> (Vec<f64>, Vec<f64>) {
@@ -471,7 +476,7 @@ fn basehaz_with_entry_times(
         }
         let mut events = 0.0;
         while event_pos < event_order.len() && same_time(time[event_order[event_pos]], event_time) {
-            events += weights[event_order[event_pos]];
+            events += case_weight(weights, event_order[event_pos]);
             event_pos += 1;
         }
 
@@ -994,14 +999,15 @@ pub fn basehaz(
             }
         }
     }
-    if let Some(values) = weights.as_ref()
+    let weights_ref = weights.as_deref();
+    if let Some(values) = weights_ref
         && values.len() != n
     {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "weights must have the same length as time",
         ));
     }
-    if let Some(values) = weights.as_ref() {
+    if let Some(values) = weights_ref {
         for (idx, &value) in values.iter().enumerate() {
             if !value.is_finite() {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -1022,7 +1028,6 @@ pub fn basehaz(
             ));
         }
     }
-    let weights = weights.unwrap_or_else(|| vec![1.0; n]);
 
     let center = if centered {
         linear_predictors.iter().sum::<f64>() / n as f64
@@ -1032,14 +1037,15 @@ pub fn basehaz(
 
     let max_shifted_lp = linear_predictors
         .iter()
-        .zip(weights.iter())
-        .filter_map(|(&lp, &weight)| (weight > 0.0).then_some(lp - center))
+        .enumerate()
+        .filter_map(|(idx, &lp)| (case_weight(weights_ref, idx) > 0.0).then_some(lp - center))
         .fold(f64::NEG_INFINITY, f64::max);
     let risk_scale = (-max_shifted_lp).exp();
     let risk_scores: Vec<f64> = linear_predictors
         .iter()
-        .zip(weights.iter())
-        .map(|(&lp, &weight)| {
+        .enumerate()
+        .map(|(idx, &lp)| {
+            let weight = case_weight(weights_ref, idx);
             if weight == 0.0 {
                 0.0
             } else {
@@ -1053,7 +1059,7 @@ pub fn basehaz(
             &time,
             &status,
             &entry,
-            &weights,
+            weights_ref,
             &risk_scores,
             risk_scale,
         ));
@@ -1084,7 +1090,7 @@ pub fn basehaz(
         while i < n && same_time(time[indices[i]], current_time) {
             if status[indices[i]] == 1 {
                 has_event = true;
-                events += weights[indices[i]];
+                events += case_weight(weights_ref, indices[i]);
             }
             i += 1;
         }
@@ -1413,6 +1419,57 @@ mod tests {
         assert!(haz[0] > 0.0);
         assert!(haz[1] > haz[0]);
         assert!(haz[2] > haz[1]);
+    }
+
+    #[test]
+    fn test_basehaz_unweighted_matches_unit_weights() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 0, 1];
+        let lp = vec![0.0, 0.1, -0.1, 0.2, 0.0];
+        let (unweighted_times, unweighted_haz) =
+            basehaz(time.clone(), status.clone(), lp.clone(), true, None, None).unwrap();
+        let (unit_times, unit_haz) = basehaz(
+            time,
+            status,
+            lp,
+            true,
+            None,
+            Some(vec![1.0, 1.0, 1.0, 1.0, 1.0]),
+        )
+        .unwrap();
+
+        assert_eq!(unweighted_times, unit_times);
+        for (actual, expected) in unweighted_haz.iter().zip(unit_haz.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+
+        let time = vec![2.0, 2.0, 4.0, 5.0, 5.0, 6.0];
+        let status = vec![1, 1, 1, 0, 1, 0];
+        let lp = vec![0.0; time.len()];
+        let entry = vec![0.0, 0.0, 1.5, 2.5, 0.0, 3.0];
+        let (unweighted_times, unweighted_haz) = basehaz(
+            time.clone(),
+            status.clone(),
+            lp.clone(),
+            false,
+            Some(entry.clone()),
+            None,
+        )
+        .unwrap();
+        let (unit_times, unit_haz) = basehaz(
+            time,
+            status,
+            lp,
+            false,
+            Some(entry),
+            Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        )
+        .unwrap();
+
+        assert_eq!(unweighted_times, unit_times);
+        for (actual, expected) in unweighted_haz.iter().zip(unit_haz.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
     }
 
     #[test]
