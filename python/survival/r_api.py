@@ -1260,13 +1260,6 @@ def _brier_apply_ties(dtime: list[float], dstat: list[int], ties: bool) -> list[
     ]
 
 
-def _brier_weighted_mean(values: Sequence[float], weights: Sequence[float]) -> float:
-    denominator = sum(weights)
-    if denominator == 0.0:
-        return math.nan
-    return sum(weight * value for weight, value in zip(weights, values, strict=True)) / denominator
-
-
 def _brier_rsquared(model_brier: float, null_brier: float) -> float:
     if null_brier == 0.0:
         if model_brier == 0.0:
@@ -1315,18 +1308,16 @@ def brier(
     curve_times, curves = _brier_prediction_curves(fit, prediction_data)
     if len(curves) != n:
         raise ValueError("Cox survival predictions do not match response length")
-    survival_by_subject = [
-        _step_curve_at(curve_times, [float(value) for value in curve], eval_times)
-        for curve in curves
-    ]
-    phat = [
-        [1.0 - survival_by_subject[row_idx][time_idx] for row_idx in range(n)]
-        for time_idx in range(len(eval_times))
-    ]
+    phat = [[0.0] * n for _ in eval_times]
+    for row_idx, curve in enumerate(curves):
+        survival = _step_curve_at(curve_times, [float(value) for value in curve], eval_times)
+        for time_idx, value in enumerate(survival):
+            phat[time_idx][row_idx] = 1.0 - value
 
     adjusted_time = _brier_apply_ties(dtime, dstat, ties_value)
     censor_fit = _brier_censoring_survival(adjusted_time, dstat, weights)
-    normalized_weights = [weight / sum(weights) for weight in weights]
+    total_weight = sum(weights)
+    normalized_weights = [weight / total_weight for weight in weights]
     brier_values: list[float] = []
     rsquared_values: list[float] = []
     eff_n: list[float] = []
@@ -1337,27 +1328,41 @@ def brier(
             censor_fit.estimate,
             [min(time_value, eval_time) for time_value in adjusted_time],
         )
-        ipcw = [
-            0.0
-            if time_value < eval_time and status == 0
-            else normalized_weights[row_idx] / censor_survival[row_idx]
-            if censor_survival[row_idx] > 0.0
-            else math.inf
-            for row_idx, (time_value, status) in enumerate(zip(adjusted_time, dstat, strict=True))
-        ]
-        eff_n.append(1.0 / sum(weight * weight for weight in ipcw))
-        null_loss = [
-            p0[time_idx] ** 2 if time_value > eval_time else (status - p0[time_idx]) ** 2
-            for time_value, status in zip(adjusted_time, dstat, strict=True)
-        ]
-        model_loss = [
-            phat[time_idx][row_idx] ** 2
-            if time_value > eval_time
-            else (status - phat[time_idx][row_idx]) ** 2
-            for row_idx, (time_value, status) in enumerate(zip(adjusted_time, dstat, strict=True))
-        ]
-        null_brier = _brier_weighted_mean(null_loss, ipcw)
-        model_brier = _brier_weighted_mean(model_loss, ipcw)
+        null_numerator = 0.0
+        model_numerator = 0.0
+        denominator = 0.0
+        weight_square_sum = 0.0
+        null_prediction = p0[time_idx]
+        model_predictions = phat[time_idx]
+
+        for row_idx, (time_value, status, censor_value) in enumerate(
+            zip(adjusted_time, dstat, censor_survival, strict=True)
+        ):
+            if time_value < eval_time and status == 0:
+                weight = 0.0
+            elif censor_value > 0.0:
+                weight = normalized_weights[row_idx] / censor_value
+            else:
+                weight = math.inf
+
+            if time_value > eval_time:
+                null_loss = null_prediction * null_prediction
+                model_prediction = model_predictions[row_idx]
+                model_loss = model_prediction * model_prediction
+            else:
+                null_residual = status - null_prediction
+                model_residual = status - model_predictions[row_idx]
+                null_loss = null_residual * null_residual
+                model_loss = model_residual * model_residual
+
+            denominator += weight
+            weight_square_sum += weight * weight
+            null_numerator += weight * null_loss
+            model_numerator += weight * model_loss
+
+        eff_n.append(1.0 / weight_square_sum)
+        null_brier = math.nan if denominator == 0.0 else null_numerator / denominator
+        model_brier = math.nan if denominator == 0.0 else model_numerator / denominator
         brier_values.append(model_brier)
         rsquared_values.append(_brier_rsquared(model_brier, null_brier))
 
