@@ -154,6 +154,33 @@ fn weighted_sums_into(
     s0
 }
 
+#[inline]
+fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
+    weights.map_or(1.0, |values| values[idx])
+}
+
+fn cox_risk_shift_optional(eta: &[f64], weights: Option<&[f64]>) -> f64 {
+    if let Some(weights) = weights {
+        return cox_risk_shift(eta, weights);
+    }
+
+    let shift = eta
+        .iter()
+        .copied()
+        .filter(|eta_i| eta_i.is_finite())
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    if shift.is_finite() { shift } else { 0.0 }
+}
+
+fn shifted_weighted_exp_eta_optional(eta: &[f64], weights: Option<&[f64]>, shift: f64) -> Vec<f64> {
+    if let Some(weights) = weights {
+        return shifted_weighted_exp_eta_with_shift(eta, weights, shift);
+    }
+
+    eta.iter().map(|eta_i| (*eta_i - shift).exp()).collect()
+}
+
 fn mean_and_covariance_into(
     s0: f64,
     s1: &[f64],
@@ -326,9 +353,6 @@ pub(crate) fn compute_coxph_detail_with_options(
         )));
     }
 
-    let wts = weights
-        .map(Cow::Borrowed)
-        .unwrap_or_else(|| Cow::Owned(vec![1.0; n]));
     let strata_values = strata
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned(vec![0; n]));
@@ -347,9 +371,8 @@ pub(crate) fn compute_coxph_detail_with_options(
             lp
         })
         .collect();
-    let risk_shift = cox_risk_shift(&linear_predictors, wts.as_ref());
-    let risk_weights =
-        shifted_weighted_exp_eta_with_shift(&linear_predictors, wts.as_ref(), risk_shift);
+    let risk_shift = cox_risk_shift_optional(&linear_predictors, weights);
+    let risk_weights = shifted_weighted_exp_eta_optional(&linear_predictors, weights, risk_shift);
 
     let groups = event_groups(time, status, strata_values.as_ref());
     let mut rows = Vec::with_capacity(groups.len());
@@ -393,11 +416,15 @@ pub(crate) fn compute_coxph_detail_with_options(
             stratum,
             event_time,
         );
-        let event_weight = deaths.iter().map(|&idx| wts[idx]).sum::<f64>();
+        let event_weight = deaths
+            .iter()
+            .map(|&idx| observation_weight(weights, idx))
+            .sum::<f64>();
         event_covariates.fill(0.0);
         for &idx in &deaths {
+            let weight = observation_weight(weights, idx);
             for col in 0..nvar {
-                event_covariates[col] += wts[idx] * covariates[idx][col];
+                event_covariates[col] += weight * covariates[idx][col];
             }
         }
 
@@ -648,6 +675,63 @@ pub fn coxph_detail(
 mod tests {
     use super::*;
 
+    fn assert_close(left: f64, right: f64) {
+        if left == right {
+            return;
+        }
+
+        assert!(
+            (left - right).abs() < 1e-12,
+            "expected {left} to equal {right}"
+        );
+    }
+
+    fn assert_vec_close(left: &[f64], right: &[f64]) {
+        assert_eq!(left.len(), right.len());
+        for (&left_value, &right_value) in left.iter().zip(right) {
+            assert_close(left_value, right_value);
+        }
+    }
+
+    fn assert_nested_vec_close(left: &[Vec<f64>], right: &[Vec<f64>]) {
+        assert_eq!(left.len(), right.len());
+        for (left_row, right_row) in left.iter().zip(right) {
+            assert_vec_close(left_row, right_row);
+        }
+    }
+
+    fn assert_optional_vec_close(left: &Option<Vec<f64>>, right: &Option<Vec<f64>>) {
+        match (left, right) {
+            (Some(left), Some(right)) => assert_vec_close(left, right),
+            (None, None) => {}
+            _ => panic!("expected matching optional vectors"),
+        }
+    }
+
+    fn assert_detail_close(left: &CoxphDetail, right: &CoxphDetail) {
+        assert_eq!(left.n_events, right.n_events);
+        assert_eq!(left.n_observations, right.n_observations);
+        assert_eq!(left.n_covariates, right.n_covariates);
+        assert_eq!(left.rows.len(), right.rows.len());
+
+        for (left_row, right_row) in left.rows.iter().zip(&right.rows) {
+            assert_eq!(left_row.stratum, right_row.stratum);
+            assert_close(left_row.time, right_row.time);
+            assert_eq!(left_row.n_risk, right_row.n_risk);
+            assert_eq!(left_row.n_event, right_row.n_event);
+            assert_eq!(left_row.n_censor, right_row.n_censor);
+            assert_close(left_row.hazard, right_row.hazard);
+            assert_close(left_row.cumhaz, right_row.cumhaz);
+            assert_close(left_row.varhaz, right_row.varhaz);
+            assert_close(left_row.wtrisk, right_row.wtrisk);
+            assert_close(left_row.n_event_weight, right_row.n_event_weight);
+            assert_vec_close(&left_row.score, &right_row.score);
+            assert_optional_vec_close(&left_row.schoenfeld, &right_row.schoenfeld);
+            assert_vec_close(&left_row.means, &right_row.means);
+            assert_nested_vec_close(&left_row.imat, &right_row.imat);
+        }
+    }
+
     #[test]
     fn test_coxph_detail() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -676,6 +760,51 @@ mod tests {
         assert!(detail.rows[0].varhaz > 0.0);
         assert_ne!(detail.rows[0].score, vec![0.0]);
         assert_ne!(detail.rows[0].imat, vec![vec![0.0]]);
+    }
+
+    #[test]
+    fn test_coxph_detail_unweighted_matches_unit_weights() {
+        let time = vec![1.0, 1.0, 2.0, 4.0, 5.0, 5.0];
+        let status = vec![1, 1, 0, 1, 0, 1];
+        let covariates = vec![
+            vec![0.2, 0.4],
+            vec![0.8, 0.1],
+            vec![0.5, 1.1],
+            vec![0.4, 0.3],
+            vec![1.1, 0.2],
+            vec![0.7, 0.6],
+        ];
+        let coefficients = vec![0.3, -0.2];
+
+        let unweighted = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &coefficients,
+            weights: None,
+            entry_times: None,
+            strata: None,
+            offset: None,
+            method: "efron",
+            center: 0.0,
+        })
+        .unwrap();
+        let unit_weights = vec![1.0; time.len()];
+        let unit_weighted = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &coefficients,
+            weights: Some(&unit_weights),
+            entry_times: None,
+            strata: None,
+            offset: None,
+            method: "efron",
+            center: 0.0,
+        })
+        .unwrap();
+
+        assert_detail_close(&unweighted, &unit_weighted);
     }
 
     #[test]
