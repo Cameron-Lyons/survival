@@ -10,6 +10,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUSTUP_TOOLCHAIN: 1.94.0
 
 jobs:
   build-and-test:
