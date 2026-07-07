@@ -183,9 +183,9 @@ pub fn two_sided_conformal_predict(
     let alpha = 1.0 - calibration.coverage_level;
     let alpha_half = alpha / 2.0;
 
-    let censor_scores = censoring_scores_new.unwrap_or_else(|| vec![0.0; n_new]);
+    let censor_scores = censoring_scores_new.as_deref();
 
-    if censor_scores.len() != n_new {
+    if censor_scores.is_some_and(|scores| scores.len() != n_new) {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "censoring_scores_new must have the same length as predicted_new",
         ));
@@ -197,7 +197,7 @@ pub fn two_sided_conformal_predict(
 
     for i in 0..n_new {
         let is_uncensored_like = classify_uncensored_like(
-            censor_scores[i],
+            censor_scores.map_or(0.0, |scores| scores[i]),
             calibration.censoring_score_threshold,
             alpha_half,
             calibration.n_censored,
