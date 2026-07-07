@@ -101,7 +101,7 @@ pub(crate) fn one_calibration_core(
             continue;
         }
 
-        let group_indices: Vec<usize> = indices[start..end].to_vec();
+        let group_indices = &indices[start..end];
         let n_in_group = group_indices.len();
 
         let sum_pred: f64 = group_indices

@@ -304,7 +304,7 @@ pub(crate) fn calibration_curve(
         if end <= start {
             continue;
         }
-        let group_indices: Vec<usize> = indices[start..end].to_vec();
+        let group_indices = &indices[start..end];
         let n_in_group = group_indices.len();
         let sum_pred: f64 = group_indices.iter().map(|&i| predicted_risk[i]).sum();
         let sum_obs: f64 = group_indices
