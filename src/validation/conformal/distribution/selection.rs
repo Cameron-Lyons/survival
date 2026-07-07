@@ -1,5 +1,7 @@
 use super::super::*;
 
+const DEFAULT_COVERAGE_CANDIDATES: &[f64] = &[0.80, 0.85, 0.90, 0.95, 0.99];
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct CoverageSelectionResult {
@@ -80,7 +82,9 @@ pub fn conformal_coverage_cv(
             "n_folds must be between 2 and the number of observations ({n})"
         )));
     }
-    let candidates = coverage_candidates.unwrap_or_else(|| vec![0.80, 0.85, 0.90, 0.95, 0.99]);
+    let candidates = coverage_candidates
+        .as_deref()
+        .unwrap_or(DEFAULT_COVERAGE_CANDIDATES);
     if candidates.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "coverage_candidates cannot be empty",
@@ -212,4 +216,53 @@ pub fn conformal_coverage_cv(
         empirical_coverages,
         efficiency_scores,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_coverage_candidates_match_explicit_grid() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 1];
+        let predicted = vec![1.1, 1.9, 3.2, 3.8, 5.2, 5.8, 7.1, 7.9];
+
+        let default_result = conformal_coverage_cv(
+            time.clone(),
+            status.clone(),
+            predicted.clone(),
+            Some(4),
+            None,
+            Some(7),
+        )
+        .unwrap();
+        let explicit_result = conformal_coverage_cv(
+            time,
+            status,
+            predicted,
+            Some(4),
+            Some(DEFAULT_COVERAGE_CANDIDATES.to_vec()),
+            Some(7),
+        )
+        .unwrap();
+
+        assert_eq!(
+            default_result.coverage_candidates,
+            explicit_result.coverage_candidates
+        );
+        assert_eq!(default_result.mean_widths, explicit_result.mean_widths);
+        assert_eq!(
+            default_result.empirical_coverages,
+            explicit_result.empirical_coverages
+        );
+        assert_eq!(
+            default_result.efficiency_scores,
+            explicit_result.efficiency_scores
+        );
+        assert_eq!(
+            default_result.optimal_coverage,
+            explicit_result.optimal_coverage
+        );
+    }
 }
