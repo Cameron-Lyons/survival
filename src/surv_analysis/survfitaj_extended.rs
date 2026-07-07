@@ -208,7 +208,6 @@ fn compute_transition_matrix(
     from_state: &[usize],
     to_state: &[usize],
     time: &[f64],
-    _weights: &[f64],
     n_states: usize,
     event_time: f64,
 ) -> (Vec<Vec<f64>>, Vec<usize>, Vec<Vec<usize>>) {
@@ -350,7 +349,6 @@ fn compute_bootstrap_variance(
     from_state: &[usize],
     to_state: &[usize],
     time: &[f64],
-    weights: &[f64],
     n_states: usize,
     unique_times: &[f64],
     n_bootstrap: usize,
@@ -369,20 +367,13 @@ fn compute_bootstrap_variance(
             let boot_from: Vec<usize> = indices.iter().map(|&i| from_state[i]).collect();
             let boot_to: Vec<usize> = indices.iter().map(|&i| to_state[i]).collect();
             let boot_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
-            let boot_weights: Vec<f64> = indices.iter().map(|&i| weights[i]).collect();
 
             let mut p_current = identity_matrix(n_states);
             let mut probs = Vec::with_capacity(n_times);
 
             for &ut in unique_times {
-                let (trans_mat, _, _) = compute_transition_matrix(
-                    &boot_from,
-                    &boot_to,
-                    &boot_time,
-                    &boot_weights,
-                    n_states,
-                    ut,
-                );
+                let (trans_mat, _, _) =
+                    compute_transition_matrix(&boot_from, &boot_to, &boot_time, n_states, ut);
                 p_current = matrix_multiply(&p_current, &trans_mat);
                 probs.push(p_current.clone());
             }
@@ -498,8 +489,6 @@ pub fn survfitaj_extended(
     validate_survfitaj_config(config)?;
     validate_survfitaj_inputs(&from_state, &to_state, &time, weights.as_deref())?;
 
-    let wt = weights.unwrap_or_else(|| vec![1.0; n]);
-
     let n_states = from_state
         .iter()
         .chain(to_state.iter())
@@ -515,7 +504,7 @@ pub fn survfitaj_extended(
 
     for &ut in &unique_times {
         let (trans_mat, n_at_risk, n_transitions) =
-            compute_transition_matrix(&from_state, &to_state, &time, &wt, n_states, ut);
+            compute_transition_matrix(&from_state, &to_state, &time, n_states, ut);
 
         transition_matrices.push(TransitionMatrix {
             time: ut,
@@ -541,7 +530,6 @@ pub fn survfitaj_extended(
                 &from_state,
                 &to_state,
                 &time,
-                &wt,
                 n_states,
                 &unique_times,
                 config.n_bootstrap,
@@ -693,6 +681,70 @@ mod tests {
         assert!(result.n_states >= 3);
         assert_eq!(result.time.len(), 5);
         assert!(!result.state_probs.is_empty());
+    }
+
+    #[test]
+    fn test_survfitaj_weighted_inputs_preserve_current_outputs() {
+        let from_state = vec![0, 0, 0, 1, 1];
+        let to_state = vec![1, 2, 0, 2, 1];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let config = AalenJohansenExtendedConfig::new(
+            VarianceEstimator::Greenwood,
+            TransitionType::Standard,
+            10,
+            0.95,
+            true,
+            None,
+        )
+        .unwrap();
+
+        let unweighted = survfitaj_extended(
+            from_state.clone(),
+            to_state.clone(),
+            time.clone(),
+            &config,
+            None,
+        )
+        .unwrap();
+        let weighted = survfitaj_extended(
+            from_state,
+            to_state,
+            time,
+            &config,
+            Some(vec![2.0, 0.5, 1.5, 3.0, 0.25]),
+        )
+        .unwrap();
+
+        assert_eq!(weighted.time, unweighted.time);
+        assert_eq!(weighted.state_probs, unweighted.state_probs);
+        assert_eq!(weighted.variance, unweighted.variance);
+        assert_eq!(weighted.ci_lower, unweighted.ci_lower);
+        assert_eq!(weighted.ci_upper, unweighted.ci_upper);
+        assert_eq!(
+            weighted.cumulative_incidence,
+            unweighted.cumulative_incidence
+        );
+        assert_eq!(weighted.expected_sojourn, unweighted.expected_sojourn);
+        assert_eq!(
+            weighted.transition_matrices.len(),
+            unweighted.transition_matrices.len()
+        );
+        for (weighted_transition, unweighted_transition) in weighted
+            .transition_matrices
+            .iter()
+            .zip(unweighted.transition_matrices.iter())
+        {
+            assert_eq!(weighted_transition.time, unweighted_transition.time);
+            assert_eq!(weighted_transition.matrix, unweighted_transition.matrix);
+            assert_eq!(
+                weighted_transition.n_at_risk,
+                unweighted_transition.n_at_risk
+            );
+            assert_eq!(
+                weighted_transition.n_transitions,
+                unweighted_transition.n_transitions
+            );
+        }
     }
 
     #[test]
