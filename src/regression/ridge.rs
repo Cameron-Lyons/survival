@@ -1,5 +1,5 @@
 use crate::constants::DIVISION_FLOOR;
-use crate::internal::cox_risk::precompute_cox_risk_set_cumsum;
+use crate::internal::cox_risk::precompute_cox_unit_risk_set_cumsum;
 use crate::internal::matrix::standardize_or_borrow_row_major_matrix;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_empty,
@@ -8,7 +8,6 @@ use crate::internal::validation::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use std::borrow::Cow;
 
 /// Configuration for ridge regression penalty
 #[derive(Debug, Clone)]
@@ -147,23 +146,14 @@ pub fn ridge_fit(
     validate_ridge_inputs(&x, n_obs, n_vars, &time, &status, weights.as_deref())?;
     validate_ridge_penalty(penalty)?;
 
-    let wt = match weights.as_deref() {
-        Some(weights) => Cow::Borrowed(weights),
-        None => Cow::Owned(vec![1.0; n_obs]),
-    };
+    let weights = weights.as_deref();
 
     let (scaled_x, _, scales) =
         standardize_or_borrow_row_major_matrix(&x, n_obs, n_vars, penalty.scale);
     let scale_factors = penalty.scale.then_some(scales);
 
-    let (beta, info_diag) = fit_unpenalized(
-        scaled_x.as_ref(),
-        n_obs,
-        n_vars,
-        &time,
-        &status,
-        wt.as_ref(),
-    )?;
+    let (beta, info_diag) =
+        fit_unpenalized(scaled_x.as_ref(), n_obs, n_vars, &time, &status, weights)?;
 
     let penalized_info: Vec<f64> = info_diag.iter().map(|&i| i + penalty.theta).collect();
 
@@ -197,7 +187,6 @@ pub fn ridge_fit(
         n_vars,
         &time,
         &status,
-        wt.as_ref(),
         &penalized_beta,
         df,
     );
@@ -294,15 +283,11 @@ fn fit_unpenalized(
     n_vars: usize,
     time: &[f64],
     status: &[i32],
-    weights: &[f64],
+    weights: Option<&[f64]>,
 ) -> PyResult<(Vec<f64>, Vec<f64>)> {
     let mut info_diag = vec![0.0; n_vars];
     let mut score = vec![0.0; n_vars];
-    let exp_eta: Vec<f64> = weights
-        .iter()
-        .map(|&weight| if weight > 0.0 { 1.0 } else { 0.0 })
-        .collect();
-    let risk_data = precompute_cox_risk_set_cumsum(x, n_obs, n_vars, time, weights, &exp_eta);
+    let risk_data = precompute_cox_unit_risk_set_cumsum(x, n_obs, n_vars, time, weights);
 
     for i in 0..n_obs {
         if status[i] != 1 {
@@ -315,14 +300,15 @@ fn fit_unpenalized(
             continue;
         }
 
+        let weight = observation_weight(weights, i);
         for j in 0..n_vars {
             let xij = x[i * n_vars + j];
             let cumsum_idx = pos * n_vars + j;
             let x_mean = risk_data.cumsum_weighted_x[cumsum_idx] / risk_sum;
             let x_sq_mean = risk_data.cumsum_weighted_x_sq[cumsum_idx] / risk_sum;
 
-            score[j] += weights[i] * (xij - x_mean);
-            info_diag[j] += weights[i] * (x_sq_mean - x_mean * x_mean).max(0.0);
+            score[j] += weight * (xij - x_mean);
+            info_diag[j] += weight * (x_sq_mean - x_mean * x_mean).max(0.0);
         }
     }
 
@@ -337,6 +323,11 @@ fn fit_unpenalized(
     Ok((final_beta, info_diag))
 }
 
+#[inline]
+fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
+    weights.map_or(1.0, |values| values[idx])
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compute_gcv(
     _x: &[f64],
@@ -344,7 +335,6 @@ fn compute_gcv(
     _n_vars: usize,
     _time: &[f64],
     _status: &[i32],
-    _weights: &[f64],
     _beta: &[f64],
     df: f64,
 ) -> f64 {
@@ -453,6 +443,41 @@ mod tests {
     use super::*;
     use crate::constants::TIME_EPSILON;
 
+    fn assert_close(left: f64, right: f64) {
+        if left == right {
+            return;
+        }
+
+        assert!(
+            (left - right).abs() < 1e-12,
+            "expected {left} to equal {right}"
+        );
+    }
+
+    fn assert_vec_close(left: &[f64], right: &[f64]) {
+        assert_eq!(left.len(), right.len());
+        for (&left_value, &right_value) in left.iter().zip(right) {
+            assert_close(left_value, right_value);
+        }
+    }
+
+    fn assert_optional_vec_close(left: &Option<Vec<f64>>, right: &Option<Vec<f64>>) {
+        match (left, right) {
+            (Some(left), Some(right)) => assert_vec_close(left, right),
+            (None, None) => {}
+            _ => panic!("expected matching optional vectors"),
+        }
+    }
+
+    fn assert_ridge_result_close(left: &RidgeResult, right: &RidgeResult) {
+        assert_vec_close(&left.coefficients, &right.coefficients);
+        assert_vec_close(&left.std_err, &right.std_err);
+        assert_close(left.df, right.df);
+        assert_close(left.gcv, right.gcv);
+        assert_close(left.theta, right.theta);
+        assert_optional_vec_close(&left.scale_factors, &right.scale_factors);
+    }
+
     #[test]
     fn test_ridge_penalty_new() {
         let penalty = RidgePenalty::new(1.0, None).unwrap();
@@ -497,6 +522,28 @@ mod tests {
     }
 
     #[test]
+    fn test_ridge_fit_unweighted_matches_unit_weights() {
+        let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let time = vec![1.0, 2.0, 3.0];
+        let status = vec![1, 1, 1];
+        let penalty = RidgePenalty::new(0.1, Some(false)).unwrap();
+
+        let unweighted = ridge_fit(
+            x.clone(),
+            3,
+            2,
+            time.clone(),
+            status.clone(),
+            &penalty,
+            None,
+        )
+        .unwrap();
+        let unit_weighted = ridge_fit(x, 3, 2, time, status, &penalty, Some(vec![1.0; 3])).unwrap();
+
+        assert_ridge_result_close(&unweighted, &unit_weighted);
+    }
+
+    #[test]
     fn test_ridge_fit_scaled_returns_standardization_scales() {
         let x = vec![1.0, 1.0, 2.0, 1.0, 3.0, 1.0];
         let time = vec![1.0, 2.0, 3.0];
@@ -519,7 +566,7 @@ mod tests {
         let status = vec![1, 0, 0];
         let weights = vec![1.0, 1.0, 1.0];
 
-        let (beta, info_diag) = fit_unpenalized(&x, 3, 1, &time, &status, &weights).unwrap();
+        let (beta, info_diag) = fit_unpenalized(&x, 3, 1, &time, &status, Some(&weights)).unwrap();
 
         assert!((beta[0] + 1.5).abs() < 1e-12);
         assert!((info_diag[0] - 8.0 / 9.0).abs() < 1e-12);
@@ -532,7 +579,7 @@ mod tests {
         let status = vec![1, 0, 0];
         let weights = vec![1.0, 0.0, 1.0];
 
-        let (beta, info_diag) = fit_unpenalized(&x, 3, 1, &time, &status, &weights).unwrap();
+        let (beta, info_diag) = fit_unpenalized(&x, 3, 1, &time, &status, Some(&weights)).unwrap();
 
         assert!((beta[0] + 1.0).abs() < 1e-12);
         assert!((info_diag[0] - 1.0).abs() < 1e-12);
