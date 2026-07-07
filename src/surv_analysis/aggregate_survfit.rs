@@ -92,9 +92,9 @@ fn normalized_weights(weights: Option<Vec<f64>>, n_curves: usize) -> PyResult<Ve
 }
 
 fn validate_curve_inputs(
-    times: &[Vec<f64>],
-    survs: &[Vec<f64>],
-    std_errs: Option<&[Vec<f64>]>,
+    times: &[&[f64]],
+    survs: &[&[f64]],
+    std_errs: Option<&[&[f64]]>,
 ) -> PyResult<()> {
     for (idx, (time, surv)) in times.iter().zip(survs.iter()).enumerate() {
         if time.len() != surv.len() {
@@ -175,6 +175,28 @@ pub fn aggregate_survfit(
     weights: Option<Vec<f64>>,
     conf_level: Option<f64>,
 ) -> PyResult<AggregateSurvfitResult> {
+    let time_refs: Vec<&[f64]> = times.iter().map(|curve| curve.as_slice()).collect();
+    let surv_refs: Vec<&[f64]> = survs.iter().map(|curve| curve.as_slice()).collect();
+    let std_err_refs = std_errs
+        .as_ref()
+        .map(|ses| ses.iter().map(|curve| curve.as_slice()).collect::<Vec<_>>());
+
+    aggregate_survfit_slices(
+        &time_refs,
+        &surv_refs,
+        std_err_refs.as_deref(),
+        weights,
+        conf_level,
+    )
+}
+
+fn aggregate_survfit_slices(
+    times: &[&[f64]],
+    survs: &[&[f64]],
+    std_errs: Option<&[&[f64]]>,
+    weights: Option<Vec<f64>>,
+    conf_level: Option<f64>,
+) -> PyResult<AggregateSurvfitResult> {
     let n_curves = times.len();
 
     if survs.len() != n_curves {
@@ -184,7 +206,7 @@ pub fn aggregate_survfit(
     }
 
     if n_curves == 0 {
-        if let Some(wts) = weights
+        if let Some(wts) = weights.as_ref()
             && !wts.is_empty()
         {
             return Err(value_error(
@@ -213,37 +235,35 @@ pub fn aggregate_survfit(
     validate_conf_level(conf)?;
     let z = z_score(conf);
 
-    validate_curve_inputs(&times, &survs, std_errs.as_deref())?;
+    validate_curve_inputs(times, survs, std_errs)?;
     let w = normalized_weights(weights, n_curves)?;
 
-    let mut all_times: Vec<f64> = times.iter().flatten().cloned().collect();
+    let mut all_times = Vec::with_capacity(times.iter().map(|curve| curve.len()).sum());
+    for curve in times {
+        all_times.extend_from_slice(curve);
+    }
     all_times.sort_by(|a, b| a.total_cmp(b));
     all_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
-
-    let mut interpolated_survs = vec![vec![0.0; all_times.len()]; n_curves];
-    let mut interpolated_ses = vec![vec![0.0; all_times.len()]; n_curves];
-
-    for (i, (t, s)) in times.iter().zip(survs.iter()).enumerate() {
-        for (j, &eval_t) in all_times.iter().enumerate() {
-            interpolated_survs[i][j] = interpolate_step(t, s, eval_t, 1.0);
-
-            if let Some(ref ses) = std_errs
-                && i < ses.len()
-            {
-                interpolated_ses[i][j] = interpolate_step(t, &ses[i], eval_t, 0.0);
-            }
-        }
-    }
 
     let mut agg_surv = vec![0.0; all_times.len()];
     let mut agg_se = vec![0.0; all_times.len()];
 
-    for j in 0..all_times.len() {
-        for i in 0..n_curves {
-            agg_surv[j] += w[i] * interpolated_survs[i][j];
-            agg_se[j] += w[i] * w[i] * interpolated_ses[i][j].powi(2);
+    for (i, (time, surv)) in times.iter().zip(survs.iter()).enumerate() {
+        let weight = w[i];
+        let weight_sq = weight * weight;
+        let se_curve = std_errs.map(|ses| ses[i]);
+
+        for (j, &eval_t) in all_times.iter().enumerate() {
+            agg_surv[j] += weight * interpolate_step(time, surv, eval_t, 1.0);
+
+            if let Some(se) = se_curve {
+                let interpolated_se = interpolate_step(time, se, eval_t, 0.0);
+                agg_se[j] += weight_sq * interpolated_se * interpolated_se;
+            }
         }
-        agg_se[j] = agg_se[j].sqrt();
+    }
+    for se in &mut agg_se {
+        *se = se.sqrt();
     }
 
     let (lower, upper) = clamped_normal_ci_bounds(&agg_surv, &agg_se, z, 0.0, 1.0);
@@ -313,13 +333,14 @@ pub fn aggregate_survfit_by_group(
     let mut results = Vec::new();
 
     for (_group, indices) in grouped {
-        let group_times: Vec<Vec<f64>> = indices.iter().map(|&i| times[i].clone()).collect();
-        let group_survs: Vec<Vec<f64>> = indices.iter().map(|&i| survs[i].clone()).collect();
+        let group_times: Vec<&[f64]> = indices.iter().map(|&i| times[i].as_slice()).collect();
+        let group_survs: Vec<&[f64]> = indices.iter().map(|&i| survs[i].as_slice()).collect();
         let group_weights: Option<Vec<f64>> = weights
             .as_ref()
             .map(|w| indices.iter().map(|&i| w[i]).collect());
 
-        let result = aggregate_survfit(group_times, group_survs, None, group_weights, None)?;
+        let result =
+            aggregate_survfit_slices(&group_times, &group_survs, None, group_weights, None)?;
         results.push(result);
     }
 
@@ -409,5 +430,25 @@ mod tests {
 
         let result = aggregate_survfit(times, survs, None, None, None).unwrap();
         assert_eq!(result.n_curves, 0);
+    }
+
+    #[test]
+    fn test_aggregate_survfit_by_group_weighted() {
+        let result = aggregate_survfit_by_group(
+            vec![vec![1.0, 2.0], vec![1.0, 2.0], vec![1.5, 2.5]],
+            vec![vec![0.9, 0.8], vec![0.8, 0.7], vec![0.95, 0.85]],
+            vec![2, 2, 1],
+            Some(vec![1.0, 2.0, 1.0]),
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].n_curves, 1);
+        assert_eq!(result[0].time, vec![1.5, 2.5]);
+        assert_eq!(result[0].surv, vec![0.95, 0.85]);
+        assert_eq!(result[1].n_curves, 2);
+        assert_eq!(result[1].weights, vec![1.0 / 3.0, 2.0 / 3.0]);
+        assert!((result[1].surv[0] - 0.8333333333333333).abs() < 1e-12);
+        assert!((result[1].surv[1] - 0.7333333333333333).abs() < 1e-12);
     }
 }
