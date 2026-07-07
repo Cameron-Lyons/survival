@@ -6,7 +6,6 @@ use crate::internal::validation::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use std::borrow::Cow;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -267,6 +266,11 @@ fn validate_cause_specific_inputs(
     Ok(())
 }
 
+#[inline]
+fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
+    weights.map_or(1.0, |values| values[idx])
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compute_cause_specific_gradient_hessian(
     x: &[f64],
@@ -274,7 +278,7 @@ fn compute_cause_specific_gradient_hessian(
     p: usize,
     time: &[f64],
     cause: &[i32],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     beta: &[f64],
     cause_of_interest: i32,
     treat_other_as: CensoringType,
@@ -311,8 +315,9 @@ fn compute_cause_specific_gradient_hessian(
     let mut weighted_x_outer = vec![vec![0.0; p]; p];
 
     for &idx in &sorted_indices {
+        let case_weight = observation_weight(weights, idx);
         if is_at_risk(idx) {
-            let w = weights[idx] * exp_eta[idx];
+            let w = case_weight * exp_eta[idx];
             risk_sum += w;
 
             for j in 0..p {
@@ -327,17 +332,17 @@ fn compute_cause_specific_gradient_hessian(
         }
 
         if cause[idx] == cause_of_interest && risk_sum > 0.0 {
-            loglik += weights[idx] * (eta[idx] - risk_sum.ln());
+            loglik += case_weight * (eta[idx] - risk_sum.ln());
 
             for j in 0..p {
                 let xij = x[idx * p + j];
                 let x_bar = weighted_x[j] / risk_sum;
-                gradient[j] += weights[idx] * (xij - x_bar);
+                gradient[j] += case_weight * (xij - x_bar);
 
                 for k in 0..p {
                     let x_bar_k = weighted_x[k] / risk_sum;
                     let x_outer_bar = weighted_x_outer[j][k] / risk_sum;
-                    hessian[j][k] -= weights[idx] * (x_outer_bar - x_bar * x_bar_k);
+                    hessian[j][k] -= case_weight * (x_outer_bar - x_bar * x_bar_k);
                 }
             }
         }
@@ -393,7 +398,7 @@ fn compute_baseline_hazard(
     n: usize,
     time: &[f64],
     cause: &[i32],
-    weights: &[f64],
+    weights: Option<&[f64]>,
     exp_eta: &[f64],
     cause_of_interest: i32,
     treat_other_as: CensoringType,
@@ -427,7 +432,7 @@ fn compute_baseline_hazard(
         let mut n_events = 0.0;
         while i < n && same_time(time[sorted_indices[i]], current_time) {
             if cause[sorted_indices[i]] == cause_of_interest {
-                n_events += weights[sorted_indices[i]];
+                n_events += observation_weight(weights, sorted_indices[i]);
             }
             i += 1;
         }
@@ -435,7 +440,7 @@ fn compute_baseline_hazard(
         let mut risk_sum = 0.0;
         for &j in &sorted_indices {
             if time[j] >= current_time && is_at_risk(j) {
-                risk_sum += weights[j] * exp_eta[j];
+                risk_sum += observation_weight(weights, j) * exp_eta[j];
             }
         }
 
@@ -466,12 +471,7 @@ pub fn cause_specific_cox(
     validate_cause_specific_inputs(&x, n_obs, n_vars, &time, &cause, weights.as_deref())?;
     validate_cause_specific_config(config)?;
 
-    let wt = match weights.as_deref() {
-        Some(weights) => Cow::Borrowed(weights),
-        None => Cow::Owned(vec![1.0; n_obs]),
-    };
-
-    cause_specific_cox_fit(&x, n_obs, n_vars, &time, &cause, config, wt.as_ref())
+    cause_specific_cox_fit(&x, n_obs, n_vars, &time, &cause, config, weights.as_deref())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -482,12 +482,12 @@ fn cause_specific_cox_fit(
     time: &[f64],
     cause: &[i32],
     config: &CauseSpecificCoxConfig,
-    weights: &[f64],
+    weights: Option<&[f64]>,
 ) -> PyResult<CauseSpecificCoxResult> {
     debug_assert_eq!(x.len(), n_obs * n_vars);
     debug_assert_eq!(time.len(), n_obs);
     debug_assert_eq!(cause.len(), n_obs);
-    debug_assert_eq!(weights.len(), n_obs);
+    debug_assert!(weights.is_none_or(|values| values.len() == n_obs));
 
     let n_events = cause
         .iter()
@@ -635,19 +635,14 @@ pub fn cause_specific_cox_all(
     }
     validate_cause_specific_inputs(&x, n_obs, n_vars, &time, &cause, weights.as_deref())?;
 
-    let wt = match weights.as_deref() {
-        Some(weights) => Cow::Borrowed(weights),
-        None => Cow::Owned(vec![1.0; n_obs]),
-    };
-
     let mut results = Vec::with_capacity(max_cause as usize);
+    let weights = weights.as_deref();
 
     for c in 1..=max_cause {
         let config =
             CauseSpecificCoxConfig::new(c, CensoringType::Censored, max_iter, tol, "breslow")?;
 
-        let result =
-            cause_specific_cox_fit(&x, n_obs, n_vars, &time, &cause, &config, wt.as_ref())?;
+        let result = cause_specific_cox_fit(&x, n_obs, n_vars, &time, &cause, &config, weights)?;
 
         results.push(result);
     }
@@ -658,6 +653,46 @@ pub fn cause_specific_cox_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_close(left: f64, right: f64) {
+        if left == right {
+            return;
+        }
+
+        assert!(
+            (left - right).abs() < 1e-12,
+            "expected {left} to equal {right}"
+        );
+    }
+
+    fn assert_vec_close(left: &[f64], right: &[f64]) {
+        assert_eq!(left.len(), right.len());
+        for (&left_value, &right_value) in left.iter().zip(right) {
+            assert_close(left_value, right_value);
+        }
+    }
+
+    fn assert_result_close(left: &CauseSpecificCoxResult, right: &CauseSpecificCoxResult) {
+        assert_vec_close(&left.coefficients, &right.coefficients);
+        assert_vec_close(&left.std_errors, &right.std_errors);
+        assert_vec_close(&left.hazard_ratios, &right.hazard_ratios);
+        assert_vec_close(&left.hr_ci_lower, &right.hr_ci_lower);
+        assert_vec_close(&left.hr_ci_upper, &right.hr_ci_upper);
+        assert_close(left.log_likelihood, right.log_likelihood);
+        assert_eq!(left.n_events, right.n_events);
+        assert_eq!(left.n_at_risk, right.n_at_risk);
+        assert_eq!(left.n_competing, right.n_competing);
+        assert_eq!(left.n_censored, right.n_censored);
+        assert_eq!(left.n_iter, right.n_iter);
+        assert_eq!(left.converged, right.converged);
+        assert_eq!(left.cause_of_interest, right.cause_of_interest);
+        assert_vec_close(&left.baseline_hazard_times, &right.baseline_hazard_times);
+        assert_vec_close(&left.baseline_hazard, &right.baseline_hazard);
+        assert_vec_close(
+            &left.cumulative_baseline_hazard,
+            &right.cumulative_baseline_hazard,
+        );
+    }
 
     #[test]
     fn test_config() {
@@ -704,6 +739,23 @@ mod tests {
     }
 
     #[test]
+    fn test_cause_specific_cox_unweighted_matches_unit_weights() {
+        let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.5, 0.5];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let cause = vec![1, 2, 0, 1, 2];
+        let config =
+            CauseSpecificCoxConfig::new(1, CensoringType::Censored, 100, 1e-5, "breslow").unwrap();
+
+        let unweighted =
+            cause_specific_cox(x.clone(), 5, 2, time.clone(), cause.clone(), &config, None)
+                .unwrap();
+        let unit_weighted =
+            cause_specific_cox(x, 5, 2, time, cause, &config, Some(vec![1.0; 5])).unwrap();
+
+        assert_result_close(&unweighted, &unit_weighted);
+    }
+
+    #[test]
     fn test_cause_specific_cox_all_keeps_requested_causes() {
         let x = vec![1.0, 0.0, 0.0, 1.0];
         let time = vec![1.0, 2.0];
@@ -715,6 +767,33 @@ mod tests {
         assert_eq!(results[0].n_events, 1);
         assert_eq!(results[1].n_events, 0);
         assert_eq!(results[2].n_events, 0);
+    }
+
+    #[test]
+    fn test_cause_specific_cox_all_unweighted_matches_unit_weights() {
+        let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.5, 0.5];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let cause = vec![1, 2, 0, 1, 2];
+
+        let unweighted = cause_specific_cox_all(
+            x.clone(),
+            5,
+            2,
+            time.clone(),
+            cause.clone(),
+            2,
+            None,
+            100,
+            1e-5,
+        )
+        .unwrap();
+        let unit_weighted =
+            cause_specific_cox_all(x, 5, 2, time, cause, 2, Some(vec![1.0; 5]), 100, 1e-5).unwrap();
+
+        assert_eq!(unweighted.len(), unit_weighted.len());
+        for (left, right) in unweighted.iter().zip(&unit_weighted) {
+            assert_result_close(left, right);
+        }
     }
 
     #[test]
