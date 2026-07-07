@@ -115,9 +115,6 @@ pub fn sensitivity_bounds_survival(
             })
             .collect();
 
-        survival_lower.push(surv_lower.clone());
-        survival_upper.push(surv_upper.clone());
-
         let rmst_l = point_estimate - adjustment * tau * 0.5;
         let rmst_u = point_estimate + adjustment * tau * 0.5;
         rmst_lower.push(rmst_l);
@@ -128,6 +125,9 @@ pub fn sensitivity_bounds_survival(
         let hr_u = hr_point * gamma;
         hazard_ratio_lower.push(hr_l);
         hazard_ratio_upper.push(hr_u);
+
+        survival_lower.push(surv_lower);
+        survival_upper.push(surv_upper);
     }
 
     Ok(SensitivityBoundsResult {

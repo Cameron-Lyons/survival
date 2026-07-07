@@ -31,6 +31,10 @@ mod tests {
             sensitivity_bounds_survival(time, event, treatment, vec![], 10.0, &config).unwrap();
 
         assert_eq!(result.gamma_values.len(), 2);
+        assert_eq!(result.survival_lower.len(), 2);
+        assert_eq!(result.survival_upper.len(), 2);
+        assert!(result.survival_lower.iter().all(|row| row.len() == 50));
+        assert!(result.survival_upper.iter().all(|row| row.len() == 50));
         assert_eq!(result.rmst_lower.len(), 2);
     }
 
@@ -44,6 +48,7 @@ mod tests {
 
         assert_eq!(result.delta_values.len(), 3);
         assert_eq!(result.adjusted_survival.len(), 3);
+        assert!(result.adjusted_survival.iter().all(|row| row.len() == 100));
     }
 
     #[test]
