@@ -362,6 +362,11 @@ pub struct TurnbullResult {
     pub converged: bool,
 }
 
+#[inline]
+fn turnbull_case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
+    weights.map_or(1.0, |values| values[index])
+}
+
 #[pyfunction]
 #[pyo3(signature = (left, right, max_iter=1000, tol=1e-6, weights=None))]
 pub fn turnbull_estimator(
@@ -377,39 +382,36 @@ pub fn turnbull_estimator(
             "left and right must have same length",
         ));
     }
-    let weights = match weights {
-        Some(values) => {
-            if values.len() != n {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "weights must have same length as left and right",
-                ));
-            }
-            let mut has_positive = false;
-            for (idx, &value) in values.iter().enumerate() {
-                if !value.is_finite() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "weights contains non-finite value at index {}",
-                        idx
-                    )));
-                }
-                if value < 0.0 {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "weights must be non-negative; got {} at index {}",
-                        value, idx
-                    )));
-                }
-                has_positive |= value > 0.0;
-            }
-            if !has_positive {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "weights must include at least one positive value",
-                ));
-            }
-            values
+    let weights_ref = weights.as_deref();
+    if let Some(values) = weights_ref {
+        if values.len() != n {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "weights must have same length as left and right",
+            ));
         }
-        None => vec![1.0; n],
-    };
-    let total_weight: f64 = weights.iter().sum();
+        let mut has_positive = false;
+        for (idx, &value) in values.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "weights contains non-finite value at index {}",
+                    idx
+                )));
+            }
+            if value < 0.0 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "weights must be non-negative; got {} at index {}",
+                    value, idx
+                )));
+            }
+            has_positive |= value > 0.0;
+        }
+        if !has_positive {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "weights must include at least one positive value",
+            ));
+        }
+    }
+    let total_weight = weights_ref.map_or(n as f64, |values| values.iter().sum());
 
     let mut all_points: Vec<f64> = Vec::new();
     for i in 0..n {
@@ -447,7 +449,7 @@ pub fn turnbull_estimator(
         let mut p_new = vec![0.0; m];
 
         for i in 0..n {
-            let case_weight = weights[i];
+            let case_weight = turnbull_case_weight(weights_ref, i);
             if case_weight == 0.0 {
                 continue;
             }
@@ -541,6 +543,22 @@ mod tests {
         let result = turnbull_estimator(left, right, 100, 1e-4, None).unwrap();
         assert!(!result.time_points.is_empty());
         assert!(result.survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
+    }
+
+    #[test]
+    fn test_turnbull_unweighted_matches_unit_weights() {
+        let left = vec![1.0, 2.0, 3.0, 1.0, 2.0];
+        let right = vec![2.0, 3.0, 5.0, 4.0, f64::INFINITY];
+
+        let unweighted = turnbull_estimator(left.clone(), right.clone(), 100, 1e-8, None).unwrap();
+        let unit_weighted = turnbull_estimator(left, right, 100, 1e-8, Some(vec![1.0; 5])).unwrap();
+
+        assert_eq!(unweighted.time_points, unit_weighted.time_points);
+        assert_eq!(unweighted.survival, unit_weighted.survival);
+        assert_eq!(unweighted.survival_lower, unit_weighted.survival_lower);
+        assert_eq!(unweighted.survival_upper, unit_weighted.survival_upper);
+        assert_eq!(unweighted.n_iter, unit_weighted.n_iter);
+        assert_eq!(unweighted.converged, unit_weighted.converged);
     }
 
     #[test]
