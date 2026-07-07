@@ -169,14 +169,6 @@ pub(crate) fn cv_cox(
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
-    let default_weights;
-    let weights = match weights {
-        Some(weights) => weights,
-        None => {
-            default_weights = vec![1.0; n];
-            &default_weights
-        }
-    };
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
     let results: Vec<(f64, Vec<f64>)> = (0..config.n_folds)
         .into_par_iter()
@@ -194,27 +186,31 @@ pub(crate) fn cv_cox(
 
             let mut sorted_time = Vec::with_capacity(train_n);
             let mut sorted_status = Vec::with_capacity(train_n);
-            let mut sorted_weights = Vec::with_capacity(train_n);
+            let mut sorted_weights = weights.map(|_| Vec::with_capacity(train_n));
             let mut sorted_covariates = Array2::zeros((train_n, nvar));
             for (new_idx, &orig_idx) in sorted_train_indices.iter().enumerate() {
                 sorted_time.push(time[orig_idx]);
                 sorted_status.push(status[orig_idx]);
-                sorted_weights.push(weights[orig_idx]);
+                if let (Some(input_weights), Some(sorted_weights)) =
+                    (weights, sorted_weights.as_mut())
+                {
+                    sorted_weights.push(input_weights[orig_idx]);
+                }
                 for var in 0..nvar {
                     sorted_covariates[[new_idx, var]] = covariates[[var, orig_idx]];
                 }
             }
             let time_arr = Array1::from_vec(sorted_time);
             let status_arr = Array1::from_vec(sorted_status);
-            let weights_arr = Array1::from_vec(sorted_weights);
-            let beta = match CoxFitBuilder::new(time_arr, status_arr, sorted_covariates)
-                .weights(weights_arr)
+            let mut builder = CoxFitBuilder::new(time_arr, status_arr, sorted_covariates)
                 .method(CoxMethod::Breslow)
                 .max_iter(COX_MAX_ITER)
                 .eps(1e-9)
-                .toler(1e-9)
-                .build()
-            {
+                .toler(1e-9);
+            if let Some(sorted_weights) = sorted_weights {
+                builder = builder.weights(Array1::from_vec(sorted_weights));
+            }
+            let beta = match builder.build() {
                 Ok(mut fit) => {
                     if fit.fit().is_ok() {
                         let (b, _, _, _, _, _, _, _) = fit.results();
@@ -517,6 +513,43 @@ mod tests {
         let result2 = cv_cox(&time, &status, &covariates, None, &config).unwrap();
         for i in 0..result1.fold_scores.len() {
             assert!((result1.fold_scores[i] - result2.fold_scores[i]).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn cv_cox_unweighted_matches_unit_weights() {
+        let (time, status, covariates) = make_test_data(30);
+        let weights = vec![1.0; time.len()];
+        let config = CVConfig {
+            n_folds: 5,
+            shuffle: true,
+            seed: Some(123),
+        };
+
+        let unweighted = cv_cox(&time, &status, &covariates, None, &config).unwrap();
+        let weighted = cv_cox(&time, &status, &covariates, Some(&weights), &config).unwrap();
+
+        assert_eq!(unweighted.fold_scores.len(), weighted.fold_scores.len());
+        for (unweighted_score, weighted_score) in
+            unweighted.fold_scores.iter().zip(&weighted.fold_scores)
+        {
+            assert!((unweighted_score - weighted_score).abs() < 1e-12);
+        }
+        assert!((unweighted.mean_score - weighted.mean_score).abs() < 1e-12);
+        assert!((unweighted.std_score - weighted.std_score).abs() < 1e-12);
+        assert_eq!(
+            unweighted.fold_coefficients.len(),
+            weighted.fold_coefficients.len()
+        );
+        for (unweighted_coef, weighted_coef) in unweighted
+            .fold_coefficients
+            .iter()
+            .zip(&weighted.fold_coefficients)
+        {
+            assert_eq!(unweighted_coef.len(), weighted_coef.len());
+            for (unweighted_value, weighted_value) in unweighted_coef.iter().zip(weighted_coef) {
+                assert!((unweighted_value - weighted_value).abs() < 1e-12);
+            }
         }
     }
 
