@@ -209,22 +209,16 @@ impl TemporalFusionTransformer {
                 let mut temporal_encoded: Vec<Vec<f64>> = Vec::with_capacity(seq_len);
 
                 for t in 0..seq_len {
-                    let temporal_input = temporal_features
-                        .get(i)
-                        .and_then(|tf| tf.get(t))
-                        .cloned()
-                        .unwrap_or_else(|| vec![0.0; self.n_temporal_features]);
+                    let temporal_input = temporal_features.get(i).and_then(|tf| tf.get(t));
 
                     let encoded: Vec<f64> = self
                         .temporal_encoder_weights
                         .iter()
                         .zip(self.temporal_encoder_biases.iter())
                         .map(|(w, &b)| {
-                            let sum: f64 = temporal_input
-                                .iter()
-                                .zip(w.iter())
-                                .map(|(&x, &wi)| x * wi)
-                                .sum();
+                            let sum: f64 = temporal_input.map_or(0.0, |input| {
+                                input.iter().zip(w.iter()).map(|(&x, &wi)| x * wi).sum()
+                            });
                             (sum + b).max(0.0)
                         })
                         .collect();
@@ -515,5 +509,28 @@ mod tests {
         let biases = vec![0.0, 0.0];
         let output = grn(&input, None, &weights1, &weights2, &biases);
         assert_eq!(output.len(), 2);
+    }
+
+    #[test]
+    fn predict_survival_missing_temporal_features_match_zero_row() {
+        let config = TFTConfig::new(4, 2, 1, 1, 0.0, 3, None, 0.001, 2, 1, Some(7)).unwrap();
+        let model = fit_temporal_fusion_transformer(
+            vec![vec![0.1, 0.2], vec![0.3, 0.4]],
+            vec![vec![vec![1.0, 0.5]], vec![vec![0.8, 0.2]]],
+            vec![1.0, 2.0],
+            vec![1, 0],
+            Some(config),
+        )
+        .unwrap();
+
+        let static_features = vec![vec![0.2, 0.3]];
+        let missing_temporal = model
+            .predict_survival(static_features.clone(), vec![])
+            .unwrap();
+        let explicit_zero_temporal = model
+            .predict_survival(static_features, vec![vec![vec![0.0, 0.0]]])
+            .unwrap();
+
+        assert_eq!(missing_temporal, explicit_zero_temporal);
     }
 }
