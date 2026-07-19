@@ -1,6 +1,5 @@
 pub const CHOLESKY_TOL: f64 = 1e-10;
 pub const RIDGE_REGULARIZATION: f64 = 1e-6;
-pub const SYMMETRY_TOL: f64 = 1e-10;
 pub const NEAR_ZERO_MATRIX: f64 = 1e-10;
 pub const TIME_EPSILON: f64 = 1e-9;
 pub const PYEARS_TIME_EPSILON: f64 = 1e-8;
