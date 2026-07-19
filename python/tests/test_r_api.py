@@ -9218,6 +9218,95 @@ def test_low_level_coxph_tie_methods_match_hand_likelihood_at_initial_beta():
         assert fit.log_likelihood == pytest.approx([expected, expected])
 
 
+@pytest.mark.parametrize(
+    ("method", "expected_beta", "expected_variance", "expected_loglik", "expected_iterations"),
+    [
+        (
+            "breslow",
+            [0.17569299458865062, -0.8920800877103963],
+            [
+                [1.7665625849926303, 0.7884637138499169],
+                [0.7884637138499169, 2.3311009321070157],
+            ],
+            [-8.070906088787817, -7.818812517162524],
+            3,
+        ),
+        (
+            "efron",
+            [0.10305623522446912, -1.021973929290916],
+            [
+                [1.8044465510612007, 0.9722159657351814],
+                [0.9722159657351814, 2.6559563822056127],
+            ],
+            [-7.7142311448490855, -7.430873243936032],
+            4,
+        ),
+        (
+            "exact",
+            [0.18990918067302853, -1.1018604705682347],
+            [
+                [2.1702188669318634, 1.0117674000364538],
+                [1.0117674000364538, 2.9114455509256167],
+            ],
+            [-6.327936783729195, -6.021664785573822],
+            3,
+        ),
+    ],
+)
+def test_low_level_coxph_rank_aware_information_matches_reference(
+    method,
+    expected_beta,
+    expected_variance,
+    expected_loglik,
+    expected_iterations,
+):
+    time = [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0]
+    status = [1, 1, 0, 1, 1, 0, 1, 0]
+    x1 = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5]
+    x2 = [1.0, 0.2, 0.7, 1.3, 0.4, 1.1, 0.5, 0.9]
+    fit = survival.regression.coxph_fit(
+        time,
+        status,
+        [[left, right] for left, right in zip(x1, x2, strict=True)],
+        method=method,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(expected_beta, rel=0, abs=1e-12)
+    for actual, expected in zip(fit.information_matrix, expected_variance, strict=True):
+        assert actual == pytest.approx(expected, rel=0, abs=1e-12)
+    assert fit.log_likelihood == pytest.approx(expected_loglik, rel=0, abs=1e-12)
+    assert fit.convergence_flag == 2
+    assert fit.iterations == expected_iterations
+
+
+def test_low_level_coxph_reduces_rank_for_dependent_columns():
+    time = [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0]
+    status = [1, 1, 0, 1, 1, 0, 1, 0]
+    x1 = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5]
+    fit = survival.regression.coxph_fit(
+        time,
+        status,
+        [[value, 2.0 * value] for value in x1],
+        method="efron",
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+
+    assert fit.coefficients[0][0] == pytest.approx(0.43940480983777153, rel=0, abs=1e-12)
+    assert fit.coefficients[0][1] == 0.0
+    assert fit.information_matrix[0][0] == pytest.approx(1.3555601527463446, rel=0, abs=1e-12)
+    assert fit.information_matrix[0][1] == 0.0
+    assert fit.information_matrix[1] == [0.0, 0.0]
+    assert fit.log_likelihood[1] == pytest.approx(-7.643272995750461, rel=0, abs=1e-12)
+    assert fit.convergence_flag == 1
+    assert fit.iterations == 3
+    assert all(math.isfinite(value) for value in fit.predict([[0.25, 0.5], [1.0, 2.0]]))
+
+
 def test_low_level_coxph_accepts_zero_column_null_model():
     data = _toy_data()
     fit = survival.regression.coxph_fit(
