@@ -4,6 +4,7 @@ use crate::constants::{
 };
 use crate::internal::matrix::invert_matrix;
 use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
+use crate::validation::brier_module::ipcw_brier_scores;
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -532,25 +533,59 @@ impl CoxPHModel {
         }
         result
     }
-    pub fn brier_score(&self) -> f64 {
-        let mut score = 0.0;
-        let mut count = 0.0;
-        let avg_risk = if self.baseline_hazard.is_empty() || self.risk_scores.is_empty() {
-            None
-        } else {
-            Some(self.risk_scores.iter().sum::<f64>() / self.risk_scores.len() as f64)
-        };
-        for (time, &status) in self.event_times.iter().zip(self.censoring.iter()) {
-            let pred = if let Some(avg_risk) = avg_risk {
-                let baseline_haz = self.baseline_cumulative_hazard_at(*time);
-                (-baseline_haz * avg_risk).exp()
-            } else {
-                0.5
-            };
-            score += (pred - status as f64).powi(2);
-            count += 1.0;
+    /// IPCW Brier score at one common evaluation time.
+    ///
+    /// Predictions are subject-specific survival probabilities and censored
+    /// observations contribute only while their outcome remains observable.
+    /// When `time` is omitted, the middle distinct event time is used.
+    #[pyo3(signature = (time=None))]
+    pub fn brier_score(&self, time: Option<f64>) -> PyResult<f64> {
+        let n = self.event_times.len();
+        if self.censoring.len() != n {
+            return Err(value_error(format!(
+                "event_times and censoring lengths differ: {n} vs {}",
+                self.censoring.len()
+            )));
         }
-        if count > 0.0 { score / count } else { 0.0 }
+        if self.risk_scores.len() != n {
+            return Err(value_error(
+                "model must be fitted before computing a Brier score",
+            ));
+        }
+
+        let evaluation_time = match time {
+            Some(value) if value.is_finite() => value,
+            Some(_) => return Err(value_error("time must be finite")),
+            None => {
+                let mut event_times: Vec<f64> = self
+                    .event_times
+                    .iter()
+                    .zip(&self.censoring)
+                    .filter_map(|(&time, &status)| (status == 1).then_some(time))
+                    .collect();
+                if event_times.is_empty() {
+                    return Ok(0.0);
+                }
+                event_times.sort_by(f64::total_cmp);
+                event_times.dedup_by(|left, right| (*left - *right).abs() < TIME_EPSILON);
+                event_times[event_times.len() / 2]
+            }
+        };
+        let baseline_hazard = self.baseline_cumulative_hazard_at(evaluation_time);
+        let survival_predictions: Vec<f64> = self
+            .risk_scores
+            .iter()
+            .map(|&risk| (-baseline_hazard * risk).exp())
+            .collect();
+        let scores = ipcw_brier_scores(
+            &self.event_times,
+            &self.censoring,
+            &survival_predictions,
+            &[evaluation_time],
+            None,
+        )
+        .map_err(value_error)?;
+        Ok(scores[0])
     }
     fn predict_survival(&self, time: f64) -> f64 {
         if self.baseline_hazard.is_empty() || self.risk_scores.is_empty() {
@@ -1001,6 +1036,88 @@ mod tests {
         assert_eq!(model.baseline_hazard_lookup_times, vec![1.0, 2.0]);
         assert!((model.baseline_hazard_lookup_values[0] - 1.0 / 14.0).abs() < 1e-12);
         assert!((model.baseline_hazard_lookup_values[1] - (1.0 / 14.0 + 2.0 / 12.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_brier_score_uses_subject_specific_ipcw_predictions() {
+        let mut model = CoxPHModel::new();
+        model.event_times = vec![1.0, 2.0, 3.0, 4.0];
+        model.censoring = vec![1, 0, 1, 0];
+        model.baseline_hazard = vec![0.2, 0.2, 0.8, 0.8];
+        model.baseline_hazard_lookup_times = vec![1.0, 3.0];
+        model.baseline_hazard_lookup_values = vec![0.2, 0.8];
+        model.risk_scores = vec![4.0, 1.0, 2.0, 0.5];
+
+        let aligned = model
+            .brier_score(Some(3.0))
+            .expect("a fitted model should have a Brier score");
+        model.risk_scores.swap(0, 3);
+        let swapped = model
+            .brier_score(Some(3.0))
+            .expect("a fitted model should have a Brier score");
+
+        assert!(aligned < swapped);
+    }
+
+    #[test]
+    fn test_brier_score_requires_fitted_risk_scores() {
+        let model =
+            CoxPHModel::new_with_data(vec![vec![0.0], vec![1.0]], vec![1.0, 2.0], vec![1, 0])
+                .expect("valid model data should construct");
+
+        assert!(model.brier_score(None).is_err());
+    }
+
+    #[test]
+    fn test_brier_score_matches_r_survival_reference() {
+        let covariates = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
+            .into_iter()
+            .map(|value| vec![value])
+            .collect();
+        let mut model = CoxPHModel::new_with_data(
+            covariates,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            vec![1, 0, 1, 1, 0, 1, 0, 1],
+        )
+        .expect("R reference data should construct");
+        model.fit(50).expect("R reference model should fit");
+
+        // survival::coxph(..., ties="breslow") followed by
+        // survival::brier(..., newdata=data) in R survival.
+        for (time, expected) in [
+            (2.0, 0.10590443678594358),
+            (3.0, 0.18450534607635558),
+            (4.0, 0.23916349962515318),
+            (6.0, 0.244_918_650_146_817_3),
+        ] {
+            let actual = model
+                .brier_score(Some(time))
+                .expect("R reference horizon should be scoreable");
+            assert!(
+                (actual - expected).abs() < 2e-4,
+                "Brier score at {time} differed: {actual} vs {expected}"
+            );
+        }
+
+        let default_score = model
+            .brier_score(None)
+            .expect("default horizon should be scoreable");
+        let median_event_score = model
+            .brier_score(Some(4.0))
+            .expect("median event horizon should be scoreable");
+        assert!((default_score - median_event_score).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_brier_score_handles_no_events_and_rejects_non_finite_time() {
+        let mut model = CoxPHModel::new();
+        model.event_times = vec![1.0, 2.0];
+        model.censoring = vec![0, 0];
+        model.risk_scores = vec![1.0, 1.0];
+
+        assert_eq!(model.brier_score(None).unwrap(), 0.0);
+        assert!(model.brier_score(Some(f64::NAN)).is_err());
+        assert!(model.brier_score(Some(f64::INFINITY)).is_err());
     }
 
     #[test]
