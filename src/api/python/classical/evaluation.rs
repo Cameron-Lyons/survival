@@ -25,11 +25,32 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(brier_calibration, m)?)?;
     m.add_function(wrap_pyfunction!(multi_time_calibration, m)?)?;
     m.add_function(wrap_pyfunction!(smoothed_calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(advanced_calibration_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(time_dependent_calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(mc_dropout_uncertainty, m)?)?;
+    m.add_function(wrap_pyfunction!(ensemble_uncertainty, m)?)?;
+    m.add_function(wrap_pyfunction!(quantile_regression_intervals, m)?)?;
+    m.add_function(wrap_pyfunction!(calibrate_prediction_intervals, m)?)?;
+    m.add_function(wrap_pyfunction!(conformal_survival, m)?)?;
+    m.add_function(wrap_pyfunction!(bayesian_bootstrap_survival, m)?)?;
+    m.add_function(wrap_pyfunction!(jackknife_plus_survival, m)?)?;
     m.add_function(wrap_pyfunction!(landmark_analysis, m)?)?;
     m.add_function(wrap_pyfunction!(landmark_analysis_batch, m)?)?;
     m.add_function(wrap_pyfunction!(decision_curve_analysis, m)?)?;
     m.add_function(wrap_pyfunction!(clinical_utility_at_threshold, m)?)?;
     m.add_function(wrap_pyfunction!(compare_decision_curves, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_fairness_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(assess_model_robustness, m)?)?;
+    m.add_function(wrap_pyfunction!(subgroup_analysis, m)?)?;
+    m.add_function(wrap_pyfunction!(hyperparameter_search, m)?)?;
+    m.add_function(wrap_pyfunction!(benchmark_models, m)?)?;
+    m.add_function(wrap_pyfunction!(nested_cross_validation, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_model_selection_criteria, m)?)?;
+    m.add_function(wrap_pyfunction!(compare_models, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_cv_score, m)?)?;
+    m.add_function(wrap_pyfunction!(survival_meta_analysis, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_forest_plot_data, m)?)?;
+    m.add_function(wrap_pyfunction!(publication_bias_tests, m)?)?;
     m.add_function(wrap_pyfunction!(joint_longitudinal_model, m)?)?;
     m.add_function(wrap_pyfunction!(landmark_cox_analysis, m)?)?;
     m.add_function(wrap_pyfunction!(longitudinal_dynamic_pred, m)?)?;
@@ -67,10 +88,38 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         BrierCalibrationResult,
         MultiTimeCalibrationResult,
         SmoothedCalibrationCurve,
+        AdvancedCalibrationResult,
+        TimeDependentCalibrationResult,
+        MCDropoutConfig,
+        UncertaintyResult,
+        EnsembleUncertaintyResult,
+        QuantileRegressionResult,
+        CalibrationUncertaintyResult,
+        ConformalSurvivalConfig,
+        ConformalSurvivalResult,
+        BayesianBootstrapConfig,
+        BayesianBootstrapResult,
+        JackknifePlusConfig,
+        JackknifePlusResult,
         LandmarkResult,
         DecisionCurveResult,
         ClinicalUtilityResult,
         ModelComparisonResult,
+        FairnessMetrics,
+        RobustnessResult,
+        SubgroupAnalysisResult,
+        SearchStrategy,
+        HyperparameterSearchConfig,
+        HyperparameterResult,
+        BenchmarkResult,
+        NestedCVResult,
+        ModelSelectionCriteria,
+        SurvivalModelComparison,
+        CrossValidatedScore,
+        MetaAnalysisConfig,
+        MetaAnalysisResult,
+        MetaForestPlotData,
+        PublicationBiasResult,
         JointModelConfig,
         JointLongSurvResult,
         LandmarkAnalysisResult,
