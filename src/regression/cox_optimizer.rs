@@ -909,6 +909,7 @@ impl CoxFit {
             }
             if !_notfinite && ((self.loglik[1] - newlk).abs() / newlk.abs() <= self.eps) {
                 self.loglik[1] = newlk;
+                self.beta.copy_from_slice(&newbeta);
                 Self::chinv(&mut self.imat)?;
                 self.rescale_params();
                 if halving > 0 {
@@ -1067,6 +1068,38 @@ mod tests {
         assert_eq!(beta.len(), 1);
         assert!(loglik[0].is_finite());
         assert!(loglik[1].is_finite());
+    }
+
+    #[test]
+    fn converged_coefficients_match_the_reported_log_likelihood() {
+        let time = Array1::from_vec((1..=16).map(f64::from).collect());
+        let status = Array1::from_vec(vec![1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0]);
+        let covariates = vec![
+            0.5, 1.2, 1.8, 0.3, 0.2, 2.1, 2.5, 0.8, 0.8, 1.5, 1.5, 0.5, 0.3, 1.8, 2.2, 1.1, 1.0,
+            0.9, 0.7, 1.7, 2.0, 0.4, 1.2, 1.3, 0.9, 2.0, 1.6, 0.7, 0.4, 1.4, 2.1, 1.0,
+        ];
+        let covar = Array2::from_shape_vec((16, 2), covariates)
+            .expect("fixture covariates should have a valid shape");
+
+        let mut fit = CoxFitBuilder::new(time.clone(), status.clone(), covar.clone())
+            .max_iter(20)
+            .eps(1e-5)
+            .build()
+            .expect("fixture fit should initialize");
+        fit.fit().expect("fixture fit should converge");
+        let (beta, _means, _u, _variance, loglik, _sctest, _flag, _iter) = fit.results();
+
+        let mut evaluation = CoxFitBuilder::new(time, status, covar)
+            .max_iter(0)
+            .initial_beta(beta)
+            .build()
+            .expect("coefficient evaluation should initialize");
+        evaluation
+            .fit()
+            .expect("coefficient evaluation should succeed");
+        let (_beta, _means, _u, _variance, evaluated, _sctest, _flag, _iter) = evaluation.results();
+
+        assert!((evaluated[0] - loglik[1]).abs() < 1e-12);
     }
 
     #[test]
