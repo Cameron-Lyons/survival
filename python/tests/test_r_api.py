@@ -36,6 +36,38 @@ def _numeric_data_with_id():
     return {"id": list(range(1, len(data["time"]) + 1)), **data}
 
 
+def _interaction_contrast_data():
+    return {
+        "time": [float(idx) for idx in range(1, 13)],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1],
+        "g": ["A", "A", "B", "B", "C", "C"] * 2,
+        "h": ["L", "H", "L", "H", "L", "H"] * 2,
+        "x": [float(idx) for idx in range(1, 13)],
+    }
+
+
+def _interaction_contrast_rows(data, columns):
+    rows = []
+    for row_idx in range(len(data["time"])):
+        row = []
+        for column in columns:
+            value = 1.0
+            for factor in column.split(":"):
+                if factor == "(Intercept)":
+                    continue
+                if factor == "x":
+                    value *= data["x"][row_idx]
+                elif factor.startswith("g"):
+                    value *= float(data["g"][row_idx] == factor[1:])
+                elif factor.startswith("h"):
+                    value *= float(data["h"][row_idx] == factor[1:])
+                else:
+                    raise AssertionError(f"unknown test design column {factor!r}")
+            row.append(value)
+        rows.append(row)
+    return rows
+
+
 class _NamedMatrix:
     def __init__(self, columns, rows):
         self.columns = columns
@@ -8262,8 +8294,8 @@ def test_predict_coxph_formula_newdata_mapping_rebuilds_transforms_and_interacti
     )
     newdata = {"x1": [0.5, 1.0], "x2": [0.25, 0.8], "group": ["B", "A"]}
     rows = [
-        [math.log(0.5), 0.5 * 0.25, 1.0 * 0.25],
-        [math.log(1.0), 1.0 * 0.8, 0.0 * 0.8],
+        [math.log(0.5), 0.5 * 0.25, 0.0 * 0.25, 1.0 * 0.25],
+        [math.log(1.0), 1.0 * 0.8, 1.0 * 0.8, 0.0 * 0.8],
     ]
 
     direct_lp = fit.predict(rows)
@@ -9249,6 +9281,126 @@ def test_coxph_formula_accepts_categorical_interactions():
 
     assert fit.coefficients[0] == pytest.approx(low_level.coefficients[0])
     assert fit.risk_scores == pytest.approx(low_level.risk_scores)
+
+
+@pytest.mark.parametrize(
+    ("rhs", "columns"),
+    [
+        ("g:x", ["gA:x", "gB:x", "gC:x"]),
+        ("x + g:x", ["x", "x:gB", "x:gC"]),
+        ("g + g:x", ["gB", "gC", "gA:x", "gB:x", "gC:x"]),
+        ("g * x", ["gB", "gC", "x", "gB:x", "gC:x"]),
+        ("g * h", ["gB", "gC", "hH", "gB:hH", "gC:hH"]),
+        (
+            "g:h",
+            ["gA:hL", "gB:hL", "gC:hL", "gA:hH", "gB:hH", "gC:hH"],
+        ),
+    ],
+)
+def test_coxph_interaction_contrasts_match_r_with_virtual_intercept(rhs, columns):
+    data = _interaction_contrast_data()
+    expected_rows = _interaction_contrast_rows(data, columns)
+
+    for intercept_suffix in ("", " + 0", " - 1"):
+        fit = survival.coxph(
+            f"Surv(time, status) ~ {rhs}{intercept_suffix}",
+            data=data,
+            max_iter=0,
+        )
+        matrix = survival.model_matrix(fit)
+
+        assert survival.coef_names(fit) == columns
+        assert matrix["columns"] == columns
+        for actual, expected in zip(matrix["data"], expected_rows, strict=True):
+            assert actual == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("rhs", "intercept_columns", "no_intercept_columns"),
+    [
+        (
+            "g:x",
+            ["(Intercept)", "gA:x", "gB:x", "gC:x"],
+            ["gA:x", "gB:x", "gC:x"],
+        ),
+        (
+            "x + g:x",
+            ["(Intercept)", "x", "x:gB", "x:gC"],
+            ["x", "x:gA", "x:gB", "x:gC"],
+        ),
+        (
+            "g + g:x",
+            ["(Intercept)", "gB", "gC", "gA:x", "gB:x", "gC:x"],
+            ["gA", "gB", "gC", "gA:x", "gB:x", "gC:x"],
+        ),
+        (
+            "g * x",
+            ["(Intercept)", "gB", "gC", "x", "gB:x", "gC:x"],
+            ["gA", "gB", "gC", "x", "gB:x", "gC:x"],
+        ),
+        (
+            "g * h",
+            ["(Intercept)", "gB", "gC", "hH", "gB:hH", "gC:hH"],
+            ["gA", "gB", "gC", "hH", "gB:hH", "gC:hH"],
+        ),
+        (
+            "g:h",
+            [
+                "(Intercept)",
+                "gA:hL",
+                "gB:hL",
+                "gC:hL",
+                "gA:hH",
+                "gB:hH",
+                "gC:hH",
+            ],
+            ["gA:hL", "gB:hL", "gC:hL", "gA:hH", "gB:hH", "gC:hH"],
+        ),
+    ],
+)
+def test_survreg_interaction_contrasts_match_r_intercept_rules(
+    rhs,
+    intercept_columns,
+    no_intercept_columns,
+):
+    data = _interaction_contrast_data()
+
+    for suffix, columns in (
+        ("", intercept_columns),
+        (" + 0", no_intercept_columns),
+        (" - 1", no_intercept_columns),
+    ):
+        fit = survival.survreg(
+            f"Surv(time, status) ~ {rhs}{suffix}",
+            data=data,
+            max_iter=0,
+        )
+        matrix = survival.model_matrix(fit)
+        expected_rows = _interaction_contrast_rows(data, columns)
+
+        assert survival.coef_names(fit) == columns
+        assert matrix["columns"] == columns
+        for actual, expected in zip(matrix["data"], expected_rows, strict=True):
+            assert actual == pytest.approx(expected)
+
+
+def test_formula_design_orders_main_effects_before_interactions_like_r():
+    data = _interaction_contrast_data()
+    columns = ["x", "gB", "gC", "gB:x", "gC:x"]
+    fit = survival.coxph(
+        "Surv(time, status) ~ g:x + x + g",
+        data=data,
+        max_iter=0,
+    )
+    matrix = survival.model_matrix(fit)
+
+    assert matrix["columns"] == columns
+    for actual, expected in zip(
+        matrix["data"],
+        _interaction_contrast_rows(data, columns),
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
 
 
 def test_coxph_formula_defaults_to_efron_ties():
@@ -12823,8 +12975,8 @@ def test_predict_survreg_formula_newdata_mapping_rebuilds_transforms_and_interac
     )
     newdata = {"x1": [0.25, 1.0], "x2": [0.25, 0.8], "group": ["B", "A"]}
     rows = [
-        [math.sqrt(0.25), 1.0 * 0.25],
-        [math.sqrt(1.0), 0.0 * 0.8],
+        [math.sqrt(0.25), 0.0 * 0.25, 1.0 * 0.25],
+        [math.sqrt(1.0), 1.0 * 0.8, 0.0 * 0.8],
     ]
     design_rows = _with_intercept(rows)
 

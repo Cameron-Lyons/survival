@@ -2392,6 +2392,206 @@ test_that("model term metadata matches native Cox formula outputs", {
   }
 })
 
+test_that("interaction contrast expansion matches native Cox and survreg fits", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  set.seed(2048)
+  n <- 90L
+  g <- factor(rep(c("a", "b", "c"), length.out = n), levels = c("a", "b", "c"))
+  h <- factor(rep(c("u", "v"), length.out = n), levels = c("u", "v"))
+  x <- seq(-1.7, 1.9, length.out = n) +
+    rep(c(-0.13, 0.07, 0.19, -0.05, 0.11), length.out = n)
+  eta <- 0.25 * x + c(a = -0.2, b = 0.15, c = 0.35)[g] +
+    c(u = -0.1, v = 0.1)[h]
+  event_time <- stats::rexp(n, rate = exp(eta) / 9)
+  censor_time <- stats::rexp(n, rate = 1 / 14)
+  data <- data.frame(
+    time = pmax(pmin(event_time, censor_time), 0.01),
+    status = as.integer(event_time <= censor_time),
+    x = x,
+    g = g,
+    h = h
+  )
+
+  cox_cases <- list(
+    list(
+      rhs = "g:x",
+      columns = c("ga:x", "gb:x", "gc:x"),
+      assign = c(1L, 1L, 1L),
+      terms = "g:x"
+    ),
+    list(
+      rhs = "x + g:x",
+      columns = c("x", "x:gb", "x:gc"),
+      assign = c(1L, 2L, 2L),
+      terms = c("x", "x:g")
+    ),
+    list(
+      rhs = "g + g:x",
+      columns = c("gb", "gc", "ga:x", "gb:x", "gc:x"),
+      assign = c(1L, 1L, 2L, 2L, 2L),
+      terms = c("g", "g:x")
+    ),
+    list(
+      rhs = "g:x + g + x",
+      columns = c("gb", "gc", "x", "gb:x", "gc:x"),
+      assign = c(1L, 1L, 2L, 3L, 3L),
+      terms = c("g", "x", "g:x")
+    ),
+    list(
+      rhs = "g*h",
+      columns = c("gb", "gc", "hv", "gb:hv", "gc:hv"),
+      assign = c(1L, 1L, 2L, 3L, 3L),
+      terms = c("g", "h", "g:h")
+    )
+  )
+
+  expect_design_parity <- function(bridged, reference, case, compare_fit = TRUE) {
+    expect_identical(names(coef(bridged)), case$columns)
+    expect_identical(names(coef(reference)), case$columns)
+    if (compare_fit) {
+      expect_equal(
+        unname(coef(bridged)),
+        unname(coef(reference)),
+        tolerance = 2e-04
+      )
+    }
+
+    bridged_matrix <- model.matrix(bridged)
+    reference_matrix <- stats::model.matrix(reference)
+    expected_dim <- c(n, length(case$columns))
+    expect_identical(dim(bridged_matrix), expected_dim)
+    expect_identical(dim(reference_matrix), expected_dim)
+    expect_identical(colnames(bridged_matrix), case$columns)
+    expect_identical(colnames(reference_matrix), case$columns)
+    expect_identical(attr(bridged_matrix, "assign"), case$assign)
+    expect_identical(attr(reference_matrix, "assign"), case$assign)
+    expect_identical(as.numeric(bridged_matrix), as.numeric(reference_matrix))
+
+    expect_identical(attr(terms(bridged), "term.labels"), case$terms)
+    expect_identical(attr(terms(reference), "term.labels"), case$terms)
+    expect_identical(labels(bridged), case$terms)
+    expect_identical(labels(reference), case$terms)
+
+    bridged_terms <- predict(bridged, type = "terms")
+    reference_terms <- stats::predict(reference, type = "terms")
+    expected_terms_dim <- c(n, length(case$terms))
+    expect_identical(dim(bridged_terms), expected_terms_dim)
+    expect_identical(dim(reference_terms), expected_terms_dim)
+    expect_identical(colnames(bridged_terms), case$terms)
+    expect_identical(colnames(reference_terms), case$terms)
+    if (compare_fit) {
+      expect_equal(
+        as.numeric(bridged_terms),
+        as.numeric(reference_terms),
+        tolerance = 2e-04
+      )
+    }
+  }
+
+  for (case in cox_cases) {
+    bridged <- coxph(
+      stats::as.formula(paste("Surv(time, status) ~", case$rhs)),
+      data = data,
+      max_iter = 150,
+      eps = 1e-09,
+      toler = 1e-10
+    )
+    reference <- survival::coxph(
+      stats::as.formula(paste("survival::Surv(time, status) ~", case$rhs)),
+      data = data,
+      x = TRUE,
+      y = TRUE,
+      control = survival::coxph.control(
+        iter.max = 150,
+        eps = 1e-09,
+        toler.chol = 1e-10
+      )
+    )
+    expect_design_parity(bridged, reference, case)
+  }
+
+  survreg_cases <- lapply(cox_cases, function(case) {
+    case$columns <- c("(Intercept)", case$columns)
+    case$assign <- c(0L, case$assign)
+    case
+  })
+  survreg_cases <- c(
+    survreg_cases,
+    list(
+      list(
+        rhs = "g:x - 1",
+        columns = c("ga:x", "gb:x", "gc:x"),
+        assign = c(1L, 1L, 1L),
+        terms = "g:x"
+      ),
+      list(
+        rhs = "x + g:x - 1",
+        columns = c("x", "x:ga", "x:gb", "x:gc"),
+        assign = c(1L, 2L, 2L, 2L),
+        terms = c("x", "x:g"),
+        # x is the sum of the full g:x columns, so fitted coefficients are non-unique.
+        singular = TRUE
+      ),
+      list(
+        rhs = "g + g:x - 1",
+        columns = c("ga", "gb", "gc", "ga:x", "gb:x", "gc:x"),
+        assign = c(1L, 1L, 1L, 2L, 2L, 2L),
+        terms = c("g", "g:x")
+      ),
+      list(
+        rhs = "g:x + g + x - 1",
+        columns = c("ga", "gb", "gc", "x", "gb:x", "gc:x"),
+        assign = c(1L, 1L, 1L, 2L, 3L, 3L),
+        terms = c("g", "x", "g:x")
+      ),
+      list(
+        rhs = "g*h - 1",
+        columns = c("ga", "gb", "gc", "hv", "gb:hv", "gc:hv"),
+        assign = c(1L, 1L, 1L, 2L, 3L, 3L),
+        terms = c("g", "h", "g:h")
+      ),
+      list(
+        rhs = "g:h - 1",
+        columns = c("ga:hu", "gb:hu", "gc:hu", "ga:hv", "gb:hv", "gc:hv"),
+        assign = rep(1L, 6L),
+        terms = "g:h"
+      )
+    )
+  )
+
+  for (case in survreg_cases) {
+    bridged <- survreg(
+      stats::as.formula(paste("Surv(time, status) ~", case$rhs)),
+      data = data,
+      dist = "weibull",
+      max_iter = 150,
+      eps = 1e-10
+    )
+    reference <- survival::survreg(
+      stats::as.formula(paste("survival::Surv(time, status) ~", case$rhs)),
+      data = data,
+      dist = "weibull",
+      x = TRUE,
+      control = survival::survreg.control(
+        maxiter = 150,
+        rel.tolerance = 1e-10
+      )
+    )
+    expect_design_parity(
+      bridged,
+      reference,
+      case,
+      compare_fit = !isTRUE(case$singular)
+    )
+  }
+})
+
 test_that("data-prep helpers match R survival shapes", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
