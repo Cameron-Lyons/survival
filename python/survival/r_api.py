@@ -16,6 +16,8 @@ from typing import Any, NoReturn
 
 from . import _survival as _core
 
+_COX_RANK_TOLERANCE = 1.8189894035458565e-12
+
 __all__ = [
     "Surv",
     "Surv2",
@@ -16584,7 +16586,11 @@ def coxph(
     case_weights = fit_weights if explicit_weights else None
     fit_offset = _optional_float_vector(offset, "offset", n)
     if not singular_ok_value:
-        _check_cox_design_full_rank(rows, fit_weights, toler if toler is not None else 1e-9)
+        _check_cox_design_full_rank(
+            rows,
+            fit_weights,
+            toler if toler is not None else _COX_RANK_TOLERANCE,
+        )
     model_frame = None
     if keep_model:
         model_frame = (

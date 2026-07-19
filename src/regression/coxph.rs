@@ -1,4 +1,7 @@
-use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, TIME_EPSILON};
+use crate::constants::{
+    COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, EXP_CLAMP_MAX, EXP_CLAMP_MIN,
+    TIME_EPSILON,
+};
 use crate::internal::validation::validate_binary_i32;
 use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod};
 pub use crate::regression::coxph_model::{CoxPHModel, Subject};
@@ -729,9 +732,9 @@ pub fn coxph_fit(
         Array1::from_vec(sorted_offset),
         Array1::from_vec(sorted_weights),
         cox_method,
-        max_iter.unwrap_or(20),
-        eps.unwrap_or(1e-5),
-        toler.unwrap_or(1e-9),
+        max_iter.unwrap_or(COX_MAX_ITER),
+        eps.unwrap_or(COX_CONVERGENCE_TOLERANCE),
+        toler.unwrap_or(COX_RANK_TOLERANCE),
         doscale,
         initial_beta.unwrap_or_else(|| vec![0.0; nvar]),
     )
@@ -951,6 +954,88 @@ mod tests {
                 .then_with(|| lhs.cmp(&rhs))
         });
         order
+    }
+
+    #[test]
+    fn default_controls_match_reference_efron_fit() {
+        let time = vec![1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0];
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 0];
+        let x1 = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5];
+        let x2 = [1.0, 0.2, 0.7, 1.3, 0.4, 1.1, 0.5, 0.9];
+        let covariates = x1
+            .into_iter()
+            .zip(x2)
+            .map(|(left, right)| vec![left, right])
+            .collect();
+
+        let fit = coxph_fit(
+            time,
+            status,
+            covariates,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("efron"),
+            None,
+            None,
+        )
+        .expect("default-control Efron fit should succeed");
+
+        assert_close_vec(
+            &fit.coefficients[0],
+            &[0.103_056_235_224_469_12, -1.021_973_929_290_916],
+        );
+        assert_close_vec(
+            &fit.log_likelihood,
+            &[-7.714_231_144_849_085_5, -7.430_873_243_936_032],
+        );
+        assert_eq!(fit.convergence_flag, 2);
+        assert_eq!(fit.iterations, 4);
+    }
+
+    #[test]
+    fn default_rank_tolerance_preserves_near_collinear_columns() {
+        let n = 20;
+        let time = (1..=n).map(|value| value as f64).collect::<Vec<_>>();
+        let status = (0..n)
+            .map(|idx| i32::from(idx % 3 != 0))
+            .collect::<Vec<_>>();
+        let covariates = (0..n)
+            .map(|idx| {
+                let first = (idx % 7) as f64 * 0.3 + (idx / 7) as f64 * 0.11;
+                let direction = if idx % 2 == 0 { 1.0 } else { -1.0 };
+                let perturbation = direction * (0.2 + (idx % 5) as f64 * 0.13);
+                vec![first, first + 1e-5 * perturbation]
+            })
+            .collect::<Vec<_>>();
+        let fit_with_tolerance = |toler| {
+            coxph_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                Some(0),
+                None,
+                toler,
+                Some("breslow"),
+                None,
+                None,
+            )
+            .expect("near-collinear fit should succeed")
+        };
+
+        let default_fit = fit_with_tolerance(None);
+        let loose_fit = fit_with_tolerance(Some(1e-9));
+
+        assert_eq!(default_fit.convergence_flag, 2);
+        assert_eq!(loose_fit.convergence_flag, 1);
     }
 
     #[test]
