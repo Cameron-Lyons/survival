@@ -427,7 +427,7 @@ model.fit(n_iters=10)
 # Get results
 print(f"Baseline hazard: {model.baseline_hazard}")
 print(f"Risk scores: {model.risk_scores}")
-print(f"Coefficients: {model.get_coefficients()}")
+print(f"Coefficients: {model.coefficients}")
 
 # Predict on new data
 new_covariates = [[1.0, 2.0], [2.0, 3.0]]

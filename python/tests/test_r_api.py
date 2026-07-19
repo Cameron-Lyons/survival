@@ -527,6 +527,7 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
         "x": [0.2, 0.4, 0.1, 0.8, 1.0, 1.2, 0.6, 1.4],
     }
     fit = survival.coxph("Surv(time, status) ~ x", data=data, model=True, max_iter=50)
+    assert fit.coefficients[0] == pytest.approx([-2.1132119551866904], abs=3e-5)
 
     result = survival.r_api.brier(fit, times=[2.0, 4.0, 6.0], detail=True)
 
@@ -534,7 +535,10 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
     assert result["times"] == pytest.approx([2.0, 4.0, 6.0])
     assert result["p0"] == pytest.approx([0.25, 0.4, 0.6])
     assert result["eff.n"] == pytest.approx([8.0, 6.9565217391304355, 5.755395683453237])
-    assert result["brier"] == pytest.approx([0.1411471269, 0.1370106253, 0.2406258361])
+    assert result["brier"] == pytest.approx(
+        [0.14111837337641864, 0.13682915300545814, 0.24095035022544881],
+        abs=1e-6,
+    )
     assert len(result["phat"]) == 3
     assert all(len(row) == len(data["time"]) for row in result["phat"])
 

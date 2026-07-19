@@ -385,7 +385,7 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let log_likelihood = model.log_likelihood();
+            let log_likelihood = black_box(&model).log_likelihood();
             black_box(log_likelihood);
         });
     }
@@ -395,7 +395,7 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let standard_errors = model.std_errors();
+            let standard_errors = black_box(&model).std_errors();
             black_box(standard_errors);
         });
     }
@@ -405,7 +405,7 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let residuals = model.dfbeta();
+            let residuals = black_box(&model).dfbeta();
             black_box(residuals);
         });
     }
@@ -415,7 +415,7 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let variance = model.vcov();
+            let variance = black_box(&model).vcov();
             black_box(variance);
         });
     }
