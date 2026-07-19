@@ -2227,6 +2227,280 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("model summaries match native Cox and survreg coefficient tables", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  set.seed(91)
+  n <- 80L
+  x <- seq(-1.2, 1.4, length.out = n) + rep(c(-0.08, 0.04, 0.11), length.out = n)
+  z <- rep(c(0, 1), length.out = n)
+  site <- factor(
+    rep(c("north", "south"), each = n / 2L),
+    levels = c("north", "south")
+  )
+  id <- rep(seq_len(n / 2L), each = 2L)
+  linear_predictor <- -0.3 * x + 0.2 * z
+  event_time <- stats::rexp(n, rate = exp(linear_predictor) / 8)
+  censor_time <- stats::rexp(n, rate = 1 / 15)
+  data <- data.frame(
+    time = pmax(pmin(event_time, censor_time), 0.01),
+    status = as.integer(event_time <= censor_time),
+    x = x,
+    z = z,
+    site = site,
+    site_num = as.integer(site),
+    id = id
+  )
+
+  cox_cases <- list(
+    plain = list(
+      bridged = coxph(
+        Surv(time, status) ~ x + z,
+        data = data,
+        max_iter = 150,
+        eps = 1e-09,
+        toler = 1e-10
+      ),
+      reference = survival::coxph(
+        survival::Surv(time, status) ~ x + z,
+        data = data,
+        control = survival::coxph.control(
+          iter.max = 150,
+          eps = 1e-09,
+          toler.chol = 1e-10
+        )
+      ),
+      columns = c("coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"),
+      robust = FALSE
+    ),
+    clustered = list(
+      bridged = coxph(
+        Surv(time, status) ~ x + z + cluster(id),
+        data = data,
+        max_iter = 150,
+        eps = 1e-09,
+        toler = 1e-10
+      ),
+      reference = survival::coxph(
+        survival::Surv(time, status) ~ x + z + cluster(id),
+        data = data,
+        control = survival::coxph.control(
+          iter.max = 150,
+          eps = 1e-09,
+          toler.chol = 1e-10
+        )
+      ),
+      columns = c(
+        "coef", "exp(coef)", "se(coef)", "robust se", "z", "Pr(>|z|)"
+      ),
+      robust = TRUE
+    )
+  )
+
+  for (case in cox_cases) {
+    bridged <- summary(case$bridged)
+    reference <- summary(case$reference)
+    expect_identical(rownames(bridged$coefficients), c("x", "z"))
+    expect_identical(rownames(reference$coefficients), c("x", "z"))
+    expect_identical(colnames(bridged$coefficients), case$columns)
+    expect_identical(colnames(reference$coefficients), case$columns)
+    expect_equal(
+      unname(bridged$coefficients),
+      unname(reference$coefficients),
+      tolerance = 2e-04
+    )
+    expect_identical(bridged$used.robust, case$robust)
+    expect_identical(reference$used.robust, case$robust)
+
+    printed <- paste(capture.output(print(bridged)), collapse = "\n")
+    expect_true(grepl("exp(coef)", printed, fixed = TRUE))
+    expect_identical(grepl("robust se", printed, fixed = TRUE), case$robust)
+  }
+
+  for (formula in list(
+    survival::Surv(time, status) ~ 1,
+    survival::Surv(time, status) ~ cluster(id)
+  )) {
+    bridged_formula <- stats::as.formula(
+      sub("survival::Surv", "Surv", deparse1(formula), fixed = TRUE)
+    )
+    bridged <- summary(coxph(bridged_formula, data = data))
+    reference <- summary(survival::coxph(formula, data = data))
+    expect_null(bridged$coefficients)
+    expect_null(reference$coefficients)
+    expect_null(bridged$used.robust)
+    expect_null(reference$used.robust)
+  }
+
+  survreg_control <- survival::survreg.control(
+    maxiter = 150,
+    rel.tolerance = 1e-10
+  )
+  survreg_cases <- list(
+    estimated = list(
+      bridged = survreg(
+        Surv(time, status) ~ x + z,
+        data = data,
+        dist = "weibull",
+        max_iter = 150,
+        eps = 1e-10
+      ),
+      reference = survival::survreg(
+        survival::Surv(time, status) ~ x + z,
+        data = data,
+        dist = "weibull",
+        control = survreg_control
+      ),
+      rows = c("(Intercept)", "x", "z", "Log(scale)"),
+      columns = c("Value", "Std. Error", "z", "p"),
+      scale_names = NULL,
+      robust = FALSE
+    ),
+    fixed = list(
+      bridged = survreg(
+        Surv(time, status) ~ x + z,
+        data = data,
+        dist = "weibull",
+        scale = 0.8,
+        max_iter = 150,
+        eps = 1e-10
+      ),
+      reference = survival::survreg(
+        survival::Surv(time, status) ~ x + z,
+        data = data,
+        dist = "weibull",
+        scale = 0.8,
+        control = survreg_control
+      ),
+      rows = c("(Intercept)", "x", "z"),
+      columns = c("Value", "Std. Error", "z", "p"),
+      scale_names = NULL,
+      robust = FALSE
+    ),
+    stratified = list(
+      bridged = survreg(
+        Surv(time, status) ~ x + z + strata(site),
+        data = data,
+        dist = "weibull",
+        max_iter = 150,
+        eps = 1e-10
+      ),
+      reference = survival::survreg(
+        survival::Surv(time, status) ~ x + z + strata(site),
+        data = data,
+        dist = "weibull",
+        control = survreg_control
+      ),
+      rows = c("(Intercept)", "x", "z", "north", "south"),
+      columns = c("Value", "Std. Error", "z", "p"),
+      scale_names = c("north", "south"),
+      robust = FALSE
+    ),
+    numeric_strata = list(
+      bridged = survreg(
+        Surv(time, status) ~ x + z + strata(site_num),
+        data = data,
+        dist = "weibull",
+        max_iter = 150,
+        eps = 1e-10
+      ),
+      reference = survival::survreg(
+        survival::Surv(time, status) ~ x + z + strata(site_num),
+        data = data,
+        dist = "weibull",
+        control = survreg_control
+      ),
+      rows = c("(Intercept)", "x", "z", "site_num=1", "site_num=2"),
+      columns = c("Value", "Std. Error", "z", "p"),
+      scale_names = c("site_num=1", "site_num=2"),
+      robust = FALSE
+    ),
+    multi_strata = list(
+      bridged = survreg(
+        Surv(time, status) ~ x + z + strata(site_num, site),
+        data = data,
+        dist = "weibull",
+        max_iter = 150,
+        eps = 1e-10
+      ),
+      reference = survival::survreg(
+        survival::Surv(time, status) ~ x + z + strata(site_num, site),
+        data = data,
+        dist = "weibull",
+        control = survreg_control
+      ),
+      rows = c(
+        "(Intercept)", "x", "z",
+        "site_num=1, site=north", "site_num=2, site=south"
+      ),
+      columns = c("Value", "Std. Error", "z", "p"),
+      scale_names = c("site_num=1, site=north", "site_num=2, site=south"),
+      robust = FALSE
+    ),
+    clustered = list(
+      bridged = survreg(
+        Surv(time, status) ~ x + z + cluster(id),
+        data = data,
+        dist = "weibull",
+        max_iter = 150,
+        eps = 1e-10
+      ),
+      reference = survival::survreg(
+        survival::Surv(time, status) ~ x + z + cluster(id),
+        data = data,
+        dist = "weibull",
+        control = survreg_control
+      ),
+      rows = c("(Intercept)", "x", "z", "Log(scale)"),
+      columns = c("Value", "Std. Err", "(Naive SE)", "z", "p"),
+      scale_names = NULL,
+      robust = TRUE
+    )
+  )
+
+  location_names <- c("(Intercept)", "x", "z")
+  for (case in survreg_cases) {
+    bridged <- summary(case$bridged)
+    reference <- summary(case$reference)
+    expect_true(is.numeric(bridged$coefficients))
+    expect_null(dim(bridged$coefficients))
+    expect_identical(names(bridged$coefficients), location_names)
+    expect_identical(names(reference$coefficients), location_names)
+    expect_equal(
+      unname(bridged$coefficients),
+      unname(reference$coefficients),
+      tolerance = 2e-04
+    )
+
+    expect_identical(rownames(bridged$table), case$rows)
+    expect_identical(rownames(reference$table), case$rows)
+    expect_identical(colnames(bridged$table), case$columns)
+    expect_identical(colnames(reference$table), case$columns)
+    expect_equal(
+      unname(bridged$table),
+      unname(reference$table),
+      tolerance = 5e-04
+    )
+    expect_identical(bridged$robust, case$robust)
+    expect_identical(reference$robust, case$robust)
+    expect_identical(names(bridged$scale), case$scale_names)
+    expect_identical(names(reference$scale), case$scale_names)
+    expect_equal(unname(bridged$scale), unname(reference$scale), tolerance = 5e-04)
+
+    printed <- paste(capture.output(print(bridged)), collapse = "\n")
+    expect_true(grepl("Value", printed, fixed = TRUE))
+    if ("Log(scale)" %in% case$rows) {
+      expect_true(grepl("Log(scale)", printed, fixed = TRUE))
+    }
+    expect_identical(grepl("(Naive SE)", printed, fixed = TRUE), case$robust)
+  }
+})
+
 test_that("data-prep helpers match R survival shapes", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

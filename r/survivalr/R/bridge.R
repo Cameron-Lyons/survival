@@ -504,23 +504,79 @@ attrassign.lm <- function(object, ...) {
   matrix(unlist(rows, use.names = FALSE), nrow = n_row, ncol = n_col, byrow = TRUE)
 }
 
-.as_coefficient_table <- function(rows) {
-  if (length(rows) == 0L) {
-    return(matrix(numeric(), nrow = 0L, ncol = 4L))
+.as_coefficient_table <- function(rows, model_type = "coxph", robust = FALSE) {
+  model_type <- as.character(model_type)[[1L]]
+  robust <- length(robust) > 0L && isTRUE(as.logical(robust)[[1L]])
+  is_survreg <- identical(model_type, "survreg")
+  columns <- if (is_survreg) {
+    if (robust) {
+      c("Value", "Std. Err", "(Naive SE)", "z", "p")
+    } else {
+      c("Value", "Std. Error", "z", "p")
+    }
+  } else if (robust) {
+    c("coef", "exp(coef)", "se(coef)", "robust se", "z", "Pr(>|z|)")
+  } else {
+    c("coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)")
   }
+  if (length(rows) == 0L) {
+    result <- matrix(numeric(), nrow = 0L, ncol = length(columns))
+    dimnames(result) <- list(NULL, columns)
+    return(result)
+  }
+
+  row_numeric <- function(row, name, fallback_name = NULL, default = NA_real_) {
+    value <- row[[name]]
+    if ((is.null(value) || length(value) == 0L) && !is.null(fallback_name)) {
+      value <- row[[fallback_name]]
+    }
+    if (is.null(value) || length(value) == 0L) {
+      return(default)
+    }
+    as.numeric(value)[[1L]]
+  }
+  row_values <- function(row) {
+    coefficient <- row_numeric(row, "coef")
+    statistic <- row_numeric(row, "z", fallback_name = "statistic")
+    if (is_survreg) {
+      values <- c(
+        row_numeric(row, "value", fallback_name = "coef"),
+        if (robust) {
+          row_numeric(row, "robust_se", fallback_name = "se")
+        } else {
+          row_numeric(row, "se")
+        }
+      )
+      if (robust) {
+        values <- c(values, row_numeric(row, "naive_se", fallback_name = "se"))
+      }
+      return(c(values, statistic, row_numeric(row, "p")))
+    }
+
+    values <- c(
+      coefficient,
+      row_numeric(row, "exp_coef", default = exp(coefficient))
+    )
+    if (robust) {
+      values <- c(
+        values,
+        row_numeric(row, "naive_se", fallback_name = "se"),
+        row_numeric(row, "robust_se", fallback_name = "se")
+      )
+    } else {
+      values <- c(values, row_numeric(row, "se"))
+    }
+    c(values, statistic, row_numeric(row, "p"))
+  }
+
   coefficient_names <- vapply(rows, function(row) as.character(row[["name"]]), character(1))
   values <- matrix(
-    unlist(
-      lapply(rows, function(row) {
-        as.numeric(c(row[["coef"]], row[["se"]], row[["statistic"]], row[["p"]]))
-      }),
-      use.names = FALSE
-    ),
+    unlist(lapply(rows, row_values), use.names = FALSE),
     nrow = length(rows),
-    ncol = 4L,
+    ncol = length(columns),
     byrow = TRUE
   )
-  dimnames(values) <- list(coefficient_names, c("coef", "se(coef)", "z", "Pr(>|z|)"))
+  dimnames(values) <- list(coefficient_names, columns)
   values
 }
 
@@ -7249,7 +7305,54 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
 
 summary.survival_py_model <- function(object, ...) {
   result <- .call_r_api("model_summary", object, ...)
-  result$coefficients <- .as_coefficient_table(result$coefficients)
+  model_type <- as.character(result$model_type)[[1L]]
+  robust <- length(result$robust) > 0L && isTRUE(as.logical(result$robust)[[1L]])
+  coefficient_table <- .as_coefficient_table(
+    result$coefficients,
+    model_type = model_type,
+    robust = robust
+  )
+  if (identical(model_type, "survreg")) {
+    location_coefficients <- result$location_coefficients
+    location_names <- result$location_coefficient_names
+    if (is.null(location_coefficients) || is.null(location_names)) {
+      location_coefficients <- coef(object)
+      location_names <- names(location_coefficients)
+    }
+    location_coefficients <- .as_numeric_vector(location_coefficients)
+    location_names <- as.character(location_names)
+    if (length(location_coefficients) != length(location_names)) {
+      stop("survreg summary coefficient names must match its location coefficients", call. = FALSE)
+    }
+    names(location_coefficients) <- location_names
+    result$coefficients <- location_coefficients
+    result$table <- coefficient_table
+
+    scales <- result$scales
+    if (is.null(scales)) {
+      scales <- result$scale
+    }
+    scales <- .as_numeric_vector(scales)
+    if (length(scales) > 1L) {
+      scale_rows <- seq.int(length(location_coefficients) + 1L, nrow(coefficient_table))
+      if (length(scale_rows) != length(scales)) {
+        stop("survreg summary scale rows must match its fitted scales", call. = FALSE)
+      }
+      names(scales) <- rownames(coefficient_table)[scale_rows]
+      result$scale <- scales
+    } else if (length(scales) == 1L) {
+      result$scale <- scales[[1L]]
+    }
+    result$scales <- scales
+  } else {
+    if (nrow(coefficient_table) == 0L) {
+      result$coefficients <- NULL
+      result$used.robust <- NULL
+    } else {
+      result$coefficients <- coefficient_table
+      result$used.robust <- robust
+    }
+  }
   class(result) <- c("summary.survival_py_model", class(result))
   result
 }
@@ -7599,7 +7702,12 @@ print.survival_py_object <- function(x, ...) {
 
 print.summary.survival_py_model <- function(x, ...) {
   cat(x$model_type, "model summary\n", sep = "")
-  print(x$coefficients, ...)
+  coefficient_table <- if (identical(x$model_type, "survreg") && !is.null(x$table)) {
+    x$table
+  } else {
+    x$coefficients
+  }
+  print(coefficient_table, ...)
   cat("logLik=", x$loglik, " df=", x$df, " n=", x$n, "\n", sep = "")
   invisible(x)
 }
