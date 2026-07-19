@@ -288,6 +288,54 @@ def test_coxph_model_outcome_setters_invalidate_fit_and_validate_values():
         model.censoring = [2]
 
 
+def _correlated_tied_cox_data():
+    event_times = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    censoring = [1, 1, 1, 0, 1, 1, 0, 1, 0, 1]
+    x1 = [0.0, 0.4, 0.8, 0.2, 1.0, 1.4, 0.6, 1.2, 1.6, 1.8]
+    x2 = [0.2, 0.16, 0.62, -0.07, 0.95, 0.61, 0.49, 0.68, 1.24, 0.97]
+    return [[left, right] for left, right in zip(x1, x2, strict=True)], event_times, censoring
+
+
+def test_coxph_model_inference_matches_r_breslow_reference():
+    covariates, event_times, censoring = _correlated_tied_cox_data()
+    model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
+    model.fit(n_iters=50)
+
+    assert model.coefficients[0] == pytest.approx([-2.31840202040788, 0.498511774024299], abs=3e-4)
+    variance = model.vcov()
+    assert variance[0] == pytest.approx([3.92617203232577, -3.98888555572652], abs=1e-5)
+    assert variance[1] == pytest.approx([-3.98888555572652, 5.93057274826530], abs=1e-5)
+    standard_errors = model.std_errors()
+    assert standard_errors == pytest.approx([1.98145704781248, 2.43527672929901], abs=2e-6)
+    assert standard_errors == pytest.approx(
+        [math.sqrt(variance[0][0]), math.sqrt(variance[1][1])], abs=1e-12
+    )
+    assert model.log_likelihood() == pytest.approx(-9.35110475893077, abs=1e-10)
+    assert model.bic() == pytest.approx(-2.0 * -9.35110475893077 + 2.0 * math.log(7.0), abs=1e-10)
+
+    hazard_ratios, lower, upper = model.hazard_ratios_with_ci()
+    assert hazard_ratios == pytest.approx([0.098430750328169, 1.64626942578056], rel=3e-4)
+    assert lower == pytest.approx([0.00202540323260718, 0.01391840926159500], rel=3e-4)
+    assert upper == pytest.approx([4.78354751991521, 194.720745116909], rel=3e-4)
+
+
+def test_coxph_model_outcome_setters_invalidate_fit_and_validate_values():
+    covariates, event_times, censoring = _correlated_tied_cox_data()
+    model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
+    model.fit(n_iters=50)
+
+    model.event_times = event_times
+    assert model.risk_scores == []
+    assert model.baseline_hazard == []
+    assert model.log_likelihood() == 0.0
+    assert model.vcov() == [[0.0, 0.0], [0.0, 0.0]]
+
+    with pytest.raises(ValueError, match="event_times contains NaN"):
+        model.event_times = [float("nan")]
+    with pytest.raises(ValueError, match="censoring must contain only 0/1"):
+        model.censoring = [2]
+
+
 def test_subject():
     subject = survival.Subject(
         id=1,
