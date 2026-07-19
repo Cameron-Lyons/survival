@@ -731,7 +731,7 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{fitted}{survival_py_model}(object, ..., type = NULL, se.fit = FALSE)
 
-\method{summary}{survival_py_model}(object, ...)
+\method{summary}{survival_py_model}(object, conf.int = 0.95, scale = 1, ...)
 
 \method{summary}{survival_py_survfit}(object, times, censored = FALSE,
   scale = 1, extend = FALSE, rmean = getOption("survfit.rmean"),
@@ -810,7 +810,9 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{print}{survival_py_anova}(x, ...)
 
-\method{print}{summary.survival_py_model}(x, ...)
+\method{print}{summary.survival_py_model}(x,
+  digits = max(getOption("digits") - 3, 3),
+  signif.stars = getOption("show.signif.stars"), expand = FALSE, ...)
 }
 \arguments{
 \item{time, time2, event}{Survival response vectors. \code{time} is also
@@ -986,8 +988,9 @@ long data frame instead of a matrix.}
 log-survival scale for \code{survfit_confint}.}
 \item{conf.type}{Confidence interval transform for \code{survfit_confint}
 and \code{survfitKM}.}
-\item{conf.int}{Confidence level for \code{survfit_confint}, or logical flag
-controlling confidence bounds in \code{quantile.survival_py_survfit}.}
+\item{conf.int}{Confidence level for \code{survfit_confint} and Cox model
+summaries, or logical flag controlling confidence bounds in survival
+quantiles and Cox summaries.}
 \item{selow}{Optional lower-side standard-error vector for asymmetric
 \code{survfit_confint} bounds.}
 \item{ulimit}{Logical flag controlling upper-bound clipping in
@@ -1007,7 +1010,12 @@ convergence tolerance used when \code{ridge}, \code{frailty.*}, or
 \item{dlist}{Distribution-list object for \code{survregDtest}.}
 \item{row.names, optional, make.names}{Standard \code{as.data.frame}
 arguments.}
-\item{digits}{Number of significant digits used by \code{print.concordance}.}
+\item{digits}{Number of significant digits used by concordance and model
+summary printers.}
+\item{signif.stars}{Logical flag controlling significance stars in printed
+Cox coefficient tables.}
+\item{expand}{Logical multi-state Cox print expansion flag, accepted for
+compatibility.}
 \item{quote}{Logical flag controlling whether printed survival-time labels are
 quoted.}
 \item{i, j, name, exact, drop}{Row and column subset controls for native
@@ -1040,11 +1048,11 @@ survtype, vartype, unlist}{Low-level delegated Cox survival-curve inputs.}
 \item{stype, ctype, conf.lower, start.time, entry, time0, robust}{Low-level
 \code{survfitKM} controls matching the R \pkg{survival} entry point where
 supported.}
-\item{scale}{Scale parameter for \code{survreg} distribution helpers, the
-standard \code{extractAIC} scale argument, divisor for survival quantile and
-\code{summary.survival_py_survfit} times, or a logical flag controlling
-whether \code{ridge} scales the penalty
-by column variance.}
+\item{scale}{Scale parameter for \code{survreg} distribution helpers, Cox
+summary coefficients, the standard \code{extractAIC} scale argument, divisor
+for survival quantile and \code{summary.survival_py_survfit} times, or a
+logical flag controlling whether \code{ridge} scales the penalty by column
+variance.}
 \item{k}{Penalty multiplier for \code{extractAIC}, or observed Poisson event
 count for \code{cipoisson}.}
 \item{test}{Test name for bridged model analysis of variance, \code{aareg}

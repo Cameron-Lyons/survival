@@ -2316,10 +2316,50 @@ test_that("model summaries match native Cox and survreg coefficient tables", {
     )
     expect_identical(bridged$used.robust, case$robust)
     expect_identical(reference$used.robust, case$robust)
+    expect_equal(bridged$loglik, reference$loglik, tolerance = 1e-08)
+    expect_identical(bridged$nevent, reference$nevent)
+    expect_identical(colnames(bridged$conf.int), colnames(reference$conf.int))
+    expect_equal(bridged$conf.int, reference$conf.int, tolerance = 1e-06)
+    for (field in c("logtest", "sctest", "waldtest")) {
+      expect_named(bridged[[field]], c("test", "df", "pvalue"))
+      expect_equal(bridged[[field]], reference[[field]], tolerance = 1e-06)
+    }
+    expect_named(bridged$rsq, c("rsq", "maxrsq"))
+    expect_equal(bridged$rsq, reference$rsq, tolerance = 1e-08)
 
     printed <- paste(capture.output(print(bridged)), collapse = "\n")
     expect_true(grepl("exp(coef)", printed, fixed = TRUE))
     expect_identical(grepl("robust se", printed, fixed = TRUE), case$robust)
+    expect_true(grepl("number of events", printed, fixed = TRUE))
+    expect_true(grepl("Likelihood ratio test=", printed, fixed = TRUE))
+    expect_true(grepl("Wald test            =", printed, fixed = TRUE))
+    expect_true(grepl("Score (logrank) test =", printed, fixed = TRUE))
+    expect_identical(
+      grepl("assume independence", printed, fixed = TRUE),
+      case$robust
+    )
+  }
+
+  for (case in cox_cases) {
+    bridged <- summary(case$bridged, conf.int = 0.9, scale = 2)
+    reference <- summary(case$reference, conf.int = 0.9, scale = 2)
+    expect_identical(
+      colnames(bridged$conf.int),
+      c("exp(coef)", "exp(-coef)", "lower .90", "upper .90")
+    )
+    expect_equal(bridged$coefficients, reference$coefficients, tolerance = 1e-06)
+    expect_equal(bridged$conf.int, reference$conf.int, tolerance = 1e-06)
+    expect_equal(bridged$logtest, reference$logtest, tolerance = 1e-06)
+    expect_equal(bridged$sctest, reference$sctest, tolerance = 1e-06)
+    expect_equal(bridged$waldtest, reference$waldtest, tolerance = 1e-06)
+    expect_equal(bridged$rsq, reference$rsq, tolerance = 1e-08)
+
+    without_confidence <- summary(case$bridged, conf.int = FALSE)
+    reference_without_confidence <- summary(case$reference, conf.int = FALSE)
+    expect_null(without_confidence$conf.int)
+    expect_null(reference_without_confidence$conf.int)
+    printed <- paste(capture.output(print(without_confidence)), collapse = "\n")
+    expect_false(grepl("lower .", printed, fixed = TRUE))
   }
 
   for (formula in list(
@@ -2329,8 +2369,16 @@ test_that("model summaries match native Cox and survreg coefficient tables", {
     bridged_formula <- stats::as.formula(
       sub("survival::Surv", "Surv", deparse1(formula), fixed = TRUE)
     )
-    bridged <- summary(coxph(bridged_formula, data = data))
-    reference <- summary(survival::coxph(formula, data = data))
+    bridged <- summary(
+      coxph(bridged_formula, data = data),
+      conf.int = 0.9,
+      scale = 2
+    )
+    reference <- summary(
+      survival::coxph(formula, data = data),
+      conf.int = 0.9,
+      scale = 2
+    )
     expect_null(bridged$coefficients)
     expect_null(reference$coefficients)
     expect_null(bridged$used.robust)
