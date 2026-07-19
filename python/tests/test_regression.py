@@ -213,6 +213,31 @@ def test_coxph_model():
 
     brier = model.brier_score()
     assert isinstance(brier, float)
+    assert isinstance(model.brier_score(time=8.0), float)
+
+
+def test_coxph_model_brier_matches_r_survival_reference():
+    model = survival.CoxPHModel.new_with_data(
+        [[value] for value in [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]],
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        [1, 0, 1, 1, 0, 1, 0, 1],
+    )
+    model.fit(n_iters=50)
+
+    expected = {
+        2.0: 0.10590443678594358,
+        3.0: 0.18450534607635558,
+        4.0: 0.23916349962515318,
+        6.0: 0.24491865014681730,
+    }
+    for horizon, r_score in expected.items():
+        assert model.brier_score(horizon) == pytest.approx(r_score, abs=2e-4)
+
+    assert model.brier_score() == pytest.approx(model.brier_score(4.0))
+    with pytest.raises(ValueError, match="time must be finite"):
+        model.brier_score(float("nan"))
+    with pytest.raises(ValueError, match="time must be finite"):
+        model.brier_score(float("inf"))
 
 
 def test_subject():

@@ -391,6 +391,18 @@ mod cox_regression {
     }
 
     #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_model_brier_score(bencher: divan::Bencher, n: usize) {
+        let model = fitted_coxph_model(n, 4);
+
+        bencher.bench_local(|| {
+            let score = model
+                .brier_score(None)
+                .expect("benchmark Brier score should succeed");
+            black_box(score);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
     fn coxph_model_std_errors(bencher: divan::Bencher, n: usize) {
         let model = fitted_coxph_model(n, 4);
 
