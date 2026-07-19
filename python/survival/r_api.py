@@ -215,6 +215,7 @@ class _NumericDesignTerm:
 class _CategoricalDesignTerm:
     term: _CovariateTerm
     levels: tuple[Any, ...]
+    full: bool = False
 
 
 _SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm
@@ -2915,12 +2916,70 @@ def _fit_single_design_term(
     return _CategoricalDesignTerm(term, _categorical_levels(values, term.column))
 
 
-def _fit_design_term(data: Any, term: _CovariateSpec, n: int) -> _DesignTerm:
+def _fit_design_term(
+    data: Any,
+    term: _CovariateSpec,
+    n: int,
+    factor_order: Mapping[_CovariateTerm, int] | None = None,
+) -> _DesignTerm:
     if isinstance(term, _InteractionTerm):
+        factors = term.factors
+        if factor_order is not None:
+            factors = tuple(sorted(factors, key=factor_order.__getitem__))
         return _InteractionDesignTerm(
-            tuple(_fit_single_design_term(data, factor, n) for factor in term.factors)
+            tuple(_fit_single_design_term(data, factor, n) for factor in factors)
         )
     return _fit_single_design_term(data, term, n)
+
+
+def _formula_factor_order(terms: Sequence[_CovariateSpec]) -> dict[_CovariateTerm, int]:
+    order: dict[_CovariateTerm, int] = {}
+    for term in terms:
+        for factor in _covariate_factors(term):
+            order.setdefault(factor, len(order))
+    return order
+
+
+def _formula_model_term_degree(term: _FormulaModelTerm) -> int:
+    if isinstance(term, _ModelCovariateTerm):
+        return len(_covariate_factors(term.term))
+    if isinstance(term, _ModelStrataTerm):
+        return 1
+    return 0
+
+
+def _categorical_design_factors(spec: _DesignTerm) -> list[_CategoricalDesignTerm]:
+    if isinstance(spec, _CategoricalDesignTerm):
+        return [spec]
+    if isinstance(spec, _InteractionDesignTerm):
+        return [factor for factor in spec.factors if isinstance(factor, _CategoricalDesignTerm)]
+    return []
+
+
+def _set_full_categorical_factors(
+    spec: _DesignTerm,
+    full_factors: set[_CovariateTerm],
+) -> _DesignTerm:
+    if isinstance(spec, _CategoricalDesignTerm):
+        return _CategoricalDesignTerm(
+            spec.term,
+            spec.levels,
+            full=spec.term in full_factors,
+        )
+    if isinstance(spec, _InteractionDesignTerm):
+        return _InteractionDesignTerm(
+            tuple(
+                _CategoricalDesignTerm(
+                    factor.term,
+                    factor.levels,
+                    full=factor.term in full_factors,
+                )
+                if isinstance(factor, _CategoricalDesignTerm)
+                else factor
+                for factor in spec.factors
+            )
+        )
+    return spec
 
 
 def _fit_formula_design(
@@ -2932,19 +2991,56 @@ def _fit_formula_design(
     include_intercept: bool = False,
 ) -> _FormulaDesign:
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
+    factor_order = _formula_factor_order(terms.covariates)
+    ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
+    ordered_model_terms = sorted(
+        (
+            term
+            for term in terms.model_terms
+            if isinstance(term, _ModelCovariateTerm | _ModelStrataTerm)
+        ),
+        key=_formula_model_term_degree,
+    )
     term_assignments: dict[_CovariateSpec, int] = {}
-    term_index = 0
-    for model_term in terms.model_terms:
+    for term_index, model_term in enumerate(ordered_model_terms, start=1):
         if isinstance(model_term, _ModelCovariateTerm):
-            term_index += 1
             term_assignments[model_term.term] = term_index
-        elif isinstance(model_term, _ModelStrataTerm):
-            term_index += 1
+    # Cox uses an implicit intercept to choose contrasts even though its design
+    # matrix never contains an intercept column. Survreg honors the formula.
+    contrast_intercept = terms.intercept if include_intercept else True
+    covered_terms: set[frozenset[_CovariateTerm]] = {frozenset()} if contrast_intercept else set()
+    promoted_no_intercept_factor = contrast_intercept
+    design_terms: list[_DesignTerm] = []
+    for term in ordered_terms:
+        fitted_term = _fit_design_term(data, term, n, factor_order)
+        raw_factors = frozenset(_covariate_factors(term))
+        categorical_factors = _categorical_design_factors(fitted_term)
+        full_factors = {
+            factor.term
+            for factor in categorical_factors
+            # R treatment-codes a factor only when the exact marginal term
+            # obtained by removing that factor has already been represented.
+            if raw_factors - {factor.term} not in covered_terms
+        }
+        # Without an intercept, model.matrix promotes the first categorical
+        # occurrence to full indicators even when its marginal is present.
+        if not promoted_no_intercept_factor and categorical_factors:
+            full_factors.add(categorical_factors[0].term)
+            promoted_no_intercept_factor = True
+        fitted_term = _set_full_categorical_factors(fitted_term, full_factors)
+        design_terms.append(fitted_term)
+        if (
+            len(raw_factors) == 1
+            and isinstance(fitted_term, _CategoricalDesignTerm)
+            and fitted_term.full
+        ):
+            covered_terms.add(frozenset())
+        covered_terms.add(raw_factors)
     return _FormulaDesign(
         response=response_spec,
-        covariates=tuple(_fit_design_term(data, term, n) for term in terms.covariates),
+        covariates=tuple(design_terms),
         offsets=tuple(terms.offsets),
-        term_assignments=tuple(term_assignments[term] for term in terms.covariates),
+        term_assignments=tuple(term_assignments[term] for term in ordered_terms),
         strata=tuple(terms.strata),
         strata_levels=_label_levels(strata_values, "strata") if terms.strata else (),
         intercept=include_intercept and terms.intercept,
@@ -2966,14 +3062,16 @@ def _single_design_columns(
             raise ValueError(
                 f"newdata column {spec.term.column!r} contains unknown level {value!r}"
             )
-    return [[1.0 if value == level else 0.0 for value in values] for level in levels[1:]]
+    encoded_levels = levels if spec.full else levels[1:]
+    return [[1.0 if value == level else 0.0 for value in values] for level in encoded_levels]
 
 
 def _design_term_columns(data: Any, spec: _DesignTerm, n: int) -> list[list[float]]:
     if isinstance(spec, _InteractionDesignTerm):
         factor_columns = [_single_design_columns(data, factor, n) for factor in spec.factors]
         interaction_columns: list[list[float]] = []
-        for column_combo in product(*factor_columns):
+        for reversed_combo in product(*reversed(factor_columns)):
+            column_combo = tuple(reversed(reversed_combo))
             interaction_columns.append(
                 [math.prod(column[idx] for column in column_combo) for idx in range(n)]
             )
@@ -3012,14 +3110,15 @@ def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
     term = spec.term
     if isinstance(spec, _CategoricalDesignTerm):
         prefix = _covariate_term_name(term)
-        return [f"{prefix}{level}" for level in spec.levels[1:]]
+        levels = spec.levels if spec.full else spec.levels[1:]
+        return [f"{prefix}{level}" for level in levels]
     return [_covariate_term_name(term)]
 
 
 def _design_term_output_names(spec: _DesignTerm) -> list[str]:
     if isinstance(spec, _InteractionDesignTerm):
         factor_names = [_single_design_term_output_names(factor) for factor in spec.factors]
-        return [":".join(combo) for combo in product(*factor_names)]
+        return [":".join(reversed(combo)) for combo in product(*reversed(factor_names))]
     return _single_design_term_output_names(spec)
 
 
