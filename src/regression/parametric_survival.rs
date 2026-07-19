@@ -47,7 +47,7 @@ impl SurvregConfig {
         tol_chol: Option<f64>,
     ) -> Self {
         Self {
-            distribution: distribution.unwrap_or(DistributionType::ExtremeValue),
+            distribution: distribution.unwrap_or(DEFAULT_SURVREG_DISTRIBUTION),
             max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
             eps: eps.unwrap_or(CONVERGENCE_EPSILON),
             tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
@@ -61,7 +61,7 @@ impl Default for SurvregConfig {
             max_iter: DEFAULT_MAX_ITER,
             eps: CONVERGENCE_EPSILON,
             tol_chol: CHOLESKY_TOL,
-            distribution: DistributionType::ExtremeValue,
+            distribution: DEFAULT_SURVREG_DISTRIBUTION,
         }
     }
 }
@@ -74,7 +74,7 @@ impl SurvregConfig {
         tol_chol: Option<f64>,
     ) -> Self {
         Self {
-            distribution: distribution.unwrap_or(DistributionType::ExtremeValue),
+            distribution: distribution.unwrap_or(DEFAULT_SURVREG_DISTRIBUTION),
             max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
             eps: eps.unwrap_or(CONVERGENCE_EPSILON),
             tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
@@ -173,7 +173,7 @@ fn is_student_t_distribution_name(distribution: &str) -> bool {
 
 fn parse_distribution_type(distribution: Option<&str>) -> PyResult<DistributionType> {
     let Some(name) = distribution else {
-        return Ok(DistributionType::ExtremeValue);
+        return Ok(DEFAULT_SURVREG_DISTRIBUTION);
     };
     match name.to_lowercase().replace('-', "_").as_str() {
         "weibull" => Ok(DistributionType::Weibull),
@@ -824,6 +824,8 @@ pub enum DistributionType {
     StudentT,
 }
 
+const DEFAULT_SURVREG_DISTRIBUTION: DistributionType = DistributionType::Weibull;
+
 /// Fit a parametric survival regression model.
 ///
 /// Parameters
@@ -1270,7 +1272,27 @@ mod tests {
         assert_eq!(config.max_iter, 30);
         assert!((config.eps - 1e-6).abs() < 1e-10);
         assert!((config.tol_chol - 1e-10).abs() < 1e-15);
-        assert_eq!(config.distribution, DistributionType::ExtremeValue);
+        assert_eq!(config.distribution, DistributionType::Weibull);
+    }
+
+    #[test]
+    fn test_survreg_distribution_fallbacks_are_weibull() {
+        assert_eq!(
+            SurvregConfig::new(None, None, None, None).distribution,
+            DistributionType::Weibull
+        );
+        assert_eq!(
+            SurvregConfig::create(None, None, None, None).distribution,
+            DistributionType::Weibull
+        );
+        assert_eq!(
+            parse_distribution_type(None).unwrap(),
+            DistributionType::Weibull
+        );
+        assert_eq!(
+            parse_distribution_type(Some("extreme_value")).unwrap(),
+            DistributionType::ExtremeValue
+        );
     }
 
     #[test]
