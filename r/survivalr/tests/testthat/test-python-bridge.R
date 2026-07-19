@@ -2241,6 +2241,157 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("model term metadata matches native Cox formula outputs", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  set.seed(1729)
+  n <- 60L
+  data <- data.frame(
+    time = stats::rexp(n) + 0.1,
+    status = stats::rbinom(n, 1L, 0.75),
+    g = factor(rep(c("a", "b", "c"), length.out = n), levels = c("a", "b", "c")),
+    x = stats::rnorm(n)
+  )
+  cases <- list(
+    bare = list(
+      rhs = "g + x",
+      coefficients = c("gb", "gc", "x"),
+      terms = c("g", "x"),
+      assign = c(1L, 1L, 2L)
+    ),
+    factor = list(
+      rhs = "factor(g) + x",
+      coefficients = c("factor(g)b", "factor(g)c", "x"),
+      terms = c("factor(g)", "x"),
+      assign = c(1L, 1L, 2L)
+    ),
+    as_factor = list(
+      rhs = "as.factor(g) + x",
+      coefficients = c("as.factor(g)b", "as.factor(g)c", "x"),
+      terms = c("as.factor(g)", "x"),
+      assign = c(1L, 1L, 2L)
+    ),
+    interaction = list(
+      rhs = "g * x",
+      coefficients = c("gb", "gc", "x", "gb:x", "gc:x"),
+      terms = c("g", "x", "g:x"),
+      assign = c(1L, 1L, 2L, 3L, 3L)
+    )
+  )
+
+  for (case in cases) {
+    bridged_formula <- stats::as.formula(paste("Surv(time, status) ~", case$rhs))
+    reference_formula <- stats::as.formula(
+      paste("survival::Surv(time, status) ~", case$rhs)
+    )
+    bridged <- coxph(
+      bridged_formula,
+      data = data,
+      max_iter = 50,
+      eps = 1e-09,
+      toler = 1e-10
+    )
+    reference <- survival::coxph(
+      reference_formula,
+      data = data,
+      x = TRUE,
+      y = TRUE,
+      control = survival::coxph.control(iter.max = 50, eps = 1e-09, toler.chol = 1e-10)
+    )
+
+    expect_equal(names(coef(bridged)), case$coefficients)
+    expect_equal(names(coef(reference)), case$coefficients)
+    expect_equal(rownames(summary(bridged)$coefficients), case$coefficients)
+
+    bridged_matrix <- model.matrix(bridged)
+    reference_matrix <- stats::model.matrix(reference)
+    expect_equal(dim(bridged_matrix), dim(reference_matrix))
+    expect_equal(colnames(bridged_matrix), case$coefficients)
+    expect_equal(colnames(reference_matrix), case$coefficients)
+    expect_equal(attr(bridged_matrix, "assign"), case$assign)
+    expect_equal(attr(reference_matrix, "assign"), case$assign)
+    expect_equal(as.numeric(bridged_matrix), as.numeric(reference_matrix), tolerance = 1e-12)
+    expect_equal(
+      attrassign(bridged_matrix, terms(bridged)),
+      survival::attrassign(reference_matrix, terms(reference))
+    )
+
+    bridged_terms <- predict(bridged, type = "terms")
+    reference_terms <- stats::predict(reference, type = "terms")
+    expect_equal(dim(bridged_terms), dim(reference_terms))
+    expect_equal(colnames(bridged_terms), case$terms)
+    expect_equal(colnames(reference_terms), case$terms)
+    expect_equal(
+      attr(bridged_terms, "constant"),
+      attr(reference_terms, "constant"),
+      tolerance = 2e-04
+    )
+
+    selected_terms <- rev(case$terms)
+    bridged_selected <- predict(bridged, type = "terms", terms = selected_terms)
+    reference_selected <- stats::predict(
+      reference,
+      type = "terms",
+      terms = selected_terms
+    )
+    expect_equal(dim(bridged_selected), dim(reference_selected))
+    expect_equal(colnames(bridged_selected), selected_terms)
+    expect_equal(colnames(reference_selected), selected_terms)
+
+    bridged_with_se <- predict(bridged, type = "terms", se.fit = TRUE)
+    reference_with_se <- stats::predict(reference, type = "terms", se.fit = TRUE)
+    expect_equal(colnames(bridged_with_se$fit), case$terms)
+    expect_equal(colnames(bridged_with_se$se.fit), case$terms)
+    expect_equal(colnames(reference_with_se$fit), case$terms)
+    expect_equal(colnames(reference_with_se$se.fit), case$terms)
+    expect_equal(
+      attr(bridged_with_se$fit, "constant"),
+      attr(reference_with_se$fit, "constant"),
+      tolerance = 2e-04
+    )
+    expect_null(attr(bridged_with_se$se.fit, "constant"))
+
+    bridged_partial <- residuals(bridged, type = "partial")
+    reference_partial <- stats::residuals(reference, type = "partial")
+    expect_equal(dim(bridged_partial), dim(reference_partial))
+    expect_equal(colnames(bridged_partial), case$terms)
+    expect_equal(colnames(reference_partial), case$terms)
+    expected_partial <- sweep(
+      unclass(bridged_terms),
+      1L,
+      as.numeric(residuals(bridged, type = "martingale")),
+      "+"
+    )
+    expect_equal(
+      as.numeric(bridged_partial),
+      as.numeric(expected_partial),
+      tolerance = 1e-10
+    )
+
+    bridged_score <- residuals(bridged, type = "score")
+    reference_score <- stats::residuals(reference, type = "score")
+    expect_equal(colnames(bridged_score), colnames(reference_score))
+
+    bridged_zph_terms <- as.data.frame(cox.zph(bridged, transform = "rank", terms = TRUE))
+    reference_zph_terms <- survival::cox.zph(reference, transform = "rank", terms = TRUE)
+    expect_equal(bridged_zph_terms$name, rownames(reference_zph_terms$table))
+    bridged_zph_columns <- as.data.frame(
+      cox.zph(bridged, transform = "rank", terms = FALSE)
+    )
+    reference_zph_columns <- survival::cox.zph(
+      reference,
+      transform = "rank",
+      terms = FALSE
+    )
+    expect_equal(bridged_zph_columns$name, rownames(reference_zph_columns$table))
+  }
+})
+
 test_that("data-prep helpers match R survival shapes", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

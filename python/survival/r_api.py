@@ -75,6 +75,7 @@ __all__ = [
     "model_summary",
     "model_frame",
     "model_matrix",
+    "model_term_names",
     "model_weights",
     "neardate",
     "nobs",
@@ -151,6 +152,7 @@ _MISSING = _MissingArgument()
 class _CovariateTerm:
     column: str
     categorical: bool = False
+    categorical_wrapper: str | None = None
     transform: str | None = None
     arithmetic: str | None = None
 
@@ -233,6 +235,7 @@ class _FormulaDesign:
     response: _SurvResponseSpec
     covariates: tuple[_DesignTerm, ...]
     offsets: tuple[_CovariateTerm, ...]
+    term_assignments: tuple[int, ...] = ()
     strata: tuple[str, ...] = ()
     strata_levels: tuple[Any, ...] = ()
     intercept: bool = False
@@ -2365,7 +2368,11 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
             raise ValueError(f"{wrapper}() requires exactly one column")
         if any(_unsupported_formula_name(column, quoted) for column, quoted in column_items):
             raise ValueError(f"unsupported formula term(s): {columns[0]}")
-        return _CovariateTerm(columns[0], categorical=True)
+        return _CovariateTerm(
+            columns[0],
+            categorical=True,
+            categorical_wrapper=wrapper,
+        )
 
     for wrapper in ("I", "identity"):
         prefix = f"{wrapper}("
@@ -2867,10 +2874,19 @@ def _fit_formula_design(
     include_intercept: bool = False,
 ) -> _FormulaDesign:
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
+    term_assignments: dict[_CovariateSpec, int] = {}
+    term_index = 0
+    for model_term in terms.model_terms:
+        if isinstance(model_term, _ModelCovariateTerm):
+            term_index += 1
+            term_assignments[model_term.term] = term_index
+        elif isinstance(model_term, _ModelStrataTerm):
+            term_index += 1
     return _FormulaDesign(
         response=response_spec,
         covariates=tuple(_fit_design_term(data, term, n) for term in terms.covariates),
         offsets=tuple(terms.offsets),
+        term_assignments=tuple(term_assignments[term] for term in terms.covariates),
         strata=tuple(terms.strata),
         strata_levels=_label_levels(strata_values, "strata") if terms.strata else (),
         intercept=include_intercept and terms.intercept,
@@ -2916,13 +2932,16 @@ def _design_rows_from_spec(data: Any, design: _FormulaDesign, n: int) -> list[li
     return [[column[i] for column in columns] for i in range(n)]
 
 
-def _display_single_design_term(spec: _SingleDesignTerm) -> str:
-    term = spec.term
+def _covariate_term_name(term: _CovariateTerm) -> str:
     if term.transform is not None:
         return f"{term.transform}({term.column})"
-    if isinstance(spec, _CategoricalDesignTerm):
-        return f"factor({term.column})"
+    if term.categorical_wrapper is not None:
+        return f"{term.categorical_wrapper}({term.column})"
     return term.column
+
+
+def _display_single_design_term(spec: _SingleDesignTerm) -> str:
+    return _covariate_term_name(spec.term)
 
 
 def _design_term_name(spec: _DesignTerm) -> str:
@@ -2934,10 +2953,9 @@ def _design_term_name(spec: _DesignTerm) -> str:
 def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
     term = spec.term
     if isinstance(spec, _CategoricalDesignTerm):
-        return [f"{term.column}{level}" for level in spec.levels[1:]]
-    if term.transform is not None:
-        return [f"{term.transform}({term.column})"]
-    return [term.column]
+        prefix = _covariate_term_name(term)
+        return [f"{prefix}{level}" for level in spec.levels[1:]]
+    return [_covariate_term_name(term)]
 
 
 def _design_term_output_names(spec: _DesignTerm) -> list[str]:
@@ -5492,9 +5510,7 @@ def _survobrien_transform_values(
 
 
 def _survobrien_term_name(term: _CovariateTerm) -> str:
-    if term.transform is not None:
-        return f"{term.transform}({term.column})"
-    return term.column
+    return _covariate_term_name(term)
 
 
 def _survobrien_formula_terms(
@@ -6014,13 +6030,7 @@ def _survcondense_legacy_call(
 def _survcondense_term_name(term: _CovariateSpec) -> str:
     if isinstance(term, _InteractionTerm):
         return ":".join(_survcondense_term_name(factor) for factor in term.factors)
-    if term.arithmetic is not None:
-        return term.arithmetic
-    if term.transform is not None:
-        return f"{term.transform}({term.column})"
-    if term.categorical:
-        return f"factor({term.column})"
-    return term.column
+    return _covariate_term_name(term)
 
 
 def _survcondense_strata_name(columns: Sequence[str]) -> str:
@@ -11425,20 +11435,6 @@ def _cox_deviance_from_martingale(martingale: list[float], status: list[float]) 
     return residuals
 
 
-def _cox_term_contributions(fit: Any, n: int) -> list[list[float]]:
-    beta = _cox_beta(fit)
-    nvar = len(beta)
-    covariates = getattr(fit, "covariates", None)
-    if covariates is None:
-        raise TypeError("model does not expose fitted covariates")
-    rows = [list(row) for row in covariates]
-    if len(rows) != n:
-        raise ValueError("fitted Cox model covariates do not match residual length")
-    if any(len(row) != nvar for row in rows):
-        raise ValueError("fitted Cox model covariates do not match coefficient width")
-    return [[float(row[col_idx]) * beta[col_idx] for col_idx in range(nvar)] for row in rows]
-
-
 def _cox_predict_term_groups(fit: Any, nvar: int) -> list[tuple[str, list[int]]]:
     design = _formula_design_for_fit(fit)
     if design is None:
@@ -11534,22 +11530,12 @@ def _cox_partial_residuals(
             residual * float(weight)
             for residual, weight in zip(martingale, martingale_weights, strict=True)
         ]
-    contributions = _cox_term_contributions(fit, len(martingale))
-    if terms is None:
-        return [
-            [martingale[row_idx] + term for term in row_terms]
-            for row_idx, row_terms in enumerate(contributions)
-        ]
-
-    groups = _cox_predict_term_groups(fit, len(_cox_beta(fit)))
-    selected = _predict_terms_selection(terms, [name for name, _columns in groups])
+    contributions = _cox_predict_terms(fit, None, terms, "sample", None)
+    if len(contributions) != len(martingale):
+        raise ValueError("Cox term predictions do not match martingale residual length")
     return [
-        [
-            martingale[row_idx]
-            + sum(contributions[row_idx][col_idx] for col_idx in groups[group_idx][1])
-            for group_idx in selected
-        ]
-        for row_idx in range(len(martingale))
+        [martingale[row_idx] + contribution for contribution in row]
+        for row_idx, row in enumerate(contributions)
     ]
 
 
@@ -12151,6 +12137,25 @@ def model_formula(fit: Any) -> str:
     raise TypeError("model_formula requires a formula-based fitted model")
 
 
+def model_term_names(fit: Any, terms: Any | None = None) -> list[str]:
+    """Return one label for each fitted model term, excluding the intercept."""
+
+    _require_model_fit(fit, "model_term_names")
+    groups = _cox_predict_term_groups(fit, len(_location_beta(fit)))
+    names = [name for name, _columns in groups]
+    return [names[idx] for idx in _predict_terms_selection(terms, names)]
+
+
+def predict_terms_constant(fit: Any) -> float:
+    """Return the sample-reference constant used by Cox term predictions."""
+
+    if not _is_coxph_fit(fit):
+        raise TypeError("predict_terms_constant requires a fitted coxph model")
+    beta = _cox_beta(fit)
+    means = _cox_reference_means(fit, "sample")
+    return sum(value * coefficient for value, coefficient in zip(means, beta, strict=True))
+
+
 def model_weights(fit: Any) -> list[float] | None:
     """Return explicit case weights for a fitted model, or ``None`` when absent."""
 
@@ -12179,6 +12184,21 @@ def _model_matrix_column_names(fit: Any, width: int) -> list[str]:
     return _fallback_coef_names(width)
 
 
+def _model_matrix_assignments(fit: Any, width: int) -> list[int]:
+    design = _formula_design_for_fit(fit)
+    if design is not None and len(design.term_assignments) == len(design.covariates):
+        assignments = [0] if design.intercept else []
+        for term, assignment in zip(
+            design.covariates,
+            design.term_assignments,
+            strict=True,
+        ):
+            assignments.extend([assignment] * len(_design_term_output_names(term)))
+        if len(assignments) == width:
+            return assignments
+    return list(range(1, width + 1))
+
+
 def model_matrix(fit: Any) -> dict[str, Any]:
     """Return the training design matrix and column names for a fitted model."""
 
@@ -12195,6 +12215,7 @@ def model_matrix(fit: Any) -> dict[str, Any]:
     return {
         "data": matrix,
         "columns": _model_matrix_column_names(fit, width),
+        "assign": _model_matrix_assignments(fit, width),
     }
 
 
@@ -16286,7 +16307,10 @@ def residuals(
         return _cox_deviance_from_martingale(martingale, status)
 
     if residual_type == "partial" and (
-        terms is not None or use_weights or not _collapse_is_false(collapse)
+        _formula_design_for_fit(fit) is not None
+        or terms is not None
+        or use_weights
+        or not _collapse_is_false(collapse)
     ):
         result = _cox_partial_residuals(
             fit,
