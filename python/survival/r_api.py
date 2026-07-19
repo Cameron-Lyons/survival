@@ -11792,6 +11792,11 @@ def _unwrap_formula_fit(fit: Any) -> Any:
     return fit.fit if isinstance(fit, _FormulaFit) else fit
 
 
+def _cox_event_count(fit: Any) -> int:
+    model = _unwrap_formula_fit(fit)
+    return sum(int(value) == 1 for value in model.status)
+
+
 def _is_coxph_fit(fit: Any) -> bool:
     model = _unwrap_formula_fit(fit)
     return all(
@@ -11824,6 +11829,8 @@ def _cox_full_loglik(fit: Any) -> float:
 
 
 def _cox_degrees_of_freedom(fit: Any) -> int:
+    if _cox_event_count(fit) == 0:
+        return 0
     return len(_cox_beta(fit))
 
 
@@ -11917,16 +11924,22 @@ def loglik(fit: Any) -> float:
     return _cox_full_loglik(_unwrap_formula_fit(fit))
 
 
-def nobs(fit: Any) -> int:
-    """Return the number of observations used by a fitted model."""
-
-    _require_model_fit(fit, "nobs")
+def _model_row_count(fit: Any) -> int:
     values = getattr(fit, "status", None)
     if values is None:
         values = getattr(fit, "event_times", None)
     if values is None:
-        raise TypeError("nobs requires a fitted model with stored observations")
+        raise TypeError("model does not expose stored observations")
     return len(list(values))
+
+
+def nobs(fit: Any) -> int:
+    """Return the model-specific observation count used by likelihood metadata."""
+
+    _require_model_fit(fit, "nobs")
+    if _is_coxph_fit(fit):
+        return _cox_event_count(fit)
+    return _model_row_count(fit)
 
 
 def degrees_freedom(fit: Any) -> int:
@@ -11967,7 +11980,10 @@ def aic(fit: Any, *, k: Any = 2.0) -> float:
 def bic(fit: Any) -> float:
     """Return Bayesian information criterion for a fitted model."""
 
-    return aic(fit, k=math.log(nobs(fit)))
+    observation_count = nobs(fit)
+    if observation_count == 0:
+        return math.nan
+    return aic(fit, k=math.log(observation_count))
 
 
 def _sample_variance(values: Sequence[float]) -> float:
@@ -12387,7 +12403,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
         "coefficient_names": names,
         "loglik": loglik(fit),
         "df": degrees_freedom(fit),
-        "n": nobs(fit),
+        "n": _model_row_count(fit),
         "robust": bool(getattr(fit, "robust", False)),
     }
     if _is_survreg_fit(fit):
