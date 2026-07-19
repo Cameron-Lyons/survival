@@ -67,6 +67,52 @@ def test_formula_term_cache_returns_independent_terms():
     assert [term.column for term in third.offsets] == ["x2"]
 
 
+def test_row_has_missing_uses_primitive_fast_paths_and_nested_fallbacks():
+    cases = [
+        (None, True),
+        (float("nan"), True),
+        (1.25, False),
+        (3, False),
+        (True, False),
+        ("value", False),
+        ([1.0, None], True),
+        ((1.0, float("nan")), True),
+        ([1.0, (2.0, 3.0)], False),
+    ]
+
+    for value, expected in cases:
+        assert survival.r_api._row_has_missing(value) is expected
+
+    class _ListSubclass(list):
+        pass
+
+    assert survival.r_api._row_has_missing(_ListSubclass([1.0, None])) is True
+
+
+def test_row_has_missing_preserves_custom_comparison_fallback():
+    class _MissingByComparison:
+        def __ne__(self, other):
+            return True
+
+    class _ComparisonError:
+        def __ne__(self, other):
+            raise TypeError("comparison unavailable")
+
+    assert survival.r_api._row_has_missing(_MissingByComparison()) is True
+    assert survival.r_api._row_has_missing(_ComparisonError()) is False
+
+
+def test_row_has_missing_preserves_numpy_and_pandas_sentinels():
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+
+    missing = [np.float64("nan"), np.datetime64("NaT"), pd.NA, pd.NaT]
+    present = [np.float64(1.0), np.int64(2), pd.Timestamp("2025-01-01")]
+
+    assert all(survival.r_api._row_has_missing(value) for value in missing)
+    assert not any(survival.r_api._row_has_missing(value) for value in present)
+
+
 def test_strata_matches_r_factor_codes_and_preserves_low_level_call():
     single = survival.strata(["b", "a", "b", None])
     named = survival.strata(["b", "a", "b", None], [2, 1, 1, 1], labels=["x", "y"])
@@ -10168,6 +10214,36 @@ def test_coxph_formula_na_action_omit_matches_filtered_data():
     assert fit.risk_scores == pytest.approx(direct.risk_scores)
     assert dotted.coefficients[0] == pytest.approx(direct.coefficients[0])
     assert dotted.risk_scores == pytest.approx(direct.risk_scores)
+
+
+def test_coxph_formula_na_action_fail_and_omit_detect_primitive_sentinels():
+    data = _numeric_data()
+    data = {
+        **data,
+        "x1": [0.2, 0.4, None, 0.8, 1.0, 1.2, 0.6, 1.4],
+        "x2": [1.0, 0.9, 1.1, 0.7, 0.4, 0.3, float("nan"), 0.2],
+    }
+    retained = [0, 1, 3, 4, 5, 7]
+
+    with pytest.raises(ValueError, match="missing values in formula data"):
+        survival.coxph("Surv(time, status) ~ x1 + x2", data=data)
+
+    omitted = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        na_action="omit",
+        max_iter=10,
+        eps=1e-5,
+    )
+    filtered = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_take(data, retained),
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    assert omitted.coefficients[0] == pytest.approx(filtered.coefficients[0])
+    assert omitted.risk_scores == pytest.approx(filtered.risk_scores)
 
 
 def test_coxph_formula_filters_external_weights_and_offset_with_subset_and_na_action():
