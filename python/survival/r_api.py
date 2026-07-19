@@ -826,6 +826,13 @@ def _is_missing_value(value: Any) -> bool:
 
 
 def _row_has_missing(value: Any) -> bool:
+    value_type = type(value)
+    if value is None:
+        return True
+    if value_type is float:
+        return math.isnan(value)
+    if value_type is int or value_type is bool or value_type is str:
+        return False
     if isinstance(value, list | tuple):
         return any(_row_has_missing(item) for item in value)
     return _is_missing_value(value)
