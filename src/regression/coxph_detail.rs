@@ -420,6 +420,7 @@ pub(crate) fn compute_coxph_detail_with_options(
             .iter()
             .map(|&idx| observation_weight(weights, idx))
             .sum::<f64>();
+        let mean_event_weight = event_weight / deaths.len() as f64;
         event_covariates.fill(0.0);
         for &idx in &deaths {
             let weight = observation_weight(weights, idx);
@@ -446,7 +447,7 @@ pub(crate) fn compute_coxph_detail_with_options(
             0.0
         };
         let mut varhaz = if s0 > 0.0 {
-            event_weight * hazard_scale_squared / (s0 * s0)
+            event_weight * mean_event_weight * hazard_scale_squared / (s0 * s0)
         } else {
             0.0
         };
@@ -461,9 +462,10 @@ pub(crate) fn compute_coxph_detail_with_options(
             );
             score.copy_from_slice(&event_covariates);
             imat.fill(0.0);
+            means.fill(0.0);
             hazard = 0.0;
             varhaz = 0.0;
-            let step_weight = event_weight / deaths.len() as f64;
+            let step_weight = mean_event_weight;
             for step in 0..deaths.len() {
                 let fraction = step as f64 / deaths.len() as f64;
                 let step_s0 = s0 - fraction * d0;
@@ -478,12 +480,14 @@ pub(crate) fn compute_coxph_detail_with_options(
                     &mut step_covariance,
                 );
                 for col in 0..nvar {
+                    means[col] += step_means[col] / deaths.len() as f64;
                     score[col] -= step_weight * step_means[col];
                 }
                 add_matrix(&mut imat, &step_covariance, step_weight);
                 if step_s0 > 0.0 {
                     hazard += step_weight * hazard_scale / step_s0;
-                    varhaz += step_weight * hazard_scale_squared / (step_s0 * step_s0);
+                    varhaz +=
+                        step_weight * step_weight * hazard_scale_squared / (step_s0 * step_s0);
                 }
             }
         }
@@ -836,7 +840,49 @@ mod tests {
         assert!((row.varhaz - 13.0 / 36.0).abs() < 1e-12);
         assert!((row.score[0] + 1.25).abs() < 1e-12);
         assert!((row.imat[0][0] - 65.0 / 48.0).abs() < 1e-12);
-        assert_eq!(row.means, vec![1.0]);
+        assert_eq!(row.means, vec![9.0 / 8.0]);
+    }
+
+    #[test]
+    fn test_coxph_detail_weighted_variance_matches_hand_computed_values() {
+        let time = vec![1.0, 1.0, 2.0];
+        let status = vec![1, 1, 0];
+        let covariates = vec![vec![0.0], vec![1.0], vec![2.0]];
+        let coefficients = vec![0.0];
+        let weights = vec![1.0, 2.0, 0.5];
+
+        let breslow = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &coefficients,
+            weights: Some(&weights),
+            entry_times: None,
+            strata: None,
+            offset: None,
+            method: "breslow",
+            center: 0.0,
+        })
+        .unwrap();
+        let efron = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &coefficients,
+            weights: Some(&weights),
+            entry_times: None,
+            strata: None,
+            offset: None,
+            method: "efron",
+            center: 0.0,
+        })
+        .unwrap();
+
+        assert_eq!(breslow.rows.len(), 1);
+        assert_eq!(efron.rows.len(), 1);
+        assert!((breslow.rows[0].varhaz - 18.0 / 49.0).abs() < 1e-12);
+        assert!((efron.rows[0].varhaz - 585.0 / 784.0).abs() < 1e-12);
+        assert_eq!(efron.rows[0].means, vec![13.0 / 14.0]);
     }
 
     #[test]

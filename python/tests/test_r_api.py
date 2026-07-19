@@ -7223,6 +7223,94 @@ def test_coxph_detail_exposes_r_style_event_contributions():
     assert all(value > 0.0 for value in detail.varhaz)
 
 
+def test_coxph_detail_efron_tie_averages_step_risk_means():
+    data = {
+        "time": [1.0, 1.0, 2.0],
+        "status": [1, 1, 0],
+        "x": [0.0, 1.0, 2.0],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        init=[0.0],
+        max_iter=0,
+        method="efron",
+    )
+
+    detail = survival.coxph_detail(fit)
+
+    assert detail.means[0] == pytest.approx([9.0 / 8.0])
+    assert detail.score[0] == pytest.approx([-5.0 / 4.0])
+    assert detail.imat[0][0] == pytest.approx([65.0 / 48.0])
+    assert detail.hazard == pytest.approx([5.0 / 6.0])
+    assert detail.varhaz == pytest.approx([13.0 / 36.0])
+
+
+def test_coxph_detail_weighted_tied_event_moments_match_native_values():
+    data = {
+        "time": [1.0, 1.0, 2.0],
+        "status": [1, 1, 0],
+        "x": [0.0, 1.0, 2.0],
+        "weight": [1.0, 2.0, 0.5],
+    }
+    expected = {
+        "breslow": {
+            "mean": 6.0 / 7.0,
+            "score": -4.0 / 7.0,
+            "imat": 60.0 / 49.0,
+            "hazard": 6.0 / 7.0,
+            "varhaz": 18.0 / 49.0,
+        },
+        "efron": {
+            "mean": 13.0 / 14.0,
+            "score": -11.0 / 14.0,
+            "imat": 267.0 / 196.0,
+            "hazard": 33.0 / 28.0,
+            "varhaz": 585.0 / 784.0,
+        },
+    }
+
+    for method, values in expected.items():
+        fit = survival.coxph(
+            "Surv(time, status) ~ x",
+            data=data,
+            weights=data["weight"],
+            init=[0.0],
+            max_iter=0,
+            method=method,
+        )
+
+        detail = survival.coxph_detail(fit)
+
+        assert detail.nevent == [2]
+        assert detail.nrisk == [3]
+        assert detail.means[0] == pytest.approx([values["mean"]])
+        assert detail.score[0] == pytest.approx([values["score"]])
+        assert detail.imat[0][0] == pytest.approx([values["imat"]])
+        assert detail.hazard == pytest.approx([values["hazard"]])
+        assert detail.varhaz == pytest.approx([values["varhaz"]])
+        assert detail.wtrisk == pytest.approx([3.5])
+        assert detail.weights == pytest.approx(data["weight"])
+        assert detail.nevent_wt == pytest.approx([3.0])
+        assert detail.nrisk_wt == pytest.approx([3.5])
+
+        scaled_weights = [10.0 * weight for weight in data["weight"]]
+        scaled_fit = survival.coxph(
+            "Surv(time, status) ~ x",
+            data=data,
+            weights=scaled_weights,
+            init=[0.0],
+            max_iter=0,
+            method=method,
+        )
+        scaled_detail = survival.coxph_detail(scaled_fit)
+        assert scaled_detail.means[0] == pytest.approx(detail.means[0])
+        assert scaled_detail.hazard == pytest.approx(detail.hazard)
+        assert scaled_detail.varhaz == pytest.approx(detail.varhaz)
+        assert scaled_detail.nevent_wt == pytest.approx([30.0])
+        assert scaled_detail.nrisk_wt == pytest.approx([35.0])
+
+
 def test_coxph_detail_riskmat_honors_counting_entry_and_strata():
     data = _counting_cox_data() | {"group": ["A", "A", "A", "A", "B", "B"]}
     fit = survival.coxph(
