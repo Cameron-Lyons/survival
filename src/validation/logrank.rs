@@ -56,6 +56,25 @@ pub enum WeightType {
     PetoPeto,
     FlemingHarrington { p: f64, q: f64 },
 }
+
+fn encode_group_indices(group: &[i32], unique_groups: &[i32]) -> Vec<usize> {
+    let group_to_index: HashMap<i32, usize> = unique_groups
+        .iter()
+        .enumerate()
+        .map(|(idx, &group)| (group, idx))
+        .collect();
+
+    group
+        .iter()
+        .map(|group| {
+            group_to_index
+                .get(group)
+                .copied()
+                .expect("unique_groups contains every group")
+        })
+        .collect()
+}
+
 pub fn weighted_logrank_test(
     time: &[f64],
     status: &[i32],
@@ -101,12 +120,9 @@ pub fn weighted_logrank_test_with_entry_times(
     }
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let group_to_index: HashMap<i32, usize> = unique_groups
-        .iter()
-        .enumerate()
-        .map(|(idx, &g)| (g, idx))
-        .collect();
+    let group_indices = encode_group_indices(group, &unique_groups);
     let mut at_risk: Vec<f64> = vec![0.0; n_groups];
+    let mut total_at_risk: f64 = 0.0;
     let entry_indices = entry_times.map(|entry| {
         let mut indices: Vec<usize> = (0..n).collect();
         indices.sort_by(|&a, &b| entry[a].total_cmp(&entry[b]));
@@ -114,16 +130,17 @@ pub fn weighted_logrank_test_with_entry_times(
     });
     let mut entry_cursor = 0;
     if entry_times.is_none() {
-        for &grp in group {
-            if let Some(&g) = group_to_index.get(&grp) {
-                at_risk[g] += 1.0;
-            }
+        for &group_index in &group_indices {
+            at_risk[group_index] += 1.0;
+            total_at_risk += 1.0;
         }
     }
     let mut observed = vec![0.0; n_groups];
     let mut expected = vec![0.0; n_groups];
     let mut variance = vec![0.0; n_groups * n_groups];
-    let mut km_survival = 1.0;
+    let mut km_survival: f64 = 1.0;
+    let mut events_by_group = vec![0.0; n_groups];
+    let mut removed = vec![0.0; n_groups];
     let mut i = 0;
     while i < n {
         let current_time = time[indices[i]];
@@ -132,61 +149,60 @@ pub fn weighted_logrank_test_with_entry_times(
                 && entry[sorted_entries[entry_cursor]] < current_time - TIME_EPSILON
             {
                 let idx = sorted_entries[entry_cursor];
-                if let Some(&g) = group_to_index.get(&group[idx]) {
-                    at_risk[g] += 1.0;
-                }
+                let group_index = group_indices[idx];
+                at_risk[group_index] += 1.0;
+                total_at_risk += 1.0;
                 entry_cursor += 1;
             }
         }
-        let mut events_by_group = vec![0.0; n_groups];
+        events_by_group.fill(0.0);
+        removed.fill(0.0);
         let mut total_events = 0.0;
-        let mut removed = vec![0.0; n_groups];
+        let mut total_removed = 0.0;
         while i < n && same_time(time[indices[i]], current_time) {
             let idx = indices[i];
-            let g = group_to_index.get(&group[idx]).copied().unwrap_or(0);
+            let g = group_indices[idx];
             removed[g] += 1.0;
+            total_removed += 1.0;
             if status[idx] == 1 {
                 events_by_group[g] += 1.0;
                 total_events += 1.0;
             }
             i += 1;
         }
-        if total_events > 0.0 {
-            let total_at_risk: f64 = at_risk.iter().sum();
-            if total_at_risk > 0.0 {
-                let weight = match weight_type {
-                    WeightType::LogRank => 1.0,
-                    WeightType::Wilcoxon => total_at_risk,
-                    WeightType::TaroneWare => total_at_risk.sqrt(),
-                    WeightType::PetoPeto => km_survival,
-                    WeightType::FlemingHarrington { p, q } => {
-                        km_survival.powf(p) * (1.0 - km_survival).powf(q)
-                    }
-                };
-                for g in 0..n_groups {
-                    observed[g] += weight * events_by_group[g];
-                    let exp_g = total_events * at_risk[g] / total_at_risk;
-                    expected[g] += weight * exp_g;
+        if total_events > 0.0 && total_at_risk > 0.0 {
+            let weight = match weight_type {
+                WeightType::LogRank => 1.0,
+                WeightType::Wilcoxon => total_at_risk,
+                WeightType::TaroneWare => total_at_risk.sqrt(),
+                WeightType::PetoPeto => km_survival,
+                WeightType::FlemingHarrington { p, q } => {
+                    km_survival.powf(p) * (1.0 - km_survival).powf(q)
                 }
-                if total_at_risk > 1.0 {
-                    let var_factor =
-                        weight * weight * total_events * (total_at_risk - total_events)
-                            / (total_at_risk * (total_at_risk - 1.0));
-                    for g in 0..n_groups {
-                        let row_start = g * n_groups;
-                        for h in 0..n_groups {
-                            let diagonal = if g == h { 1.0 } else { 0.0 };
-                            variance[row_start + h] +=
-                                var_factor * at_risk[g] * (diagonal - at_risk[h] / total_at_risk);
-                        }
-                    }
-                }
-                km_survival *= 1.0 - total_events / total_at_risk;
+            };
+            for g in 0..n_groups {
+                observed[g] += weight * events_by_group[g];
+                let exp_g = total_events * at_risk[g] / total_at_risk;
+                expected[g] += weight * exp_g;
             }
+            if total_at_risk > 1.0 {
+                let var_factor = weight * weight * total_events * (total_at_risk - total_events)
+                    / (total_at_risk * (total_at_risk - 1.0));
+                for g in 0..n_groups {
+                    let row_start = g * n_groups;
+                    for h in 0..n_groups {
+                        let diagonal = if g == h { 1.0 } else { 0.0 };
+                        variance[row_start + h] +=
+                            var_factor * at_risk[g] * (diagonal - at_risk[h] / total_at_risk);
+                    }
+                }
+            }
+            km_survival *= 1.0 - total_events / total_at_risk;
         }
         for g in 0..n_groups {
             at_risk[g] -= removed[g];
         }
+        total_at_risk -= total_removed;
     }
     let (statistic, df) =
         logrank_statistic_from_flat_covariance(&observed, &expected, &variance, n_groups);
@@ -407,58 +423,55 @@ pub(crate) fn logrank_trend_test(
     let scores = scores.unwrap_or(&default_scores);
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let group_to_index: HashMap<i32, usize> = unique_groups
-        .iter()
-        .enumerate()
-        .map(|(idx, &g)| (g, idx))
-        .collect();
+    let group_indices = encode_group_indices(group, &unique_groups);
     let mut at_risk: Vec<f64> = vec![0.0; n_groups];
-    for &grp in group {
-        if let Some(&g) = group_to_index.get(&grp) {
-            at_risk[g] += 1.0;
-        }
+    for &group_index in &group_indices {
+        at_risk[group_index] += 1.0;
     }
+    let mut total_at_risk = n as f64;
     let mut u_stat = 0.0;
     let mut var_stat = 0.0;
+    let mut events_by_group = vec![0.0; n_groups];
+    let mut removed = vec![0.0; n_groups];
     let mut i = 0;
     while i < n {
         let current_time = time[indices[i]];
-        let mut events_by_group = vec![0.0; n_groups];
+        events_by_group.fill(0.0);
+        removed.fill(0.0);
         let mut total_events = 0.0;
-        let mut removed = vec![0.0; n_groups];
+        let mut total_removed = 0.0;
         while i < n && same_time(time[indices[i]], current_time) {
             let idx = indices[i];
-            let g = group_to_index.get(&group[idx]).copied().unwrap_or(0);
+            let g = group_indices[idx];
             removed[g] += 1.0;
+            total_removed += 1.0;
             if status[idx] == 1 {
                 events_by_group[g] += 1.0;
                 total_events += 1.0;
             }
             i += 1;
         }
-        if total_events > 0.0 {
-            let total_at_risk: f64 = at_risk.iter().sum();
-            if total_at_risk > 1.0 {
-                let mut score_mean = 0.0;
-                let mut score_var = 0.0;
-                for g in 0..n_groups {
-                    score_mean += scores[g] * at_risk[g] / total_at_risk;
-                }
-                for g in 0..n_groups {
-                    score_var += at_risk[g] * (scores[g] - score_mean).powi(2) / total_at_risk;
-                }
-                for g in 0..n_groups {
-                    let exp_g = total_events * at_risk[g] / total_at_risk;
-                    u_stat += scores[g] * (events_by_group[g] - exp_g);
-                }
-                let var_factor = total_events * (total_at_risk - total_events)
-                    / (total_at_risk * (total_at_risk - 1.0));
-                var_stat += var_factor * score_var * total_at_risk;
+        if total_events > 0.0 && total_at_risk > 1.0 {
+            let mut score_mean = 0.0;
+            let mut score_var = 0.0;
+            for g in 0..n_groups {
+                score_mean += scores[g] * at_risk[g] / total_at_risk;
             }
+            for g in 0..n_groups {
+                score_var += at_risk[g] * (scores[g] - score_mean).powi(2) / total_at_risk;
+            }
+            for g in 0..n_groups {
+                let exp_g = total_events * at_risk[g] / total_at_risk;
+                u_stat += scores[g] * (events_by_group[g] - exp_g);
+            }
+            let var_factor = total_events * (total_at_risk - total_events)
+                / (total_at_risk * (total_at_risk - 1.0));
+            var_stat += var_factor * score_var * total_at_risk;
         }
         for g in 0..n_groups {
             at_risk[g] -= removed[g];
         }
+        total_at_risk -= total_removed;
     }
     let statistic = if var_stat > 0.0 {
         u_stat * u_stat / var_stat
