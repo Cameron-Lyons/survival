@@ -6960,6 +6960,8 @@ def test_model_summary_reports_named_coefficient_table():
     assert cox_summary["df"] == 2
     assert cox_summary["loglik"] == pytest.approx(cox.log_likelihood[-1])
     assert cox_summary["null_loglik"] == pytest.approx(cox.log_likelihood[0])
+    assert cox_summary["score_test"] == pytest.approx(cox.score_test)
+    assert plain_cox_summary["score_test"] == pytest.approx(plain_cox.score_test)
     assert [row["name"] for row in cox_summary["coefficients"]] == ["x1", "x2"]
     assert cox_summary["coefficient_names"] == ["x1", "x2"]
     for idx, (row, coefficient, variance_row, naive_variance_row) in enumerate(
@@ -7016,6 +7018,22 @@ def test_model_summary_reports_named_coefficient_table():
         assert row["z"] == pytest.approx(row["statistic"])
         assert row["p"] == pytest.approx(2.0 * NormalDist().cdf(-abs(row["z"])))
         assert 0.0 <= row["p"] <= 1.0
+
+
+def test_model_summary_reports_zero_coefficient_cox_inference_payload():
+    data = _toy_data()
+    fit = survival.coxph("Surv(time, status) ~ 1", data=data, max_iter=0)
+
+    summary = survival.model_summary(fit)
+
+    assert summary["coefficients"] == []
+    assert summary["coefficient_names"] == []
+    assert summary["df"] == 0
+    assert summary["loglik"] == pytest.approx(fit.log_likelihood[-1])
+    assert summary["null_loglik"] == pytest.approx(fit.log_likelihood[0])
+    assert summary["score_test"] == pytest.approx(fit.score_test)
+    assert summary["score_test"] == pytest.approx(0.0)
+    assert summary["n_event"] == sum(data["status"])
 
 
 def test_model_summary_survreg_scale_rows_and_robust_standard_errors():

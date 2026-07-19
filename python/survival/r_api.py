@@ -12495,6 +12495,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
         model = _unwrap_formula_fit(fit)
         logliks = _cox_loglik_values(model)
         result["null_loglik"] = logliks[0]
+        result["score_test"] = float(model.score_test)
         result["n_event"] = sum(1 for event in model.status if int(event) == 1)
         result["method"] = str(getattr(model, "method", "breslow"))
     return result
