@@ -96,6 +96,7 @@ _R_EXPORTS = [
     "model_formula",
     "model_frame",
     "model_matrix",
+    "model_term_names",
     "model_weights",
     "model_summary",
     "nobs",

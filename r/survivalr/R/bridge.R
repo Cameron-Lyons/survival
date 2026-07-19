@@ -715,6 +715,14 @@ attrassign.lm <- function(object, ...) {
 .as_model_matrix <- function(result) {
   values <- .as_numeric_matrix(result[["data"]])
   colnames(values) <- as.character(result[["columns"]])
+  assign <- result[["assign"]]
+  if (!is.null(assign)) {
+    assign <- as.integer(unlist(assign, recursive = TRUE, use.names = FALSE))
+    if (length(assign) != ncol(values)) {
+      stop("model matrix assign metadata must match its column count", call. = FALSE)
+    }
+    attr(values, "assign") <- assign
+  }
   values
 }
 
@@ -985,12 +993,8 @@ attrassign.lm <- function(object, ...) {
   .as_prediction_value(value, matrix_result = matrix_result, col.names = col.names)
 }
 
-.model_term_names <- function(object) {
-  values <- as.character(.call_r_api("coef_names", object))
-  if (inherits(object, "survival_py_survreg")) {
-    values <- values[values != "(Intercept)"]
-  }
-  values
+.model_term_names <- function(object, terms = NULL) {
+  as.character(.call_r_api("model_term_names", object, terms = terms))
 }
 
 .predict_matrix_result <- function(type) {
@@ -1001,15 +1005,48 @@ attrassign.lm <- function(object, ...) {
   startsWith("terms", value) || startsWith("quantile", value) || startsWith("uquantile", value)
 }
 
-.predict_column_names <- function(object, type) {
+.predict_column_names <- function(object, type, terms = NULL) {
   if (is.null(type)) {
     return(NULL)
   }
   value <- tolower(gsub("-", "_", trimws(type)))
   if (startsWith("terms", value)) {
-    return(.model_term_names(object))
+    return(.model_term_names(object, terms = terms))
   }
   NULL
+}
+
+.attach_term_prediction_constant <- function(value, object, type, reference = NULL) {
+  if (is.null(type) || !inherits(object, "survival_py_coxph")) {
+    return(value)
+  }
+  type_key <- tolower(gsub("-", "_", trimws(type)))
+  if (!startsWith("terms", type_key)) {
+    return(value)
+  }
+  reference_key <- if (is.null(reference)) {
+    "sample"
+  } else {
+    tolower(gsub("-", "_", trimws(as.character(reference)[[1L]])))
+  }
+  if (identical(reference_key, "strata")) {
+    return(value)
+  }
+  if (identical(reference_key, "zero")) {
+    constant <- 0
+  } else {
+    module <- .survival_python_module()
+    if (!reticulate::py_has_attr(module, "predict_terms_constant")) {
+      return(value)
+    }
+    constant <- as.numeric(.call_r_api("predict_terms_constant", object))[[1L]]
+  }
+  if (is.list(value) && all(c("fit", "se.fit") %in% names(value))) {
+    attr(value$fit, "constant") <- constant
+  } else {
+    attr(value, "constant") <- constant
+  }
+  value
 }
 
 .residual_type_key <- function(type) {
@@ -1030,9 +1067,12 @@ attrassign.lm <- function(object, ...) {
   value
 }
 
-.residual_column_names <- function(object, key) {
+.residual_column_names <- function(object, key, terms = NULL) {
+  if (inherits(object, "survival_py_coxph") && identical(key, "partial")) {
+    return(.model_term_names(object, terms = terms))
+  }
   if (inherits(object, "survival_py_coxph") &&
-      key %in% c("score", "schoenfeld", "scaledsch", "partial")) {
+      key %in% c("score", "schoenfeld", "scaledsch")) {
     return(as.character(.call_r_api("coef_names", object)))
   }
   if (inherits(object, "survival_py_survreg") && identical(key, "matrix")) {
@@ -1041,7 +1081,7 @@ attrassign.lm <- function(object, ...) {
   NULL
 }
 
-.as_residual_result <- function(object, value, type) {
+.as_residual_result <- function(object, value, type, terms = NULL) {
   key <- .residual_type_key(type)
   matrix_result <- FALSE
   drop_single_column <- FALSE
@@ -1058,7 +1098,7 @@ attrassign.lm <- function(object, ...) {
     value,
     matrix_result = matrix_result,
     drop_single_column = drop_single_column,
-    col.names = .residual_column_names(object, key)
+    col.names = .residual_column_names(object, key, terms = terms)
   )
 }
 
@@ -7233,6 +7273,7 @@ model.frame.survival_py_survfit <- function(formula, ...) {
 }
 
 fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
+  dots <- list(...)
   result <- .call_r_api(
     "fitted",
     object,
@@ -7240,11 +7281,12 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
     `se.fit` = se.fit,
     ...
   )
-  .as_prediction_result(
+  value <- .as_prediction_result(
     result,
     matrix_result = .predict_matrix_result(type),
-    col.names = .predict_column_names(object, type)
+    col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
 summary.survival_py_model <- function(object, ...) {
@@ -7255,6 +7297,7 @@ summary.survival_py_model <- function(object, ...) {
 }
 
 predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, se.fit = FALSE) {
+  dots <- list(...)
   result <- .call_r_api(
     "predict",
     object,
@@ -7263,16 +7306,18 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
     `se.fit` = se.fit,
     ...
   )
-  .as_prediction_result(
+  value <- .as_prediction_result(
     result,
     matrix_result = .predict_matrix_result(type),
-    col.names = .predict_column_names(object, type)
+    col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
 residuals.survival_py_model <- function(object, ..., type = "martingale") {
+  dots <- list(...)
   result <- .call_r_api("residuals", object, type = type, ...)
-  .as_residual_result(object, result, type)
+  .as_residual_result(object, result, type, terms = dots[["terms"]])
 }
 
 anova.survival_py_model <- function(object, ..., test = "Chisq") {
