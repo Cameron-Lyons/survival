@@ -723,7 +723,7 @@ impl CoxPHModel {
             return (0..nvar)
                 .map(|idx| {
                     let value = variance[(idx, idx)];
-                    if value.is_finite() && value > 0.0 {
+                    if value.is_finite() && value >= 0.0 {
                         value.sqrt()
                     } else {
                         0.1
@@ -1107,6 +1107,31 @@ mod tests {
             assert_relative_close(lower[idx], expected[idx].1, 3e-4, 3e-6);
             assert_relative_close(upper[idx], expected[idx].2, 3e-4, 3e-6);
         }
+    }
+
+    #[test]
+    fn aliased_covariate_keeps_zero_standard_error_and_confidence_interval() {
+        let time = vec![1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0];
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 0];
+        let x = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5];
+        let covariates = x
+            .into_iter()
+            .map(|value| vec![value, 2.0 * value])
+            .collect();
+        let mut model = CoxPHModel::new_with_data(covariates, time, status)
+            .expect("collinear fixture should be valid");
+
+        model.fit(50).expect("collinear fit should converge");
+
+        let variance = model.vcov();
+        assert_eq!(variance[0][1], 0.0);
+        assert_eq!(variance[1], vec![0.0, 0.0]);
+        assert_eq!(model.std_errors()[1], 0.0);
+
+        let (hazard_ratios, lower, upper) = model.hazard_ratios_with_ci(0.95);
+        assert_eq!(hazard_ratios[1], 1.0);
+        assert_eq!(lower[1], 1.0);
+        assert_eq!(upper[1], 1.0);
     }
 
     #[test]
