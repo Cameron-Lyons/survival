@@ -1,6 +1,6 @@
 use crate::constants::{
-    DIVISION_FLOOR, EXP_CLAMP_MIN, TIME_EPSILON, exp_clamped, exp_clamped_ci,
-    z_score_for_confidence,
+    COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, DIVISION_FLOOR, EXP_CLAMP_MIN,
+    TIME_EPSILON, exp_clamped, exp_clamped_ci, z_score_for_confidence,
 };
 use crate::internal::matrix::invert_matrix;
 use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
@@ -465,7 +465,7 @@ impl CoxPHModel {
         Ok(())
     }
 
-    #[pyo3(signature = (n_iters = 20))]
+    #[pyo3(signature = (n_iters = COX_MAX_ITER as u16))]
     pub fn fit(&mut self, n_iters: u16) -> PyResult<()> {
         self.invalidate_fit_cache();
         if self.event_times.is_empty() {
@@ -497,8 +497,8 @@ impl CoxPHModel {
             .strata(strata)
             .method(CoxMethod::Breslow)
             .max_iter(n_iters as usize)
-            .eps(1e-5)
-            .toler(1e-9)
+            .eps(COX_CONVERGENCE_TOLERANCE)
+            .toler(COX_RANK_TOLERANCE)
             .initial_beta(initial_beta)
             .build()
             .map_err(|e| {

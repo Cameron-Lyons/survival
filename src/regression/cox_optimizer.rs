@@ -1,5 +1,5 @@
 use crate::constants::{
-    CHOLESKY_TOL, CONVERGENCE_EPSILON, CONVERGENCE_FLAG, COX_MAX_ITER, DEFAULT_MAX_ITER,
+    CONVERGENCE_FLAG, COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE,
     PARALLEL_THRESHOLD_MEDIUM,
 };
 use ndarray::{Array1, Array2};
@@ -20,9 +20,9 @@ impl Default for CoxFitConfig {
     fn default() -> Self {
         Self {
             method: Method::Breslow,
-            max_iter: DEFAULT_MAX_ITER,
-            eps: CONVERGENCE_EPSILON,
-            toler: CHOLESKY_TOL,
+            max_iter: COX_MAX_ITER,
+            eps: COX_CONVERGENCE_TOLERANCE,
+            toler: COX_RANK_TOLERANCE,
         }
     }
 }
@@ -168,8 +168,8 @@ impl CoxFitBuilder {
             weights: None,
             method: Method::Breslow,
             max_iter: COX_MAX_ITER,
-            eps: CONVERGENCE_EPSILON,
-            toler: CONVERGENCE_EPSILON,
+            eps: COX_CONVERGENCE_TOLERANCE,
+            toler: COX_RANK_TOLERANCE,
             doscale: None,
             initial_beta: None,
         }
@@ -1064,9 +1064,9 @@ mod tests {
         let config = CoxFitConfig::default();
 
         assert!(matches!(config.method, Method::Breslow));
-        assert!(config.max_iter > 0);
-        assert!(config.eps > 0.0);
-        assert!(config.toler > 0.0);
+        assert_eq!(config.max_iter, COX_MAX_ITER);
+        assert_eq!(config.eps, COX_CONVERGENCE_TOLERANCE);
+        assert_eq!(config.toler, COX_RANK_TOLERANCE);
     }
 
     #[test]
@@ -1076,6 +1076,9 @@ mod tests {
         let covar = Array2::from_shape_vec((5, 1), vec![0.5, 1.0, 0.3, 0.8, 0.6]).unwrap();
 
         let builder = CoxFitBuilder::new(time, status, covar);
+        assert_eq!(builder.max_iter, COX_MAX_ITER);
+        assert_eq!(builder.eps, COX_CONVERGENCE_TOLERANCE);
+        assert_eq!(builder.toler, COX_RANK_TOLERANCE);
         let result = builder.build();
 
         assert!(result.is_ok());

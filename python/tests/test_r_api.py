@@ -9282,6 +9282,51 @@ def test_low_level_coxph_rank_aware_information_matches_reference(
     assert fit.iterations == expected_iterations
 
 
+def test_low_level_coxph_defaults_match_efron_reference():
+    time = [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0]
+    status = [1, 1, 0, 1, 1, 0, 1, 0]
+    x1 = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5]
+    x2 = [1.0, 0.2, 0.7, 1.3, 0.4, 1.1, 0.5, 0.9]
+    fit = survival.regression.coxph_fit(
+        time,
+        status,
+        [[left, right] for left, right in zip(x1, x2, strict=True)],
+    )
+
+    assert fit.method == "efron"
+    assert fit.coefficients[0] == pytest.approx(
+        [0.10305623522446912, -1.021973929290916], rel=0, abs=1e-12
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-7.7142311448490855, -7.430873243936032], rel=0, abs=1e-12
+    )
+    assert fit.convergence_flag == 2
+    assert fit.iterations == 4
+
+
+def test_low_level_coxph_default_rank_tolerance_preserves_near_independent_columns():
+    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    status = [1, 1, 0, 1, 1, 0, 1, 0]
+    x1 = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5]
+    z = [0.7, -0.4, 1.1, -0.8, 0.2, 0.9, -0.5, 0.3]
+    x2 = [left + 5e-6 * perturbation for left, perturbation in zip(x1, z, strict=True)]
+    covariates = [[left, right] for left, right in zip(x1, x2, strict=True)]
+
+    default_fit = survival.regression.coxph_fit(time, status, covariates, max_iter=0)
+    rank_reduced_fit = survival.regression.coxph_fit(
+        time,
+        status,
+        covariates,
+        max_iter=0,
+        toler=1e-10,
+    )
+
+    assert default_fit.convergence_flag == 2
+    assert rank_reduced_fit.convergence_flag == 1
+    assert rank_reduced_fit.information_matrix[0][1] == 0.0
+    assert rank_reduced_fit.information_matrix[1] == [0.0, 0.0]
+
+
 def test_low_level_coxph_reduces_rank_for_dependent_columns():
     time = [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0]
     status = [1, 1, 0, 1, 1, 0, 1, 0]
@@ -9418,6 +9463,9 @@ def test_low_level_coxph_rejects_invalid_numeric_inputs():
 
     with pytest.raises(ValueError, match="eps must be a finite positive value"):
         survival.regression.coxph_fit(**{**kwargs, "eps": 0.0})
+
+    with pytest.raises(ValueError, match="toler must be a finite positive value"):
+        survival.regression.coxph_fit(**{**kwargs, "toler": 0.0})
 
     fit = survival.regression.coxph_fit(**kwargs)
     with pytest.raises(ValueError, match="covariates row contains non-finite"):
