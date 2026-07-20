@@ -213,6 +213,31 @@ def test_coxph_model():
 
     brier = model.brier_score()
     assert isinstance(brier, float)
+    assert isinstance(model.brier_score(time=8.0), float)
+
+
+def test_coxph_model_brier_matches_r_survival_reference():
+    model = survival.CoxPHModel.new_with_data(
+        [[value] for value in [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]],
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        [1, 0, 1, 1, 0, 1, 0, 1],
+    )
+    model.fit(n_iters=50)
+
+    expected = {
+        2.0: 0.10590443678594358,
+        3.0: 0.18450534607635558,
+        4.0: 0.23916349962515318,
+        6.0: 0.24491865014681730,
+    }
+    for horizon, r_score in expected.items():
+        assert model.brier_score(horizon) == pytest.approx(r_score, abs=2e-4)
+
+    assert model.brier_score() == pytest.approx(model.brier_score(4.0))
+    with pytest.raises(ValueError, match="time must be finite"):
+        model.brier_score(float("nan"))
+    with pytest.raises(ValueError, match="time must be finite"):
+        model.brier_score(float("inf"))
 
 
 def _correlated_tied_cox_data():
@@ -261,6 +286,60 @@ def test_coxph_model_outcome_setters_invalidate_fit_and_validate_values():
         model.event_times = [float("nan")]
     with pytest.raises(ValueError, match="censoring must contain only 0/1"):
         model.censoring = [2]
+
+
+def _survival_quantile_cox_model(censoring=None):
+    event_times = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    if censoring is None:
+        censoring = [1, 0, 1, 1, 0, 1, 0, 1]
+    covariates = [[0.0], [1.0], [0.0], [1.0], [0.0], [1.0], [0.0], [1.0]]
+    model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
+    model.fit(n_iters=50)
+    return model
+
+
+def test_coxph_model_survival_time_quantiles_match_step_reference():
+    model = _survival_quantile_cox_model()
+    rows = [[0.0], [1.0]]
+
+    assert model.predicted_survival_time(rows, 0.0) == [0.0, 0.0]
+    assert model.predicted_survival_time(rows, 0.25) == [3.0, 4.0]
+    assert model.predicted_survival_time(rows) == [6.0, 6.0]
+    assert model.predicted_survival_time(rows, 0.75) == [8.0, 8.0]
+    assert model.predicted_survival_time(rows, 1.0) == [None, None]
+
+    _, curves = model.survival_curve([[0.0]], None)
+    plateau_probability = 1.0 - curves[0][3]
+    tolerance = math.sqrt(math.ulp(1.0))
+    assert model.predicted_survival_time([[0.0]], plateau_probability) == [5.0]
+    assert model.predicted_survival_time([[0.0]], plateau_probability + tolerance / 2.0) == [5.0]
+    assert model.predicted_survival_time([[0.0]], plateau_probability + 2.0 * tolerance) == [6.0]
+
+    terminal_model = _survival_quantile_cox_model([1, 0, 1, 1, 0, 1, 0, 0])
+    _, terminal_curves = terminal_model.survival_curve([[0.0]], None)
+    terminal_probability = 1.0 - terminal_curves[0][5]
+    assert terminal_model.predicted_survival_time([[0.0]], terminal_probability) == [7.0]
+
+
+def test_coxph_model_survival_time_quantiles_validate_inputs():
+    model = _survival_quantile_cox_model()
+
+    for percentile in [-0.01, 1.01, math.nan, -math.inf, math.inf]:
+        with pytest.raises(ValueError, match="percentile must be a finite value"):
+            model.predicted_survival_time([[0.0]], percentile)
+
+    with pytest.raises(ValueError, match="has 2 columns but expected 1"):
+        model.predicted_survival_time([[0.0, 1.0]])
+    with pytest.raises(ValueError, match="contains NaN"):
+        model.predicted_survival_time([[math.nan]])
+    with pytest.raises(ValueError, match="contains non-finite"):
+        model.predicted_survival_time([[math.inf]])
+
+    unfitted = survival.CoxPHModel.new_with_data([[0.0]], [1.0], [1])
+    with pytest.raises(ValueError, match="model must be fit before prediction"):
+        unfitted.predicted_survival_time([[0.0]])
+
+    assert model.predicted_survival_time([]) == []
 
 
 def test_subject():

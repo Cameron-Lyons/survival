@@ -171,7 +171,7 @@ jobs:
         run: .venv/bin/python -m pip uninstall -y survival || true
 
       - name: Install extension with maturin develop
-        run: .venv/bin/maturin develop --release --features extension-module,ml
+        run: .venv/bin/maturin develop --release
 
       - name: Verify extension import path
         run: |
