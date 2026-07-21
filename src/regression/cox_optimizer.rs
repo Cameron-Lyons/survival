@@ -1,11 +1,9 @@
 use crate::constants::{
-    CHOLESKY_TOL, CONVERGENCE_EPSILON, CONVERGENCE_FLAG, COX_MAX_ITER, DEFAULT_MAX_ITER,
-    PARALLEL_THRESHOLD_MEDIUM, RIDGE_REGULARIZATION,
+    CONVERGENCE_FLAG, COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE,
+    PARALLEL_THRESHOLD_MEDIUM,
 };
-use crate::internal::matrix::{cholesky_check, lu_solve, matrix_inverse};
 use ndarray::{Array1, Array2};
 use rayon::prelude::*;
-use std::fmt;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CoxFitConfig {
@@ -22,29 +20,14 @@ impl Default for CoxFitConfig {
     fn default() -> Self {
         Self {
             method: Method::Breslow,
-            max_iter: DEFAULT_MAX_ITER,
-            eps: CONVERGENCE_EPSILON,
-            toler: CHOLESKY_TOL,
+            max_iter: COX_MAX_ITER,
+            eps: COX_CONVERGENCE_TOLERANCE,
+            toler: COX_RANK_TOLERANCE,
         }
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum CoxError {
-    CholeskyDecomposition,
-    MatrixInversion,
-}
-
-impl fmt::Display for CoxError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CoxError::CholeskyDecomposition => write!(f, "Cholesky decomposition failed"),
-            CoxError::MatrixInversion => write!(f, "Matrix inversion failed"),
-        }
-    }
-}
-
-impl std::error::Error for CoxError {}
+pub(crate) type CoxError = std::convert::Infallible;
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Method {
     Breslow,
@@ -80,6 +63,14 @@ fn add_risk_sums(
             cmat[(i, j)] += risk_covar_i * covar[(person, j)];
         }
     }
+}
+
+fn sort_entry_order(order: &mut [usize], entry_times: &Array1<f64>) {
+    order.sort_by(|&lhs, &rhs| {
+        entry_times[rhs]
+            .total_cmp(&entry_times[lhs])
+            .then_with(|| rhs.cmp(&lhs))
+    });
 }
 
 pub(crate) fn exact_tied_moments(
@@ -140,6 +131,7 @@ pub(crate) struct CoxFit {
     time: Array1<f64>,
     status: Array1<i32>,
     entry_times: Option<Array1<f64>>,
+    entry_order: Option<Vec<usize>>,
     covar: Array2<f64>,
     strata: Array1<i32>,
     offset: Array1<f64>,
@@ -185,8 +177,8 @@ impl CoxFitBuilder {
             weights: None,
             method: Method::Breslow,
             max_iter: COX_MAX_ITER,
-            eps: CONVERGENCE_EPSILON,
-            toler: CONVERGENCE_EPSILON,
+            eps: COX_CONVERGENCE_TOLERANCE,
+            toler: COX_RANK_TOLERANCE,
             doscale: None,
             initial_beta: None,
         }
@@ -295,10 +287,26 @@ impl CoxFit {
         initial_beta: Vec<f64>,
     ) -> Result<Self, CoxError> {
         let nvar = covar.ncols();
+        let entry_order = entry_times.as_ref().map(|entry_times| {
+            let mut order: Vec<usize> = (0..entry_times.len()).collect();
+            let mut stratum_start = 0;
+            for stratum_end in 0..strata.len() {
+                if strata[stratum_end] != 1 {
+                    continue;
+                }
+                sort_entry_order(&mut order[stratum_start..=stratum_end], entry_times);
+                stratum_start = stratum_end + 1;
+            }
+            if stratum_start < order.len() {
+                sort_entry_order(&mut order[stratum_start..], entry_times);
+            }
+            order
+        });
         let mut cox = Self {
             time,
             status,
             entry_times,
+            entry_order,
             covar,
             strata,
             offset,
@@ -637,6 +645,10 @@ impl CoxFit {
         let Some(entry_times) = self.entry_times.as_ref() else {
             return self.iterate_right_censored(beta);
         };
+        let entry_order = self
+            .entry_order
+            .as_deref()
+            .expect("entry order must accompany counting-process entry times");
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let method = self.method;
@@ -675,12 +687,7 @@ impl CoxFit {
                 continue;
             }
 
-            let mut start_order: Vec<usize> = (stratum_start..=stratum_end).collect();
-            start_order.sort_by(|&lhs, &rhs| {
-                entry_times[rhs]
-                    .total_cmp(&entry_times[lhs])
-                    .then_with(|| rhs.cmp(&lhs))
-            });
+            let start_order = &entry_order[stratum_start..=stratum_end];
 
             let mut stop_denom = 0.0;
             let mut stop_a = vec![0.0; nvar];
@@ -870,11 +877,11 @@ impl CoxFit {
             return Ok(());
         }
         a.copy_from_slice(&self.u);
-        self.flag = Self::cholesky(&mut self.imat, self.toler)?;
-        Self::chsolve(&self.imat, &mut a)?;
+        self.flag = Self::cholesky(&mut self.imat, self.toler);
+        Self::chsolve(&self.imat, &mut a);
         self.sctest = a.iter().zip(&self.u).map(|(ai, ui)| ai * ui).sum();
         if self.max_iter == 0 || !self.loglik[0].is_finite() {
-            Self::chinv(&mut self.imat)?;
+            Self::chinv(&mut self.imat);
             self.rescale_params();
             return Ok(());
         }
@@ -892,6 +899,7 @@ impl CoxFit {
                     f64::NAN
                 }
             };
+            self.flag = Self::cholesky(&mut self.imat, self.toler);
             _notfinite = !newlk.is_finite();
             if !_notfinite {
                 for i in 0..nvar {
@@ -907,9 +915,10 @@ impl CoxFit {
                     }
                 }
             }
-            if !_notfinite && ((self.loglik[1] - newlk).abs() / newlk.abs() <= self.eps) {
+            if !_notfinite && (1.0 - self.loglik[1] / newlk).abs() <= self.eps {
                 self.loglik[1] = newlk;
-                Self::chinv(&mut self.imat)?;
+                self.beta.copy_from_slice(&newbeta);
+                Self::chinv(&mut self.imat);
                 self.rescale_params();
                 if halving > 0 {
                     self.flag = -2;
@@ -928,7 +937,7 @@ impl CoxFit {
                 self.loglik[1] = newlk;
                 self.beta.copy_from_slice(&newbeta);
                 a.copy_from_slice(&self.u);
-                Self::chsolve(&self.imat, &mut a)?;
+                Self::chsolve(&self.imat, &mut a);
                 for (newbeta_elem, (beta_elem, a_elem)) in newbeta
                     .iter_mut()
                     .zip(self.beta.iter().zip(a.iter()))
@@ -940,7 +949,8 @@ impl CoxFit {
         }
         let beta_final = self.beta.clone();
         self.loglik[1] = self.iterate(&beta_final)?;
-        Self::chinv(&mut self.imat)?;
+        self.flag = Self::cholesky(&mut self.imat, self.toler);
+        Self::chinv(&mut self.imat);
         self.rescale_params();
         self.flag = CONVERGENCE_FLAG;
         Ok(())
@@ -959,39 +969,101 @@ impl CoxFit {
             }
         }
     }
-    fn cholesky(mat: &mut Array2<f64>, toler: f64) -> Result<i32, CoxError> {
+    fn cholesky(mat: &mut Array2<f64>, toler: f64) -> i32 {
+        let n = mat.nrows();
+        let mut eps = 0.0_f64;
+        for i in 0..n {
+            if mat[(i, i)] > eps {
+                eps = mat[(i, i)];
+            }
+            for j in (i + 1)..n {
+                mat[(j, i)] = mat[(i, j)];
+            }
+        }
+        eps = if eps == 0.0 { toler } else { eps * toler };
+
+        let mut rank = 0_i32;
+        let mut nonnegative = 1_i32;
+        for i in 0..n {
+            let pivot = mat[(i, i)];
+            if !pivot.is_finite() || pivot < eps {
+                mat[(i, i)] = 0.0;
+                if pivot < -8.0 * eps {
+                    nonnegative = -1;
+                }
+                continue;
+            }
+
+            rank += 1;
+            for j in (i + 1)..n {
+                let temp = mat[(j, i)] / pivot;
+                mat[(j, i)] = temp;
+                mat[(j, j)] -= temp * temp * pivot;
+                for k in (j + 1)..n {
+                    mat[(k, j)] -= temp * mat[(k, i)];
+                }
+            }
+        }
+        rank * nonnegative
+    }
+    fn chsolve(chol: &Array2<f64>, a: &mut [f64]) {
+        for i in 0..a.len() {
+            let mut temp = a[i];
+            for j in 0..i {
+                temp -= a[j] * chol[(i, j)];
+            }
+            a[i] = temp;
+        }
+        for i in (0..a.len()).rev() {
+            if chol[(i, i)] == 0.0 {
+                a[i] = 0.0;
+            } else {
+                let mut temp = a[i] / chol[(i, i)];
+                for j in (i + 1)..a.len() {
+                    temp -= a[j] * chol[(j, i)];
+                }
+                a[i] = temp;
+            }
+        }
+    }
+    fn chinv(mat: &mut Array2<f64>) {
         let n = mat.nrows();
         for i in 0..n {
-            for j in (i + 1)..n {
+            if mat[(i, i)] > 0.0 {
+                mat[(i, i)] = 1.0 / mat[(i, i)];
+                for j in (i + 1)..n {
+                    mat[(j, i)] = -mat[(j, i)];
+                    for k in 0..i {
+                        mat[(j, k)] += mat[(j, i)] * mat[(i, k)];
+                    }
+                }
+            }
+        }
+
+        for i in 0..n {
+            if mat[(i, i)] == 0.0 {
+                for j in 0..i {
+                    mat[(j, i)] = 0.0;
+                }
+                for j in i..n {
+                    mat[(i, j)] = 0.0;
+                }
+            } else {
+                for j in (i + 1)..n {
+                    let temp = mat[(j, i)] * mat[(j, j)];
+                    mat[(i, j)] = temp;
+                    for k in i..j {
+                        mat[(i, k)] += temp * mat[(j, k)];
+                    }
+                }
+            }
+        }
+
+        for i in 0..n {
+            for j in 0..i {
                 mat[(i, j)] = mat[(j, i)];
             }
         }
-        if cholesky_check(mat) {
-            Ok(n as i32)
-        } else {
-            for i in 0..n {
-                if mat[(i, i)] < toler {
-                    return Ok(i as i32);
-                }
-            }
-            Err(CoxError::CholeskyDecomposition)
-        }
-    }
-    fn chsolve(chol: &Array2<f64>, a: &mut [f64]) -> Result<(), CoxError> {
-        let b = Array1::from_iter(a.iter().copied());
-        let result = lu_solve(chol, &b).ok_or(CoxError::CholeskyDecomposition)?;
-        a.copy_from_slice(result.as_slice().unwrap_or(&[]));
-        Ok(())
-    }
-    fn chinv(mat: &mut Array2<f64>) -> Result<(), CoxError> {
-        let mut mat_reg = mat.clone();
-        mat_reg
-            .diag_mut()
-            .iter_mut()
-            .for_each(|d| *d += RIDGE_REGULARIZATION);
-        let inv = matrix_inverse(&mat_reg).ok_or(CoxError::MatrixInversion)?;
-        *mat = inv;
-        Ok(())
     }
     pub(crate) fn results(self) -> CoxFitResults {
         (
@@ -1011,14 +1083,37 @@ impl CoxFit {
 mod tests {
     use super::*;
 
+    fn counting_process_order_fixture() -> CoxFit {
+        CoxFit::new_with_entry_times(
+            Array1::from_vec(vec![2.0, 3.0, 4.0, 2.5, 4.0, 5.0]),
+            Array1::from_vec(vec![1, 1, 0, 1, 0, 1]),
+            Array2::from_shape_vec(
+                (6, 2),
+                vec![0.2, 1.0, 0.8, 0.4, 0.5, 1.2, 1.1, 0.3, 0.7, 0.9, 1.3, 0.6],
+            )
+            .expect("counting-process fixture covariates should have a valid shape"),
+            Some(Array1::from_vec(vec![0.5, 1.5, 1.5, 2.0, 0.25, 2.0])),
+            Array1::from_vec(vec![0, 0, 1, 0, 0, 1]),
+            Array1::zeros(6),
+            Array1::ones(6),
+            Method::Efron,
+            10,
+            1e-9,
+            1e-9,
+            vec![true; 2],
+            vec![0.0; 2],
+        )
+        .expect("counting-process fixture should initialize")
+    }
+
     #[test]
     fn test_cox_fit_config_default() {
         let config = CoxFitConfig::default();
 
         assert!(matches!(config.method, Method::Breslow));
-        assert!(config.max_iter > 0);
-        assert!(config.eps > 0.0);
-        assert!(config.toler > 0.0);
+        assert_eq!(config.max_iter, COX_MAX_ITER);
+        assert_eq!(config.eps, COX_CONVERGENCE_TOLERANCE);
+        assert_eq!(config.toler, COX_RANK_TOLERANCE);
     }
 
     #[test]
@@ -1028,6 +1123,9 @@ mod tests {
         let covar = Array2::from_shape_vec((5, 1), vec![0.5, 1.0, 0.3, 0.8, 0.6]).unwrap();
 
         let builder = CoxFitBuilder::new(time, status, covar);
+        assert_eq!(builder.max_iter, COX_MAX_ITER);
+        assert_eq!(builder.eps, COX_CONVERGENCE_TOLERANCE);
+        assert_eq!(builder.toler, COX_RANK_TOLERANCE);
         let result = builder.build();
 
         assert!(result.is_ok());
@@ -1067,6 +1165,79 @@ mod tests {
         assert_eq!(beta.len(), 1);
         assert!(loglik[0].is_finite());
         assert!(loglik[1].is_finite());
+    }
+
+    #[test]
+    fn converged_coefficients_match_the_reported_log_likelihood() {
+        let time = Array1::from_vec((1..=16).map(f64::from).collect());
+        let status = Array1::from_vec(vec![1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0]);
+        let covariates = vec![
+            0.5, 1.2, 1.8, 0.3, 0.2, 2.1, 2.5, 0.8, 0.8, 1.5, 1.5, 0.5, 0.3, 1.8, 2.2, 1.1, 1.0,
+            0.9, 0.7, 1.7, 2.0, 0.4, 1.2, 1.3, 0.9, 2.0, 1.6, 0.7, 0.4, 1.4, 2.1, 1.0,
+        ];
+        let covar = Array2::from_shape_vec((16, 2), covariates)
+            .expect("fixture covariates should have a valid shape");
+
+        let mut fit = CoxFitBuilder::new(time.clone(), status.clone(), covar.clone())
+            .max_iter(20)
+            .eps(1e-5)
+            .build()
+            .expect("fixture fit should initialize");
+        fit.fit().expect("fixture fit should converge");
+        let (beta, _means, _u, _variance, loglik, _sctest, _flag, _iter) = fit.results();
+
+        let mut evaluation = CoxFitBuilder::new(time, status, covar)
+            .max_iter(0)
+            .initial_beta(beta)
+            .build()
+            .expect("coefficient evaluation should initialize");
+        evaluation
+            .fit()
+            .expect("coefficient evaluation should succeed");
+        let (_beta, _means, _u, _variance, evaluated, _sctest, _flag, _iter) = evaluation.results();
+
+        assert!((evaluated[0] - loglik[1]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nonconverged_fit_refactors_information_at_the_last_accepted_beta() {
+        let time = Array1::from_vec((1..=8).map(f64::from).collect());
+        let status = Array1::from_vec(vec![1, 0, 1, 1, 0, 1, 0, 1]);
+        let covar = Array2::from_shape_vec(
+            (8, 2),
+            vec![
+                0.0, 0.2, 1.0, 0.7, 0.4, 1.2, 1.5, 0.1, 0.8, 1.0, 1.1, 0.3, 1.8, 0.9, 2.0, 0.5,
+            ],
+        )
+        .unwrap();
+        let mut fit = CoxFitBuilder::new(time.clone(), status.clone(), covar.clone())
+            .max_iter(1)
+            .eps(1e-12)
+            .build()
+            .expect("limited-iteration fixture should initialize");
+
+        fit.fit().expect("limited-iteration fixture should fit");
+        let (beta, _means, score, variance, loglik, _sctest, flag, _iter) = fit.results();
+        assert_eq!(flag, CONVERGENCE_FLAG);
+
+        let mut evaluation = CoxFitBuilder::new(time, status, covar)
+            .max_iter(0)
+            .initial_beta(beta)
+            .build()
+            .expect("accepted coefficient evaluation should initialize");
+        evaluation
+            .fit()
+            .expect("accepted coefficient evaluation should succeed");
+        let (_beta, _means, evaluated_score, evaluated_variance, evaluated_loglik, ..) =
+            evaluation.results();
+
+        assert!((evaluated_loglik[0] - loglik[1]).abs() < 1e-12);
+        for i in 0..2 {
+            assert!((evaluated_score[i] - score[i]).abs() < 1e-12);
+            for j in 0..2 {
+                assert!((evaluated_variance[(i, j)] - variance[(i, j)]).abs() < 1e-12);
+            }
+        }
     }
 
     #[test]
@@ -1115,12 +1286,162 @@ mod tests {
     }
 
     #[test]
-    fn test_cox_error_display() {
-        let chol_err = CoxError::CholeskyDecomposition;
-        let inv_err = CoxError::MatrixInversion;
+    fn counting_process_entry_order_is_precomputed_per_stratum_with_index_ties() {
+        let fit = counting_process_order_fixture();
 
-        assert_eq!(format!("{}", chol_err), "Cholesky decomposition failed");
-        assert_eq!(format!("{}", inv_err), "Matrix inversion failed");
+        assert_eq!(
+            fit.entry_order.as_deref(),
+            Some([2, 1, 0, 5, 3, 4].as_slice())
+        );
+    }
+
+    #[test]
+    fn counting_process_entry_order_is_reused_across_evaluations() {
+        let mut fit = counting_process_order_fixture();
+        let beta = [0.2, -0.15];
+        let cached_order = fit.entry_order.clone();
+
+        let first_loglik = fit
+            .iterate(&beta)
+            .expect("first counting-process evaluation should succeed");
+        let first_score = fit.u.clone();
+        let first_information = fit.imat.clone();
+        let second_loglik = fit
+            .iterate(&beta)
+            .expect("second counting-process evaluation should succeed");
+
+        assert_eq!(second_loglik, first_loglik);
+        assert_eq!(fit.u, first_score);
+        assert_eq!(fit.imat, first_information);
+        assert_eq!(fit.entry_order, cached_order);
+    }
+
+    #[test]
+    fn information_factorization_inverts_spd_matrix() {
+        let mut information = Array2::from_shape_vec((2, 2), vec![4.0, 2.0, 0.0, 3.0]).unwrap();
+
+        let rank = CoxFit::cholesky(&mut information, 1e-9);
+        CoxFit::chinv(&mut information);
+
+        assert_eq!(rank, 2);
+        let expected = [[0.375, -0.25], [-0.25, 0.5]];
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!((information[(i, j)] - expected[i][j]).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn singular_information_solve_and_inverse_zero_the_alias() {
+        let mut information = Array2::from_shape_vec((2, 2), vec![2.0, 2.0, 0.0, 2.0]).unwrap();
+        let rank = CoxFit::cholesky(&mut information, 1e-9);
+        let mut score = vec![2.0, 2.0];
+
+        CoxFit::chsolve(&information, &mut score);
+        CoxFit::chinv(&mut information);
+
+        assert_eq!(rank, 1);
+        assert_eq!(score, vec![1.0, 0.0]);
+        assert_eq!(information[(0, 0)], 0.5);
+        assert_eq!(information[(0, 1)], 0.0);
+        assert_eq!(information[(1, 0)], 0.0);
+        assert_eq!(information[(1, 1)], 0.0);
+    }
+
+    #[test]
+    fn singular_information_preserves_active_pivots_after_an_alias() {
+        let mut information =
+            Array2::from_shape_vec((3, 3), vec![2.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0])
+                .unwrap();
+        let rank = CoxFit::cholesky(&mut information, 1e-9);
+        let mut score = vec![2.0, 2.0, 6.0];
+
+        CoxFit::chsolve(&information, &mut score);
+        CoxFit::chinv(&mut information);
+
+        assert_eq!(rank, 2);
+        assert_eq!(score, vec![1.0, 0.0, 2.0]);
+        assert_eq!(information[(0, 0)], 0.5);
+        assert_eq!(information[(1, 1)], 0.0);
+        assert_eq!(information[(2, 2)], 1.0 / 3.0);
+        for i in 0..3 {
+            assert_eq!(information[(i, 1)], 0.0);
+            assert_eq!(information[(1, i)], 0.0);
+        }
+    }
+
+    #[test]
+    fn information_factorization_reports_indefinite_rank() {
+        let mut information = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 0.0, 1.0]).unwrap();
+
+        let rank = CoxFit::cholesky(&mut information, 1e-9);
+
+        assert_eq!(rank, -1);
+        assert_eq!(information[(1, 1)], 0.0);
+    }
+
+    #[test]
+    fn information_factorization_uses_a_strict_relative_pivot_tolerance() {
+        let tolerance = 1e-9;
+        let threshold = 2.0 * tolerance;
+        let mut at_threshold =
+            Array2::from_shape_vec((2, 2), vec![2.0, 0.0, 0.0, threshold]).unwrap();
+        let mut below_threshold =
+            Array2::from_shape_vec((2, 2), vec![2.0, 0.0, 0.0, threshold / 2.0]).unwrap();
+
+        assert_eq!(CoxFit::cholesky(&mut at_threshold, tolerance), 2);
+        assert_eq!(CoxFit::cholesky(&mut below_threshold, tolerance), 1);
+    }
+
+    #[test]
+    fn collinear_tied_efron_fit_reports_rank_and_zero_alias_variance() {
+        let time = Array1::from_vec(vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        let status = Array1::from_vec(vec![1, 1, 1, 0, 1, 1, 0, 1, 0, 1]);
+        let x1 = [0.0, 0.4, 0.8, 0.2, 1.0, 1.4, 0.6, 1.2, 1.6, 1.8];
+        let x2 = [0.2, 0.16, 0.62, -0.07, 0.95, 0.61, 0.49, 0.68, 1.24, 0.97];
+        let mut covariates = Vec::with_capacity(30);
+        for (&first, &second) in x1.iter().zip(&x2) {
+            covariates.extend_from_slice(&[first, second, first + second]);
+        }
+        let covar = Array2::from_shape_vec((10, 3), covariates).unwrap();
+        let mut strata = Array1::zeros(10);
+        strata[9] = 1;
+        let mut fit = CoxFit::new(
+            time,
+            status,
+            covar,
+            strata,
+            Array1::zeros(10),
+            Array1::ones(10),
+            Method::Efron,
+            50,
+            1e-9,
+            1e-12,
+            vec![true; 3],
+            vec![0.0; 3],
+        )
+        .expect("collinear Efron fixture should initialize");
+
+        fit.fit().expect("collinear Efron fixture should fit");
+        let (beta, _means, _u, variance, loglik, _sctest, flag, iter) = fit.results();
+
+        assert_eq!(flag, 2);
+        assert_eq!(iter, 4);
+        let expected_beta = [-2.3468678070137803, 0.5775928193386433, 0.0];
+        let expected_variance = [
+            [3.9806704210981683, -4.116538359266848, 0.0],
+            [-4.116538359266848, 6.056737323572425, 0.0],
+            [0.0, 0.0, 0.0],
+        ];
+        for i in 0..3 {
+            assert!((beta[i] - expected_beta[i]).abs() < 1e-10);
+            for j in 0..3 {
+                assert!((variance[(i, j)] - expected_variance[i][j]).abs() < 1e-10);
+            }
+        }
+        assert!((loglik[0] - -11.079060882340368).abs() < 1e-12);
+        assert!((loglik[1] - -9.002136268091796).abs() < 1e-12);
     }
 
     #[test]

@@ -304,27 +304,6 @@ pub(crate) fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     Some(aug.into_iter().map(|row| row[n..].to_vec()).collect())
 }
 
-pub(crate) fn cholesky_check(matrix: &Array2<f64>) -> bool {
-    let n = matrix.nrows();
-    if n == 0 {
-        return true;
-    }
-
-    for i in 0..n {
-        if matrix[[i, i]] <= 0.0 {
-            return false;
-        }
-        for j in 0..i {
-            if (matrix[[i, j]] - matrix[[j, i]]).abs() > crate::constants::SYMMETRY_TOL {
-                return false;
-            }
-        }
-    }
-
-    let b = Array1::from_elem(n, 1.0);
-    lu_solve(matrix, &b).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

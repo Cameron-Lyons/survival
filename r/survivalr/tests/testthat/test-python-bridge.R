@@ -1749,6 +1749,8 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_true(any(grepl("Coefficients:", aft_print, fixed = TRUE)))
   expect_true(any(grepl("Surv(time, status) ~ x", aft_print, fixed = TRUE)))
   expect_true(any(grepl("logLik=", aft_print, fixed = TRUE)))
+  expect_true(any(grepl("n=4", aft_print, fixed = TRUE)))
+  expect_false(any(grepl("events=", aft_print, fixed = TRUE)))
   expect_false(any(grepl("survival.r_api", aft_print, fixed = TRUE)))
   expect_s3_class(fit, "survival_py_model")
   fit_print <- capture.output(print(fit))
@@ -1756,6 +1758,8 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_true(any(grepl("Coefficients:", fit_print, fixed = TRUE)))
   expect_true(any(grepl("Surv(time, status) ~ x", fit_print, fixed = TRUE)))
   expect_true(any(grepl("logLik=", fit_print, fixed = TRUE)))
+  expect_true(any(grepl("n=4", fit_print, fixed = TRUE)))
+  expect_true(any(grepl("events=3", fit_print, fixed = TRUE)))
   expect_false(any(grepl("survival.r_api", fit_print, fixed = TRUE)))
   expect_length(coef(fit), 1)
   expect_named(coef(fit), "x")
@@ -1773,7 +1777,14 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(logLik(fit), "logLik")
   expect_null(deviance(fit))
   expect_equal(attr(logLik(fit), "df"), 1L)
-  expect_equal(nobs(fit), nrow(data))
+  expect_equal(nobs(fit), sum(data$status))
+  expect_equal(attr(logLik(fit), "nobs"), sum(data$status))
+  expect_equal(
+    BIC(fit),
+    -2 * as.numeric(logLik(fit)) + log(sum(data$status)) * attr(logLik(fit), "df")
+  )
+  expect_equal(nobs(aft_fit), nrow(data))
+  expect_null(attr(logLik(aft_fit), "nobs"))
   fit_aic <- extractAIC(fit)
   expect_named(fit_aic, c("df", "AIC"))
   expect_equal(fit_aic[["df"]], 1)
@@ -1791,6 +1802,9 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(rownames(fit_summary$coefficients), "x")
   expect_true(all(c("coef", "se(coef)", "z", "Pr(>|z|)") %in% colnames(fit_summary$coefficients)))
   expect_equal(fit_summary$n, nrow(data))
+  fit_summary_print <- capture.output(print(fit_summary))
+  expect_true(any(grepl("n=4", fit_summary_print, fixed = TRUE)))
+  expect_true(any(grepl("events=3", fit_summary_print, fixed = TRUE)))
   prediction <- predict(fit, data.frame(x = c(0.5, 0.7)))
   expect_true(is.numeric(unlist(prediction, use.names = FALSE)))
   prediction_with_se <- predict(fit, data.frame(x = c(0.5, 0.7)), se.fit = TRUE)
@@ -3573,6 +3587,13 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_hazard$time, reference_hazard$time)
   expect_equal(bridged_hazard$cumhaz, reference_hazard$hazard, tolerance = 1e-04)
   expect_equal(as.numeric(logLik(bridged)), reference$loglik[[2L]], tolerance = 1e-05)
+  expect_equal(nobs(bridged), nobs(reference))
+  expect_equal(attr(logLik(bridged), "nobs"), attr(logLik(reference), "nobs"))
+  expect_equal(BIC(bridged), BIC(reference), tolerance = 1e-05)
+  bridged_summary <- summary(bridged)
+  reference_summary <- summary(reference)
+  expect_equal(bridged_summary$n, reference_summary$n)
+  expect_equal(bridged_summary$n_event, reference_summary$nevent)
   expect_equal(deviance(bridged), deviance(reference))
   expect_equal(labels(bridged), attr(reference$terms, "term.labels"))
   bridged_concordance <- concordance(bridged)
@@ -3589,6 +3610,195 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_concordance$count, direct_concordance$count, tolerance = 1e-12)
   expect_equal(bridged_concordance$concordance, reference_concordance$concordance, tolerance = 1e-02)
   expect_equal(bridged_concordance$n, reference_concordance$n)
+})
+
+test_that("Cox likelihood metadata counts weighted and recurrent event rows", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  right <- data.frame(
+    time = 1:6,
+    status = c(1, 0, 1, 0, 1, 0),
+    x = c(0.2, 0.4, 0.1, 0.8, 0.5, 0.3),
+    weight = c(0.5, 2, 1.5, 0.75, 3, 4)
+  )
+  weighted <- coxph(
+    Surv(time, status) ~ x,
+    data = right,
+    weights = weight,
+    max_iter = 0
+  )
+  reference_weighted <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = right,
+    weights = weight,
+    control = survival::coxph.control(iter.max = 0)
+  )
+
+  expect_equal(nobs(weighted), sum(right$status))
+  expect_equal(nobs(weighted), nobs(reference_weighted))
+  expect_equal(attr(logLik(weighted), "nobs"), attr(logLik(reference_weighted), "nobs"))
+  expect_equal(BIC(weighted), BIC(reference_weighted), tolerance = 1e-12)
+  expect_equal(summary(weighted)$n, nrow(right))
+
+  no_events <- coxph(
+    Surv(time, rep(0, nrow(right))) ~ x,
+    data = right
+  )
+  reference_no_events <- survival::coxph(
+    survival::Surv(time, rep(0, nrow(right))) ~ x,
+    data = right
+  )
+  expect_equal(nobs(no_events), 0L)
+  expect_equal(attr(logLik(no_events), "df"), 0L)
+  expect_equal(attr(logLik(no_events), "nobs"), 0L)
+  expect_true(is.nan(BIC(no_events)))
+  expect_true(is.nan(BIC(reference_no_events)))
+  expect_equal(summary(no_events)$n, nrow(right))
+  expect_equal(summary(no_events)$n_event, 0L)
+
+  recurrent <- data.frame(
+    start = c(0, 1, 0, 2, 0, 1, 2, 0),
+    stop = c(1, 3, 2, 4, 5, 2, 4, 6),
+    status = c(0, 1, 1, 0, 1, 1, 0, 1),
+    x = c(0.2, 0.4, 0.1, 0.8, 0.5, 0.3, 0.9, 0.6),
+    id = c(1, 1, 2, 2, 3, 3, 4, 4)
+  )
+  counting <- coxph(
+    Surv(start, stop, status) ~ x,
+    data = recurrent,
+    id = id,
+    max_iter = 0
+  )
+  reference_counting <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x,
+    data = recurrent,
+    id = id,
+    control = survival::coxph.control(iter.max = 0)
+  )
+
+  expect_equal(nobs(counting), sum(recurrent$status))
+  expect_equal(nobs(counting), nobs(reference_counting))
+  expect_equal(attr(logLik(counting), "nobs"), attr(logLik(reference_counting), "nobs"))
+  expect_equal(BIC(counting), BIC(reference_counting), tolerance = 1e-12)
+  expect_equal(summary(counting)$n, nrow(recurrent))
+  expect_equal(summary(counting)$n_event, sum(recurrent$status))
+})
+
+test_that("Cox bridge reports converged aliased coefficients like R survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1, 1, 2, 3, 3, 4, 5, 5),
+    status = c(1, 1, 0, 1, 1, 0, 1, 0),
+    x1 = c(0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5)
+  )
+  data$x2 <- 2 * data$x1
+
+  bridged <- coxph(
+    Surv(time, status) ~ x1 + x2,
+    data = data,
+    max_iter = 50,
+    eps = 1e-09,
+    toler = 1e-10
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x1 + x2,
+    data = data,
+    singular.ok = TRUE,
+    control = survival::coxph.control(iter.max = 50, eps = 1e-09, toler.chol = 1e-10)
+  )
+
+  expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+  expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-12)
+  expect_equal(
+    vcov(bridged, complete = FALSE),
+    vcov(reference, complete = FALSE),
+    tolerance = 1e-12
+  )
+  expect_equal(confint(bridged), confint(reference), tolerance = 1e-12)
+  expect_equal(attr(logLik(bridged), "df"), attr(logLik(reference), "df"))
+  expect_equal(
+    unname(extractAIC(bridged)),
+    unname(extractAIC(reference)),
+    tolerance = 1e-12
+  )
+
+  bridged_summary <- summary(bridged)$coefficients
+  reference_summary <- summary(reference)$coefficients
+  expect_equal(
+    bridged_summary,
+    reference_summary[, c("coef", "se(coef)", "z", "Pr(>|z|)"), drop = FALSE],
+    tolerance = 1e-12
+  )
+
+  term_predictions <- predict(bridged, type = "terms")
+  expect_equal(colnames(term_predictions), c("x1", "x2"))
+  expect_true(all(is.finite(term_predictions)))
+  expect_equal(term_predictions[, "x2"], rep(0, nrow(data)))
+
+  for (group_terms in c(TRUE, FALSE)) {
+    bridged_zph <- as.data.frame(
+      cox.zph(bridged, transform = "rank", terms = group_terms)
+    )
+    reference_zph <- survival::cox.zph(
+      reference,
+      transform = "rank",
+      terms = group_terms
+    )
+    expect_equal(bridged_zph$name, rownames(reference_zph$table))
+    expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+  }
+})
+
+test_that("Cox zph bridge remaps partially aliased terms like R survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 0, 1, 1, 0),
+    group = factor(c("a", "a", "b", "b", "c", "c", "a", "b")),
+    is_b = c(0, 0, 1, 1, 0, 0, 0, 1),
+    x = c(1, 0.9, 1.1, 0.7, 0.4, 0.3, 0.6, 0.2)
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ is_b + factor(group) + x,
+    data = data,
+    max_iter = 50,
+    eps = 1e-09,
+    toler = 1e-10
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ is_b + factor(group) + x,
+    data = data,
+    singular.ok = TRUE,
+    control = survival::coxph.control(iter.max = 50, eps = 1e-09, toler.chol = 1e-10)
+  )
+
+  expect_true(is.na(coef(bridged)[[2L]]))
+  expect_true(is.na(coef(reference)[[2L]]))
+  for (group_terms in c(TRUE, FALSE)) {
+    bridged_zph <- as.data.frame(
+      cox.zph(bridged, transform = "rank", terms = group_terms)
+    )
+    reference_zph <- survival::cox.zph(
+      reference,
+      transform = "rank",
+      terms = group_terms
+    )
+    reference_names <- sub(
+      "^factor\\(([^)]+)\\)(.+)$",
+      "\\1\\2",
+      rownames(reference_zph$table)
+    )
+    expect_equal(bridged_zph$name, reference_names)
+    expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+  }
 })
 
 test_that("survreg bridge agrees with R survival distributions", {

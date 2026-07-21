@@ -151,7 +151,9 @@ pub fn anova_coxph(
         let chisq = 2.0 * (logliks[i] - logliks[i - 1]);
         let df_diff = dfs[i].abs_diff(dfs[i - 1]);
 
-        let p_value = if df_diff > 0 && chisq >= 0.0 {
+        let p_value = if df_diff == 0 && !chisq.is_nan() {
+            if chisq <= 0.0 { 1.0 } else { 0.0 }
+        } else if df_diff > 0 && chisq >= 0.0 {
             chi2_sf(chisq, df_diff)
         } else {
             f64::NAN
@@ -322,6 +324,21 @@ mod tests {
         assert!(result.rows[0].chisq.is_none());
         assert!(result.rows[1].chisq.is_some());
         assert!((result.rows[1].chisq.unwrap() - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn zero_df_steps_use_degenerate_chi_square_tail() {
+        let result = anova_coxph(
+            vec![-10.0, -10.0, -9.5, -10.0],
+            vec![1, 1, 1, 1],
+            None,
+            "LRT".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(result.rows[1].p_value, Some(1.0));
+        assert_eq!(result.rows[2].p_value, Some(0.0));
+        assert_eq!(result.rows[3].p_value, Some(1.0));
     }
 
     #[test]

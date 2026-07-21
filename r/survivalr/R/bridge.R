@@ -7205,12 +7205,15 @@ confint.survival_py_model <- function(object, parm, level = 0.95, ...) {
 
 logLik.survival_py_model <- function(object, ...) {
   value <- as.numeric(.call_r_api("loglik", object, ...))
-  structure(
+  result <- structure(
     value,
     df = as.integer(.call_r_api("degrees_freedom", object)),
-    nobs = as.integer(.call_r_api("nobs", object)),
     class = "logLik"
   )
+  if (inherits(object, "survival_py_coxph")) {
+    attr(result, "nobs") <- as.integer(.call_r_api("nobs", object))
+  }
+  result
 }
 
 deviance.survival_py_model <- function(object, ...) {
@@ -7624,13 +7627,17 @@ print.survival_py_model <- function(x, ...) {
   print(coef(x), ...)
 
   likelihood <- logLik(x)
+  metadata <- .call_r_api("model_summary", x)
   cat(
     "\nlogLik=", format(as.numeric(likelihood)),
     " df=", attr(likelihood, "df"),
-    " n=", attr(likelihood, "nobs"),
-    "\n",
+    " n=", metadata$n,
     sep = ""
   )
+  if (inherits(x, "survival_py_coxph")) {
+    cat(" events=", metadata$n_event, sep = "")
+  }
+  cat("\n")
   invisible(x)
 }
 
@@ -7645,6 +7652,10 @@ print.survival_py_object <- function(x, ...) {
 print.summary.survival_py_model <- function(x, ...) {
   cat(x$model_type, "model summary\n", sep = "")
   print(x$coefficients, ...)
-  cat("logLik=", x$loglik, " df=", x$df, " n=", x$n, "\n", sep = "")
+  cat("logLik=", x$loglik, " df=", x$df, " n=", x$n, sep = "")
+  if (!is.null(x$n_event)) {
+    cat(" events=", x$n_event, sep = "")
+  }
+  cat("\n")
   invisible(x)
 }
