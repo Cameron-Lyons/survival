@@ -5471,29 +5471,29 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
   }
   if (ncol(y) == 3L) {
     start <- as.numeric(y[, 1L])
-    stopp <- as.numeric(y[, 2L])
+    stop_time <- as.numeric(y[, 2L])
     event <- as.integer(y[, 3L])
   } else if (ncol(y) == 2L) {
     start <- rep(0, n)
-    stopp <- as.numeric(y[, 1L])
+    stop_time <- as.numeric(y[, 1L])
     event <- as.integer(y[, 2L])
   } else {
     stop("y must have 2 or 3 columns", call. = FALSE)
   }
-  if (length(stopp) != n) {
+  if (length(stop_time) != n) {
     stop("x and y have different numbers of rows", call. = FALSE)
   }
 
   has_strata <- !(missing(strata) || is.null(strata) || length(strata) == 0L)
   if (!has_strata) {
-    sorted <- order(stopp, -event)
+    sorted <- order(stop_time, -event)
     newstrat <- integer(n)
   } else {
     if (length(strata) != n) {
       stop("strata and y have different numbers of rows", call. = FALSE)
     }
     strata_codes <- match(strata, unique(strata))
-    sorted <- order(strata_codes, stopp, -event)
+    sorted <- order(strata_codes, stop_time, -event)
     newstrat <- as.integer(c(diff(strata_codes[sorted]) != 0, 1))
   }
 
@@ -5509,7 +5509,7 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
   }
   init <- as.numeric(init)
   if (length(init) != nvar) {
-    stop("Wrong length for inital values", call. = FALSE)
+    stop("Wrong length for initial values", call. = FALSE)
   }
   if (missing(control) || is.null(control)) {
     control <- coxph.control()
@@ -5530,7 +5530,7 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
     apply(x, 2L, function(column) all(column %in% nocenter))
   }
   sstart <- as.double(start[sorted])
-  sstop <- as.double(stopp[sorted])
+  sstop <- as.double(stop_time[sorted])
   sstat <- as.integer(event[sorted])
   python_sequence <- function(values) {
     if (length(values) == 1L) as.list(values) else values
