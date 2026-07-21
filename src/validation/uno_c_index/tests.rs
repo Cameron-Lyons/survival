@@ -2,6 +2,73 @@
 mod tests {
     use super::*;
 
+    fn assert_close(actual: f64, expected: f64) {
+        let scale = actual.abs().max(expected.abs()).max(1.0);
+        assert!(
+            (actual - expected).abs() <= 1e-11 * scale,
+            "actual={actual:?}, expected={expected:?}"
+        );
+    }
+
+    fn assert_uno_accumulators_close(
+        actual: &UnoCIndexAccumulator,
+        expected: &UnoCIndexAccumulator,
+    ) {
+        assert_close(actual.concordant, expected.concordant);
+        assert_close(actual.discordant, expected.discordant);
+        assert_close(actual.tied, expected.tied);
+        assert_close(actual.total_weight, expected.total_weight);
+        assert_eq!(actual.influence_sums.len(), expected.influence_sums.len());
+        for (&actual_value, &expected_value) in actual
+            .influence_sums
+            .iter()
+            .zip(&expected.influence_sums)
+        {
+            assert_close(actual_value, expected_value);
+        }
+        assert_close(
+            actual.concordant + actual.discordant + actual.tied,
+            actual.total_weight,
+        );
+        let influence_sum = actual.influence_sums.iter().sum::<f64>();
+        assert!(
+            influence_sum.abs() <= 1e-11 * actual.total_weight.max(1.0),
+            "influence sum={influence_sum:?}, total weight={:?}",
+            actual.total_weight
+        );
+    }
+
+    fn assert_uno_results_close(actual: &UnoCIndexResult, expected: &UnoCIndexResult) {
+        assert_close(actual.c_index, expected.c_index);
+        assert_close(actual.concordant, expected.concordant);
+        assert_close(actual.discordant, expected.discordant);
+        assert_close(actual.tied_risk, expected.tied_risk);
+        assert_close(actual.comparable_pairs, expected.comparable_pairs);
+        assert_close(actual.variance, expected.variance);
+        assert_close(actual.std_error, expected.std_error);
+        assert_close(actual.ci_lower, expected.ci_lower);
+        assert_close(actual.ci_upper, expected.ci_upper);
+        assert_close(actual.tau, expected.tau);
+    }
+
+    fn assert_ranked_uno_matches_quadratic(
+        time: &[f64],
+        status: &[i32],
+        risk_score: &[f64],
+        tau: Option<f64>,
+    ) {
+        let tau_value = tau.unwrap_or_else(|| time.iter().copied().fold(0.0, f64::max));
+        let (km_times, km_values) = compute_censoring_km(time, status);
+        let event_weights = uno_event_weights(time, status, &km_times, &km_values, tau_value);
+        let ranked = uno_c_index_ranked_accumulator(time, risk_score, &event_weights);
+        let quadratic = uno_c_index_quadratic_accumulator(time, risk_score, &event_weights);
+        assert_uno_accumulators_close(&ranked, &quadratic);
+        assert_uno_results_close(
+            &uno_c_index_core(time, status, risk_score, tau),
+            &uno_c_index_core_quadratic(time, status, risk_score, tau),
+        );
+    }
+
     #[test]
     fn test_uno_c_index_basic() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
@@ -59,7 +126,115 @@ mod tests {
     }
 
     #[test]
-    fn test_uno_c_index_parallel_path_is_finite() {
+    fn test_ranked_uno_matches_quadratic_at_time_tau_and_risk_boundaries() {
+        let epsilon = crate::constants::TIME_EPSILON;
+        let time = vec![
+            1.0,
+            1.0 + 0.5 * epsilon,
+            1.0 + epsilon,
+            1.0 + 1.5 * epsilon,
+            2.0,
+            2.0,
+            3.0,
+            4.0,
+        ];
+        let status = vec![1, 1, 1, 0, 1, 0, 1, 0];
+        let risk_score = vec![-0.0, 0.0, 1.0, 1.0, -1.0, 2.0, -1.0, 0.5];
+
+        for tau in [
+            None,
+            Some(0.0),
+            Some(1.0),
+            Some(1.0 + 0.5 * epsilon),
+            Some(1.0 + epsilon),
+            Some(2.5),
+        ] {
+            assert_ranked_uno_matches_quadratic(&time, &status, &risk_score, tau);
+        }
+    }
+
+    #[test]
+    fn test_ranked_uno_matches_quadratic_at_ipcw_survival_floor() {
+        let n = 202;
+        let time: Vec<f64> = (1..=n).map(|value| value as f64).collect();
+        let mut status = vec![0; n];
+        status[n - 2] = 1;
+        status[n - 1] = 1;
+        let risk_score: Vec<f64> = (0..n).map(|idx| ((idx * 37) % n) as f64).collect();
+
+        let (km_times, km_values) = compute_censoring_km(&time, &status);
+        let event_weights = uno_event_weights(
+            &time,
+            &status,
+            &km_times,
+            &km_values,
+            *time.last().expect("fixture is non-empty"),
+        );
+        assert_close(
+            event_weights[n - 2],
+            1.0 / (IPCW_SURVIVAL_FLOOR * IPCW_SURVIVAL_FLOOR),
+        );
+        assert_ranked_uno_matches_quadratic(&time, &status, &risk_score, None);
+    }
+
+    #[test]
+    fn test_ranked_uno_matches_quadratic_on_deterministic_random_inputs() {
+        let epsilon = crate::constants::TIME_EPSILON;
+        let mut state = 0x6a09_e667_f3bc_c909_u64;
+        for n in 1..=64 {
+            for case_idx in 0..12 {
+                let mut time = Vec::with_capacity(n);
+                let mut status = Vec::with_capacity(n);
+                let mut risk_score = Vec::with_capacity(n);
+                for _ in 0..n {
+                    crate::internal::statistical::lcg64_next(&mut state);
+                    let bucket = (state % 11) as f64;
+                    let offset = match (state >> 8) % 4 {
+                        0 => 0.0,
+                        1 => 0.5 * epsilon,
+                        2 => epsilon,
+                        _ => 1.5 * epsilon,
+                    };
+                    time.push(bucket + offset);
+                    status.push(i32::from((state >> 16).is_multiple_of(3)));
+                    let risk = match (state >> 24) % 9 {
+                        0 => -0.0,
+                        1 => 0.0,
+                        value => value as f64 - 5.0,
+                    };
+                    risk_score.push(risk);
+                }
+                let tau = match case_idx % 4 {
+                    0 => None,
+                    1 => Some(4.0),
+                    2 => Some(4.0 + 0.5 * epsilon),
+                    _ => Some(4.0 + epsilon),
+                };
+                assert_ranked_uno_matches_quadratic(&time, &status, &risk_score, tau);
+            }
+        }
+    }
+
+    #[test]
+    fn test_ranked_uno_matches_quadratic_across_old_parallel_threshold() {
+        for n in [
+            PARALLEL_THRESHOLD_LARGE - 1,
+            PARALLEL_THRESHOLD_LARGE,
+            PARALLEL_THRESHOLD_LARGE + 1,
+        ] {
+            let time: Vec<f64> = (0..n)
+                .map(|idx| 1.0 + (idx % 127) as f64 * 0.25 + (idx / 127) as f64 * 0.01)
+                .collect();
+            let status: Vec<i32> = (0..n).map(|idx| i32::from(idx % 5 != 0)).collect();
+            let risk_score: Vec<f64> = (0..n)
+                .map(|idx| ((idx.wrapping_mul(37) + 7) % 41) as f64)
+                .collect();
+            assert_ranked_uno_matches_quadratic(&time, &status, &risk_score, Some(20.0));
+        }
+    }
+
+    #[test]
+    fn test_uno_c_index_large_input_is_finite() {
         let n = PARALLEL_THRESHOLD_LARGE + 5;
         let time: Vec<f64> = (0..n).map(|i| i as f64 + 1.0).collect();
         let status = vec![1; n];
