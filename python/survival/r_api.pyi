@@ -733,6 +733,16 @@ def coxph(
     control: Any | None = None,
     **kwargs: Any,
 ) -> Any: ...
+def clogit(
+    formula: str,
+    data: Any | None = None,
+    *,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    method: str = "exact",
+    **kwargs: Any,
+) -> Any: ...
 def predict(
     fit: Any,
     newdata: Any | None = None,

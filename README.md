@@ -102,6 +102,7 @@ from survival import (
     aic,
     as_data_frame,
     basehaz,
+    clogit,
     coxph,
     fitted,
     predict,
@@ -151,6 +152,9 @@ to produce model-based survival curves.
 `survdiff` uses the same right-censored and delayed-entry response forms.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.
+`clogit("case ~ exposure + strata(set)", data=...)` fits matched case-control
+models through the exact stratified Cox likelihood; `method="approximate"`
+maps to Breslow handling as it does in R.
 R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
 in the bridge and pass named control lists through to the Python API.
 The R-style `predict(...)` and `fitted(...)` generics support Cox linear

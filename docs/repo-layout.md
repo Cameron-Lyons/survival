@@ -35,7 +35,7 @@ The Python package in `python/survival/` mirrors the Rust domains:
 - `population`, `monitoring`, `ml`
 - `bayesian`, `causal`, `joint`, `interpretability`, `spatial`, and related domains
 - `r_api`: R-style formula façade for `Surv`, `survfit`, `survdiff`, `coxph`,
-  `survreg`, Cox `predict`, and residual dispatch
+  `clogit`, `survreg`, Cox `predict`, and residual dispatch
 
 Preferred usage is module-oriented:
 
@@ -49,7 +49,7 @@ rmst = validation.rmst(...)
 
 Top-level imports remain available lazily for compatibility, but new code should
 prefer the domain modules unless it is using the intentional R-style façade
-(`from survival import Surv, survfit, coxph, survreg`).
+(`from survival import Surv, survfit, coxph, clogit, survreg`).
 
 Python source builds use the lean `extension-module` feature set by default.
 Build with `--features extension-module,ml` when the optional ML bindings should

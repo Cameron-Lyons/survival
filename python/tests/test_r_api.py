@@ -1139,6 +1139,15 @@ def _tied_cox_data():
     }
 
 
+def _clogit_data():
+    return {
+        "case": [1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0],
+        "set": [1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4],
+        "x": [0.2, 0.8, 1.1, 0.4, 0.5, 1.2, 0.9, 0.1, 0.7, 1.0, 0.3, 1.3, 0.6, 0.2, 1.4, 0.9],
+        "z": [1.0, 0.3, 0.8, 1.4, 0.2, 1.1, 0.6, 0.9, 0.5, 1.2, 0.1, 0.7, 1.3, 0.4, 0.8, 0.2],
+    }
+
+
 def _counting_cox_data():
     return {
         "start": [0.0, 0.0, 1.5, 2.5, 0.0, 3.0],
@@ -6592,6 +6601,212 @@ def test_coxph_formula_accepts_rep_constant_response_argument():
     assert survival.coef(inferred_length) == pytest.approx(survival.coef(direct))
     assert survival.loglik(formula) == pytest.approx(survival.loglik(direct))
     assert survival.nobs(formula) == sum(data["case"])
+
+
+def test_clogit_exact_matches_r_reference_for_multiple_cases_per_set():
+    data = _clogit_data()
+    fit = survival.clogit(
+        "case ~ x + z + strata(set)",
+        data=data,
+        control={"iter.max": 50, "eps": 1e-9},
+    )
+    equivalent_cox = survival.coxph(
+        "Surv(rep(1, nrow(data)), case) ~ x + z + strata(set)",
+        data=data,
+        method="exact",
+        control={"iter.max": 50, "eps": 1e-9},
+    )
+    expected_variance = [
+        [1.6714828664413921, -0.20436032396075088],
+        [-0.20436032396075085, 1.5517480346884],
+    ]
+
+    assert survival.coef(fit) == pytest.approx(
+        [-0.8457808761181879, 1.4766531964610223], rel=0, abs=1e-10
+    )
+    for actual, expected in zip(survival.vcov(fit), expected_variance, strict=True):
+        assert actual == pytest.approx(expected, rel=0, abs=1e-10)
+    assert fit.log_likelihood == pytest.approx(
+        [-6.579251212010101, -5.679859460220504], rel=0, abs=1e-10
+    )
+    assert fit.score_test == pytest.approx(1.804139493304423, rel=0, abs=1e-10)
+    assert fit.iterations == 3
+    assert fit.method == "exact"
+    assert survival.model_formula(fit) == "Surv(rep(1, n), case) ~ x + z + strata(set)"
+    assert survival.coef(fit) == pytest.approx(survival.coef(equivalent_cox))
+    for actual, expected in zip(survival.vcov(fit), survival.vcov(equivalent_cox), strict=True):
+        assert actual == pytest.approx(expected)
+    with pytest.raises(ValueError, match="survival curves are not defined for a clogit model"):
+        survival.basehaz(fit)
+    with pytest.raises(ValueError, match="survival curves are not defined for a clogit model"):
+        survival.survfit(fit)
+    with pytest.raises(ValueError, match="survival curves are not defined for a clogit model"):
+        fit.basehaz()
+    with pytest.raises(ValueError, match="survival curves are not defined for a clogit model"):
+        fit.survival_curve()
+    for residual_type in ("score", "schoenfeld", "dfbeta", "dfbetas", "scaledsch"):
+        with pytest.raises(ValueError, match=f"{residual_type} residuals are not available"):
+            survival.r_api.residuals(fit, type=residual_type)
+    with pytest.raises(ValueError, match="score residuals are not available"):
+        fit.score_residuals()
+    assert len(survival.r_api.residuals(fit, type="martingale")) == len(data["case"])
+    with pytest.raises(ValueError, match="schoenfeld residuals are not available"):
+        survival.cox_zph(fit)
+
+
+def test_clogit_method_and_exact_inference_rules_match_r():
+    data = {**_clogit_data(), "id": list(range(16))}
+    formula = "case ~ x + z + strata(set)"
+    exact = survival.clogit(formula, data=data)
+    explicit_exact = survival.clogit(formula, data=data, method="exact")
+    approximate = survival.clogit(formula, data=data, method="ap")
+    breslow = survival.clogit(formula, data=data, method="breslow")
+
+    assert survival.coef(exact) == pytest.approx(survival.coef(explicit_exact))
+    assert survival.coef(approximate) == pytest.approx(survival.coef(breslow))
+    assert approximate.method == breslow.method == "breslow"
+
+    with pytest.warns(RuntimeWarning, match="weights ignored"):
+        weighted = survival.clogit(formula, data=data, weights=[2.0] * len(data["case"]))
+    assert survival.coef(weighted) == pytest.approx(survival.coef(exact))
+    assert survival.model_weights(weighted) is None
+
+    breslow_weights = [0.5 + 0.1 * (idx % 5) for idx in range(len(data["case"]))]
+    weighted_breslow = survival.clogit(
+        formula,
+        data=data,
+        method="breslow",
+        weights=breslow_weights,
+    )
+    assert survival.model_weights(weighted_breslow) == pytest.approx(breslow_weights)
+    assert weighted_breslow.robust is True
+    expected_weighted_variance = [
+        [0.720954464895698, 0.00931434307520126],
+        [0.00931434307520126, 0.7781943393567565],
+    ]
+    expected_weighted_naive = [
+        [1.6761284190128223, -0.19215580825836115],
+        [-0.19215580825836115, 1.8422617494368836],
+    ]
+    for actual, expected in zip(
+        survival.vcov(weighted_breslow), expected_weighted_variance, strict=True
+    ):
+        assert actual == pytest.approx(expected, rel=0, abs=1e-10)
+    for actual, expected in zip(weighted_breslow.naive_var, expected_weighted_naive, strict=True):
+        assert actual == pytest.approx(expected, rel=0, abs=1e-10)
+
+    integer_weighted = survival.clogit(
+        formula,
+        data=data,
+        method="breslow",
+        weights=[2.0] * len(data["case"]),
+    )
+    assert integer_weighted.robust is False
+
+    id_exact = survival.clogit(formula, data=data, id=data["id"])
+    id_breslow = survival.clogit(formula, data=data, method="breslow", id=data["id"])
+    robust_id_breslow = survival.clogit(
+        formula,
+        data=data,
+        method="breslow",
+        id=data["id"],
+        robust=True,
+    )
+    assert survival.coef(id_exact) == pytest.approx(survival.coef(exact))
+    assert id_exact.robust is False
+    for actual, expected in zip(survival.vcov(id_breslow), survival.vcov(breslow), strict=True):
+        assert actual == pytest.approx(expected)
+    assert id_breslow.robust is False
+    assert robust_id_breslow.robust is True
+
+    repeated_event_ids = [
+        "a",
+        "b",
+        "a",
+        "c",
+        "d",
+        "e",
+        "f",
+        "a",
+        "g",
+        "a",
+        "h",
+        "i",
+        "j",
+        "k",
+        "l",
+        "m",
+    ]
+    repeated_id_breslow = survival.clogit(
+        formula,
+        data=data,
+        method="breslow",
+        id=repeated_event_ids,
+    )
+    expected_id_variance = [
+        [0.5065837992703215, 0.1113609349577885],
+        [0.1113609349577885, 0.5874222540961469],
+    ]
+    assert repeated_id_breslow.robust is True
+    for actual, expected in zip(
+        survival.vcov(repeated_id_breslow), expected_id_variance, strict=True
+    ):
+        assert actual == pytest.approx(expected, rel=0, abs=1e-10)
+
+    with pytest.raises(ValueError, match="dfbeta residuals are not available"):
+        survival.clogit(formula, data=data, id=repeated_event_ids)
+    for kwargs in ({"robust": True}, {"cluster": data["id"]}):
+        with pytest.raises(ValueError, match="dfbeta residuals are not available"):
+            survival.clogit(formula, data=data, **kwargs)
+    with pytest.warns(RuntimeWarning, match="cluster specified with robust=FALSE"):
+        ignored_cluster = survival.clogit(
+            formula,
+            data=data,
+            cluster=data["id"],
+            robust=False,
+        )
+    assert survival.coef(ignored_cluster) == pytest.approx(survival.coef(exact))
+    with pytest.warns(RuntimeWarning, match="cluster specified with robust=FALSE"):
+        ignored_breslow_cluster = survival.clogit(
+            formula,
+            data=data,
+            method="breslow",
+            cluster=data["id"],
+            robust=False,
+        )
+    assert ignored_breslow_cluster.robust is False
+    for actual, expected in zip(
+        survival.vcov(ignored_breslow_cluster), survival.vcov(breslow), strict=True
+    ):
+        assert actual == pytest.approx(expected)
+    with pytest.raises(ValueError, match="robust variance plus the exact method"):
+        survival.clogit(f"{formula} + cluster(id)", data=data)
+    with pytest.raises(ValueError, match="survival curves are not defined for a clogit model"):
+        survival.survfit(breslow)
+
+
+def test_clogit_delegates_subset_and_missing_value_alignment():
+    data = _clogit_data()
+    filtered = _take(data, list(range(1, len(data["case"]))))
+    subset_fit = survival.clogit(
+        "case ~ x + z + strata(set)",
+        data=data,
+        subset=list(range(1, len(data["case"]))),
+    )
+    filtered_fit = survival.clogit("case ~ x + z + strata(set)", data=filtered)
+
+    with_missing = {key: list(values) for key, values in data.items()}
+    with_missing["z"][0] = None
+    omitted_fit = survival.clogit(
+        "case ~ x + z + strata(set)",
+        data=with_missing,
+        na_action="omit",
+    )
+
+    assert survival.coef(subset_fit) == pytest.approx(survival.coef(filtered_fit))
+    assert survival.loglik(subset_fit) == pytest.approx(survival.loglik(filtered_fit))
+    assert survival.coef(omitted_fit) == pytest.approx(survival.coef(filtered_fit))
+    assert survival.loglik(omitted_fit) == pytest.approx(survival.loglik(filtered_fit))
 
 
 def test_coxph_formula_cluster_computes_robust_variance():
@@ -14569,13 +14784,13 @@ def test_r_api_rejects_unsupported_formula_features():
     with pytest.raises(ValueError, match="id must have length"):
         survival.coxph("Surv(time, status) ~ x1", data=_toy_data(), id=["a"])
 
-    with pytest.raises(ValueError, match="cluster or id"):
-        survival.coxph(
-            "Surv(time, status) ~ x1",
-            data=_toy_data(),
-            id=_toy_data()["group"],
-            robust=False,
-        )
+    nonrobust_id = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=_toy_data(),
+        id=_toy_data()["group"],
+        robust=False,
+    )
+    assert nonrobust_id.robust is False
 
     with pytest.raises(NotImplementedError, match="istate"):
         survival.coxph("Surv(time, status) ~ x1", data=_toy_data(), istate=_toy_data()["status"])

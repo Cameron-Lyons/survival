@@ -5,7 +5,7 @@ import random
 import warnings
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date as _Date  # noqa: N812
 from datetime import datetime as _DateTime  # noqa: N812
 from functools import lru_cache
@@ -49,6 +49,7 @@ __all__ = [
     "coef_names",
     "confint",
     "concordance",
+    "clogit",
     "coxph",
     "coxph_detail",
     "coxph_wtest",
@@ -257,8 +258,28 @@ class _FormulaFit:
     y_response: Surv | None = None
     model_frame: dict[str, Any] | None = None
     score_values: list[float] | None = None
+    conditional_logistic: bool = False
 
     def __getattr__(self, name: str) -> Any:
+        if self.conditional_logistic and name in {
+            "basehaz",
+            "basehaz_with_strata",
+            "survival_curve",
+            "survival_curve_with_strata",
+        }:
+            raise ValueError("predicted survival curves are not defined for a clogit model")
+        if self.conditional_logistic and getattr(self.fit, "method", None) == "exact":
+            unavailable = {
+                "score_residuals": "score",
+                "schoenfeld_residuals": "schoenfeld",
+                "scaled_schoenfeld_residuals": "scaledsch",
+                "dfbeta": "dfbeta",
+                "dfbetas": "dfbetas",
+            }
+            if name in unavailable:
+                raise ValueError(
+                    f"{unavailable[name]} residuals are not available for the exact method"
+                )
         if name == "id" and self.id_values is not None:
             return self.id_values
         if name == "x" and self.x_matrix is not None:
@@ -10155,6 +10176,9 @@ def survfit(
 ):
     """Fit Kaplan-Meier curves or Cox-model survival curves."""
 
+    if _is_clogit_fit(response):
+        raise ValueError("predicted survival curves are not defined for a clogit model")
+
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, None)
     conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, True)
@@ -11067,6 +11091,9 @@ def basehaz(
 ):
     """Return Cox baseline cumulative hazard, like R's basehaz."""
 
+    if _is_clogit_fit(fit):
+        raise ValueError("predicted survival curves are not defined for a clogit model")
+
     centered_value = _normalize_bool_option(centered, "centered")
     if time is not None:
         if newdata is not None:
@@ -11159,6 +11186,8 @@ def cox_zph(
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"unexpected cox_zph argument(s): {unexpected}")
+    if _is_clogit_fit(fit) and getattr(_unwrap_formula_fit(fit), "method", None) == "exact":
+        raise ValueError("schoenfeld residuals are not available for the exact method")
     if _is_survreg_fit(fit) or not hasattr(fit, "schoenfeld_residuals"):
         raise TypeError("cox_zph requires a fitted Cox model")
     group_terms = _normalize_bool_option(terms, "terms")
@@ -11835,6 +11864,10 @@ def _cox_beta(fit: Any) -> list[float]:
 
 def _unwrap_formula_fit(fit: Any) -> Any:
     return fit.fit if isinstance(fit, _FormulaFit) else fit
+
+
+def _is_clogit_fit(fit: Any) -> bool:
+    return isinstance(fit, _FormulaFit) and fit.conditional_logistic
 
 
 def _cox_event_count(fit: Any) -> int:
@@ -13645,6 +13678,18 @@ def _cox_robust_variance_matrix(
     cluster_codes = _encode_labels(cluster_values, "cluster")
     robust = _core.clustered_sandwich_variance(score, weights, cluster_codes, naive)
     return robust, naive, cluster_values
+
+
+def _cox_has_repeated_event_id(response: Surv, id_values: Sequence[Any]) -> bool:
+    seen: set[Any] = set()
+    for event, id_value in zip(response.event, id_values, strict=True):
+        if int(event) != 1:
+            continue
+        key = _hashable_group_value(id_value)
+        if key in seen:
+            return True
+        seen.add(key)
+    return False
 
 
 def _survreg_robust_variance_matrix(
@@ -16455,6 +16500,12 @@ def residuals(
         raise AssertionError(f"unhandled survreg residual type {residual_type!r}")
 
     residual_type = _normalize_residual_type(type)
+    if (
+        _is_clogit_fit(fit)
+        and getattr(_unwrap_formula_fit(fit), "method", None) == "exact"
+        and residual_type in {"score", "schoenfeld", "dfbeta", "dfbetas", "scaledsch"}
+    ):
+        raise ValueError(f"{residual_type} residuals are not available for the exact method")
     if terms is not None and residual_type != "partial":
         raise ValueError("terms is only supported for Cox partial residuals")
     method_names = {
@@ -16886,11 +16937,32 @@ def coxph(
         raise ValueError(
             "coxph design matrix is singular; use singular_ok=True to allow dependent covariates"
         )
-    robust_cluster = cluster if cluster is not None else id_values
-    if robust_value is True and robust_cluster is None:
-        robust_cluster = list(range(n))
-    if robust_value is False and robust_cluster is not None:
-        raise ValueError("cluster or id cannot be combined with robust=False")
+    has_fractional_weights = fit_weights is not None and any(
+        not float(weight).is_integer() for weight in fit_weights
+    )
+    has_repeated_event_id = id_values is not None and _cox_has_repeated_event_id(
+        response,
+        id_values,
+    )
+    automatically_robust = cluster is not None or has_fractional_weights or has_repeated_event_id
+    use_robust_variance = automatically_robust if robust_value is None else robust_value
+    if cluster is not None and not use_robust_variance:
+        warnings.warn(
+            "cluster specified with robust=FALSE, cluster ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        cluster = None
+
+    robust_cluster = None
+    if use_robust_variance:
+        robust_cluster = cluster if cluster is not None else id_values
+        if robust_cluster is None:
+            if response.start is not None and robust_value is True:
+                raise ValueError("one of cluster or id is needed for robust variance")
+            robust_cluster = list(range(n))
+        if method_name == "exact":
+            raise ValueError("dfbeta residuals are not available for the exact method")
     robust_variance = None
     naive_variance = None
     cluster_values = None
@@ -16921,6 +16993,65 @@ def coxph(
             model_frame=model_frame,
         )
     return fit
+
+
+def clogit(
+    formula: str,
+    data: Any | None = None,
+    *,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    method: str = "exact",
+    **kwargs: Any,
+) -> Any:
+    """Fit a conditional logistic model through stratified Cox regression."""
+
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    if not isinstance(formula, str):
+        raise TypeError("clogit formula must be a string")
+    response, separator, rhs = formula.partition("~")
+    response = response.strip()
+    rhs = rhs.strip()
+    if not separator or not response or not rhs:
+        raise ValueError("clogit formula must contain a response and '~'")
+
+    method_name = _match_string_arg(
+        method,
+        "method",
+        ("exact", "approximate", "efron", "breslow"),
+        "clogit method must be 'exact', 'approximate', 'efron', or 'breslow'",
+    )
+    cox_method = "breslow" if method_name == "approximate" else method_name
+    cox_formula = f"Surv(rep(1, n), {response}) ~ {rhs}"
+    response_columns = _response_arg_columns(response)
+    terms = _split_terms(rhs, _dot_terms(data, response_columns))
+
+    if cox_method == "exact":
+        if terms.clusters:
+            raise ValueError("robust variance plus the exact method is not supported")
+        if weights is not None:
+            warnings.warn(
+                "weights ignored: not possible for the exact method",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            weights = None
+
+    if kwargs.get("eps") is None and kwargs.get("control") is None:
+        kwargs["eps"] = 1e-9
+    fit = coxph(
+        cox_formula,
+        data=data,
+        weights=weights,
+        subset=subset,
+        na_action=na_action,
+        method=cox_method,
+        **kwargs,
+    )
+    if not isinstance(fit, _FormulaFit):
+        raise AssertionError("clogit formula fit did not preserve formula metadata")
+    return replace(fit, conditional_logistic=True)
 
 
 def survreg(
