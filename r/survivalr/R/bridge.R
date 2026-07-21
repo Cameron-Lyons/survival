@@ -7456,7 +7456,7 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
       result$loglik <- c(null_loglik, full_loglik)
       result$nevent <- as.numeric(result$n_event)[[1L]]
 
-      df <- sum(!is.na(coefficient_table[, "coef"]))
+      df <- as.integer(result$df)[[1L]]
       likelihood_test <- -2 * (null_loglik - full_loglik)
       result$logtest <- .cox_summary_test(likelihood_test, df)
       result$sctest <- .cox_summary_test(result$score_test, df)
@@ -7467,7 +7467,7 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
 
       unscaled_coefficients <- stats::coef(object)
       keep <- !is.na(unscaled_coefficients)
-      if (any(keep)) {
+      if (df > 0L && any(keep)) {
         active_variance <- stats::vcov(object, complete = TRUE)[keep, keep, drop = FALSE]
         wald <- coxph.wtest(
           active_variance,
@@ -7475,7 +7475,7 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
         )
         wald_test <- wald$test
       } else {
-        wald_test <- numeric()
+        wald_test <- 0
       }
       result$waldtest <- .cox_summary_test(wald_test, df, round.test = TRUE)
     }

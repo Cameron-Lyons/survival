@@ -1803,8 +1803,8 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_true(all(c("coef", "se(coef)", "z", "Pr(>|z|)") %in% colnames(fit_summary$coefficients)))
   expect_equal(fit_summary$n, nrow(data))
   fit_summary_print <- capture.output(print(fit_summary))
-  expect_true(any(grepl("n=4", fit_summary_print, fixed = TRUE)))
-  expect_true(any(grepl("events=3", fit_summary_print, fixed = TRUE)))
+  expect_true(any(grepl("n= 4", fit_summary_print, fixed = TRUE)))
+  expect_true(any(grepl("number of events= 3", fit_summary_print, fixed = TRUE)))
   prediction <- predict(fit, data.frame(x = c(0.5, 0.7)))
   expect_true(is.numeric(unlist(prediction, use.names = FALSE)))
   prediction_with_se <- predict(fit, data.frame(x = c(0.5, 0.7)), se.fit = TRUE)
@@ -3979,8 +3979,13 @@ test_that("Cox likelihood metadata counts weighted and recurrent event rows", {
   expect_equal(attr(logLik(no_events), "nobs"), 0L)
   expect_true(is.nan(BIC(no_events)))
   expect_true(is.nan(BIC(reference_no_events)))
-  expect_equal(summary(no_events)$n, nrow(right))
-  expect_equal(summary(no_events)$n_event, 0L)
+  no_events_summary <- summary(no_events)
+  reference_no_events_summary <- summary(reference_no_events)
+  expect_equal(no_events_summary$n, nrow(right))
+  expect_equal(no_events_summary$n_event, 0L)
+  for (field in c("logtest", "sctest", "waldtest")) {
+    expect_equal(no_events_summary[[field]], reference_no_events_summary[[field]])
+  }
 
   recurrent <- data.frame(
     start = c(0, 1, 0, 2, 0, 1, 2, 0),
@@ -4055,7 +4060,7 @@ test_that("Cox bridge reports converged aliased coefficients like R survival", {
   reference_summary <- summary(reference)$coefficients
   expect_equal(
     bridged_summary,
-    reference_summary[, c("coef", "se(coef)", "z", "Pr(>|z|)"), drop = FALSE],
+    reference_summary,
     tolerance = 1e-12
   )
 
