@@ -11119,6 +11119,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "bprobit" in survival.__all__
     assert "coef" in survival.__all__
     assert "coef_names" in survival.__all__
+    assert "clogit" in survival.__all__
     assert "confint" in survival.__all__
     assert "cox_zph" in survival.__all__
     assert "coxph_detail" in survival.__all__
@@ -11186,6 +11187,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.coef is survival.r_api.coef
     assert survival.survfit0 is survival.r_api.survfit0
     assert survival.coef_names is survival.r_api.coef_names
+    assert survival.clogit is survival.r_api.clogit
     assert survival.confint is survival.r_api.confint
     assert survival.cox_zph is survival.r_api.cox_zph
     assert survival.coxph_detail is survival.r_api.coxph_detail
@@ -11878,6 +11880,14 @@ def test_r_api_stub_tracks_fit_control_public_signatures():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected_by_name = {
+        "clogit": [
+            "formula",
+            "data",
+            "weights",
+            "subset",
+            "na_action",
+            "method",
+        ],
         "coxph": [
             "response",
             "data",

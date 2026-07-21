@@ -76,6 +76,7 @@ _R_EXPORTS = [
     "coef_names",
     "confint",
     "concordance",
+    "clogit",
     "coxph",
     "coxph_detail",
     "coxph_wtest",

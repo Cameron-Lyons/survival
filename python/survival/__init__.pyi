@@ -50,6 +50,7 @@ from .r_api import (
     blogit,
     bprobit,
     cipoisson,
+    clogit,
     coef,
     coef_names,
     concordance,
