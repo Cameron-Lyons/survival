@@ -9264,6 +9264,93 @@ def test_coxph_score_and_dfbeta_residuals_use_fitted_information():
             assert dfbetas_row[col_idx] == pytest.approx(dfbeta[row_idx][col_idx] / scale)
 
 
+@pytest.mark.parametrize(
+    ("method", "expected_score", "expected_dfbeta", "expected_robust_variance"),
+    [
+        (
+            "breslow",
+            [
+                -0.566205435493211,
+                0.118975338134561,
+                -0.247269050248814,
+                -0.385057268840082,
+                -0.244685141396534,
+                1.32424155784408,
+            ],
+            [
+                -0.145720034481586,
+                0.0306197879579248,
+                -0.0636377757431793,
+                -0.0990992932519008,
+                -0.0629727745555388,
+                0.34081009007428,
+            ],
+            0.15615942412013,
+        ),
+        (
+            "efron",
+            [
+                -0.629825947484865,
+                0.116681966051309,
+                -0.218899195194712,
+                -0.400556408828364,
+                -0.25072229332147,
+                1.3833218787781,
+            ],
+            [
+                -0.158565652518724,
+                0.0293759762645186,
+                -0.0551102949322474,
+                -0.10084450885211,
+                -0.0631221120696446,
+                0.348266592108208,
+            ],
+            0.164486793924122,
+        ),
+    ],
+)
+def test_coxph_mixed_event_censor_ties_match_r_score_inference(
+    method,
+    expected_score,
+    expected_dfbeta,
+    expected_robust_variance,
+):
+    data = {
+        "time": [1.0, 1.0, 2.0, 2.0, 3.0, 4.0],
+        "status": [1, 1, 1, 0, 1, 0],
+        "x": [0.0, 1.0, 0.5, 1.5, 2.0, -0.5],
+        "id": list(range(6)),
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        ties=method,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+    robust_fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        ties=method,
+        cluster=data["id"],
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+
+    score = [row[0] for row in fit.score_residuals()]
+    dfbeta = [row[0] for row in fit.dfbeta()]
+
+    assert score == pytest.approx(expected_score, abs=1e-12)
+    assert dfbeta == pytest.approx(expected_dfbeta, abs=1e-12)
+    assert sum(score) == pytest.approx(fit.score_vector[0], abs=1e-12)
+    assert robust_fit.variance_matrix[0][0] == pytest.approx(
+        expected_robust_variance,
+        abs=1e-12,
+    )
+
+
 def test_coxph_counting_process_score_and_dfbeta_residuals_sum_to_score_vector():
     data = _counting_cox_data()
     for method in ("breslow", "efron", "exact"):
