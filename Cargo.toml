@@ -50,6 +50,10 @@ pyo3-build-config = { version = "0.29.0", features = ["resolve-config"], optiona
 name = "survival_benchmarks"
 harness = false
 
+[[bench]]
+name = "survfitaj_benchmarks"
+harness = false
+
 [profile.release]
 lto = true
 codegen-units = 1
