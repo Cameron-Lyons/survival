@@ -2241,6 +2241,52 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("Cox score inference matches native fits at mixed event and censor ties", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = c(1, 1, 2, 2, 3, 4),
+    status = c(1, 1, 1, 0, 1, 0),
+    x = c(0, 1, 0.5, 1.5, 2, -0.5),
+    id = seq_len(6L)
+  )
+
+  for (method in c("breslow", "efron")) {
+    bridged <- coxph(
+      Surv(time, status) ~ x,
+      data = data,
+      cluster = data$id,
+      ties = method,
+      max_iter = 50,
+      eps = 1e-09,
+      toler = 1e-10
+    )
+    reference <- survival::coxph(
+      survival::Surv(time, status) ~ x,
+      data = data,
+      cluster = data$id,
+      ties = method,
+      control = survival::coxph.control(
+        iter.max = 50,
+        eps = 1e-09,
+        toler.chol = 1e-10
+      )
+    )
+
+    expect_equal(
+      unname(residuals(bridged, type = "score")),
+      unname(stats::residuals(reference, type = "score")),
+      tolerance = 1e-10
+    )
+    expect_equal(unname(vcov(bridged)), unname(vcov(reference)), tolerance = 1e-10)
+  }
+})
+
 test_that("model summaries match native Cox and survreg coefficient tables", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

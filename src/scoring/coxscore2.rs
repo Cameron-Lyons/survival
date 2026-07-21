@@ -92,6 +92,14 @@ fn find_strata_boundaries(strata: &[i32], n: usize) -> Vec<(usize, usize)> {
     boundaries.push((start, n - 1));
     boundaries
 }
+
+#[inline]
+fn death_rows_in_bucket(status: &[f64], start: i32, end: i32) -> impl Iterator<Item = usize> + '_ {
+    (start..=end)
+        .map(|row| row as usize)
+        .filter(|&row| status[row] == 1.0)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn process_stratum(
     start: usize,
@@ -156,8 +164,7 @@ fn process_stratum(
                 for var in 0..nvar {
                     let xbar = a[var] / denom;
                     xhaz[var] += xbar * hazard;
-                    for k in processed_start..=processed_end {
-                        let k_usize = k as usize;
+                    for k_usize in death_rows_in_bucket(status, processed_start, processed_end) {
                         let local_idx = k_usize - start;
                         partial_resid[local_idx][var] += covar[k_usize * nvar + var] - xbar;
                     }
@@ -172,8 +179,8 @@ fn process_stratum(
                     for var in 0..nvar {
                         let xbar = (a[var] - downwt * a2[var]) / temp;
                         xhaz[var] += xbar * hazard;
-                        for k in processed_start..=processed_end {
-                            let k_usize = k as usize;
+                        for k_usize in death_rows_in_bucket(status, processed_start, processed_end)
+                        {
                             let local_idx = k_usize - start;
                             let temp2 = covar[k_usize * nvar + var] - xbar;
                             partial_resid[local_idx][var] += temp2 / deaths;
@@ -291,8 +298,7 @@ pub(crate) fn compute_cox_score_residuals(data: CoxScoreData, params: CoxScorePa
                 {
                     let xbar = a_elem / denom;
                     *xhaz_elem += xbar * hazard;
-                    for k in processed_start..=processed_end {
-                        let k_usize = k as usize;
+                    for k_usize in death_rows_in_bucket(status, processed_start, processed_end) {
                         let idx = k_usize * params.nvar + var;
                         resid[idx] += data.covar[idx] - xbar;
                     }
@@ -307,8 +313,8 @@ pub(crate) fn compute_cox_score_residuals(data: CoxScoreData, params: CoxScorePa
                     for var in 0..params.nvar {
                         let xbar = (a[var] - downwt * a2[var]) / temp;
                         xhaz[var] += xbar * hazard;
-                        for k in processed_start..=processed_end {
-                            let k_usize = k as usize;
+                        for k_usize in death_rows_in_bucket(status, processed_start, processed_end)
+                        {
                             let idx = k_usize * params.nvar + var;
                             let temp2 = data.covar[idx] - xbar;
                             resid[idx] += temp2 / deaths;
@@ -370,6 +376,45 @@ pub fn cox_score_residuals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn repeated_mixed_tie_residuals(method: i32, strata_count: usize) -> Vec<f64> {
+        let n = 4 * strata_count;
+        let mut time = Vec::with_capacity(n);
+        let mut status = Vec::with_capacity(n);
+        let mut strata = Vec::with_capacity(n);
+        let mut covar = Vec::with_capacity(n);
+        for stratum in 0..strata_count {
+            time.extend([1.0, 1.0, 1.0, 2.0]);
+            status.extend([1.0, 1.0, 0.0, 0.0]);
+            strata.extend([stratum as i32; 4]);
+            covar.extend([0.0, 2.0, 4.0, 6.0]);
+        }
+        let mut y = time;
+        y.extend(status);
+        let score = vec![1.0; n];
+        let weights = vec![1.0; n];
+
+        compute_cox_score_residuals(
+            CoxScoreData {
+                y: &y,
+                strata: &strata,
+                covar: &covar,
+                score: &score,
+                weights: &weights,
+            },
+            CoxScoreParams { method, n, nvar: 1 },
+        )
+    }
+
+    fn assert_values_close(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (idx, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "value {idx}: expected {expected}, got {actual}"
+            );
+        }
+    }
 
     #[test]
     fn single_stratum_output_length() {
@@ -445,6 +490,91 @@ mod tests {
             .zip(efron.iter())
             .any(|(a, b)| (a - b).abs() > 1e-15);
         assert!(differs);
+    }
+
+    #[test]
+    fn breslow_excludes_tied_censor_from_event_contribution() {
+        let residuals = repeated_mixed_tie_residuals(0, 1);
+
+        assert_values_close(&residuals, &[-1.5, -0.5, -0.5, -1.5]);
+        assert!((residuals.iter().sum::<f64>() + 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn efron_excludes_tied_censor_from_event_and_death_adjustments() {
+        let residuals = repeated_mixed_tie_residuals(1, 1);
+        let expected = [-71.0 / 36.0, -29.0 / 36.0, -13.0 / 36.0, -55.0 / 36.0];
+
+        assert_values_close(&residuals, &expected);
+        assert!((residuals.iter().sum::<f64>() + 14.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn stratified_mixed_ties_preserve_each_stratum_score_sum() {
+        for (method, expected, expected_score) in [
+            (0, vec![-1.5, -0.5, -0.5, -1.5], -4.0),
+            (
+                1,
+                vec![-71.0 / 36.0, -29.0 / 36.0, -13.0 / 36.0, -55.0 / 36.0],
+                -14.0 / 3.0,
+            ),
+        ] {
+            let residuals = repeated_mixed_tie_residuals(method, 2);
+            for stratum_residuals in residuals.chunks_exact(4) {
+                assert_values_close(stratum_residuals, &expected);
+                assert!((stratum_residuals.iter().sum::<f64>() - expected_score).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn weighted_residual_sum_matches_partial_likelihood_score() {
+        let n = 4;
+        let covar = vec![0.0, 2.0, 4.0, 6.0];
+        let score = vec![1.0, 1.25, 0.8, 1.1];
+        let weights = vec![1.5, 0.75, 2.0, 0.5];
+        let y = vec![1.0, 1.0, 1.0, 2.0, 1.0, 1.0, 0.0, 0.0];
+        let strata = vec![0; n];
+        let risk: Vec<f64> = score
+            .iter()
+            .zip(&weights)
+            .map(|(&score, &weight)| score * weight)
+            .collect();
+        let denom: f64 = risk.iter().sum();
+        let risk_x: f64 = risk.iter().zip(&covar).map(|(&risk, &x)| risk * x).sum();
+        let death_denom = risk[0] + risk[1];
+        let death_risk_x = risk[0] * covar[0] + risk[1] * covar[1];
+        let death_weight = weights[0] + weights[1];
+        let observed = weights[0] * covar[0] + weights[1] * covar[1];
+
+        for method in [0, 1] {
+            let residuals = compute_cox_score_residuals(
+                CoxScoreData {
+                    y: &y,
+                    strata: &strata,
+                    covar: &covar,
+                    score: &score,
+                    weights: &weights,
+                },
+                CoxScoreParams { method, n, nvar: 1 },
+            );
+            let expected_score = if method == 0 {
+                observed - death_weight * risk_x / denom
+            } else {
+                let mean_death_weight = death_weight / 2.0;
+                observed
+                    - mean_death_weight * risk_x / denom
+                    - mean_death_weight * (risk_x - 0.5 * death_risk_x)
+                        / (denom - 0.5 * death_denom)
+            };
+            let residual_score: f64 = residuals
+                .iter()
+                .zip(&weights)
+                .map(|(&residual, &weight)| residual * weight)
+                .sum();
+
+            assert!((residual_score - expected_score).abs() < 1e-12);
+        }
     }
 
     #[test]
