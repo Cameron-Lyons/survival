@@ -291,7 +291,7 @@ def test_finegray():
     extend = [True, True, False, False]
     keep = [True, True, True, True]
 
-    result = survival.finegray(
+    result = survival.regression.finegray(
         tstart=tstart,
         tstop=tstop,
         ctime=ctime,
@@ -316,16 +316,16 @@ def test_finegray():
 
 def test_finegray_validates_public_inputs():
     with pytest.raises(ValueError, match="tstop length"):
-        survival.finegray([0.0], [], [], [], [True], [])
+        survival.regression.finegray([0.0], [], [], [], [True], [])
 
     with pytest.raises(ValueError, match="exceeds tstop"):
-        survival.finegray([2.0], [1.0], [], [], [True], [])
+        survival.regression.finegray([2.0], [1.0], [], [], [True], [])
 
     with pytest.raises(ValueError, match="ctime must be sorted"):
-        survival.finegray([0.0], [1.0], [2.0, 1.0], [1.0, 1.0], [True], [True, True])
+        survival.regression.finegray([0.0], [1.0], [2.0, 1.0], [1.0, 1.0], [True], [True, True])
 
     with pytest.raises(ValueError, match="cprob must contain values"):
-        survival.finegray([0.0], [1.0], [1.0], [0.0], [True], [True])
+        survival.regression.finegray([0.0], [1.0], [1.0], [0.0], [True], [True])
 
 
 def test_finegray_regression_and_cif_public_api():

@@ -26,6 +26,7 @@ from . import spatial as spatial
 from . import surv_analysis as surv_analysis
 from . import validation as validation
 from .r_api import (
+    FineGrayFrame,
     FineGrayOutput,
     PyearsResult,
     RateTable,
