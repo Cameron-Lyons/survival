@@ -67,6 +67,52 @@ def test_formula_term_cache_returns_independent_terms():
     assert [term.column for term in third.offsets] == ["x2"]
 
 
+def test_row_has_missing_uses_primitive_fast_paths_and_nested_fallbacks():
+    cases = [
+        (None, True),
+        (float("nan"), True),
+        (1.25, False),
+        (3, False),
+        (True, False),
+        ("value", False),
+        ([1.0, None], True),
+        ((1.0, float("nan")), True),
+        ([1.0, (2.0, 3.0)], False),
+    ]
+
+    for value, expected in cases:
+        assert survival.r_api._row_has_missing(value) is expected
+
+    class _ListSubclass(list):
+        pass
+
+    assert survival.r_api._row_has_missing(_ListSubclass([1.0, None])) is True
+
+
+def test_row_has_missing_preserves_custom_comparison_fallback():
+    class _MissingByComparison:
+        def __ne__(self, other):
+            return True
+
+    class _ComparisonError:
+        def __ne__(self, other):
+            raise TypeError("comparison unavailable")
+
+    assert survival.r_api._row_has_missing(_MissingByComparison()) is True
+    assert survival.r_api._row_has_missing(_ComparisonError()) is False
+
+
+def test_row_has_missing_preserves_numpy_and_pandas_sentinels():
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+
+    missing = [np.float64("nan"), np.datetime64("NaT"), pd.NA, pd.NaT]
+    present = [np.float64(1.0), np.int64(2), pd.Timestamp("2025-01-01")]
+
+    assert all(survival.r_api._row_has_missing(value) for value in missing)
+    assert not any(survival.r_api._row_has_missing(value) for value in present)
+
+
 def test_strata_matches_r_factor_codes_and_preserves_low_level_call():
     single = survival.strata(["b", "a", "b", None])
     named = survival.strata(["b", "a", "b", None], [2, 1, 1, 1], labels=["x", "y"])
@@ -6513,7 +6559,7 @@ def test_coxph_formula_accepts_rep_constant_response_argument():
     assert survival.coef(formula) == pytest.approx(survival.coef(direct))
     assert survival.coef(inferred_length) == pytest.approx(survival.coef(direct))
     assert survival.loglik(formula) == pytest.approx(survival.loglik(direct))
-    assert survival.nobs(formula) == len(data["case"])
+    assert survival.nobs(formula) == sum(data["case"])
 
 
 def test_coxph_formula_cluster_computes_robust_variance():
@@ -6690,7 +6736,7 @@ def test_model_generic_helpers_report_core_fit_metadata():
     for actual, expected in zip(survival.vcov(cox), cox.variance_matrix, strict=True):
         assert actual == pytest.approx(expected)
     assert survival.loglik(cox) == pytest.approx(cox.log_likelihood[-1])
-    assert survival.nobs(cox) == len(data["time"])
+    assert survival.nobs(cox) == sum(data["status"])
     assert survival.degrees_freedom(cox) == len(cox.coefficients[0])
     assert survival.aic(cox) == pytest.approx(
         -2.0 * survival.loglik(cox) + 2.0 * survival.degrees_freedom(cox)
@@ -6699,7 +6745,7 @@ def test_model_generic_helpers_report_core_fit_metadata():
         -2.0 * survival.loglik(cox) + 4.0 * survival.degrees_freedom(cox)
     )
     assert survival.bic(cox) == pytest.approx(
-        -2.0 * survival.loglik(cox) + math.log(survival.nobs(cox)) * survival.degrees_freedom(cox)
+        -2.0 * survival.loglik(cox) + math.log(sum(data["status"])) * survival.degrees_freedom(cox)
     )
     assert survival.extract_aic(cox) == pytest.approx(
         [survival.degrees_freedom(cox), survival.aic(cox)]
@@ -6767,6 +6813,84 @@ def test_model_generic_helpers_report_core_fit_metadata():
         survival.df_residual(cox)
     with pytest.raises(TypeError, match="stored model frame"):
         survival.model_frame(cox)
+
+
+def test_cox_likelihood_metadata_counts_events_but_summary_counts_rows():
+    data = _toy_data()
+    cox = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=data,
+        weights=data["x2"],
+        max_iter=10,
+        eps=1e-5,
+    )
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    event_count = sum(data["status"])
+    assert survival.nobs(cox) == event_count
+    assert survival.bic(cox) == pytest.approx(
+        -2.0 * survival.loglik(cox) + math.log(event_count) * survival.degrees_freedom(cox)
+    )
+    cox_summary = survival.model_summary(cox)
+    assert cox_summary["n"] == len(data["time"])
+    assert cox_summary["n_event"] == event_count
+
+    assert survival.nobs(aft) == len(data["time"])
+    assert survival.bic(aft) == pytest.approx(
+        -2.0 * survival.loglik(aft) + math.log(len(data["time"])) * survival.degrees_freedom(aft)
+    )
+
+
+def test_zero_event_cox_bic_is_nan():
+    fit = survival.coxph(
+        survival.Surv([1.0, 2.0, 3.0, 4.0], [0, 0, 0, 0]),
+        x=[[0.2], [0.4], [0.8], [1.0]],
+    )
+
+    assert survival.nobs(fit) == 0
+    assert survival.degrees_freedom(fit) == 0
+    summary = survival.model_summary(fit)
+    assert summary["n"] == 4
+    assert summary["n_event"] == 0
+    assert math.isnan(survival.bic(fit))
+
+
+def test_counting_process_and_intercept_only_cox_metadata_use_event_rows():
+    start = [0.0, 1.0, 0.0, 2.0, 0.0, 1.0, 2.0, 0.0]
+    stop = [1.0, 3.0, 2.0, 4.0, 5.0, 2.0, 4.0, 6.0]
+    status = [0, 1, 1, 0, 1, 1, 0, 1]
+    values = [0.2, 0.4, 0.1, 0.8, 0.5, 0.3, 0.9, 0.6]
+    response = survival.Surv(start, stop, status)
+    counting = survival.coxph(
+        response,
+        x=[[value] for value in values],
+        weights=[0.5, 2.0, 1.5, 0.75, 3.0, 1.25, 0.8, 4.0],
+        max_iter=0,
+    )
+
+    event_count = sum(status)
+    assert survival.nobs(counting) == event_count
+    counting_summary = survival.model_summary(counting)
+    assert counting_summary["n"] == len(status)
+    assert counting_summary["n_event"] == event_count
+    assert survival.bic(counting) == pytest.approx(
+        -2.0 * survival.loglik(counting)
+        + math.log(event_count) * survival.degrees_freedom(counting)
+    )
+
+    intercept_only = survival.coxph(
+        response,
+        x=[[] for _ in status],
+        max_iter=0,
+    )
+    assert survival.nobs(intercept_only) == event_count
+    assert survival.degrees_freedom(intercept_only) == 0
+    assert survival.bic(intercept_only) == pytest.approx(-2.0 * survival.loglik(intercept_only))
 
 
 def test_coxph_generics_mask_converged_aliased_coefficients():
@@ -6973,7 +7097,12 @@ def test_model_generic_helpers_report_formula_coefficient_names():
         eps=1e-5,
     )
 
-    assert survival.coef_names(cox) == ["x1", "groupB", "groupC", "x1:x2"]
+    assert survival.coef_names(cox) == [
+        "x1",
+        "factor(group)B",
+        "factor(group)C",
+        "x1:x2",
+    ]
     assert survival.coef_names(aft) == ["(Intercept)", "x1", "x2"]
     assert survival.coef_names(aft, complete=True) == [
         "(Intercept)",
@@ -6985,6 +7114,58 @@ def test_model_generic_helpers_report_formula_coefficient_names():
     ]
     assert len(survival.coef_names(aft, complete=True)) == len(aft.coefficients)
     assert len(survival.coef_names(aft)) == len(survival.coef(aft))
+
+
+def test_formula_metadata_preserves_categorical_spelling_and_assignments():
+    data = _factor_data()
+    data["group"] = ["A", "A", "B", "B", "C", "C", "A", "B"]
+    data["band"] = [0, 1, 2, 0, 1, 2, 0, 1]
+    formula = "Surv(time, status) ~ group + factor(dose) + as.factor(band) + x1"
+    term_names = ["group", "factor(dose)", "as.factor(band)", "x1"]
+    cox_columns = [
+        "groupB",
+        "groupC",
+        "factor(dose)1",
+        "factor(dose)2",
+        "as.factor(band)1",
+        "as.factor(band)2",
+        "x1",
+    ]
+
+    cox = survival.coxph(formula, data=data, max_iter=0)
+    aft = survival.survreg(formula, data=data, max_iter=1)
+
+    assert survival.model_term_names(cox) == term_names
+    assert survival.model_term_names(aft) == term_names
+    assert survival.r_api.model_term_names(cox, [3, 1]) == [
+        "as.factor(band)",
+        "group",
+    ]
+    assert survival.coef_names(cox) == cox_columns
+    assert survival.coef_names(aft) == ["(Intercept)", *cox_columns]
+
+    cox_matrix = survival.model_matrix(cox)
+    assert cox_matrix["columns"] == cox_columns
+    assert cox_matrix["assign"] == [1, 1, 2, 2, 3, 3, 4]
+
+    aft_matrix = survival.model_matrix(aft)
+    assert aft_matrix["columns"] == ["(Intercept)", *cox_columns]
+    assert aft_matrix["assign"] == [0, 1, 1, 2, 2, 3, 3, 4]
+
+
+def test_model_matrix_assignments_keep_strata_term_positions():
+    data = _factor_data()
+    data["group"] = ["A", "A", "B", "B", "A", "B", "A", "B"]
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + strata(group) + as.factor(dose)",
+        data=data,
+        max_iter=0,
+    )
+
+    matrix = survival.model_matrix(fit)
+    assert survival.model_term_names(fit) == ["x1", "as.factor(dose)"]
+    assert matrix["columns"] == ["x1", "as.factor(dose)1", "as.factor(dose)2"]
+    assert matrix["assign"] == [1, 3, 3]
 
 
 def test_direct_model_matrix_preserves_tabular_column_names():
@@ -8425,7 +8606,7 @@ def test_cox_zph_formula_terms_group_multi_column_factors():
 
     assert by_term.variable_names == ["factor(dose)", "x1"]
     assert by_term.df == [2, 1]
-    assert by_column.variable_names == ["dose1", "dose2", "x1"]
+    assert by_column.variable_names == ["factor(dose)1", "factor(dose)2", "x1"]
     assert by_column.df == [1, 1, 1]
     assert single_df.df == [1, 1]
     assert len(by_term.y[0]) == 2
@@ -8435,21 +8616,200 @@ def test_cox_zph_formula_terms_group_multi_column_factors():
     assert survival.cox_zph(fit, **{"global": False}).table[-1]["name"] != "GLOBAL"
 
 
+def test_cox_zph_drops_aliased_columns_like_explicitly_reduced_fit():
+    data = {
+        "time": [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0],
+        "status": [1, 1, 0, 1, 1, 0, 1, 0],
+        "x1": [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5],
+    }
+    data["x2"] = [2.0 * value for value in data["x1"]]
+    aliased_fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+    reduced_fit = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=data,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+
+    assert math.isnan(survival.coef(aliased_fit)[1])
+    for terms in (True, False):
+        result = survival.cox_zph(aliased_fit, transform="rank", terms=terms)
+        reduced = survival.cox_zph(reduced_fit, transform="rank", terms=terms)
+
+        assert result.variable_names == reduced.variable_names == ["x1"]
+        assert result.df == reduced.df == [1]
+        assert result.chi2_values == pytest.approx(reduced.chi2_values)
+        assert result.p_values == pytest.approx(reduced.p_values)
+        assert result.x == pytest.approx(reduced.x)
+        assert result.time == pytest.approx(reduced.time)
+        for actual, expected in zip(result.y, reduced.y, strict=True):
+            assert actual == pytest.approx(expected)
+        for actual, expected in zip(result.var, reduced.var, strict=True):
+            assert actual == pytest.approx(expected)
+        assert result.global_chi2 == pytest.approx(reduced.global_chi2)
+        assert result.global_df == reduced.global_df == 1
+        assert result.global_p_value == pytest.approx(reduced.global_p_value)
+        assert [row["name"] for row in result.table] == ["x1", "GLOBAL"]
+
+
+def test_cox_zph_filters_aliases_with_robust_scaling_and_variance():
+    data = {
+        "time": [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0],
+        "status": [1, 1, 0, 1, 1, 0, 1, 0],
+        "x1": [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5],
+        "subject": ["a", "a", "b", "b", "c", "c", "d", "d"],
+    }
+    data["x2"] = [2.0 * value for value in data["x1"]]
+    aliased_fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2 + cluster(subject)",
+        data=data,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+    reduced_fit = survival.coxph(
+        "Surv(time, status) ~ x1 + cluster(subject)",
+        data=data,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+
+    assert aliased_fit.robust is True
+    assert math.isnan(survival.coef(aliased_fit)[1])
+    for terms in (True, False):
+        result = survival.cox_zph(aliased_fit, transform="rank", terms=terms)
+        reduced = survival.cox_zph(reduced_fit, transform="rank", terms=terms)
+
+        assert result.variable_names == reduced.variable_names == ["x1"]
+        assert result.df == reduced.df == [1]
+        assert result.chi2_values == pytest.approx(reduced.chi2_values)
+        assert result.p_values == pytest.approx(reduced.p_values)
+        assert result.global_chi2 == pytest.approx(reduced.global_chi2)
+        assert result.global_df == reduced.global_df == 1
+        for actual, expected in zip(result.y, reduced.y, strict=True):
+            assert actual == pytest.approx(expected)
+        for actual, expected in zip(result.var, reduced.var, strict=True):
+            assert actual == pytest.approx(expected)
+
+
+def test_cox_zph_preserves_survivor_names_when_the_first_column_is_aliased():
+    data = {
+        "time": list(range(1, 9)),
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "constant": [1.0] * 8,
+        "x": [1.0, 0.9, 1.1, 0.7, 0.4, 0.3, 0.6, 0.2],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ constant + x",
+        data=data,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+    scaled = survival.r_api.residuals(fit, type="scaledsch")
+
+    assert math.isnan(survival.coef(fit)[0])
+    for terms in (True, False):
+        result = survival.cox_zph(fit, transform="rank", terms=terms)
+
+        assert result.variable_names == ["x"]
+        assert result.df == [1]
+        assert result.global_df == 1
+        for actual, expected in zip(result.y, scaled, strict=True):
+            assert actual == pytest.approx([expected[1]])
+        assert len(result.var) == 1
+        assert len(result.var[0]) == 1
+
+
+def test_cox_zph_remaps_partially_aliased_multi_column_terms():
+    data = {
+        "time": list(range(1, 9)),
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "group": ["a", "a", "b", "b", "c", "c", "a", "b"],
+        "is_b": [0, 0, 1, 1, 0, 0, 0, 1],
+        "x": [1.0, 0.9, 1.1, 0.7, 0.4, 0.3, 0.6, 0.2],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ is_b + factor(group) + x",
+        data=data,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+
+    assert math.isnan(survival.coef(fit)[1])
+    by_term = survival.cox_zph(fit, transform="rank", terms=True)
+    by_column = survival.cox_zph(fit, transform="rank", terms=False)
+
+    assert by_term.variable_names == ["is_b", "factor(group)", "x"]
+    assert by_term.df == [1, 1, 1]
+    assert by_term.global_df == 3
+    assert by_column.variable_names == ["is_b", "groupc", "x"]
+    assert by_column.df == [1, 1, 1]
+    assert by_column.global_df == 3
+    assert all(len(row) == 3 for row in by_term.y)
+    assert all(len(row) == 3 for row in by_column.y)
+    assert len(by_term.var) == len(by_column.var) == 3
+    assert all(len(row) == 3 for row in by_term.var)
+    assert all(len(row) == 3 for row in by_column.var)
+
+
+@pytest.mark.parametrize(
+    "formula",
+    ["Surv(time, status) ~ 1", "Surv(time, status) ~ constant"],
+)
+def test_cox_zph_rejects_fits_without_estimable_coefficients(formula):
+    data = {
+        "time": list(range(1, 9)),
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "constant": [1.0] * 8,
+    }
+    fit = survival.coxph(
+        formula,
+        data=data,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+
+    with pytest.raises(ValueError, match="at least one estimable coefficient"):
+        survival.cox_zph(fit)
+
+
+def test_cox_zph_rejects_fits_without_events():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [0, 0, 0, 0],
+        "x": [0.2, 0.8, 0.4, 1.1],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-9,
+    )
+
+    with pytest.raises(ValueError, match="at least one event"):
+        survival.cox_zph(fit)
+
+
 def test_coxph_partial_residuals_add_terms_to_martingales():
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=10, eps=1e-5)
     martingale = fit.martingale_residuals()
-    beta = fit.coefficients[0]
+    term_predictions = survival.predict(fit, type="terms")
     expected = [
-        [
-            martingale[row_idx] + fit.covariates[row_idx][col_idx] * beta[col_idx]
-            for col_idx in range(2)
-        ]
-        for row_idx in range(len(martingale))
+        [martingale[row_idx] + term for term in row] for row_idx, row in enumerate(term_predictions)
     ]
 
-    partial = fit.partial_residuals()
-    for actual, expected_row in zip(partial, expected, strict=True):
-        assert actual == pytest.approx(expected_row)
     for alias in ("partial", "partials", "p"):
         for actual, expected_row in zip(
             survival.r_api.residuals(fit, type=alias),
@@ -8469,6 +8829,61 @@ def test_coxph_partial_residuals_add_terms_to_martingales():
         survival.r_api.residuals(fit, type="partial", terms="missing")
 
 
+def test_coxph_partial_residuals_group_factor_coefficients_by_formula_term():
+    data = _factor_data()
+    fit = survival.coxph(
+        "Surv(time, status) ~ as.factor(dose) + x1",
+        data=data,
+        initial_beta=[0.2, -0.1, 0.3],
+        max_iter=0,
+    )
+    martingale = fit.martingale_residuals()
+    term_predictions = survival.predict(fit, type="terms")
+
+    partial = survival.r_api.residuals(fit, type="partial")
+    selected = survival.r_api.residuals(
+        fit,
+        type="partial",
+        terms="as.factor(dose)",
+    )
+
+    assert survival.model_term_names(fit) == ["as.factor(dose)", "x1"]
+    assert all(len(row) == 2 for row in partial)
+    for row_idx, actual in enumerate(partial):
+        assert actual == pytest.approx(
+            [martingale[row_idx] + value for value in term_predictions[row_idx]]
+        )
+        assert selected[row_idx] == pytest.approx([actual[0]])
+
+
+def test_predict_terms_constant_restores_zero_reference_linear_predictor():
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_toy_data(),
+        initial_beta=[0.25, -0.4],
+        max_iter=0,
+    )
+    constant = survival.r_api.predict_terms_constant(fit)
+    term_predictions = survival.predict(fit, type="terms")
+    zero_reference = survival.predict(fit, reference="zero")
+
+    assert constant == pytest.approx(
+        sum(
+            mean * coefficient
+            for mean, coefficient in zip(fit.means, fit.coefficients[0], strict=True)
+        )
+    )
+    assert [sum(row) + constant for row in term_predictions] == pytest.approx(zero_reference)
+
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=_toy_data(),
+        max_iter=1,
+    )
+    with pytest.raises(TypeError, match="coxph"):
+        survival.r_api.predict_terms_constant(aft)
+
+
 def test_coxph_counting_process_partial_residuals_keep_training_row_order():
     data = _counting_cox_data()
     fit = survival.coxph(
@@ -8479,10 +8894,9 @@ def test_coxph_counting_process_partial_residuals_keep_training_row_order():
         max_iter=0,
     )
     martingale = fit.martingale_residuals()
-    beta = fit.coefficients[0]
+    term_predictions = survival.predict(fit, type="terms")
     expected = [
-        [martingale[row_idx] + fit.covariates[row_idx][0] * beta[0]]
-        for row_idx in range(len(martingale))
+        [martingale[row_idx] + term_predictions[row_idx][0]] for row_idx in range(len(martingale))
     ]
 
     partial = survival.r_api.residuals(fit, type="partial")
@@ -8522,10 +8936,7 @@ def test_coxph_residuals_honor_case_weighting_rules():
         assert unweighted_row == pytest.approx(raw_row)
         assert default_row == pytest.approx([value * weights[row_idx] for value in raw_row])
 
-    terms = [
-        [fit.covariates[row_idx][col_idx] * fit.coefficients[0][col_idx] for col_idx in range(2)]
-        for row_idx in range(len(martingale))
-    ]
+    terms = survival.predict(fit, type="terms")
     partial = survival.r_api.residuals(fit, type="partial", weighted=True)
     for row_idx, actual in enumerate(partial):
         assert actual == pytest.approx(
@@ -8564,7 +8975,7 @@ def test_coxph_residuals_collapse_training_rows_by_label():
     for actual, expected_row in zip(collapsed_score, expected_score, strict=True):
         assert actual == pytest.approx(expected_row)
 
-    partial = fit.partial_residuals()
+    partial = survival.r_api.residuals(fit, type="partial")
     collapsed_partial = survival.r_api.residuals(fit, type="partial", collapse=collapse)
     expected_partial = [
         [sum(partial[idx][0] for idx, label in enumerate(collapse) if label == group)]
@@ -10046,6 +10457,36 @@ def test_coxph_formula_na_action_omit_matches_filtered_data():
     assert fit.risk_scores == pytest.approx(direct.risk_scores)
     assert dotted.coefficients[0] == pytest.approx(direct.coefficients[0])
     assert dotted.risk_scores == pytest.approx(direct.risk_scores)
+
+
+def test_coxph_formula_na_action_fail_and_omit_detect_primitive_sentinels():
+    data = _numeric_data()
+    data = {
+        **data,
+        "x1": [0.2, 0.4, None, 0.8, 1.0, 1.2, 0.6, 1.4],
+        "x2": [1.0, 0.9, 1.1, 0.7, 0.4, 0.3, float("nan"), 0.2],
+    }
+    retained = [0, 1, 3, 4, 5, 7]
+
+    with pytest.raises(ValueError, match="missing values in formula data"):
+        survival.coxph("Surv(time, status) ~ x1 + x2", data=data)
+
+    omitted = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        na_action="omit",
+        max_iter=10,
+        eps=1e-5,
+    )
+    filtered = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_take(data, retained),
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    assert omitted.coefficients[0] == pytest.approx(filtered.coefficients[0])
+    assert omitted.risk_scores == pytest.approx(filtered.risk_scores)
 
 
 def test_coxph_formula_filters_external_weights_and_offset_with_subset_and_na_action():
@@ -13467,6 +13908,12 @@ def test_survreg_formula_as_factor_treatment_codes_numeric_covariates():
 
     assert fit.coefficients == pytest.approx(low_level.coefficients)
     assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
+    assert survival.coef_names(fit) == [
+        "(Intercept)",
+        "as.factor(dose)1",
+        "as.factor(dose)2",
+        "x2",
+    ]
 
 
 def test_survreg_matrix_input_applies_subset_to_row_aligned_arrays():
@@ -13616,7 +14063,7 @@ def test_survreg_formula_treatment_codes_categorical_covariates():
 
     assert fit.coefficients == pytest.approx(low_level.coefficients)
     newdata = {"group": ["B", "A"], "x1": [0.5, 0.8]}
-    term_se = survival.predict(fit, newdata, type="terms", terms="factor(group)", se_fit=True)
+    term_se = survival.predict(fit, newdata, type="terms", terms="group", se_fit=True)
     group_var = fit.variance_matrix[1][1]
     group_mean = sum(1.0 if value == "B" else 0.0 for value in data["group"]) / len(data["group"])
     for actual, expected in zip(
