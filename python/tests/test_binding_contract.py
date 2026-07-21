@@ -10792,6 +10792,7 @@ def test_legacy_cox_model_bindings_are_typed_to_runtime_surface():
         "predict_survival": ["self", "time"],
         "survival_curve": ["self", "covariates", "time_points"],
         "cumulative_hazard": ["self", "covariates"],
+        "predicted_survival_time": ["self", "covariates", "percentile"],
         "restricted_mean_survival_time": ["self", "covariates", "tau"],
         "brier_score": ["self", "time"],
         "std_errors": ["self"],
@@ -10812,6 +10813,10 @@ def test_legacy_cox_model_bindings_are_typed_to_runtime_surface():
     assert (
         _pyi_class_method_return(stub_path, "CoxPHModel", "hazard_ratios_with_ci")
         == "tuple[list[float], list[float], list[float]]"
+    )
+    assert (
+        _pyi_class_method_return(stub_path, "CoxPHModel", "predicted_survival_time")
+        == "list[float | None]"
     )
 
     subject = core.Subject(

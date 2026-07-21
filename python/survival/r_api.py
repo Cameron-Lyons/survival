@@ -16,6 +16,8 @@ from typing import Any, NoReturn
 
 from . import _survival as _core
 
+_COX_NONCONVERGENCE_FLAG = 1000
+
 __all__ = [
     "Surv",
     "Surv2",
@@ -1376,73 +1378,6 @@ def brier(
         result["phat"] = phat
         result["eff.n"] = eff_n
     return result
-
-
-def _cox_centered_design_rank(
-    rows: list[list[float]],
-    weights: list[float] | None,
-    tolerance: float,
-) -> int:
-    width = len(rows[0]) if rows else 0
-    if width == 0:
-        return 0
-
-    case_weights = [1.0] * len(rows) if weights is None else weights
-    active = [
-        idx for idx, weight in enumerate(case_weights) if math.isfinite(weight) and weight > 0.0
-    ]
-    if not active:
-        return width
-
-    total_weight = math.fsum(case_weights[idx] for idx in active)
-    if not math.isfinite(total_weight) or total_weight <= 0.0:
-        return width
-
-    means = [
-        math.fsum(case_weights[idx] * rows[idx][col_idx] for idx in active) / total_weight
-        for col_idx in range(width)
-    ]
-    columns: list[list[float]] = []
-    for col_idx in range(width):
-        column = [
-            (rows[idx][col_idx] - means[col_idx]) * math.sqrt(case_weights[idx]) for idx in active
-        ]
-        scale = max((abs(value) for value in column), default=0.0)
-        columns.append([value / scale for value in column] if scale > 0.0 else column)
-
-    rank = 0
-    basis: list[list[float]] = []
-    pivot_tolerance = max(abs(tolerance), 1e-12) * max(len(active), width, 1)
-    for column in columns:
-        residual = list(column)
-        for basis_column in basis:
-            projection = math.fsum(
-                value * basis_value
-                for value, basis_value in zip(residual, basis_column, strict=True)
-            )
-            residual = [
-                value - projection * basis_value
-                for value, basis_value in zip(residual, basis_column, strict=True)
-            ]
-        norm = math.sqrt(math.fsum(value * value for value in residual))
-        if norm > pivot_tolerance:
-            basis.append([value / norm for value in residual])
-            rank += 1
-    return rank
-
-
-def _check_cox_design_full_rank(
-    rows: list[list[float]],
-    weights: list[float] | None,
-    tolerance: float,
-) -> None:
-    width = len(rows[0]) if rows else 0
-    if width == 0:
-        return
-    if _cox_centered_design_rank(rows, weights, tolerance) < width:
-        raise ValueError(
-            "coxph design matrix is singular; use singular_ok=True to allow dependent covariates"
-        )
 
 
 def _column(data: Any, name: str) -> list[Any]:
@@ -11790,6 +11725,38 @@ def _unwrap_formula_fit(fit: Any) -> Any:
     return fit.fit if isinstance(fit, _FormulaFit) else fit
 
 
+def _cox_alias_mask(fit: Any) -> list[bool]:
+    """Identify coefficients removed by the fitted Cox information rank."""
+
+    model = _unwrap_formula_fit(fit)
+    width = len(_cox_beta(model))
+    aliases = [False] * width
+    if width == 0 or int(getattr(model, "iterations", 0)) <= 0:
+        return aliases
+
+    try:
+        rank = int(model.convergence_flag)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return aliases
+    # A nonconverged or zero-iteration fit keeps its raw coefficients. Successful
+    # step-halving fits use a negative flag, so their exact zero diagonals still
+    # identify aliases even though the flag no longer records the fitted rank.
+    if rank == _COX_NONCONVERGENCE_FLAG or rank >= width:
+        return aliases
+
+    raw_variance = getattr(model, "information_matrix", None)
+    if raw_variance is None:
+        return aliases
+    variance = list(raw_variance)
+    if len(variance) != width or any(len(row) != width for row in variance):
+        return aliases
+
+    aliases = [float(variance[idx][idx]) == 0.0 for idx in range(width)]
+    if rank >= 0 and sum(aliases) != width - rank:
+        return [False] * width
+    return aliases
+
+
 def _is_coxph_fit(fit: Any) -> bool:
     model = _unwrap_formula_fit(fit)
     return all(
@@ -11822,7 +11789,7 @@ def _cox_full_loglik(fit: Any) -> float:
 
 
 def _cox_degrees_of_freedom(fit: Any) -> int:
-    return len(_cox_beta(fit))
+    return sum(not aliased for aliased in _cox_alias_mask(fit))
 
 
 def _formula_design_output_names(design: _FormulaDesign) -> list[str]:
@@ -11875,14 +11842,20 @@ def coef(fit: Any) -> list[float]:
     _require_model_fit(fit, "coef")
     if _is_survreg_fit(fit):
         return _location_beta(fit)
-    return _cox_beta(fit)
+    beta = _cox_beta(fit)
+    return [
+        math.nan if aliased else value
+        for value, aliased in zip(beta, _cox_alias_mask(fit), strict=True)
+    ]
 
 
-def coef_names(fit: Any, *, complete: Any = False) -> list[str]:
+def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
     """Return fitted coefficient names for R-style model helpers."""
 
     _require_model_fit(fit, "coef_names")
-    include_complete = _normalize_bool_option_with_default(complete, "complete", False)
+    include_complete = (
+        _is_coxph_fit(fit) if complete is None else _normalize_bool_option(complete, "complete")
+    )
     if _is_survreg_fit(fit):
         location_width = len(_location_beta(fit))
         names = _fit_location_coef_names(fit, location_width)
@@ -11892,7 +11865,10 @@ def coef_names(fit: Any, *, complete: Any = False) -> list[str]:
         return names
 
     beta = _cox_beta(fit)
-    return _fit_location_coef_names(fit, len(beta))
+    names = _fit_location_coef_names(fit, len(beta))
+    if include_complete:
+        return names
+    return [name for name, aliased in zip(names, _cox_alias_mask(fit), strict=True) if not aliased]
 
 
 def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
@@ -11903,7 +11879,11 @@ def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
     if _is_survreg_fit(fit):
         width = len(list(fit.coefficients)) if include_complete else len(_location_beta(fit))
         return _survreg_variance_matrix(fit, width)
-    return _cox_variance_matrix(fit, len(_cox_beta(fit)))
+    variance = _cox_variance_matrix(fit, len(_cox_beta(fit)))
+    if include_complete:
+        return variance
+    active = [idx for idx, aliased in enumerate(_cox_alias_mask(fit)) if not aliased]
+    return [[variance[row_idx][col_idx] for col_idx in active] for row_idx in active]
 
 
 def loglik(fit: Any) -> float:
@@ -12299,10 +12279,12 @@ def _coefficient_summary_rows(
     for idx, value in enumerate(coefficients):
         standard_error = math.sqrt(max(float(variance[idx][idx]), 0.0))
         naive_standard_error = math.sqrt(max(float(naive_variance[idx][idx]), 0.0))
-        if standard_error > 0.0:
+        if math.isnan(value):
+            statistic = math.nan
+        elif standard_error > 0.0:
             statistic = value / standard_error
         elif value == 0.0:
-            statistic = 0.0
+            statistic = math.nan
         else:
             statistic = math.copysign(math.inf, value)
         row: dict[str, float | str] = {
@@ -12428,7 +12410,7 @@ def confint(
     z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
     names = coef_names(fit)
     coefficients = coef(fit)
-    variance = vcov(fit, complete=False)
+    variance = vcov(fit, complete=not _is_survreg_fit(fit))
     indices = _coefficient_selection_indices(parm, names)
 
     intervals = []
@@ -12459,7 +12441,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
     else:
         names = coef_names(fit)
         coefficients = coef(fit)
-        variance = vcov(fit, complete=False)
+        variance = vcov(fit, complete=True)
     naive_variance = _summary_naive_variance(fit, len(coefficients), variance)
     result: dict[str, Any] = {
         "model_type": "survreg" if is_survreg else "coxph",
@@ -12941,7 +12923,11 @@ def _cox_fit_offset(fit: Any, beta: list[float]) -> list[float] | None:
     return offsets
 
 
-def _cox_refit_loglik(fit: Any, width: int, offset: list[float] | None) -> float:
+def _cox_refit_loglik_and_df(
+    fit: Any,
+    width: int,
+    offset: list[float] | None,
+) -> tuple[float, int]:
     rows = [[float(value) for value in row[:width]] for row in fit.covariates]
     nocenter = getattr(fit, "nocenter", None)
     refit = _core.coxph_fit(
@@ -12963,7 +12949,7 @@ def _cox_refit_loglik(fit: Any, width: int, offset: list[float] | None) -> float
         ),
         nocenter=[float(value) for value in nocenter] if nocenter is not None else None,
     )
-    return _cox_full_loglik(refit)
+    return _cox_full_loglik(refit), _cox_degrees_of_freedom(refit)
 
 
 def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
@@ -12982,11 +12968,13 @@ def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
     for idx, (name, group_width) in enumerate(groups):
         width += group_width
         names.append(name)
-        dfs.append(width)
         if idx == len(groups) - 1:
             logliks.append(_cox_full_loglik(model))
+            dfs.append(_cox_degrees_of_freedom(model))
         else:
-            logliks.append(_cox_refit_loglik(model, width, offset))
+            refit_loglik, refit_df = _cox_refit_loglik_and_df(model, width, offset)
+            logliks.append(refit_loglik)
+            dfs.append(refit_df)
     return _anova_result(logliks, dfs, names, test_name, with_tests)
 
 
@@ -16675,8 +16663,6 @@ def coxph(
     fit_weights = _optional_float_vector(weights, "weights", n)
     case_weights = fit_weights if explicit_weights else None
     fit_offset = _optional_float_vector(offset, "offset", n)
-    if not singular_ok_value:
-        _check_cox_design_full_rank(rows, fit_weights, toler if toler is not None else 1e-9)
     model_frame = None
     if keep_model:
         model_frame = (
@@ -16729,6 +16715,10 @@ def coxph(
         entry_times=entry_times,
         nocenter=nocenter_values,
     )
+    if not singular_ok_value and any(_cox_alias_mask(fit)):
+        raise ValueError(
+            "coxph design matrix is singular; use singular_ok=True to allow dependent covariates"
+        )
     robust_cluster = cluster if cluster is not None else id_values
     if robust_value is True and robust_cluster is None:
         robust_cluster = list(range(n))

@@ -1,6 +1,6 @@
 use crate::constants::{
-    DIVISION_FLOOR, EXP_CLAMP_MIN, TIME_EPSILON, exp_clamped, exp_clamped_ci,
-    z_score_for_confidence,
+    COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, DIVISION_FLOOR, EXP_CLAMP_MIN,
+    TIME_EPSILON, exp_clamped, exp_clamped_ci, z_score_for_confidence,
 };
 use crate::internal::matrix::invert_matrix;
 use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
@@ -49,6 +49,57 @@ fn sorted_unique_times(values: &[f64]) -> Vec<f64> {
     times.sort_by(f64::total_cmp);
     times.dedup_by(|left, right| (*left - *right).abs() < TIME_EPSILON);
     times
+}
+
+fn step_failure_quantile(
+    times: &[f64],
+    baseline_hazards: &[f64],
+    risk_multiplier: f64,
+    percentile: f64,
+) -> Option<f64> {
+    if percentile == 0.0 {
+        return Some(0.0);
+    }
+
+    let tolerance = f64::EPSILON.sqrt();
+    let final_time = times.last().copied().unwrap_or(0.0);
+    // The two tolerance-shifted crossings coincide on an ordinary step and
+    // bracket a horizontal segment when the target matches a failure level.
+    let mut first_lower_crossing = if tolerance >= percentile {
+        Some(0.0)
+    } else {
+        None
+    };
+    let mut first_upper_crossing = None;
+    let mut previous_failure = 0.0;
+    let mut final_failure = 0.0;
+
+    for (&time, &baseline_hazard) in times.iter().zip(baseline_hazards) {
+        let failure = 1.0 - (-baseline_hazard * risk_multiplier).exp();
+        if failure == previous_failure {
+            continue;
+        }
+        previous_failure = failure;
+        final_failure = failure;
+
+        if first_lower_crossing.is_none() && failure + tolerance >= percentile {
+            first_lower_crossing = Some(time);
+        }
+        if first_upper_crossing.is_none() && failure - tolerance >= percentile {
+            first_upper_crossing = Some(time);
+        }
+    }
+
+    if final_failure < percentile {
+        return None;
+    }
+
+    let lower_time = first_lower_crossing?;
+    if (percentile - final_failure).abs() < tolerance {
+        return Some((lower_time + final_time) / 2.0);
+    }
+
+    first_upper_crossing.map(|upper_time| (lower_time + upper_time) / 2.0)
 }
 
 fn validate_covariate_rows(
@@ -414,7 +465,7 @@ impl CoxPHModel {
         Ok(())
     }
 
-    #[pyo3(signature = (n_iters = 20))]
+    #[pyo3(signature = (n_iters = COX_MAX_ITER as u16))]
     pub fn fit(&mut self, n_iters: u16) -> PyResult<()> {
         self.invalidate_fit_cache();
         if self.event_times.is_empty() {
@@ -446,8 +497,8 @@ impl CoxPHModel {
             .strata(strata)
             .method(CoxMethod::Breslow)
             .max_iter(n_iters as usize)
-            .eps(1e-5)
-            .toler(1e-9)
+            .eps(COX_CONVERGENCE_TOLERANCE)
+            .toler(COX_RANK_TOLERANCE)
             .initial_beta(initial_beta)
             .build()
             .map_err(|e| {
@@ -672,7 +723,7 @@ impl CoxPHModel {
             return (0..nvar)
                 .map(|idx| {
                     let value = variance[(idx, idx)];
-                    if value.is_finite() && value > 0.0 {
+                    if value.is_finite() && value >= 0.0 {
                         value.sqrt()
                     } else {
                         0.1
@@ -751,38 +802,33 @@ impl CoxPHModel {
         &self,
         covariates: Vec<Vec<f64>>,
         percentile: f64,
-    ) -> Vec<Option<f64>> {
-        if self.validate_prediction_rows(&covariates).is_err() {
-            return vec![];
+    ) -> PyResult<Vec<Option<f64>>> {
+        if !percentile.is_finite() || !(0.0..=1.0).contains(&percentile) {
+            return Err(value_error(
+                "percentile must be a finite value between 0 and 1",
+            ));
         }
+        if self.fitted_log_likelihood.is_none() {
+            return Err(value_error("model must be fit before prediction"));
+        }
+        self.validate_prediction_rows(&covariates)?;
+
         let times = sorted_unique_times(&self.event_times);
         let baseline_hazards: Vec<f64> = times
             .iter()
             .map(|&t| self.baseline_cumulative_hazard_at(t))
             .collect();
-        let target_survival = 1.0 - percentile;
-        covariates
+        Ok(covariates
             .par_iter()
             .map(|row| {
-                let risk_exp = self.exp_risk_for_row(row);
-                let mut prev_surv = 1.0;
-                for (i, (&time, &baseline_hazard)) in
-                    times.iter().zip(baseline_hazards.iter()).enumerate()
-                {
-                    let survival = (-baseline_hazard * risk_exp).exp();
-                    if survival <= target_survival {
-                        if i == 0 {
-                            return Some(time);
-                        }
-                        let t0 = times[i - 1];
-                        let frac = (prev_surv - target_survival) / (prev_surv - survival);
-                        return Some(t0 + frac * (time - t0));
-                    }
-                    prev_surv = survival;
-                }
-                None
+                step_failure_quantile(
+                    &times,
+                    &baseline_hazards,
+                    self.exp_risk_for_row(row),
+                    percentile,
+                )
             })
-            .collect()
+            .collect())
     }
     pub fn restricted_mean_survival_time(&self, covariates: Vec<Vec<f64>>, tau: f64) -> Vec<f64> {
         if self.validate_prediction_rows(&covariates).is_err() {
@@ -1064,6 +1110,31 @@ mod tests {
     }
 
     #[test]
+    fn aliased_covariate_keeps_zero_standard_error_and_confidence_interval() {
+        let time = vec![1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0];
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 0];
+        let x = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5];
+        let covariates = x
+            .into_iter()
+            .map(|value| vec![value, 2.0 * value])
+            .collect();
+        let mut model = CoxPHModel::new_with_data(covariates, time, status)
+            .expect("collinear fixture should be valid");
+
+        model.fit(50).expect("collinear fit should converge");
+
+        let variance = model.vcov();
+        assert_eq!(variance[0][1], 0.0);
+        assert_eq!(variance[1], vec![0.0, 0.0]);
+        assert_eq!(model.std_errors()[1], 0.0);
+
+        let (hazard_ratios, lower, upper) = model.hazard_ratios_with_ci(0.95);
+        assert_eq!(hazard_ratios[1], 1.0);
+        assert_eq!(lower[1], 1.0);
+        assert_eq!(upper[1], 1.0);
+    }
+
+    #[test]
     fn replacing_outcomes_invalidates_fitted_statistics() {
         let mut model = correlated_tied_model();
         model.fit(50).expect("correlated tied fit should converge");
@@ -1258,24 +1329,106 @@ mod tests {
         assert_eq!(cumulative_hazard.len(), 1);
     }
 
-    #[test]
-    fn test_predicted_survival_time_interpolates_from_baseline_hazard() {
+    fn fitted_quantile_test_model() -> CoxPHModel {
         let mut model = CoxPHModel::new();
         model.coefficients =
             Array2::from_shape_vec((1, 1), vec![0.0]).expect("coefficient shape is valid");
-        model.event_times = vec![1.0, 2.0, 3.0];
-        model.censoring = vec![1, 1, 1];
+        model.event_times = vec![1.0, 2.0, 3.0, 4.0];
+        model.censoring = vec![1, 1, 1, 0];
+        model.risk_scores = vec![1.0; 4];
+        model.fitted_log_likelihood = Some(-1.0);
         model.baseline_hazard_lookup_times = vec![1.0, 2.0, 3.0];
         model.baseline_hazard_lookup_values = vec![0.1, 0.8, 1.2];
+        model
+    }
 
-        let survival_at_1 = (-0.1_f64).exp();
-        let survival_at_2 = (-0.8_f64).exp();
-        let expected = 1.0 + (survival_at_1 - 0.5) / (survival_at_1 - survival_at_2) * (2.0 - 1.0);
+    #[test]
+    fn test_predicted_survival_time_uses_step_quantiles_and_plateau_midpoints() {
+        let model = fitted_quantile_test_model();
 
-        let predicted = model.predicted_survival_time(vec![vec![0.0]], 0.5);
+        let ordinary = model
+            .predicted_survival_time(vec![vec![0.0]], 0.5)
+            .expect("ordinary quantile should be predicted");
+        assert_eq!(ordinary, vec![Some(2.0)]);
 
-        assert_eq!(predicted.len(), 1);
-        assert!((predicted[0].expect("median should be predicted") - expected).abs() < 1e-12);
+        let tolerance = f64::EPSILON.sqrt();
+        let interior_probability = 1.0 - (-0.8_f64).exp();
+        let interior = model
+            .predicted_survival_time(vec![vec![0.0]], interior_probability)
+            .expect("interior plateau should be predicted");
+        let within_tolerance = model
+            .predicted_survival_time(vec![vec![0.0]], interior_probability + tolerance / 2.0)
+            .expect("nearby interior plateau should be predicted");
+        let beyond_tolerance = model
+            .predicted_survival_time(vec![vec![0.0]], interior_probability + 2.0 * tolerance)
+            .expect("next step should be predicted");
+        assert_eq!(interior, vec![Some(2.5)]);
+        assert_eq!(within_tolerance, vec![Some(2.5)]);
+        assert_eq!(beyond_tolerance, vec![Some(3.0)]);
+
+        let terminal_probability = 1.0 - (-1.2_f64).exp();
+        let terminal = model
+            .predicted_survival_time(vec![vec![0.0]], terminal_probability)
+            .expect("terminal plateau should be predicted");
+        assert_eq!(terminal, vec![Some(3.5)]);
+
+        assert_eq!(
+            model
+                .predicted_survival_time(vec![vec![0.0]], 0.0)
+                .expect("zero percentile should be predicted"),
+            vec![Some(0.0)]
+        );
+        assert_eq!(
+            model
+                .predicted_survival_time(vec![vec![0.0]], 1.0)
+                .expect("unreachable percentile should be represented"),
+            vec![None]
+        );
+    }
+
+    #[test]
+    fn test_predicted_survival_time_validates_model_inputs() {
+        let model = fitted_quantile_test_model();
+
+        for percentile in [f64::NAN, f64::NEG_INFINITY, -0.1, 1.1, f64::INFINITY] {
+            let error = model
+                .predicted_survival_time(vec![vec![0.0]], percentile)
+                .expect_err("invalid percentiles should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("percentile must be a finite value")
+            );
+        }
+
+        let bad_row = model
+            .predicted_survival_time(vec![vec![0.0, 1.0]], 0.5)
+            .expect_err("invalid covariate width should fail");
+        assert!(bad_row.to_string().contains("has 2 columns but expected 1"));
+
+        let unfitted = CoxPHModel::new();
+        let error = unfitted
+            .predicted_survival_time(vec![vec![]], 0.5)
+            .expect_err("unfitted prediction should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("model must be fit before prediction")
+        );
+
+        assert_eq!(
+            model
+                .predicted_survival_time(vec![], 0.5)
+                .expect("empty prediction batches should be accepted"),
+            Vec::<Option<f64>>::new()
+        );
+    }
+
+    #[test]
+    fn test_step_failure_quantile_handles_a_curve_that_reaches_zero() {
+        let quantile = step_failure_quantile(&[1.0, 2.0, 3.0], &[1.0, 1_000.0, 1_000.0], 1.0, 1.0);
+
+        assert_eq!(quantile, Some(2.5));
     }
 
     #[test]

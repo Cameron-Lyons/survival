@@ -1,4 +1,7 @@
-use crate::constants::{COX_MAX_ITER, DEFAULT_BOOTSTRAP_SAMPLES};
+use crate::constants::{
+    COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, DEFAULT_BOOTSTRAP_SAMPLES,
+    DEFAULT_MAX_ITER,
+};
 use ndarray::Array2;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -237,8 +240,8 @@ pub(crate) fn bootstrap_cox(
     let mut original_builder = CoxFitBuilder::new(time_arr, status_arr, sorted_covariates.clone())
         .method(CoxMethod::Breslow)
         .max_iter(COX_MAX_ITER)
-        .eps(1e-9)
-        .toler(1e-9);
+        .eps(COX_CONVERGENCE_TOLERANCE)
+        .toler(COX_RANK_TOLERANCE);
     if let Some(weights) = sorted_weights.clone() {
         original_builder = original_builder.weights(Array1::from_vec(weights));
     }
@@ -279,8 +282,8 @@ pub(crate) fn bootstrap_cox(
             let mut builder = CoxFitBuilder::new(time_arr, status_arr, resorted_covariates)
                 .method(CoxMethod::Breslow)
                 .max_iter(COX_MAX_ITER)
-                .eps(1e-9)
-                .toler(1e-9);
+                .eps(COX_CONVERGENCE_TOLERANCE)
+                .toler(COX_RANK_TOLERANCE);
             if let Some(weights) = resorted_weights {
                 builder = builder.weights(Array1::from_vec(weights));
             }
@@ -438,7 +441,7 @@ pub(crate) fn bootstrap_survreg(
         None,
         None,
         Some(dist_str),
-        Some(COX_MAX_ITER),
+        Some(DEFAULT_MAX_ITER),
         Some(1e-5),
         Some(1e-9),
         None,
@@ -463,7 +466,7 @@ pub(crate) fn bootstrap_survreg(
                 None,
                 None,
                 Some(dist_str),
-                Some(COX_MAX_ITER),
+                Some(DEFAULT_MAX_ITER),
                 Some(1e-5),
                 Some(1e-9),
                 None,

@@ -3514,6 +3514,61 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_concordance$n, reference_concordance$n)
 })
 
+test_that("Cox bridge reports converged aliased coefficients like R survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1, 1, 2, 3, 3, 4, 5, 5),
+    status = c(1, 1, 0, 1, 1, 0, 1, 0),
+    x1 = c(0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5)
+  )
+  data$x2 <- 2 * data$x1
+
+  bridged <- coxph(
+    Surv(time, status) ~ x1 + x2,
+    data = data,
+    max_iter = 50,
+    eps = 1e-09,
+    toler = 1e-10
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x1 + x2,
+    data = data,
+    singular.ok = TRUE,
+    control = survival::coxph.control(iter.max = 50, eps = 1e-09, toler.chol = 1e-10)
+  )
+
+  expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+  expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-12)
+  expect_equal(
+    vcov(bridged, complete = FALSE),
+    vcov(reference, complete = FALSE),
+    tolerance = 1e-12
+  )
+  expect_equal(confint(bridged), confint(reference), tolerance = 1e-12)
+  expect_equal(attr(logLik(bridged), "df"), attr(logLik(reference), "df"))
+  expect_equal(
+    unname(extractAIC(bridged)),
+    unname(extractAIC(reference)),
+    tolerance = 1e-12
+  )
+
+  bridged_summary <- summary(bridged)$coefficients
+  reference_summary <- summary(reference)$coefficients
+  expect_equal(
+    bridged_summary,
+    reference_summary[, c("coef", "se(coef)", "z", "Pr(>|z|)"), drop = FALSE],
+    tolerance = 1e-12
+  )
+
+  term_predictions <- predict(bridged, type = "terms")
+  expect_equal(colnames(term_predictions), c("x1", "x2"))
+  expect_true(all(is.finite(term_predictions)))
+  expect_equal(term_predictions[, "x2"], rep(0, nrow(data)))
+})
+
 test_that("survreg bridge agrees with R survival distributions", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

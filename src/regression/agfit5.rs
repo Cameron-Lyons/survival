@@ -1,4 +1,4 @@
-use crate::constants::normal_ci_95;
+use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, normal_ci_95};
 use crate::internal::matrix::{lu_solve, matrix_inverse};
 use crate::internal::statistical::normal_cdf;
 use ndarray::{Array1, Array2};
@@ -406,8 +406,8 @@ fn perform_cox_regression(
     let weights = config.weights.as_deref();
     let strata = config.strata.as_deref();
     let frail = config.frail.as_deref();
-    let max_iter = config.max_iter.unwrap_or(20);
-    let eps = config.eps.unwrap_or(1e-6);
+    let max_iter = config.max_iter.unwrap_or(COX_MAX_ITER as i32);
+    let eps = config.eps.unwrap_or(COX_CONVERGENCE_TOLERANCE);
     let mut yy = Vec::with_capacity(3 * nused);
     yy.extend_from_slice(&time);
     yy.extend_from_slice(&time);
