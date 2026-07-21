@@ -65,6 +65,14 @@ fn add_risk_sums(
     }
 }
 
+fn sort_entry_order(order: &mut [usize], entry_times: &Array1<f64>) {
+    order.sort_by(|&lhs, &rhs| {
+        entry_times[rhs]
+            .total_cmp(&entry_times[lhs])
+            .then_with(|| rhs.cmp(&lhs))
+    });
+}
+
 pub(crate) fn exact_tied_moments(
     risk_indices: &[usize],
     deaths: usize,
@@ -123,6 +131,7 @@ pub(crate) struct CoxFit {
     time: Array1<f64>,
     status: Array1<i32>,
     entry_times: Option<Array1<f64>>,
+    entry_order: Option<Vec<usize>>,
     covar: Array2<f64>,
     strata: Array1<i32>,
     offset: Array1<f64>,
@@ -278,10 +287,26 @@ impl CoxFit {
         initial_beta: Vec<f64>,
     ) -> Result<Self, CoxError> {
         let nvar = covar.ncols();
+        let entry_order = entry_times.as_ref().map(|entry_times| {
+            let mut order: Vec<usize> = (0..entry_times.len()).collect();
+            let mut stratum_start = 0;
+            for stratum_end in 0..strata.len() {
+                if strata[stratum_end] != 1 {
+                    continue;
+                }
+                sort_entry_order(&mut order[stratum_start..=stratum_end], entry_times);
+                stratum_start = stratum_end + 1;
+            }
+            if stratum_start < order.len() {
+                sort_entry_order(&mut order[stratum_start..], entry_times);
+            }
+            order
+        });
         let mut cox = Self {
             time,
             status,
             entry_times,
+            entry_order,
             covar,
             strata,
             offset,
@@ -620,6 +645,10 @@ impl CoxFit {
         let Some(entry_times) = self.entry_times.as_ref() else {
             return self.iterate_right_censored(beta);
         };
+        let entry_order = self
+            .entry_order
+            .as_deref()
+            .expect("entry order must accompany counting-process entry times");
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let method = self.method;
@@ -658,12 +687,7 @@ impl CoxFit {
                 continue;
             }
 
-            let mut start_order: Vec<usize> = (stratum_start..=stratum_end).collect();
-            start_order.sort_by(|&lhs, &rhs| {
-                entry_times[rhs]
-                    .total_cmp(&entry_times[lhs])
-                    .then_with(|| rhs.cmp(&lhs))
-            });
+            let start_order = &entry_order[stratum_start..=stratum_end];
 
             let mut stop_denom = 0.0;
             let mut stop_a = vec![0.0; nvar];
@@ -1059,6 +1083,29 @@ impl CoxFit {
 mod tests {
     use super::*;
 
+    fn counting_process_order_fixture() -> CoxFit {
+        CoxFit::new_with_entry_times(
+            Array1::from_vec(vec![2.0, 3.0, 4.0, 2.5, 4.0, 5.0]),
+            Array1::from_vec(vec![1, 1, 0, 1, 0, 1]),
+            Array2::from_shape_vec(
+                (6, 2),
+                vec![0.2, 1.0, 0.8, 0.4, 0.5, 1.2, 1.1, 0.3, 0.7, 0.9, 1.3, 0.6],
+            )
+            .expect("counting-process fixture covariates should have a valid shape"),
+            Some(Array1::from_vec(vec![0.5, 1.5, 1.5, 2.0, 0.25, 2.0])),
+            Array1::from_vec(vec![0, 0, 1, 0, 0, 1]),
+            Array1::zeros(6),
+            Array1::ones(6),
+            Method::Efron,
+            10,
+            1e-9,
+            1e-9,
+            vec![true; 2],
+            vec![0.0; 2],
+        )
+        .expect("counting-process fixture should initialize")
+    }
+
     #[test]
     fn test_cox_fit_config_default() {
         let config = CoxFitConfig::default();
@@ -1236,6 +1283,37 @@ mod tests {
             assert!(loglik[0].is_finite());
             assert!(loglik[1].is_finite());
         }
+    }
+
+    #[test]
+    fn counting_process_entry_order_is_precomputed_per_stratum_with_index_ties() {
+        let fit = counting_process_order_fixture();
+
+        assert_eq!(
+            fit.entry_order.as_deref(),
+            Some([2, 1, 0, 5, 3, 4].as_slice())
+        );
+    }
+
+    #[test]
+    fn counting_process_entry_order_is_reused_across_evaluations() {
+        let mut fit = counting_process_order_fixture();
+        let beta = [0.2, -0.15];
+        let cached_order = fit.entry_order.clone();
+
+        let first_loglik = fit
+            .iterate(&beta)
+            .expect("first counting-process evaluation should succeed");
+        let first_score = fit.u.clone();
+        let first_information = fit.imat.clone();
+        let second_loglik = fit
+            .iterate(&beta)
+            .expect("second counting-process evaluation should succeed");
+
+        assert_eq!(second_loglik, first_loglik);
+        assert_eq!(fit.u, first_score);
+        assert_eq!(fit.imat, first_information);
+        assert_eq!(fit.entry_order, cached_order);
     }
 
     #[test]
