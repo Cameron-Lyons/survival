@@ -10826,6 +10826,36 @@ def test_coxph_formula_accepts_offset_only_rhs():
     )
 
 
+def test_survreg_config_defaults_to_weibull():
+    config = survival.SurvregConfig()
+
+    assert config.distribution == survival.DistributionType.weibull
+
+
+def test_low_level_survreg_omitted_distribution_matches_explicit_weibull():
+    data = _toy_data()
+    kwargs = {
+        "time": data["time"],
+        "status": [float(value) for value in data["status"]],
+        "covariates": _with_intercept(
+            [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
+        ),
+        "max_iter": 5,
+        "eps": 1e-5,
+    }
+
+    default = survival.regression.survreg(**kwargs)
+    explicit = survival.regression.survreg(**kwargs, distribution="weibull")
+    extreme = survival.regression.survreg(**kwargs, distribution="extreme_value")
+
+    assert default.distribution == "weibull"
+    assert default.coefficients == pytest.approx(explicit.coefficients)
+    assert default.log_likelihood == pytest.approx(explicit.log_likelihood)
+    assert default.iterations == explicit.iterations
+    assert extreme.distribution == "extreme_value"
+    assert extreme.log_likelihood != pytest.approx(default.log_likelihood)
+
+
 def test_survreg_formula_matches_low_level_binding():
     data = _toy_data()
     fit = survival.survreg(
