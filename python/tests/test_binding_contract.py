@@ -11102,6 +11102,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "regression" in survival.__all__
     assert "StrataFactor" in survival.__all__
     assert "Surv" in survival.__all__
+    assert "FineGrayFrame" in survival.__all__
     assert "FineGrayOutput" in survival.__all__
     assert "RateTable" in survival.__all__
     assert "PyearsResult" in survival.__all__
@@ -11169,6 +11170,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "ridge_fit" not in vars(survival)
     assert survival.StrataFactor is survival.r_api.StrataFactor
     assert survival.Surv is survival.r_api.Surv
+    assert survival.FineGrayFrame is survival.r_api.FineGrayFrame
     assert survival.FineGrayOutput is survival.r_api.FineGrayOutput
     assert survival.RateTable is survival.r_api.RateTable
     assert survival.PyearsResult is survival.r_api.PyearsResult
@@ -11631,9 +11633,25 @@ def test_r_api_stub_tracks_finegray_public_signature():
     survival = importlib.import_module("survival")
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
-    expected = ["tstart", "tstop", "ctime", "cprob", "extend", "keep"]
-    assert list(inspect.signature(survival.r_api.finegray).parameters) == expected
-    assert _pyi_function_arg_names(stub_path, "finegray") == expected
+    expected = [
+        "formula",
+        "data",
+        "weights",
+        "subset",
+        "na_action",
+        "etype",
+        "prefix",
+        "count",
+        "id",
+        "timefix",
+        "kwargs",
+    ]
+    runtime_params = inspect.signature(survival.r_api.finegray).parameters
+    assert list(runtime_params) == expected
+    for name in expected[2:-1]:
+        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert _pyi_function_arg_names(stub_path, "finegray") == expected[:-1]
+    assert _pyi_function_kwarg_name(stub_path, "finegray") == "kwargs"
 
 
 def test_r_api_stub_tracks_survobrien_public_signature():

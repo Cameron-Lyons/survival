@@ -1,5 +1,6 @@
 # ruff: noqa: N802
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ._survival import SplineBasisResult as _SplineBasisResult
@@ -92,6 +93,16 @@ class FineGrayOutput:
     end: list[float]
     wt: list[float]
     add: list[int]
+
+class FineGrayFrame(dict[str, list[Any]]):
+    event: Any
+    def __init__(
+        self,
+        columns: Mapping[str, Sequence[Any]] | None = None,
+        *,
+        event: Any = None,
+    ) -> None: ...
+    def copy(self) -> FineGrayFrame: ...
 
 class TcutResult:
     codes: list[int]
@@ -187,13 +198,19 @@ def pyears(
     data_frame: Any = False,
 ) -> PyearsResult | dict[str, list[Any]]: ...
 def finegray(
-    tstart: Any,
-    tstop: Any,
-    ctime: Any,
-    cprob: Any,
-    extend: Any,
-    keep: Any,
-) -> FineGrayOutput: ...
+    formula: str,
+    data: Any | None = None,
+    *,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "pass",
+    etype: Any | None = None,
+    prefix: str = "fg",
+    count: str | None = None,
+    id: Any | None = None,
+    timefix: bool = True,
+    **kwargs: Any,
+) -> FineGrayFrame: ...
 def cipoisson(
     k: Any,
     time: Any = 1.0,

@@ -52,6 +52,7 @@ _R_EXPORTS = [
     "Surv",
     "Surv2",
     "Surv2data",
+    "FineGrayFrame",
     "FineGrayOutput",
     "RateTable",
     "PyearsResult",

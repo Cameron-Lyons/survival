@@ -344,6 +344,31 @@ print(f"Number at risk: {result.n_risk}")
 ### Fine-Gray Competing Risks Model
 
 ```python
+from survival import finegray
+
+data = {
+    "time": [1.0, 2.0, 3.0, 4.0],
+    "event": ["target", "competing", "censor", "target"],
+    "x": [0.2, 0.4, 0.1, 0.8],
+}
+
+# String labels use a recognized censor label as the censoring state. For
+# pandas categoricals, the declared category order is preserved exactly.
+expanded = finegray(
+    "Surv(time, event) ~ x",
+    data=data,
+    etype="target",
+    count="replication",
+)
+
+print(expanded.event)
+print(expanded["fgstart"], expanded["fgstop"], expanded["fgwt"])
+```
+
+The checked six-vector interval splitter remains available for lower-level
+workflows:
+
+```python
 from survival import regression
 
 # Example competing risks data

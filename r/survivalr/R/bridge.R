@@ -1290,6 +1290,10 @@ attrassign.lm <- function(object, ...) {
   do.call(.data_prep_attr(name), .compact_null(list(...)))
 }
 
+.call_regression <- function(name, ...) {
+  do.call(.regression_attr(name), .compact_null(list(...)))
+}
+
 .core_nsk_basis <- function(x, df, knots, intercept, boundary_knots) {
   constructor <- .core_attr("NaturalSplineKnot")
   boundary_knots <- do.call(reticulate::tuple, as.list(as.numeric(boundary_knots)))
@@ -3428,7 +3432,7 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
     ckeep[index] <- TRUE
     expand <- (Y[keep, 3L] != 0 & Y[keep, 3L] != enum & last[keep])
     keep_arg <- c(TRUE, ckeep)[seq_along(ct2)]
-    split <- .call_r_api(
+    split <- .call_regression(
       "finegray",
       .finegray_python_vector(Y[keep, 1L]),
       .finegray_python_vector(Y[keep, 2L]),
@@ -3492,7 +3496,7 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
   if (missing(tstop) || missing(ctime) || missing(cprob) || missing(extend) || missing(keep)) {
     stop("direct finegray bridge requires tstart, tstop, ctime, cprob, extend, and keep", call. = FALSE)
   }
-  result <- .call_r_api(
+  result <- .call_regression(
     "finegray",
     .finegray_python_vector(direct_start),
     .finegray_python_vector(tstop),
