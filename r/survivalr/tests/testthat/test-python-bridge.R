@@ -3936,6 +3936,75 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_concordance$n, reference_concordance$n)
 })
 
+test_that("Cox detail weighted tied-event moments agree with R survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1, 1, 2),
+    status = c(1, 1, 0),
+    x = c(0, 1, 2),
+    weight = c(1, 2, 0.5)
+  )
+  exact <- list(
+    breslow = c(
+      means = 6 / 7,
+      score = -4 / 7,
+      imat = 60 / 49,
+      hazard = 6 / 7,
+      varhaz = 18 / 49
+    ),
+    efron = c(
+      means = 13 / 14,
+      score = -11 / 14,
+      imat = 267 / 196,
+      hazard = 33 / 28,
+      varhaz = 585 / 784
+    )
+  )
+
+  for (method in names(exact)) {
+    bridged <- coxph(
+      Surv(time, status) ~ x,
+      data = data,
+      weights = data$weight,
+      max_iter = 0,
+      method = method
+    )
+    reference <- survival::coxph(
+      survival::Surv(time, status) ~ x,
+      data = data,
+      weights = data$weight,
+      init = c(0),
+      ties = method,
+      control = survival::coxph.control(iter.max = 0)
+    )
+    bridged_detail <- coxph.detail(bridged)
+    reference_detail <- survival::coxph.detail(reference)
+
+    for (field in c("means", "score", "imat", "hazard", "varhaz", "wtrisk")) {
+      actual <- as.numeric(unlist(survivalr:::.result_field(bridged_detail, field)))
+      expected <- as.numeric(reference_detail[[field]])
+      expect_equal(actual, expected, tolerance = 1e-12)
+    }
+    expect_equal(
+      as.numeric(unlist(survivalr:::.result_field(bridged_detail, "nevent_wt"))),
+      as.numeric(reference_detail[["nevent.wt"]]),
+      tolerance = 1e-12
+    )
+    expect_equal(
+      as.numeric(unlist(survivalr:::.result_field(bridged_detail, "nrisk_wt"))),
+      as.numeric(reference_detail[["nrisk.wt"]]),
+      tolerance = 1e-12
+    )
+    for (field in names(exact[[method]])) {
+      actual <- as.numeric(unlist(survivalr:::.result_field(bridged_detail, field)))
+      expect_equal(actual, unname(exact[[method]][[field]]), tolerance = 1e-12)
+    }
+  }
+})
+
 test_that("Cox likelihood metadata counts weighted and recurrent event rows", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
