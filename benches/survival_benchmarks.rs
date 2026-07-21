@@ -1,5 +1,5 @@
 use std::hint::black_box;
-use survival::regression::{CoxPHModel, coxph_fit, survreg};
+use survival::regression::{CoxPHModel, coxph_fit, finegray, survreg};
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
     nelson_aalen, weighted_logrank_test,
@@ -194,6 +194,51 @@ mod concordance_bench {
         let indx: Vec<i32> = (0..n).map(|i| (i % ntree as usize) as i32).collect();
 
         bencher.bench_local(|| concordance1(&y, &weights, &indx, ntree));
+    }
+}
+
+mod finegray_interval_expansion {
+    use super::*;
+
+    #[divan::bench(args = [1000, 5000, 20000])]
+    fn sparse_kept_cuts(bencher: divan::Bencher, n: usize) {
+        let tstart = vec![0.0; n];
+        let tstop: Vec<f64> = (0..n).map(|idx| (idx % (n - 1)) as f64 + 0.5).collect();
+        let ctime: Vec<f64> = (0..n).map(|idx| idx as f64 + 1.0).collect();
+        let cprob = vec![1.0; n];
+        let extend = vec![true; n];
+        let mut keep = vec![false; n];
+        keep[n - 1] = true;
+        let inputs = (tstart, tstop, ctime, cprob, extend, keep);
+
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(tstart, tstop, ctime, cprob, extend, keep)| {
+                black_box(
+                    finegray(tstart, tstop, ctime, cprob, extend, keep)
+                        .expect("benchmark Fine-Gray inputs should be valid"),
+                )
+            },
+        );
+    }
+
+    #[divan::bench(args = [1000, 5000, 20000])]
+    fn dense_cut_output(bencher: divan::Bencher, n: usize) {
+        let tstart = vec![0.0];
+        let tstop = vec![0.5];
+        let ctime: Vec<f64> = (0..n).map(|idx| idx as f64 + 1.0).collect();
+        let cprob = vec![1.0; n];
+        let extend = vec![true];
+        let keep = vec![true; n];
+        let inputs = (tstart, tstop, ctime, cprob, extend, keep);
+
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(tstart, tstop, ctime, cprob, extend, keep)| {
+                black_box(
+                    finegray(tstart, tstop, ctime, cprob, extend, keep)
+                        .expect("benchmark Fine-Gray inputs should be valid"),
+                )
+            },
+        );
     }
 }
 
