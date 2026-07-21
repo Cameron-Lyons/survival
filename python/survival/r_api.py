@@ -11053,35 +11053,33 @@ def cox_zph(
     scaled = _cox_scaled_schoenfeld_from_raw(fit, raw)
     if len(raw) != len(scaled):
         raise ValueError("Schoenfeld residual arrays have inconsistent lengths")
-    if not raw:
-        return CoxZPHResult(
-            variable_names=[],
-            chi2_values=[],
-            df=[],
-            p_values=[],
-            x=[],
-            time=[],
-            y=[],
-            var=[],
-            transform=str(transform),
-            global_chi2=0.0 if include_global else None,
-            global_df=0 if include_global else None,
-            global_p_value=1.0 if include_global else None,
-        )
-
-    nvar = len(raw[0])
-    if any(len(row) != nvar for row in raw) or any(len(row) != nvar for row in scaled):
-        raise ValueError("Schoenfeld residual arrays must be rectangular")
     beta = _cox_beta(fit)
-    if len(beta) != nvar:
+    aliases = _cox_alias_mask(fit)
+    if len(aliases) != len(beta):
+        raise ValueError("fitted Cox model alias metadata does not match coefficient width")
+    active_columns = [idx for idx, aliased in enumerate(aliases) if not aliased]
+    if not active_columns:
+        raise ValueError("cox_zph requires at least one estimable coefficient")
+    if not raw:
+        raise ValueError("cox_zph requires at least one event")
+
+    full_nvar = len(raw[0])
+    if any(len(row) != full_nvar for row in raw) or any(len(row) != full_nvar for row in scaled):
+        raise ValueError("Schoenfeld residual arrays must be rectangular")
+    if len(beta) != full_nvar:
         raise ValueError("fitted Cox model coefficients do not match residual width")
+    groups = _cox_zph_active_groups(
+        _cox_zph_column_groups(fit, full_nvar, group_terms),
+        active_columns,
+    )
+    scaled = _matrix_columns(scaled, active_columns)
+    beta = [beta[idx] for idx in active_columns]
 
     event_indices = _cox_event_indices(fit)
     if len(event_indices) != len(raw):
         raise ValueError("fitted Cox model event times do not match Schoenfeld residuals")
     event_times = [float(fit.event_times[idx]) for idx in event_indices]
     transform_name, transformed_time = _cox_zph_transform(fit, event_times, transform)
-    groups = _cox_zph_column_groups(fit, nvar, group_terms)
     test_residuals = scaled
 
     variable_names: list[str] = []
@@ -11110,7 +11108,7 @@ def cox_zph(
     )
     grouped_y = (
         _cox_zph_term_matrix(scaled, groups, beta)
-        if group_terms
+        if group_terms and groups
         else _matrix_columns(scaled, [idx for _name, columns in groups for idx in columns])
     )
     return CoxZPHResult(
@@ -11121,7 +11119,7 @@ def cox_zph(
         x=transformed_time,
         time=event_times,
         y=grouped_y,
-        var=_cox_zph_group_variance(fit, groups, beta),
+        var=_cox_zph_group_variance(fit, groups, beta, active_columns),
         transform=transform_name,
         global_chi2=float(global_result.global_chi2) if global_result is not None else None,
         global_df=int(global_result.global_df) if global_result is not None else None,
@@ -11688,6 +11686,21 @@ def _cox_zph_column_groups(
     return groups
 
 
+def _cox_zph_active_groups(
+    groups: list[tuple[str, list[int]]],
+    active_columns: list[int],
+) -> list[tuple[str, list[int]]]:
+    active_index = {
+        original_index: dense_index for dense_index, original_index in enumerate(active_columns)
+    }
+    active_groups: list[tuple[str, list[int]]] = []
+    for name, columns in groups:
+        remapped = [active_index[column] for column in columns if column in active_index]
+        if remapped:
+            active_groups.append((name, remapped))
+    return active_groups
+
+
 def _cox_zph_term_matrix(
     scaled: list[list[float]],
     groups: list[tuple[str, list[int]]],
@@ -11700,11 +11713,18 @@ def _cox_zph_group_variance(
     fit: Any,
     groups: list[tuple[str, list[int]]],
     beta: list[float],
+    active_columns: list[int],
 ) -> list[list[float]]:
     raw_variance = getattr(fit, "information_matrix", None)
     if raw_variance is None:
         return []
-    variance = [[float(value) for value in row] for row in raw_variance]
+    full_variance = [[float(value) for value in row] for row in raw_variance]
+    full_nvar = len(full_variance)
+    if any(len(row) != full_nvar for row in full_variance):
+        return []
+    if any(column < 0 or column >= full_nvar for column in active_columns):
+        return []
+    variance = [[full_variance[row][column] for column in active_columns] for row in active_columns]
     nvar = len(beta)
     if len(variance) != nvar or any(len(row) != nvar for row in variance):
         return []

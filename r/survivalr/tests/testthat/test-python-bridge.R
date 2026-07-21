@@ -3388,6 +3388,66 @@ test_that("Cox bridge reports converged aliased coefficients like R survival", {
   expect_equal(colnames(term_predictions), c("x1", "x2"))
   expect_true(all(is.finite(term_predictions)))
   expect_equal(term_predictions[, "x2"], rep(0, nrow(data)))
+
+  for (group_terms in c(TRUE, FALSE)) {
+    bridged_zph <- as.data.frame(
+      cox.zph(bridged, transform = "rank", terms = group_terms)
+    )
+    reference_zph <- survival::cox.zph(
+      reference,
+      transform = "rank",
+      terms = group_terms
+    )
+    expect_equal(bridged_zph$name, rownames(reference_zph$table))
+    expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+  }
+})
+
+test_that("Cox zph bridge remaps partially aliased terms like R survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 0, 1, 1, 0),
+    group = factor(c("a", "a", "b", "b", "c", "c", "a", "b")),
+    is_b = c(0, 0, 1, 1, 0, 0, 0, 1),
+    x = c(1, 0.9, 1.1, 0.7, 0.4, 0.3, 0.6, 0.2)
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ is_b + factor(group) + x,
+    data = data,
+    max_iter = 50,
+    eps = 1e-09,
+    toler = 1e-10
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ is_b + factor(group) + x,
+    data = data,
+    singular.ok = TRUE,
+    control = survival::coxph.control(iter.max = 50, eps = 1e-09, toler.chol = 1e-10)
+  )
+
+  expect_true(is.na(coef(bridged)[[2L]]))
+  expect_true(is.na(coef(reference)[[2L]]))
+  for (group_terms in c(TRUE, FALSE)) {
+    bridged_zph <- as.data.frame(
+      cox.zph(bridged, transform = "rank", terms = group_terms)
+    )
+    reference_zph <- survival::cox.zph(
+      reference,
+      transform = "rank",
+      terms = group_terms
+    )
+    reference_names <- sub(
+      "^factor\\(([^)]+)\\)(.+)$",
+      "\\1\\2",
+      rownames(reference_zph$table)
+    )
+    expect_equal(bridged_zph$name, reference_names)
+    expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+  }
 })
 
 test_that("survreg bridge agrees with R survival distributions", {
