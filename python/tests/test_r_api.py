@@ -8642,7 +8642,7 @@ def test_cox_zph_remaps_partially_aliased_multi_column_terms():
     assert by_term.variable_names == ["is_b", "factor(group)", "x"]
     assert by_term.df == [1, 1, 1]
     assert by_term.global_df == 3
-    assert by_column.variable_names == ["is_b", "groupc", "x"]
+    assert by_column.variable_names == ["is_b", "factor(group)c", "x"]
     assert by_column.df == [1, 1, 1]
     assert by_column.global_df == 3
     assert all(len(row) == 3 for row in by_term.y)
