@@ -2476,7 +2476,9 @@ test_that("interaction contrast expansion matches native Cox and survreg fits", 
     expect_identical(attr(terms(bridged), "term.labels"), case$terms)
     expect_identical(attr(terms(reference), "term.labels"), case$terms)
     expect_identical(labels(bridged), case$terms)
-    expect_identical(labels(reference), case$terms)
+    if (!is.null(utils::getS3method("labels", "coxph", optional = TRUE))) {
+      expect_identical(labels(reference), case$terms)
+    }
 
     bridged_terms <- predict(bridged, type = "terms")
     reference_terms <- stats::predict(reference, type = "terms")
@@ -3791,12 +3793,7 @@ test_that("Cox zph bridge remaps partially aliased terms like R survival", {
       transform = "rank",
       terms = group_terms
     )
-    reference_names <- sub(
-      "^factor\\(([^)]+)\\)(.+)$",
-      "\\1\\2",
-      rownames(reference_zph$table)
-    )
-    expect_equal(bridged_zph$name, reference_names)
+    expect_equal(bridged_zph$name, rownames(reference_zph$table))
     expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
   }
 })
