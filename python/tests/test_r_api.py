@@ -6513,7 +6513,7 @@ def test_coxph_formula_accepts_rep_constant_response_argument():
     assert survival.coef(formula) == pytest.approx(survival.coef(direct))
     assert survival.coef(inferred_length) == pytest.approx(survival.coef(direct))
     assert survival.loglik(formula) == pytest.approx(survival.loglik(direct))
-    assert survival.nobs(formula) == len(data["case"])
+    assert survival.nobs(formula) == sum(data["case"])
 
 
 def test_coxph_formula_cluster_computes_robust_variance():
@@ -6690,7 +6690,7 @@ def test_model_generic_helpers_report_core_fit_metadata():
     for actual, expected in zip(survival.vcov(cox), cox.variance_matrix, strict=True):
         assert actual == pytest.approx(expected)
     assert survival.loglik(cox) == pytest.approx(cox.log_likelihood[-1])
-    assert survival.nobs(cox) == len(data["time"])
+    assert survival.nobs(cox) == sum(data["status"])
     assert survival.degrees_freedom(cox) == len(cox.coefficients[0])
     assert survival.aic(cox) == pytest.approx(
         -2.0 * survival.loglik(cox) + 2.0 * survival.degrees_freedom(cox)
@@ -6699,7 +6699,7 @@ def test_model_generic_helpers_report_core_fit_metadata():
         -2.0 * survival.loglik(cox) + 4.0 * survival.degrees_freedom(cox)
     )
     assert survival.bic(cox) == pytest.approx(
-        -2.0 * survival.loglik(cox) + math.log(survival.nobs(cox)) * survival.degrees_freedom(cox)
+        -2.0 * survival.loglik(cox) + math.log(sum(data["status"])) * survival.degrees_freedom(cox)
     )
     assert survival.extract_aic(cox) == pytest.approx(
         [survival.degrees_freedom(cox), survival.aic(cox)]
@@ -6767,6 +6767,84 @@ def test_model_generic_helpers_report_core_fit_metadata():
         survival.df_residual(cox)
     with pytest.raises(TypeError, match="stored model frame"):
         survival.model_frame(cox)
+
+
+def test_cox_likelihood_metadata_counts_events_but_summary_counts_rows():
+    data = _toy_data()
+    cox = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=data,
+        weights=data["x2"],
+        max_iter=10,
+        eps=1e-5,
+    )
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    event_count = sum(data["status"])
+    assert survival.nobs(cox) == event_count
+    assert survival.bic(cox) == pytest.approx(
+        -2.0 * survival.loglik(cox) + math.log(event_count) * survival.degrees_freedom(cox)
+    )
+    cox_summary = survival.model_summary(cox)
+    assert cox_summary["n"] == len(data["time"])
+    assert cox_summary["n_event"] == event_count
+
+    assert survival.nobs(aft) == len(data["time"])
+    assert survival.bic(aft) == pytest.approx(
+        -2.0 * survival.loglik(aft) + math.log(len(data["time"])) * survival.degrees_freedom(aft)
+    )
+
+
+def test_zero_event_cox_bic_is_nan():
+    fit = survival.coxph(
+        survival.Surv([1.0, 2.0, 3.0, 4.0], [0, 0, 0, 0]),
+        x=[[0.2], [0.4], [0.8], [1.0]],
+    )
+
+    assert survival.nobs(fit) == 0
+    assert survival.degrees_freedom(fit) == 0
+    summary = survival.model_summary(fit)
+    assert summary["n"] == 4
+    assert summary["n_event"] == 0
+    assert math.isnan(survival.bic(fit))
+
+
+def test_counting_process_and_intercept_only_cox_metadata_use_event_rows():
+    start = [0.0, 1.0, 0.0, 2.0, 0.0, 1.0, 2.0, 0.0]
+    stop = [1.0, 3.0, 2.0, 4.0, 5.0, 2.0, 4.0, 6.0]
+    status = [0, 1, 1, 0, 1, 1, 0, 1]
+    values = [0.2, 0.4, 0.1, 0.8, 0.5, 0.3, 0.9, 0.6]
+    response = survival.Surv(start, stop, status)
+    counting = survival.coxph(
+        response,
+        x=[[value] for value in values],
+        weights=[0.5, 2.0, 1.5, 0.75, 3.0, 1.25, 0.8, 4.0],
+        max_iter=0,
+    )
+
+    event_count = sum(status)
+    assert survival.nobs(counting) == event_count
+    counting_summary = survival.model_summary(counting)
+    assert counting_summary["n"] == len(status)
+    assert counting_summary["n_event"] == event_count
+    assert survival.bic(counting) == pytest.approx(
+        -2.0 * survival.loglik(counting)
+        + math.log(event_count) * survival.degrees_freedom(counting)
+    )
+
+    intercept_only = survival.coxph(
+        response,
+        x=[[] for _ in status],
+        max_iter=0,
+    )
+    assert survival.nobs(intercept_only) == event_count
+    assert survival.degrees_freedom(intercept_only) == 0
+    assert survival.bic(intercept_only) == pytest.approx(-2.0 * survival.loglik(intercept_only))
 
 
 def test_coxph_generics_mask_converged_aliased_coefficients():
