@@ -4599,3 +4599,305 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
     "Cannot have both an offset and groups"
   )
 })
+
+test_that("agexact.fit matches tied counting-process reference output", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  n <- 10L
+  x <- matrix(
+    c(
+      -0.8, 0.3, 1.1, -0.2, 0.7, 1.4, -1.0, 0.5, 1.0, -0.4,
+      0.2, 1.3, -0.5, 0.8, -1.1, 0.4, 1.2, -0.7, 0.6, 1.0
+    ),
+    nrow = n,
+    ncol = 2L
+  )
+  colnames(x) <- c("x1", "x2")
+  start <- c(0, 0, 0.5, 0.5, 1, 1, 1.5, 2, 2.5, 3)
+  stop <- c(2, 3, 3, 3, 4, 4.5, 5, 5, 5, 6)
+  event <- c(1, 1, 1, 0, 0, 1, 1, 1, 0, 1)
+  offset <- c(0.1, -0.2, 0.05, 0.3, -0.1, 0.15, -0.25, 0.2, -0.05, 0.1)
+  y <- survival::Surv(start, stop, event)
+  row_labels <- paste0("row", seq_len(n))
+
+  bridged <- agexact.fit(
+    x,
+    y,
+    strata = NULL,
+    offset = offset,
+    init = c(0.25, -0.15),
+    control = coxph.control(iter.max = 20L, eps = 1e-09),
+    weights = rep(1, n),
+    method = "exact",
+    rownames = row_labels
+  )
+  reference <- survival::agexact.fit(
+    x,
+    y,
+    strata = NULL,
+    offset = offset,
+    init = c(0.25, -0.15),
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-09),
+    weights = rep(1, n),
+    method = "exact",
+    rownames = row_labels
+  )
+
+  expect_equal(names(bridged), names(reference))
+  expect_equal(bridged$coefficients, reference$coefficients, tolerance = 1e-10)
+  expect_equal(bridged$var, reference$var, tolerance = 1e-10)
+  expect_equal(bridged$loglik, reference$loglik, tolerance = 1e-10)
+  expect_equal(bridged$score, reference$score, tolerance = 1e-10)
+  expect_equal(bridged$iter, reference$iter)
+  expect_equal(bridged$linear.predictors, reference$linear.predictors, tolerance = 1e-10)
+  expect_equal(bridged$residuals, reference$residuals, tolerance = 1e-10)
+  expect_equal(bridged$means, reference$means, tolerance = 1e-12)
+
+  bridged_wrapped_response <- agexact.fit(
+    x,
+    Surv(start, stop, event),
+    strata = NULL,
+    offset = offset,
+    init = c(0.25, -0.15),
+    control = coxph.control(iter.max = 20L, eps = 1e-09),
+    weights = rep(1, n),
+    method = "exact",
+    rownames = row_labels
+  )
+  expect_equal(bridged_wrapped_response, bridged, tolerance = 1e-10)
+
+  negative_y <- survival::Surv(start - 4, stop - 4, event)
+  bridged_negative_times <- agexact.fit(
+    x,
+    negative_y,
+    strata = NULL,
+    offset = offset,
+    init = c(0.25, -0.15),
+    control = coxph.control(iter.max = 20L, eps = 1e-09),
+    weights = rep(1, n),
+    method = "exact",
+    rownames = row_labels
+  )
+  reference_negative_times <- survival::agexact.fit(
+    x,
+    negative_y,
+    strata = NULL,
+    offset = offset,
+    init = c(0.25, -0.15),
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-09),
+    weights = rep(1, n),
+    method = "exact",
+    rownames = row_labels
+  )
+  expect_equal(
+    bridged_negative_times$residuals,
+    reference_negative_times$residuals,
+    tolerance = 1e-10
+  )
+
+  strata_labels <- c(rep("north", 5L), rep("south", 5L))
+  strata_factor <- factor(strata_labels, levels = c("south", "north"))
+  zero_iteration_control <- coxph.control(iter.max = 0L, eps = 1e-09)
+  bridged_factor_strata <- agexact.fit(
+    x,
+    y,
+    strata = strata_factor,
+    offset = offset,
+    init = c(0.25, -0.15),
+    control = zero_iteration_control,
+    weights = rep(1, n),
+    method = "exact",
+    rownames = row_labels
+  )
+  bridged_character_strata <- agexact.fit(
+    x,
+    y,
+    strata = strata_labels,
+    offset = offset,
+    init = c(0.25, -0.15),
+    control = zero_iteration_control,
+    weights = rep(1, n),
+    method = "exact",
+    rownames = row_labels
+  )
+  reference_factor_strata <- survival::agexact.fit(
+    x,
+    y,
+    strata = strata_factor,
+    offset = offset,
+    init = c(0.25, -0.15),
+    control = survival::coxph.control(iter.max = 0L, eps = 1e-09),
+    weights = rep(1, n),
+    method = "exact",
+    rownames = row_labels
+  )
+  comparable_fields <- c(
+    "coefficients", "var", "loglik", "score", "iter",
+    "linear.predictors", "residuals", "means", "method"
+  )
+  for (field in comparable_fields) {
+    expect_equal(
+      bridged_factor_strata[[field]],
+      reference_factor_strata[[field]],
+      tolerance = 1e-10
+    )
+    expect_equal(
+      bridged_character_strata[[field]],
+      bridged_factor_strata[[field]],
+      tolerance = 1e-12
+    )
+  }
+
+  large_n <- 80L
+  large_x <- matrix(
+    sin(seq_len(large_n) * 0.73) + cos(seq_len(large_n) * 0.19),
+    ncol = 1L
+  )
+  large_y <- survival::Surv(
+    rep(0, large_n),
+    seq_len(large_n),
+    rep(c(1L, 1L, 0L), length.out = large_n)
+  )
+  large_rows <- as.character(seq_len(large_n))
+  bridged_large <- agexact.fit(
+    large_x,
+    large_y,
+    strata = NULL,
+    offset = rep(0, large_n),
+    init = 0,
+    control = coxph.control(iter.max = 20L, eps = 1e-09),
+    weights = rep(1, large_n),
+    method = "exact",
+    rownames = large_rows,
+    resid = FALSE
+  )
+  reference_large <- survival::agexact.fit(
+    large_x,
+    large_y,
+    strata = NULL,
+    offset = rep(0, large_n),
+    init = 0,
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-09),
+    weights = rep(1, large_n),
+    method = "exact",
+    rownames = large_rows,
+    resid = FALSE
+  )
+  expect_equal(bridged_large$coefficients, reference_large$coefficients, tolerance = 1e-10)
+  expect_equal(bridged_large$var, reference_large$var, tolerance = 1e-10)
+  expect_equal(bridged_large$loglik, reference_large$loglik, tolerance = 1e-10)
+  expect_equal(bridged_large$score, reference_large$score, tolerance = 1e-10)
+  expect_equal(bridged_large$iter, reference_large$iter)
+})
+
+test_that("agexact.fit preserves exact iteration and final-trial semantics", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  halving_start <- c(0, 0, 0, 2, 6, 5, 8, 1, 5, 10)
+  halving_stop <- c(1, 2, 2, 6, 7, 7, 10, 10, 11, 11)
+  halving_event <- c(1, 1, 0, 0, 0, 0, 1, 0, 1, 1)
+  halving_x <- matrix(c(
+    -0.7949017577222064, -0.971412993595188, -0.8973640249385726,
+    -0.31173291990153856, -0.9513748122177565, 1.204533321642762,
+    2.883351093087066, -0.8851941617914357, 0.9821570019435617,
+    0.251309986747342
+  ), ncol = 1L)
+  halving_offset <- c(
+    0.3211436207164723, -0.1703476212015294, 0.2757700305715469,
+    0.22219156001732224, 0.1257485571910997, -0.18593546677480463,
+    0.3816069176371731, -0.694971257421976, 0.496755599155065,
+    0.17014843430288
+  )
+  halving_y <- survival::Surv(halving_start, halving_stop, halving_event)
+  halving_rows <- as.character(seq_along(halving_start))
+  bridged_halving <- agexact.fit(
+    halving_x,
+    halving_y,
+    strata = NULL,
+    offset = halving_offset,
+    init = 5.85354416465122,
+    control = coxph.control(iter.max = 40L, eps = 1e-09),
+    weights = rep(1, length(halving_start)),
+    method = "exact",
+    rownames = halving_rows,
+    resid = FALSE
+  )
+  reference_halving <- survival::agexact.fit(
+    halving_x,
+    halving_y,
+    strata = NULL,
+    offset = halving_offset,
+    init = 5.85354416465122,
+    control = survival::coxph.control(iter.max = 40L, eps = 1e-09),
+    weights = rep(1, length(halving_start)),
+    method = "exact",
+    rownames = halving_rows,
+    resid = FALSE
+  )
+  expect_equal(bridged_halving$coefficients, reference_halving$coefficients, tolerance = 1e-09)
+  expect_equal(bridged_halving$var, reference_halving$var, tolerance = 1e-08)
+  expect_equal(bridged_halving$loglik, reference_halving$loglik, tolerance = 1e-09)
+  expect_equal(bridged_halving$score, reference_halving$score, tolerance = 1e-09)
+  expect_equal(bridged_halving$iter, reference_halving$iter)
+
+  separated_start <- c(0, 0, 0, 1, 2, 2, 3)
+  separated_stop <- c(1, 1, 1, 3, 3, 4, 5)
+  separated_event <- c(1, 0, 0, 0, 0, 1, 0)
+  separated_x <- matrix(c(
+    -0.10627590772801489, -1.415108390302514, -0.5982619079224836,
+    3.279520010161916, -1.334405338827207, 2.4961790201596363,
+    0.1897036691116272
+  ), ncol = 1L)
+  separated_offset <- c(
+    1.4884172952401737, -0.37680328079335645, -0.3108565122880977,
+    -1.0850166921555693, 1.234396256848731, 0.42712866434784125,
+    -0.15961611577080256
+  )
+  separated_y <- survival::Surv(separated_start, separated_stop, separated_event)
+  separated_rows <- as.character(seq_along(separated_start))
+  bridged_separated <- expect_warning(
+    agexact.fit(
+      separated_x,
+      separated_y,
+      strata = NULL,
+      offset = separated_offset,
+      init = 0.7083443262910332,
+      control = coxph.control(iter.max = 20L, eps = 1e-09),
+      weights = rep(1, length(separated_start)),
+      method = "exact",
+      rownames = separated_rows,
+      resid = FALSE
+    ),
+    "Ran out of iterations and did not converge"
+  )
+  reference_separated <- expect_warning(
+    survival::agexact.fit(
+      separated_x,
+      separated_y,
+      strata = NULL,
+      offset = separated_offset,
+      init = 0.7083443262910332,
+      control = survival::coxph.control(iter.max = 20L, eps = 1e-09),
+      weights = rep(1, length(separated_start)),
+      method = "exact",
+      rownames = separated_rows,
+      resid = FALSE
+    ),
+    "Ran out of iterations and did not converge"
+  )
+  expect_equal(bridged_separated$coefficients, reference_separated$coefficients, tolerance = 5e-07)
+  expect_equal(bridged_separated$var, reference_separated$var, tolerance = 1e-06)
+  expect_equal(bridged_separated$loglik, reference_separated$loglik, tolerance = 1e-09)
+  expect_equal(bridged_separated$score, reference_separated$score, tolerance = 1e-09)
+  expect_equal(bridged_separated$iter, reference_separated$iter)
+})

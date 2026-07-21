@@ -226,8 +226,6 @@ impl CountingProcessData {
         validate_no_nan(&stop, "stop")?;
         validate_finite(&start, "start")?;
         validate_finite(&stop, "stop")?;
-        validate_non_negative(&start, "start")?;
-        validate_non_negative(&stop, "stop")?;
         validate_status_values(&event, "event")?;
 
         for (index, (&start, &stop)) in start.iter().zip(stop.iter()).enumerate() {
@@ -589,5 +587,14 @@ mod tests {
         assert!(matches!(ag_input.strata_or_default_cow(), Cow::Owned(_)));
         assert_eq!(ag_input.weights_or_unit_cow().as_ref(), [1.0, 1.0]);
         assert_eq!(ag_input.strata_or_default_cow().as_ref(), [0, 0]);
+    }
+
+    #[test]
+    fn counting_process_data_accepts_signed_time_origins() {
+        let counting = CountingProcessData::try_new(vec![-3.0, -1.0], vec![-1.0, 2.0], vec![1, 0])
+            .expect("counting-process intervals may use a negative time origin");
+
+        assert_eq!(counting.start, vec![-3.0, -1.0]);
+        assert_eq!(counting.stop, vec![-1.0, 2.0]);
     }
 }

@@ -1,5 +1,5 @@
 use std::hint::black_box;
-use survival::regression::{CoxPHModel, coxph_fit, finegray, survreg};
+use survival::regression::{CoxPHModel, agexact, coxph_fit, finegray, survreg};
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
     nelson_aalen, weighted_logrank_test,
@@ -236,6 +236,102 @@ mod finegray_interval_expansion {
                 black_box(
                     finegray(tstart, tstop, ctime, cprob, extend, keep)
                         .expect("benchmark Fine-Gray inputs should be valid"),
+                )
+            },
+        );
+    }
+}
+
+mod exact_counting_process_cox {
+    use super::*;
+
+    #[divan::bench(args = [1000, 2000, 4000])]
+    fn untied_scaling(bencher: divan::Bencher, n: usize) {
+        #[cfg(feature = "python")]
+        pyo3::Python::initialize();
+
+        let start = vec![0.0; n];
+        let stop: Vec<f64> = (1..=n).map(|value| value as f64).collect();
+        let event = vec![1; n];
+        let covar: Vec<f64> = (0..n).map(|value| (value % 17) as f64).collect();
+        let offset = vec![0.0; n];
+        let strata = vec![0; n];
+        let work = vec![0.0; n + 4];
+        let work2 = vec![0; 2 * n];
+        let inputs = (start, stop, event, covar, offset, strata, work, work2);
+
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(start, stop, event, covar, offset, strata, work, work2)| {
+                black_box(
+                    agexact(
+                        0,
+                        n as i32,
+                        1,
+                        start,
+                        stop,
+                        event,
+                        covar,
+                        offset,
+                        strata,
+                        vec![0.0],
+                        vec![0.0],
+                        vec![0.0],
+                        vec![0.0],
+                        vec![0.0; 2],
+                        work,
+                        work2,
+                        1e-9,
+                        1e-9,
+                        vec![0],
+                    )
+                    .expect("untied exact counting-process benchmark should succeed"),
+                )
+            },
+        );
+    }
+
+    #[divan::bench]
+    fn tied_24_of_12(bencher: divan::Bencher) {
+        #[cfg(feature = "python")]
+        pyo3::Python::initialize();
+
+        const N: usize = 24;
+        const DEATHS: usize = 12;
+        let start = vec![0.0; N];
+        let stop = vec![1.0; N];
+        let event: Vec<i32> = (0..N).map(|person| i32::from(person < DEATHS)).collect();
+        let covar: Vec<f64> = (0..N).map(|value| value as f64).collect();
+        let offset = vec![0.0; N];
+        let strata = vec![0; N];
+        let work = vec![0.0; N + 4];
+        let work2 = vec![0; 2 * N];
+        let inputs = (start, stop, event, covar, offset, strata, work, work2);
+
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(start, stop, event, covar, offset, strata, work, work2)| {
+                black_box(
+                    agexact(
+                        0,
+                        N as i32,
+                        1,
+                        start,
+                        stop,
+                        event,
+                        covar,
+                        offset,
+                        strata,
+                        vec![0.0],
+                        vec![0.0],
+                        vec![0.0],
+                        vec![0.0],
+                        vec![0.0; 2],
+                        work,
+                        work2,
+                        1e-9,
+                        1e-9,
+                        vec![0],
+                    )
+                    .expect("benchmark exact counting-process fit should succeed"),
                 )
             },
         );

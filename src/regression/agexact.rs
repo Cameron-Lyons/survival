@@ -1,7 +1,10 @@
-use crate::constants::{CONVERGENCE_FLAG, PARALLEL_THRESHOLD_LARGE};
+use std::convert::Infallible;
+
+use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use rayon::prelude::*;
+
+use super::cox_optimizer::{CoxFit, Method};
 
 pub(crate) struct AgexactData {
     pub start: Vec<f64>,
@@ -29,6 +32,18 @@ pub(crate) struct AgexactParams {
     pub nvar: i32,
     pub eps: f64,
     pub tol_chol: f64,
+}
+
+struct AgexactResult {
+    maxiter: i32,
+    covar: Vec<f64>,
+    means: Vec<f64>,
+    beta: Vec<f64>,
+    u: Vec<f64>,
+    imat: Vec<f64>,
+    loglik: Vec<f64>,
+    flag: i32,
+    sctest: f64,
 }
 
 fn validate_agexact_inputs(
@@ -165,508 +180,142 @@ pub fn agexact(
     agexact_impl(data, state, params)
 }
 
-fn agexact_impl(
-    data: AgexactData,
-    state: AgexactState,
-    params: AgexactParams,
-) -> PyResult<Py<PyDict>> {
+fn take_infallible<T>(result: Result<T, Infallible>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(never) => match never {},
+    }
+}
+
+fn center_column_major(covar: &mut [f64], means: &mut [f64], nocenter: &[i32], n: usize) {
+    for (variable, mean) in means.iter_mut().enumerate() {
+        if nocenter[variable] == 0 || n == 0 {
+            *mean = 0.0;
+            continue;
+        }
+
+        let column = &mut covar[variable * n..(variable + 1) * n];
+        *mean = column.iter().sum::<f64>() / n as f64;
+        for value in column {
+            *value -= *mean;
+        }
+    }
+}
+
+fn column_major_to_row_major(covar: &[f64], n: usize, p: usize) -> Vec<f64> {
+    let mut row_major = Vec::with_capacity(n * p);
+    for person in 0..n {
+        for variable in 0..p {
+            row_major.push(covar[variable * n + person]);
+        }
+    }
+    row_major
+}
+
+fn flatten_matrix(matrix: &Array2<f64>) -> Vec<f64> {
+    let mut flat = Vec::with_capacity(matrix.len());
+    for row in 0..matrix.nrows() {
+        for column in 0..matrix.ncols() {
+            flat.push(matrix[(row, column)]);
+        }
+    }
+    flat
+}
+
+fn fit_agexact(data: AgexactData, state: AgexactState, params: AgexactParams) -> AgexactResult {
     let AgexactData {
         start,
         stop,
         event,
         mut covar,
         offset,
-        strata,
+        mut strata,
         nocenter,
     } = data;
     let AgexactState {
         mut means,
-        mut beta,
-        mut u,
-        mut imat,
-        mut loglik,
-        mut work,
-        mut work2,
+        beta,
+        u: _,
+        imat: _,
+        loglik: _loglik,
+        work: _,
+        work2: _,
     } = state;
     let AgexactParams {
-        mut maxiter,
+        maxiter,
         nused,
         nvar,
         eps,
         tol_chol,
     } = params;
     let n = nused as usize;
-    let nvar_usize = nvar as usize;
-    let p = nvar_usize;
-    let (cmat, rest) = work.split_at_mut(p * p);
-    let (a, rest) = rest.split_at_mut(p);
-    let (newbeta, rest) = rest.split_at_mut(p);
-    let (score, newvar) = rest.split_at_mut(n);
-    let atrisk = &mut work2[n..2 * n];
-    if nvar_usize > 4 {
-        let mean_updates: Vec<(usize, f64)> = (0..nvar_usize)
-            .into_par_iter()
-            .filter_map(|i| {
-                if nocenter[i] == 0 {
-                    Some((i, 0.0))
-                } else {
-                    let sum: f64 = (0..n).map(|j| covar[i * n + j]).sum();
-                    Some((i, sum / n as f64))
-                }
-            })
-            .collect();
-        for (i, mean_val) in mean_updates {
-            means[i] = mean_val;
-            if nocenter[i] != 0 {
-                for j in 0..n {
-                    covar[i * n + j] -= mean_val;
-                }
-            }
-        }
-    } else {
-        for i in 0..nvar_usize {
-            if nocenter[i] == 0 {
-                means[i] = 0.0;
-            } else {
-                let mut sum = 0.0;
-                for j in 0..n {
-                    sum += covar[i * n + j];
-                }
-                means[i] = sum / n as f64;
-                let mean_val = means[i];
-                for j in 0..n {
-                    covar[i * n + j] -= mean_val;
-                }
-            }
-        }
-    }
-    if n > PARALLEL_THRESHOLD_LARGE {
-        let scores: Vec<f64> = (0..n)
-            .into_par_iter()
-            .map(|person| {
-                let mut zbeta = 0.0;
-                for i in 0..nvar_usize {
-                    zbeta += beta[i] * covar[i * n + person];
-                }
-                (zbeta + offset[person]).exp()
-            })
-            .collect();
-        score.copy_from_slice(&scores);
-    } else {
-        for person in 0..n {
-            let mut zbeta = 0.0;
-            for i in 0..nvar_usize {
-                zbeta += beta[i] * covar[i * n + person];
-            }
-            score[person] = (zbeta + offset[person]).exp();
-        }
-    }
-    if loglik.len() < 2 {
-        loglik.resize(2, 0.0);
-    }
-    loglik[1] = 0.0;
-    u.fill(0.0);
-    imat.fill(0.0);
-    let mut person = 0;
-    while person < n {
-        if event[person] == 0 {
-            person += 1;
-        } else {
-            let time = stop[person];
-            let mut deaths = 0;
-            let mut nrisk = 0;
-            let mut k = person;
-            while k < n {
-                if stop[k] == time {
-                    deaths += event[k];
-                }
-                if start[k] < time {
-                    atrisk[nrisk] = k as i32;
-                    nrisk += 1;
-                }
-                if strata[k] == 1 {
-                    break;
-                }
-                k += 1;
-            }
-            let mut denom = 0.0;
-            a.fill(0.0);
-            cmat.fill(0.0);
-            if deaths == 1 {
-                for &at_risk_idx in atrisk.iter().take(nrisk) {
-                    let k = at_risk_idx as usize;
-                    let weight = score[k];
-                    denom += weight;
-                    for i in 0..nvar_usize {
-                        let covar_ik = covar[i * n + k];
-                        a[i] += weight * covar_ik;
-                        for j in 0..=i {
-                            let covar_jk = covar[j * n + k];
-                            cmat[i * p + j] += weight * covar_ik * covar_jk;
-                        }
-                    }
-                }
-            } else {
-                for indices in iter_combinations(0, nrisk, deaths as usize) {
-                    newvar.fill(0.0);
-                    let mut weight = 1.0;
-                    for &idx in &indices {
-                        let k = atrisk[idx] as usize;
-                        weight *= score[k];
-                        for i in 0..nvar_usize {
-                            newvar[i] += covar[i * n + k];
-                        }
-                    }
-                    denom += weight;
-                    for i in 0..nvar_usize {
-                        a[i] += weight * newvar[i];
-                        for j in 0..=i {
-                            cmat[i * p + j] += weight * newvar[i] * newvar[j];
-                        }
-                    }
-                }
-            }
-            loglik[1] -= denom.ln();
-            for i in 0..nvar_usize {
-                u[i] -= a[i] / denom;
-                for j in 0..=i {
-                    let cmat_ij = cmat[i * p + j];
-                    let term = (cmat_ij - a[i] * a[j] / denom) / denom;
-                    imat[j * p + i] += term;
-                }
-            }
-            let mut k = person;
-            while k < n && stop[k] == time {
-                if event[k] == 1 {
-                    loglik[1] += score[k].ln();
-                    for i in 0..nvar_usize {
-                        u[i] += covar[i * n + k];
-                    }
-                }
-                person += 1;
-                if strata[k] == 1 {
-                    break;
-                }
-                k += 1;
-            }
-        }
-    }
-    loglik[0] = loglik[1];
-    let mut a_copy = a.to_vec();
-    cholesky2(&mut imat[..p * p], p, tol_chol);
-    chsolve2(&mut imat[..p * p], p, &mut a_copy);
-    let sctest = a_copy.iter().zip(u.iter()).map(|(a, u)| a * u).sum::<f64>();
-    if maxiter == 0 {
-        chinv2(&mut imat[..p * p], p);
-        for i in 0..p {
-            for j in 0..i {
-                imat[i * p + j] = imat[j * p + i];
-            }
-        }
-        let final_flag = 0;
-        Python::attach(|py| {
-            let dict = PyDict::new(py);
-            dict.set_item("maxiter", maxiter)?;
-            dict.set_item("covar", covar.to_vec())?;
-            dict.set_item("means", means.to_vec())?;
-            dict.set_item("beta", beta.to_vec())?;
-            dict.set_item("u", u.to_vec())?;
-            dict.set_item("imat", imat.to_vec())?;
-            dict.set_item("loglik", loglik.to_vec())?;
-            dict.set_item("flag", final_flag)?;
-            dict.set_item("sctest", sctest)?;
-            Ok(dict.into())
-        })
-    } else {
-        let mut iter = 0;
-        let mut halving = false;
-        let mut newbeta_vec = newbeta.to_vec();
-        let mut newlk = 0.0;
-        while iter < maxiter {
-            iter += 1;
-            newlk = 0.0;
-            u.fill(0.0);
-            imat.fill(0.0);
-            for person in 0..n {
-                let mut zbeta = 0.0;
-                for i in 0..nvar_usize {
-                    zbeta += newbeta_vec[i] * covar[i * n + person];
-                }
-                score[person] = (zbeta + offset[person]).exp();
-            }
-            let mut person = 0;
-            while person < n {
-                if event[person] == 0 {
-                    person += 1;
-                } else {
-                    let time = stop[person];
-                    let mut deaths = 0;
-                    let mut nrisk = 0;
-                    let mut k = person;
-                    while k < n {
-                        if stop[k] == time {
-                            deaths += event[k];
-                        }
-                        if start[k] < time {
-                            atrisk[nrisk] = k as i32;
-                            nrisk += 1;
-                        }
-                        if strata[k] == 1 {
-                            break;
-                        }
-                        k += 1;
-                    }
-                    let mut denom = 0.0;
-                    a.fill(0.0);
-                    cmat.fill(0.0);
-                    if deaths == 1 {
-                        for &at_risk_idx in atrisk.iter().take(nrisk) {
-                            let k = at_risk_idx as usize;
-                            let weight = score[k];
-                            denom += weight;
-                            for i in 0..nvar_usize {
-                                let covar_ik = covar[i * n + k];
-                                a[i] += weight * covar_ik;
-                                for j in 0..=i {
-                                    cmat[i * p + j] += weight * covar_ik * covar[j * n + k];
-                                }
-                            }
-                        }
-                    } else {
-                        for indices in iter_combinations(0, nrisk, deaths as usize) {
-                            newvar.fill(0.0);
-                            let mut weight = 1.0;
-                            for &idx in &indices {
-                                let k = atrisk[idx] as usize;
-                                weight *= score[k];
-                                for i in 0..nvar_usize {
-                                    newvar[i] += covar[i * n + k];
-                                }
-                            }
-                            denom += weight;
-                            for i in 0..nvar_usize {
-                                a[i] += weight * newvar[i];
-                                for j in 0..=i {
-                                    cmat[i * p + j] += weight * newvar[i] * newvar[j];
-                                }
-                            }
-                        }
-                    }
-                    newlk -= denom.ln();
-                    for i in 0..nvar_usize {
-                        u[i] -= a[i] / denom;
-                        for j in 0..=i {
-                            let cmat_ij = cmat[i * p + j];
-                            let term = (cmat_ij - a[i] * a[j] / denom) / denom;
-                            imat[j * p + i] += term;
-                        }
-                    }
-                    let mut k = person;
-                    while k < n && stop[k] == time {
-                        if event[k] == 1 {
-                            newlk += score[k].ln();
-                            for i in 0..nvar_usize {
-                                u[i] += covar[i * n + k];
-                            }
-                        }
-                        person += 1;
-                        if strata[k] == 1 {
-                            break;
-                        }
-                        k += 1;
-                    }
-                }
-            }
-            if (1.0 - (loglik[1] / newlk)).abs() <= eps && !halving {
-                loglik[1] = newlk;
-                chinv2(&mut imat[..p * p], p);
-                for i in 0..p {
-                    for j in 0..i {
-                        imat[i * p + j] = imat[j * p + i];
-                    }
-                }
-                beta.copy_from_slice(&newbeta_vec);
-                maxiter = iter;
-                return Python::attach(|py| {
-                    let dict = PyDict::new(py);
-                    dict.set_item("maxiter", maxiter)?;
-                    dict.set_item("covar", covar.to_vec())?;
-                    dict.set_item("means", means.to_vec())?;
-                    dict.set_item("beta", beta.to_vec())?;
-                    dict.set_item("u", u.to_vec())?;
-                    dict.set_item("imat", imat.to_vec())?;
-                    dict.set_item("loglik", loglik.to_vec())?;
-                    dict.set_item("flag", 0)?;
-                    dict.set_item("sctest", sctest)?;
-                    Ok(dict.into())
-                });
-            } else {
-                if iter == maxiter {
-                    break;
-                }
-                if newlk < loglik[1] {
-                    halving = true;
-                    for i in 0..nvar_usize {
-                        newbeta_vec[i] = (newbeta_vec[i] + beta[i]) / 2.0;
-                    }
-                } else {
-                    halving = false;
-                    loglik[1] = newlk;
-                    let mut u_copy = u.to_vec();
-                    chsolve2(&mut imat[..p * p], p, &mut u_copy);
-                    beta[..nvar_usize].copy_from_slice(&newbeta_vec[..nvar_usize]);
-                    for i in 0..nvar_usize {
-                        newbeta_vec[i] += u_copy[i];
-                    }
-                }
-            }
-        }
-        loglik[1] = newlk;
-        chinv2(&mut imat[..p * p], p);
-        for i in 0..p {
-            for j in 0..i {
-                imat[i * p + j] = imat[j * p + i];
-            }
-        }
-        beta.copy_from_slice(&newbeta_vec);
-        let final_flag = CONVERGENCE_FLAG;
-        Python::attach(|py| {
-            let dict = PyDict::new(py);
-            dict.set_item("maxiter", maxiter)?;
-            dict.set_item("covar", covar.to_vec())?;
-            dict.set_item("means", means.to_vec())?;
-            dict.set_item("beta", beta.to_vec())?;
-            dict.set_item("u", u.to_vec())?;
-            dict.set_item("imat", imat.to_vec())?;
-            dict.set_item("loglik", loglik.to_vec())?;
-            dict.set_item("flag", final_flag)?;
-            dict.set_item("sctest", sctest)?;
-            Ok(dict.into())
-        })
-    }
-}
-#[inline]
-fn iter_combinations(start: usize, end: usize, k: usize) -> IndexCombinations {
-    IndexCombinations::new(start, end, k)
-}
+    let p = nvar as usize;
 
-struct IndexCombinations {
-    start: usize,
-    len: usize,
-    k: usize,
-    current: Vec<usize>,
-    first: bool,
-    done: bool,
-}
+    center_column_major(&mut covar, &mut means, &nocenter, n);
+    let row_major = column_major_to_row_major(&covar, n, p);
+    let covariates = Array2::from_shape_vec((n, p), row_major)
+        .expect("validated exact Cox covariates have a valid matrix shape");
 
-impl IndexCombinations {
-    fn new(start: usize, end: usize, k: usize) -> Self {
-        let len = end.saturating_sub(start);
-        let done = k > len;
-        Self {
-            start,
-            len,
-            k,
-            current: (0..k).map(|i| start + i).collect(),
-            first: !done,
-            done,
-        }
+    // The original entry point treats the final row as a stratum boundary even
+    // when the caller leaves the marker vector at its all-zero default.
+    if let Some(last) = strata.last_mut() {
+        *last = 1;
+    }
+
+    // Centering is performed above to preserve the compatibility output. The
+    // shared optimizer therefore receives already-centered, unscaled columns.
+    let mut fit = take_infallible(CoxFit::new_with_entry_times(
+        Array1::from_vec(stop),
+        Array1::from_vec(event),
+        covariates,
+        Some(Array1::from_vec(start)),
+        Array1::from_vec(strata),
+        Array1::from_vec(offset),
+        Array1::ones(n),
+        Method::Exact,
+        maxiter as usize,
+        eps,
+        tol_chol,
+        vec![false; p],
+        beta,
+    ));
+    take_infallible(fit.fit_agexact_compatibility());
+    let (beta, _optimizer_means, u, imat, loglik, sctest, optimizer_flag, iterations) =
+        fit.results();
+    let flag = if maxiter == 0 { 0 } else { optimizer_flag };
+
+    AgexactResult {
+        maxiter: iterations as i32,
+        covar,
+        means,
+        beta,
+        u,
+        imat: flatten_matrix(&imat),
+        loglik: loglik.to_vec(),
+        flag,
+        sctest,
     }
 }
 
-impl Iterator for IndexCombinations {
-    type Item = Vec<usize>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-        if self.first {
-            self.first = false;
-            return Some(self.current.clone());
-        }
-        if self.k == 0 {
-            self.done = true;
-            return None;
-        }
-
-        for i in (0..self.k).rev() {
-            let max_at_i = self.start + self.len - self.k + i;
-            if self.current[i] < max_at_i {
-                self.current[i] += 1;
-                for j in (i + 1)..self.k {
-                    self.current[j] = self.current[j - 1] + 1;
-                }
-                return Some(self.current.clone());
-            }
-        }
-
-        self.done = true;
-        None
-    }
-}
-#[inline]
-fn cholesky2(matrix: &mut [f64], n: usize, tol: f64) -> i32 {
-    for i in 0..n {
-        for j in i..n {
-            let mut temp = matrix[i * n + j];
-            for k in 0..i {
-                temp -= matrix[i * n + k] * matrix[j * n + k];
-            }
-            if j == i {
-                if temp <= 0.0 {
-                    matrix[i * n + i] = 0.0;
-                    return (i + 1) as i32;
-                }
-                if temp < tol * matrix[i * n + i].abs() {
-                    temp = 0.0;
-                }
-                matrix[i * n + i] = temp.sqrt();
-            } else {
-                matrix[j * n + i] = temp / matrix[i * n + i];
-            }
-        }
-    }
-    0
-}
-#[inline]
-fn chsolve2(chol: &mut [f64], n: usize, b: &mut [f64]) {
-    for i in 0..n {
-        let mut sum = b[i];
-        for j in 0..i {
-            sum -= chol[i * n + j] * b[j];
-        }
-        b[i] = sum / chol[i * n + i];
-    }
-    for i in (0..n).rev() {
-        let mut sum = b[i];
-        for j in (i + 1)..n {
-            sum -= chol[j * n + i] * b[j];
-        }
-        b[i] = sum / chol[i * n + i];
-    }
-}
-#[inline]
-fn chinv2(chol: &mut [f64], n: usize) {
-    for i in 0..n {
-        chol[i * n + i] = 1.0 / chol[i * n + i];
-        for j in (i + 1)..n {
-            let mut sum = 0.0;
-            for k in i..j {
-                sum += chol[j * n + k] * chol[k * n + i];
-            }
-            chol[j * n + i] = -sum * chol[j * n + j];
-        }
-    }
-    for i in 0..n {
-        for j in i..n {
-            let mut sum = 0.0;
-            for k in j..n {
-                sum += chol[k * n + i] * chol[k * n + j];
-            }
-            chol[i * n + j] = sum;
-        }
-    }
+fn agexact_impl(
+    data: AgexactData,
+    state: AgexactState,
+    params: AgexactParams,
+) -> PyResult<Py<PyDict>> {
+    let result = fit_agexact(data, state, params);
+    Python::attach(|py| {
+        let dict = PyDict::new(py);
+        dict.set_item("maxiter", result.maxiter)?;
+        dict.set_item("covar", result.covar)?;
+        dict.set_item("means", result.means)?;
+        dict.set_item("beta", result.beta)?;
+        dict.set_item("u", result.u)?;
+        dict.set_item("imat", result.imat)?;
+        dict.set_item("loglik", result.loglik)?;
+        dict.set_item("flag", result.flag)?;
+        dict.set_item("sctest", result.sctest)?;
+        Ok(dict.into())
+    })
 }
 
 #[cfg(test)]
@@ -681,6 +330,40 @@ mod tests {
             nvar,
             eps: 1e-9,
             tol_chol: 1e-9,
+        }
+    }
+
+    fn workspace(n: usize, p: usize) -> AgexactState {
+        AgexactState {
+            means: vec![0.0; p],
+            beta: vec![0.0; p],
+            u: vec![0.0; p],
+            imat: vec![0.0; p * p],
+            loglik: vec![0.0; 2],
+            work: vec![0.0; p * p + 3 * p + n],
+            work2: vec![0; 2 * n],
+        }
+    }
+
+    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() < tolerance,
+            "expected {expected:.16e}, got {actual:.16e}"
+        );
+    }
+
+    fn tied_data(offset: Vec<f64>) -> AgexactData {
+        AgexactData {
+            start: vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.5, 2.0, 2.5, 3.0],
+            stop: vec![2.0, 3.0, 3.0, 3.0, 4.0, 4.5, 5.0, 5.0, 5.0, 6.0],
+            event: vec![1, 1, 1, 0, 0, 1, 1, 1, 0, 1],
+            covar: vec![
+                -0.8, 0.3, 1.1, -0.2, 0.7, 1.4, -1.0, 0.5, 1.0, -0.4, 0.2, 1.3, -0.5, 0.8, -1.1,
+                0.4, 1.2, -0.7, 0.6, 1.0,
+            ],
+            offset,
+            strata: vec![0; 10],
+            nocenter: vec![1, 1],
         }
     }
 
@@ -726,15 +409,7 @@ mod tests {
             strata: vec![0, 1],
             nocenter: vec![1],
         };
-        let state = AgexactState {
-            means: vec![0.0],
-            beta: vec![0.0],
-            u: vec![0.0],
-            imat: vec![1.0],
-            loglik: vec![0.0, 0.0],
-            work: vec![0.0, 0.0, 0.0, 0.0, 0.0],
-            work2: vec![0, 0, 0, 0],
-        };
+        let state = workspace(2, 1);
         let params = sample_params(2, 1);
 
         let err = validate_agexact_inputs(&data, &state, &params).unwrap_err();
@@ -746,23 +421,357 @@ mod tests {
     }
 
     #[test]
-    fn iter_combinations_yields_lexicographic_combinations() {
-        let combinations: Vec<Vec<usize>> = iter_combinations(0, 4, 2).collect();
-        assert_eq!(
-            combinations,
-            vec![
-                vec![0, 1],
-                vec![0, 2],
-                vec![0, 3],
-                vec![1, 2],
-                vec![1, 3],
-                vec![2, 3],
-            ]
-        );
+    fn exact_counting_process_fit_matches_reference() {
+        let n = 6;
+        let data = AgexactData {
+            start: vec![0.0; n],
+            stop: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            event: vec![1, 0, 1, 1, 0, 1],
+            covar: vec![0.2, 1.1, -0.4, 0.8, 1.5, -0.2],
+            offset: vec![0.0; n],
+            strata: vec![0; n],
+            nocenter: vec![1],
+        };
+        let mut params = sample_params(n as i32, 1);
+        params.maxiter = 20;
 
-        let empty_combination: Vec<Vec<usize>> = iter_combinations(2, 5, 0).collect();
-        assert_eq!(empty_combination, vec![Vec::<usize>::new()]);
+        let result = fit_agexact(data, workspace(n, 1), params);
 
-        assert!(iter_combinations(0, 2, 3).next().is_none());
+        assert!((result.beta[0] - -0.716_230_334_1).abs() < 1e-9);
+        assert!((result.loglik[0] - -4.276_666_119_0).abs() < 1e-9);
+        assert!((result.loglik[1] - -3.923_517_065_7).abs() < 1e-9);
+        assert!((result.sctest - 0.677_003_624_6).abs() < 1e-9);
+        assert!((result.imat[0] - 0.809_942_243_8).abs() < 1e-9);
+        assert_eq!(result.maxiter, 4);
+        assert_eq!(result.flag, 1);
+        assert_eq!(result.means, vec![0.5]);
+        for (actual, expected) in result.covar.iter().zip([-0.3, 0.6, -0.9, 0.3, 1.0, -0.7]) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn tied_exact_fit_matches_reference() {
+        let n = 10;
+        let mut params = sample_params(n as i32, 2);
+        params.maxiter = 20;
+
+        let result = fit_agexact(tied_data(vec![0.0; n]), workspace(n, 2), params);
+
+        for (actual, expected) in result
+            .beta
+            .iter()
+            .zip([-0.115_430_521_359_233_32, -0.213_265_368_013_505_2])
+        {
+            assert_close(*actual, expected, 1e-10);
+        }
+        for (actual, expected) in result
+            .loglik
+            .iter()
+            .zip([-8.679_312_040_892_672, -8.627_187_346_318_79])
+        {
+            assert_close(*actual, expected, 1e-10);
+        }
+        for (actual, expected) in result.imat.iter().zip([
+            0.441_606_639_173_011_4,
+            0.230_754_719_570_179_73,
+            0.230_754_719_570_179_73,
+            0.432_843_140_053_174_1,
+        ]) {
+            assert_close(*actual, expected, 1e-10);
+        }
+        assert_close(result.sctest, 0.105_617_248_301_556_97, 1e-10);
+        assert_eq!(result.maxiter, 3);
+        assert_eq!(result.flag, 2);
+    }
+
+    #[test]
+    fn stratified_exact_fit_matches_reference() {
+        let n = 12;
+        let data = AgexactData {
+            start: vec![0.0, 0.2, 0.5, 1.0, 1.2, 2.0, 0.0, 0.1, 0.4, 0.8, 1.5, 2.2],
+            stop: vec![1.5, 2.5, 3.0, 3.0, 4.5, 5.5, 1.0, 2.0, 2.8, 3.8, 4.2, 5.0],
+            event: vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+            covar: vec![
+                -0.7, 0.4, 1.2, -0.1, 0.8, 1.5, 0.5, -1.1, 0.9, 1.3, -0.4, 0.2, 1.0, -0.5, 0.3,
+                1.4, -0.8, 0.6, -1.2, 0.7, 1.1, -0.2, 0.5, 1.6,
+            ],
+            offset: vec![0.0; n],
+            strata: vec![0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+            nocenter: vec![1, 1],
+        };
+        let mut params = sample_params(n as i32, 2);
+        params.maxiter = 20;
+
+        let result = fit_agexact(data, workspace(n, 2), params);
+
+        for (actual, expected) in result
+            .beta
+            .iter()
+            .zip([-1.491_575_625_028_017_2, 0.651_994_589_955_765_1])
+        {
+            assert_close(*actual, expected, 1e-8);
+        }
+        for (actual, expected) in result
+            .loglik
+            .iter()
+            .zip([-6.866_933_284_461_882, -4.782_313_934_490_155])
+        {
+            assert_close(*actual, expected, 1e-9);
+        }
+        for (actual, expected) in result.imat.iter().zip([
+            1.110_235_034_638_227_7,
+            -0.217_479_161_166_214_63,
+            -0.217_479_161_166_214_63,
+            0.811_063_057_618_197_3,
+        ]) {
+            assert_close(*actual, expected, 1e-8);
+        }
+        assert_eq!(result.maxiter, 5);
+        assert_eq!(result.flag, 2);
+    }
+
+    #[test]
+    fn zero_iteration_fit_preserves_initial_coefficients() {
+        let n = 10;
+        let offset = vec![0.1, -0.2, 0.05, 0.3, -0.1, 0.15, -0.25, 0.2, -0.05, 0.1];
+        let mut state = workspace(n, 2);
+        state.beta = vec![0.25, -0.15];
+        let mut params = sample_params(n as i32, 2);
+        params.maxiter = 0;
+
+        let result = fit_agexact(tied_data(offset), state, params);
+
+        assert_eq!(result.beta, vec![0.25, -0.15]);
+        assert_eq!(result.maxiter, 0);
+        assert_eq!(result.flag, 0);
+        assert_eq!(result.loglik[0], result.loglik[1]);
+        assert_close(result.loglik[0], -8.984_551_377_142_534, 1e-10);
+        assert_close(result.sctest, 0.527_340_441_191_537_9, 1e-10);
+        for (actual, expected) in result
+            .u
+            .iter()
+            .zip([-1.198_072_004_593_938_6, 0.582_535_379_350_987_8])
+        {
+            assert_close(*actual, expected, 1e-10);
+        }
+        for (actual, expected) in result.imat.iter().zip([
+            0.453_757_442_304_586_64,
+            0.194_510_928_931_332_07,
+            0.194_510_928_931_332_07,
+            0.434_756_546_357_564_44,
+        ]) {
+            assert_close(*actual, expected, 1e-10);
+        }
+    }
+
+    #[test]
+    fn one_iteration_from_nonzero_initial_values_matches_reference() {
+        let n = 10;
+        let offset = vec![0.1, -0.2, 0.05, 0.3, -0.1, 0.15, -0.25, 0.2, -0.05, 0.1];
+        let mut state = workspace(n, 2);
+        state.beta = vec![0.25, -0.15];
+        let mut params = sample_params(n as i32, 2);
+        params.maxiter = 1;
+
+        let result = fit_agexact(tied_data(offset), state, params);
+
+        for (actual, expected) in result
+            .beta
+            .iter()
+            .zip([-0.180_324_590_728_348, -0.129_777_028_882_461])
+        {
+            assert_close(*actual, expected, 1e-10);
+        }
+        for (actual, expected) in result
+            .loglik
+            .iter()
+            .zip([-8.984_551_377_142_53, -8.735_543_533_097_94])
+        {
+            assert_close(*actual, expected, 1e-10);
+        }
+        for (actual, expected) in result.imat.iter().zip([
+            0.445_743_377_908_897,
+            0.234_376_633_135_133,
+            0.234_376_633_135_133,
+            0.452_933_208_616_838,
+        ]) {
+            assert_close(*actual, expected, 1e-10);
+        }
+        assert_eq!(result.maxiter, 1);
+        assert_eq!(result.flag, 1_000);
+    }
+
+    #[test]
+    fn delayed_entry_exact_fit_avoids_risk_sum_cancellation() {
+        let n = 3;
+        let data = AgexactData {
+            start: vec![0.0, 0.0, 1.0],
+            stop: vec![1.0, 2.0, 2.0],
+            event: vec![1, 0, 0],
+            covar: vec![0.0, 0.0, 100.0],
+            offset: vec![0.0; n],
+            strata: vec![0; n],
+            nocenter: vec![1],
+        };
+        let mut state = workspace(n, 1);
+        state.beta = vec![1.0];
+        let mut params = sample_params(n as i32, 1);
+        params.maxiter = 0;
+
+        let result = fit_agexact(data, state, params);
+
+        assert_close(result.loglik[0], -std::f64::consts::LN_2, 1e-12);
+        assert_eq!(result.loglik[0], result.loglik[1]);
+        assert_eq!(result.u, vec![0.0]);
+        assert_eq!(result.imat, vec![0.0]);
+        assert_eq!(result.sctest, 0.0);
+        assert_eq!(result.flag, 0);
+    }
+
+    #[test]
+    fn complete_tied_risk_set_has_zero_conditional_information() {
+        let n = 3;
+        let data = AgexactData {
+            start: vec![0.0; n],
+            stop: vec![1.0; n],
+            event: vec![1; n],
+            covar: (0..n)
+                .map(|value| ((value as f64 - 0.37).powi(2)) / 7.0)
+                .collect(),
+            offset: vec![0.0; n],
+            strata: vec![0; n],
+            nocenter: vec![1],
+        };
+        let mut state = workspace(n, 1);
+        state.beta = vec![0.7];
+        let mut params = sample_params(n as i32, 1);
+        params.maxiter = 0;
+
+        let result = fit_agexact(data, state, params);
+
+        assert_eq!(result.loglik, vec![0.0, 0.0]);
+        assert_eq!(result.u, vec![0.0]);
+        assert_eq!(result.imat, vec![0.0]);
+        assert_eq!(result.sctest, 0.0);
+        assert_eq!(result.flag, 0);
+    }
+
+    #[test]
+    fn step_halving_uses_exact_compatibility_policy() {
+        let n = 10;
+        let data = AgexactData {
+            start: vec![0.0, 0.0, 0.0, 2.0, 6.0, 5.0, 8.0, 1.0, 5.0, 10.0],
+            stop: vec![1.0, 2.0, 2.0, 6.0, 7.0, 7.0, 10.0, 10.0, 11.0, 11.0],
+            event: vec![1, 1, 0, 0, 0, 0, 1, 0, 1, 1],
+            covar: vec![
+                -0.794_901_757_722_206_4,
+                -0.971_412_993_595_188,
+                -0.897_364_024_938_572_6,
+                -0.311_732_919_901_538_56,
+                -0.951_374_812_217_756_5,
+                1.204_533_321_642_762,
+                2.883_351_093_087_066,
+                -0.885_194_161_791_435_7,
+                0.982_157_001_943_561_7,
+                0.251_309_986_747_342,
+            ],
+            offset: vec![
+                0.321_143_620_716_472_3,
+                -0.170_347_621_201_529_4,
+                0.275_770_030_571_546_9,
+                0.222_191_560_017_322_24,
+                0.125_748_557_191_099_7,
+                -0.185_935_466_774_804_63,
+                0.381_606_917_637_173_1,
+                -0.694_971_257_421_976,
+                0.496_755_599_155_065,
+                0.170_148_434_302_88,
+            ],
+            strata: vec![0; n],
+            nocenter: vec![1],
+        };
+        let mut state = workspace(n, 1);
+        state.beta = vec![5.853_544_164_651_22];
+        let mut params = sample_params(n as i32, 1);
+        params.maxiter = 40;
+
+        let result = fit_agexact(data, state, params);
+
+        assert_close(result.beta[0], 4.633_619_571_940_176, 1e-9);
+        assert_close(result.loglik[0], -2.034_562_528_770_813, 1e-9);
+        assert_close(result.loglik[1], -2.030_219_922_496_827_6, 1e-9);
+        assert_close(result.imat[0], 161.077_101_202_556_04, 1e-7);
+        assert_eq!(result.maxiter, 3);
+        assert_eq!(result.flag, 1);
+    }
+
+    #[test]
+    fn nonconverged_exact_fit_returns_final_trial_state() {
+        let n = 7;
+        let data = AgexactData {
+            start: vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 3.0],
+            stop: vec![1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 5.0],
+            event: vec![1, 0, 0, 0, 0, 1, 0],
+            covar: vec![
+                -0.106_275_907_728_014_89,
+                -1.415_108_390_302_514,
+                -0.598_261_907_922_483_6,
+                3.279_520_010_161_916,
+                -1.334_405_338_827_207,
+                2.496_179_020_159_636_3,
+                0.189_703_669_111_627_2,
+            ],
+            offset: vec![
+                1.488_417_295_240_173_7,
+                -0.376_803_280_793_356_45,
+                -0.310_856_512_288_097_7,
+                -1.085_016_692_155_569_3,
+                1.234_396_256_848_731,
+                0.427_128_664_347_841_25,
+                -0.159_616_115_770_802_56,
+            ],
+            strata: vec![0; n],
+            nocenter: vec![1],
+        };
+        let mut state = workspace(n, 1);
+        state.beta = vec![0.708_344_326_291_033_2];
+        let mut params = sample_params(n as i32, 1);
+        params.maxiter = 20;
+
+        let result = fit_agexact(data, state, params);
+
+        assert_close(result.beta[0], 36.550_680_230_661_33, 5e-7);
+        assert_close(result.loglik[0], -0.266_892_412_518_194_4, 1e-12);
+        assert_close(result.loglik[1], -2.564_007_672_845_036_7e-9, 1e-12);
+        assert_close(result.imat[0], 1_611_299_433.054_453_4, 300.0);
+        assert_eq!(result.maxiter, 20);
+        assert_eq!(result.flag, 1_000);
+    }
+
+    #[test]
+    fn large_tied_risk_set_uses_dynamic_programming() {
+        let n = 64;
+        let deaths = 32;
+        let data = AgexactData {
+            start: vec![0.0; n],
+            stop: vec![1.0; n],
+            event: (0..n).map(|person| i32::from(person < deaths)).collect(),
+            covar: (0..n).map(|value| value as f64).collect(),
+            offset: vec![0.0; n],
+            strata: vec![0; n],
+            nocenter: vec![0],
+        };
+        let mut params = sample_params(n as i32, 1);
+        params.maxiter = 0;
+
+        let result = fit_agexact(data, workspace(n, 1), params);
+
+        assert_close(result.loglik[0], -42.052_280_570_411_12, 1e-10);
+        assert_close(result.u[0], -512.0, 1e-10);
+        assert_close(result.imat[0], 3.0 / 16_640.0, 1e-15);
+        assert_close(result.sctest, 3_072.0 / 65.0, 1e-10);
+        assert_eq!(result.maxiter, 0);
+        assert_eq!(result.flag, 0);
     }
 }
