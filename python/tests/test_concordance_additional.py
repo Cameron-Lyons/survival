@@ -183,6 +183,23 @@ def test_perform_concordance_calculation():
     assert "concordance_index" in result
 
 
+def test_concordance1_large_weighted_event_tie_counts_each_pair_once():
+    n = 32
+    weights = [0.5 + (idx % 7) * 0.125 for idx in range(n)]
+    expected = sum(
+        weights[left] * weights[right] for left in range(n) for right in range(left + 1, n)
+    )
+
+    result = survival.perform_concordance1_calculation(
+        [1.0] * n + [1.0] * n,
+        weights,
+        [idx % 16 for idx in range(n)],
+        16,
+    )
+
+    assert result["tied_y"] == pytest.approx(expected)
+
+
 def test_low_level_concordance_wrappers_validate_index_inputs():
     time_data = [1.0, 2.0, 3.0, 1.0, 1.0, 0.0]
     weights = [1.0, 1.0, 1.0]

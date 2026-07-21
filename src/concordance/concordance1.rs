@@ -10,6 +10,18 @@ fn node_weight(nwt: &[f64], index: usize, ntree: usize) -> f64 {
     if index >= ntree { 0.0 } else { nwt[index] }
 }
 
+#[inline]
+fn tied_event_weight_sums(indices: &[usize], weights: &[f64]) -> (f64, f64) {
+    let mut total_weight = 0.0;
+    let mut pair_weight = 0.0;
+    for &index in indices {
+        let weight = weights[index];
+        pair_weight += total_weight * weight;
+        total_weight += weight;
+    }
+    (total_weight, pair_weight)
+}
+
 pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64> {
     let n = wt.len();
     let ntree = ntree as usize;
@@ -36,21 +48,17 @@ pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64>
             j = temp_j;
 
             let num_tied = tied_indices.len();
+            let (tied_weight, tied_pair_weight) = tied_event_weight_sums(&tied_indices, wt);
+            ndeath = tied_weight;
+            count[3] += tied_pair_weight;
 
             if num_tied > 10 {
-                let parallel_counts: (f64, f64, f64, f64, f64) = tied_indices
+                let parallel_counts: (f64, f64, f64) = tied_indices
                     .par_iter()
-                    .enumerate()
-                    .map(|(idx_in_tied, &j_idx)| {
+                    .map(|&j_idx| {
                         let mut local_count0 = 0.0;
                         let mut local_count1 = 0.0;
                         let mut local_count2 = 0.0;
-                        let mut local_count3 = 0.0;
-                        let local_ndeath = wt[j_idx];
-
-                        for &k_idx in tied_indices.iter().skip(idx_in_tied + 1) {
-                            local_count3 += wt[j_idx] * wt[k_idx];
-                        }
 
                         let index = indx[j_idx] as usize;
                         local_count2 += wt[j_idx] * node_weight(&twt[ntree..], index, ntree);
@@ -75,32 +83,16 @@ pub fn concordance1(y: &[f64], wt: &[f64], indx: &[i32], ntree: i32) -> Vec<f64>
                             current = parent;
                         }
 
-                        (
-                            local_count0,
-                            local_count1,
-                            local_count2,
-                            local_count3,
-                            local_ndeath,
-                        )
+                        (local_count0, local_count1, local_count2)
                     })
-                    .reduce(
-                        || (0.0, 0.0, 0.0, 0.0, 0.0),
-                        |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3, a.4 + b.4),
-                    );
+                    .reduce(|| (0.0, 0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
 
                 count[0] += parallel_counts.0;
                 count[1] += parallel_counts.1;
                 count[2] += parallel_counts.2;
-                count[3] += parallel_counts.3;
-                ndeath = parallel_counts.4;
             } else {
-                for (idx_in_tied, &j_idx) in tied_indices.iter().enumerate() {
-                    ndeath += wt[j_idx];
+                for &j_idx in &tied_indices {
                     let index = indx[j_idx] as usize;
-
-                    for &k_idx in tied_indices.iter().skip(idx_in_tied + 1) {
-                        count[3] += wt[j_idx] * wt[k_idx];
-                    }
 
                     count[2] += wt[j_idx] * node_weight(&twt[ntree..], index, ntree);
 
@@ -233,6 +225,48 @@ mod tests {
         let result = concordance1(&y, &wt, &indx, ntree);
         assert_eq!(result.len(), CONCORDANCE_COUNT_SIZE);
         assert!(result[3] >= 0.0);
+    }
+
+    #[test]
+    fn weighted_tied_event_pairs_match_naive_sum_across_parallel_threshold() {
+        for n in [10, 11, 64] {
+            let mut y = vec![1.0; n];
+            y.extend(vec![1.0; n]);
+            let weights: Vec<f64> = (0..n)
+                .map(|idx| {
+                    if idx % 9 == 0 {
+                        0.0
+                    } else {
+                        0.5 + idx as f64 * 0.125
+                    }
+                })
+                .collect();
+            let indices: Vec<i32> = (0..n).map(|idx| (idx % 16) as i32).collect();
+            let expected_pair_weight: f64 = weights
+                .iter()
+                .enumerate()
+                .map(|(idx, &weight)| weight * weights.iter().skip(idx + 1).sum::<f64>())
+                .sum();
+
+            let result = concordance1(&y, &weights, &indices, 16);
+
+            assert!((result[3] - expected_pair_weight).abs() < 1e-10);
+            assert_eq!(&result[..3], &[0.0, 0.0, 0.0]);
+        }
+    }
+
+    #[test]
+    fn tied_event_pairs_do_not_cross_time_groups() {
+        let time = [1.0, 1.0, 1.0, 2.0, 2.0];
+        let status = [1.0; 5];
+        let weights = [0.5, 1.25, 2.0, 3.5, 4.0];
+        let mut y = time.to_vec();
+        y.extend(status);
+        let expected = 0.5 * 1.25 + 0.5 * 2.0 + 1.25 * 2.0 + 3.5 * 4.0;
+
+        let result = concordance1(&y, &weights, &[0, 1, 2, 3, 4], 8);
+
+        assert!((result[3] - expected).abs() < 1e-12);
     }
 
     #[test]

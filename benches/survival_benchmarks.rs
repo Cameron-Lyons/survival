@@ -183,6 +183,18 @@ mod concordance_bench {
 
         bencher.bench_local(|| concordance1(&y, &weights, &indx, ntree));
     }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn concordance_tied_events(bencher: divan::Bencher, n: usize) {
+        let mut y = vec![1.0; n];
+        y.extend(vec![1.0; n]);
+
+        let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64 * 0.1).collect();
+        let ntree = 16i32;
+        let indx: Vec<i32> = (0..n).map(|i| (i % ntree as usize) as i32).collect();
+
+        bencher.bench_local(|| concordance1(&y, &weights, &indx, ntree));
+    }
 }
 
 mod cox_regression {
