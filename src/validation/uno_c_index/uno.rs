@@ -74,133 +74,170 @@ impl UnoCIndexAccumulator {
             influence_sums: vec![0.0; n],
         }
     }
-
-    fn merge(&mut self, other: Self) {
-        self.concordant += other.concordant;
-        self.discordant += other.discordant;
-        self.tied += other.tied;
-        self.total_weight += other.total_weight;
-        for (left, right) in self
-            .influence_sums
-            .iter_mut()
-            .zip(other.influence_sums.iter())
-        {
-            *left += right;
-        }
-    }
 }
 
-struct UnoCIndexContext<'a> {
-    time: &'a [f64],
-    status: &'a [i32],
-    risk_score: &'a [f64],
-    km_times: &'a [f64],
-    km_values: &'a [f64],
-    tau: f64,
-    min_g: f64,
+#[inline]
+fn uno_rank_counts(tree: &FenwickTree, rank: usize) -> (f64, f64, f64) {
+    let below = if rank == 0 {
+        0.0
+    } else {
+        tree.prefix_sum(rank - 1)
+    };
+    let inclusive = tree.prefix_sum(rank);
+    (below, inclusive - below, tree.total() - inclusive)
 }
 
-fn accumulate_uno_c_index_row(
-    accumulator: &mut UnoCIndexAccumulator,
-    context: &UnoCIndexContext<'_>,
-    i: usize,
-) {
-    if context.status[i] != 1 || !at_or_before_tau(context.time[i], context.tau) {
-        return;
-    }
-
-    let g_ti = km_step_prob_at(context.time[i], context.km_times, context.km_values).max(context.min_g);
-    let weight = 1.0 / (g_ti * g_ti);
-
-    for j in 0..context.time.len() {
-        if i == j {
-            continue;
-        }
-
-        if !after_event_time(context.time[j], context.time[i]) {
-            continue;
-        }
-
-        accumulator.total_weight += weight;
-
-        if context.risk_score[i] > context.risk_score[j] {
-            accumulator.concordant += weight;
-            accumulator.influence_sums[i] += weight;
-            accumulator.influence_sums[j] -= weight;
-        } else if context.risk_score[i] < context.risk_score[j] {
-            accumulator.discordant += weight;
-            accumulator.influence_sums[i] -= weight;
-            accumulator.influence_sums[j] += weight;
-        } else {
-            accumulator.tied += weight;
-        }
-    }
+fn uno_risk_ranks(risk_score: &[f64]) -> (usize, Vec<usize>) {
+    let mut levels = risk_score.to_vec();
+    levels.sort_by(f64::total_cmp);
+    levels.dedup_by(|left, right| *left == *right);
+    let ranks = risk_score
+        .iter()
+        .map(|&score| levels.partition_point(|&level| level < score))
+        .collect();
+    (levels.len(), ranks)
 }
 
-pub(crate) fn uno_c_index_core(
+fn uno_event_weights(
     time: &[f64],
     status: &[i32],
+    km_times: &[f64],
+    km_values: &[f64],
+    tau: f64,
+) -> Vec<f64> {
+    time.iter()
+        .enumerate()
+        .map(|(idx, &event_time)| {
+            if status[idx] != 1 || !at_or_before_tau(event_time, tau) {
+                return 0.0;
+            }
+            let censoring_survival =
+                km_step_prob_at(event_time, km_times, km_values).max(IPCW_SURVIVAL_FLOOR);
+            1.0 / (censoring_survival * censoring_survival)
+        })
+        .collect()
+}
+
+fn uno_c_index_ranked_accumulator(
+    time: &[f64],
     risk_score: &[f64],
-    tau: Option<f64>,
-) -> UnoCIndexResult {
+    event_weights: &[f64],
+) -> UnoCIndexAccumulator {
     let n = time.len();
+    let (n_ranks, risk_ranks) = uno_risk_ranks(risk_score);
+    let mut subjects_desc: Vec<usize> = (0..n).collect();
+    subjects_desc.sort_by(|&left, &right| {
+        time[right]
+            .total_cmp(&time[left])
+            .then_with(|| left.cmp(&right))
+    });
+    let mut events_desc: Vec<usize> = (0..n)
+        .filter(|&idx| event_weights[idx] > 0.0)
+        .collect();
+    events_desc.sort_by(|&left, &right| {
+        time[right]
+            .total_cmp(&time[left])
+            .then_with(|| left.cmp(&right))
+    });
 
-    if n == 0 {
-        return UnoCIndexResult {
-            c_index: 0.5,
-            concordant: 0.0,
-            discordant: 0.0,
-            tied_risk: 0.0,
-            comparable_pairs: 0.0,
-            variance: 0.0,
-            std_error: 0.0,
-            ci_lower: 0.5,
-            ci_upper: 0.5,
-            tau: 0.0,
-        };
-    }
+    // Sweep backward through event times, adding only subjects far enough in
+    // the future to satisfy the package's epsilon-aware comparability rule.
+    let mut accumulator = {
+        let mut later_risk_counts = FenwickTree::new(n_ranks);
+        let mut subject_cursor = 0;
+        let mut pair_counts = vec![(0.0, 0.0, 0.0); n];
+        for &event_idx in &events_desc {
+            while subject_cursor < n
+                && after_event_time(
+                    time[subjects_desc[subject_cursor]],
+                    time[event_idx],
+                )
+            {
+                let subject_idx = subjects_desc[subject_cursor];
+                later_risk_counts.update(risk_ranks[subject_idx], 1.0);
+                subject_cursor += 1;
+            }
+            pair_counts[event_idx] = uno_rank_counts(&later_risk_counts, risk_ranks[event_idx]);
+        }
 
-    let tau_val = tau.unwrap_or_else(|| time.iter().copied().fold(f64::NEG_INFINITY, f64::max));
-
-    let (km_times, km_values) = compute_censoring_km(time, status);
-
-    let min_g = IPCW_SURVIVAL_FLOOR;
-
-    let context = UnoCIndexContext {
-        time,
-        status,
-        risk_score,
-        km_times: &km_times,
-        km_values: &km_values,
-        tau: tau_val,
-        min_g,
-    };
-
-    let accumulator = if n > PARALLEL_THRESHOLD_LARGE {
-        (0..n)
-            .into_par_iter()
-            .fold(
-                || UnoCIndexAccumulator::new(n),
-                |mut accumulator, i| {
-                    accumulate_uno_c_index_row(&mut accumulator, &context, i);
-                    accumulator
-                },
-            )
-            .reduce(
-                || UnoCIndexAccumulator::new(n),
-                |mut left, right| {
-                    left.merge(right);
-                    left
-                },
-            )
-    } else {
+        // Preserve the old row-order accumulation for stable floating-point
+        // behavior while replacing each row's pair scan with its rank counts.
         let mut accumulator = UnoCIndexAccumulator::new(n);
-        for i in 0..n {
-            accumulate_uno_c_index_row(&mut accumulator, &context, i);
+        for idx in 0..n {
+            let weight = event_weights[idx];
+            if weight == 0.0 {
+                continue;
+            }
+            let (lower, tied, higher) = pair_counts[idx];
+            accumulator.concordant += weight * lower;
+            accumulator.discordant += weight * higher;
+            accumulator.tied += weight * tied;
+            accumulator.total_weight += weight * (lower + tied + higher);
+            accumulator.influence_sums[idx] += weight * (lower - higher);
         }
         accumulator
     };
 
+    // Sweep forward to recover every later subject's signed influence from
+    // the IPCW weights of earlier comparable events.
+    subjects_desc.reverse();
+    events_desc.reverse();
+    let mut earlier_event_weights = FenwickTree::new(n_ranks);
+    let mut event_cursor = 0;
+    for &subject_idx in &subjects_desc {
+        while event_cursor < events_desc.len()
+            && after_event_time(time[subject_idx], time[events_desc[event_cursor]])
+        {
+            let event_idx = events_desc[event_cursor];
+            earlier_event_weights.update(risk_ranks[event_idx], event_weights[event_idx]);
+            event_cursor += 1;
+        }
+        let (lower, _tied, higher) =
+            uno_rank_counts(&earlier_event_weights, risk_ranks[subject_idx]);
+        accumulator.influence_sums[subject_idx] += lower - higher;
+    }
+
+    accumulator
+}
+
+#[cfg(test)]
+fn uno_c_index_quadratic_accumulator(
+    time: &[f64],
+    risk_score: &[f64],
+    event_weights: &[f64],
+) -> UnoCIndexAccumulator {
+    let mut accumulator = UnoCIndexAccumulator::new(time.len());
+    for i in 0..time.len() {
+        let weight = event_weights[i];
+        if weight == 0.0 {
+            continue;
+        }
+        for j in 0..time.len() {
+            if i == j || !after_event_time(time[j], time[i]) {
+                continue;
+            }
+            accumulator.total_weight += weight;
+            if risk_score[i] > risk_score[j] {
+                accumulator.concordant += weight;
+                accumulator.influence_sums[i] += weight;
+                accumulator.influence_sums[j] -= weight;
+            } else if risk_score[i] < risk_score[j] {
+                accumulator.discordant += weight;
+                accumulator.influence_sums[i] -= weight;
+                accumulator.influence_sums[j] += weight;
+            } else {
+                accumulator.tied += weight;
+            }
+        }
+    }
+    accumulator
+}
+
+fn uno_c_index_result(
+    accumulator: UnoCIndexAccumulator,
+    n: usize,
+    tau: f64,
+) -> UnoCIndexResult {
     let c_index = if accumulator.total_weight > 0.0 {
         (accumulator.concordant + 0.5 * accumulator.tied) / accumulator.total_weight
     } else {
@@ -234,8 +271,51 @@ pub(crate) fn uno_c_index_core(
         std_error,
         ci_lower,
         ci_upper,
-        tau: tau_val,
+        tau,
     }
+}
+
+pub(crate) fn uno_c_index_core(
+    time: &[f64],
+    status: &[i32],
+    risk_score: &[f64],
+    tau: Option<f64>,
+) -> UnoCIndexResult {
+    let n = time.len();
+    if n == 0 {
+        return uno_c_index_result(UnoCIndexAccumulator::new(0), 0, 0.0);
+    }
+
+    let tau_val = tau.unwrap_or_else(|| time.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    let (km_times, km_values) = compute_censoring_km(time, status);
+    let event_weights = uno_event_weights(time, status, &km_times, &km_values, tau_val);
+    uno_c_index_result(
+        uno_c_index_ranked_accumulator(time, risk_score, &event_weights),
+        n,
+        tau_val,
+    )
+}
+
+#[cfg(test)]
+fn uno_c_index_core_quadratic(
+    time: &[f64],
+    status: &[i32],
+    risk_score: &[f64],
+    tau: Option<f64>,
+) -> UnoCIndexResult {
+    let n = time.len();
+    if n == 0 {
+        return uno_c_index_result(UnoCIndexAccumulator::new(0), 0, 0.0);
+    }
+
+    let tau_val = tau.unwrap_or_else(|| time.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    let (km_times, km_values) = compute_censoring_km(time, status);
+    let event_weights = uno_event_weights(time, status, &km_times, &km_values, tau_val);
+    uno_c_index_result(
+        uno_c_index_quadratic_accumulator(time, risk_score, &event_weights),
+        n,
+        tau_val,
+    )
 }
 
 #[pyfunction]

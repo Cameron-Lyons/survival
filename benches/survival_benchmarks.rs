@@ -2,7 +2,7 @@ use std::hint::black_box;
 use survival::regression::{CoxPHModel, coxph_fit, finegray, survreg};
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
-    nelson_aalen, weighted_logrank_test,
+    nelson_aalen, uno_c_index, weighted_logrank_test,
 };
 
 fn generate_survival_data(n: usize) -> (Vec<f64>, Vec<f64>, Vec<i32>) {
@@ -194,6 +194,50 @@ mod concordance_bench {
         let indx: Vec<i32> = (0..n).map(|i| (i % ntree as usize) as i32).collect();
 
         bencher.bench_local(|| concordance1(&y, &weights, &indx, ntree));
+    }
+}
+
+mod uno_c_index_bench {
+    use super::*;
+
+    #[divan::bench(args = [100, 1000, 5000, 20000])]
+    fn mixed_censoring_and_tied_risk(bencher: divan::Bencher, n: usize) {
+        let time: Vec<f64> = (0..n)
+            .map(|idx| 1.0 + (idx % 250) as f64 * 0.25 + (idx / 250) as f64 * 0.01)
+            .collect();
+        let status: Vec<i32> = (0..n).map(|idx| i32::from(idx % 4 != 0)).collect();
+        let risk_score: Vec<f64> = (0..n)
+            .map(|idx| ((idx.wrapping_mul(37) + 11) % 64) as f64 / 16.0)
+            .collect();
+        let inputs = (time, status, risk_score);
+
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|(time, status, risk_score)| {
+                black_box(
+                    uno_c_index(time, status, risk_score, None)
+                        .expect("benchmark Uno C-index inputs should be valid"),
+                )
+            });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000, 20000])]
+    fn mixed_censoring_and_distinct_risk(bencher: divan::Bencher, n: usize) {
+        let time: Vec<f64> = (0..n)
+            .map(|idx| 1.0 + (idx % 250) as f64 * 0.25 + (idx / 250) as f64 * 0.01)
+            .collect();
+        let status: Vec<i32> = (0..n).map(|idx| i32::from(idx % 4 != 0)).collect();
+        let risk_score: Vec<f64> = (0..n).map(|idx| idx as f64).collect();
+        let inputs = (time, status, risk_score);
+
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|(time, status, risk_score)| {
+                black_box(
+                    uno_c_index(time, status, risk_score, None)
+                        .expect("benchmark Uno C-index inputs should be valid"),
+                )
+            });
     }
 }
 

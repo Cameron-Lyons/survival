@@ -1,6 +1,7 @@
 use crate::constants::{
     IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE, clamped_normal_ci_95, normal_ci_95, same_time,
 };
+use crate::internal::fenwick::FenwickTree;
 use crate::internal::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_empty,
