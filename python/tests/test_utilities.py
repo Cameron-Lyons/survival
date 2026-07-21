@@ -452,6 +452,34 @@ def test_agexact_public_api_and_validation():
     assert result["loglik"] == pytest.approx([0.0, 0.0])
     assert result["flag"] == 0
 
+    fitted = survival_package.agexact(
+        20,
+        6,
+        1,
+        [0.0] * 6,
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        [1, 0, 1, 1, 0, 1],
+        [0.2, 1.1, -0.4, 0.8, 1.5, -0.2],
+        [0.0] * 6,
+        [0] * 6,
+        [0.0],
+        [0.0],
+        [0.0],
+        [0.0],
+        [0.0, 0.0],
+        [0.0] * 10,
+        [0] * 12,
+        1e-9,
+        1e-9,
+        [1],
+    )
+    assert fitted["beta"] == pytest.approx([-0.716230334066463], abs=1e-10)
+    assert fitted["loglik"] == pytest.approx([-4.276666119016055, -3.923517065659742], abs=1e-10)
+    assert fitted["imat"] == pytest.approx([0.8099422437616611], abs=1e-10)
+    assert fitted["sctest"] == pytest.approx(0.6770036246476036, abs=1e-10)
+    assert fitted["maxiter"] == 4
+    assert fitted["flag"] == 1
+
     with pytest.raises(ValueError, match="work must have length at least 5"):
         survival_package.agexact(
             1,

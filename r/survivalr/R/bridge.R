@@ -62,6 +62,21 @@ if (getRversion() >= "2.15.1") {
   reticulate::py_get_attr(.survival_regression_module(), name)
 }
 
+.survival_residuals_module <- local({
+  module <- NULL
+
+  function() {
+    if (is.null(module)) {
+      module <<- reticulate::import("survival.residuals", convert = TRUE)
+    }
+    module
+  }
+})
+
+.residuals_attr <- function(name) {
+  reticulate::py_get_attr(.survival_residuals_module(), name)
+}
+
 .compact_null <- function(values) {
   values[!vapply(values, is.null, logical(1))]
 }
@@ -5437,13 +5452,190 @@ agreg.fit <- function(x, y, strata, offset, init, control, weights, method,
 
 agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
                         rownames, resid = TRUE, nocenter = NULL) {
+  if (!is.matrix(x)) {
+    stop("Invalid formula for cox fitting function", call. = FALSE)
+  }
+  if (inherits(y, "survival_py_surv")) {
+    y <- .as_native_surv(y)
+  }
+  if (!inherits(y, "Surv") || !is.matrix(y)) {
+    stop("y must be a Surv object", call. = FALSE)
+  }
   if (!missing(weights) && !is.null(weights) && any(as.numeric(weights) != 1)) {
     stop("Case weights are not supported for the exact method", call. = FALSE)
   }
-  .coxph_fit_core(x, y, strata, offset, init, control, rep(1, nrow(as.matrix(x))), "exact",
-                  rownames, resid = resid, nocenter = nocenter,
-                  include_class = FALSE, method_label = "coxph",
-                  linear_predictors_matrix = TRUE)
+
+  n <- nrow(x)
+  nvar <- ncol(x)
+  if (nvar == 0L) {
+    stop("Cannot handle a null model + exact calculation (yet)", call. = FALSE)
+  }
+  if (!missing(weights) && !is.null(weights) && length(weights) != n) {
+    stop("weights and y have different numbers of rows", call. = FALSE)
+  }
+  if (ncol(y) == 3L) {
+    start <- as.numeric(y[, 1L])
+    stopp <- as.numeric(y[, 2L])
+    event <- as.integer(y[, 3L])
+  } else if (ncol(y) == 2L) {
+    start <- rep(0, n)
+    stopp <- as.numeric(y[, 1L])
+    event <- as.integer(y[, 2L])
+  } else {
+    stop("y must have 2 or 3 columns", call. = FALSE)
+  }
+  if (length(stopp) != n) {
+    stop("x and y have different numbers of rows", call. = FALSE)
+  }
+
+  has_strata <- !(missing(strata) || is.null(strata) || length(strata) == 0L)
+  if (!has_strata) {
+    sorted <- order(stopp, -event)
+    newstrat <- integer(n)
+  } else {
+    if (length(strata) != n) {
+      stop("strata and y have different numbers of rows", call. = FALSE)
+    }
+    strata_codes <- match(strata, unique(strata))
+    sorted <- order(strata_codes, stopp, -event)
+    newstrat <- as.integer(c(diff(strata_codes[sorted]) != 0, 1))
+  }
+
+  if (missing(offset) || is.null(offset)) {
+    offset <- rep(0, n)
+  }
+  offset <- as.numeric(offset)
+  if (length(offset) != n) {
+    stop("offset and y have different numbers of rows", call. = FALSE)
+  }
+  if (missing(init) || is.null(init)) {
+    init <- rep(0, nvar)
+  }
+  init <- as.numeric(init)
+  if (length(init) != nvar) {
+    stop("Wrong length for inital values", call. = FALSE)
+  }
+  if (missing(control) || is.null(control)) {
+    control <- coxph.control()
+  }
+  if (missing(rownames) || is.null(rownames)) {
+    rownames <- rownames(y)
+    if (is.null(rownames)) {
+      rownames <- as.character(seq_len(n))
+    }
+  }
+  if (length(rownames) != n) {
+    stop("rownames and y have different lengths", call. = FALSE)
+  }
+
+  zero_one <- if (is.null(nocenter)) {
+    rep(FALSE, nvar)
+  } else {
+    apply(x, 2L, function(column) all(column %in% nocenter))
+  }
+  sstart <- as.double(start[sorted])
+  sstop <- as.double(stopp[sorted])
+  sstat <- as.integer(event[sorted])
+  python_sequence <- function(values) {
+    if (length(values) == 1L) as.list(values) else values
+  }
+  agfit <- do.call(
+    .regression_attr("agexact"),
+    list(
+      maxiter = as.integer(control[["iter.max"]]),
+      nused = as.integer(n),
+      nvar = as.integer(nvar),
+      start = python_sequence(sstart),
+      stop = python_sequence(sstop),
+      event = python_sequence(sstat),
+      covar = python_sequence(as.numeric(x[sorted, , drop = FALSE])),
+      offset = python_sequence(as.double(offset[sorted])),
+      strata = python_sequence(newstrat),
+      means = python_sequence(double(nvar)),
+      beta = python_sequence(as.double(init)),
+      u = python_sequence(double(nvar)),
+      imat = python_sequence(double(nvar * nvar)),
+      loglik = python_sequence(double(2L)),
+      work = python_sequence(double(2L * nvar * nvar + 4L * nvar + n)),
+      work2 = python_sequence(integer(2L * n)),
+      eps = as.double(control[["eps"]]),
+      tol_chol = as.double(control[["toler.chol"]]),
+      nocenter = python_sequence(as.integer(ifelse(zero_one, 0L, 1L)))
+    )
+  )
+
+  variance <- matrix(.as_numeric_vector(.result_field(agfit, "imat")), nvar, nvar)
+  coefficients <- .as_numeric_vector(.result_field(agfit, "beta"))
+  score_vector <- .as_numeric_vector(.result_field(agfit, "u"))
+  means <- .as_numeric_vector(.result_field(agfit, "means"))
+  flag <- as.integer(.result_field(agfit, "flag"))
+  which_singular <- if (flag < nvar) diag(variance) == 0 else rep(FALSE, nvar)
+  infs <- abs(score_vector %*% variance)
+  if (control[["iter.max"]] > 1L) {
+    if (flag == 1000L) {
+      warning("Ran out of iterations and did not converge", call. = FALSE)
+    } else {
+      infs <- (infs > control[["eps"]]) &
+        infs > control[["toler.inf"]] * abs(coefficients)
+      if (any(infs)) {
+        warning(
+          paste(
+            "Loglik converged before variable ",
+            paste(seq_len(nvar)[infs], collapse = ","),
+            "; beta may be infinite. "
+          ),
+          call. = FALSE
+        )
+      }
+    }
+  }
+
+  names(coefficients) <- colnames(x)
+  linear_predictors <- x %*% coefficients + offset - sum(coefficients * means)
+  risk_score <- as.double(exp(linear_predictors[sorted]))
+  coefficients[which_singular] <- NA_real_
+  out <- list(
+    coefficients = coefficients,
+    var = variance,
+    loglik = .as_numeric_vector(.result_field(agfit, "loglik")),
+    score = as.numeric(.result_field(agfit, "sctest")),
+    iter = as.integer(.result_field(agfit, "maxiter")),
+    linear.predictors = linear_predictors,
+    means = means,
+    method = "coxph"
+  )
+
+  if (isTRUE(resid)) {
+    counting <- do.call(
+      .core_attr("CountingProcessData"),
+      list(
+        start = python_sequence(sstart),
+        stop = python_sequence(sstop),
+        event = python_sequence(sstat)
+      )
+    )
+    residual_input <- do.call(
+      .core_attr("AndersenGillInput"),
+      list(
+        counting = counting,
+        score = python_sequence(risk_score),
+        strata = python_sequence(newstrat)
+      )
+    )
+    sorted_residuals <- .as_numeric_vector(do.call(
+      .residuals_attr("agmart"),
+      list(input = residual_input, method = 0L)
+    ))
+    martingale <- double(n)
+    martingale[sorted] <- sorted_residuals
+    names(martingale) <- rownames
+    out$residuals <- martingale
+    out <- out[c(
+      "coefficients", "var", "loglik", "score", "iter",
+      "linear.predictors", "residuals", "means", "method"
+    )]
+  }
+  out
 }
 
 survreg.control <- function(maxiter = 30, rel.tolerance = 1e-09,

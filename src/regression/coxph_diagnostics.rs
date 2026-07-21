@@ -1,9 +1,10 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, same_time};
-use crate::regression::cox_optimizer::{Method as CoxMethod, exact_tied_moments};
+use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_support::{
     ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup, cumulative_step_at,
 };
+use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
 use ndarray::Array2;
 use pyo3::prelude::*;
@@ -508,60 +509,6 @@ impl CoxPHFit {
         }
     }
 
-    fn exact_inclusion_weights(
-        risk_indices: &[usize],
-        deaths: usize,
-        risk: &[f64],
-    ) -> Option<Vec<(usize, f64)>> {
-        if deaths == 0 || deaths > risk_indices.len() {
-            return None;
-        }
-        let n_risk = risk_indices.len();
-        let mut prefix = vec![vec![0.0; deaths + 1]; n_risk + 1];
-        prefix[0][0] = 1.0;
-        for pos in 0..n_risk {
-            let (previous_rows, current_rows) = prefix.split_at_mut(pos + 1);
-            let previous = &previous_rows[pos];
-            let current = &mut current_rows[0];
-            current.copy_from_slice(previous);
-            let value = risk[risk_indices[pos]];
-            for size in 1..=deaths.min(pos + 1) {
-                current[size] += value * previous[size - 1];
-            }
-        }
-        let mut suffix = vec![vec![0.0; deaths + 1]; n_risk + 1];
-        suffix[n_risk][0] = 1.0;
-        for pos in (0..n_risk).rev() {
-            let (current_rows, following_rows) = suffix.split_at_mut(pos + 1);
-            let current = &mut current_rows[pos];
-            let following = &following_rows[0];
-            current.copy_from_slice(following);
-            let value = risk[risk_indices[pos]];
-            for size in 1..=deaths.min(n_risk - pos) {
-                current[size] += value * following[size - 1];
-            }
-        }
-        let denom = prefix[n_risk][deaths];
-        if denom <= 0.0 {
-            return None;
-        }
-        Some(
-            (0..n_risk)
-                .map(|pos| {
-                    let mut excluded = 0.0;
-                    for (left_size, prefix_value) in prefix[pos].iter().take(deaths).enumerate() {
-                        let right_size = deaths - 1 - left_size;
-                        excluded += *prefix_value * suffix[pos + 1][right_size];
-                    }
-                    (
-                        risk_indices[pos],
-                        risk[risk_indices[pos]] * excluded / denom,
-                    )
-                })
-                .collect(),
-        )
-    }
-
     pub(crate) fn score_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
         let beta = self.coefficients.first().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
@@ -602,6 +549,14 @@ impl CoxPHFit {
         y.extend(order.iter().map(|&idx| self.event_times[idx]));
         y.extend(order.iter().map(|&idx| self.status[idx] as f64));
         let strata: Vec<i32> = order.iter().map(|&idx| self.strata[idx]).collect();
+        let weights: Vec<f64> = order.iter().map(|&idx| self.weights[idx]).collect();
+        if matches!(tie_method, CoxMethod::Exact) {
+            let log_risk: Vec<f64> = order
+                .iter()
+                .map(|&idx| self.linear_predictors[idx] + self.weights[idx].ln())
+                .collect();
+            return Ok(self.score_residuals_exact_right_censored(nvar, &order, &log_risk));
+        }
         let score: Vec<f64> = order
             .iter()
             .map(|&idx| {
@@ -610,16 +565,10 @@ impl CoxPHFit {
                     .exp()
             })
             .collect();
-        let weights: Vec<f64> = order.iter().map(|&idx| self.weights[idx]).collect();
         let mut covar = Vec::with_capacity(n * nvar);
         for &idx in &order {
             covar.extend(self.covariates[idx].iter().copied());
         }
-
-        if matches!(tie_method, CoxMethod::Exact) {
-            return Ok(self.score_residuals_exact_right_censored(nvar, &order, &score, &weights));
-        }
-
         let flat = compute_cox_score_residuals(
             CoxScoreData {
                 y: &y,
@@ -643,15 +592,9 @@ impl CoxPHFit {
         &self,
         nvar: usize,
         order: &[usize],
-        score: &[f64],
-        weights: &[f64],
+        log_risk: &[f64],
     ) -> Vec<Vec<f64>> {
         let n = self.event_times.len();
-        let risk: Vec<f64> = order
-            .iter()
-            .enumerate()
-            .map(|(sorted_idx, _)| score[sorted_idx] * weights[sorted_idx])
-            .collect();
         let mut residuals = vec![vec![0.0; nvar]; n];
         let mut stratum_start = 0usize;
         while stratum_start < order.len() {
@@ -687,7 +630,7 @@ impl CoxPHFit {
                         }
                     }
                     if let Some(inclusion_weights) =
-                        Self::exact_inclusion_weights(&risk_indices, deaths.len(), &risk)
+                        exact_inclusion_probabilities(&risk_indices, deaths.len(), log_risk)
                     {
                         for (sorted_idx, inclusion_weight) in inclusion_weights {
                             let original_idx = order[sorted_idx];
@@ -727,6 +670,21 @@ impl CoxPHFit {
             ));
         }
 
+        let order = diagnostic_order(&self.strata, &self.event_times);
+
+        if method == 2 {
+            let log_risk: Vec<f64> = (0..n)
+                .map(|idx| self.linear_predictors[idx] + self.weights[idx].ln())
+                .collect();
+            return Ok(self.score_residuals_counting_process_by_scan(
+                nvar,
+                method,
+                &log_risk,
+                &order,
+                entry_times,
+            ));
+        }
+
         let risk: Vec<f64> = (0..n)
             .map(|idx| {
                 self.linear_predictors[idx]
@@ -735,18 +693,6 @@ impl CoxPHFit {
                     * self.weights[idx]
             })
             .collect();
-        let order = diagnostic_order(&self.strata, &self.event_times);
-
-        if method == 2 {
-            return Ok(self.score_residuals_counting_process_by_scan(
-                nvar,
-                method,
-                &risk,
-                &order,
-                entry_times,
-            ));
-        }
-
         Ok(self.score_residuals_counting_process_sweep(nvar, method, &risk, &order, entry_times))
     }
 
@@ -795,8 +741,7 @@ impl CoxPHFit {
                     risk_indices.extend(stratum_indices.iter().copied().filter(|&idx| {
                         entry_times[idx] < event_time && self.event_times[idx] >= event_time
                     }));
-                    let denom: f64 = risk_indices.iter().map(|&idx| risk[idx]).sum();
-                    if denom > 0.0 {
+                    if method == 2 {
                         for &idx in &deaths {
                             for (col_idx, residual) in
                                 residuals[idx].iter_mut().enumerate().take(nvar)
@@ -804,50 +749,59 @@ impl CoxPHFit {
                                 *residual += self.weights[idx] * self.covariates[idx][col_idx];
                             }
                         }
-                        if method == 2 {
-                            if let Some(inclusion_weights) =
-                                Self::exact_inclusion_weights(&risk_indices, deaths.len(), risk)
-                            {
-                                for (idx, inclusion_weight) in inclusion_weights {
-                                    for (col_idx, residual) in
-                                        residuals[idx].iter_mut().enumerate().take(nvar)
-                                    {
-                                        *residual -=
-                                            inclusion_weight * self.covariates[idx][col_idx];
-                                    }
-                                }
-                            }
-                        } else if method == 0 || deaths.len() == 1 {
-                            let deadwt: f64 = deaths.iter().map(|&idx| self.weights[idx]).sum();
-                            for &idx in &risk_indices {
-                                let factor = risk[idx] * deadwt / denom;
+                        if let Some(inclusion_weights) =
+                            exact_inclusion_probabilities(&risk_indices, deaths.len(), risk)
+                        {
+                            for (idx, inclusion_weight) in inclusion_weights {
                                 for (col_idx, residual) in
                                     residuals[idx].iter_mut().enumerate().take(nvar)
                                 {
-                                    *residual -= factor * self.covariates[idx][col_idx];
+                                    *residual -= inclusion_weight * self.covariates[idx][col_idx];
                                 }
                             }
-                        } else {
-                            let death_count = deaths.len();
-                            let deaths_f = death_count as f64;
-                            let deadwt: f64 = deaths.iter().map(|&idx| self.weights[idx]).sum();
-                            let weight_average = deadwt / deaths_f;
-                            let death_risk: f64 = deaths.iter().map(|&idx| risk[idx]).sum();
-                            for step in 0..death_count {
-                                let fraction = step as f64 / deaths_f;
-                                let step_denom = denom - fraction * death_risk;
-                                if step_denom <= 0.0 {
-                                    continue;
+                        }
+                    } else {
+                        let denom: f64 = risk_indices.iter().map(|&idx| risk[idx]).sum();
+                        if denom > 0.0 {
+                            for &idx in &deaths {
+                                for (col_idx, residual) in
+                                    residuals[idx].iter_mut().enumerate().take(nvar)
+                                {
+                                    *residual += self.weights[idx] * self.covariates[idx][col_idx];
                                 }
+                            }
+                            if method == 0 || deaths.len() == 1 {
+                                let deadwt: f64 = deaths.iter().map(|&idx| self.weights[idx]).sum();
                                 for &idx in &risk_indices {
-                                    let multiplier =
-                                        if is_death[idx] { 1.0 - fraction } else { 1.0 };
-                                    let factor =
-                                        weight_average * risk[idx] * multiplier / step_denom;
+                                    let factor = risk[idx] * deadwt / denom;
                                     for (col_idx, residual) in
                                         residuals[idx].iter_mut().enumerate().take(nvar)
                                     {
                                         *residual -= factor * self.covariates[idx][col_idx];
+                                    }
+                                }
+                            } else {
+                                let death_count = deaths.len();
+                                let deaths_f = death_count as f64;
+                                let deadwt: f64 = deaths.iter().map(|&idx| self.weights[idx]).sum();
+                                let weight_average = deadwt / deaths_f;
+                                let death_risk: f64 = deaths.iter().map(|&idx| risk[idx]).sum();
+                                for step in 0..death_count {
+                                    let fraction = step as f64 / deaths_f;
+                                    let step_denom = denom - fraction * death_risk;
+                                    if step_denom <= 0.0 {
+                                        continue;
+                                    }
+                                    for &idx in &risk_indices {
+                                        let multiplier =
+                                            if is_death[idx] { 1.0 - fraction } else { 1.0 };
+                                        let factor =
+                                            weight_average * risk[idx] * multiplier / step_denom;
+                                        for (col_idx, residual) in
+                                            residuals[idx].iter_mut().enumerate().take(nvar)
+                                        {
+                                            *residual -= factor * self.covariates[idx][col_idx];
+                                        }
                                     }
                                 }
                             }
@@ -1146,6 +1100,10 @@ impl CoxPHFit {
                     * self.weights[idx]
             })
             .collect();
+        let sorted_log_risk: Vec<f64> = order
+            .iter()
+            .map(|&idx| self.linear_predictors[idx] + self.weights[idx].ln())
+            .collect();
         let mut covar = Array2::<f64>::zeros((n, nvar));
         for (row_idx, &source_idx) in order.iter().enumerate() {
             for col_idx in 0..nvar {
@@ -1185,17 +1143,15 @@ impl CoxPHFit {
                         sorted_start[idx] < event_time && sorted_time[idx] >= event_time
                     }));
                     mean.fill(0.0);
-                    if matches!(method, CoxMethod::Exact) && death_indices.len() > 1 {
-                        let (denom, a, _cmat) = exact_tied_moments(
+                    if matches!(method, CoxMethod::Exact) {
+                        let moments = exact_tied_moments(
                             &risk_indices,
                             death_indices.len(),
-                            &sorted_risk,
+                            &sorted_log_risk,
                             &covar,
                         );
-                        if denom > 0.0 {
-                            for col_idx in 0..nvar {
-                                mean[col_idx] = a[col_idx] / denom / death_indices.len() as f64;
-                            }
+                        for (value, &expected_sum) in mean.iter_mut().zip(&moments.mean) {
+                            *value = expected_sum / death_indices.len() as f64;
                         }
                     } else {
                         let mut denom = 0.0;
@@ -1600,7 +1556,8 @@ mod tests {
 
     #[test]
     fn exact_inclusion_weights_match_pairwise_tie_probabilities() {
-        let inclusion = CoxPHFit::exact_inclusion_weights(&[0, 1, 2], 2, &[2.0, 3.0, 5.0])
+        let log_risk = [2.0_f64.ln(), 3.0_f64.ln(), 5.0_f64.ln()];
+        let inclusion = exact_inclusion_probabilities(&[0, 1, 2], 2, &log_risk)
             .expect("two deaths among three risk scores should compute");
 
         assert_eq!(inclusion.len(), 3);
@@ -1608,5 +1565,68 @@ mod tests {
         assert!((inclusion[1].1 - 21.0 / 31.0).abs() < 1e-12);
         assert!((inclusion[2].1 - 25.0 / 31.0).abs() < 1e-12);
         assert!((inclusion.iter().map(|(_, value)| value).sum::<f64>() - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn exact_diagnostics_are_invariant_to_common_large_log_risk_shifts() {
+        let fit = CoxPHFit {
+            coefficients: vec![vec![0.0]],
+            means: vec![0.0],
+            score_vector: vec![0.0],
+            information_matrix: vec![vec![0.0]],
+            log_likelihood: vec![0.0, 0.0],
+            score_test: 0.0,
+            convergence_flag: 0,
+            iterations: 0,
+            risk_scores: vec![0.0; 3],
+            event_times: vec![1.0, 1.0, 1.0],
+            status: vec![1, 1, 0],
+            linear_predictors: vec![1_000.0, 900.0, 800.0],
+            entry_times: None,
+            weights: vec![1.0; 3],
+            covariates: vec![vec![0.0], vec![1.0], vec![2.0]],
+            strata: vec![0; 3],
+            method: "exact".to_string(),
+            nocenter: Vec::new(),
+        };
+        let mut shifted = fit.clone();
+        for value in &mut shifted.linear_predictors {
+            *value -= 1_000.0;
+        }
+
+        let schoenfeld = fit
+            .schoenfeld_residuals_internal()
+            .expect("large exact Schoenfeld residuals should compute");
+        let shifted_schoenfeld = shifted
+            .schoenfeld_residuals_internal()
+            .expect("shifted exact Schoenfeld residuals should compute");
+        let score = fit
+            .score_residuals_internal()
+            .expect("large exact score residuals should compute");
+        let shifted_score = shifted
+            .score_residuals_internal()
+            .expect("shifted exact score residuals should compute");
+        let mut counting = fit.clone();
+        counting.entry_times = Some(vec![0.0; 3]);
+        let mut shifted_counting = shifted.clone();
+        shifted_counting.entry_times = Some(vec![0.0; 3]);
+        let counting_score = counting
+            .score_residuals_internal()
+            .expect("large counting-process exact score residuals should compute");
+        let shifted_counting_score = shifted_counting
+            .score_residuals_internal()
+            .expect("shifted counting-process exact score residuals should compute");
+
+        assert!((schoenfeld[0][0] + 0.5).abs() < 1e-12);
+        assert!((schoenfeld[1][0] - 0.5).abs() < 1e-12);
+        for (actual, expected) in schoenfeld.iter().zip(&shifted_schoenfeld) {
+            assert!((actual[0] - expected[0]).abs() < 1e-12);
+        }
+        for (actual, expected) in score.iter().zip(&shifted_score) {
+            assert!((actual[0] - expected[0]).abs() < 1e-12);
+        }
+        for (actual, expected) in counting_score.iter().zip(&shifted_counting_score) {
+            assert!((actual[0] - expected[0]).abs() < 1e-12);
+        }
     }
 }

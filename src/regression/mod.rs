@@ -17,6 +17,7 @@ pub(crate) mod coxph_model;
 pub(crate) mod coxph_support;
 pub(crate) mod cure_models;
 pub(crate) mod elastic_net;
+pub(crate) mod exact_ties;
 #[path = "fast_cox/mod.rs"]
 pub(crate) mod fast_cox_module;
 pub(crate) mod finegray_data;
