@@ -7284,6 +7284,12 @@ def test_direct_model_matrix_preserves_tabular_column_names():
 
 def test_model_summary_reports_named_coefficient_table():
     data = _toy_data()
+    plain_cox = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
     cox = survival.coxph(
         "Surv(time, status) ~ x1 + x2 + cluster(group)",
         data=data,
@@ -7297,8 +7303,14 @@ def test_model_summary_reports_named_coefficient_table():
         eps=1e-5,
     )
 
+    plain_cox_summary = survival.model_summary(plain_cox)
     cox_summary = survival.model_summary(cox)
     aft_summary = survival.model_summary(aft)
+
+    assert plain_cox_summary["robust"] is False
+    for row in plain_cox_summary["coefficients"]:
+        assert row["naive_se"] == pytest.approx(row["se"])
+        assert "robust_se" not in row
 
     assert cox_summary["model_type"] == "coxph"
     assert cox_summary["robust"] is True
@@ -7307,18 +7319,27 @@ def test_model_summary_reports_named_coefficient_table():
     assert cox_summary["df"] == 2
     assert cox_summary["loglik"] == pytest.approx(cox.log_likelihood[-1])
     assert cox_summary["null_loglik"] == pytest.approx(cox.log_likelihood[0])
+    assert cox_summary["score_test"] == pytest.approx(cox.score_test)
+    assert plain_cox_summary["score_test"] == pytest.approx(plain_cox.score_test)
     assert [row["name"] for row in cox_summary["coefficients"]] == ["x1", "x2"]
-    for idx, (row, coefficient, variance_row) in enumerate(
+    assert cox_summary["coefficient_names"] == ["x1", "x2"]
+    for idx, (row, coefficient, variance_row, naive_variance_row) in enumerate(
         zip(
             cox_summary["coefficients"],
             survival.coef(cox),
             survival.vcov(cox),
+            cox.naive_variance,
             strict=True,
         )
     ):
         assert row["coef"] == pytest.approx(coefficient)
+        assert row["exp_coef"] == pytest.approx(math.exp(coefficient))
         assert row["se"] == pytest.approx(math.sqrt(max(variance_row[idx], 0.0)))
+        assert row["naive_se"] == pytest.approx(math.sqrt(max(naive_variance_row[idx], 0.0)))
+        assert row["robust_se"] == pytest.approx(row["se"])
         assert row["statistic"] == pytest.approx(row["coef"] / row["se"])
+        assert row["z"] == pytest.approx(row["statistic"])
+        assert row["p"] == pytest.approx(2.0 * NormalDist().cdf(-abs(row["z"])))
         assert 0.0 <= row["p"] <= 1.0
 
     assert aft_summary["model_type"] == "survreg"
@@ -7326,12 +7347,133 @@ def test_model_summary_reports_named_coefficient_table():
     assert aft_summary["df"] == len(aft.coefficients)
     assert aft_summary["scale"] == pytest.approx(aft.scale)
     assert aft_summary["scales"] == pytest.approx(aft.scales)
-    assert [row["name"] for row in aft_summary["coefficients"]] == ["(Intercept)", "x1", "x2"]
-    for row, coefficient in zip(
-        aft_summary["coefficients"], aft.location_coefficients, strict=True
+    assert [row["name"] for row in aft_summary["coefficients"]] == [
+        "(Intercept)",
+        "x1",
+        "x2",
+        "Log(scale)",
+    ]
+    assert aft_summary["coefficient_names"] == [
+        "(Intercept)",
+        "x1",
+        "x2",
+        "Log(scale)",
+    ]
+    assert aft_summary["location_coefficient_names"] == ["(Intercept)", "x1", "x2"]
+    assert aft_summary["location_coefficients"] == pytest.approx(aft.location_coefficients)
+    for idx, (row, coefficient, variance_row) in enumerate(
+        zip(
+            aft_summary["coefficients"],
+            aft.coefficients,
+            survival.vcov(aft),
+            strict=True,
+        )
     ):
         assert row["coef"] == pytest.approx(coefficient)
+        assert row["value"] == pytest.approx(coefficient)
+        assert row["se"] == pytest.approx(math.sqrt(max(variance_row[idx], 0.0)))
+        assert row["naive_se"] == pytest.approx(row["se"])
+        assert "robust_se" not in row
+        assert row["z"] == pytest.approx(row["statistic"])
+        assert row["p"] == pytest.approx(2.0 * NormalDist().cdf(-abs(row["z"])))
         assert 0.0 <= row["p"] <= 1.0
+
+
+def test_model_summary_reports_zero_coefficient_cox_inference_payload():
+    data = _toy_data()
+    fit = survival.coxph("Surv(time, status) ~ 1", data=data, max_iter=0)
+
+    summary = survival.model_summary(fit)
+
+    assert summary["coefficients"] == []
+    assert summary["coefficient_names"] == []
+    assert summary["df"] == 0
+    assert summary["loglik"] == pytest.approx(fit.log_likelihood[-1])
+    assert summary["null_loglik"] == pytest.approx(fit.log_likelihood[0])
+    assert summary["score_test"] == pytest.approx(fit.score_test)
+    assert summary["score_test"] == pytest.approx(0.0)
+    assert summary["n_event"] == sum(data["status"])
+
+
+def test_model_summary_survreg_scale_rows_and_robust_standard_errors():
+    data = _toy_data()
+    data["group_num"] = [1 if group == "A" else 2 for group in data["group"]]
+    fixed_scale = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        scale=1.0,
+        max_iter=10,
+        eps=1e-5,
+    )
+    stratified_scale = survival.survreg(
+        "Surv(time, status) ~ x1 + x2 + strata(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    numeric_strata = survival.survreg(
+        "Surv(time, status) ~ x1 + x2 + strata(group_num)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    multi_strata = survival.survreg(
+        "Surv(time, status) ~ x1 + x2 + strata(group_num, group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    robust = survival.survreg(
+        "Surv(time, status) ~ x1 + x2 + cluster(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    fixed_summary = survival.model_summary(fixed_scale)
+    stratified_summary = survival.model_summary(stratified_scale)
+    numeric_summary = survival.model_summary(numeric_strata)
+    multi_summary = survival.model_summary(multi_strata)
+    robust_summary = survival.model_summary(robust)
+
+    assert fixed_summary["coefficient_names"] == ["(Intercept)", "x1", "x2"]
+    assert stratified_summary["coefficient_names"] == [
+        "(Intercept)",
+        "x1",
+        "x2",
+        "A",
+        "B",
+    ]
+    assert [row["coef"] for row in stratified_summary["coefficients"]] == pytest.approx(
+        stratified_scale.coefficients
+    )
+    assert survival.coef_names(stratified_scale, complete=True) == [
+        "(Intercept)",
+        "x1",
+        "x2",
+        "Log(scale:A)",
+        "Log(scale:B)",
+    ]
+    assert numeric_summary["coefficient_names"][-2:] == ["group_num=1", "group_num=2"]
+    assert multi_summary["coefficient_names"][-2:] == [
+        "group_num=1, group=A",
+        "group_num=2, group=B",
+    ]
+
+    assert robust_summary["robust"] is True
+    for idx, (row, robust_variance_row, naive_variance_row) in enumerate(
+        zip(
+            robust_summary["coefficients"],
+            robust.variance_matrix,
+            robust.naive_variance,
+            strict=True,
+        )
+    ):
+        assert row["se"] == pytest.approx(math.sqrt(max(robust_variance_row[idx], 0.0)))
+        assert row["robust_se"] == pytest.approx(row["se"])
+        assert row["naive_se"] == pytest.approx(math.sqrt(max(naive_variance_row[idx], 0.0)))
+        assert row["z"] == pytest.approx(row["coef"] / row["robust_se"])
+        assert row["p"] == pytest.approx(2.0 * NormalDist().cdf(-abs(row["z"])))
 
 
 def test_model_confint_reports_named_coefficient_intervals():

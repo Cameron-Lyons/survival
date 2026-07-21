@@ -12410,19 +12410,38 @@ def _normal_two_sided_p_value(statistic: float) -> float:
     return 2.0 * NormalDist().cdf(-abs(statistic))
 
 
+def _coefficient_exp(value: float) -> float:
+    try:
+        return math.exp(value)
+    except OverflowError:
+        return math.inf
+
+
 def _coefficient_summary_rows(
     names: list[str],
     coefficients: list[float],
     variance: list[list[float]],
+    *,
+    naive_variance: list[list[float]] | None = None,
+    robust: bool = False,
+    coxph: bool = False,
+    survreg: bool = False,
 ) -> list[dict[str, float | str]]:
     if len(names) != len(coefficients):
         raise ValueError("coefficient names do not match coefficient width")
     if len(variance) != len(coefficients) or any(len(row) != len(coefficients) for row in variance):
         raise ValueError("variance matrix does not match coefficient width")
+    if naive_variance is None:
+        naive_variance = variance
+    if len(naive_variance) != len(coefficients) or any(
+        len(row) != len(coefficients) for row in naive_variance
+    ):
+        raise ValueError("naive variance matrix does not match coefficient width")
 
     rows = []
     for idx, value in enumerate(coefficients):
         standard_error = math.sqrt(max(float(variance[idx][idx]), 0.0))
+        naive_standard_error = math.sqrt(max(float(naive_variance[idx][idx]), 0.0))
         if math.isnan(value):
             statistic = math.nan
         elif standard_error > 0.0:
@@ -12431,16 +12450,70 @@ def _coefficient_summary_rows(
             statistic = math.nan
         else:
             statistic = math.copysign(math.inf, value)
-        rows.append(
-            {
-                "name": names[idx],
-                "coef": value,
-                "se": standard_error,
-                "statistic": statistic,
-                "p": _normal_two_sided_p_value(statistic),
-            }
-        )
+        row: dict[str, float | str] = {
+            "name": names[idx],
+            "coef": value,
+            "se": standard_error,
+            "naive_se": naive_standard_error,
+            "statistic": statistic,
+            "z": statistic,
+            "p": _normal_two_sided_p_value(statistic),
+        }
+        if coxph:
+            row["exp_coef"] = _coefficient_exp(value)
+        if survreg:
+            row["value"] = value
+        if robust:
+            row["robust_se"] = standard_error
+        rows.append(row)
     return rows
+
+
+def _summary_naive_variance(
+    fit: Any,
+    width: int,
+    active_variance: list[list[float]],
+) -> list[list[float]]:
+    raw_variance = fit.naive_variance if isinstance(fit, _FormulaFit) else None
+    if raw_variance is None:
+        return active_variance
+    variance = [[float(value) for value in row[:width]] for row in raw_variance[:width]]
+    if len(variance) != width or any(len(row) != width for row in variance):
+        raise ValueError("stored naive variance matrix does not match coefficient width")
+    return variance
+
+
+def _survreg_summary_coef_names(fit: Any, location_width: int, total_width: int) -> list[str]:
+    names = _fit_location_coef_names(fit, location_width)
+    scale_width = total_width - location_width
+    if scale_width <= 0:
+        return names
+    if scale_width == 1:
+        names.append("Log(scale)")
+        return names
+
+    design = _formula_design_for_fit(fit)
+    if design is not None and len(design.strata_levels) == scale_width:
+        level_parts = [
+            (level,) if len(design.strata) == 1 else tuple(level) for level in design.strata_levels
+        ]
+        short_labels = all(
+            len(parts) == len(design.strata) and all(isinstance(value, str) for value in parts)
+            for parts in level_parts
+        )
+        for parts in level_parts:
+            if len(parts) != len(design.strata):
+                names.append(str(parts))
+                continue
+            labels = [_strata_value_label(value) for value in parts]
+            if not short_labels:
+                labels = [
+                    f"{term}={label}" for term, label in zip(design.strata, labels, strict=True)
+                ]
+            names.append(", ".join(labels))
+    else:
+        names.extend(_survreg_scale_coef_names(fit, scale_width))
+    return names
 
 
 def _coefficient_selection_indices(parm: Any, names: list[str]) -> list[int]:
@@ -12521,19 +12594,38 @@ def model_summary(fit: Any) -> dict[str, Any]:
     """Return a compact R-style model summary as plain Python data."""
 
     _require_model_fit(fit, "model_summary")
-    names = coef_names(fit)
-    coefficients = coef(fit)
-    variance = vcov(fit, complete=not _is_survreg_fit(fit))
+    is_survreg = _is_survreg_fit(fit)
+    robust = bool(getattr(fit, "robust", False))
+    if is_survreg:
+        location_width = len(_location_beta(fit))
+        coefficients = [float(value) for value in fit.coefficients]
+        names = _survreg_summary_coef_names(fit, location_width, len(coefficients))
+        variance = vcov(fit, complete=True)
+    else:
+        names = coef_names(fit)
+        coefficients = coef(fit)
+        variance = vcov(fit, complete=True)
+    naive_variance = _summary_naive_variance(fit, len(coefficients), variance)
     result: dict[str, Any] = {
-        "model_type": "survreg" if _is_survreg_fit(fit) else "coxph",
-        "coefficients": _coefficient_summary_rows(names, coefficients, variance),
+        "model_type": "survreg" if is_survreg else "coxph",
+        "coefficients": _coefficient_summary_rows(
+            names,
+            coefficients,
+            variance,
+            naive_variance=naive_variance,
+            robust=robust,
+            coxph=not is_survreg,
+            survreg=is_survreg,
+        ),
         "coefficient_names": names,
         "loglik": loglik(fit),
         "df": degrees_freedom(fit),
         "n": _model_row_count(fit),
-        "robust": bool(getattr(fit, "robust", False)),
+        "robust": robust,
     }
-    if _is_survreg_fit(fit):
+    if is_survreg:
+        result["location_coefficients"] = coef(fit)
+        result["location_coefficient_names"] = coef_names(fit)
         result["scale"] = float(fit.scale)
         result["scales"] = _survreg_scales(fit)
         distribution = getattr(fit, "distribution", None)
@@ -12548,6 +12640,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
         model = _unwrap_formula_fit(fit)
         logliks = _cox_loglik_values(model)
         result["null_loglik"] = logliks[0]
+        result["score_test"] = float(model.score_test)
         result["n_event"] = sum(1 for event in model.status if int(event) == 1)
         result["method"] = str(getattr(model, "method", "breslow"))
     return result

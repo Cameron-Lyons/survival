@@ -504,24 +504,128 @@ attrassign.lm <- function(object, ...) {
   matrix(unlist(rows, use.names = FALSE), nrow = n_row, ncol = n_col, byrow = TRUE)
 }
 
-.as_coefficient_table <- function(rows) {
-  if (length(rows) == 0L) {
-    return(matrix(numeric(), nrow = 0L, ncol = 4L))
+.as_coefficient_table <- function(rows, model_type = "coxph", robust = FALSE,
+                                  scale = 1) {
+  model_type <- as.character(model_type)[[1L]]
+  robust <- length(robust) > 0L && isTRUE(as.logical(robust)[[1L]])
+  is_survreg <- identical(model_type, "survreg")
+  cox_scale <- if (is_survreg) 1 else as.numeric(scale)[[1L]]
+  columns <- if (is_survreg) {
+    if (robust) {
+      c("Value", "Std. Err", "(Naive SE)", "z", "p")
+    } else {
+      c("Value", "Std. Error", "z", "p")
+    }
+  } else if (robust) {
+    c("coef", "exp(coef)", "se(coef)", "robust se", "z", "Pr(>|z|)")
+  } else {
+    c("coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)")
   }
+  if (length(rows) == 0L) {
+    result <- matrix(numeric(), nrow = 0L, ncol = length(columns))
+    dimnames(result) <- list(NULL, columns)
+    return(result)
+  }
+
+  row_numeric <- function(row, name, fallback_name = NULL, default = NA_real_) {
+    value <- row[[name]]
+    if ((is.null(value) || length(value) == 0L) && !is.null(fallback_name)) {
+      value <- row[[fallback_name]]
+    }
+    if (is.null(value) || length(value) == 0L) {
+      return(default)
+    }
+    as.numeric(value)[[1L]]
+  }
+  row_values <- function(row) {
+    coefficient <- row_numeric(row, "coef")
+    if (is_survreg) {
+      statistic <- row_numeric(row, "z", fallback_name = "statistic")
+      values <- c(
+        row_numeric(row, "value", fallback_name = "coef"),
+        if (robust) {
+          row_numeric(row, "robust_se", fallback_name = "se")
+        } else {
+          row_numeric(row, "se")
+        }
+      )
+      if (robust) {
+        values <- c(values, row_numeric(row, "naive_se", fallback_name = "se"))
+      }
+      return(c(values, statistic, row_numeric(row, "p")))
+    }
+
+    coefficient <- coefficient * cox_scale
+    active_se <- row_numeric(
+      row,
+      if (robust) "robust_se" else "se",
+      fallback_name = "se"
+    ) * cox_scale
+    statistic <- coefficient / active_se
+    values <- c(
+      coefficient,
+      exp(coefficient)
+    )
+    if (robust) {
+      values <- c(
+        values,
+        row_numeric(row, "naive_se", fallback_name = "se"),
+        active_se
+      )
+    } else {
+      values <- c(values, active_se)
+    }
+    c(values, statistic, stats::pchisq(statistic^2, 1, lower.tail = FALSE))
+  }
+
   coefficient_names <- vapply(rows, function(row) as.character(row[["name"]]), character(1))
   values <- matrix(
-    unlist(
-      lapply(rows, function(row) {
-        as.numeric(c(row[["coef"]], row[["se"]], row[["statistic"]], row[["p"]]))
-      }),
-      use.names = FALSE
-    ),
+    unlist(lapply(rows, row_values), use.names = FALSE),
     nrow = length(rows),
-    ncol = 4L,
+    ncol = length(columns),
     byrow = TRUE
   )
-  dimnames(values) <- list(coefficient_names, c("coef", "se(coef)", "z", "Pr(>|z|)"))
+  dimnames(values) <- list(coefficient_names, columns)
   values
+}
+
+.as_cox_confint_table <- function(coefficient_table, conf.int) {
+  coefficient <- coefficient_table[, "coef"]
+  se_column <- if ("robust se" %in% colnames(coefficient_table)) {
+    "robust se"
+  } else {
+    "se(coef)"
+  }
+  standard_error <- coefficient_table[, se_column]
+  z <- stats::qnorm((1 + conf.int) / 2)
+  values <- cbind(
+    exp(coefficient),
+    exp(-coefficient),
+    exp(coefficient - z * standard_error),
+    exp(coefficient + z * standard_error)
+  )
+  dimnames(values) <- list(
+    rownames(coefficient_table),
+    c(
+      "exp(coef)",
+      "exp(-coef)",
+      paste("lower .", round(100 * conf.int, 2), sep = ""),
+      paste("upper .", round(100 * conf.int, 2), sep = "")
+    )
+  )
+  values
+}
+
+.cox_summary_test <- function(test, df, round.test = FALSE) {
+  if (length(test) == 0L) {
+    return(c(df = df))
+  }
+  raw_test <- as.numeric(test)[[1L]]
+  c(
+    test = if (round.test) round(raw_test, 2) else raw_test,
+    df = df,
+    pvalue = stats::pchisq(raw_test, df, lower.tail = FALSE)
+  )
 }
 
 .as_confint_matrix <- function(rows, level) {
@@ -7292,9 +7396,90 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
-summary.survival_py_model <- function(object, ...) {
-  result <- .call_r_api("model_summary", object, ...)
-  result$coefficients <- .as_coefficient_table(result$coefficients)
+summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
+  result <- .call_r_api("model_summary", object)
+  model_type <- as.character(result$model_type)[[1L]]
+  robust <- length(result$robust) > 0L && isTRUE(as.logical(result$robust)[[1L]])
+  coefficient_table <- .as_coefficient_table(
+    result$coefficients,
+    model_type = model_type,
+    robust = robust,
+    scale = scale
+  )
+  if (identical(model_type, "survreg")) {
+    location_coefficients <- result$location_coefficients
+    location_names <- result$location_coefficient_names
+    if (is.null(location_coefficients) || is.null(location_names)) {
+      location_coefficients <- coef(object)
+      location_names <- names(location_coefficients)
+    }
+    location_coefficients <- .as_numeric_vector(location_coefficients)
+    location_names <- as.character(location_names)
+    if (length(location_coefficients) != length(location_names)) {
+      stop("survreg summary coefficient names must match its location coefficients", call. = FALSE)
+    }
+    names(location_coefficients) <- location_names
+    result$coefficients <- location_coefficients
+    result$table <- coefficient_table
+
+    scales <- result$scales
+    if (is.null(scales)) {
+      scales <- result$scale
+    }
+    scales <- .as_numeric_vector(scales)
+    if (length(scales) > 1L) {
+      scale_rows <- seq.int(length(location_coefficients) + 1L, nrow(coefficient_table))
+      if (length(scale_rows) != length(scales)) {
+        stop("survreg summary scale rows must match its fitted scales", call. = FALSE)
+      }
+      names(scales) <- rownames(coefficient_table)[scale_rows]
+      result$scale <- scales
+    } else if (length(scales) == 1L) {
+      result$scale <- scales[[1L]]
+    }
+    result$scales <- scales
+  } else {
+    if (nrow(coefficient_table) == 0L) {
+      result$coefficients <- NULL
+      result$used.robust <- NULL
+    } else {
+      result$coefficients <- coefficient_table
+      result$used.robust <- robust
+      if (conf.int) {
+        result$conf.int <- .as_cox_confint_table(coefficient_table, conf.int)
+      } else {
+        result$conf.int <- NULL
+      }
+
+      null_loglik <- as.numeric(result$null_loglik)[[1L]]
+      full_loglik <- as.numeric(result$loglik)[[1L]]
+      result$loglik <- c(null_loglik, full_loglik)
+      result$nevent <- as.numeric(result$n_event)[[1L]]
+
+      df <- as.integer(result$df)[[1L]]
+      likelihood_test <- -2 * (null_loglik - full_loglik)
+      result$logtest <- .cox_summary_test(likelihood_test, df)
+      result$sctest <- .cox_summary_test(result$score_test, df)
+      result$rsq <- c(
+        rsq = 1 - exp(-likelihood_test / result$n),
+        maxrsq = 1 - exp(2 * null_loglik / result$n)
+      )
+
+      unscaled_coefficients <- stats::coef(object)
+      keep <- !is.na(unscaled_coefficients)
+      if (df > 0L && any(keep)) {
+        active_variance <- stats::vcov(object, complete = TRUE)[keep, keep, drop = FALSE]
+        wald <- coxph.wtest(
+          active_variance,
+          unname(as.list(unscaled_coefficients[keep]))
+        )
+        wald_test <- wald$test
+      } else {
+        wald_test <- 0
+      }
+      result$waldtest <- .cox_summary_test(wald_test, df, round.test = TRUE)
+    }
+  }
   class(result) <- c("summary.survival_py_model", class(result))
   result
 }
@@ -7649,13 +7834,91 @@ print.survival_py_object <- function(x, ...) {
   invisible(x)
 }
 
-print.summary.survival_py_model <- function(x, ...) {
-  cat(x$model_type, "model summary\n", sep = "")
-  print(x$coefficients, ...)
-  cat("logLik=", x$loglik, " df=", x$df, " n=", x$n, sep = "")
-  if (!is.null(x$n_event)) {
-    cat(" events=", x$n_event, sep = "")
+print.summary.survival_py_model <- function(
+    x,
+    digits = max(getOption("digits") - 3, 3),
+    signif.stars = getOption("show.signif.stars"),
+    expand = FALSE,
+    ...) {
+  if (identical(x$model_type, "coxph")) {
+    if (!is.null(x$call)) {
+      cat("Call:\n")
+      dput(x$call)
+      cat("\n")
+    }
+    if (!is.null(x$fail)) {
+      cat(" Coxreg failed.", x$fail, "\n")
+      return(invisible(x))
+    }
+
+    saved_digits <- options(digits = digits)
+    on.exit(options(saved_digits))
+    cat("  n=", x$n)
+    if (!is.null(x$nevent)) {
+      cat(", number of events=", x$nevent, "\n")
+    } else {
+      cat("\n")
+    }
+    if (is.null(x$coefficients)) {
+      cat("   Null model\n")
+      return(invisible(x))
+    }
+
+    cat("\n")
+    stats::printCoefmat(
+      x$coefficients,
+      digits = digits,
+      signif.stars = signif.stars,
+      ...
+    )
+    if (!is.null(x$conf.int)) {
+      cat("\n")
+      print(x$conf.int)
+    }
+
+    p_digits <- max(1, getOption("digits") - 4)
+    cat("\n")
+    cat(
+      "Likelihood ratio test= ",
+      format(round(x$logtest["test"], 2)),
+      "  on ", x$logtest["df"], " df,",
+      "   p=", format.pval(x$logtest["pvalue"], digits = p_digits),
+      "\n",
+      sep = ""
+    )
+    cat(
+      "Wald test            = ",
+      format(round(x$waldtest["test"], 2)),
+      "  on ", x$waldtest["df"], " df,",
+      "   p=", format.pval(x$waldtest["pvalue"], digits = p_digits),
+      "\n",
+      sep = ""
+    )
+    cat(
+      "Score (logrank) test = ",
+      format(round(x$sctest["test"], 2)),
+      "  on ", x$sctest["df"], " df,",
+      "   p=", format.pval(x$sctest["pvalue"], digits = p_digits),
+      "\n\n",
+      sep = ""
+    )
+    if (isTRUE(x$used.robust)) {
+      cat(
+        "  (Note: the likelihood ratio and score tests assume independence of\n",
+        "     observations within a cluster, the Wald and robust score tests do not).\n",
+        sep = ""
+      )
+    }
+    return(invisible(x))
   }
-  cat("\n")
+
+  cat(x$model_type, "model summary\n", sep = "")
+  coefficient_table <- if (identical(x$model_type, "survreg") && !is.null(x$table)) {
+    x$table
+  } else {
+    x$coefficients
+  }
+  print(coefficient_table, digits = digits, ...)
+  cat("logLik=", x$loglik, " df=", x$df, " n=", x$n, "\n", sep = "")
   invisible(x)
 }
