@@ -31,21 +31,55 @@ def _simple_subject(subject_id, covariate, *, is_case, is_subcohort):
 
 def _survfitaj_kwargs(*, sefit):
     return {
-        "y": [0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 0.0, 2.0, 0.0],
+        "y": [0.0, 1.0, 2.0, 0.0, 2.0, 2.0, 0.0, 2.0, 0.0],
         "sort1": [0, 1, 2],
         "sort2": [0, 1, 2],
         "utime": [1.0, 2.0],
         "cstate": [0, 0, 0],
         "wt": [1.0, 1.0, 1.0],
-        "grp": [0, 0, 0],
-        "ngrp": 1,
+        "grp": [0, 1, 2],
+        "ngrp": 3,
         "p0": [1.0, 0.0],
-        "i0": [0.0, 0.0],
+        "i0": [0.0] * 6,
         "sefit": sefit,
         "entry": False,
-        "position": [2, 2, 2],
-        "hindx": [[0]],
+        "position": [3, 3, 3],
+        "hindx": [[1, 0], [1, 1]],
         "trmat": [[0, 1]],
+        "t0": 0.0,
+    }
+
+
+def _competing_survfitaj_kwargs(*, sefit):
+    return {
+        "y": [
+            0.0,
+            1.0,
+            2.0,
+            0.0,
+            1.0,
+            3.0,
+            0.0,
+            2.0,
+            0.0,
+            0.0,
+            2.0,
+            0.0,
+        ],
+        "sort1": [0, 1, 2, 3],
+        "sort2": [0, 1, 2, 3],
+        "utime": [1.0, 2.0],
+        "cstate": [0, 0, 0, 0],
+        "wt": [1.0, 1.0, 1.0, 1.0],
+        "grp": [0, 1, 2, 3],
+        "ngrp": 4,
+        "p0": [1.0, 0.0, 0.0],
+        "i0": [0.0] * 12,
+        "sefit": sefit,
+        "entry": False,
+        "position": [3, 3, 3, 3],
+        "hindx": [[2, 0, 1], [2, 2, 2], [2, 2, 2]],
+        "trmat": [[0, 1], [0, 2]],
         "t0": 0.0,
     }
 
@@ -274,8 +308,8 @@ def test_survfitaj_basic_outputs_are_consistent():
     assert result.n_enter is None
     assert result.std_err is None
     assert result.influence is None
-    assert result.pstate[0] == pytest.approx([1.0, 0.0])
-    assert result.pstate[1] == pytest.approx([0.5, 0.5])
+    assert result.pstate[0] == pytest.approx([2 / 3, 1 / 3])
+    assert result.pstate[1] == pytest.approx([1 / 3, 2 / 3])
     assert result.cumhaz[0][0] <= result.cumhaz[1][0]
     assert sum(result.pstate[0]) == pytest.approx(1.0)
     assert sum(result.pstate[1]) == pytest.approx(1.0)
@@ -293,6 +327,140 @@ def test_survfitaj_returns_standard_errors_when_requested():
     assert len(result.std_err) == len(result.pstate)
     assert len(result.std_err[0]) == len(result.pstate[0])
     assert len(result.std_chaz[0]) == len(result.cumhaz[0])
+    assert result.std_err[0] == pytest.approx([0.272165526975909] * 2)
+    assert result.std_err[1] == pytest.approx([0.272165526975909] * 2)
+
+
+def test_survfitaj_matches_r_for_simultaneous_competing_transitions():
+    result = survival.survfitaj(**_competing_survfitaj_kwargs(sefit=3))
+
+    assert result.n_risk[0] == pytest.approx([4.0, 0.0, 0.0, 4.0, 0.0, 0.0])
+    assert result.n_event[0] == pytest.approx([0.0, 1.0, 1.0])
+    assert result.pstate[0] == pytest.approx([0.5, 0.25, 0.25])
+    assert result.pstate[1] == pytest.approx([0.5, 0.25, 0.25])
+    assert result.cumhaz[0] == pytest.approx([0.25, 0.25])
+    assert result.n_transition[0] == pytest.approx([1.0, 1.0, 1.0, 1.0])
+    tied_error = math.sqrt(3) / 8
+    for row in result.std_err:
+        assert row == pytest.approx([0.25, tied_error, tied_error])
+    for row in result.std_chaz:
+        assert row == pytest.approx([tied_error, tied_error])
+    assert result.std_auc[0] == pytest.approx([0.0, 0.0, 0.0])
+    assert result.std_auc[1] == pytest.approx([0.25, tied_error, tied_error])
+    expected_influence = [
+        -0.125,
+        -0.125,
+        0.125,
+        0.125,
+        0.1875,
+        -0.0625,
+        -0.0625,
+        -0.0625,
+        -0.0625,
+        0.1875,
+        -0.0625,
+        -0.0625,
+    ]
+    for row, expected in zip(result.influence, expected_influence, strict=True):
+        assert row == pytest.approx([expected, expected])
+
+
+def test_survfitaj_matches_r_for_weighted_clustered_influence():
+    result = survival.survfitaj(
+        y=[0.0, 1.0, 2.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0],
+        sort1=[0, 1, 2],
+        sort2=[0, 1, 2],
+        utime=[1.0, 2.0],
+        cstate=[0, 0, 0],
+        wt=[2.0, 1.0, 1.0],
+        grp=[0, 0, 1],
+        ngrp=2,
+        p0=[1.0, 0.0],
+        i0=[0.0] * 4,
+        sefit=3,
+        entry=False,
+        position=[3, 3, 3],
+        hindx=[[1, 0], [1, 1]],
+        trmat=[[0, 1]],
+        t0=0.0,
+    )
+
+    standard_error = math.sqrt(1 / 32)
+    for row in result.pstate:
+        assert row == pytest.approx([0.5, 0.5])
+    for row in result.std_err:
+        assert row == pytest.approx([standard_error, standard_error])
+    for row in result.std_chaz:
+        assert row == pytest.approx([standard_error])
+    assert result.std_auc[1] == pytest.approx([standard_error, standard_error])
+    expected_influence = [-0.125, 0.125, 0.125, -0.125]
+    for row, expected in zip(result.influence, expected_influence, strict=True):
+        assert row == pytest.approx([expected, expected])
+
+
+def test_survfitaj_is_invariant_to_row_order():
+    original = survival.survfitaj(**_competing_survfitaj_kwargs(sefit=3))
+    permuted_kwargs = _competing_survfitaj_kwargs(sefit=3)
+    rows = [permuted_kwargs["y"][idx : idx + 3] for idx in range(0, 12, 3)]
+    permutation = [3, 1, 2, 0]
+    permuted_kwargs["y"] = [value for idx in permutation for value in rows[idx]]
+    for field in ["cstate", "wt", "grp", "position"]:
+        values = permuted_kwargs[field]
+        permuted_kwargs[field] = [values[idx] for idx in permutation]
+    permuted_kwargs["sort1"] = [0, 1, 2, 3]
+    permuted_kwargs["sort2"] = [1, 3, 0, 2]
+
+    permuted = survival.survfitaj(**permuted_kwargs)
+
+    for field in [
+        "n_risk",
+        "n_event",
+        "n_censor",
+        "pstate",
+        "cumhaz",
+        "std_err",
+        "std_chaz",
+        "std_auc",
+        "influence",
+        "n_transition",
+    ]:
+        for actual, expected in zip(
+            getattr(permuted, field), getattr(original, field), strict=True
+        ):
+            assert actual == pytest.approx(expected)
+    assert permuted.n_enter is original.n_enter is None
+
+
+def test_survfitaj_accepts_negative_times_and_zero_hazards():
+    result = survival.survfitaj(
+        y=[-2.0, -1.0, 0.0, -2.0, 1.0, 0.0, -2.0, 1.0, 0.0],
+        sort1=[0, 1, 2],
+        sort2=[0, 1, 2],
+        utime=[-1.0, 1.0],
+        cstate=[0, 0, 1],
+        wt=[1.0, 1.0, 1.0],
+        grp=[0, 1, 2],
+        ngrp=3,
+        p0=[2 / 3, 1 / 3],
+        i0=[1 / 9, 1 / 9, -2 / 9, -1 / 9, -1 / 9, 2 / 9],
+        sefit=3,
+        entry=False,
+        position=[3, 3, 3],
+        hindx=[[0, 0], [0, 0]],
+        trmat=[],
+        t0=-2.0,
+    )
+
+    for row in result.pstate:
+        assert row == pytest.approx([2 / 3, 1 / 3])
+    assert result.cumhaz == [[], []]
+    assert result.n_transition == [[], []]
+    standard_error = math.sqrt(2 / 27)
+    assert result.std_err[0] == pytest.approx([standard_error] * 2)
+    assert result.std_auc[1] == pytest.approx([3 * standard_error] * 2)
+    expected_influence = [1 / 9, 1 / 9, -2 / 9, -1 / 9, -1 / 9, 2 / 9]
+    for row, expected in zip(result.influence, expected_influence, strict=True):
+        assert row == pytest.approx([expected, expected])
 
 
 def test_survfitaj_rejects_ragged_hindx():
@@ -345,8 +513,8 @@ def test_survfitaj_validates_public_inputs():
         survival.survfitaj(**kwargs)
 
     kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["hindx"] = [[1]]
-    with pytest.raises(ValueError, match="hindx hazard index 1"):
+    kwargs["hindx"] = [[2, 0], [1, 1]]
+    with pytest.raises(ValueError, match="hindx hazard index 2"):
         survival.survfitaj(**kwargs)
 
 
