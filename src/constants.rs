@@ -1,6 +1,5 @@
 pub const CHOLESKY_TOL: f64 = 1e-10;
 pub const RIDGE_REGULARIZATION: f64 = 1e-6;
-pub const SYMMETRY_TOL: f64 = 1e-10;
 pub const NEAR_ZERO_MATRIX: f64 = 1e-10;
 pub const TIME_EPSILON: f64 = 1e-9;
 pub const PYEARS_TIME_EPSILON: f64 = 1e-8;
@@ -164,7 +163,12 @@ pub const PARALLEL_THRESHOLD_MEDIUM: usize = 500;
 pub const PARALLEL_THRESHOLD_LARGE: usize = 1000;
 pub const PARALLEL_THRESHOLD_XLARGE: usize = 10000;
 
-pub const COX_MAX_ITER: usize = 25;
+pub const COX_MAX_ITER: usize = 20;
+pub const COX_CONVERGENCE_TOLERANCE: f64 = 1e-9;
+/// Relative information-matrix pivot tolerance used by Cox regression.
+///
+/// This is `f64::EPSILON.powf(0.75)`, matching the reference Cox control.
+pub const COX_RANK_TOLERANCE: f64 = 1.818_989_403_545_856_5e-12;
 pub const ITERATIVE_MAX_ITER: usize = 100;
 pub const LINEAR_PRED_CLAMP_MIN: f64 = -20.0;
 pub const LINEAR_PRED_CLAMP_MAX: f64 = 20.0;

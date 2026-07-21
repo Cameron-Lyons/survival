@@ -1,4 +1,7 @@
-use crate::constants::{COX_MAX_ITER, PARALLEL_THRESHOLD_SMALL};
+use crate::constants::{
+    COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, DEFAULT_MAX_ITER,
+    PARALLEL_THRESHOLD_SMALL,
+};
 use crate::internal::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::lcg64_shuffle_per_index_seed;
 use crate::internal::validation::{
@@ -205,8 +208,8 @@ pub(crate) fn cv_cox(
             let mut builder = CoxFitBuilder::new(time_arr, status_arr, sorted_covariates)
                 .method(CoxMethod::Breslow)
                 .max_iter(COX_MAX_ITER)
-                .eps(1e-9)
-                .toler(1e-9);
+                .eps(COX_CONVERGENCE_TOLERANCE)
+                .toler(COX_RANK_TOLERANCE);
             if let Some(sorted_weights) = sorted_weights {
                 builder = builder.weights(Array1::from_vec(sorted_weights));
             }
@@ -374,7 +377,7 @@ pub(crate) fn cv_survreg(
                 None,
                 None,
                 Some(distribution),
-                Some(COX_MAX_ITER),
+                Some(DEFAULT_MAX_ITER),
                 Some(1e-5),
                 Some(1e-9),
                 None,

@@ -427,15 +427,16 @@ model.fit(n_iters=10)
 # Get results
 print(f"Baseline hazard: {model.baseline_hazard}")
 print(f"Risk scores: {model.risk_scores}")
-print(f"Coefficients: {model.get_coefficients()}")
+print(f"Coefficients: {model.coefficients}")
 
 # Predict on new data
 new_covariates = [[1.0, 2.0], [2.0, 3.0]]
 predictions = model.predict(new_covariates)
 print(f"Predictions: {predictions}")
 
-# Calculate Brier score
-brier = model.brier_score()
+# Calculate an IPCW Brier score at a common horizon. If omitted, `time`
+# defaults to the middle distinct event time in the training data.
+brier = model.brier_score(time=2.0)
 print(f"Brier score: {brier}")
 
 # Compute survival curves for new covariates

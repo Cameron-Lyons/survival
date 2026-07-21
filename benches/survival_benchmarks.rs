@@ -55,6 +55,16 @@ fn generate_case_weights(n: usize) -> Vec<f64> {
     (0..n).map(|i| 0.75 + (i % 7) as f64 * 0.1).collect()
 }
 
+fn generate_entry_times(time: &[f64]) -> Vec<f64> {
+    time.iter()
+        .enumerate()
+        .map(|(i, &stop)| {
+            let scrambled_fraction = (i.wrapping_mul(37).wrapping_add(17) % 101) as f64 + 1.0;
+            stop * scrambled_fraction / 103.0
+        })
+        .collect()
+}
+
 fn generate_strata(n: usize, n_strata: usize) -> Vec<i32> {
     (0..n).map(|i| (i % n_strata) as i32).collect()
 }
@@ -199,6 +209,32 @@ mod cox_regression {
                 None,
             )
             .expect("benchmark Cox PH Efron fit should converge");
+            black_box(fit);
+        });
+    }
+
+    #[divan::bench(args = [1000, 5000, 20000])]
+    fn coxph_counting_efron(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+        let entry_times = generate_entry_times(&time);
+
+        bencher.bench_local(|| {
+            let fit = coxph_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                Some(20),
+                Some(1e-7),
+                Some(1e-9),
+                Some("efron"),
+                Some(entry_times.clone()),
+                None,
+            )
+            .expect("benchmark counting-process Cox PH Efron fit should converge");
             black_box(fit);
         });
     }
@@ -385,8 +421,20 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let log_likelihood = model.log_likelihood();
+            let log_likelihood = black_box(&model).log_likelihood();
             black_box(log_likelihood);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_model_brier_score(bencher: divan::Bencher, n: usize) {
+        let model = fitted_coxph_model(n, 4);
+
+        bencher.bench_local(|| {
+            let score = model
+                .brier_score(None)
+                .expect("benchmark Brier score should succeed");
+            black_box(score);
         });
     }
 
@@ -395,7 +443,7 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let standard_errors = model.std_errors();
+            let standard_errors = black_box(&model).std_errors();
             black_box(standard_errors);
         });
     }
@@ -405,7 +453,7 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let residuals = model.dfbeta();
+            let residuals = black_box(&model).dfbeta();
             black_box(residuals);
         });
     }
@@ -415,7 +463,7 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let variance = model.vcov();
+            let variance = black_box(&model).vcov();
             black_box(variance);
         });
     }
