@@ -10792,8 +10792,9 @@ def test_legacy_cox_model_bindings_are_typed_to_runtime_surface():
         "predict_survival": ["self", "time"],
         "survival_curve": ["self", "covariates", "time_points"],
         "cumulative_hazard": ["self", "covariates"],
+        "predicted_survival_time": ["self", "covariates", "percentile"],
         "restricted_mean_survival_time": ["self", "covariates", "tau"],
-        "brier_score": ["self"],
+        "brier_score": ["self", "time"],
         "std_errors": ["self"],
         "vcov": ["self"],
         "log_likelihood": ["self"],
@@ -10812,6 +10813,10 @@ def test_legacy_cox_model_bindings_are_typed_to_runtime_surface():
     assert (
         _pyi_class_method_return(stub_path, "CoxPHModel", "hazard_ratios_with_ci")
         == "tuple[list[float], list[float], list[float]]"
+    )
+    assert (
+        _pyi_class_method_return(stub_path, "CoxPHModel", "predicted_survival_time")
+        == "list[float | None]"
     )
 
     subject = core.Subject(
@@ -10846,6 +10851,7 @@ def test_legacy_cox_model_bindings_are_typed_to_runtime_surface():
     assert len(hazard_ratios) == len(ci_lower) == len(ci_upper) == 2
     assert len(model.restricted_mean_survival_time([[0.0, 1.0]], 3.0)) == 1
     assert isinstance(model.brier_score(), float)
+    assert isinstance(model.brier_score(2.0), float)
     assert len(model.std_errors()) == 2
     assert len(model.vcov()) == 2
     assert isinstance(model.log_likelihood(), float)
