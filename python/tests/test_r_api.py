@@ -36,6 +36,38 @@ def _numeric_data_with_id():
     return {"id": list(range(1, len(data["time"]) + 1)), **data}
 
 
+def _interaction_contrast_data():
+    return {
+        "time": [float(idx) for idx in range(1, 13)],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1],
+        "g": ["A", "A", "B", "B", "C", "C"] * 2,
+        "h": ["L", "H", "L", "H", "L", "H"] * 2,
+        "x": [float(idx) for idx in range(1, 13)],
+    }
+
+
+def _interaction_contrast_rows(data, columns):
+    rows = []
+    for row_idx in range(len(data["time"])):
+        row = []
+        for column in columns:
+            value = 1.0
+            for factor in column.split(":"):
+                if factor == "(Intercept)":
+                    continue
+                if factor == "x":
+                    value *= data["x"][row_idx]
+                elif factor.startswith("g"):
+                    value *= float(data["g"][row_idx] == factor[1:])
+                elif factor.startswith("h"):
+                    value *= float(data["h"][row_idx] == factor[1:])
+                else:
+                    raise AssertionError(f"unknown test design column {factor!r}")
+            row.append(value)
+        rows.append(row)
+    return rows
+
+
 class _NamedMatrix:
     def __init__(self, columns, rows):
         self.columns = columns
@@ -7097,7 +7129,12 @@ def test_model_generic_helpers_report_formula_coefficient_names():
         eps=1e-5,
     )
 
-    assert survival.coef_names(cox) == ["x1", "groupB", "groupC", "x1:x2"]
+    assert survival.coef_names(cox) == [
+        "x1",
+        "factor(group)B",
+        "factor(group)C",
+        "x1:x2",
+    ]
     assert survival.coef_names(aft) == ["(Intercept)", "x1", "x2"]
     assert survival.coef_names(aft, complete=True) == [
         "(Intercept)",
@@ -7109,6 +7146,58 @@ def test_model_generic_helpers_report_formula_coefficient_names():
     ]
     assert len(survival.coef_names(aft, complete=True)) == len(aft.coefficients)
     assert len(survival.coef_names(aft)) == len(survival.coef(aft))
+
+
+def test_formula_metadata_preserves_categorical_spelling_and_assignments():
+    data = _factor_data()
+    data["group"] = ["A", "A", "B", "B", "C", "C", "A", "B"]
+    data["band"] = [0, 1, 2, 0, 1, 2, 0, 1]
+    formula = "Surv(time, status) ~ group + factor(dose) + as.factor(band) + x1"
+    term_names = ["group", "factor(dose)", "as.factor(band)", "x1"]
+    cox_columns = [
+        "groupB",
+        "groupC",
+        "factor(dose)1",
+        "factor(dose)2",
+        "as.factor(band)1",
+        "as.factor(band)2",
+        "x1",
+    ]
+
+    cox = survival.coxph(formula, data=data, max_iter=0)
+    aft = survival.survreg(formula, data=data, max_iter=1)
+
+    assert survival.model_term_names(cox) == term_names
+    assert survival.model_term_names(aft) == term_names
+    assert survival.r_api.model_term_names(cox, [3, 1]) == [
+        "as.factor(band)",
+        "group",
+    ]
+    assert survival.coef_names(cox) == cox_columns
+    assert survival.coef_names(aft) == ["(Intercept)", *cox_columns]
+
+    cox_matrix = survival.model_matrix(cox)
+    assert cox_matrix["columns"] == cox_columns
+    assert cox_matrix["assign"] == [1, 1, 2, 2, 3, 3, 4]
+
+    aft_matrix = survival.model_matrix(aft)
+    assert aft_matrix["columns"] == ["(Intercept)", *cox_columns]
+    assert aft_matrix["assign"] == [0, 1, 1, 2, 2, 3, 3, 4]
+
+
+def test_model_matrix_assignments_keep_strata_term_positions():
+    data = _factor_data()
+    data["group"] = ["A", "A", "B", "B", "A", "B", "A", "B"]
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + strata(group) + as.factor(dose)",
+        data=data,
+        max_iter=0,
+    )
+
+    matrix = survival.model_matrix(fit)
+    assert survival.model_term_names(fit) == ["x1", "as.factor(dose)"]
+    assert matrix["columns"] == ["x1", "as.factor(dose)1", "as.factor(dose)2"]
+    assert matrix["assign"] == [1, 3, 3]
 
 
 def test_direct_model_matrix_preserves_tabular_column_names():
@@ -8293,8 +8382,8 @@ def test_predict_coxph_formula_newdata_mapping_rebuilds_transforms_and_interacti
     )
     newdata = {"x1": [0.5, 1.0], "x2": [0.25, 0.8], "group": ["B", "A"]}
     rows = [
-        [math.log(0.5), 0.5 * 0.25, 1.0 * 0.25],
-        [math.log(1.0), 1.0 * 0.8, 0.0 * 0.8],
+        [math.log(0.5), 0.5 * 0.25, 0.0 * 0.25, 1.0 * 0.25],
+        [math.log(1.0), 1.0 * 0.8, 1.0 * 0.8, 0.0 * 0.8],
     ]
 
     direct_lp = fit.predict(rows)
@@ -8495,7 +8584,7 @@ def test_cox_zph_formula_terms_group_multi_column_factors():
 
     assert by_term.variable_names == ["factor(dose)", "x1"]
     assert by_term.df == [2, 1]
-    assert by_column.variable_names == ["dose1", "dose2", "x1"]
+    assert by_column.variable_names == ["factor(dose)1", "factor(dose)2", "x1"]
     assert by_column.df == [1, 1, 1]
     assert single_df.df == [1, 1]
     assert len(by_term.y[0]) == 2
@@ -8641,7 +8730,7 @@ def test_cox_zph_remaps_partially_aliased_multi_column_terms():
     assert by_term.variable_names == ["is_b", "factor(group)", "x"]
     assert by_term.df == [1, 1, 1]
     assert by_term.global_df == 3
-    assert by_column.variable_names == ["is_b", "groupc", "x"]
+    assert by_column.variable_names == ["is_b", "factor(group)c", "x"]
     assert by_column.df == [1, 1, 1]
     assert by_column.global_df == 3
     assert all(len(row) == 3 for row in by_term.y)
@@ -8694,18 +8783,11 @@ def test_cox_zph_rejects_fits_without_events():
 def test_coxph_partial_residuals_add_terms_to_martingales():
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=10, eps=1e-5)
     martingale = fit.martingale_residuals()
-    beta = fit.coefficients[0]
+    term_predictions = survival.predict(fit, type="terms")
     expected = [
-        [
-            martingale[row_idx] + fit.covariates[row_idx][col_idx] * beta[col_idx]
-            for col_idx in range(2)
-        ]
-        for row_idx in range(len(martingale))
+        [martingale[row_idx] + term for term in row] for row_idx, row in enumerate(term_predictions)
     ]
 
-    partial = fit.partial_residuals()
-    for actual, expected_row in zip(partial, expected, strict=True):
-        assert actual == pytest.approx(expected_row)
     for alias in ("partial", "partials", "p"):
         for actual, expected_row in zip(
             survival.r_api.residuals(fit, type=alias),
@@ -8725,6 +8807,61 @@ def test_coxph_partial_residuals_add_terms_to_martingales():
         survival.r_api.residuals(fit, type="partial", terms="missing")
 
 
+def test_coxph_partial_residuals_group_factor_coefficients_by_formula_term():
+    data = _factor_data()
+    fit = survival.coxph(
+        "Surv(time, status) ~ as.factor(dose) + x1",
+        data=data,
+        initial_beta=[0.2, -0.1, 0.3],
+        max_iter=0,
+    )
+    martingale = fit.martingale_residuals()
+    term_predictions = survival.predict(fit, type="terms")
+
+    partial = survival.r_api.residuals(fit, type="partial")
+    selected = survival.r_api.residuals(
+        fit,
+        type="partial",
+        terms="as.factor(dose)",
+    )
+
+    assert survival.model_term_names(fit) == ["as.factor(dose)", "x1"]
+    assert all(len(row) == 2 for row in partial)
+    for row_idx, actual in enumerate(partial):
+        assert actual == pytest.approx(
+            [martingale[row_idx] + value for value in term_predictions[row_idx]]
+        )
+        assert selected[row_idx] == pytest.approx([actual[0]])
+
+
+def test_predict_terms_constant_restores_zero_reference_linear_predictor():
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_toy_data(),
+        initial_beta=[0.25, -0.4],
+        max_iter=0,
+    )
+    constant = survival.r_api.predict_terms_constant(fit)
+    term_predictions = survival.predict(fit, type="terms")
+    zero_reference = survival.predict(fit, reference="zero")
+
+    assert constant == pytest.approx(
+        sum(
+            mean * coefficient
+            for mean, coefficient in zip(fit.means, fit.coefficients[0], strict=True)
+        )
+    )
+    assert [sum(row) + constant for row in term_predictions] == pytest.approx(zero_reference)
+
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=_toy_data(),
+        max_iter=1,
+    )
+    with pytest.raises(TypeError, match="coxph"):
+        survival.r_api.predict_terms_constant(aft)
+
+
 def test_coxph_counting_process_partial_residuals_keep_training_row_order():
     data = _counting_cox_data()
     fit = survival.coxph(
@@ -8735,10 +8872,9 @@ def test_coxph_counting_process_partial_residuals_keep_training_row_order():
         max_iter=0,
     )
     martingale = fit.martingale_residuals()
-    beta = fit.coefficients[0]
+    term_predictions = survival.predict(fit, type="terms")
     expected = [
-        [martingale[row_idx] + fit.covariates[row_idx][0] * beta[0]]
-        for row_idx in range(len(martingale))
+        [martingale[row_idx] + term_predictions[row_idx][0]] for row_idx in range(len(martingale))
     ]
 
     partial = survival.r_api.residuals(fit, type="partial")
@@ -8778,10 +8914,7 @@ def test_coxph_residuals_honor_case_weighting_rules():
         assert unweighted_row == pytest.approx(raw_row)
         assert default_row == pytest.approx([value * weights[row_idx] for value in raw_row])
 
-    terms = [
-        [fit.covariates[row_idx][col_idx] * fit.coefficients[0][col_idx] for col_idx in range(2)]
-        for row_idx in range(len(martingale))
-    ]
+    terms = survival.predict(fit, type="terms")
     partial = survival.r_api.residuals(fit, type="partial", weighted=True)
     for row_idx, actual in enumerate(partial):
         assert actual == pytest.approx(
@@ -8820,7 +8953,7 @@ def test_coxph_residuals_collapse_training_rows_by_label():
     for actual, expected_row in zip(collapsed_score, expected_score, strict=True):
         assert actual == pytest.approx(expected_row)
 
-    partial = fit.partial_residuals()
+    partial = survival.r_api.residuals(fit, type="partial")
     collapsed_partial = survival.r_api.residuals(fit, type="partial", collapse=collapse)
     expected_partial = [
         [sum(partial[idx][0] for idx, label in enumerate(collapse) if label == group)]
@@ -9236,6 +9369,126 @@ def test_coxph_formula_accepts_categorical_interactions():
 
     assert fit.coefficients[0] == pytest.approx(low_level.coefficients[0])
     assert fit.risk_scores == pytest.approx(low_level.risk_scores)
+
+
+@pytest.mark.parametrize(
+    ("rhs", "columns"),
+    [
+        ("g:x", ["gA:x", "gB:x", "gC:x"]),
+        ("x + g:x", ["x", "x:gB", "x:gC"]),
+        ("g + g:x", ["gB", "gC", "gA:x", "gB:x", "gC:x"]),
+        ("g * x", ["gB", "gC", "x", "gB:x", "gC:x"]),
+        ("g * h", ["gB", "gC", "hH", "gB:hH", "gC:hH"]),
+        (
+            "g:h",
+            ["gA:hL", "gB:hL", "gC:hL", "gA:hH", "gB:hH", "gC:hH"],
+        ),
+    ],
+)
+def test_coxph_interaction_contrasts_match_r_with_virtual_intercept(rhs, columns):
+    data = _interaction_contrast_data()
+    expected_rows = _interaction_contrast_rows(data, columns)
+
+    for intercept_suffix in ("", " + 0", " - 1"):
+        fit = survival.coxph(
+            f"Surv(time, status) ~ {rhs}{intercept_suffix}",
+            data=data,
+            max_iter=0,
+        )
+        matrix = survival.model_matrix(fit)
+
+        assert survival.coef_names(fit) == columns
+        assert matrix["columns"] == columns
+        for actual, expected in zip(matrix["data"], expected_rows, strict=True):
+            assert actual == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("rhs", "intercept_columns", "no_intercept_columns"),
+    [
+        (
+            "g:x",
+            ["(Intercept)", "gA:x", "gB:x", "gC:x"],
+            ["gA:x", "gB:x", "gC:x"],
+        ),
+        (
+            "x + g:x",
+            ["(Intercept)", "x", "x:gB", "x:gC"],
+            ["x", "x:gA", "x:gB", "x:gC"],
+        ),
+        (
+            "g + g:x",
+            ["(Intercept)", "gB", "gC", "gA:x", "gB:x", "gC:x"],
+            ["gA", "gB", "gC", "gA:x", "gB:x", "gC:x"],
+        ),
+        (
+            "g * x",
+            ["(Intercept)", "gB", "gC", "x", "gB:x", "gC:x"],
+            ["gA", "gB", "gC", "x", "gB:x", "gC:x"],
+        ),
+        (
+            "g * h",
+            ["(Intercept)", "gB", "gC", "hH", "gB:hH", "gC:hH"],
+            ["gA", "gB", "gC", "hH", "gB:hH", "gC:hH"],
+        ),
+        (
+            "g:h",
+            [
+                "(Intercept)",
+                "gA:hL",
+                "gB:hL",
+                "gC:hL",
+                "gA:hH",
+                "gB:hH",
+                "gC:hH",
+            ],
+            ["gA:hL", "gB:hL", "gC:hL", "gA:hH", "gB:hH", "gC:hH"],
+        ),
+    ],
+)
+def test_survreg_interaction_contrasts_match_r_intercept_rules(
+    rhs,
+    intercept_columns,
+    no_intercept_columns,
+):
+    data = _interaction_contrast_data()
+
+    for suffix, columns in (
+        ("", intercept_columns),
+        (" + 0", no_intercept_columns),
+        (" - 1", no_intercept_columns),
+    ):
+        fit = survival.survreg(
+            f"Surv(time, status) ~ {rhs}{suffix}",
+            data=data,
+            max_iter=0,
+        )
+        matrix = survival.model_matrix(fit)
+        expected_rows = _interaction_contrast_rows(data, columns)
+
+        assert survival.coef_names(fit) == columns
+        assert matrix["columns"] == columns
+        for actual, expected in zip(matrix["data"], expected_rows, strict=True):
+            assert actual == pytest.approx(expected)
+
+
+def test_formula_design_orders_main_effects_before_interactions_like_r():
+    data = _interaction_contrast_data()
+    columns = ["x", "gB", "gC", "gB:x", "gC:x"]
+    fit = survival.coxph(
+        "Surv(time, status) ~ g:x + x + g",
+        data=data,
+        max_iter=0,
+    )
+    matrix = survival.model_matrix(fit)
+
+    assert matrix["columns"] == columns
+    for actual, expected in zip(
+        matrix["data"],
+        _interaction_contrast_rows(data, columns),
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
 
 
 def test_coxph_formula_defaults_to_efron_ties():
@@ -12810,8 +13063,8 @@ def test_predict_survreg_formula_newdata_mapping_rebuilds_transforms_and_interac
     )
     newdata = {"x1": [0.25, 1.0], "x2": [0.25, 0.8], "group": ["B", "A"]}
     rows = [
-        [math.sqrt(0.25), 1.0 * 0.25],
-        [math.sqrt(1.0), 0.0 * 0.8],
+        [math.sqrt(0.25), 0.0 * 0.25, 1.0 * 0.25],
+        [math.sqrt(1.0), 1.0 * 0.8, 0.0 * 0.8],
     ]
     design_rows = _with_intercept(rows)
 
@@ -13753,6 +14006,12 @@ def test_survreg_formula_as_factor_treatment_codes_numeric_covariates():
 
     assert fit.coefficients == pytest.approx(low_level.coefficients)
     assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
+    assert survival.coef_names(fit) == [
+        "(Intercept)",
+        "as.factor(dose)1",
+        "as.factor(dose)2",
+        "x2",
+    ]
 
 
 def test_survreg_matrix_input_applies_subset_to_row_aligned_arrays():
@@ -13902,7 +14161,7 @@ def test_survreg_formula_treatment_codes_categorical_covariates():
 
     assert fit.coefficients == pytest.approx(low_level.coefficients)
     newdata = {"group": ["B", "A"], "x1": [0.5, 0.8]}
-    term_se = survival.predict(fit, newdata, type="terms", terms="factor(group)", se_fit=True)
+    term_se = survival.predict(fit, newdata, type="terms", terms="group", se_fit=True)
     group_var = fit.variance_matrix[1][1]
     group_mean = sum(1.0 if value == "B" else 0.0 for value in data["group"]) / len(data["group"])
     for actual, expected in zip(
