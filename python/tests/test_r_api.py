@@ -10259,6 +10259,54 @@ def test_coxph_exact_ties_handles_tied_events():
     assert exact.coefficients[0][0] != pytest.approx(efron.coefficients[0][0])
 
 
+def test_coxph_exact_rejects_case_weights_across_interfaces():
+    data = _tied_cox_data()
+    rows = [[value] for value in data["x1"]]
+    weights = [1.0, 2.0, *([1.0] * (len(data["time"]) - 2))]
+    error = "Case weights are not supported for the exact method"
+
+    with pytest.raises(ValueError, match=error):
+        survival.regression.coxph_fit(
+            time=data["time"],
+            status=data["status"],
+            covariates=rows,
+            weights=weights,
+            method="exact",
+        )
+    with pytest.raises(ValueError, match=error):
+        survival.coxph(
+            "Surv(time, status) ~ x1",
+            data=data,
+            weights=weights,
+            ties="exact",
+        )
+    with pytest.raises(ValueError, match=error):
+        survival.coxph(
+            survival.Surv(data["time"], data["status"]),
+            x=rows,
+            weights=weights,
+            ties="exact",
+        )
+
+    omitted = survival.regression.coxph_fit(
+        time=data["time"],
+        status=data["status"],
+        covariates=rows,
+        method="exact",
+        max_iter=0,
+    )
+    explicit_units = survival.regression.coxph_fit(
+        time=data["time"],
+        status=data["status"],
+        covariates=rows,
+        weights=[1.0] * len(data["time"]),
+        method="exact",
+        max_iter=0,
+    )
+    assert explicit_units.log_likelihood == pytest.approx(omitted.log_likelihood)
+    assert explicit_units.score_vector == pytest.approx(omitted.score_vector)
+
+
 def test_low_level_coxph_tie_methods_match_hand_likelihood_at_initial_beta():
     data = _tied_cox_data()
     for method in ("efron", "breslow", "exact"):

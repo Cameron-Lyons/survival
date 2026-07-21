@@ -1794,6 +1794,16 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_null(weights(fit))
   weighted_fit <- coxph(Surv(time, status) ~ x, data = data, weights = wt, max_iter = 0)
   expect_equal(weights(weighted_fit), data$wt)
+  expect_error(
+    coxph(
+      Surv(time, status) ~ x,
+      data = data,
+      weights = wt,
+      method = "exact",
+      max_iter = 0
+    ),
+    "Case weights are not supported for the exact method"
+  )
   fitted_values <- fitted(fit)
   expect_true(is.numeric(unlist(fitted_values, use.names = FALSE)))
   expect_equal(length(unlist(fitted_values, use.names = FALSE)), nrow(data))

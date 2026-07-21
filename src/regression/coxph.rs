@@ -556,6 +556,17 @@ fn validate_case_weights(weights: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
+fn validate_method_weights(method: CoxMethod, weights: Option<&[f64]>) -> PyResult<()> {
+    if matches!(method, CoxMethod::Exact)
+        && weights.is_some_and(|values| values.iter().any(|&value| value != 1.0))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Case weights are not supported for the exact method",
+        ));
+    }
+    Ok(())
+}
+
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None))]
 #[allow(clippy::too_many_arguments)]
@@ -670,6 +681,7 @@ pub fn coxph_fit(
     }
 
     let cox_method = parse_cox_method(method)?;
+    validate_method_weights(cox_method, weights.as_deref())?;
     let method_name = match cox_method {
         CoxMethod::Breslow => "breslow",
         CoxMethod::Efron => "efron",
@@ -788,6 +800,15 @@ pub fn coxph_fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_method_rejects_non_unit_case_weights() {
+        assert!(validate_method_weights(CoxMethod::Exact, None).is_ok());
+        assert!(validate_method_weights(CoxMethod::Exact, Some(&[1.0, 1.0])).is_ok());
+        assert!(validate_method_weights(CoxMethod::Exact, Some(&[1.0, 2.0])).is_err());
+        assert!(validate_method_weights(CoxMethod::Breslow, Some(&[1.0, 2.0])).is_ok());
+        assert!(validate_method_weights(CoxMethod::Efron, Some(&[0.5, 2.0])).is_ok());
+    }
 
     fn baseline_test_fit(method: &str) -> CoxPHFit {
         CoxPHFit {
