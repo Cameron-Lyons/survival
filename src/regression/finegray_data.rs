@@ -137,22 +137,21 @@ pub(crate) fn compute_finegray(
     let ncut = ctime.len();
     assert_eq!(cprob.len(), ncut);
     assert_eq!(keep.len(), ncut);
-    let mut extra = 0;
+    let kept_indices: Vec<usize> = keep
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &is_kept)| is_kept.then_some(idx))
+        .collect();
+    let mut extension_plans = Vec::with_capacity(n);
+    let mut extra = 0usize;
     for (&ext, (&ts, &te)) in extend.iter().zip(tstart.iter().zip(tstop.iter())) {
         if ext && !ts.is_nan() && !te.is_nan() {
-            let j_initial = {
-                let mut j = 0;
-                while j < ncut && ctime[j] < te {
-                    j += 1;
-                }
-                j
-            };
-            let j_start = j_initial + 1;
-            for &k in keep.iter().take(ncut).skip(j_start) {
-                if k {
-                    extra += 1;
-                }
-            }
+            let initial_cut = ctime.partition_point(|&cut_time| cut_time < te);
+            let first_kept = kept_indices.partition_point(|&idx| idx <= initial_cut);
+            extra += kept_indices.len() - first_kept;
+            extension_plans.push((initial_cut, first_kept));
+        } else {
+            extension_plans.push((ncut, kept_indices.len()));
         }
     }
     let total = n + extra;
@@ -161,43 +160,25 @@ pub(crate) fn compute_finegray(
     let mut end = Vec::with_capacity(total);
     let mut wt = Vec::with_capacity(total);
     let mut add = Vec::with_capacity(total);
-    for (i, ((&original_start, &original_end), &ext)) in tstart
-        .iter()
-        .zip(tstop.iter())
-        .zip(extend.iter())
-        .enumerate()
-    {
-        let is_valid = !original_start.is_nan() && !original_end.is_nan();
-        let is_extended = ext && is_valid;
-        let (current_end, temp_wt, j_initial) = if is_extended {
-            let mut j = 0;
-            while j < ncut && ctime[j] < original_end {
-                j += 1;
-            }
-            if j < ncut {
-                (ctime[j], cprob[j], j)
-            } else {
-                (original_end, 1.0, ncut)
-            }
+    for (i, (&original_start, &original_end)) in tstart.iter().zip(tstop.iter()).enumerate() {
+        let (initial_cut, first_kept) = extension_plans[i];
+        let (current_end, temp_wt) = if initial_cut < ncut {
+            (ctime[initial_cut], cprob[initial_cut])
         } else {
-            (original_end, 1.0, ncut)
+            (original_end, 1.0)
         };
         row.push(i + 1);
         start.push(original_start);
         end.push(current_end);
         wt.push(1.0);
         add.push(0);
-        if is_extended && j_initial < ncut {
-            let mut iadd = 0;
-            for j in (j_initial + 1)..ncut {
-                if keep[j] {
-                    iadd += 1;
-                    row.push(i + 1);
-                    start.push(ctime[j - 1]);
-                    end.push(ctime[j]);
-                    wt.push(cprob[j] / temp_wt);
-                    add.push(iadd);
-                }
+        if initial_cut < ncut {
+            for (iadd, &cut_idx) in kept_indices[first_kept..].iter().enumerate() {
+                row.push(i + 1);
+                start.push(ctime[cut_idx - 1]);
+                end.push(ctime[cut_idx]);
+                wt.push(cprob[cut_idx] / temp_wt);
+                add.push(iadd + 1);
             }
         }
     }
@@ -212,6 +193,112 @@ pub(crate) fn compute_finegray(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compute_finegray_naive(
+        tstart: &[f64],
+        tstop: &[f64],
+        ctime: &[f64],
+        cprob: &[f64],
+        extend: &[bool],
+        keep: &[bool],
+    ) -> FineGrayOutput {
+        let ncut = ctime.len();
+        let mut row = Vec::new();
+        let mut start = Vec::new();
+        let mut end = Vec::new();
+        let mut wt = Vec::new();
+        let mut add = Vec::new();
+
+        for (i, ((&original_start, &original_end), &ext)) in tstart
+            .iter()
+            .zip(tstop.iter())
+            .zip(extend.iter())
+            .enumerate()
+        {
+            let is_valid = !original_start.is_nan() && !original_end.is_nan();
+            let is_extended = ext && is_valid;
+            let (current_end, temp_wt, initial_cut) = if is_extended {
+                let mut cut_idx = 0;
+                while cut_idx < ncut && ctime[cut_idx] < original_end {
+                    cut_idx += 1;
+                }
+                if cut_idx < ncut {
+                    (ctime[cut_idx], cprob[cut_idx], cut_idx)
+                } else {
+                    (original_end, 1.0, ncut)
+                }
+            } else {
+                (original_end, 1.0, ncut)
+            };
+
+            row.push(i + 1);
+            start.push(original_start);
+            end.push(current_end);
+            wt.push(1.0);
+            add.push(0);
+            if is_extended && initial_cut < ncut {
+                let mut iadd = 0;
+                for cut_idx in (initial_cut + 1)..ncut {
+                    if keep[cut_idx] {
+                        iadd += 1;
+                        row.push(i + 1);
+                        start.push(ctime[cut_idx - 1]);
+                        end.push(ctime[cut_idx]);
+                        wt.push(cprob[cut_idx] / temp_wt);
+                        add.push(iadd);
+                    }
+                }
+            }
+        }
+        FineGrayOutput {
+            row,
+            start,
+            end,
+            wt,
+            add,
+        }
+    }
+
+    fn assert_output_eq(actual: &FineGrayOutput, expected: &FineGrayOutput) {
+        assert_eq!(actual.row, expected.row);
+        assert_eq!(actual.add, expected.add);
+        assert_eq!(
+            actual
+                .start
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .start
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            actual
+                .end
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .end
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            actual
+                .wt
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .wt
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -249,6 +336,83 @@ mod tests {
         assert_eq!(result.wt.len(), expected_wt.len());
         for (&actual, &expected) in result.wt.iter().zip(expected_wt.iter()) {
             assert_close(actual, expected, 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_finegray_preserves_duplicate_and_boundary_cut_semantics() {
+        let tstart = vec![0.0; 5];
+        let tstop = vec![1.0, 1.5, 4.0, 8.0, 0.5];
+        let ctime = vec![1.0, 1.0, 2.0, 4.0, 4.0, 7.0];
+        let cprob = vec![1.0, 0.9, 0.8, 0.7, 0.6, 0.5];
+        let extend = vec![true; 5];
+        let keep = vec![false, true, false, false, true, false];
+
+        let result = compute_finegray(&tstart, &tstop, &ctime, &cprob, &extend, &keep);
+
+        assert_eq!(result.row, vec![1, 1, 1, 2, 2, 3, 3, 4, 5, 5, 5]);
+        assert_eq!(
+            result.start,
+            vec![0.0, 1.0, 4.0, 0.0, 4.0, 0.0, 4.0, 0.0, 0.0, 1.0, 4.0]
+        );
+        assert_eq!(
+            result.end,
+            vec![1.0, 1.0, 4.0, 2.0, 4.0, 4.0, 4.0, 8.0, 1.0, 1.0, 4.0]
+        );
+        assert_eq!(result.add, vec![0, 1, 2, 0, 1, 0, 1, 0, 0, 1, 2]);
+        let expected_wt = vec![
+            1.0,
+            0.9,
+            0.6,
+            1.0,
+            0.6 / 0.8,
+            1.0,
+            0.6 / 0.7,
+            1.0,
+            1.0,
+            0.9,
+            0.6,
+        ];
+        assert_eq!(result.wt, expected_wt);
+    }
+
+    #[test]
+    fn test_finegray_optimized_expansion_matches_naive_reference() {
+        for seed in 0..512 {
+            let mut rng = fastrand::Rng::with_seed(seed);
+            let n = rng.usize(0..24);
+            let ncut = rng.usize(0..20);
+            let mut current_cut = -2.0;
+            let ctime: Vec<f64> = (0..ncut)
+                .map(|_| {
+                    current_cut += rng.usize(0..4) as f64;
+                    current_cut
+                })
+                .collect();
+            let cprob: Vec<f64> = (0..ncut).map(|idx| 1.0 / (idx as f64 + 1.0)).collect();
+            let keep: Vec<bool> = (0..ncut).map(|_| rng.bool()).collect();
+            let mut tstop = Vec::with_capacity(n);
+            let mut tstart = Vec::with_capacity(n);
+            let mut extend = Vec::with_capacity(n);
+            for _ in 0..n {
+                let stop = if ncut == 0 {
+                    rng.usize(0..10) as f64
+                } else {
+                    match rng.usize(0..4) {
+                        0 => ctime[rng.usize(0..ncut)],
+                        1 => ctime[0] - 1.0,
+                        2 => ctime[ncut - 1] + 1.0,
+                        _ => ctime[rng.usize(0..ncut)] + 0.5,
+                    }
+                };
+                tstop.push(stop);
+                tstart.push(stop - rng.usize(0..4) as f64);
+                extend.push(rng.bool());
+            }
+
+            let actual = compute_finegray(&tstart, &tstop, &ctime, &cprob, &extend, &keep);
+            let expected = compute_finegray_naive(&tstart, &tstop, &ctime, &cprob, &extend, &keep);
+            assert_output_eq(&actual, &expected);
         }
     }
 
