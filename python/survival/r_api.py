@@ -797,6 +797,27 @@ def _coerce_array_like(values: Any, name: str) -> list[Any]:
     return result
 
 
+class _RFactorVector:
+    """Iterable factor values with level metadata preserved across reticulate."""
+
+    def __init__(self, values: Any, levels: Any):
+        self._values = tuple(values)
+        self.categories = tuple(levels)
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __getitem__(self, item: int) -> Any:
+        return self._values[item]
+
+
+def _r_factor(values: Any, levels: Any) -> _RFactorVector:
+    return _RFactorVector(values, levels)
+
+
 def _materialize_1d(values: Any, name: str) -> list[Any]:
     result = _coerce_array_like(values, name)
     if result and isinstance(result[0], list | tuple):
@@ -897,11 +918,16 @@ def _mstate_inferred_levels(values: Sequence[Any]) -> list[str]:
     return sorted(labels)
 
 
+def _mstate_categories(values: Any) -> Any | None:
+    categories = getattr(values, "categories", None)
+    if categories is not None:
+        return categories
+    return getattr(getattr(values, "dtype", None), "categories", None)
+
+
 def _mstate_event_vector(values: Any, name: str) -> tuple[list[int | None], tuple[str, ...]]:
     raw = _materialize_1d(values, name)
-    categories = getattr(values, "categories", None)
-    if categories is None:
-        categories = getattr(getattr(values, "dtype", None), "categories", None)
+    categories = _mstate_categories(values)
     if categories is None:
         levels = _mstate_inferred_levels(raw)
     else:
@@ -920,9 +946,7 @@ def _mstate_event_vector(values: Any, name: str) -> tuple[list[int | None], tupl
 
 def _mstate_levels(values: Any, name: str) -> tuple[list[Any], list[str]]:
     raw = _materialize_1d(values, name)
-    categories = getattr(values, "categories", None)
-    if categories is None:
-        categories = getattr(getattr(values, "dtype", None), "categories", None)
+    categories = _mstate_categories(values)
     levels = (
         _mstate_inferred_levels(raw)
         if categories is None
@@ -1099,11 +1123,15 @@ def _subset_indices(subset: Any, n: int) -> list[int]:
     return indices
 
 
-def _subset_sequence(values: Any, indices: list[int], name: str) -> list[Any]:
+def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
     materialized = _coerce_array_like(values, name)
     if indices and max(indices) >= len(materialized):
         raise ValueError(f"{name} must have enough rows for subset")
-    return [materialized[idx] for idx in indices]
+    subsetted = [materialized[idx] for idx in indices]
+    categories = _mstate_categories(values)
+    if categories is not None:
+        return _RFactorVector(subsetted, categories)
+    return subsetted
 
 
 def _subset_optional_sequence(
@@ -1593,18 +1621,22 @@ def brier(
     return result
 
 
-def _column(data: Any, name: str) -> list[Any]:
+def _column_source(data: Any, name: str) -> Any:
     if data is None:
         raise ValueError("data is required when using a formula")
     if isinstance(data, Mapping):
         try:
-            return _materialize_1d(data[name], name)
+            return data[name]
         except KeyError as exc:
             raise KeyError(f"column {name!r} not found in data") from exc
     try:
-        return _materialize_1d(data[name], name)
+        return data[name]
     except Exception as exc:
         raise KeyError(f"column {name!r} not found in data") from exc
+
+
+def _column(data: Any, name: str) -> list[Any]:
+    return _materialize_1d(_column_source(data, name), name)
 
 
 def _formula_name(name: str) -> tuple[str, bool]:
@@ -1930,7 +1962,7 @@ def _response_rep_count(count_expression: str, inferred_length: int | None) -> i
     return count
 
 
-def _response_arg_values(data: Any, part: str, inferred_length: int | None = None) -> list[Any]:
+def _response_arg_values(data: Any, part: str, inferred_length: int | None = None) -> Any:
     part = _unwrap_response_identity(part)
     rep_call = _response_rep_call(part)
     if rep_call is not None:
@@ -1942,7 +1974,7 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
         operand = _response_operand(part, allow_literal=False)
         if operand.column is None:
             raise ValueError("Surv(...) formula response arguments must be data columns")
-        return _column(data, operand.column)
+        return _column_source(data, operand.column)
 
     left_operand = _response_operand(comparison[0], allow_literal=True)
     right_operand = _response_operand(comparison[2], allow_literal=True)
@@ -1966,7 +1998,7 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
     raise ValueError("formula response comparisons require at least one data column")
 
 
-def _formula_response_values(data: Any, spec: _SurvResponseSpec) -> list[list[Any]]:
+def _formula_response_values(data: Any, spec: _SurvResponseSpec) -> list[Any]:
     inferred_length: int | None = None
     if spec.columns:
         inferred_length = len(_column(data, spec.columns[0]))
@@ -4661,6 +4693,12 @@ class Surv:
             args = named_args
 
         surv_type = _normalize_surv_type(type) if type is not None else None
+        categorical_event = len(args) in {2, 3} and _mstate_categories(args[-1]) is not None
+        if categorical_event and (
+            (len(args) == 2 and surv_type in {None, "right", "left", "mstate"})
+            or (len(args) == 3 and surv_type in {None, "counting", "mstate"})
+        ):
+            surv_type = "mstate"
         states: tuple[str, ...] = ()
         origin_value = _finite_float(origin, "origin")
         if len(args) == 1:
@@ -4792,7 +4830,7 @@ class Surv2:
             raise ValueError("invalid value for repeated option")
         repeated_value = bool(repeated)
 
-        levels = _surv2_levels(event_values)
+        levels = _surv2_levels(event)
         states = levels[1:]
         if any(state == "" for state in states):
             raise ValueError("each state must have a non-blank name")
@@ -4831,9 +4869,16 @@ def _surv2_level_sort_key(label: str) -> tuple[int, Any]:
     return (1, label)
 
 
-def _surv2_levels(events: Sequence[Any]) -> list[str]:
+def _surv2_levels(events: Any) -> list[str]:
+    categories = _mstate_categories(events)
+    if categories is not None:
+        return [
+            _surv2_event_label(value)
+            for value in _materialize_1d(categories, "event categories")
+            if not _is_missing_value(value)
+        ]
     levels: dict[str, None] = {}
-    for value in events:
+    for value in _materialize_1d(events, "event"):
         if not _is_missing_value(value):
             levels.setdefault(_surv2_event_label(value), None)
     return sorted(levels, key=_surv2_level_sort_key)
@@ -14499,6 +14544,70 @@ def _survfit_frame(result: SurvfitResult) -> dict[str, list[Any]]:
     return frame
 
 
+def _survfit_multistate_column(
+    values: Sequence[Sequence[Any]],
+    state_index: int,
+    row_count: int,
+    state_count: int,
+    name: str,
+) -> list[Any]:
+    if len(values) != row_count:
+        raise ValueError(f"multi-state survfit column {name!r} must match time length")
+    column: list[Any] = []
+    for row in values:
+        if len(row) != state_count:
+            raise ValueError(f"multi-state survfit column {name!r} must have one value per state")
+        column.append(row[state_index])
+    return column
+
+
+def _survfit_multistate_frame(result: SurvfitMultiStateResult) -> dict[str, list[Any]]:
+    row_count = len(result.time)
+    state_count = len(result.states)
+    required = {
+        "n.risk": result.n_risk,
+        "n.event": result.n_event,
+        "n.censor": result.n_censor,
+        "pstate": result.pstate,
+    }
+    optional = {
+        "std.err": result.std_err,
+        "lower": result.conf_lower,
+        "upper": result.conf_upper,
+    }
+    frame: dict[str, list[Any]] = {
+        "time": [],
+        **{name: [] for name in required},
+        **{name: [] for name, values in optional.items() if values is not None},
+        "state": [],
+    }
+    for state_index, state in enumerate(result.states):
+        frame["time"].extend(float(value) for value in result.time)
+        for name, values in required.items():
+            frame[name].extend(
+                _survfit_multistate_column(
+                    values,
+                    state_index,
+                    row_count,
+                    state_count,
+                    name,
+                )
+            )
+        for name, values in optional.items():
+            if values is not None:
+                frame[name].extend(
+                    _survfit_multistate_column(
+                        values,
+                        state_index,
+                        row_count,
+                        state_count,
+                        name,
+                    )
+                )
+        frame["state"].extend([state] * row_count)
+    return frame
+
+
 def _turnbull_survfit_frame(result: TurnbullSurvfitResult) -> dict[str, list[Any]]:
     return {
         "time": result.time_points,
@@ -14509,6 +14618,31 @@ def _turnbull_survfit_frame(result: TurnbullSurvfitResult) -> dict[str, list[Any
 
 
 def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
+    if result and all(isinstance(curve, SurvfitMultiStateResult) for curve in result.values()):
+        curve_frames = {label: _survfit_multistate_frame(curve) for label, curve in result.items()}
+        columns = list(next(iter(curve_frames.values())))
+        if "state" not in columns:
+            raise ValueError("multi-state survfit frame is missing its state column")
+        frame = {
+            name: [] for name in [*[name for name in columns if name != "state"], "strata", "state"]
+        }
+        states = next(iter(result.values())).states
+        if any(curve.states != states for curve in result.values()):
+            raise ValueError("grouped multi-state results must share state columns")
+        for state in states:
+            for label, curve_frame in curve_frames.items():
+                if list(curve_frame) != columns:
+                    raise ValueError("grouped multi-state results must share tabular columns")
+                indices = [
+                    index for index, value in enumerate(curve_frame["state"]) if value == state
+                ]
+                frame["strata"].extend([str(label)] * len(indices))
+                frame["state"].extend([state] * len(indices))
+                for name in columns:
+                    if name != "state":
+                        frame[name].extend(curve_frame[name][index] for index in indices)
+        return frame
+
     frame: dict[str, list[Any]] = {}
     for label, curve in result.items():
         curve_frame = as_data_frame(curve)
@@ -14784,6 +14918,8 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _cox_survfit_frame(result)
     if isinstance(result, CoxBaseHazardResult):
         return _cox_basehaz_frame(result)
+    if isinstance(result, SurvfitMultiStateResult):
+        return _survfit_multistate_frame(result)
     if isinstance(result, SurvfitResult):
         return _survfit_frame(result)
     if isinstance(result, TurnbullSurvfitResult):
