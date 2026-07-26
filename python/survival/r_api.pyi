@@ -442,6 +442,44 @@ class SurvfitResult:
     @property
     def cumulative_hazard_std_err(self) -> list[float]: ...
 
+class SurvfitMultiStateResult:
+    time: list[float]
+    n_risk: list[list[float]]
+    n_event: list[list[float]]
+    n_censor: list[list[float]]
+    pstate: list[list[float]]
+    cumhaz: list[list[float]]
+    states: tuple[str, ...]
+    transitions: tuple[tuple[int, int], ...]
+    p0: list[float]
+    t0: float
+    n: int
+    n_id: int
+    std_err: list[list[float]] | None
+    std_chaz: list[list[float]] | None
+    std_auc: list[list[float]] | None
+    conf_lower: list[list[float]] | None
+    conf_upper: list[list[float]] | None
+    n_risk_count: list[list[float]] | None
+    n_event_count: list[list[float]] | None
+    n_censor_count: list[list[float]] | None
+    n_transition: list[list[float]]
+    n_transition_count: list[list[float]] | None
+    model: dict[str, Any] | None
+    def __iter__(self): ...
+    @property
+    def surv(self) -> list[list[float]]: ...
+    @property
+    def estimate(self) -> list[list[float]]: ...
+    @property
+    def state_probabilities(self) -> list[list[float]]: ...
+    @property
+    def cumulative_hazard(self) -> list[list[float]]: ...
+    @property
+    def cumulative_hazard_std_err(self) -> list[list[float]] | None: ...
+    @property
+    def transition_labels(self) -> tuple[tuple[str, str], ...]: ...
+
 class SurvfitConfidenceIntervalResult:
     lower: list[float]
     upper: list[float]

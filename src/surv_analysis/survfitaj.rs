@@ -380,6 +380,9 @@ fn compute_survfitaj_estimates(
             let Some(to) = observation_target(data.y, idx) else {
                 continue;
             };
+            if data.wt[idx] == 0.0 {
+                continue;
+            }
             event_count += 1;
             let from = data.cstate[idx];
             let transition = params.hindx[[from, to]];
@@ -414,6 +417,9 @@ fn compute_survfitaj_estimates(
                 let Some(to) = observation_target(data.y, idx) else {
                     continue;
                 };
+                if data.wt[idx] == 0.0 {
+                    continue;
+                }
                 let from = data.cstate[idx];
                 if from != to {
                     let term = data.wt[idx] * phat[from] / counts.n_risk[[time_idx, from]];
@@ -692,16 +698,6 @@ fn validate_survfitaj_inputs(
     validate_no_nan(i0, "i0")?;
     validate_finite(i0, "i0")?;
 
-    if let Some((idx, weight)) = wt
-        .iter()
-        .copied()
-        .enumerate()
-        .find(|(_, weight)| *weight <= 0.0)
-    {
-        return Err(PyValueError::new_err(format!(
-            "wt must contain only positive values; found {weight} at index {idx}"
-        )));
-    }
     if let Some((idx, times)) = utime
         .windows(2)
         .enumerate()
