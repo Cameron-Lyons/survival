@@ -148,9 +148,19 @@ if (getRversion() >= "2.15.1") {
   frame
 }
 
+.as_python_factor <- function(value) {
+  factor_values <- as.character(value)
+  if (anyNA(factor_values)) {
+    factor_values <- lapply(factor_values, function(item) {
+      if (is.na(item)) reticulate::py_none() else item
+    })
+  }
+  .python_attr("_r_factor")(factor_values, levels(value))
+}
+
 .as_python_vector <- function(value) {
   if (is.factor(value)) {
-    value <- as.character(value)
+    return(.as_python_factor(value))
   } else if (inherits(value, "Date")) {
     value <- as.numeric(value)
   } else {
@@ -347,6 +357,42 @@ attrassign.lm <- function(object, ...) {
   surv_type <- attr(value, "type")
   if (is.null(surv_type)) {
     surv_type <- if (ncol(value) == 3L) "counting" else "right"
+  }
+  if (surv_type %in% c("mright", "mcounting")) {
+    states <- attr(value, "states")
+    if (is.null(states)) {
+      stop("multi-state Surv response is missing its states", call. = FALSE)
+    }
+    status <- as.integer(value[, ncol(value)])
+    event_values <- rep("(censored)", length(status))
+    event_values[is.na(status)] <- NA_character_
+    event_rows <- !is.na(status) & status > 0L
+    event_values[event_rows] <- states[status[event_rows]]
+    event <- factor(
+      event_values,
+      levels = c("(censored)", states)
+    )
+    if (ncol(value) == 2L) {
+      return(.wrap_python(
+        .python_attr("Surv")(
+          as.numeric(value[, 1L]),
+          .as_python_factor(event),
+          type = "mstate"
+        ),
+        c("survival_py_surv", "survival_py_object")
+      ))
+    }
+    if (ncol(value) == 3L) {
+      return(.wrap_python(
+        .python_attr("Surv")(
+          as.numeric(value[, 1L]),
+          as.numeric(value[, 2L]),
+          .as_python_factor(event),
+          type = "mstate"
+        ),
+        c("survival_py_surv", "survival_py_object")
+      ))
+    }
   }
   if (ncol(value) == 2L) {
     return(.wrap_python(
@@ -728,7 +774,8 @@ attrassign.lm <- function(object, ...) {
   diff(c(0, cumulative[indices + 1L]))
 }
 
-.survival_py_summary_curve_at_times <- function(curve, times, extend, dosum) {
+.survival_py_summary_curve_at_times <- function(curve, times, extend, dosum,
+                                                augment = TRUE) {
   if (nrow(curve) == 0L || !("time" %in% names(curve))) {
     return(curve[0L, , drop = FALSE])
   }
@@ -741,7 +788,7 @@ attrassign.lm <- function(object, ...) {
     return(curve[0L, , drop = FALSE])
   }
 
-  augmented <- .survival_py_summary_augmented_curve(curve)
+  augmented <- if (augment) .survival_py_summary_augmented_curve(curve) else curve
   index1 <- findInterval(selected_times, augmented$time)
   step_index <- pmax(1L, index1)
   result <- augmented[step_index, , drop = FALSE]
@@ -765,7 +812,7 @@ attrassign.lm <- function(object, ...) {
 }
 
 .survival_py_summary_split_frame <- function(frame) {
-  group_columns <- intersect(c("strata", "curve"), names(frame))
+  group_columns <- intersect(c("state", "strata", "curve"), names(frame))
   if (length(group_columns) == 0L) {
     return(list(frame))
   }
@@ -774,17 +821,56 @@ attrassign.lm <- function(object, ...) {
   split(frame, factor(keys, levels = unique(keys)), drop = TRUE)
 }
 
+.survival_py_summary_event_rows <- function(frame) {
+  if (!("state" %in% names(frame)) || !("time" %in% names(frame))) {
+    return(frame[["n.event"]] > 0)
+  }
+  key_columns <- c(intersect(c("strata", "curve"), names(frame)), "time")
+  keys <- do.call(paste, c(frame[key_columns], sep = "\r"))
+  groups <- factor(keys, levels = unique(keys))
+  stats::ave(frame[["n.event"]], groups, FUN = sum) > 0
+}
+
+.survival_py_summary_event_frame <- function(frame) {
+  keep <- .survival_py_summary_event_rows(frame)
+  delta_columns <- intersect(c("n.enter", "n.censor"), names(frame))
+  if (any(keep) && length(delta_columns) > 0L) {
+    group_columns <- intersect(c("state", "strata", "curve"), names(frame))
+    if (length(group_columns) == 0L) {
+      groups <- factor(rep.int("curve", nrow(frame)))
+    } else {
+      keys <- do.call(paste, c(frame[group_columns], sep = "\r"))
+      groups <- factor(keys, levels = unique(keys))
+    }
+    for (indices in split(seq_len(nrow(frame)), groups, drop = TRUE)) {
+      selected <- which(keep[indices])
+      if (length(selected) == 0L) {
+        next
+      }
+      for (name in delta_columns) {
+        cumulative <- cumsum(frame[[name]][indices])
+        frame[[name]][indices[selected]] <- diff(c(0, cumulative[selected]))
+      }
+    }
+  }
+  frame[keep, , drop = FALSE]
+}
+
 .survival_py_survfit_summary_frame <- function(object, times, censored, scale,
                                                extend, data.frame, dosum, ...) {
   censored <- .survival_py_summary_logical(censored, "censored")
   extend <- .survival_py_summary_logical(extend, "extend")
   data.frame <- .survival_py_summary_logical(data.frame, "data.frame")
   scale <- .survival_py_summary_scale(scale)
+  has_times <- !missing(times)
+  if (has_times) {
+    object <- survfit0(object)
+  }
   frame <- as.data.frame.survival_py_survfit(object, optional = TRUE)
 
-  if (missing(times)) {
+  if (!has_times) {
     if (!censored && "n.event" %in% names(frame)) {
-      frame <- frame[frame[["n.event"]] > 0, , drop = FALSE]
+      frame <- .survival_py_summary_event_frame(frame)
       row.names(frame) <- NULL
     }
   } else {
@@ -797,8 +883,8 @@ attrassign.lm <- function(object, ...) {
     if (!is.numeric(times)) {
       stop("times must be a numeric vector", call. = FALSE)
     }
-    if (any(is.na(times))) {
-      stop("times contains missing values", call. = FALSE)
+    if (any(!is.finite(times))) {
+      stop("times contains missing or infinite values", call. = FALSE)
     }
     if (missing(dosum)) {
       dosum <- all(diff(times) > 0)
@@ -813,7 +899,8 @@ attrassign.lm <- function(object, ...) {
       .survival_py_summary_curve_at_times,
       times = times,
       extend = extend,
-      dosum = dosum
+      dosum = dosum,
+      augment = FALSE
     )
     frame <- do.call(rbind, pieces)
     row.names(frame) <- NULL
@@ -2263,7 +2350,7 @@ Surv2 <- function(time, event, repeated = FALSE) {
     time_values <- as.list(time_values)
   }
   event_values <- .as_python_vector(event)
-  if (!is.list(event_values)) {
+  if (!is.factor(event) && !is.list(event_values)) {
     event_values <- as.list(event_values)
   }
   result <- .call_r_api(
@@ -5672,7 +5759,7 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
     dots,
     data,
     parent.frame(),
-    vector_args = c("weights", "id", "cluster", "group")
+    vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
   do.call(
     .call_r_api,
@@ -5696,7 +5783,7 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
     dots,
     data,
     parent.frame(),
-    vector_args = c("weights", "id", "cluster", "group")
+    vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
   do.call(
     .call_r_api,
@@ -5725,14 +5812,26 @@ survfit.Surv <- function(formula, ..., group = NULL, subset = NULL, na.action = 
 }
 
 survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, na.action = "fail") {
-  .call_r_api(
-    "survfit",
-    response = formula,
-    group = if (is.null(group)) NULL else .as_python_vector(group),
-    subset = subset,
-    `na.action` = .as_na_action(na.action),
-    ...,
-    .wrap = c("survival_py_survfit", "survival_py_object")
+  dots <- list(...)
+  vector_args <- intersect(c("weights", "id", "cluster", "istate", "etype"), names(dots))
+  for (name in vector_args) {
+    if (!is.null(dots[[name]])) {
+      dots[[name]] <- .as_python_vector(dots[[name]])
+    }
+  }
+  do.call(
+    .call_r_api,
+    c(
+      list(
+        "survfit",
+        response = formula,
+        group = if (is.null(group)) NULL else .as_python_vector(group),
+        subset = subset,
+        `na.action` = .as_na_action(na.action)
+      ),
+      dots,
+      list(.wrap = c("survival_py_survfit", "survival_py_object"))
+    )
   )
 }
 

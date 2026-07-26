@@ -4416,6 +4416,82 @@ test_that("survreg bridge agrees with R survival distributions", {
   }
 })
 
+test_that("multi-state survfit tables and summaries agree with R survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1, 2, 3, 4, 5, 6),
+    event = factor(
+      c("ill", "death", "censor", "death", "ill", "censor"),
+      levels = c("censor", "ill", "death")
+    ),
+    group = factor(c("a", "a", "a", "b", "b", "b"))
+  )
+  p0 <- c(0.25, 0.5, 0.25)
+  compare_frames <- function(actual, expected) {
+    expect_identical(names(actual), names(expected))
+    expect_identical(actual$state, expected$state)
+    for (name in setdiff(names(expected), c("state", "strata"))) {
+      expect_equal(actual[[name]], expected[[name]], tolerance = 1e-06)
+    }
+    if ("strata" %in% names(expected)) {
+      expect_identical(as.character(actual$strata), as.character(expected$strata))
+    }
+  }
+
+  bridged <- survfit(Surv(time, event) ~ 1, data = data, p0 = p0)
+  reference <- survival::survfit(
+    survival::Surv(time, event) ~ 1,
+    data = data,
+    p0 = p0
+  )
+  compare_frames(
+    as.data.frame(bridged),
+    summary(reference, data.frame = TRUE, censored = TRUE)
+  )
+  compare_frames(
+    as.data.frame(summary(bridged)),
+    summary(reference, data.frame = TRUE)
+  )
+  compare_frames(
+    as.data.frame(summary(bridged, times = c(0, 1.5, 3, 7), extend = TRUE)),
+    summary(
+      reference,
+      times = c(0, 1.5, 3, 7),
+      extend = TRUE,
+      data.frame = TRUE
+    )
+  )
+
+  grouped_bridged <- survfit(Surv(time, event) ~ group, data = data, p0 = p0)
+  grouped_reference <- survival::survfit(
+    survival::Surv(time, event) ~ group,
+    data = data,
+    p0 = p0
+  )
+  grouped_expected <- summary(grouped_reference, data.frame = TRUE, censored = TRUE)
+  grouped_expected$strata <- sub("^group=", "", as.character(grouped_expected$strata))
+  compare_frames(as.data.frame(grouped_bridged), grouped_expected)
+
+  grouped_time_expected <- summary(
+    grouped_reference,
+    times = c(0, 2.5, 7),
+    extend = TRUE,
+    data.frame = TRUE
+  )
+  grouped_time_expected$strata <- sub(
+    "^group=",
+    "",
+    as.character(grouped_time_expected$strata)
+  )
+  compare_frames(
+    as.data.frame(summary(grouped_bridged, times = c(0, 2.5, 7), extend = TRUE)),
+    grouped_time_expected
+  )
+})
+
 test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
