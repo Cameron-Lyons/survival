@@ -456,6 +456,7 @@ class SurvfitMultiStateResult:
     n: int
     n_id: int
     std_err: list[list[float]] | None
+    std_err0: list[float] | None
     std_chaz: list[list[float]] | None
     std_auc: list[list[float]] | None
     conf_lower: list[list[float]] | None
@@ -463,6 +464,8 @@ class SurvfitMultiStateResult:
     n_risk_count: list[list[float]] | None
     n_event_count: list[list[float]] | None
     n_censor_count: list[list[float]] | None
+    n_enter: list[list[float]] | None
+    n_enter_count: list[list[float]] | None
     n_transition: list[list[float]]
     n_transition_count: list[list[float]] | None
     model: dict[str, Any] | None
