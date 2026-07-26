@@ -11428,6 +11428,7 @@ def test_r_api_stub_tracks_survfit_public_signature():
         "robust",
         "istate",
         "etype",
+        "p0",
         "model",
         "error",
         "entry",

@@ -557,6 +557,7 @@ def survfit(
     robust: Any | None = None,
     istate: Any | None = None,
     etype: Any | None = None,
+    p0: Any | None = None,
     model: Any = False,
     error: Any | None = None,
     entry: Any = False,
