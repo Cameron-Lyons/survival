@@ -11912,8 +11912,6 @@ def survfit(
 
     if not isinstance(response, Surv):
         raise TypeError("survfit response must be a Surv object, formula, or fitted Cox model")
-    if response.type in {"mright", "mcounting"}:
-        raise NotImplementedError("survfit multi-state Surv responses are not yet supported")
     if subset is not None:
         indices = _subset_indices(subset, len(response))
         response = _subset_surv(response, indices)
