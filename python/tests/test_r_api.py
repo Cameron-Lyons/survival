@@ -1796,16 +1796,182 @@ def test_survfit_multistate_validates_unsupported_options():
         survival.survfit(response, type="fh")
     with pytest.raises(ValueError, match="reverse"):
         survival.survfit(response, reverse=True)
-    with pytest.raises(NotImplementedError, match="counting-process multi-state"):
+    with pytest.raises(ValueError, match="both istate and etype"):
         survival.survfit(
-            survival.Surv(
-                [0.0, 0.0],
-                [1.0, 2.0],
-                ["censor", "ill"],
-                type="mstate",
-            ),
-            id=["a", "b"],
+            survival.Surv([1.0, 2.0], [0, 1]),
+            istate=["entry", "entry"],
+            etype=["none", "death"],
         )
+
+
+def test_survfit_counting_multistate_matches_r_subject_history_fixture():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    subject_id = [1, 1, 2, 3, 3]
+    response = survival.Surv(
+        [0.0, 1.0, 0.0, 0.0, 1.0],
+        [1.0, 3.0, 2.0, 1.0, 3.0],
+        Factor(
+            ["ill", "censor", "death", "censor", "death"],
+            ["censor", "ill", "death"],
+        ),
+        type="mstate",
+    )
+
+    fit = survival.survfit(response, id=subject_id)
+
+    assert fit.time == pytest.approx([1.0, 2.0, 3.0])
+    assert fit.states == ("(s0)", "ill", "death")
+    assert fit.transitions == ((0, 1), (0, 2))
+    assert fit.n == 5
+    assert fit.n_id == 3
+    assert fit.p0 == pytest.approx([1.0, 0.0, 0.0])
+    assert fit.n_risk == [
+        [3.0, 0.0, 0.0],
+        [2.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+    ]
+    assert fit.n_event == [
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+    ]
+    assert fit.n_censor == [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ]
+    expected_pstate = [
+        [2 / 3, 1 / 3, 0.0],
+        [1 / 3, 1 / 3, 1 / 3],
+        [0.0, 1 / 3, 2 / 3],
+    ]
+    expected_cumhaz = [
+        [1 / 3, 0.0],
+        [1 / 3, 0.5],
+        [1 / 3, 1.5],
+    ]
+    for actual, expected in zip(fit.pstate, expected_pstate, strict=True):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(fit.cumhaz, expected_cumhaz, strict=True):
+        assert actual == pytest.approx(expected)
+    assert fit.std_err is not None
+    expected_std_err = [
+        [0.272165527, 0.272165527, 0.0],
+        [0.272165527, 0.272165527, 0.272165527],
+        [0.0, 0.272165527, 0.272165527],
+    ]
+    for actual, expected in zip(fit.std_err, expected_std_err, strict=True):
+        assert actual == pytest.approx(expected)
+
+    with_entry = survival.survfit(response, id=subject_id, entry=True)
+    assert with_entry.time == pytest.approx([0.0, 1.0, 2.0, 3.0])
+    assert with_entry.n_enter is not None
+    assert with_entry.n_enter[0] == pytest.approx([3.0, 0.0, 0.0])
+    assert with_entry.n_enter_count is not None
+    assert with_entry.n_enter_count[0] == pytest.approx([3.0, 0.0, 0.0])
+
+    independent_rows = survival.survfit(response)
+    assert independent_rows.n_id == 5
+    assert independent_rows.n_risk == [
+        [3.0, 0.0, 0.0],
+        [3.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+    ]
+
+
+def test_survfit_counting_multistate_supports_istate_formula_and_etype():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    data = {
+        "id": [1, 1, 2, 3, 3],
+        "start": [0.0, 1.0, 0.0, 0.0, 1.0],
+        "stop": [1.0, 3.0, 2.0, 1.0, 3.0],
+        "event": Factor(
+            ["ill", "censor", "death", "censor", "death"],
+            ["censor", "ill", "death"],
+        ),
+        "status": [1, 0, 1, 0, 1],
+        "kind": ["ill", "none", "death", "none", "death"],
+        "state": ["entry", "ill", "entry", "entry", "entry"],
+    }
+
+    fit = survival.survfit(
+        "Surv(start, stop, event, type='mstate') ~ 1",
+        data=data,
+        id="id",
+        istate="state",
+    )
+
+    assert fit.states == ("entry", "death", "ill")
+    assert fit.p0 == pytest.approx([1.0, 0.0, 0.0])
+    assert fit.pstate[-1] == pytest.approx([0.0, 2 / 3, 1 / 3])
+
+    etype_fit = survival.survfit(
+        "Surv(start, stop, status) ~ 1",
+        data=data,
+        id="id",
+        etype="kind",
+    )
+    assert etype_fit.states == ("(s0)", "death", "ill")
+    assert etype_fit.pstate[-1] == pytest.approx([0.0, 2 / 3, 1 / 3])
+
+    invalid_state = list(data["state"])
+    invalid_state[1] = "entry"
+    with pytest.raises(ValueError, match="istate is inconsistent"):
+        survival.survfit(
+            survival.Surv(data["start"], data["stop"], data["event"], type="mstate"),
+            id=data["id"],
+            istate=invalid_state,
+        )
+
+    heterogeneous = survival.Surv(
+        [0.0, 0.0],
+        [2.0, 2.0],
+        Factor(["death", "death"], ["censor", "death"]),
+        type="mstate",
+    )
+    heterogeneous_fit = survival.survfit(
+        heterogeneous,
+        id=[1, 2],
+        istate=Factor(["entry", "ill"], ["entry", "ill", "death"]),
+    )
+    assert heterogeneous_fit.time == pytest.approx([2.0])
+    assert heterogeneous_fit.states == ("entry", "ill", "death")
+    assert heterogeneous_fit.p0 == pytest.approx([0.5, 0.5, 0.0])
+    assert heterogeneous_fit.pstate[0] == pytest.approx([0.0, 0.0, 1.0])
+    assert heterogeneous_fit.std_err0 == pytest.approx([0.3535533906, 0.3535533906, 0.0])
+
+    heterogeneous_time0 = survival.survfit(
+        heterogeneous,
+        id=[1, 2],
+        istate=Factor(["entry", "ill"], ["entry", "ill", "death"]),
+        time0=True,
+    )
+    assert heterogeneous_time0.time == pytest.approx([2.0])
+    assert heterogeneous_time0.std_err0 is None
+
+    delayed_start = survival.Surv(
+        [0.0, 1.0, 0.0],
+        [1.0, 3.0, 3.0],
+        Factor(["ill", "censor", "censor"], ["censor", "ill"]),
+        type="mstate",
+    )
+    delayed_fit = survival.survfit(
+        delayed_start,
+        id=[1, 1, 2],
+        start_time=2.0,
+    )
+    assert delayed_fit.time == pytest.approx([3.0])
+    assert delayed_fit.p0 == pytest.approx([0.5, 0.5])
+    assert delayed_fit.pstate[0] == pytest.approx([0.5, 0.5])
+    assert delayed_fit.std_err0 == pytest.approx([0.3535533906, 0.3535533906])
 
 
 def test_surv2_response_matches_r_multistate_shape():

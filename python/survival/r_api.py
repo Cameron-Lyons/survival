@@ -671,6 +671,7 @@ class SurvfitMultiStateResult:
     n: int
     n_id: int
     std_err: list[list[float]] | None = None
+    std_err0: list[float] | None = None
     std_chaz: list[list[float]] | None = None
     std_auc: list[list[float]] | None = None
     conf_lower: list[list[float]] | None = None
@@ -678,6 +679,8 @@ class SurvfitMultiStateResult:
     n_risk_count: list[list[float]] | None = None
     n_event_count: list[list[float]] | None = None
     n_censor_count: list[list[float]] | None = None
+    n_enter: list[list[float]] | None = None
+    n_enter_count: list[list[float]] | None = None
     n_transition: list[list[float]] = field(default_factory=list)
     n_transition_count: list[list[float]] | None = None
     model: dict[str, Any] | None = None
@@ -933,8 +936,10 @@ def _mstate_levels(values: Any, name: str) -> tuple[list[Any], list[str]]:
 
 
 def _survfit_response_with_etype(response: Surv, etype: Any) -> Surv:
-    if response.type != "right":
-        raise ValueError("etype can only be used with a right-censored Surv response")
+    if response.type not in {"right", "counting"}:
+        raise ValueError(
+            "etype can only be used with a right-censored or counting-process Surv response"
+        )
     raw, levels = _mstate_levels(etype, "etype")
     if len(raw) != len(response):
         raise ValueError("etype must have the same length as the Surv response")
@@ -957,9 +962,9 @@ def _survfit_response_with_etype(response: Surv, etype: Any) -> Surv:
     return Surv._from_normalized(
         time=response.time,
         event=events,
-        start=None,
+        start=response.start,
         time2=None,
-        surv_type="mright",
+        surv_type="mright" if response.start is None else "mcounting",
         states=states,
     )
 
@@ -11211,68 +11216,259 @@ def _survfit_multistate_cluster_codes(
     return codes, len(set(codes))
 
 
-def _survfit_mright_curve(
+def _survfit_multistate_state_data(
+    response: Surv,
+    id_values: list[Any] | None,
+    istate: Any | None,
+    timefix: bool,
+) -> tuple[Surv, list[int], tuple[str, ...], list[Any]]:
+    n = len(response)
+    ids = list(range(n)) if id_values is None else id_values
+    id_codes = _encode_labels(ids, "id")
+    if istate is None:
+        initial_labels = ["(s0)"]
+        provided_states: list[int] | None = None
+    else:
+        raw_initial, initial_levels = _mstate_levels(istate, "istate")
+        if len(raw_initial) != n:
+            raise ValueError("istate must have the same length as the Surv response")
+        observed_initial = {
+            _mstate_event_label(value) for value in raw_initial if not _is_missing_value(value)
+        }
+        initial_labels = [level for level in initial_levels if level in observed_initial]
+        provided_states = []
+
+    states = tuple(
+        [state for state in initial_labels if state not in response.states] + list(response.states)
+    )
+    state_index = {state: idx for idx, state in enumerate(states)}
+    if istate is not None:
+        provided_states = [
+            state_index[_mstate_event_label(value)] for value in _materialize_1d(istate, "istate")
+        ]
+
+    mapped_events = [
+        None if event is None else 0 if event == 0 else state_index[response.states[event - 1]] + 1
+        for event in response.event
+    ]
+    if response.start is None:
+        stop = _survdiff_timefix_values(list(response.time), timefix)
+        start = None
+    else:
+        raw_start = list(response.start)
+        raw_stop = list(response.time)
+        start, stop = _timefix_vectors(raw_start, raw_stop) if timefix else (raw_start, raw_stop)
+        if any(left >= right for left, right in zip(start, stop, strict=True)):
+            raise ValueError("timefix produced an empty multi-state interval")
+
+    current_states = [0] * n
+    if response.start is None:
+        seen_ids: set[int] = set()
+        for idx in sorted(range(n), key=lambda row: (id_codes[row], stop[row], row)):
+            subject = id_codes[idx]
+            if subject in seen_ids:
+                raise ValueError("a subject has overlapping right-censored multi-state rows")
+            seen_ids.add(subject)
+            current_states[idx] = 0 if provided_states is None else provided_states[idx]
+    else:
+        previous_by_id: dict[int, int] = {}
+        for idx in sorted(
+            range(n),
+            key=lambda row: (id_codes[row], stop[row], start[row], row),
+        ):
+            subject = id_codes[idx]
+            previous = previous_by_id.get(subject)
+            if previous is None:
+                current = 0 if provided_states is None else provided_states[idx]
+            else:
+                tolerance = _SURVFIT_TIME_EPSILON if timefix else 0.0
+                if start[idx] < stop[previous] - tolerance:
+                    raise ValueError("a subject has overlapping time intervals")
+                if start[idx] > stop[previous] + tolerance:
+                    raise ValueError("a subject has a gap between time intervals")
+                prior_event = mapped_events[previous]
+                expected = (
+                    current_states[previous] if prior_event in {None, 0} else int(prior_event) - 1
+                )
+                if provided_states is not None and provided_states[idx] != expected:
+                    raise ValueError("istate is inconsistent with the subject transition history")
+                current = expected
+            current_states[idx] = current
+            previous_by_id[subject] = idx
+
+    normalized = Surv._from_normalized(
+        time=stop,
+        event=mapped_events,
+        start=start,
+        time2=None,
+        surv_type=response.type,
+        states=states,
+    )
+    return normalized, current_states, states, ids
+
+
+def _survfit_counting_positions(
+    start: Sequence[float],
+    stop: Sequence[float],
+    ids: Sequence[Any],
+    timefix: bool,
+) -> list[int]:
+    id_codes = _encode_labels(list(ids), "id")
+    order = sorted(range(len(stop)), key=lambda idx: (id_codes[idx], stop[idx], idx))
+    positions = [0] * len(stop)
+    tolerance = _SURVFIT_TIME_EPSILON if timefix else 0.0
+    for order_idx, row_idx in enumerate(order):
+        previous = order[order_idx - 1] if order_idx > 0 else None
+        following = order[order_idx + 1] if order_idx + 1 < len(order) else None
+        first = (
+            previous is None
+            or id_codes[previous] != id_codes[row_idx]
+            or stop[previous] < start[row_idx] - tolerance
+        )
+        last = (
+            following is None
+            or id_codes[following] != id_codes[row_idx]
+            or stop[row_idx] < start[following] - tolerance
+        )
+        positions[row_idx] = int(first) + 2 * int(last)
+    return positions
+
+
+def _survfit_multistate_initial_distribution(
+    current_states: Sequence[int],
+    initial_rows: Sequence[bool],
+    weights: Sequence[float],
+    cluster_codes: Sequence[int],
+    cluster_count: int,
+    state_count: int,
+    p0_override: list[float] | None,
+    include_se: bool,
+) -> tuple[list[float], list[float]]:
+    if p0_override is not None:
+        p0 = list(p0_override)
+        return p0, [0.0] * (cluster_count * state_count) if include_se else []
+
+    total_weight = sum(
+        weight for weight, at_risk in zip(weights, initial_rows, strict=True) if at_risk
+    )
+    if total_weight <= 0.0:
+        raise ValueError("positive total weight is required at the multi-state start time")
+    p0 = [0.0] * state_count
+    for state, weight, at_risk in zip(current_states, weights, initial_rows, strict=True):
+        if at_risk:
+            p0[state] += weight / total_weight
+    if not include_se or any(value == 1.0 for value in p0):
+        return p0, [0.0] * (cluster_count * state_count) if include_se else []
+
+    influence = [[0.0] * state_count for _ in range(cluster_count)]
+    for state, weight, at_risk, cluster_code in zip(
+        current_states,
+        weights,
+        initial_rows,
+        cluster_codes,
+        strict=True,
+    ):
+        if not at_risk:
+            continue
+        for target in range(state_count):
+            influence[cluster_code][target] += (
+                weight * (float(state == target) - p0[target]) / total_weight
+            )
+    return p0, [
+        influence[cluster_code][state]
+        for state in range(state_count)
+        for cluster_code in range(cluster_count)
+    ]
+
+
+def _survfit_multistate_curve(
     response: Surv,
     weights: list[float] | None,
     id_values: list[Any] | None,
     cluster: Any | None,
+    current_states: list[int],
+    positions: list[int],
+    states: tuple[str, ...],
     transitions: tuple[tuple[int, int], ...],
     *,
     t0: float,
-    include_time0: bool,
+    output_times: list[float],
+    initial_rows: list[bool],
+    p0_override: list[float] | None,
+    report_initial_error: bool,
     include_se: bool,
+    include_entry: bool,
     conf_level: float,
     conf_type: str,
-    timefix: bool,
     model_frame: dict[str, Any] | None,
 ) -> SurvfitMultiStateResult:
     n = len(response)
-    stop = _survdiff_timefix_values(list(response.time), timefix)
-    if timefix:
-        stop = [
-            t0 if value < t0 and value >= t0 - _SURVFIT_TIME_EPSILON else value for value in stop
-        ]
+    stop = list(response.time)
+    if response.start is None:
+        initial_time = t0 if t0 < min(stop) else math.nextafter(min(stop), -math.inf)
+        start = [initial_time] * n
+    else:
+        start = list(response.start)
     if any(event is None for event in response.event):
         raise ValueError("missing values in multi-state survfit inputs")
     case_weights = [1.0] * n if weights is None else list(weights)
     if any(weight < 0.0 or not math.isfinite(weight) for weight in case_weights):
         raise ValueError("weights must contain only non-negative finite values")
 
-    output_times = sorted(set(stop))
-    if include_time0 and t0 not in output_times:
-        output_times.insert(0, t0)
-    initial_time = t0 if t0 < min(stop) else math.nextafter(min(stop), -math.inf)
-    state_count = len(response.states) + 1
+    state_count = len(states)
     transition_count = len(transitions)
     hindx = [[transition_count] * state_count for _ in range(state_count)]
     for transition_idx, (source, target) in enumerate(transitions):
         hindx[source][target] = transition_idx
 
     cluster_codes, cluster_count = _survfit_multistate_cluster_codes(n, cluster, id_values)
+    p0, initial_influence = _survfit_multistate_initial_distribution(
+        current_states,
+        initial_rows,
+        case_weights,
+        cluster_codes,
+        cluster_count,
+        state_count,
+        p0_override,
+        include_se,
+    )
+    std_err0 = (
+        [
+            math.sqrt(
+                sum(
+                    initial_influence[cluster_code + state * cluster_count] ** 2
+                    for cluster_code in range(cluster_count)
+                )
+            )
+            for state in range(state_count)
+        ]
+        if include_se and report_initial_error and all(value < 1.0 for value in p0)
+        else None
+    )
     y = [
         value
         for start, end, event in zip(
-            [initial_time] * n,
+            start,
             stop,
             response.event,
             strict=True,
         )
-        for value in (start, end, 0.0 if event == 0 else float(event + 1))
+        for value in (start, end, float(event))
     ]
     raw = _core.survfitaj(
         y=y,
-        sort1=list(range(n)),
+        sort1=sorted(range(n), key=lambda idx: (start[idx], idx)),
         sort2=sorted(range(n), key=lambda idx: (stop[idx], idx)),
         utime=output_times,
-        cstate=[0] * n,
+        cstate=current_states,
         wt=case_weights,
         grp=cluster_codes,
         ngrp=cluster_count,
-        p0=[1.0, *([0.0] * (state_count - 1))],
-        i0=[0.0] * (cluster_count * state_count) if include_se else [],
+        p0=p0,
+        i0=initial_influence,
         sefit=1 if include_se else 0,
-        entry=False,
-        position=[3] * n,
+        entry=include_entry,
+        position=positions,
         hindx=hindx,
         trmat=[list(transition) for transition in transitions],
         t0=t0,
@@ -11295,7 +11491,7 @@ def _survfit_mright_curve(
         ]
         for row in transition_counts
     ]
-    states = ("(s0)", *response.states)
+    n_enter_raw = None if raw.n_enter is None else _survfit_multistate_matrix(raw.n_enter)
     return SurvfitMultiStateResult(
         time=[float(value) for value in output_times],
         n_risk=[row[:state_count] for row in n_risk_raw],
@@ -11305,11 +11501,12 @@ def _survfit_mright_curve(
         cumhaz=_survfit_multistate_matrix(raw.cumhaz),
         states=states,
         transitions=transitions,
-        p0=[1.0, *([0.0] * (state_count - 1))],
+        p0=p0,
         t0=t0,
         n=n,
         n_id=len(_label_levels(id_values, "id")) if id_values is not None else n,
         std_err=std_err,
+        std_err0=std_err0,
         std_chaz=None if raw.std_chaz is None else _survfit_multistate_matrix(raw.std_chaz),
         std_auc=None if raw.std_auc is None else _survfit_multistate_matrix(raw.std_auc),
         conf_lower=conf_lower,
@@ -11317,71 +11514,214 @@ def _survfit_mright_curve(
         n_risk_count=[row[state_count:] for row in n_risk_raw],
         n_event_count=n_event_count,
         n_censor_count=[row[state_count:] for row in n_censor_raw],
+        n_enter=None if n_enter_raw is None else [row[:state_count] for row in n_enter_raw],
+        n_enter_count=(None if n_enter_raw is None else [row[state_count:] for row in n_enter_raw]),
         n_transition=[row[:transition_count] for row in n_transition_raw],
         n_transition_count=transition_counts,
         model=model_frame,
     )
 
 
-def _survfit_mright(
+def _survfit_multistate_output_times(
+    response: Surv,
+    positions: list[int],
+    *,
+    t0: float,
+    include_time0: bool,
+    include_entry: bool,
+) -> list[float]:
+    if response.start is None:
+        times = sorted(set(response.time))
+    elif include_entry:
+        times = sorted(
+            {
+                value
+                for idx, (start, stop, event) in enumerate(
+                    zip(response.start, response.time, response.event, strict=True)
+                )
+                if not (positions[idx] == 0 and event == 0)
+                for value in (start, stop)
+            }
+        )
+    else:
+        times = sorted(
+            {
+                stop
+                for stop, event, position in zip(
+                    response.time, response.event, positions, strict=True
+                )
+                if position >= 2 or event != 0
+            }
+        )
+    if include_time0:
+        return [t0, *[time for time in times if time > t0]]
+    return [time for time in times if time >= t0]
+
+
+def _survfit_multistate(
     response: Surv,
     group: Any | None,
     weights: list[float] | None,
     id_values: list[Any] | None,
     cluster: Any | None,
+    istate: Any | None,
     *,
-    t0: float,
+    start_time: float | None,
     include_time0: bool,
     include_se: bool,
+    include_entry: bool,
     conf_level: float,
     conf_type: str,
     timefix: bool,
     group_levels: Sequence[Any] | None,
     model_frame: dict[str, Any] | None,
 ) -> SurvfitMultiStateResult | dict[Any, SurvfitMultiStateResult]:
-    indices = _survfit_start_time_indices(response, t0, timefix)
-    response = _subset_surv(response, indices)
-    group = _subset_optional_sequence(group, indices, "group")
-    weights = _subset_optional_sequence(weights, indices, "weights")
-    id_values = _subset_optional_sequence(id_values, indices, "id")
-    cluster = _subset_optional_sequence(cluster, indices, "cluster")
-    transitions = tuple(
-        (0, state) for state in sorted({int(event) for event in response.event if event})
+    response, current_states, states, ids = _survfit_multistate_state_data(
+        response, id_values, istate, timefix
     )
 
-    if group is None:
-        return _survfit_mright_curve(
-            response,
-            weights,
-            id_values,
-            cluster,
-            transitions,
+    def initial_curve_indices(
+        curve_response: Surv,
+        curve_groups: Sequence[Any],
+        curve_ids: Sequence[Any],
+    ) -> list[int]:
+        group_codes = _encode_labels(list(curve_groups), "group")
+        id_codes = _encode_labels(list(curve_ids), "id")
+        order = sorted(
+            range(len(curve_response)),
+            key=lambda idx: (
+                group_codes[idx],
+                id_codes[idx],
+                curve_response.start[idx] if curve_response.start is not None else 0.0,
+                idx,
+            ),
+        )
+        first_indices: list[int] = []
+        seen_subjects: set[tuple[int, int]] = set()
+        for idx in order:
+            key = (group_codes[idx], id_codes[idx])
+            if key not in seen_subjects:
+                seen_subjects.add(key)
+                first_indices.append(idx)
+        return first_indices
+
+    group_values = [0] * len(response) if group is None else _materialize_labels(group, "group")
+    initial_indices = initial_curve_indices(response, group_values, ids)
+    initial_states = [current_states[idx] for idx in initial_indices]
+    same_initial_state = len(set(initial_states)) == 1
+    if start_time is not None:
+        t0 = start_time
+    elif response.start is None:
+        t0 = min(0.0, *response.time)
+    elif same_initial_state:
+        t0 = min(response.start)
+    else:
+        initial_starts = [response.start[idx] for idx in initial_indices]
+        if max(initial_starts) == min(initial_starts):
+            t0 = initial_starts[0]
+        else:
+            event_times = [
+                stop for stop, event in zip(response.time, response.event, strict=True) if event
+            ]
+            if not event_times:
+                raise ValueError("start_time is required when initial states have staggered entry")
+            t0 = min(event_times)
+
+    if start_time is not None:
+        for label, indices in _group_indices(group_values, len(response)).items():
+            if max(response.time[idx] for idx in indices) <= t0:
+                raise ValueError(f"start_time has removed all observations from curve {label!r}")
+    keep = _survfit_start_time_indices(response, t0, timefix)
+    transitions = tuple(
+        sorted(
+            {
+                (current_states[idx], int(event) - 1)
+                for idx, event in enumerate(response.event)
+                if event
+            },
+            key=lambda transition: (transition[1], transition[0]),
+        )
+    )
+    response = _subset_surv(response, keep)
+    current_states = [current_states[idx] for idx in keep]
+    group = _subset_optional_sequence(group, keep, "group")
+    weights = _subset_optional_sequence(weights, keep, "weights")
+    ids = [ids[idx] for idx in keep]
+    id_values = _subset_optional_sequence(id_values, keep, "id")
+    cluster = _subset_optional_sequence(cluster, keep, "cluster")
+    if start_time is not None:
+        kept_groups = [0] * len(response) if group is None else _materialize_labels(group, "group")
+        initial_indices = initial_curve_indices(response, kept_groups, ids)
+        initial_states = [current_states[idx] for idx in initial_indices]
+        same_initial_state = len(set(initial_states)) == 1
+    p0_override = None
+    if same_initial_state:
+        p0_override = [float(state == initial_states[0]) for state in range(len(states))]
+
+    def fit_curve(indices: list[int]) -> SurvfitMultiStateResult:
+        curve_response = _subset_surv(response, indices)
+        curve_states = [current_states[idx] for idx in indices]
+        curve_ids = [ids[idx] for idx in indices]
+        curve_positions = (
+            [3] * len(indices)
+            if curve_response.start is None
+            else _survfit_counting_positions(
+                curve_response.start,
+                curve_response.time,
+                curve_ids,
+                timefix,
+            )
+        )
+        output_times = _survfit_multistate_output_times(
+            curve_response,
+            curve_positions,
             t0=t0,
             include_time0=include_time0,
+            include_entry=include_entry,
+        )
+        if curve_response.start is not None and p0_override is None:
+            output_times = [time for time in output_times if time > t0]
+        if not output_times:
+            raise ValueError("multi-state survfit has no output times")
+        initial_rows = (
+            [True] * len(indices)
+            if curve_response.start is None
+            else [
+                start <= t0 <= stop if t0 == min(response.start) else start < t0 <= stop
+                for start, stop in zip(
+                    curve_response.start,
+                    curve_response.time,
+                    strict=True,
+                )
+            ]
+        )
+        return _survfit_multistate_curve(
+            curve_response,
+            _subset_optional_sequence(weights, indices, "weights"),
+            _subset_optional_sequence(id_values, indices, "id"),
+            _subset_optional_sequence(cluster, indices, "cluster"),
+            curve_states,
+            curve_positions,
+            states,
+            transitions,
+            t0=t0,
+            output_times=output_times,
+            initial_rows=initial_rows,
+            p0_override=p0_override,
+            report_initial_error=not include_time0 and p0_override is None,
             include_se=include_se,
+            include_entry=include_entry,
             conf_level=conf_level,
             conf_type=conf_type,
-            timefix=timefix,
             model_frame=model_frame,
         )
 
-    result: dict[Any, SurvfitMultiStateResult] = {}
-    for label, group_indices in _group_indices(group, len(response), levels=group_levels).items():
-        result[label] = _survfit_mright_curve(
-            _subset_surv(response, group_indices),
-            _subset_optional_sequence(weights, group_indices, "weights"),
-            _subset_optional_sequence(id_values, group_indices, "id"),
-            _subset_optional_sequence(cluster, group_indices, "cluster"),
-            transitions,
-            t0=t0,
-            include_time0=include_time0,
-            include_se=include_se,
-            conf_level=conf_level,
-            conf_type=conf_type,
-            timefix=timefix,
-            model_frame=model_frame,
-        )
-    return result
+    if group is None:
+        return fit_curve(list(range(len(response))))
+    return {
+        label: fit_curve(indices)
+        for label, indices in _group_indices(group, len(response), levels=group_levels).items()
+    }
 
 
 def survfit(
@@ -11435,8 +11775,8 @@ def survfit(
     include_se = _normalize_bool_option_with_default(se_fit, "se_fit", True)
     robust_value = _normalize_optional_bool_option(robust, "robust")
     id_arg = id
-    if istate is not None:
-        raise NotImplementedError("survfit multi-state istate inputs are not yet supported")
+    if istate is not None and etype is not None:
+        raise ValueError("survfit cannot use both istate and etype")
     # R's survival keeps `error` for backward compatibility but no longer uses it.
 
     computation = _normalize_survfit_type(type, stype, ctype)
@@ -11454,12 +11794,15 @@ def survfit(
         id_column = id_arg if isinstance(id_arg, str) else None
         cluster_column = cluster if isinstance(cluster, str) else None
         etype_column = etype if isinstance(etype, str) else None
+        istate_column = istate if isinstance(istate, str) else None
         if id_column is not None:
             id_arg = _column(data, id_column)
         if cluster_column is not None:
             cluster = _column(data, cluster_column)
         if etype_column is not None:
             etype = _column(data, etype_column)
+        if istate_column is not None:
+            istate = _column(data, istate_column)
         if subset is not None:
             data, aligned = _subset_formula_inputs(
                 formula,
@@ -11469,11 +11812,13 @@ def survfit(
                 id=id_arg,
                 cluster=cluster,
                 etype=etype,
+                istate=istate,
             )
             weights = aligned["weights"]
             id_arg = aligned["id"]
             cluster = aligned["cluster"]
             etype = aligned["etype"]
+            istate = aligned["istate"]
             subset = None
         data, aligned = _apply_formula_na_action(
             formula,
@@ -11483,11 +11828,13 @@ def survfit(
             id=id_arg,
             cluster=cluster,
             etype=etype,
+            istate=istate,
         )
         weights = aligned["weights"]
         id_arg = aligned["id"]
         cluster = aligned["cluster"]
         etype = aligned["etype"]
+        istate = aligned["istate"]
         na_action = "pass"
         response, terms = _parse_formula(formula, data)
         if terms.clusters:
@@ -11508,13 +11855,17 @@ def survfit(
             model_frame["(etype)"] = _materialize_1d(etype, "etype")
             if etype_column is not None and etype_column not in model_frame:
                 model_frame[etype_column] = _column(data, etype_column)
+        if istate is not None:
+            model_frame["(istate)"] = _materialize_1d(istate, "istate")
+            if istate_column is not None and istate_column not in model_frame:
+                model_frame[istate_column] = _column(data, istate_column)
         if terms.strata or terms.covariates:
             group = _combined_formula_groups(data, terms.strata, terms.covariates, len(response))
             formula_group_levels = _r_formula_ordered_levels(group, "survfit formula groups")
 
     if not isinstance(response, Surv) and hasattr(response, "survival_curve"):
-        if etype is not None:
-            raise ValueError("etype is only supported for Surv or formula inputs")
+        if etype is not None or istate is not None:
+            raise ValueError("etype and istate are only supported for Surv or formula inputs")
         if not computation.is_kaplan_meier:
             raise ValueError(
                 "non-Kaplan-Meier survfit styles are only supported for Surv or formula inputs"
@@ -11571,6 +11922,7 @@ def survfit(
         id_arg = _subset_optional_sequence(id_arg, indices, "id")
         cluster = _subset_optional_sequence(cluster, indices, "cluster")
         etype = _subset_optional_sequence(etype, indices, "etype")
+        istate = _subset_optional_sequence(istate, indices, "istate")
     response, aligned = _apply_surv_na_action(
         response,
         na_action,
@@ -11580,12 +11932,14 @@ def survfit(
         id=id_arg,
         cluster=cluster,
         etype=etype,
+        istate=istate,
     )
     group = aligned["group"]
     weights = aligned["weights"]
     id_arg = aligned["id"]
     cluster = aligned["cluster"]
     etype = aligned["etype"]
+    istate = aligned["istate"]
     if etype is not None:
         response = _survfit_response_with_etype(response, etype)
         if model_frame is not None:
@@ -11598,17 +11952,21 @@ def survfit(
         raise ValueError("id must have the same length as the Surv response")
     if model_frame is None:
         model_frame = _survfit_model_frame(response, group, weights, id_values, cluster)
+        if istate is not None:
+            model_frame["(istate)"] = _materialize_1d(istate, "istate")
     if newdata is not None:
         raise ValueError("newdata is only supported for fitted Cox models")
     if not include_censor:
         raise ValueError("censor is only supported for fitted Cox models")
-    if include_entry and (response.start is None or id_values is None):
+    if (
+        include_entry
+        and response.type != "mcounting"
+        and (response.start is None or id_values is None)
+    ):
         raise ValueError("survfit entry=TRUE requires counting-process Surv input and id")
-    if response.type == "mcounting":
-        raise NotImplementedError(
-            "survfit counting-process multi-state responses are not yet supported"
-        )
-    if response.type == "mright":
+    if istate is not None and response.type not in {"mright", "mcounting"}:
+        raise NotImplementedError("survfit istate requires a multi-state Surv response")
+    if response.type in {"mright", "mcounting"}:
         if robust_value is False:
             raise ValueError("multi-state survfit supports only a robust variance")
         if not computation.is_kaplan_meier:
@@ -11618,15 +11976,17 @@ def survfit(
         wt = _float_vector(weights, "weights") if weights is not None else None
         if wt is not None and len(wt) != len(response):
             raise ValueError("weights must have the same length as the Surv response")
-        return _survfit_mright(
+        return _survfit_multistate(
             response,
             group,
             wt,
             id_values,
             cluster,
-            t0=normalized_start_time if normalized_start_time is not None else 0.0,
+            istate,
+            start_time=normalized_start_time,
             include_time0=include_time0,
             include_se=include_se,
+            include_entry=include_entry and response.type == "mcounting",
             conf_level=normalized_conf_level,
             conf_type=normalized_conf_type,
             timefix=fix_time,
