@@ -473,6 +473,12 @@ class SurvfitMultiStateResult:
     conf_type: str
     conf_level: float
     oldstate: tuple[str, ...] | None
+    p0_fixed: bool
+    timefix: bool
+    influence_state: list[list[float]] | None
+    influence_state0: list[float] | None
+    influence_chaz: list[list[float]] | None
+    influence_auc: list[list[float]] | None
     def __iter__(self): ...
     @property
     def surv(self) -> list[list[float]]: ...

@@ -4547,6 +4547,181 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   expect_error(grouped_bridged[1L], "single index subscripts")
   expect_error(quantile(bridged), "not a well defined quantity")
   expect_error(median(grouped_bridged), "not a well defined quantity")
+
+  diagnostic_bridged <- survfit(
+    Surv(time, event) ~ 1,
+    data = data,
+    model = TRUE
+  )
+  diagnostic_reference <- survival:::survfit.formula(
+    survival::Surv(time, event) ~ 1,
+    data = data,
+    model = TRUE
+  )
+  for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
+    expect_equal(
+      residuals(diagnostic_bridged, times = c(2, 5), type = diagnostic_type),
+      stats::residuals(diagnostic_reference, times = c(2, 5), type = diagnostic_type),
+      tolerance = 1e-10
+    )
+    expect_equal(
+      pseudo(diagnostic_bridged, times = c(2, 5), type = diagnostic_type),
+      survival::pseudo(diagnostic_reference, times = c(2, 5), type = diagnostic_type),
+      tolerance = 1e-10
+    )
+  }
+  expect_equal(
+    residuals(diagnostic_bridged, times = 2),
+    stats::residuals(diagnostic_reference, times = 2),
+    tolerance = 1e-10
+  )
+  expect_equal(
+    pseudo(diagnostic_bridged, times = 2),
+    survival::pseudo(diagnostic_reference, times = 2),
+    tolerance = 1e-10
+  )
+  expect_equal(
+    residuals(diagnostic_bridged, times = c(2, 5), data.frame = TRUE),
+    stats::residuals(diagnostic_reference, times = c(2, 5), data.frame = TRUE),
+    tolerance = 1e-10
+  )
+  expect_equal(
+    pseudo(diagnostic_bridged, times = c(2, 5), data.frame = TRUE),
+    survival::pseudo(diagnostic_reference, times = c(2, 5), data.frame = TRUE),
+    tolerance = 1e-10
+  )
+
+  grouped_diagnostic_bridged <- survfit(
+    Surv(time, event) ~ group,
+    data = data,
+    model = TRUE
+  )
+  grouped_diagnostic_reference <- survival:::survfit.formula(
+    survival::Surv(time, event) ~ group,
+    data = data,
+    model = TRUE
+  )
+  for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
+    expect_equal(
+      residuals(
+        grouped_diagnostic_bridged,
+        times = c(2, 5),
+        type = diagnostic_type
+      ),
+      stats::residuals(
+        grouped_diagnostic_reference,
+        times = c(2, 5),
+        type = diagnostic_type
+      ),
+      tolerance = 1e-10
+    )
+    expect_equal(
+      suppressWarnings(pseudo(
+        grouped_diagnostic_bridged,
+        times = c(2, 5),
+        type = diagnostic_type
+      )),
+      suppressWarnings(survival::pseudo(
+        grouped_diagnostic_reference,
+        times = c(2, 5),
+        type = diagnostic_type
+      )),
+      tolerance = 1e-10
+    )
+  }
+
+  diagnostic_weights <- c(1, 2, 1.5, 0.5, 3, 1)
+  weighted_diagnostic_bridged <- survfit(
+    Surv(time, event) ~ 1,
+    data = data,
+    weights = diagnostic_weights,
+    model = TRUE
+  )
+  weighted_diagnostic_reference <- survival:::survfit.formula(
+    survival::Surv(time, event) ~ 1,
+    data = data,
+    weights = diagnostic_weights,
+    model = TRUE
+  )
+  for (weighted_value in c(FALSE, TRUE)) {
+    expect_equal(
+      residuals(
+        weighted_diagnostic_bridged,
+        times = c(2, 5),
+        weighted = weighted_value
+      ),
+      stats::residuals(
+        weighted_diagnostic_reference,
+        times = c(2, 5),
+        weighted = weighted_value
+      ),
+      tolerance = 1e-10
+    )
+  }
+  expect_equal(
+    pseudo(weighted_diagnostic_bridged, times = c(2, 5)),
+    survival::pseudo(weighted_diagnostic_reference, times = c(2, 5)),
+    tolerance = 1e-10
+  )
+
+  counting_data <- data.frame(
+    id = c(1, 1, 2, 2, 3, 3),
+    start = c(0, 1, 0, 2, 0, 3),
+    stop = c(1, 4, 2, 5, 3, 6),
+    event = factor(
+      c("ill", "death", "ill", "censor", "death", "censor"),
+      levels = c("censor", "ill", "death")
+    )
+  )
+  counting_diagnostic_bridged <- survfit(
+    Surv(start, stop, event) ~ 1,
+    data = counting_data,
+    id = id,
+    model = TRUE
+  )
+  counting_diagnostic_reference <- survival:::survfit.formula(
+    survival::Surv(start, stop, event) ~ 1,
+    data = counting_data,
+    id = counting_data$id,
+    model = TRUE
+  )
+  for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
+    expect_equal(
+      residuals(
+        counting_diagnostic_bridged,
+        times = c(2, 5),
+        type = diagnostic_type
+      ),
+      stats::residuals(
+        counting_diagnostic_reference,
+        times = c(2, 5),
+        type = diagnostic_type
+      ),
+      tolerance = 1e-10
+    )
+    expect_equal(
+      residuals(
+        counting_diagnostic_bridged,
+        times = c(2, 5),
+        type = diagnostic_type,
+        collapse = TRUE,
+        weighted = TRUE
+      ),
+      stats::residuals(
+        counting_diagnostic_reference,
+        times = c(2, 5),
+        type = diagnostic_type,
+        collapse = TRUE,
+        weighted = TRUE
+      ),
+      tolerance = 1e-10
+    )
+  }
+  expect_equal(
+    pseudo(counting_diagnostic_bridged, times = c(2, 5)),
+    survival::pseudo(counting_diagnostic_reference, times = c(2, 5)),
+    tolerance = 1e-10
+  )
 })
 
 test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {

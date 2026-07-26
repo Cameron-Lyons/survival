@@ -26,6 +26,10 @@ pub struct SurvFitAJ {
     #[pyo3(get)]
     pub influence: Option<Vec<Vec<f64>>>,
     #[pyo3(get)]
+    pub influence_chaz: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub influence_auc: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
     pub n_enter: Option<Vec<Vec<f64>>>,
     #[pyo3(get)]
     pub n_transition: Vec<Vec<f64>>,
@@ -41,6 +45,8 @@ struct SurvFitAJComputed {
     pub std_chaz: Option<Array2<f64>>,
     pub std_auc: Option<Array2<f64>>,
     pub influence: Option<Array2<f64>>,
+    pub influence_chaz: Option<Array2<f64>>,
+    pub influence_auc: Option<Array2<f64>>,
     pub n_enter: Option<Array2<f64>>,
     pub n_transition: Array2<f64>,
 }
@@ -61,6 +67,8 @@ impl SurvFitAJComputed {
             std_chaz: option_array2_to_vec(self.std_chaz),
             std_auc: option_array2_to_vec(self.std_auc),
             influence: option_array2_to_vec(self.influence),
+            influence_chaz: option_array2_to_vec(self.influence_chaz),
+            influence_auc: option_array2_to_vec(self.influence_auc),
             n_enter: option_array2_to_vec(self.n_enter),
             n_transition: array2_to_vec(self.n_transition),
         }
@@ -74,6 +82,7 @@ pub(crate) struct SurvFitAJData<'a> {
     pub utime: &'a [f64],
     pub cstate: &'a [usize],
     pub wt: &'a [f64],
+    pub iwt: &'a [f64],
     pub grp: &'a [usize],
     pub position: &'a [usize],
 }
@@ -104,6 +113,8 @@ struct SurvFitAJEstimates {
     std_chaz: Option<Array2<f64>>,
     std_auc: Option<Array2<f64>>,
     influence: Option<Array2<f64>>,
+    influence_chaz: Option<Array2<f64>>,
+    influence_auc: Option<Array2<f64>>,
 }
 
 #[inline]
@@ -298,6 +309,8 @@ fn compute_survfitaj_estimates(
             std_chaz: None,
             std_auc: None,
             influence: None,
+            influence_chaz: None,
+            influence_auc: None,
         });
     }
 
@@ -331,6 +344,10 @@ fn compute_survfitaj_estimates(
     let mut std_auc = Array2::zeros((ntime, nstate));
     let mut saved_influence =
         (params.sefit > 1).then(|| Array2::zeros((params.ngrp * nstate, ntime)));
+    let mut saved_influence_chaz =
+        (params.sefit > 1).then(|| Array2::zeros((params.ngrp * nhaz, ntime)));
+    let mut saved_influence_auc =
+        (params.sefit > 1).then(|| Array2::zeros((params.ngrp * nstate, ntime)));
     let mut start_cursor = 0;
     let mut stop_cursor = 0;
 
@@ -358,7 +375,7 @@ fn compute_survfitaj_estimates(
             if observation_start(data.y, idx) >= current_time {
                 break;
             }
-            group_risk[[data.grp[idx], data.cstate[idx]]] += data.wt[idx];
+            group_risk[[data.grp[idx], data.cstate[idx]]] += data.iwt[idx];
             start_cursor += 1;
         }
         while stop_cursor < nused {
@@ -366,7 +383,7 @@ fn compute_survfitaj_estimates(
             if observation_stop(data.y, idx) >= current_time {
                 break;
             }
-            group_risk[[data.grp[idx], data.cstate[idx]]] -= data.wt[idx];
+            group_risk[[data.grp[idx], data.cstate[idx]]] -= data.iwt[idx];
             stop_cursor += 1;
         }
 
@@ -387,7 +404,7 @@ fn compute_survfitaj_estimates(
             let from = data.cstate[idx];
             let transition = params.hindx[[from, to]];
             let risk = counts.n_risk[[time_idx, from]];
-            influence_hazard[[data.grp[idx], transition]] += data.wt[idx] / risk;
+            influence_hazard[[data.grp[idx], transition]] += data.iwt[idx] / risk;
             if from != to {
                 let increment = data.wt[idx] / risk;
                 hazard_increment[[from, from]] -= increment;
@@ -422,7 +439,7 @@ fn compute_survfitaj_estimates(
                 }
                 let from = data.cstate[idx];
                 if from != to {
-                    let term = data.wt[idx] * phat[from] / counts.n_risk[[time_idx, from]];
+                    let term = data.iwt[idx] * phat[from] / counts.n_risk[[time_idx, from]];
                     influence_state[[data.grp[idx], from]] -= term;
                     influence_state[[data.grp[idx], to]] += term;
                 }
@@ -490,6 +507,22 @@ fn compute_survfitaj_estimates(
                 }
             }
         }
+        if let Some(ref mut influence) = saved_influence_chaz {
+            for transition in 0..nhaz {
+                for group in 0..params.ngrp {
+                    influence[[group + transition * params.ngrp, time_idx]] =
+                        influence_hazard[[group, transition]];
+                }
+            }
+        }
+        if let Some(ref mut influence) = saved_influence_auc {
+            for state in 0..nstate {
+                for group in 0..params.ngrp {
+                    influence[[group + state * params.ngrp, time_idx]] =
+                        influence_auc[[group, state]];
+                }
+            }
+        }
     }
 
     Ok(SurvFitAJEstimates {
@@ -499,6 +532,8 @@ fn compute_survfitaj_estimates(
         std_chaz: Some(std_chaz),
         std_auc: Some(std_auc),
         influence: saved_influence,
+        influence_chaz: saved_influence_chaz,
+        influence_auc: saved_influence_auc,
     })
 }
 
@@ -518,6 +553,8 @@ fn compute_survfitaj(
         std_chaz: estimates.std_chaz,
         std_auc: estimates.std_auc,
         influence: estimates.influence,
+        influence_chaz: estimates.influence_chaz,
+        influence_auc: estimates.influence_auc,
         n_enter: counts.n_enter,
         n_transition: counts.n_transition,
     })
@@ -530,9 +567,12 @@ fn compute_survfitaj(
 /// transition lookup is an `nstate x nstate` matrix: entries below `nhaz`
 /// select a row of `trmat`, while `nhaz` marks an absent transition. Initial
 /// influence values use R's column-major `group + state * ngrp` layout.
+/// `influence_weights` can differ from the case weights when unweighted
+/// observation-level influence residuals are requested.
 /// `sefit=0` skips uncertainty, `sefit=1` returns standard errors, and values
-/// greater than one also return the grouped state-probability influence.
+/// greater than one also return grouped state, hazard, and area influences.
 #[pyfunction]
+#[pyo3(signature = (y, sort1, sort2, utime, cstate, wt, grp, ngrp, p0, i0, sefit, entry, position, hindx, trmat, t0, influence_weights=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitaj(
     y: Vec<f64>,
@@ -551,10 +591,12 @@ pub fn survfitaj(
     hindx: Vec<Vec<usize>>,
     trmat: Vec<Vec<usize>>,
     t0: f64,
+    influence_weights: Option<Vec<f64>>,
 ) -> PyResult<SurvFitAJ> {
+    let iwt = influence_weights.unwrap_or_else(|| wt.clone());
     validate_survfitaj_inputs(
-        &y, &sort1, &sort2, &utime, &cstate, &wt, &grp, ngrp, &p0, &i0, sefit, &position, &hindx,
-        entry, &trmat, t0,
+        &y, &sort1, &sort2, &utime, &cstate, &wt, &iwt, &grp, ngrp, &p0, &i0, sefit, &position,
+        &hindx, entry, &trmat, t0,
     )?;
 
     let hindx_array = matrix_from_rows(hindx, "hindx")?;
@@ -566,6 +608,7 @@ pub fn survfitaj(
         utime: &utime,
         cstate: &cstate,
         wt: &wt,
+        iwt: &iwt,
         grp: &grp,
         position: &position,
     };
@@ -625,6 +668,7 @@ fn validate_survfitaj_inputs(
     utime: &[f64],
     cstate: &[usize],
     wt: &[f64],
+    iwt: &[f64],
     grp: &[usize],
     ngrp: usize,
     p0: &[f64],
@@ -655,9 +699,14 @@ fn validate_survfitaj_inputs(
             "sort1 and sort2 must have equal length",
         ));
     }
-    if cstate.len() != n_obs || wt.len() != n_obs || grp.len() != n_obs || position.len() != n_obs {
+    if cstate.len() != n_obs
+        || wt.len() != n_obs
+        || iwt.len() != n_obs
+        || grp.len() != n_obs
+        || position.len() != n_obs
+    {
         return Err(PyValueError::new_err(
-            "cstate, wt, grp, and position must have length equal to y.len() / 3",
+            "cstate, wt, influence_weights, grp, and position must have length equal to y.len() / 3",
         ));
     }
     if p0.is_empty() {
@@ -692,6 +741,9 @@ fn validate_survfitaj_inputs(
     validate_finite(utime, "utime")?;
     validate_no_nan(wt, "wt")?;
     validate_finite(wt, "wt")?;
+    validate_no_nan(iwt, "influence_weights")?;
+    validate_finite(iwt, "influence_weights")?;
+    validate_non_negative(iwt, "influence_weights")?;
     validate_no_nan(p0, "p0")?;
     validate_finite(p0, "p0")?;
     validate_non_negative(p0, "p0")?;
@@ -985,6 +1037,7 @@ mod tests {
             two_state_hazard_index(),
             vec![vec![0, 1]],
             0.0,
+            None,
         )
     }
 
@@ -1023,6 +1076,7 @@ mod tests {
             two_state_hazard_index(),
             vec![vec![0, 1]],
             0.0,
+            None,
         )
         .unwrap();
 
@@ -1064,6 +1118,14 @@ mod tests {
                 &[-0.25, -0.25],
             ],
         );
+        assert_matrix_close(
+            result.influence_chaz.as_deref().unwrap(),
+            &[&[0.25, 0.25], &[-0.25, -0.25]],
+        );
+        assert_matrix_close(
+            result.influence_auc.as_deref().unwrap(),
+            &[&[0.0, -0.25], &[0.0, 0.25], &[0.0, 0.25], &[0.0, -0.25]],
+        );
 
         let std_err = result.std_err.as_deref().unwrap();
         let influence = result.influence.as_deref().unwrap();
@@ -1096,6 +1158,7 @@ mod tests {
             vec![vec![2, 0, 1], vec![2; 3], vec![2; 3]],
             vec![vec![0, 1], vec![0, 2]],
             0.0,
+            None,
         )
         .unwrap();
 
@@ -1131,6 +1194,7 @@ mod tests {
             vec![vec![2, 0, 2], vec![2, 2, 1], vec![2; 3]],
             vec![vec![0, 1], vec![1, 2]],
             0.0,
+            None,
         )
         .unwrap();
 
@@ -1159,6 +1223,7 @@ mod tests {
             two_state_hazard_index(),
             vec![vec![0, 1]],
             0.0,
+            None,
         )
         .unwrap();
 
@@ -1190,6 +1255,7 @@ mod tests {
             two_state_hazard_index(),
             vec![vec![0, 1]],
             0.0,
+            None,
         )
         .unwrap();
 
@@ -1216,6 +1282,7 @@ mod tests {
             two_state_hazard_index(),
             vec![vec![0, 1]],
             -2.0,
+            None,
         )
         .unwrap();
 
@@ -1285,6 +1352,7 @@ mod tests {
             vec![vec![0; 2], vec![0; 2]],
             vec![],
             -2.0,
+            None,
         )
         .unwrap();
 
@@ -1337,7 +1405,7 @@ mod tests {
         args.0[3] = -1.0;
         let err = survfitaj(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11, args.12, args.13, args.14, args.15,
+            args.10, args.11, args.12, args.13, args.14, args.15, None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("sort1 must order observations"));
@@ -1346,7 +1414,7 @@ mod tests {
         args.13[0][1] = 1;
         let err = survfitaj(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11, args.12, args.13, args.14, args.15,
+            args.10, args.11, args.12, args.13, args.14, args.15, None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("must be 0"));

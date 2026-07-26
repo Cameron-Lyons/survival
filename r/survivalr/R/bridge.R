@@ -4951,6 +4951,9 @@ points.survival_py_survfit <- function(x, fun, censor = FALSE, col = 1,
 }
 
 .survival_py_survfit_residual_matrix <- function(result) {
+  if (!is.null(result$columns)) {
+    return(.survival_py_survfit_multistate_array(result, "resid"))
+  }
   resid <- .as_numeric_matrix(result$resid)
   times <- .as_numeric_vector(result$time)
   id_values <- result$id
@@ -4964,7 +4967,62 @@ points.survival_py_survfit <- function(x, fun, censor = FALSE, col = 1,
   resid
 }
 
+.survival_py_survfit_multistate_array <- function(result, field) {
+  rows <- result[[field]]
+  id_values <- unname(unlist(result$id, recursive = TRUE, use.names = FALSE))
+  columns <- as.character(unlist(result$columns, recursive = TRUE, use.names = FALSE))
+  times <- .as_numeric_vector(result$time)
+  values <- array(0, dim = c(length(id_values), length(columns), length(times)))
+  for (row_idx in seq_along(id_values)) {
+    row <- rows[[row_idx]]
+    for (column_idx in seq_along(columns)) {
+      values[row_idx, column_idx, ] <- .as_numeric_vector(row[[column_idx]])
+    }
+  }
+  id_name <- result$id_name
+  id_dim_name <- if (is.null(id_name)) "" else as.character(id_name)[[1L]]
+  time_labels <- signif(times, 4)
+  if (any(duplicated(time_labels))) {
+    time_labels <- NULL
+  }
+  if (length(times) == 1L) {
+    values <- matrix(
+      values,
+      nrow = length(id_values),
+      ncol = length(columns),
+      dimnames = list(id_values, columns)
+    )
+    names(dimnames(values)) <- c(id_dim_name, "")
+    return(values)
+  }
+  dimnames(values) <- list(id_values, columns, time_labels)
+  names(dimnames(values)) <- c(id_dim_name, "", "times")
+  values
+}
+
 .survival_py_survfit_residual_frame <- function(result, resid) {
+  if (!is.null(result$columns)) {
+    id_values <- unname(unlist(result$id, recursive = TRUE, use.names = FALSE))
+    columns <- as.character(unlist(result$columns, recursive = TRUE, use.names = FALSE))
+    times <- .as_numeric_vector(result$time)
+    frame <- data.frame(
+      id = rep(id_values, times = length(columns) * length(times)),
+      column = rep(rep(columns, each = length(id_values)), times = length(times)),
+      time = rep(times, each = length(id_values) * length(columns)),
+      resid = as.numeric(resid)
+    )
+    names(frame)[[2L]] <- as.character(result$column_name)[[1L]]
+    curve <- result$curve
+    if (!is.null(curve) && length(curve) > 0L) {
+      frame$curve <- rep(
+        as.integer(.as_numeric_vector(curve)),
+        times = length(columns) * length(times)
+      )
+    }
+    id_name <- result$id_name
+    names(frame)[[1L]] <- if (is.null(id_name)) "(id)" else as.character(id_name)[[1L]]
+    return(frame)
+  }
   times <- .as_numeric_vector(result$time)
   id_values <- result$id
   frame <- data.frame(
@@ -4978,6 +5036,13 @@ points.survival_py_survfit <- function(x, fun, censor = FALSE, col = 1,
   }
   id_name <- result$id_name
   names(frame)[[1L]] <- if (is.null(id_name)) "(id)" else as.character(id_name)[[1L]]
+  frame
+}
+
+.survival_py_multistate_pseudo_frame <- function(result, pseudo_values) {
+  resid <- .survival_py_survfit_multistate_array(result, "resid")
+  frame <- .survival_py_survfit_residual_frame(result, resid)
+  frame$pseudo <- as.numeric(pseudo_values)
   frame
 }
 
@@ -6603,6 +6668,13 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
     `data.frame` = FALSE,
     ...
   )
+  if (!is.null(result$columns) && !is.null(result$pseudo)) {
+    pseudo_values <- .survival_py_survfit_multistate_array(result, "pseudo")
+    if (isTRUE(data.frame)) {
+      return(.survival_py_multistate_pseudo_frame(result, pseudo_values))
+    }
+    return(pseudo_values)
+  }
   if (isTRUE(data.frame)) {
     return(.as_pseudo_data_frame(
       result,

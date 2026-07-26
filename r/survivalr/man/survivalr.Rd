@@ -823,7 +823,7 @@ construction. \code{time1} and \code{start} map to the first time column,
 \code{stop} maps to \code{time2}, and \code{status} maps to \code{event};
 \code{status} is also the direct event-code vector for \code{survobrien}.}
 \item{type}{Optional survival response, prediction, \code{survfitKM} curve,
-or plotted line type.}
+plotted line, residual, or pseudo-value type.}
 \item{origin}{Optional time origin passed to the Python response constructor.}
 \item{value}{Object to test.}
 \item{verbose}{Logical flag accepted by \code{is.ratetable}.}
@@ -974,8 +974,9 @@ Python, \code{x} is the input vector for bounded link helper transforms.}
 includes censor-only rows when no explicit \code{times} vector is supplied.}
 \item{collapse, weighted, extra}{Logical flags for \code{pseudo} and
 \code{residuals.survival_py_survfit}. The residuals bridge supports
-right-censored and counting-process Kaplan-Meier \code{survfit} objects with
-retained model frames.}
+right-censored, counting-process, and multi-state \code{survfit} objects with
+retained model frames. Multi-state results preserve state or transition array
+dimensions across requested times.}
 \item{data.frame}{Logical flag controlling whether \code{pseudo} returns a
 long data frame instead of a matrix.}
 \item{q, p, n}{Quantiles, probabilities, or draw count for the

@@ -1986,6 +1986,119 @@ def test_multistate_survfit_structure_preserves_matrix_dimensions_and_metadata()
     assert subset_structure["oldstate"] == ["(s0)", "ill", "death"]
 
 
+def test_multistate_survfit_residuals_and_pseudo_values_use_core_influences():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    response = survival.Surv(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        Factor(
+            ["ill", "death", "censor", "death", "ill", "censor"],
+            ["censor", "ill", "death"],
+        ),
+    )
+    fit = survival.survfit(response, model=True)
+    residuals = survival.survfit_residuals(fit, times=[2.0, 5.0])
+    cumhaz = survival.survfit_residuals(
+        fit,
+        times=[2.0, 5.0],
+        type="cumhaz",
+    )
+    sojourn = survival.survfit_residuals(
+        fit,
+        times=[2.0, 5.0],
+        type="sojourn",
+    )
+    pseudo = survival.pseudo(fit, times=[2.0, 5.0])
+
+    assert residuals["columns"] == ["(s0)", "ill", "death"]
+    assert residuals["column_name"] == "state"
+    assert residuals["resid"][0][0] == pytest.approx([-1 / 9, -1 / 27])
+    assert residuals["resid"][0][1] == pytest.approx([5 / 36, 11 / 108])
+    assert residuals["resid"][5][0] == pytest.approx([1 / 18, 1 / 6])
+    assert cumhaz["columns"] == ["1:2", "1:3"]
+    assert cumhaz["column_name"] == "transition"
+    for actual, expected in zip(
+        cumhaz["resid"][0],
+        [[5 / 36, 5 / 36], [0.0, 0.0]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        sojourn["resid"][0],
+        [[-5 / 36, -47 / 108], [5 / 36, 5 / 9], [0.0, -13 / 108]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        pseudo["pseudo"][0],
+        [[0.0, 0.0], [1.0, 1.0], [0.0, 0.0]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert pseudo["pseudo"][5][0] == pytest.approx([1.0, 11 / 9])
+
+    weights = [1.0, 2.0, 1.5, 0.5, 3.0, 1.0]
+    weighted_fit = survival.survfit(response, weights=weights, model=True)
+    unweighted_residuals = survival.survfit_residuals(
+        weighted_fit,
+        times=[2.0, 5.0],
+    )
+    weighted_residuals = survival.survfit_residuals(
+        weighted_fit,
+        times=[2.0, 5.0],
+        weighted=True,
+    )
+    for row_idx, weight in enumerate(weights):
+        for state_idx in range(3):
+            assert weighted_residuals["resid"][row_idx][state_idx] == pytest.approx(
+                [weight * value for value in unweighted_residuals["resid"][row_idx][state_idx]]
+            )
+
+    grouped_fit = survival.survfit(
+        response,
+        group=["a", "a", "a", "b", "b", "b"],
+        model=True,
+    )
+    grouped = survival.survfit_residuals(grouped_fit, times=[2.0, 5.0])
+    grouped_pseudo = survival.pseudo(grouped_fit, times=[2.0, 5.0])
+    assert grouped["curve"] == [1, 1, 1, 2, 2, 2]
+    assert grouped["resid"][3][0] == pytest.approx([0.0, -1 / 9])
+    assert grouped_pseudo["pseudo"][3][2] == pytest.approx([0.0, 1.0])
+
+    counting_response = survival.Surv(
+        [0.0, 1.0, 0.0, 2.0, 0.0, 3.0],
+        [1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
+        Factor(
+            ["ill", "death", "ill", "censor", "death", "censor"],
+            ["censor", "ill", "death"],
+        ),
+    )
+    counting_fit = survival.survfit(
+        counting_response,
+        id=[1, 1, 2, 2, 3, 3],
+        model=True,
+    )
+    row_level = survival.survfit_residuals(counting_fit, times=[2.0, 5.0])
+    collapsed = survival.survfit_residuals(
+        counting_fit,
+        times=[2.0, 5.0],
+        collapse=True,
+        weighted=True,
+    )
+    assert collapsed["id"] == [1, 2, 3]
+    for subject_idx in range(3):
+        for state_idx in range(3):
+            expected = [
+                row_level["resid"][2 * subject_idx][state_idx][time_idx]
+                + row_level["resid"][2 * subject_idx + 1][state_idx][time_idx]
+                for time_idx in range(2)
+            ]
+            assert collapsed["resid"][subject_idx][state_idx] == pytest.approx(expected)
+
+
 def test_survfit_multistate_validates_p0():
     response = survival.Surv(
         [1.0, 2.0, 3.0],

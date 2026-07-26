@@ -4318,6 +4318,7 @@ def test_survfitaj_binding_is_typed():
         "hindx",
         "trmat",
         "t0",
+        "influence_weights",
     ]
 
     assert {"SurvFitAJ", "survfitaj"} <= stub_names
@@ -4333,6 +4334,8 @@ def test_survfitaj_binding_is_typed():
         "std_chaz",
         "std_auc",
         "influence",
+        "influence_chaz",
+        "influence_auc",
         "n_enter",
         "n_transition",
     }
