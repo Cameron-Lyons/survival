@@ -15,10 +15,11 @@ class StrataFactor:
 
 class Surv:
     time: tuple[float, ...]
-    event: tuple[int, ...]
+    event: tuple[int | None, ...]
     start: tuple[float, ...] | None
     time2: tuple[float, ...] | None
     type: str
+    states: tuple[str, ...]
     def __init__(
         self,
         *args: Any,
@@ -34,7 +35,7 @@ class Surv:
     ) -> None: ...
     def __len__(self) -> int: ...
     @property
-    def status(self) -> tuple[int, ...]: ...
+    def status(self) -> tuple[int | None, ...]: ...
 
 class Surv2:
     time: tuple[float, ...]

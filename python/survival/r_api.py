@@ -131,7 +131,8 @@ _EXP_CLAMP_MAX = 709.0
 _SURVFIT_TIME_EPSILON = 1e-9
 _VARIANCE_SCALE_FLOOR = 1e-12
 _COX_DFBETAS_SCALE_FLOOR = 1e-10
-_SURV_TYPES = ("right", "left", "interval", "counting", "interval2")
+_SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
+_SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
 
 FineGrayOutput = _core.FineGrayOutput
 RateTable = _core.RateTable
@@ -811,6 +812,47 @@ def _event_vector(values: Any, name: str) -> list[int]:
     if observed <= {1, 2}:
         return [int(value == 2) for value in events]
     raise ValueError(f"{name} must use 0/1 or 1/2 event coding")
+
+
+def _mstate_event_label(value: Any) -> str:
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return _surv_format_number(value)
+    return str(value)
+
+
+def _mstate_inferred_levels(values: Sequence[Any]) -> list[str]:
+    observed = [value for value in values if not _is_missing_value(value)]
+    labels = {_mstate_event_label(value) for value in observed}
+    if observed and all(
+        isinstance(value, int | float) and not isinstance(value, bool) for value in observed
+    ):
+        return sorted(labels, key=float)
+    return sorted(labels)
+
+
+def _mstate_event_vector(values: Any, name: str) -> tuple[list[int | None], tuple[str, ...]]:
+    raw = _materialize_1d(values, name)
+    categories = getattr(values, "categories", None)
+    if categories is None:
+        categories = getattr(getattr(values, "dtype", None), "categories", None)
+    if categories is None:
+        levels = _mstate_inferred_levels(raw)
+    else:
+        levels = [
+            _mstate_event_label(value)
+            for value in _materialize_1d(categories, f"{name} categories")
+            if not _is_missing_value(value)
+        ]
+    level_index = {level: idx for idx, level in enumerate(levels)}
+    events = [
+        None if _is_missing_value(value) else level_index[_mstate_event_label(value)]
+        for value in raw
+    ]
+    return events, tuple(levels[1:])
 
 
 def _interval_status_vector(values: Any, name: str) -> list[int]:
@@ -1837,7 +1879,9 @@ def _normalize_surv_type(value: Any) -> str:
         return matches[0]
     if len(matches) > 1:
         raise ValueError("Surv type is ambiguous; use a full type name")
-    raise ValueError("Surv type must be 'right', 'left', 'counting', 'interval', or 'interval2'")
+    raise ValueError(
+        "Surv type must be 'right', 'left', 'counting', 'interval', 'interval2', or 'mstate'"
+    )
 
 
 def _parse_formula_origin_option(value: str) -> float:
@@ -4466,10 +4510,11 @@ class Surv:
     """Survival response container, like R's Surv."""
 
     time: tuple[float, ...]
-    event: tuple[int, ...]
+    event: tuple[int | None, ...]
     start: tuple[float, ...] | None
     time2: tuple[float, ...] | None
     type: str
+    states: tuple[str, ...]
 
     def __init__(  # noqa: A002
         self,
@@ -4502,6 +4547,7 @@ class Surv:
             args = named_args
 
         surv_type = _normalize_surv_type(type) if type is not None else None
+        states: tuple[str, ...] = ()
         origin_value = _finite_float(origin, "origin")
         if len(args) == 1:
             if surv_type is not None:
@@ -4523,6 +4569,11 @@ class Surv:
                     for value in _interval_endpoint_vector(args[1], "time2", float("inf"))
                 ]
                 event = _derive_interval2_status(time, time2)
+            elif surv_type == "mstate":
+                time = [value - origin_value for value in _float_vector(args[0], "time")]
+                time2 = None
+                event, states = _mstate_event_vector(args[1], "event")
+                surv_type = "mright"
             else:
                 time = [value - origin_value for value in _float_vector(args[0], "time")]
                 time2 = None
@@ -4538,6 +4589,12 @@ class Surv:
                 time = [value - origin_value for value in _float_vector(args[0], "time")]
                 time2 = [value - origin_value for value in _float_vector(args[1], "time2")]
                 event = _interval_status_vector(args[2], "event")
+            elif surv_type == "mstate":
+                start = [value - origin_value for value in _float_vector(args[0], "start")]
+                time = [value - origin_value for value in _float_vector(args[1], "stop")]
+                time2 = None
+                event, states = _mstate_event_vector(args[2], "event")
+                surv_type = "mcounting"
             else:
                 start = [value - origin_value for value in _float_vector(args[0], "start")]
                 time = [value - origin_value for value in _float_vector(args[1], "stop")]
@@ -4557,9 +4614,10 @@ class Surv:
             raise ValueError("Surv inputs must have the same length")
         if not time:
             raise ValueError("Surv inputs must not be empty")
-        if surv_type not in _SURV_TYPES:
+        if surv_type not in _SURV_RESPONSE_TYPES:
             raise ValueError(
-                "Surv type must be 'right', 'left', 'counting', 'interval', or 'interval2'"
+                "Surv type must be 'right', 'left', 'counting', 'interval', 'interval2', "
+                "or 'mstate'"
             )
         _validate_surv_intervals(time, time2, event, surv_type)
         _validate_surv_time_structure(time, time2, event, start, surv_type)
@@ -4569,13 +4627,34 @@ class Surv:
         object.__setattr__(self, "start", tuple(start) if start is not None else None)
         object.__setattr__(self, "time2", tuple(time2) if time2 is not None else None)
         object.__setattr__(self, "type", surv_type)
+        object.__setattr__(self, "states", states)
 
     def __len__(self) -> int:
         return len(self.time)
 
     @property
-    def status(self) -> tuple[int, ...]:
+    def status(self) -> tuple[int | None, ...]:
         return self.event
+
+    @classmethod
+    def _from_normalized(
+        cls,
+        *,
+        time: Sequence[float],
+        event: Sequence[int | None],
+        start: Sequence[float] | None,
+        time2: Sequence[float] | None,
+        surv_type: str,
+        states: Sequence[str] = (),
+    ) -> Surv:
+        result = object.__new__(cls)
+        object.__setattr__(result, "time", tuple(time))
+        object.__setattr__(result, "event", tuple(event))
+        object.__setattr__(result, "start", None if start is None else tuple(start))
+        object.__setattr__(result, "time2", None if time2 is None else tuple(time2))
+        object.__setattr__(result, "type", surv_type)
+        object.__setattr__(result, "states", tuple(states))
+        return result
 
 
 @dataclass(frozen=True, init=False)
@@ -4987,6 +5066,8 @@ def is_surv(value: Any) -> bool:
 
 
 def _surv_missing_row(response: Surv, idx: int) -> bool:
+    if response.event[idx] is None:
+        return True
     if response.start is not None and math.isnan(response.start[idx]):
         return True
     if math.isnan(response.time[idx]):
@@ -5042,6 +5123,33 @@ def _format_surv_counting(response: Surv) -> list[str]:
     return [value.ljust(width) for value in labels]
 
 
+def _format_surv_mstate(response: Surv) -> list[str]:
+    suffixes = ["+", *(f":{state}" for state in response.states)]
+
+    def suffix(event: int | None) -> str:
+        return "?" if event is None else suffixes[event]
+
+    if response.type == "mright":
+        labels = [
+            f"{_surv_format_number(time)}{suffix(event)}"
+            for time, event in zip(response.time, response.event, strict=True)
+        ]
+    else:
+        if response.start is None:
+            raise ValueError("mcounting Surv response is missing start times")
+        labels = [
+            f"({_surv_format_number(start)},{_surv_format_number(stop)}{suffix(event)}]"
+            for start, stop, event in zip(
+                response.start,
+                response.time,
+                response.event,
+                strict=True,
+            )
+        ]
+    width = max(len(value) for value in labels) if labels else 0
+    return [value.ljust(width) for value in labels]
+
+
 def _format_surv_interval(response: Surv) -> list[str]:
     if response.time2 is None:
         raise ValueError(f"{response.type} Surv response is missing time2")
@@ -5082,6 +5190,8 @@ def format_surv(x: Any) -> list[str]:
         return _format_surv_right_or_left(x)
     if x.type == "counting":
         return _format_surv_counting(x)
+    if x.type in {"mright", "mcounting"}:
+        return _format_surv_mstate(x)
     if x.type in {"interval", "interval2"}:
         return _format_surv_interval(x)
     raise ValueError(f"unsupported Surv type {x.type!r}")
@@ -8523,6 +8633,15 @@ def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:  # noqa: N802
     if x.start is not None:
         start, stop = _aeq_adjust_time_columns((x.start, x.time), tolerance_value)
         _raise_if_aeq_zero_interval(x.start, x.time, start, stop)
+        if x.type == "mcounting":
+            return Surv._from_normalized(
+                time=stop,
+                event=x.event,
+                start=start,
+                time2=None,
+                surv_type=x.type,
+                states=x.states,
+            )
         return Surv(start, stop, list(x.event), type="counting")
 
     if x.time2 is not None:
@@ -8533,6 +8652,15 @@ def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:  # noqa: N802
         return Surv(left, right, list(x.event), type=x.type)
 
     (time,) = _aeq_adjust_time_columns((x.time,), tolerance_value)
+    if x.type == "mright":
+        return Surv._from_normalized(
+            time=time,
+            event=x.event,
+            start=None,
+            time2=None,
+            surv_type=x.type,
+            states=x.states,
+        )
     return Surv(time, list(x.event), type=x.type)
 
 
@@ -8628,6 +8756,15 @@ def survSplit(  # noqa: N802
 def _subset_surv(response: Surv, indices: list[int]) -> Surv:
     times = [response.time[idx] for idx in indices]
     events = [response.event[idx] for idx in indices]
+    if response.type in {"mright", "mcounting"}:
+        return Surv._from_normalized(
+            time=times,
+            event=events,
+            start=(None if response.start is None else [response.start[idx] for idx in indices]),
+            time2=None,
+            surv_type=response.type,
+            states=response.states,
+        )
     if response.type in {"right", "left"}:
         return Surv(times, events, type=response.type)
     if response.type == "interval":
@@ -11083,6 +11220,8 @@ def survfit(
 
     if not isinstance(response, Surv):
         raise TypeError("survfit response must be a Surv object, formula, or fitted Cox model")
+    if response.type in {"mright", "mcounting"}:
+        raise NotImplementedError("survfit multi-state Surv responses are not yet supported")
     if subset is not None:
         indices = _subset_indices(subset, len(response))
         response = _subset_surv(response, indices)
