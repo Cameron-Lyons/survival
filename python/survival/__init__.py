@@ -59,6 +59,7 @@ _R_EXPORTS = [
     "SurvObrienResult",
     "SurvExpResult",
     "SurvfitConfidenceIntervalResult",
+    "SurvfitMultiStateResult",
     "TcutResult",
     "YatesPairwiseResult",
     "YatesResult",

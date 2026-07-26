@@ -1636,8 +1636,10 @@ def test_surv_multistate_helpers_preserve_state_metadata():
     assert subset.type == "mright"
     assert subset.states == response.states
     assert subset.status == (1, 0)
-    with pytest.raises(NotImplementedError, match="multi-state Surv"):
-        survival.survfit(response)
+    curve = survival.survfit(response)
+    assert isinstance(curve, survival.SurvfitMultiStateResult)
+    assert curve.states == ("(s0)", *response.states)
+    assert curve.time == pytest.approx([1.0, 2.0])
 
 
 def test_surv_multistate_preserves_categorical_level_order():
@@ -1662,6 +1664,148 @@ def test_surv_multistate_preserves_categorical_level_order():
     assert numeric.status == (0, 2, 1)
     assert numeric_strings.states == ("10", "2")
     assert numeric_strings.status == (0, 1, 2)
+
+
+def test_survfit_multistate_matches_r_aalen_johansen_fixture():
+    response = survival.Surv(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        ["censor", "ill", "death", "ill", "censor", "death"],
+        type="mstate",
+    )
+
+    fit = survival.survfit(response)
+
+    assert isinstance(fit, survival.SurvfitMultiStateResult)
+    assert fit.time == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    assert fit.states == ("(s0)", "death", "ill")
+    assert fit.transitions == ((0, 1), (0, 2))
+    assert fit.transition_labels == (("(s0)", "death"), ("(s0)", "ill"))
+    assert fit.p0 == pytest.approx([1.0, 0.0, 0.0])
+    assert fit.t0 == 0.0
+    assert fit.n == fit.n_id == 6
+    expected_risk = [[value, 0.0, 0.0] for value in [6, 5, 4, 3, 2, 1]]
+    expected_pstate = [
+        [1.0, 0.0, 0.0],
+        [0.8, 0.0, 0.2],
+        [0.6, 0.2, 0.2],
+        [0.4, 0.2, 0.4],
+        [0.4, 0.2, 0.4],
+        [0.0, 0.6, 0.4],
+    ]
+    expected_cumhaz = [
+        [0.0, 0.0],
+        [0.0, 0.2],
+        [0.25, 0.2],
+        [0.25, 0.5333333333333333],
+        [0.25, 0.5333333333333333],
+        [1.25, 0.5333333333333333],
+    ]
+    for actual, expected in zip(fit.n_risk, expected_risk, strict=True):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(fit.pstate, expected_pstate, strict=True):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(fit.cumhaz, expected_cumhaz, strict=True):
+        assert actual == pytest.approx(expected)
+    assert fit.n_event == [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ]
+    assert fit.std_err is not None
+    assert fit.std_err[1] == pytest.approx([0.1788854382, 0.0, 0.1788854382])
+    assert fit.std_chaz is not None
+    assert fit.std_chaz[-1] == pytest.approx([0.2165063509, 0.3256901504])
+    assert fit.conf_lower is not None
+    assert fit.conf_lower[1] == pytest.approx([0.5161257603, 0.0, 0.0346491185])
+    assert fit.conf_upper is not None
+    assert fit.conf_upper[1] == pytest.approx([1.0, 0.0, 1.0])
+    assert fit.n_risk_count == fit.n_risk
+    assert fit.n_transition_count == fit.n_transition
+
+    time0_fit = survival.survfit(response, time0=True)
+    assert time0_fit.time == pytest.approx([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    assert time0_fit.n_risk[0] == pytest.approx([0.0, 0.0, 0.0])
+    assert time0_fit.pstate[0] == pytest.approx([1.0, 0.0, 0.0])
+
+    conditional = survival.survfit(response, start_time=3.0)
+    assert conditional.time == pytest.approx([3.0, 4.0, 5.0, 6.0])
+    assert conditional.n_risk[0] == pytest.approx([4.0, 0.0, 0.0])
+    assert conditional.pstate[0] == pytest.approx([0.75, 0.25, 0.0])
+
+    without_se = survival.survfit(response, se_fit=False)
+    assert without_se.std_err is None
+    assert without_se.std_chaz is None
+    assert without_se.conf_lower is None
+    assert without_se.conf_upper is None
+
+    zero_weight = survival.survfit(response, weights=[1.0, 0.0, 1.0, 1.0, 1.0, 1.0])
+    assert zero_weight.n_risk[0] == pytest.approx([5.0, 0.0, 0.0])
+    assert zero_weight.n_event[1] == pytest.approx([0.0, 0.0, 0.0])
+
+
+def test_survfit_multistate_supports_formula_groups_weights_and_etype():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "event": ["censor", "ill", "death", "ill", "censor", "death"],
+        "status": [0, 1, 1, 1, 0, 1],
+        "kind": ["none", "ill", "death", "ill", "none", "death"],
+        "arm": ["b", "a", "b", "a", "b", "a"],
+        "weight": [1.0, 2.0, 1.0, 1.0, 1.0, 1.0],
+    }
+
+    grouped = survival.survfit(
+        "Surv(time, event, type='mstate') ~ arm",
+        data=data,
+        weights=data["weight"],
+    )
+
+    assert list(grouped) == ["a", "b"]
+    assert grouped["a"].time == pytest.approx([2.0, 4.0, 6.0])
+    assert grouped["a"].n_risk == [[4.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    assert grouped["a"].pstate[0] == pytest.approx([0.5, 0.0, 0.5])
+    assert grouped["a"].pstate[-1] == pytest.approx([0.0, 0.25, 0.75])
+    assert grouped["b"].time == pytest.approx([1.0, 3.0, 5.0])
+    assert grouped["b"].pstate[-1] == pytest.approx([0.5, 0.5, 0.0])
+
+    etype_fit = survival.survfit(
+        "Surv(time, status) ~ 1",
+        data=data,
+        etype="kind",
+    )
+    direct_etype = survival.survfit(
+        survival.Surv(data["time"], data["status"]),
+        etype=data["kind"],
+    )
+    assert etype_fit.states == direct_etype.states == ("(s0)", "death", "ill")
+    for actual, expected in zip(etype_fit.pstate, direct_etype.pstate, strict=True):
+        assert actual == pytest.approx(expected)
+
+
+def test_survfit_multistate_validates_unsupported_options():
+    response = survival.Surv(
+        [1.0, 2.0, 3.0],
+        ["censor", "ill", "death"],
+        type="mstate",
+    )
+    with pytest.raises(ValueError, match="robust variance"):
+        survival.survfit(response, robust=False)
+    with pytest.raises(ValueError, match="Aalen-Johansen"):
+        survival.survfit(response, type="fh")
+    with pytest.raises(ValueError, match="reverse"):
+        survival.survfit(response, reverse=True)
+    with pytest.raises(NotImplementedError, match="counting-process multi-state"):
+        survival.survfit(
+            survival.Surv(
+                [0.0, 0.0],
+                [1.0, 2.0],
+                ["censor", "ill"],
+                type="mstate",
+            ),
+            id=["a", "b"],
+        )
 
 
 def test_surv2_response_matches_r_multistate_shape():
@@ -15712,8 +15856,11 @@ def test_r_api_rejects_unsupported_formula_features():
     with pytest.raises(NotImplementedError, match="istate"):
         survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), istate=[0, 1])
 
-    with pytest.raises(NotImplementedError, match="etype"):
-        survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), etype=[1, 2])
+    etype_fit = survival.survfit(
+        survival.Surv([1.0, 2.0], [1, 0]),
+        etype=[1, 2],
+    )
+    assert etype_fit.states == ("(s0)", "1")
 
     with pytest.raises(TypeError, match="entry"):
         survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), entry=1)

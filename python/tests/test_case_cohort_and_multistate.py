@@ -331,6 +331,25 @@ def test_survfitaj_returns_standard_errors_when_requested():
     assert result.std_err[1] == pytest.approx([0.272165526975909] * 2)
 
 
+def test_survfitaj_zero_weights_match_r_case_weight_semantics():
+    kwargs = _competing_survfitaj_kwargs(sefit=1)
+    kwargs["wt"] = [1.0, 0.0, 1.0, 1.0]
+
+    result = survival.survfitaj(**kwargs)
+
+    assert result.n_risk[0] == pytest.approx([3.0, 0.0, 0.0, 4.0, 0.0, 0.0])
+    assert result.n_event[0] == pytest.approx([0.0, 1.0, 0.0])
+    assert result.pstate[0] == pytest.approx([2 / 3, 1 / 3, 0.0])
+    assert result.std_err is not None
+    assert all(math.isfinite(value) for row in result.std_err for value in row)
+
+    kwargs["wt"] = [0.0, 0.0, 0.0, 0.0]
+    all_zero = survival.survfitaj(**kwargs)
+    assert all(row == pytest.approx([1.0, 0.0, 0.0]) for row in all_zero.pstate)
+    assert all_zero.std_err is not None
+    assert all(row == pytest.approx([0.0, 0.0, 0.0]) for row in all_zero.std_err)
+
+
 def test_survfitaj_matches_r_for_simultaneous_competing_transitions():
     result = survival.survfitaj(**_competing_survfitaj_kwargs(sefit=3))
 
