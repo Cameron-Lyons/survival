@@ -1580,6 +1580,90 @@ def test_surv_right_censored_response():
         survival.format_surv([1.0, 2.0])
 
 
+def test_surv_multistate_responses_match_r_shape_and_formatting():
+    right = survival.Surv(
+        [1.0, 2.0, 3.0, 4.0],
+        ["censor", "ill", "death", "ill"],
+        type="mstate",
+    )
+    counting = survival.Surv(
+        [0.0, 0.0, 1.0, 2.0],
+        [1.0, 2.0, 3.0, 4.0],
+        ["ill", "censor", "death", "ill"],
+        type="mstate",
+    )
+    missing = survival.Surv(
+        [1.0, 2.0, 3.0],
+        [None, "censor", "death"],
+        type="m",
+    )
+
+    assert right.type == "mright"
+    assert right.status == (0, 2, 1, 2)
+    assert right.states == ("death", "ill")
+    assert survival.format_surv(right) == ["1+     ", "2:ill  ", "3:death", "4:ill  "]
+
+    assert counting.type == "mcounting"
+    assert counting.status == (2, 0, 1, 2)
+    assert counting.states == ("death", "ill")
+    assert survival.format_surv(counting) == [
+        "(0,1:ill]".ljust(11),
+        "(0,2+]".ljust(11),
+        "(1,3:death]",
+        "(2,4:ill]".ljust(11),
+    ]
+
+    assert missing.status == (None, 0, 1)
+    assert missing.states == ("death",)
+    assert survival.is_na_surv(missing) == [True, False, False]
+    assert survival.format_surv(missing) == ["1?     ", "2+     ", "3:death"]
+
+
+def test_surv_multistate_helpers_preserve_state_metadata():
+    response = survival.Surv(
+        [1.0, 1.0 + 1e-10, 2.0],
+        ["censor", "ill", "death"],
+        type="mstate",
+    )
+
+    adjusted = survival.aeqSurv(response)
+    subset = survival.r_api._subset_surv(response, [2, 0])
+
+    assert adjusted.type == "mright"
+    assert adjusted.states == response.states
+    assert adjusted.status == response.status
+    assert adjusted.time[0] == adjusted.time[1]
+    assert subset.type == "mright"
+    assert subset.states == response.states
+    assert subset.status == (1, 0)
+    with pytest.raises(NotImplementedError, match="multi-state Surv"):
+        survival.survfit(response)
+
+
+def test_surv_multistate_preserves_categorical_level_order():
+    pandas = pytest.importorskip("pandas")
+    events = pandas.Categorical(
+        ["censor", "ill", "censor"],
+        categories=["censor", "ill", "death"],
+    )
+
+    response = survival.Surv([1.0, 2.0, 3.0], events, type="mstate")
+
+    assert response.status == (0, 1, 0)
+    assert response.states == ("ill", "death")
+
+    numeric = survival.Surv([1.0, 2.0, 3.0], [0, 10, 2], type="mstate")
+    numeric_strings = survival.Surv(
+        [1.0, 2.0, 3.0],
+        ["0", "10", "2"],
+        type="mstate",
+    )
+    assert numeric.states == ("2", "10")
+    assert numeric.status == (0, 2, 1)
+    assert numeric_strings.states == ("10", "2")
+    assert numeric_strings.status == (0, 1, 2)
+
+
 def test_surv2_response_matches_r_multistate_shape():
     response = survival.Surv2([1.0, 2.0, 3.0], ["a", "b", "c"])
     missing = survival.Surv2([1.0, math.nan, 3.0], [None, "b", "c"], repeated=True)
