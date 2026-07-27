@@ -4442,7 +4442,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   }
 
   bridged <- survfit(Surv(time, event) ~ 1, data = data, p0 = p0)
-  reference <- survival:::survfit.formula(
+  reference <- survival::survfit(
     survival::Surv(time, event) ~ 1,
     data = data,
     p0 = p0
@@ -4466,7 +4466,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   )
 
   grouped_bridged <- survfit(Surv(time, event) ~ group, data = data, p0 = p0)
-  grouped_reference <- survival:::survfit.formula(
+  grouped_reference <- survival::survfit(
     survival::Surv(time, event) ~ group,
     data = data,
     p0 = p0
@@ -4553,7 +4553,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
-  diagnostic_reference <- survival:::survfit.formula(
+  diagnostic_reference <- survival::survfit(
     survival::Surv(time, event) ~ 1,
     data = data,
     model = TRUE
@@ -4596,7 +4596,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
-  grouped_diagnostic_reference <- survival:::survfit.formula(
+  grouped_diagnostic_reference <- survival::survfit(
     survival::Surv(time, event) ~ group,
     data = data,
     model = TRUE
@@ -4637,7 +4637,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     weights = diagnostic_weights,
     model = TRUE
   )
-  weighted_diagnostic_reference <- survival:::survfit.formula(
+  weighted_diagnostic_reference <- survival::survfit(
     survival::Surv(time, event) ~ 1,
     data = data,
     weights = diagnostic_weights,
@@ -4679,7 +4679,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     id = id,
     model = TRUE
   )
-  counting_diagnostic_reference <- survival:::survfit.formula(
+  counting_diagnostic_reference <- survival::survfit(
     survival::Surv(start, stop, event) ~ 1,
     data = counting_data,
     id = counting_data$id,
