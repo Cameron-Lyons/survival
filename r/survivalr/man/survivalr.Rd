@@ -511,7 +511,7 @@ survfitKM(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
 
 \method{[[}{survival_py_survfit}(x, i, ..., exact = TRUE)
 
-\method{[}{survival_py_survfit}(x, i, ..., drop = TRUE)
+\method{[}{survival_py_survfit}(x, i, j, ..., drop = TRUE)
 
 \method{$}{survival_py_survfit}(x, name)
 

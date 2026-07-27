@@ -1913,6 +1913,79 @@ def test_as_data_frame_flattens_multistate_curves_like_r_summary():
     ]
 
 
+def test_multistate_survfit_structure_preserves_matrix_dimensions_and_metadata():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    response = survival.Surv(
+        [1.0, 2.0, 3.0, 4.0],
+        Factor(
+            ["ill", "death", "censor", "death"],
+            ["censor", "ill", "death"],
+        ),
+    )
+    fit = survival.survfit(
+        response,
+        p0=[0.25, 0.5, 0.25],
+        conf_level=0.9,
+        conf_type="plain",
+    )
+
+    structure = survival.r_api._survfit_multistate_structure(fit)
+
+    assert structure["n"] == 4
+    assert structure["n.id"] == 4
+    assert structure["n.risk"] == fit.n_risk
+    assert structure["n.event"] == fit.n_event
+    assert structure["pstate"] == fit.pstate
+    assert structure["n.transition"] == fit.n_transition
+    assert structure["cumhaz"] == fit.cumhaz
+    assert structure["p0"] == pytest.approx([0.25, 0.5, 0.25])
+    assert structure["states"] == ["(s0)", "ill", "death"]
+    assert structure["type"] == "mright"
+    assert structure["conf.type"] == "plain"
+    assert structure["conf.int"] == pytest.approx(0.9)
+    assert structure["_transition_names"] == ["1:2", "1:3"]
+    assert structure["transitions"] == {
+        "values": [[1.0, 2.0, 1.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(censored)"],
+    }
+
+    grouped = survival.survfit(
+        response,
+        group=["a", "a", "b", "b"],
+        p0=[0.25, 0.5, 0.25],
+    )
+    grouped_structure = survival.r_api._survfit_multistate_structure(grouped)
+    assert grouped_structure["n"] == [2, 2]
+    assert grouped_structure["n.id"] == [2, 2]
+    assert grouped_structure["strata"] == {"a": 2, "b": 2}
+    assert grouped_structure["time"] == pytest.approx([1.0, 2.0, 3.0, 4.0])
+    assert grouped_structure["p0"] == [
+        [0.25, 0.5, 0.25],
+        [0.25, 0.5, 0.25],
+    ]
+    assert len(grouped_structure["pstate"]) == 4
+    assert all(len(row) == 3 for row in grouped_structure["pstate"])
+
+    subset = survival.r_api._subset_survfit_multistate(fit, [1])
+    assert subset.states == ("ill",)
+    assert subset.p0 == pytest.approx([0.5])
+    assert subset.pstate == [[row[1]] for row in fit.pstate]
+    assert subset.n_risk == [[row[1]] for row in fit.n_risk]
+    assert subset.transitions == ()
+    assert subset.surv_type == fit.surv_type
+    assert subset.conf_type == fit.conf_type
+    assert subset.conf_level == fit.conf_level
+    assert subset.oldstate == fit.states
+    subset_structure = survival.r_api._survfit_multistate_structure(subset)
+    assert "n.id" not in subset_structure
+    assert subset_structure["oldstate"] == ["(s0)", "ill", "death"]
+
+
 def test_survfit_multistate_validates_p0():
     response = survival.Surv(
         [1.0, 2.0, 3.0],

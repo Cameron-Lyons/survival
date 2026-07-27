@@ -684,6 +684,10 @@ class SurvfitMultiStateResult:
     n_transition: list[list[float]] = field(default_factory=list)
     n_transition_count: list[list[float]] | None = None
     model: dict[str, Any] | None = None
+    surv_type: str = "mright"
+    conf_type: str = "log"
+    conf_level: float = 0.95
+    oldstate: tuple[str, ...] | None = None
 
     def __iter__(self):
         yield self.time
@@ -10766,6 +10770,10 @@ def _survfit0_multistate_result(
             zero_transitions,
         ),
         model=result.model,
+        surv_type=result.surv_type,
+        conf_type=result.conf_type,
+        conf_level=result.conf_level,
+        oldstate=result.oldstate,
     )
 
 
@@ -11674,6 +11682,9 @@ def _survfit_multistate_curve(
         n_transition=[row[:transition_count] for row in n_transition_raw],
         n_transition_count=transition_counts,
         model=model_frame,
+        surv_type=response.type,
+        conf_type=conf_type,
+        conf_level=conf_level,
     )
 
 
@@ -14606,6 +14617,180 @@ def _survfit_multistate_frame(result: SurvfitMultiStateResult) -> dict[str, list
                 )
         frame["state"].extend([state] * row_count)
     return frame
+
+
+def _subset_survfit_multistate(
+    result: SurvfitMultiStateResult,
+    state_indices: Any,
+) -> SurvfitMultiStateResult:
+    if not isinstance(result, SurvfitMultiStateResult):
+        raise TypeError("multi-state survfit subsetting requires a multi-state result")
+    indices = [
+        _integer_scalar(value, "state_indices")
+        for value in _materialize_1d(state_indices, "state_indices")
+    ]
+    if not indices:
+        raise ValueError("multi-state survfit subsetting must select at least one state")
+    if any(index < 0 or index >= len(result.states) for index in indices):
+        raise IndexError("multi-state survfit state index is out of bounds")
+
+    def select_columns(values: list[list[float]]) -> list[list[float]]:
+        return [[float(row[index]) for index in indices] for row in values]
+
+    def select_optional(
+        values: list[list[float]] | None,
+    ) -> list[list[float]] | None:
+        return None if values is None else select_columns(values)
+
+    empty_transitions = [[] for _ in result.time]
+    return SurvfitMultiStateResult(
+        time=[float(value) for value in result.time],
+        n_risk=select_columns(result.n_risk),
+        n_event=select_columns(result.n_event),
+        n_censor=select_columns(result.n_censor),
+        pstate=select_columns(result.pstate),
+        cumhaz=empty_transitions,
+        states=tuple(result.states[index] for index in indices),
+        transitions=(),
+        p0=[float(result.p0[index]) for index in indices],
+        t0=result.t0,
+        n=result.n,
+        n_id=result.n_id,
+        std_err=select_optional(result.std_err),
+        std_err0=(
+            None
+            if result.std_err0 is None
+            else [float(result.std_err0[index]) for index in indices]
+        ),
+        std_chaz=None if result.std_chaz is None else empty_transitions,
+        std_auc=select_optional(result.std_auc),
+        conf_lower=select_optional(result.conf_lower),
+        conf_upper=select_optional(result.conf_upper),
+        n_risk_count=select_optional(result.n_risk_count),
+        n_event_count=select_optional(result.n_event_count),
+        n_censor_count=select_optional(result.n_censor_count),
+        n_enter=select_optional(result.n_enter),
+        n_enter_count=select_optional(result.n_enter_count),
+        n_transition=empty_transitions,
+        n_transition_count=(None if result.n_transition_count is None else empty_transitions),
+        model=result.model,
+        surv_type=result.surv_type,
+        conf_type=result.conf_type,
+        conf_level=result.conf_level,
+        oldstate=result.states if result.oldstate is None else result.oldstate,
+    )
+
+
+def _survfit_multistate_structure(
+    result: SurvfitMultiStateResult | Mapping[Any, Any],
+) -> dict[str, Any]:
+    if isinstance(result, SurvfitMultiStateResult):
+        curves = [(None, result)]
+        grouped = False
+    elif (
+        isinstance(result, Mapping)
+        and result
+        and all(isinstance(curve, SurvfitMultiStateResult) for curve in result.values())
+    ):
+        curves = list(result.items())
+        grouped = True
+    else:
+        raise TypeError("survfit structure requires a multi-state result")
+
+    first = curves[0][1]
+    for _label, curve in curves:
+        if curve.states != first.states:
+            raise ValueError("grouped multi-state results must share state columns")
+        if curve.transitions != first.transitions:
+            raise ValueError("grouped multi-state results must share transition columns")
+        if curve.surv_type != first.surv_type:
+            raise ValueError("grouped multi-state results must share a response type")
+
+    def combined_matrix(name: str) -> list[list[float]] | None:
+        matrices = [getattr(curve, name) for _label, curve in curves]
+        if all(matrix is None for matrix in matrices):
+            return None
+        if any(matrix is None for matrix in matrices):
+            raise ValueError(f"grouped multi-state results must share {name} output")
+        return [[float(value) for value in row] for matrix in matrices for row in matrix]
+
+    transition_names = [f"{source + 1}:{target + 1}" for source, target in first.transitions]
+    structure: dict[str, Any] = {
+        "n": [curve.n for _label, curve in curves] if grouped else first.n,
+        "time": [float(value) for _label, curve in curves for value in curve.time],
+        "n.risk": combined_matrix("n_risk"),
+        "n.event": combined_matrix("n_event"),
+        "n.censor": combined_matrix("n_censor"),
+        "pstate": combined_matrix("pstate"),
+    }
+    if first.transitions:
+        structure["n.transition"] = combined_matrix("n_transition")
+    if grouped or first.oldstate is None:
+        structure["n.id"] = [curve.n_id for _label, curve in curves] if grouped else first.n_id
+    if first.transitions:
+        structure["cumhaz"] = combined_matrix("cumhaz")
+    n_enter = combined_matrix("n_enter")
+    if n_enter is not None:
+        structure["n.enter"] = n_enter
+    structure["p0"] = (
+        [[float(value) for value in curve.p0] for _label, curve in curves]
+        if grouped
+        else [float(value) for value in first.p0]
+    )
+    if grouped:
+        structure["strata"] = {str(label): len(curve.time) for label, curve in curves}
+    for field_name, attribute in (
+        ("std.err", "std_err"),
+        ("std.chaz", "std_chaz"),
+        ("std.auc", "std_auc"),
+    ):
+        values = combined_matrix(attribute)
+        if values is not None and (field_name != "std.chaz" or first.transitions):
+            structure[field_name] = values
+    structure["logse"] = False
+
+    if first.transitions:
+        target_states = list(dict.fromkeys(target for _source, target in first.transitions))
+        target_columns = {state: index for index, state in enumerate(target_states)}
+        transition_table = [[0.0] * (len(target_states) + 1) for _state in first.states]
+        for _label, curve in curves:
+            transition_values = (
+                curve.n_transition_count
+                if curve.n_transition_count is not None
+                else curve.n_transition
+            )
+            for row in transition_values:
+                for transition_index, (source, target) in enumerate(curve.transitions):
+                    transition_table[source][target_columns[target]] += float(row[transition_index])
+            censor_values = (
+                curve.n_censor_count if curve.n_censor_count is not None else curve.n_censor
+            )
+            for row in censor_values:
+                for state, value in enumerate(row):
+                    transition_table[state][-1] += float(value)
+        structure["transitions"] = {
+            "values": transition_table,
+            "rows": list(first.states),
+            "columns": [first.states[state] for state in target_states] + ["(censored)"],
+        }
+
+    for field_name, attribute in (("lower", "conf_lower"), ("upper", "conf_upper")):
+        values = combined_matrix(attribute)
+        if values is not None:
+            structure[field_name] = values
+    structure.update(
+        {
+            "conf.type": first.conf_type,
+            "conf.int": first.conf_level,
+            "states": list(first.states),
+            "type": first.surv_type,
+            "t0": first.t0,
+            "_transition_names": transition_names,
+        }
+    )
+    if first.oldstate is not None:
+        structure["oldstate"] = list(first.oldstate)
+    return structure
 
 
 def _turnbull_survfit_frame(result: TurnbullSurvfitResult) -> dict[str, list[Any]]:

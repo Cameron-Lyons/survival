@@ -4649,6 +4649,12 @@ quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
   if (missing(scale)) {
     scale <- 1
   }
+  if (.is_survival_py_multistate_survfit(x)) {
+    stop(
+      "quantiles are not a well defined quantity for multi-state models",
+      call. = FALSE
+    )
+  }
   pname <- format(probs * 100)
 
   if (is.list(x) && !inherits(x, "python.builtin.object")) {
@@ -7856,6 +7862,120 @@ summary.survival_py_anova <- function(object, ...) {
   is.list(x) && !inherits(x, "python.builtin.object")
 }
 
+.is_survival_py_multistate_curve <- function(x) {
+  inherits(x, "python.builtin.object") &&
+    reticulate::py_has_attr(x, "states") &&
+    reticulate::py_has_attr(x, "pstate")
+}
+
+.is_survival_py_multistate_survfit <- function(x) {
+  if (.is_grouped_survival_py_survfit(x)) {
+    curves <- unclass(x)
+    return(
+      length(curves) > 0L &&
+        all(vapply(curves, .is_survival_py_multistate_curve, logical(1L)))
+    )
+  }
+  .is_survival_py_multistate_curve(x)
+}
+
+.survival_py_multistate_states <- function(x) {
+  curve <- if (.is_grouped_survival_py_survfit(x)) unclass(x)[[1L]] else x
+  as.character(.result_field(curve, "states"))
+}
+
+.as_survival_py_multistate_list <- function(x) {
+  fields <- .call_r_api("_survfit_multistate_structure", x)
+  states <- as.character(fields[["states"]])
+  transition_names <- as.character(fields[["_transition_names"]])
+  fields[["_transition_names"]] <- NULL
+  strata_names <- NULL
+
+  if (!is.null(fields[["strata"]])) {
+    strata_names <- names(fields[["strata"]])
+    strata <- as.integer(unlist(fields[["strata"]], recursive = TRUE, use.names = FALSE))
+    names(strata) <- strata_names
+    fields[["strata"]] <- strata
+  }
+
+  state_matrices <- intersect(
+    c(
+      "n.risk", "n.event", "n.censor", "pstate", "n.enter", "lower", "upper"
+    ),
+    names(fields)
+  )
+  for (name in state_matrices) {
+    values <- .as_numeric_matrix(fields[[name]])
+    colnames(values) <- states
+    fields[[name]] <- values
+  }
+
+  unnamed_state_matrices <- intersect(c("std.err", "std.auc"), names(fields))
+  for (name in unnamed_state_matrices) {
+    values <- .as_numeric_matrix(fields[[name]])
+    dimnames(values) <- NULL
+    fields[[name]] <- values
+  }
+
+  transition_matrices <- intersect(
+    c("n.transition", "cumhaz"),
+    names(fields)
+  )
+  for (name in transition_matrices) {
+    values <- .as_numeric_matrix(fields[[name]])
+    colnames(values) <- transition_names
+    fields[[name]] <- values
+  }
+
+  if ("std.chaz" %in% names(fields)) {
+    values <- .as_numeric_matrix(fields[["std.chaz"]])
+    dimnames(values) <- NULL
+    fields[["std.chaz"]] <- values
+  }
+
+  if (is.null(strata_names)) {
+    p0 <- .as_numeric_vector(fields[["p0"]])
+    names(p0) <- states
+  } else {
+    p0 <- .as_numeric_matrix(fields[["p0"]])
+    dimnames(p0) <- list(strata_names, states)
+  }
+  fields[["p0"]] <- p0
+
+  transition_table <- fields[["transitions"]]
+  if (!is.null(transition_table)) {
+    values <- .as_numeric_matrix(transition_table[["values"]])
+    dimnames(values) <- stats::setNames(
+      list(
+        as.character(transition_table[["rows"]]),
+        as.character(transition_table[["columns"]])
+      ),
+      c("from", "to")
+    )
+    fields[["transitions"]] <- as.table(values)
+  }
+
+  fields[["time"]] <- .as_numeric_vector(fields[["time"]])
+  fields[["n"]] <- as.integer(unlist(fields[["n"]], recursive = TRUE, use.names = FALSE))
+  if (!is.null(fields[["n.id"]])) {
+    fields[["n.id"]] <- as.integer(
+      unlist(fields[["n.id"]], recursive = TRUE, use.names = FALSE)
+    )
+  }
+  if (!is.null(strata_names)) {
+    names(fields[["n"]]) <- strata_names
+    if (!is.null(fields[["n.id"]])) {
+      names(fields[["n.id"]]) <- strata_names
+    }
+  }
+  fields[["states"]] <- states
+  fields[["type"]] <- as.character(fields[["type"]])[[1L]]
+  fields[["conf.type"]] <- as.character(fields[["conf.type"]])[[1L]]
+  fields[["conf.int"]] <- as.numeric(fields[["conf.int"]])[[1L]]
+  fields[["t0"]] <- as.numeric(fields[["t0"]])[[1L]]
+  fields
+}
+
 .survival_py_survfit_field_alias <- function(name) {
   aliases <- c(
     estimate = "surv",
@@ -7878,6 +7998,9 @@ summary.survival_py_anova <- function(object, ...) {
 }
 
 .as_survival_py_survfit_list <- function(x) {
+  if (.is_survival_py_multistate_survfit(x)) {
+    return(.as_survival_py_multistate_list(x))
+  }
   if (.is_grouped_survival_py_survfit(x)) {
     return(unclass(x))
   }
@@ -7889,12 +8012,12 @@ summary.survival_py_anova <- function(object, ...) {
   x
 }
 
-.survival_py_survfit_group_indices <- function(i, targets) {
+.survival_py_survfit_group_indices <- function(i, targets, dimension = "strata") {
   if (is.character(i)) {
     idx <- match(i, targets)
     if (any(is.na(idx))) {
       stop(
-        paste("strata", paste(i[is.na(idx)], collapse = " "), "not matched"),
+        paste(dimension, paste(i[is.na(idx)], collapse = " "), "not matched"),
         call. = FALSE
       )
     }
@@ -7903,7 +8026,7 @@ summary.survival_py_anova <- function(object, ...) {
   idx <- seq_along(targets)[i]
   if (any(is.na(idx))) {
     stop(
-      paste("strata", paste(i[is.na(idx)], collapse = " "), "not matched"),
+      paste(dimension, paste(i[is.na(idx)], collapse = " "), "not matched"),
       call. = FALSE
     )
   }
@@ -7968,6 +8091,13 @@ length.survival_py_survfit <- function(x) {
 }
 
 dim.survival_py_survfit <- function(x) {
+  if (.is_survival_py_multistate_survfit(x)) {
+    state_count <- length(.survival_py_multistate_states(x))
+    if (.is_grouped_survival_py_survfit(x)) {
+      return(c(strata = length(unclass(x)), states = state_count))
+    }
+    return(c(states = state_count))
+  }
   if (.is_grouped_survival_py_survfit(x)) {
     return(stats::setNames(length(x), "strata"))
   }
@@ -7988,8 +8118,65 @@ dim.survival_py_survfit <- function(x) {
   NULL
 }
 
-`[.survival_py_survfit` <- function(x, i, ..., drop = TRUE) {
+`[.survival_py_survfit` <- function(x, i, j, ..., drop = TRUE) {
   if (length(list(...)) > 0L) {
+    stop("incorrect number of dimensions", call. = FALSE)
+  }
+  call_names <- names(match.call(expand.dots = FALSE))
+  has_second_dimension <- !missing(j) ||
+    (nargs() >= 3L && missing(j) && !("drop" %in% call_names))
+  if (missing(i) && missing(j)) {
+    return(x)
+  }
+  if (.is_survival_py_multistate_survfit(x)) {
+    states <- .survival_py_multistate_states(x)
+    state_selector <- if (has_second_dimension) {
+      if (missing(j)) seq_along(states) else j
+    } else {
+      i
+    }
+    state_indices <- .survival_py_survfit_group_indices(
+      state_selector,
+      states,
+      dimension = "states"
+    )
+    subset_curve <- function(curve) {
+      .wrap_python(
+        .python_attr("_subset_survfit_multistate")(
+          curve,
+          as.list(as.integer(state_indices - 1L))
+        ),
+        c("survival_py_survfit", "survival_py_object")
+      )
+    }
+    if (.is_grouped_survival_py_survfit(x)) {
+      if (!has_second_dimension) {
+        stop(
+          paste(
+            "single index subscripts are not supported for a survfit object",
+            "with both strata and state dimensions"
+          ),
+          call. = FALSE
+        )
+      }
+      curves <- unclass(x)
+      group_selector <- if (missing(i)) seq_along(curves) else i
+      group_indices <- .survival_py_survfit_group_indices(
+        group_selector,
+        names(curves)
+      )
+      selected <- lapply(curves[group_indices], subset_curve)
+      return(structure(
+        selected,
+        class = c("survival_py_survfit", "survival_py_object", "list")
+      ))
+    }
+    if (has_second_dimension && !missing(i) && !all(seq_len(1L)[i] == 1L)) {
+      stop("subscript out of bounds", call. = FALSE)
+    }
+    return(subset_curve(x))
+  }
+  if (has_second_dimension) {
     stop("incorrect number of dimensions", call. = FALSE)
   }
   if (missing(i)) {

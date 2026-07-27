@@ -469,6 +469,10 @@ class SurvfitMultiStateResult:
     n_transition: list[list[float]]
     n_transition_count: list[list[float]] | None
     model: dict[str, Any] | None
+    surv_type: str
+    conf_type: str
+    conf_level: float
+    oldstate: tuple[str, ...] | None
     def __iter__(self): ...
     @property
     def surv(self) -> list[list[float]]: ...
