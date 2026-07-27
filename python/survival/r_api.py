@@ -684,6 +684,16 @@ class SurvfitMultiStateResult:
     n_transition: list[list[float]] = field(default_factory=list)
     n_transition_count: list[list[float]] | None = None
     model: dict[str, Any] | None = None
+    surv_type: str = "mright"
+    conf_type: str = "log"
+    conf_level: float = 0.95
+    oldstate: tuple[str, ...] | None = None
+    p0_fixed: bool = False
+    timefix: bool = True
+    influence_state: list[list[float]] | None = None
+    influence_state0: list[float] | None = None
+    influence_chaz: list[list[float]] | None = None
+    influence_auc: list[list[float]] | None = None
 
     def __iter__(self):
         yield self.time
@@ -797,6 +807,27 @@ def _coerce_array_like(values: Any, name: str) -> list[Any]:
     return result
 
 
+class _RFactorVector:
+    """Iterable factor values with level metadata preserved across reticulate."""
+
+    def __init__(self, values: Any, levels: Any):
+        self._values = tuple(values)
+        self.categories = tuple(levels)
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __getitem__(self, item: int) -> Any:
+        return self._values[item]
+
+
+def _r_factor(values: Any, levels: Any) -> _RFactorVector:
+    return _RFactorVector(values, levels)
+
+
 def _materialize_1d(values: Any, name: str) -> list[Any]:
     result = _coerce_array_like(values, name)
     if result and isinstance(result[0], list | tuple):
@@ -897,11 +928,16 @@ def _mstate_inferred_levels(values: Sequence[Any]) -> list[str]:
     return sorted(labels)
 
 
+def _mstate_categories(values: Any) -> Any | None:
+    categories = getattr(values, "categories", None)
+    if categories is not None:
+        return categories
+    return getattr(getattr(values, "dtype", None), "categories", None)
+
+
 def _mstate_event_vector(values: Any, name: str) -> tuple[list[int | None], tuple[str, ...]]:
     raw = _materialize_1d(values, name)
-    categories = getattr(values, "categories", None)
-    if categories is None:
-        categories = getattr(getattr(values, "dtype", None), "categories", None)
+    categories = _mstate_categories(values)
     if categories is None:
         levels = _mstate_inferred_levels(raw)
     else:
@@ -920,9 +956,7 @@ def _mstate_event_vector(values: Any, name: str) -> tuple[list[int | None], tupl
 
 def _mstate_levels(values: Any, name: str) -> tuple[list[Any], list[str]]:
     raw = _materialize_1d(values, name)
-    categories = getattr(values, "categories", None)
-    if categories is None:
-        categories = getattr(getattr(values, "dtype", None), "categories", None)
+    categories = _mstate_categories(values)
     levels = (
         _mstate_inferred_levels(raw)
         if categories is None
@@ -1099,11 +1133,15 @@ def _subset_indices(subset: Any, n: int) -> list[int]:
     return indices
 
 
-def _subset_sequence(values: Any, indices: list[int], name: str) -> list[Any]:
+def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
     materialized = _coerce_array_like(values, name)
     if indices and max(indices) >= len(materialized):
         raise ValueError(f"{name} must have enough rows for subset")
-    return [materialized[idx] for idx in indices]
+    subsetted = [materialized[idx] for idx in indices]
+    categories = _mstate_categories(values)
+    if categories is not None:
+        return _RFactorVector(subsetted, categories)
+    return subsetted
 
 
 def _subset_optional_sequence(
@@ -1593,18 +1631,22 @@ def brier(
     return result
 
 
-def _column(data: Any, name: str) -> list[Any]:
+def _column_source(data: Any, name: str) -> Any:
     if data is None:
         raise ValueError("data is required when using a formula")
     if isinstance(data, Mapping):
         try:
-            return _materialize_1d(data[name], name)
+            return data[name]
         except KeyError as exc:
             raise KeyError(f"column {name!r} not found in data") from exc
     try:
-        return _materialize_1d(data[name], name)
+        return data[name]
     except Exception as exc:
         raise KeyError(f"column {name!r} not found in data") from exc
+
+
+def _column(data: Any, name: str) -> list[Any]:
+    return _materialize_1d(_column_source(data, name), name)
 
 
 def _formula_name(name: str) -> tuple[str, bool]:
@@ -1930,7 +1972,7 @@ def _response_rep_count(count_expression: str, inferred_length: int | None) -> i
     return count
 
 
-def _response_arg_values(data: Any, part: str, inferred_length: int | None = None) -> list[Any]:
+def _response_arg_values(data: Any, part: str, inferred_length: int | None = None) -> Any:
     part = _unwrap_response_identity(part)
     rep_call = _response_rep_call(part)
     if rep_call is not None:
@@ -1942,7 +1984,7 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
         operand = _response_operand(part, allow_literal=False)
         if operand.column is None:
             raise ValueError("Surv(...) formula response arguments must be data columns")
-        return _column(data, operand.column)
+        return _column_source(data, operand.column)
 
     left_operand = _response_operand(comparison[0], allow_literal=True)
     right_operand = _response_operand(comparison[2], allow_literal=True)
@@ -1966,7 +2008,7 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
     raise ValueError("formula response comparisons require at least one data column")
 
 
-def _formula_response_values(data: Any, spec: _SurvResponseSpec) -> list[list[Any]]:
+def _formula_response_values(data: Any, spec: _SurvResponseSpec) -> list[Any]:
     inferred_length: int | None = None
     if spec.columns:
         inferred_length = len(_column(data, spec.columns[0]))
@@ -4661,6 +4703,12 @@ class Surv:
             args = named_args
 
         surv_type = _normalize_surv_type(type) if type is not None else None
+        categorical_event = len(args) in {2, 3} and _mstate_categories(args[-1]) is not None
+        if categorical_event and (
+            (len(args) == 2 and surv_type in {None, "right", "left", "mstate"})
+            or (len(args) == 3 and surv_type in {None, "counting", "mstate"})
+        ):
+            surv_type = "mstate"
         states: tuple[str, ...] = ()
         origin_value = _finite_float(origin, "origin")
         if len(args) == 1:
@@ -4792,7 +4840,7 @@ class Surv2:
             raise ValueError("invalid value for repeated option")
         repeated_value = bool(repeated)
 
-        levels = _surv2_levels(event_values)
+        levels = _surv2_levels(event)
         states = levels[1:]
         if any(state == "" for state in states):
             raise ValueError("each state must have a non-blank name")
@@ -4831,9 +4879,16 @@ def _surv2_level_sort_key(label: str) -> tuple[int, Any]:
     return (1, label)
 
 
-def _surv2_levels(events: Sequence[Any]) -> list[str]:
+def _surv2_levels(events: Any) -> list[str]:
+    categories = _mstate_categories(events)
+    if categories is not None:
+        return [
+            _surv2_event_label(value)
+            for value in _materialize_1d(categories, "event categories")
+            if not _is_missing_value(value)
+        ]
     levels: dict[str, None] = {}
-    for value in events:
+    for value in _materialize_1d(events, "event"):
         if not _is_missing_value(value):
             levels.setdefault(_surv2_event_label(value), None)
     return sorted(levels, key=_surv2_level_sort_key)
@@ -8498,6 +8553,133 @@ def _pseudo_matrix_or_frame(result: Any, data_frame: bool) -> Any:
     return frame
 
 
+def _survfit_multistate_integrated_estimate(
+    curve_time: Sequence[float],
+    estimates: Sequence[float],
+    initial: float,
+    t0: float,
+    eval_times: Sequence[float],
+) -> list[float]:
+    times = [float(value) for value in curve_time]
+    values = [float(value) for value in estimates]
+    result: list[float] = []
+    for target_value in eval_times:
+        target = float(target_value)
+        if target <= t0:
+            result.append(0.0)
+            continue
+        area = 0.0
+        previous_time = t0
+        previous_value = float(initial)
+        for time, value in zip(times, values, strict=True):
+            if time < t0:
+                previous_value = value
+                continue
+            upper = min(target, time)
+            if upper > previous_time:
+                area += previous_value * (upper - previous_time)
+                previous_time = upper
+            if time > target:
+                break
+            previous_value = value
+        if target > previous_time:
+            area += previous_value * (target - previous_time)
+        result.append(area)
+    return result
+
+
+def _survfit_multistate_estimates_at_times(
+    curve: SurvfitMultiStateResult,
+    eval_times: Sequence[float],
+    residual_type: str,
+) -> list[list[float]]:
+    if residual_type == "cumhaz":
+        return [
+            _core.step_values_at(
+                list(curve.time),
+                [float(row[column]) for row in curve.cumhaz],
+                [float(value) for value in eval_times],
+                0.0,
+            )
+            for column in range(len(curve.transitions))
+        ]
+    if residual_type == "auc":
+        return [
+            _survfit_multistate_integrated_estimate(
+                curve.time,
+                [float(row[state]) for row in curve.pstate],
+                curve.p0[state],
+                curve.t0,
+                eval_times,
+            )
+            for state in range(len(curve.states))
+        ]
+    return [
+        _core.step_values_at(
+            list(curve.time),
+            [float(row[state]) for row in curve.pstate],
+            [float(value) for value in eval_times],
+            float(curve.p0[state]),
+        )
+        for state in range(len(curve.states))
+    ]
+
+
+def _pseudo_multistate_survfit(
+    fit: SurvfitMultiStateResult | Mapping[Any, Any],
+    eval_times: list[float] | None,
+    pseudo_type: str,
+    collapse: bool,
+    data_frame: bool,
+) -> dict[str, Any]:
+    if eval_times is None:
+        raise TypeError("the times argument is required")
+    residual_type = {
+        "survival": "pstate",
+        "cumhaz": "cumhaz",
+        "rmst": "auc",
+    }[pseudo_type]
+    residual_result = survfit_residuals(
+        fit,
+        times=eval_times,
+        type=residual_type,
+        collapse=collapse,
+        weighted=collapse,
+        data_frame=False,
+        extra=True,
+    )
+    curves = list(fit.values()) if isinstance(fit, Mapping) else [fit]
+    if not all(isinstance(curve, SurvfitMultiStateResult) for curve in curves):
+        raise TypeError("multi-state pseudo-values require multi-state survfit results")
+    estimate_cache = [
+        _survfit_multistate_estimates_at_times(curve, eval_times, residual_type) for curve in curves
+    ]
+    curve_numbers = residual_result["curve"]
+    pseudo_values: list[list[list[float]]] = []
+    for row_idx, residual_columns in enumerate(residual_result["resid"]):
+        curve_idx = 0 if curve_numbers is None else int(curve_numbers[row_idx]) - 1
+        curve = curves[curve_idx]
+        scale = float(curve.n_id)
+        estimates = estimate_cache[curve_idx]
+        pseudo_values.append(
+            [
+                [
+                    float(estimate) + scale * float(residual)
+                    for estimate, residual in zip(
+                        estimates[column],
+                        residual_columns[column],
+                        strict=True,
+                    )
+                ]
+                for column in range(len(estimates))
+            ]
+        )
+    result = dict(residual_result)
+    result["pseudo"] = pseudo_values
+    result["data_frame"] = data_frame
+    return result
+
+
 def pseudo(
     fit: Any = None,
     status: Any | None = None,
@@ -8535,14 +8717,27 @@ def pseudo(
         )
     if fit is None:
         raise TypeError("pseudo requires a survfit result or time/status vectors")
-    _normalize_bool_option(collapse, "collapse")
+    collapse_value = _normalize_bool_option(collapse, "collapse")
     data_frame = _normalize_bool_option(data_frame, "data_frame")
+    is_multistate = isinstance(fit, SurvfitMultiStateResult) or (
+        isinstance(fit, Mapping)
+        and bool(fit)
+        and all(isinstance(curve, SurvfitMultiStateResult) for curve in fit.values())
+    )
+    if is_multistate:
+        return _pseudo_multistate_survfit(
+            fit,
+            eval_time_values,
+            pseudo_type,
+            collapse_value,
+            data_frame,
+        )
     if isinstance(fit, Mapping):
         return _pseudo_for_grouped_survfit(
             fit,
             eval_time_values,
             pseudo_type,
-            _normalize_bool_option(collapse, "collapse"),
+            collapse_value,
             data_frame,
         )
 
@@ -8559,7 +8754,7 @@ def pseudo(
             model,
             eval_time_values,
             pseudo_type,
-            _normalize_bool_option(collapse, "collapse"),
+            collapse_value,
             data_frame,
         )
     if response.type != "right":
@@ -9729,10 +9924,9 @@ def _survfit_residual_model_frame(fit: Any) -> Mapping[Any, Any]:
 def _survfit_residual_response(frame: Mapping[Any, Any]) -> Surv:
     for value in frame.values():
         if isinstance(value, Surv):
-            if value.type not in {"right", "counting"}:
+            if value.type not in {"right", "counting", "mright", "mcounting"}:
                 raise NotImplementedError(
-                    "residuals.survfit currently supports right-censored or counting "
-                    "Kaplan-Meier fits"
+                    "residuals.survfit currently supports right-censored or counting fits"
                 )
             return value
     raise TypeError("stored survfit model frame does not contain a Surv response")
@@ -9821,6 +10015,229 @@ def _survfit_residual_curve_specs(
             n,
         )
     return [(None, fit, list(range(n)), 1)]
+
+
+def _survfit_multistate_auc_influence_at_times(
+    curve_times: Sequence[float],
+    state_influence: Sequence[float],
+    area_influence: Sequence[float],
+    initial_influence: float,
+    t0: float,
+    eval_times: Sequence[float],
+) -> list[float]:
+    times = [float(value) for value in curve_times]
+    state = [float(value) for value in state_influence]
+    area = [float(value) for value in area_influence]
+    values: list[float] = []
+    for target_value in eval_times:
+        target = float(target_value)
+        if target <= t0:
+            values.append(0.0)
+            continue
+        time_idx = bisect_right(times, target) - 1
+        if time_idx < 0:
+            values.append((target - t0) * initial_influence)
+            continue
+        values.append(area[time_idx] + (target - times[time_idx]) * state[time_idx])
+    return values
+
+
+def _survfit_multistate_residual_block(
+    curve: SurvfitMultiStateResult,
+    response: Surv,
+    case_weights: list[float],
+    id_values: list[Any] | None,
+    istate: list[Any] | None,
+    group_labels: list[Any],
+    eval_times: Sequence[float],
+    residual_type: str,
+    weighted: bool,
+) -> tuple[list[Any], list[list[list[float]]], list[str]]:
+    if curve.oldstate is not None:
+        raise ValueError("residuals not available for a subscripted survfit object")
+    normalized, current_states, states, history_ids = _survfit_multistate_state_data(
+        response,
+        id_values,
+        istate,
+        curve.timefix,
+    )
+    if states != curve.states:
+        raise ValueError("error in residuals.survfit, non-matching states")
+    keep = _survfit_start_time_indices(normalized, curve.t0, curve.timefix)
+    normalized = _subset_surv(normalized, keep)
+    current_states = [current_states[idx] for idx in keep]
+    history_ids = [history_ids[idx] for idx in keep]
+    case_weights = [case_weights[idx] for idx in keep]
+    kept_group_labels = [group_labels[idx] for idx in keep]
+    influence_weights = list(case_weights) if weighted else [1.0] * len(keep)
+    positions = (
+        [3] * len(normalized)
+        if normalized.start is None
+        else _survfit_counting_positions(
+            normalized.start,
+            normalized.time,
+            history_ids,
+            curve.timefix,
+        )
+    )
+    initial_rows = (
+        [True] * len(normalized)
+        if normalized.start is None
+        else [
+            start <= curve.t0 <= stop
+            if curve.t0 == min(normalized.start)
+            else start < curve.t0 <= stop
+            for start, stop in zip(normalized.start, normalized.time, strict=True)
+        ]
+    )
+    influence_curve = _survfit_multistate_curve(
+        normalized,
+        case_weights,
+        history_ids,
+        kept_group_labels,
+        current_states,
+        positions,
+        curve.states,
+        curve.transitions,
+        t0=curve.t0,
+        output_times=list(curve.time),
+        initial_rows=initial_rows,
+        p0_override=list(curve.p0) if curve.p0_fixed else None,
+        report_initial_error=False,
+        include_se=True,
+        include_entry=False,
+        conf_level=curve.conf_level,
+        conf_type="none",
+        model_frame=None,
+        timefix=curve.timefix,
+        save_influence=True,
+        influence_weights=influence_weights,
+    )
+    groups = _label_levels(kept_group_labels, "influence groups")
+    group_count = len(groups)
+    if residual_type == "cumhaz":
+        raw_values = influence_curve.influence_chaz
+        columns = [f"{source + 1}:{target + 1}" for source, target in curve.transitions]
+        column_count = len(columns)
+    else:
+        raw_values = (
+            influence_curve.influence_auc
+            if residual_type == "auc"
+            else influence_curve.influence_state
+        )
+        columns = list(curve.states)
+        column_count = len(columns)
+    if raw_values is None:
+        raise RuntimeError("multi-state influence values were not returned by the core fit")
+    initial_values = influence_curve.influence_state0
+    state_values = influence_curve.influence_state
+    if initial_values is None or state_values is None:
+        raise RuntimeError("multi-state state influence values were not returned by the core fit")
+
+    block = [
+        [[0.0 for _time in eval_times] for _column in range(column_count)]
+        for _group in range(group_count)
+    ]
+    for column in range(column_count):
+        for group in range(group_count):
+            raw_row = raw_values[group + column * group_count]
+            if residual_type == "auc":
+                values = _survfit_multistate_auc_influence_at_times(
+                    influence_curve.time,
+                    state_values[group + column * group_count],
+                    raw_row,
+                    initial_values[group + column * group_count],
+                    curve.t0,
+                    eval_times,
+                )
+            else:
+                initial = (
+                    initial_values[group + column * group_count]
+                    if residual_type == "pstate"
+                    else 0.0
+                )
+                values = _core.step_values_at(
+                    list(influence_curve.time),
+                    [float(value) for value in raw_row],
+                    [float(value) for value in eval_times],
+                    initial,
+                )
+            block[group][column] = [float(value) for value in values]
+    return groups, block, columns
+
+
+def _survfit_multistate_residual_result(
+    frame: Mapping[Any, Any],
+    response: Surv,
+    case_weights: list[float],
+    id_values: list[Any],
+    id_name: str | None,
+    curve_specs: list[tuple[Any, Any, list[int], int]],
+    eval_times: Sequence[float],
+    residual_type: str,
+    collapse: bool,
+    weighted: bool,
+    data_frame: bool,
+    extra: bool,
+) -> dict[str, Any]:
+    first_curve = curve_specs[0][1]
+    if not isinstance(first_curve, SurvfitMultiStateResult):
+        raise TypeError("multi-state residuals require a multi-state survfit result")
+    columns = (
+        [f"{source + 1}:{target + 1}" for source, target in first_curve.transitions]
+        if residual_type == "cumhaz"
+        else list(first_curve.states)
+    )
+    output_ids = list(_label_levels(id_values, "id")) if collapse else list(id_values)
+    output_index = {value: idx for idx, value in enumerate(output_ids)} if collapse else None
+    cube = [[[0.0 for _time in eval_times] for _column in columns] for _row in output_ids]
+    curve_numbers = [0 for _row in output_ids] if len(curve_specs) > 1 else None
+    istate_values = None
+    if "(istate)" in frame:
+        istate_values = _materialize_1d(frame["(istate)"], "istate")
+        if len(istate_values) != len(response):
+            raise ValueError("istate must have the same length as the Surv response")
+
+    for _label, curve, indices, curve_idx in curve_specs:
+        if not isinstance(curve, SurvfitMultiStateResult):
+            raise TypeError("grouped survfit results must not mix curve types")
+        source_response = _subset_surv(response, indices)
+        source_weights = [case_weights[idx] for idx in indices]
+        source_ids = [id_values[idx] for idx in indices]
+        source_istate = None if istate_values is None else [istate_values[idx] for idx in indices]
+        group_labels = source_ids if collapse else list(indices)
+        groups, block, block_columns = _survfit_multistate_residual_block(
+            curve,
+            source_response,
+            source_weights,
+            source_ids if "(id)" in frame else None,
+            source_istate,
+            group_labels,
+            eval_times,
+            residual_type,
+            weighted,
+        )
+        if block_columns != columns:
+            raise ValueError("grouped multi-state residual curves must share output columns")
+        for group_idx, group in enumerate(groups):
+            target = output_index[group] if output_index is not None else int(group)
+            if curve_numbers is not None and curve_numbers[target] not in {0, curve_idx}:
+                raise ValueError("same id appears in multiple curves, cannot collapse")
+            cube[target] = block[group_idx]
+            if curve_numbers is not None:
+                curve_numbers[target] = curve_idx
+
+    return {
+        "resid": cube,
+        "id": output_ids,
+        "id_name": id_name,
+        "time": [float(value) for value in eval_times],
+        "columns": columns,
+        "column_name": "transition" if residual_type == "cumhaz" else "state",
+        "curve": curve_numbers,
+        "data_frame": data_frame,
+        "extra": extra,
+    }
 
 
 def _survfit_residual_rows_at_times(
@@ -9972,10 +10389,27 @@ def survfit_residuals(
     if not has_id or len(_label_levels(id_values, "id")) == n:
         collapse_value = False
 
+    curve_specs = _survfit_residual_curve_specs(fit, frame, n)
+    if response.type in {"mright", "mcounting"}:
+        return _survfit_multistate_residual_result(
+            frame,
+            response,
+            weights_values,
+            id_values,
+            id_name,
+            curve_specs,
+            eval_times,
+            residual_type,
+            collapse_value,
+            weighted_value,
+            data_frame_value,
+            extra_value,
+        )
+
     matrix, curve_numbers = _survfit_residual_matrix(
         response,
         weights_values,
-        _survfit_residual_curve_specs(fit, frame, n),
+        curve_specs,
         eval_times,
         residual_type,
     )
@@ -10721,6 +11155,16 @@ def _survfit0_multistate_result(
             zero_transitions,
         ),
         model=result.model,
+        surv_type=result.surv_type,
+        conf_type=result.conf_type,
+        conf_level=result.conf_level,
+        oldstate=result.oldstate,
+        p0_fixed=result.p0_fixed,
+        timefix=result.timefix,
+        influence_state=result.influence_state,
+        influence_state0=result.influence_state0,
+        influence_chaz=result.influence_chaz,
+        influence_auc=result.influence_auc,
     )
 
 
@@ -11430,6 +11874,7 @@ def _survfit_multistate_initial_distribution(
     state_count: int,
     p0_override: list[float] | None,
     include_se: bool,
+    influence_weights: Sequence[float] | None = None,
 ) -> tuple[list[float], list[float]]:
     if p0_override is not None:
         p0 = list(p0_override)
@@ -11447,10 +11892,11 @@ def _survfit_multistate_initial_distribution(
     if not include_se or any(value == 1.0 for value in p0):
         return p0, [0.0] * (cluster_count * state_count) if include_se else []
 
+    influence_case_weights = weights if influence_weights is None else influence_weights
     influence = [[0.0] * state_count for _ in range(cluster_count)]
-    for state, weight, at_risk, cluster_code in zip(
+    for state, influence_weight, at_risk, cluster_code in zip(
         current_states,
-        weights,
+        influence_case_weights,
         initial_rows,
         cluster_codes,
         strict=True,
@@ -11459,7 +11905,7 @@ def _survfit_multistate_initial_distribution(
             continue
         for target in range(state_count):
             influence[cluster_code][target] += (
-                weight * (float(state == target) - p0[target]) / total_weight
+                influence_weight * (float(state == target) - p0[target]) / total_weight
             )
     return p0, [
         influence[cluster_code][state]
@@ -11511,6 +11957,9 @@ def _survfit_multistate_curve(
     conf_level: float,
     conf_type: str,
     model_frame: dict[str, Any] | None,
+    timefix: bool = True,
+    save_influence: bool = False,
+    influence_weights: list[float] | None = None,
 ) -> SurvfitMultiStateResult:
     n = len(response)
     stop = list(response.time)
@@ -11524,6 +11973,11 @@ def _survfit_multistate_curve(
     case_weights = [1.0] * n if weights is None else list(weights)
     if any(weight < 0.0 or not math.isfinite(weight) for weight in case_weights):
         raise ValueError("weights must contain only non-negative finite values")
+    influence_case_weights = case_weights if influence_weights is None else list(influence_weights)
+    if len(influence_case_weights) != n:
+        raise ValueError("influence_weights must have the same length as the Surv response")
+    if any(weight < 0.0 or not math.isfinite(weight) for weight in influence_case_weights):
+        raise ValueError("influence_weights must contain only non-negative finite values")
 
     state_count = len(states)
     transition_count = len(transitions)
@@ -11541,6 +11995,7 @@ def _survfit_multistate_curve(
         state_count,
         p0_override,
         include_se,
+        influence_case_weights,
     )
     std_err0 = (
         [
@@ -11576,12 +12031,13 @@ def _survfit_multistate_curve(
         ngrp=cluster_count,
         p0=p0,
         i0=initial_influence,
-        sefit=1 if include_se else 0,
+        sefit=2 if include_se and save_influence else 1 if include_se else 0,
         entry=include_entry,
         position=positions,
         hindx=hindx,
         trmat=[list(transition) for transition in transitions],
         t0=t0,
+        influence_weights=influence_case_weights,
     )
     n_risk_raw = _survfit_multistate_matrix(raw.n_risk)
     n_censor_raw = _survfit_multistate_matrix(raw.n_censor)
@@ -11629,6 +12085,21 @@ def _survfit_multistate_curve(
         n_transition=[row[:transition_count] for row in n_transition_raw],
         n_transition_count=transition_counts,
         model=model_frame,
+        surv_type=response.type,
+        conf_type=conf_type,
+        conf_level=conf_level,
+        p0_fixed=p0_override is not None,
+        timefix=timefix,
+        influence_state=(
+            None if raw.influence is None else _survfit_multistate_matrix(raw.influence)
+        ),
+        influence_state0=(list(initial_influence) if include_se and save_influence else None),
+        influence_chaz=(
+            None if raw.influence_chaz is None else _survfit_multistate_matrix(raw.influence_chaz)
+        ),
+        influence_auc=(
+            None if raw.influence_auc is None else _survfit_multistate_matrix(raw.influence_auc)
+        ),
     )
 
 
@@ -11826,6 +12297,7 @@ def _survfit_multistate(
             conf_level=conf_level,
             conf_type=conf_type,
             model_frame=model_frame,
+            timefix=timefix,
         )
 
     if group is None:
@@ -14499,6 +14971,246 @@ def _survfit_frame(result: SurvfitResult) -> dict[str, list[Any]]:
     return frame
 
 
+def _survfit_multistate_column(
+    values: Sequence[Sequence[Any]],
+    state_index: int,
+    row_count: int,
+    state_count: int,
+    name: str,
+) -> list[Any]:
+    if len(values) != row_count:
+        raise ValueError(f"multi-state survfit column {name!r} must match time length")
+    column: list[Any] = []
+    for row in values:
+        if len(row) != state_count:
+            raise ValueError(f"multi-state survfit column {name!r} must have one value per state")
+        column.append(row[state_index])
+    return column
+
+
+def _survfit_multistate_frame(result: SurvfitMultiStateResult) -> dict[str, list[Any]]:
+    row_count = len(result.time)
+    state_count = len(result.states)
+    required = {
+        "n.risk": result.n_risk,
+        "n.event": result.n_event,
+        "n.censor": result.n_censor,
+        "pstate": result.pstate,
+    }
+    optional = {
+        "std.err": result.std_err,
+        "lower": result.conf_lower,
+        "upper": result.conf_upper,
+    }
+    frame: dict[str, list[Any]] = {
+        "time": [],
+        **{name: [] for name in required},
+        **{name: [] for name, values in optional.items() if values is not None},
+        "state": [],
+    }
+    for state_index, state in enumerate(result.states):
+        frame["time"].extend(float(value) for value in result.time)
+        for name, values in required.items():
+            frame[name].extend(
+                _survfit_multistate_column(
+                    values,
+                    state_index,
+                    row_count,
+                    state_count,
+                    name,
+                )
+            )
+        for name, values in optional.items():
+            if values is not None:
+                frame[name].extend(
+                    _survfit_multistate_column(
+                        values,
+                        state_index,
+                        row_count,
+                        state_count,
+                        name,
+                    )
+                )
+        frame["state"].extend([state] * row_count)
+    return frame
+
+
+def _subset_survfit_multistate(
+    result: SurvfitMultiStateResult,
+    state_indices: Any,
+) -> SurvfitMultiStateResult:
+    if not isinstance(result, SurvfitMultiStateResult):
+        raise TypeError("multi-state survfit subsetting requires a multi-state result")
+    indices = [
+        _integer_scalar(value, "state_indices")
+        for value in _materialize_1d(state_indices, "state_indices")
+    ]
+    if not indices:
+        raise ValueError("multi-state survfit subsetting must select at least one state")
+    if any(index < 0 or index >= len(result.states) for index in indices):
+        raise IndexError("multi-state survfit state index is out of bounds")
+
+    def select_columns(values: list[list[float]]) -> list[list[float]]:
+        return [[float(row[index]) for index in indices] for row in values]
+
+    def select_optional(
+        values: list[list[float]] | None,
+    ) -> list[list[float]] | None:
+        return None if values is None else select_columns(values)
+
+    empty_transitions = [[] for _ in result.time]
+    return SurvfitMultiStateResult(
+        time=[float(value) for value in result.time],
+        n_risk=select_columns(result.n_risk),
+        n_event=select_columns(result.n_event),
+        n_censor=select_columns(result.n_censor),
+        pstate=select_columns(result.pstate),
+        cumhaz=empty_transitions,
+        states=tuple(result.states[index] for index in indices),
+        transitions=(),
+        p0=[float(result.p0[index]) for index in indices],
+        t0=result.t0,
+        n=result.n,
+        n_id=result.n_id,
+        std_err=select_optional(result.std_err),
+        std_err0=(
+            None
+            if result.std_err0 is None
+            else [float(result.std_err0[index]) for index in indices]
+        ),
+        std_chaz=None if result.std_chaz is None else empty_transitions,
+        std_auc=select_optional(result.std_auc),
+        conf_lower=select_optional(result.conf_lower),
+        conf_upper=select_optional(result.conf_upper),
+        n_risk_count=select_optional(result.n_risk_count),
+        n_event_count=select_optional(result.n_event_count),
+        n_censor_count=select_optional(result.n_censor_count),
+        n_enter=select_optional(result.n_enter),
+        n_enter_count=select_optional(result.n_enter_count),
+        n_transition=empty_transitions,
+        n_transition_count=(None if result.n_transition_count is None else empty_transitions),
+        model=result.model,
+        surv_type=result.surv_type,
+        conf_type=result.conf_type,
+        conf_level=result.conf_level,
+        oldstate=result.states if result.oldstate is None else result.oldstate,
+        p0_fixed=result.p0_fixed,
+        timefix=result.timefix,
+    )
+
+
+def _survfit_multistate_structure(
+    result: SurvfitMultiStateResult | Mapping[Any, Any],
+) -> dict[str, Any]:
+    if isinstance(result, SurvfitMultiStateResult):
+        curves = [(None, result)]
+        grouped = False
+    elif (
+        isinstance(result, Mapping)
+        and result
+        and all(isinstance(curve, SurvfitMultiStateResult) for curve in result.values())
+    ):
+        curves = list(result.items())
+        grouped = True
+    else:
+        raise TypeError("survfit structure requires a multi-state result")
+
+    first = curves[0][1]
+    for _label, curve in curves:
+        if curve.states != first.states:
+            raise ValueError("grouped multi-state results must share state columns")
+        if curve.transitions != first.transitions:
+            raise ValueError("grouped multi-state results must share transition columns")
+        if curve.surv_type != first.surv_type:
+            raise ValueError("grouped multi-state results must share a response type")
+
+    def combined_matrix(name: str) -> list[list[float]] | None:
+        matrices = [getattr(curve, name) for _label, curve in curves]
+        if all(matrix is None for matrix in matrices):
+            return None
+        if any(matrix is None for matrix in matrices):
+            raise ValueError(f"grouped multi-state results must share {name} output")
+        return [[float(value) for value in row] for matrix in matrices for row in matrix]
+
+    transition_names = [f"{source + 1}:{target + 1}" for source, target in first.transitions]
+    structure: dict[str, Any] = {
+        "n": [curve.n for _label, curve in curves] if grouped else first.n,
+        "time": [float(value) for _label, curve in curves for value in curve.time],
+        "n.risk": combined_matrix("n_risk"),
+        "n.event": combined_matrix("n_event"),
+        "n.censor": combined_matrix("n_censor"),
+        "pstate": combined_matrix("pstate"),
+    }
+    if first.transitions:
+        structure["n.transition"] = combined_matrix("n_transition")
+    if grouped or first.oldstate is None:
+        structure["n.id"] = [curve.n_id for _label, curve in curves] if grouped else first.n_id
+    if first.transitions:
+        structure["cumhaz"] = combined_matrix("cumhaz")
+    n_enter = combined_matrix("n_enter")
+    if n_enter is not None:
+        structure["n.enter"] = n_enter
+    structure["p0"] = (
+        [[float(value) for value in curve.p0] for _label, curve in curves]
+        if grouped
+        else [float(value) for value in first.p0]
+    )
+    if grouped:
+        structure["strata"] = {str(label): len(curve.time) for label, curve in curves}
+    for field_name, attribute in (
+        ("std.err", "std_err"),
+        ("std.chaz", "std_chaz"),
+        ("std.auc", "std_auc"),
+    ):
+        values = combined_matrix(attribute)
+        if values is not None and (field_name != "std.chaz" or first.transitions):
+            structure[field_name] = values
+    structure["logse"] = False
+
+    if first.transitions:
+        target_states = list(dict.fromkeys(target for _source, target in first.transitions))
+        target_columns = {state: index for index, state in enumerate(target_states)}
+        transition_table = [[0.0] * (len(target_states) + 1) for _state in first.states]
+        for _label, curve in curves:
+            transition_values = (
+                curve.n_transition_count
+                if curve.n_transition_count is not None
+                else curve.n_transition
+            )
+            for row in transition_values:
+                for transition_index, (source, target) in enumerate(curve.transitions):
+                    transition_table[source][target_columns[target]] += float(row[transition_index])
+            censor_values = (
+                curve.n_censor_count if curve.n_censor_count is not None else curve.n_censor
+            )
+            for row in censor_values:
+                for state, value in enumerate(row):
+                    transition_table[state][-1] += float(value)
+        structure["transitions"] = {
+            "values": transition_table,
+            "rows": list(first.states),
+            "columns": [first.states[state] for state in target_states] + ["(censored)"],
+        }
+
+    for field_name, attribute in (("lower", "conf_lower"), ("upper", "conf_upper")):
+        values = combined_matrix(attribute)
+        if values is not None:
+            structure[field_name] = values
+    structure.update(
+        {
+            "conf.type": first.conf_type,
+            "conf.int": first.conf_level,
+            "states": list(first.states),
+            "type": first.surv_type,
+            "t0": first.t0,
+            "_transition_names": transition_names,
+        }
+    )
+    if first.oldstate is not None:
+        structure["oldstate"] = list(first.oldstate)
+    return structure
+
+
 def _turnbull_survfit_frame(result: TurnbullSurvfitResult) -> dict[str, list[Any]]:
     return {
         "time": result.time_points,
@@ -14509,6 +15221,31 @@ def _turnbull_survfit_frame(result: TurnbullSurvfitResult) -> dict[str, list[Any
 
 
 def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
+    if result and all(isinstance(curve, SurvfitMultiStateResult) for curve in result.values()):
+        curve_frames = {label: _survfit_multistate_frame(curve) for label, curve in result.items()}
+        columns = list(next(iter(curve_frames.values())))
+        if "state" not in columns:
+            raise ValueError("multi-state survfit frame is missing its state column")
+        frame = {
+            name: [] for name in [*[name for name in columns if name != "state"], "strata", "state"]
+        }
+        states = next(iter(result.values())).states
+        if any(curve.states != states for curve in result.values()):
+            raise ValueError("grouped multi-state results must share state columns")
+        for state in states:
+            for label, curve_frame in curve_frames.items():
+                if list(curve_frame) != columns:
+                    raise ValueError("grouped multi-state results must share tabular columns")
+                indices = [
+                    index for index, value in enumerate(curve_frame["state"]) if value == state
+                ]
+                frame["strata"].extend([str(label)] * len(indices))
+                frame["state"].extend([state] * len(indices))
+                for name in columns:
+                    if name != "state":
+                        frame[name].extend(curve_frame[name][index] for index in indices)
+        return frame
+
     frame: dict[str, list[Any]] = {}
     for label, curve in result.items():
         curve_frame = as_data_frame(curve)
@@ -14784,6 +15521,8 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _cox_survfit_frame(result)
     if isinstance(result, CoxBaseHazardResult):
         return _cox_basehaz_frame(result)
+    if isinstance(result, SurvfitMultiStateResult):
+        return _survfit_multistate_frame(result)
     if isinstance(result, SurvfitResult):
         return _survfit_frame(result)
     if isinstance(result, TurnbullSurvfitResult):

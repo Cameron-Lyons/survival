@@ -12,6 +12,9 @@ Bridged models support standard R generics including `coef`, `vcov`, `confint`,
 Common result objects such as `survfit`, `basehaz`, `survdiff`, `concordance`,
 `cox.zph`, `coxph.detail`, and `anova` outputs can also be converted with
 `as.data.frame`.
+Multi-state `survfit` objects with retained model frames support native-shaped
+influence residuals and pseudo-values for state probabilities, cumulative
+transition hazards, and integrated state occupancy.
 
 The package is intentionally named `survivalr` rather than `survival` so it can
 coexist with CRAN's upstream `survival` package while this bridge matures.

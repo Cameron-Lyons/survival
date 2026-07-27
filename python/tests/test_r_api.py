@@ -1649,10 +1649,21 @@ def test_surv_multistate_preserves_categorical_level_order():
         categories=["censor", "ill", "death"],
     )
 
-    response = survival.Surv([1.0, 2.0, 3.0], events, type="mstate")
+    response = survival.Surv([1.0, 2.0, 3.0], events)
+    explicit_right = survival.Surv([1.0, 2.0, 3.0], events, type="right")
+    explicit_counting = survival.Surv(
+        [0.0, 0.0, 1.0],
+        [1.0, 2.0, 3.0],
+        events,
+        type="counting",
+    )
 
     assert response.status == (0, 1, 0)
     assert response.states == ("ill", "death")
+    assert explicit_right.type == "mright"
+    assert explicit_right.states == response.states
+    assert explicit_counting.type == "mcounting"
+    assert explicit_counting.states == response.states
 
     numeric = survival.Surv([1.0, 2.0, 3.0], [0, 10, 2], type="mstate")
     numeric_strings = survival.Surv(
@@ -1841,6 +1852,253 @@ def test_survfit_multistate_supports_p0_and_survfit0():
         assert curve.pstate[0] == pytest.approx(p0)
 
 
+def test_as_data_frame_flattens_multistate_curves_like_r_summary():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    response = survival.Surv(
+        [1.0, 2.0, 3.0, 4.0],
+        Factor(
+            ["ill", "death", "censor", "death"],
+            ["censor", "ill", "death"],
+        ),
+        type="mstate",
+    )
+    fit = survival.survfit(response, p0=[0.25, 0.5, 0.25])
+
+    frame = survival.as_data_frame(fit)
+
+    assert list(frame) == [
+        "time",
+        "n.risk",
+        "n.event",
+        "n.censor",
+        "pstate",
+        "std.err",
+        "lower",
+        "upper",
+        "state",
+    ]
+    assert frame["time"] == pytest.approx([1.0, 2.0, 3.0, 4.0] * 3)
+    assert frame["state"] == ["(s0)"] * 4 + ["ill"] * 4 + ["death"] * 4
+    assert frame["n.risk"] == pytest.approx([4.0, 3.0, 2.0, 1.0] + [0.0] * 8)
+    assert frame["n.event"] == pytest.approx(
+        [0.0] * 4 + [1.0, 0.0, 0.0, 0.0] + [0.0, 1.0, 0.0, 1.0]
+    )
+    assert frame["n.censor"] == pytest.approx([0.0, 0.0, 1.0, 0.0] + [0.0] * 8)
+    assert frame["pstate"] == pytest.approx(
+        [0.1875, 0.125, 0.125, 0.0] + [0.5625] * 4 + [0.25, 0.3125, 0.3125, 0.4375]
+    )
+
+    grouped = survival.survfit(
+        response,
+        group=["a", "a", "b", "b"],
+        p0=[0.25, 0.5, 0.25],
+    )
+    grouped_frame = survival.as_data_frame(grouped)
+    assert grouped_frame["state"] == ["(s0)"] * 4 + ["ill"] * 4 + ["death"] * 4
+    assert grouped_frame["strata"] == ["a", "a", "b", "b"] * 3
+    assert grouped_frame["time"] == pytest.approx([1.0, 2.0, 3.0, 4.0] * 3)
+
+    without_se = survival.as_data_frame(survival.survfit(response, se_fit=False))
+    assert list(without_se) == [
+        "time",
+        "n.risk",
+        "n.event",
+        "n.censor",
+        "pstate",
+        "state",
+    ]
+
+
+def test_multistate_survfit_structure_preserves_matrix_dimensions_and_metadata():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    response = survival.Surv(
+        [1.0, 2.0, 3.0, 4.0],
+        Factor(
+            ["ill", "death", "censor", "death"],
+            ["censor", "ill", "death"],
+        ),
+    )
+    fit = survival.survfit(
+        response,
+        p0=[0.25, 0.5, 0.25],
+        conf_level=0.9,
+        conf_type="plain",
+    )
+
+    structure = survival.r_api._survfit_multistate_structure(fit)
+
+    assert structure["n"] == 4
+    assert structure["n.id"] == 4
+    assert structure["n.risk"] == fit.n_risk
+    assert structure["n.event"] == fit.n_event
+    assert structure["pstate"] == fit.pstate
+    assert structure["n.transition"] == fit.n_transition
+    assert structure["cumhaz"] == fit.cumhaz
+    assert structure["p0"] == pytest.approx([0.25, 0.5, 0.25])
+    assert structure["states"] == ["(s0)", "ill", "death"]
+    assert structure["type"] == "mright"
+    assert structure["conf.type"] == "plain"
+    assert structure["conf.int"] == pytest.approx(0.9)
+    assert structure["_transition_names"] == ["1:2", "1:3"]
+    assert structure["transitions"] == {
+        "values": [[1.0, 2.0, 1.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(censored)"],
+    }
+
+    grouped = survival.survfit(
+        response,
+        group=["a", "a", "b", "b"],
+        p0=[0.25, 0.5, 0.25],
+    )
+    grouped_structure = survival.r_api._survfit_multistate_structure(grouped)
+    assert grouped_structure["n"] == [2, 2]
+    assert grouped_structure["n.id"] == [2, 2]
+    assert grouped_structure["strata"] == {"a": 2, "b": 2}
+    assert grouped_structure["time"] == pytest.approx([1.0, 2.0, 3.0, 4.0])
+    assert grouped_structure["p0"] == [
+        [0.25, 0.5, 0.25],
+        [0.25, 0.5, 0.25],
+    ]
+    assert len(grouped_structure["pstate"]) == 4
+    assert all(len(row) == 3 for row in grouped_structure["pstate"])
+
+    subset = survival.r_api._subset_survfit_multistate(fit, [1])
+    assert subset.states == ("ill",)
+    assert subset.p0 == pytest.approx([0.5])
+    assert subset.pstate == [[row[1]] for row in fit.pstate]
+    assert subset.n_risk == [[row[1]] for row in fit.n_risk]
+    assert subset.transitions == ()
+    assert subset.surv_type == fit.surv_type
+    assert subset.conf_type == fit.conf_type
+    assert subset.conf_level == fit.conf_level
+    assert subset.oldstate == fit.states
+    subset_structure = survival.r_api._survfit_multistate_structure(subset)
+    assert "n.id" not in subset_structure
+    assert subset_structure["oldstate"] == ["(s0)", "ill", "death"]
+
+
+def test_multistate_survfit_residuals_and_pseudo_values_use_core_influences():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    response = survival.Surv(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        Factor(
+            ["ill", "death", "censor", "death", "ill", "censor"],
+            ["censor", "ill", "death"],
+        ),
+    )
+    fit = survival.survfit(response, model=True)
+    residuals = survival.survfit_residuals(fit, times=[2.0, 5.0])
+    cumhaz = survival.survfit_residuals(
+        fit,
+        times=[2.0, 5.0],
+        type="cumhaz",
+    )
+    sojourn = survival.survfit_residuals(
+        fit,
+        times=[2.0, 5.0],
+        type="sojourn",
+    )
+    pseudo = survival.pseudo(fit, times=[2.0, 5.0])
+
+    assert residuals["columns"] == ["(s0)", "ill", "death"]
+    assert residuals["column_name"] == "state"
+    assert residuals["resid"][0][0] == pytest.approx([-1 / 9, -1 / 27])
+    assert residuals["resid"][0][1] == pytest.approx([5 / 36, 11 / 108])
+    assert residuals["resid"][5][0] == pytest.approx([1 / 18, 1 / 6])
+    assert cumhaz["columns"] == ["1:2", "1:3"]
+    assert cumhaz["column_name"] == "transition"
+    for actual, expected in zip(
+        cumhaz["resid"][0],
+        [[5 / 36, 5 / 36], [0.0, 0.0]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        sojourn["resid"][0],
+        [[-5 / 36, -47 / 108], [5 / 36, 5 / 9], [0.0, -13 / 108]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        pseudo["pseudo"][0],
+        [[0.0, 0.0], [1.0, 1.0], [0.0, 0.0]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert pseudo["pseudo"][5][0] == pytest.approx([1.0, 11 / 9])
+
+    weights = [1.0, 2.0, 1.5, 0.5, 3.0, 1.0]
+    weighted_fit = survival.survfit(response, weights=weights, model=True)
+    unweighted_residuals = survival.survfit_residuals(
+        weighted_fit,
+        times=[2.0, 5.0],
+    )
+    weighted_residuals = survival.survfit_residuals(
+        weighted_fit,
+        times=[2.0, 5.0],
+        weighted=True,
+    )
+    for row_idx, weight in enumerate(weights):
+        for state_idx in range(3):
+            assert weighted_residuals["resid"][row_idx][state_idx] == pytest.approx(
+                [weight * value for value in unweighted_residuals["resid"][row_idx][state_idx]]
+            )
+
+    grouped_fit = survival.survfit(
+        response,
+        group=["a", "a", "a", "b", "b", "b"],
+        model=True,
+    )
+    grouped = survival.survfit_residuals(grouped_fit, times=[2.0, 5.0])
+    grouped_pseudo = survival.pseudo(grouped_fit, times=[2.0, 5.0])
+    assert grouped["curve"] == [1, 1, 1, 2, 2, 2]
+    assert grouped["resid"][3][0] == pytest.approx([0.0, -1 / 9])
+    assert grouped_pseudo["pseudo"][3][2] == pytest.approx([0.0, 1.0])
+
+    counting_response = survival.Surv(
+        [0.0, 1.0, 0.0, 2.0, 0.0, 3.0],
+        [1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
+        Factor(
+            ["ill", "death", "ill", "censor", "death", "censor"],
+            ["censor", "ill", "death"],
+        ),
+    )
+    counting_fit = survival.survfit(
+        counting_response,
+        id=[1, 1, 2, 2, 3, 3],
+        model=True,
+    )
+    row_level = survival.survfit_residuals(counting_fit, times=[2.0, 5.0])
+    collapsed = survival.survfit_residuals(
+        counting_fit,
+        times=[2.0, 5.0],
+        collapse=True,
+        weighted=True,
+    )
+    assert collapsed["id"] == [1, 2, 3]
+    for subject_idx in range(3):
+        for state_idx in range(3):
+            expected = [
+                row_level["resid"][2 * subject_idx][state_idx][time_idx]
+                + row_level["resid"][2 * subject_idx + 1][state_idx][time_idx]
+                for time_idx in range(2)
+            ]
+            assert collapsed["resid"][subject_idx][state_idx] == pytest.approx(expected)
+
+
 def test_survfit_multistate_validates_p0():
     response = survival.Surv(
         [1.0, 2.0, 3.0],
@@ -1984,15 +2242,15 @@ def test_survfit_counting_multistate_supports_istate_formula_and_etype():
     }
 
     fit = survival.survfit(
-        "Surv(start, stop, event, type='mstate') ~ 1",
+        "Surv(start, stop, event) ~ 1",
         data=data,
         id="id",
         istate="state",
     )
 
-    assert fit.states == ("entry", "death", "ill")
+    assert fit.states == ("entry", "ill", "death")
     assert fit.p0 == pytest.approx([1.0, 0.0, 0.0])
-    assert fit.pstate[-1] == pytest.approx([0.0, 2 / 3, 1 / 3])
+    assert fit.pstate[-1] == pytest.approx([0.0, 1 / 3, 2 / 3])
 
     etype_fit = survival.survfit(
         "Surv(start, stop, status) ~ 1",
@@ -2062,8 +2320,20 @@ def test_survfit_counting_multistate_supports_istate_formula_and_etype():
 
 
 def test_surv2_response_matches_r_multistate_shape():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
     response = survival.Surv2([1.0, 2.0, 3.0], ["a", "b", "c"])
     missing = survival.Surv2([1.0, math.nan, 3.0], [None, "b", "c"], repeated=True)
+    categorical = survival.Surv2(
+        [1.0, 2.0, 3.0],
+        Factor(
+            ["entry", "death", "ill"],
+            ["censor", "entry", "ill", "death"],
+        ),
+    )
 
     assert len(response) == 3
     assert response.time == pytest.approx((1.0, 2.0, 3.0))
@@ -2077,6 +2347,8 @@ def test_surv2_response_matches_r_multistate_shape():
     assert missing.repeated is True
     assert survival.is_na_surv(missing) == [True, True, False]
     assert survival.format_surv(missing) == ["1? ", "NA+", "3:c"]
+    assert categorical.status == (1, 3, 2)
+    assert categorical.states == ("entry", "ill", "death")
 
     with pytest.raises(ValueError, match="different lengths"):
         survival.Surv2([1.0, 2.0], ["a"])

@@ -73,6 +73,7 @@ fn run_benchmark(inputs: SurvfitAjInputs) {
             inputs.hindx,
             inputs.trmat,
             0.0,
+            None,
         )
         .expect("benchmark inputs should define a valid multistate curve"),
     );
