@@ -154,6 +154,10 @@ initial distributions through `p0=`, and entry counts through `entry=True`.
 `survfit0(...)` inserts the initial state-probability row into existing
 multi-state curves while preserving their typed count, hazard, and uncertainty
 outputs.
+Multi-state fits with retained model frames also support influence residuals
+and pseudo-values for state probabilities, cumulative transition hazards, and
+integrated state occupancy, including grouped, weighted, and subject-collapsed
+counting-process results.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
 to produce model-based survival curves.
 `survdiff` uses the same right-censored and delayed-entry response forms.
