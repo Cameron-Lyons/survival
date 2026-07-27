@@ -4442,7 +4442,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   }
 
   bridged <- survfit(Surv(time, event) ~ 1, data = data, p0 = p0)
-  reference <- survival:::survfit.formula(
+  reference <- survival::survfit(
     survival::Surv(time, event) ~ 1,
     data = data,
     p0 = p0
@@ -4466,7 +4466,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   )
 
   grouped_bridged <- survfit(Surv(time, event) ~ group, data = data, p0 = p0)
-  grouped_reference <- survival:::survfit.formula(
+  grouped_reference <- survival::survfit(
     survival::Surv(time, event) ~ group,
     data = data,
     p0 = p0
