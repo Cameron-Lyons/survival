@@ -4421,6 +4421,10 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("survival")
   skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
 
+  # Call CRAN survival's method directly; survival::survfit() still dispatches
+  # to survivalr::survfit.formula while this package is loaded.
+  reference_survfit <- getFromNamespace("survfit.formula", "survival")
+
   data <- data.frame(
     time = c(1, 2, 3, 4, 5, 6),
     event = factor(
@@ -4442,7 +4446,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   }
 
   bridged <- survfit(Surv(time, event) ~ 1, data = data, p0 = p0)
-  reference <- survival::survfit(
+  reference <- reference_survfit(
     survival::Surv(time, event) ~ 1,
     data = data,
     p0 = p0
@@ -4466,7 +4470,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   )
 
   grouped_bridged <- survfit(Surv(time, event) ~ group, data = data, p0 = p0)
-  grouped_reference <- survival::survfit(
+  grouped_reference <- reference_survfit(
     survival::Surv(time, event) ~ group,
     data = data,
     p0 = p0
@@ -4553,7 +4557,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
-  diagnostic_reference <- survival::survfit(
+  diagnostic_reference <- reference_survfit(
     survival::Surv(time, event) ~ 1,
     data = data,
     model = TRUE
@@ -4596,7 +4600,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
-  grouped_diagnostic_reference <- survival::survfit(
+  grouped_diagnostic_reference <- reference_survfit(
     survival::Surv(time, event) ~ group,
     data = data,
     model = TRUE
@@ -4637,7 +4641,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     weights = diagnostic_weights,
     model = TRUE
   )
-  weighted_diagnostic_reference <- survival::survfit(
+  weighted_diagnostic_reference <- reference_survfit(
     survival::Surv(time, event) ~ 1,
     data = data,
     weights = diagnostic_weights,
@@ -4679,7 +4683,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     id = id,
     model = TRUE
   )
-  counting_diagnostic_reference <- survival::survfit(
+  counting_diagnostic_reference <- reference_survfit(
     survival::Surv(start, stop, event) ~ 1,
     data = counting_data,
     id = counting_data$id,
