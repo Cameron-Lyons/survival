@@ -10644,6 +10644,86 @@ def _survfit0_result(result: SurvfitResult, t0: float | None = None) -> SurvfitR
     )
 
 
+def _prepend_multistate_time0(
+    values: list[list[float]],
+    initial: Sequence[float],
+) -> list[list[float]]:
+    return [
+        [float(value) for value in initial],
+        *[[float(value) for value in row] for row in values],
+    ]
+
+
+def _prepend_multistate_time0_optional(
+    values: list[list[float]] | None,
+    initial: Sequence[float],
+) -> list[list[float]] | None:
+    return None if values is None else _prepend_multistate_time0(values, initial)
+
+
+def _survfit0_multistate_result(
+    result: SurvfitMultiStateResult,
+    t0: float | None = None,
+) -> SurvfitMultiStateResult:
+    initial_time = float(result.t0) if t0 is None else float(t0)
+    if not _needs_time0_insert(result.time, initial_time):
+        return result
+
+    state_count = len(result.states)
+    transition_count = len(result.transitions)
+    zero_states = [0.0] * state_count
+    zero_transitions = [0.0] * transition_count
+    initial_risk = result.n_risk[0] if result.n_risk else zero_states
+    initial_risk_count = (
+        result.n_risk_count[0] if result.n_risk_count else [0.0] * len(initial_risk)
+    )
+    initial_standard_error = result.std_err0 if result.std_err0 is not None else zero_states
+
+    return SurvfitMultiStateResult(
+        time=[initial_time, *[float(value) for value in result.time]],
+        n_risk=_prepend_multistate_time0(result.n_risk, initial_risk),
+        n_event=_prepend_multistate_time0(result.n_event, zero_states),
+        n_censor=_prepend_multistate_time0(result.n_censor, zero_states),
+        pstate=_prepend_multistate_time0(result.pstate, result.p0),
+        cumhaz=_prepend_multistate_time0(result.cumhaz, zero_transitions),
+        states=result.states,
+        transitions=result.transitions,
+        p0=[float(value) for value in result.p0],
+        t0=result.t0,
+        n=result.n,
+        n_id=result.n_id,
+        std_err=_prepend_multistate_time0_optional(result.std_err, initial_standard_error),
+        std_err0=result.std_err0,
+        std_chaz=_prepend_multistate_time0_optional(result.std_chaz, zero_transitions),
+        std_auc=_prepend_multistate_time0_optional(result.std_auc, zero_states),
+        conf_lower=_prepend_multistate_time0_optional(result.conf_lower, zero_states),
+        conf_upper=_prepend_multistate_time0_optional(result.conf_upper, zero_states),
+        n_risk_count=_prepend_multistate_time0_optional(
+            result.n_risk_count,
+            initial_risk_count,
+        ),
+        n_event_count=_prepend_multistate_time0_optional(
+            result.n_event_count,
+            zero_states,
+        ),
+        n_censor_count=_prepend_multistate_time0_optional(
+            result.n_censor_count,
+            zero_states,
+        ),
+        n_enter=_prepend_multistate_time0_optional(result.n_enter, zero_states),
+        n_enter_count=_prepend_multistate_time0_optional(
+            result.n_enter_count,
+            zero_states,
+        ),
+        n_transition=_prepend_multistate_time0(result.n_transition, zero_transitions),
+        n_transition_count=_prepend_multistate_time0_optional(
+            result.n_transition_count,
+            zero_transitions,
+        ),
+        model=result.model,
+    )
+
+
 def _survfit0_cox_result(
     result: CoxSurvfitResult,
     t0: float | None = None,
@@ -10742,6 +10822,8 @@ def _coerce_turnbull_result_like(value: Any) -> TurnbullSurvfitResult:
 
 
 def _survfit0_any_result(value: Any, t0: float | None = None) -> Any:
+    if isinstance(value, SurvfitMultiStateResult):
+        return _survfit0_multistate_result(value, t0)
     if isinstance(value, SurvfitResult) or _is_survfit_result_like(value):
         result = _coerce_survfit_result_like(value)
         initial_time = _survfit0_default_time(result) if t0 is None else float(t0)
@@ -10770,6 +10852,8 @@ def _survfit0_any_result(value: Any, t0: float | None = None) -> Any:
 
 
 def _mapping_survfit0_time(results: Mapping[Any, Any]) -> float:
+    if results and all(isinstance(result, SurvfitMultiStateResult) for result in results.values()):
+        return min(float(result.t0) for result in results.values())
     values = [0.0]
     for result in results.values():
         times = getattr(result, "time", None)
@@ -10789,7 +10873,10 @@ def survfit0(x: Any, *args: Any, **kwargs: Any) -> Any:
         t0 = _mapping_survfit0_time(x)
         return {label: _survfit0_any_result(result, t0) for label, result in x.items()}
     result = _survfit0_any_result(x)
-    if result is not x or isinstance(x, SurvfitResult | CoxSurvfitResult | TurnbullSurvfitResult):
+    if result is not x or isinstance(
+        x,
+        SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult | TurnbullSurvfitResult,
+    ):
         return result
     if _is_survfit_result_like(x) or _is_turnbull_result_like(x):
         return result
@@ -11381,6 +11468,29 @@ def _survfit_multistate_initial_distribution(
     ]
 
 
+def _survfit_multistate_p0(value: Any | None, state_count: int) -> list[float] | None:
+    if value is None:
+        return None
+    try:
+        raw_probabilities = _materialize_1d(value, "p0")
+        if not raw_probabilities:
+            return None
+        if any(isinstance(probability, bool) for probability in raw_probabilities):
+            raise TypeError
+        probabilities = [float(probability) for probability in raw_probabilities]
+    except (TypeError, ValueError) as exc:
+        raise TypeError("p0 must be a numeric vector") from exc
+    if len(probabilities) != state_count:
+        raise ValueError("p0 must have one probability per multi-state outcome")
+    if any(not math.isfinite(probability) for probability in probabilities):
+        raise ValueError("p0 must contain only finite probabilities")
+    if any(probability < 0.0 for probability in probabilities):
+        raise ValueError("p0 probabilities must be non-negative")
+    if not math.isclose(sum(probabilities), 1.0, rel_tol=1e-8, abs_tol=1e-8):
+        raise ValueError("p0 probabilities must sum to 1")
+    return probabilities
+
+
 def _survfit_multistate_curve(
     response: Surv,
     weights: list[float] | None,
@@ -11565,6 +11675,7 @@ def _survfit_multistate(
     id_values: list[Any] | None,
     cluster: Any | None,
     istate: Any | None,
+    p0: Any | None,
     *,
     start_time: float | None,
     include_time0: bool,
@@ -11579,6 +11690,7 @@ def _survfit_multistate(
     response, current_states, states, ids = _survfit_multistate_state_data(
         response, id_values, istate, timefix
     )
+    supplied_p0 = _survfit_multistate_p0(p0, len(states))
 
     def initial_curve_indices(
         curve_response: Surv,
@@ -11654,8 +11766,8 @@ def _survfit_multistate(
         initial_indices = initial_curve_indices(response, kept_groups, ids)
         initial_states = [current_states[idx] for idx in initial_indices]
         same_initial_state = len(set(initial_states)) == 1
-    p0_override = None
-    if same_initial_state:
+    p0_override = supplied_p0
+    if p0_override is None and same_initial_state:
         p0_override = [float(state == initial_states[0]) for state in range(len(states))]
 
     def fit_curve(indices: list[int]) -> SurvfitMultiStateResult:
@@ -11749,6 +11861,7 @@ def survfit(
     robust: Any | None = None,
     istate: Any | None = None,
     etype: Any | None = None,
+    p0: Any | None = None,
     model: Any = False,
     error: Any | None = None,
     entry: Any = False,
@@ -11862,6 +11975,11 @@ def survfit(
         if terms.strata or terms.covariates:
             group = _combined_formula_groups(data, terms.strata, terms.covariates, len(response))
             formula_group_levels = _r_formula_ordered_levels(group, "survfit formula groups")
+
+    if p0 is not None and (
+        not isinstance(response, Surv) or response.type not in {"mright", "mcounting"}
+    ):
+        raise ValueError("p0 is only supported for multi-state Surv responses")
 
     if not isinstance(response, Surv) and hasattr(response, "survival_curve"):
         if etype is not None or istate is not None:
@@ -11981,6 +12099,7 @@ def survfit(
             id_values,
             cluster,
             istate,
+            p0,
             start_time=normalized_start_time,
             include_time0=include_time0,
             include_se=include_se,

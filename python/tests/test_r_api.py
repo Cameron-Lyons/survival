@@ -1784,6 +1784,87 @@ def test_survfit_multistate_supports_formula_groups_weights_and_etype():
         assert actual == pytest.approx(expected)
 
 
+def test_survfit_multistate_supports_p0_and_survfit0():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    response = survival.Surv(
+        [1.0, 2.0, 3.0, 4.0],
+        Factor(
+            ["ill", "death", "censor", "death"],
+            ["censor", "ill", "death"],
+        ),
+        type="mstate",
+    )
+    p0 = [0.25, 0.5, 0.25]
+
+    fit = survival.survfit(response, p0=p0)
+
+    assert fit.p0 == pytest.approx(p0)
+    expected_pstate = [
+        [0.1875, 0.5625, 0.25],
+        [0.125, 0.5625, 0.3125],
+        [0.125, 0.5625, 0.3125],
+        [0.0, 0.5625, 0.4375],
+    ]
+    for actual, expected in zip(fit.pstate, expected_pstate, strict=True):
+        assert actual == pytest.approx(expected)
+
+    inserted = survival.survfit0(fit)
+    assert inserted.time == pytest.approx([0.0, 1.0, 2.0, 3.0, 4.0])
+    assert inserted.pstate[0] == pytest.approx(p0)
+    assert inserted.n_risk[0] == pytest.approx([4.0, 0.0, 0.0])
+    assert inserted.n_event[0] == pytest.approx([0.0, 0.0, 0.0])
+    assert inserted.n_censor[0] == pytest.approx([0.0, 0.0, 0.0])
+    assert inserted.n_transition[0] == pytest.approx([0.0, 0.0])
+    assert inserted.cumhaz[0] == pytest.approx([0.0, 0.0])
+    assert inserted.std_err is not None
+    assert inserted.std_err[0] == pytest.approx([0.0, 0.0, 0.0])
+    assert inserted.conf_lower is not None
+    assert inserted.conf_lower[0] == pytest.approx([0.0, 0.0, 0.0])
+    assert inserted.conf_upper is not None
+    assert inserted.conf_upper[0] == pytest.approx([0.0, 0.0, 0.0])
+    assert survival.survfit0(inserted) is inserted
+
+    direct_time0 = survival.survfit(response, p0=p0, time0=True)
+    assert direct_time0.time == pytest.approx(inserted.time)
+    for actual, expected in zip(direct_time0.pstate, inserted.pstate, strict=True):
+        assert actual == pytest.approx(expected)
+
+    grouped = survival.survfit(response, group=["a", "a", "b", "b"], p0=p0)
+    grouped_inserted = survival.survfit0(grouped)
+    assert list(grouped_inserted) == ["a", "b"]
+    for curve in grouped_inserted.values():
+        assert curve.time[0] == pytest.approx(0.0)
+        assert curve.pstate[0] == pytest.approx(p0)
+
+
+def test_survfit_multistate_validates_p0():
+    response = survival.Surv(
+        [1.0, 2.0, 3.0],
+        ["censor", "ill", "death"],
+        type="mstate",
+    )
+
+    assert survival.survfit(response, p0=[]).p0 == pytest.approx([1.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="one probability per"):
+        survival.survfit(response, p0=[0.5, 0.5])
+    with pytest.raises(ValueError, match="sum to 1"):
+        survival.survfit(response, p0=[0.5, 0.4, 0.0])
+    with pytest.raises(ValueError, match="non-negative"):
+        survival.survfit(response, p0=[0.5, 0.6, -0.1])
+    with pytest.raises(ValueError, match="finite"):
+        survival.survfit(response, p0=[0.5, 0.5, math.nan])
+    with pytest.raises(TypeError, match="numeric vector"):
+        survival.survfit(response, p0="bad")
+    with pytest.raises(TypeError, match="numeric vector"):
+        survival.survfit(response, p0=[True, False, False])
+    with pytest.raises(ValueError, match="only supported for multi-state"):
+        survival.survfit(survival.Surv([1.0, 2.0], [0, 1]), p0=[1.0])
+
+
 def test_survfit_multistate_validates_unsupported_options():
     response = survival.Surv(
         [1.0, 2.0, 3.0],
@@ -1947,6 +2028,12 @@ def test_survfit_counting_multistate_supports_istate_formula_and_etype():
     assert heterogeneous_fit.p0 == pytest.approx([0.5, 0.5, 0.0])
     assert heterogeneous_fit.pstate[0] == pytest.approx([0.0, 0.0, 1.0])
     assert heterogeneous_fit.std_err0 == pytest.approx([0.3535533906, 0.3535533906, 0.0])
+
+    heterogeneous_inserted = survival.survfit0(heterogeneous_fit)
+    assert heterogeneous_inserted.time == pytest.approx([0.0, 2.0])
+    assert heterogeneous_inserted.pstate[0] == pytest.approx([0.5, 0.5, 0.0])
+    assert heterogeneous_inserted.std_err is not None
+    assert heterogeneous_inserted.std_err[0] == pytest.approx([0.3535533906, 0.3535533906, 0.0])
 
     heterogeneous_time0 = survival.survfit(
         heterogeneous,

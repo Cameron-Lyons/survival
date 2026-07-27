@@ -147,6 +147,13 @@ They support right-censored `Surv(time, event)` data and counting-process
 `Surv(start, stop, event)` data with delayed-entry risk sets. Direct and
 formula `Surv(...)` calls also accept R-style named aliases including `time=`,
 `time1=`, `start=`, `time2=`, `stop=`, `event=`, and `status=`.
+Factor-valued event responses produce multi-state Aalen--Johansen curves.
+These curves support subject histories through `id=`, observed initial states
+through `istate=`, event-type conversion through `etype=`, user-supplied
+initial distributions through `p0=`, and entry counts through `entry=True`.
+`survfit0(...)` inserts the initial state-probability row into existing
+multi-state curves while preserving their typed count, hazard, and uncertainty
+outputs.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
 to produce model-based survival curves.
 `survdiff` uses the same right-censored and delayed-entry response forms.
