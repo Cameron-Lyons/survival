@@ -55,7 +55,7 @@ test = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
   "numpy==2.4.6",
-  "pandas==3.0.3",
+  "pandas==3.0.5",
   "polars==1.42.1",
 ]
 sklearn = [
