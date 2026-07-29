@@ -251,7 +251,7 @@ pub fn fit_dysurv(
     let n_features = covariates[0].len();
     let hidden_dim = config.hidden_dims.first().copied().unwrap_or(64);
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

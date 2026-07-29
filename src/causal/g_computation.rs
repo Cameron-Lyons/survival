@@ -266,7 +266,7 @@ fn bootstrap_se(
     let ates: Vec<f64> = (0..n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {
-            let mut rng = fastrand::Rng::with_seed(b as u64 + 12345);
+            let mut rng = crate::internal::rng::Rng::with_seed(b as u64 + 12345);
             let indices: Vec<usize> = (0..n_obs).map(|_| rng.usize(0..n_obs)).collect();
 
             let boot_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();

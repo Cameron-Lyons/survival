@@ -64,8 +64,8 @@ pub fn bayesian_model_averaging_cox(
     }
 
     let mut rng = match config.seed {
-        Some(s) => fastrand::Rng::with_seed(s),
-        None => fastrand::Rng::new(),
+        Some(s) => crate::internal::rng::Rng::with_seed(s),
+        None => crate::internal::rng::Rng::new(),
     };
 
     let mut included = vec![true; n_covariates];

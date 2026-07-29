@@ -360,7 +360,7 @@ fn compute_bootstrap_variance(
     let bootstrap_results: Vec<Vec<Vec<Vec<f64>>>> = (0..n_bootstrap)
         .into_par_iter()
         .map(|b| {
-            let mut rng = fastrand::Rng::with_seed(seed + b as u64);
+            let mut rng = crate::internal::rng::Rng::with_seed(seed + b as u64);
 
             let indices: Vec<usize> = (0..n).map(|_| rng.usize(0..n)).collect();
 

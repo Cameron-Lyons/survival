@@ -3,6 +3,7 @@ pub(crate) mod fenwick;
 pub(crate) mod logrank;
 pub(crate) mod matrix;
 pub(crate) mod numpy_utils;
+pub(crate) mod rng;
 pub(crate) mod simd;
 pub(crate) mod sorting;
 pub(crate) mod statistical;

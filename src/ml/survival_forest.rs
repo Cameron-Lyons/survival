@@ -328,7 +328,7 @@ fn find_best_split(
     mtry: usize,
     min_node_size: usize,
     n_random_splits: usize,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
     split_rule: &SplitRule,
 ) -> Option<SplitCandidate> {
     if indices.len() < 2 * min_node_size {
@@ -414,7 +414,7 @@ fn build_tree(
     all_times: &[f64],
     config: &SurvivalForestConfig,
     depth: usize,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) -> TreeNode {
     let node_times: Vec<f64> = indices.iter().map(|&i| data.time[i]).collect();
     let node_status: Vec<i32> = indices.iter().map(|&i| data.status[i]).collect();
@@ -496,7 +496,8 @@ fn fit_survival_forest_inner(
     let results: Vec<TreeWithOob> = (0..config.n_trees)
         .into_par_iter()
         .map(|tree_idx| {
-            let mut rng = fastrand::Rng::with_seed(base_seed.wrapping_add(tree_idx as u64));
+            let mut rng =
+                crate::internal::rng::Rng::with_seed(base_seed.wrapping_add(tree_idx as u64));
 
             let mut bootstrap_indices: Vec<usize> = Vec::with_capacity(sample_size);
             let mut in_bag = vec![false; data.n_obs];
@@ -792,7 +793,7 @@ fn compute_variable_importance(
         .map(|var| {
             let mut x_permuted = data.x.to_vec();
 
-            let mut rng = fastrand::Rng::with_seed(var as u64);
+            let mut rng = crate::internal::rng::Rng::with_seed(var as u64);
             let mut perm: Vec<usize> = (0..data.n_obs).collect();
             for i in (1..data.n_obs).rev() {
                 let j = rng.usize(0..=i);

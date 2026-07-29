@@ -230,7 +230,7 @@ pub fn fit_neural_mtlr(
         assign_time_bin(t, &time_bins);
     }
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

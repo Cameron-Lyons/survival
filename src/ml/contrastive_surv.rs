@@ -671,7 +671,7 @@ fn fit_contrastive_surv_inner(
 
     let mut optimizer = AdamConfig::new().init();
 
-    let mut rng = fastrand::Rng::with_seed(seed);
+    let mut rng = crate::internal::rng::Rng::with_seed(seed);
     let split = train_validation_split_indices(n_obs, config.validation_fraction, &mut rng);
     let n_train = split.train_indices.len();
     let train_indices = split.train_indices;

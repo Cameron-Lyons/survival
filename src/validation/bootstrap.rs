@@ -59,7 +59,7 @@ impl Default for BootstrapConfig {
 
 #[inline]
 fn bootstrap_sample_indices(n: usize, seed: u64, iteration: usize) -> Vec<usize> {
-    let mut rng = fastrand::Rng::with_seed(seed.wrapping_add(iteration as u64));
+    let mut rng = crate::internal::rng::Rng::with_seed(seed.wrapping_add(iteration as u64));
     (0..n).map(|_| rng.usize(..n)).collect()
 }
 

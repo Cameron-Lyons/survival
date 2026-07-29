@@ -1,33 +1,22 @@
-use pulp::{Arch, Simd, WithSimd};
-
 pub fn dot_product_simd(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len().min(b.len());
+    let mut accumulators = [0.0; 4];
+    let mut index = 0;
 
-    struct DotProduct<'a>(&'a [f64], &'a [f64]);
-
-    impl WithSimd for DotProduct<'_> {
-        type Output = f64;
-
-        #[inline(always)]
-        fn with_simd<S: Simd>(self, simd: S) -> Self::Output {
-            let (a_head, a_tail) = S::as_simd_f64s(self.0);
-            let (b_head, b_tail) = S::as_simd_f64s(self.1);
-
-            let mut acc = simd.splat_f64s(0.0);
-            for (&a_chunk, &b_chunk) in a_head.iter().zip(b_head.iter()) {
-                acc = simd.mul_add_f64s(a_chunk, b_chunk, acc);
-            }
-
-            simd.reduce_sum_f64s(acc)
-                + a_tail
-                    .iter()
-                    .zip(b_tail.iter())
-                    .map(|(&a_val, &b_val)| a_val * b_val)
-                    .sum::<f64>()
-        }
+    while index + 4 <= n {
+        accumulators[0] = a[index].mul_add(b[index], accumulators[0]);
+        accumulators[1] = a[index + 1].mul_add(b[index + 1], accumulators[1]);
+        accumulators[2] = a[index + 2].mul_add(b[index + 2], accumulators[2]);
+        accumulators[3] = a[index + 3].mul_add(b[index + 3], accumulators[3]);
+        index += 4;
     }
 
-    Arch::new().dispatch(DotProduct(&a[..n], &b[..n]))
+    let mut total = (accumulators[0] + accumulators[1]) + (accumulators[2] + accumulators[3]);
+    while index < n {
+        total = a[index].mul_add(b[index], total);
+        index += 1;
+    }
+    total
 }
 
 pub fn weighted_sum_simd(values: &[f64], weights: &[f64]) -> f64 {

@@ -74,7 +74,7 @@ pub fn conformal_survival(
     })
 }
 
-fn generate_dirichlet_weights(n: usize, rng: &mut fastrand::Rng) -> Vec<f64> {
+fn generate_dirichlet_weights(n: usize, rng: &mut crate::internal::rng::Rng) -> Vec<f64> {
     let mut weights: Vec<f64> = (0..n)
         .map(|_| {
             let u: f64 = rng.f64().max(1e-10);
@@ -224,9 +224,9 @@ pub fn bayesian_bootstrap_survival(
     validate_bayesian_bootstrap_inputs(&time, &event, &eval_times, &config)?;
 
     let mut rng = if let Some(seed) = config.seed {
-        fastrand::Rng::with_seed(seed)
+        crate::internal::rng::Rng::with_seed(seed)
     } else {
-        fastrand::Rng::new()
+        crate::internal::rng::Rng::new()
     };
 
     let n_times = eval_times.len();

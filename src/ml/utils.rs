@@ -1,6 +1,6 @@
+use crate::internal::rng::Rng;
 use burn::prelude::Backend;
 use burn::tensor::Tensor;
-use fastrand::Rng;
 use std::f64::consts::SQRT_2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

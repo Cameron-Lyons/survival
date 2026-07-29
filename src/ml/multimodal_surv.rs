@@ -418,7 +418,7 @@ pub fn fit_multimodal_surv(
     let imaging_out = config.imaging_hidden_dims.last().copied().unwrap_or(64);
     let genomic_out = config.genomic_hidden_dims.last().copied().unwrap_or(64);
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

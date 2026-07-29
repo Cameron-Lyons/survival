@@ -70,7 +70,7 @@ impl UncertaintyResult {
     }
 }
 
-fn _apply_dropout(values: &[f64], dropout_rate: f64, rng: &mut fastrand::Rng) -> Vec<f64> {
+fn _apply_dropout(values: &[f64], dropout_rate: f64, rng: &mut crate::internal::rng::Rng) -> Vec<f64> {
     debug_assert!(dropout_rate.is_finite() && (0.0..1.0).contains(&dropout_rate));
     let scale = 1.0 / (1.0 - dropout_rate);
     values

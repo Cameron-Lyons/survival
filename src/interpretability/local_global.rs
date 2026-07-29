@@ -301,7 +301,7 @@ fn compute_confidence_interval_width(
     }
 
     let n = shap_values.len();
-    let mut rng = fastrand::Rng::with_seed(seed);
+    let mut rng = crate::internal::rng::Rng::with_seed(seed);
 
     let bootstrap_means: Vec<f64> = (0..n_bootstrap)
         .map(|_| {

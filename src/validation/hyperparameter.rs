@@ -216,7 +216,11 @@ fn compute_cv_c_index(
     concordance_index_with_horizon(&test_risk, &test_time, &test_event, None)
 }
 
-fn create_cv_folds(n: usize, n_folds: usize, rng: &mut fastrand::Rng) -> Vec<Vec<usize>> {
+fn create_cv_folds(
+    n: usize,
+    n_folds: usize,
+    rng: &mut crate::internal::rng::Rng,
+) -> Vec<Vec<usize>> {
     let mut indices: Vec<usize> = (0..n).collect();
     rng.shuffle(&mut indices);
 
@@ -259,7 +263,7 @@ pub fn hyperparameter_search(
     validate_param_grid(&param_grid)?;
     validate_search_config(&config, risk_scores.len())?;
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(s) = config.seed {
         rng.seed(s);
     }
@@ -543,7 +547,7 @@ pub fn nested_cross_validation(
     let min_outer_train_size = n.saturating_sub(max_outer_test_size);
     validate_cv_folds(inner_folds, min_outer_train_size, "inner_folds")?;
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(s) = seed {
         rng.seed(s);
     }

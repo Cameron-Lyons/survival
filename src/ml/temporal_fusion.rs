@@ -411,7 +411,7 @@ pub fn fit_temporal_fusion_transformer(
         .map(|f| f.len())
         .unwrap_or(1);
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

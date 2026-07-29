@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn test_finegray_optimized_expansion_matches_naive_reference() {
         for seed in 0..512 {
-            let mut rng = fastrand::Rng::with_seed(seed);
+            let mut rng = crate::internal::rng::Rng::with_seed(seed);
             let n = rng.usize(0..24);
             let ncut = rng.usize(0..20);
             let mut current_cut = -2.0;

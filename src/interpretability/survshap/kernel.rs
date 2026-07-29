@@ -34,7 +34,7 @@ fn sample_coalitions(
     n_coalitions: usize,
     seed: u64,
 ) -> (Vec<Vec<bool>>, Vec<usize>) {
-    let mut rng = fastrand::Rng::with_seed(seed);
+    let mut rng = crate::internal::rng::Rng::with_seed(seed);
 
     let mut coalitions = Vec::with_capacity(n_coalitions);
     let mut coalition_sizes = Vec::with_capacity(n_coalitions);

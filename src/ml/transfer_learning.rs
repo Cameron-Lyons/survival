@@ -187,7 +187,7 @@ pub fn pretrain_survival_model(
 
     let n_features = source_covariates[0].len();
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(s) = seed {
         rng.seed(s);
     }
@@ -327,7 +327,7 @@ pub fn transfer_survival_model(
 
     let hidden_dim = pretrained_model.n_hidden;
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(s) = config.seed {
         rng.seed(s);
     }

@@ -243,7 +243,7 @@ fn metropolis_step(
     config: &BayesianParametricConfig,
     proposal_sd: &[f64],
     shape_proposal_sd: f64,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) -> MetropolisStepResult {
     let mut new_beta = beta.to_vec();
     for j in 0..p {
@@ -285,7 +285,7 @@ fn run_chain(
 ) -> ChainSamples {
     let seed =
         config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED) + chain_id as u64 * 1000;
-    let mut rng = fastrand::Rng::with_seed(seed);
+    let mut rng = crate::internal::rng::Rng::with_seed(seed);
 
     let mut beta = vec![0.0; p];
     let mut shape = config.shape_prior_mean;

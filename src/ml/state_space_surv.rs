@@ -320,7 +320,7 @@ pub fn fit_mamba_surv(
     let n_features = sequences[0].first().map(|s| s.len()).unwrap_or(1);
     let d_inner = config.d_model * config.expand_factor;
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

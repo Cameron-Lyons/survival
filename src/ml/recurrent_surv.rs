@@ -104,7 +104,7 @@ struct _LSTMCell {
 }
 
 impl _LSTMCell {
-    fn _new(input_size: usize, hidden_size: usize, rng: &mut fastrand::Rng) -> Self {
+    fn _new(input_size: usize, hidden_size: usize, rng: &mut crate::internal::rng::Rng) -> Self {
         Self {
             w_ii: (0..hidden_size)
                 .map(|_| (0..input_size).map(|_| rng.f64() * 0.1 - 0.05).collect())
@@ -305,7 +305,7 @@ pub fn fit_recurrent_surv(
 
     let n_features = covariates[0].len();
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

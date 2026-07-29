@@ -1,23 +1,20 @@
-use pulp::{Arch, Simd, WithSimd};
-
 pub(crate) fn sum_f64(data: &[f64]) -> f64 {
-    struct Sum<'a>(&'a [f64]);
-
-    impl WithSimd for Sum<'_> {
-        type Output = f64;
-
-        #[inline(always)]
-        fn with_simd<S: Simd>(self, simd: S) -> Self::Output {
-            let (head, tail) = S::as_simd_f64s(self.0);
-            let mut acc = simd.splat_f64s(0.0);
-            for &chunk in head {
-                acc = simd.add_f64s(acc, chunk);
-            }
-            simd.reduce_sum_f64s(acc) + tail.iter().sum::<f64>()
-        }
+    let mut accumulators = [0.0; 4];
+    let mut index = 0;
+    while index + 4 <= data.len() {
+        accumulators[0] += data[index];
+        accumulators[1] += data[index + 1];
+        accumulators[2] += data[index + 2];
+        accumulators[3] += data[index + 3];
+        index += 4;
     }
 
-    Arch::new().dispatch(Sum(data))
+    let mut total = (accumulators[0] + accumulators[1]) + (accumulators[2] + accumulators[3]);
+    while index < data.len() {
+        total += data[index];
+        index += 1;
+    }
+    total
 }
 
 pub(crate) fn weighted_squared_diff_sum(
@@ -25,63 +22,45 @@ pub(crate) fn weighted_squared_diff_sum(
     outcomes: &[f64],
     weights: &[f64],
 ) -> f64 {
-    struct WeightedSquaredDiff<'a>(&'a [f64], &'a [f64], &'a [f64]);
-
-    impl WithSimd for WeightedSquaredDiff<'_> {
-        type Output = f64;
-
-        #[inline(always)]
-        fn with_simd<S: Simd>(self, simd: S) -> Self::Output {
-            let (pred_head, pred_tail) = S::as_simd_f64s(self.0);
-            let (out_head, out_tail) = S::as_simd_f64s(self.1);
-            let (wt_head, wt_tail) = S::as_simd_f64s(self.2);
-
-            let mut acc = simd.splat_f64s(0.0);
-            for ((&p, &o), &w) in pred_head.iter().zip(out_head.iter()).zip(wt_head.iter()) {
-                let diff = simd.sub_f64s(p, o);
-                let sq = simd.mul_f64s(diff, diff);
-                acc = simd.mul_add_f64s(sq, w, acc);
-            }
-
-            let mut scalar_sum = simd.reduce_sum_f64s(acc);
-            for ((&p, &o), &w) in pred_tail.iter().zip(out_tail.iter()).zip(wt_tail.iter()) {
-                let diff = p - o;
-                scalar_sum += w * diff * diff;
-            }
-            scalar_sum
+    let n = predictions.len().min(outcomes.len()).min(weights.len());
+    let mut accumulators = [0.0; 4];
+    let mut index = 0;
+    while index + 4 <= n {
+        for lane in 0..4 {
+            let diff = predictions[index + lane] - outcomes[index + lane];
+            accumulators[lane] = (weights[index + lane] * diff).mul_add(diff, accumulators[lane]);
         }
+        index += 4;
     }
 
-    Arch::new().dispatch(WeightedSquaredDiff(predictions, outcomes, weights))
+    let mut total = (accumulators[0] + accumulators[1]) + (accumulators[2] + accumulators[3]);
+    while index < n {
+        let diff = predictions[index] - outcomes[index];
+        total = (weights[index] * diff).mul_add(diff, total);
+        index += 1;
+    }
+    total
 }
 
 pub(crate) fn squared_diff_sum(predictions: &[f64], outcomes: &[f64]) -> f64 {
-    struct SquaredDiff<'a>(&'a [f64], &'a [f64]);
-
-    impl WithSimd for SquaredDiff<'_> {
-        type Output = f64;
-
-        #[inline(always)]
-        fn with_simd<S: Simd>(self, simd: S) -> Self::Output {
-            let (pred_head, pred_tail) = S::as_simd_f64s(self.0);
-            let (out_head, out_tail) = S::as_simd_f64s(self.1);
-
-            let mut acc = simd.splat_f64s(0.0);
-            for (&p, &o) in pred_head.iter().zip(out_head.iter()) {
-                let diff = simd.sub_f64s(p, o);
-                acc = simd.mul_add_f64s(diff, diff, acc);
-            }
-
-            let mut scalar_sum = simd.reduce_sum_f64s(acc);
-            for (&p, &o) in pred_tail.iter().zip(out_tail.iter()) {
-                let diff = p - o;
-                scalar_sum += diff * diff;
-            }
-            scalar_sum
+    let n = predictions.len().min(outcomes.len());
+    let mut accumulators = [0.0; 4];
+    let mut index = 0;
+    while index + 4 <= n {
+        for lane in 0..4 {
+            let diff = predictions[index + lane] - outcomes[index + lane];
+            accumulators[lane] = diff.mul_add(diff, accumulators[lane]);
         }
+        index += 4;
     }
 
-    Arch::new().dispatch(SquaredDiff(predictions, outcomes))
+    let mut total = (accumulators[0] + accumulators[1]) + (accumulators[2] + accumulators[3]);
+    while index < n {
+        let diff = predictions[index] - outcomes[index];
+        total = diff.mul_add(diff, total);
+        index += 1;
+    }
+    total
 }
 
 #[cfg(test)]
@@ -89,67 +68,14 @@ mod tests {
     use super::*;
 
     fn dot_product(a: &[f64], b: &[f64]) -> f64 {
-        struct DotProduct<'a>(&'a [f64], &'a [f64]);
-
-        impl WithSimd for DotProduct<'_> {
-            type Output = f64;
-
-            #[inline(always)]
-            fn with_simd<S: Simd>(self, simd: S) -> Self::Output {
-                let (a_head, a_tail) = S::as_simd_f64s(self.0);
-                let (b_head, b_tail) = S::as_simd_f64s(self.1);
-
-                let mut acc = simd.splat_f64s(0.0);
-                for (&a_chunk, &b_chunk) in a_head.iter().zip(b_head.iter()) {
-                    acc = simd.mul_add_f64s(a_chunk, b_chunk, acc);
-                }
-
-                let mut scalar_sum = simd.reduce_sum_f64s(acc);
-                for (&a_val, &b_val) in a_tail.iter().zip(b_tail.iter()) {
-                    scalar_sum += a_val * b_val;
-                }
-                scalar_sum
-            }
-        }
-
-        Arch::new().dispatch(DotProduct(a, b))
+        a.iter().zip(b).map(|(&left, &right)| left * right).sum()
     }
 
     fn min_max_f64(data: &[f64]) -> (f64, f64) {
-        struct MinMax<'a>(&'a [f64]);
-
-        impl WithSimd for MinMax<'_> {
-            type Output = (f64, f64);
-
-            #[inline(always)]
-            fn with_simd<S: Simd>(self, simd: S) -> Self::Output {
-                if self.0.is_empty() {
-                    return (f64::INFINITY, f64::NEG_INFINITY);
-                }
-
-                let (head, tail) = S::as_simd_f64s(self.0);
-
-                let mut min_acc = simd.splat_f64s(f64::INFINITY);
-                let mut max_acc = simd.splat_f64s(f64::NEG_INFINITY);
-
-                for &chunk in head {
-                    min_acc = simd.min_f64s(min_acc, chunk);
-                    max_acc = simd.max_f64s(max_acc, chunk);
-                }
-
-                let mut min_val = simd.reduce_min_f64s(min_acc);
-                let mut max_val = simd.reduce_max_f64s(max_acc);
-
-                for &val in tail {
-                    min_val = min_val.min(val);
-                    max_val = max_val.max(val);
-                }
-
-                (min_val, max_val)
-            }
-        }
-
-        Arch::new().dispatch(MinMax(data))
+        data.iter().fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(minimum, maximum), &value| (minimum.min(value), maximum.max(value)),
+        )
     }
 
     #[test]
