@@ -100,7 +100,7 @@ pub fn multiple_imputation_survival(
     let imputation_results: Vec<Vec<f64>> = (0..n_imputations)
         .into_par_iter()
         .map(|m| {
-            let mut rng = fastrand::Rng::with_seed(base_seed + m as u64);
+            let mut rng = crate::internal::rng::Rng::with_seed(base_seed + m as u64);
             let imputed_x = impute_dataset(
                 &x,
                 &missing_indicators,
@@ -126,7 +126,7 @@ fn impute_dataset(
     n_vars: usize,
     method: ImputationMethod,
     max_iter: usize,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) -> Vec<f64> {
     let mut imputed = x.to_vec();
 
@@ -203,7 +203,7 @@ fn impute_pmm(
     var_j: usize,
     _n_obs: usize,
     n_vars: usize,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) {
     let observed_values: Vec<f64> = observed_idx
         .iter()
@@ -257,7 +257,7 @@ fn impute_regression(
     var_j: usize,
     _n_obs: usize,
     n_vars: usize,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) {
     if n_vars < 2 {
         let mean_obs: f64 = observed_idx
@@ -600,7 +600,7 @@ fn solve_linear_system(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
     (0..n).map(|i| aug[i * (n + 1) + n]).collect()
 }
 
-fn standard_normal(rng: &mut fastrand::Rng) -> f64 {
+fn standard_normal(rng: &mut crate::internal::rng::Rng) -> f64 {
     let u1: f64 = rng.f64().max(1e-10);
     let u2: f64 = rng.f64();
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()

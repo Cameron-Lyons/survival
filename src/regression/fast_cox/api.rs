@@ -560,7 +560,7 @@ pub(crate) fn fast_cox_cv_typed(
     let lambdas = fast_cox_lambda_sequence(&lambda_data, config.l1_ratio, config.n_lambda, None);
 
     let mut rng =
-        fastrand::Rng::with_seed(config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED));
+        crate::internal::rng::Rng::with_seed(config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED));
     let mut fold_assign: Vec<usize> = (0..n_obs).map(|i| i % config.n_folds).collect();
     for i in (1..n_obs).rev() {
         let j = rng.usize(0..=i);

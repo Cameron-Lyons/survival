@@ -232,7 +232,7 @@ pub fn distill_survival_model(
     let n_features = covariates[0].len();
     let n_outputs = teacher_predictions[0].len();
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

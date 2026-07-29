@@ -203,7 +203,7 @@ fn find_best_split_regression(
     indices: &[usize],
     max_features: usize,
     min_samples_leaf: usize,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) -> Option<(usize, f64, Vec<usize>, Vec<usize>)> {
     if indices.len() < 2 * min_samples_leaf {
         return None;
@@ -282,7 +282,7 @@ fn build_regression_tree(
     indices: &[usize],
     config: &GradientBoostSurvivalConfig,
     depth: usize,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) -> RegressionTreeNode {
     let max_idx = indices.iter().copied().max().unwrap_or(0) + 1;
     let mut idx_to_pos = vec![usize::MAX; max_idx];
@@ -374,7 +374,7 @@ fn fit_gradient_boost_inner(
     let base_seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     for iter in 0..config.n_estimators {
-        let mut rng = fastrand::Rng::with_seed(base_seed.wrapping_add(iter as u64));
+        let mut rng = crate::internal::rng::Rng::with_seed(base_seed.wrapping_add(iter as u64));
 
         let sample_size = (n_obs as f64 * config.subsample).ceil() as usize;
         let indices: Vec<usize> = if config.subsample < 1.0 {

@@ -299,7 +299,7 @@ pub fn assess_model_robustness(
     let noise_levels = noise_levels.as_deref().unwrap_or(DEFAULT_NOISE_LEVELS);
     validate_noise_levels(noise_levels)?;
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(s) = seed {
         rng.seed(s);
     }

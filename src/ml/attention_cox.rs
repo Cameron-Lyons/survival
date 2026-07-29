@@ -391,7 +391,7 @@ pub fn fit_attention_cox(
 
     let n_features = covariates[0].len();
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

@@ -112,7 +112,7 @@ pub fn mediation_survival(
         0.0
     };
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

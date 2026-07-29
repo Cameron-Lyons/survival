@@ -103,7 +103,7 @@ pub fn sparse_boosting_cox(
         ));
     }
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

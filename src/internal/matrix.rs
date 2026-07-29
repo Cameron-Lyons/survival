@@ -1,10 +1,6 @@
-use crate::constants::{
-    GAUSSIAN_ELIMINATION_TOL, NEAR_ZERO_MATRIX, PARALLEL_THRESHOLD_LARGE, RIDGE_REGULARIZATION,
-};
+use crate::constants::{GAUSSIAN_ELIMINATION_TOL, NEAR_ZERO_MATRIX, RIDGE_REGULARIZATION};
 use crate::internal::validation::MatrixError;
-use faer::{linalg::solvers::DenseSolveCore, prelude::*};
 use ndarray::{Array1, Array2};
-use rayon::prelude::*;
 use std::borrow::Cow;
 
 pub(crate) fn standardize_row_major_matrix(
@@ -54,55 +50,151 @@ pub(crate) fn standardize_or_borrow_row_major_matrix(
     }
 }
 
-#[inline]
-fn ndarray_to_faer(arr: &Array2<f64>) -> Mat<f64> {
-    let (rows, cols) = arr.dim();
-    if arr.is_standard_layout() && rows * cols > PARALLEL_THRESHOLD_LARGE {
-        Mat::from_fn(rows, cols, |i, j| {
-            // SAFETY: `Mat::from_fn` calls this closure with `i < rows` and
-            // `j < cols`, where `(rows, cols)` came directly from `arr.dim()`.
-            // The standard-layout check is only a fast-path precondition; the
-            // bounds invariant is what makes unchecked ndarray access valid.
-            unsafe { *arr.uget((i, j)) }
-        })
-    } else {
-        Mat::from_fn(rows, cols, |i, j| arr[[i, j]])
-    }
+/// Compact row-major LU factorization with partial pivoting.
+///
+/// The statistical routines in this crate only need dense square solves and
+/// inverses. Keeping that narrow implementation here avoids pulling a general
+/// matrix backend into every build while retaining pivoting and scale-aware
+/// singularity detection.
+struct PartialPivotLu {
+    factors: Vec<f64>,
+    swaps: Vec<usize>,
+    n: usize,
 }
 
-#[inline]
-fn faer_col_to_ndarray(col: faer::ColRef<f64>) -> Array1<f64> {
-    let n = col.nrows();
-    let mut result = Array1::uninit(n);
-    for i in 0..n {
-        result[i].write(col[i]);
-    }
-    // SAFETY: `result` has length `n`, and the loop above writes exactly once
-    // to every index in `0..n` before initialization is assumed.
-    unsafe { result.assume_init() }
-}
+impl PartialPivotLu {
+    fn decompose(matrix: &Array2<f64>) -> Option<Self> {
+        let (rows, cols) = matrix.dim();
+        if rows != cols {
+            return None;
+        }
+        if rows == 0 {
+            return Some(Self {
+                factors: Vec::new(),
+                swaps: Vec::new(),
+                n: 0,
+            });
+        }
 
-#[inline]
-fn faer_mat_to_ndarray(mat: faer::MatRef<f64>) -> Array2<f64> {
-    let (rows, cols) = (mat.nrows(), mat.ncols());
-    let mut data = vec![0.0; rows * cols];
-
-    if rows * cols > PARALLEL_THRESHOLD_LARGE {
-        data.par_chunks_mut(cols).enumerate().for_each(|(i, row)| {
-            for j in 0..cols {
-                row[j] = mat[(i, j)];
-            }
-        });
-    } else {
-        for i in 0..rows {
-            for j in 0..cols {
-                data[i * cols + j] = mat[(i, j)];
+        let n = rows;
+        let mut factors = Vec::with_capacity(n * n);
+        let mut scale = 0.0_f64;
+        for row in 0..n {
+            for col in 0..n {
+                let value = matrix[[row, col]];
+                if !value.is_finite() {
+                    return None;
+                }
+                scale = scale.max(value.abs());
+                factors.push(value);
             }
         }
+        if scale == 0.0 {
+            return None;
+        }
+
+        let pivot_tolerance = scale * GAUSSIAN_ELIMINATION_TOL;
+        let mut swaps = Vec::with_capacity(n);
+
+        for pivot_col in 0..n {
+            let mut pivot_row = pivot_col;
+            let mut pivot_abs = factors[pivot_col * n + pivot_col].abs();
+            for row in (pivot_col + 1)..n {
+                let candidate = factors[row * n + pivot_col].abs();
+                if candidate > pivot_abs {
+                    pivot_abs = candidate;
+                    pivot_row = row;
+                }
+            }
+            if !pivot_abs.is_finite() || pivot_abs <= pivot_tolerance {
+                return None;
+            }
+
+            swaps.push(pivot_row);
+            if pivot_row != pivot_col {
+                for col in 0..n {
+                    factors.swap(pivot_col * n + col, pivot_row * n + col);
+                }
+            }
+
+            let pivot = factors[pivot_col * n + pivot_col];
+            for row in (pivot_col + 1)..n {
+                let multiplier_index = row * n + pivot_col;
+                let multiplier = factors[multiplier_index] / pivot;
+                factors[multiplier_index] = multiplier;
+
+                let row_start = row * n;
+                let pivot_start = pivot_col * n;
+                for col in (pivot_col + 1)..n {
+                    factors[row_start + col] =
+                        (-multiplier).mul_add(factors[pivot_start + col], factors[row_start + col]);
+                }
+            }
+        }
+
+        Some(Self { factors, swaps, n })
     }
 
-    Array2::from_shape_vec((rows, cols), data)
-        .expect("shape and buffer length are consistent for Faer matrix conversion")
+    fn solve_slice(&self, rhs: &[f64]) -> Option<Vec<f64>> {
+        if rhs.len() != self.n || rhs.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        if self.n == 0 {
+            return Some(Vec::new());
+        }
+
+        let mut solution = rhs.to_vec();
+        for (row, &swap_row) in self.swaps.iter().enumerate() {
+            if row != swap_row {
+                solution.swap(row, swap_row);
+            }
+        }
+
+        // Forward substitution for the unit-diagonal lower factor.
+        for row in 0..self.n {
+            let row_start = row * self.n;
+            let mut value = solution[row];
+            for (col, &known_value) in solution.iter().take(row).enumerate() {
+                value = (-self.factors[row_start + col]).mul_add(known_value, value);
+            }
+            solution[row] = value;
+        }
+
+        // Back substitution for the upper factor.
+        for row in (0..self.n).rev() {
+            let row_start = row * self.n;
+            let mut value = solution[row];
+            for (col, &known_value) in solution.iter().enumerate().skip(row + 1) {
+                value = (-self.factors[row_start + col]).mul_add(known_value, value);
+            }
+            let diagonal = self.factors[row_start + row];
+            if diagonal == 0.0 || !diagonal.is_finite() {
+                return None;
+            }
+            solution[row] = value / diagonal;
+        }
+
+        solution
+            .iter()
+            .all(|value| value.is_finite())
+            .then_some(solution)
+    }
+
+    fn inverse(&self) -> Option<Array2<f64>> {
+        let mut inverse = vec![0.0; self.n * self.n];
+        let mut rhs = vec![0.0; self.n];
+
+        for col in 0..self.n {
+            rhs[col] = 1.0;
+            let solution = self.solve_slice(&rhs)?;
+            rhs[col] = 0.0;
+            for row in 0..self.n {
+                inverse[row * self.n + col] = solution[row];
+            }
+        }
+
+        Array2::from_shape_vec((self.n, self.n), inverse).ok()
+    }
 }
 
 pub(crate) fn regularized_lu_solve(
@@ -140,15 +232,13 @@ pub(crate) fn regularized_lu_solve(
 
 fn lu_solve_internal(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
     if matrix.nrows() == 0 || matrix.ncols() == 0 {
-        return Some(Array1::zeros(vector.len()));
+        return vector.is_empty().then(|| Array1::zeros(0));
     }
 
-    let mat = ndarray_to_faer(matrix);
-    let b: Col<f64> = Col::from_fn(vector.len(), |i| vector[i]);
-
-    let lu = mat.partial_piv_lu();
-    let x: Col<f64> = lu.solve(&b);
-    Some(faer_col_to_ndarray(x.as_ref()))
+    let factorization = PartialPivotLu::decompose(matrix)?;
+    factorization
+        .solve_slice(vector.as_slice()?)
+        .map(Array1::from_vec)
 }
 
 pub(crate) fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
@@ -160,11 +250,7 @@ pub(crate) fn matrix_inverse(matrix: &Array2<f64>) -> Option<Array2<f64>> {
         return Some(matrix.clone());
     }
 
-    let mat = ndarray_to_faer(matrix);
-    let lu = mat.partial_piv_lu();
-    let inv: Mat<f64> = lu.inverse();
-
-    Some(faer_mat_to_ndarray(inv.as_ref()))
+    PartialPivotLu::decompose(matrix)?.inverse()
 }
 
 pub(crate) fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Vec<f64> {
@@ -383,6 +469,26 @@ mod tests {
     }
 
     #[test]
+    fn test_lu_solve_uses_partial_pivoting() {
+        let matrix = arr2(&[[0.0, 2.0], [1.0, 3.0]]);
+        let vector = Array1::from_vec(vec![4.0, 5.0]);
+        let result = lu_solve(&matrix, &vector).unwrap();
+        assert!((result[0] + 1.0).abs() < 1e-12);
+        assert!((result[1] - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_lu_solve_rejects_singular_and_malformed_systems() {
+        let singular = arr2(&[[1.0, 2.0], [2.0, 4.0]]);
+        let rhs = Array1::from_vec(vec![1.0, 2.0]);
+        assert!(lu_solve(&singular, &rhs).is_none());
+
+        let nonsquare = Array2::from_shape_vec((2, 3), vec![1.0; 6]).unwrap();
+        assert!(lu_solve(&nonsquare, &rhs).is_none());
+        assert!(lu_solve(&arr2(&[[1.0, 0.0], [0.0, 1.0]]), &Array1::zeros(1)).is_none());
+    }
+
+    #[test]
     fn test_matrix_inverse() {
         let matrix = arr2(&[[1.0, 0.0], [0.0, 1.0]]);
         let inv = matrix_inverse(&matrix).unwrap();
@@ -390,5 +496,18 @@ mod tests {
         assert!((inv[[1, 1]] - 1.0).abs() < 1e-10);
         assert!(inv[[0, 1]].abs() < 1e-10);
         assert!(inv[[1, 0]].abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_matrix_inverse_nontrivial_product_is_identity() {
+        let matrix = arr2(&[[4.0, 7.0, 2.0], [3.0, 6.0, 1.0], [2.0, 5.0, 3.0]]);
+        let inverse = matrix_inverse(&matrix).unwrap();
+        let product = matrix.dot(&inverse);
+        for row in 0..3 {
+            for col in 0..3 {
+                let expected = if row == col { 1.0 } else { 0.0 };
+                assert!((product[[row, col]] - expected).abs() < 1e-10);
+            }
+        }
     }
 }

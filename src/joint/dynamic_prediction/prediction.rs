@@ -103,7 +103,7 @@ pub fn dynamic_prediction(
     let survival_samples: Vec<Vec<f64>> = (0..n_monte_carlo)
         .into_par_iter()
         .map(|mc_idx| {
-            let mut rng = fastrand::Rng::with_seed(mc_idx as u64);
+            let mut rng = crate::internal::rng::Rng::with_seed(mc_idx as u64);
 
             let b0_sample = b0 + 0.1 * sample_normal(&mut rng);
             let b1_sample = b1 + 0.05 * sample_normal(&mut rng);

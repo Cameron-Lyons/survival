@@ -313,7 +313,7 @@ pub fn fit_deep_pamm(
     let knots = create_knot_sequence(min_time, max_time, config.num_knots, config.spline_degree);
     let n_basis = knots.len() - config.spline_degree - 1;
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

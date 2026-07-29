@@ -317,7 +317,7 @@ fn kmeans_clustering(
 
     let dim = features[0].len();
 
-    let mut rng = fastrand::Rng::with_seed(seed);
+    let mut rng = crate::internal::rng::Rng::with_seed(seed);
     let mut centroids: Vec<Vec<f64>> = (0..n_groups)
         .map(|_| {
             let idx = rng.usize(0..n_features);

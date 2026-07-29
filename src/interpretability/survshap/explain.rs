@@ -218,7 +218,7 @@ pub fn survshap_bootstrap(
         .into_par_iter()
         .map(|b| {
             let seed = base_seed.wrapping_add(b as u64);
-            let mut rng = fastrand::Rng::with_seed(seed);
+            let mut rng = crate::internal::rng::Rng::with_seed(seed);
 
             let bg_indices: Vec<usize> = (0..n_background)
                 .map(|_| rng.usize(0..n_background))
@@ -347,7 +347,7 @@ pub fn permutation_importance(
 
         for r in 0..n_repeats {
             let mut rng =
-                fastrand::Rng::with_seed(base_seed + feature_idx as u64 * 1000 + r as u64);
+                crate::internal::rng::Rng::with_seed(base_seed + feature_idx as u64 * 1000 + r as u64);
 
             let mut perm_indices: Vec<usize> = (0..n_samples).collect();
             for i in (1..n_samples).rev() {

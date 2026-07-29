@@ -303,7 +303,7 @@ pub fn fit_neural_ode_surv(
 
     let n_features = covariates[0].len();
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

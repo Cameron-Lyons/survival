@@ -50,7 +50,7 @@ impl DoubleMLConfig {
     }
 }
 
-fn create_folds(n: usize, n_folds: usize, rng: &mut fastrand::Rng) -> Vec<Vec<usize>> {
+fn create_folds(n: usize, n_folds: usize, rng: &mut crate::internal::rng::Rng) -> Vec<Vec<usize>> {
     let mut indices: Vec<usize> = (0..n).collect();
     rng.shuffle(&mut indices);
 
@@ -248,7 +248,7 @@ pub fn double_ml_survival(
         ));
     }
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn test_create_folds() {
-        let mut rng = fastrand::Rng::new();
+        let mut rng = crate::internal::rng::Rng::new();
         rng.seed(42);
         let folds = create_folds(100, 5, &mut rng);
         assert_eq!(folds.len(), 5);
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn test_create_folds_odd_n() {
-        let mut rng = fastrand::Rng::new();
+        let mut rng = crate::internal::rng::Rng::new();
         rng.seed(123);
         let folds = create_folds(7, 3, &mut rng);
         assert_eq!(folds.len(), 3);

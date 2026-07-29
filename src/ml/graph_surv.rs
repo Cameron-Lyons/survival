@@ -397,7 +397,7 @@ pub fn fit_graph_surv(
         .map(|n| n.len())
         .unwrap_or(config.hidden_dim);
 
-    let mut rng = fastrand::Rng::new();
+    let mut rng = crate::internal::rng::Rng::new();
     if let Some(seed) = config.seed {
         rng.seed(seed);
     }

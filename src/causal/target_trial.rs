@@ -405,7 +405,7 @@ fn bootstrap_standard_errors(
     let results: Vec<(f64, f64)> = (0..config.n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {
-            let mut rng = fastrand::Rng::with_seed(b as u64 + 54321);
+            let mut rng = crate::internal::rng::Rng::with_seed(b as u64 + 54321);
             let indices: Vec<usize> = (0..n_obs).map(|_| rng.usize(0..n_obs)).collect();
 
             let mut all_clones: Vec<ClonedObservation> = Vec::new();

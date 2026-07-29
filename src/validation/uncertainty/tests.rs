@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_apply_dropout() {
-        let mut rng = fastrand::Rng::new();
+        let mut rng = crate::internal::rng::Rng::new();
         rng.seed(42);
         let values = vec![1.0, 1.0, 1.0, 1.0, 1.0];
         let dropped = _apply_dropout(&values, 0.5, &mut rng);

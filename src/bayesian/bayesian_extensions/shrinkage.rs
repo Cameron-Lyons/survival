@@ -77,8 +77,8 @@ pub fn spike_slab_cox(
     }
 
     let mut rng = match config.seed {
-        Some(s) => fastrand::Rng::with_seed(s),
-        None => fastrand::Rng::new(),
+        Some(s) => crate::internal::rng::Rng::with_seed(s),
+        None => crate::internal::rng::Rng::new(),
     };
 
     let mut gamma = vec![false; n_covariates];
@@ -259,8 +259,8 @@ pub fn horseshoe_cox(
     }
 
     let mut rng = match config.seed {
-        Some(s) => fastrand::Rng::with_seed(s),
-        None => fastrand::Rng::new(),
+        Some(s) => crate::internal::rng::Rng::with_seed(s),
+        None => crate::internal::rng::Rng::new(),
     };
 
     let mut beta: Vec<f64> = vec![0.0; n_covariates];
@@ -381,4 +381,3 @@ pub fn horseshoe_cox(
         effective_df,
     })
 }
-

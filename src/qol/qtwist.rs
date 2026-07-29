@@ -172,7 +172,7 @@ pub fn qtwist_comparison(
     let mut boot_diffs: Vec<f64> = Vec::with_capacity(n_bootstrap);
 
     for b in 0..n_bootstrap {
-        let mut rng = fastrand::Rng::with_seed(b as u64);
+        let mut rng = crate::internal::rng::Rng::with_seed(b as u64);
 
         let boot_treated_idx: Vec<usize> =
             (0..n_treated).map(|_| rng.usize(0..n_treated)).collect();

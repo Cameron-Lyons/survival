@@ -239,7 +239,7 @@ fn hmc_step(
     config: &BayesianCoxConfig,
     step_size: f64,
     n_leapfrog: usize,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) -> (Vec<f64>, f64, bool) {
     let mut q = beta.to_vec();
     let mut momentum: Vec<f64> = (0..p).map(|_| sample_normal(rng)).collect();
@@ -315,7 +315,7 @@ fn run_chain(
 ) -> (Vec<Vec<f64>>, Vec<f64>) {
     let seed =
         config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED) + chain_id as u64 * 1000;
-    let mut rng = fastrand::Rng::with_seed(seed);
+    let mut rng = crate::internal::rng::Rng::with_seed(seed);
 
     let mut beta = vec![0.0; p];
     let mut samples: Vec<Vec<f64>> = Vec::with_capacity(config.n_samples);

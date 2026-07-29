@@ -1,6 +1,6 @@
 
 
-fn sample_gamma(rng: &mut fastrand::Rng, shape: f64, scale: f64) -> f64 {
+fn sample_gamma(rng: &mut crate::internal::rng::Rng, shape: f64, scale: f64) -> f64 {
     if shape < 1.0 {
         let u = rng.f64();
         return sample_gamma(rng, shape + 1.0, scale) * u.powf(1.0 / shape);
@@ -106,8 +106,8 @@ pub fn dirichlet_process_survival(
     }
 
     let mut rng = match config.seed {
-        Some(s) => fastrand::Rng::with_seed(s),
-        None => fastrand::Rng::new(),
+        Some(s) => crate::internal::rng::Rng::with_seed(s),
+        None => crate::internal::rng::Rng::new(),
     };
 
     let max_time = time.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -297,7 +297,7 @@ fn sample_weibull_posterior(
     event: &[i32],
     shape: f64,
     _rate: f64,
-    rng: &mut fastrand::Rng,
+    rng: &mut crate::internal::rng::Rng,
 ) -> (f64, f64) {
     let sum_events: f64 = obs_idx.iter().map(|&i| event[i] as f64).sum();
     let sum_t_shape: f64 = obs_idx.iter().map(|&i| time[i].powf(shape)).sum();

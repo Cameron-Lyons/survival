@@ -185,7 +185,7 @@ fn bootstrap_qaly_ci(
     let qalys: Vec<f64> = (0..n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {
-            let mut rng = fastrand::Rng::with_seed(b as u64 + 98765);
+            let mut rng = crate::internal::rng::Rng::with_seed(b as u64 + 98765);
             let indices: Vec<usize> = (0..n).map(|_| rng.usize(0..n)).collect();
 
             let boot_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
@@ -279,7 +279,7 @@ pub fn qaly_comparison(
     let boot_diffs: Vec<f64> = (0..n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {
-            let mut rng = fastrand::Rng::with_seed(b as u64 + 11111);
+            let mut rng = crate::internal::rng::Rng::with_seed(b as u64 + 11111);
 
             let idx_t: Vec<usize> = (0..n_treated).map(|_| rng.usize(0..n_treated)).collect();
             let idx_c: Vec<usize> = (0..n_control).map(|_| rng.usize(0..n_control)).collect();
