@@ -1,4 +1,3 @@
-
 BINDINGS = (
     "ALE2DResult",
     "ALEResult",
