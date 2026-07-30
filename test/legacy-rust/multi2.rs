@@ -10,7 +10,7 @@ fn aeq(x: &Array<f64, ndarray::Ix1>, y: &Array<f64, ndarray::Ix1>, tol: f64) -> 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tdata = DataFrame::from_csv("myeloid.csv")?;
-    
+
     process_tmerge(&mut tdata)?;
     create_event_factor(&mut tdata)?;
 

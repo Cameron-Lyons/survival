@@ -1,4 +1,3 @@
-# ruff: noqa: N803
 from __future__ import annotations
 
 from ._sklearn_ensemble import GradientBoostSurvivalEstimator, SurvivalForestEstimator

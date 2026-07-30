@@ -5,7 +5,6 @@ pub(crate) mod survexp_module;
 #[path = "survexp_us.rs"]
 pub(crate) mod survexp_us_module;
 
-// Public facade exports
 pub use pyears_summary::{PyearsCell, PyearsSummary, pyears_by_cell, pyears_ci, summary_pyears};
 pub use ratetable::{
     DimType, RateDimension, RateTable, RatetableDateResult, create_simple_ratetable, days_to_date,

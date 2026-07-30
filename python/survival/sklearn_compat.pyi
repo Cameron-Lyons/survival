@@ -1,5 +1,3 @@
-# ruff: noqa: N803
-
 from collections.abc import Iterator
 from typing import Any, Self
 

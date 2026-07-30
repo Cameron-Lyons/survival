@@ -1,8 +1,3 @@
-//! Condense (shorten) a survival dataset by merging adjacent intervals
-//!
-//! This is the inverse operation of survsplit - it merges adjacent censored intervals
-//! that have the same covariate values.
-
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -11,42 +6,21 @@ use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_overlapping_intervals_i32,
 };
 
-/// Result of condensing survival data
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
 pub struct CondenseResult {
-    /// Subject identifiers for each output row
     #[pyo3(get)]
     pub id: Vec<i32>,
-    /// Start time of each interval
     #[pyo3(get)]
     pub time1: Vec<f64>,
-    /// End time of each interval
     #[pyo3(get)]
     pub time2: Vec<f64>,
-    /// Event status (1=event, 0=censored)
     #[pyo3(get)]
     pub status: Vec<i32>,
-    /// Maps each output row to original input row indices
     #[pyo3(get)]
     pub row_map: Vec<Vec<usize>>,
 }
 
-/// Condense a survival dataset by merging adjacent censored intervals
-///
-/// Merges consecutive intervals for the same subject where:
-/// - The intervals are adjacent (time2\[i\] == time1\[i+1\])
-/// - All intermediate intervals are censored (status=0)
-/// - The final interval inherits the status of the last merged interval
-///
-/// # Arguments
-/// * `id` - Subject identifiers
-/// * `time1` - Start times of intervals
-/// * `time2` - End times of intervals
-/// * `status` - Event status (1=event, 0=censored)
-///
-/// # Returns
-/// A CondenseResult with merged intervals
 #[pyfunction]
 #[pyo3(signature = (id, time1, time2, status))]
 pub fn survcondense(

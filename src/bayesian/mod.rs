@@ -4,7 +4,6 @@ pub(crate) mod bayesian_extensions;
 #[path = "bayesian_parametric.rs"]
 pub(crate) mod bayesian_parametric_module;
 
-// Public facade exports
 pub use bayesian_cox_module::{
     BayesianCoxConfig, BayesianCoxResult, PriorType, bayesian_cox, bayesian_cox_predict_survival,
 };

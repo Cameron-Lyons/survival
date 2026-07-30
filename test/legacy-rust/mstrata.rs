@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .lazy()
         .filter(col("ph.ecog").lt(3))
         .collect()?;
-    
+
     tdata.apply("status", |s| {
         s.categorical()
             .map(|cat| cat.set_categories(&["censor", "death"]).unwrap())
@@ -21,6 +21,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let formula = "Surv(time, status) ~ age + sex + ph.ecog";
     let mut model = CoxPHModel::new();
     model.fit(&tdata, formula)?;
-    
+
     Ok(())
 }

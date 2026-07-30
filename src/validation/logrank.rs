@@ -311,28 +311,6 @@ fn parse_logrank_weight_type(weight_type: Option<&str>) -> PyResult<WeightType> 
     }
 }
 
-/// Perform log-rank test comparing survival between groups.
-///
-/// Parameters
-/// ----------
-/// time : array-like
-///     Survival/censoring times. Accepts numpy, pandas, polars, or lists.
-/// status : array-like
-///     Event indicator (1=event, 0=censored).
-/// group : array-like
-///     Group membership indicator (integer-coded).
-/// weight_type : str, optional
-///     Weight function: "logrank" (default), "wilcoxon", "tarone-ware", or "peto-peto".
-///
-/// Returns
-/// -------
-/// LogRankResult
-///     Object with: statistic (test statistic), p_value, observed/expected counts per group.
-///
-/// Examples
-/// --------
-/// >>> result = survival.logrank_test(time, status, group)
-/// >>> print(f"p-value: {result.p_value:.4f}")
 #[pyfunction]
 #[pyo3(signature = (time, status, group, weight_type=None, entry_times=None))]
 pub fn logrank_test(

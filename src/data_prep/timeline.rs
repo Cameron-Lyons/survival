@@ -1,8 +1,3 @@
-//! Convert between timeline (wide) and interval (long) data formats
-//!
-//! Timeline format: one row per subject, multiple columns for different time points
-//! Interval format: multiple rows per subject, with (time1, time2) columns
-
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -12,35 +7,26 @@ use crate::internal::validation::{
     validate_finite, validate_no_nan, validate_non_overlapping_intervals_i32,
 };
 
-/// Result of converting to timeline (wide) format
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
 pub struct TimelineResult {
-    /// Subject identifiers (one per row)
     #[pyo3(get)]
     pub id: Vec<i32>,
-    /// State at each time point for each subject (subjects x time_points)
     #[pyo3(get)]
     pub states: Vec<Vec<i32>>,
-    /// Time points (column headers)
     #[pyo3(get)]
     pub time_points: Vec<f64>,
 }
 
-/// Result of converting from timeline to interval format
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
 pub struct IntervalResult {
-    /// Subject identifiers
     #[pyo3(get)]
     pub id: Vec<i32>,
-    /// Start time of each interval
     #[pyo3(get)]
     pub time1: Vec<f64>,
-    /// End time of each interval
     #[pyo3(get)]
     pub time2: Vec<f64>,
-    /// State/status for each interval
     #[pyo3(get)]
     pub status: Vec<i32>,
 }
@@ -76,20 +62,6 @@ fn sorted_unique_time_points(time1: &[f64], time2: &[f64]) -> Vec<f64> {
     times
 }
 
-/// Convert interval data to timeline (wide) format
-///
-/// Creates a grid where each row is a subject and each column is a time point.
-/// The value at each cell is the state/status at that time.
-///
-/// # Arguments
-/// * `id` - Subject identifiers
-/// * `time1` - Start times of intervals
-/// * `time2` - End times of intervals
-/// * `status` - State/status for each interval
-/// * `time_points` - Optional: specific time points to use as columns
-///
-/// # Returns
-/// TimelineResult with subjects as rows and time points as columns
 #[pyfunction]
 #[pyo3(signature = (id, time1, time2, status, time_points=None))]
 pub fn to_timeline(
@@ -189,18 +161,6 @@ pub fn to_timeline(
     })
 }
 
-/// Convert timeline (wide) format to interval (long) format
-///
-/// Takes a grid where each row is a subject and each column is a time point,
-/// and converts it back to interval format with (time1, time2) pairs.
-///
-/// # Arguments
-/// * `id` - Subject identifiers (one per row)
-/// * `states` - State matrix (subjects x time_points)
-/// * `time_points` - Time point values for each column
-///
-/// # Returns
-/// IntervalResult with (time1, time2) intervals for each state change
 #[pyfunction]
 pub fn from_timeline(
     id: Vec<i32>,

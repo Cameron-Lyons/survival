@@ -10,7 +10,6 @@ pub(crate) mod msm;
 pub(crate) mod target_trial;
 pub(crate) mod tmle;
 
-// Public facade exports
 pub use causal_forest::{
     CausalForestConfig, CausalForestResult, CausalForestSurvival, causal_forest_survival,
 };

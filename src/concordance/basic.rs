@@ -1116,7 +1116,6 @@ fn validate_legacy_concordance_inputs(
     Ok(())
 }
 
-/// Compute Harrell's concordance index for survival predictions.
 #[pyfunction]
 #[pyo3(signature = (time, status, risk_scores, weights=None, timewt="n".to_string()))]
 pub fn concordance_index(
@@ -1156,7 +1155,6 @@ fn build_concordance_summary_dict(summary: ConcordanceSummary) -> PyResult<Py<Py
     })
 }
 
-/// Compute Harrell's concordance index and pair counts for survival predictions.
 #[pyfunction]
 #[pyo3(signature = (time, status, risk_scores, weights=None, timewt="n".to_string()))]
 pub fn concordance_summary(
@@ -1288,7 +1286,6 @@ pub fn stratified_concordance_influence_rows(
     ))
 }
 
-/// Compute Harrell's concordance index for counting-process survival data.
 #[pyfunction]
 #[pyo3(signature = (start, stop, status, risk_scores, weights=None, timewt="n".to_string(), timefix=None))]
 pub fn counting_concordance_index(
@@ -1328,7 +1325,6 @@ pub fn counting_concordance_index(
     )
 }
 
-/// Compute Harrell's concordance index and pair counts for counting-process data.
 #[pyfunction]
 #[pyo3(signature = (start, stop, status, risk_scores, weights=None, timewt="n".to_string(), timefix=None))]
 pub fn counting_concordance_summary(
@@ -1529,27 +1525,6 @@ pub fn stratified_counting_concordance_influence_rows(
     ))
 }
 
-/// Compute concordance statistics for survival predictions.
-///
-/// Parameters
-/// ----------
-/// y : array-like
-///     Survival times.
-/// x : array-like
-///     Predicted risk scores (integer-coded).
-/// wt : array-like
-///     Observation weights.
-/// timewt : array-like
-///     Time-dependent weights.
-/// sortstart : array-like, optional
-///     Start-time sort indices for left-truncated data.
-/// sortstop : array-like
-///     Stop-time sort indices.
-///
-/// Returns
-/// -------
-/// dict
-///     Dictionary with concordance counts: concordant, discordant, tied_risk, tied_time, pairs.
 #[pyfunction]
 pub fn concordance(
     y: Vec<f64>,

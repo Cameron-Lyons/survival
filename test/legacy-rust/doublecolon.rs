@@ -11,9 +11,9 @@ fn test_survival_functions() {
     let lung = load_lung_dataset();
 
     let c1 = coxph(Surv::new("time", "status") ~ age + strata("inst"), &lung).unwrap();
-    
+
     let c3 = coxph(survival::Surv::new("time", "status") ~ age + survival::strata("inst"), &lung).unwrap();
-    
+
     assert!(aeq(c1.coefficients(), c3.coefficients(), 1e-6));
 
     let fit5a = survfit(Surv::new("time", "status") ~ sex, &lung).unwrap();

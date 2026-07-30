@@ -5,7 +5,6 @@ pub(crate) mod coxscho;
 pub(crate) mod nsk_module;
 pub(crate) mod pspline;
 
-// Public facade exports
 pub use coxcount1_module::{CoxCountOutput, coxcount1, coxcount2};
 pub use coxscho::schoenfeld_residuals;
 pub use nsk_module::{NaturalSplineKnot, SplineBasisResult, nsk};

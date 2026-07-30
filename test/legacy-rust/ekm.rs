@@ -9,7 +9,7 @@ struct SurvivalData {
     status: u32,
     trt: u32,
     wt: f32,
-    pos: u32, 
+    pos: u32,
 }
 
 #[derive(Debug)]
@@ -35,7 +35,7 @@ fn main() {
 
     let true_results = byhand(&tdata);
 
-    assert_eq!(true_results[&1].n_id, 5); 
+    assert_eq!(true_results[&1].n_id, 5);
     assert_abs_diff_eq!(true_results[&1].surv[0], 0.8, epsilon = 0.001);
 }
 
@@ -53,7 +53,7 @@ fn surv_split(data: &mut Vec<SurvivalData>, cuts: &[f64]) {
         let mut current_start = d.tstart;
         let mut cuts = cuts.to_vec();
         cuts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        
+
         for &cut in &cuts {
             if cut < d.time {
                 intervals.push(SurvivalData {
@@ -85,7 +85,7 @@ fn surv_split(data: &mut Vec<SurvivalData>, cuts: &[f64]) {
 fn assign_trt_and_weights(data: &mut Vec<SurvivalData>) {
     let trt_cycle = vec![1, 1, 2, 2, 2];
     let wt_cycle = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    
+
     for (i, d) in data.iter_mut().enumerate() {
         d.trt = trt_cycle[i % trt_cycle.len()];
         d.wt = wt_cycle[i % wt_cycle.len()];

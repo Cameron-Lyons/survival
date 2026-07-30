@@ -8,7 +8,6 @@ pub(crate) mod survshap_module;
 pub(crate) mod time_varying;
 pub(crate) mod variable_groups;
 
-// Public facade exports
 pub use ale_plots::{
     ALE2DResult, ALEResult, compute_ale, compute_ale_2d, compute_time_varying_ale,
 };

@@ -917,41 +917,6 @@ impl SurvFitKMOutput {
     }
 }
 
-/// Compute Kaplan-Meier survival curve estimates.
-///
-/// Parameters
-/// ----------
-/// time : array-like
-///     Survival/censoring times. Accepts numpy arrays, pandas Series, polars Series, or lists.
-/// status : array-like
-///     Event indicator (1=event, 0=censored).
-/// weights : array-like, optional
-///     Case weights for weighted estimation.
-/// entry_times : array-like, optional
-///     Left truncation (late entry) times for delayed entry data.
-/// position : array-like, optional
-///     Position indicators for tied event handling.
-/// reverse : bool, optional
-///     If True, compute reverse Kaplan-Meier (censoring distribution). Default False.
-/// computation_type : int, optional
-///     Algorithm variant (0=standard, 1=alternative). Default 0.
-/// conf_type : str, optional
-///     Confidence interval transform: plain, log, log-log, logit, arcsin, or none.
-///
-/// Returns
-/// -------
-/// SurvFitKMOutput
-///     Object containing: time (event/censor times), n_risk (at-risk counts), n_event (event counts),
-///     estimate (survival probabilities), std_err (standard errors), cumhaz/std_chaz, and
-///     conf_lower/conf_upper intervals.
-///
-/// Examples
-/// --------
-/// >>> import survival
-/// >>> import pandas as pd
-/// >>> df = pd.DataFrame({'time': [1, 2, 3, 4, 5], 'status': [1, 0, 1, 1, 0]})
-/// >>> result = survival.survfitkm(df['time'], df['status'])
-/// >>> result.estimate
 #[pyfunction]
 #[pyo3(signature = (time, status, weights=None, entry_times=None, position=None, reverse=None, computation_type=None, conf_level=None, conf_type=None, timefix=None))]
 #[allow(clippy::too_many_arguments)]

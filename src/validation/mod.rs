@@ -38,7 +38,6 @@ pub(crate) mod uno_c_index_module;
 #[path = "yates.rs"]
 pub(crate) mod yates_module;
 
-// Public facade exports
 pub use anova::{AnovaCoxphResult, AnovaRow, anova_coxph, anova_coxph_single};
 pub use bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
 pub use brier_module::{brier, compute_brier, integrated_brier};

@@ -58,7 +58,6 @@ jobs:
         id: compare
         continue-on-error: true
         run: |
-          # Keep benchmark comment under GitHub's 65,536-character limit.
           tail -n 300 base-bench.txt > base-bench-tail.txt || true
           tail -n 300 pr-bench.txt > pr-bench-tail.txt || true
           echo "## Benchmark Results" > bench-comment.md

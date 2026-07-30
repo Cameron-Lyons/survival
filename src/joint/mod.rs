@@ -3,7 +3,6 @@ pub(crate) mod dynamic_prediction_module;
 #[path = "joint_model.rs"]
 pub(crate) mod joint_model_module;
 
-// Public facade exports
 pub use dynamic_prediction_module::{
     DynamicCIndexResult, DynamicPredictionResult, IPCWAUCResult, SuperLandmarkResult,
     TimeDependentROCResult, TimeVaryingAUCResult, dynamic_auc, dynamic_brier_score,

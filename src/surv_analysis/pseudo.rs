@@ -8,45 +8,19 @@ use crate::internal::validation::{
 };
 use pyo3::exceptions::PyValueError;
 
-/// Result of pseudo-value computation
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct PseudoResult {
-    /// Matrix of pseudo-values: n_subjects x n_times
     #[pyo3(get)]
     pub pseudo: Vec<Vec<f64>>,
-    /// Time points at which pseudo-values were computed
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Type of pseudo-values computed
     #[pyo3(get)]
     pub type_: String,
-    /// Number of subjects
     #[pyo3(get)]
     pub n: usize,
 }
 
-/// Compute pseudo-values for survival analysis.
-///
-/// Pseudo-values are computed using the infinitesimal jackknife (IJ) approach,
-/// which is much faster than ordinary jackknife. The pseudo-values can be used
-/// in regression models (like generalized estimating equations) to analyze
-/// survival data.
-///
-/// For each observation i and time t:
-///   pseudo_i(t) = n * theta_full(t) - (n-1) * theta_{-i}(t)
-///
-/// where theta is the Kaplan-Meier estimate and theta_{-i} is the estimate
-/// excluding observation i.
-///
-/// # Arguments
-/// * `time` - Survival/censoring times
-/// * `status` - Event indicator (1=event, 0=censored)
-/// * `eval_times` - Optional times at which to compute pseudo-values (default: event times)
-/// * `type_` - Type of pseudo-values: "survival", "cumhaz", or "rmst"
-///
-/// # Returns
-/// * `PseudoResult` with pseudo-value matrix
 #[pyfunction]
 #[pyo3(signature = (time, status, eval_times=None, type_=None))]
 pub fn pseudo(
@@ -299,7 +273,6 @@ fn default_event_times(time: &[f64], status: &[i32]) -> Vec<f64> {
     event_times
 }
 
-/// Compute Kaplan-Meier estimates at specified times
 fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> Vec<f64> {
     let n = time.len();
     if n == 0 {
@@ -400,10 +373,6 @@ fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> 
     result
 }
 
-/// Compute pseudo-values using efficient IJ residuals
-///
-/// This is a more efficient implementation that uses influence function
-/// decomposition rather than explicit leave-one-out computation.
 #[pyfunction]
 #[pyo3(signature = (time, status, eval_times=None, type_=None))]
 pub fn pseudo_fast(

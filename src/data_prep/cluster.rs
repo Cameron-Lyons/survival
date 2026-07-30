@@ -1,35 +1,19 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-/// Result of cluster identification
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct ClusterResult {
-    /// Cluster IDs for each observation (0-indexed)
     #[pyo3(get)]
     pub cluster_ids: Vec<i32>,
-    /// Number of unique clusters
     #[pyo3(get)]
     pub n_clusters: usize,
-    /// Size of each cluster
     #[pyo3(get)]
     pub cluster_sizes: Vec<usize>,
-    /// Original unique values in order of first appearance
     #[pyo3(get)]
     pub levels: Vec<String>,
 }
 
-/// Identify clusters for robust variance estimation.
-///
-/// This function creates cluster identification for correlated observations,
-/// which is used in survival models to compute robust (sandwich) variance
-/// estimates that account for within-cluster correlation.
-///
-/// # Arguments
-/// * `id` - Vector of cluster identifiers (can be integers or will be converted)
-///
-/// # Returns
-/// * `ClusterResult` containing cluster IDs, counts, and sizes
 #[pyfunction]
 pub fn cluster(id: Vec<i64>) -> PyResult<ClusterResult> {
     let n = id.len();
@@ -72,7 +56,6 @@ pub fn cluster(id: Vec<i64>) -> PyResult<ClusterResult> {
     })
 }
 
-/// Identify clusters from string identifiers
 #[pyfunction]
 pub fn cluster_str(id: Vec<String>) -> PyResult<ClusterResult> {
     let n = id.len();

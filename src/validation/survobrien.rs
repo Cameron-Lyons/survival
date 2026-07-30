@@ -1,9 +1,3 @@
-//! O'Brien's Test for Association of a Single Variable with Survival
-//!
-//! O'Brien's test is a generalization of the Wilcoxon rank-sum test to censored data.
-//! At each failure time, it ranks the covariate values among subjects still at risk
-//! and computes a test statistic based on these ranks.
-
 use crate::constants::same_time;
 use crate::internal::numpy_utils::{extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::chi2_sf;
@@ -34,29 +28,21 @@ fn validate_survobrien_inputs(
     Ok(())
 }
 
-/// Result of O'Brien's test for survival association
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SurvObrienResult {
-    /// Chi-squared test statistic
     #[pyo3(get)]
     pub statistic: f64,
-    /// P-value from chi-squared distribution
     #[pyo3(get)]
     pub p_value: f64,
-    /// Degrees of freedom
     #[pyo3(get)]
     pub df: usize,
-    /// O'Brien scores for each observation
     #[pyo3(get)]
     pub scores: Vec<f64>,
-    /// Sum of scores at event times
     #[pyo3(get)]
     pub score_sum: f64,
-    /// Expected sum under null hypothesis
     #[pyo3(get)]
     pub expected: f64,
-    /// Variance of the test statistic
     #[pyo3(get)]
     pub variance: f64,
 }
@@ -85,20 +71,6 @@ impl SurvObrienResult {
     }
 }
 
-/// O'Brien's Test for Association with Survival
-///
-/// Tests whether a continuous covariate is associated with survival time.
-/// The test ranks covariate values among subjects at risk at each failure time
-/// and computes a test statistic analogous to the Wilcoxon rank-sum test.
-///
-/// # Arguments
-/// * `time` - Survival/censoring times
-/// * `status` - Event indicator (1=event, 0=censored)
-/// * `covariate` - Continuous covariate to test
-/// * `strata` - Optional stratification variable
-///
-/// # Returns
-/// SurvObrienResult with test statistic, p-value, and scores
 #[pyfunction]
 #[pyo3(signature = (time, status, covariate, strata=None))]
 pub fn survobrien(
@@ -118,7 +90,6 @@ pub fn survobrien(
     Ok(result)
 }
 
-/// Compute O'Brien's test statistic
 fn compute_survobrien(
     time: &[f64],
     status: &[i32],

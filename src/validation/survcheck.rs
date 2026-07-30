@@ -11,62 +11,33 @@ fn initial_state_at(istate: Option<&[i32]>, idx: usize) -> i32 {
     istate.map_or(0, |values| values[idx])
 }
 
-/// Result of survival data validation
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SurvCheckResult {
-    /// Number of subjects in the data
     #[pyo3(get)]
     pub n_subjects: usize,
-    /// Number of transitions observed
     #[pyo3(get)]
     pub n_transitions: usize,
-    /// Number of subjects with issues
     #[pyo3(get)]
     pub n_problems: usize,
-    /// IDs of subjects with overlapping intervals
     #[pyo3(get)]
     pub overlap_ids: Vec<i64>,
-    /// IDs of subjects with gaps in time
     #[pyo3(get)]
     pub gap_ids: Vec<i64>,
-    /// IDs of subjects with teleportation (state change without time)
     #[pyo3(get)]
     pub teleport_ids: Vec<i64>,
-    /// IDs of subjects with invalid transitions
     #[pyo3(get)]
     pub invalid_ids: Vec<i64>,
-    /// Transition counts: from_state -> to_state -> count
     #[pyo3(get)]
     pub transitions: HashMap<String, usize>,
-    /// Flags for each observation (0=ok, 1=overlap, 2=gap, 3=teleport, 4=invalid)
     #[pyo3(get)]
     pub flags: Vec<i32>,
-    /// Whether the data passed all checks
     #[pyo3(get)]
     pub is_valid: bool,
-    /// Human-readable messages about issues found
     #[pyo3(get)]
     pub messages: Vec<String>,
 }
 
-/// Check survival data for consistency.
-///
-/// Validates multi-state survival data for common issues:
-/// - Overlapping time intervals for the same subject
-/// - Gaps in time sequences
-/// - Teleportation (state changes without elapsed time)
-/// - Invalid state transitions
-///
-/// # Arguments
-/// * `id` - Subject identifiers
-/// * `time1` - Start times for each interval
-/// * `time2` - End times for each interval
-/// * `status` - Event/state indicator at end of interval
-/// * `istate` - Optional initial state at start of interval
-///
-/// # Returns
-/// * `SurvCheckResult` with detailed validation results
 #[pyfunction]
 #[pyo3(signature = (id, time1, time2, status, istate=None))]
 pub fn survcheck(
@@ -226,7 +197,6 @@ pub fn survcheck(
     })
 }
 
-/// Simplified check for standard (non-multi-state) survival data
 #[pyfunction]
 pub fn survcheck_simple(time: Vec<f64>, status: Vec<i32>) -> PyResult<SurvCheckResult> {
     let n = time.len();

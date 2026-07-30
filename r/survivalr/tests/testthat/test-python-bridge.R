@@ -1526,7 +1526,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
   for (conf_type in c("plain", "log", "log-log", "logit", "arcsin")) {
     actual_confint <- survfit_confint(c(0.2, 0.5, 0.9), 0.1, conf.type = conf_type)
     expected_confint <- reference_survfit_confint(c(0.2, 0.5, 0.9), 0.1, conf.type = conf_type)
-    # survival 3.8-3 vectorized these variants; current survival and the bridge return the first interval.
     if (conf_type %in% c("log", "log-log", "logit") &&
       length(actual_confint$lower) == 1L &&
       length(expected_confint$lower) > 1L) {
@@ -2915,7 +2914,6 @@ test_that("interaction contrast expansion matches native Cox and survreg fits", 
         columns = c("x", "x:ga", "x:gb", "x:gc"),
         assign = c(1L, 2L, 2L, 2L),
         terms = c("x", "x:g"),
-        # x is the sum of the full g:x columns, so fitted coefficients are non-unique.
         singular = TRUE
       ),
       list(
@@ -4421,8 +4419,6 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("survival")
   skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
 
-  # Call CRAN survival's method directly; survival::survfit() still dispatches
-  # to survivalr::survfit.formula while this package is loaded.
   reference_survfit <- getFromNamespace("survfit.formula", "survival")
 
   data <- data.frame(

@@ -1,7 +1,6 @@
 pub(crate) mod multiple_imputation;
 pub(crate) mod pattern_mixture;
 
-// Public facade exports
 pub use multiple_imputation::{
     ImputationMethod, MultipleImputationResult, analyze_missing_pattern,
     multiple_imputation_survival,

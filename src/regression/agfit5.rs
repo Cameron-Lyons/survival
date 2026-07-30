@@ -518,11 +518,7 @@ mod tests {
 
     #[test]
     fn cox_state_update_processes_all_strata() {
-        let yy = vec![
-            1.0, 2.0, 1.0, 2.0, // start
-            1.0, 2.0, 1.0, 2.0, // stop
-            1.0, 0.0, 1.0, 0.0, // event
-        ];
+        let yy = vec![1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 0.0, 1.0, 0.0];
         let covar = vec![0.0, 0.0, 0.0, 0.0];
         let offset = vec![0.0; 4];
         let weights = vec![1.0; 4];
@@ -558,11 +554,7 @@ mod tests {
 
     #[test]
     fn cox_state_update_defaults_match_explicit_vectors() {
-        let yy = vec![
-            1.0, 2.0, 3.0, // start
-            1.0, 2.0, 3.0, // stop
-            1.0, 1.0, 0.0, // event
-        ];
+        let yy = vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 1.0, 0.0];
         let covar = vec![0.0, 1.0, 2.0];
         let offset = vec![0.0; 3];
         let weights = vec![1.0; 3];

@@ -63,8 +63,6 @@ fn step_failure_quantile(
 
     let tolerance = f64::EPSILON.sqrt();
     let final_time = times.last().copied().unwrap_or(0.0);
-    // The two tolerance-shifted crossings coincide on an ordinary step and
-    // bracket a horizontal segment when the target matches a failure level.
     let mut first_lower_crossing = if tolerance >= percentile {
         Some(0.0)
     } else {
@@ -600,11 +598,6 @@ impl CoxPHModel {
         }
         result
     }
-    /// IPCW Brier score at one common evaluation time.
-    ///
-    /// Predictions are subject-specific survival probabilities and censored
-    /// observations contribute only while their outcome remains observable.
-    /// When `time` is omitted, the middle distinct event time is used.
     #[pyo3(signature = (time=None))]
     pub fn brier_score(&self, time: Option<f64>) -> PyResult<f64> {
         let n = self.event_times.len();
@@ -1263,8 +1256,6 @@ mod tests {
         .expect("R reference data should construct");
         model.fit(50).expect("R reference model should fit");
 
-        // survival::coxph(..., ties="breslow") followed by
-        // survival::brier(..., newdata=data) in R survival.
         for (time, expected) in [
             (2.0, 0.10590443678594358),
             (3.0, 0.18450534607635558),

@@ -52,37 +52,21 @@ fn sorted_unique_values(mut values: Vec<f64>) -> Vec<f64> {
     values
 }
 
-/// Natural spline with knot heights as basis coefficients.
-///
-/// This creates a natural cubic spline basis where the coefficients
-/// directly represent the function values at the knots, making them
-/// easily interpretable.
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct NaturalSplineKnot {
-    /// Interior knot locations
     #[pyo3(get)]
     pub knots: Vec<f64>,
-    /// Boundary knots (extrapolation becomes linear beyond these)
     #[pyo3(get)]
     pub boundary_knots: (f64, f64),
-    /// Whether to include an intercept column
     #[pyo3(get)]
     pub intercept: bool,
-    /// Degrees of freedom
     #[pyo3(get)]
     pub df: usize,
 }
 
 #[pymethods]
 impl NaturalSplineKnot {
-    /// Create a natural spline basis specification.
-    ///
-    /// # Arguments
-    /// * `knots` - Interior knot locations (or None to compute from data)
-    /// * `boundary_knots` - Boundary knot locations (or None to use data range)
-    /// * `df` - Degrees of freedom (used if knots not specified)
-    /// * `intercept` - Whether to include intercept (default: false)
     #[new]
     #[pyo3(signature = (knots=None, boundary_knots=None, df=None, intercept=None))]
     pub fn new(
@@ -119,13 +103,6 @@ impl NaturalSplineKnot {
         })
     }
 
-    /// Compute the spline basis matrix for given data.
-    ///
-    /// # Arguments
-    /// * `x` - Data values at which to evaluate the basis
-    ///
-    /// # Returns
-    /// Matrix of basis function values (n x df), flattened row-major
     pub fn basis(&self, x: Vec<f64>) -> PyResult<SplineBasisResult> {
         let n = x.len();
         validate_df(self.df, self.intercept)?;
@@ -183,14 +160,6 @@ impl NaturalSplineKnot {
         })
     }
 
-    /// Predict values given coefficients (which are function values at knots).
-    ///
-    /// # Arguments
-    /// * `x` - Points at which to predict
-    /// * `coef` - Coefficients (function values at knots)
-    ///
-    /// # Returns
-    /// Predicted values at each x
     pub fn predict(&self, x: Vec<f64>, coef: Vec<f64>) -> PyResult<Vec<f64>> {
         validate_finite_slice(&coef, "coef")?;
         let basis_result = self.basis(x)?;
@@ -217,37 +186,21 @@ impl NaturalSplineKnot {
     }
 }
 
-/// Result of computing spline basis
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SplineBasisResult {
-    /// Basis matrix (flattened row-major)
     #[pyo3(get)]
     pub basis: Vec<f64>,
-    /// Number of observations
     #[pyo3(get)]
     pub n_rows: usize,
-    /// Number of basis functions
     #[pyo3(get)]
     pub n_cols: usize,
-    /// Interior knots used
     #[pyo3(get)]
     pub knots: Vec<f64>,
-    /// Boundary knots used
     #[pyo3(get)]
     pub boundary_knots: (f64, f64),
 }
 
-/// Create natural spline basis for given data.
-///
-/// # Arguments
-/// * `x` - Data values
-/// * `df` - Degrees of freedom (default: 3)
-/// * `knots` - Optional interior knot locations
-/// * `boundary_knots` - Optional boundary knot locations
-///
-/// # Returns
-/// `SplineBasisResult` with basis matrix
 #[pyfunction]
 #[pyo3(signature = (x, df=None, knots=None, boundary_knots=None))]
 pub fn nsk(
@@ -309,7 +262,6 @@ fn default_boundary_knots(x: &[f64]) -> PyResult<(f64, f64)> {
     Ok((lower, upper))
 }
 
-/// Compute type-7 quantile knots from values inside the boundary.
 fn compute_quantile_knots(x: &[f64], n_knots: usize, low: f64, high: f64) -> PyResult<Vec<f64>> {
     if n_knots == 0 {
         return Ok(vec![]);
@@ -382,10 +334,6 @@ fn resolve_all_knots(
     Ok(all_knots)
 }
 
-/// Compute a raw natural cubic spline basis at a single point.
-///
-/// The raw basis spans the same natural spline space as `splines::ns`; it is
-/// transformed later so coefficients correspond to heights at the knots.
 fn natural_spline_raw_basis_at_point(x: f64, knots: &[f64]) -> Vec<f64> {
     let k = knots.len();
     if k < 2 {
@@ -411,7 +359,6 @@ fn natural_spline_d(x: f64, knot: f64, upper: f64) -> f64 {
     (truncated_power(x, knot, 3) - truncated_power(x, upper, 3)) / (upper - knot)
 }
 
-/// Truncated power function
 fn truncated_power(x: f64, knot: f64, degree: i32) -> f64 {
     if x > knot {
         (x - knot).powi(degree)
@@ -420,7 +367,6 @@ fn truncated_power(x: f64, knot: f64, degree: i32) -> f64 {
     }
 }
 
-/// Transform basis to knot-height parameterization
 fn transform_to_knot_heights(
     basis: &[f64],
     n: usize,

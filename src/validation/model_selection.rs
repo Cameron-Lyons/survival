@@ -297,7 +297,6 @@ pub fn compare_models(
         .flat_map(|i| ((i + 1)..n_models).map(move |j| (i, j)))
         .collect();
 
-    // Keep pair output order stable while parallelizing independent LR computations.
     let lr_candidates: Vec<Option<LikelihoodRatioTest>> = model_pairs
         .par_iter()
         .map(|&(i, j)| {

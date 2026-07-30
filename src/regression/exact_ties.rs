@@ -62,7 +62,6 @@ fn log_add_exp(lhs: f64, rhs: f64) -> f64 {
     largest + ((lhs - largest).exp() + (rhs - largest).exp()).ln()
 }
 
-/// Marginal probability that each row is included in an exact tied-death set.
 pub(crate) fn exact_inclusion_probabilities(
     risk_indices: &[usize],
     deaths: usize,
@@ -133,11 +132,6 @@ pub(crate) fn exact_inclusion_probabilities(
     )
 }
 
-/// Exact conditional moments for selecting `deaths` rows from a risk set.
-///
-/// The dynamic program stores each subset-size distribution as a log total,
-/// mean, and central covariance. This avoids enumerating subsets, raw moment
-/// cancellation, and overflow when the number of possible subsets is large.
 pub(crate) fn exact_tied_moments(
     risk_indices: &[usize],
     deaths: usize,

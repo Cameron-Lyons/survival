@@ -2,17 +2,13 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-/// Result of nearest date matching
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct NearDateResult {
-    /// Index into the reference set (id2/date2) for each query, None if no match
     #[pyo3(get)]
     pub indices: Vec<Option<usize>>,
-    /// Distance (in same units as input) to the matched value, None if no match
     #[pyo3(get)]
     pub distances: Vec<Option<f64>>,
-    /// Number of successful matches
     #[pyo3(get)]
     pub n_matched: usize,
 }
@@ -47,21 +43,6 @@ fn validate_direction(best: Option<&str>) -> PyResult<&'static str> {
     Ok(first)
 }
 
-/// Find the closest matching date/value in a reference set.
-///
-/// For each observation in the query set (id1, date1), finds the closest
-/// matching date in the reference set (id2, date2) within the same ID.
-///
-/// # Arguments
-/// * `id1` - IDs for the query observations
-/// * `date1` - Dates/values for the query observations
-/// * `id2` - IDs for the reference observations
-/// * `date2` - Dates/values for the reference observations
-/// * `best` - Direction to search: "prior" (<=), "after" (>=), or "closest" (default)
-/// * `nomatch` - Value to return for non-matches (index). If None, returns None.
-///
-/// # Returns
-/// * `NearDateResult` with indices into reference set and distances
 #[pyfunction]
 #[pyo3(signature = (id1, date1, id2, date2, best=None, nomatch=None))]
 pub fn neardate(
@@ -130,7 +111,6 @@ pub fn neardate(
     })
 }
 
-/// Find nearest value in sorted reference list
 fn find_nearest(refs: &[(usize, f64)], target: f64, direction: &str) -> Option<(usize, f64)> {
     if refs.is_empty() {
         return None;
@@ -176,7 +156,6 @@ fn find_nearest(refs: &[(usize, f64)], target: f64, direction: &str) -> Option<(
     }
 }
 
-/// Find nearest date using string IDs
 #[pyfunction]
 #[pyo3(signature = (id1, date1, id2, date2, best=None, nomatch=None))]
 pub fn neardate_str(

@@ -6,9 +6,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PYO3_PYTHON");
     println!("cargo:rerun-if-env-changed=PYO3_CONFIG_FILE");
 
-    // `extension-module` suppresses normal libpython linkage. Rust test binaries
-    // still need explicit libpython symbols on Unix platforms, but wheel builds
-    // must not link libpython (manylinux policy).
     if env::var_os("CARGO_FEATURE_EXTENSION_MODULE").is_none() {
         return;
     }

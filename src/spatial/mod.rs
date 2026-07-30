@@ -1,7 +1,6 @@
 pub(crate) mod network_survival;
 pub(crate) mod spatial_frailty;
 
-// Public facade exports
 pub use network_survival::{
     CentralityType, DiffusionSurvivalConfig, DiffusionSurvivalResult, NetworkHeterogeneityResult,
     NetworkSurvivalConfig, NetworkSurvivalResult, diffusion_survival_model,

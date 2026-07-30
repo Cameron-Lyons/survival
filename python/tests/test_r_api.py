@@ -187,7 +187,7 @@ def test_strata_matches_r_factor_codes_and_preserves_low_level_call():
         survival.strata(["a", "b"], [1])
 
 
-def test_aeqSurv_adjusts_surv_response_like_r():  # noqa: N802
+def test_aeqSurv_adjusts_surv_response_like_r():
     right = survival.Surv([1.0, 1.0 + 1e-8, 2.0], [1, 0, 1])
     adjusted_right = survival.aeqSurv(right, tolerance=1e-7)
 
@@ -243,7 +243,7 @@ def test_aeqSurv_adjusts_surv_response_like_r():  # noqa: N802
         )
 
 
-def test_survSplit_splits_right_and_counting_surv_responses_like_r():  # noqa: N802
+def test_survSplit_splits_right_and_counting_surv_responses_like_r():
     right = survival.Surv([5.0, 8.0], [1, 0])
     right_split = survival.survSplit(
         right,
@@ -5966,7 +5966,7 @@ def test_concordance_accepts_r_style_defaults():
     assert same_event_time.tied_xy == pytest.approx(1.0)
 
 
-def test_survConcordance_deprecated_wrappers_keep_legacy_direction():  # noqa: N802
+def test_survConcordance_deprecated_wrappers_keep_legacy_direction():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],
         "status": [1, 1, 0, 1],

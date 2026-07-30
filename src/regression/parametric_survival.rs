@@ -740,7 +740,6 @@ fn validate_time2_values(
             }
             sanitized.push(end);
         } else {
-            // survregc1 ignores time2 unless status == 3; keep the logged array finite.
             sanitized.push(start);
         }
     }
@@ -826,44 +825,6 @@ pub enum DistributionType {
 
 const DEFAULT_SURVREG_DISTRIBUTION: DistributionType = DistributionType::Weibull;
 
-/// Fit a parametric survival regression model.
-///
-/// Parameters
-/// ----------
-/// time : array-like
-///     Exact, right-censoring, left-censoring, or interval lower-bound times.
-/// status : array-like
-///     Censoring status (0=right censored, 1=exact, 2=left censored, 3=interval censored).
-/// covariates : list of lists
-///     Covariate matrix (n_obs x n_vars).
-/// weights : array-like, optional
-///     Case weights.
-/// offsets : array-like, optional
-///     Offset terms for the linear predictor.
-/// initial_beta : array-like, optional
-///     Starting values for coefficients.
-/// strata : array-like, optional
-///     Stratum indicators for stratified analysis.
-/// distribution : str, optional
-///     Error distribution: "weibull" (default), "exponential", "rayleigh", "extreme_value",
-///     "lognormal", "loglogistic", "gaussian", "logistic", or "t".
-/// max_iter : int, optional
-///     Maximum iterations (default 30).
-/// eps : float, optional
-///     Convergence tolerance (default 1e-6).
-/// tol_chol : float, optional
-///     Cholesky tolerance (default crate::constants::DIVISION_FLOOR).
-/// time2 : array-like, optional
-///     Interval upper-bound times. Required for rows with status=3.
-/// fixed_scale : float, optional
-///     Fixed scale parameter. When supplied, the scale is not estimated.
-/// distribution_parameter : float, optional
-///     Distribution-specific parameter. For "t", the Student-t degrees of freedom.
-///
-/// Returns
-/// -------
-/// SurvivalFit
-///     Object with: coefficients, std_errors, variance_matrix, log_likelihood, convergence info.
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None, fixed_scale=None, distribution_parameter=None))]
 #[allow(clippy::too_many_arguments)]

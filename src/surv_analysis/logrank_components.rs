@@ -551,7 +551,6 @@ fn same_logrank_time(left: f64, right: f64, timefix: bool) -> bool {
     }
 }
 
-/// Backward-compatible alias retained for the public crate and Python APIs.
 #[pyfunction]
 #[pyo3(signature = (time, status, group, strata=None, rho=None, timefix=None))]
 pub fn survdiff2(

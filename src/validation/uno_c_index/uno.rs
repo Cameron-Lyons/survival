@@ -140,8 +140,6 @@ fn uno_c_index_ranked_accumulator(
             .then_with(|| left.cmp(&right))
     });
 
-    // Sweep backward through event times, adding only subjects far enough in
-    // the future to satisfy the package's epsilon-aware comparability rule.
     let mut accumulator = {
         let mut later_risk_counts = FenwickTree::new(n_ranks);
         let mut subject_cursor = 0;
@@ -160,8 +158,6 @@ fn uno_c_index_ranked_accumulator(
             pair_counts[event_idx] = uno_rank_counts(&later_risk_counts, risk_ranks[event_idx]);
         }
 
-        // Preserve the old row-order accumulation for stable floating-point
-        // behavior while replacing each row's pair scan with its rank counts.
         let mut accumulator = UnoCIndexAccumulator::new(n);
         for idx in 0..n {
             let weight = event_weights[idx];
@@ -178,8 +174,6 @@ fn uno_c_index_ranked_accumulator(
         accumulator
     };
 
-    // Sweep forward to recover every later subject's signed influence from
-    // the IPCW weights of earlier comparable events.
     subjects_desc.reverse();
     events_desc.reverse();
     let mut earlier_event_weights = FenwickTree::new(n_ranks);
