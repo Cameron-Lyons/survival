@@ -415,6 +415,7 @@ impl CoxFit {
             initial_beta,
         )
     }
+    #[allow(clippy::undocumented_unsafe_blocks)]
     fn scale_center(&mut self, doscale: Vec<bool>) -> Result<(), CoxError> {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
