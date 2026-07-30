@@ -1,4 +1,3 @@
-# ruff: noqa: N802
 
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -242,7 +241,7 @@ def nsk(
     knots: Any | None = None,
     intercept: Any = False,
     b: Any = 0.05,
-    Boundary_knots: Any = ...,  # noqa: N803
+    Boundary_knots: Any = ...,
     **kwargs: Any,
 ) -> _SplineBasisResult: ...
 def pspline(
@@ -253,7 +252,7 @@ def pspline(
     degree: Any = 3,
     eps: Any = 0.1,
     method: Any | None = None,
-    Boundary_knots: Any | None = None,  # noqa: N803
+    Boundary_knots: Any | None = None,
     *,
     boundary_knots: Any | None = None,
     intercept: Any = False,

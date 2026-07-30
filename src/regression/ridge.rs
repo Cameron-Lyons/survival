@@ -9,28 +9,19 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-/// Configuration for ridge regression penalty
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct RidgePenalty {
-    /// Penalty parameter (larger = more shrinkage)
     #[pyo3(get, set)]
     pub theta: f64,
-    /// Whether to scale predictors to unit variance before applying penalty
     #[pyo3(get, set)]
     pub scale: bool,
-    /// Effective degrees of freedom (computed after fitting)
     #[pyo3(get)]
     pub df: Option<f64>,
 }
 
 #[pymethods]
 impl RidgePenalty {
-    /// Create a new ridge penalty configuration
-    ///
-    /// # Arguments
-    /// * `theta` - Penalty parameter. Can be specified directly or computed from df.
-    /// * `scale` - Whether to scale predictors (default: true)
     #[new]
     #[pyo3(signature = (theta, scale=None))]
     pub fn new(theta: f64, scale: Option<bool>) -> PyResult<Self> {
@@ -47,12 +38,6 @@ impl RidgePenalty {
         })
     }
 
-    /// Create ridge penalty from desired degrees of freedom
-    ///
-    /// # Arguments
-    /// * `df` - Approximate degrees of freedom
-    /// * `n_vars` - Number of variables
-    /// * `scale` - Whether to scale predictors
     #[staticmethod]
     #[pyo3(signature = (df, n_vars, scale=None))]
     pub fn from_df(df: f64, n_vars: usize, scale: Option<bool>) -> PyResult<Self> {
@@ -72,66 +57,37 @@ impl RidgePenalty {
         })
     }
 
-    /// Compute the penalty term for a given coefficient vector
     pub fn penalty_value(&self, beta: Vec<f64>) -> f64 {
         let sum_sq: f64 = beta.iter().map(|&b| b * b).sum();
         self.theta / 2.0 * sum_sq
     }
 
-    /// Compute the gradient of the penalty (for optimization)
     pub fn penalty_gradient(&self, beta: Vec<f64>) -> Vec<f64> {
         beta.iter().map(|&b| self.theta * b).collect()
     }
 
-    /// Apply penalty to information matrix (add theta*I to diagonal)
-    ///
-    /// This modifies the information matrix for penalized estimation.
     pub fn apply_to_information(&self, info_diag: Vec<f64>) -> Vec<f64> {
         info_diag.iter().map(|&x| x + self.theta).collect()
     }
 }
 
-/// Result of ridge regression estimation
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct RidgeResult {
-    /// Penalized coefficient estimates
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
-    /// Standard errors (may be biased due to shrinkage)
     #[pyo3(get)]
     pub std_err: Vec<f64>,
-    /// Effective degrees of freedom
     #[pyo3(get)]
     pub df: f64,
-    /// Generalized cross-validation score
     #[pyo3(get)]
     pub gcv: f64,
-    /// Penalty parameter used
     #[pyo3(get)]
     pub theta: f64,
-    /// Scaling factors applied (if scale=true)
     #[pyo3(get)]
     pub scale_factors: Option<Vec<f64>>,
 }
 
-/// Fit ridge regression for survival models.
-///
-/// This performs penalized maximum likelihood estimation with an L2 (ridge)
-/// penalty on the coefficients. The penalty shrinks coefficients toward zero,
-/// which can improve prediction accuracy when predictors are correlated.
-///
-/// # Arguments
-/// * `x` - Design matrix (flattened, row-major)
-/// * `n_obs` - Number of observations
-/// * `n_vars` - Number of variables
-/// * `time` - Survival times
-/// * `status` - Event indicators
-/// * `penalty` - Ridge penalty configuration
-/// * `weights` - Optional observation weights
-///
-/// # Returns
-/// * `RidgeResult` with penalized estimates
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, penalty, weights=None))]
 pub fn ridge_fit(
@@ -276,7 +232,6 @@ fn validate_ridge_inputs(
     Ok(())
 }
 
-/// Fit unpenalized model (simplified)
 fn fit_unpenalized(
     x: &[f64],
     n_obs: usize,
@@ -347,7 +302,6 @@ fn compute_gcv(
     }
 }
 
-/// Select optimal ridge penalty using cross-validation
 #[pyfunction]
 #[pyo3(signature = (x, n_obs, n_vars, time, status, theta_grid=None, n_folds=None))]
 pub fn ridge_cv(

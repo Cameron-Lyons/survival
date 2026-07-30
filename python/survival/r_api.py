@@ -6,8 +6,8 @@ import warnings
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date as _Date  # noqa: N812
-from datetime import datetime as _DateTime  # noqa: N812
+from datetime import date as _Date
+from datetime import datetime as _DateTime
 from functools import lru_cache
 from itertools import combinations, product
 from numbers import Real
@@ -3195,8 +3195,6 @@ def _fit_formula_design(
     for term_index, model_term in enumerate(ordered_model_terms, start=1):
         if isinstance(model_term, _ModelCovariateTerm):
             term_assignments[model_term.term] = term_index
-    # Cox uses an implicit intercept to choose contrasts even though its design
-    # matrix never contains an intercept column. Survreg honors the formula.
     contrast_intercept = terms.intercept if include_intercept else True
     covered_terms: set[frozenset[_CovariateTerm]] = {frozenset()} if contrast_intercept else set()
     promoted_no_intercept_factor = contrast_intercept
@@ -3208,12 +3206,8 @@ def _fit_formula_design(
         full_factors = {
             factor.term
             for factor in categorical_factors
-            # R treatment-codes a factor only when the exact marginal term
-            # obtained by removing that factor has already been represented.
             if raw_factors - {factor.term} not in covered_terms
         }
-        # Without an intercept, model.matrix promotes the first categorical
-        # occurrence to full indicators even when its marginal is present.
         if not promoted_no_intercept_factor and categorical_factors:
             full_factors.add(categorical_factors[0].term)
             promoted_no_intercept_factor = True
@@ -3342,7 +3336,7 @@ def _formula_model_frame(
     offsets: Any | None = None,
     strata: Any | None = None,
     cluster: Any | None = None,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
 ) -> dict[str, Any]:
     frame: dict[str, Any] = {_surv_response_model_name(design.response): response}
     columns: list[str] = []
@@ -3373,7 +3367,7 @@ def _matrix_model_frame(
     offsets: Any | None = None,
     strata: Any | None = None,
     cluster: Any | None = None,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
 ) -> dict[str, Any]:
     frame: dict[str, Any] = {
         "response": response,
@@ -3426,7 +3420,7 @@ def _survfit_formula_model_frame(
     data: Any,
     response: Surv,
     weights: Any | None,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
     id_column: str | None = None,
     cluster: Any | None = None,
     cluster_column: str | None = None,
@@ -3452,7 +3446,7 @@ def _survfit_model_frame(
     response: Surv,
     group: Any | None,
     weights: Any | None,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
     cluster: Any | None = None,
 ) -> dict[str, Any]:
     frame: dict[str, Any] = {"response": response}
@@ -4430,7 +4424,7 @@ def pspline(
     degree: Any = 3,
     eps: Any = 0.1,
     method: Any | None = None,
-    Boundary_knots: Any | None = None,  # noqa: N803
+    Boundary_knots: Any | None = None,
     *,
     boundary_knots: Any | None = None,
     intercept: Any = False,
@@ -4548,7 +4542,7 @@ def nsk(
     knots: Any | None = None,
     intercept: Any = False,
     b: Any = 0.05,
-    Boundary_knots: Any = _MISSING,  # noqa: N803
+    Boundary_knots: Any = _MISSING,
     **kwargs: Any,
 ) -> Any:
     """Create a Rust-backed natural spline basis with R ``survival::nsk`` arguments."""
@@ -4585,7 +4579,7 @@ def nsk(
     return spline.basis(x_values)
 
 
-def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:  # noqa: A002
+def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:
     """Carry the last non-missing value forward within each id, like R's ``lvcf``."""
 
     id_values = _materialize_labels(id, "id")
@@ -4622,7 +4616,7 @@ def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:  # noqa: A002
 
 
 def nostutter(
-    id: Any,  # noqa: A002
+    id: Any,
     x: Any,
     censor: Any = 0,
     single: bool = False,
@@ -4672,10 +4666,10 @@ class Surv:
     type: str
     states: tuple[str, ...]
 
-    def __init__(  # noqa: A002
+    def __init__(
         self,
         *args: Any,
-        type: str | None = None,  # noqa: A002
+        type: str | None = None,
         origin: Any = 0.0,
         time: Any = _MISSING,
         time1: Any = _MISSING,
@@ -4919,13 +4913,13 @@ def _surv2data_sort_value(value: Any) -> tuple[int, Any]:
     return (1, str(value))
 
 
-def Surv2data(  # noqa: N802
+def Surv2data(
     time: Any,
     status: Any,
     *,
     states: Any | None = None,
     repeated: Any = False,
-    id: Any,  # noqa: A002
+    id: Any,
 ) -> dict[str, Any]:
     """Convert R ``Surv2`` timeline rows into start-stop transition rows."""
 
@@ -5041,7 +5035,7 @@ def totimeline(
     status: Any,
     *,
     states: Any,
-    id: Any,  # noqa: A002
+    id: Any,
     istate: Any | None = None,
     istate_levels: Any | None = None,
 ) -> dict[str, Any]:
@@ -5153,7 +5147,7 @@ def fromtimeline(
     time: Any,
     status: Any,
     *,
-    id: Any,  # noqa: A002
+    id: Any,
     states: Any | None = None,
     data: Any | None = None,
     id_name: Any = "id",
@@ -5429,7 +5423,7 @@ def _ratetable_date_value(value: Any, origin_year: Any) -> float:
     return float(value)
 
 
-def ratetableDate(  # noqa: N802
+def ratetableDate(
     x: Any,
     month: Any | None = None,
     day: Any | None = None,
@@ -6432,9 +6426,6 @@ def _finegray_split_intervals(
     if all(probability > 0.0 for probability in cut_probability):
         return _core.finegray(start, stop, cut_time, cut_probability, extend, keep)
 
-    # The checked low-level splitter rejects zero probabilities. At the formula
-    # level a zero can still be harmless when it only truncates an original row;
-    # handle those sparse cases without weakening the public kernel contract.
     rows: list[int] = []
     output_start: list[float] = []
     output_end: list[float] = []
@@ -6514,7 +6505,7 @@ def finegray(
     etype: Any | None = None,
     prefix: str = "fg",
     count: str | None = None,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
     timefix: bool = True,
     **kwargs: Any,
 ) -> FineGrayFrame:
@@ -6750,8 +6741,6 @@ def _survobrien_event_sets(
             if key in seen:
                 continue
             seen.add(key)
-            # Match survival::survobrien's right-censored strata branch, including
-            # its status-column risk-set test.
             result.append(
                 (
                     float(event_time),
@@ -6807,8 +6796,6 @@ def _survobrien_event_sets(
             if key in seen:
                 continue
             seen.add(key)
-            # Match survival::survobrien's counting-process strata branch,
-            # whose risk-set predicate uses rows outside the event stratum.
             result.append(
                 (
                     event_time_float,
@@ -7465,7 +7452,7 @@ def survcondense(
     weights: Any | None = None,
     na_action: Any | None = "pass",
     *,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
     start: str = "tstart",
     end: str = "tstop",
     event: str = "event",
@@ -7508,7 +7495,7 @@ def survcheck(
     data: Any | None = None,
     subset: Any | None = None,
     na_action: Any | None = "pass",
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
     istate: Any | None = None,
     istate0: str = "(s0)",
     timefix: bool = True,
@@ -7535,8 +7522,6 @@ def survcheck(
     if time1 is not _MISSING or time2 is not _MISSING or status is not _MISSING:
         raise TypeError("time1, time2, and status are only valid for low-level survcheck calls")
 
-    # Backward compatibility for the legacy low-level root call:
-    # survcheck(id, time1, time2, status, istate=None).
     if not isinstance(response, Surv | str):
         if data is None or subset is None or na_action is None:
             raise TypeError(
@@ -7628,7 +7613,7 @@ def _rttright_response_from_formula(
     subset: Any | None,
     na_action: str | None,
     weights: Any | None,
-    id: Any | None,  # noqa: A002
+    id: Any | None,
     *,
     warn_offset: bool = True,
 ) -> tuple[Surv, Any | None, Any | None, list[int] | None]:
@@ -7689,7 +7674,7 @@ def _rttright_times_vector(times: Any) -> list[float]:
     return result
 
 
-def _rttright_validate_id(response: Surv, id: Any | None) -> list[Any] | None:  # noqa: A002
+def _rttright_validate_id(response: Surv, id: Any | None) -> list[Any] | None:
     if id is None:
         return None
     id_values = _materialize_labels(id, "id")
@@ -8042,8 +8027,6 @@ def _rttright_counting_group_result(
         for col_idx, query_time in enumerate(query_times):
             if float(row_start) < float(query_time) <= float(row_stop):
                 matrix[row_idx][col_idx] = _rttright_divide(float(row_weight), gwt[col_idx])
-        # R's timed counting branch tests the stop column, so final censored rows
-        # also receive redistributed weights across all requested times.
         if is_last and float(row_stop) > 0.0:
             for col_idx, query_gwt in enumerate(gwt):
                 matrix[row_idx][col_idx] = _rttright_divide(
@@ -8687,7 +8670,7 @@ def pseudo(
     type_: Any | None = None,
     *,
     times: Any | None = None,
-    type: Any | None = None,  # noqa: A002
+    type: Any | None = None,
     collapse: bool = True,
     data_frame: bool = False,
     time: Any | None = None,
@@ -8777,7 +8760,7 @@ def rttright(
     subset: Any | None = None,
     na_action: Any | None = "pass",
     times: Any | None = None,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
     timefix: bool = True,
     renorm: bool = True,
     **kwargs: Any,
@@ -8930,7 +8913,7 @@ def _raise_if_aeq_zero_interval(
             raise ValueError("aeqSurv exception, an interval has effective length 0")
 
 
-def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:  # noqa: N802
+def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:
     """Adjudicate near-tied times in a ``Surv`` response, like R's ``aeqSurv``."""
 
     if not isinstance(x, Surv):
@@ -8997,7 +8980,7 @@ def _survsplit_data_columns(data: Any | None, n: int) -> dict[str, list[Any]]:
     return columns
 
 
-def survSplit(  # noqa: N802
+def survSplit(
     response: Surv,
     data: Any | None = None,
     *,
@@ -9006,7 +8989,7 @@ def survSplit(  # noqa: N802
     end: str = "tstop",
     event: str = "event",
     episode: str | None = None,
-    id: str | None = None,  # noqa: A002
+    id: str | None = None,
     zero: Any = 0,
 ) -> dict[str, list[Any]]:
     """Split right or counting-process survival data at fixed cut points."""
@@ -10350,7 +10333,7 @@ def survfit_residuals(
     fit: Any,
     times: Any | None = None,
     *,
-    type: str = "pstate",  # noqa: A002
+    type: str = "pstate",
     collapse: Any = False,
     weighted: Any = False,
     data_frame: Any = False,
@@ -12325,10 +12308,10 @@ def survfit(
     time0: bool = False,
     reverse: bool = False,
     censor: bool = True,
-    type: str | None = None,  # noqa: A002
+    type: str | None = None,
     stype: int | None = None,
     ctype: int | None = None,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
     cluster: Any | None = None,
     robust: Any | None = None,
     istate: Any | None = None,
@@ -12362,7 +12345,6 @@ def survfit(
     id_arg = id
     if istate is not None and etype is not None:
         raise ValueError("survfit cannot use both istate and etype")
-    # R's survival keeps `error` for backward compatibility but no longer uses it.
 
     computation = _normalize_survfit_type(type, stype, ctype)
     normalized_conf_level = _normalize_survfit_conf_level(conf_level, conf_int)
@@ -14132,9 +14114,6 @@ def _cox_alias_mask(fit: Any) -> list[bool]:
         rank = int(model.convergence_flag)
     except (AttributeError, TypeError, ValueError, OverflowError):
         return aliases
-    # A nonconverged or zero-iteration fit keeps its raw coefficients. Successful
-    # step-halving fits use a negative flag, so their exact zero diagonals still
-    # identify aliases even though the flag no longer records the fitted rank.
     if rank == _COX_NONCONVERGENCE_FLAG or rank >= width:
         return aliases
 
@@ -14646,7 +14625,7 @@ def model_frame(fit: Any) -> dict[str, list[Any]]:
 def fitted(
     fit: Any,
     *,
-    type: str | None = None,  # noqa: A002
+    type: str | None = None,
     centered: bool | None = None,
     terms: Any | None = None,
     collapse: Any = False,
@@ -16650,7 +16629,7 @@ def rsurvreg(
     distribution_name = _normalize_survreg_distribution_helper(distribution)
     if count == 0:
         return []
-    probabilities = [random.random() for _ in range(count)]  # noqa: S311
+    probabilities = [random.random() for _ in range(count)]
     probability_values, mean_values, scale_values = _expand_survreg_distribution_inputs(
         probabilities,
         "p",
@@ -18659,7 +18638,7 @@ def concordance(
     )
 
 
-def survConcordance(  # noqa: N802
+def survConcordance(
     formula: Any,
     data: Any | None = None,
     weights: Any | None = None,
@@ -18686,7 +18665,7 @@ def survConcordance(  # noqa: N802
     )
 
 
-def _survConcordance_legacy_stats(  # noqa: N802
+def _survConcordance_legacy_stats(
     result: ConcordanceResult,
 ) -> dict[str, float]:
     if isinstance(result.concordance, list):
@@ -18709,7 +18688,7 @@ def _survConcordance_legacy_stats(  # noqa: N802
     }
 
 
-def survConcordance_fit(  # noqa: N802
+def survConcordance_fit(
     y: Any,
     x: Any,
     strata: Any | None = None,
@@ -18750,7 +18729,7 @@ def predict(
     fit: Any,
     newdata: Any | None = None,
     *,
-    type: str | None = None,  # noqa: A002
+    type: str | None = None,
     centered: bool | None = None,
     terms: Any | None = None,
     collapse: Any = False,
@@ -18946,7 +18925,7 @@ def predict(
 def residuals(
     fit: Any,
     *,
-    type: str = "martingale",  # noqa: A002
+    type: str = "martingale",
     terms: Any | None = None,
     collapse: Any = False,
     weighted: bool | None = None,
@@ -19241,7 +19220,7 @@ def coxph(
     model: Any = False,
     y: Any = True,
     tt: Any | None = None,
-    id: Any | None = None,  # noqa: A002
+    id: Any | None = None,
     istate: Any | None = None,
     statedata: Any | None = None,
     singular_ok: Any = True,

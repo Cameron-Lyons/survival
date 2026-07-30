@@ -464,13 +464,6 @@ impl CoxFit {
                     let scale_val = scales[i];
                     let base_ptr = covar_ptr.load(Ordering::Relaxed);
                     for person in 0..nused {
-                        // SAFETY: `person < nused == self.covar.nrows()` and
-                        // `i < nvar == self.covar.ncols()`, so the stride
-                        // calculation addresses an in-bounds matrix element.
-                        // Rayon partitions work by unique column index `i`,
-                        // so concurrent writes target disjoint `(person, i)`
-                        // elements of the owned `Array2`, and `self.covar` is
-                        // not otherwise mutated while this closure runs.
                         unsafe {
                             let offset = person as isize * row_stride + i as isize * col_stride;
                             let ptr = base_ptr.offset(offset);
@@ -1170,10 +1163,6 @@ impl CoxFit {
             && matches!(self.method, Method::Exact)
             && self.covar.nrows() <= EXACT_COMPATIBILITY_DIRECT_THRESHOLD
         {
-            // Small compatibility fits use the sequential log-space fold to
-            // preserve the legacy floating-point iteration trajectory. Larger
-            // fits use the linear risk-set sweep below, with stable fallbacks
-            // whenever delayed-entry subtraction loses precision.
             self.iterate_counting_process_exact_compatibility(beta)
         } else {
             self.iterate(beta)

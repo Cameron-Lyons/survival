@@ -1,7 +1,6 @@
 use super::cox_baseline::compute_baseline_survival_steps;
 use pyo3::prelude::*;
 
-/// Backward-compatible aggregate survival helper kept for the public crate API.
 #[pyfunction]
 pub fn agsurv4(
     ndeath: Vec<i32>,

@@ -3,54 +3,25 @@ use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
 use pyo3::prelude::*;
 
-/// Result of Royston's D statistic calculation
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct RoystonResult {
-    /// Royston's D statistic (measure of prognostic separation)
     #[pyo3(get)]
     pub d: f64,
-    /// Standard error of D
     #[pyo3(get)]
     pub se: f64,
-    /// R-squared based on D (Royston-Sauerbrei)
     #[pyo3(get)]
     pub r_squared_d: f64,
-    /// Kent-O'Quigley R-squared
     #[pyo3(get)]
     pub r_squared_ko: f64,
-    /// Z-score
     #[pyo3(get)]
     pub z: f64,
-    /// P-value (two-sided)
     #[pyo3(get)]
     pub p_value: f64,
-    /// Number of events
     #[pyo3(get)]
     pub n_events: usize,
 }
 
-/// Compute Royston's D statistic for a Cox model.
-///
-/// The D statistic measures the prognostic separation achieved by a Cox model.
-/// It is based on the linear predictor (prognostic index) and provides a measure
-/// of discrimination that is interpretable in terms of hazard ratios.
-///
-/// D can be interpreted as: subjects with prognostic index one SD above the mean
-/// have exp(D) times the hazard of subjects with prognostic index one SD below
-/// the mean.
-///
-/// # Arguments
-/// * `linear_predictor` - Linear predictor values (X * beta) from Cox model
-/// * `time` - Survival/censoring times
-/// * `status` - Event indicator (1=event, 0=censored)
-///
-/// # Returns
-/// * `RoystonResult` with D statistic and related measures
-///
-/// # References
-/// Royston P, Sauerbrei W. (2004) A new measure of prognostic separation in
-/// survival data. Statistics in Medicine 23:723-748.
 #[pyfunction]
 pub fn royston(
     linear_predictor: Vec<f64>,
@@ -148,10 +119,6 @@ pub fn royston(
     })
 }
 
-/// Compute Royston's D from model coefficients and data.
-///
-/// This is a convenience function that computes the linear predictor
-/// and then calls royston().
 #[pyfunction]
 pub fn royston_from_model(
     x: Vec<f64>,

@@ -1,5 +1,3 @@
-# ruff: noqa: F401
-
 from typing import Any, Final
 
 from . import bayesian as bayesian

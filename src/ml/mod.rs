@@ -40,7 +40,6 @@ pub(crate) mod tracer_module;
 pub(crate) mod transfer_learning;
 pub(crate) mod utils;
 
-// Public facade exports
 #[cfg(feature = "ml")]
 pub use active_learning::{
     ActiveLearningConfig, ActiveLearningResult, AdaptiveDesignResult, LogrankPowerResult,

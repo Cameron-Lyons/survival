@@ -1,4 +1,3 @@
-# ruff: noqa: N803, N806, UP037
 from __future__ import annotations
 
 from statistics import NormalDist

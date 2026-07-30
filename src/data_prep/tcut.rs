@@ -129,38 +129,19 @@ fn tcut_breaks_and_default_labels(
     Ok((breaks, labels))
 }
 
-/// Result of time cutting for person-years calculations
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct TcutResult {
-    /// Factor codes for each observation (0-indexed interval)
     #[pyo3(get)]
     pub codes: Vec<i32>,
-    /// Labels for each interval
     #[pyo3(get)]
     pub levels: Vec<String>,
-    /// The break points used
     #[pyo3(get)]
     pub breaks: Vec<f64>,
-    /// Count of observations in each interval
     #[pyo3(get)]
     pub counts: Vec<usize>,
 }
 
-/// Create factor for person-years calculations with time-dependent cutpoints.
-///
-/// This function assigns observations to intervals based on break points,
-/// creating a factor suitable for use with person-years calculations.
-/// Unlike regular cut, this is designed for time-varying data where
-/// subjects can contribute to multiple intervals.
-///
-/// # Arguments
-/// * `value` - Vector of time values to categorize
-/// * `breaks` - Vector of break points defining intervals
-/// * `labels` - Optional labels for each interval (length should be len(breaks) - 1)
-///
-/// # Returns
-/// * `TcutResult` with interval codes and level information
 #[pyfunction]
 #[pyo3(signature = (value, breaks, labels=None))]
 pub fn tcut(
@@ -219,8 +200,6 @@ fn tcut_from_vecs(
     })
 }
 
-/// Find which interval a value belongs to.
-/// Returns -1 if outside all intervals.
 fn find_interval(breaks: &[f64], value: f64) -> i32 {
     let n = breaks.len();
     if n < 2 {
@@ -244,18 +223,6 @@ fn find_expanded_interval_code(cuts: &[f64], midpoint: f64) -> i32 {
     if pos == 0 { -1 } else { (pos - 1) as i32 }
 }
 
-/// Split time intervals for person-years analysis.
-///
-/// This function takes start/stop times and splits them at the specified
-/// cut points, returning expanded data suitable for pyears calculations.
-///
-/// # Arguments
-/// * `start` - Start times for each interval
-/// * `stop` - Stop times for each interval
-/// * `cuts` - Cut points to split at
-///
-/// # Returns
-/// * Tuple of (new_start, new_stop, interval_codes, original_indices)
 #[pyfunction]
 pub fn tcut_expand(start: Vec<f64>, stop: Vec<f64>, cuts: Vec<f64>) -> PyResult<ExpandedIntervals> {
     let n = start.len();

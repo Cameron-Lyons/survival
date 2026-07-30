@@ -2143,7 +2143,6 @@ tcut <- function(x, breaks, labels, scale = 1) {
   if (length(labels) != length(breaks) - 1L) {
     stop("labels length must equal length(breaks) - 1", call. = FALSE)
   }
-  # Validate against the Rust-backed implementation while returning R's tcut shape.
   .call_data_prep("tcut", x, breaks, labels)
   structure(
     x * scale,
@@ -3411,9 +3410,6 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
     stop("survival time has only a single state")
   }
   if (isTRUE(timefix)) {
-    # The expansion path is otherwise independent of exact R Surv internals.
-    # Right-multistate timefix only affects near-tied stop times, so leave
-    # already-distinct times unchanged here.
     Y[, 1L] <- as.numeric(Y[, 1L])
   }
 

@@ -1,6 +1,2 @@
 [build]
 rustflags = ["-Dwarnings"]
-
-# For builds with AVX2
-# [target.x86_64-unknown-linux-gnu]
-# rustflags = ["-C", "target-feature=+avx2,+fma", "-Dwarnings"]

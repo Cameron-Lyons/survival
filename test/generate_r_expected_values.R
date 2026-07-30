@@ -1,4 +1,3 @@
-#!/usr/bin/env Rscript
 
 library(survival)
 library(jsonlite)

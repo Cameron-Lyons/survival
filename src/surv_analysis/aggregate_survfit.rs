@@ -124,48 +124,25 @@ fn validate_curve_inputs(
     Ok(())
 }
 
-/// Result of aggregating survival curves
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct AggregateSurvfitResult {
-    /// Aggregated time points
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Aggregated survival estimates
     #[pyo3(get)]
     pub surv: Vec<f64>,
-    /// Aggregated standard errors
     #[pyo3(get)]
     pub std_err: Vec<f64>,
-    /// Lower confidence bounds
     #[pyo3(get)]
     pub lower: Vec<f64>,
-    /// Upper confidence bounds
     #[pyo3(get)]
     pub upper: Vec<f64>,
-    /// Number of curves aggregated
     #[pyo3(get)]
     pub n_curves: usize,
-    /// Weights used for aggregation
     #[pyo3(get)]
     pub weights: Vec<f64>,
 }
 
-/// Aggregate (average) multiple survival curves.
-///
-/// This function computes the weighted average of multiple survival curves,
-/// typically used for computing marginal survival estimates from Cox models
-/// or for meta-analysis of survival curves.
-///
-/// # Arguments
-/// * `times` - Vector of time vectors (one per curve)
-/// * `survs` - Vector of survival estimate vectors (one per curve)
-/// * `std_errs` - Optional vector of standard error vectors
-/// * `weights` - Optional weights for each curve (default: equal weights)
-/// * `conf_level` - Confidence level for intervals (default: 0.95)
-///
-/// # Returns
-/// * `AggregateSurvfitResult` with aggregated estimates
 #[pyfunction]
 #[pyo3(signature = (times, survs, std_errs=None, weights=None, conf_level=None))]
 pub fn aggregate_survfit(
@@ -279,7 +256,6 @@ fn aggregate_survfit_slices(
     })
 }
 
-/// Interpolate step function at a given point
 fn interpolate_step(times: &[f64], values: &[f64], at: f64, default_value: f64) -> f64 {
     if times.is_empty() || values.is_empty() {
         return default_value;
@@ -302,7 +278,6 @@ fn z_score(conf_level: f64) -> f64 {
     normal_inverse_cdf(p)
 }
 
-/// Average survival curves by group
 #[pyfunction]
 #[pyo3(signature = (times, survs, groups, weights=None))]
 pub fn aggregate_survfit_by_group(

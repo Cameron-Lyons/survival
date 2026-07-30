@@ -5,13 +5,6 @@ use rayon::prelude::*;
 
 const SIMD_THRESHOLD: usize = 64;
 
-/// Compute inverse-probability-of-censoring weighted Brier scores.
-///
-/// `survival_predictions` is a flattened row-major matrix (`observation x
-/// evaluation time`) containing predictions for the survival probability
-/// `P(T > t)`. Censoring is estimated once with a weighted Kaplan-Meier curve.
-/// Observed events are removed before censorings at a tied time, matching
-/// `survival::brier`'s default tie handling.
 pub(crate) fn ipcw_brier_scores(
     observed_times: &[f64],
     status: &[u8],
@@ -86,9 +79,6 @@ pub(crate) fn ipcw_brier_scores(
         ));
     }
 
-    // Shift censorings just after deaths at the same time. Besides defining
-    // the tie order, using the adjusted times throughout reproduces the
-    // interval convention used by R's brier implementation.
     let mut unique_times = observed_times.to_vec();
     unique_times.sort_by(f64::total_cmp);
     unique_times.dedup_by(|left, right| (*left - *right).abs() < TIME_EPSILON);
@@ -110,7 +100,6 @@ pub(crate) fn ipcw_brier_scores(
         })
         .collect();
 
-    // Build G(t), the censoring survival curve, on the adjusted time scale.
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&left, &right| {
         adjusted_times[left]
@@ -466,8 +455,6 @@ mod tests {
         )
         .expect("valid IPCW score should be computed");
 
-        // R's default tie handling moves the censoring at time 2 to 2.5.
-        // At that boundary all four rows remain observable and G(2.5)=2/3.
         assert!((scores[0] - 0.13545454545454547).abs() < 1e-12);
     }
 

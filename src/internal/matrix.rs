@@ -50,12 +50,6 @@ pub(crate) fn standardize_or_borrow_row_major_matrix(
     }
 }
 
-/// Compact row-major LU factorization with partial pivoting.
-///
-/// The statistical routines in this crate only need dense square solves and
-/// inverses. Keeping that narrow implementation here avoids pulling a general
-/// matrix backend into every build while retaining pivoting and scale-aware
-/// singularity detection.
 struct PartialPivotLu {
     factors: Vec<f64>,
     swaps: Vec<usize>,
@@ -150,7 +144,6 @@ impl PartialPivotLu {
             }
         }
 
-        // Forward substitution for the unit-diagonal lower factor.
         for row in 0..self.n {
             let row_start = row * self.n;
             let mut value = solution[row];
@@ -160,7 +153,6 @@ impl PartialPivotLu {
             solution[row] = value;
         }
 
-        // Back substitution for the upper factor.
         for row in (0..self.n).rev() {
             let row_start = row * self.n;
             let mut value = solution[row];

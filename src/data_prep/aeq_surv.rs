@@ -1,34 +1,17 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-/// Result of adjusting near ties in survival times
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct AeqSurvResult {
-    /// Adjusted survival times with near-ties resolved
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Number of values that were adjusted
     #[pyo3(get)]
     pub adjusted_count: usize,
-    /// Indices of values that were adjusted
     #[pyo3(get)]
     pub adjusted_indices: Vec<usize>,
 }
 
-/// Adjudicate near ties in survival times.
-///
-/// This function handles floating-point precision issues that can cause
-/// survival times that should be equal to be treated as different.
-/// It compares values and replaces near-ties with the smaller value.
-///
-/// # Arguments
-/// * `time` - Vector of survival times
-/// * `tolerance` - Absolute/relative tolerance for considering values as tied
-///   (default: `sqrt(f64::EPSILON)`)
-///
-/// # Returns
-/// * `AeqSurvResult` containing adjusted times and adjustment info
 #[pyfunction]
 #[pyo3(signature = (time, tolerance=None))]
 pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResult> {

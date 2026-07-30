@@ -1,44 +1,21 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-/// Data for drawing a state space figure.
-///
-/// This provides structured data that can be used with external plotting
-/// libraries to create box-and-arrow diagrams showing states and transitions
-/// in multi-state survival models.
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct StateFigData {
-    /// Names of the states
     #[pyo3(get)]
     pub states: Vec<String>,
-    /// Positions for each state (x, y coordinates)
     #[pyo3(get)]
     pub positions: Vec<(f64, f64)>,
-    /// Edges: (from_state_idx, to_state_idx, count)
     #[pyo3(get)]
     pub edges: Vec<(usize, usize, usize)>,
-    /// Box dimensions (width, height) for each state
     #[pyo3(get)]
     pub box_sizes: Vec<(f64, f64)>,
-    /// Layout specification used
     #[pyo3(get)]
     pub layout: Vec<usize>,
 }
 
-/// Generate data for a state space figure.
-///
-/// This function computes layout positions and edge information for
-/// visualizing a multi-state model. The actual plotting should be done
-/// with a graphics library (matplotlib, plotly, etc.) using this data.
-///
-/// # Arguments
-/// * `states` - Names of the states
-/// * `transitions` - HashMap of (from_state, to_state) -> count
-/// * `layout` - Optional layout specification (states per row)
-///
-/// # Returns
-/// * `StateFigData` with positions and edges for plotting
 #[pyfunction]
 #[pyo3(signature = (states, transitions, layout=None))]
 pub fn statefig(
@@ -86,7 +63,6 @@ pub fn statefig(
     })
 }
 
-/// Compute default layout based on number of states and transitions
 fn compute_default_layout(n_states: usize, edges: &[(usize, usize, usize)]) -> Vec<usize> {
     let mut out_degree = vec![0usize; n_states];
     let mut in_degree = vec![0usize; n_states];
@@ -116,7 +92,6 @@ fn compute_default_layout(n_states: usize, edges: &[(usize, usize, usize)]) -> V
     layout
 }
 
-/// Compute positions for states based on layout
 fn compute_positions(layout: &[usize], n_states: usize) -> Vec<(f64, f64)> {
     let mut positions = vec![(0.0, 0.0); n_states];
 
@@ -140,7 +115,6 @@ fn compute_positions(layout: &[usize], n_states: usize) -> Vec<(f64, f64)> {
     positions
 }
 
-/// Generate matplotlib-compatible plot code for the state figure
 #[pyfunction]
 pub fn statefig_matplotlib_code(data: &StateFigData) -> String {
     let mut code = String::new();
@@ -202,7 +176,6 @@ pub fn statefig_matplotlib_code(data: &StateFigData) -> String {
     code
 }
 
-/// Create transition matrix from edge list
 #[pyfunction]
 pub fn statefig_transition_matrix(data: &StateFigData) -> Vec<Vec<usize>> {
     let n = data.states.len();
@@ -215,7 +188,6 @@ pub fn statefig_transition_matrix(data: &StateFigData) -> Vec<Vec<usize>> {
     matrix
 }
 
-/// Validate state transitions against allowed patterns
 #[pyfunction]
 pub fn statefig_validate(
     data: &StateFigData,

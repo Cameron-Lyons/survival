@@ -6,11 +6,6 @@ use std::time::Instant;
 
 static SEED_SEQUENCE: AtomicU64 = AtomicU64::new(0x6a09_e667_f3bc_c909);
 
-/// Small non-cryptographic generator for simulation, resampling, and model initialization.
-///
-/// The generator uses WyRand and Lemire's unbiased bounded-integer mapping. Seeded streams retain
-/// the deterministic behavior the public statistical APIs rely on, while `new` mixes process-local
-/// timing, thread identity, and a monotonic sequence to create independent streams.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Rng {
     state: u64,
@@ -94,7 +89,6 @@ impl Rng {
         }
     }
 
-    /// Generate a uniformly distributed integer in the supplied range.
     #[inline]
     pub(crate) fn usize(&mut self, range: impl RangeBounds<usize>) -> usize {
         let empty_range = || {
@@ -125,7 +119,6 @@ impl Rng {
         }
     }
 
-    /// Generate a uniformly distributed `u64` in the supplied range.
     #[inline]
     pub(crate) fn u64(&mut self, range: impl RangeBounds<u64>) -> u64 {
         let empty_range = || {

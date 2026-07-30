@@ -1,9 +1,5 @@
-# Pre-commit hooks for survival
-# Install: pip install pre-commit && pre-commit install
-# Run manually: pre-commit run --all-files
 
 repos:
-  # Rust formatting and linting
   - repo: local
     hooks:
       - id: cargo-fmt
@@ -27,7 +23,6 @@ repos:
         types: [rust]
         pass_filenames: false
 
-  # Python formatting and linting
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.12
     hooks:
@@ -37,7 +32,6 @@ repos:
       - id: ruff-format
         types_or: [python, pyi]
 
-  # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:

@@ -186,8 +186,6 @@ impl ConditionalLogisticRegression {
         self.iterations = 0;
         self.converged = false;
 
-        // Use a stable gradient ascent step on the conditional likelihood
-        // within each stratum so matched-set membership actually affects the fit.
         let learning_rate = 0.1;
         while self.iterations < self.max_iter {
             let mut gradient = vec![0.0; num_covariates];

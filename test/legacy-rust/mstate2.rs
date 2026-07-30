@@ -30,7 +30,7 @@ impl SurvivalData {
     ) -> Self {
         let states = Self::survival_check(&id, &t1, &t2, &state, &istate);
         let nstate = states.len();
-        
+
         SurvivalData {
             id, t1, t2, state, istate, weight,
             states, nstate,
@@ -49,22 +49,22 @@ impl SurvivalData {
 
     fn fit(&self) -> SurvivalFit {
         let mut fit = SurvivalFit::new(self.nstate);
-        
+
         let p0 = self.initial_probabilities();
         fit.initialize(p0);
-        
+
         let event_times = self.get_event_times();
-        
+
         for (it, &time) in event_times.iter().enumerate() {
-            if it == 0 { continue; } 
-            
+            if it == 0 { continue; }
+
             let at_risk = self.get_at_risk(time);
-            
+
             let events = self.get_events(time);
-            
+
             self.update_matrices(&mut fit, it, &at_risk, &events);
         }
-        
+
         fit
     }
 

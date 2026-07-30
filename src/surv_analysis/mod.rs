@@ -25,7 +25,6 @@ pub(crate) mod survfitaj_module;
 #[path = "survfitkm.rs"]
 pub(crate) mod survfitkm_module;
 
-// Public facade exports
 pub use aggregate_survfit_module::{
     AggregateSurvfitResult, aggregate_survfit, aggregate_survfit_by_group,
 };

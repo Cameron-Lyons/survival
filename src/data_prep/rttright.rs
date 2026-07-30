@@ -7,41 +7,19 @@ use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
 };
 
-/// Result of redistribute-to-the-right weight calculation
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct RttrightResult {
-    /// Redistributed weights for each observation
     #[pyo3(get)]
     pub weights: Vec<f64>,
-    /// Original time values (sorted)
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Original status values (sorted)
     #[pyo3(get)]
     pub status: Vec<i32>,
-    /// Sort order indices
     #[pyo3(get)]
     pub order: Vec<usize>,
 }
 
-/// Compute redistribute-to-the-right weights for censored data.
-///
-/// This implements the IPCW (Inverse Probability of Censoring Weighting)
-/// approach where the weight of each censored observation is redistributed
-/// to observations with longer survival times.
-///
-/// The Kaplan-Meier estimator can be derived from this redistribution.
-///
-/// # Arguments
-/// * `time` - Survival/censoring times
-/// * `status` - Event indicator (1=event, 0=censored)
-/// * `weights` - Optional initial weights (default: 1.0 for all)
-/// * `timefix` - Coalesce nearly-equal times like R's `aeqSurv`
-/// * `renorm` - Normalize weights to sum to one before redistribution
-///
-/// # Returns
-/// * `RttrightResult` containing redistributed weights
 #[pyfunction]
 #[pyo3(signature = (time, status, weights=None, timefix=true, renorm=true))]
 pub fn rttright(
@@ -151,12 +129,6 @@ fn same_rttright_time(left: f64, right: f64, timefix: bool) -> bool {
     }
 }
 
-/// Compute IPCW weights using the Kaplan-Meier censoring distribution.
-///
-/// Within a time block, observed events receive the censoring survival just
-/// before the block; censoring at that same time updates the censoring curve
-/// only after those same-time events have left the risk set. This matches the
-/// shifted-censoring construction used by R's `rttright`.
 fn compute_km_weights(
     time: &[f64],
     status: &[i32],
@@ -206,7 +178,6 @@ fn compute_km_weights(
     weights
 }
 
-/// Compute IPCW weights with stratification
 #[pyfunction]
 #[pyo3(signature = (time, status, strata, weights=None, timefix=true, renorm=true))]
 pub fn rttright_stratified(

@@ -58,14 +58,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut cox_model = survival::coxph(
             ×,
             &status,
-            &[age.as_slice()], 
+            &[age.as_slice()],
             params,
         )?;
 
         cox_model.variance = Array2::zeros((1, 1));
 
         let baseline_hazards = cox_model.baseline_hazard();
-        
+
     }
 
     Ok(())

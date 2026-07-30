@@ -1,7 +1,5 @@
 #![cfg_attr(
     not(feature = "python"),
-    // The non-Python build compiles PyO3-facing constructors and methods through
-    // a local shim, so rustc cannot see the dynamic Python entry points.
     allow(
         dead_code,
         unused_attributes,
@@ -63,7 +61,6 @@ pub mod surv_analysis;
 mod tests;
 pub mod validation;
 
-/// Public input and data container types shared across survival analysis domains.
 pub mod data_types {
     pub use crate::internal::typed_inputs::{
         AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
@@ -71,9 +68,6 @@ pub mod data_types {
     };
 }
 
-/// Curated imports for new Rust code.
-///
-/// Prefer domain modules from this module over root-level compatibility exports.
 pub mod preferred {
     pub use crate::data_types::{
         AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
@@ -89,10 +83,6 @@ pub mod preferred {
     };
 }
 
-/// PyO3-compatible prelude for internal Python-facing modules.
-///
-/// New Rust callers should prefer `survival::preferred` or explicit domain
-/// modules over this compatibility-oriented prelude.
 pub mod prelude {
     #[cfg(feature = "python")]
     pub use crate::preferred::*;
@@ -100,15 +90,9 @@ pub mod prelude {
     pub use crate::pyo3_shim::prelude::*;
 }
 
-/// Root-level compatibility exports are retained for old callers but are no
-/// longer the preferred API shape.
 pub const DEPRECATED_ROOT_EXPORTS_NOTE: &str =
     "Prefer survival::preferred or explicit domain modules such as survival::regression.";
 
-/// Backwards-compatible root-level exports.
-///
-/// Prefer importing through the public domain modules, for example
-/// `survival::regression::coxph` or `survival::validation::brier`.
 #[doc(hidden)]
 pub mod compatibility {
     pub use crate::bayesian::*;

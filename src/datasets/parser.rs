@@ -1,11 +1,3 @@
-//! Simple CSV parser for embedded survival datasets
-//!
-//! Handles:
-//! - Header row detection
-//! - NA/missing value handling
-//! - Numeric and string columns
-
-/// Parse CSV data into rows of string values
 pub(super) fn parse_csv(data: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let mut lines = data.lines().peekable();
 
@@ -40,7 +32,6 @@ pub(super) fn parse_csv(data: &str) -> Result<(Vec<String>, Vec<Vec<String>>), S
     Ok((headers, rows))
 }
 
-/// Parse a single CSV line, handling quoted fields
 fn parse_csv_line(line: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut current = String::new();
@@ -75,7 +66,6 @@ fn parse_csv_line(line: &str) -> Vec<String> {
     result
 }
 
-/// Parse a string value to f64, treating NA as NaN
 pub(super) fn parse_f64(s: &str) -> Option<f64> {
     let s = s.trim();
     if s.is_empty() || s.eq_ignore_ascii_case("na") || s.eq_ignore_ascii_case("nan") {
@@ -85,7 +75,6 @@ pub(super) fn parse_f64(s: &str) -> Option<f64> {
     }
 }
 
-/// Parse a string value to i32, treating NA as None
 pub(super) fn parse_i32(s: &str) -> Option<i32> {
     let s = s.trim();
     if s.is_empty() || s.eq_ignore_ascii_case("na") || s.eq_ignore_ascii_case("nan") {

@@ -256,14 +256,10 @@ fn fit_agexact(data: AgexactData, state: AgexactState, params: AgexactParams) ->
     let covariates = Array2::from_shape_vec((n, p), row_major)
         .expect("validated exact Cox covariates have a valid matrix shape");
 
-    // The original entry point treats the final row as a stratum boundary even
-    // when the caller leaves the marker vector at its all-zero default.
     if let Some(last) = strata.last_mut() {
         *last = 1;
     }
 
-    // Centering is performed above to preserve the compatibility output. The
-    // shared optimizer therefore receives already-centered, unscaled columns.
     let mut fit = take_infallible(CoxFit::new_with_entry_times(
         Array1::from_vec(stop),
         Array1::from_vec(event),

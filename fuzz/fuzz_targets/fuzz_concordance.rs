@@ -22,8 +22,7 @@ fuzz_target!(|data: &[u8]| {
 
         y.push(t.abs());
         weights.push((w_raw as f64 / u32::MAX as f64).max(0.01));
-        // status stored in second half of y
-        let _ = s; // will be pushed after time
+        let _ = s;
     }
 
     for i in 0..n {

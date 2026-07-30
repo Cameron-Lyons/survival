@@ -53,7 +53,7 @@ fn log_rank_test(data: &SurvivalData) -> SurvivalTestResult {
     let variance = vec![vec![total_events * (1.0 - 1.0 / group_count); groups.len()]; groups.len()];
 
     SurvivalTestResult {
-        chi_squared: 10.0, 
+        chi_squared: 10.0,
         degrees_of_freedom: groups.len() - 1,
         observed: groups
             .iter()

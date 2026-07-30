@@ -48,16 +48,16 @@ impl SurvivalData {
     fn coxph(&self, method: TieMethod) -> CoxModel {
         let n = self.time.len();
         let nvar = self.covariates.ncols();
-        
+
         let strata = self.strata.clone().unwrap_or_else(|| Array1::zeros(n));
         let offset = Array1::zeros(n);
         let weights = self.weights.clone().unwrap_or_else(|| Array1::from_elem(n, 1.0));
-        
+
         let cox_method = match method {
             TieMethod::Breslow => CoxMethod::Breslow,
             TieMethod::Efron => CoxMethod::Efron,
         };
-        
+
         let mut cox_fit = CoxFit::new(
             self.time.clone(),
             self.status.clone(),
@@ -72,11 +72,11 @@ impl SurvivalData {
             vec![true; nvar],
             vec![0.0; nvar],
         ).expect("Failed to create CoxFit");
-        
+
         cox_fit.fit().expect("Failed to fit Cox model");
-        
+
         let (beta, _means, _u, imat, loglik, _sctest, _flag, _iter) = cox_fit.results();
-        
+
         let risk_scores: Vec<f64> = self.covariates
             .outer_iter()
             .map(|row| {
@@ -87,7 +87,7 @@ impl SurvivalData {
                     .exp()
             })
             .collect();
-        
+
         let mut martingale = vec![0.0; n];
         let status_vec: Vec<i32> = self.status.to_vec();
         let time_vec: Vec<f64> = self.time.to_vec();
@@ -96,7 +96,7 @@ impl SurvivalData {
         let weights_vec: Vec<f64> = self.weights.as_ref()
             .map(|w| w.to_vec())
             .unwrap_or_else(|| vec![1.0; n]);
-        
+
         use survival::residuals::coxmart::{SurvivalData, Weights};
         compute_coxmart(
             n,
@@ -112,11 +112,11 @@ impl SurvivalData {
             },
             &mut martingale,
         );
-        
+
         let score = martingale.clone();
-        
+
         let schoenfeld = Array2::zeros((n, nvar));
-        
+
         CoxModel {
             coefficients: Array1::from_vec(beta),
             log_likelihood: loglik[1],
@@ -137,7 +137,7 @@ impl SurvivalData {
             .map(|w| w.to_vec())
             .unwrap_or_else(|| vec![1.0; n]);
         let position_vec: Vec<i32> = vec![0; n];
-        
+
         let result = compute_survfitkm(
             &time_vec,
             &status_vec,
@@ -146,7 +146,7 @@ impl SurvivalData {
             &position_vec,
             &KaplanMeierConfig::default(),
         );
-        
+
         KaplanMeier {
             time_points: Array1::from_vec(result.time),
             survival: Array1::from_vec(result.estimate),
@@ -158,7 +158,7 @@ impl SurvivalData {
         let n = self.time.len();
         let time_vec: Vec<f64> = self.time.to_vec();
         let status_vec: Vec<i32> = self.status.to_vec();
-        
+
         let median_time = {
             let mut sorted_times = self.time.to_vec();
             sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -167,30 +167,30 @@ impl SurvivalData {
         let group_vec: Vec<i32> = self.time.iter()
             .map(|&t| if t <= median_time { 1 } else { 2 })
             .collect();
-        
+
         let strata_vec: Vec<i32> = vec![0; n];
-        
+
         let ngroup = 2;
         let mut obs = vec![0.0; ngroup];
         let mut exp = vec![0.0; ngroup];
         let mut var = vec![0.0; ngroup * ngroup];
         let mut risk = vec![0.0; ngroup];
         let mut kaplan = vec![0.0; n];
-        
+
         let params = SurvDiffParams {
             nn: n as i32,
             nngroup: ngroup as i32,
             _nstrat: 1,
             rho: 0.0,
         };
-        
+
         let input = SurvDiffInput {
             time: &time_vec,
             status: &status_vec,
             group: &group_vec,
             strata: &strata_vec,
         };
-        
+
         let mut output = SurvDiffOutput {
             obs: &mut obs,
             exp: &mut exp,
@@ -198,9 +198,9 @@ impl SurvivalData {
             risk: &mut risk,
             kaplan: &mut kaplan,
         };
-        
+
         compute_survdiff(params, input, &mut output);
-        
+
         let mut chi_sq = 0.0;
         let mut df = 0;
         for i in 0..ngroup {
@@ -211,10 +211,10 @@ impl SurvivalData {
             }
         }
         df = (df - 1).max(0);
-        
+
         let dist = ChiSquared::new(df as f64).unwrap();
         let p_value = 1.0 - dist.cdf(chi_sq);
-        
+
         LogRankTest {
             chi_squared: chi_sq,
             df,
@@ -243,7 +243,7 @@ fn create_aml_data() -> SurvivalData {
         let status = arr1(&[
             1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1,
         ]);
-        let covariates = Array2::eye(23); 
+        let covariates = Array2::eye(23);
 
     SurvivalData::new(time, status, covariates)
 }
@@ -258,7 +258,7 @@ mod tests {
         let aml = create_aml_data();
 
         let fit1 = aml.coxph(TieMethod::Breslow);
-        let fit2 = aml.coxph(TieMethod::Breslow); 
+        let fit2 = aml.coxph(TieMethod::Breslow);
 
         assert_relative_eq!(fit1.log_likelihood, fit2.log_likelihood, epsilon = 1e-6);
         assert_relative_eq!(
@@ -294,7 +294,7 @@ mod tests {
         let p = 1.0 - dist.cdf(result.chi_squared);
 
         assert_relative_eq!(result.p_value, p, epsilon = 1e-6);
-        assert!(result.chi_squared > 5.0); 
+        assert!(result.chi_squared > 5.0);
     }
 }
 

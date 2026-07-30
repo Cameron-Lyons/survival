@@ -6,48 +6,25 @@ use crate::internal::validation::{
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-/// Result of Yates population prediction
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct YatesResult {
-    /// Factor levels being compared
     #[pyo3(get)]
     pub levels: Vec<String>,
-    /// Mean population predicted value for each level
     #[pyo3(get)]
     pub means: Vec<f64>,
-    /// Standard errors
     #[pyo3(get)]
     pub se: Vec<f64>,
-    /// Lower confidence bounds
     #[pyo3(get)]
     pub lower: Vec<f64>,
-    /// Upper confidence bounds
     #[pyo3(get)]
     pub upper: Vec<f64>,
-    /// Sample size for each level
     #[pyo3(get)]
     pub n: Vec<usize>,
-    /// Type of prediction used
     #[pyo3(get)]
     pub predict_type: String,
 }
 
-/// Compute population marginal means (Yates-style adjustment).
-///
-/// This function computes adjusted predictions for each level of a factor,
-/// averaging over the distribution of other covariates in the population.
-/// This provides a way to estimate "what if everyone had treatment A vs B"
-/// effects.
-///
-/// # Arguments
-/// * `predictions` - Predicted values for each observation
-/// * `factor` - Factor variable defining groups
-/// * `weights` - Optional observation weights
-/// * `conf_level` - Confidence level (default: 0.95)
-///
-/// # Returns
-/// * `YatesResult` with adjusted means for each factor level
 #[pyfunction]
 #[pyo3(signature = (predictions, factor, weights=None, conf_level=None))]
 pub fn yates(
@@ -160,22 +137,6 @@ pub fn yates(
     })
 }
 
-/// Compute population marginal means with model-based predictions.
-///
-/// This version takes model coefficients and computes counterfactual
-/// predictions for each factor level.
-///
-/// # Arguments
-/// * `x` - Design matrix (flattened, row-major)
-/// * `coef` - Model coefficients
-/// * `n_obs` - Number of observations
-/// * `n_vars` - Number of variables
-/// * `factor_col` - Column index of the factor variable
-/// * `factor_levels` - Possible levels of the factor
-/// * `predict_type` - Type of prediction ("linear", "risk", "survival")
-///
-/// # Returns
-/// * `YatesResult` with adjusted predictions
 #[pyfunction]
 #[pyo3(signature = (x, coef, n_obs, n_vars, factor_col, factor_levels, predict_type=None))]
 pub fn yates_contrast(
@@ -282,7 +243,6 @@ pub fn yates_contrast(
     })
 }
 
-/// Compute pairwise contrasts between factor levels
 #[pyfunction]
 pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResult> {
     let k = yates_result.levels.len();
@@ -333,7 +293,6 @@ pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResul
     })
 }
 
-/// Result of pairwise comparisons
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct YatesPairwiseResult {

@@ -15,9 +15,9 @@ struct Surv {
 
 fn coxph(formula: &str, data: &PbcData) -> CoxPHModel {
     let event: Vec<bool> = data.status.iter().map(|&s| s > 0).collect();
-    
+
     let covariates = prepare_covariates(data);
-    
+
     CoxPHModel::new()
         .add_covariates(covariates)
         .fit(Surv {
@@ -71,23 +71,23 @@ fn main() {
             _ => "unknown",
         })
         .collect();
-    
+
     let esurv2 = survexp("~ trt", &pfit2, &temp);
-    
+
     let lung_data = load_lung_data();
     let n = lung_data.time.len();
-    
+
     let entry: Vec<Date<Utc>> = (0..n)
         .map(|i| NaiveDate::from_ymd(1940, 1, 1) + Duration::days((n - i) * 50))
         .collect();
-    
+
     let entry2 = entry.iter().map(|d| d.and_hms(0, 0, 0)).collect();
     let entry3 = entry.iter().map(|&d| datedate(d)).collect();
-    
+
     let p1 = pyears("Surv(time, status) ~ ph_ecog", &lung_data, survexp_us(), rmap! {
         "age" => lung_data.age * 365.25,
         "sex" => lung_data.sex,
         "year" => entry
     });
-    
+
 }

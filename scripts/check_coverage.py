@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 from __future__ import annotations
 
 import argparse
@@ -47,8 +45,7 @@ def main() -> int:
         print(f"coverage report not found: {args.report}", file=sys.stderr)
         return 1
 
-    # CI generates this report locally via cargo-tarpaulin/pytest-cov.
-    root = ET.parse(args.report).getroot()  # noqa: S314
+    root = ET.parse(args.report).getroot()
     line_rate = extract_line_rate(root)
     percent = line_rate * 100.0
 

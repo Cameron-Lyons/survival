@@ -5,26 +5,19 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-/// Result of expected survival calculation
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SurvExpResult {
-    /// Time points
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Expected survival probabilities
     #[pyo3(get)]
     pub surv: Vec<f64>,
-    /// Number at risk at each time
     #[pyo3(get)]
     pub n_risk: Vec<f64>,
-    /// Cumulative expected hazard
     #[pyo3(get)]
     pub cumhaz: Vec<f64>,
-    /// Method used for calculation
     #[pyo3(get)]
     pub method: String,
-    /// Number of subjects
     #[pyo3(get)]
     pub n: usize,
 }
@@ -86,22 +79,6 @@ fn validate_eval_times(eval_times: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
-/// Compute expected survival based on population mortality.
-///
-/// This function computes expected survival for a cohort based on external
-/// population mortality rates (e.g., national mortality tables).
-///
-/// # Arguments
-/// * `time` - Follow-up times for each subject
-/// * `age` - Age at baseline for each subject (in days or years depending on ratetable)
-/// * `year` - Calendar year at baseline for each subject
-/// * `ratetable` - Population mortality rate table
-/// * `sex` - Optional sex indicator for each subject
-/// * `times` - Optional times at which to compute expected survival
-/// * `method` - Method: "hakulinen", "conditional", or "individual" (default: "hakulinen")
-///
-/// # Returns
-/// * `SurvExpResult` with expected survival estimates
 #[pyfunction]
 #[pyo3(signature = (time, age, year, ratetable, sex=None, times=None, method=None))]
 pub fn survexp(
@@ -156,7 +133,6 @@ pub fn survexp(
     }
 }
 
-/// Hakulinen method: expected survival for a cohort
 fn compute_hakulinen(
     time: &[f64],
     age: &[f64],
@@ -210,7 +186,6 @@ fn compute_hakulinen(
     })
 }
 
-/// Conditional method: expected survival conditional on observed survival
 fn compute_conditional(
     time: &[f64],
     age: &[f64],
@@ -284,7 +259,6 @@ fn compute_conditional(
     })
 }
 
-/// Individual method: individual expected survival for each subject
 fn compute_individual(
     time: &[f64],
     age: &[f64],
@@ -346,7 +320,6 @@ fn compute_individual(
     })
 }
 
-/// Compute individual expected survival for each subject
 #[pyfunction]
 #[pyo3(signature = (time, age, year, ratetable, sex=None))]
 pub fn survexp_individual(

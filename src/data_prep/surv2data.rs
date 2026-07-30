@@ -1,8 +1,3 @@
-//! Convert timecourse data to (time1, time2) interval format
-//!
-//! Converts data where each row represents an observation at a single time point
-//! into counting process format with (time1, time2) intervals.
-
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -10,40 +5,21 @@ use std::collections::HashMap;
 use crate::constants::TIME_EPSILON;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
 
-/// Result of converting timecourse data to interval format
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
 pub struct Surv2DataResult {
-    /// Subject identifiers
     #[pyo3(get)]
     pub id: Vec<i32>,
-    /// Start time of each interval
     #[pyo3(get)]
     pub time1: Vec<f64>,
-    /// End time of each interval
     #[pyo3(get)]
     pub time2: Vec<f64>,
-    /// Event status (1=event, 0=censored) for each interval
     #[pyo3(get)]
     pub status: Vec<i32>,
-    /// Original row index (1-indexed) for each output row
     #[pyo3(get)]
     pub row_index: Vec<usize>,
 }
 
-/// Convert timecourse data to counting process (time1, time2) format
-///
-/// Takes data where each row is an observation at a single time point and converts
-/// it to interval format suitable for Cox regression with time-varying covariates.
-///
-/// # Arguments
-/// * `id` - Subject identifiers
-/// * `time` - Observation times for each row
-/// * `event_time` - Optional: time of event for each subject (if known)
-/// * `event_status` - Optional: event indicator (1=event, 0=censored)
-///
-/// # Returns
-/// Surv2DataResult with intervals created from consecutive observations
 #[pyfunction]
 #[pyo3(signature = (id, time, event_time=None, event_status=None))]
 pub fn surv2data(

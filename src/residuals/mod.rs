@@ -6,7 +6,6 @@ pub(crate) mod diagnostics;
 pub(crate) mod survfit_resid;
 pub(crate) mod survreg_resid;
 
-// Public facade exports
 pub use agmart_module::agmart;
 pub use coxmart_module::coxmart;
 pub use diagnostics::{

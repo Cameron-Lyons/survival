@@ -22,7 +22,6 @@ pub(crate) mod timeline;
 #[path = "tmerge.rs"]
 pub(crate) mod tmerge_module;
 
-// Public facade exports
 pub use aeq_surv_module::{AeqSurvResult, aeq_surv};
 pub use cluster_module::{ClusterResult, cluster, cluster_str};
 pub use collapse_module::collapse;

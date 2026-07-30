@@ -2,7 +2,6 @@ use super::cox_baseline::compute_tied_baseline_summaries;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// Backward-compatible aggregate survival helper kept for the public crate API.
 #[pyfunction]
 pub fn agsurv5(
     n: usize,

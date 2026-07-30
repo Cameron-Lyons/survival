@@ -43,34 +43,24 @@ fn validate_rates(rates: &[f64], field: &str) -> PyResult<()> {
     Ok(())
 }
 
-/// Type of dimension in a rate table
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum DimType {
-    /// Categorical factor (e.g., sex)
     Factor,
-    /// Age in days/years
     Age,
-    /// Calendar year
     Year,
-    /// General continuous variable
     Continuous,
 }
 
-/// A dimension in the rate table
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct RateDimension {
-    /// Name of the dimension
     #[pyo3(get)]
     pub name: String,
-    /// Type of dimension
     #[pyo3(get)]
     pub dim_type: DimType,
-    /// Factor levels (for Factor type)
     #[pyo3(get)]
     pub levels: Option<Vec<String>>,
-    /// Cutpoints for continuous dimensions
     #[pyo3(get)]
     pub cutpoints: Vec<f64>,
 }
@@ -94,33 +84,18 @@ impl RateDimension {
     }
 }
 
-/// Population mortality rate table.
-///
-/// A multi-dimensional table of mortality rates indexed by age, calendar year,
-/// sex, and potentially other factors. Used with survexp() to compute expected
-/// survival based on population mortality.
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct RateTable {
-    /// Dimensions of the table
     dimensions: Vec<RateDimension>,
-    /// Flattened array of mortality rates (daily hazard rates)
     rates: Vec<f64>,
-    /// Shape of the multi-dimensional array
     shape: Vec<usize>,
-    /// Summary/description of the table
     #[pyo3(get)]
     pub summary: String,
 }
 
 #[pymethods]
 impl RateTable {
-    /// Create a new rate table
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector of dimension definitions
-    /// * `rates` - Flattened array of mortality rates
-    /// * `summary` - Description of the table
     #[new]
     #[pyo3(signature = (dimensions, rates, summary=None))]
     pub fn new(
@@ -178,44 +153,24 @@ impl RateTable {
         })
     }
 
-    /// Get the number of dimensions
     pub fn ndim(&self) -> usize {
         self.dimensions.len()
     }
 
-    /// Get dimension names
     pub fn dim_names(&self) -> Vec<String> {
         self.dimensions.iter().map(|d| d.name.clone()).collect()
     }
 
-    /// Lookup mortality rate for given coordinates
-    ///
-    /// # Arguments
-    /// * `coords` - HashMap mapping dimension names to values
-    ///
-    /// # Returns
-    /// Daily hazard rate at the specified coordinates
     pub fn lookup(&self, coords: HashMap<String, f64>) -> PyResult<f64> {
         let indices = self.coords_to_indices(&coords)?;
         let flat_idx = self.indices_to_flat(&indices);
         Ok(self.rates[flat_idx])
     }
 
-    /// Lookup with interpolation for continuous dimensions
     pub fn lookup_interpolate(&self, coords: HashMap<String, f64>) -> PyResult<f64> {
         self.lookup(coords)
     }
 
-    /// Get cumulative hazard over a time interval
-    ///
-    /// # Arguments
-    /// * `age_start` - Starting age (in days)
-    /// * `age_end` - Ending age (in days)
-    /// * `year_start` - Starting calendar year
-    /// * `sex` - Sex (0=male, 1=female typically)
-    ///
-    /// # Returns
-    /// Cumulative hazard over the interval
     #[pyo3(signature = (age_start, age_end, year_start, sex=None))]
     pub fn cumulative_hazard(
         &self,
@@ -285,7 +240,6 @@ impl RateTable {
         Ok(cumhaz)
     }
 
-    /// Get expected survival probability over a time interval
     #[pyo3(signature = (age_start, age_end, year_start, sex=None))]
     pub fn expected_survival(
         &self,
@@ -300,7 +254,6 @@ impl RateTable {
 }
 
 impl RateTable {
-    /// Convert coordinate values to array indices
     fn coords_to_indices(&self, coords: &HashMap<String, f64>) -> PyResult<Vec<usize>> {
         let mut indices = Vec::with_capacity(self.dimensions.len());
 
@@ -334,7 +287,6 @@ impl RateTable {
         Ok(indices)
     }
 
-    /// Convert multi-dimensional indices to flat index
     fn indices_to_flat(&self, indices: &[usize]) -> usize {
         let mut flat_idx = 0;
         let mut multiplier = 1;
@@ -349,7 +301,6 @@ impl RateTable {
     }
 }
 
-/// Find which interval a value belongs to using binary search
 fn find_interval(cutpoints: &[f64], value: f64) -> usize {
     if cutpoints.len() < 2 {
         return 0;
@@ -375,7 +326,6 @@ fn find_interval(cutpoints: &[f64], value: f64) -> usize {
     }
 }
 
-/// Create a simple rate table for testing/demonstration
 #[pyfunction]
 pub fn create_simple_ratetable(
     age_breaks: Vec<f64>,

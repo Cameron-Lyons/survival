@@ -290,30 +290,6 @@ pub(crate) fn compute_rmst_optimal_threshold(
     }
 }
 
-/// Compute optimal RMST threshold using reduced piecewise exponential model.
-///
-/// Uses the RPEXE approach (Han et al. 2025) to identify statistically
-/// significant changepoints in the hazard function, then returns the largest
-/// changepoint as the optimal tau for RMST computation.
-///
-/// Parameters
-/// ----------
-/// time : array-like
-///     Survival/censoring times.
-/// status : array-like
-///     Event indicator (1=event, 0=censored).
-/// alpha : float, optional
-///     Significance level for changepoint detection (default 0.05).
-/// min_events_per_interval : int, optional
-///     Minimum events required in each interval (default 5).
-/// confidence_level : float, optional
-///     Confidence level for RMST computation (default 0.95).
-///
-/// Returns
-/// -------
-/// RMSTOptimalThresholdResult
-///     Object with: optimal_tau, max_followup, changepoints (list of
-///     ChangepointInfo), n_changepoints, rmst_at_optimal.
 #[pyfunction]
 #[pyo3(signature = (time, status, alpha=None, min_events_per_interval=None, confidence_level=None))]
 pub fn rmst_optimal_threshold(

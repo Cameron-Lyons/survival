@@ -3,7 +3,7 @@ use polars::prelude::*;
 use survival::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let df = DataFrame::default(); 
+    let df = DataFrame::default();
 
     let n = df.height();
     let occupation = df.column("occupation")?.unique()?.sort(false);

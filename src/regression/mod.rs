@@ -34,7 +34,6 @@ pub(crate) mod spline_hazard;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
-// Public facade exports
 pub use aareg_module::{
     AaregConfidenceInterval, AaregDiagnostics, AaregFitDetails, AaregOptions, AaregResult, aareg,
 };

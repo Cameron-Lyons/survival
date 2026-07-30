@@ -31,7 +31,7 @@ fn compute_linear_index(cell: &[usize], dim_sizes: &[usize]) -> Result<usize, St
     if cell.len() != dim_sizes.len() {
         return Err("Cell length doesn't match dimensions".to_string());
     }
-    
+
     let mut index = 0;
     let mut stride = 1;
     for (i, (&c, &d)) in cell.iter().zip(dim_sizes.iter()).enumerate().rev() {
@@ -71,7 +71,7 @@ fn ratewalk(start: &[f64], mut futime: f64, ratetable: &Ratable) -> Result<RateW
                     let adj_value = current_start[i] + EPS;
                     let count = dim.cutpoints.partition_point(|cp| cp <= &adj_value);
                     cell[i] = count;
-                    
+
                     if count < dim.cutpoints.len() {
                         let time_to_next = dim.cutpoints[count] - current_start[i];
                         if time_to_next < edge {
@@ -142,12 +142,12 @@ mod tests {
         ];
 
         let mut rates = vec![0.0; dim_sizes.iter().product()];
-        
-        let age_index = 20; 
-        let sex_index = 0;  
-        let year_index = 0; 
+
+        let age_index = 20;
+        let sex_index = 0;
+        let year_index = 0;
         let idx = compute_linear_index(&[age_index, sex_index, year_index], &dim_sizes).unwrap();
-        rates[idx] = - (1.0 - 0.00169).ln() / 365.25; 
+        rates[idx] = - (1.0 - 0.00169).ln() / 365.25;
 
         let ratetable = Ratetable {
             dim_sizes,
@@ -160,7 +160,7 @@ mod tests {
         let age_days = (entry_date - birth_date).num_days() as f64;
         let year_days = (entry_date - NaiveDate::from_ymd_opt(1960, 1, 1).unwrap()).num_days() as f64;
         let start = vec![age_days, 1.0, year_days];
-        
+
         let result = ratewalk(&start, 200.0, &ratetable).unwrap();
 
         assert_eq!(result.days.len(), 2);

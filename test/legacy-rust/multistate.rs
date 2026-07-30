@@ -68,12 +68,12 @@ fn main() {
         .select(&["etime"])
         .collect()
         .unwrap();
-    
+
     let dataset_pcm = Dataset::new(
         features_pcm.to_ndarray::<Float64Type>().unwrap(),
         times_pcm.to_ndarray::<Float64Type>().unwrap()
     );
-    
+
     let params = CoxPHParams::new().ties("breslow");
     let model_pcm = params.fit(&dataset_pcm).unwrap();
 

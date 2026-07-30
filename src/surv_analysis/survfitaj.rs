@@ -314,8 +314,6 @@ fn compute_survfitaj_estimates(
         });
     }
 
-    // R matrices are column-major: i0 is grouped by state, with all groups
-    // for state 0 first. Preserve that layout at the Python boundary.
     let mut influence_state = Array2::zeros((params.ngrp, nstate));
     for state in 0..nstate {
         for group in 0..params.ngrp {
@@ -559,18 +557,6 @@ fn compute_survfitaj(
         n_transition: counts.n_transition,
     })
 }
-/// Compute the low-level Aalen--Johansen tables used by multistate survfit.
-///
-/// `y` is a row-major sequence of `(start, stop, status)` triples. A positive
-/// status is the one-based destination state. `sort1` and `sort2` contain the
-/// same observation subset in ascending start- and stop-time order. The
-/// transition lookup is an `nstate x nstate` matrix: entries below `nhaz`
-/// select a row of `trmat`, while `nhaz` marks an absent transition. Initial
-/// influence values use R's column-major `group + state * ngrp` layout.
-/// `influence_weights` can differ from the case weights when unweighted
-/// observation-level influence residuals are requested.
-/// `sefit=0` skips uncertainty, `sefit=1` returns standard errors, and values
-/// greater than one also return grouped state, hazard, and area influences.
 #[pyfunction]
 #[pyo3(signature = (y, sort1, sort2, utime, cstate, wt, grp, ngrp, p0, i0, sefit, entry, position, hindx, trmat, t0, influence_weights=None))]
 #[allow(clippy::too_many_arguments)]
@@ -844,9 +830,6 @@ fn validate_survfitaj_inputs(
         }
     }
 
-    // nhaz is the unsigned sentinel for an absent transition. This mirrors
-    // the upstream native routine's -1 sentinel without exposing signed
-    // hazard indices in the Python API.
     for (from, row) in hindx.iter().enumerate() {
         for (to, &transition) in row.iter().enumerate() {
             if transition > nhaz {
@@ -1015,7 +998,6 @@ mod tests {
     }
 
     fn two_state_hazard_index() -> Vec<Vec<usize>> {
-        // One transition means 1 is the unsigned absent-transition sentinel.
         vec![vec![1, 0], vec![1, 1]]
     }
 
@@ -1058,7 +1040,6 @@ mod tests {
 
     #[test]
     fn survfitaj_matches_r_for_index_zero_and_censor_only_uncertainty() {
-        // Reference: R survival 3.8-6, native Csurvfitaj.
         let result = survfitaj(
             vec![0.0, 1.0, 2.0, 0.0, 2.0, 0.0],
             vec![0, 1],
