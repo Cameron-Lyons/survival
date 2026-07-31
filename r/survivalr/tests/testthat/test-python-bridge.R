@@ -4190,6 +4190,99 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_concordance$n, reference_concordance$n)
 })
 
+test_that("Cox time transforms agree with R survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  right <- data.frame(
+    time = c(5, 1, 9, 3, 12, 7, 2, 10, 4, 11, 6, 8),
+    status = c(1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1),
+    x1 = c(-0.4, 0.2, 1.1, -0.8, 0.5, 1.4, -1.2, 0.7, 0, -0.3, 0.9, -0.6),
+    x2 = c(1.2, -0.5, 0.3, 1.1, -0.9, 0.8, -0.2, 1.5, -1.1, 0.4, -0.7, 0.6)
+  )
+  log_transform <- function(x, time, riskset, weights) x * log(time)
+  bridged_right <- coxph(
+    Surv(time, status) ~ x1 + tt(x2),
+    data = right,
+    tt = log_transform,
+    eps = 1e-10,
+    max_iter = 50,
+    x = TRUE
+  )
+  reference_right <- survival::coxph(
+    survival::Surv(time, status) ~ x1 + tt(x2),
+    data = right,
+    tt = log_transform,
+    control = survival::coxph.control(eps = 1e-10, iter.max = 50),
+    x = TRUE
+  )
+
+  expect_equal(unname(coef(bridged_right)), unname(coef(reference_right)), tolerance = 1e-10)
+  expect_equal(unname(vcov(bridged_right)), unname(vcov(reference_right)), tolerance = 1e-10)
+  expect_equal(as.numeric(logLik(bridged_right)), reference_right$loglik[[2L]], tolerance = 1e-10)
+  expect_equal(unname(model.matrix(bridged_right)), unname(model.matrix(reference_right)))
+  expect_equal(summary(bridged_right)$n, summary(reference_right)$n)
+  expect_equal(nobs(bridged_right), nobs(reference_right))
+
+  default_bridged <- coxph(
+    Surv(time, status) ~ x1 + tt(x2),
+    data = right,
+    eps = 1e-10,
+    max_iter = 50
+  )
+  default_reference <- survival::coxph(
+    survival::Surv(time, status) ~ x1 + tt(x2),
+    data = right,
+    control = survival::coxph.control(eps = 1e-10, iter.max = 50)
+  )
+  expect_equal(
+    unname(coef(default_bridged)),
+    unname(coef(default_reference)),
+    tolerance = 1e-10
+  )
+
+  counting <- data.frame(
+    start = c(0, 0, 1, 2, 0, 3, 1, 4, 2, 5),
+    stop = c(2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+    status = c(1, 0, 1, 1, 0, 1, 0, 1, 1, 1),
+    x1 = c(-0.4, 0.2, 1.1, -0.8, 0.5, 1.4, -1.2, 0.7, 0, -0.3),
+    x2 = c(1.2, -0.5, 0.3, 1.1, -0.9, 0.8, -0.2, 1.5, -1.1, 0.4)
+  )
+  root_transform <- function(x, time, riskset, weights) x * sqrt(time)
+  bridged_counting <- coxph(
+    Surv(start, stop, status) ~ x1 + tt(x2),
+    data = counting,
+    tt = root_transform,
+    eps = 1e-10,
+    max_iter = 50
+  )
+  reference_counting <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x1 + tt(x2),
+    data = counting,
+    tt = root_transform,
+    control = survival::coxph.control(eps = 1e-10, iter.max = 50)
+  )
+
+  expect_equal(
+    unname(coef(bridged_counting)),
+    unname(coef(reference_counting)),
+    tolerance = 1e-10
+  )
+  expect_equal(
+    unname(vcov(bridged_counting)),
+    unname(vcov(reference_counting)),
+    tolerance = 1e-10
+  )
+  expect_equal(
+    as.numeric(logLik(bridged_counting)),
+    reference_counting$loglik[[2L]],
+    tolerance = 1e-10
+  )
+  expect_equal(summary(bridged_counting)$n, summary(reference_counting)$n)
+  expect_equal(nobs(bridged_counting), nobs(reference_counting))
+})
+
 test_that("Cox detail weighted tied-event moments agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

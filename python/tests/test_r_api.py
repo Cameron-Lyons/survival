@@ -11185,6 +11185,149 @@ def test_coxph_accepts_unused_tt_argument_without_time_transform_terms():
     assert unused_tt.log_likelihood == pytest.approx(baseline.log_likelihood)
 
 
+def test_coxph_right_censored_tt_transform_matches_r():
+    data = {
+        "time": [5, 1, 9, 3, 12, 7, 2, 10, 4, 11, 6, 8],
+        "status": [1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1],
+        "x1": [-0.4, 0.2, 1.1, -0.8, 0.5, 1.4, -1.2, 0.7, 0.0, -0.3, 0.9, -0.6],
+        "x2": [1.2, -0.5, 0.3, 1.1, -0.9, 0.8, -0.2, 1.5, -1.1, 0.4, -0.7, 0.6],
+    }
+
+    def transform(values, times, riskset, weights):
+        assert len(values) == len(times) == len(riskset) == 58
+        assert weights is None
+        return [value * math.log(time) for value, time in zip(values, times, strict=True)]
+
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + tt(x2)",
+        data=data,
+        tt=transform,
+        eps=1e-10,
+        max_iter=50,
+    )
+
+    assert survival.coef_names(fit) == ["x1", "tt(x2)"]
+    assert fit.coefficients[0] == pytest.approx(
+        [-2.02447677883511, -0.0849208564716238],
+        abs=1e-11,
+    )
+    for actual, expected in zip(
+        fit.variance_matrix,
+        [
+            [0.972801236030821, 0.204657367018178],
+            [0.204657367018178, 0.242009052405649],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-13.7646382275905, -9.83384786326646],
+        abs=1e-10,
+    )
+    assert fit.n == len(data["time"])
+    assert len(fit.y) == 58
+
+
+def test_coxph_counting_process_tt_transform_matches_r():
+    data = {
+        "start": [0, 0, 1, 2, 0, 3, 1, 4, 2, 5],
+        "stop": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 1],
+        "x1": [-0.4, 0.2, 1.1, -0.8, 0.5, 1.4, -1.2, 0.7, 0.0, -0.3],
+        "x2": [1.2, -0.5, 0.3, 1.1, -0.9, 0.8, -0.2, 1.5, -1.1, 0.4],
+    }
+
+    fit = survival.coxph(
+        "Surv(start, stop, status) ~ x1 + tt(x2)",
+        data=data,
+        tt=lambda values, times, _riskset, _weights: [
+            value * math.sqrt(time) for value, time in zip(values, times, strict=True)
+        ],
+        eps=1e-10,
+        max_iter=50,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [0.338462892860216, 0.243057037178683],
+        abs=1e-11,
+    )
+    for actual, expected in zip(
+        fit.variance_matrix,
+        [
+            [0.348891892139636, -0.0281799632994735],
+            [-0.0281799632994735, 0.0518588099168937],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-8.59415423255237, -7.52770636448589],
+        abs=1e-10,
+    )
+    assert fit.n == len(data["start"])
+    assert len(fit.y) == 28
+
+
+def test_coxph_default_tt_uses_obrien_risk_set_ranks():
+    data = {
+        "time": [5, 1, 9, 3, 12, 7, 2, 10, 4, 11, 6, 8],
+        "status": [1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1],
+        "x1": [-0.4, 0.2, 1.1, -0.8, 0.5, 1.4, -1.2, 0.7, 0.0, -0.3, 0.9, -0.6],
+        "x2": [1.2, -0.5, 0.3, 1.1, -0.9, 0.8, -0.2, 1.5, -1.1, 0.4, -0.7, 0.6],
+    }
+
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + tt(x2)",
+        data=data,
+        eps=1e-10,
+        max_iter=50,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [-1.92744172321465, -0.0775171744618016],
+        abs=1e-11,
+    )
+    for actual, expected in zip(
+        fit.variance_matrix,
+        [
+            [0.78059048651903, 0.00570342140879421],
+            [0.00570342140879421, 0.0415301874370861],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-13.7646382275905, -9.76126051837732],
+        abs=1e-11,
+    )
+
+
+def test_coxph_tt_validates_transform_configuration_and_results():
+    data = _toy_data()
+    formula = "Surv(time, status) ~ x1 + tt(x2)"
+
+    with pytest.raises(ValueError, match="one function per"):
+        survival.coxph(
+            formula,
+            data=data,
+            tt=[lambda *args: args[0], lambda *args: args[0]],
+        )
+    with pytest.raises(TypeError, match="tt must be a function"):
+        survival.coxph(formula, data=data, tt=1)
+    with pytest.raises(ValueError, match="expanded risk-set rows"):
+        survival.coxph(formula, data=data, tt=lambda *_args: [1.0])
+    with pytest.raises(ValueError, match="numeric values"):
+        survival.coxph(formula, data=data, tt=lambda values, *_args: ["x"] * len(values))
+    with pytest.raises(ValueError, match="finite values"):
+        survival.coxph(
+            formula,
+            data=data,
+            tt=lambda values, *_args: [math.nan] * len(values),
+        )
+    with pytest.raises(ValueError, match="model=True"):
+        survival.coxph(formula, data=data, model=True)
+
+
 def test_coxph_accepts_r_style_control_mapping():
     data = _tied_cox_data()
     explicit = survival.coxph(
@@ -15977,13 +16120,6 @@ def test_r_api_rejects_unsupported_formula_features():
             data=_toy_data(),
             singular_ok=False,
             **{"singular.ok": True},
-        )
-
-    with pytest.raises(NotImplementedError, match="tt"):
-        survival.coxph(
-            "Surv(time, status) ~ x1 + tt(x2)",
-            data=_toy_data(),
-            tt=lambda value, *_args: value,
         )
 
     with pytest.raises(ValueError, match="id must have length"):
