@@ -4347,9 +4347,225 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
                 method = c("Prentice", "SelfPrentice", "LinYing",
                            "I.Borgan", "II.Borgan"),
                 robust = FALSE) {
-  call <- match.call()
-  call[[1L]] <- quote(survival::cch)
-  eval.parent(call)
+  Call <- match.call()
+  if (missing(data)) {
+    data <- parent.frame()
+  }
+  if (is.data.frame(data)) {
+    if (inherits(id, "formula")) {
+      id <- stats::model.frame(id, data, na.action = stats::na.fail)[, 1L]
+    }
+    if (inherits(subcoh, "formula")) {
+      subcoh <- stats::model.frame(subcoh, data, na.action = stats::na.fail)[, 1L]
+    }
+    if (inherits(stratum, "formula")) {
+      stratum <- stats::model.frame(stratum, data, na.action = stats::na.fail)[, 1L]
+    }
+  }
+  if (length(id) != length(unique(id))) {
+    stop("Multiple records per id not allowed", call. = FALSE)
+  }
+  if (is.logical(subcoh)) {
+    subcoh <- as.numeric(subcoh)
+  }
+  subcoh_table <- table(subcoh)
+  if (length(subcoh_table) == 0L ||
+      min(charmatch(names(subcoh_table), c("0", "1"), 0L)) == 0L) {
+    stop(
+      "Permissible values for subcohort indicator are 0/1 or TRUE/FALSE",
+      call. = FALSE
+    )
+  }
+  if (length(id) > sum(cohort.size)) {
+    stop("Number of records greater than cohort size", call. = FALSE)
+  }
+  method <- match.arg(method)
+  if (method %in% c("I.Borgan", "II.Borgan")) {
+    stop(
+      sprintf("native cch method '%s' requires the stratified Borgan kernel", method),
+      call. = FALSE
+    )
+  }
+  if (isTRUE(robust) && method != "LinYing") {
+    warning("`robust' ignored for method (", method, ")", call. = FALSE)
+    robust <- FALSE
+  }
+  if (!is.null(stratum)) {
+    warning("'stratum' ignored for method (", method, ")", call. = FALSE)
+  }
+  if (length(cohort.size) != 1L) {
+    stop("cohort size must be a scalar for unstratified analysis", call. = FALSE)
+  }
+  if (length(id) > cohort.size) {
+    stop("Population smaller than sample", call. = FALSE)
+  }
+
+  frame_call <- match.call(expand.dots = FALSE)
+  frame_call$method <- frame_call$cohort.size <- frame_call$id <- NULL
+  frame_call$subcoh <- frame_call$stratum <- frame_call$robust <- NULL
+  frame_call[[1L]] <- quote(stats::model.frame)
+  frame <- eval(frame_call, parent.frame())
+  Terms <- attr(frame, "terms")
+  response <- stats::model.extract(frame, "response")
+  if (!inherits(response, "Surv")) {
+    stop("Response must be a survival object", call. = FALSE)
+  }
+  response_type <- attr(response, "type")
+  if (!response_type %in% c("right", "counting")) {
+    stop(
+      sprintf("Cox model doesn't support \"%s\" survival data", response_type),
+      call. = FALSE
+    )
+  }
+  status_column <- if (response_type == "right") 2L else 3L
+  stop_column <- if (response_type == "right") 1L else 2L
+  status <- as.integer(response[, status_column])
+  stop_time <- as.numeric(response[, stop_column])
+  start_time <- if (response_type == "counting") {
+    as.numeric(response[, 1L])
+  } else {
+    NULL
+  }
+  outside_censored <- sum(subcoh == 0 & status == 0)
+  if (outside_censored > 0L) {
+    stop(
+      outside_censored,
+      " censored observations not in subcohort",
+      call. = FALSE
+    )
+  }
+
+  design <- stats::model.matrix(Terms, frame)
+  if (attr(Terms, "intercept") == 1L) {
+    design <- design[, -1L, drop = FALSE]
+  }
+  if (ncol(design) == 0L) {
+    stop("cch formula must contain at least one covariate", call. = FALSE)
+  }
+  coefficient_names <- colnames(design)
+  result <- .call_regression(
+    "cch_fit",
+    stop = as.list(stop_time),
+    status = as.list(status),
+    covariates = .coxph_fit_covariates(design, nrow(design)),
+    subcohort = as.list(as.integer(subcoh)),
+    id = as.list(as.integer(factor(id, levels = unique(id))) - 1L),
+    cohort_size = as.integer(cohort.size),
+    start = if (is.null(start_time)) NULL else as.list(start_time),
+    method = method,
+    robust = isTRUE(robust)
+  )
+
+  coefficients <- .as_numeric_matrix(.result_field(result, "coefficients"))
+  coefficients <- if (nrow(coefficients) == 0L) numeric() else coefficients[1L, ]
+  names(coefficients) <- coefficient_names
+  variance <- .as_numeric_matrix(.result_field(result, "information_matrix"))
+  naive_variance <- .as_numeric_matrix(.result_field(result, "naive_information_matrix"))
+  phase2_variance <- .as_numeric_matrix(.result_field(result, "phase2_variance"))
+  dimnames(variance) <- dimnames(naive_variance) <- list(
+    coefficient_names,
+    coefficient_names
+  )
+  fit_x <- .as_numeric_matrix(.result_field(result, "covariates"))
+  colnames(fit_x) <- coefficient_names
+  fit_start <- .as_numeric_vector(.result_field(result, "entry_times"))
+  fit_stop <- .as_numeric_vector(.result_field(result, "event_times"))
+  fit_status <- as.integer(.as_numeric_vector(.result_field(result, "status")))
+  fit_y <- Surv(fit_start, fit_stop, fit_status)
+
+  out <- list(
+    coefficients = coefficients,
+    var = variance,
+    loglik = .as_numeric_vector(.result_field(result, "log_likelihood")),
+    score = as.numeric(.result_field(result, "score_test")),
+    iter = as.integer(.result_field(result, "iterations")),
+    linear.predictors = .as_numeric_vector(.result_field(result, "linear_predictors")),
+    residuals = .as_numeric_vector(.result_field(result, "residuals")),
+    means = stats::setNames(.as_numeric_vector(.result_field(result, "means")), coefficient_names),
+    method = method,
+    n = as.integer(.result_field(result, "n")),
+    nevent = as.integer(.result_field(result, "nevent")),
+    terms = Terms,
+    assign = attr(design, "assign"),
+    naive.var = naive_variance,
+    x = fit_x,
+    y = fit_y,
+    timefix = FALSE,
+    formula = formula,
+    offset = .as_numeric_vector(.result_field(result, "offsets")),
+    call = Call,
+    phase2var = phase2_variance,
+    cohort.size = cohort.size,
+    stratified = FALSE,
+    subcohort.size = stats::setNames(sum(subcoh == 1), "1")
+  )
+  class(out) <- "cch"
+  out
+}
+
+coef.cch <- function(object, ...) {
+  object$coefficients
+}
+
+vcov.cch <- function(object, ...) {
+  object$var
+}
+
+summary.cch <- function(object, ...) {
+  coefficients <- coef.cch(object)
+  standard_error <- sqrt(diag(vcov.cch(object)))
+  statistic <- abs(coefficients / standard_error)
+  coefficient_table <- cbind(
+    Value = coefficients,
+    SE = standard_error,
+    Z = statistic,
+    p = 2 * stats::pnorm(statistic, lower.tail = FALSE)
+  )
+  structure(
+    list(
+      call = object$call,
+      method = object$method,
+      cohort.size = object$cohort.size,
+      subcohort.size = object$subcohort.size,
+      coefficients = coefficient_table,
+      stratified = object$stratified
+    ),
+    class = "summary.cch"
+  )
+}
+
+print.cch <- function(x, ...) {
+  summary <- summary.cch(x)
+  cat(
+    "Case-cohort analysis,", x$method,
+    "\n with subcohort of", x$subcohort.size,
+    "from cohort of", x$cohort.size, "\n\n"
+  )
+  cat("Call: ")
+  print(x$call)
+  cat("\nCoefficients:\n")
+  print(summary$coefficients)
+  invisible(x)
+}
+
+print.summary.cch <- function(x, digits = 3, ...) {
+  cat(
+    "Case-cohort analysis,", x$method,
+    "\n with subcohort of", x$subcohort.size,
+    "from cohort of", x$cohort.size, "\n\n"
+  )
+  cat("Call: ")
+  print(x$call)
+  cat("\nCoefficients:\n")
+  output <- cbind(
+    Coef = x$coefficients[, "Value"],
+    HR = exp(x$coefficients[, "Value"]),
+    `(95%` = exp(x$coefficients[, "Value"] - 1.96 * x$coefficients[, "SE"]),
+    `CI)` = exp(x$coefficients[, "Value"] + 1.96 * x$coefficients[, "SE"]),
+    p = x$coefficients[, "p"]
+  )
+  print(round(output, digits))
+  invisible(x)
 }
 
 clogit <- function(formula, data, weights, subset, na.action,

@@ -16578,6 +16578,151 @@ def test_r_api_rejects_unsupported_formula_features():
         )
 
 
+def _cch_parity_data() -> dict[str, list[object]]:
+    return {
+        "start": [0, 2, 1, 5, 4, 0, 10, 3, 12, 1, 5, 9, 0, 6, 2, 4, 7, 2, 11, 13],
+        "stop": [5, 12, 3, 18, 9, 1, 15, 7, 20, 4, 11, 16, 2, 14, 6, 10, 13, 8, 17, 19],
+        "status": [1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1],
+        "x": [
+            -1.2,
+            0.4,
+            0.9,
+            -0.3,
+            1.4,
+            -0.8,
+            0.2,
+            1.1,
+            -0.5,
+            0.7,
+            -1.0,
+            0.1,
+            1.7,
+            -0.6,
+            0.5,
+            -1.5,
+            1.0,
+            -0.1,
+            0.8,
+            -0.9,
+        ],
+        "z": [0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1],
+        "group": ["a", "b", "a", "b"] * 5,
+        "id": list(range(1, 21)),
+        "subcohort": [1] * 14 + [0] * 6,
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "expected_coefficients", "expected_variance"),
+    [
+        (
+            "Prentice",
+            [-0.750094296490168, 0.8328505349093008],
+            [[0.5226059635047275, -0.2022114811960434], [-0.2022114811960434, 1.2764980832765467]],
+        ),
+        (
+            "SelfPrentice",
+            [-0.7634916900390691, 1.399231426827849],
+            [[0.5226059633986218, -0.20221148126102825], [-0.20221148126102825, 1.276498083557965]],
+        ),
+        (
+            "LinYing",
+            [-1.3511250601042777, 0.008608309135789173],
+            [[0.3500994140596079, 0.06715207958696841], [0.06715207958696841, 0.6314590317131163]],
+        ),
+    ],
+)
+def test_cch_formula_matches_r_right_censored_results(
+    method: str,
+    expected_coefficients: list[float],
+    expected_variance: list[list[float]],
+):
+    fit = survival.cch(
+        "Surv(stop, status) ~ x + z",
+        _cch_parity_data(),
+        subcoh="subcohort",
+        id="id",
+        cohort_size=80,
+        method=method,
+        robust=method == "LinYing",
+    )
+
+    assert survival.coef(fit) == pytest.approx(expected_coefficients, abs=1e-11)
+    for actual, expected in zip(survival.vcov(fit), expected_variance, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    assert survival.coef_names(fit) == ["x", "z"]
+    assert fit.method == method
+    assert fit.cohort_size == 80
+    assert fit.subcohort_size == 14
+    assert fit.stratified is False
+
+
+def test_cch_formula_matches_r_counting_process_results():
+    fit = survival.cch(
+        "Surv(start, stop, status) ~ x + z",
+        _cch_parity_data(),
+        subcoh="subcohort",
+        id="id",
+        cohort_size=80,
+        method="LinYing",
+        robust=True,
+    )
+
+    assert survival.coef(fit) == pytest.approx(
+        [-1.1662987644578553, -0.042048877306928675],
+        abs=1e-11,
+    )
+    expected = [
+        [0.1917752992327156, -0.16536154052082166],
+        [-0.16536154052082166, 0.6718407297652415],
+    ]
+    for actual, expected_row in zip(fit.var, expected, strict=True):
+        assert actual == pytest.approx(expected_row, abs=1e-11)
+    assert len(fit.phase2var) == 2
+    assert len(fit.martingale_residuals()) == len(fit.status)
+
+
+def test_cch_formula_expands_factors_and_validates_sampling_inputs():
+    data = _cch_parity_data()
+    fit = survival.cch(
+        "Surv(stop, status) ~ x * group",
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=80,
+        method="Prentice",
+    )
+    assert survival.coef_names(fit) == ["x", "groupb", "x:groupb"]
+
+    with pytest.raises(NotImplementedError, match="stratified Borgan"):
+        survival.cch(
+            "Surv(stop, status) ~ x",
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=80,
+            method="I.Borgan",
+        )
+    with pytest.raises(ValueError, match="multiple records per id"):
+        survival.cch(
+            "Surv(stop, status) ~ x",
+            data,
+            subcoh="subcohort",
+            id=[1] * 20,
+            cohort_size=80,
+        )
+    invalid_subcohort = list(data["subcohort"])
+    invalid_subcohort[1] = 0
+    with pytest.raises(ValueError, match="censored observations"):
+        survival.cch(
+            "Surv(stop, status) ~ x",
+            data,
+            subcoh=invalid_subcohort,
+            id="id",
+            cohort_size=80,
+        )
+
+
 def test_aareg_formula_matches_weighted_right_censored_reference_values():
     data = {
         "stop": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0],

@@ -47,7 +47,7 @@ pub use cause_specific_cox_module::{
     CauseSpecificCoxConfig, CauseSpecificCoxResult, CensoringType, cause_specific_cox,
     cause_specific_cox_all,
 };
-pub use cch::{CchMethod, CohortData};
+pub use cch::{CchFitResult, CchMethod, CohortData, cch_fit};
 pub use clogit::{ClogitDataSet, ConditionalLogisticRegression};
 pub use coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit};
 pub use coxph_detail_module::{CoxphDetail, CoxphDetailRow, coxph_detail};

@@ -1,5 +1,5 @@
 use std::hint::black_box;
-use survival::regression::{CoxPHModel, aareg_fit, agexact, coxph_fit, finegray, survreg};
+use survival::regression::{CoxPHModel, aareg_fit, agexact, cch_fit, coxph_fit, finegray, survreg};
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
     nelson_aalen, uno_c_index, weighted_logrank_test,
@@ -727,6 +727,74 @@ mod cox_regression {
         bencher.bench_local(|| {
             let variance = black_box(&model).vcov();
             black_box(variance);
+        });
+    }
+}
+
+mod case_cohort_bench {
+    use super::*;
+
+    type CaseCohortData = (Vec<f64>, Vec<i32>, Vec<Vec<f64>>, Vec<i32>, Vec<i64>);
+
+    fn case_cohort_data(n: usize, p: usize) -> CaseCohortData {
+        // Use strictly spaced event times so Prentice's entry-delta stays representable,
+        // and offset the subcohort pattern from censoring so sampled noncases remain.
+        let time = (0..n)
+            .map(|idx| (idx as f64 + 1.0) * 0.25)
+            .collect::<Vec<_>>();
+        let mut status = (0..n)
+            .map(|idx| if idx % 4 == 0 { 0 } else { 1 })
+            .collect::<Vec<_>>();
+        let covariates = generate_covariates(n, p);
+        let subcohort = (0..n)
+            .map(|idx| i32::from(idx % 5 != 0))
+            .collect::<Vec<_>>();
+        for idx in 0..n {
+            if subcohort[idx] == 0 {
+                status[idx] = 1;
+            }
+        }
+        let id = (0..n).map(|idx| idx as i64).collect();
+        (time, status, covariates, subcohort, id)
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn prentice(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
+        bencher.bench_local(|| {
+            let fit = cch_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                subcohort.clone(),
+                id.clone(),
+                n * 4,
+                None,
+                "Prentice",
+                false,
+            )
+            .expect("benchmark Prentice fit should converge");
+            black_box(fit);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn lin_ying_robust(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
+        bencher.bench_local(|| {
+            let fit = cch_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                subcohort.clone(),
+                id.clone(),
+                n * 4,
+                None,
+                "LinYing",
+                true,
+            )
+            .expect("benchmark Lin-Ying fit should converge");
+            black_box(fit);
         });
     }
 }

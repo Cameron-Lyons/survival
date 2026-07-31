@@ -28,6 +28,7 @@ __all__ = [
     "CoxPHDetailResult",
     "CoxPHWTestResult",
     "CoxZPHResult",
+    "CchModelResult",
     "FineGrayFrame",
     "FineGrayOutput",
     "PredictResult",
@@ -55,6 +56,7 @@ __all__ = [
     "confint",
     "concordance",
     "clogit",
+    "cch",
     "coxph",
     "coxph_detail",
     "coxph_wtest",
@@ -343,6 +345,53 @@ class _FormulaFit:
     @property
     def robust(self) -> bool:
         return self.robust_variance is not None
+
+
+@dataclass(frozen=True)
+class CchModelResult:
+    """Formula metadata and R-style aliases for a native case-cohort fit."""
+
+    fit: Any
+    design: _FormulaDesign
+    formula: str
+    coefficient_names: tuple[str, ...]
+    response: Surv
+    id_values: list[Any]
+    subcohort: list[int]
+
+    def __getattr__(self, name: str) -> Any:
+        aliases = {
+            "var": "information_matrix",
+            "naive_var": "naive_information_matrix",
+            "phase2var": "phase2_variance",
+        }
+        if name == "coef":
+            return list(self.fit.coefficients[0])
+        if name == "x":
+            return self.fit.covariates
+        if name == "y":
+            return self.response
+        if name == "id":
+            return self.id_values
+        if name == "stratified":
+            return False
+        return getattr(self.fit, aliases.get(name, name))
+
+    @property
+    def coefficients(self) -> list[list[float]]:
+        return self.fit.coefficients
+
+    @property
+    def information_matrix(self) -> list[list[float]]:
+        return self.fit.information_matrix
+
+    @property
+    def variance_matrix(self) -> list[list[float]]:
+        return self.fit.information_matrix
+
+    @property
+    def naive_information_matrix(self) -> list[list[float]]:
+        return self.fit.naive_information_matrix
 
 
 @dataclass(frozen=True)
@@ -14136,7 +14185,7 @@ def _cox_beta(fit: Any) -> list[float]:
 
 
 def _unwrap_formula_fit(fit: Any) -> Any:
-    return fit.fit if isinstance(fit, _FormulaFit) else fit
+    return fit.fit if isinstance(fit, _FormulaFit | CchModelResult) else fit
 
 
 def _is_clogit_fit(fit: Any) -> bool:
@@ -16875,7 +16924,7 @@ def _cox_reference_center(fit: Any, reference: str) -> float:
 
 
 def _formula_design_for_fit(fit: Any) -> _FormulaDesign | None:
-    return fit.design if isinstance(fit, _FormulaFit) else None
+    return fit.design if isinstance(fit, _FormulaFit | CchModelResult) else None
 
 
 def _cox_strata_labels_for_fit(
@@ -16919,7 +16968,7 @@ def _prediction_inputs(
         n = _formula_design_row_count(newdata, design)
         offsets = _offset_vector(newdata, list(design.offsets), n) if design.offsets else None
         return _design_rows_from_spec(newdata, design, n), offsets
-    coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
+    coefficient_names = getattr(fit, "coefficient_names", None)
     if coefficient_names is not None and (
         isinstance(newdata, Mapping) or hasattr(newdata, "columns")
     ):
@@ -19242,6 +19291,164 @@ def coxph_detail(
         nevent_wt=[float(row.n_event_weight) for row in detail_rows] if has_case_weights else None,
         nrisk_wt=[float(row.wtrisk) for row in detail_rows] if has_case_weights else None,
         sortorder=sortorder,
+    )
+
+
+def cch(
+    formula: str,
+    data: Any,
+    *,
+    subcoh: Any,
+    id: Any,
+    cohort_size: Any | None = None,
+    stratum: Any | None = None,
+    method: str = "Prentice",
+    robust: Any = False,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    **kwargs: Any,
+) -> CchModelResult:
+    """Fit an unstratified case-cohort Cox model using the native kernel."""
+
+    cohort_size = _pop_dotted_keyword(
+        kwargs,
+        "cohort.size",
+        "cohort_size",
+        cohort_size,
+        None,
+    )
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"cch got unexpected keyword argument(s): {unexpected}")
+    if not isinstance(formula, str):
+        raise TypeError("cch formula must be a string")
+    if data is None:
+        raise ValueError("cch formula requires data")
+    if cohort_size is None:
+        raise TypeError("cohort_size is required")
+
+    normalized_method = _match_string_arg(
+        method,
+        "method",
+        ("prentice", "selfprentice", "linying", "i.borgan", "ii.borgan"),
+        "cch method must be 'Prentice', 'SelfPrentice', 'LinYing', 'I.Borgan', or 'II.Borgan'",
+    )
+    method_name = {
+        "prentice": "Prentice",
+        "selfprentice": "SelfPrentice",
+        "linying": "LinYing",
+        "i.borgan": "I.Borgan",
+        "ii.borgan": "II.Borgan",
+    }[normalized_method]
+    if method_name in {"I.Borgan", "II.Borgan"}:
+        raise NotImplementedError(
+            f"native cch method {method_name!r} requires the stratified Borgan kernel"
+        )
+    robust_value = _normalize_bool_option_with_default(robust, "robust", False)
+    if robust_value and method_name != "LinYing":
+        warnings.warn(
+            f"robust ignored for method ({method_name})",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        robust_value = False
+
+    subcohort_values = _column_or_values(data, subcoh, "subcoh")
+    id_values = _column_or_values(data, id, "id")
+    stratum_values = _column_or_values(data, stratum, "stratum") if stratum is not None else None
+    if subset is not None:
+        data, aligned = _subset_formula_inputs(
+            formula,
+            data,
+            subset,
+            subcohort=subcohort_values,
+            id=id_values,
+            stratum=stratum_values,
+        )
+        subcohort_values = aligned["subcohort"]
+        id_values = aligned["id"]
+        stratum_values = aligned["stratum"]
+    data, aligned = _apply_formula_na_action(
+        formula,
+        data,
+        na_action,
+        subcohort=subcohort_values,
+        id=id_values,
+        stratum=stratum_values,
+    )
+    subcohort_values = aligned["subcohort"]
+    id_values = aligned["id"]
+    stratum_values = aligned["stratum"]
+
+    response_spec = _formula_response_spec(formula)
+    response, terms = _parse_formula(formula, data)
+    if response.type not in {"right", "counting"}:
+        raise NotImplementedError("cch supports right-censored and counting Surv responses")
+    if terms.strata or stratum_values is not None:
+        warnings.warn(
+            f"stratum ignored for method ({method_name})",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    if terms.offsets:
+        warnings.warn("Offset term ignored", RuntimeWarning, stacklevel=2)
+    if terms.clusters:
+        raise ValueError("cluster() terms are not supported by cch")
+
+    design = _fit_formula_design(data, response_spec, terms, len(response))
+    rows = _design_rows_from_spec(data, design, len(response))
+    if not rows or not rows[0]:
+        raise ValueError("cch formula must contain at least one covariate")
+    coefficient_names = tuple(_formula_design_output_names(design))
+
+    raw_subcohort = _materialize_1d(subcohort_values, "subcoh")
+    if len(raw_subcohort) != len(response):
+        raise ValueError("subcoh must have the same length as the Surv response")
+    fit_subcohort: list[int] = []
+    for row_idx, value in enumerate(raw_subcohort):
+        if isinstance(value, bool):
+            fit_subcohort.append(int(value))
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("subcoh must contain only 0/1 or boolean values") from exc
+        if not math.isfinite(numeric) or numeric not in {0.0, 1.0}:
+            raise ValueError(
+                f"subcoh must contain only 0/1 or boolean values; got {value!r} at row {row_idx}"
+            )
+        fit_subcohort.append(int(numeric))
+
+    id_labels = _materialize_labels(id_values, "id")
+    if len(id_labels) != len(response):
+        raise ValueError("id must have the same length as the Surv response")
+    if len(_label_levels(id_labels, "id")) != len(id_labels):
+        raise ValueError("multiple records per id are not allowed")
+    id_codes = _encode_labels(id_labels, "id")
+    cohort_size_value = _integer_scalar(cohort_size, "cohort_size")
+    if cohort_size_value <= 0:
+        raise ValueError("cohort_size must be positive")
+
+    fit = _core.cch_fit(
+        list(response.time),
+        list(response.event),
+        rows,
+        fit_subcohort,
+        id_codes,
+        cohort_size_value,
+        start=list(response.start) if response.start is not None else None,
+        method=method_name,
+        robust=robust_value,
+    )
+    return CchModelResult(
+        fit=fit,
+        design=design,
+        formula=formula,
+        coefficient_names=coefficient_names,
+        response=response,
+        id_values=id_labels,
+        subcohort=fit_subcohort,
     )
 
 

@@ -10908,7 +10908,29 @@ def test_case_cohort_bindings_are_typed_to_runtime_surface():
     stub_path = PACKAGE_ROOT / "_survival.pyi"
     stub_names = _pyi_top_level_names(stub_path)
 
-    assert {"CchMethod", "CohortData"} <= stub_names
+    assert {"CchFitResult", "CchMethod", "CohortData", "cch_fit"} <= stub_names
+    expected_fit_args = [
+        "stop",
+        "status",
+        "covariates",
+        "subcohort",
+        "id",
+        "cohort_size",
+        "start",
+        "method",
+        "robust",
+    ]
+    assert list(inspect.signature(core.cch_fit).parameters) == expected_fit_args
+    assert _pyi_function_arg_names(stub_path, "cch_fit") == expected_fit_args
+    assert {
+        "coefficients",
+        "information_matrix",
+        "naive_information_matrix",
+        "phase2_variance",
+        "method",
+        "cohort_size",
+        "subcohort_size",
+    } <= _pyi_class_property_names(stub_path, "CchFitResult")
     assert _pyi_class_method_arg_names(stub_path, "CohortData", "add_subject") == [
         "self",
         "subject",
@@ -10930,6 +10952,18 @@ def test_case_cohort_bindings_are_typed_to_runtime_surface():
     cohort.add_subject(subject)
     assert len(cohort) == 1
     assert cohort.get_subject(0).id == 1
+
+    fit = core.cch_fit(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 1],
+        [[-0.5], [0.2], [0.8], [-0.1]],
+        [1, 1, 0, 0],
+        [1, 2, 3, 4],
+        10,
+    )
+    assert isinstance(fit, core.CchFitResult)
+    assert fit.method == "Prentice"
+    assert len(fit.coefficients[0]) == 1
 
 
 def test_clogit_bindings_are_typed_to_runtime_surface():

@@ -50,6 +50,7 @@ _SKLEARN_EXPORTS = [
 _R_EXPORTS = [
     "AaregModelResult",
     "StrataFactor",
+    "CchModelResult",
     "Surv",
     "Surv2",
     "Surv2data",
@@ -81,6 +82,7 @@ _R_EXPORTS = [
     "confint",
     "concordance",
     "clogit",
+    "cch",
     "coxph",
     "coxph_detail",
     "coxph_wtest",
