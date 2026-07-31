@@ -7984,7 +7984,10 @@ def test_coxph_formula_cluster_computes_robust_variance():
     score = clustered.score_residuals()
     expected_dfbeta = [
         [
-            sum(expected_robust[col_idx][inner_idx] * row[inner_idx] for inner_idx in range(2))
+            sum(
+                clustered.naive_information_matrix[col_idx][inner_idx] * row[inner_idx]
+                for inner_idx in range(2)
+            )
             for col_idx in range(2)
         ]
         for row in score
@@ -7993,7 +7996,7 @@ def test_coxph_formula_cluster_computes_robust_variance():
         [
             row[col_idx]
             / max(
-                math.sqrt(abs(expected_robust[col_idx][col_idx])),
+                math.sqrt(abs(clustered.naive_information_matrix[col_idx][col_idx])),
                 survival.r_api._COX_DFBETAS_SCALE_FLOOR,
             )
             for col_idx in range(2)
@@ -8016,7 +8019,7 @@ def test_coxph_formula_cluster_computes_robust_variance():
         strict=True,
     ):
         assert actual == pytest.approx(expected)
-    assert clustered.dfbeta()[3] != pytest.approx(clustered.fit.dfbeta()[3])
+    assert clustered.dfbeta()[3] == pytest.approx(clustered.fit.dfbeta()[3])
 
     row = [0.5, 0.8]
     robust_prediction = survival.predict(clustered, [row], reference="zero", se_fit=True)
@@ -10697,6 +10700,59 @@ def test_coxph_counting_process_score_and_dfbeta_residuals_sum_to_score_vector()
             scale = math.sqrt(abs(fit.information_matrix[0][0]))
             assert dfbeta[row_idx][0] == pytest.approx(expected_dfbeta)
             assert dfbetas[row_idx][0] == pytest.approx(expected_dfbeta / scale)
+
+
+@pytest.mark.parametrize(
+    ("method", "expected_coef", "expected_score", "expected_dfbeta", "expected_variance"),
+    [
+        (
+            "breslow",
+            [0.0459536309248242, 0.353370968238964],
+            [-0.477002515097761, 0.0460464768418501],
+            [-0.143794564182129, -0.0193305596279085],
+            [[0.108272854521586, 0.0296127805336108], [0.0296127805336108, 0.227116707749646]],
+        ),
+        (
+            "efron",
+            [-0.0071109501556483, 0.280700887836646],
+            [-0.581824262049244, 0.0154020097871799],
+            [-0.182250992353341, -0.0380955483800846],
+            [[0.149167505896732, 0.0546676978998634], [0.0546676978998634, 0.278398896247739]],
+        ),
+    ],
+)
+def test_coxph_counting_process_score_inference_matches_r(
+    method,
+    expected_coef,
+    expected_score,
+    expected_dfbeta,
+    expected_variance,
+):
+    data = {
+        "start": [0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 1.0, 0.0],
+        "stop": [2.0, 2.0, 3.0, 4.0, 4.0, 3.0, 5.0, 5.0],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "x": [-1.2, 0.4, 1.1, -0.3, 0.8, 1.7, -0.9, 0.2],
+        "z": [0.5, -1.0, 0.3, 1.2, -0.7, 0.9, 0.1, -1.3],
+        "group": [0, 0, 0, 0, 0, 1, 1, 1],
+        "id": list(range(8)),
+    }
+    fit = survival.coxph(
+        "Surv(start, stop, status) ~ x + z + strata(group)",
+        data=data,
+        weights=[1.0, 1.5, 0.8, 1.2, 0.7, 1.1, 0.9, 1.3],
+        ties=method,
+        cluster=data["id"],
+        max_iter=50,
+        eps=1e-9,
+        toler=1e-10,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(expected_coef, abs=1e-12)
+    assert fit.score_residuals()[0] == pytest.approx(expected_score, abs=1e-12)
+    assert fit.dfbeta()[0] == pytest.approx(expected_dfbeta, abs=1e-12)
+    for actual, expected in zip(fit.variance_matrix, expected_variance, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-12)
 
 
 def test_coxph_exact_tie_score_and_dfbeta_residuals_sum_to_score_vector():

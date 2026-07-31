@@ -846,6 +846,43 @@ mod tests {
         fit
     }
 
+    fn counting_score_reference_fit(method: &str) -> CoxPHFit {
+        let covariates = vec![
+            vec![-1.2, 0.5],
+            vec![0.4, -1.0],
+            vec![1.1, 0.3],
+            vec![-0.3, 1.2],
+            vec![0.8, -0.7],
+            vec![1.7, 0.9],
+            vec![-0.9, 0.1],
+            vec![0.2, -1.3],
+        ];
+        let linear_predictors = covariates
+            .iter()
+            .map(|row| 0.2 * row[0] - 0.1 * row[1])
+            .collect();
+        CoxPHFit {
+            coefficients: vec![vec![0.2, -0.1]],
+            means: vec![0.0, 0.0],
+            score_vector: vec![],
+            information_matrix: vec![],
+            log_likelihood: vec![],
+            score_test: 0.0,
+            convergence_flag: 0,
+            iterations: 0,
+            risk_scores: vec![],
+            event_times: vec![2.0, 2.0, 3.0, 4.0, 4.0, 3.0, 5.0, 5.0],
+            status: vec![1, 1, 0, 1, 0, 1, 1, 0],
+            linear_predictors,
+            entry_times: Some(vec![0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 1.0, 0.0]),
+            weights: vec![1.0, 1.5, 0.8, 1.2, 0.7, 1.1, 0.9, 1.3],
+            covariates,
+            strata: vec![0, 0, 0, 0, 0, 1, 1, 1],
+            method: method.to_string(),
+            nocenter: vec![],
+        }
+    }
+
     fn brute_force_basehaz(fit: &CoxPHFit, centered: bool) -> (Vec<f64>, Vec<f64>, Vec<i32>) {
         let n = fit.event_times.len();
         let row_strata = fit.row_strata_cow().into_owned();
@@ -1260,6 +1297,45 @@ mod tests {
                 entry_times,
             );
 
+            assert_close_matrix(&actual, &expected);
+        }
+    }
+
+    #[test]
+    fn test_coxph_counting_score_residuals_match_r_for_weights_strata_and_ties() {
+        let cases = [
+            (
+                "breslow",
+                vec![
+                    vec![-0.778427039030269, 0.283533537794141],
+                    vec![0.091186357321952, -0.342237690541851],
+                    vec![-0.650093055328823, -0.190343304961445],
+                    vec![-0.0420910220554235, -0.132051648232679],
+                    vec![-0.469472843288164, 0.810907638406828],
+                    vec![0.709746822901141, 0.66611561001089],
+                    vec![-0.143052423889649, 0.568213016404157],
+                    vec![-0.0432781142437781, 0.608556079386341],
+                ],
+            ),
+            (
+                "efron",
+                vec![
+                    vec![-0.890022262887945, 0.233804575353994],
+                    vec![0.0973290025651707, -0.50524720360612],
+                    vec![-0.741057387549249, -0.122553172255785],
+                    vec![0.0221464326595451, -0.166914303193565],
+                    vec![-0.469472843288164, 0.810907638406828],
+                    vec![0.709746822901141, 0.66611561001089],
+                    vec![-0.143052423889649, 0.568213016404157],
+                    vec![-0.0432781142437781, 0.608556079386341],
+                ],
+            ),
+        ];
+
+        for (method, expected) in cases {
+            let actual = counting_score_reference_fit(method)
+                .score_residuals_internal()
+                .expect("counting-process score residuals should compute");
             assert_close_matrix(&actual, &expected);
         }
     }
