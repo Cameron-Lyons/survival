@@ -168,6 +168,37 @@ models through the exact stratified Cox likelihood; `method="approximate"`
 maps to Breslow handling as it does in R.
 R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
 in the bridge and pass named control lists through to the Python API.
+Time-dependent start/stop data can be built with the R-compatible `tmerge`
+workflow. Its update builders preserve R's `(tstart, tstop]` boundary rules,
+event placement, cumulative updates, missing-value handling, and classification
+metadata while using the native linear-time sweeps underneath:
+
+```python
+from survival import cumevent, cumtdc, event, tdc, tmerge
+
+baseline = {"id": [1, 2], "group": ["control", "treated"]}
+spans = {"id": [1, 2], "stop": [10.0, 8.0]}
+updates = {
+    "id": [1, 1, 2],
+    "time": [2.0, 6.0, 4.0],
+    "dose": [5.0, 3.0, 4.0],
+    "status": [0, 1, 1],
+}
+
+timeline = tmerge(baseline, spans, "id", tstop="stop")
+timeline = tmerge(
+    timeline,
+    updates,
+    "id",
+    dose=tdc("time", "dose", init=0.0),
+    total_dose=cumtdc("time", "dose", init=0.0),
+    endpoint=event("time", "status"),
+    endpoint_count=cumevent("time", "status"),
+)
+```
+
+The raw `tmerge`, `tmerge2`, and `tmerge3` sweeps remain available from
+`survival.data_prep` for callers that already manage sorted numeric arrays.
 The R-style `predict(...)` and `fitted(...)` generics support Cox linear
 predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.

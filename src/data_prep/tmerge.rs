@@ -34,6 +34,18 @@ fn validate_newx_values(values: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
+fn validate_increment_values(values: &[f64]) -> PyResult<()> {
+    for (index, &value) in values.iter().enumerate() {
+        if value.is_infinite() {
+            return Err(PyValueError::new_err(format!(
+                "x values may be finite or NaN, got infinite value at index {}",
+                index
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_non_decreasing_id(name: &str, id: &[i32]) -> PyResult<()> {
     for (index, window) in id.windows(2).enumerate() {
         if window[1] < window[0] {
@@ -105,7 +117,7 @@ pub fn tmerge(
     validate_finite_values("time1", &time1)?;
     validate_newx_values(&newx)?;
     validate_finite_values("ntime", &ntime)?;
-    validate_finite_values("x", &x)?;
+    validate_increment_values(&x)?;
     validate_sorted_id_time("id", &id, "time1", &time1)?;
     validate_sorted_id_time("nid", &nid, "ntime", &ntime)?;
 
@@ -165,18 +177,21 @@ pub fn tmerge2(
 
     let mut result = vec![0; n1];
     let mut k = 0;
+    let mut current_id = None;
+    let mut last_valid = 0;
     for i in 0..n1 {
-        let current_id = id[i];
+        let row_id = id[i];
         let start_time = time1[i];
-        result[i] = 0;
-        while k < n2 && nid[k] < current_id {
-            k += 1;
+        if current_id != Some(row_id) {
+            current_id = Some(row_id);
+            last_valid = 0;
+            while k < n2 && nid[k] < row_id {
+                k += 1;
+            }
         }
-        let mut last_valid = 0;
-        let mut local_k = k;
-        while local_k < n2 && nid[local_k] == current_id && ntime[local_k] <= start_time {
-            last_valid = local_k + 1;
-            local_k += 1;
+        while k < n2 && nid[k] == row_id && ntime[k] <= start_time {
+            last_valid = k + 1;
+            k += 1;
         }
         result[i] = last_valid;
     }
@@ -404,7 +419,7 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("ntime values must be finite"));
 
-        let err = tmerge(
+        let result = tmerge(
             vec![1],
             vec![1.0],
             vec![0.0],
@@ -412,8 +427,19 @@ mod tests {
             vec![0.5],
             vec![f64::NAN],
         )
+        .unwrap();
+        assert!(result[0].is_nan());
+
+        let err = tmerge(
+            vec![1],
+            vec![1.0],
+            vec![0.0],
+            vec![1],
+            vec![0.5],
+            vec![f64::INFINITY],
+        )
         .unwrap_err();
-        assert!(err.to_string().contains("x values must be finite"));
+        assert!(err.to_string().contains("x values may be finite or NaN"));
     }
 
     #[test]

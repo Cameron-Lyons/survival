@@ -19,6 +19,32 @@ transition hazards, and integrated state occupancy.
 fits, including weights, tapering, clustered influence arrays, and standard R
 model retention options.
 
+Time-dependent data construction is also native: `tmerge` evaluates the
+familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the
+Rust-backed sweep kernels, and returns an ordinary R `tmerge` object with
+`tm.retain` and `tcount` attributes preserved across repeated calls.
+
+```r
+baseline <- data.frame(id = 1:2, group = c("control", "treated"))
+spans <- data.frame(id = 1:2, stop = c(10, 8))
+updates <- data.frame(
+  id = c(1, 1, 2),
+  time = c(2, 6, 4),
+  dose = c(5, 3, 4),
+  status = c(0, 1, 1)
+)
+
+timeline <- tmerge(baseline, spans, id = id, tstop = stop)
+timeline <- tmerge(
+  timeline,
+  updates,
+  id = id,
+  dose = tdc(time, dose, init = 0),
+  total_dose = cumtdc(time, dose, init = 0),
+  endpoint = event(time, status)
+)
+```
+
 The package is intentionally named `survivalr` rather than `survival` so it can
 coexist with CRAN's upstream `survival` package while this bridge matures.
 

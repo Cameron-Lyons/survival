@@ -857,17 +857,22 @@ logical values follow the compatibility behavior of \code{survival::nsk}.}
 \item{nterm, degree, penalty, combine}{Spline basis and penalty controls for
 \code{pspline}.}
 \item{tstart, tstop, ctime, cprob, extend, keep}{Direct-vector inputs for
-Python-backed \code{finegray} interval expansion. \code{extend} also controls
-whether \code{summary.survival_py_survfit} carries estimates beyond the last
-observed curve time.}
-\item{data1, data2}{Input data frames for delegated \code{tmerge}.}
+Python-backed \code{finegray} interval expansion. On the first \code{tmerge}
+call, \code{tstart} and \code{tstop} establish each subject's observation
+range. \code{extend} also controls whether
+\code{summary.survival_py_survfit} carries estimates beyond the last observed
+curve time.}
+\item{data1, data2}{Input data frames for native \code{tmerge} interval construction.}
+\item{options}{Named \code{tmerge} controls: \code{idname},
+\code{tstartname}, \code{tstopname}, \code{delay}, \code{na.rm}, and
+\code{tdcstart}; also optional prediction settings for \code{yates}.}
 \item{subcoh, stratum, cohort.size}{Case-cohort design inputs for delegated
 \code{cch}.}
 \item{qrtol, nmin, dfbeta, taper}{Control values for Rust-backed
 \code{aareg} risk-set fitting and influence diagnostics.}
 \item{id}{Optional generated row identifier column for \code{survSplit}, or
 subject identifiers for \code{survcondense}, \code{survcheck}, timeline
-converters, \code{Surv2data}, delegated \code{cch}/\code{tmerge}, and
+converters, \code{Surv2data}, delegated \code{cch}, native \code{tmerge}, and
 low-level \code{survfitKM}.}
 \item{istate}{Optional initial state vector for \code{survcheck} and
 timeline converters.}
@@ -1029,8 +1034,7 @@ survival when the fitted Cox model used Efron ties.}
 \item{term}{Model term for \code{yates}.}
 \item{population, levels}{Population weighting and level controls for
 \code{yates}.}
-\item{predict, options, nsim}{Prediction scale, optional prediction settings,
-and simulation count for \code{yates}.}
+\item{predict, nsim}{Prediction scale and simulation count for \code{yates}.}
 \item{complete}{Logical flag requesting the full variance matrix where the
 Python fit exposes extra parameters such as estimated survreg scale terms.}
 \item{offset, init, control, rownames, resid, nocenter}{Low-level
@@ -1058,7 +1062,9 @@ variance.}
 count for \code{cipoisson}.}
 \item{test}{Test name for bridged model analysis of variance, \code{aareg}
 test selector, or contrast test selector for \code{yates}.}
-\item{...}{Additional arguments passed to the Python API.}
+\item{...}{Additional arguments passed to the Python API. For \code{tmerge},
+these are named \code{tdc}, \code{cumtdc}, \code{event}, or \code{cumevent}
+expressions evaluated against \code{data2}.}
 }
 \value{
 A reticulate-wrapped Python object, an R-converted Python result, or a scalar
@@ -1068,6 +1074,11 @@ value depending on the delegated Python function.
 This package is intentionally named \pkg{survivalr} so it can coexist with
 CRAN's \pkg{survival} package while the bridge matures. The Python package must
 be installed in the Python environment selected by \pkg{reticulate}.
+
+\code{tmerge} builds `(tstart, tstop]` intervals with native linear-time
+sweeps. It follows R boundary and tie rules, retains event censor values and
+time-dependent covariate names, and appends all nine \code{tcount}
+classification columns across repeated calls.
 }
 \seealso{
 \code{\link{survival_python_config}}
