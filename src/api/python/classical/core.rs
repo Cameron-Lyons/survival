@@ -71,6 +71,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_function(wrap_pyfunction!(coxph_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(cch_fit, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount1, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount2, m)?)?;
     m.add_function(wrap_pyfunction!(norisk, m)?)?;
@@ -105,6 +106,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         LinkFunctionParams,
         CoxPHModel,
         Subject,
+        CchFitResult,
         CchMethod,
         CohortData,
         ClogitDataSet,

@@ -166,6 +166,13 @@ to produce model-based survival curves.
 `clogit("case ~ exposure + strata(set)", data=...)` fits matched case-control
 models through the exact stratified Cox likelihood; `method="approximate"`
 maps to Breslow handling as it does in R.
+`cch("Surv(time, status) ~ exposure + group", data=..., subcoh="sampled",
+id="subject", cohort_size=...)` fits unstratified case-cohort models with the
+native Prentice, Self-Prentice, or Lin--Ying estimators. Right-censored and
+counting-process responses share the Cox optimizer, formula expansion supports
+numeric, factor, and interaction terms, and `robust=True` selects Lin--Ying's
+robust variance. The risk-set and residual sweeps stay in Rust; Python performs
+only formula preparation and result labeling.
 R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
 in the bridge and pass named control lists through to the Python API.
 The R-style `predict(...)` and `fitted(...)` generics support Cox linear
