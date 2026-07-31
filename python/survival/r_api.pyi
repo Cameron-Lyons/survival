@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 from ._survival import SplineBasisResult as _SplineBasisResult
@@ -102,6 +102,24 @@ class FineGrayFrame(dict[str, list[Any]]):
         event: Any = None,
     ) -> None: ...
     def copy(self) -> FineGrayFrame: ...
+
+class TMergeOperation:
+    kind: str
+    time: Any
+    value: Any | None
+    default: Any | None
+    censor: Any | None
+
+class TMergeFrame(Mapping[str, list[Any]]):
+    columns: dict[str, list[Any]]
+    tname: dict[str, str]
+    tevent: dict[str, Any]
+    tdcvar: tuple[str, ...]
+    tcount: dict[str, dict[str, int]]
+    def __getitem__(self, key: str) -> list[Any]: ...
+    def __iter__(self) -> Iterator[str]: ...
+    def __len__(self) -> int: ...
+    def copy(self) -> TMergeFrame: ...
 
 class TcutResult:
     codes: list[int]
@@ -241,6 +259,34 @@ def finegray(
     timefix: bool = True,
     **kwargs: Any,
 ) -> FineGrayFrame: ...
+def tdc(time: Any, value: Any | None = None, init: Any | None = None) -> TMergeOperation: ...
+def cumtdc(
+    time: Any,
+    value: Any | None = None,
+    init: Any | None = None,
+) -> TMergeOperation: ...
+def event(
+    time: Any,
+    value: Any | None = None,
+    censor: Any | None = None,
+) -> TMergeOperation: ...
+def cumevent(
+    time: Any,
+    value: Any | None = None,
+    censor: Any | None = None,
+) -> TMergeOperation: ...
+def tmerge(
+    data1: Any,
+    data2: Any,
+    id: Any,
+    *,
+    tstart: Any | None = None,
+    tstop: Any | None = None,
+    options: Mapping[str, Any] | None = None,
+    operations: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    **updates: Any,
+) -> TMergeFrame: ...
 def cipoisson(
     k: Any,
     time: Any = 1.0,

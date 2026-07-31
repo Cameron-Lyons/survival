@@ -928,6 +928,55 @@ mod simd_bench {
     }
 }
 
+mod tmerge_bench {
+    use super::*;
+    use survival::data_prep::{tmerge, tmerge2};
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn last_value_sweep(bencher: divan::Bencher, n: usize) {
+        let id: Vec<i32> = (0..n).map(|row| (row / 10) as i32).collect();
+        let time: Vec<f64> = (0..n).map(|row| (row % 10) as f64).collect();
+        let update_id = id.clone();
+        let update_time: Vec<f64> = time.iter().map(|value| value - 0.5).collect();
+
+        bencher.bench_local(|| {
+            black_box(
+                tmerge2(
+                    id.clone(),
+                    time.clone(),
+                    update_id.clone(),
+                    update_time.clone(),
+                )
+                .expect("benchmark tmerge inputs should be valid"),
+            )
+        });
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn cumulative_sweep(bencher: divan::Bencher, n: usize) {
+        let id: Vec<i32> = (0..n).map(|row| (row / 10) as i32).collect();
+        let time: Vec<f64> = (0..n).map(|row| (row % 10) as f64).collect();
+        let initial = vec![f64::NAN; n];
+        let update_id = id.clone();
+        let update_time: Vec<f64> = time.iter().map(|value| value - 0.5).collect();
+        let increment = vec![1.0; n];
+
+        bencher.bench_local(|| {
+            black_box(
+                tmerge(
+                    id.clone(),
+                    time.clone(),
+                    initial.clone(),
+                    update_id.clone(),
+                    update_time.clone(),
+                    increment.clone(),
+                )
+                .expect("benchmark tmerge inputs should be valid"),
+            )
+        });
+    }
+}
+
 fn main() {
     divan::main();
 }

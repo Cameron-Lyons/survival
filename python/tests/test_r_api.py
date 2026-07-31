@@ -16811,3 +16811,123 @@ def test_aareg_formula_validates_model_specific_options():
         survival.aareg("Surv(time, status) ~ x", data=data, nmin=1, taper=0)
     with pytest.raises(ValueError, match="test must be"):
         survival.aareg("Surv(time, status) ~ x", data=data, nmin=1, test="bogus")
+
+
+def test_r_style_tmerge_matches_mixed_operation_fixture():
+    base = {"id": [1, 2], "group": ["a", "b"]}
+    span = {"id": [1, 2], "stop": [10, 8]}
+    initial = survival.tmerge(base, span, "id", tstop="stop")
+    updates = {
+        "id": [1, 1, 1, 1, 1, 1, 2, 2, 3],
+        "time": [-1, 0, 2, 5, 10, 11, 0, 4, 3],
+        "value": [10, 20, 30, 40, 50, 60, 1, 2, 99],
+    }
+
+    result = survival.tmerge(
+        initial,
+        updates,
+        "id",
+        x=survival.tdc("time", "value", init=-9),
+        cx=survival.cumtdc("time", "value", init=100),
+        ev=survival.event("time", "value"),
+        cev=survival.cumevent("time", "value"),
+    )
+
+    assert isinstance(result, survival.TMergeFrame)
+    assert result.columns == {
+        "id": [1, 1, 1, 2, 2],
+        "group": ["a", "a", "a", "b", "b"],
+        "tstart": [0.0, 2.0, 5.0, 0.0, 4.0],
+        "tstop": [2.0, 5.0, 10.0, 4.0, 8.0],
+        "x": [20, 30, 40, 1, 2],
+        "cx": [130.0, 160.0, 200.0, 101.0, 103.0],
+        "ev": [30, 40, 50, 2, 0],
+        "cev": [60.0, 100.0, 150.0, 3.0, 0],
+    }
+    assert result.tname == {
+        "idname": "id",
+        "tstartname": "tstart",
+        "tstopname": "tstop",
+    }
+    assert result.tevent == {"ev": 0, "cev": 0}
+    assert result.tdcvar == ("x", "cx")
+    first_counts = {
+        "early": 1,
+        "late": 1,
+        "gap": 0,
+        "within": 3,
+        "boundary": 0,
+        "leading": 2,
+        "trailing": 1,
+        "tied": 0,
+        "missid": 1,
+    }
+    later_counts = dict(first_counts, within=0, boundary=3)
+    assert result.tcount == {
+        "x": first_counts,
+        "cx": later_counts,
+        "ev": later_counts,
+        "cev": later_counts,
+    }
+
+
+def test_r_style_tmerge_classifies_gaps_edges_and_ties():
+    base = {"id": [1], "z": [2]}
+    span = {"id": [1, 1], "start": [0, 7], "stop": [5, 10]}
+    initial = survival.tmerge(base, span, "id", tstart="start", tstop="stop")
+    updates = {
+        "id": [1] * 10,
+        "time": [-1, 0, 3, 5, 6, 7, 8, 8, 10, 11],
+        "value": [-1, 0, 3, 5, 6, 7, 8, 70, 10, 11],
+    }
+
+    result = survival.tmerge(initial, updates, "id", x=survival.tdc("time", "value"))
+
+    assert result.columns == {
+        "id": [1, 1, 1, 1],
+        "z": [2, 2, 2, 2],
+        "tstart": [0.0, 3.0, 7.0, 8.0],
+        "tstop": [3.0, 5.0, 8.0, 10.0],
+        "x": [0, 3, 7, 70],
+    }
+    assert result.tcount["x"] == {
+        "early": 1,
+        "late": 1,
+        "gap": 1,
+        "within": 3,
+        "boundary": 0,
+        "leading": 2,
+        "trailing": 2,
+        "tied": 1,
+        "missid": 0,
+    }
+
+
+def test_r_style_tmerge_delay_and_missing_update_semantics():
+    base = {"id": [1], "z": [0]}
+    span = {"id": [1], "stop": [10]}
+    initial = survival.tmerge(base, span, "id", tstop="stop")
+    updates = {"id": [1, 1, 1], "time": [2, 4, 6], "value": [1, None, 3]}
+
+    delayed = survival.tmerge(
+        initial,
+        updates,
+        "id",
+        options={"delay": 2, "na.rm": False},
+        x=survival.tdc("time", "value", init=-1),
+    )
+    cumulative = survival.tmerge(
+        initial,
+        updates,
+        "id",
+        options={"na.rm": False},
+        total=survival.cumtdc("time", "value", init=0),
+    )
+
+    assert delayed["tstart"] == [0.0, 4.0, 6.0, 8.0]
+    assert delayed["x"][:2] == [-1, 1]
+    assert delayed["x"][2] is None
+    assert delayed["x"][3] == 3
+    assert cumulative["total"][:2] == [0.0, 1.0]
+    assert math.isnan(cumulative["total"][2])
+    assert math.isnan(cumulative["total"][3])

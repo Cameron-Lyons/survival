@@ -31,6 +31,8 @@ __all__ = [
     "CchModelResult",
     "FineGrayFrame",
     "FineGrayOutput",
+    "TMergeFrame",
+    "TMergeOperation",
     "PredictResult",
     "PyearsResult",
     "RateTable",
@@ -72,6 +74,11 @@ __all__ = [
     "extract_aic",
     "fitted",
     "finegray",
+    "tdc",
+    "cumtdc",
+    "event",
+    "cumevent",
+    "tmerge",
     "fromtimeline",
     "format_surv",
     "is_surv",
@@ -552,6 +559,46 @@ class FineGrayFrame(dict[str, list[Any]]):
         """Return a shallow copy that retains the selected endpoint."""
 
         return FineGrayFrame(self, event=self.event)
+
+
+@dataclass(frozen=True)
+class TMergeOperation:
+    """A time-dependent update consumed by :func:`tmerge`."""
+
+    kind: str
+    time: Any
+    value: Any | None = None
+    default: Any | None = None
+    censor: Any | None = None
+
+
+@dataclass(frozen=True)
+class TMergeFrame(Mapping[str, list[Any]]):
+    """Column-oriented start/stop data with retained ``tmerge`` metadata."""
+
+    columns: dict[str, list[Any]]
+    tname: dict[str, str]
+    tevent: dict[str, Any]
+    tdcvar: tuple[str, ...]
+    tcount: dict[str, dict[str, int]]
+
+    def __getitem__(self, key: str) -> list[Any]:
+        return self.columns[key]
+
+    def __iter__(self):
+        return iter(self.columns)
+
+    def __len__(self) -> int:
+        return len(self.columns)
+
+    def copy(self) -> TMergeFrame:
+        return TMergeFrame(
+            columns={name: list(values) for name, values in self.columns.items()},
+            tname=dict(self.tname),
+            tevent=dict(self.tevent),
+            tdcvar=tuple(self.tdcvar),
+            tcount={name: dict(counts) for name, counts in self.tcount.items()},
+        )
 
 
 @dataclass(frozen=True)
@@ -9048,6 +9095,697 @@ def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:
             states=x.states,
         )
     return Surv(time, list(x.event), type=x.type)
+
+
+_TMERGE_COUNT_NAMES = (
+    "early",
+    "late",
+    "gap",
+    "within",
+    "boundary",
+    "leading",
+    "trailing",
+    "tied",
+    "missid",
+)
+
+
+def tdc(time: Any, value: Any | None = None, init: Any | None = None) -> TMergeOperation:
+    """Describe a time-dependent covariate update for :func:`tmerge`."""
+
+    return TMergeOperation("tdc", time, value=value, default=init)
+
+
+def cumtdc(time: Any, value: Any | None = None, init: Any | None = None) -> TMergeOperation:
+    """Describe a cumulative time-dependent covariate for :func:`tmerge`."""
+
+    return TMergeOperation("cumtdc", time, value=value, default=init)
+
+
+def event(time: Any, value: Any | None = None, censor: Any | None = None) -> TMergeOperation:
+    """Describe an event update for :func:`tmerge`."""
+
+    return TMergeOperation("event", time, value=value, censor=censor)
+
+
+def cumevent(
+    time: Any,
+    value: Any | None = None,
+    censor: Any | None = None,
+) -> TMergeOperation:
+    """Describe a cumulative event update for :func:`tmerge`."""
+
+    return TMergeOperation("cumevent", time, value=value, censor=censor)
+
+
+def _tmerge_data_columns(data: Any, name: str) -> dict[str, list[Any]]:
+    if isinstance(data, TMergeFrame):
+        return {column: list(values) for column, values in data.columns.items()}
+    names = _data_column_names(data)
+    if names is None:
+        raise TypeError(f"{name} must be a mapping or data frame")
+    if any(not isinstance(column, str) or not column for column in names):
+        raise ValueError(f"{name} column names must be non-empty strings")
+    if len(set(names)) != len(names):
+        raise ValueError(f"{name} column names must be unique")
+    columns = {column: _column(data, column) for column in names}
+    lengths = {len(values) for values in columns.values()}
+    if len(lengths) > 1:
+        raise ValueError(f"{name} columns must have equal lengths")
+    return columns
+
+
+def _tmerge_row_count(columns: Mapping[str, Sequence[Any]]) -> int:
+    return len(next(iter(columns.values()))) if columns else 0
+
+
+def _tmerge_resolve_vector(
+    value: Any,
+    data: Any,
+    n: int,
+    name: str,
+    *,
+    scalar: bool = False,
+) -> list[Any]:
+    column_names = _data_column_names(data) or []
+    if isinstance(value, str) and value in column_names:
+        result = _column(data, value)
+    else:
+        scalar_value = isinstance(value, str | bytes)
+        if scalar and not scalar_value:
+            try:
+                iter(value)
+            except TypeError:
+                scalar_value = True
+        if scalar and scalar_value:
+            result = [value] * n
+        else:
+            result = _materialize_1d(value, name)
+            if scalar and len(result) == 1 and n != 1:
+                result *= n
+    if len(result) != n:
+        raise ValueError(f"{name} must have length {n}")
+    return result
+
+
+def _tmerge_operation(value: Any, name: str) -> TMergeOperation:
+    if isinstance(value, TMergeOperation):
+        operation = value
+    elif isinstance(value, Mapping):
+        kind = value.get("kind", value.get("type", value.get("class")))
+        operation = TMergeOperation(
+            kind=str(kind),
+            time=value.get("time"),
+            value=value.get("value"),
+            default=value.get("default", value.get("init")),
+            censor=value.get("censor"),
+        )
+    else:
+        raise TypeError(f"operation {name!r} must be created by tdc, cumtdc, event, or cumevent")
+    kind = operation.kind.lower()
+    if kind not in {"tdc", "cumtdc", "event", "cumevent"}:
+        raise ValueError(f"operation {name!r} has unrecognized type {operation.kind!r}")
+    if operation.time is None:
+        raise ValueError(f"operation {name!r} requires time values")
+    return replace(operation, kind=kind)
+
+
+def _tmerge_options(options: Mapping[str, Any] | None, id: Any) -> dict[str, Any]:
+    raw = {} if options is None else dict(options)
+    aliases = {"na.rm": "na_rm"}
+    normalized = {aliases.get(key, key): value for key, value in raw.items()}
+    allowed = {"idname", "tstartname", "tstopname", "delay", "na_rm", "tdcstart"}
+    unexpected = sorted(set(normalized) - allowed)
+    if unexpected:
+        raise ValueError(f"unrecognized tmerge option(s): {', '.join(unexpected)}")
+    idname = normalized.get("idname", id if isinstance(id, str) else "id")
+    tstartname = normalized.get("tstartname", "tstart")
+    tstopname = normalized.get("tstopname", "tstop")
+    for option, label in (
+        (idname, "idname"),
+        (tstartname, "tstartname"),
+        (tstopname, "tstopname"),
+    ):
+        if not isinstance(option, str) or not option:
+            raise ValueError(f"{label} option must be a non-empty variable name")
+    delay = _finite_float(normalized.get("delay", 0.0), "delay")
+    if delay < 0.0:
+        raise ValueError("delay option must be a number >= 0")
+    na_rm = _normalize_bool_option_with_default(normalized.get("na_rm", True), "na.rm", True)
+    tdcstart = normalized.get("tdcstart", math.nan)
+    if _is_missing_value(tdcstart):
+        tdcstart = math.nan
+    return {
+        "idname": idname,
+        "tstartname": tstartname,
+        "tstopname": tstopname,
+        "delay": delay,
+        "na_rm": na_rm,
+        "tdcstart": tdcstart,
+    }
+
+
+def _tmerge_retained_metadata(
+    data1: Any,
+    metadata: Mapping[str, Any] | None,
+) -> tuple[dict[str, str] | None, dict[str, Any], tuple[str, ...], dict[str, dict[str, int]]]:
+    if isinstance(data1, TMergeFrame):
+        return (
+            dict(data1.tname),
+            dict(data1.tevent),
+            tuple(data1.tdcvar),
+            {name: dict(counts) for name, counts in data1.tcount.items()},
+        )
+    if metadata is None:
+        return None, {}, (), {}
+    tname_raw = metadata.get("tname")
+    tname = (
+        None
+        if tname_raw is None
+        else {str(key): str(value) for key, value in dict(tname_raw).items()}
+    )
+    tevent_raw = metadata.get("tevent", {})
+    tevent = (
+        {str(key): value for key, value in tevent_raw.items()}
+        if isinstance(tevent_raw, Mapping)
+        else {}
+    )
+    tdcvar = tuple(str(value) for value in metadata.get("tdcvar", ()))
+    counts_raw = metadata.get("tcount", {})
+    tcount = {
+        str(operation): {str(kind): int(count) for kind, count in dict(values).items()}
+        for operation, values in dict(counts_raw).items()
+    }
+    return tname, tevent, tdcvar, tcount
+
+
+def _tmerge_unique_levels(values: Sequence[Any], name: str) -> tuple[list[Any], dict[Any, int]]:
+    levels: list[Any] = []
+    lookup: dict[Any, int] = {}
+    for value in values:
+        if _is_missing_value(value):
+            raise ValueError(f"{name} cannot have missing values")
+        key = _hashable_group_value(value)
+        if key not in lookup:
+            lookup[key] = len(levels)
+            levels.append(value)
+    return levels, lookup
+
+
+def _tmerge_initial_frame(
+    data1: Any,
+    data2: Any,
+    id: Any,
+    tstart: Any | None,
+    tstop: Any | None,
+    operations: Mapping[str, TMergeOperation],
+    options: Mapping[str, Any],
+) -> dict[str, list[Any]]:
+    columns1 = _tmerge_data_columns(data1, "data1")
+    columns2 = _tmerge_data_columns(data2, "data2")
+    n2 = _tmerge_row_count(columns2)
+    if not isinstance(id, str):
+        raise TypeError("on the first call id must be a single column name")
+    if id not in columns1 or id not in columns2:
+        raise KeyError(f"id column {id!r} must exist in data1 and data2")
+    base_ids = list(columns1[id])
+    base_levels, base_lookup = _tmerge_unique_levels(base_ids, "id")
+    if len(base_levels) != len(base_ids):
+        raise ValueError("data1 must have no duplicate identifiers on the first call")
+    id2 = list(columns2[id])
+    _tmerge_unique_levels(id2, "id")
+    id2_keys = {_hashable_group_value(value) for value in id2}
+    if any(_hashable_group_value(value) not in base_lookup for value in id2):
+        raise ValueError("setting the range found data2 id values not in data1")
+    if any(_hashable_group_value(value) not in id2_keys for value in base_ids):
+        raise ValueError("setting the range found data1 id values not in data2")
+
+    if tstop is None:
+        if not operations or next(iter(operations.values())).kind != "event":
+            raise ValueError("neither tstop nor an initial event operation was provided")
+        event_times = _tmerge_resolve_vector(
+            next(iter(operations.values())).time,
+            data2,
+            n2,
+            "initial event time",
+        )
+        latest: dict[Any, float] = {}
+        for row_id, value in zip(id2, event_times, strict=True):
+            if _is_missing_value(value):
+                continue
+            key = _hashable_group_value(row_id)
+            latest[key] = max(
+                latest.get(key, -math.inf), _finite_float(value, "initial event time")
+            )
+        id_rows = []
+        source_rows = []
+        seen_ids: set[Any] = set()
+        for row_id in id2:
+            key = _hashable_group_value(row_id)
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            id_rows.append(row_id)
+            source_rows.append(base_lookup[key])
+        stop_values = [latest[_hashable_group_value(row_id)] for row_id in id_rows]
+    else:
+        stop_values = [
+            _finite_float(value, "tstop")
+            for value in _tmerge_resolve_vector(tstop, data2, n2, "tstop")
+        ]
+        source_rows = [base_lookup[_hashable_group_value(value)] for value in id2]
+        id_rows = list(id2)
+
+    if tstart is None:
+        start_values = [0.0] * len(stop_values)
+    else:
+        start_values = [
+            _finite_float(value, "tstart")
+            for value in _tmerge_resolve_vector(
+                tstart, data2, len(stop_values), "tstart", scalar=True
+            )
+        ]
+    if any(start >= stop for start, stop in zip(start_values, stop_values, strict=True)):
+        raise ValueError("tstart must be less than tstop")
+
+    id_keys = [_hashable_group_value(value) for value in id_rows]
+    if len(set(id_keys)) != len(id_keys):
+        first_seen = {key: idx for idx, key in enumerate(dict.fromkeys(id_keys))}
+        order = sorted(
+            range(len(stop_values)),
+            key=lambda idx: (first_seen[id_keys[idx]], stop_values[idx], idx),
+        )
+    else:
+        order = list(range(len(stop_values)))
+    result = {
+        name: [values[source_rows[idx]] for idx in order] for name, values in columns1.items()
+    }
+    result[str(options["idname"])] = [id_rows[idx] for idx in order]
+    result[str(options["tstartname"])] = [start_values[idx] for idx in order]
+    result[str(options["tstopname"])] = [stop_values[idx] for idx in order]
+    ids = result[str(options["idname"])]
+    starts = result[str(options["tstartname"])]
+    stops = result[str(options["tstopname"])]
+    for idx in range(1, len(stops)):
+        if ids[idx] == ids[idx - 1] and starts[idx] < stops[idx - 1]:
+            raise ValueError("first call created overlapping or duplicated time intervals")
+    return result
+
+
+def _tmerge_interval_index(
+    columns: Mapping[str, list[Any]],
+    idname: str,
+    startname: str,
+    stopname: str,
+) -> dict[Any, tuple[list[int], list[float], list[float]]]:
+    result: dict[Any, tuple[list[int], list[float], list[float]]] = {}
+    for row, (row_id, start, stop) in enumerate(
+        zip(columns[idname], columns[startname], columns[stopname], strict=True)
+    ):
+        rows, starts, stops = result.setdefault(_hashable_group_value(row_id), ([], [], []))
+        rows.append(row)
+        starts.append(float(start))
+        stops.append(float(stop))
+    return result
+
+
+def _tmerge_classify(
+    intervals: Mapping[Any, tuple[list[int], list[float], list[float]]],
+    row_id: Any,
+    time: float,
+) -> str:
+    subject = intervals.get(_hashable_group_value(row_id))
+    if subject is None:
+        return "missid"
+    _rows, starts, stops = subject
+    prior = bisect_right(starts, time) - 1
+    if prior < 0:
+        return "early"
+    after = bisect_left(stops, time)
+    if after == len(stops):
+        return "late"
+    if after > prior:
+        return "gap"
+    if time == starts[prior] or time == stops[after]:
+        if prior == after + 1:
+            return "boundary"
+        if time == starts[prior]:
+            return "leading"
+        return "trailing"
+    return "within"
+
+
+def _tmerge_split_rows(
+    columns: dict[str, list[Any]],
+    idname: str,
+    startname: str,
+    stopname: str,
+    event_censors: Mapping[str, Any],
+    intervals: Mapping[Any, tuple[list[int], list[float], list[float]]],
+    update_ids: Sequence[Any],
+    update_times: Sequence[float],
+    classifications: Sequence[str],
+) -> dict[str, list[Any]]:
+    cuts: dict[int, set[float]] = {}
+    for row_id, time, kind in zip(update_ids, update_times, classifications, strict=True):
+        if kind != "within":
+            continue
+        rows, starts, _stops = intervals[_hashable_group_value(row_id)]
+        local_row = bisect_right(starts, time) - 1
+        cuts.setdefault(rows[local_row], set()).add(time)
+    if not cuts:
+        return columns
+    result = {name: [] for name in columns}
+    for row_idx in range(len(columns[idname])):
+        points = [float(columns[startname][row_idx])]
+        points.extend(sorted(cuts.get(row_idx, ())))
+        points.append(float(columns[stopname][row_idx]))
+        segment_count = len(points) - 1
+        for segment in range(segment_count):
+            for name, values in columns.items():
+                value = values[row_idx]
+                if name in event_censors and segment < segment_count - 1:
+                    value = event_censors[name]
+                result[name].append(value)
+            result[startname][-1] = points[segment]
+            result[stopname][-1] = points[segment + 1]
+    return result
+
+
+def _tmerge_default_censor(
+    values: Sequence[Any],
+    categories: Sequence[Any] | None = None,
+) -> Any:
+    if categories:
+        return categories[0]
+    sample = next((value for value in values if not _is_missing_value(value)), 0)
+    if isinstance(sample, bool):
+        return False
+    if isinstance(sample, str):
+        return ""
+    if isinstance(sample, float):
+        return 0.0
+    return 0
+
+
+def _tmerge_numeric_value(value: Any, name: str) -> float:
+    if _is_missing_value(value):
+        return math.nan
+    return _finite_float(value, name)
+
+
+def _tmerge_operation_categories(operation: TMergeOperation, data2: Any) -> list[Any] | None:
+    source = operation.value
+    column_names = _data_column_names(data2) or []
+    if isinstance(source, str) and source in column_names:
+        source = _column_source(data2, source)
+    categories = _mstate_categories(source)
+    if categories is None:
+        return None
+    return _materialize_1d(categories, "event categories")
+
+
+def _tmerge_apply_operation(
+    columns: dict[str, list[Any]],
+    data2: Any,
+    data2_ids: list[Any],
+    name: str,
+    operation: TMergeOperation,
+    options: Mapping[str, Any],
+    event_censors: dict[str, Any],
+    tdc_names: list[str],
+) -> tuple[dict[str, list[Any]], dict[str, int]]:
+    n2 = len(data2_ids)
+    times_raw = _tmerge_resolve_vector(operation.time, data2, n2, f"{name} time")
+    values_raw = (
+        None
+        if operation.value is None
+        else _tmerge_resolve_vector(operation.value, data2, n2, f"{name} value", scalar=True)
+    )
+    base_id_values = columns[str(options["idname"])]
+    base_start_values = columns[str(options["tstartname"])]
+    known_ids = {_hashable_group_value(value) for value in base_id_values}
+    subject_min_starts: dict[Any, float] = {}
+    for base_id, start in zip(base_id_values, base_start_values, strict=True):
+        key = _hashable_group_value(base_id)
+        subject_min_starts[key] = min(subject_min_starts.get(key, math.inf), float(start))
+    updates: list[tuple[Any, float, Any, int]] = []
+    missid = 0
+    for idx, (row_id, raw_time) in enumerate(zip(data2_ids, times_raw, strict=True)):
+        if _hashable_group_value(row_id) not in known_ids:
+            missid += 1
+            continue
+        raw_value = None if values_raw is None else values_raw[idx]
+        if _is_missing_value(raw_time) or (
+            bool(options["na_rm"]) and values_raw is not None and _is_missing_value(raw_value)
+        ):
+            continue
+        time = _finite_float(raw_time, f"{name} time")
+        if (
+            operation.kind in {"tdc", "cumtdc"}
+            and float(options["delay"]) > 0.0
+            and time > subject_min_starts[_hashable_group_value(row_id)]
+        ):
+            time += float(options["delay"])
+        updates.append((row_id, time, raw_value, idx))
+
+    level_order = {
+        _hashable_group_value(value): idx
+        for idx, value in enumerate(dict.fromkeys(columns[str(options["idname"])]))
+    }
+    updates.sort(key=lambda item: (level_order[_hashable_group_value(item[0])], item[1], item[3]))
+    intervals = _tmerge_interval_index(
+        columns,
+        str(options["idname"]),
+        str(options["tstartname"]),
+        str(options["tstopname"]),
+    )
+    classifications = [
+        _tmerge_classify(intervals, row_id, time) for row_id, time, _value, _idx in updates
+    ]
+    counts = dict.fromkeys(_TMERGE_COUNT_NAMES, 0)
+    counts["missid"] = missid
+    for kind in classifications:
+        counts[kind] += 1
+    seen: set[tuple[Any, float]] = set()
+    for row_id, time, _value, _idx in updates:
+        key = (_hashable_group_value(row_id), time)
+        if key in seen:
+            counts["tied"] += 1
+        else:
+            seen.add(key)
+
+    update_ids = [item[0] for item in updates]
+    update_times = [item[1] for item in updates]
+    columns = _tmerge_split_rows(
+        columns,
+        str(options["idname"]),
+        str(options["tstartname"]),
+        str(options["tstopname"]),
+        event_censors,
+        intervals,
+        update_ids,
+        update_times,
+        classifications,
+    )
+    base_ids = columns[str(options["idname"])]
+    _levels, lookup = _tmerge_unique_levels(base_ids, "id")
+    base_codes = [lookup[_hashable_group_value(value)] for value in base_ids]
+    update_codes = [lookup[_hashable_group_value(value)] for value in update_ids]
+    starts = [float(value) for value in columns[str(options["tstartname"])]]
+    update_values = [item[2] for item in updates]
+
+    if operation.kind == "tdc":
+        if name in event_censors:
+            raise ValueError(f"attempt to turn event variable {name!r} into a tdc")
+        indices = _core.tmerge2(base_codes, starts, update_codes, update_times)
+        existing = columns.get(name) if name in tdc_names else None
+        if name in columns and name not in tdc_names:
+            warnings.warn(f"replacement of variable {name!r}", stacklevel=3)
+        if existing is None:
+            if operation.value is None:
+                new_values = [int(position != 0) for position in indices]
+            else:
+                default = options["tdcstart"] if operation.default is None else operation.default
+                new_values = [
+                    default if position == 0 else update_values[position - 1]
+                    for position in indices
+                ]
+        else:
+            new_values = list(existing)
+            for row_idx, position in enumerate(indices):
+                if position == 0:
+                    continue
+                new_values[row_idx] = 1 if operation.value is None else update_values[position - 1]
+        columns[name] = new_values
+        if name not in tdc_names:
+            tdc_names.append(name)
+        return columns, counts
+
+    if operation.kind == "cumtdc":
+        if name in event_censors:
+            raise ValueError(f"attempt to turn event variable {name!r} into a cumtdc")
+        increments = [
+            1.0 if operation.value is None else _tmerge_numeric_value(value, name)
+            for value in update_values
+        ]
+        existing = columns.get(name)
+        if existing is None:
+            default = (
+                0.0
+                if operation.value is None
+                else (options["tdcstart"] if operation.default is None else operation.default)
+            )
+            initial = [float(default)] * len(base_ids)
+        else:
+            initial = [_tmerge_numeric_value(value, name) for value in existing]
+        columns[name] = _core.tmerge(
+            base_codes,
+            starts,
+            initial,
+            update_codes,
+            update_times,
+            increments,
+        )
+        if name not in tdc_names:
+            tdc_names.append(name)
+        return columns, counts
+
+    if name in tdc_names:
+        raise ValueError(f"attempt to turn time-dependent covariate {name!r} into an event")
+    raw_event_values = [1 if operation.value is None else value for value in update_values]
+    if operation.kind == "cumevent":
+        cumulative: dict[Any, float] = {}
+        event_values: list[Any] = []
+        for row_id, value in zip(update_ids, raw_event_values, strict=True):
+            key = _hashable_group_value(row_id)
+            cumulative[key] = cumulative.get(key, 0.0) + _tmerge_numeric_value(value, name)
+            event_values.append(cumulative[key])
+    else:
+        event_values = raw_event_values
+    censor = event_censors.get(
+        name,
+        _tmerge_default_censor(
+            event_values,
+            _tmerge_operation_categories(operation, data2),
+        ),
+    )
+    if name not in event_censors:
+        columns[name] = [censor] * len(base_ids)
+    target = {
+        (_hashable_group_value(row_id), float(stop)): idx
+        for idx, (row_id, stop) in enumerate(
+            zip(base_ids, columns[str(options["tstopname"])], strict=True)
+        )
+    }
+    valid = {"within", "boundary", "trailing"}
+    for update, kind, value, raw_value in zip(
+        updates,
+        classifications,
+        event_values,
+        raw_event_values,
+        strict=True,
+    ):
+        if kind not in valid or (
+            operation.kind == "cumevent"
+            and not _is_missing_value(raw_value)
+            and float(raw_value) == 0.0
+        ):
+            continue
+        row_id, time, _unused, _source = update
+        row_idx = target.get((_hashable_group_value(row_id), time))
+        if row_idx is not None:
+            columns[name][row_idx] = value
+    event_censors[name] = censor
+    return columns, counts
+
+
+def tmerge(
+    data1: Any,
+    data2: Any,
+    id: Any,
+    *,
+    tstart: Any | None = None,
+    tstop: Any | None = None,
+    options: Mapping[str, Any] | None = None,
+    operations: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    **updates: Any,
+) -> TMergeFrame:
+    """Create start/stop data with time-dependent covariates and events."""
+
+    if data1 is None or data2 is None or id is None:
+        raise TypeError("data1, data2, and id are required")
+    operation_values = {} if operations is None else dict(operations)
+    overlap = set(operation_values) & set(updates)
+    if overlap:
+        raise TypeError(f"duplicate tmerge operation(s): {', '.join(sorted(overlap))}")
+    operation_values.update(updates)
+    if any(not isinstance(name, str) or not name for name in operation_values):
+        raise ValueError("all tmerge operations must have a name")
+    parsed_operations = {
+        name: _tmerge_operation(value, name) for name, value in operation_values.items()
+    }
+    retained_tname, retained_events, retained_tdc, retained_counts = _tmerge_retained_metadata(
+        data1,
+        metadata,
+    )
+    option_values = _tmerge_options(options, id)
+    if retained_tname is not None:
+        for key in ("idname", "tstartname", "tstopname"):
+            if options is None or key not in options:
+                option_values[key] = retained_tname[key]
+        if tstart is not None or tstop is not None:
+            raise ValueError("tstart and tstop only apply to the first tmerge call")
+        columns = _tmerge_data_columns(data1, "data1")
+    else:
+        columns = _tmerge_initial_frame(
+            data1,
+            data2,
+            id,
+            tstart,
+            tstop,
+            parsed_operations,
+            option_values,
+        )
+
+    data2_columns = _tmerge_data_columns(data2, "data2")
+    n2 = _tmerge_row_count(data2_columns)
+    if isinstance(id, str):
+        if id not in data2_columns:
+            raise KeyError(f"id column {id!r} not found in data2")
+        data2_ids = list(data2_columns[id])
+    else:
+        data2_ids = _tmerge_resolve_vector(id, data2, n2, "id")
+    _tmerge_unique_levels(data2_ids, "id")
+
+    event_censors = dict(retained_events)
+    tdc_names = list(retained_tdc)
+    counts = {name: dict(values) for name, values in retained_counts.items()}
+    for name, operation in parsed_operations.items():
+        columns, operation_counts = _tmerge_apply_operation(
+            columns,
+            data2,
+            data2_ids,
+            name,
+            operation,
+            option_values,
+            event_censors,
+            tdc_names,
+        )
+        counts[name] = operation_counts
+    tname = {
+        "idname": str(option_values["idname"]),
+        "tstartname": str(option_values["tstartname"]),
+        "tstopname": str(option_values["tstopname"]),
+    }
+    return TMergeFrame(
+        columns=columns,
+        tname=tname,
+        tevent=event_censors,
+        tdcvar=tuple(tdc_names),
+        tcount=counts,
+    )
 
 
 def _survsplit_output_name(value: Any, name: str) -> str:

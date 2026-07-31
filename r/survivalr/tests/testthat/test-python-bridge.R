@@ -471,9 +471,13 @@ test_that("R formula wrappers delegate to the Python survival package", {
     )
   )
   tmerge_data <- data.frame(id = 1:2, tstop = c(5, 6))
+  bridged_tmerge <- tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+  reference_tmerge <- survival::tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+  attr(bridged_tmerge, "call") <- NULL
+  attr(reference_tmerge, "call") <- NULL
   expect_equal(
-    tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop),
-    survival::tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+    bridged_tmerge,
+    reference_tmerge
   )
   clogit_data <- data.frame(
     case = c(1, 0, 1, 0, 0, 1, 0, 1),
@@ -2317,6 +2321,133 @@ test_that("R formula wrappers delegate to the Python survival package", {
   aft_dfbeta <- residuals(aft_fit, type = "dfbeta")
   expect_true(is.matrix(aft_dfbeta))
   expect_equal(nrow(aft_dfbeta), nrow(data))
+})
+
+test_that("tmerge matches native interval, metadata, and class semantics", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  expect_tmerge_equal <- function(actual, expected) {
+    attr(actual, "call") <- NULL
+    attr(expected, "call") <- NULL
+    expect_equal(actual, expected)
+  }
+
+  base <- data.frame(id = 1:2, age = c(40, 50))
+  spans <- data.frame(id = 1:2, stop = c(10, 9))
+  updates <- data.frame(
+    id = c(1, 1, 1, 2, 2),
+    time = c(2, 5, 8, 3, 7),
+    value = c(10, 20, 30, 5, 9),
+    increment = c(1, 2, 3, 4, 5),
+    status = c(0, 1, 1, 1, 0)
+  )
+  initial <- tmerge(base, spans, id = id, tstop = stop)
+  reference_initial <- survival::tmerge(base, spans, id = id, tstop = stop)
+  mixed <- tmerge(
+    initial,
+    updates,
+    id = id,
+    x = tdc(time, value, init = 0),
+    count = cumtdc(time, increment, init = 0),
+    endpoint = event(time, status),
+    cumulative_endpoint = cumevent(time, increment)
+  )
+  reference_mixed <- survival::tmerge(
+    reference_initial,
+    updates,
+    id = id,
+    x = tdc(time, value, init = 0),
+    count = cumtdc(time, increment, init = 0),
+    endpoint = event(time, status),
+    cumulative_endpoint = cumevent(time, increment)
+  )
+  expect_tmerge_equal(mixed, reference_mixed)
+  expect_s3_class(mixed, "tmerge")
+  expect_identical(
+    colnames(attr(mixed, "tcount")),
+    c("early", "late", "gap", "within", "boundary", "leading", "trailing", "tied", "missid")
+  )
+
+  gap_base <- data.frame(id = 1, marker = factor("a", levels = c("a", "b")))
+  gap_spans <- data.frame(id = c(1, 1), start = c(0, 5), stop = c(3, 10))
+  gap_updates <- data.frame(
+    id = c(1, 1, 1, 1, 1, 1, 1, 1, 2),
+    time = c(-1, 0, 2, 3, 4, 5, 7, 10, 2),
+    value = seq_len(9L)
+  )
+  gap_initial <- tmerge(gap_base, gap_spans, id = id, tstart = start, tstop = stop)
+  reference_gap_initial <- survival::tmerge(
+    gap_base,
+    gap_spans,
+    id = id,
+    tstart = start,
+    tstop = stop
+  )
+  gap_result <- tmerge(gap_initial, gap_updates, id = id, endpoint = event(time, value))
+  reference_gap <- survival::tmerge(
+    reference_gap_initial,
+    gap_updates,
+    id = id,
+    endpoint = event(time, value)
+  )
+  expect_tmerge_equal(gap_result, reference_gap)
+
+  typed_updates <- data.frame(
+    id = c(1, 1),
+    time = c(2, 4),
+    state = factor(c("event", "other"), levels = c("none", "event", "other")),
+    date = as.Date(c("2020-01-02", "2020-01-04"))
+  )
+  typed_initial <- tmerge(gap_base, data.frame(id = 1, stop = 10), id = id, tstop = stop)
+  reference_typed_initial <- survival::tmerge(
+    gap_base,
+    data.frame(id = 1, stop = 10),
+    id = id,
+    tstop = stop
+  )
+  typed_result <- tmerge(
+    typed_initial,
+    typed_updates,
+    id = id,
+    state = event(time, state),
+    state_tdc = tdc(time, state, init = "none"),
+    date_tdc = tdc(time, date)
+  )
+  reference_typed <- survival::tmerge(
+    reference_typed_initial,
+    typed_updates,
+    id = id,
+    state = event(time, state),
+    state_tdc = tdc(time, state, init = "none"),
+    date_tdc = tdc(time, date)
+  )
+  expect_tmerge_equal(typed_result, reference_typed)
+  expect_s3_class(typed_result$state, "factor")
+  expect_s3_class(typed_result$date_tdc, "Date")
+
+  missing_updates <- data.frame(id = c(1, 1), time = c(2, 4), value = c(NA, 5))
+  missing_result <- tmerge(
+    typed_initial,
+    missing_updates,
+    id = id,
+    total = cumtdc(time, value, init = 1),
+    endpoint = event(time, value),
+    options = list(na.rm = FALSE)
+  )
+  reference_missing <- survival::tmerge(
+    reference_typed_initial,
+    missing_updates,
+    id = id,
+    total = cumtdc(time, value, init = 1),
+    endpoint = event(time, value),
+    options = list(na.rm = FALSE)
+  )
+  expect_tmerge_equal(missing_result, reference_missing)
 })
 
 test_that("Cox score inference matches native fits at mixed event and censor ties", {

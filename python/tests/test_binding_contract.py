@@ -11185,6 +11185,8 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "PyearsResult" in survival.__all__
     assert "SurvObrienResult" in survival.__all__
     assert "SurvExpResult" in survival.__all__
+    assert "TMergeFrame" in survival.__all__
+    assert "TMergeOperation" in survival.__all__
     assert "aic" in survival.__all__
     assert "aeqSurv" in survival.__all__
     assert "anova" in survival.__all__
@@ -11201,11 +11203,14 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "confint" in survival.__all__
     assert "cox_zph" in survival.__all__
     assert "coxph_detail" in survival.__all__
+    assert "cumevent" in survival.__all__
+    assert "cumtdc" in survival.__all__
     assert "df_residual" in survival.__all__
     assert "degrees_freedom" in survival.__all__
     assert "dsurvreg" in survival.__all__
     assert "bic" in survival.__all__
     assert "extract_aic" in survival.__all__
+    assert "event" in survival.__all__
     assert "fitted" in survival.__all__
     assert "finegray" in survival.__all__
     assert "format_surv" in survival.__all__
@@ -11240,6 +11245,8 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "survfit0" in survival.__all__
     assert "survSplit" in survival.__all__
     assert "survreg" in survival.__all__
+    assert "tdc" in survival.__all__
+    assert "tmerge" in survival.__all__
     assert "vcov" in survival.__all__
     assert "validation" in survival.__all__
     assert "ridge_fit" not in survival.__all__
@@ -11253,6 +11260,8 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.PyearsResult is survival.r_api.PyearsResult
     assert survival.SurvObrienResult is survival.r_api.SurvObrienResult
     assert survival.SurvExpResult is survival.r_api.SurvExpResult
+    assert survival.TMergeFrame is survival.r_api.TMergeFrame
+    assert survival.TMergeOperation is survival.r_api.TMergeOperation
     assert survival.aic is survival.r_api.aic
     assert survival.aeqSurv is survival.r_api.aeqSurv
     assert survival.anova is survival.r_api.anova
@@ -11270,11 +11279,14 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.confint is survival.r_api.confint
     assert survival.cox_zph is survival.r_api.cox_zph
     assert survival.coxph_detail is survival.r_api.coxph_detail
+    assert survival.cumevent is survival.r_api.cumevent
+    assert survival.cumtdc is survival.r_api.cumtdc
     assert survival.df_residual is survival.r_api.df_residual
     assert survival.degrees_freedom is survival.r_api.degrees_freedom
     assert survival.dsurvreg is survival.r_api.dsurvreg
     assert survival.bic is survival.r_api.bic
     assert survival.extract_aic is survival.r_api.extract_aic
+    assert survival.event is survival.r_api.event
     assert survival.fitted is survival.r_api.fitted
     assert survival.finegray is survival.r_api.finegray
     assert survival.format_surv is survival.r_api.format_surv
@@ -11313,6 +11325,9 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.survSplit is survival.r_api.survSplit
     assert survival.survreg is survival.r_api.survreg
     assert survival.survreg is not survival.regression.survreg
+    assert survival.tdc is survival.r_api.tdc
+    assert survival.tmerge is survival.r_api.tmerge
+    assert survival.tmerge is not survival.data_prep.tmerge
     assert survival.vcov is survival.r_api.vcov
     assert survival.ridge_fit is survival.regression.ridge_fit
     assert "ridge_fit" not in vars(survival)
@@ -11730,6 +11745,45 @@ def test_r_api_stub_tracks_finegray_public_signature():
         assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
     assert _pyi_function_arg_names(stub_path, "finegray") == expected[:-1]
     assert _pyi_function_kwarg_name(stub_path, "finegray") == "kwargs"
+
+
+def test_r_api_stub_tracks_tmerge_public_surface():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "data1",
+        "data2",
+        "id",
+        "tstart",
+        "tstop",
+        "options",
+        "operations",
+        "metadata",
+        "updates",
+    ]
+    runtime_params = inspect.signature(survival.r_api.tmerge).parameters
+    assert list(runtime_params) == expected
+    for name in expected[3:-1]:
+        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["updates"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "tmerge") == expected[:-1]
+    assert _pyi_function_kwarg_name(stub_path, "tmerge") == "updates"
+    assert _pyi_class_annotation_names(stub_path, "TMergeOperation") == {
+        "kind",
+        "time",
+        "value",
+        "default",
+        "censor",
+    }
+    assert _pyi_class_annotation_names(stub_path, "TMergeFrame") == {
+        "columns",
+        "tname",
+        "tevent",
+        "tdcvar",
+        "tcount",
+    }
 
 
 def test_r_api_stub_tracks_survobrien_public_signature():

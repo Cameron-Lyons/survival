@@ -154,8 +154,10 @@ if (getRversion() >= "2.15.1") {
     factor_values <- lapply(factor_values, function(item) {
       if (is.na(item)) reticulate::py_none() else item
     })
+  } else {
+    factor_values <- as.list(factor_values)
   }
-  .python_attr("_r_factor")(factor_values, levels(value))
+  .python_attr("_r_factor")(factor_values, as.list(levels(value)))
 }
 
 .as_python_vector <- function(value) {
@@ -4621,9 +4623,256 @@ clogit <- function(formula, data, weights, subset, na.action,
 }
 
 tmerge <- function(data1, data2, id, ..., tstart, tstop, options) {
-  call <- match.call()
-  call[[1L]] <- quote(survival::tmerge)
-  eval.parent(call)
+  Call <- match.call()
+  if (missing(data1) || missing(data2) || missing(id)) {
+    stop("the data1, data2, and id arguments are required", call. = FALSE)
+  }
+  if (!is.data.frame(data1) || !is.data.frame(data2)) {
+    stop("data1 and data2 must be data frames", call. = FALSE)
+  }
+
+  operation_env <- new.env(parent = parent.frame())
+  assign("tdc", function(time, value = NULL, init = NULL) {
+    structure(
+      list(kind = "tdc", time = time, value = value, default = init, censor = NULL),
+      class = "tdc"
+    )
+  }, envir = operation_env)
+  assign("cumtdc", function(time, value = NULL, init = NULL) {
+    structure(
+      list(kind = "cumtdc", time = time, value = value, default = init, censor = NULL),
+      class = "cumtdc"
+    )
+  }, envir = operation_env)
+  assign("event", function(time, value = NULL, censor = NULL) {
+    structure(
+      list(kind = "event", time = time, value = value, default = NULL, censor = censor),
+      class = "event"
+    )
+  }, envir = operation_env)
+  assign("cumevent", function(time, value = NULL, censor = NULL) {
+    structure(
+      list(kind = "cumevent", time = time, value = value, default = NULL, censor = censor),
+      class = "cumevent"
+    )
+  }, envir = operation_env)
+
+  reserved <- c("data1", "data2", "id", "tstart", "tstop", "options")
+  dot_call <- Call[is.na(match(names(Call), reserved))]
+  dot_call[[1L]] <- as.name("list")
+  operations <- eval(dot_call, data2, enclos = operation_env)
+  operation_names <- names(operations)
+  if (is.null(operation_names)) {
+    operation_names <- rep("", length(operations))
+  }
+  if (any(!nzchar(operation_names))) {
+    stop("all additional arguments must have a name", call. = FALSE)
+  }
+  operation_kinds <- vapply(operations, function(operation) class(operation)[[1L]], character(1))
+  valid_kinds <- c("tdc", "cumtdc", "event", "cumevent")
+  if (any(!operation_kinds %in% valid_kinds)) {
+    invalid <- operation_names[!operation_kinds %in% valid_kinds]
+    stop("argument(s) ", paste(invalid, collapse = ", "), " not a recognized type", call. = FALSE)
+  }
+
+  python_vector <- function(value) {
+    converted <- .as_python_vector(value)
+    if (inherits(converted, "python.builtin.object") || is.list(converted)) {
+      return(converted)
+    }
+    if (length(converted) == 1L) {
+      return(as.list(converted))
+    }
+    converted
+  }
+  python_data <- function(data) {
+    values <- lapply(data, python_vector)
+    names(values) <- names(data)
+    values
+  }
+
+  python_operations <- lapply(seq_along(operations), function(index) {
+    operation <- operations[[index]]
+    list(
+      kind = operation_kinds[[index]],
+      time = python_vector(operation$time),
+      value = if (is.null(operation$value)) NULL else python_vector(operation$value),
+      default = operation$default,
+      censor = operation$censor
+    )
+  })
+  names(python_operations) <- operation_names
+
+  first_call <- !inherits(data1, "tmerge")
+  id_expression <- Call[["id"]]
+  if (first_call && !is.name(id_expression)) {
+    stop("on the first call 'id' must be a single variable name", call. = FALSE)
+  }
+  id_values <- eval(id_expression, data2, enclos = parent.frame())
+  if (is.null(id_values)) {
+    stop("id variable not found in data2", call. = FALSE)
+  }
+  if (anyNA(id_values)) {
+    stop("id variable cannot have missing values", call. = FALSE)
+  }
+  id_argument <- if (is.name(id_expression)) {
+    as.character(id_expression)
+  } else {
+    python_vector(id_values)
+  }
+
+  option_values <- if (missing(options)) list() else options
+  if (!is.list(option_values)) {
+    stop("options must be a list", call. = FALSE)
+  }
+  if (first_call && is.null(option_values$idname)) {
+    option_values$idname <- as.character(id_expression)
+  }
+
+  tstart_values <- if (missing(tstart)) {
+    NULL
+  } else {
+    python_vector(eval(Call[["tstart"]], data2, enclos = parent.frame()))
+  }
+  tstop_values <- if (missing(tstop)) {
+    NULL
+  } else {
+    python_vector(eval(Call[["tstop"]], data2, enclos = parent.frame()))
+  }
+
+  metadata <- NULL
+  retained <- attr(data1, "tm.retain")
+  if (!first_call) {
+    if (is.null(retained) || is.null(retained$tname)) {
+      stop("tmerge object is missing retained metadata", call. = FALSE)
+    }
+    if (!identical(nrow(data1), as.integer(retained$n))) {
+      stop("tmerge object has been modified, size", call. = FALSE)
+    }
+    event_censors <- NULL
+    if (!is.null(retained$tevent)) {
+      event_censors <- retained$tevent$censor
+      names(event_censors) <- retained$tevent$name
+    }
+    metadata <- .compact_null(list(
+      tname = retained$tname,
+      tevent = event_censors,
+      tdcvar = retained$tdcvar
+    ))
+  }
+
+  result <- .call_r_api(
+    "tmerge",
+    data1 = python_data(data1),
+    data2 = python_data(data2),
+    id = id_argument,
+    tstart = tstart_values,
+    tstop = tstop_values,
+    options = option_values,
+    operations = python_operations,
+    metadata = metadata
+  )
+
+  nullable_vector <- function(value) {
+    items <- if (is.list(value)) value else as.list(value)
+    missing_item <- vapply(items, function(item) is.null(item) || length(item) == 0L, logical(1))
+    if (!any(missing_item)) {
+      return(unlist(items, recursive = FALSE, use.names = FALSE))
+    }
+    if (all(missing_item)) {
+      return(rep(NA_real_, length(items)))
+    }
+    sample <- items[[which(!missing_item)[[1L]]]]
+    if (is.logical(sample)) {
+      return(vapply(items, function(item) if (is.null(item) || length(item) == 0L) NA else as.logical(item)[[1L]], logical(1)))
+    }
+    if (is.integer(sample)) {
+      return(vapply(items, function(item) if (is.null(item) || length(item) == 0L) NA_integer_ else as.integer(item)[[1L]], integer(1)))
+    }
+    if (is.numeric(sample)) {
+      return(vapply(items, function(item) if (is.null(item) || length(item) == 0L) NA_real_ else as.numeric(item)[[1L]], numeric(1)))
+    }
+    vapply(items, function(item) if (is.null(item) || length(item) == 0L) NA_character_ else as.character(item)[[1L]], character(1))
+  }
+
+  columns <- .result_field(result, "columns")
+  columns <- lapply(columns, nullable_vector)
+  output <- as.data.frame(columns, check.names = FALSE, stringsAsFactors = FALSE)
+  output <- .restore_r_column_classes(output, data1)
+  for (index in seq_along(operations)) {
+    operation <- operations[[index]]
+    source <- operation$value
+    if (is.null(source)) {
+      next
+    }
+    name <- operation_names[[index]]
+    if (is.factor(source)) {
+      output_levels <- levels(source)
+      if (operation_kinds[[index]] == "tdc" && !is.null(operation$default)) {
+        initial <- as.character(operation$default)[[1L]]
+        if (!is.na(initial) && !initial %in% output_levels) {
+          output_levels <- c(output_levels, initial)
+        }
+      }
+      output[[name]] <- factor(
+        as.character(output[[name]]),
+        levels = output_levels,
+        ordered = is.ordered(source)
+      )
+    } else if (inherits(source, "Date")) {
+      date_values <- as.numeric(output[[name]])
+      date_values[is.nan(date_values)] <- NA_real_
+      output[[name]] <- as.Date(date_values, origin = "1970-01-01")
+    } else if (inherits(source, "POSIXct")) {
+      timezone <- attr(source, "tzone")
+      if (is.null(timezone) || length(timezone) == 0L) {
+        timezone <- ""
+      }
+      datetime_values <- as.numeric(output[[name]])
+      datetime_values[is.nan(datetime_values)] <- NA_real_
+      output[[name]] <- as.POSIXct(
+        datetime_values,
+        origin = "1970-01-01",
+        tz = timezone[[1L]]
+      )
+    }
+  }
+
+  tname <- .result_field(result, "tname")
+  event_censors <- .result_field(result, "tevent")
+  event_names <- names(event_censors)
+  tdc_names <- as.character(unlist(.result_field(result, "tdcvar"), use.names = FALSE))
+  tm_retain <- list(tname = tname, n = nrow(output))
+  if (length(event_names) > 0L) {
+    tm_retain$tevent <- list(name = event_names, censor = as.list(event_censors))
+  }
+  if (length(tdc_names) > 0L) {
+    tm_retain$tdcvar <- tdc_names
+  }
+
+  count_names <- c(
+    "early", "late", "gap", "within", "boundary",
+    "leading", "trailing", "tied", "missid"
+  )
+  current_counts <- matrix(
+    0,
+    nrow = length(operation_names),
+    ncol = length(count_names),
+    dimnames = list(operation_names, count_names)
+  )
+  count_values <- .result_field(result, "tcount")
+  for (name in operation_names) {
+    row <- count_values[[name]]
+    current_counts[name, ] <- as.numeric(unlist(row[count_names], use.names = FALSE))
+  }
+  all_counts <- rbind(attr(data1, "tcount"), current_counts)
+
+  attr(output, "tm.retain") <- tm_retain
+  attr(output, "tcount") <- all_counts
+  attr(output, "call") <- Call
+  row.names(output) <- NULL
+  class(output) <- c("tmerge", "data.frame")
+  output
 }
 
 coxsurv.fit <- function(ctype, stype, se.fit, varmat, cluster, y, x, wt, risk,

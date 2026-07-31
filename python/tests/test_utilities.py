@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from .helpers import setup_survival_import
@@ -110,8 +112,10 @@ def test_tmerge_family_public_apis():
         survival.tmerge([1, 1], [2.0, 1.0], [0.0, 0.0], [], [], [])
     with pytest.raises(ValueError, match="ntime values must be finite"):
         survival.tmerge([1], [1.0], [0.0], [1], [float("inf")], [1.0])
-    with pytest.raises(ValueError, match="x values must be finite"):
-        survival.tmerge([1], [1.0], [0.0], [1], [0.5], [float("nan")])
+    missing_increment = survival.tmerge([1], [1.0], [0.0], [1], [0.5], [float("nan")])
+    assert math.isnan(missing_increment[0])
+    with pytest.raises(ValueError, match="x values may be finite or NaN"):
+        survival.tmerge([1], [1.0], [0.0], [1], [0.5], [float("inf")])
     with pytest.raises(ValueError, match="nid must be sorted in non-decreasing order"):
         survival.tmerge2([1], [1.0], [2, 1], [0.5, 0.5])
     with pytest.raises(ValueError, match="id must be sorted in non-decreasing order"):
