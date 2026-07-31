@@ -8091,24 +8091,81 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
                                           timewt = c("n", "S", "S/G", "n/G2", "I"),
                                           influence = 0, ranks = FALSE, timefix = TRUE,
                                           keepstrata = 10) {
-  extra <- list(...)
-  if (length(extra) > 0L) {
-    stop("multiple fitted model concordance is not implemented", call. = FALSE)
+  Call <- match.call()
+  fits <- list(object, ...)
+  nfit <- length(fits)
+  fit_names <- as.character(Call)[1L + seq_len(nfit)]
+  fit_class <- if (inherits(object, "survival_py_coxph")) {
+    "survival_py_coxph"
+  } else if (inherits(object, "survival_py_survreg")) {
+    "survival_py_survreg"
+  } else {
+    stop("object is not an appropriate fit object", call. = FALSE)
+  }
+  valid_fit <- vapply(fits, inherits, logical(1), what = fit_class)
+  if (any(!valid_fit)) {
+    index <- which(!valid_fit)[[1L]]
+    call_name <- names(Call)[index + 1L]
+    label <- if (!is.null(call_name) && nzchar(call_name) && call_name != "object") {
+      call_name
+    } else {
+      fit_names[[index]]
+    }
+    stop(label, " argument is not an appropriate fit object", call. = FALSE)
   }
   timewt <- match.arg(timewt)
-  response <- if (missing(newdata)) {
-    .model_concordance_response(object)
+  responses <- if (missing(newdata)) {
+    lapply(fits, .model_concordance_response)
   } else {
-    .model_concordance_response(object, newdata)
+    lapply(fits, .model_concordance_response, newdata = newdata)
   }
+  sample_sizes <- vapply(responses, nrow, integer(1))
+  if (any(sample_sizes != sample_sizes[[1L]])) {
+    stop("all models must have the same sample size", call. = FALSE)
+  }
+  response <- responses[[1L]]
+  same_response <- vapply(responses[-1L], function(value) {
+    identical(attr(value, "type"), attr(response, "type")) &&
+      isTRUE(all.equal(unclass(value), unclass(response), check.attributes = FALSE))
+  }, logical(1))
+  if (length(same_response) > 0L && any(!same_response)) {
+    warning("models do not have the same response vector", call. = FALSE)
+  }
+
   scores <- if (missing(newdata)) {
-    predict(object, type = "lp")
+    lapply(fits, predict, type = "lp")
   } else {
-    predict(object, newdata = newdata, type = "lp")
+    lapply(fits, predict, newdata = newdata, type = "lp")
+  }
+  if (any(vapply(scores, length, integer(1)) != sample_sizes[[1L]])) {
+    stop("model predictions must match the response length", call. = FALSE)
+  }
+  score_matrix <- do.call(cbind, lapply(scores, as.numeric))
+  colnames(score_matrix) <- fit_names
+
+  fit_weights <- if (missing(newdata)) {
+    lapply(fits, weights)
+  } else {
+    rep(list(NULL), nfit)
+  }
+  has_weights <- !vapply(fit_weights, is.null, logical(1))
+  if (any(has_weights) && !all(has_weights)) {
+    stop("all models must have the same weight vector", call. = FALSE)
+  }
+  if (all(has_weights)) {
+    reference_weights <- as.numeric(fit_weights[[1L]])
+    same_weights <- vapply(fit_weights[-1L], function(value) {
+      isTRUE(all.equal(as.numeric(value), reference_weights, check.attributes = FALSE))
+    }, logical(1))
+    if (length(same_weights) > 0L && any(!same_weights)) {
+      stop("all models must have the same weight vector", call. = FALSE)
+    }
+  } else {
+    reference_weights <- NULL
   }
   fit_args <- list(
     y = response,
-    x = scores,
+    x = score_matrix,
     timewt = timewt,
     influence = influence,
     ranks = ranks,
@@ -8119,6 +8176,9 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
   if (!missing(cluster)) {
     fit_args$cluster <- cluster
   }
+  if (!is.null(reference_weights)) {
+    fit_args$weights <- reference_weights
+  }
   if (!missing(ymin)) {
     fit_args$ymin <- ymin
   }
@@ -8126,7 +8186,7 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
     fit_args$ymax <- ymax
   }
   result <- do.call(concordancefit, fit_args)
-  result$call <- match.call()
+  result$call <- Call
   class(result) <- "concordance"
   result
 }
@@ -8245,7 +8305,7 @@ survConcordance.fit <- function(y, x, strata, weight) {
   values
 }
 
-.concordancefit_count <- function(result) {
+.concordancefit_count <- function(result, score_names = NULL) {
   concordant <- .as_numeric_vector(.result_field(result, "concordant"))
   comparable <- .as_numeric_vector(.result_field(result, "comparable"))
   tied_x <- .as_numeric_vector(.result_field(result, "tied_x"))
@@ -8268,20 +8328,33 @@ survConcordance.fit <- function(y, x, strata, weight) {
     names(out) <- colnames(count)
     return(out)
   }
-  rownames(count) <- .result_field(result, "score_names")
+  rownames(count) <- if (is.null(score_names)) {
+    .result_field(result, "score_names")
+  } else {
+    score_names
+  }
   count
 }
 
-.concordancefit_rows <- function(rows) {
+.concordancefit_rows <- function(rows, fit = NULL) {
   if (is.null(rows) || !is.list(rows) || length(rows) == 0L) {
     return(NULL)
   }
-  data.frame(
+  frame <- data.frame(
     time = .as_numeric_vector(lapply(rows, `[[`, "time")),
     rank = .as_numeric_vector(lapply(rows, `[[`, "rank")),
     timewt = .as_numeric_vector(lapply(rows, `[[`, "timewt")),
     casewt = .as_numeric_vector(lapply(rows, `[[`, "casewt"))
   )
+  if (!is.null(fit)) {
+    frame <- data.frame(
+      fit = rep(fit, nrow(frame)),
+      frame,
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  }
+  frame
 }
 
 concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
@@ -8292,6 +8365,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (any(is.na(x)) || any(is.na(y))) {
     return(NULL)
   }
+  input_score_names <- if (is.matrix(x) || is.data.frame(x)) colnames(x) else NULL
   timewt <- match.arg(timewt)
   influence <- as.integer(influence)
   if (!isTRUE(std.err)) {
@@ -8317,31 +8391,80 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   )
 
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))
+  multi_score <- length(concordance) > 1L
+  score_names <- if (!is.null(input_score_names) && length(input_score_names) == length(concordance)) {
+    as.character(input_score_names)
+  } else {
+    as.character(.result_field(result, "score_names"))
+  }
+  if (multi_score) {
+    names(concordance) <- score_names
+  }
   out <- list(
     concordance = if (length(concordance) == 1L) concordance[[1L]] else concordance,
-    count = .concordancefit_count(result),
+    count = .concordancefit_count(result, if (multi_score) score_names else NULL),
     n = as.integer(.result_field(result, "n"))
   )
   variance <- .result_field(result, "variance")
+  dfbeta <- .result_field(result, "dfbeta")
+  dfbeta_matrix <- NULL
+  if (multi_score && !is.null(dfbeta)) {
+    dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
+    n_obs <- length(dfbeta_columns[[1L]])
+    if (any(vapply(dfbeta_columns, length, integer(1)) != n_obs)) {
+      stop("concordance dfbeta values must be rectangular", call. = FALSE)
+    }
+    dfbeta_matrix <- do.call(cbind, dfbeta_columns)
+  }
   if (isTRUE(std.err) && !is.null(variance)) {
-    out$var <- 4 * .as_numeric_vector(variance)
-    out$cvar <- out$var
+    if (multi_score && !is.null(dfbeta_matrix)) {
+      out$var <- 4 * crossprod(dfbeta_matrix)
+      out$cvar <- 4 * .as_numeric_vector(variance)
+    } else {
+      out$var <- 4 * .as_numeric_vector(variance)
+      out$cvar <- out$var
+    }
   }
   if (influence %in% c(1L, 3L)) {
-    dfbeta <- .result_field(result, "dfbeta")
     if (!is.null(dfbeta)) {
-      out$dfbeta <- 2 * .as_numeric_vector(dfbeta)
+      out$dfbeta <- if (multi_score && !is.null(dfbeta_matrix)) {
+        2 * dfbeta_matrix
+      } else {
+        2 * .as_numeric_vector(dfbeta)
+      }
     }
   }
   if (influence >= 2L) {
     influence_rows <- .result_field(result, "influence")
     if (!is.null(influence_rows)) {
-      out$influence <- 2 * .as_numeric_matrix(influence_rows)
-      colnames(out$influence) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
+      if (multi_score) {
+        influence_matrices <- lapply(influence_rows, .as_numeric_matrix)
+        matrix_dims <- lapply(influence_matrices, dim)
+        if (!all(vapply(matrix_dims, identical, logical(1), matrix_dims[[1L]]))) {
+          stop("concordance influence values must be rectangular", call. = FALSE)
+        }
+        out$influence <- array(
+          2 * unlist(influence_matrices, use.names = FALSE),
+          dim = c(matrix_dims[[1L]], length(influence_matrices))
+        )
+        dimnames(out$influence) <- list(
+          NULL,
+          c("concordant", "discordant", "tied.x", "tied.y", "tied.xy"),
+          score_names
+        )
+      } else {
+        out$influence <- 2 * .as_numeric_matrix(influence_rows)
+        colnames(out$influence) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
+      }
     }
   }
   if (isTRUE(ranks)) {
-    out$ranks <- .concordancefit_rows(.result_field(result, "ranks"))
+    rank_rows <- .result_field(result, "ranks")
+    out$ranks <- if (multi_score) {
+      do.call(rbind, Map(.concordancefit_rows, rank_rows, score_names))
+    } else {
+      .concordancefit_rows(rank_rows)
+    }
   }
   out
 }
