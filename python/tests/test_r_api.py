@@ -6555,6 +6555,20 @@ def test_concordance_summary_low_level_reports_pair_counts():
     )
 
 
+def test_concordance_summary_low_level_reports_weighted_tie_counts():
+    summary = survival.core.concordance_summary(
+        [1.0, 2.0, 2.0, 2.0, 3.0],
+        [1, 1, 1, 1, 0],
+        [0.1, 0.5, 0.5, 0.9, 0.5],
+        weights=[1.0, 2.0, 3.0, 4.0, 5.0],
+        timewt="I",
+    )
+
+    assert summary["tied_x"] == pytest.approx(25.0 / 14.0)
+    assert summary["tied_y"] == pytest.approx(10.0 / 7.0)
+    assert summary["tied_xy"] == pytest.approx(3.0 / 7.0)
+
+
 def test_concordance_formula_accepts_strata_wrapper():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],
