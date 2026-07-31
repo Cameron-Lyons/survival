@@ -4302,7 +4302,10 @@ def strata(
             pieces.append(level_label if short else f"{term_labels[term_idx]}={level_label}")
         levels.append(sep.join(pieces))
     row_labels = [None if code is None else levels[code - 1] for code in codes]
-    counts = [sum(1 for code in codes if code == idx + 1) for idx in range(len(levels))]
+    counts = [0] * len(levels)
+    for code in codes:
+        if code is not None:
+            counts[code - 1] += 1
     return StrataFactor(codes=codes, levels=levels, labels=row_labels, counts=counts)
 
 
@@ -12430,10 +12433,14 @@ def aggregate_survfit_result(
     if len(set(group_codes)) == 1:
         return aggregate_survfit_result(result, weights=curve_weights)
 
+    indices_by_group: dict[int, list[int]] = {}
+    for idx, code in enumerate(group_codes):
+        indices_by_group.setdefault(code, []).append(idx)
+
     aggregates = []
     linear_predictors = []
-    for code in sorted(set(group_codes)):
-        indices = [idx for idx, group_code in enumerate(group_codes) if group_code == code]
+    for code in sorted(indices_by_group):
+        indices = indices_by_group[code]
         group_weights = (
             [curve_weights[idx] for idx in indices] if curve_weights is not None else None
         )
@@ -16693,13 +16700,15 @@ def _cox_detail_event_times(
     status: list[int],
     strata: list[int],
 ) -> list[tuple[int, float]]:
-    groups: list[tuple[int, float]] = []
-    for stratum in sorted(set(strata)):
-        values = sorted(
-            {time[idx] for idx, event in enumerate(status) if event == 1 and strata[idx] == stratum}
-        )
-        groups.extend((stratum, value) for value in values)
-    return groups
+    event_times: dict[int, set[float]] = {}
+    for event_time, event, stratum in zip(time, status, strata, strict=True):
+        if event == 1:
+            event_times.setdefault(stratum, set()).add(event_time)
+    return [
+        (stratum, event_time)
+        for stratum in sorted(event_times)
+        for event_time in sorted(event_times[stratum])
+    ]
 
 
 def _cox_detail_at_risk(
