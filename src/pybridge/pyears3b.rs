@@ -228,7 +228,7 @@ pub(crate) fn pyears3b(
 }
 
 fn checked_dimension_product(name: &str, dims: &[usize]) -> PyResult<usize> {
-    if dims.iter().any(|&dim| dim == 0) {
+    if dims.contains(&0) {
         return Err(PyValueError::new_err(format!(
             "{name} dimensions must be positive"
         )));
@@ -249,16 +249,28 @@ fn validate_finite(name: &str, values: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
-fn validate_table_layout(
-    name: &str,
+struct TableLayout<'a> {
+    name: &'a str,
     n: usize,
     dim: usize,
-    factors: &[i32],
-    dims: &[usize],
-    cuts: &[f64],
-    data: &[f64],
+    factors: &'a [i32],
+    dims: &'a [usize],
+    cuts: &'a [f64],
+    data: &'a [f64],
     observed: bool,
-) -> PyResult<usize> {
+}
+
+fn validate_table_layout(layout: TableLayout<'_>) -> PyResult<usize> {
+    let TableLayout {
+        name,
+        n,
+        dim,
+        factors,
+        dims,
+        cuts,
+        data,
+        observed,
+    } = layout;
     if dim == 0
         && !observed
         && factors.is_empty()
@@ -390,32 +402,32 @@ pub(crate) fn perform_pyears_calculation(
         return Err(PyValueError::new_err("weights must be non-negative"));
     }
 
-    let total_expected = validate_table_layout(
-        "expected",
+    let total_expected = validate_table_layout(TableLayout {
+        name: "expected",
         n,
-        expected_dim,
-        &expected_factors,
-        &expected_dims,
-        &expected_cuts,
-        &expected_data,
-        false,
-    )?;
+        dim: expected_dim,
+        factors: &expected_factors,
+        dims: &expected_dims,
+        cuts: &expected_cuts,
+        data: &expected_data,
+        observed: false,
+    })?;
     if expected_rates.len() != total_expected {
         return Err(PyValueError::new_err(format!(
             "expected_rates must have length {total_expected}"
         )));
     }
     validate_finite("expected_rates", &expected_rates)?;
-    let total_observed = validate_table_layout(
-        "observed",
+    let total_observed = validate_table_layout(TableLayout {
+        name: "observed",
         n,
-        observed_dim,
-        &observed_factors,
-        &observed_dims,
-        &observed_cuts,
-        &observed_data,
-        true,
-    )?;
+        dim: observed_dim,
+        factors: &observed_factors,
+        dims: &observed_dims,
+        cuts: &observed_cuts,
+        data: &observed_data,
+        observed: true,
+    })?;
     let mut pyears = vec![0.0; total_observed];
     let mut pn = vec![0.0; total_observed];
     let mut pcount = vec![0.0; total_observed];
@@ -474,12 +486,9 @@ mod tests {
         ny: usize,
         y: &[f64],
         weights: &[f64],
-        observed_factors: &[i32],
-        observed_dims: &[usize],
-        observed_cuts: &[f64],
-        observed_data: &[f64],
+        observed: PyearsObservedParams<'_>,
     ) -> (Vec<f64>, Vec<f64>, Vec<f64>, f64) {
-        let size = observed_dims.iter().product();
+        let size = observed.dims.iter().product();
         let mut pyears = vec![0.0; size];
         let mut pn = vec![0.0; size];
         let mut pcount = vec![0.0; size];
@@ -493,13 +502,6 @@ mod tests {
             cut: &[],
             rates: &[0.0],
             data: &expected_data,
-        };
-        let observed = PyearsObservedParams {
-            dim: observed_dims.len(),
-            fac: observed_factors,
-            dims: observed_dims,
-            cut: observed_cuts,
-            data: observed_data,
         };
         let mut output = PyearsOutput {
             pyears: &mut pyears,
@@ -520,10 +522,13 @@ mod tests {
             2,
             &[25.0, 8.0, 1.0, 0.0],
             &[1.0, 1.0],
-            &[0],
-            &[3],
-            &[0.0, 10.0, 20.0, 30.0],
-            &[0.0, 5.0],
+            PyearsObservedParams {
+                dim: 1,
+                fac: &[0],
+                dims: &[3],
+                cut: &[0.0, 10.0, 20.0, 30.0],
+                data: &[0.0, 5.0],
+            },
         );
 
         assert_eq!(result.0, vec![15.0, 13.0, 5.0]);
@@ -539,10 +544,13 @@ mod tests {
             2,
             &[10.0, 10.0, 10.0, 1.0, 1.0, 1.0],
             &[1.0, 1.0, 1.0],
-            &[0],
-            &[3],
-            &[0.0, 10.0, 20.0, 30.0],
-            &[-5.0, 25.0, 35.0],
+            PyearsObservedParams {
+                dim: 1,
+                fac: &[0],
+                dims: &[3],
+                cut: &[0.0, 10.0, 20.0, 30.0],
+                data: &[-5.0, 25.0, 35.0],
+            },
         );
 
         assert_eq!(result.0, vec![5.0, 0.0, 5.0]);
@@ -558,10 +566,13 @@ mod tests {
             2,
             &[25.0, 8.0, 12.0, 1.0, 0.0, 1.0],
             &[1.0, 1.0, 1.0],
-            &[0, 1],
-            &[4, 2],
-            &[0.0, 10.0, 20.0, 30.0, 40.0],
-            &[0.0, 5.0, 15.0, 1.0, 2.0, 1.0],
+            PyearsObservedParams {
+                dim: 2,
+                fac: &[0, 1],
+                dims: &[4, 2],
+                cut: &[0.0, 10.0, 20.0, 30.0, 40.0],
+                data: &[0.0, 5.0, 15.0, 1.0, 2.0, 1.0],
+            },
         );
 
         assert_eq!(result.0, vec![10.0, 15.0, 12.0, 0.0, 5.0, 3.0, 0.0, 0.0]);
