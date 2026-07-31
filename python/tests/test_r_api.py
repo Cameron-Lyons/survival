@@ -2571,10 +2571,11 @@ def test_r_style_ratetable_helpers_delegate_to_population_core():
 
     assert isinstance(scaled, survival.SurvExpResult)
     assert scaled.time == pytest.approx([1.0, 2.0])
-    assert scaled.method == "hakulinen"
+    assert scaled.method == "ederer"
     assert conditional.method == "conditional"
     assert individual_surv == pytest.approx(direct_individual)
     assert individual_hazard == pytest.approx([-math.log(value) for value in direct_individual])
+
     with pytest.warns(RuntimeWarning, match="se_fit value ignored"):
         survival.survexp(
             time=[365.25],
@@ -2597,6 +2598,49 @@ def test_r_style_ratetable_helpers_delegate_to_population_core():
         survival.ratetableDate(2001, 2, 29)
     with pytest.raises(TypeError, match="month and day"):
         survival.ratetableDate(2000, month=2)
+
+
+def test_survexp_ederer_keeps_the_full_reference_cohort():
+    ages = [14610.0, 25567.5]
+    years = [2000.0, 2000.0]
+    sexes = [0, 1]
+    eval_times = [365.25, 730.5]
+    follow_up = [180.0, 1095.0]
+
+    ederer = survival.survexp(
+        follow_up,
+        ages,
+        years,
+        sex=sexes,
+        times=eval_times,
+        method="ederer",
+    )
+    hakulinen = survival.survexp(
+        follow_up,
+        ages,
+        years,
+        sex=sexes,
+        times=eval_times,
+        method="hakulinen",
+    )
+
+    assert isinstance(ederer, survival.SurvExpResult)
+    assert isinstance(hakulinen, survival.SurvExpResult)
+    assert ederer.n_risk == pytest.approx([2.0, 2.0])
+    assert hakulinen.n_risk == pytest.approx([1.0, 1.0])
+    expected_ederer = [
+        sum(
+            survival.survexp_individual(
+                time=[eval_time, eval_time],
+                age=ages,
+                year=years,
+                sex=sexes,
+            )
+        )
+        / 2.0
+        for eval_time in eval_times
+    ]
+    assert ederer.surv == pytest.approx(expected_ederer)
 
 
 def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
