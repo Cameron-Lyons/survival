@@ -163,6 +163,9 @@ to produce model-based survival curves.
 `survdiff` uses the same right-censored and delayed-entry response forms.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.
+Formula fits support `tt(...)` time-varying coefficient terms for right-censored
+and counting-process responses, including R's default O'Brien rank transform
+and custom `tt(x, time, riskset, weights)` callables.
 `clogit("case ~ exposure + strata(set)", data=...)` fits matched case-control
 models through the exact stratified Cox likelihood; `method="approximate"`
 maps to Breslow handling as it does in R.

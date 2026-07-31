@@ -274,6 +274,7 @@ class _FormulaFit:
     model_frame: dict[str, Any] | None = None
     score_values: list[float] | None = None
     conditional_logistic: bool = False
+    n_observations: int | None = None
 
     def __getattr__(self, name: str) -> Any:
         if self.conditional_logistic and name in {
@@ -307,6 +308,8 @@ class _FormulaFit:
             return self.case_weights
         if name == "score" and self.score_values is not None:
             return self.score_values
+        if name == "n" and self.n_observations is not None:
+            return self.n_observations
         if name == "scaled_schoenfeld_residuals" and hasattr(self.fit, "schoenfeld_residuals"):
             return self._cox_scaled_schoenfeld_residuals
         if name == "dfbeta" and hasattr(self.fit, "score_residuals"):
@@ -2718,7 +2721,7 @@ def _factor_column_items(term: str) -> tuple[str, list[tuple[str, bool]]] | None
 
 
 def _transform_column_items(term: str) -> tuple[str, list[tuple[str, bool]]] | None:
-    for wrapper in ("log", "sqrt", "exp", "I", "identity", "as.numeric"):
+    for wrapper in ("log", "sqrt", "exp", "I", "identity", "as.numeric", "tt"):
         prefix = f"{wrapper}("
         if term.startswith(prefix) and term.endswith(")"):
             return wrapper, _formula_name_items(term[len(prefix) : -1])
@@ -3072,25 +3075,153 @@ def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
     return _materialize_formula_terms(_split_terms_cached(rhs, dot_key))
 
 
-def _formula_has_time_transform_term(formula: str) -> bool:
-    _lhs, sep, rhs = formula.partition("~")
-    if not sep:
-        return False
+@dataclass(frozen=True)
+class _CoxTimeTransformExpansion:
+    response: Surv
+    source_indices: list[int]
+    riskset: list[int]
+    strata: list[int]
 
-    in_backtick = False
-    for idx, char in enumerate(rhs):
-        if char == "`":
-            in_backtick = not in_backtick
-            continue
-        if in_backtick or char != "t":
-            continue
-        if rhs[idx : idx + 2] != "tt":
-            continue
-        previous = rhs[idx - 1] if idx > 0 else ""
-        next_char = rhs[idx + 2] if idx + 2 < len(rhs) else ""
-        if (not previous or not (previous.isalnum() or previous in "._")) and next_char == "(":
-            return True
-    return False
+
+def _cox_time_transform_terms(terms: _FormulaTerms) -> list[_CovariateTerm]:
+    result: list[_CovariateTerm] = []
+    for spec in terms.covariates:
+        for term in _covariate_factors(spec):
+            if term.transform == "tt" and term not in result:
+                result.append(term)
+    return result
+
+
+def _cox_time_transform_expansion(
+    response: Surv,
+    strata: Any | None,
+    timefix: bool,
+) -> _CoxTimeTransformExpansion:
+    n = len(response)
+    group_codes = _encode_groups(strata, n) if strata is not None else [0] * n
+    stop = list(response.time)
+    start = list(response.start) if response.start is not None else None
+    if timefix:
+        if start is None:
+            stop = _survdiff_timefix_values(stop, True)
+        else:
+            start, stop = _timefix_vectors(start, stop)
+    status = [float(value) for value in response.event]
+
+    if start is None:
+        order = sorted(range(n), key=lambda idx: (group_codes[idx], -stop[idx], status[idx]))
+        boundaries = [
+            int(position == 0 or group_codes[idx] != group_codes[order[position - 1]])
+            for position, idx in enumerate(order)
+        ]
+        counts = _core.coxcount1(
+            [stop[idx] for idx in order],
+            [status[idx] for idx in order],
+            boundaries,
+        )
+        source_indices = [order[int(index) - 1] for index in counts.index]
+    else:
+        sort_end = sorted(
+            range(n),
+            key=lambda idx: (group_codes[idx], -stop[idx], status[idx]),
+        )
+        sort_start = sorted(range(n), key=lambda idx: (group_codes[idx], -start[idx]))
+        boundaries = [
+            int(position == 0 or group_codes[idx] != group_codes[sort_end[position - 1]])
+            for position, idx in enumerate(sort_end)
+        ]
+        counts = _core.coxcount2(start, stop, status, sort_start, sort_end, boundaries)
+        source_indices = [int(index) - 1 for index in counts.index]
+
+    expanded_time = [
+        float(event_time)
+        for event_time, risk_size in zip(counts.time, counts.nrisk, strict=True)
+        for _ in range(int(risk_size))
+    ]
+    riskset = [
+        risk_idx + 1
+        for risk_idx, risk_size in enumerate(counts.nrisk)
+        for _ in range(int(risk_size))
+    ]
+    return _CoxTimeTransformExpansion(
+        response=Surv(expanded_time, [int(value) for value in counts.status]),
+        source_indices=source_indices,
+        riskset=riskset,
+        strata=[value - 1 for value in riskset],
+    )
+
+
+def _cox_default_time_transform(values: Sequence[float], riskset: Sequence[int]) -> list[float]:
+    result = [0.0] * len(values)
+    start = 0
+    while start < len(values):
+        end = start + 1
+        while end < len(values) and riskset[end] == riskset[start]:
+            end += 1
+        order = sorted(range(start, end), key=values.__getitem__)
+        position = 0
+        while position < len(order):
+            tie_end = position + 1
+            while tie_end < len(order) and values[order[tie_end]] == values[order[position]]:
+                tie_end += 1
+            average_rank = (position + 1 + tie_end) / 2.0
+            transformed = (average_rank - 0.5) / (0.5 + len(order) - average_rank)
+            for ordered_idx in order[position:tie_end]:
+                result[ordered_idx] = transformed
+            position = tie_end
+        start = end
+    return result
+
+
+def _cox_time_transform_functions(value: Any, count: int) -> list[Any | None]:
+    if count == 0:
+        return []
+    if value is None:
+        return [None] * count
+    if callable(value):
+        return [value] * count
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        functions = list(value)
+        if not functions or any(not callable(function) for function in functions):
+            raise TypeError("tt must be a function or a non-empty sequence of functions")
+        if len(functions) == 1:
+            return functions * count
+        if len(functions) != count:
+            raise ValueError("tt must contain one function per tt() formula term")
+        return functions
+    raise TypeError("tt must be a function or a sequence of functions")
+
+
+def _cox_time_transform_values(
+    data: Any,
+    terms: Sequence[_CovariateTerm],
+    functions: Sequence[Any | None],
+    expansion: _CoxTimeTransformExpansion,
+    weights: Sequence[float] | None,
+) -> dict[_CovariateTerm, list[float]]:
+    transformed: dict[_CovariateTerm, list[float]] = {}
+    for term, function in zip(terms, functions, strict=True):
+        raw = _numeric_term_values(
+            _subset_sequence(_column(data, term.column), expansion.source_indices, term.column),
+            replace(term, transform=None),
+        )
+        if function is None:
+            values = _cox_default_time_transform(raw, expansion.riskset)
+        else:
+            values = _coerce_array_like(
+                function(raw, list(expansion.response.time), expansion.riskset, weights),
+                "tt transform result",
+            )
+            if len(values) != len(raw):
+                raise ValueError("tt transform result must match the expanded risk-set rows")
+            try:
+                values = [float(item) for item in values]
+            except (TypeError, ValueError) as exc:
+                raise ValueError("tt transform result must contain numeric values") from exc
+            if any(not math.isfinite(item) for item in values):
+                raise ValueError("tt transform result must contain only finite values")
+        transformed[term] = values
+    return transformed
 
 
 def _parse_formula(formula: str, data: Any) -> tuple[Surv, _FormulaTerms]:
@@ -3142,7 +3273,7 @@ def _apply_numeric_transform(values: list[float], transform: str | None, term: s
         return [math.sqrt(value) for value in values]
     if transform == "exp":
         return [math.exp(value) for value in values]
-    if transform in {"I", "identity", "as.numeric"}:
+    if transform in {"I", "identity", "as.numeric", "tt"}:
         return values
     raise ValueError(f"unsupported formula transform {transform!r}")
 
@@ -3376,7 +3507,17 @@ def _single_design_columns(
     data: Any,
     spec: _SingleDesignTerm,
     n: int,
+    time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
 ) -> list[list[float]]:
+    if (
+        isinstance(spec, _NumericDesignTerm)
+        and spec.term.transform == "tt"
+        and time_transform_values is not None
+    ):
+        values = list(time_transform_values[spec.term])
+        if len(values) != n:
+            raise ValueError("tt transform result must match the expanded risk-set rows")
+        return [values]
     values = _term_raw_values(data, spec.term, n)
     if isinstance(spec, _NumericDesignTerm):
         return [_numeric_term_values(values, spec.term)]
@@ -3391,9 +3532,17 @@ def _single_design_columns(
     return [[1.0 if value == level else 0.0 for value in values] for level in encoded_levels]
 
 
-def _design_term_columns(data: Any, spec: _DesignTerm, n: int) -> list[list[float]]:
+def _design_term_columns(
+    data: Any,
+    spec: _DesignTerm,
+    n: int,
+    time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
+) -> list[list[float]]:
     if isinstance(spec, _InteractionDesignTerm):
-        factor_columns = [_single_design_columns(data, factor, n) for factor in spec.factors]
+        factor_columns = [
+            _single_design_columns(data, factor, n, time_transform_values)
+            for factor in spec.factors
+        ]
         interaction_columns: list[list[float]] = []
         for reversed_combo in product(*reversed(factor_columns)):
             column_combo = tuple(reversed(reversed_combo))
@@ -3401,12 +3550,20 @@ def _design_term_columns(data: Any, spec: _DesignTerm, n: int) -> list[list[floa
                 [math.prod(column[idx] for column in column_combo) for idx in range(n)]
             )
         return interaction_columns
-    return _single_design_columns(data, spec, n)
+    return _single_design_columns(data, spec, n, time_transform_values)
 
 
-def _design_rows_from_spec(data: Any, design: _FormulaDesign, n: int) -> list[list[float]]:
+def _design_rows_from_spec(
+    data: Any,
+    design: _FormulaDesign,
+    n: int,
+    *,
+    time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
+) -> list[list[float]]:
     columns = [
-        column for term in design.covariates for column in _design_term_columns(data, term, n)
+        column
+        for term in design.covariates
+        for column in _design_term_columns(data, term, n, time_transform_values)
     ]
     if design.intercept:
         columns.insert(0, [1.0] * n)
@@ -15105,6 +15262,8 @@ def loglik(fit: Any) -> float:
 
 
 def _model_row_count(fit: Any) -> int:
+    if isinstance(fit, _FormulaFit) and fit.n_observations is not None:
+        return fit.n_observations
     values = getattr(fit, "status", None)
     if values is None:
         values = getattr(fit, "event_times", None)
@@ -20446,11 +20605,14 @@ def coxph(
     formula_model_data: Any | None = None
     formula_cluster_columns: tuple[str, ...] = ()
     direct_coefficient_names: tuple[str, ...] | None = None
+    time_transform_terms: list[_CovariateTerm] = []
+    time_transform_functions: list[Any | None] = []
+    time_transform_expanded = False
+    time_transform_observed_n: int | None = None
+    formula_x = False
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
-        if _formula_has_time_transform_term(response):
-            raise NotImplementedError("coxph tt time-transform terms are not supported")
         if subset is not None:
             data, aligned = _subset_formula_inputs(
                 response,
@@ -20484,12 +20646,15 @@ def coxph(
         cluster = aligned["cluster"]
         id_arg = aligned["id"]
         na_action = "pass"
-        formula_x = False
         if x is not None:
             if not _is_bool_like(x):
                 raise TypeError("x must be True or False for coxph formula input")
             formula_x = _normalize_bool_option(x, "x")
         response, terms = _parse_formula(response, data)
+        time_transform_terms = _cox_time_transform_terms(terms)
+        time_transform_functions = _cox_time_transform_functions(tt, len(time_transform_terms))
+        if time_transform_terms and keep_model:
+            raise ValueError("model=True is not supported for coxph fits with tt terms")
         if terms.strata:
             if strata is not None:
                 raise ValueError("use only one of formula strata(...) or strata")
@@ -20543,6 +20708,37 @@ def coxph(
             "coxph currently supports right-censored and counting Surv responses"
         )
 
+    if time_transform_terms:
+        if formula_design is None or formula_model_data is None:
+            raise AssertionError("tt terms require formula design metadata")
+        time_transform_observed_n = len(response)
+        expansion = _cox_time_transform_expansion(response, strata, fix_time)
+        source_indices = expansion.source_indices
+        expanded_n = len(source_indices)
+        expanded_data = _subset_data(formula_model_data, source_indices)
+        weights = _subset_optional_sequence(weights, source_indices, "weights")
+        offset = _subset_optional_sequence(offset, source_indices, "offset")
+        cluster = _subset_optional_sequence(cluster, source_indices, "cluster")
+        id_arg = _subset_optional_sequence(id_arg, source_indices, "id")
+        transform_weights = _optional_float_vector(weights, "weights", expanded_n)
+        transformed = _cox_time_transform_values(
+            formula_model_data,
+            time_transform_terms,
+            time_transform_functions,
+            expansion,
+            transform_weights,
+        )
+        x = _design_rows_from_spec(
+            expanded_data,
+            formula_design,
+            expanded_n,
+            time_transform_values=transformed,
+        )
+        formula_x_matrix = [list(row) for row in x] if formula_x else None
+        response = expansion.response
+        strata = expansion.strata
+        time_transform_expanded = True
+
     rows = _as_matrix_rows(x, "x", allow_empty_columns=True)
     direct_coefficient_names = _validated_matrix_column_names(direct_coefficient_names, rows)
     if len(rows) != len(response):
@@ -20584,7 +20780,7 @@ def coxph(
 
     fit_times = list(response.time)
     entry_times = list(response.start) if response.start is not None else None
-    if fix_time:
+    if fix_time and not time_transform_expanded:
         if entry_times is None:
             fit_times = _survdiff_timefix_values(fit_times, True)
         else:
@@ -20666,6 +20862,7 @@ def coxph(
             x_matrix=formula_x_matrix,
             y_response=response if formula_design is not None and keep_y else None,
             model_frame=model_frame,
+            n_observations=time_transform_observed_n,
         )
     return fit
 
