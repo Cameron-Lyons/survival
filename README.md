@@ -140,6 +140,8 @@ Formula calls also accept `subset=` as a boolean mask or zero-based row indices
 and `na_action="omit"` for row-wise missing-data omission across formula
 columns and external row-aligned arrays such as `weights`, `offset`, and
 `strata`.
+R `survobrien` formula expansion preserves factor keeper columns while applying
+the risk-set transform only to continuous terms.
 Kaplan-Meier `survfit` calls honor `conf_level=`, R-style `conf_type=`
 choices for confidence intervals, `start_time=` for conditional curves, and
 `time0=True` to include the starting row.

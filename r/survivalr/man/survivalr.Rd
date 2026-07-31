@@ -1091,6 +1091,10 @@ I.Borgan and II.Borgan fits retain stratum sizes, optimal allocation fractions,
 phase-two score matrices, and collapsed scores. The returned \code{cch} object
 carries coefficient, model-based, phase-two, and final variance components with
 R-compatible names and methods.
+
+\code{survobrien} formula expansion retains factor keeper columns, including
+their level ordering, while transforming continuous terms within each event
+risk set.
 }
 \seealso{
 \code{\link{survival_python_config}}

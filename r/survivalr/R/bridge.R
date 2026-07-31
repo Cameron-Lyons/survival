@@ -3632,7 +3632,8 @@ survobrien <- function(formula, data, subset, na.action, transform,
         `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
         transform = if (missing(transform)) NULL else transform
       )
-      return(as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE))
+      frame <- as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE)
+      return(.restore_r_column_classes(frame, data))
     }
     call <- match.call()
     call[[1L]] <- quote(survival::survobrien)
@@ -3659,9 +3660,10 @@ survobrien <- function(formula, data, subset, na.action, transform,
   )
 }
 
-.survobrien_formula_numeric_term <- function(label, data) {
+.survobrien_formula_supported_term <- function(label, data) {
   if (label %in% names(data)) {
-    return(is.numeric(data[[label]]) && !is.factor(data[[label]]))
+    value <- data[[label]]
+    return(is.factor(value) || (is.numeric(value) && !inherits(value, "AsIs")))
   }
   match <- regexec(
     "^(log|sqrt|exp|identity|as\\.numeric)\\(([[:space:]]*[^()]+[[:space:]]*)\\)$",
@@ -3692,7 +3694,15 @@ survobrien <- function(formula, data, subset, na.action, transform,
   if (length(labels) == 0L) {
     return(FALSE)
   }
-  all(vapply(labels, .survobrien_formula_numeric_term, logical(1), data = data))
+  factor_terms <- vapply(
+    labels,
+    function(label) label %in% names(data) && is.factor(data[[label]]),
+    logical(1)
+  )
+  if (any(factor_terms) && length(specials$strata) > 0L) {
+    return(FALSE)
+  }
+  all(vapply(labels, .survobrien_formula_supported_term, logical(1), data = data))
 }
 
 fromtimeline <- function(formula, data, id, istate = "istate") {

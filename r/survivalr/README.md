@@ -26,6 +26,8 @@ model retention options.
 `coxph` formula fits support `tt(...)` terms for right-censored and
 counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
+`survobrien` formula expansion preserves factor keeper columns and their level
+ordering while transforming continuous terms within each event risk set.
 
 Time-dependent data construction is also native: `tmerge` evaluates the
 familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the
