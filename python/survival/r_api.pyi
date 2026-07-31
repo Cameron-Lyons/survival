@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 from ._survival import SplineBasisResult as _SplineBasisResult
@@ -116,6 +116,9 @@ class TMergeFrame(Mapping[str, list[Any]]):
     tevent: dict[str, Any]
     tdcvar: tuple[str, ...]
     tcount: dict[str, dict[str, int]]
+    def __getitem__(self, key: str) -> list[Any]: ...
+    def __iter__(self) -> Iterator[str]: ...
+    def __len__(self) -> int: ...
     def copy(self) -> TMergeFrame: ...
 
 class TcutResult:
