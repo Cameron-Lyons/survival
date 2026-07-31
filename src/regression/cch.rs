@@ -17,6 +17,34 @@ enum NativeCchMethod {
     LinYing,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeBorganMethod {
+    I,
+    II,
+}
+
+impl NativeBorganMethod {
+    fn parse(value: &str) -> PyResult<Self> {
+        let normalized = value
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>();
+        match normalized.as_str() {
+            "iborgan" => Ok(Self::I),
+            "iiborgan" => Ok(Self::II),
+            _ => Err(value_error("method must be 'I.Borgan' or 'II.Borgan'")),
+        }
+    }
+
+    fn as_r_name(self) -> &'static str {
+        match self {
+            Self::I => "I.Borgan",
+            Self::II => "II.Borgan",
+        }
+    }
+}
+
 impl NativeCchMethod {
     fn parse(value: &str) -> PyResult<Self> {
         let normalized = value
@@ -170,6 +198,20 @@ pub struct CchFitResult {
     pub cohort_size: usize,
     #[pyo3(get)]
     pub robust: bool,
+    #[pyo3(get)]
+    pub stratified: bool,
+    #[pyo3(get)]
+    pub stratum: Option<Vec<usize>>,
+    #[pyo3(get)]
+    pub cohort_sizes: Vec<usize>,
+    #[pyo3(get)]
+    pub subcohort_sizes: Vec<usize>,
+    #[pyo3(get)]
+    pub optimization_fraction: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub phase2_score_matrix: Option<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub collapsed_score_rows: Option<Vec<Vec<f64>>>,
     score_residual_rows: Vec<Vec<f64>>,
     dfbeta_rows: Vec<Vec<f64>>,
 }
@@ -313,6 +355,39 @@ fn centered_rows(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
+fn square_matrix_product(left: &[Vec<f64>], right: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let width = left.len();
+    let mut result = vec![vec![0.0; width]; width];
+    for (row_idx, left_row) in left.iter().enumerate() {
+        for (shared_idx, &left_value) in left_row.iter().enumerate() {
+            for (column_idx, result_value) in result[row_idx].iter_mut().enumerate() {
+                *result_value += left_value * right[shared_idx][column_idx];
+            }
+        }
+    }
+    result
+}
+
+fn sandwich_product(variance: &[Vec<f64>], middle: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    square_matrix_product(&square_matrix_product(variance, middle), variance)
+}
+
+fn collapse_weighted_score_rows(
+    rows: &[Vec<f64>],
+    weights: &[f64],
+    source_indices: &[usize],
+    observed_n: usize,
+) -> Vec<Vec<f64>> {
+    let width = rows.first().map_or(0, Vec::len);
+    let mut collapsed = vec![vec![0.0; width]; observed_n];
+    for ((row, &weight), &source_idx) in rows.iter().zip(weights).zip(source_indices) {
+        for (target, &value) in collapsed[source_idx].iter_mut().zip(row) {
+            *target += weight * value;
+        }
+    }
+    collapsed
+}
+
 fn validate_cch_inputs(
     stop: &[f64],
     status: &[i32],
@@ -399,6 +474,64 @@ fn validate_cch_inputs(
     Ok(width)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn validate_borgan_inputs(
+    stop: &[f64],
+    status: &[i32],
+    covariates: &[Vec<f64>],
+    start: Option<&[f64]>,
+    subcohort: &[i32],
+    id: &[i64],
+    stratum: &[usize],
+    cohort_sizes: &[usize],
+) -> PyResult<usize> {
+    let cohort_size = cohort_sizes.iter().try_fold(0usize, |total, &size| {
+        total
+            .checked_add(size)
+            .ok_or_else(|| value_error("cohort_sizes sum is too large"))
+    })?;
+    let width = validate_cch_inputs(stop, status, covariates, start, subcohort, id, cohort_size)?;
+    if cohort_sizes.is_empty() {
+        return Err(value_error("cohort_sizes must not be empty"));
+    }
+    if cohort_sizes.contains(&0) {
+        return Err(value_error(
+            "cohort_sizes must contain only positive values",
+        ));
+    }
+    if stratum.len() != stop.len() {
+        return Err(value_error(format!(
+            "stratum has {} rows but stop has {}",
+            stratum.len(),
+            stop.len()
+        )));
+    }
+    if stratum.iter().any(|&value| value >= cohort_sizes.len()) {
+        return Err(value_error(
+            "stratum codes must index every value in cohort_sizes",
+        ));
+    }
+    let mut observed_sizes = vec![0usize; cohort_sizes.len()];
+    for &code in stratum {
+        observed_sizes[code] += 1;
+    }
+    if observed_sizes.contains(&0) {
+        return Err(value_error(
+            "each cohort_sizes entry must have an observed stratum",
+        ));
+    }
+    if observed_sizes
+        .iter()
+        .zip(cohort_sizes)
+        .any(|(&observed, &population)| observed > population)
+    {
+        return Err(value_error(
+            "population is smaller than the sample in a stratum",
+        ));
+    }
+    Ok(width)
+}
+
 fn event_time_delta(stop: &[f64], status: &[i32]) -> f64 {
     let mut times = stop
         .iter()
@@ -426,12 +559,35 @@ fn fit_cox(
     initial_beta: Option<Vec<f64>>,
     max_iter: usize,
 ) -> PyResult<CoxPHFit> {
+    fit_weighted_cox(
+        stop,
+        status,
+        covariates,
+        start,
+        offset,
+        None,
+        initial_beta,
+        max_iter,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fit_weighted_cox(
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    start: Vec<f64>,
+    offset: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    initial_beta: Option<Vec<f64>>,
+    max_iter: usize,
+) -> PyResult<CoxPHFit> {
     coxph_fit(
         stop,
         status,
         covariates,
         None,
-        None,
+        weights,
         Some(offset),
         initial_beta,
         Some(max_iter),
@@ -627,6 +783,342 @@ fn lin_ying_fit(
     })
 }
 
+struct BorganPhaseTwo {
+    variance: Vec<Vec<f64>>,
+    score_matrix: Vec<Vec<f64>>,
+    optimization_fraction: Vec<Vec<f64>>,
+}
+
+fn borgan_phase_two(
+    score_rows: &[Vec<f64>],
+    row_strata: &[usize],
+    sample_sizes: &[usize],
+    population_sizes: &[usize],
+    sampling_inverse: &[f64],
+    model_variance: &[Vec<f64>],
+) -> BorganPhaseTwo {
+    let stratum_count = sample_sizes.len();
+    let width = model_variance.len();
+    let mut means = vec![vec![0.0; width]; stratum_count];
+    for (row, &stratum_idx) in score_rows.iter().zip(row_strata) {
+        for (mean, &value) in means[stratum_idx].iter_mut().zip(row) {
+            *mean += value;
+        }
+    }
+    for (mean, &sample_size) in means.iter_mut().zip(sample_sizes) {
+        for value in mean {
+            *value /= sample_size as f64;
+        }
+    }
+
+    let mut crossproducts = vec![vec![vec![0.0; width]; width]; stratum_count];
+    for (row, &stratum_idx) in score_rows.iter().zip(row_strata) {
+        for outer in 0..width {
+            let outer_value = row[outer] - means[stratum_idx][outer];
+            for inner in 0..=outer {
+                crossproducts[stratum_idx][outer][inner] +=
+                    outer_value * (row[inner] - means[stratum_idx][inner]);
+            }
+        }
+    }
+
+    let mut score_matrix = vec![vec![0.0; width]; width];
+    let mut optimization_fraction = vec![vec![0.0; width]; stratum_count];
+    for stratum_idx in 0..stratum_count {
+        mirror_lower_triangle(&mut crossproducts[stratum_idx]);
+        let denominator = (sample_sizes[stratum_idx] - 1) as f64;
+        for row in &mut crossproducts[stratum_idx] {
+            for value in row {
+                *value /= denominator;
+            }
+        }
+        let delta_scale =
+            (sampling_inverse[stratum_idx] - 1.0) * population_sizes[stratum_idx] as f64;
+        for outer in 0..width {
+            for inner in 0..width {
+                score_matrix[outer][inner] +=
+                    delta_scale * crossproducts[stratum_idx][outer][inner];
+            }
+        }
+        let stratum_variance = sandwich_product(model_variance, &crossproducts[stratum_idx]);
+        for column_idx in 0..width {
+            optimization_fraction[stratum_idx][column_idx] = population_sizes[stratum_idx] as f64
+                * stratum_variance[column_idx][column_idx].max(0.0).sqrt();
+        }
+    }
+    for column_idx in 0..width {
+        let total = optimization_fraction
+            .iter()
+            .map(|row| row[column_idx])
+            .sum::<f64>();
+        if total > 0.0 {
+            for row in &mut optimization_fraction {
+                row[column_idx] /= total;
+            }
+        }
+    }
+
+    BorganPhaseTwo {
+        variance: sandwich_product(model_variance, &score_matrix),
+        score_matrix,
+        optimization_fraction,
+    }
+}
+
+struct BorganComputation {
+    computation: CchComputation,
+    optimization_fraction: Vec<Vec<f64>>,
+    phase2_score_matrix: Vec<Vec<f64>>,
+    collapsed_score_rows: Vec<Vec<f64>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn borgan_fit(
+    stop: &[f64],
+    status: &[i32],
+    covariates: &[Vec<f64>],
+    start: &[f64],
+    subcohort: &[i32],
+    stratum: &[usize],
+    cohort_sizes: &[usize],
+    method: NativeBorganMethod,
+) -> PyResult<BorganComputation> {
+    let observed_n = stop.len();
+    let stratum_count = cohort_sizes.len();
+    let mut event_counts = vec![0usize; stratum_count];
+    let mut sampled_counts = vec![0usize; stratum_count];
+    let mut sampled_noncase_counts = vec![0usize; stratum_count];
+    for idx in 0..observed_n {
+        let stratum_idx = stratum[idx];
+        if status[idx] == 1 {
+            event_counts[stratum_idx] += 1;
+        }
+        if subcohort[idx] == 1 {
+            sampled_counts[stratum_idx] += 1;
+            if status[idx] == 0 {
+                sampled_noncase_counts[stratum_idx] += 1;
+            }
+        }
+    }
+
+    let (sample_sizes, population_sizes) = match method {
+        NativeBorganMethod::I => (sampled_counts.clone(), cohort_sizes.to_vec()),
+        NativeBorganMethod::II => {
+            let noncase_population = cohort_sizes
+                .iter()
+                .zip(&event_counts)
+                .map(|(&population, &events)| population.checked_sub(events))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| value_error("a stratum has more events than cohort members"))?;
+            (sampled_noncase_counts.clone(), noncase_population)
+        }
+    };
+    if sample_sizes.iter().any(|&size| size < 2) {
+        return Err(value_error(
+            "each Borgan sampling stratum requires at least two phase-two rows",
+        ));
+    }
+    if sample_sizes
+        .iter()
+        .zip(&population_sizes)
+        .any(|(&sample, &population)| sample > population)
+    {
+        return Err(value_error(
+            "population is smaller than the sample in a stratum",
+        ));
+    }
+    let sampling_inverse = population_sizes
+        .iter()
+        .zip(&sample_sizes)
+        .map(|(&population, &sample)| population as f64 / sample as f64)
+        .collect::<Vec<_>>();
+
+    let mut source_indices = Vec::new();
+    let mut fit_stop = Vec::new();
+    let mut fit_status = Vec::new();
+    let mut fit_covariates = Vec::new();
+    let mut fit_start = Vec::new();
+    let mut offsets = Vec::new();
+    let mut weights = Vec::new();
+    let mut phase2_start = 0usize;
+    match method {
+        NativeBorganMethod::I => {
+            let case_indices = status
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &event)| (event == 1).then_some(idx))
+                .collect::<Vec<_>>();
+            let subcohort_indices = subcohort
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &sampled)| (sampled == 1).then_some(idx))
+                .collect::<Vec<_>>();
+            phase2_start = case_indices.len();
+            for idx in case_indices {
+                source_indices.push(idx);
+                fit_stop.push(stop[idx]);
+                fit_status.push(1);
+                fit_covariates.push(covariates[idx].clone());
+                fit_start.push(start[idx]);
+                offsets.push(-100.0);
+                weights.push(1.0);
+            }
+            for idx in subcohort_indices {
+                source_indices.push(idx);
+                fit_stop.push(stop[idx]);
+                fit_status.push(0);
+                fit_covariates.push(covariates[idx].clone());
+                fit_start.push(start[idx]);
+                offsets.push(0.0);
+                weights.push(sampling_inverse[stratum[idx]]);
+            }
+        }
+        NativeBorganMethod::II => {
+            source_indices.extend(0..observed_n);
+            fit_stop.extend_from_slice(stop);
+            fit_status.extend_from_slice(status);
+            fit_covariates.extend_from_slice(covariates);
+            fit_start.extend_from_slice(start);
+            offsets.resize(observed_n, 0.0);
+            weights.extend((0..observed_n).map(|idx| {
+                if status[idx] == 1 {
+                    1.0
+                } else {
+                    sampling_inverse[stratum[idx]]
+                }
+            }));
+        }
+    }
+
+    let fit = fit_weighted_cox(
+        fit_stop,
+        fit_status,
+        fit_covariates,
+        fit_start,
+        offsets.clone(),
+        Some(weights),
+        None,
+        25,
+    )?;
+    let score_rows = fit.score_residuals()?;
+    let phase2_source_indices = match method {
+        NativeBorganMethod::I => (phase2_start..score_rows.len()).collect::<Vec<_>>(),
+        NativeBorganMethod::II => status
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &event)| (event == 0).then_some(idx))
+            .collect(),
+    };
+    let phase2_rows = phase2_source_indices
+        .iter()
+        .map(|&idx| score_rows[idx].clone())
+        .collect::<Vec<_>>();
+    let phase2_strata = phase2_source_indices
+        .iter()
+        .map(|&idx| stratum[source_indices[idx]])
+        .collect::<Vec<_>>();
+    let model_variance = fit.information_matrix.clone();
+    let phase_two = borgan_phase_two(
+        &phase2_rows,
+        &phase2_strata,
+        &sample_sizes,
+        &population_sizes,
+        &sampling_inverse,
+        &model_variance,
+    );
+    let naive_variance = add_matrices(&model_variance, &phase_two.variance);
+    let collapsed_score_rows =
+        collapse_weighted_score_rows(&score_rows, &fit.weights, &source_indices, observed_n);
+    let coefficients = fit.coefficients[0].clone();
+    Ok(BorganComputation {
+        computation: CchComputation {
+            fit,
+            coefficients,
+            phase2_variance: phase_two.variance,
+            variance: naive_variance.clone(),
+            naive_variance,
+            offsets,
+            robust: false,
+        },
+        optimization_fraction: phase_two.optimization_fraction,
+        phase2_score_matrix: phase_two.score_matrix,
+        collapsed_score_rows,
+    })
+}
+
+struct CchResultMetadata {
+    method: String,
+    nevent: usize,
+    observed_n: usize,
+    subcohort_sizes: Vec<usize>,
+    cohort_sizes: Vec<usize>,
+    stratum: Option<Vec<usize>>,
+    optimization_fraction: Option<Vec<Vec<f64>>>,
+    phase2_score_matrix: Option<Vec<Vec<f64>>>,
+    collapsed_score_rows: Option<Vec<Vec<f64>>>,
+}
+
+fn finish_cch_result(
+    computation: CchComputation,
+    metadata: CchResultMetadata,
+) -> PyResult<CchFitResult> {
+    let score_residual_rows = computation.fit.score_residuals()?;
+    let dfbeta_rows = computation.fit.dfbeta()?;
+    let residuals = computation.fit.martingale_residuals()?;
+    let CchComputation {
+        fit,
+        coefficients,
+        phase2_variance,
+        naive_variance,
+        variance,
+        offsets,
+        robust,
+    } = computation;
+    let n = fit.event_times.len();
+    let cohort_size = metadata.cohort_sizes.iter().sum();
+    let subcohort_size = metadata.subcohort_sizes.iter().sum();
+    let stratified = metadata.stratum.is_some();
+
+    Ok(CchFitResult {
+        coefficients: vec![coefficients],
+        information_matrix: variance,
+        naive_information_matrix: naive_variance,
+        model_information_matrix: fit.information_matrix,
+        phase2_variance,
+        log_likelihood: fit.log_likelihood,
+        score_vector: fit.score_vector,
+        score_test: fit.score_test,
+        convergence_flag: fit.convergence_flag,
+        iterations: fit.iterations,
+        risk_scores: fit.risk_scores,
+        event_times: fit.event_times,
+        status: fit.status,
+        linear_predictors: fit.linear_predictors,
+        entry_times: fit.entry_times,
+        weights: fit.weights,
+        covariates: fit.covariates,
+        means: fit.means,
+        offsets,
+        residuals,
+        method: metadata.method,
+        n,
+        nevent: metadata.nevent,
+        observed_n: metadata.observed_n,
+        subcohort_size,
+        cohort_size,
+        robust,
+        stratified,
+        stratum: metadata.stratum,
+        cohort_sizes: metadata.cohort_sizes,
+        subcohort_sizes: metadata.subcohort_sizes,
+        optimization_fraction: metadata.optimization_fraction,
+        phase2_score_matrix: metadata.phase2_score_matrix,
+        collapsed_score_rows: metadata.collapsed_score_rows,
+        score_residual_rows,
+        dfbeta_rows,
+    })
+}
+
 #[pyfunction]
 #[pyo3(signature = (stop, status, covariates, subcohort, id, cohort_size, start=None, method="Prentice", robust=false))]
 #[allow(clippy::too_many_arguments)]
@@ -684,51 +1176,78 @@ pub fn cch_fit(
             robust,
         )?,
     };
-    let score_residual_rows = computation.fit.score_residuals()?;
-    let dfbeta_rows = computation.fit.dfbeta()?;
-    let residuals = computation.fit.martingale_residuals()?;
-    let CchComputation {
-        fit,
-        coefficients,
-        phase2_variance,
-        naive_variance,
-        variance,
-        offsets,
-        robust,
-    } = computation;
-    let n = fit.event_times.len();
+    finish_cch_result(
+        computation,
+        CchResultMetadata {
+            method: method.as_r_name().to_string(),
+            nevent,
+            observed_n,
+            subcohort_sizes: vec![subcohort_size],
+            cohort_sizes: vec![cohort_size],
+            stratum: None,
+            optimization_fraction: None,
+            phase2_score_matrix: None,
+            collapsed_score_rows: None,
+        },
+    )
+}
 
-    Ok(CchFitResult {
-        coefficients: vec![coefficients],
-        information_matrix: variance,
-        naive_information_matrix: naive_variance,
-        model_information_matrix: fit.information_matrix,
-        phase2_variance,
-        log_likelihood: fit.log_likelihood,
-        score_vector: fit.score_vector,
-        score_test: fit.score_test,
-        convergence_flag: fit.convergence_flag,
-        iterations: fit.iterations,
-        risk_scores: fit.risk_scores,
-        event_times: fit.event_times,
-        status: fit.status,
-        linear_predictors: fit.linear_predictors,
-        entry_times: fit.entry_times,
-        weights: fit.weights,
-        covariates: fit.covariates,
-        means: fit.means,
-        offsets,
-        residuals,
-        method: method.as_r_name().to_string(),
-        n,
-        nevent,
-        observed_n,
-        subcohort_size,
-        cohort_size,
-        robust,
-        score_residual_rows,
-        dfbeta_rows,
-    })
+#[pyfunction]
+#[pyo3(signature = (stop, status, covariates, subcohort, id, stratum, cohort_sizes, start=None, method="I.Borgan"))]
+#[allow(clippy::too_many_arguments)]
+pub fn cch_borgan_fit(
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    subcohort: Vec<i32>,
+    id: Vec<i64>,
+    stratum: Vec<usize>,
+    cohort_sizes: Vec<usize>,
+    start: Option<Vec<f64>>,
+    method: &str,
+) -> PyResult<CchFitResult> {
+    validate_borgan_inputs(
+        &stop,
+        &status,
+        &covariates,
+        start.as_deref(),
+        &subcohort,
+        &id,
+        &stratum,
+        &cohort_sizes,
+    )?;
+    let method = NativeBorganMethod::parse(method)?;
+    let entry = start.unwrap_or_else(|| vec![0.0; stop.len()]);
+    let observed_n = stop.len();
+    let nevent = status.iter().filter(|&&event| event == 1).count();
+    let mut subcohort_sizes = vec![0usize; cohort_sizes.len()];
+    for (&sampled, &stratum_idx) in subcohort.iter().zip(&stratum) {
+        subcohort_sizes[stratum_idx] += usize::from(sampled == 1);
+    }
+    let borgan = borgan_fit(
+        &stop,
+        &status,
+        &covariates,
+        &entry,
+        &subcohort,
+        &stratum,
+        &cohort_sizes,
+        method,
+    )?;
+    finish_cch_result(
+        borgan.computation,
+        CchResultMetadata {
+            method: method.as_r_name().to_string(),
+            nevent,
+            observed_n,
+            subcohort_sizes,
+            cohort_sizes,
+            stratum: Some(stratum),
+            optimization_fraction: Some(borgan.optimization_fraction),
+            phase2_score_matrix: Some(borgan.phase2_score_matrix),
+            collapsed_score_rows: Some(borgan.collapsed_score_rows),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -954,6 +1473,99 @@ mod tests {
                 method == "LinYing",
             )
             .expect("R parity fit should succeed");
+            assert_close(&result.coefficients[0], &expected_coefficients);
+            assert_matrix_close(&result.information_matrix, &expected_variance);
+        }
+    }
+
+    #[test]
+    fn native_stratified_borgan_results_match_r_survival() {
+        let (start, stop, status, covariates, subcohort, id) = r_parity_fixture();
+        let stratum = (0..stop.len()).map(|idx| idx % 2).collect::<Vec<_>>();
+        let expected = [
+            (
+                "I.Borgan",
+                vec![-0.763_491_690_039_068, 1.399_231_426_827_85],
+                vec![
+                    vec![0.532_806_143_623_19, -0.207_366_276_403_962],
+                    vec![-0.207_366_276_403_962, 1.339_426_794_016_54],
+                ],
+                vec![
+                    vec![0.697_261_201_213_853, 0.649_936_772_854_918],
+                    vec![0.302_738_798_786_147, 0.350_063_227_145_082],
+                ],
+            ),
+            (
+                "II.Borgan",
+                vec![-1.351_125_060_104_28, 0.008_608_309_135_789_29],
+                vec![
+                    vec![0.282_233_396_842_156, 0.001_531_832_828_161_97],
+                    vec![0.001_531_832_828_161_97, 0.542_554_720_451_637],
+                ],
+                vec![
+                    vec![0.524_014_328_275_41, 0.356_352_324_777_529],
+                    vec![0.475_985_671_724_59, 0.643_647_675_222_471],
+                ],
+            ),
+        ];
+        for (method, expected_coefficients, expected_variance, expected_opt) in expected {
+            let result = cch_borgan_fit(
+                stop.clone(),
+                status.clone(),
+                covariates.clone(),
+                subcohort.clone(),
+                id.clone(),
+                stratum.clone(),
+                vec![40, 40],
+                None,
+                method,
+            )
+            .expect("right-censored Borgan fit should succeed");
+            assert_close(&result.coefficients[0], &expected_coefficients);
+            assert_matrix_close(&result.information_matrix, &expected_variance);
+            assert_matrix_close(
+                result
+                    .optimization_fraction
+                    .as_ref()
+                    .expect("Borgan fit should report allocation fractions"),
+                &expected_opt,
+            );
+            assert!(result.stratified);
+            assert_eq!(result.cohort_sizes, vec![40, 40]);
+            assert_eq!(result.subcohort_sizes, vec![7, 7]);
+        }
+
+        let expected = [
+            (
+                "I.Borgan",
+                vec![-0.787_643_185_183_801, 1.285_919_285_286_71],
+                vec![
+                    vec![0.446_615_040_566_727, -0.379_274_338_369_315],
+                    vec![-0.379_274_338_369_315, 1.792_883_479_688_41],
+                ],
+            ),
+            (
+                "II.Borgan",
+                vec![-1.166_298_764_457_86, -0.042_048_877_306_928_8],
+                vec![
+                    vec![0.220_569_751_476_77, -0.100_625_898_088_698],
+                    vec![-0.100_625_898_088_698, 0.619_445_707_012_408],
+                ],
+            ),
+        ];
+        for (method, expected_coefficients, expected_variance) in expected {
+            let result = cch_borgan_fit(
+                stop.clone(),
+                status.clone(),
+                covariates.clone(),
+                subcohort.clone(),
+                id.clone(),
+                stratum.clone(),
+                vec![40, 40],
+                Some(start.clone()),
+                method,
+            )
+            .expect("counting-process Borgan fit should succeed");
             assert_close(&result.coefficients[0], &expected_coefficients);
             assert_matrix_close(&result.information_matrix, &expected_variance);
         }

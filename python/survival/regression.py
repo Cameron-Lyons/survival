@@ -12,6 +12,7 @@ __all__ = bind_names(
         "CchMethod",
         "CchFitResult",
         "CohortData",
+        "cch_borgan_fit",
         "cch_fit",
         "ClogitDataSet",
         "ConditionalLogisticRegression",

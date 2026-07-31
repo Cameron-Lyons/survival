@@ -365,6 +365,8 @@ class CchModelResult:
     response: Surv
     id_values: list[Any]
     subcohort: list[int]
+    stratum_values: list[Any] | None
+    cohort_sizes: list[int]
 
     def __getattr__(self, name: str) -> Any:
         aliases = {
@@ -380,8 +382,10 @@ class CchModelResult:
             return self.response
         if name == "id":
             return self.id_values
+        if name == "stratum":
+            return self.stratum_values
         if name == "stratified":
-            return False
+            return self.fit.stratified
         return getattr(self.fit, aliases.get(name, name))
 
     @property
@@ -20032,6 +20036,23 @@ def coxph_detail(
     )
 
 
+def _cch_stratified_cohort_sizes(value: Any, levels: Sequence[Any]) -> list[int]:
+    if isinstance(value, Mapping):
+        missing = [level for level in levels if level not in value]
+        extra = [key for key in value if key not in levels]
+        if missing or extra:
+            raise ValueError("cohort_size mapping keys must match the stratum levels")
+        raw_sizes = [value[level] for level in levels]
+    else:
+        raw_sizes = _materialize_1d(value, "cohort_size")
+        if len(raw_sizes) != len(levels):
+            raise ValueError("cohort_size and stratum levels must have the same length")
+    sizes = [_integer_scalar(item, "cohort_size") for item in raw_sizes]
+    if any(size <= 0 for size in sizes):
+        raise ValueError("cohort_size values must be positive")
+    return sizes
+
+
 def cch(
     formula: str,
     data: Any,
@@ -20046,7 +20067,7 @@ def cch(
     na_action: str | None = "fail",
     **kwargs: Any,
 ) -> CchModelResult:
-    """Fit an unstratified case-cohort Cox model using the native kernel."""
+    """Fit an unstratified or sampling-stratified case-cohort Cox model."""
 
     cohort_size = _pop_dotted_keyword(
         kwargs,
@@ -20079,12 +20100,16 @@ def cch(
         "i.borgan": "I.Borgan",
         "ii.borgan": "II.Borgan",
     }[normalized_method]
-    if method_name in {"I.Borgan", "II.Borgan"}:
-        raise NotImplementedError(
-            f"native cch method {method_name!r} requires the stratified Borgan kernel"
-        )
+    stratified = method_name in {"I.Borgan", "II.Borgan"}
     robust_value = _normalize_bool_option_with_default(robust, "robust", False)
-    if robust_value and method_name != "LinYing":
+    if stratified and robust_value:
+        warnings.warn(
+            "robust variance is not implemented for stratified cch analysis",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        robust_value = False
+    elif robust_value and method_name != "LinYing":
         warnings.warn(
             f"robust ignored for method ({method_name})",
             RuntimeWarning,
@@ -20123,7 +20148,9 @@ def cch(
     response, terms = _parse_formula(formula, data)
     if response.type not in {"right", "counting"}:
         raise NotImplementedError("cch supports right-censored and counting Surv responses")
-    if terms.strata or stratum_values is not None:
+    if stratified and stratum_values is None:
+        raise ValueError(f"method ({method_name}) requires stratum")
+    if not stratified and (terms.strata or stratum_values is not None):
         warnings.warn(
             f"stratum ignored for method ({method_name})",
             RuntimeWarning,
@@ -20164,21 +20191,41 @@ def cch(
     if len(_label_levels(id_labels, "id")) != len(id_labels):
         raise ValueError("multiple records per id are not allowed")
     id_codes = _encode_labels(id_labels, "id")
-    cohort_size_value = _integer_scalar(cohort_size, "cohort_size")
-    if cohort_size_value <= 0:
-        raise ValueError("cohort_size must be positive")
-
-    fit = _core.cch_fit(
-        list(response.time),
-        list(response.event),
-        rows,
-        fit_subcohort,
-        id_codes,
-        cohort_size_value,
-        start=list(response.start) if response.start is not None else None,
-        method=method_name,
-        robust=robust_value,
-    )
+    stratum_labels: list[Any] | None = None
+    if stratified:
+        stratum_labels = _materialize_labels(stratum_values, "stratum")
+        if len(stratum_labels) != len(response):
+            raise ValueError("stratum must have the same length as the Surv response")
+        stratum_levels = _label_levels(stratum_labels, "stratum")
+        stratum_codes = _encode_labels(stratum_labels, "stratum")
+        cohort_sizes = _cch_stratified_cohort_sizes(cohort_size, stratum_levels)
+        fit = _core.cch_borgan_fit(
+            list(response.time),
+            list(response.event),
+            rows,
+            fit_subcohort,
+            id_codes,
+            stratum_codes,
+            cohort_sizes,
+            start=list(response.start) if response.start is not None else None,
+            method=method_name,
+        )
+    else:
+        cohort_size_value = _integer_scalar(cohort_size, "cohort_size")
+        if cohort_size_value <= 0:
+            raise ValueError("cohort_size must be positive")
+        cohort_sizes = [cohort_size_value]
+        fit = _core.cch_fit(
+            list(response.time),
+            list(response.event),
+            rows,
+            fit_subcohort,
+            id_codes,
+            cohort_size_value,
+            start=list(response.start) if response.start is not None else None,
+            method=method_name,
+            robust=robust_value,
+        )
     return CchModelResult(
         fit=fit,
         design=design,
@@ -20187,6 +20234,8 @@ def cch(
         response=response,
         id_values=id_labels,
         subcohort=fit_subcohort,
+        stratum_values=stratum_labels,
+        cohort_sizes=cohort_sizes,
     )
 
 

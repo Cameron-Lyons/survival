@@ -15,10 +15,11 @@ Common result objects such as `survfit`, `basehaz`, `survdiff`, `concordance`,
 Multi-state `survfit` objects with retained model frames support native-shaped
 influence residuals and pseudo-values for state probabilities, cumulative
 transition hazards, and integrated state occupancy.
-Unstratified `cch` fits use the Rust case-cohort kernel for Prentice,
-Self-Prentice, and Lin--Ying estimation, including right-censored and
-counting-process responses, factor-expanded formulas, phase-two variance, and
-the optional robust Lin--Ying variance.
+`cch` fits use the Rust case-cohort kernel for Prentice, Self-Prentice,
+Lin--Ying, I.Borgan, and II.Borgan estimation. This includes right-censored and
+counting-process responses, sampling-stratified population sizes,
+factor-expanded formulas, phase-two variance, optimal allocation fractions,
+and the optional robust Lin--Ying variance.
 `aareg` uses the Rust risk-set kernel for right-censored and counting-process
 fits, including weights, tapering, clustered influence arrays, and standard R
 model retention options.

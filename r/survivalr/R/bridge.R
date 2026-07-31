@@ -4382,23 +4382,36 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     stop("Number of records greater than cohort size", call. = FALSE)
   }
   method <- match.arg(method)
-  if (method %in% c("I.Borgan", "II.Borgan")) {
-    stop(
-      sprintf("native cch method '%s' requires the stratified Borgan kernel", method),
-      call. = FALSE
-    )
-  }
-  if (isTRUE(robust) && method != "LinYing") {
+  stratified <- method %in% c("I.Borgan", "II.Borgan")
+  if (stratified && isTRUE(robust)) {
+    warning("`robust' not implemented for stratified analysis.", call. = FALSE)
+    robust <- FALSE
+  } else if (isTRUE(robust) && method != "LinYing") {
     warning("`robust' ignored for method (", method, ")", call. = FALSE)
     robust <- FALSE
   }
-  if (!is.null(stratum)) {
+  if (stratified) {
+    if (is.null(stratum)) {
+      stop("method (", method, ") requires 'stratum'", call. = FALSE)
+    }
+    stratum <- factor(stratum)
+    if (length(cohort.size) != length(levels(stratum))) {
+      stop("cohort.size and stratum do not match", call. = FALSE)
+    }
+    if (!all(levels(stratum) %in% names(cohort.size))) {
+      warning("stratum levels and names(cohort.size) do not agree", call. = FALSE)
+    }
+    observed_stratum_sizes <- table(stratum)
+    if (any(observed_stratum_sizes > cohort.size)) {
+      stop("Population smaller than sample in some strata", call. = FALSE)
+    }
+  } else if (!is.null(stratum)) {
     warning("'stratum' ignored for method (", method, ")", call. = FALSE)
   }
-  if (length(cohort.size) != 1L) {
+  if (!stratified && length(cohort.size) != 1L) {
     stop("cohort size must be a scalar for unstratified analysis", call. = FALSE)
   }
-  if (length(id) > cohort.size) {
+  if (!stratified && length(id) > cohort.size) {
     stop("Population smaller than sample", call. = FALSE)
   }
 
@@ -4445,18 +4458,37 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     stop("cch formula must contain at least one covariate", call. = FALSE)
   }
   coefficient_names <- colnames(design)
-  result <- .call_regression(
-    "cch_fit",
+  common_args <- list(
     stop = as.list(stop_time),
     status = as.list(status),
     covariates = .coxph_fit_covariates(design, nrow(design)),
     subcohort = as.list(as.integer(subcoh)),
     id = as.list(as.integer(factor(id, levels = unique(id))) - 1L),
-    cohort_size = as.integer(cohort.size),
     start = if (is.null(start_time)) NULL else as.list(start_time),
-    method = method,
-    robust = isTRUE(robust)
+    method = method
   )
+  if (stratified) {
+    result <- do.call(
+      .call_regression,
+      c(
+        list("cch_borgan_fit"),
+        common_args,
+        list(
+          stratum = as.list(as.integer(stratum) - 1L),
+          cohort_sizes = as.list(as.integer(cohort.size))
+        )
+      )
+    )
+  } else {
+    result <- do.call(
+      .call_regression,
+      c(
+        list("cch_fit"),
+        common_args,
+        list(cohort_size = as.integer(cohort.size), robust = isTRUE(robust))
+      )
+    )
+  }
 
   coefficients <- .as_numeric_matrix(.result_field(result, "coefficients"))
   coefficients <- if (nrow(coefficients) == 0L) numeric() else coefficients[1L, ]
@@ -4498,9 +4530,21 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     call = Call,
     phase2var = phase2_variance,
     cohort.size = cohort.size,
-    stratified = FALSE,
-    subcohort.size = stats::setNames(sum(subcoh == 1), "1")
+    stratified = stratified,
+    subcohort.size = if (stratified) observed_stratum_sizes else stats::setNames(sum(subcoh == 1), "1")
   )
+  if (stratified) {
+    out$stratum <- stratum
+    out$opt <- .as_numeric_matrix(.result_field(result, "optimization_fraction"))
+    out$delta <- .as_numeric_matrix(.result_field(result, "phase2_score_matrix"))
+    out$sc <- .as_numeric_matrix(.result_field(result, "collapsed_score_rows"))
+    internal_score_names <- paste0("X", coefficient_names)
+    dimnames(out$opt) <- list(c("opt", rep("", max(0L, nrow(out$opt) - 1L))), NULL)
+    if (identical(method, "II.Borgan")) {
+      dimnames(out$delta) <- list(internal_score_names, internal_score_names)
+    }
+    dimnames(out$sc) <- list(as.character(id), internal_score_names)
+  }
   class(out) <- "cch"
   out
 }

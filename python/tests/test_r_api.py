@@ -16682,6 +16682,48 @@ def test_cch_formula_matches_r_counting_process_results():
     assert len(fit.martingale_residuals()) == len(fit.status)
 
 
+@pytest.mark.parametrize(
+    ("method", "expected_coefficients", "expected_variance"),
+    [
+        (
+            "I.Borgan",
+            [-0.763491690039068, 1.39923142682785],
+            [[0.53280614362319, -0.207366276403962], [-0.207366276403962, 1.33942679401654]],
+        ),
+        (
+            "II.Borgan",
+            [-1.35112506010428, 0.00860830913578929],
+            [[0.282233396842156, 0.00153183282816197], [0.00153183282816197, 0.542554720451637]],
+        ),
+    ],
+)
+def test_cch_formula_matches_r_stratified_borgan_results(
+    method: str,
+    expected_coefficients: list[float],
+    expected_variance: list[list[float]],
+):
+    fit = survival.cch(
+        "Surv(stop, status) ~ x + z",
+        _cch_parity_data(),
+        subcoh="subcohort",
+        id="id",
+        stratum="group",
+        cohort_size={"a": 40, "b": 40},
+        method=method,
+    )
+
+    assert survival.coef(fit) == pytest.approx(expected_coefficients, abs=1e-11)
+    for actual, expected in zip(fit.var, expected_variance, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    assert fit.stratified is True
+    assert fit.stratum == _cch_parity_data()["group"]
+    assert fit.cohort_sizes == [40, 40]
+    assert fit.subcohort_sizes == [7, 7]
+    assert len(fit.optimization_fraction) == 2
+    assert len(fit.phase2_score_matrix) == 2
+    assert len(fit.collapsed_score_rows) == 20
+
+
 def test_cch_formula_expands_factors_and_validates_sampling_inputs():
     data = _cch_parity_data()
     fit = survival.cch(
@@ -16694,14 +16736,24 @@ def test_cch_formula_expands_factors_and_validates_sampling_inputs():
     )
     assert survival.coef_names(fit) == ["x", "groupb", "x:groupb"]
 
-    with pytest.raises(NotImplementedError, match="stratified Borgan"):
+    with pytest.raises(ValueError, match="requires stratum"):
         survival.cch(
             "Surv(stop, status) ~ x",
             data,
             subcoh="subcohort",
             id="id",
-            cohort_size=80,
+            cohort_size=[40, 40],
             method="I.Borgan",
+        )
+    with pytest.raises(ValueError, match="same length"):
+        survival.cch(
+            "Surv(stop, status) ~ x",
+            data,
+            subcoh="subcohort",
+            id="id",
+            stratum="group",
+            cohort_size=[80],
+            method="II.Borgan",
         )
     with pytest.raises(ValueError, match="multiple records per id"):
         survival.cch(

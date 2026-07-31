@@ -426,6 +426,8 @@ class CchModelResult:
     response: Surv
     id_values: list[Any]
     subcohort: list[int]
+    stratum_values: list[Any] | None
+    cohort_sizes: list[int]
     def __getattr__(self, name: str) -> Any: ...
     @property
     def coefficients(self) -> list[list[float]]: ...
