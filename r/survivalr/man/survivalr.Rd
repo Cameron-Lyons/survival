@@ -873,7 +873,7 @@ curve time.}
 \code{tdcstart}; also optional prediction settings for \code{yates}.}
 \item{subcoh, stratum, cohort.size}{Case-cohort design inputs for native
 \code{cch} fitting. Unstratified Prentice, Self-Prentice, and Lin--Ying
-methods are supported; the Borgan methods require a stratified kernel.}
+methods and sampling-stratified I.Borgan and II.Borgan methods are supported.}
 \item{qrtol, nmin, dfbeta, taper}{Control values for Rust-backed
 \code{aareg} risk-set fitting and influence diagnostics.}
 \item{id}{Optional generated row identifier column for \code{survSplit}, or
@@ -1080,16 +1080,17 @@ value depending on the delegated Python function.
 This package is intentionally named \pkg{survivalr} so it can coexist with
 CRAN's \pkg{survival} package while the bridge matures. The Python package must
 be installed in the Python environment selected by \pkg{reticulate}.
-
 \code{tmerge} builds `(tstart, tstop]` intervals with native linear-time
 sweeps. It follows R boundary and tie rules, retains event censor values and
 time-dependent covariate names, and appends all nine \code{tcount}
 classification columns across repeated calls.
 
-Unstratified \code{cch} formulas are evaluated in R, expanded with
-\code{model.matrix}, and fitted by the Rust Cox and case-cohort variance
-kernels. The returned \code{cch} object carries coefficient, model-based,
-phase-two, and final variance components with R-compatible names and methods.
+\code{cch} formulas are evaluated in R, expanded with \code{model.matrix}, and
+fitted by the Rust Cox and case-cohort variance kernels. Sampling-stratified
+I.Borgan and II.Borgan fits retain stratum sizes, optimal allocation fractions,
+phase-two score matrices, and collapsed scores. The returned \code{cch} object
+carries coefficient, model-based, phase-two, and final variance components with
+R-compatible names and methods.
 }
 \seealso{
 \code{\link{survival_python_config}}

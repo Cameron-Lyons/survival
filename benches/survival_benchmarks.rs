@@ -1,5 +1,7 @@
 use std::hint::black_box;
-use survival::regression::{CoxPHModel, aareg_fit, agexact, cch_fit, coxph_fit, finegray, survreg};
+use survival::regression::{
+    CoxPHModel, aareg_fit, agexact, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg,
+};
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
     nelson_aalen, uno_c_index, weighted_logrank_test,
@@ -794,6 +796,48 @@ mod case_cohort_bench {
                 true,
             )
             .expect("benchmark Lin-Ying fit should converge");
+            black_box(fit);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn borgan_i(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
+        let stratum = (0..n).map(|idx| (idx / 4) % 2).collect::<Vec<_>>();
+        bencher.bench_local(|| {
+            let fit = cch_borgan_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                subcohort.clone(),
+                id.clone(),
+                stratum.clone(),
+                vec![n * 2, n * 2],
+                None,
+                "I.Borgan",
+            )
+            .expect("benchmark I.Borgan fit should converge");
+            black_box(fit);
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn borgan_ii(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
+        let stratum = (0..n).map(|idx| (idx / 4) % 2).collect::<Vec<_>>();
+        bencher.bench_local(|| {
+            let fit = cch_borgan_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                subcohort.clone(),
+                id.clone(),
+                stratum.clone(),
+                vec![n * 2, n * 2],
+                None,
+                "II.Borgan",
+            )
+            .expect("benchmark II.Borgan fit should converge");
             black_box(fit);
         });
     }

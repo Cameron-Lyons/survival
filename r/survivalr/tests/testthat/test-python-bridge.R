@@ -5559,6 +5559,61 @@ test_that("cch unstratified fits match survival for right and counting data", {
   }
 })
 
+test_that("cch stratified Borgan fits match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(0, 2, 1, 5, 4, 0, 10, 3, 12, 1, 5, 9, 0, 6, 2, 4, 7, 2, 11, 13),
+    stop = c(5, 12, 3, 18, 9, 1, 15, 7, 20, 4, 11, 16, 2, 14, 6, 10, 13, 8, 17, 19),
+    status = c(1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1),
+    x = c(-1.2, .4, .9, -.3, 1.4, -.8, .2, 1.1, -.5, .7, -1, .1, 1.7, -.6, .5, -1.5, 1, -.1, .8, -.9),
+    z = c(0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1),
+    sampling = factor(rep(c("a", "b"), 10)),
+    id = seq_len(20),
+    subcohort = c(rep(1, 14), rep(0, 6))
+  )
+  cohort_sizes <- c(a = 40, b = 40)
+
+  compare_fit <- function(formula, method) {
+    actual <- cch(
+      formula,
+      data,
+      subcoh = ~subcohort,
+      id = ~id,
+      stratum = ~sampling,
+      cohort.size = cohort_sizes,
+      method = method
+    )
+    reference <- survival::cch(
+      formula,
+      data,
+      subcoh = ~subcohort,
+      id = ~id,
+      stratum = ~sampling,
+      cohort.size = cohort_sizes,
+      method = method
+    )
+
+    expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+    expect_equal(actual$var, reference$var, tolerance = 1e-11)
+    expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+    expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+    expect_equal(actual$opt, reference$opt, tolerance = 1e-11)
+    expect_equal(actual$delta, reference$delta, tolerance = 1e-11)
+    expect_equal(actual$sc, reference$sc, tolerance = 1e-11)
+    expect_equal(actual$stratum, reference$stratum)
+    expect_equal(actual$subcohort.size, reference$subcohort.size)
+    expect_true(actual$stratified)
+  }
+
+  for (method in c("I.Borgan", "II.Borgan")) {
+    compare_fit(Surv(stop, status) ~ x + z, method)
+    compare_fit(Surv(start, stop, status) ~ x + z, method)
+  }
+})
+
 test_that("cch rejects invalid unstratified sampling inputs", {
   skip_if_not_installed("reticulate")
   skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
@@ -5579,7 +5634,7 @@ test_that("cch rejects invalid unstratified sampling inputs", {
       cohort.size = 10,
       method = "I.Borgan"
     ),
-    "stratified Borgan kernel"
+    "requires 'stratum'"
   )
   invalid <- data$subcohort
   invalid[[2L]] <- 0
