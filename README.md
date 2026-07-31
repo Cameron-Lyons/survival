@@ -160,6 +160,10 @@ integrated state occupancy, including grouped, weighted, and subject-collapsed
 counting-process results.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
 to produce model-based survival curves.
+The R facade's low-level `coxsurv.fit` and `survfitcoxph.fit` entry points use
+an `O(n log n)` Rust risk-set sweep for weighted, stratified, tied-event, and
+counting-process baselines, while retaining R-compatible curve and uncertainty
+shapes for ordinary predictions and individual time-dependent trajectories.
 `survdiff` uses the same right-censored and delayed-entry response forms.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.

@@ -1,5 +1,5 @@
 #[cfg(feature = "python")]
-use numpy::PyReadonlyArray1;
+use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
@@ -41,6 +41,28 @@ pub(crate) fn extract_vec_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
         "Cannot convert '{}' to float array. Expected: numpy array, pandas Series, polars Series, or list of floats. \
          Tip: For pandas/polars, ensure the column contains numeric data.",
         type_name
+    )))
+}
+
+#[cfg(feature = "python")]
+pub(crate) fn extract_matrix_f64(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f64>>> {
+    if let Ok(arr) = obj.extract::<PyReadonlyArray2<'_, f64>>() {
+        return Ok(arr
+            .as_array()
+            .outer_iter()
+            .map(|row| row.iter().copied().collect())
+            .collect());
+    }
+    if let Ok(rows) = obj.extract::<Vec<Vec<f64>>>() {
+        return Ok(rows);
+    }
+    let type_name = obj
+        .get_type()
+        .name()
+        .map(|name| name.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+        "Cannot convert '{type_name}' to a float matrix. Expected a two-dimensional numpy array or nested list."
     )))
 }
 
@@ -125,6 +147,13 @@ pub(crate) fn extract_optional_vec_i32(
 pub(crate) fn extract_vec_f64(_obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
         "array-like Python inputs require the `python` feature",
+    ))
+}
+
+#[cfg(not(feature = "python"))]
+pub(crate) fn extract_matrix_f64(_obj: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f64>>> {
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "matrix-like Python inputs require the `python` feature",
     ))
 }
 

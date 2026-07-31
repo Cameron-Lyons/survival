@@ -10,6 +10,7 @@ __all__ = bind_names(
         "agsurv5",
         "compute_baseline_survival_steps",
         "compute_tied_baseline_summaries",
+        "cox_survfit_baseline",
         "IllnessDeathConfig",
         "IllnessDeathPrediction",
         "IllnessDeathResult",

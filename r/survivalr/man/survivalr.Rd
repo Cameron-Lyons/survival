@@ -1051,7 +1051,7 @@ Python fit exposes extra parameters such as estimated survreg scale terms.}
 \item{controlvals, dist, nstrat, pcols, pattr, assign}{Low-level delegated
 \code{survreg.fit} and \code{survpenal.fit} inputs.}
 \item{varmat, wt, risk, newrisk, position, oldid, x2, risk2, strata2,
-survtype, vartype, unlist}{Low-level delegated Cox survival-curve inputs.}
+survtype, vartype, unlist}{Low-level Cox survival-curve inputs.}
 \item{var}{Variance matrix for \code{coxph.wtest}.}
 \item{parm}{Optional coefficient names or 1-based coefficient indices.}
 \item{level}{Confidence level for coefficient intervals.}
@@ -1091,6 +1091,11 @@ I.Borgan and II.Borgan fits retain stratum sizes, optimal allocation fractions,
 phase-two score matrices, and collapsed scores. The returned \code{cch} object
 carries coefficient, model-based, phase-two, and final variance components with
 R-compatible names and methods.
+
+\code{coxsurv.fit} and \code{survfitcoxph.fit} use a Rust risk-set sweep for
+weighted right-censored and counting-process baselines, including strata and
+tied events. R-side assembly retains compatible curve, cumulative-hazard,
+standard-error, and individual-trajectory output shapes.
 }
 \seealso{
 \code{\link{survival_python_config}}

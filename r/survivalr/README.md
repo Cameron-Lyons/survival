@@ -26,6 +26,10 @@ model retention options.
 `coxph` formula fits support `tt(...)` terms for right-censored and
 counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
+Low-level `coxsurv.fit` and `survfitcoxph.fit` calls use a Rust risk-set sweep
+for weighted, stratified, tied-event, and counting-process baselines. Their R
+assembly preserves multiple prediction rows, standard errors, and individual
+time-dependent trajectories.
 
 Time-dependent data construction is also native: `tmerge` evaluates the
 familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the
