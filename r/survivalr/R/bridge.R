@@ -4117,9 +4117,230 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
                   nmin, dfbeta = FALSE, taper = 1,
                   test = c("aalen", "variance", "nrisk"),
                   cluster, model = FALSE, x = FALSE, y = FALSE) {
-  call <- match.call()
-  call[[1L]] <- quote(survival::aareg)
-  eval.parent(call)
+  Call <- match.call()
+  test <- match.arg(test)
+  if (missing(formula)) {
+    stop("a formula argument is required", call. = FALSE)
+  }
+
+  Terms <- if (missing(data)) {
+    stats::terms(formula, specials = c("cluster", "offset", "strata"))
+  } else {
+    stats::terms(formula, specials = c("cluster", "offset", "strata"), data = data)
+  }
+  specials <- attr(Terms, "specials")
+  cluster_special <- specials$cluster
+  if (length(cluster_special) > 1L) {
+    stop("a formula cannot have multiple cluster terms", call. = FALSE)
+  }
+  if (length(cluster_special) == 1L) {
+    factors <- attr(Terms, "factors")
+    if (any(factors[cluster_special, , drop = FALSE] > 1L)) {
+      stop("cluster() cannot be in an interaction", call. = FALSE)
+    }
+    cluster_terms <- which(factors[cluster_special, ] > 0L)
+    cluster_expression <- attr(Terms, "variables")[[1L + cluster_special]][[2L]]
+    if (is.null(Call$cluster)) {
+      Call$cluster <- cluster_expression
+    } else {
+      warning(
+        "cluster appears both in a formula and as an argument, formula term ignored",
+        call. = FALSE
+      )
+    }
+    Terms <- stats::drop.terms(Terms, cluster_terms, keep.response = TRUE)
+    formula <- stats::formula(Terms)
+    Call$formula <- formula
+  }
+  if (length(specials$strata) > 0L) {
+    stop("Strata terms not allowed", call. = FALSE)
+  }
+
+  frame_terms <- if (missing(data)) {
+    stats::terms(formula, specials = "strata")
+  } else {
+    stats::terms(formula, specials = "strata", data = data)
+  }
+  indices <- match(
+    c("formula", "data", "weights", "subset", "na.action", "cluster"),
+    names(Call),
+    nomatch = 0L
+  )
+  frame_call <- Call[c(1L, indices)]
+  frame_call[[1L]] <- quote(stats::model.frame)
+  frame_call$formula <- frame_terms
+  frame <- eval(frame_call, parent.frame())
+  Terms <- attr(frame, "terms")
+  response <- stats::model.response(frame)
+  if (!inherits(response, "Surv")) {
+    stop("Response must be a survival object", call. = FALSE)
+  }
+  response_type <- attr(response, "type")
+  if (!(response_type %in% c("right", "counting"))) {
+    stop(
+      paste0("Aalen model doesn't support \"", response_type, "\" survival data"),
+      call. = FALSE
+    )
+  }
+
+  cluster_values <- stats::model.extract(frame, "cluster")
+
+  design <- stats::model.matrix(Terms, frame)
+  assign <- attr(design, "assign")
+  keep <- assign != 0L
+  design <- design[, keep, drop = FALSE]
+  storage.mode(design) <- "double"
+  nused <- nrow(design)
+  nvar <- ncol(design)
+
+  fit_weights <- stats::model.extract(frame, "weights")
+  if (length(fit_weights) == 0L) {
+    fit_weights <- rep(1, nused)
+  }
+  fit_weights <- as.numeric(fit_weights)
+  if (any(!is.finite(fit_weights)) || any(fit_weights <= 0)) {
+    stop("weights must contain positive finite values", call. = FALSE)
+  }
+  qrtol <- as.numeric(qrtol)
+  if (length(qrtol) != 1L || !is.finite(qrtol) || qrtol <= 0) {
+    stop("qrtol must be a positive finite scalar", call. = FALSE)
+  }
+  taper <- as.numeric(taper)
+  if (length(taper) == 0L || any(!is.finite(taper)) || any(taper <= 0)) {
+    stop("Invalid taper vector", call. = FALSE)
+  }
+  nmin_value <- if (missing(nmin)) 3L * nvar else nmin
+  nmin_value <- as.integer(nmin_value)
+  if (length(nmin_value) != 1L || is.na(nmin_value) || nmin_value < 0L) {
+    stop("nmin must be a non-negative integer", call. = FALSE)
+  }
+
+  keep_dfbeta <- as.logical(dfbeta)
+  if (length(keep_dfbeta) != 1L || is.na(keep_dfbeta)) {
+    stop("dfbeta must be TRUE or FALSE", call. = FALSE)
+  }
+  keep_dfbeta <- keep_dfbeta || length(cluster_values) > 0L
+  cluster_codes <- NULL
+  if (length(cluster_values) > 0L) {
+    cluster_factor <- as.factor(cluster_values)
+    cluster_codes <- as.integer(cluster_factor) - 1L
+  } else if (keep_dfbeta) {
+    cluster_codes <- seq_len(nused) - 1L
+  }
+
+  if (identical(response_type, "right")) {
+    start <- NULL
+    stop_time <- as.numeric(response[, 1L])
+    status <- as.integer(response[, 2L])
+    mintime <- min(stop_time)
+    initial_time <- if (mintime < 0) 2 * mintime - 1 else -1
+    saved_response <- cbind(initial_time, response)
+  } else {
+    start <- as.numeric(response[, 1L])
+    stop_time <- as.numeric(response[, 2L])
+    status <- as.integer(response[, 3L])
+    saved_response <- response
+  }
+  order_index <- order(stop_time, -status)
+  test_cluster_codes <- NULL
+  if (length(cluster_values) > 0L) {
+    test_cluster_codes <- integer(nused)
+    test_cluster_codes[order_index] <- cluster_codes
+  }
+
+  result <- .call_regression(
+    "aareg_fit",
+    stop = .as_python_vector(stop_time),
+    status = .as_python_vector(status),
+    covariates = .coxph_fit_covariates(design, nused),
+    start = if (is.null(start)) NULL else .as_python_vector(start),
+    weights = .as_python_vector(fit_weights),
+    cluster = if (is.null(cluster_codes)) NULL else .as_python_vector(cluster_codes),
+    qrtol = qrtol,
+    nmin = nmin_value,
+    dfbeta = keep_dfbeta,
+    taper = as.list(taper),
+    test = test,
+    test_cluster = if (is.null(test_cluster_codes)) {
+      NULL
+    } else {
+      .as_python_vector(test_cluster_codes)
+    }
+  )
+
+  event_times <- .as_numeric_vector(.result_field(result, "times"))
+  coefficient_names <- c("Intercept", colnames(design))
+  coefficient <- .as_numeric_matrix(.result_field(result, "coefficient"))
+  dimnames(coefficient) <- list(as.character(event_times), coefficient_names)
+  test_names <- if (identical(test, "variance") && nvar > 1L) {
+    colnames(design)
+  } else {
+    coefficient_names
+  }
+  test_statistic <- .as_numeric_vector(.result_field(result, "test_statistic"))
+  names(test_statistic) <- test_names
+  test_variance <- .as_numeric_matrix(.result_field(result, "test_variance"))
+  if (nvar > 1L && !identical(test, "variance")) {
+    variance_names <- c("b0", rep("", nvar))
+    dimnames(test_variance) <- list(variance_names, variance_names)
+  } else {
+    dimnames(test_variance) <- NULL
+  }
+  time_weights <- .as_numeric_matrix(.result_field(result, "time_weights"))
+  dimnames(time_weights) <- NULL
+
+  out <- list(
+    n = as.integer(.result_field(result, "n")),
+    times = event_times,
+    nrisk = .as_numeric_vector(.result_field(result, "n_risk")),
+    coefficient = coefficient,
+    test.statistic = test_statistic,
+    test.var = test_variance,
+    test = test,
+    tweight = time_weights,
+    call = Call
+  )
+  raw_dfbeta <- .result_field(result, "dfbeta")
+  if (keep_dfbeta && !is.null(raw_dfbeta)) {
+    influence_order <- if (length(cluster_values) > 0L) {
+      unique(cluster_codes[order_index]) + 1L
+    } else {
+      order_index
+    }
+    raw_dfbeta <- raw_dfbeta[influence_order]
+    cluster_count <- length(raw_dfbeta)
+    retained_times <- as.integer(out$n[[2L]])
+    influence <- array(0, dim = c(cluster_count, nvar + 1L, retained_times))
+    for (cluster_index in seq_len(cluster_count)) {
+      for (column_index in seq_len(nvar + 1L)) {
+        influence[cluster_index, column_index, ] <- .as_numeric_vector(
+          raw_dfbeta[[cluster_index]][[column_index]]
+        )
+      }
+    }
+    out$dfbeta <- influence
+    out$test.var2 <- .as_numeric_matrix(.result_field(result, "robust_test_variance"))
+  }
+  if (any(fit_weights != 1)) {
+    out$weights <- fit_weights[order_index]
+    names(out$weights) <- rownames(frame)[order_index]
+  }
+  frame_na_action <- attr(frame, "na.action")
+  if (length(frame_na_action) > 0L) {
+    out$na.action <- frame_na_action
+  }
+  if (isTRUE(model)) {
+    out$model <- frame
+  } else {
+    if (isTRUE(x)) {
+      out$x <- design
+    }
+    if (isTRUE(y)) {
+      out$y <- saved_response
+    }
+  }
+  class(out) <- "aareg"
+  out
 }
 
 cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,

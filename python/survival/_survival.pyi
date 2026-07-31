@@ -390,6 +390,43 @@ class AaregResult:
 
 def aareg(options: AaregOptions) -> AaregResult: ...
 
+class AaregFitResult:
+    @property
+    def n(self) -> list[int]: ...
+    @property
+    def times(self) -> list[float]: ...
+    @property
+    def n_risk(self) -> list[float]: ...
+    @property
+    def coefficient(self) -> list[list[float]]: ...
+    @property
+    def test_statistic(self) -> list[float]: ...
+    @property
+    def test_variance(self) -> list[list[float]]: ...
+    @property
+    def test(self) -> str: ...
+    @property
+    def time_weights(self) -> list[list[float]]: ...
+    @property
+    def dfbeta(self) -> list[list[list[float]]] | None: ...
+    @property
+    def robust_test_variance(self) -> list[list[float]] | None: ...
+
+def aareg_fit(
+    stop: list[float],
+    status: list[int],
+    covariates: list[list[float]],
+    start: list[float] | None = None,
+    weights: list[float] | None = None,
+    cluster: list[int] | None = None,
+    qrtol: float = 1e-7,
+    nmin: int | None = None,
+    dfbeta: bool = False,
+    taper: list[float] | None = None,
+    test: str = "aalen",
+    test_cluster: list[int] | None = None,
+) -> AaregFitResult: ...
+
 class CoxCountOutput:
     @property
     def time(self) -> list[float]: ...

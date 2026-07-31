@@ -2,7 +2,7 @@
 
 `survivalr` is an experimental R facade for this repository's Rust-backed
 Python package. It exposes familiar R entry points such as `Surv`, `survfit`,
-`coxph`, `survdiff`, `survreg`, `basehaz`, `cox.zph`, and `concordance`, then
+`coxph`, `aareg`, `survdiff`, `survreg`, `basehaz`, `cox.zph`, and `concordance`, then
 delegates computation to `survival.r_api` through `reticulate`.
 Simple Python return values are converted back into R objects when possible;
 fitted model objects stay wrapped so S3 methods can dispatch to the Python API.
@@ -15,6 +15,9 @@ Common result objects such as `survfit`, `basehaz`, `survdiff`, `concordance`,
 Multi-state `survfit` objects with retained model frames support native-shaped
 influence residuals and pseudo-values for state probabilities, cumulative
 transition hazards, and integrated state occupancy.
+`aareg` uses the Rust risk-set kernel for right-censored and counting-process
+fits, including weights, tapering, clustered influence arrays, and standard R
+model retention options.
 
 The package is intentionally named `survivalr` rather than `survival` so it can
 coexist with CRAN's upstream `survival` package while this bridge matures.

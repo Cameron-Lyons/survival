@@ -1,5 +1,5 @@
 use std::hint::black_box;
-use survival::regression::{CoxPHModel, agexact, coxph_fit, finegray, survreg};
+use survival::regression::{CoxPHModel, aareg_fit, agexact, coxph_fit, finegray, survreg};
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
     nelson_aalen, uno_c_index, weighted_logrank_test,
@@ -103,6 +103,71 @@ mod nelson_aalen_bench {
         let (time, _, status_i32) = generate_survival_data(n);
 
         bencher.bench_local(|| nelson_aalen(&time, &status_i32, None, 0.95));
+    }
+}
+
+mod aareg_bench {
+    use super::*;
+
+    type AaregInputs = (Vec<f64>, Vec<i32>, Vec<Vec<f64>>, Vec<f64>);
+
+    fn inputs(n: usize, p: usize) -> AaregInputs {
+        let (stop, status, covariates) = generate_tied_regression_data(n, p);
+        let weights = generate_case_weights(n);
+        (stop, status, covariates, weights)
+    }
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn weighted_risk_sweep(bencher: divan::Bencher, n: usize) {
+        let inputs = inputs(n, 4);
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(stop, status, covariates, weights)| {
+                black_box(
+                    aareg_fit(
+                        stop,
+                        status,
+                        covariates,
+                        None,
+                        Some(weights),
+                        None,
+                        1e-7,
+                        Some(12),
+                        false,
+                        None,
+                        "aalen".to_string(),
+                        None,
+                    )
+                    .expect("benchmark Aalen inputs should be full rank"),
+                )
+            },
+        );
+    }
+
+    #[divan::bench(args = [100, 500, 1000])]
+    fn clustered_influence(bencher: divan::Bencher, n: usize) {
+        let inputs = inputs(n, 3);
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(stop, status, covariates, weights)| {
+                let clusters = (0..n).map(|idx| (idx % 50) as i32).collect();
+                black_box(
+                    aareg_fit(
+                        stop,
+                        status,
+                        covariates,
+                        None,
+                        Some(weights),
+                        Some(clusters),
+                        1e-7,
+                        Some(9),
+                        true,
+                        None,
+                        "aalen".to_string(),
+                        None,
+                    )
+                    .expect("benchmark Aalen influence inputs should be full rank"),
+                )
+            },
+        );
     }
 }
 

@@ -11,6 +11,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perform_pystep_calculation, m)?)?;
     m.add_function(wrap_pyfunction!(perform_pystep_simple_calculation, m)?)?;
     m.add_function(wrap_pyfunction!(aareg, m)?)?;
+    m.add_function(wrap_pyfunction!(aareg_fit, m)?)?;
     m.add_function(wrap_pyfunction!(collapse, m)?)?;
     m.add_function(wrap_pyfunction!(
         crate::concordance::basic::concordance_index,
@@ -95,6 +96,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         AaregConfidenceInterval,
         AaregDiagnostics,
         AaregFitDetails,
+        AaregFitResult,
         AaregOptions,
         AaregResult,
         PSpline,

@@ -1,3 +1,5 @@
+#[path = "aareg_fit.rs"]
+pub(crate) mod aareg_fit_module;
 #[path = "aareg.rs"]
 pub(crate) mod aareg_module;
 #[path = "agexact.rs"]
@@ -34,6 +36,7 @@ pub(crate) mod spline_hazard;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
+pub use aareg_fit_module::{AaregFitResult, aareg_fit};
 pub use aareg_module::{
     AaregConfidenceInterval, AaregDiagnostics, AaregFitDetails, AaregOptions, AaregResult, aareg,
 };

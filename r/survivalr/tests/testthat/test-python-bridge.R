@@ -392,14 +392,83 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_null(yates_setup(yates_py_cox_fit, predict = "lp"))
   expect_equal(yates_setup(yates_py_cox_fit, predict = "risk")(c(-1, 0, 1), NULL), exp(c(-1, 0, 1)))
 
+  compare_aareg <- function(actual, expected) {
+    fields <- setdiff(names(expected), "call")
+    expect_setequal(setdiff(names(actual), "call"), fields)
+    for (field in fields) {
+      expect_equal(actual[[field]], expected[[field]], tolerance = 1e-10, info = field)
+    }
+    expect_s3_class(actual, "aareg")
+  }
   aareg_data <- data.frame(
-    time = c(1, 2, 3, 4, 5),
-    status = c(1, 0, 1, 1, 0),
-    x = c(0, 1, 0.5, 1.5, 0.2)
+    time = c(1, 2, 2, 3, 4, 4),
+    status = c(1, 1, 1, 1, 0, 1),
+    x = c(0, 1, 2, 1, 3, -1),
+    z = c(1, 0, 1, 2, -1, 0),
+    weight = c(1, 2, 0.5, 1.5, 1, 3),
+    group = factor(c("low", "high", "low", "high", "low", "high")),
+    cluster = c("a", "a", "b", "b", "c", "c")
   )
-  expect_equal(
-    aareg(survival::Surv(time, status) ~ x, data = aareg_data),
-    survival::aareg(survival::Surv(time, status) ~ x, data = aareg_data)
+  compare_aareg(
+    aareg(
+      survival::Surv(time, status) ~ x + z,
+      data = aareg_data,
+      weights = weight,
+      cluster = cluster,
+      nmin = 1,
+      model = TRUE,
+      x = TRUE,
+      y = TRUE
+    ),
+    survival::aareg(
+      survival::Surv(time, status) ~ x + z,
+      data = aareg_data,
+      weights = weight,
+      cluster = cluster,
+      nmin = 1,
+      model = TRUE,
+      x = TRUE,
+      y = TRUE
+    )
+  )
+  compare_aareg(
+    aareg(
+      survival::Surv(time, status) ~ x + group + cluster(cluster),
+      data = aareg_data,
+      nmin = 1,
+      model = TRUE
+    ),
+    survival::aareg(
+      survival::Surv(time, status) ~ x + group + cluster(cluster),
+      data = aareg_data,
+      nmin = 1,
+      model = TRUE
+    )
+  )
+  aareg_counting <- transform(
+    aareg_data,
+    start = c(0, 0, 1, 0, 2, 1),
+    stop = c(1, 3, 3, 4, 4, 2)
+  )
+  compare_aareg(
+    aareg(
+      survival::Surv(start, stop, status) ~ x + z + cluster(cluster),
+      data = aareg_counting,
+      weights = weight,
+      nmin = 1,
+      taper = c(1, 2),
+      x = TRUE,
+      y = TRUE
+    ),
+    survival::aareg(
+      survival::Surv(start, stop, status) ~ x + z + cluster(cluster),
+      data = aareg_counting,
+      weights = weight,
+      nmin = 1,
+      taper = c(1, 2),
+      x = TRUE,
+      y = TRUE
+    )
   )
   tmerge_data <- data.frame(id = 1:2, tstop = c(5, 6))
   expect_equal(

@@ -4,7 +4,9 @@ __all__ = bind_names(
     globals(),
     [
         "AaregOptions",
+        "AaregFitResult",
         "aareg",
+        "aareg_fit",
         "perform_cox_regression_frailty",
         "LinkFunctionParams",
         "CchMethod",

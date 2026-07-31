@@ -135,6 +135,37 @@ class YatesPairwiseResult:
     z: list[float]
     p_value: list[float]
 
+class AaregModelResult:
+    n: list[int]
+    times: list[float]
+    n_risk: list[float]
+    coefficient: list[list[float]]
+    coefficient_names: list[str]
+    test_statistic: list[float]
+    test_statistic_names: list[str]
+    test_variance: list[list[float]]
+    test: str
+    time_weights: list[list[float]]
+    dfbeta: list[list[list[float]]] | None
+    robust_test_variance: list[list[float]] | None
+    formula: str | None
+    weights: list[float] | None
+    cluster: list[Any] | None
+    cluster_levels: list[Any] | None
+    model: dict[str, Any] | None
+    x: list[list[float]] | None
+    y: Surv | None
+    @property
+    def nrisk(self) -> list[float]: ...
+    @property
+    def coefficients(self) -> list[list[float]]: ...
+    @property
+    def tweight(self) -> list[list[float]]: ...
+    @property
+    def test_var(self) -> list[list[float]]: ...
+    @property
+    def test_var2(self) -> list[list[float]] | None: ...
+
 def is_surv(value: Any) -> bool: ...
 def is_na_surv(x: Any) -> list[bool]: ...
 def format_surv(x: Any) -> list[str]: ...
@@ -759,6 +790,24 @@ def fitted(
 ) -> Any: ...
 def as_data_frame(result: Any) -> dict[str, list[Any]]: ...
 def anova(*fits: Any, test: str | None = "Chisq") -> Any: ...
+def aareg(
+    formula: Any,
+    data: Any | None = None,
+    *,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    qrtol: Any = 1e-7,
+    nmin: Any | None = None,
+    dfbeta: Any = False,
+    taper: Any = 1.0,
+    test: Any = "aalen",
+    cluster: Any | None = None,
+    model: Any = False,
+    x: Any = False,
+    y: Any = False,
+    **kwargs: Any,
+) -> Any: ...
 def coxph_detail(
     fit: Any | None = None,
     riskmat: bool = False,
