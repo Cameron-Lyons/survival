@@ -5409,3 +5409,95 @@ test_that("agexact.fit preserves exact iteration and final-trial semantics", {
   expect_equal(bridged_separated$score, reference_separated$score, tolerance = 1e-09)
   expect_equal(bridged_separated$iter, reference_separated$iter)
 })
+
+test_that("cch unstratified fits match survival for right and counting data", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(0, 2, 1, 5, 4, 0, 10, 3, 12, 1, 5, 9, 0, 6, 2, 4, 7, 2, 11, 13),
+    stop = c(5, 12, 3, 18, 9, 1, 15, 7, 20, 4, 11, 16, 2, 14, 6, 10, 13, 8, 17, 19),
+    status = c(1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1),
+    x = c(-1.2, .4, .9, -.3, 1.4, -.8, .2, 1.1, -.5, .7, -1, .1, 1.7, -.6, .5, -1.5, 1, -.1, .8, -.9),
+    group = factor(rep(c("a", "b"), 10)),
+    id = seq_len(20),
+    subcohort = c(rep(1, 14), rep(0, 6))
+  )
+
+  compare_fit <- function(formula, method) {
+    actual <- cch(
+      formula,
+      data,
+      subcoh = ~subcohort,
+      id = ~id,
+      cohort.size = 80,
+      method = method,
+      robust = identical(method, "LinYing")
+    )
+    reference <- survival::cch(
+      formula,
+      data,
+      subcoh = ~subcohort,
+      id = ~id,
+      cohort.size = 80,
+      method = method,
+      robust = identical(method, "LinYing")
+    )
+
+    expect_s3_class(actual, "cch")
+    expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+    expect_equal(actual$var, reference$var, tolerance = 1e-11)
+    expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+    expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+    expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+    expect_equal(actual$iter, reference$iter)
+    expect_equal(actual$n, reference$n)
+    expect_equal(actual$nevent, reference$nevent)
+    expect_equal(actual$method, reference$method)
+    expect_equal(actual$cohort.size, reference$cohort.size)
+    expect_equal(actual$subcohort.size, reference$subcohort.size)
+    expect_false(actual$stratified)
+  }
+
+  for (method in c("Prentice", "SelfPrentice", "LinYing")) {
+    compare_fit(Surv(stop, status) ~ x + group, method)
+    compare_fit(Surv(start, stop, status) ~ x + group, method)
+  }
+})
+
+test_that("cch rejects invalid unstratified sampling inputs", {
+  skip_if_not_installed("reticulate")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1, 2, 3, 4),
+    status = c(1, 0, 1, 1),
+    x = c(-1, 0, 1, 2),
+    id = seq_len(4),
+    subcohort = c(1, 1, 0, 0)
+  )
+  expect_error(
+    cch(
+      Surv(time, status) ~ x,
+      data,
+      subcoh = data$subcohort,
+      id = data$id,
+      cohort.size = 10,
+      method = "I.Borgan"
+    ),
+    "stratified Borgan kernel"
+  )
+  invalid <- data$subcohort
+  invalid[[2L]] <- 0
+  expect_error(
+    cch(
+      Surv(time, status) ~ x,
+      data,
+      subcoh = invalid,
+      id = data$id,
+      cohort.size = 10
+    ),
+    "censored observations not in subcohort"
+  )
+})

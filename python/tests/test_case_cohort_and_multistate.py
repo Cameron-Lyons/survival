@@ -247,12 +247,12 @@ def test_case_cohort_prentice_accepts_public_enum_value():
         survival.CchMethod.IIBorgan,
     ],
 )
-def test_case_cohort_unimplemented_methods_raise(method):
+def test_legacy_case_cohort_methods_require_real_time_api(method):
     cohort = survival.CohortData.new()
     cohort.add_subject(_simple_subject(1, 0.1, is_case=True, is_subcohort=True))
     cohort.add_subject(_simple_subject(2, 0.2, is_case=False, is_subcohort=True))
 
-    with pytest.raises(NotImplementedError, match="only Prentice is currently supported"):
+    with pytest.raises(NotImplementedError, match="use cch_fit with real survival times"):
         cohort.fit(method, max_iter=5)
 
 

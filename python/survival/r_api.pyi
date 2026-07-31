@@ -418,6 +418,24 @@ class CoxZPHResult:
     @property
     def table(self) -> list[dict[str, float | int | str]]: ...
 
+class CchModelResult:
+    fit: Any
+    design: Any
+    formula: str
+    coefficient_names: tuple[str, ...]
+    response: Surv
+    id_values: list[Any]
+    subcohort: list[int]
+    def __getattr__(self, name: str) -> Any: ...
+    @property
+    def coefficients(self) -> list[list[float]]: ...
+    @property
+    def information_matrix(self) -> list[list[float]]: ...
+    @property
+    def variance_matrix(self) -> list[list[float]]: ...
+    @property
+    def naive_information_matrix(self) -> list[list[float]]: ...
+
 class CoxPHDetailResult:
     time: list[float]
     nevent: list[int]
@@ -866,6 +884,20 @@ def coxph_detail(
     weights: Any | None = None,
 ) -> Any: ...
 def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult: ...
+def cch(
+    formula: str,
+    data: Any,
+    *,
+    subcoh: Any,
+    id: Any,
+    cohort_size: Any | None = None,
+    stratum: Any | None = None,
+    method: str = "Prentice",
+    robust: Any = False,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    **kwargs: Any,
+) -> CchModelResult: ...
 def coxph(
     response: Surv | str,
     data: Any | None = None,

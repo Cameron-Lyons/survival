@@ -16,6 +16,11 @@
 \alias{ratetable}
 \alias{match.ratetable}
 \alias{cch}
+\alias{coef.cch}
+\alias{print.cch}
+\alias{print.summary.cch}
+\alias{summary.cch}
+\alias{vcov.cch}
 \alias{cipoisson}
 \alias{clogit}
 \alias{cluster}
@@ -866,13 +871,14 @@ curve time.}
 \item{options}{Named \code{tmerge} controls: \code{idname},
 \code{tstartname}, \code{tstopname}, \code{delay}, \code{na.rm}, and
 \code{tdcstart}; also optional prediction settings for \code{yates}.}
-\item{subcoh, stratum, cohort.size}{Case-cohort design inputs for delegated
-\code{cch}.}
+\item{subcoh, stratum, cohort.size}{Case-cohort design inputs for native
+\code{cch} fitting. Unstratified Prentice, Self-Prentice, and Lin--Ying
+methods are supported; the Borgan methods require a stratified kernel.}
 \item{qrtol, nmin, dfbeta, taper}{Control values for Rust-backed
 \code{aareg} risk-set fitting and influence diagnostics.}
 \item{id}{Optional generated row identifier column for \code{survSplit}, or
 subject identifiers for \code{survcondense}, \code{survcheck}, timeline
-converters, \code{Surv2data}, delegated \code{cch}, native \code{tmerge}, and
+converters, \code{Surv2data}, native \code{cch}, native \code{tmerge}, and
 low-level \code{survfitKM}.}
 \item{istate}{Optional initial state vector for \code{survcheck} and
 timeline converters.}
@@ -1079,6 +1085,11 @@ be installed in the Python environment selected by \pkg{reticulate}.
 sweeps. It follows R boundary and tie rules, retains event censor values and
 time-dependent covariate names, and appends all nine \code{tcount}
 classification columns across repeated calls.
+
+Unstratified \code{cch} formulas are evaluated in R, expanded with
+\code{model.matrix}, and fitted by the Rust Cox and case-cohort variance
+kernels. The returned \code{cch} object carries coefficient, model-based,
+phase-two, and final variance components with R-compatible names and methods.
 }
 \seealso{
 \code{\link{survival_python_config}}

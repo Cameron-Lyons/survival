@@ -24,6 +24,7 @@ from . import spatial as spatial
 from . import surv_analysis as surv_analysis
 from . import validation as validation
 from .r_api import (
+    CchModelResult,
     FineGrayFrame,
     FineGrayOutput,
     PyearsResult,
@@ -51,6 +52,7 @@ from .r_api import (
     blog,
     blogit,
     bprobit,
+    cch,
     cipoisson,
     clogit,
     coef,
