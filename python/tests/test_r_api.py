@@ -770,6 +770,26 @@ def test_coxph_wtest_matches_r_wald_helper_shapes():
         survival.coxph_wtest([[1.0, 0.0], [0.0, float("inf")]], [1.0, 2.0])
 
 
+def test_integrated_step_values_preserve_boundaries_and_preorigin_state():
+    result = survival.r_api._integrated_step_values(
+        [-1.0, 1.0, 1.0, 3.0],
+        [0.25, 0.5, 0.75, 1.0],
+        [4.0, 0.0, 0.5, 1.0, 2.0, -1.0],
+        start_time=0.0,
+        initial_value=0.1,
+    )
+
+    assert result == pytest.approx([2.75, 0.0, 0.125, 0.25, 1.0, 0.0])
+    with pytest.raises(ValueError, match="same length"):
+        survival.r_api._integrated_step_values(
+            [1.0, 2.0],
+            [0.5],
+            [2.0],
+            start_time=0.0,
+            initial_value=0.0,
+        )
+
+
 def test_pseudo_accepts_survfit_results_and_preserves_direct_api():
     response = survival.Surv([1.0, 2.0, 3.0, 4.0], [1, 0, 1, 1])
     fit = survival.survfit(response)
