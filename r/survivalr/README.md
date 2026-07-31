@@ -26,6 +26,10 @@ model retention options.
 `coxph` formula fits support `tt(...)` terms for right-censored and
 counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
+`finegray` formulas use the Python formula engine and Rust interval-expansion
+kernel directly, including weights, subsets, missing-data handling, strata,
+counting-process histories, and delayed entry. Censoring risk sets are computed
+with sorted sweeps, and factor and `I(...)` column classes are restored in R.
 
 Time-dependent data construction is also native: `tmerge` evaluates the
 familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the

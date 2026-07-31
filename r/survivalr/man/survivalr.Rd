@@ -922,8 +922,8 @@ for \code{cipoisson}. Direct Python \code{survexp} calls accept
 \code{"ederer"}, \code{"hakulinen"}, \code{"conditional"},
 \code{"individual.h"}, and \code{"individual.s"}. For \code{yates}, method
 selects the direct or SGTT contrast path.}
-\item{etype, prefix, count}{Formula \code{finegray} options delegated to
-\code{survival::finegray}.}
+\item{etype, prefix, count}{Formula \code{finegray} endpoint and output-column
+options handled by the native bridge.}
 \item{transform}{Formula \code{survobrien} option delegated to
 \code{survival::survobrien}.}
 \item{covariate}{Direct numeric covariate vector for Python-backed
@@ -1091,6 +1091,12 @@ I.Borgan and II.Borgan fits retain stratum sizes, optimal allocation fractions,
 phase-two score matrices, and collapsed scores. The returned \code{cch} object
 carries coefficient, model-based, phase-two, and final variance components with
 R-compatible names and methods.
+
+Formula \code{finegray} calls use the Python formula engine and Rust interval
+expansion directly. The bridge supports weights, subsets, missing-data actions,
+strata, counting-process histories, and delayed entry; computes censoring risk
+sets with sorted sweeps; and restores factor and \code{I(...)} column classes
+on the returned data frame.
 }
 \seealso{
 \code{\link{survival_python_config}}
