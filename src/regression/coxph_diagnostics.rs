@@ -1,9 +1,7 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, same_time};
 use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
-use crate::regression::coxph_support::{
-    ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup, cumulative_step_at,
-};
+use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
 use ndarray::Array2;
@@ -706,6 +704,12 @@ impl CoxPHFit {
     ) -> Vec<Vec<f64>> {
         let n = self.event_times.len();
         let mut residuals = vec![vec![0.0; nvar]; n];
+        let scores = (method != 2).then(|| {
+            self.linear_predictors
+                .iter()
+                .map(|&value| value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
+                .collect::<Vec<_>>()
+        });
         let mut stratum_start = 0usize;
         while stratum_start < order.len() {
             let stratum = self.strata[order[stratum_start]];
@@ -763,21 +767,34 @@ impl CoxPHFit {
                     } else {
                         let denom: f64 = risk_indices.iter().map(|&idx| risk[idx]).sum();
                         if denom > 0.0 {
-                            for &idx in &deaths {
-                                for (col_idx, residual) in
-                                    residuals[idx].iter_mut().enumerate().take(nvar)
-                                {
-                                    *residual += self.weights[idx] * self.covariates[idx][col_idx];
-                                }
-                            }
+                            let scores = scores
+                                .as_ref()
+                                .expect("non-exact score residuals have risk scores");
                             if method == 0 || deaths.len() == 1 {
                                 let deadwt: f64 = deaths.iter().map(|&idx| self.weights[idx]).sum();
+                                let hazard = deadwt / denom;
+                                let mut mean = vec![0.0; nvar];
                                 for &idx in &risk_indices {
-                                    let factor = risk[idx] * deadwt / denom;
-                                    for (col_idx, residual) in
-                                        residuals[idx].iter_mut().enumerate().take(nvar)
+                                    for (col_idx, value) in mean.iter_mut().enumerate() {
+                                        *value += risk[idx] * self.covariates[idx][col_idx];
+                                    }
+                                }
+                                for value in &mut mean {
+                                    *value /= denom;
+                                }
+                                for &idx in &risk_indices {
+                                    let score = scores[idx];
+                                    for (col_idx, residual) in residuals[idx].iter_mut().enumerate()
                                     {
-                                        *residual -= factor * self.covariates[idx][col_idx];
+                                        *residual += score
+                                            * hazard
+                                            * (mean[col_idx] - self.covariates[idx][col_idx]);
+                                    }
+                                }
+                                for &idx in &deaths {
+                                    for (col_idx, residual) in residuals[idx].iter_mut().enumerate()
+                                    {
+                                        *residual += self.covariates[idx][col_idx] - mean[col_idx];
                                     }
                                 }
                             } else {
@@ -786,21 +803,52 @@ impl CoxPHFit {
                                 let deadwt: f64 = deaths.iter().map(|&idx| self.weights[idx]).sum();
                                 let weight_average = deadwt / deaths_f;
                                 let death_risk: f64 = deaths.iter().map(|&idx| risk[idx]).sum();
+                                let mut risk_sum = vec![0.0; nvar];
+                                let mut death_risk_sum = vec![0.0; nvar];
+                                for &idx in &risk_indices {
+                                    for (col_idx, value) in risk_sum.iter_mut().enumerate() {
+                                        *value += risk[idx] * self.covariates[idx][col_idx];
+                                    }
+                                }
+                                for &idx in &deaths {
+                                    for (col_idx, value) in death_risk_sum.iter_mut().enumerate() {
+                                        *value += risk[idx] * self.covariates[idx][col_idx];
+                                    }
+                                }
                                 for step in 0..death_count {
                                     let fraction = step as f64 / deaths_f;
                                     let step_denom = denom - fraction * death_risk;
                                     if step_denom <= 0.0 {
                                         continue;
                                     }
+                                    let hazard = weight_average / step_denom;
+                                    let mean: Vec<f64> = risk_sum
+                                        .iter()
+                                        .zip(&death_risk_sum)
+                                        .map(|(&total, &death_total)| {
+                                            (total - fraction * death_total) / step_denom
+                                        })
+                                        .collect();
                                     for &idx in &risk_indices {
+                                        let score = scores[idx];
                                         let multiplier =
                                             if is_death[idx] { 1.0 - fraction } else { 1.0 };
-                                        let factor =
-                                            weight_average * risk[idx] * multiplier / step_denom;
                                         for (col_idx, residual) in
-                                            residuals[idx].iter_mut().enumerate().take(nvar)
+                                            residuals[idx].iter_mut().enumerate()
                                         {
-                                            *residual -= factor * self.covariates[idx][col_idx];
+                                            *residual += score
+                                                * hazard
+                                                * multiplier
+                                                * (mean[col_idx] - self.covariates[idx][col_idx]);
+                                        }
+                                    }
+                                    for &idx in &deaths {
+                                        for (col_idx, residual) in
+                                            residuals[idx].iter_mut().enumerate()
+                                        {
+                                            *residual += (self.covariates[idx][col_idx]
+                                                - mean[col_idx])
+                                                / deaths_f;
                                         }
                                     }
                                 }
@@ -833,6 +881,11 @@ impl CoxPHFit {
     ) -> Vec<Vec<f64>> {
         let n = self.event_times.len();
         let mut residuals = vec![vec![0.0; nvar]; n];
+        let scores: Vec<f64> = self
+            .linear_predictors
+            .iter()
+            .map(|&value| value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
+            .collect();
         let mut stratum_start = 0usize;
         while stratum_start < order.len() {
             let stratum = self.strata[order[stratum_start]];
@@ -856,8 +909,11 @@ impl CoxPHFit {
             let event_count = rows.iter().filter(|row| row.status == 1).count();
             let mut event_times = Vec::with_capacity(event_count);
             let mut cumulative_scalars = Vec::with_capacity(event_count);
+            let mut cumulative_xhazards = Vec::with_capacity(event_count);
             let mut deaths: Vec<usize> = Vec::with_capacity(event_count);
             let mut cumulative_scalar = 0.0;
+            let mut cumulative_xhazard = vec![0.0; nvar];
+            let mut active_risk_covariates = vec![0.0; nvar];
             let mut time_start = 0usize;
             while time_start < rows.len() {
                 let event_time = rows[time_start].stop;
@@ -866,78 +922,114 @@ impl CoxPHFit {
                     time_end += 1;
                 }
 
-                active.advance_to(event_time, |_, _| {});
+                active.advance_to(event_time, |row_idx, added| {
+                    let direction = if added { 1.0 } else { -1.0 };
+                    let original_idx = rows[row_idx].original_idx;
+                    for (col_idx, value) in active_risk_covariates.iter_mut().enumerate() {
+                        *value +=
+                            direction * rows[row_idx].risk * self.covariates[original_idx][col_idx];
+                    }
+                });
 
                 deaths.clear();
                 deaths.extend((time_start..=time_end).filter(|&idx| rows[idx].status == 1));
                 if !deaths.is_empty() && active.risk_sum > 0.0 {
-                    for &row_idx in &deaths {
-                        let original_idx = rows[row_idx].original_idx;
-                        for (col_idx, residual) in
-                            residuals[original_idx].iter_mut().enumerate().take(nvar)
-                        {
-                            *residual +=
-                                rows[row_idx].weight * self.covariates[original_idx][col_idx];
-                        }
-                    }
-
                     let deadwt: f64 = deaths.iter().map(|&idx| rows[idx].weight).sum();
-                    let (scalar, death_adjustment) = if method == 1 && deaths.len() > 1 {
+                    if method == 1 && deaths.len() > 1 {
                         let death_count = deaths.len();
                         let deaths_f = death_count as f64;
                         let weight_average = deadwt / deaths_f;
                         let death_risk: f64 = deaths.iter().map(|&idx| rows[idx].risk).sum();
-                        let mut all_active_scalar = 0.0;
-                        let mut death_scalar = 0.0;
+                        let mut death_covariates = vec![0.0; nvar];
+                        for &row_idx in &deaths {
+                            let original_idx = rows[row_idx].original_idx;
+                            for (col_idx, value) in death_covariates.iter_mut().enumerate() {
+                                *value +=
+                                    rows[row_idx].risk * self.covariates[original_idx][col_idx];
+                            }
+                        }
+                        let mut mean = vec![0.0; nvar];
                         for step in 0..death_count {
                             let fraction = step as f64 / deaths_f;
                             let step_denom = active.risk_sum - fraction * death_risk;
                             if step_denom <= 0.0 {
                                 continue;
                             }
-                            let step_scalar = weight_average / step_denom;
-                            all_active_scalar += step_scalar;
-                            death_scalar += step_scalar * (1.0 - fraction);
+                            let hazard = weight_average / step_denom;
+                            for ((value, &active_total), &death_total) in mean
+                                .iter_mut()
+                                .zip(&active_risk_covariates)
+                                .zip(&death_covariates)
+                            {
+                                *value = (active_total - fraction * death_total) / step_denom;
+                            }
+                            cumulative_scalar += hazard;
+                            for (col_idx, value) in cumulative_xhazard.iter_mut().enumerate() {
+                                *value += mean[col_idx] * hazard;
+                            }
+                            for &row_idx in &deaths {
+                                let original_idx = rows[row_idx].original_idx;
+                                let score = scores[original_idx];
+                                for (col_idx, residual) in
+                                    residuals[original_idx].iter_mut().enumerate()
+                                {
+                                    let centered =
+                                        self.covariates[original_idx][col_idx] - mean[col_idx];
+                                    *residual +=
+                                        centered / deaths_f + score * hazard * fraction * centered;
+                                }
+                            }
                         }
-                        (all_active_scalar, all_active_scalar - death_scalar)
                     } else {
-                        (deadwt / active.risk_sum, 0.0)
-                    };
-
-                    cumulative_scalar += scalar;
-                    event_times.push(event_time);
-                    cumulative_scalars.push(cumulative_scalar);
-
-                    if death_adjustment != 0.0 {
+                        let hazard = deadwt / active.risk_sum;
+                        let mean: Vec<f64> = active_risk_covariates
+                            .iter()
+                            .map(|&value| value / active.risk_sum)
+                            .collect();
+                        cumulative_scalar += hazard;
+                        for (col_idx, value) in cumulative_xhazard.iter_mut().enumerate() {
+                            *value += mean[col_idx] * hazard;
+                        }
                         for &row_idx in &deaths {
                             let original_idx = rows[row_idx].original_idx;
                             for (col_idx, residual) in
-                                residuals[original_idx].iter_mut().enumerate().take(nvar)
+                                residuals[original_idx].iter_mut().enumerate()
                             {
-                                *residual += rows[row_idx].risk
-                                    * death_adjustment
-                                    * self.covariates[original_idx][col_idx];
+                                *residual += self.covariates[original_idx][col_idx] - mean[col_idx];
                             }
                         }
                     }
+                    event_times.push(event_time);
+                    cumulative_scalars.push(cumulative_scalar);
+                    cumulative_xhazards.push(cumulative_xhazard.clone());
                 }
 
                 time_start = time_end + 1;
             }
 
             for row in &rows {
-                let start_scalar = cumulative_step_at(&event_times, &cumulative_scalars, row.entry);
-                let stop_scalar = cumulative_step_at(&event_times, &cumulative_scalars, row.stop);
+                let step_index = |time: f64| match event_times
+                    .binary_search_by(|probe| probe.total_cmp(&time))
+                {
+                    Ok(idx) => Some(idx),
+                    Err(0) => None,
+                    Err(idx) => Some(idx - 1),
+                };
+                let start_index = step_index(row.entry);
+                let stop_index = step_index(row.stop);
+                let start_scalar = start_index.map_or(0.0, |idx| cumulative_scalars[idx]);
+                let stop_scalar = stop_index.map_or(0.0, |idx| cumulative_scalars[idx]);
                 let active_scalar = stop_scalar - start_scalar;
-                if active_scalar != 0.0 {
-                    for (col_idx, residual) in residuals[row.original_idx]
-                        .iter_mut()
-                        .enumerate()
-                        .take(nvar)
-                    {
-                        *residual -=
-                            row.risk * active_scalar * self.covariates[row.original_idx][col_idx];
-                    }
+                let score = scores[row.original_idx];
+                for (col_idx, residual) in residuals[row.original_idx].iter_mut().enumerate() {
+                    let start_xhazard =
+                        start_index.map_or(0.0, |idx| cumulative_xhazards[idx][col_idx]);
+                    let stop_xhazard =
+                        stop_index.map_or(0.0, |idx| cumulative_xhazards[idx][col_idx]);
+                    *residual += score
+                        * (stop_xhazard
+                            - start_xhazard
+                            - active_scalar * self.covariates[row.original_idx][col_idx]);
                 }
             }
 

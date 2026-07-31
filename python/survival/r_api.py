@@ -13967,7 +13967,9 @@ def _cox_dfbeta_from_score_residuals(fit: Any, *, scaled: bool) -> list[list[flo
     score = [[float(value) for value in row] for row in score_method()]
     if nvar == 0:
         return score
-    variance = getattr(fit, "information_matrix", None)
+    variance = getattr(fit, "naive_variance", None)
+    if variance is None:
+        variance = getattr(fit, "information_matrix", None)
     if variance is None:
         raise TypeError("model does not expose coefficient variance")
     matrix = [list(row) for row in variance]
