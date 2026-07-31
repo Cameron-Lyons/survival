@@ -863,8 +863,8 @@ observed curve time.}
 \item{data1, data2}{Input data frames for delegated \code{tmerge}.}
 \item{subcoh, stratum, cohort.size}{Case-cohort design inputs for delegated
 \code{cch}.}
-\item{qrtol, nmin, dfbeta, taper}{Control values for delegated
-\code{aareg}.}
+\item{qrtol, nmin, dfbeta, taper}{Control values for Rust-backed
+\code{aareg} risk-set fitting and influence diagnostics.}
 \item{id}{Optional generated row identifier column for \code{survSplit}, or
 subject identifiers for \code{survcondense}, \code{survcheck}, timeline
 converters, \code{Surv2data}, delegated \code{cch}/\code{tmerge}, and

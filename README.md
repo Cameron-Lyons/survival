@@ -221,30 +221,28 @@ for a runnable module-oriented example.
 ### Aalen's Additive Regression Model
 
 ```python
-from survival import regression
+import survival
 
-data = [
-    [1.0, 0.0, 0.5],
-    [2.0, 1.0, 1.5],
-    [3.0, 0.0, 2.5],
-]
-variable_names = ["time", "event", "covariate1"]
+data = {
+    "time": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+    "status": [1, 1, 1, 1, 0, 1],
+    "age": [42.0, 55.0, 61.0, 49.0, 67.0, 38.0],
+    "treatment": ["control", "treated", "control", "treated", "control", "treated"],
+}
 
-# Create options with required parameters (formula, data, variable_names)
-options = regression.AaregOptions(
-    formula="time + event ~ covariate1",
+fit = survival.aareg(
+    "Surv(time, status) ~ age + treatment",
     data=data,
-    variable_names=variable_names,
+    nmin=1,
 )
-
-# Optional: modify default values via setters
-# options.weights = [1.0, 1.0, 1.0]
-# options.qrtol = 1e-8
-# options.dfbeta = True
-
-result = regression.aareg(options)
-print(result)
+print(fit.coefficient_names)
+print(fit.coefficient)
 ```
+
+The formula interface supports right-censored and counting-process responses,
+case weights, factors and interactions, clustered influence estimates, tapering,
+and retained model, design, and response data. The risk-set sweep and linear
+algebra are implemented in Rust.
 
 ### Penalized Splines (P-splines)
 

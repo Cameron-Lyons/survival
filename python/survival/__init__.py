@@ -48,6 +48,7 @@ _SKLEARN_EXPORTS = [
 ]
 
 _R_EXPORTS = [
+    "AaregModelResult",
     "StrataFactor",
     "Surv",
     "Surv2",
@@ -64,6 +65,7 @@ _R_EXPORTS = [
     "YatesPairwiseResult",
     "YatesResult",
     "aic",
+    "aareg",
     "aeqSurv",
     "anova",
     "as_data_frame",

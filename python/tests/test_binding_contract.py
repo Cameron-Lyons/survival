@@ -10581,7 +10581,9 @@ def test_aareg_bindings_are_typed_to_runtime_surface():
         "AaregConfidenceInterval",
         "AaregFitDetails",
         "AaregDiagnostics",
+        "AaregFitResult",
         "aareg",
+        "aareg_fit",
     } <= stub_names
     assert list(inspect.signature(core.AaregOptions).parameters) == [
         "formula",
@@ -10590,6 +10592,20 @@ def test_aareg_bindings_are_typed_to_runtime_surface():
         "max_iter",
     ]
     assert list(inspect.signature(core.aareg).parameters) == ["options"]
+    assert list(inspect.signature(core.aareg_fit).parameters) == [
+        "stop",
+        "status",
+        "covariates",
+        "start",
+        "weights",
+        "cluster",
+        "qrtol",
+        "nmin",
+        "dfbeta",
+        "taper",
+        "test",
+        "test_cluster",
+    ]
     assert _pyi_class_method_arg_names(stub_path, "AaregOptions", "__init__") == [
         "self",
         "formula",
@@ -10598,6 +10614,20 @@ def test_aareg_bindings_are_typed_to_runtime_surface():
         "max_iter",
     ]
     assert _pyi_function_arg_names(stub_path, "aareg") == ["options"]
+    assert _pyi_function_arg_names(stub_path, "aareg_fit") == [
+        "stop",
+        "status",
+        "covariates",
+        "start",
+        "weights",
+        "cluster",
+        "qrtol",
+        "nmin",
+        "dfbeta",
+        "taper",
+        "test",
+        "test_cluster",
+    ]
     assert _pyi_class_annotation_names(stub_path, "AaregResult") == {
         "coefficients",
         "standard_errors",
@@ -10646,6 +10676,16 @@ def test_aareg_bindings_are_typed_to_runtime_surface():
     assert type(result.confidence_intervals[0]).__name__ == "AaregConfidenceInterval"
     assert type(result.fit_details).__name__ == "AaregFitDetails"
     assert type(result.diagnostics).__name__ == "AaregDiagnostics"
+
+    fit = core.aareg_fit(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 1, 1, 1],
+        [[0.0], [1.0], [0.5], [2.0]],
+        nmin=1,
+    )
+    assert type(fit).__name__ == "AaregFitResult"
+    assert fit.n == [4, 3, 4]
+    assert len(fit.coefficient) == 3
 
 
 def test_finegray_bindings_are_typed_to_runtime_surface():
