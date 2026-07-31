@@ -6107,7 +6107,14 @@ def pyears(
             start = [start_values[idx] for idx in keep] if start_values else _MISSING
             stop = [stop_values[idx] for idx in keep]
             event = [event_values[idx] for idx in keep] if event_values is not None else _MISSING
-            group = _subset_optional_sequence(group, keep, "group")
+            if isinstance(group, TcutResult):
+                group = _core.tcut(
+                    [float(group.values[idx]) for idx in keep],
+                    list(group.breaks),
+                    list(group.levels),
+                )
+            else:
+                group = _subset_optional_sequence(group, keep, "group")
             weights = _subset_optional_sequence(weights, keep, "weights")
     start_values, stop_values, event_values, ny, do_event = _pyears_response_from_direct(
         response,
@@ -6120,7 +6127,28 @@ def pyears(
     event_for_core = [0.0] * n if event_values is None else [float(value) for value in event_values]
     _pyears_validate_time_columns(start_values, stop_values, event_values)
     weight_values = _pyears_weights(weights, n)
-    group_codes, group_labels = _pyears_group_codes(group, n, levels=formula_group_levels)
+    if isinstance(group, TcutResult):
+        if formula_group_levels is not None:
+            raise ValueError("formula group levels cannot be combined with a tcut group")
+        if len(group.values) != n:
+            raise ValueError("group must have the same length as the response")
+        observed_factors = [0]
+        observed_dims = [len(group.levels)]
+        observed_cuts = [float(value) for value in group.breaks]
+        observed_data = [float(value) for value in group.values]
+        group_labels = [str(value) for value in group.levels]
+        has_tcut = True
+    else:
+        group_codes, group_labels = _pyears_group_codes(
+            group,
+            n,
+            levels=formula_group_levels,
+        )
+        observed_factors = [1]
+        observed_dims = [len(group_labels)]
+        observed_cuts = []
+        observed_data = group_codes
+        has_tcut = False
     scale_value = _normalize_positive_scale(scale)
     _normalize_bool_option(data_frame, "data_frame")
 
@@ -6134,18 +6162,18 @@ def pyears(
     raw = _core.perform_pyears_calculation(
         time_data,
         weight_values,
-        1,
-        [1],
-        [1],
+        0,
         [],
-        [0.0],
-        [1.0] * n,
-        1,
-        [1],
-        [len(group_labels)],
+        [],
+        [],
+        [],
         [],
         1,
-        group_codes,
+        observed_factors,
+        observed_dims,
+        observed_cuts,
+        1,
+        observed_data,
         1 if do_event else 0,
         ny,
     )
@@ -6157,7 +6185,7 @@ def pyears(
         observations=n,
         event=[float(value) for value in raw["pcount"]] if event_values is not None else None,
         expected=None,
-        tcut=False,
+        tcut=has_tcut,
     )
     return _pyears_result_frame(result) if data_frame else result
 

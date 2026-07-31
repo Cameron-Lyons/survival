@@ -47,6 +47,21 @@ if (getRversion() >= "2.15.1") {
   reticulate::py_get_attr(.survival_core_module(), name)
 }
 
+.survival_pybridge_module <- local({
+  module <- NULL
+
+  function() {
+    if (is.null(module)) {
+      module <<- reticulate::import("survival.pybridge", convert = TRUE)
+    }
+    module
+  }
+})
+
+.pybridge_attr <- function(name) {
+  reticulate::py_get_attr(.survival_pybridge_module(), name)
+}
+
 .survival_regression_module <- local({
   module <- NULL
 
@@ -1392,6 +1407,10 @@ attrassign.lm <- function(object, ...) {
 
 .call_data_prep <- function(name, ...) {
   do.call(.data_prep_attr(name), .compact_null(list(...)))
+}
+
+.call_pybridge <- function(name, ...) {
+  do.call(.pybridge_attr(name), .compact_null(list(...)))
 }
 
 .call_regression <- function(name, ...) {
@@ -2864,10 +2883,13 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
 }
 
 .pyears_group_values <- function(value) {
+  if (inherits(value, "tcut")) {
+    return(attr(value, "labels"))
+  }
   if (is.factor(value)) {
     return(levels(value))
   }
-  sort(unique(as.character(value)))
+  levels(as.factor(value))
 }
 
 .pyears_row_grid_keys <- function(values, levels) {
@@ -2907,6 +2929,9 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
     names = term_labels,
     levels = levels,
     factor_info = lapply(values, function(value) {
+      if (inherits(value, "tcut")) {
+        return(list(levels = attr(value, "labels"), ordered = FALSE))
+      }
       if (!is.factor(value)) {
         return(NULL)
       }
@@ -3018,13 +3043,7 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
   }
   if (isTRUE(data.frame)) {
     if (!is.null(group_info)) {
-      keep <- as.numeric(pyears_values) != 0 | as.numeric(n_values) != 0
-      if (!is.null(expected_values)) {
-        keep <- keep | as.numeric(expected_values) != 0
-      }
-      if (!is.null(event_values)) {
-        keep <- keep | as.numeric(event_values) != 0
-      }
+      keep <- as.numeric(pyears_values) > 0
       frame <- group_info$grid[keep, , drop = FALSE]
       frame$pyears <- as.numeric(pyears_values)[keep]
       frame$n <- as.numeric(n_values)[keep]
@@ -3165,6 +3184,82 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
   )
 }
 
+.pyears_tcut_native <- function(response_args, term_values, weights, scale) {
+  scale <- .as_finite_scalar(scale, "scale", positive = TRUE)
+  py_sequence <- function(value) {
+    value <- unname(value)
+    if (length(value) <= 1L) as.list(value) else value
+  }
+  n <- length(weights)
+  observed_factors <- integer(length(term_values))
+  observed_dims <- integer(length(term_values))
+  observed_cuts <- vector("list", length(term_values))
+  observed_data <- vector("list", length(term_values))
+
+  for (idx in seq_along(term_values)) {
+    value <- term_values[[idx]]
+    if (inherits(value, "tcut")) {
+      cuts <- as.numeric(attr(value, "cutpoints"))
+      observed_factors[[idx]] <- 0L
+      observed_dims[[idx]] <- length(cuts) - 1L
+      observed_cuts[[idx]] <- cuts
+      observed_data[[idx]] <- as.numeric(value)
+    } else {
+      levels <- .pyears_group_values(value)
+      codes <- match(as.character(value), as.character(levels))
+      observed_factors[[idx]] <- 1L
+      observed_dims[[idx]] <- length(levels)
+      observed_cuts[[idx]] <- numeric()
+      observed_data[[idx]] <- as.numeric(codes)
+    }
+  }
+
+  if (!is.null(response_args$direct)) {
+    time_data <- as.numeric(response_args$direct)
+    ny <- 1L
+    do_event <- 0L
+  } else if (!is.null(response_args$start)) {
+    time_data <- c(response_args$start, response_args$stop, response_args$event)
+    ny <- 3L
+    do_event <- 1L
+  } else {
+    time_data <- c(response_args$time, response_args$event)
+    ny <- 2L
+    do_event <- 1L
+  }
+
+  raw <- .call_pybridge(
+    "perform_pyears_calculation",
+    py_sequence(as.numeric(time_data)),
+    py_sequence(as.numeric(weights)),
+    0L,
+    py_sequence(integer()),
+    py_sequence(integer()),
+    py_sequence(numeric()),
+    py_sequence(numeric()),
+    py_sequence(numeric()),
+    as.integer(length(term_values)),
+    py_sequence(observed_factors),
+    py_sequence(observed_dims),
+    py_sequence(as.numeric(unlist(observed_cuts, use.names = FALSE))),
+    1L,
+    py_sequence(as.numeric(unlist(observed_data, use.names = FALSE))),
+    do_event,
+    ny
+  )
+
+  list(
+    pyears = .as_numeric_vector(.result_field(raw, "pyears")) / scale,
+    n = .as_numeric_vector(.result_field(raw, "pn")),
+    offtable = as.numeric(.result_field(raw, "offtable")) / scale,
+    group = as.character(seq_len(prod(observed_dims))),
+    observations = n,
+    event = if (do_event == 1L) .as_numeric_vector(.result_field(raw, "pcount")) else NULL,
+    expected = NULL,
+    tcut = TRUE
+  )
+}
+
 pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
                    scale = 365.25, expect = c("event", "pyears"),
                    model = FALSE, x = FALSE, y = FALSE, data.frame = FALSE,
@@ -3206,15 +3301,28 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       } else {
         mf[term_labels]
       }
-      if (!is.null(term_values) && any(vapply(term_values, inherits, logical(1), "tcut"))) {
-        call <- match.call()
-        call[[1L]] <- quote(survival::pyears)
-        return(eval.parent(call))
-      }
+      has_tcut <- !is.null(term_values) &&
+        any(vapply(term_values, inherits, logical(1), "tcut"))
       group_info <- .pyears_formula_group_info(term_labels, mf)
       weight_values <- stats::model.weights(mf)
       if (is.null(weight_values)) {
         weight_values <- rep(1, nrow(mf))
+      }
+      if (has_tcut) {
+        result <- .pyears_tcut_native(
+          response_args,
+          term_values,
+          weight_values,
+          scale
+        )
+        return(.as_pyears_result(
+          result,
+          match.call(),
+          data.frame = data.frame,
+          terms = output_terms,
+          group_name = if (length(term_labels) == 1L) term_labels[[1L]] else NULL,
+          group_info = group_info
+        ))
       }
       result <- .call_r_api(
         "pyears",

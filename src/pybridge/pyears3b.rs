@@ -1,6 +1,6 @@
 use super::pystep::pystep;
 use crate::constants::PYEARS_TIME_EPSILON;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -70,7 +70,7 @@ pub(crate) fn pyears3b(
         (start, stop, event)
     } else {
         let stop = &y[0..n];
-        let event = &y[n..2 * n];
+        let event = if doevent == 1 { &y[n..2 * n] } else { &[] };
         (&[] as &[f64], stop, event)
     };
     let mut ecut_slices = Vec::with_capacity(edim);
@@ -125,9 +125,9 @@ pub(crate) fn pyears3b(
     }
     eps *= PYEARS_TIME_EPSILON;
     **offtable = 0.0;
+    let mut data = vec![0.0; odim];
+    let mut data2 = vec![0.0; edim];
     for i in 0..n {
-        let mut data = vec![0.0; odim];
-        let mut data2 = vec![0.0; edim];
         for j in 0..odim {
             if ofac[j] == 1 || start.is_empty() {
                 data[j] = odata[j * n + i];
@@ -147,52 +147,199 @@ pub(crate) fn pyears3b(
         } else {
             stop[i] - start[i]
         };
-        let mut cumhaz = 0.0;
-        let mut data2_current = vec![0.0; edim];
+        let mut cumhaz: f64 = 0.0;
+        let mut index = -1isize;
+
+        if timeleft <= eps && doevent == 1 {
+            let (_, current_index, _, _) =
+                pystep(odim, &data, ofac, odims, &ocut_slices, 1.0, false);
+            index = current_index;
+        }
+
         while timeleft > eps {
-            let (thiscell, idx, _idx2, _lwt) =
-                pystep(odim, &mut data, ofac, odims, &ocut_slices, timeleft);
-            pyears[idx] += thiscell * weight[i];
-            pn[idx] += 1.0;
-            if doevent == 1 && !event.is_empty() && event[i] > 0.0 {
-                pcount[idx] += weight[i];
-            }
-            let mut etime = thiscell;
-            let mut hazard = 0.0;
-            let mut temp = 0.0;
-            data2_current.copy_from_slice(&data2);
-            while etime > 0.0 {
-                let (et2, edx, edx2, elwt) =
-                    pystep(edim, &mut data2_current, efac, edims, &ecut_slices, etime);
-                let lambda = if elwt < 1.0 {
-                    elwt * expect[edx] + (1.0 - elwt) * expect[edx2]
-                } else {
-                    expect[edx]
-                };
-                if method == 0 {
-                    let neg_hazard: f64 = -hazard;
-                    let neg_lambda_et2: f64 = -lambda * et2;
-                    temp += neg_hazard.exp() * (1.0 - neg_lambda_et2.exp()) / lambda;
+            let (thiscell, current_index, _, _) =
+                pystep(odim, &data, ofac, odims, &ocut_slices, timeleft, false);
+            index = current_index;
+
+            if index >= 0 {
+                let output_index = index as usize;
+                pyears[output_index] += thiscell * weight[i];
+                pn[output_index] += 1.0;
+
+                if edim > 0 {
+                    let mut etime = thiscell;
+                    let mut hazard: f64 = 0.0;
+                    let mut temp = 0.0;
+                    while etime > 0.0 {
+                        let (et2, expected_index, expected_index2, expected_weight) =
+                            pystep(edim, &data2, efac, edims, &ecut_slices, etime, true);
+                        let expected_index = expected_index as usize;
+                        let lambda = if expected_weight < 1.0 {
+                            expected_weight * expect[expected_index]
+                                + (1.0 - expected_weight) * expect[expected_index2 as usize]
+                        } else {
+                            expect[expected_index]
+                        };
+                        if method == 0 {
+                            let interval_survival_loss = if lambda == 0.0 {
+                                et2
+                            } else {
+                                -(-lambda * et2).exp_m1() / lambda
+                            };
+                            temp += (-hazard).exp() * interval_survival_loss;
+                        }
+                        hazard += lambda * et2;
+                        for j in 0..edim {
+                            if efac[j] != 1 {
+                                data2[j] += et2;
+                            }
+                        }
+                        etime -= et2;
+                    }
+
+                    if method == 1 {
+                        pexpect[output_index] += hazard * weight[i];
+                    } else {
+                        pexpect[output_index] += (-cumhaz).exp() * temp * weight[i];
+                    }
+                    cumhaz += hazard;
                 }
-                hazard += lambda * et2;
+            } else {
+                **offtable += thiscell * weight[i];
                 for j in 0..edim {
                     if efac[j] != 1 {
-                        data2_current[j] += et2;
+                        data2[j] += thiscell;
                     }
                 }
-                etime -= et2;
             }
-            if method == 1 {
-                pexpect[idx] += hazard * weight[i];
-            } else {
-                let neg_cumhaz: f64 = -cumhaz;
-                pexpect[idx] += neg_cumhaz.exp() * temp * weight[i];
+
+            for j in 0..odim {
+                if ofac[j] == 0 {
+                    data[j] += thiscell;
+                }
             }
-            cumhaz += hazard;
             timeleft -= thiscell;
+        }
+
+        if index >= 0 && doevent == 1 && !event.is_empty() {
+            pcount[index as usize] += event[i] * weight[i];
         }
     }
 }
+
+fn checked_dimension_product(name: &str, dims: &[usize]) -> PyResult<usize> {
+    if dims.iter().any(|&dim| dim == 0) {
+        return Err(PyValueError::new_err(format!(
+            "{name} dimensions must be positive"
+        )));
+    }
+    dims.iter().try_fold(1usize, |product, &dim| {
+        product
+            .checked_mul(dim)
+            .ok_or_else(|| PyValueError::new_err(format!("{name} dimension product is too large")))
+    })
+}
+
+fn validate_finite(name: &str, values: &[f64]) -> PyResult<()> {
+    if let Some(index) = values.iter().position(|value| !value.is_finite()) {
+        return Err(PyValueError::new_err(format!(
+            "{name} contains a non-finite value at index {index}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_table_layout(
+    name: &str,
+    n: usize,
+    dim: usize,
+    factors: &[i32],
+    dims: &[usize],
+    cuts: &[f64],
+    data: &[f64],
+    observed: bool,
+) -> PyResult<usize> {
+    if dim == 0
+        && !observed
+        && factors.is_empty()
+        && dims.is_empty()
+        && cuts.is_empty()
+        && data.is_empty()
+    {
+        return Ok(0);
+    }
+    if dim == 0 {
+        return Err(PyValueError::new_err(format!(
+            "{name}_dim must be positive"
+        )));
+    }
+    if factors.len() != dim || dims.len() != dim {
+        return Err(PyValueError::new_err(format!(
+            "{name} factors and dimensions must have length {dim}"
+        )));
+    }
+    let table_size = checked_dimension_product(name, dims)?;
+    if data.len() != n * dim {
+        return Err(PyValueError::new_err(format!(
+            "{name}_data must have length {}",
+            n * dim
+        )));
+    }
+    validate_finite(&format!("{name}_data"), data)?;
+
+    let mut cut_offset = 0usize;
+    for dimension in 0..dim {
+        let factor = factors[dimension];
+        if factor < 0 || (observed && factor > 1) {
+            return Err(PyValueError::new_err(format!(
+                "invalid {name} factor type at dimension {dimension}"
+            )));
+        }
+        if factor == 1 {
+            for row in 0..n {
+                let value = data[dimension * n + row];
+                if value.fract() != 0.0 || value < 1.0 || value > dims[dimension] as f64 {
+                    return Err(PyValueError::new_err(format!(
+                        "{name} factor codes must be integers between 1 and {}",
+                        dims[dimension]
+                    )));
+                }
+            }
+            continue;
+        }
+
+        let cut_count = if observed {
+            dims[dimension] + 1
+        } else if factor == 0 {
+            dims[dimension]
+        } else {
+            1 + (factor as usize - 1) * dims[dimension]
+        };
+        let end = cut_offset
+            .checked_add(cut_count)
+            .ok_or_else(|| PyValueError::new_err(format!("{name} cutpoint count is too large")))?;
+        if end > cuts.len() {
+            return Err(PyValueError::new_err(format!(
+                "{name}_cuts does not contain enough cutpoints"
+            )));
+        }
+        let dimension_cuts = &cuts[cut_offset..end];
+        validate_finite(&format!("{name}_cuts"), dimension_cuts)?;
+        if dimension_cuts.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(PyValueError::new_err(format!(
+                "{name} cutpoints must be strictly increasing"
+            )));
+        }
+        cut_offset = end;
+    }
+    if cut_offset != cuts.len() {
+        return Err(PyValueError::new_err(format!(
+            "{name}_cuts contains unused cutpoints"
+        )));
+    }
+    Ok(table_size)
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn perform_pyears_calculation(
@@ -219,10 +366,56 @@ pub(crate) fn perform_pyears_calculation(
     }
     let ny = ny.unwrap_or(2);
     let doevent = do_event.unwrap_or(1);
-    let mut total_observed = 1;
-    for &dim in &observed_dims {
-        total_observed *= dim;
+    if !(1..=3).contains(&ny) {
+        return Err(PyValueError::new_err("ny must be 1, 2, or 3"));
     }
+    if doevent != 0 && doevent != 1 {
+        return Err(PyValueError::new_err("do_event must be 0 or 1"));
+    }
+    if ny == 1 && doevent == 1 {
+        return Err(PyValueError::new_err("ny=1 cannot include an event column"));
+    }
+    if time_data.len() != n * ny {
+        return Err(PyValueError::new_err(format!(
+            "time_data must have length {}",
+            n * ny
+        )));
+    }
+    if method != 0 && method != 1 {
+        return Err(PyValueError::new_err("method must be 0 or 1"));
+    }
+    validate_finite("time_data", &time_data)?;
+    validate_finite("weights", &weights)?;
+    if weights.iter().any(|&weight| weight < 0.0) {
+        return Err(PyValueError::new_err("weights must be non-negative"));
+    }
+
+    let total_expected = validate_table_layout(
+        "expected",
+        n,
+        expected_dim,
+        &expected_factors,
+        &expected_dims,
+        &expected_cuts,
+        &expected_data,
+        false,
+    )?;
+    if expected_rates.len() != total_expected {
+        return Err(PyValueError::new_err(format!(
+            "expected_rates must have length {total_expected}"
+        )));
+    }
+    validate_finite("expected_rates", &expected_rates)?;
+    let total_observed = validate_table_layout(
+        "observed",
+        n,
+        observed_dim,
+        &observed_factors,
+        &observed_dims,
+        &observed_cuts,
+        &observed_data,
+        true,
+    )?;
     let mut pyears = vec![0.0; total_observed];
     let mut pn = vec![0.0; total_observed];
     let mut pcount = vec![0.0; total_observed];
@@ -270,4 +463,110 @@ pub(crate) fn perform_pyears_calculation(
         dict.set_item("offtable", offtable)?;
         Ok(dict.into())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_observed(
+        n: usize,
+        ny: usize,
+        y: &[f64],
+        weights: &[f64],
+        observed_factors: &[i32],
+        observed_dims: &[usize],
+        observed_cuts: &[f64],
+        observed_data: &[f64],
+    ) -> (Vec<f64>, Vec<f64>, Vec<f64>, f64) {
+        let size = observed_dims.iter().product();
+        let mut pyears = vec![0.0; size];
+        let mut pn = vec![0.0; size];
+        let mut pcount = vec![0.0; size];
+        let mut pexpect = vec![0.0; size];
+        let mut offtable = 0.0;
+        let expected_data = vec![1.0; n];
+        let expected = PyearsExpectedParams {
+            dim: 1,
+            fac: &[1],
+            dims: &[1],
+            cut: &[],
+            rates: &[0.0],
+            data: &expected_data,
+        };
+        let observed = PyearsObservedParams {
+            dim: observed_dims.len(),
+            fac: observed_factors,
+            dims: observed_dims,
+            cut: observed_cuts,
+            data: observed_data,
+        };
+        let mut output = PyearsOutput {
+            pyears: &mut pyears,
+            pn: &mut pn,
+            pcount: &mut pcount,
+            pexpect: &mut pexpect,
+            offtable: &mut offtable,
+        };
+
+        pyears3b(n, ny, 1, y, weights, expected, observed, 1, &mut output);
+        (pyears, pn, pcount, offtable)
+    }
+
+    #[test]
+    fn tcut_person_time_and_events_match_reference_cells() {
+        let result = run_observed(
+            2,
+            2,
+            &[25.0, 8.0, 1.0, 0.0],
+            &[1.0, 1.0],
+            &[0],
+            &[3],
+            &[0.0, 10.0, 20.0, 30.0],
+            &[0.0, 5.0],
+        );
+
+        assert_eq!(result.0, vec![15.0, 13.0, 5.0]);
+        assert_eq!(result.1, vec![2.0, 2.0, 1.0]);
+        assert_eq!(result.2, vec![0.0, 0.0, 1.0]);
+        assert_eq!(result.3, 0.0);
+    }
+
+    #[test]
+    fn tcut_tracks_off_table_time_without_panicking() {
+        let result = run_observed(
+            3,
+            2,
+            &[10.0, 10.0, 10.0, 1.0, 1.0, 1.0],
+            &[1.0, 1.0, 1.0],
+            &[0],
+            &[3],
+            &[0.0, 10.0, 20.0, 30.0],
+            &[-5.0, 25.0, 35.0],
+        );
+
+        assert_eq!(result.0, vec![5.0, 0.0, 5.0]);
+        assert_eq!(result.1, vec![1.0, 0.0, 1.0]);
+        assert_eq!(result.2, vec![1.0, 0.0, 0.0]);
+        assert_eq!(result.3, 20.0);
+    }
+
+    #[test]
+    fn tcut_and_factor_dimensions_use_column_major_output_order() {
+        let result = run_observed(
+            3,
+            2,
+            &[25.0, 8.0, 12.0, 1.0, 0.0, 1.0],
+            &[1.0, 1.0, 1.0],
+            &[0, 1],
+            &[4, 2],
+            &[0.0, 10.0, 20.0, 30.0, 40.0],
+            &[0.0, 5.0, 15.0, 1.0, 2.0, 1.0],
+        );
+
+        assert_eq!(result.0, vec![10.0, 15.0, 12.0, 0.0, 5.0, 3.0, 0.0, 0.0]);
+        assert_eq!(result.1, vec![1.0, 2.0, 2.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(result.2, vec![0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(result.3, 0.0);
+    }
 }

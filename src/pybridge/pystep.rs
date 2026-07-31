@@ -1,4 +1,3 @@
-use super::column_major_index;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -22,74 +21,75 @@ fn find_interval(cuts: &[f64], x: f64) -> Option<usize> {
     }
 }
 pub(crate) fn pystep(
-    edim: usize,
-    data: &mut [f64],
-    efac: &[i32],
-    edims: &[usize],
-    ecut: &[&[f64]],
-    tmax: f64,
-) -> (f64, usize, usize, f64) {
-    let mut et2 = tmax;
+    dim: usize,
+    data: &[f64],
+    factors: &[i32],
+    dims: &[usize],
+    cuts: &[&[f64]],
+    step: f64,
+    extend_edges: bool,
+) -> (f64, isize, isize, f64) {
+    let mut index = 0isize;
+    let mut index2 = 0isize;
+    let mut stride = 1isize;
     let mut wt = 1.0;
-    let mut limiting_dim = None;
-    for j in 0..edim {
-        if efac[j] != 0 {
-            continue;
-        }
-        let cuts = ecut[j];
-        if cuts.is_empty() {
-            continue;
-        }
-        let current = data[j];
-        let pos = cuts.partition_point(|&x| x <= current);
-        if pos < cuts.len() {
-            let next_cut = cuts[pos];
-            let delta = (next_cut - current).max(0.0);
-            if delta < et2 {
-                et2 = delta;
-                limiting_dim = Some(j);
-            }
-        }
-    }
-    et2 = et2.min(tmax);
-    let mut indices_current = vec![0; edim];
-    let mut indices_next = vec![0; edim];
-    for j in 0..edim {
-        if efac[j] == 0 {
-            data[j] += et2;
-            let cuts = ecut[j];
-            if !cuts.is_empty() {
-                let pos = cuts.partition_point(|&x| x <= data[j]) - 1;
-                indices_current[j] = pos.min(edims[j] - 1);
-                indices_next[j] = (pos + 1).min(edims[j] - 1);
-            } else {
-                indices_current[j] = 0;
-                indices_next[j] = 0;
-            }
+    let mut shortfall = 0.0;
+    let mut max_time = step;
+
+    for dimension in 0..dim {
+        let factor = factors[dimension];
+        if factor == 1 {
+            index += (data[dimension] as isize - 1) * stride;
         } else {
-            indices_current[j] = data[j] as usize - 1;
-            indices_next[j] = indices_current[j];
-        }
-    }
-    let indx = column_major_index(&indices_current, edims);
-    let indx2 = column_major_index(&indices_next, edims);
-    if let Some(dim) = limiting_dim {
-        let current = data[dim] - et2;
-        let cuts = ecut[dim];
-        if !cuts.is_empty() {
-            let pos = cuts.partition_point(|&x| x <= current) - 1;
-            if pos + 1 < cuts.len() {
-                let next_cut = cuts[pos + 1];
-                let prev_cut = cuts[pos];
-                let width = next_cut - prev_cut;
-                if width > 0.0 {
-                    wt = (current + et2 - prev_cut) / width;
-                    wt = wt.clamp(0.0, 1.0);
+            let dimension_cuts = cuts[dimension];
+            let cut_count = if factor > 1 {
+                1 + (factor as usize - 1) * dims[dimension]
+            } else {
+                dims[dimension]
+            };
+            let mut cut_index =
+                dimension_cuts[..cut_count].partition_point(|&cut| data[dimension] >= cut);
+
+            if cut_index == 0 {
+                let time_to_first_cut = dimension_cuts[0] - data[dimension];
+                if !extend_edges && time_to_first_cut > shortfall {
+                    shortfall = time_to_first_cut.min(step);
+                }
+                max_time = max_time.min(time_to_first_cut);
+            } else if cut_index == cut_count {
+                if !extend_edges {
+                    let time_to_upper_limit = dimension_cuts[cut_count] - data[dimension];
+                    if time_to_upper_limit <= 0.0 {
+                        shortfall = step;
+                    } else {
+                        max_time = max_time.min(time_to_upper_limit);
+                    }
+                }
+                if factor > 1 {
+                    cut_index = dims[dimension] - 1;
+                } else {
+                    cut_index -= 1;
+                }
+            } else {
+                max_time = max_time.min(dimension_cuts[cut_index] - data[dimension]);
+                cut_index -= 1;
+                if factor > 1 {
+                    wt = 1.0 - (cut_index % factor as usize) as f64 / factor as f64;
+                    cut_index /= factor as usize;
+                    index2 = stride;
                 }
             }
+            index += cut_index as isize * stride;
         }
+        stride *= dims[dimension] as isize;
     }
-    (et2, indx, indx2, wt)
+
+    index2 += index;
+    if shortfall == 0.0 {
+        (max_time, index, index2, wt)
+    } else {
+        (shortfall, -1, index2, wt)
+    }
 }
 pub(crate) fn pystep_simple(
     odim: usize,
@@ -168,17 +168,22 @@ pub(crate) fn perform_pystep_calculation(
             "Cutpoints length does not match edim",
         ));
     }
-    let mut data_mut = data.clone();
     let ecut_refs: Vec<&[f64]> = ecut.iter().map(|v| v.as_slice()).collect();
     let (time_step, current_index, next_index, weight) =
-        pystep(edim, &mut data_mut, &efac, &edims, &ecut_refs, tmax);
+        pystep(edim, &data, &efac, &edims, &ecut_refs, tmax, true);
+    let mut updated_data = data;
+    for idx in 0..edim {
+        if efac[idx] != 1 {
+            updated_data[idx] += time_step;
+        }
+    }
     Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("time_step", time_step)?;
         dict.set_item("current_index", current_index)?;
         dict.set_item("next_index", next_index)?;
         dict.set_item("weight", weight)?;
-        dict.set_item("updated_data", data_mut)?;
+        dict.set_item("updated_data", updated_data)?;
         Ok(dict.into())
     })
 }
@@ -215,4 +220,35 @@ pub(crate) fn perform_pystep_simple_calculation(
         dict.set_item("index", index)?;
         Ok(dict.into())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pystep_assigns_elapsed_time_to_the_current_cell() {
+        let cuts = [0.0, 1.0];
+        let (elapsed, index, index2, weight) = pystep(1, &[0.25], &[0], &[2], &[&cuts], 1.0, true);
+
+        assert_eq!(elapsed, 0.75);
+        assert_eq!(index, 0);
+        assert_eq!(index2, 0);
+        assert_eq!(weight, 1.0);
+    }
+
+    #[test]
+    fn pystep_reports_time_below_and_above_observed_cuts_as_off_table() {
+        let cuts = [0.0, 10.0, 20.0, 30.0];
+        let below = pystep(1, &[-5.0], &[0], &[3], &[&cuts], 10.0, false);
+        let final_cell = pystep(1, &[25.0], &[0], &[3], &[&cuts], 10.0, false);
+        let above = pystep(1, &[30.0], &[0], &[3], &[&cuts], 5.0, false);
+
+        assert_eq!(below.0, 5.0);
+        assert_eq!(below.1, -1);
+        assert_eq!(final_cell.0, 5.0);
+        assert_eq!(final_cell.1, 2);
+        assert_eq!(above.0, 5.0);
+        assert_eq!(above.1, -1);
+    }
 }

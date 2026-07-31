@@ -342,6 +342,16 @@ print(result["coefficients"])
 
 ### Person-Years Calculation
 
+The high-level API accepts a `tcut` result directly for time-changing groups:
+
+```python
+import survival
+
+response = survival.Surv([25.0, 8.0], [1, 0])
+attained = survival.tcut([0.0, 5.0], [0.0, 10.0, 20.0, 30.0])
+result = survival.pyears(response, group=attained, scale=1)
+```
+
 ```python
 from survival import pybridge
 

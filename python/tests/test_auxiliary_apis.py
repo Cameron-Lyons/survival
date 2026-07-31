@@ -543,8 +543,8 @@ def test_pystep_helpers():
         1.0,
     )
     assert step["time_step"] == pytest.approx(0.75)
-    assert step["current_index"] == 1
-    assert step["next_index"] == 1
+    assert step["current_index"] == 0
+    assert step["next_index"] == 0
     assert step["weight"] == pytest.approx(1.0)
     assert step["updated_data"] == [1.0]
 
