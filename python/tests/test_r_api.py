@@ -5496,6 +5496,36 @@ def test_survfit_formula_splits_interval_weights_by_group():
     assert grouped_with_model["A"].survival == pytest.approx(expected_a.survival)
     assert grouped_with_model["B"].survival == pytest.approx(expected_b.survival)
     assert grouped_with_model["A"].model["(weights)"] == pytest.approx(data["weights"])
+    assert grouped_with_model["A"].model is grouped_with_model["B"].model
+
+
+def test_survfit_grouped_turnbull_preserves_first_seen_label_order():
+    left = [0.0, 1.0, 2.0, 0.0, 2.0, 3.0, 4.0, 3.0]
+    right = [1.0, 3.0, float("inf"), 2.0, 2.0, 5.0, 4.0, float("inf")]
+    groups = ["later", "first", "later", "first", "later", "first", "later", "first"]
+    weights = [1.0, 0.5, 1.5, 2.0, 0.75, 1.25, 2.5, 1.0]
+    response = survival.Surv(left, right, type="interval2")
+
+    grouped = survival.survfit(response, group=groups, weights=weights)
+
+    assert list(grouped) == ["later", "first"]
+    for label in grouped:
+        indices = [idx for idx, value in enumerate(groups) if value == label]
+        expected = survival.survfit(
+            survival.Surv(
+                [left[idx] for idx in indices],
+                [right[idx] for idx in indices],
+                type="interval2",
+            ),
+            weights=[weights[idx] for idx in indices],
+        )
+        assert isinstance(grouped[label], survival.r_api.TurnbullSurvfitResult)
+        assert grouped[label].time_points == pytest.approx(expected.time_points)
+        assert grouped[label].survival == pytest.approx(expected.survival)
+        assert grouped[label].survival_lower == pytest.approx(expected.survival_lower)
+        assert grouped[label].survival_upper == pytest.approx(expected.survival_upper)
+        assert grouped[label].n_iter == expected.n_iter
+        assert grouped[label].converged == expected.converged
 
 
 def test_survfit_formula_accepts_named_interval2_response_arguments():
