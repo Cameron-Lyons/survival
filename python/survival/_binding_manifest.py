@@ -624,6 +624,7 @@ BINDINGS = (
     "coxmart",
     "coxph_detail",
     "coxph_fit",
+    "coxph_wtest",
     "cqr_conformal_survival",
     "create_model_card",
     "create_simple_ratetable",

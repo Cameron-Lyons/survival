@@ -840,6 +840,8 @@ def test_coxph_wtest_matches_r_wald_helper_shapes():
     correlated = survival.coxph_wtest([[2.0, 0.5], [0.5, 1.0]], [1.0, 2.0])
     singular = survival.coxph_wtest([[1.0, 2.0], [2.0, 4.0]], [1.0, 2.0])
     trailing = survival.coxph_wtest([[0.0, 0.0], [0.0, 2.0]], [1.0, 2.0])
+    zero = survival.coxph_wtest([[0.0, 0.0], [0.0, 0.0]], [1.0, 2.0])
+    indefinite = survival.coxph_wtest([[1.0, 2.0], [2.0, 1.0]], [1.0, 2.0])
     matrix_rhs = survival.coxph_wtest(
         [[1.0, 0.0], [0.0, 1.0]],
         [[1.0, 3.0], [2.0, 4.0]],
@@ -858,6 +860,12 @@ def test_coxph_wtest_matches_r_wald_helper_shapes():
     assert trailing.df == 1
     assert trailing.test == pytest.approx([2.0])
     assert trailing.solve == pytest.approx([0.0, 1.0])
+    assert zero.test == pytest.approx([0.0])
+    assert zero.df == 0
+    assert zero.solve == pytest.approx([0.0, 0.0])
+    assert indefinite.test == pytest.approx([1.0])
+    assert indefinite.df == 1
+    assert indefinite.solve == pytest.approx([1.0, 0.0])
     assert matrix_rhs.test == pytest.approx([5.0, 25.0])
     assert len(matrix_rhs.solve) == 2
     for actual_row, expected_row in zip(
