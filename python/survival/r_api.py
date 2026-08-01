@@ -17161,9 +17161,7 @@ def _survreg_distribution_values(
         mean,
         scale,
     )
-    distribution_parms = (
-        _survreg_t_degrees_of_freedom(parms) if distribution_name == "t" else None
-    )
+    distribution_parms = _survreg_t_degrees_of_freedom(parms) if distribution_name == "t" else None
     return _core.survreg_distribution(
         value_values,
         mean_values,
@@ -17233,9 +17231,7 @@ def rsurvreg(
         scale,
         target_length=count,
     )
-    distribution_parms = (
-        _survreg_t_degrees_of_freedom(parms) if distribution_name == "t" else None
-    )
+    distribution_parms = _survreg_t_degrees_of_freedom(parms) if distribution_name == "t" else None
     return _core.survreg_distribution(
         probability_values,
         mean_values,
