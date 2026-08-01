@@ -4,6 +4,7 @@ pub(crate) mod aeq_surv_module;
 pub(crate) mod cluster_module;
 #[path = "collapse.rs"]
 pub(crate) mod collapse_module;
+pub(crate) mod lvcf;
 #[path = "neardate.rs"]
 pub(crate) mod neardate_module;
 #[path = "rttright.rs"]
@@ -25,6 +26,7 @@ pub(crate) mod tmerge_module;
 pub use aeq_surv_module::{AeqSurvResult, aeq_surv};
 pub use cluster_module::{ClusterResult, cluster, cluster_str};
 pub use collapse_module::collapse;
+pub use lvcf::lvcf_indices;
 pub use neardate_module::{NearDateResult, neardate, neardate_str};
 pub use rttright_module::{RttrightResult, rttright, rttright_stratified};
 pub use strata_module::{StrataResult, strata, strata_str};

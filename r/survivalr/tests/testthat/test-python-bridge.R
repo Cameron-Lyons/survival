@@ -3225,6 +3225,25 @@ test_that("data-prep helpers match R survival shapes", {
       reference_lvcf(c(1, 1, 1), c(NA, 10, NA), c(2, 1, 3))
     }
   )
+  if (!is.null(reference_lvcf)) {
+    for (special_time in list(
+      c(1, NA, 2),
+      c(1, Inf, 2),
+      c(1, -Inf, 2),
+      c("b", "a", "c"),
+      factor(c("b", "a", "c"), levels = c("c", "b", "a"))
+    )) {
+      expect_equal(
+        lvcf(c(1, 1, 1), c(10, NA, 20), special_time),
+        reference_lvcf(c(1, 1, 1), c(10, NA, 20), special_time)
+      )
+    }
+    lvcf_factor_id <- factor(c("b", "a", "b", "a"), levels = c("b", "a"))
+    expect_equal(
+      lvcf(lvcf_factor_id, c(NA, 1, 2, NA)),
+      reference_lvcf(lvcf_factor_id, c(NA, 1, 2, NA))
+    )
+  }
   lvcf_factor <- factor(c("a", NA, "b", NA), levels = c("a", "b"))
   expect_equal(
     lvcf(c(1, 1, 1, 2), lvcf_factor),

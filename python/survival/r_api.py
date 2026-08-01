@@ -4309,15 +4309,73 @@ def strata(
 def _lvcf_order_key(value: Any) -> tuple[int, Any]:
     if _is_missing_value(value):
         raise ValueError("id must not contain missing values")
-    if isinstance(value, bool):
-        return (0, int(value))
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return (1, str(value))
-    if math.isfinite(numeric):
-        return (0, numeric)
+    if isinstance(value, Real):
+        return (0, float(value))
     return (1, str(value))
+
+
+def _lvcf_category_ranks(values: Any, name: str) -> dict[Any, int] | None:
+    categories = _mstate_categories(values)
+    if categories is None:
+        return None
+    levels = _materialize_1d(categories, f"{name} categories")
+    return {_hashable_group_value(level): rank for rank, level in enumerate(levels)}
+
+
+def _lvcf_id_ranks(values: Any, raw: list[Any] | None = None) -> tuple[list[Any], list[int]]:
+    if raw is None:
+        raw = _materialize_labels(values, "id")
+    if any(_is_missing_value(value) for value in raw):
+        raise ValueError("id must not contain missing values")
+
+    category_ranks = _lvcf_category_ranks(values, "id")
+    if category_ranks is not None:
+        try:
+            return raw, [category_ranks[_hashable_group_value(value)] for value in raw]
+        except KeyError as exc:
+            raise ValueError("id contains a value outside the declared categories") from exc
+
+    unique: dict[Any, Any] = {}
+    for value in raw:
+        unique.setdefault(_hashable_group_value(value), value)
+    ordered = sorted(unique, key=lambda key: _lvcf_order_key(unique[key]))
+    ranks = {key: rank for rank, key in enumerate(ordered)}
+    return raw, [ranks[_hashable_group_value(value)] for value in raw]
+
+
+def _lvcf_time_order(values: Any) -> tuple[list[Any], list[Any]]:
+    raw = _materialize_1d(values, "time")
+    category_ranks = _lvcf_category_ranks(values, "time")
+    if category_ranks is not None:
+        try:
+            return raw, [
+                len(category_ranks)
+                if _is_missing_value(value)
+                else category_ranks[_hashable_group_value(value)]
+                for value in raw
+            ]
+        except KeyError as exc:
+            raise ValueError("time contains a value outside the declared categories") from exc
+
+    first_observed = next((value for value in raw if not _is_missing_value(value)), None)
+    if isinstance(first_observed, Real):
+        try:
+            numeric = [math.nan if value is None else float(value) for value in raw]
+        except (TypeError, ValueError):
+            pass
+        else:
+            if not any(math.isnan(value) for value in numeric):
+                return raw, numeric
+            return raw, [(1, 0.0) if math.isnan(value) else (0, value) for value in numeric]
+
+    return raw, [
+        (2, "")
+        if _is_missing_value(value)
+        else (0, float(value))
+        if isinstance(value, Real)
+        else (1, str(value))
+        for value in raw
+    ]
 
 
 def _integerish_vector_or_none(values: Any, name: str) -> list[int] | None:
@@ -4889,19 +4947,32 @@ def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:
     if len(result) != len(id_values):
         raise ValueError("x must have the same length as id")
     if time is None:
+        _, id_ranks = _lvcf_id_ranks(id, id_values)
+        source = _core.lvcf_indices(
+            id_ranks,
+            [_is_missing_value(value) for value in result],
+        )
+        return [result[row_idx] for row_idx in source]
+
+    time_values, time_order = _lvcf_time_order(time)
+    if len(time_values) != len(id_values):
+        raise ValueError("time must have the same length as id")
+    id_category_ranks = _lvcf_category_ranks(id, "id")
+    if id_category_ranks is None:
         order = sorted(
             range(len(id_values)),
-            key=lambda idx: (_lvcf_order_key(id_values[idx]), idx),
+            key=lambda idx: (_lvcf_order_key(id_values[idx]), time_order[idx], idx),
         )
     else:
-        time_values = _float_vector(time, "time")
-        if len(time_values) != len(id_values):
-            raise ValueError("time must have the same length as id")
-        if any(not math.isfinite(value) for value in time_values):
-            raise ValueError("time must contain only finite values")
+        if any(_is_missing_value(value) for value in id_values):
+            raise ValueError("id must not contain missing values")
+        try:
+            id_order = [id_category_ranks[_hashable_group_value(value)] for value in id_values]
+        except KeyError as exc:
+            raise ValueError("id contains a value outside the declared categories") from exc
         order = sorted(
             range(len(id_values)),
-            key=lambda idx: (_lvcf_order_key(id_values[idx]), time_values[idx], idx),
+            key=lambda idx: (id_order[idx], time_order[idx], idx),
         )
 
     current: Any = None

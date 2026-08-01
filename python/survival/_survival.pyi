@@ -5617,6 +5617,11 @@ def from_timeline(
     states: list[list[int]],
     time_points: list[float],
 ) -> IntervalResult: ...
+def lvcf_indices(
+    id: list[int],
+    missing: list[bool],
+    time: list[float] | None = None,
+) -> list[int]: ...
 def turnbull_estimator(
     left: list[float],
     right: list[float],
