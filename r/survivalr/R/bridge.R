@@ -2888,6 +2888,301 @@ blog <- function(edge = 0.05) {
   NULL
 }
 
+.survexp_ratetable_fit <- function(group, expected_data, followup, times,
+                                   conditional, ratetable) {
+  atts <- attributes(ratetable)
+  times <- sort(unique(times))
+  cuts <- lapply(atts$cutpoints, function(value) {
+    if (!is.null(value) && inherits(value, c("Date", "POSIXt", "date", "chron"))) {
+      ratetableDate(value)
+    } else {
+      value
+    }
+  })
+  if (is.null(atts$type)) {
+    factors <- as.integer(atts$factor)
+    us_special <- factors > 1L
+  } else {
+    factors <- as.integer(atts$type == 1L)
+    us_special <- atts$type == 4L
+  }
+
+  if (any(us_special)) {
+    dimid <- if (is.null(atts$dimid)) names(atts$dimnames) else atts$dimid
+    age_year <- match(c("age", "year"), dimid)
+    if (any(is.na(age_year))) {
+      stop("ratetable does not have expected shape", call. = FALSE)
+    }
+    birth_date <- as.Date("1970-01-01") +
+      (expected_data[, age_year[[2L]]] - expected_data[, age_year[[1L]]])
+    birth_year <- format(birth_date, "%Y")
+    offset <- as.numeric(birth_date - as.Date(paste0(birth_year, "-01-01")))
+    expected_data[, age_year[[2L]]] <- expected_data[, age_year[[2L]]] - offset
+
+    if (any(factors > 1L)) {
+      special_dimension <- which(us_special)[[1L]]
+      year_count <- length(cuts[[special_dimension]])
+      interpolation <- factors[[special_dimension]]
+      cuts[[special_dimension]] <- round(
+        stats::approx(
+          interpolation * seq_len(year_count),
+          cuts[[special_dimension]],
+          interpolation:(interpolation * year_count)
+        )$y - 1e-4
+      )
+    }
+  }
+
+  py_sequence <- function(value) {
+    value <- unname(value)
+    if (length(value) <= 1L) as.list(value) else value
+  }
+  raw <- .call_pybridge(
+    "perform_survexp_fit",
+    isTRUE(conditional),
+    py_sequence(factors),
+    py_sequence(as.integer(atts$dim)),
+    py_sequence(as.numeric(unlist(cuts, use.names = FALSE))),
+    py_sequence(as.numeric(ratetable)),
+    py_sequence(as.integer(group)),
+    py_sequence(as.numeric(expected_data)),
+    py_sequence(as.numeric(followup)),
+    py_sequence(as.numeric(times)),
+    as.integer(max(group))
+  )
+  interval_survival <- .as_numeric_vector(.result_field(raw, "surv"))
+  n_risk <- as.integer(.as_numeric_vector(.result_field(raw, "n")))
+  n_times <- length(times)
+  n_groups <- max(group)
+
+  if (n_times == 1L) {
+    list(surv = interval_survival, n = n_risk)
+  } else if (n_groups > 1L) {
+    interval_matrix <- matrix(interval_survival, n_times, n_groups)
+    list(
+      surv = apply(interval_matrix, 2L, cumprod),
+      n = matrix(n_risk, n_times, n_groups)
+    )
+  } else {
+    list(surv = cumprod(interval_survival), n = n_risk)
+  }
+}
+
+.survexp_formula_ratetable <- function(Call, evaluation_env, ratetable,
+                                       times_missing, method_missing,
+                                       cohort_missing, conditional_missing,
+                                       se_fit_missing, method, cohort,
+                                       conditional, scale, se_fit, model, x, y) {
+  model_args <- match(
+    c("formula", "data", "weights", "subset", "na.action"),
+    names(Call),
+    nomatch = 0L
+  )
+  if (model_args[[1L]] == 0L) {
+    stop("A formula argument is required", call. = FALSE)
+  }
+  model_call <- Call[c(1L, model_args)]
+  model_call[[1L]] <- quote(stats::model.frame)
+  formula_value <- eval(Call$formula, evaluation_env)
+  Terms <- if ("data" %in% names(Call)) {
+    stats::terms(formula_value, data = eval(Call$data, evaluation_env))
+  } else {
+    stats::terms(formula_value)
+  }
+
+  rcall <- if ("rmap" %in% names(Call)) Call$rmap else NULL
+  if (!is.null(rcall) && (!is.call(rcall) || rcall[[1L]] != as.name("list"))) {
+    stop("Invalid rcall argument", call. = FALSE)
+  }
+  varlist <- names(dimnames(ratetable))
+  if (is.null(varlist)) {
+    varlist <- attr(ratetable, "dimid")
+  }
+  mapped <- match(names(rcall)[-1L], varlist)
+  if (any(is.na(mapped))) {
+    stop("Variable not found in the ratetable: ", names(rcall)[-1L][is.na(mapped)], call. = FALSE)
+  }
+  if (any(!(varlist %in% names(rcall)))) {
+    missing_vars <- varlist[!(varlist %in% names(rcall))]
+    additions <- paste(paste(missing_vars, missing_vars, sep = "="), collapse = ",")
+    if (is.null(rcall)) {
+      rcall <- parse(text = paste0("list(", additions, ")"))[[1L]]
+    } else {
+      rcall <- parse(text = paste0(
+        "c(", paste(deparse(rcall), collapse = ""), ",list(", additions, "))"
+      ))[[1L]]
+    }
+  }
+  new_variables <- all.vars(rcall)
+  if (length(new_variables) > 0L) {
+    expanded_formula <- paste(
+      paste(deparse(Terms), collapse = ""),
+      paste(new_variables, collapse = "+"),
+      sep = "+"
+    )
+    model_call$formula <- stats::as.formula(expanded_formula, environment(Terms))
+  }
+
+  model_frame <- eval(model_call, evaluation_env)
+  n <- nrow(model_frame)
+  if (n == 0L) {
+    stop("Data set has 0 rows", call. = FALSE)
+  }
+  if (!se_fit_missing && isTRUE(se_fit)) {
+    warning("se.fit value ignored")
+  }
+  weights <- stats::model.weights(model_frame)
+  if (length(weights) == 0L) {
+    weights <- rep(1, n)
+  }
+  if (any(weights != 1)) {
+    warning("weights ignored")
+  }
+  if (any(attr(Terms, "order") > 1L)) {
+    stop("Survexp cannot have interaction terms", call. = FALSE)
+  }
+
+  requested_times <- if (times_missing) NULL else as.numeric(eval(Call$times, evaluation_env))
+  if (!times_missing) {
+    if (any(requested_times < 0)) {
+      stop("Invalid time point requested", call. = FALSE)
+    }
+    if (length(requested_times) > 1L && any(diff(requested_times) < 0)) {
+      stop("Times must be in increasing order", call. = FALSE)
+    }
+  }
+  response <- stats::model.response(model_frame)
+  no_response <- is.null(response)
+  if (no_response) {
+    if (times_missing) {
+      stop("either a times argument or a response is needed", call. = FALSE)
+    }
+    new_time <- requested_times
+  } else {
+    if (is.matrix(response)) {
+      if (inherits(response, "Surv") && attr(response, "type") == "right") {
+        response <- response[, 1L]
+      } else {
+        stop("Illegal response value", call. = FALSE)
+      }
+    }
+    if (any(response < 0)) {
+      stop("Negative follow up time", call. = FALSE)
+    }
+    unique_response <- unique(response)
+    new_time <- if (times_missing) {
+      sort(unique_response)
+    } else {
+      sort(unique(c(requested_times, unique_response[unique_response < max(requested_times)])))
+    }
+  }
+
+  if (!method_missing) {
+    method <- match.arg(method, c(
+      "ederer", "hakulinen", "conditional", "individual.h", "individual.s"
+    ))
+  } else {
+    method <- if (!conditional_missing && isTRUE(conditional)) {
+      "conditional"
+    } else if (no_response) {
+      "ederer"
+    } else {
+      "hakulinen"
+    }
+    if (!cohort_missing && !isTRUE(cohort)) {
+      method <- "individual.s"
+    }
+  }
+  if (no_response && method != "ederer") {
+    stop("a response is required in the formula unless method='ederer'", call. = FALSE)
+  }
+
+  output_variables <- attr(Terms, "term.labels")
+  rate_data <- data.frame(eval(rcall, model_frame), stringsAsFactors = TRUE)
+  if (no_response) {
+    response <- rep(max(requested_times), n)
+  }
+  matched <- match.ratetable(rate_data, ratetable)
+  expected_data <- matched$R
+
+  if (startsWith(method, "individual")) {
+    if (no_response) {
+      stop("for individual survival an observation time must be given", call. = FALSE)
+    }
+    fit <- .survexp_ratetable_fit(
+      seq_len(n), expected_data, response, max(response), TRUE, ratetable
+    )
+    values <- if (method == "individual.s") fit$surv else -log(fit$surv)
+    names(values) <- row.names(model_frame)
+    omitted <- attr(model_frame, "na.action")
+    if (length(omitted)) stats::naresid(omitted, values) else values
+  } else {
+    if (length(output_variables) == 0L) {
+      groups <- rep(1L, n)
+    } else {
+      for (variable in output_variables) {
+        if (inherits(model_frame[[variable]], "tcut")) {
+          stop("Can't use tcut variables in expected survival", call. = FALSE)
+        }
+      }
+      groups <- strata(model_frame[output_variables])
+    }
+    fit <- .survexp_ratetable_fit(
+      as.numeric(groups), expected_data, response, new_time,
+      method == "conditional", ratetable
+    )
+    if (times_missing) {
+      n_risk <- fit$n
+      survival <- fit$surv
+    } else {
+      keep <- match(requested_times, new_time)
+      if (is.matrix(fit$surv)) {
+        survival <- rbind(1, fit$surv)[keep + 1L, , drop = FALSE]
+        n_risk <- fit$n[pmax(1L, keep), , drop = FALSE]
+      } else {
+        survival <- c(1, fit$surv)[keep + 1L]
+        n_risk <- fit$n[pmax(1L, keep)]
+      }
+      new_time <- requested_times
+    }
+    new_time <- new_time / scale
+    if (is.matrix(survival)) {
+      dimnames(survival) <- list(NULL, levels(groups))
+      out <- list(
+        call = Call,
+        surv = drop(survival),
+        n.risk = drop(n_risk),
+        time = new_time
+      )
+    } else {
+      out <- list(
+        call = Call,
+        surv = c(survival),
+        n.risk = c(n_risk),
+        time = new_time
+      )
+    }
+    if (model) {
+      out$model <- model_frame
+    } else {
+      if (x) out$x <- groups
+      if (y) out$y <- response
+    }
+    if (!is.null(matched$summ)) {
+      out$summ <- matched$summ
+    }
+    out$method <- if (no_response) {
+      "Ederer"
+    } else if (isTRUE(conditional)) {
+      "conditional"
+    } else {
+      "cohort"
+    }
+    class(out) <- c("survexp", "survfit")
+    out
+  }
+}
+
 survexp <- function(formula, data, weights, subset, na.action, rmap, times,
                     method = c(
                       "ederer", "hakulinen", "conditional", "individual.h",
@@ -2903,6 +3198,31 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
     direct_time <- formula
   }
   if (is.null(direct_time)) {
+    formula_ratetable <- if (missing(ratetable) || is.null(ratetable)) {
+      survival::survexp.us
+    } else {
+      ratetable
+    }
+    if (is.ratetable(formula_ratetable)) {
+      return(.survexp_formula_ratetable(
+        Call = match.call(),
+        evaluation_env = parent.frame(),
+        ratetable = formula_ratetable,
+        times_missing = missing(times),
+        method_missing = missing(method),
+        cohort_missing = missing(cohort),
+        conditional_missing = missing(conditional),
+        se_fit_missing = missing(se.fit),
+        method = method,
+        cohort = cohort,
+        conditional = conditional,
+        scale = scale,
+        se_fit = if (missing(se.fit)) NULL else se.fit,
+        model = model,
+        x = x,
+        y = y
+      ))
+    }
     call <- match.call()
     call[[1L]] <- quote(survival::survexp)
     return(eval.parent(call))

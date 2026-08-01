@@ -3558,18 +3558,89 @@ test_that("data-prep helpers match R survival shapes", {
     sex = factor(c("male", "female")),
     year = as.Date(c("2000-01-01", "2000-01-01"))
   )
-  bridged_fallback <- survexp(
+  bridged_formula <- survexp(
     survival::Surv(time, status) ~ 1,
     data = fallback_data,
     times = c(5, 10)
   )
-  reference_fallback <- survival::survexp(
+  reference_formula <- survival::survexp(
     survival::Surv(time, status) ~ 1,
     data = fallback_data,
     times = c(5, 10)
   )
-  expect_equal(bridged_fallback$time, reference_fallback$time)
-  expect_equal(bridged_fallback$surv, reference_fallback$surv)
+  expect_equal(bridged_formula$time, reference_formula$time)
+  expect_equal(bridged_formula$surv, reference_formula$surv, tolerance = 1e-12)
+  expect_equal(bridged_formula$n.risk, reference_formula$n.risk)
+
+  grouped_data <- data.frame(
+    time = c(365, 730, 1095, 1460),
+    status = c(1, 0, 1, 0),
+    cohort = factor(c("a", "a", "b", "b")),
+    age = c(45, 55, 65, 75) * 365.25,
+    sex = factor(c("male", "female", "male", "female")),
+    year = as.Date(c("1995-03-01", "2000-07-01", "2005-11-01", "2010-01-01"))
+  )
+  for (survexp_method in c("ederer", "hakulinen", "conditional")) {
+    bridged_grouped <- survexp(
+      survival::Surv(time, status) ~ cohort,
+      data = grouped_data,
+      times = c(180, 365, 730, 1000),
+      method = survexp_method
+    )
+    reference_grouped <- survival::survexp(
+      survival::Surv(time, status) ~ cohort,
+      data = grouped_data,
+      times = c(180, 365, 730, 1000),
+      method = survexp_method
+    )
+    expect_equal(bridged_grouped$time, reference_grouped$time)
+    expect_equal(bridged_grouped$surv, reference_grouped$surv, tolerance = 1e-12)
+    expect_equal(bridged_grouped$n.risk, reference_grouped$n.risk)
+  }
+  for (survexp_method in c("individual.s", "individual.h")) {
+    expect_equal(
+      survexp(
+        survival::Surv(time, status) ~ 1,
+        data = grouped_data,
+        method = survexp_method
+      ),
+      survival::survexp(
+        survival::Surv(time, status) ~ 1,
+        data = grouped_data,
+        method = survexp_method
+      ),
+      tolerance = 1e-12
+    )
+  }
+  no_response_bridge <- survexp(
+    ~ cohort,
+    data = grouped_data,
+    times = c(180, 365, 730)
+  )
+  no_response_reference <- survival::survexp(
+    ~ cohort,
+    data = grouped_data,
+    times = c(180, 365, 730)
+  )
+  expect_equal(no_response_bridge$surv, no_response_reference$surv, tolerance = 1e-12)
+  expect_equal(no_response_bridge$n.risk, no_response_reference$n.risk)
+
+  remapped_data <- transform(grouped_data, attained_age = age)
+  expect_equal(
+    survexp(
+      survival::Surv(time, status) ~ cohort,
+      data = remapped_data,
+      rmap = list(age = attained_age),
+      times = c(365, 730)
+    )$surv,
+    survival::survexp(
+      survival::Surv(time, status) ~ cohort,
+      data = remapped_data,
+      rmap = list(age = attained_age),
+      times = c(365, 730)
+    )$surv,
+    tolerance = 1e-12
+  )
 
   bridged_pyears <- pyears(
     c(10, 20, 30),

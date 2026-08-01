@@ -825,6 +825,7 @@ BINDINGS = (
     "perform_pystep_calculation",
     "perform_pystep_simple_calculation",
     "perform_score_calculation",
+    "perform_survexp_fit",
     "permutation_importance",
     "ph_test",
     "power_logrank",
@@ -1475,6 +1476,7 @@ MODULE_BINDINGS = {
     "pybridge": (
         "cox_callback",
         "perform_pyears_calculation",
+        "perform_survexp_fit",
         "perform_pystep_calculation",
         "perform_pystep_simple_calculation",
     ),
