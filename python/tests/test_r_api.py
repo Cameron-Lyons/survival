@@ -198,6 +198,45 @@ def test_strata_counts_high_cardinality_levels_once():
     assert result.counts == [1] * len(values)
 
 
+def test_strata_compaction_matches_python_reference():
+    rng = random.Random(20260801)  # noqa: S311
+    for _ in range(300):
+        n_rows = rng.randrange(0, 40)
+        level_counts = [rng.randrange(0, 8) for _ in range(rng.randrange(1, 6))]
+        variables = [
+            [
+                None if level_count == 0 or rng.randrange(5) == 0 else rng.randrange(level_count)
+                for _ in range(n_rows)
+            ]
+            for level_count in level_counts
+        ]
+
+        raw_codes = []
+        raw_to_parts = {}
+        for row_idx in range(n_rows):
+            parts = [variable[row_idx] for variable in variables]
+            if any(part is None for part in parts):
+                raw_codes.append(None)
+                continue
+            raw_code = 0
+            numeric_parts = [int(part) for part in parts if part is not None]
+            for part, level_count in zip(numeric_parts, level_counts, strict=True):
+                raw_code = raw_code * level_count + part
+            raw_codes.append(raw_code)
+            raw_to_parts.setdefault(raw_code, numeric_parts)
+        observed_raw = sorted(raw_to_parts)
+        compact = {raw_code: idx + 1 for idx, raw_code in enumerate(observed_raw)}
+        expected_codes = [None if raw_code is None else compact[raw_code] for raw_code in raw_codes]
+        expected_parts = [raw_to_parts[raw_code] for raw_code in observed_raw]
+        expected_counts = [0] * len(observed_raw)
+        for code in expected_codes:
+            if code is not None:
+                expected_counts[code - 1] += 1
+
+        actual = survival._survival.strata_compact(variables, level_counts)
+        assert actual == (expected_codes, expected_parts, expected_counts)
+
+
 def test_aeqSurv_adjusts_surv_response_like_r():
     right = survival.Surv([1.0, 1.0 + 1e-8, 2.0], [1, 0, 1])
     adjusted_right = survival.aeqSurv(right, tolerance=1e-7)

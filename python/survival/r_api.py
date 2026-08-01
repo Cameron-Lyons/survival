@@ -4203,23 +4203,38 @@ def _strata_level_sort_key(value: Any) -> tuple[int, Any]:
     return (1, str(value))
 
 
-def _strata_column_levels(column: Sequence[Any], na_group: bool) -> tuple[list[Any], list[str]]:
+def _strata_column_levels(
+    column: Sequence[Any],
+    na_group: bool,
+) -> tuple[list[Any], list[str], list[int | None]]:
     values: dict[Any, None] = {}
     saw_missing = False
+    missing = object()
+    normalized: list[Any] = []
     for value in column:
         if _is_missing_value(value):
             saw_missing = True
+            normalized.append(missing)
             continue
         try:
             values.setdefault(value, None)
         except TypeError as exc:
             raise TypeError("strata variables must contain hashable values") from exc
+        normalized.append(value)
     levels = sorted(values, key=_strata_level_sort_key)
     labels = [_strata_value_label(value) for value in levels]
     if na_group and saw_missing:
         levels.append(None)
         labels.append("NA")
-    return levels, labels
+    level_map = {value: idx for idx, value in enumerate(levels)}
+    try:
+        codes = [
+            (level_map[None] if na_group else None) if value is missing else level_map[value]
+            for value in normalized
+        ]
+    except KeyError as exc:
+        raise ValueError("missing strata level could not be encoded") from exc
+    return levels, labels, codes
 
 
 def _strata_default_labels(n_terms: int) -> list[str]:
@@ -4263,59 +4278,30 @@ def strata(
         raise TypeError("sep must be a string")
 
     columns = _strata_variables_from_args(variables)
-    n = len(columns[0])
     term_labels = _strata_normalize_labels(labels, len(columns))
     short = _strata_default_shortlabel(columns, labels) if shortlabel is None else shortlabel
 
     column_levels: list[list[Any]] = []
     column_level_labels: list[list[str]] = []
-    column_maps: list[dict[Any, int]] = []
+    column_codes: list[list[int | None]] = []
     for column in columns:
-        levels, level_labels = _strata_column_levels(column, na_group)
+        levels, level_labels, codes = _strata_column_levels(column, na_group)
         column_levels.append(levels)
         column_level_labels.append(level_labels)
-        column_maps.append({value: idx for idx, value in enumerate(levels)})
+        column_codes.append(codes)
 
-    raw_codes: list[int | None] = []
-    raw_to_parts: dict[int, list[int]] = {}
-    for row_idx in range(n):
-        raw_code = 0
-        parts: list[int] = []
-        missing = False
-        for column_idx, column in enumerate(columns):
-            value = column[row_idx]
-            if _is_missing_value(value):
-                if not na_group:
-                    missing = True
-                    break
-                value = None
-            try:
-                part = column_maps[column_idx][value]
-            except KeyError as exc:
-                raise ValueError("missing strata level could not be encoded") from exc
-            raw_code = part if column_idx == 0 else part + raw_code * len(column_levels[column_idx])
-            parts.append(part)
-        if missing:
-            raw_codes.append(None)
-            continue
-        raw_codes.append(raw_code)
-        raw_to_parts.setdefault(raw_code, parts)
-
-    observed_raw = sorted(raw_to_parts)
-    compact = {raw_code: idx + 1 for idx, raw_code in enumerate(observed_raw)}
-    codes = [None if raw_code is None else compact[raw_code] for raw_code in raw_codes]
+    codes, observed_parts, counts = _core.strata_compact(
+        column_codes,
+        [len(levels) for levels in column_levels],
+    )
     levels: list[str] = []
-    for raw_code in observed_raw:
+    for parts in observed_parts:
         pieces: list[str] = []
-        for term_idx, part_idx in enumerate(raw_to_parts[raw_code]):
+        for term_idx, part_idx in enumerate(parts):
             level_label = column_level_labels[term_idx][part_idx]
             pieces.append(level_label if short else f"{term_labels[term_idx]}={level_label}")
         levels.append(sep.join(pieces))
     row_labels = [None if code is None else levels[code - 1] for code in codes]
-    counts = [0] * len(levels)
-    for code in codes:
-        if code is not None:
-            counts[code - 1] += 1
     return StrataFactor(codes=codes, levels=levels, labels=row_labels, counts=counts)
 
 
