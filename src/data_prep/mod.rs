@@ -7,6 +7,7 @@ pub(crate) mod collapse_module;
 pub(crate) mod lvcf;
 #[path = "neardate.rs"]
 pub(crate) mod neardate_module;
+pub(crate) mod nostutter;
 #[path = "rttright.rs"]
 pub(crate) mod rttright_module;
 #[path = "strata.rs"]
@@ -28,6 +29,10 @@ pub use cluster_module::{ClusterResult, cluster, cluster_str};
 pub use collapse_module::collapse;
 pub use lvcf::lvcf_indices;
 pub use neardate_module::{NearDateResult, neardate, neardate_str};
+pub use nostutter::{
+    nostutter_numeric_numeric, nostutter_numeric_str, nostutter_replacements,
+    nostutter_str_numeric, nostutter_str_str,
+};
 pub use rttright_module::{
     RttrightResult, rttright, rttright_matrix, rttright_stratified, rttright_time_matrix,
 };
@@ -36,7 +41,9 @@ pub use surv2data_module::{
     FromTimelineRowsResult, Surv2DataResult, Surv2TimelineResult, from_timeline_rows, surv2data,
     surv2data_timeline,
 };
-pub use survcondense_module::{CondenseResult, survcondense};
+pub use survcondense_module::{
+    CondensePlanResult, CondenseResult, survcondense, survcondense_plan,
+};
 pub use survsplit_module::{SplitResult, survsplit};
 pub use tcut_module::{TcutResult, tcut, tcut_expand};
 pub use timeline::{IntervalResult, TimelineResult, from_timeline, to_timeline};

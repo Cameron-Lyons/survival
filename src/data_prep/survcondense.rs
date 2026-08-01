@@ -21,6 +21,15 @@ pub struct CondenseResult {
     pub row_map: Vec<Vec<usize>>,
 }
 
+#[pyclass(from_py_object)]
+#[derive(Debug, Clone)]
+pub struct CondensePlanResult {
+    #[pyo3(get)]
+    pub start: Vec<f64>,
+    #[pyo3(get)]
+    pub keep: Vec<usize>,
+}
+
 #[pyfunction]
 #[pyo3(signature = (id, time1, time2, status))]
 pub fn survcondense(
@@ -127,6 +136,107 @@ pub fn survcondense(
     }
 
     Ok(result)
+}
+
+#[pyfunction]
+pub fn survcondense_plan(
+    py: Python<'_>,
+    id_order: Vec<i32>,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    row_code: Vec<i32>,
+) -> PyResult<CondensePlanResult> {
+    let n = id_order.len();
+    if start.len() != n {
+        return Err(PyValueError::new_err(
+            "start must have same length as id_order",
+        ));
+    }
+    if stop.len() != n {
+        return Err(PyValueError::new_err(
+            "stop must have same length as id_order",
+        ));
+    }
+    if row_code.len() != n {
+        return Err(PyValueError::new_err(
+            "row_code must have same length as id_order",
+        ));
+    }
+    validate_finite(&start, "start")?;
+    validate_finite(&stop, "stop")?;
+
+    Ok(py.detach(move || build_survcondense_plan(id_order, start, stop, row_code)))
+}
+
+fn build_survcondense_plan(
+    id_order: Vec<i32>,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    row_code: Vec<i32>,
+) -> CondensePlanResult {
+    let n = id_order.len();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&left, &right| {
+        id_order[left]
+            .cmp(&id_order[right])
+            .then_with(|| stop[left].total_cmp(&stop[right]))
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut drop_sorted = vec![false; n];
+    for position in 0..n.saturating_sub(1) {
+        let current = order[position];
+        let next = order[position + 1];
+        drop_sorted[position] = row_code[next] == row_code[current] && start[next] == stop[current];
+    }
+    if !drop_sorted.iter().any(|&drop| drop) {
+        return CondensePlanResult {
+            start,
+            keep: Vec::new(),
+        };
+    }
+
+    let mut runs = Vec::new();
+    let mut run_start = 0;
+    while run_start < n {
+        let value = drop_sorted[run_start];
+        let mut run_end = run_start + 1;
+        while run_end < n && drop_sorted[run_end] == value {
+            run_end += 1;
+        }
+        runs.push((value, run_start, run_end));
+        run_start = run_end;
+    }
+
+    let mut adjusted_start = start;
+    if runs.len() == 2 {
+        adjusted_start[runs[0].2] = adjusted_start[0];
+    } else if runs.len() == 3 {
+        adjusted_start[runs[1].2] = adjusted_start[runs[0].2];
+    } else {
+        for &(drop, first, end) in &runs {
+            if drop && end < n {
+                adjusted_start[order[end]] = adjusted_start[order[first]];
+            }
+        }
+    }
+
+    let mut drop_original = vec![false; n];
+    for (position, &drop) in drop_sorted.iter().enumerate() {
+        if drop {
+            drop_original[order[position]] = true;
+        }
+    }
+    let keep = drop_original
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &drop)| (!drop).then_some(index))
+        .collect();
+
+    CondensePlanResult {
+        start: adjusted_start,
+        keep,
+    }
 }
 
 #[cfg(test)]
@@ -260,5 +370,31 @@ mod tests {
             err.to_string()
                 .contains("intervals must not overlap within id")
         );
+    }
+
+    #[test]
+    fn formula_plan_preserves_input_order_and_adjusts_merged_starts() {
+        let result = build_survcondense_plan(
+            vec![1, 0, 0, 1],
+            vec![0.0, 0.0, 5.0, 3.0],
+            vec![3.0, 5.0, 8.0, 5.0],
+            vec![1, 2, 2, 1],
+        );
+
+        assert_eq!(result.keep, vec![2, 3]);
+        assert_eq!(result.start, vec![0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn formula_plan_matches_no_drop_reference_shape() {
+        let result = build_survcondense_plan(
+            vec![0, 0, 0],
+            vec![0.0, 1.0, 2.0],
+            vec![1.0, 2.0, 3.0],
+            vec![0, 1, 0],
+        );
+
+        assert!(result.keep.is_empty());
+        assert_eq!(result.start, vec![0.0, 1.0, 2.0]);
     }
 }

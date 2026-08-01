@@ -23,12 +23,18 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge3, m)?)?;
     m.add_function(wrap_pyfunction!(survsplit, m)?)?;
     m.add_function(wrap_pyfunction!(survcondense, m)?)?;
+    m.add_function(wrap_pyfunction!(survcondense_plan, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline_rows, m)?)?;
     m.add_function(wrap_pyfunction!(to_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(lvcf_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_replacements, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_numeric_numeric, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_numeric_str, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_str_numeric, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_str_str, m)?)?;
     m.add_function(wrap_pyfunction!(aeq_surv, m)?)?;
     m.add_function(wrap_pyfunction!(cluster, m)?)?;
     m.add_function(wrap_pyfunction!(cluster_str, m)?)?;
@@ -46,6 +52,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_classes!(
         m,
         SplitResult,
+        CondensePlanResult,
         CondenseResult,
         Surv2DataResult,
         Surv2TimelineResult,

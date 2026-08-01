@@ -16,8 +16,6 @@ use pyo3::types::PyDict;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
-const CONCORDANCE_RISK_TIE_FLOOR: f64 = 1e-12;
-
 type ConcordanceRankRows = Vec<(f64, f64, f64, f64)>;
 type ConcordanceInfluenceOutput = (Vec<Vec<f64>>, Vec<f64>, f64);
 
@@ -374,7 +372,7 @@ fn tied_event_risk_pairs(
     let mut window_weight = 0.0;
     let mut left = 0;
     for right in 0..events.len() {
-        while left < right && events[right].0 - events[left].0 >= CONCORDANCE_RISK_TIE_FLOOR {
+        while left < right && events[right].0 != events[left].0 {
             window_weight -= events[left].1;
             left += 1;
         }
@@ -421,12 +419,8 @@ fn right_concordance_tie_counts_for_vectors(
                 .filter(|&idx| status[idx] == 1)
                 .collect();
             for &event_idx in &event_indices {
-                let lower_end = risk_levels.partition_point(|&risk| {
-                    risk <= risk_scores[event_idx] - CONCORDANCE_RISK_TIE_FLOOR
-                });
-                let tied_end = risk_levels.partition_point(|&risk| {
-                    risk < risk_scores[event_idx] + CONCORDANCE_RISK_TIE_FLOOR
-                });
+                let lower_end = risk_levels.partition_point(|&risk| risk < risk_scores[event_idx]);
+                let tied_end = risk_levels.partition_point(|&risk| risk <= risk_scores[event_idx]);
                 let lower = rank_prefix_weight_before(&at_risk, lower_end);
                 let lower_or_tied = rank_prefix_weight_before(&at_risk, tied_end);
                 counts.tied_x += concordance_case_weight(weights, event_idx)
@@ -547,10 +541,8 @@ fn rank_from_active_risk_set(
         return None;
     }
 
-    let lower_end =
-        risk_levels.partition_point(|&risk| risk < event_risk - CONCORDANCE_RISK_TIE_FLOOR);
-    let not_greater_end =
-        risk_levels.partition_point(|&risk| risk <= event_risk + CONCORDANCE_RISK_TIE_FLOOR);
+    let lower_end = risk_levels.partition_point(|&risk| risk < event_risk);
+    let not_greater_end = risk_levels.partition_point(|&risk| risk <= event_risk);
     let lower = rank_prefix_weight_before(at_risk, lower_end);
     let not_greater = rank_prefix_weight_before(at_risk, not_greater_end);
     let greater = risk_weight - not_greater;
@@ -859,9 +851,7 @@ fn right_concordance_influence_rows_for_vectors(
                 if pair_weight <= 0.0 {
                     continue;
                 }
-                let column = if (risk_scores[left] - risk_scores[right]).abs()
-                    < CONCORDANCE_RISK_TIE_FLOOR
-                {
+                let column = if risk_scores[left] == risk_scores[right] {
                     4
                 } else {
                     3
@@ -887,10 +877,10 @@ fn right_concordance_influence_rows_for_vectors(
             }
             comparable += pair_weight;
             let diff = risk_scores[event_idx] - risk_scores[risk_idx];
-            let column = if diff > CONCORDANCE_RISK_TIE_FLOOR {
+            let column = if diff > 0.0 {
                 concordant += pair_weight;
                 0
-            } else if diff < -CONCORDANCE_RISK_TIE_FLOOR {
+            } else if diff < 0.0 {
                 1
             } else {
                 concordant += 0.5 * pair_weight;
@@ -949,9 +939,7 @@ fn counting_concordance_influence_rows_for_vectors(
             }
             if status[risk_idx] == 1 && stop[risk_idx] == event_time {
                 if event_idx < risk_idx {
-                    let column = if (risk_scores[event_idx] - risk_scores[risk_idx]).abs()
-                        < CONCORDANCE_RISK_TIE_FLOOR
-                    {
+                    let column = if risk_scores[event_idx] == risk_scores[risk_idx] {
                         4
                     } else {
                         3
@@ -972,10 +960,10 @@ fn counting_concordance_influence_rows_for_vectors(
 
             comparable += pair_weight;
             let diff = risk_scores[event_idx] - risk_scores[risk_idx];
-            let column = if diff > CONCORDANCE_RISK_TIE_FLOOR {
+            let column = if diff > 0.0 {
                 concordant += pair_weight;
                 0
-            } else if diff < -CONCORDANCE_RISK_TIE_FLOOR {
+            } else if diff < 0.0 {
                 1
             } else {
                 concordant += 0.5 * pair_weight;
@@ -2176,14 +2164,14 @@ mod tests {
             }
         );
 
-        let tolerance_boundary = right_concordance_tie_counts_for_vectors(
+        let distinct_scores = right_concordance_tie_counts_for_vectors(
             &[1.0, 2.0, 3.0],
             &[1, 0, 0],
             &[0.0, 0.5e-12, 1e-12],
             None,
             ConcordanceTimeWeight::N,
         );
-        assert_eq!(tolerance_boundary.tied_x, 1.0);
+        assert_eq!(distinct_scores.tied_x, 0.0);
     }
 
     #[test]
