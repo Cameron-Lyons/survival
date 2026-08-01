@@ -2824,15 +2824,16 @@ lvcf <- function(id, x, time) {
     return(factor(.as_nullable_character_vector(result), levels = levels(x)))
   }
   if (is.integer(x)) {
-    return(as.integer(.as_nullable_numeric_vector(result)))
+    output <- as.integer(.as_nullable_numeric_vector(result))
+  } else if (is.numeric(x)) {
+    output <- .as_nullable_numeric_vector(result)
+  } else if (is.logical(x)) {
+    output <- .as_nullable_logical_vector(result)
+  } else {
+    output <- .as_nullable_character_vector(result)
   }
-  if (is.numeric(x)) {
-    return(.as_nullable_numeric_vector(result))
-  }
-  if (is.logical(x)) {
-    return(.as_nullable_logical_vector(result))
-  }
-  .as_nullable_character_vector(result)
+  attributes(output) <- attributes(x)
+  output
 }
 
 nostutter <- function(id, x, censor = 0, single = FALSE) {
