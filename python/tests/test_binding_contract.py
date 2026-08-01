@@ -823,6 +823,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "offset",
             "method",
             "center",
+            "include_riskmat",
         ],
     }
     for name, args in expected_args.items():
@@ -910,6 +911,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "n_events",
         "n_observations",
         "n_covariates",
+        "risk_matrix",
     }
     assert (
         _pyi_class_method_return(stub_path, "CoxPHFit", "basehaz")
@@ -995,12 +997,16 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         None,
         "breslow",
         0.0,
+        True,
     )
 
     assert type(detail).__name__ == "CoxphDetail"
     assert detail.n_events == sum(status)
     assert detail.n_observations == len(time)
     assert detail.n_covariates == 1
+    assert detail.risk_matrix is not None
+    assert len(detail.risk_matrix) == len(time)
+    assert all(len(row) == sum(status) for row in detail.risk_matrix)
     assert len(detail.rows) == sum(status)
     assert detail.times() == pytest.approx([1.0, 3.0, 4.0, 6.0, 8.0])
     assert len(detail.hazards()) == sum(status)

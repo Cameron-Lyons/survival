@@ -4795,6 +4795,8 @@ test_that("Cox detail weighted tied-event moments agree with R survival", {
     )
     bridged_detail <- coxph.detail(bridged)
     reference_detail <- survival::coxph.detail(reference)
+    bridged_risk_detail <- coxph.detail(bridged, riskmat = TRUE)
+    reference_risk_detail <- survival::coxph.detail(reference, riskmat = TRUE)
 
     for (field in c("means", "score", "imat", "hazard", "varhaz", "wtrisk")) {
       actual <- as.numeric(unlist(survivalr:::.result_field(bridged_detail, field)))
@@ -4811,6 +4813,11 @@ test_that("Cox detail weighted tied-event moments agree with R survival", {
       as.numeric(reference_detail[["nrisk.wt"]]),
       tolerance = 1e-12
     )
+    bridged_riskmat <- survivalr:::.result_field(bridged_risk_detail, "riskmat")
+    if (is.list(bridged_riskmat)) {
+      bridged_riskmat <- do.call(rbind, bridged_riskmat)
+    }
+    expect_equal(unname(bridged_riskmat), unname(reference_risk_detail$riskmat))
     for (field in names(exact[[method]])) {
       actual <- as.numeric(unlist(survivalr:::.result_field(bridged_detail, field)))
       expect_equal(actual, unname(exact[[method]][[field]]), tolerance = 1e-12)

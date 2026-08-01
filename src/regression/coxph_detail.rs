@@ -59,6 +59,8 @@ pub struct CoxphDetail {
     pub n_observations: usize,
     #[pyo3(get)]
     pub n_covariates: usize,
+    #[pyo3(get)]
+    pub risk_matrix: Option<Vec<Vec<i32>>>,
 }
 
 pub(crate) struct CoxphDetailOptions<'a> {
@@ -72,6 +74,7 @@ pub(crate) struct CoxphDetailOptions<'a> {
     pub offset: Option<&'a [f64]>,
     pub method: &'a str,
     pub center: f64,
+    pub include_riskmat: bool,
 }
 
 #[pymethods]
@@ -332,6 +335,7 @@ pub(crate) fn compute_coxph_detail_with_options(
         offset,
         method,
         center,
+        include_riskmat,
     } = options;
     let n = time.len();
     let nvar = coefficients.len();
@@ -342,6 +346,7 @@ pub(crate) fn compute_coxph_detail_with_options(
             n_events: 0,
             n_observations: 0,
             n_covariates: nvar,
+            risk_matrix: include_riskmat.then(Vec::new),
         });
     }
 
@@ -375,6 +380,11 @@ pub(crate) fn compute_coxph_detail_with_options(
     let risk_weights = shifted_weighted_exp_eta_optional(&linear_predictors, weights, risk_shift);
 
     let groups = event_groups(time, status, strata_values.as_ref());
+    let mut risk_matrix = include_riskmat.then(|| {
+        (0..n)
+            .map(|_| Vec::with_capacity(groups.len()))
+            .collect::<Vec<_>>()
+    });
     let mut rows = Vec::with_capacity(groups.len());
     let mut total_events = 0;
     let mut current_stratum = None;
@@ -408,6 +418,16 @@ pub(crate) fn compute_coxph_detail_with_options(
             stratum,
             event_time,
         );
+        if let Some(matrix) = risk_matrix.as_mut() {
+            for row in matrix.iter_mut() {
+                row.push(0);
+            }
+            for &index in &at_risk {
+                if let Some(value) = matrix[index].last_mut() {
+                    *value = 1;
+                }
+            }
+        }
         fill_event_indices(
             &mut deaths,
             time,
@@ -521,6 +541,7 @@ pub(crate) fn compute_coxph_detail_with_options(
         n_events: total_events,
         n_observations: n,
         n_covariates: nvar,
+        risk_matrix,
     })
 }
 
@@ -535,7 +556,8 @@ pub(crate) fn compute_coxph_detail_with_options(
     strata=None,
     offset=None,
     method="breslow".to_string(),
-    center=0.0
+    center=0.0,
+    include_riskmat=false
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_detail(
@@ -549,6 +571,7 @@ pub fn coxph_detail(
     offset: Option<Vec<f64>>,
     method: String,
     center: f64,
+    include_riskmat: bool,
 ) -> PyResult<CoxphDetail> {
     let n = time.len();
     if status.len() != n || covariates.len() != n {
@@ -672,6 +695,7 @@ pub fn coxph_detail(
         offset: offset.as_deref(),
         method: &method,
         center,
+        include_riskmat,
     })
 }
 
@@ -754,6 +778,7 @@ mod tests {
             offset: None,
             method: "breslow",
             center: 0.0,
+            include_riskmat: false,
         })
         .unwrap();
 
@@ -791,6 +816,7 @@ mod tests {
             offset: None,
             method: "efron",
             center: 0.0,
+            include_riskmat: false,
         })
         .unwrap();
         let unit_weights = vec![1.0; time.len()];
@@ -805,6 +831,7 @@ mod tests {
             offset: None,
             method: "efron",
             center: 0.0,
+            include_riskmat: false,
         })
         .unwrap();
 
@@ -829,6 +856,7 @@ mod tests {
             offset: None,
             method: "efron",
             center: 0.0,
+            include_riskmat: false,
         })
         .unwrap();
 
@@ -862,6 +890,7 @@ mod tests {
             offset: None,
             method: "breslow",
             center: 0.0,
+            include_riskmat: false,
         })
         .unwrap();
         let efron = compute_coxph_detail_with_options(CoxphDetailOptions {
@@ -875,6 +904,7 @@ mod tests {
             offset: None,
             method: "efron",
             center: 0.0,
+            include_riskmat: false,
         })
         .unwrap();
 
@@ -903,6 +933,7 @@ mod tests {
             offset: None,
             method: "breslow",
             center: 0.0,
+            include_riskmat: false,
         })
         .unwrap();
 
@@ -935,6 +966,7 @@ mod tests {
             offset: None,
             method: "breslow",
             center: 0.0,
+            include_riskmat: false,
         })
         .unwrap();
 
@@ -963,6 +995,7 @@ mod tests {
             offset: None,
             method: "breslow",
             center: 0.0,
+            include_riskmat: true,
         })
         .unwrap();
 
@@ -972,5 +1005,9 @@ mod tests {
         assert_eq!(detail.rows[0].n_event, 2);
         assert_eq!(detail.rows[1].stratum, 2);
         assert_eq!(detail.rows[1].time, 2.0);
+        assert_eq!(
+            detail.risk_matrix,
+            Some(vec![vec![0, 1], vec![1, 0], vec![1, 0], vec![0, 1]])
+        );
     }
 }
