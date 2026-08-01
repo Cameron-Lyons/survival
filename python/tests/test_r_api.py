@@ -2750,7 +2750,10 @@ def test_r_style_ratetable_helpers_delegate_to_population_core():
 
     assert survival.ratetableDate(2000, 2, 29) == pytest.approx(11016.0)
     assert survival.ratetableDate("2000-02-29") == pytest.approx(11016.0)
-    assert survival.ratetableDate(["2000-02-29", "2001-01-01"]) == pytest.approx([11016.0, 11323.0])
+    assert survival.ratetableDate("1940-01-01") == pytest.approx(-10958.0)
+    assert survival.ratetableDate(["1940-01-01", "2000-02-29", "2001-01-01"]) == pytest.approx(
+        [-10958.0, 11016.0, 11323.0]
+    )
     assert survival.ratetableDate(11016.0) == pytest.approx(11016.0)
     with pytest.raises(ValueError, match="day is invalid"):
         survival.ratetableDate(2001, 2, 29)
