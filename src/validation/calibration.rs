@@ -575,16 +575,10 @@ pub(crate) fn stratify_risk(
         let idx = (g * n / n_groups).min(n - 1);
         cutpoints.push(sorted_scores[idx]);
     }
-    let mut risk_groups = Vec::with_capacity(n);
-    for &score in risk_scores {
-        let mut group = 0;
-        for (g, &cut) in cutpoints.iter().enumerate() {
-            if score >= cut {
-                group = g + 1;
-            }
-        }
-        risk_groups.push(group);
-    }
+    let risk_groups: Vec<usize> = risk_scores
+        .iter()
+        .map(|&score| cutpoints.partition_point(|&cut| score >= cut))
+        .collect();
     let mut group_sizes = vec![0usize; n_groups];
     let mut group_events = vec![0usize; n_groups];
     let mut group_scores: Vec<Vec<f64>> = vec![Vec::new(); n_groups];
@@ -1250,6 +1244,19 @@ mod tests {
 
         let explicit_result = risk_stratification(vec![0.2, 0.8], vec![0, 1], Some(5)).unwrap();
         assert_eq!(explicit_result.group_sizes, vec![1, 1]);
+    }
+
+    #[test]
+    fn test_risk_stratification_preserves_duplicate_cutpoint_assignment() {
+        let result = stratify_risk(&[0.1, 0.1, 0.1, 0.2, 0.2, 0.9], &[0, 1, 0, 1, 0, 1], 4);
+
+        assert_eq!(result.cutpoints, vec![0.1, 0.2, 0.2]);
+        assert_eq!(result.risk_groups, vec![1, 1, 1, 3, 3, 3]);
+        assert_eq!(result.group_sizes, vec![0, 3, 0, 3]);
+        assert_eq!(
+            result.group_event_rates,
+            vec![0.0, 1.0 / 3.0, 0.0, 2.0 / 3.0]
+        );
     }
 
     #[test]

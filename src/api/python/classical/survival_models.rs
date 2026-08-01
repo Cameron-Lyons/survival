@@ -11,6 +11,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfitkm_influence, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_counting_influence, m)?)?;
     m.add_function(wrap_pyfunction!(robust_counting_survfit_variance, m)?)?;
+    m.add_function(wrap_pyfunction!(robust_right_survfit_variance, m)?)?;
     m.add_function(wrap_pyfunction!(counting_survfit_tables, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_curve_from_tables, m)?)?;
     m.add_function(wrap_pyfunction!(survfitaj, m)?)?;
@@ -50,6 +51,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pseudo_gee_regression, m)?)?;
     m.add_function(wrap_pyfunction!(aggregate_survfit, m)?)?;
     m.add_function(wrap_pyfunction!(aggregate_survfit_by_group, m)?)?;
+    m.add_function(wrap_pyfunction!(aggregate_shared_survfit, m)?)?;
     m.add_function(wrap_pyfunction!(survcheck, m)?)?;
     m.add_function(wrap_pyfunction!(survcheck_simple, m)?)?;
     m.add_function(wrap_pyfunction!(royston, m)?)?;
@@ -97,6 +99,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfit_multistate, m)?)?;
     m.add_function(wrap_pyfunction!(condition_cox_survfit_curves, m)?)?;
     m.add_function(wrap_pyfunction!(step_values_at, m)?)?;
+    m.add_function(wrap_pyfunction!(step_matrix_values_at, m)?)?;
     m.add_function(wrap_pyfunction!(cox_survfit_from_baseline, m)?)?;
     m.add_function(wrap_pyfunction!(basehaz, m)?)?;
     m.add_function(wrap_pyfunction!(statefig, m)?)?;
