@@ -1881,6 +1881,24 @@ test_that("R formula wrappers delegate to the Python survival package", {
         tolerance = 1e-12
       )
     }
+    expect_equal(
+      survfit_confint(numeric(), 0.1, conf.type = conf_type),
+      suppressWarnings(reference_survfit_confint(
+        numeric(),
+        0.1,
+        conf.type = conf_type
+      )),
+      tolerance = 1e-12
+    )
+    expect_equal(
+      survfit_confint(0.5, numeric(), conf.type = conf_type),
+      suppressWarnings(reference_survfit_confint(
+        0.5,
+        numeric(),
+        conf.type = conf_type
+      )),
+      tolerance = 1e-12
+    )
   }
   expect_error(survfit_confint(0.5, 0.1, conf.type = "p"), "invalid conf.int type")
   pseudo_data <- data.frame(time = c(1, 2, 3, 4), status = c(1, 0, 1, 1))
