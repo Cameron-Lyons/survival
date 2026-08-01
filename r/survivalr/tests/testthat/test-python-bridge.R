@@ -611,6 +611,18 @@ test_that("R formula wrappers delegate to the Python survival package", {
   tmerge_data <- data.frame(id = 1:2, tstop = c(5, 6))
   bridged_tmerge <- tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
   reference_tmerge <- survival::tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+  attr(bridged_tmerge, "call") <- attr(reference_tmerge, "call") <- quote(
+    tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+  )
+  reference_tmerge_summary <- getFromNamespace("summary.tmerge", "survival")
+  expect_equal(
+    capture.output(summary.tmerge(bridged_tmerge)),
+    capture.output(reference_tmerge_summary(reference_tmerge))
+  )
+  expect_equal(
+    `[.tmerge`(bridged_tmerge, 1:2, c("id", "tstop"), drop = FALSE),
+    reference_tmerge[1:2, c("id", "tstop"), drop = FALSE]
+  )
   attr(bridged_tmerge, "call") <- NULL
   attr(reference_tmerge, "call") <- NULL
   expect_equal(
