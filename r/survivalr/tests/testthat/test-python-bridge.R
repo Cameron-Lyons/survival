@@ -4843,6 +4843,99 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_concordance$n, reference_concordance$n)
 })
 
+test_that("public helper signatures accept R-style named and positional calls", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  expect_identical(names(formals(is.Surv)), names(formals(survival::is.Surv)))
+  expect_identical(
+    head(names(formals(survdiff)), 6L),
+    names(formals(survival::survdiff))
+  )
+  expect_identical(
+    head(names(formals(basehaz)), 3L),
+    names(formals(survival::basehaz))
+  )
+  expect_identical(
+    head(names(formals(cox.zph)), 5L),
+    names(formals(survival::cox.zph))
+  )
+  expect_identical(
+    head(names(formals(coxph.detail)), 3L),
+    names(formals(survival::coxph.detail))
+  )
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 1, 0, 1, 0),
+    group = rep(c("control", "treated"), 4),
+    x = c(0.1, 0.4, 0.2, 0.8, 1.1, 0.7, 1.5, 1.2),
+    z = c(1, 0, 1, 0, 1, 1, 0, 0)
+  )
+  response <- Surv(data$time, data$status)
+  expect_true(is.Surv(x = response))
+
+  keep <- c(TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE)
+  bridged_diff <- survdiff(
+    Surv(time, status) ~ group,
+    data,
+    keep,
+    stats::na.omit,
+    rho = 0.5,
+    timefix = FALSE
+  )
+  reference_diff <- survival::survdiff(
+    survival::Surv(time, status) ~ group,
+    data,
+    keep,
+    stats::na.omit,
+    rho = 0.5
+  )
+  bridged_diff_frame <- as.data.frame(bridged_diff)
+  expect_equal(bridged_diff_frame$observed, unname(reference_diff$obs), tolerance = 1e-06)
+  expect_equal(bridged_diff_frame$expected, unname(reference_diff$exp), tolerance = 1e-06)
+  expect_equal(
+    bridged_diff_frame$variance,
+    unname(diag(reference_diff$var)),
+    tolerance = 1e-06
+  )
+  expect_equal(as.numeric(bridged_diff$statistic), reference_diff$chisq, tolerance = 1e-06)
+  expect_equal(as.numeric(bridged_diff$p_value), reference_diff$pvalue, tolerance = 1e-06)
+
+  bridged <- coxph(Surv(time, status) ~ x + z, data = data, eps = 1e-10, max_iter = 50)
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x + z,
+    data = data,
+    control = survival::coxph.control(eps = 1e-10, iter.max = 50),
+    x = TRUE,
+    y = TRUE
+  )
+  newdata <- data.frame(x = 0.35, z = 1)
+  expect_equal(
+    unname(predict(bridged, newdata, type = "lp")),
+    unname(stats::predict(reference, newdata, type = "lp")),
+    tolerance = 1e-05
+  )
+  bridged_hazard <- as.data.frame(basehaz(bridged, newdata, FALSE))
+  reference_hazard <- survival::basehaz(reference, newdata, FALSE)
+  expect_equal(bridged_hazard$time, reference_hazard$time)
+  expect_equal(bridged_hazard$cumhaz, reference_hazard$hazard, tolerance = 2e-04)
+
+  bridged_zph <- as.data.frame(cox.zph(bridged, "rank", FALSE, FALSE, FALSE))
+  reference_zph <- survival::cox.zph(reference, "rank", FALSE, FALSE, FALSE)
+  expect_equal(bridged_zph$name, rownames(reference_zph$table))
+  expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+
+  bridged_detail <- coxph.detail(object = bridged, TRUE, "time")
+  reference_detail <- survival::coxph.detail(object = reference, TRUE, "time")
+  bridged_riskmat <- do.call(
+    rbind,
+    survivalr:::.result_field(bridged_detail, "riskmat")
+  )
+  expect_equal(unname(bridged_riskmat), unname(reference_detail$riskmat))
+})
+
 test_that("Fitted-model concordance supports joint Cox and survreg comparisons", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
