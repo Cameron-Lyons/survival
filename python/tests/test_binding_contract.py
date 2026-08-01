@@ -9321,8 +9321,13 @@ def test_core_nsk_rejects_malformed_inputs():
     setup_survival_import()
     core = importlib.import_module("survival._survival")
 
+    missing = core.nsk([1.0, float("nan"), 2.0, 3.0], 3, None, None)
+    assert missing.n_rows == 4
+    assert all(math.isnan(value) for value in missing.basis[missing.n_cols : 2 * missing.n_cols])
     with pytest.raises(ValueError, match="x contains non-finite"):
-        core.nsk([1.0, float("nan")], 3, None, None)
+        core.nsk([1.0, float("inf")], 3, None, None)
+    with pytest.raises(ValueError, match="at least one non-missing"):
+        core.nsk([float("nan"), float("nan")], 3, None, None)
     with pytest.raises(ValueError, match="non-zero finite range"):
         core.nsk([1.0, 1.0], 3, None, None)
     with pytest.raises(ValueError, match="df must be at least 1"):

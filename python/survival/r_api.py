@@ -4996,7 +4996,10 @@ def nsk(
     x_values = _float_vector(x, "x")
     if not x_values:
         raise ValueError("x must contain at least one value")
-    if any(not math.isfinite(value) for value in x_values):
+    observed_x = [value for value in x_values if not math.isnan(value)]
+    if not observed_x:
+        raise ValueError("x must contain at least one non-missing value")
+    if any(not math.isfinite(value) for value in observed_x):
         raise ValueError("x must contain only finite values")
 
     intercept_value = _normalize_bool_option(intercept, "intercept")
@@ -5008,13 +5011,13 @@ def nsk(
 
     normalized_knots = _normalize_nsk_knots(knots)
     boundary_knots, core_knots = _normalize_nsk_boundary_knots(
-        x_values,
+        observed_x,
         normalized_knots,
         b,
         boundary_arg,
     )
     if not normalized_knots and core_knots is None:
-        core_knots = _computed_nsk_knots(x_values, boundary_knots, df_value, intercept_value)
+        core_knots = _computed_nsk_knots(observed_x, boundary_knots, df_value, intercept_value)
     spline = _core.NaturalSplineKnot(core_knots, boundary_knots, df_value, intercept_value)
     return spline.basis(x_values)
 
