@@ -644,6 +644,18 @@ test_that("R formula wrappers delegate to the Python survival package", {
   tmerge_data <- data.frame(id = 1:2, tstop = c(5, 6))
   bridged_tmerge <- tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
   reference_tmerge <- survival::tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+  attr(bridged_tmerge, "call") <- attr(reference_tmerge, "call") <- quote(
+    tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+  )
+  reference_tmerge_summary <- getFromNamespace("summary.tmerge", "survival")
+  expect_equal(
+    capture.output(summary.tmerge(bridged_tmerge)),
+    capture.output(reference_tmerge_summary(reference_tmerge))
+  )
+  expect_equal(
+    `[.tmerge`(bridged_tmerge, 1:2, c("id", "tstop"), drop = FALSE),
+    reference_tmerge[1:2, c("id", "tstop"), drop = FALSE]
+  )
   attr(bridged_tmerge, "call") <- NULL
   attr(reference_tmerge, "call") <- NULL
   expect_equal(
@@ -1157,6 +1169,78 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_pspline_equal(
     pspline(c(1, NA, 2), df = 2, penalty = FALSE),
     survival::pspline(c(1, NA, 2), df = 2, penalty = FALSE)
+  )
+
+  bridged_nsk_basis <- nsk(1:10, df = 4)
+  bridged_nsk_call_method <- get(
+    "makepredictcall.nsk",
+    envir = asNamespace("survivalr")
+  )
+  reference_nsk_call_method <- get(
+    "makepredictcall.nsk",
+    envir = asNamespace("survival")
+  )
+  original_nsk_call <- quote(nsk(value, df = 4, b = 0.2))
+  expect_equal(
+    bridged_nsk_call_method(bridged_nsk_basis, original_nsk_call),
+    reference_nsk_call_method(bridged_nsk_basis, original_nsk_call)
+  )
+  namespaced_nsk_call <- bridged_nsk_call_method(
+    bridged_nsk_basis,
+    quote(survivalr::nsk(value, df = 4))
+  )
+  expect_identical(namespaced_nsk_call[[1L]], quote(survivalr::nsk))
+  expect_equal(namespaced_nsk_call$knots, attr(bridged_nsk_basis, "knots"))
+  expect_equal(
+    namespaced_nsk_call$Boundary.knots,
+    attr(bridged_nsk_basis, "Boundary.knots")
+  )
+  unrelated_nsk_call <- quote(splines::ns(value, df = 4))
+  expect_identical(
+    bridged_nsk_call_method(bridged_nsk_basis, unrelated_nsk_call),
+    unrelated_nsk_call
+  )
+
+  bridged_pspline_basis <- pspline(1:10, df = 4)
+  reference_pspline_basis <- survival::pspline(1:10, df = 4)
+  bridged_pspline_call_method <- get(
+    "makepredictcall.pspline",
+    envir = asNamespace("survivalr")
+  )
+  reference_pspline_call_method <- get(
+    "makepredictcall.pspline",
+    envir = asNamespace("survival")
+  )
+  original_pspline_call <- quote(pspline(value, df = 4, nterm = 10))
+  expect_equal(
+    bridged_pspline_call_method(bridged_pspline_basis, original_pspline_call),
+    reference_pspline_call_method(bridged_pspline_basis, original_pspline_call)
+  )
+  expect_null(
+    bridged_pspline_call_method(bridged_pspline_basis, original_pspline_call)$df
+  )
+  unrelated_pspline_call <- quote(stats::poly(value, degree = 3))
+  expect_identical(
+    bridged_pspline_call_method(bridged_pspline_basis, unrelated_pspline_call),
+    unrelated_pspline_call
+  )
+
+  bridged_pspline_predict_method <- get(
+    "predict.pspline",
+    envir = asNamespace("survivalr")
+  )
+  reference_pspline_predict_method <- get(
+    "predict.pspline",
+    envir = asNamespace("survival")
+  )
+  expect_identical(
+    bridged_pspline_predict_method(bridged_pspline_basis),
+    bridged_pspline_basis
+  )
+  prediction_values <- c(0, 2.5, 5, 10, 12)
+  expect_pspline_equal(
+    bridged_pspline_predict_method(bridged_pspline_basis, prediction_values),
+    reference_pspline_predict_method(reference_pspline_basis, prediction_values)
   )
 
   strata_factor <- strata(c("b", "a", "b", NA), c(2, 1, 1, 1), shortlabel = TRUE)
@@ -2603,6 +2687,61 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(symbol_concordance_frame$variance, string_column_concordance_frame$variance)
   expect_equal(subset_symbol_concordance_frame$concordance, as.numeric(reference_subset_symbol_concordance$concordance))
   expect_equal(subset_symbol_concordance_frame$variance, as.numeric(reference_subset_symbol_concordance$var))
+  near_risk <- c(0.5, 0.5 + 5e-13, 0.1, 0.8)
+  near_risk_concordance <- concordancefit(
+    response,
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_near_risk_concordance <- survival::concordancefit(
+    survival::Surv(data$time, data$status),
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(near_risk_concordance$concordance, reference_near_risk_concordance$concordance)
+  expect_equal(near_risk_concordance$count, reference_near_risk_concordance$count)
+  expect_equal(near_risk_concordance$dfbeta, reference_near_risk_concordance$dfbeta)
+  expect_equal(near_risk_concordance$influence, reference_near_risk_concordance$influence)
+  expect_equal(near_risk_concordance$ranks, reference_near_risk_concordance$ranks)
+  counting_near_risk_response <- Surv(
+    c(0, 0, 1, 1),
+    c(1, 2, 3, 4),
+    c(1, 0, 1, 1)
+  )
+  counting_near_risk_concordance <- concordancefit(
+    counting_near_risk_response,
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_counting_near_risk_concordance <- survival::concordancefit(
+    survival::Surv(c(0, 0, 1, 1), c(1, 2, 3, 4), c(1, 0, 1, 1)),
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(
+    counting_near_risk_concordance$concordance,
+    reference_counting_near_risk_concordance$concordance
+  )
+  expect_equal(
+    counting_near_risk_concordance$count,
+    reference_counting_near_risk_concordance$count
+  )
+  expect_equal(
+    counting_near_risk_concordance$dfbeta,
+    reference_counting_near_risk_concordance$dfbeta
+  )
+  expect_equal(
+    counting_near_risk_concordance$influence,
+    reference_counting_near_risk_concordance$influence
+  )
+  expect_equal(
+    counting_near_risk_concordance$ranks,
+    reference_counting_near_risk_concordance$ranks
+  )
   old_concordance <- suppressWarnings(survConcordance(
     Surv(time, status) ~ x,
     data = data
@@ -3603,6 +3742,28 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(attr(bridged_scalar, "cutpoints"), attr(reference_scalar, "cutpoints"))
   expect_equal(attr(bridged_scalar, "labels"), attr(reference_scalar, "labels"))
 
+  bridged_tcut_subset <- get("[.tcut", envir = asNamespace("survivalr"))
+  reference_tcut_subset <- get("[.tcut", envir = asNamespace("survival"))
+  subset_rows <- c(4L, 2L, NA_integer_, 1L)
+  expect_equal(
+    bridged_tcut_subset(bridged_special, subset_rows),
+    reference_tcut_subset(bridged_special, subset_rows)
+  )
+  expect_equal(
+    bridged_tcut_subset(bridged_scaled, c(3L, 1L), drop = TRUE),
+    reference_tcut_subset(bridged_scaled, c(3L, 1L), drop = TRUE)
+  )
+  expect_equal(
+    bridged_tcut_subset(bridged_cut, c(3L, 1L), "ignored"),
+    reference_tcut_subset(bridged_cut, c(3L, 1L), "ignored")
+  )
+  bridged_tcut_levels <- get("levels.tcut", envir = asNamespace("survivalr"))
+  reference_tcut_levels <- get("levels.tcut", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_tcut_levels(bridged_scaled),
+    reference_tcut_levels(bridged_scaled)
+  )
+
   expect_equal(
     neardate(c(1, 1, 2), c(1, 1, 2), c(4, 12, 7), c(5, 10, 9)),
     survival::neardate(c(1, 1, 2), c(1, 1, 2), c(4, 12, 7), c(5, 10, 9))
@@ -3863,6 +4024,102 @@ test_that("data-prep helpers match R survival shapes", {
     match.ratetable(rtable_frame[c("age", "year")], survival::survexp.us),
     "sex"
   )
+
+  population_table <- survival::survexp.us[1:4, , 1:3, drop = FALSE]
+  bridged_subset_method <- get("[.ratetable", envir = asNamespace("survivalr"))
+  reference_subset_method <- get("[.ratetable", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_subset_method(
+      population_table,
+      c(4L, 2L), 1L, c(3L, 1L),
+      drop = FALSE
+    ),
+    reference_subset_method(
+      population_table,
+      c(4L, 2L), 1L, c(3L, 1L),
+      drop = FALSE
+    )
+  )
+  expect_equal(
+    bridged_subset_method(population_table, c(4L, 2L), 1L, c(3L, 1L)),
+    reference_subset_method(population_table, c(4L, 2L), 1L, c(3L, 1L))
+  )
+  expect_equal(
+    bridged_subset_method(population_table, 1L, 1L, 1L),
+    reference_subset_method(population_table, 1L, 1L, 1L)
+  )
+
+  bridged_matrix_method <- get("as.matrix.ratetable", envir = asNamespace("survivalr"))
+  reference_matrix_method <- get("as.matrix.ratetable", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_matrix_method(population_table),
+    reference_matrix_method(population_table)
+  )
+  missing_population_table <- population_table
+  missing_population_table[2L, 1L, 1L] <- NA_real_
+  bridged_missing_method <- get("is.na.ratetable", envir = asNamespace("survivalr"))
+  reference_missing_method <- get("is.na.ratetable", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_missing_method(missing_population_table),
+    reference_missing_method(missing_population_table)
+  )
+
+  bridged_math_method <- get("Math.ratetable", envir = asNamespace("survivalr"))
+  reference_math_method <- get("Math.ratetable", envir = asNamespace("survival"))
+  bridged_ops_method <- get("Ops.ratetable", envir = asNamespace("survivalr"))
+  reference_ops_method <- get("Ops.ratetable", envir = asNamespace("survival"))
+  bridged_print_method <- get("print.ratetable", envir = asNamespace("survivalr"))
+  reference_print_method <- get("print.ratetable", envir = asNamespace("survival"))
+  registerS3method("Math", "survivalr_rate_fixture", bridged_math_method)
+  registerS3method("Math", "survival_rate_fixture", reference_math_method)
+  registerS3method("Ops", "survivalr_rate_fixture", bridged_ops_method)
+  registerS3method("Ops", "survival_rate_fixture", reference_ops_method)
+  registerS3method("print", "survivalr_rate_fixture", bridged_print_method)
+  registerS3method("print", "survival_rate_fixture", reference_print_method)
+  bridged_fixture <- population_table
+  reference_fixture <- population_table
+  class(bridged_fixture) <- "survivalr_rate_fixture"
+  class(reference_fixture) <- "survival_rate_fixture"
+  expect_equal(log(bridged_fixture), log(reference_fixture))
+  expect_equal(bridged_fixture + 1, reference_fixture + 1)
+  expect_equal(1 + bridged_fixture, 1 + reference_fixture)
+  expect_equal(
+    bridged_fixture == bridged_fixture,
+    reference_fixture == reference_fixture
+  )
+  expect_equal(
+    capture.output(print(bridged_fixture)),
+    capture.output(print(reference_fixture))
+  )
+  attr(bridged_fixture, "dimid") <- NULL
+  attr(reference_fixture, "dimid") <- NULL
+  expect_equal(
+    capture.output(print(bridged_fixture)),
+    capture.output(print(reference_fixture))
+  )
+
+  bridged_summary_method <- get("summary.ratetable", envir = asNamespace("survivalr"))
+  reference_summary_method <- get("summary.ratetable", envir = asNamespace("survival"))
+  bridged_summary_output <- capture.output(
+    bridged_summary <- bridged_summary_method(population_table)
+  )
+  reference_summary_output <- capture.output(
+    reference_summary <- reference_summary_method(population_table)
+  )
+  expect_equal(bridged_summary_output, reference_summary_output)
+  expect_equal(bridged_summary, reference_summary)
+  legacy_population_table <- population_table
+  attr(legacy_population_table, "factor") <- c(0, 1, 365.25)
+  attr(legacy_population_table, "type") <- NULL
+  bridged_legacy_output <- capture.output(
+    bridged_legacy_summary <- bridged_summary_method(legacy_population_table)
+  )
+  reference_legacy_output <- capture.output(
+    reference_legacy_summary <- reference_summary_method(legacy_population_table)
+  )
+  expect_equal(bridged_legacy_output, reference_legacy_output)
+  expect_equal(bridged_legacy_summary, reference_legacy_summary)
+  expect_error(bridged_summary_method(1), "Argument is not a rate table")
 
   bridged_ci <- cipoisson(5, time = 10)
   reference_ci <- survival::cipoisson(5, time = 10)
@@ -4522,6 +4779,53 @@ test_that("data-prep helpers match R survival shapes", {
     reference_ratetable_frame$data,
     tolerance = 1e-12
   )
+
+  bridged_print <- bridged_pyears_formula
+  reference_print <- reference_pyears_formula
+  bridged_print$call <- reference_print$call <- quote(pyears(Surv(time, status) ~ group))
+  reference_print_method <- getFromNamespace("print.pyears", "survival")
+  reference_summary_method <- getFromNamespace("summary.pyears", "survival")
+  expect_equal(
+    capture.output(print.pyears(bridged_print)),
+    capture.output(reference_print_method(reference_print))
+  )
+
+  summary_options <- list(
+    header = FALSE,
+    call = FALSE,
+    rate = TRUE,
+    ci.r = TRUE,
+    totals = TRUE,
+    vertical = FALSE,
+    vline = TRUE,
+    digits = 4
+  )
+  expect_equal(
+    capture.output(do.call(summary.pyears, c(list(object = bridged_pyears_formula), summary_options))),
+    capture.output(do.call(reference_summary_method, c(list(object = reference_pyears_formula), summary_options)))
+  )
+  expect_equal(
+    capture.output(summary.pyears(bridged_pyears_multi, header = FALSE, call = FALSE, vline = TRUE)),
+    capture.output(reference_summary_method(reference_pyears_multi, header = FALSE, call = FALSE, vline = TRUE))
+  )
+  expect_equal(
+    capture.output(summary.pyears(bridged_pyears_formula_frame, header = FALSE, call = FALSE)),
+    capture.output(reference_summary_method(reference_pyears_formula_frame, header = FALSE, call = FALSE))
+  )
+  ratetable_summary_options <- list(
+    header = FALSE,
+    call = FALSE,
+    rate = TRUE,
+    ci.r = TRUE,
+    rr = TRUE,
+    ci.rr = TRUE,
+    digits = 5
+  )
+  expect_equal(
+    capture.output(do.call(summary.pyears, c(list(object = bridged_ratetable), ratetable_summary_options))),
+    capture.output(do.call(reference_summary_method, c(list(object = reference_ratetable), ratetable_summary_options)))
+  )
+  expect_error(summary.pyears(bridged_pyears_formula, header = "yes"), "must be single logical values")
 
   pyears_ratetable_tcut_data <- transform(
     pyears_ratetable_data,
