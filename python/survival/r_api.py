@@ -14512,29 +14512,12 @@ def cox_zph(
     transform_name, transformed_time = _cox_zph_transform(fit, event_times, transform)
     test_residuals = scaled
 
-    variable_names: list[str] = []
-    chi2_values: list[float] = []
-    df_values: list[int] = []
-    p_values: list[float] = []
-    for name, columns in groups:
-        variable_names.append(name)
-        if single_df and len(columns) > 1:
-            residual_matrix = [
-                [sum(row[col_idx] * beta[col_idx] for col_idx in columns)] for row in test_residuals
-            ]
-            test = _core.ph_test(residual_matrix, transformed_time, None)
-            chi2_values.append(float(test.chi2_values[0]) if test.chi2_values else 0.0)
-            df_values.append(1)
-            p_values.append(float(test.p_values[0]) if test.p_values else 1.0)
-            continue
-
-        test = _core.ph_test(_matrix_columns(test_residuals, columns), transformed_time, None)
-        chi2_values.append(float(test.global_chi2))
-        df_values.append(int(test.global_df))
-        p_values.append(float(test.global_p_value))
-
-    global_result = (
-        _core.ph_test(test_residuals, transformed_time, None) if include_global else None
+    test = _core.cox_zph_tests(
+        test_residuals,
+        transformed_time,
+        [columns for _name, columns in groups],
+        beta,
+        single_df,
     )
     grouped_y = (
         _cox_zph_term_matrix(scaled, groups, beta)
@@ -14542,18 +14525,18 @@ def cox_zph(
         else _matrix_columns(scaled, [idx for _name, columns in groups for idx in columns])
     )
     return CoxZPHResult(
-        variable_names=variable_names,
-        chi2_values=chi2_values,
-        df=df_values,
-        p_values=p_values,
+        variable_names=[name for name, _columns in groups],
+        chi2_values=[float(value) for value in test.chi2_values],
+        df=[1 if single_df else len(columns) for _name, columns in groups],
+        p_values=[float(value) for value in test.p_values],
         x=transformed_time,
         time=event_times,
         y=grouped_y,
         var=_cox_zph_group_variance(fit, groups, beta, active_columns),
         transform=transform_name,
-        global_chi2=float(global_result.global_chi2) if global_result is not None else None,
-        global_df=int(global_result.global_df) if global_result is not None else None,
-        global_p_value=(float(global_result.global_p_value) if global_result is not None else None),
+        global_chi2=float(test.global_chi2) if include_global else None,
+        global_df=int(test.global_df) if include_global else None,
+        global_p_value=float(test.global_p_value) if include_global else None,
     )
 
 

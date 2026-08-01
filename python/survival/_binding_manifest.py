@@ -619,6 +619,7 @@ BINDINGS = (
     "cox_survfit_from_baseline",
     "cox_zph_group_variance",
     "cox_zph_term_matrix",
+    "cox_zph_tests",
     "coxcount1",
     "coxcount2",
     "coxmart",

@@ -1,9 +1,12 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, same_time};
+use crate::internal::statistical::chi2_sf;
 use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
+use crate::validation::ProportionalityTest;
+use crate::validation::hypothesis_tests::proportional_hazards_chi2;
 use ndarray::Array2;
 use pyo3::prelude::*;
 
@@ -312,6 +315,63 @@ pub fn cox_zph_term_matrix(
 }
 
 #[pyfunction]
+pub fn cox_zph_tests(
+    scaled: Vec<Vec<f64>>,
+    transformed_time: Vec<f64>,
+    groups: Vec<Vec<usize>>,
+    beta: Vec<f64>,
+    single_df: bool,
+) -> PyResult<ProportionalityTest> {
+    let nvar = beta.len();
+    if transformed_time.len() != scaled.len() {
+        return Err(value_error(
+            "transformed_time must have the same length as scaled",
+        ));
+    }
+    if transformed_time.len() < 2 {
+        return Err(value_error(
+            "at least two transformed_time values are required",
+        ));
+    }
+    validate_finite_slice(&transformed_time, "transformed_time")?;
+    validate_finite_slice(&beta, "beta")?;
+    validate_matrix_width(&scaled, nvar, "scaled")?;
+    validate_column_groups(&groups, nvar)?;
+
+    let full_chi2 = proportional_hazards_chi2(&scaled, &transformed_time);
+    let (chi2_values, df_values) = if single_df {
+        let collapsed = cox_zph_term_matrix(scaled, groups.clone(), beta)?;
+        (
+            proportional_hazards_chi2(&collapsed, &transformed_time),
+            vec![1; groups.len()],
+        )
+    } else {
+        (
+            groups
+                .iter()
+                .map(|columns| columns.iter().map(|&idx| full_chi2[idx]).sum())
+                .collect(),
+            groups.iter().map(Vec::len).collect(),
+        )
+    };
+    let p_values = chi2_values
+        .iter()
+        .zip(&df_values)
+        .map(|(&chi2, &df)| chi2_sf(chi2, df))
+        .collect();
+    let global_chi2 = full_chi2.iter().sum();
+
+    Ok(ProportionalityTest {
+        variable_names: (0..groups.len()).map(|idx| format!("var{idx}")).collect(),
+        chi2_values,
+        p_values,
+        global_chi2,
+        global_df: nvar,
+        global_p_value: chi2_sf(global_chi2, nvar),
+    })
+}
+
+#[pyfunction]
 pub fn cox_zph_group_variance(
     information_matrix: Vec<Vec<f64>>,
     groups: Vec<Vec<usize>>,
@@ -321,27 +381,15 @@ pub fn cox_zph_group_variance(
     validate_finite_slice(&beta, "beta")?;
     validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
     validate_column_groups(&groups, nvar)?;
-    let loadings: Vec<Vec<f64>> = groups
-        .iter()
-        .map(|columns| {
-            let mut loading = vec![0.0; nvar];
-            for &col_idx in columns {
-                loading[col_idx] = if columns.len() > 1 {
-                    beta[col_idx]
-                } else {
-                    1.0
-                };
-            }
-            loading
-        })
-        .collect();
-    let mut result = vec![vec![0.0; loadings.len()]; loadings.len()];
-    for (left_idx, left) in loadings.iter().enumerate() {
-        for (right_idx, right) in loadings.iter().enumerate() {
+    let mut result = vec![vec![0.0; groups.len()]; groups.len()];
+    for (left_idx, left) in groups.iter().enumerate() {
+        for (right_idx, right) in groups.iter().enumerate() {
             let mut value = 0.0;
-            for row in 0..nvar {
-                for col in 0..nvar {
-                    value += left[row] * information_matrix[row][col] * right[col];
+            for &row in left {
+                let left_loading = if left.len() > 1 { beta[row] } else { 1.0 };
+                for &col in right {
+                    let right_loading = if right.len() > 1 { beta[col] } else { 1.0 };
+                    value += left_loading * information_matrix[row][col] * right_loading;
                 }
             }
             result[left_idx][right_idx] = value;
@@ -1475,6 +1523,7 @@ impl CoxPHFit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::validation::hypothesis_tests::proportional_hazards_test;
 
     #[test]
     fn cox_diagnostic_helpers_match_python_formulas() {
@@ -1539,6 +1588,108 @@ mod tests {
         )
         .expect("group variance should compute");
         assert_eq!(variance, vec![vec![4.25, 0.0], vec![0.0, 1.0]]);
+
+        let residuals = vec![
+            vec![0.1, 1.2, -0.3],
+            vec![0.4, 0.8, 0.2],
+            vec![-0.2, 1.5, 0.7],
+            vec![0.9, -0.1, 0.4],
+        ];
+        let transformed_time = vec![4.0, 1.0, 3.0, 2.0];
+        let groups = vec![vec![0, 1], vec![2]];
+        let beta = vec![0.5, -0.25, 1.5];
+        let grouped_test = cox_zph_tests(
+            residuals.clone(),
+            transformed_time.clone(),
+            groups.clone(),
+            beta.clone(),
+            false,
+        )
+        .expect("grouped proportional-hazards tests should compute");
+        let first = proportional_hazards_test(
+            &residuals
+                .iter()
+                .map(|row| vec![row[0], row[1]])
+                .collect::<Vec<_>>(),
+            &transformed_time,
+            None,
+        );
+        let second = proportional_hazards_test(
+            &residuals.iter().map(|row| vec![row[2]]).collect::<Vec<_>>(),
+            &transformed_time,
+            None,
+        );
+        let global = proportional_hazards_test(&residuals, &transformed_time, None);
+        assert!((grouped_test.chi2_values[0] - first.global_chi2).abs() < 1e-12);
+        assert!((grouped_test.chi2_values[1] - second.global_chi2).abs() < 1e-12);
+        assert!((grouped_test.global_chi2 - global.global_chi2).abs() < 1e-12);
+        assert_eq!(grouped_test.global_df, 3);
+
+        let single_df_test = cox_zph_tests(
+            residuals.clone(),
+            transformed_time.clone(),
+            groups.clone(),
+            beta.clone(),
+            true,
+        )
+        .expect("single-df proportional-hazards tests should compute");
+        let collapsed =
+            cox_zph_term_matrix(residuals, groups, beta).expect("term residuals should collapse");
+        let expected_single = proportional_hazards_test(&collapsed, &transformed_time, None);
+        assert_eq!(single_df_test.global_df, 3);
+        for (actual, expected) in single_df_test
+            .chi2_values
+            .iter()
+            .zip(expected_single.chi2_values.iter())
+        {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+
+        let dense_information = vec![
+            vec![2.0, 0.5, -0.2],
+            vec![0.4, 3.0, 0.7],
+            vec![-0.1, 0.6, 4.0],
+        ];
+        let sparse_variance = cox_zph_group_variance(
+            dense_information.clone(),
+            vec![vec![0, 2], vec![1]],
+            vec![0.5, 2.0, -1.5],
+        )
+        .expect("sparse grouped variance should compute");
+        let loadings = [vec![0.5, 0.0, -1.5], vec![0.0, 1.0, 0.0]];
+        let expected_variance: Vec<Vec<f64>> = loadings
+            .iter()
+            .map(|left| {
+                loadings
+                    .iter()
+                    .map(|right| {
+                        left.iter()
+                            .enumerate()
+                            .map(|(row, &left_value)| {
+                                right
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(col, &right_value)| {
+                                        left_value * dense_information[row][col] * right_value
+                                    })
+                                    .sum::<f64>()
+                            })
+                            .sum()
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(sparse_variance, expected_variance);
+        assert!(
+            cox_zph_tests(
+                vec![vec![1.0], vec![2.0]],
+                vec![1.0],
+                vec![vec![0]],
+                vec![0.5],
+                false,
+            )
+            .is_err()
+        );
 
         let crossprod = clustered_crossprod(
             vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]],

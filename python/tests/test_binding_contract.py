@@ -2976,6 +2976,7 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
         "cox_interval_cumulative_hazard_se",
         "cox_zph_group_variance",
         "cox_zph_term_matrix",
+        "cox_zph_tests",
         "leverage_cox",
         "prediction_se_from_variance",
         "scale_schoenfeld_residuals",
@@ -3014,6 +3015,7 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
         "scale_schoenfeld_residuals": ["raw", "beta", "information_matrix"],
         "cox_dfbeta_from_score_residuals": ["score", "information_matrix", "scaled"],
         "cox_zph_term_matrix": ["scaled", "groups", "beta"],
+        "cox_zph_tests": ["scaled", "transformed_time", "groups", "beta", "single_df"],
         "cox_zph_group_variance": ["information_matrix", "groups", "beta"],
         "prediction_se_from_variance": ["rows", "variance"],
         "term_prediction_se_from_variance": ["rows", "variance", "groups"],
@@ -3087,6 +3089,16 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
     assert core.cox_zph_term_matrix([[1.0, 2.0, 3.0]], [[0, 1], [2]], [0.5, 2.0, 7.0])[
         0
     ] == pytest.approx([4.5, 3.0])
+    zph_tests = core.cox_zph_tests(
+        [[1.0, 0.5], [0.5, 1.5], [2.0, -0.5]],
+        [3.0, 1.0, 2.0],
+        [[0], [1]],
+        [0.25, -0.5],
+        False,
+    )
+    assert len(zph_tests.chi2_values) == 2
+    assert zph_tests.global_chi2 == pytest.approx(sum(zph_tests.chi2_values))
+    assert zph_tests.global_df == 2
     group_variance = core.cox_zph_group_variance(
         [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         [[0, 1], [2]],
