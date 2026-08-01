@@ -5933,6 +5933,20 @@ def survfitkm_counting_influence(
     conf_type: str | None = None,
     timefix: bool | None = None,
 ) -> SurvFitKMInfluenceOutput: ...
+def robust_right_survfit_variance(
+    time: list[float],
+    status: list[int],
+    curve_time: list[float],
+    curve_estimate: list[float],
+    cluster: list[int],
+    weights: list[float] | None = None,
+    reverse: bool | None = None,
+    conf_level: float | None = None,
+    conf_type: str | None = None,
+    timefix: bool | None = None,
+    stype: int = 1,
+    ctype: int = 1,
+) -> tuple[list[float], list[float], list[float], list[float]]: ...
 def robust_counting_survfit_variance(
     start: list[float],
     stop: list[float],

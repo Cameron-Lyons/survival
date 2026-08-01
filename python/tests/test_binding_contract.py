@@ -3754,6 +3754,7 @@ def test_survfitkm_bindings_are_typed():
         "survfitkm_influence",
         "survfitkm_counting_influence",
         "robust_survfitkm",
+        "robust_right_survfit_variance",
         "robust_counting_survfit_variance",
         "survfitkm_with_options",
         "counting_survfit_tables",
@@ -3857,6 +3858,34 @@ def test_survfitkm_bindings_are_typed():
         "conf_level",
         "conf_type",
         "timefix",
+    ]
+    assert list(inspect.signature(core.robust_right_survfit_variance).parameters) == [
+        "time",
+        "status",
+        "curve_time",
+        "curve_estimate",
+        "cluster",
+        "weights",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+        "stype",
+        "ctype",
+    ]
+    assert _pyi_function_arg_names(stub_path, "robust_right_survfit_variance") == [
+        "time",
+        "status",
+        "curve_time",
+        "curve_estimate",
+        "cluster",
+        "weights",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+        "stype",
+        "ctype",
     ]
     assert list(inspect.signature(core.robust_counting_survfit_variance).parameters) == [
         "start",
@@ -4081,6 +4110,13 @@ def test_survfitkm_bindings_are_typed():
         [1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
         [0, 0, 1, 1, 2, 2],
     )
+    robust_right = core.robust_right_survfit_variance(
+        [1.0, 2.0, 3.0, 4.0],
+        [1.0, 0.0, 1.0, 0.0],
+        influence.time,
+        [0.75, 0.75, 0.375, 0.375],
+        [0, 1, 2, 3],
+    )
     robust_counting = core.robust_counting_survfit_variance(
         [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
         [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
@@ -4163,6 +4199,18 @@ def test_survfitkm_bindings_are_typed():
     assert influence.influence_surv[3] == pytest.approx([0.0625, 0.0625, 0.21875, 0.21875])
     assert robust.std_err == pytest.approx(
         [0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0]
+    )
+    assert robust_right[0] == pytest.approx(
+        [
+            sum(row[column] ** 2 for row in influence.influence_surv) ** 0.5
+            for column in range(len(influence.time))
+        ]
+    )
+    assert robust_right[1] == pytest.approx(
+        [
+            sum(row[column] ** 2 for row in influence.influence_chaz) ** 0.5
+            for column in range(len(influence.time))
+        ]
     )
     assert robust_counting[0] == pytest.approx([0.0, 0.2721655, 0.1814437, 0.1814437, 0.0])
     assert robust_counting[1] == pytest.approx([0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655])

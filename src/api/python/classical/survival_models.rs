@@ -10,6 +10,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfitkm_influence, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_counting_influence, m)?)?;
     m.add_function(wrap_pyfunction!(robust_counting_survfit_variance, m)?)?;
+    m.add_function(wrap_pyfunction!(robust_right_survfit_variance, m)?)?;
     m.add_function(wrap_pyfunction!(counting_survfit_tables, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_curve_from_tables, m)?)?;
     m.add_function(wrap_pyfunction!(survfitaj, m)?)?;
