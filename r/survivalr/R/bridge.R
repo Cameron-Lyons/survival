@@ -2671,12 +2671,51 @@ is.ratetable <- function(x, verbose = FALSE) {
   }
 }
 
+.as_ratetable_date <- function(x) {
+  output <- as.vector(x)
+  class(output) <- "rtabledate"
+  output
+}
+
 ratetableDate <- function(x) {
-  if (!(inherits(x, "Date") || inherits(x, "POSIXt"))) {
-    return(x)
-  }
-  days <- as.numeric(as.Date(x))
-  structure(days, class = "rtabledate")
+  UseMethod("ratetableDate", x)
+}
+
+ratetableDate.default <- function(x) {
+  x
+}
+
+ratetableDate.integer <- function(x) {
+  .as_ratetable_date(x - 3653)
+}
+
+ratetableDate.Date <- function(x) {
+  .as_ratetable_date(x)
+}
+
+ratetableDate.POSIXt <- function(x) {
+  .as_ratetable_date(as.Date(x))
+}
+
+ratetableDate.date <- function(x) {
+  .as_ratetable_date(x - 3653)
+}
+
+.ratetable_date_from_origin <- function(x) {
+  origin <- attr(x, "origin")
+  date <- as.Date(paste(
+    origin["year"], origin["month"], origin["day"],
+    sep = "/"
+  ))
+  .as_ratetable_date(as.numeric(x) + date)
+}
+
+ratetableDate.dates <- function(x) {
+  .ratetable_date_from_origin(x)
+}
+
+ratetableDate.chron <- function(x) {
+  .ratetable_date_from_origin(x)
 }
 
 ratetable <- function(...) {

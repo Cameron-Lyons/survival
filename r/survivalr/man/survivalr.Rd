@@ -13,6 +13,13 @@
 \alias{is.Surv}
 \alias{is.ratetable}
 \alias{ratetableDate}
+\alias{ratetableDate.chron}
+\alias{ratetableDate.date}
+\alias{ratetableDate.Date}
+\alias{ratetableDate.dates}
+\alias{ratetableDate.default}
+\alias{ratetableDate.integer}
+\alias{ratetableDate.POSIXt}
 \alias{ratetable}
 \alias{match.ratetable}
 \alias{cch}
