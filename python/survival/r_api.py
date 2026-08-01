@@ -7693,7 +7693,7 @@ def _survcondense_from_formula(
     weights = aligned["weights"]
     response, terms = _parse_formula(formula, data)
     _reject_formula_clusters("survcondense", terms)
-    if response.type != "counting":
+    if response.type not in {"counting", "mcounting"}:
         raise ValueError("survcondense requires a counting-process Surv response")
     if response.start is None:
         raise ValueError("counting Surv response is missing start times")
@@ -7743,7 +7743,13 @@ def _survcondense_from_formula(
     }
     output[start] = [starts[idx] for idx in keep_indices]
     output[end] = [response.time[idx] for idx in keep_indices]
-    output[event] = [response.event[idx] for idx in keep_indices]
+    if response.type == "mcounting":
+        output[event] = [
+            "censor" if response.event[idx] == 0 else response.states[int(response.event[idx]) - 1]
+            for idx in keep_indices
+        ]
+    else:
+        output[event] = [response.event[idx] for idx in keep_indices]
     return output
 
 

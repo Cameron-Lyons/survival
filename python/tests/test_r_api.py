@@ -979,6 +979,11 @@ def test_pseudo_supports_counting_process_survfit_results():
 
 
 def test_survcondense_accepts_formula_and_preserves_direct_api():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
     data = {
         "id": [2, 1, 1, 2],
         "tstart": [0.0, 0.0, 5.0, 3.0],
@@ -1055,6 +1060,22 @@ def test_survcondense_accepts_formula_and_preserves_direct_api():
         data=special_data,
         id="id",
     )
+    multistate_data = {
+        "id": [1, 1, 2, 2, 3, 3],
+        "tstart": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+        "tstop": [1.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+        "state": Factor(
+            ["a", "censor", "b", "a", "a", "b"],
+            ["censor", "a", "b"],
+        ),
+        "x": [1, 1, 2, 2, 3, 3],
+    }
+    multistate = survival.survcondense(
+        "Surv(tstart, tstop, state) ~ x",
+        data=multistate_data,
+        id="id",
+        event="state",
+    )
 
     assert result == {
         "x": ["b", "a"],
@@ -1096,6 +1117,13 @@ def test_survcondense_accepts_formula_and_preserves_direct_api():
     assert list(offset_first)[:2] == ["offset(off)", "x"]
     assert offset_first["offset(off)"] == pytest.approx([2.0, 1.0])
     assert offset_first["x"] == ["b", "a"]
+    assert multistate == {
+        "x": [1, 2, 3],
+        "id": [1, 2, 3],
+        "tstart": [0.0, 0.0, 0.0],
+        "tstop": [2.0, 2.0, 2.0],
+        "state": ["censor", "a", "b"],
+    }
 
     with pytest.raises(ValueError, match="counting-process"):
         survival.survcondense(
