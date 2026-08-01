@@ -59,6 +59,7 @@
 \alias{survSplit}
 \alias{survcondense}
 \alias{survcheck}
+\alias{print.survcheck}
 \alias{survdiff}
 \alias{survexp}
 \alias{finegray}
@@ -604,6 +605,8 @@ royston(fit, newdata, ties = TRUE, adjust = FALSE)
 
 survcheck(formula, data = NULL, subset = NULL, na.action = na.pass,
   id, istate, istate0 = "(s0)", timefix = TRUE, ...)
+
+\method{print}{survcheck}(x, ...)
 
 rttright(formula, data, weights, subset, na.action, times, id,
   timefix = TRUE, renorm = TRUE)

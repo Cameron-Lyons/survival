@@ -7866,9 +7866,9 @@ def survcheck(
         if timefix:
             times = _survdiff_timefix_values(times, True)
         return _core.survcheck_simple(times, list(response.event))
-    if response.type != "counting":
+    if response.type not in {"counting", "mright", "mcounting"}:
         raise ValueError(f"survcheck is not valid for {response.type} censored survival data")
-    if response.start is None:
+    if response.type in {"counting", "mcounting"} and response.start is None:
         raise ValueError("counting Surv response is missing start times")
     if id_values is None:
         raise ValueError("an id argument is required")
@@ -7877,16 +7877,29 @@ def survcheck(
     if istate is not None and len(_materialize_labels(istate, "istate")) != len(response):
         raise ValueError("istate must have the same length as the Surv response")
 
-    start = list(response.start)
+    start = [0.0] * len(response) if response.start is None else list(response.start)
     stop = list(response.time)
     if timefix:
         start, stop = _timefix_vectors(start, stop)
+    status_values = list(response.event)
+    initial_codes: list[int] | None
+    if response.type in {"mright", "mcounting"} and istate is not None:
+        initial_labels = _materialize_labels(istate, "istate")
+        state_names = list(dict.fromkeys([*map(str, initial_labels), *response.states]))
+        state_index = {name: index + 1 for index, name in enumerate(state_names)}
+        initial_codes = [state_index[str(value)] for value in initial_labels]
+        status_values = [
+            0 if value == 0 else state_index[response.states[int(value) - 1]]
+            for value in response.event
+        ]
+    else:
+        initial_codes = None if istate is None else _survcheck_integer_labels(istate, "istate")
     return _core.survcheck(
         _survcheck_integer_labels(id_values, "id"),
         start,
         stop,
-        list(response.event),
-        None if istate is None else _survcheck_integer_labels(istate, "istate"),
+        status_values,
+        initial_codes,
     )
 
 

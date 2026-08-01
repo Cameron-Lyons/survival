@@ -698,10 +698,11 @@ def test_survcheck_public_apis_and_validation():
     )
 
     assert result.n_subjects == 2
-    assert result.n_transitions == 3
+    assert result.n_observations == 3
+    assert result.n_transitions == 2
     assert result.n_problems == 0
     assert result.is_valid is True
-    assert result.transitions == {"0 -> 1": 2, "1 -> 0": 1}
+    assert result.transitions == {"0 -> 1": 2}
     assert result.flags == [0, 0, 0]
 
     assert simple.n_subjects == 3
@@ -718,7 +719,9 @@ def test_survcheck_public_apis_and_validation():
 
     assert multi_issue.n_problems == 2
     assert multi_issue.overlap_ids == [1, 2]
+    assert multi_issue.overlap_rows == [1, 3]
     assert multi_issue.gap_ids == [1]
+    assert multi_issue.gap_rows == [4]
 
     assert multi_nonfinite.is_valid is False
     assert multi_nonfinite.n_problems == 1
