@@ -187,6 +187,16 @@ def test_strata_matches_r_factor_codes_and_preserves_low_level_call():
         survival.strata(["a", "b"], [1])
 
 
+def test_strata_counts_high_cardinality_levels_once():
+    values = [f"group-{idx:04d}" for idx in range(2_000)]
+
+    result = survival.strata(values)
+
+    assert result.codes == list(range(1, len(values) + 1))
+    assert result.levels == values
+    assert result.counts == [1] * len(values)
+
+
 def test_aeqSurv_adjusts_surv_response_like_r():
     right = survival.Surv([1.0, 1.0 + 1e-8, 2.0], [1, 0, 1])
     adjusted_right = survival.aeqSurv(right, tolerance=1e-7)
@@ -244,6 +254,11 @@ def test_aeqSurv_adjusts_surv_response_like_r():
 
 
 def test_survSplit_splits_right_and_counting_surv_responses_like_r():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
     right = survival.Surv([5.0, 8.0], [1, 0])
     right_split = survival.survSplit(
         right,
@@ -284,6 +299,54 @@ def test_survSplit_splits_right_and_counting_surv_responses_like_r():
         "stop": [3.0, 5.0, 3.0, 6.0, 8.0],
         "status": [0, 1, 0, 0, 0],
         "episode": [1, 2, 1, 2, 3],
+    }
+
+    multistate_right = survival.Surv(
+        [1.0, 3.0, 4.0],
+        Factor(["a", "censor", "b"], ["censor", "a", "b"]),
+        type="mstate",
+    )
+    multistate_right_split = survival.survSplit(
+        multistate_right,
+        {"x": [11, 12, 13]},
+        cut=[2.0, 3.5],
+        episode="episode",
+        id="subject",
+        end="time",
+        event="state",
+    )
+    assert multistate_right_split == {
+        "x": [11, 12, 12, 13, 13, 13],
+        "subject": [1, 2, 2, 3, 3, 3],
+        "tstart": [0.0, 0.0, 2.0, 0.0, 2.0, 3.5],
+        "time": [1.0, 2.0, 3.0, 2.0, 3.5, 4.0],
+        "state": [1, 0, 0, 0, 0, 2],
+        "episode": [1, 1, 2, 1, 2, 3],
+    }
+
+    multistate_counting = survival.Surv(
+        [0.0, 1.0],
+        [3.0, 4.0],
+        Factor(["a", "b"], ["censor", "a", "b"]),
+        type="mstate",
+    )
+    multistate_counting_split = survival.survSplit(
+        multistate_counting,
+        {"x": [1, 2]},
+        cut=[2.0],
+        start="start",
+        end="stop",
+        event="state",
+        episode="episode",
+        id="subject",
+    )
+    assert multistate_counting_split == {
+        "x": [1, 1, 2, 2],
+        "subject": [1, 1, 2, 2],
+        "start": [0.0, 2.0, 1.0, 2.0],
+        "stop": [2.0, 3.0, 2.0, 4.0],
+        "state": [0, 1, 0, 2],
+        "episode": [1, 2, 1, 2],
     }
 
     with pytest.raises(ValueError, match="not valid for interval2"):
@@ -557,6 +620,53 @@ def test_rttright_formula_wrapper_preserves_legacy_direct_api():
         )
 
 
+def test_rttright_supports_simple_multistate_right_censoring():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "state": Factor(
+            ["a", "censor", "b", "a"],
+            ["censor", "a", "b"],
+        ),
+        "id": ["a", "b", "c", "d"],
+    }
+
+    result = survival.rttright("Surv(time, state) ~ 1", data=data, id="id")
+    timed = survival.rttright(
+        "Surv(time, state) ~ 1",
+        data=data,
+        times=[1.0, 2.0, 3.0, 4.0],
+    )
+
+    assert result == pytest.approx([0.25, 0.0, 0.375, 0.375])
+    for actual_row, expected_row in zip(
+        timed,
+        [
+            [0.25, 0.25, 0.25, 0.25],
+            [0.25, 0.25, 0.0, 0.0],
+            [0.25, 0.25, 0.375, 0.375],
+            [0.25, 0.25, 0.375, 0.375],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+
+    with pytest.raises(NotImplementedError, match="delayed entry or multistate"):
+        survival.rttright(
+            survival.Surv(
+                [0.0, 1.0],
+                [1.0, 2.0],
+                Factor(["a", "censor"], ["censor", "a"]),
+                type="mstate",
+            ),
+            id=["a", "a"],
+        )
+
+
 def test_r_api_statefig_matches_r_coordinate_layouts():
     connect = [[0.0, 1.0], [0.0, 0.0]]
 
@@ -770,6 +880,26 @@ def test_coxph_wtest_matches_r_wald_helper_shapes():
         survival.coxph_wtest([[1.0, 0.0], [0.0, float("inf")]], [1.0, 2.0])
 
 
+def test_integrated_step_values_preserve_boundaries_and_preorigin_state():
+    result = survival.r_api._integrated_step_values(
+        [-1.0, 1.0, 1.0, 3.0],
+        [0.25, 0.5, 0.75, 1.0],
+        [4.0, 0.0, 0.5, 1.0, 2.0, -1.0],
+        start_time=0.0,
+        initial_value=0.1,
+    )
+
+    assert result == pytest.approx([2.75, 0.0, 0.125, 0.25, 1.0, 0.0])
+    with pytest.raises(ValueError, match="same length"):
+        survival.r_api._integrated_step_values(
+            [1.0, 2.0],
+            [0.5],
+            [2.0],
+            start_time=0.0,
+            initial_value=0.0,
+        )
+
+
 def test_pseudo_accepts_survfit_results_and_preserves_direct_api():
     response = survival.Surv([1.0, 2.0, 3.0, 4.0], [1, 0, 1, 1])
     fit = survival.survfit(response)
@@ -979,6 +1109,11 @@ def test_pseudo_supports_counting_process_survfit_results():
 
 
 def test_survcondense_accepts_formula_and_preserves_direct_api():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
     data = {
         "id": [2, 1, 1, 2],
         "tstart": [0.0, 0.0, 5.0, 3.0],
@@ -1055,6 +1190,22 @@ def test_survcondense_accepts_formula_and_preserves_direct_api():
         data=special_data,
         id="id",
     )
+    multistate_data = {
+        "id": [1, 1, 2, 2, 3, 3],
+        "tstart": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+        "tstop": [1.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+        "state": Factor(
+            ["a", "censor", "b", "a", "a", "b"],
+            ["censor", "a", "b"],
+        ),
+        "x": [1, 1, 2, 2, 3, 3],
+    }
+    multistate = survival.survcondense(
+        "Surv(tstart, tstop, state) ~ x",
+        data=multistate_data,
+        id="id",
+        event="state",
+    )
 
     assert result == {
         "x": ["b", "a"],
@@ -1096,6 +1247,13 @@ def test_survcondense_accepts_formula_and_preserves_direct_api():
     assert list(offset_first)[:2] == ["offset(off)", "x"]
     assert offset_first["offset(off)"] == pytest.approx([2.0, 1.0])
     assert offset_first["x"] == ["b", "a"]
+    assert multistate == {
+        "x": [1, 2, 3],
+        "id": [1, 2, 3],
+        "tstart": [0.0, 0.0, 0.0],
+        "tstop": [2.0, 2.0, 2.0],
+        "state": ["censor", "a", "b"],
+    }
 
     with pytest.raises(ValueError, match="counting-process"):
         survival.survcondense(
@@ -6558,6 +6716,20 @@ def test_concordance_summary_low_level_reports_pair_counts():
     assert summary["concordance"] == pytest.approx(
         survival.core.concordance_index(data["time"], data["status"], scores)
     )
+
+
+def test_concordance_summary_low_level_reports_weighted_tie_counts():
+    summary = survival.core.concordance_summary(
+        [1.0, 2.0, 2.0, 2.0, 3.0],
+        [1, 1, 1, 1, 0],
+        [0.1, 0.5, 0.5, 0.9, 0.5],
+        weights=[1.0, 2.0, 3.0, 4.0, 5.0],
+        timewt="I",
+    )
+
+    assert summary["tied_x"] == pytest.approx(25.0 / 14.0)
+    assert summary["tied_y"] == pytest.approx(10.0 / 7.0)
+    assert summary["tied_xy"] == pytest.approx(3.0 / 7.0)
 
 
 def test_concordance_formula_accepts_strata_wrapper():

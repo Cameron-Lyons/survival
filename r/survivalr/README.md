@@ -28,6 +28,10 @@ counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
 `survobrien` formula expansion preserves factor keeper columns and their level
 ordering while transforming continuous terms within each event risk set.
+Low-level `coxsurv.fit` and `survfitcoxph.fit` calls use a Rust risk-set sweep
+for weighted, stratified, tied-event, and counting-process baselines. Their R
+assembly preserves multiple prediction rows, standard errors, and individual
+time-dependent trajectories.
 Low-level `survreg.fit` calls for the built-in extreme-value, logistic,
 Gaussian, and Student-t distributions use the Rust AFT optimizer directly.
 The returned coefficient, null-fit, covariance, likelihood, score, and linear

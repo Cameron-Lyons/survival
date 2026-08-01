@@ -185,6 +185,41 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(attr(factor_response, "inputAttributes"), attr(reference_factor_response, "inputAttributes"))
   expect_equal(format(factor_response), format(reference_factor_response))
   expect_equal(is.na(factor_response), is.na(reference_factor_response))
+  expect_warning(
+    explicit_multistate_response <- Surv(
+      c(1, 2, 3),
+      factor(c("censor", "relapse", "death")),
+      type = "mstate"
+    ),
+    "type= 'mstate' is deprecated"
+  )
+  reference_explicit_multistate_response <- suppressWarnings(
+    survival::Surv(
+      c(1, 2, 3),
+      factor(c("censor", "relapse", "death")),
+      type = "mstate"
+    )
+  )
+  expect_equal(explicit_multistate_response, reference_explicit_multistate_response)
+  expect_warning(
+    explicit_numeric_multistate_response <- Surv(
+      c(1, 2),
+      c(0, 1),
+      type = "mstate"
+    ),
+    "type= 'mstate' is deprecated"
+  )
+  reference_numeric_multistate_response <- suppressWarnings(
+    survival::Surv(
+      c(1, 2),
+      c(0, 1),
+      type = "mstate"
+    )
+  )
+  expect_equal(
+    .as_native_surv(explicit_numeric_multistate_response),
+    reference_numeric_multistate_response
+  )
   factor_counting_response <- Surv(c(0, 0), c(1, 2), factor(c("a", "b")), type = "counting")
   reference_factor_counting_response <- survival::Surv(
     c(0, 0),
@@ -199,6 +234,48 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(attr(factor_counting_response, "inputAttributes"), attr(reference_factor_counting_response, "inputAttributes"))
   expect_equal(format(factor_counting_response), format(reference_factor_counting_response))
   expect_equal(is.na(factor_counting_response), is.na(reference_factor_counting_response))
+  expect_warning(
+    explicit_multistate_counting_response <- Surv(
+      c(0, 0),
+      c(1, 2),
+      factor(c("a", "b")),
+      type = "mstate"
+    ),
+    "type= 'mstate' is deprecated"
+  )
+  reference_explicit_multistate_counting_response <- suppressWarnings(
+    survival::Surv(
+      c(0, 0),
+      c(1, 2),
+      factor(c("a", "b")),
+      type = "mstate"
+    )
+  )
+  expect_equal(
+    explicit_multistate_counting_response,
+    reference_explicit_multistate_counting_response
+  )
+  expect_warning(
+    explicit_numeric_multistate_counting_response <- Surv(
+      c(0, 0),
+      c(1, 2),
+      c(0, 1),
+      type = "mstate"
+    ),
+    "type= 'mstate' is deprecated"
+  )
+  reference_numeric_multistate_counting_response <- suppressWarnings(
+    survival::Surv(
+      c(0, 0),
+      c(1, 2),
+      c(0, 1),
+      type = "mstate"
+    )
+  )
+  expect_equal(
+    .as_native_surv(explicit_numeric_multistate_counting_response),
+    reference_numeric_multistate_counting_response
+  )
   reference_model_frame_formula <- Surv(time, status) ~ group + x
   reference_model_frame_env <- list2env(list(Surv = survival::Surv), parent = parent.frame())
   environment(reference_model_frame_formula) <- reference_model_frame_env
@@ -602,6 +679,59 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(as.integer(counting_split$status), c(0L, 1L, 0L, 0L, 0L))
   expect_equal(as.integer(counting_split$episode), c(1L, 2L, 1L, 2L, 3L))
 
+  split_multistate <- data.frame(
+    time = c(1, 3, 4),
+    state = factor(c("a", "censor", "b"), levels = c("censor", "a", "b")),
+    x = 11:13
+  )
+  multistate_split <- survSplit(
+    Surv(time, state) ~ x,
+    data = split_multistate,
+    cut = c(2, 3.5),
+    episode = "episode",
+    id = "subject"
+  )
+  reference_multistate_formula <- Surv(time, state) ~ x
+  environment(reference_multistate_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  reference_multistate_split <- survival::survSplit(
+    reference_multistate_formula,
+    data = split_multistate,
+    cut = c(2, 3.5),
+    episode = "episode",
+    id = "subject"
+  )
+  expect_equal(multistate_split, reference_multistate_split)
+
+  split_multistate_counting <- data.frame(
+    start = c(0, 1),
+    stop = c(3, 4),
+    state = factor(c("a", "b"), levels = c("censor", "a", "b")),
+    x = 1:2
+  )
+  multistate_counting_split <- survSplit(
+    Surv(start, stop, state) ~ x,
+    data = split_multistate_counting,
+    cut = 2,
+    episode = "episode",
+    id = "subject"
+  )
+  reference_multistate_counting_formula <- Surv(start, stop, state) ~ x
+  environment(reference_multistate_counting_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  reference_multistate_counting_split <- survival::survSplit(
+    reference_multistate_counting_formula,
+    data = split_multistate_counting,
+    cut = 2,
+    episode = "episode",
+    id = "subject"
+  )
+  expect_equal(multistate_counting_split, reference_multistate_counting_split)
+
   check_data <- data.frame(
     id = c(1, 1, 2),
     start = c(0, 1, 0),
@@ -693,6 +823,37 @@ test_that("R formula wrappers delegate to the Python survival package", {
       nrow = 4,
       byrow = TRUE,
       dimnames = list(NULL, c("1", "2", "3", "4"))
+    )
+  )
+
+  multistate_rtt <- data.frame(
+    time = c(1, 2, 3, 4, 5, 6),
+    state = factor(
+      c("a", "censor", "b", "a", "censor", "b"),
+      levels = c("censor", "a", "b")
+    ),
+    group = rep(c("x", "y"), each = 3),
+    wt = c(2, 1, 3, 1, 4, 2),
+    id = letters[1:6]
+  )
+  expect_equal(
+    rttright(Surv(time, state) ~ 1, data = multistate_rtt, id = id),
+    survival::rttright(survival::Surv(time, state) ~ 1, data = multistate_rtt, id = id)
+  )
+  expect_equal(
+    rttright(Surv(time, state) ~ group, data = multistate_rtt, weights = wt),
+    survival::rttright(
+      survival::Surv(time, state) ~ group,
+      data = multistate_rtt,
+      weights = wt
+    )
+  )
+  expect_equal(
+    rttright(Surv(time, state) ~ group, data = multistate_rtt, times = c(2, 4, 6)),
+    survival::rttright(
+      survival::Surv(time, state) ~ group,
+      data = multistate_rtt,
+      times = c(2, 4, 6)
     )
   )
 
@@ -4154,6 +4315,48 @@ test_that("data-prep helpers match R survival shapes", {
     survcondense(condense_offset_formula, data = condense_special_data, id = id),
     survival::survcondense(condense_offset_formula, data = condense_special_data, id = id)
   )
+  condense_multistate_data <- data.frame(
+    id = rep(1:3, each = 2),
+    tstart = rep(c(0, 1), 3),
+    tstop = rep(c(1, 2), 3),
+    state = factor(
+      c("a", "censor", "b", "a", "a", "b"),
+      levels = c("censor", "a", "b")
+    ),
+    x = rep(1:3, each = 2)
+  )
+  condense_multistate_formula <- Surv(tstart, tstop, state) ~ x
+  environment(condense_multistate_formula) <- environment(reference_formula)
+  expect_equal(
+    survcondense(
+      condense_multistate_formula,
+      data = condense_multistate_data,
+      id = id
+    ),
+    survival::survcondense(
+      condense_multistate_formula,
+      data = condense_multistate_data,
+      id = id
+    )
+  )
+  expect_equal(
+    survcondense(
+      condense_multistate_formula,
+      data = condense_multistate_data,
+      id = id,
+      start = "begin",
+      end = "finish",
+      event = "transition"
+    ),
+    survival::survcondense(
+      condense_multistate_formula,
+      data = condense_multistate_data,
+      id = id,
+      start = "begin",
+      end = "finish",
+      event = "transition"
+    )
+  )
 })
 
 test_that("Cox bridge agrees with R survival on a small right-censored fixture", {
@@ -4218,6 +4421,87 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_concordance$count, direct_concordance$count, tolerance = 1e-12)
   expect_equal(bridged_concordance$concordance, reference_concordance$concordance, tolerance = 1e-02)
   expect_equal(bridged_concordance$n, reference_concordance$n)
+})
+
+test_that("Fitted-model concordance supports joint Cox and survreg comparisons", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1.2, 2.1, 2.8, 3.4, 4.2, 5.0, 6.3, 7.1),
+    status = c(1, 1, 0, 1, 1, 0, 1, 0),
+    x = c(0.1, 0.3, 0.2, 0.8, 1.0, 0.7, 1.4, 1.1),
+    z = c(1, 0, 1, 0, 1, 1, 0, 0)
+  )
+  cox_x <- coxph(Surv(time, status) ~ x, data = data, eps = 1e-10, max_iter = 50)
+  cox_z <- coxph(Surv(time, status) ~ z, data = data, eps = 1e-10, max_iter = 50)
+  cox_x_single <- concordance(cox_x, influence = 1)
+  cox_z_single <- concordance(cox_z, influence = 1)
+  cox_joint <- concordance(cox_x, cox_z, influence = 3, ranks = TRUE)
+
+  expect_s3_class(cox_joint, "concordance")
+  expect_equal(names(cox_joint$concordance), c("cox_x", "cox_z"))
+  expect_equal(unname(cox_joint$concordance), c(cox_x_single$concordance, cox_z_single$concordance))
+  expect_equal(cox_joint$count[1L, ], cox_x_single$count)
+  expect_equal(cox_joint$count[2L, ], cox_z_single$count)
+  expect_equal(
+    cox_joint$var,
+    crossprod(cbind(cox_x_single$dfbeta, cox_z_single$dfbeta)),
+    tolerance = 1e-12
+  )
+  expect_equal(dim(cox_joint$dfbeta), c(nrow(data), 2L))
+  expect_equal(dim(cox_joint$influence), c(nrow(data), 5L, 2L))
+  expect_equal(dimnames(cox_joint$influence)[[3L]], c("cox_x", "cox_z"))
+  expect_equal(unique(cox_joint$ranks$fit), c("cox_x", "cox_z"))
+  expect_equal(
+    concordance(cox_x, cox_z, newdata = data)$concordance,
+    concordance(cox_x, cox_z)$concordance
+  )
+
+  weighted_data <- transform(data, wt = seq_len(nrow(data)) / nrow(data) + 0.5)
+  weighted_x <- coxph(Surv(time, status) ~ x, data = weighted_data, weights = wt)
+  weighted_z <- coxph(Surv(time, status) ~ z, data = weighted_data, weights = wt)
+  expect_equal(nrow(concordance(weighted_x, weighted_z)$count), 2L)
+  expect_error(concordance(weighted_x, cox_z), "same weight vector")
+
+  survreg_x <- survreg(
+    Surv(time, status) ~ x,
+    data = data,
+    dist = "weibull",
+    max_iter = 150,
+    eps = 1e-10
+  )
+  survreg_z <- survreg(
+    Surv(time, status) ~ z,
+    data = data,
+    dist = "weibull",
+    max_iter = 150,
+    eps = 1e-10
+  )
+  survreg_joint <- concordance(survreg_x, survreg_z, influence = 1)
+  reference_survreg_x <- survival::survreg(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    dist = "weibull"
+  )
+  reference_survreg_z <- survival::survreg(
+    survival::Surv(time, status) ~ z,
+    data = data,
+    dist = "weibull"
+  )
+  reference_survreg_joint <- survival::concordance(reference_survreg_x, reference_survreg_z)
+  expect_equal(
+    unname(survreg_joint$concordance),
+    unname(reference_survreg_joint$concordance),
+    tolerance = 1e-12
+  )
+  expect_equal(dim(survreg_joint$var), c(2L, 2L))
+  expect_equal(dim(survreg_joint$dfbeta), c(nrow(data), 2L))
+
+  short_fit <- coxph(Surv(time, status) ~ x, data = data[-1L, ], max_iter = 0)
+  expect_error(concordance(cox_x, short_fit), "same sample size")
+  expect_error(concordance(cox_x, bad = survreg_x), "bad argument is not an appropriate fit object")
 })
 
 test_that("Cox time transforms agree with R survival", {
@@ -5764,5 +6048,137 @@ test_that("cch rejects invalid unstratified sampling inputs", {
       cohort.size = 10
     ),
     "censored observations not in subcohort"
+  )
+})
+
+test_that("low-level Cox survival curves match right and counting-process fits", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  x <- cbind(
+    x1 = c(0.2, 0.8, -0.3, 1.1, 0.4, -0.7, 0.6, -0.1),
+    x2 = c(1, 0, 1, 2, -1, 0.5, 1.5, -0.5)
+  )
+  stop <- c(1, 2, 2, 3, 4, 4, 2.5, 5)
+  status <- c(1, 1, 0, 1, 0, 1, 1, 0)
+  start <- c(0, 0.5, 0, 1.5, 2, 1, 0.25, 3.5)
+  weights <- c(1, 0.5, 2, 1.5, 1, 0.75, 1.25, 0.8)
+  risk <- exp(c(-0.2, 0.3, 0.1, -0.4, 0.5, 0.2, -0.1, 0.4))
+  strata_value <- factor(c("a", "a", "a", "a", "b", "b", "b", "b"))
+  prediction_x <- rbind(first = c(0.1, 0.2), second = c(-0.2, 0.6))
+  prediction_risk <- exp(c(0.12, -0.21))
+  variance <- matrix(c(0.08, 0.01, 0.01, 0.05), 2L)
+
+  compare_fit <- function(y, ctype, stype, se.fit, unlist) {
+    args <- list(
+      ctype = ctype,
+      stype = stype,
+      se.fit = se.fit,
+      varmat = variance,
+      y = y,
+      x = x,
+      wt = weights,
+      risk = risk,
+      strata = strata_value,
+      x2 = prediction_x,
+      risk2 = prediction_risk,
+      unlist = unlist
+    )
+    expect_equal(
+      do.call(coxsurv.fit, args),
+      do.call(survival::coxsurv.fit, args),
+      tolerance = 1e-10
+    )
+  }
+
+  for (y in list(cbind(stop, status), cbind(start, stop, status))) {
+    for (ctype in 1:2) {
+      for (stype in 1:2) {
+        compare_fit(y, ctype, stype, FALSE, TRUE)
+        compare_fit(y, ctype, stype, TRUE, FALSE)
+      }
+    }
+  }
+
+  one_time_args <- list(
+    ctype = 1L,
+    stype = 2L,
+    se.fit = TRUE,
+    varmat = matrix(0.1),
+    y = cbind(c(1, 1), c(1, 0)),
+    x = cbind(c(0.2, 0.3)),
+    wt = c(1, 1),
+    risk = c(1, 1),
+    x2 = rbind(one = 0.1, two = 0.2),
+    risk2 = c(1, 2),
+    unlist = TRUE
+  )
+  expect_equal(
+    do.call(coxsurv.fit, one_time_args),
+    do.call(survival::coxsurv.fit, one_time_args),
+    tolerance = 1e-10
+  )
+})
+
+test_that("low-level Cox survival curves match individual trajectories", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  x <- cbind(
+    x1 = c(0.2, 0.8, -0.3, 1.1, 0.4, -0.7, 0.6, -0.1),
+    x2 = c(1, 0, 1, 2, -1, 0.5, 1.5, -0.5)
+  )
+  start <- c(0, 0.5, 0, 1.5, 2, 1, 0.25, 3.5)
+  stop <- c(1, 2, 2, 3, 4, 4, 2.5, 5)
+  status <- c(1, 1, 0, 1, 0, 1, 1, 0)
+  strata_value <- factor(c("a", "a", "a", "a", "b", "b", "b", "b"))
+  y2 <- rbind(c(0, 2.5), c(2.5, 5), c(0, 3), c(3, 5))
+  x2 <- rbind(c(0.1, 0.2), c(0.3, -0.1), c(-0.2, 0.6), c(0.4, 0.5))
+  args <- list(
+    ctype = 2L,
+    stype = 2L,
+    se.fit = TRUE,
+    varmat = matrix(c(0.08, 0.01, 0.01, 0.05), 2L),
+    y = cbind(start, stop, status),
+    x = x,
+    wt = c(1, 0.5, 2, 1.5, 1, 0.75, 1.25, 0.8),
+    risk = exp(c(-0.2, 0.3, 0.1, -0.4, 0.5, 0.2, -0.1, 0.4)),
+    strata = strata_value,
+    y2 = y2,
+    x2 = x2,
+    risk2 = exp(c(0.12, 0.07, -0.21, 0.18)),
+    strata2 = c(1L, 2L, 1L, 2L),
+    id2 = c("one", "one", "two", "two"),
+    unlist = TRUE
+  )
+  expect_equal(
+    do.call(coxsurv.fit, args),
+    do.call(survival::coxsurv.fit, args),
+    tolerance = 1e-10
+  )
+
+  wrapper_args <- list(
+    y = args$y,
+    x = args$x,
+    wt = args$wt,
+    x2 = args$x2,
+    risk = args$risk,
+    newrisk = args$risk2,
+    strata = args$strata,
+    se.fit = args$se.fit,
+    survtype = 3L,
+    vartype = 3L,
+    varmat = args$varmat,
+    id = args$id2,
+    y2 = args$y2,
+    strata2 = args$strata2,
+    unlist = TRUE
+  )
+  expect_equal(
+    do.call(survfitcoxph.fit, wrapper_args),
+    do.call(survival::survfitcoxph.fit, wrapper_args),
+    tolerance = 1e-10
   )
 })

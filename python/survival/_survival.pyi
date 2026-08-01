@@ -5690,6 +5690,14 @@ def cox_expected_baseline_by_stratum(
     list[list[float]],
     list[list[list[float]]],
 ]: ...
+def cox_survfit_baseline(
+    y: list[list[float]],
+    x: list[list[float]],
+    weights: list[float],
+    risk: list[float],
+    survtype: int,
+    vartype: int,
+) -> dict[str, object]: ...
 def coxcount1(
     time: list[float],
     status: list[float],
