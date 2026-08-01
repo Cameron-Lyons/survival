@@ -4025,17 +4025,17 @@ test_that("data-prep helpers match R survival shapes", {
     status = factor(c("a", "b", "censored", "a"), levels = c("censored", "a", "b")),
     x = c("a", "b", "a", "b")
   )
-  bridged_finegray_fallback <- suppressWarnings(finegray(
+  bridged_finegray_formula <- suppressWarnings(finegray(
     survival::Surv(time, status) ~ x,
     data = finegray_data,
     etype = "a"
   ))
-  reference_finegray_fallback <- suppressWarnings(survival::finegray(
+  reference_finegray_formula <- suppressWarnings(survival::finegray(
     survival::Surv(time, status) ~ x,
     data = finegray_data,
     etype = "a"
   ))
-  expect_equal(bridged_finegray_fallback, reference_finegray_fallback)
+  expect_equal(bridged_finegray_formula, reference_finegray_formula)
   finegray_extended_data <- data.frame(
     time = c(5, 8, 10, 12, 7, 11),
     status = factor(
@@ -4096,6 +4096,42 @@ test_that("data-prep helpers match R survival shapes", {
       etype = "a"
     )
   )
+  finegray_class_data <- data.frame(
+    time = seq_len(8L),
+    status = factor(
+      c("a", "censored", "b", "a", "censored", "b", "a", "censored"),
+      levels = c("censored", "a", "b")
+    ),
+    keeper = ordered(
+      c("z", "a", "z", "a", "z", "a", "z", "a"),
+      levels = c("z", "a")
+    ),
+    x = c(1, 2, 3, 4, NA, 6, 7, 8),
+    wt = c(1, 2, 1, 3, 1, 2, 1, 4)
+  )
+  finegray_rows <- seq_len(7L)
+  finegray_class_formula <- Surv(time, status) ~ keeper + I(x^2)
+  bridged_finegray_classes <- finegray(
+    finegray_class_formula,
+    data = finegray_class_data,
+    weights = wt,
+    subset = finegray_rows,
+    na.action = na.omit,
+    etype = "a",
+    count = "extra rows"
+  )
+  reference_finegray_classes <- survival::finegray(
+    survival::Surv(time, status) ~ keeper + I(x^2),
+    data = finegray_class_data,
+    weights = wt,
+    subset = finegray_rows,
+    na.action = na.omit,
+    etype = "a",
+    count = "extra rows"
+  )
+  expect_s3_class(bridged_finegray_classes$keeper, "ordered")
+  expect_s3_class(bridged_finegray_classes[["I(x^2)"]], "AsIs")
+  expect_equal(bridged_finegray_classes, reference_finegray_classes)
   finegray_counting_data <- data.frame(
     id = c(1, 1, 2, 2, 3, 3),
     start = c(0, 5, 0, 4, 0, 6),

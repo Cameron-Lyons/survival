@@ -26,6 +26,10 @@ model retention options.
 `coxph` formula fits support `tt(...)` terms for right-censored and
 counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
+`finegray` formulas use the Python formula engine and Rust interval-expansion
+kernel directly, including weights, subsets, missing-data handling, strata,
+counting-process histories, and delayed entry. Censoring risk sets are computed
+with sorted sweeps, and factor and `I(...)` column classes are restored in R.
 Low-level `coxsurv.fit` and `survfitcoxph.fit` calls use a Rust risk-set sweep
 for weighted, stratified, tied-event, and counting-process baselines. Their R
 assembly preserves multiple prediction rows, standard errors, and individual
