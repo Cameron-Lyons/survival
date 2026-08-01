@@ -11713,15 +11713,6 @@ def _survfit_robust_km_result(
     )
 
 
-def _matrix_column_norms(matrix: list[list[float]]) -> list[float]:
-    if not matrix:
-        return []
-    width = len(matrix[0])
-    return [
-        math.sqrt(sum(float(row[col]) * float(row[col]) for row in matrix)) for col in range(width)
-    ]
-
-
 def _survfit_robust_right_result(
     result: SurvfitResult,
     response: Surv,
@@ -11742,10 +11733,10 @@ def _survfit_robust_right_result(
     if len(cluster_values) != len(response):
         raise ValueError("cluster must have the same length as the Surv response")
 
-    influence = survfitkm_influence(
+    influence = _core.survfitkm_influence(
         list(response.time),
         list(response.event),
-        cluster_values,
+        _encode_labels(cluster_values, "cluster"),
         weights=weights,
         reverse=reverse,
         stype=computation.stype,
@@ -11753,9 +11744,10 @@ def _survfit_robust_right_result(
         conf_level=conf_level,
         conf_type=conf_type,
         timefix=timefix,
+        include_influence=False,
     )
-    std_err = _matrix_column_norms(influence.influence_surv)
-    std_chaz = _matrix_column_norms(influence.influence_chaz)
+    std_err = [float(value) for value in influence.std_err]
+    std_chaz = [float(value) for value in influence.std_chaz]
     if conf_type == "none":
         conf_lower: list[float] = []
         conf_upper: list[float] = []

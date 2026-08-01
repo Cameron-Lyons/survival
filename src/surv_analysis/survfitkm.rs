@@ -900,6 +900,10 @@ pub struct SurvFitKMInfluenceOutput {
     pub influence_surv: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub influence_chaz: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub std_err: Vec<f64>,
+    #[pyo3(get)]
+    pub std_chaz: Vec<f64>,
 }
 
 type RobustSurvfitVarianceOutput = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
@@ -1670,6 +1674,7 @@ pub fn compute_survfitkm_influence_with_timefix(
     conf_level: f64,
     conf_type: &str,
     timefix: bool,
+    include_influence: bool,
 ) -> PyResult<SurvFitKMInfluenceOutput> {
     let km_config = KaplanMeierConfig {
         reverse,
@@ -1731,8 +1736,18 @@ pub fn compute_survfitkm_influence_with_timefix(
     let mut events_by_cluster = vec![0.0; n_clusters];
     let order = sorted_indices_by(&fixed_time);
     let mut cursor = 0;
-    let mut influence_surv = vec![Vec::with_capacity(curve.time.len()); n_clusters];
-    let mut influence_chaz = vec![Vec::with_capacity(curve.time.len()); n_clusters];
+    let mut influence_surv = if include_influence {
+        vec![Vec::with_capacity(curve.time.len()); n_clusters]
+    } else {
+        Vec::new()
+    };
+    let mut influence_chaz = if include_influence {
+        vec![Vec::with_capacity(curve.time.len()); n_clusters]
+    } else {
+        Vec::new()
+    };
+    let mut std_err = Vec::with_capacity(curve.time.len());
+    let mut std_chaz = Vec::with_capacity(curve.time.len());
 
     for (&curve_time, &survival) in curve.time.iter().zip(curve.estimate.iter()) {
         while cursor < order.len()
@@ -1775,21 +1790,33 @@ pub fn compute_survfitkm_influence_with_timefix(
             );
         }
 
+        let mut sum_surv_squares = 0.0;
+        let mut sum_chaz_squares = 0.0;
         for code in 0..n_clusters {
-            influence_chaz[code].push(chaz_score[code]);
+            let chaz_influence = chaz_score[code];
             let score = if stype == 1 {
                 survival_score[code]
             } else {
                 chaz_score[code]
             };
-            influence_surv[code].push(-survival * score);
+            let surv_influence = -survival * score;
+            if include_influence {
+                influence_chaz[code].push(chaz_influence);
+                influence_surv[code].push(surv_influence);
+            }
+            sum_surv_squares += surv_influence * surv_influence;
+            sum_chaz_squares += chaz_influence * chaz_influence;
         }
+        std_err.push(sum_surv_squares.sqrt());
+        std_chaz.push(sum_chaz_squares.sqrt());
     }
 
     Ok(SurvFitKMInfluenceOutput {
         time: curve.time,
         influence_surv,
         influence_chaz,
+        std_err,
+        std_chaz,
     })
 }
 
@@ -1827,6 +1854,8 @@ pub fn compute_counting_survfitkm_influence_with_timefix(
     let mut stop_cursor = 0;
     let mut influence_surv = vec![Vec::with_capacity(curve_time.len()); n_clusters];
     let mut influence_chaz = vec![Vec::with_capacity(curve_time.len()); n_clusters];
+    let mut std_err = Vec::with_capacity(curve_time.len());
+    let mut std_chaz = Vec::with_capacity(curve_time.len());
 
     for (&time, &survival) in curve_time.iter().zip(curve_estimate.iter()) {
         while stop_cursor < stop_order.len()
@@ -1896,26 +1925,36 @@ pub fn compute_counting_survfitkm_influence_with_timefix(
             );
         }
 
+        let mut sum_surv_squares = 0.0;
+        let mut sum_chaz_squares = 0.0;
         for code in 0..n_clusters {
-            influence_chaz[code].push(chaz_score[code]);
+            let chaz_influence = chaz_score[code];
+            influence_chaz[code].push(chaz_influence);
             let score = if stype == 1 {
                 survival_score[code]
             } else {
                 chaz_score[code]
             };
-            influence_surv[code].push(-survival * score);
+            let surv_influence = -survival * score;
+            influence_surv[code].push(surv_influence);
+            sum_surv_squares += surv_influence * surv_influence;
+            sum_chaz_squares += chaz_influence * chaz_influence;
         }
+        std_err.push(sum_surv_squares.sqrt());
+        std_chaz.push(sum_chaz_squares.sqrt());
     }
 
     Ok(SurvFitKMInfluenceOutput {
         time: curve_time.to_vec(),
         influence_surv,
         influence_chaz,
+        std_err,
+        std_chaz,
     })
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, cluster, weights=None, reverse=None, stype=1, ctype=1, conf_level=None, conf_type=None, timefix=None))]
+#[pyo3(signature = (time, status, cluster, weights=None, reverse=None, stype=1, ctype=1, conf_level=None, conf_type=None, timefix=None, include_influence=true))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitkm_influence(
     time: &Bound<'_, PyAny>,
@@ -1928,6 +1967,7 @@ pub fn survfitkm_influence(
     conf_level: Option<f64>,
     conf_type: Option<String>,
     timefix: Option<bool>,
+    include_influence: bool,
 ) -> PyResult<SurvFitKMInfluenceOutput> {
     if stype != 1 && stype != 2 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -1977,6 +2017,7 @@ pub fn survfitkm_influence(
         conf_level,
         &conf_type,
         timefix,
+        include_influence,
     )
 }
 
@@ -2185,6 +2226,19 @@ mod tests {
                 "index {idx}: actual {left} differs from expected {right}"
             );
         }
+    }
+
+    fn matrix_column_norms(matrix: &[Vec<f64>]) -> Vec<f64> {
+        let width = matrix.first().map_or(0, Vec::len);
+        (0..width)
+            .map(|column| {
+                matrix
+                    .iter()
+                    .map(|row| row[column] * row[column])
+                    .sum::<f64>()
+                    .sqrt()
+            })
+            .collect()
     }
 
     #[test]
@@ -2608,6 +2662,7 @@ mod tests {
             DEFAULT_CONFIDENCE_LEVEL,
             "log",
             true,
+            true,
         )
         .expect("KM influence should compute");
         assert_eq!(km.time, vec![1.0, 2.0, 3.0, 4.0]);
@@ -2629,6 +2684,27 @@ mod tests {
                 vec![0.0625, 0.0625, 0.21875, 0.21875],
             ]
         );
+        assert_eq!(km.std_err, matrix_column_norms(&km.influence_surv));
+        assert_eq!(km.std_chaz, matrix_column_norms(&km.influence_chaz));
+
+        let norms_only = compute_survfitkm_influence_with_timefix(
+            &time,
+            &status,
+            &weights,
+            &cluster,
+            false,
+            1,
+            1,
+            DEFAULT_CONFIDENCE_LEVEL,
+            "log",
+            true,
+            false,
+        )
+        .expect("KM influence norms should compute without matrices");
+        assert!(norms_only.influence_surv.is_empty());
+        assert!(norms_only.influence_chaz.is_empty());
+        assert_eq!(norms_only.std_err, km.std_err);
+        assert_eq!(norms_only.std_chaz, km.std_chaz);
 
         let fh = compute_survfitkm_influence_with_timefix(
             &time,
@@ -2640,6 +2716,7 @@ mod tests {
             1,
             DEFAULT_CONFIDENCE_LEVEL,
             "log",
+            true,
             true,
         )
         .expect("Fleming-Harrington influence should compute");
@@ -2681,6 +2758,7 @@ mod tests {
             DEFAULT_CONFIDENCE_LEVEL,
             "log",
             true,
+            true,
         )
         .expect("KM survival with FH2 hazard influence should compute");
         let fh2 = compute_survfitkm_influence_with_timefix(
@@ -2693,6 +2771,7 @@ mod tests {
             2,
             DEFAULT_CONFIDENCE_LEVEL,
             "log",
+            true,
             true,
         )
         .expect("FH2 influence should compute");
@@ -2781,6 +2860,8 @@ mod tests {
             &[0.0, 0.0, 0.2222222, 0.2222222, 0.2222222, 0.2222222],
             1e-6,
         );
+        assert_eq!(km.std_err, matrix_column_norms(&km.influence_surv));
+        assert_eq!(km.std_chaz, matrix_column_norms(&km.influence_chaz));
 
         let fh_estimate = vec![1.0, 1.0, 0.7165313, 0.7165313, 0.7165313, 0.2635971];
         let fh = compute_counting_survfitkm_influence_with_timefix(
