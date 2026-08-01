@@ -794,6 +794,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "CoxphDetailRow",
         "coxph_fit",
         "coxph_detail",
+        "coxph_wtest",
     } <= stub_names
 
     expected_args = {
@@ -824,6 +825,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "method",
             "center",
         ],
+        "coxph_wtest": ["matrix", "rhs_columns", "toler_chol"],
     }
     for name, args in expected_args.items():
         assert list(inspect.signature(getattr(core, name)).parameters) == args

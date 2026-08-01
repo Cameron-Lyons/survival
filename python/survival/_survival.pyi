@@ -6834,6 +6834,11 @@ def coxph_detail(
     method: str = "breslow",
     center: float = 0.0,
 ) -> CoxphDetail: ...
+def coxph_wtest(
+    matrix: list[list[float]],
+    rhs_columns: list[list[float]],
+    toler_chol: float = 1e-9,
+) -> tuple[list[float], int, list[list[float]]]: ...
 def clustered_crossprod(
     rows: list[list[float]],
     weights: list[float],

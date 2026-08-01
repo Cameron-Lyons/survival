@@ -1313,6 +1313,19 @@ test_that("R formula wrappers delegate to the Python survival package", {
     coxph.wtest(diag(2), matrix(c(1, 2, 3, 4), nrow = 2)),
     survival::coxph.wtest(diag(2), matrix(c(1, 2, 3, 4), nrow = 2))
   )
+  expect_equal(
+    coxph.wtest(matrix(0, 2, 2), c(1, 2)),
+    survival::coxph.wtest(matrix(0, 2, 2), c(1, 2))
+  )
+  expect_equal(
+    coxph.wtest(matrix(c(1, 2, 2, 1), 2), c(1, 2)),
+    survival::coxph.wtest(matrix(c(1, 2, 2, 1), 2), c(1, 2))
+  )
+  asymmetric_wtest <- matrix(c(2, 0.25, 7, 1), 2, byrow = TRUE)
+  expect_equal(
+    coxph.wtest(asymmetric_wtest, c(1, 2)),
+    survival::coxph.wtest(asymmetric_wtest, c(1, 2))
+  )
   expect_equal(coxph.wtest(diag(2), c(NA, 2)), survival::coxph.wtest(diag(2), c(NA, 2)))
 
   survreg_control <- survreg.control(maxiter = 1, rel.tolerance = 1e-05, toler.chol = 1e-08)

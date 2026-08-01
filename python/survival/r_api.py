@@ -14267,79 +14267,6 @@ def _coxph_wtest_var_matrix(var: Any) -> tuple[list[list[float]], int]:
     return [], len(values)
 
 
-def _coxph_solve_linear_system(matrix: list[list[float]], rhs: Sequence[float]) -> list[float]:
-    n = len(matrix)
-    if n == 0:
-        return []
-    augmented = [list(row) + [float(rhs[idx])] for idx, row in enumerate(matrix)]
-    for col in range(n):
-        pivot = max(range(col, n), key=lambda row: abs(augmented[row][col]))
-        if abs(augmented[pivot][col]) <= 1e-14:
-            raise ValueError("First argument must be a square matrix")
-        if pivot != col:
-            augmented[col], augmented[pivot] = augmented[pivot], augmented[col]
-        pivot_value = augmented[col][col]
-        for row in range(col + 1, n):
-            factor = augmented[row][col] / pivot_value
-            if factor == 0.0:
-                continue
-            for idx in range(col, n + 1):
-                augmented[row][idx] -= factor * augmented[col][idx]
-    solution = [0.0] * n
-    for row in range(n - 1, -1, -1):
-        total = augmented[row][n] - sum(
-            augmented[row][col] * solution[col] for col in range(row + 1, n)
-        )
-        solution[row] = total / augmented[row][row]
-    return solution
-
-
-def _coxph_wtest_active_indices(matrix: list[list[float]], toler_chol: float) -> list[int]:
-    n = len(matrix)
-    max_diag = max((abs(matrix[idx][idx]) for idx in range(n)), default=0.0)
-    threshold = toler_chol * max_diag
-    active: list[int] = []
-    for idx in range(n):
-        variance = matrix[idx][idx]
-        if active:
-            submatrix = [[matrix[row][col] for col in active] for row in active]
-            covariance = [matrix[idx][col] for col in active]
-            projected = _coxph_solve_linear_system(submatrix, covariance)
-            variance -= sum(value * coef for value, coef in zip(covariance, projected, strict=True))
-        if variance > threshold and variance > 0.0:
-            active.append(idx)
-    return active
-
-
-def _coxph_wtest_solve(
-    matrix: list[list[float]],
-    b_columns: list[list[float]],
-    toler_chol: float,
-) -> tuple[list[float], int, list[list[float]]]:
-    n = len(matrix)
-    active = _coxph_wtest_active_indices(matrix, toler_chol)
-    if not active:
-        return [0.0 for _ in b_columns], 0, [[0.0 for _ in b_columns] for _ in range(n)]
-
-    submatrix = [[matrix[row][col] for col in active] for row in active]
-    solve_columns: list[list[float]] = []
-    tests: list[float] = []
-    for column in b_columns:
-        rhs = [column[idx] for idx in active]
-        active_solution = _coxph_solve_linear_system(submatrix, rhs)
-        solution = [0.0] * n
-        for idx, value in zip(active, active_solution, strict=True):
-            solution[idx] = value
-        solve_columns.append(solution)
-        tests.append(sum(value * coef for value, coef in zip(column, solution, strict=True)))
-
-    solve_rows = [
-        [solve_columns[col_idx][row_idx] for col_idx in range(len(solve_columns))]
-        for row_idx in range(n)
-    ]
-    return tests, len(active), solve_rows
-
-
 def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     """Compute the Wald test helper exported as R's ``coxph.wtest``."""
 
@@ -14387,7 +14314,7 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     b_columns = [
         [b_numeric[row_idx][col_idx] for row_idx in range(nvar)] for col_idx in range(ntest)
     ]
-    tests, df, solve_rows = _coxph_wtest_solve(matrix, b_columns, toler_value)
+    tests, df, solve_rows = _core.coxph_wtest(matrix, b_columns, toler_value)
     solve: list[float] | list[list[float]] = (
         solve_rows if b_is_matrix and ntest > 1 else [row[0] for row in solve_rows]
     )
