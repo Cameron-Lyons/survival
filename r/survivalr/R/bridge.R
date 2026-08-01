@@ -9122,7 +9122,7 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
   targets <- factor(status, levels = 0:length(states))
   counts <- table(subjects, targets)[, -1L, drop = FALSE]
   counts <- cbind(counts, rowSums(counts))
-  count_levels <- sort(unique(as.integer(counts)))
+  count_levels <- sort(unique(c(counts)))
   events <- if (length(count_levels) == 1L) {
     matrix(
       count_levels,
@@ -9139,7 +9139,7 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
     state = c(states, "(any)")
   )
   no_visit <- colSums(events[-1L, , drop = FALSE]) == 0L
-  if (any(no_visit)) events <- events[, !no_visit, drop = FALSE]
+  if (any(no_visit)) events <- events[, !no_visit]
   t(events)
 }
 
