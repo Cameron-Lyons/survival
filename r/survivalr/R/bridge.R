@@ -2726,6 +2726,157 @@ is.ratetable <- function(x, verbose = FALSE) {
   }
 }
 
+`[.ratetable` <- function(x, ..., drop = TRUE) {
+  att <- attributes(x)
+  attributes(x) <- att[c("dim", "dimnames")]
+  result <- NextMethod("[", drop = FALSE)
+  new_dim <- attr(result, "dim")
+  if (is.null(new_dim)) {
+    return(result)
+  }
+  dropped <- new_dim == 1
+  changed <- if (drop) {
+    new_dim != att$dim & !dropped
+  } else {
+    new_dim != att$dim
+  }
+  if (any(changed)) {
+    cutpoints <- att$cutpoints
+    for (idx in seq_along(changed)[changed]) {
+      if (!is.null(cutpoints[[idx]])) {
+        cutpoints[[idx]] <- cutpoints[[idx]][
+          match(dimnames(result)[[idx]], att$dimnames[[idx]])
+        ]
+      }
+    }
+    att$cutpoints <- cutpoints
+  }
+  if (drop && any(dropped)) {
+    if (all(dropped)) {
+      as.numeric(result)
+    } else {
+      attributes(result) <- list(
+        dim = dim(result)[!dropped],
+        dimnames = dimnames(result)[!dropped],
+        dimid = att$dimid[!dropped],
+        factor = att$factor[!dropped],
+        cutpoints = att$cutpoints[!dropped],
+        type = att$type[!dropped]
+      )
+      class(result) <- "ratetable"
+      result
+    }
+  } else {
+    att$dim <- NULL
+    att$dimnames <- NULL
+    attributes(result) <- c(attributes(result), att)
+    result
+  }
+}
+
+as.matrix.ratetable <- function(x, ...) {
+  attributes(x) <- attributes(x)[c("dim", "dimnames")]
+  x
+}
+
+is.na.ratetable <- function(x) {
+  structure(is.na(as.vector(x)), dim = dim(x), dimnames = dimnames(x))
+}
+
+Math.ratetable <- function(x, ...) {
+  attributes(x) <- attributes(x)[c("dim", "dimnames")]
+  NextMethod(.Generic)
+}
+
+Ops.ratetable <- function(e1, e2) {
+  if (nchar(.Method[1L])) {
+    attributes(e1) <- attributes(e1)[c("dim", "dimnames")]
+  }
+  if (nchar(.Method[2L])) {
+    attributes(e2) <- attributes(e2)[c("dim", "dimnames")]
+  }
+  NextMethod(.Generic)
+}
+
+print.ratetable <- function(x, ...) {
+  if (is.null(attr(x, "dimid"))) {
+    cat("Rate table with dimension(s):", names(dimnames(x)), "\n")
+  } else {
+    cat("Rate table with dimension(s):", attr(x, "dimid"), "\n")
+  }
+  attributes(x) <- attributes(x)[c("dim", "dimnames")]
+  NextMethod()
+}
+
+summary.ratetable <- function(object, ...) {
+  rtable <- object
+  if (!inherits(rtable, "ratetable")) {
+    stop("Argument is not a rate table")
+  }
+  att <- attributes(rtable)
+  ncat <- length(dim(rtable))
+  cat(" Rate table with", ncat, "dimensions:\n")
+  dimid <- if (is.null(att$dimid)) names(dimnames(rtable)) else att$dimid
+  for (idx in seq_len(ncat)) {
+    if (!is.null(att$factor)) {
+      if (att$factor[idx] == 0) {
+        cat(
+          "\t", dimid[idx], " ranges from ", format(min(att$cutpoints[[idx]])),
+          " to ", format(max(att$cutpoints[[idx]])), "; with ",
+          att$dim[idx], " categories\n",
+          sep = ""
+        )
+      } else if (att$factor[idx] == 1) {
+        cat(
+          "\t", dimid[idx], " has levels of: ",
+          paste(att$dimnames[[idx]], collapse = " "), "\n",
+          sep = ""
+        )
+      } else {
+        cat(
+          "\t", dimid[idx], " ranges from ", format(min(att$cutpoints[[idx]])),
+          " to ", format(max(att$cutpoints[[idx]])), "; with ",
+          att$dim[idx], " categories,\n\t\tlinearly interpolated in ",
+          att$factor[idx], " steps per division\n",
+          sep = ""
+        )
+      }
+    } else if (att$type[idx] == 1) {
+      cat(
+        "\t", dimid[idx], " has levels of: ",
+        paste(att$dimnames[[idx]], collapse = " "), "\n",
+        sep = ""
+      )
+    } else if (att$type[idx] > 2) {
+      if (is.numeric(att$cutpoints[[idx]])) {
+        cat(
+          "\t", dimid[idx], " ranges from ",
+          format(as.Date(min(att$cutpoints[[idx]]), origin = "1960/01/01")),
+          " to ",
+          format(as.Date(max(att$cutpoints[[idx]]), origin = "1960/01/01")),
+          "; with ", att$dim[idx], " categories\n",
+          sep = ""
+        )
+      } else {
+        cat(
+          "\t", dimid[idx], " ranges from ", format(min(att$cutpoints[[idx]])),
+          " to ", format(max(att$cutpoints[[idx]])), "; with ",
+          att$dim[idx], " categories\n",
+          sep = ""
+        )
+      }
+    } else {
+      cat(
+        "\t", dimid[idx], " ranges from ", format(min(att$cutpoints[[idx]])),
+        " to ", format(max(att$cutpoints[[idx]])), "; with ",
+        att$dim[idx], " categories\n",
+        sep = ""
+      )
+    }
+  }
+  invisible(att)
+}
+
 .as_ratetable_date <- function(x) {
   output <- as.vector(x)
   class(output) <- "rtabledate"
