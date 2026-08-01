@@ -4293,6 +4293,24 @@ test_that("data-prep helpers match R survival shapes", {
       data = obrien_data
     )
   )
+  obrien_factor_data <- transform(
+    obrien_data,
+    keeper = factor(group, levels = c("b", "a"))
+  )
+  factor_formula <- survival::Surv(time, status) ~ x + keeper
+  expect_true(.survobrien_formula_python_eligible(factor_formula, obrien_factor_data))
+  bridged_obrien_factor <- survobrien(factor_formula, data = obrien_factor_data)
+  reference_obrien_factor <- survival::survobrien(
+    factor_formula,
+    data = obrien_factor_data
+  )
+  expect_s3_class(bridged_obrien_factor$keeper, "factor")
+  expect_equal(levels(bridged_obrien_factor$keeper), c("b", "a"))
+  expect_equal(bridged_obrien_factor, reference_obrien_factor)
+  expect_false(.survobrien_formula_python_eligible(
+    survival::Surv(time, status) ~ x + keeper + strata(group),
+    obrien_factor_data
+  ))
 
   obrien_counting_data <- data.frame(
     start = c(0, 0, 1, 2),
@@ -4303,6 +4321,18 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(
     survobrien(survival::Surv(start, stop, status) ~ x, data = obrien_counting_data),
     survival::survobrien(survival::Surv(start, stop, status) ~ x, data = obrien_counting_data)
+  )
+  obrien_counting_data$keeper <- factor(c("a", "a", "b", "b"))
+  counting_factor_formula <- survival::Surv(start, stop, status) ~ x + keeper
+  expect_true(
+    .survobrien_formula_python_eligible(
+      counting_factor_formula,
+      obrien_counting_data
+    )
+  )
+  expect_equal(
+    survobrien(counting_factor_formula, data = obrien_counting_data),
+    survival::survobrien(counting_factor_formula, data = obrien_counting_data)
   )
   obrien_counting_strata_data <- data.frame(
     start = c(0, 0, 1, 2, 0, 3),
