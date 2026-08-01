@@ -621,6 +621,39 @@ fn calculate_likelihood(
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
 }
+
+fn is_positive_definite(matrix: &Array2<f64>, tolerance: f64) -> bool {
+    if matrix.nrows() != matrix.ncols() {
+        return false;
+    }
+    let size = matrix.nrows();
+    let scale = matrix
+        .diag()
+        .iter()
+        .map(|value| value.abs())
+        .fold(1.0_f64, f64::max);
+    let threshold = tolerance * scale;
+    let mut lower = Array2::<f64>::zeros((size, size));
+    for row in 0..size {
+        for column in 0..=row {
+            let product_sum = (0..column)
+                .map(|index| lower[[row, index]] * lower[[column, index]])
+                .sum::<f64>();
+            if row == column {
+                let pivot = matrix[[row, row]] - product_sum;
+                if !pivot.is_finite() || pivot <= threshold {
+                    return false;
+                }
+                lower[[row, column]] = pivot.sqrt();
+            } else {
+                lower[[row, column]] =
+                    (matrix[[row, column]] - product_sum) / lower[[column, column]];
+            }
+        }
+    }
+    true
+}
+
 fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) {
     newbeta[nvar..nvar + nstrat]
         .iter_mut()
@@ -1114,57 +1147,71 @@ fn compute_survreg(
     let mut converged = false;
     while iter < max_iter {
         let old_loglik = loglik;
-        let solve_result = regularized_lu_solve(&jj, &u);
-        let delta = match solve_result {
-            Ok(d) => d,
-            Err(_) => regularized_lu_solve(&imat, &u)?,
-        };
-
         let mut accepted = None;
-        let mut step_factor = 1.0;
-        for _ in 0..=MAX_HALVING_ITERATIONS {
-            let mut candidate_beta = beta.clone();
-            candidate_beta
-                .iter_mut()
-                .zip(beta.iter().zip(delta.iter()))
-                .for_each(|(nb, (b, d))| *nb = b + d * step_factor);
-            adjust_strata(&mut candidate_beta, &beta, nvar, estimated_scale_count);
+        let observed_delta = is_positive_definite(&imat, tol_chol)
+            .then(|| regularized_lu_solve(&imat, &u).ok())
+            .flatten();
+        let delta_candidates = [
+            (true, observed_delta),
+            (false, regularized_lu_solve(&jj, &u).ok()),
+        ];
+        for (uses_observed_information, delta) in delta_candidates
+            .iter()
+            .filter_map(|(observed, delta)| delta.as_ref().map(|delta| (*observed, delta)))
+        {
+            let mut step_factor = 1.0;
+            for _ in 0..=MAX_HALVING_ITERATIONS {
+                let mut candidate_beta = beta.clone();
+                candidate_beta
+                    .iter_mut()
+                    .zip(beta.iter().zip(delta.iter()))
+                    .for_each(|(nb, (b, d))| *nb = b + d * step_factor);
+                adjust_strata(&mut candidate_beta, &beta, nvar, estimated_scale_count);
 
-            let mut candidate_imat = Array2::zeros((nvar2, nvar2));
-            let mut candidate_jj = Array2::zeros((nvar2, nvar2));
-            let mut candidate_u = Array1::zeros(nvar2);
-            let candidate_input = LikelihoodInput {
-                n,
-                nvar,
-                nstrat: estimated_scale_count,
-                beta: &candidate_beta,
-                distribution: &distribution,
-                distribution_parameter,
-                strata,
-                offsets,
-                time1: &time1,
-                time2: time2_view.as_ref(),
-                status: &status,
-                weights,
-                covariates,
-            };
-            let mut candidate_output = LikelihoodOutput {
-                imat: &mut candidate_imat,
-                jj: &mut candidate_jj,
-                u: &mut candidate_u,
-            };
-            let candidate_loglik = calculate_likelihood(&candidate_input, &mut candidate_output)?;
-            if candidate_loglik.is_finite() && candidate_loglik >= old_loglik {
-                accepted = Some((
-                    candidate_beta,
-                    candidate_loglik,
-                    candidate_imat,
-                    candidate_jj,
-                    candidate_u,
-                ));
+                let mut candidate_imat = Array2::zeros((nvar2, nvar2));
+                let mut candidate_jj = Array2::zeros((nvar2, nvar2));
+                let mut candidate_u = Array1::zeros(nvar2);
+                let candidate_input = LikelihoodInput {
+                    n,
+                    nvar,
+                    nstrat: estimated_scale_count,
+                    beta: &candidate_beta,
+                    distribution: &distribution,
+                    distribution_parameter,
+                    strata,
+                    offsets,
+                    time1: &time1,
+                    time2: time2_view.as_ref(),
+                    status: &status,
+                    weights,
+                    covariates,
+                };
+                let mut candidate_output = LikelihoodOutput {
+                    imat: &mut candidate_imat,
+                    jj: &mut candidate_jj,
+                    u: &mut candidate_u,
+                };
+                let candidate_loglik =
+                    calculate_likelihood(&candidate_input, &mut candidate_output)?;
+                if candidate_loglik.is_finite()
+                    && candidate_loglik >= old_loglik
+                    && (!uses_observed_information
+                        || is_positive_definite(&candidate_imat, tol_chol))
+                {
+                    accepted = Some((
+                        candidate_beta,
+                        candidate_loglik,
+                        candidate_imat,
+                        candidate_jj,
+                        candidate_u,
+                    ));
+                    break;
+                }
+                step_factor *= STEP_HALVE_FACTOR;
+            }
+            if accepted.is_some() {
                 break;
             }
-            step_factor *= STEP_HALVE_FACTOR;
         }
 
         if let Some((candidate_beta, candidate_loglik, candidate_imat, candidate_jj, candidate_u)) =
@@ -1326,6 +1373,15 @@ mod tests {
         assert!(!check_convergence(-100.0, -99.0, 1e-6));
         assert!(check_convergence(-1e-10, -1e-10, 1e-6));
         assert!(check_convergence(-100.0, -100.0 + 1e-7, 1e-6));
+    }
+
+    #[test]
+    fn positive_definite_check_rejects_saddle_information() {
+        let positive = Array2::from_shape_vec((2, 2), vec![2.0, 0.5, 0.5, 1.0]).unwrap();
+        let indefinite = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 2.0, 1.0]).unwrap();
+
+        assert!(is_positive_definite(&positive, 1e-10));
+        assert!(!is_positive_definite(&indefinite, 1e-10));
     }
 
     #[test]
@@ -1522,6 +1578,42 @@ mod tests {
         let fit = result.unwrap();
         assert_eq!(fit.coefficients.len(), 2);
         assert!(fit.log_likelihood.is_finite());
+    }
+
+    #[test]
+    fn observed_information_accelerates_well_conditioned_fit() {
+        let y = Array2::from_shape_vec(
+            (6, 2),
+            vec![1.2, 1.0, 2.1, 1.0, 3.0, 0.0, 4.5, 1.0, 6.2, 1.0, 8.1, 0.0],
+        )
+        .unwrap();
+        let covariates = Array2::from_shape_vec(
+            (2, 6),
+            vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0],
+        )
+        .unwrap();
+        let result = compute_survreg(ComputeSurvregInput {
+            max_iter: 100,
+            nvar: 2,
+            y: &y,
+            covariates: &covariates,
+            weights: &Array1::from_vec(vec![1.0; 6]),
+            offsets: &Array1::from_vec(vec![0.0; 6]),
+            beta: vec![2.113333, 1.38, 1.103973],
+            nstrat: 1,
+            strata: &[0; 6],
+            eps: 1e-10,
+            tol_chol: 1e-10,
+            distribution: DistributionType::Gaussian,
+            distribution_parameter: None,
+            fixed_scale: None,
+        })
+        .unwrap();
+
+        assert!(result.iterations <= 10);
+        assert!((result.coefficients[0] - 2.244776).abs() < 1e-5);
+        assert!((result.coefficients[1] - 1.392510).abs() < 1e-5);
+        assert!(result.score_vector.iter().all(|score| score.abs() < 1e-5));
     }
 
     #[test]
