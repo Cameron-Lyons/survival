@@ -3183,6 +3183,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "RttrightResult",
         "Surv2DataResult",
         "Surv2TimelineResult",
+        "FromTimelineRowsResult",
         "CondenseResult",
         "TcutResult",
         "TimelineResult",
@@ -3207,6 +3208,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "rttright_time_matrix",
         "surv2data",
         "surv2data_timeline",
+        "from_timeline_rows",
         "survcondense",
         "tcut",
         "tcut_expand",
@@ -3252,6 +3254,7 @@ def test_data_prep_low_level_bindings_are_typed():
         ],
         "surv2data": ["id", "time", "event_time", "event_status"],
         "surv2data_timeline": ["id", "time", "status", "repeated"],
+        "from_timeline_rows": ["id", "time", "status"],
         "survcondense": ["id", "time1", "time2", "status"],
         "tcut": ["value", "breaks", "labels"],
         "tcut_expand": ["start", "stop", "cuts"],
@@ -3288,6 +3291,15 @@ def test_data_prep_low_level_bindings_are_typed():
         "RttrightResult": {"weights", "time", "status", "order"},
         "Surv2DataResult": {"id", "time1", "time2", "status", "row_index"},
         "Surv2TimelineResult": {"row_index", "start", "stop", "status", "istate"},
+        "FromTimelineRowsResult": {
+            "start",
+            "stop",
+            "status",
+            "istate",
+            "static_row",
+            "dynamic_row",
+            "removed_row",
+        },
         "CondenseResult": {"id", "time1", "time2", "status", "row_map"},
         "TcutResult": {"values", "codes", "levels", "breaks", "counts"},
         "TimelineResult": {"id", "states", "time_points"},
@@ -3295,6 +3307,19 @@ def test_data_prep_low_level_bindings_are_typed():
     }
     for class_name, properties in expected_properties.items():
         assert _pyi_class_property_names(stub_path, class_name) == properties
+
+    timeline_rows = core.from_timeline_rows(
+        [0, 1, 0, 1, 0, 2],
+        [0.0, 3.0, 4.0, 0.0, 2.0, 1.0],
+        [1, 2, 3, 1, 2, 1],
+    )
+    assert timeline_rows.start == [0.0, 2.0, 0.0]
+    assert timeline_rows.stop == [2.0, 4.0, 3.0]
+    assert timeline_rows.status == [2, 3, 2]
+    assert timeline_rows.istate == [1, 2, 1]
+    assert timeline_rows.static_row == [0, 0, 3]
+    assert timeline_rows.dynamic_row == [0, 4, 3]
+    assert timeline_rows.removed_row == [5]
 
     collapsed = core.collapse(
         [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0],
