@@ -6009,7 +6009,22 @@ def _pyears_group_codes(
     values = _materialize_labels(group, "group")
     if len(values) != n:
         raise ValueError("group must have the same length as the response")
-    group_levels = tuple(levels) if levels is not None else _label_levels(values, "group")
+    if levels is None:
+        group_levels: list[Any] = []
+        labels: dict[Any, int] = {}
+        codes: list[float] = []
+        for value in values:
+            try:
+                code = labels.get(value)
+                if code is None:
+                    code = len(labels) + 1
+                    labels[value] = code
+                    group_levels.append(value)
+            except TypeError as exc:
+                raise TypeError("group contains unhashable labels") from exc
+            codes.append(float(code))
+        return codes, [str(value) for value in group_levels]
+    group_levels = tuple(levels)
     labels = {value: idx + 1 for idx, value in enumerate(group_levels)}
     try:
         codes = [float(labels[value]) for value in values]
@@ -6117,6 +6132,7 @@ def pyears(
 ) -> PyearsResult | dict[str, list[Any]]:
     """Tabulate person-years for direct ``Surv``/formula inputs, like R's ``pyears``."""
 
+    direct_inputs_ready = False
     if isinstance(response, str) and "~" in response:
         response, formula_group, formula_group_levels, formula_weights = _pyears_formula_inputs(
             response,
@@ -6131,7 +6147,7 @@ def pyears(
         weights = formula_weights
     else:
         formula_group_levels = None
-        start_values, stop_values, event_values, _ny, _do_event = _pyears_response_from_direct(
+        start_values, stop_values, event_values, ny, do_event = _pyears_response_from_direct(
             response,
             time=time,
             start=start,
@@ -6158,13 +6174,16 @@ def pyears(
             else:
                 group = _subset_optional_sequence(group, keep, "group")
             weights = _subset_optional_sequence(weights, keep, "weights")
-    start_values, stop_values, event_values, ny, do_event = _pyears_response_from_direct(
-        response,
-        time=time,
-        start=start,
-        stop=stop,
-        event=event,
-    )
+        else:
+            direct_inputs_ready = True
+    if not direct_inputs_ready:
+        start_values, stop_values, event_values, ny, do_event = _pyears_response_from_direct(
+            response,
+            time=time,
+            start=start,
+            stop=stop,
+            event=event,
+        )
     n = len(stop_values)
     event_for_core = [0.0] * n if event_values is None else [float(value) for value in event_values]
     _pyears_validate_time_columns(start_values, stop_values, event_values)
