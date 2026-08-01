@@ -3656,6 +3656,32 @@ test_that("data-prep helpers match R survival shapes", {
   reference_date <- survival::ratetableDate(as.Date(c("1940-01-01", "2000-02-29", "2001-01-01")))
   expect_equal(unclass(bridged_date), unclass(reference_date))
   expect_equal(class(bridged_date), class(reference_date))
+  ratetable_date_cases <- list(
+    default = 42.5,
+    integer = c(10000L, 10001L),
+    Date = as.Date(c("1970-01-01", "2000-02-29")),
+    POSIXt = as.POSIXct(c("1970-01-01", "2000-02-29"), tz = "UTC"),
+    date = structure(c(10000, 10001), class = "date"),
+    dates = structure(
+      c(0, 1),
+      class = "dates",
+      origin = c(month = 1, day = 1, year = 1970)
+    ),
+    chron = structure(
+      c(0, 1),
+      class = "chron",
+      origin = c(month = 1, day = 1, year = 1970)
+    )
+  )
+  for (method in names(ratetable_date_cases)) {
+    method_name <- paste0("ratetableDate.", method)
+    bridged_method <- get(method_name, envir = asNamespace("survivalr"))
+    reference_method <- get(method_name, envir = asNamespace("survival"))
+    expect_equal(
+      bridged_method(ratetable_date_cases[[method]]),
+      reference_method(ratetable_date_cases[[method]])
+    )
+  }
   bridged_rtable <- ratetable(
     age = c(50, 60) * 365.25,
     sex = factor(c("male", "female")),
