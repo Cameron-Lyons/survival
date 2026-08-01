@@ -2242,6 +2242,18 @@ tcut <- function(x, breaks, labels, scale = 1) {
   )
 }
 
+`[.tcut` <- function(x, ..., drop = FALSE) {
+  metadata <- attributes(x)
+  x <- unclass(x)[..1]
+  attributes(x) <- metadata
+  class(x) <- "tcut"
+  x
+}
+
+levels.tcut <- function(x) {
+  attr(x, "labels")
+}
+
 neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_integer_) {
   if (missing(best)) {
     best <- "after"

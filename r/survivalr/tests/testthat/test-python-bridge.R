@@ -3523,6 +3523,28 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(attr(bridged_scalar, "cutpoints"), attr(reference_scalar, "cutpoints"))
   expect_equal(attr(bridged_scalar, "labels"), attr(reference_scalar, "labels"))
 
+  bridged_tcut_subset <- get("[.tcut", envir = asNamespace("survivalr"))
+  reference_tcut_subset <- get("[.tcut", envir = asNamespace("survival"))
+  subset_rows <- c(4L, 2L, NA_integer_, 1L)
+  expect_equal(
+    bridged_tcut_subset(bridged_special, subset_rows),
+    reference_tcut_subset(bridged_special, subset_rows)
+  )
+  expect_equal(
+    bridged_tcut_subset(bridged_scaled, c(3L, 1L), drop = TRUE),
+    reference_tcut_subset(bridged_scaled, c(3L, 1L), drop = TRUE)
+  )
+  expect_equal(
+    bridged_tcut_subset(bridged_cut, c(3L, 1L), "ignored"),
+    reference_tcut_subset(bridged_cut, c(3L, 1L), "ignored")
+  )
+  bridged_tcut_levels <- get("levels.tcut", envir = asNamespace("survivalr"))
+  reference_tcut_levels <- get("levels.tcut", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_tcut_levels(bridged_scaled),
+    reference_tcut_levels(bridged_scaled)
+  )
+
   expect_equal(
     neardate(c(1, 1, 2), c(1, 1, 2), c(4, 12, 7), c(5, 10, 9)),
     survival::neardate(c(1, 1, 2), c(1, 1, 2), c(4, 12, 7), c(5, 10, 9))
