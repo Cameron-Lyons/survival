@@ -16991,6 +16991,7 @@ def test_aareg_formula_validates_model_specific_options():
         "status": [1, 1, 1, 1],
         "x": [0.0, 1.0, 0.5, 2.0],
         "group": ["a", "a", "b", "b"],
+        "cluster": ["w", "x", "y", "z"],
     }
 
     with pytest.raises(ValueError, match="strata terms are not allowed"):
@@ -16999,6 +17000,42 @@ def test_aareg_formula_validates_model_specific_options():
         survival.aareg("Surv(time, status) ~ x", data=data, nmin=1, taper=0)
     with pytest.raises(ValueError, match="test must be"):
         survival.aareg("Surv(time, status) ~ x", data=data, nmin=1, test="bogus")
+    with pytest.raises(ValueError, match="multiple cluster terms"):
+        survival.aareg(
+            "Surv(time, status) ~ x + cluster(group) + cluster(cluster)",
+            data=data,
+            nmin=1,
+        )
+    with pytest.raises(ValueError, match="cluster"):
+        survival.aareg("Surv(time, status) ~ x:cluster(group)", data=data, nmin=1)
+
+
+def test_aareg_explicit_cluster_overrides_formula_cluster_like_r():
+    data = {
+        "time": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+        "status": [1, 1, 1, 1, 0, 1],
+        "x": [0.0, 1.0, 2.0, 1.0, 3.0, -1.0],
+        "formula_cluster": ["a", "a", None, "b", "c", "c"],
+        "explicit_cluster": ["left", "right", "left", "right", "left", "right"],
+    }
+
+    with pytest.warns(RuntimeWarning, match="formula term ignored"):
+        fit = survival.aareg(
+            "Surv(time, status) ~ x + cluster(formula_cluster)",
+            data=data,
+            cluster=data["explicit_cluster"],
+            nmin=1,
+            na_action="omit",
+            model=True,
+        )
+
+    assert fit.n[0] == len(data["time"])
+    assert fit.cluster_levels == ["left", "right"]
+    assert fit.dfbeta is not None
+    assert len(fit.dfbeta) == 2
+    assert fit.model is not None
+    assert "formula_cluster" not in fit.model
+    assert fit.model["(cluster)"] == data["explicit_cluster"]
 
 
 def test_r_style_tmerge_matches_mixed_operation_fixture():

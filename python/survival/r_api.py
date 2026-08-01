@@ -2493,13 +2493,16 @@ def _apply_formula_na_action(
     formula: str,
     data: Any,
     na_action: str | None,
+    *,
+    exclude_columns: Sequence[str] = (),
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any]]:
     action = _normalize_na_action(na_action)
     if action == "pass":
         return data, row_aligned
 
-    columns = _formula_columns(formula, data)
+    excluded = set(exclude_columns)
+    columns = [column for column in _formula_columns(formula, data) if column not in excluded]
     n = len(_column(data, columns[0]))
     missing = _missing_row_indices(
         [
@@ -20467,6 +20470,20 @@ def aareg(
     if not isinstance(formula, str):
         raise TypeError("aareg formula must be a string or AaregOptions")
 
+    response_spec = _formula_response_spec(formula)
+    _lhs, _separator, rhs = formula.partition("~")
+    formula_terms = _split_terms(rhs, _dot_terms(data, response_spec.columns))
+    if len(formula_terms.clusters) > 1:
+        raise ValueError("a formula cannot have multiple cluster terms")
+    ignored_formula_clusters: tuple[str, ...] = ()
+    if formula_terms.clusters and cluster is not None:
+        ignored_formula_clusters = tuple(formula_terms.clusters)
+        warnings.warn(
+            "cluster appears both in a formula and as an argument, formula term ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     if subset is not None:
         data, aligned = _subset_formula_inputs(
             formula,
@@ -20481,21 +20498,19 @@ def aareg(
         formula,
         data,
         na_action,
+        exclude_columns=ignored_formula_clusters,
         weights=weights,
         cluster=cluster,
     )
     weights = aligned["weights"]
     cluster = aligned["cluster"]
 
-    response_spec = _formula_response_spec(formula)
     response, terms = _parse_formula(formula, data)
     if response.type not in {"right", "counting"}:
         raise ValueError(f'Aalen model does not support "{response.type}" survival data')
     if terms.strata:
         raise ValueError("strata terms are not allowed in aareg formulas")
-    if terms.clusters:
-        if cluster is not None:
-            raise ValueError("use only one of formula cluster(...) or cluster")
+    if terms.clusters and cluster is None:
         cluster = _combined_columns(data, terms.clusters, len(response))
     if terms.offsets:
         _offset_vector(data, terms.offsets, len(response))
@@ -20548,7 +20563,7 @@ def aareg(
             data,
             response,
             design,
-            extra_columns=terms.clusters,
+            extra_columns=() if ignored_formula_clusters else terms.clusters,
             weights=weights,
             cluster=cluster_values,
         )

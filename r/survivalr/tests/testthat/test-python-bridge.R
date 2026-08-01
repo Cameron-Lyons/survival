@@ -470,6 +470,43 @@ test_that("R formula wrappers delegate to the Python survival package", {
       y = TRUE
     )
   )
+  bridged_aareg_cluster_override <- NULL
+  expect_warning(
+    bridged_aareg_cluster_override <- aareg(
+      survival::Surv(time, status) ~ x + cluster(cluster),
+      data = aareg_data,
+      cluster = group,
+      nmin = 1
+    ),
+    "formula term ignored"
+  )
+  reference_aareg_cluster_override <- NULL
+  expect_warning(
+    reference_aareg_cluster_override <- survival::aareg(
+      survival::Surv(time, status) ~ x + cluster(cluster),
+      data = aareg_data,
+      cluster = group,
+      nmin = 1
+    ),
+    "formula term ignored"
+  )
+  compare_aareg(bridged_aareg_cluster_override, reference_aareg_cluster_override)
+  expect_error(
+    aareg(
+      survival::Surv(time, status) ~ x + cluster(group) + cluster(cluster),
+      data = aareg_data,
+      nmin = 1
+    ),
+    "multiple cluster terms"
+  )
+  expect_error(
+    aareg(
+      survival::Surv(time, status) ~ x:cluster(group),
+      data = aareg_data,
+      nmin = 1
+    ),
+    "cluster.*interaction"
+  )
   tmerge_data <- data.frame(id = 1:2, tstop = c(5, 6))
   bridged_tmerge <- tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
   reference_tmerge <- survival::tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
