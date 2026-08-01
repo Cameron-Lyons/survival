@@ -9292,7 +9292,7 @@ survcheck <- function(formula, data = NULL, subset = NULL, na.action = na.pass,
   }
 
   multistate <- response_type %in% c("mright", "mcounting")
-  response_states <- if (multistate) attr(response, "states") else "event"
+  response_states <- if (multistate) attr(response, "states") else "1"
   raw_status <- as.integer(response[, ncol(response)])
   if (is.null(initial_values)) {
     state_names <- c(istate0, response_states)
