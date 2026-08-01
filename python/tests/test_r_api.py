@@ -5722,6 +5722,47 @@ def test_survfit_formula_fh_groups_curves_by_label():
         assert grouped[label].estimate == pytest.approx(direct[label].estimate)
 
 
+def test_survfit_grouped_batch_matches_weighted_delayed_entry_curves():
+    start = [0.0, 0.5, 1.0, 0.0, 1.5, 2.0, 2.5, 3.0]
+    stop = [2.0, 3.0, 4.0, 2.5, 4.5, 5.0, 6.0, 7.0]
+    status = [1, 0, 1, 0, 1, 1, 0, 1]
+    groups = ["later", "first", "later", "first", "later", "first", "later", "first"]
+    weights = [1.0, 0.75, 1.5, 1.25, 0.5, 2.0, 1.75, 0.8]
+    response = survival.Surv(start, stop, status)
+
+    grouped = survival.survfit(
+        response,
+        group=groups,
+        weights=weights,
+        type="fh2",
+        conf_type="log-log",
+        robust=False,
+    )
+
+    assert list(grouped) == ["later", "first"]
+    for label in grouped:
+        indices = [idx for idx, value in enumerate(groups) if value == label]
+        expected = survival.survfit(
+            survival.Surv(
+                [start[idx] for idx in indices],
+                [stop[idx] for idx in indices],
+                [status[idx] for idx in indices],
+            ),
+            weights=[weights[idx] for idx in indices],
+            type="fh2",
+            conf_type="log-log",
+            robust=False,
+        )
+        assert grouped[label].time == pytest.approx(expected.time)
+        assert grouped[label].n_risk == pytest.approx(expected.n_risk)
+        assert grouped[label].estimate == pytest.approx(expected.estimate)
+        assert grouped[label].std_err == pytest.approx(expected.std_err)
+        assert grouped[label].cumhaz == pytest.approx(expected.cumhaz)
+        assert grouped[label].std_chaz == pytest.approx(expected.std_chaz)
+        assert grouped[label].conf_lower == pytest.approx(expected.conf_lower)
+        assert grouped[label].conf_upper == pytest.approx(expected.conf_upper)
+
+
 def test_survfit_formula_accepts_backtick_column_names():
     grouped = survival.survfit(
         "Surv(`follow-up`, `event status`) ~ `treatment arm`",

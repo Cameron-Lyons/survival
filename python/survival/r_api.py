@@ -11530,6 +11530,7 @@ def _survfit_from_km_counts(
             if getattr(km, "n_enter_count", None) is not None
             else None
         ),
+        model=getattr(km, "model", None),
     )
 
 
@@ -13798,40 +13799,106 @@ def survfit(
         result = _survfit_without_standard_errors(result) if not include_se else result
         return _survfit_with_model_frame(result, model_frame) if model_frame is not None else result
 
+    grouped_indices = _group_indices(group, len(response), levels=formula_group_levels)
+    batched_km: dict[int, Any] | None = None
+    if (
+        robust_clusters is None
+        and not include_time0
+        and not (response.start is not None and id_values is not None)
+    ):
+        labels = list(grouped_indices)
+        group_codes = _encode_labels_with_levels(
+            _materialize_labels(group, "group"),
+            labels,
+            "group",
+        )
+        raw_grouped = _core.survfitkm_grouped(
+            list(response.time),
+            list(response.event),
+            group_codes,
+            weights=wt,
+            entry_times=list(response.start) if response.start is not None else None,
+            reverse=reverse_curve,
+            conf_level=normalized_conf_level,
+            conf_type=normalized_conf_type,
+            timefix=fix_time,
+        )
+        raw_groups = [int(value) for value in raw_grouped.groups]
+        raw_time = raw_grouped.time
+        raw_n_risk = raw_grouped.n_risk
+        raw_n_risk_count = raw_grouped.n_risk_count
+        raw_n_event = raw_grouped.n_event
+        raw_n_event_count = raw_grouped.n_event_count
+        raw_n_censor = raw_grouped.n_censor
+        raw_n_censor_count = raw_grouped.n_censor_count
+        raw_estimate = raw_grouped.estimate
+        raw_std_err = raw_grouped.std_err
+        raw_cumhaz = raw_grouped.cumhaz
+        raw_std_chaz = raw_grouped.std_chaz
+        raw_conf_lower = raw_grouped.conf_lower
+        raw_conf_upper = raw_grouped.conf_upper
+        batched_km = {
+            group_code: SurvfitResult(
+                time=raw_time[curve_idx],
+                n_risk=raw_n_risk[curve_idx],
+                n_event=raw_n_event[curve_idx],
+                n_censor=raw_n_censor[curve_idx],
+                estimate=raw_estimate[curve_idx],
+                std_err=raw_std_err[curve_idx],
+                conf_lower=raw_conf_lower[curve_idx],
+                conf_upper=raw_conf_upper[curve_idx],
+                cumhaz=raw_cumhaz[curve_idx],
+                std_chaz=raw_std_chaz[curve_idx],
+                n_risk_count=raw_n_risk_count[curve_idx],
+                n_event_count=raw_n_event_count[curve_idx],
+                n_censor_count=raw_n_censor_count[curve_idx],
+                model=model_frame,
+            )
+            for curve_idx, group_code in enumerate(raw_groups)
+        }
+        if set(batched_km) != set(range(len(labels))):
+            raise RuntimeError("grouped survfit returned inconsistent group codes")
+
     results: dict[Any, Any] = {}
-    for label, indices in _group_indices(group, len(response), levels=formula_group_levels).items():
-        group_response = _subset_surv(response, indices)
-        group_weights = [wt[idx] for idx in indices] if wt is not None else None
-        group_ids = [id_values[idx] for idx in indices] if id_values is not None else None
-        group_clusters = (
-            [robust_clusters[idx] for idx in indices] if robust_clusters is not None else None
-        )
-        km = (
-            _survfit_counting_with_id(
-                group_response,
-                group_weights,
-                group_ids,
-                include_entry=include_entry,
-                reverse=reverse_curve,
-                conf_level=normalized_conf_level,
-                conf_type=normalized_conf_type,
-                computation=computation,
-                timefix=fix_time,
+    for group_code, (label, indices) in enumerate(grouped_indices.items()):
+        if batched_km is not None:
+            group_response = response
+            group_weights = wt
+            group_clusters = None
+            km = batched_km[group_code]
+        else:
+            group_response = _subset_surv(response, indices)
+            group_weights = [wt[idx] for idx in indices] if wt is not None else None
+            group_ids = [id_values[idx] for idx in indices] if id_values is not None else None
+            group_clusters = (
+                [robust_clusters[idx] for idx in indices] if robust_clusters is not None else None
             )
-            if group_response.start is not None and group_ids is not None
-            else _survfitkm(
-                list(group_response.time),
-                list(group_response.event),
-                weights=group_weights,
-                entry_times=(
-                    list(group_response.start) if group_response.start is not None else None
-                ),
-                reverse=reverse_curve,
-                conf_level=normalized_conf_level,
-                conf_type=normalized_conf_type,
-                timefix=fix_time,
+            km = (
+                _survfit_counting_with_id(
+                    group_response,
+                    group_weights,
+                    group_ids,
+                    include_entry=include_entry,
+                    reverse=reverse_curve,
+                    conf_level=normalized_conf_level,
+                    conf_type=normalized_conf_type,
+                    computation=computation,
+                    timefix=fix_time,
+                )
+                if group_response.start is not None and group_ids is not None
+                else _survfitkm(
+                    list(group_response.time),
+                    list(group_response.event),
+                    weights=group_weights,
+                    entry_times=(
+                        list(group_response.start) if group_response.start is not None else None
+                    ),
+                    reverse=reverse_curve,
+                    conf_level=normalized_conf_level,
+                    conf_type=normalized_conf_type,
+                    timefix=fix_time,
+                )
             )
-        )
         if computation.is_kaplan_meier:
             if group_clusters is not None:
                 km = _survfit_robust_km_result(
@@ -13899,7 +13966,11 @@ def survfit(
                 else result
             )
     result = _survfit_without_standard_errors(results) if not include_se else results
-    return _survfit_with_model_frame(result, model_frame) if model_frame is not None else result
+    return (
+        _survfit_with_model_frame(result, model_frame)
+        if model_frame is not None and batched_km is None
+        else result
+    )
 
 
 def _survdiff_weight_type(rho: float) -> str:
