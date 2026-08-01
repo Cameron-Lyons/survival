@@ -118,6 +118,8 @@
 \alias{survfitcoxph.fit}
 \alias{survpenal.fit}
 \alias{tmerge}
+\alias{[.tmerge}
+\alias{summary.tmerge}
 \alias{survival_python_config}
 \alias{survfit.character}
 \alias{survfit.formula}
@@ -639,6 +641,10 @@ clogit(formula, data, weights, subset, na.action,
 fromtimeline(formula, data, id, istate = "istate")
 
 tmerge(data1, data2, id, ..., tstart, tstop, options)
+
+\method{[}{tmerge}(x, ..., drop = TRUE)
+
+\method{summary}{tmerge}(object, ...)
 
 totimeline(formula, data, id, istate)
 

@@ -6092,6 +6092,23 @@ tmerge <- function(data1, data2, id, ..., tstart, tstop, options) {
   output
 }
 
+`[.tmerge` <- function(x, ..., drop = TRUE) {
+  class(x) <- "data.frame"
+  attr(x, "tm.retain") <- NULL
+  attr(x, "tcount") <- NULL
+  attr(x, "call") <- NULL
+  do.call(`[.data.frame`, c(list(x), list(...), list(drop = drop)))
+}
+
+summary.tmerge <- function(object, ...) {
+  if (!is.null(call <- attr(object, "call"))) {
+    cat("Call:\n")
+    dput(call)
+    cat("\n")
+  }
+  print(attr(object, "tcount"))
+}
+
 .coxsurv_baseline <- function(y, x, wt, risk, survtype, vartype) {
   y <- as.matrix(y)
   x <- as.matrix(x)
