@@ -3618,6 +3618,7 @@ def test_baseline_survival_step_bindings_are_typed():
         "compute_tied_baseline_summaries",
         "agsurv5",
         "cox_expected_baseline_by_stratum",
+        "cox_survfit_baseline",
     } <= stub_names
 
     step_args = ["ndeath", "risk", "wt", "sn", "denom"]
@@ -3634,6 +3635,7 @@ def test_baseline_survival_step_bindings_are_typed():
         "entry_times",
         "method",
     ]
+    survfit_baseline_args = ["y", "x", "weights", "risk", "survtype", "vartype"]
     assert list(inspect.signature(core.compute_baseline_survival_steps).parameters) == step_args
     assert list(inspect.signature(core.agsurv4).parameters) == step_args
     assert list(inspect.signature(core.compute_tied_baseline_summaries).parameters) == tied_args
@@ -3642,6 +3644,7 @@ def test_baseline_survival_step_bindings_are_typed():
         list(inspect.signature(core.cox_expected_baseline_by_stratum).parameters)
         == expected_baseline_args
     )
+    assert list(inspect.signature(core.cox_survfit_baseline).parameters) == survfit_baseline_args
     assert _pyi_function_arg_names(stub_path, "compute_baseline_survival_steps") == step_args
     assert _pyi_function_arg_names(stub_path, "agsurv4") == step_args
     assert _pyi_function_arg_names(stub_path, "compute_tied_baseline_summaries") == tied_args
@@ -3650,6 +3653,7 @@ def test_baseline_survival_step_bindings_are_typed():
         _pyi_function_arg_names(stub_path, "cox_expected_baseline_by_stratum")
         == expected_baseline_args
     )
+    assert _pyi_function_arg_names(stub_path, "cox_survfit_baseline") == survfit_baseline_args
 
     ndeath = [1, 2, 0]
     risk = [1.0, 1.0, 1.0]

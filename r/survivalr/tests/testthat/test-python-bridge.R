@@ -5925,3 +5925,135 @@ test_that("cch rejects invalid unstratified sampling inputs", {
     "censored observations not in subcohort"
   )
 })
+
+test_that("low-level Cox survival curves match right and counting-process fits", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  x <- cbind(
+    x1 = c(0.2, 0.8, -0.3, 1.1, 0.4, -0.7, 0.6, -0.1),
+    x2 = c(1, 0, 1, 2, -1, 0.5, 1.5, -0.5)
+  )
+  stop <- c(1, 2, 2, 3, 4, 4, 2.5, 5)
+  status <- c(1, 1, 0, 1, 0, 1, 1, 0)
+  start <- c(0, 0.5, 0, 1.5, 2, 1, 0.25, 3.5)
+  weights <- c(1, 0.5, 2, 1.5, 1, 0.75, 1.25, 0.8)
+  risk <- exp(c(-0.2, 0.3, 0.1, -0.4, 0.5, 0.2, -0.1, 0.4))
+  strata_value <- factor(c("a", "a", "a", "a", "b", "b", "b", "b"))
+  prediction_x <- rbind(first = c(0.1, 0.2), second = c(-0.2, 0.6))
+  prediction_risk <- exp(c(0.12, -0.21))
+  variance <- matrix(c(0.08, 0.01, 0.01, 0.05), 2L)
+
+  compare_fit <- function(y, ctype, stype, se.fit, unlist) {
+    args <- list(
+      ctype = ctype,
+      stype = stype,
+      se.fit = se.fit,
+      varmat = variance,
+      y = y,
+      x = x,
+      wt = weights,
+      risk = risk,
+      strata = strata_value,
+      x2 = prediction_x,
+      risk2 = prediction_risk,
+      unlist = unlist
+    )
+    expect_equal(
+      do.call(coxsurv.fit, args),
+      do.call(survival::coxsurv.fit, args),
+      tolerance = 1e-10
+    )
+  }
+
+  for (y in list(cbind(stop, status), cbind(start, stop, status))) {
+    for (ctype in 1:2) {
+      for (stype in 1:2) {
+        compare_fit(y, ctype, stype, FALSE, TRUE)
+        compare_fit(y, ctype, stype, TRUE, FALSE)
+      }
+    }
+  }
+
+  one_time_args <- list(
+    ctype = 1L,
+    stype = 2L,
+    se.fit = TRUE,
+    varmat = matrix(0.1),
+    y = cbind(c(1, 1), c(1, 0)),
+    x = cbind(c(0.2, 0.3)),
+    wt = c(1, 1),
+    risk = c(1, 1),
+    x2 = rbind(one = 0.1, two = 0.2),
+    risk2 = c(1, 2),
+    unlist = TRUE
+  )
+  expect_equal(
+    do.call(coxsurv.fit, one_time_args),
+    do.call(survival::coxsurv.fit, one_time_args),
+    tolerance = 1e-10
+  )
+})
+
+test_that("low-level Cox survival curves match individual trajectories", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  x <- cbind(
+    x1 = c(0.2, 0.8, -0.3, 1.1, 0.4, -0.7, 0.6, -0.1),
+    x2 = c(1, 0, 1, 2, -1, 0.5, 1.5, -0.5)
+  )
+  start <- c(0, 0.5, 0, 1.5, 2, 1, 0.25, 3.5)
+  stop <- c(1, 2, 2, 3, 4, 4, 2.5, 5)
+  status <- c(1, 1, 0, 1, 0, 1, 1, 0)
+  strata_value <- factor(c("a", "a", "a", "a", "b", "b", "b", "b"))
+  y2 <- rbind(c(0, 2.5), c(2.5, 5), c(0, 3), c(3, 5))
+  x2 <- rbind(c(0.1, 0.2), c(0.3, -0.1), c(-0.2, 0.6), c(0.4, 0.5))
+  args <- list(
+    ctype = 2L,
+    stype = 2L,
+    se.fit = TRUE,
+    varmat = matrix(c(0.08, 0.01, 0.01, 0.05), 2L),
+    y = cbind(start, stop, status),
+    x = x,
+    wt = c(1, 0.5, 2, 1.5, 1, 0.75, 1.25, 0.8),
+    risk = exp(c(-0.2, 0.3, 0.1, -0.4, 0.5, 0.2, -0.1, 0.4)),
+    strata = strata_value,
+    y2 = y2,
+    x2 = x2,
+    risk2 = exp(c(0.12, 0.07, -0.21, 0.18)),
+    strata2 = c(1L, 2L, 1L, 2L),
+    id2 = c("one", "one", "two", "two"),
+    unlist = TRUE
+  )
+  expect_equal(
+    do.call(coxsurv.fit, args),
+    do.call(survival::coxsurv.fit, args),
+    tolerance = 1e-10
+  )
+
+  wrapper_args <- list(
+    y = args$y,
+    x = args$x,
+    wt = args$wt,
+    x2 = args$x2,
+    risk = args$risk,
+    newrisk = args$risk2,
+    strata = args$strata,
+    se.fit = args$se.fit,
+    survtype = 3L,
+    vartype = 3L,
+    varmat = args$varmat,
+    id = args$id2,
+    y2 = args$y2,
+    strata2 = args$strata2,
+    unlist = TRUE
+  )
+  expect_equal(
+    do.call(survfitcoxph.fit, wrapper_args),
+    do.call(survival::survfitcoxph.fit, wrapper_args),
+    tolerance = 1e-10
+  )
+})
