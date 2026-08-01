@@ -596,7 +596,10 @@ test_that("R formula wrappers delegate to the Python survival package", {
   reference_aareg_summary <- getFromNamespace("summary.aareg", "survival")
   reference_aareg_print <- getFromNamespace("print.aareg", "survival")
   reference_aareg_summary_print <- getFromNamespace("print.summary.aareg", "survival")
-  expect_equal(labels.aareg(bridged_aareg), getFromNamespace("labels.aareg", "survival")(reference_aareg))
+  expect_equal(
+    labels.aareg(bridged_aareg),
+    attr(reference_aareg$terms, "term.labels")
+  )
   compare_aareg(
     `[.aareg`(bridged_aareg, 1:2),
     reference_aareg_subset(reference_aareg, 1:2)
