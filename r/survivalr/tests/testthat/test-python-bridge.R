@@ -3501,6 +3501,28 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(attr(bridged_scaled, "cutpoints"), attr(reference_scaled, "cutpoints"))
   expect_equal(attr(bridged_scaled, "labels"), attr(reference_scaled, "labels"))
 
+  special_value <- c(5, NA, Inf, -Inf)
+  special_breaks <- c(-Inf, 10, 20, Inf)
+  bridged_special <- tcut(special_value, special_breaks)
+  reference_special <- survival::tcut(special_value, special_breaks)
+  expect_equal(unclass(bridged_special), unclass(reference_special))
+  expect_equal(attr(bridged_special, "cutpoints"), attr(reference_special, "cutpoints"))
+  expect_equal(attr(bridged_special, "labels"), attr(reference_special, "labels"))
+
+  repeated_breaks <- c(0, 10, 10, 20)
+  bridged_repeated <- tcut(c(0, 10, 15, 20), repeated_breaks)
+  reference_repeated <- survival::tcut(c(0, 10, 15, 20), repeated_breaks)
+  expect_equal(unclass(bridged_repeated), unclass(reference_repeated))
+  expect_equal(attr(bridged_repeated, "cutpoints"), attr(reference_repeated, "cutpoints"))
+  expect_equal(attr(bridged_repeated, "labels"), attr(reference_repeated, "labels"))
+
+  scalar_value <- c(1, NA, 3)
+  bridged_scalar <- tcut(scalar_value, 2, scale = 10)
+  reference_scalar <- survival::tcut(scalar_value, 2, scale = 10)
+  expect_equal(unclass(bridged_scalar), unclass(reference_scalar))
+  expect_equal(attr(bridged_scalar, "cutpoints"), attr(reference_scalar, "cutpoints"))
+  expect_equal(attr(bridged_scalar, "labels"), attr(reference_scalar, "labels"))
+
   expect_equal(
     neardate(c(1, 1, 2), c(1, 1, 2), c(4, 12, 7), c(5, 10, 9)),
     survival::neardate(c(1, 1, 2), c(1, 1, 2), c(4, 12, 7), c(5, 10, 9))

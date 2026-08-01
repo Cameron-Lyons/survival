@@ -3822,6 +3822,26 @@ def test_r_style_neardate_and_tcut_use_native_data_prep_helpers():
     assert cut.breaks == pytest.approx([0.0, 10.0, 20.0, 30.0])
     assert cut.counts == [1, 1, 1]
 
+    special = survival.tcut(
+        [5.0, None, float("inf"), float("-inf")],
+        [float("-inf"), 10.0, 20.0, float("inf")],
+    )
+    assert special.values[0] == pytest.approx(5.0)
+    assert math.isnan(special.values[1])
+    assert special.values[2:] == [float("inf"), float("-inf")]
+    assert special.codes == [0, -1, 2, 0]
+    assert special.counts == [2, 0, 1]
+
+    repeated = survival.tcut([0.0, 1.0, 1.5, 2.0], [0.0, 1.0, 1.0, 2.0])
+    assert repeated.codes == [0, 2, 2, 2]
+    assert repeated.counts == [1, 0, 3]
+
+    generated = survival.tcut([1.0, None, 3.0], 2)
+    assert generated.codes == [0, -1, 1]
+    assert generated.levels == ["Range 1", "Range 2"]
+    assert generated.breaks == pytest.approx([0.98, 2.0, 3.02])
+    assert generated.counts == [1, 1]
+
     scaled = survival.tcut(
         [5.0, 15.0, 30.0],
         [0.0, 10.0, 20.0, 30.0],
@@ -3833,8 +3853,10 @@ def test_r_style_neardate_and_tcut_use_native_data_prep_helpers():
     assert scaled.breaks == pytest.approx([0.0, 3652.5, 7305.0, 10957.5])
     assert survival.tcut is survival.r_api.tcut
 
-    with pytest.raises(ValueError, match="breaks must have at least 2"):
-        survival.tcut([1.0], [0.0])
+    with pytest.raises(ValueError, match="breaks must have at least 1"):
+        survival.tcut([1.0], [])
+    with pytest.raises(ValueError, match="contain no NA"):
+        survival.tcut([1.0], [0.0, None, 2.0])
 
 
 def test_surv_rejects_invalid_named_response_arguments():
