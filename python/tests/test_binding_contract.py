@@ -3168,6 +3168,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "neardate_str",
         "rttright",
         "rttright_stratified",
+        "rttright_time_matrix",
         "surv2data",
         "survcondense",
         "tcut",
@@ -3192,6 +3193,15 @@ def test_data_prep_low_level_bindings_are_typed():
         "neardate_str": ["id1", "date1", "id2", "date2", "best", "nomatch"],
         "rttright": ["time", "status", "weights", "timefix", "renorm"],
         "rttright_stratified": ["time", "status", "strata", "weights", "timefix", "renorm"],
+        "rttright_time_matrix": [
+            "time",
+            "status",
+            "times",
+            "weights",
+            "strata",
+            "timefix",
+            "renorm",
+        ],
         "surv2data": ["id", "time", "event_time", "event_status"],
         "survcondense": ["id", "time1", "time2", "status"],
         "tcut": ["value", "breaks", "labels"],
@@ -3247,6 +3257,19 @@ def test_data_prep_low_level_bindings_are_typed():
         "matrix": [[1, 1], [2, 2], [3, 3], [4, 4]],
         "dimnames": ["start", "end"],
     }
+
+    timed_weights = core.rttright_time_matrix(
+        [3.0, 1.0, 2.0],
+        [1, 0, 1],
+        [1.0, 2.0, 3.0],
+        None,
+        None,
+        True,
+        True,
+    )
+    assert timed_weights[0] == pytest.approx([1.0 / 3.0, 0.5, 0.5])
+    assert timed_weights[1] == pytest.approx([1.0 / 3.0, 0.0, 0.0])
+    assert timed_weights[2] == pytest.approx([1.0 / 3.0, 0.5, 0.5])
 
 
 def test_cox_counting_low_level_bindings_are_typed():

@@ -5585,6 +5585,15 @@ def rttright_stratified(
     timefix: bool = True,
     renorm: bool = True,
 ) -> RttrightResult: ...
+def rttright_time_matrix(
+    time: list[float],
+    status: list[int],
+    times: list[float],
+    weights: list[float] | None = None,
+    strata: list[int] | None = None,
+    timefix: bool = True,
+    renorm: bool = True,
+) -> list[list[float]]: ...
 def surv2data(
     id: list[int],
     time: list[float],

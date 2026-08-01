@@ -1,5 +1,6 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 use crate::constants::{DIVISION_FLOOR, same_time};
@@ -176,6 +177,183 @@ fn compute_km_weights(
     }
 
     weights
+}
+
+const PARALLEL_TIME_MATRIX_WORK: usize = 8_192;
+
+fn compute_time_matrix_group(
+    time: &[f64],
+    status: &[i32],
+    query_times: &[f64],
+    case_weights: &[f64],
+    indices: &[usize],
+    renorm: bool,
+) -> PyResult<Vec<Vec<f64>>> {
+    let group_weights = indices
+        .iter()
+        .map(|&index| case_weights[index])
+        .collect::<Vec<_>>();
+    let group_weights = if renorm {
+        let total = group_weights.iter().sum::<f64>();
+        if total <= 0.0 {
+            return Err(PyValueError::new_err(
+                "weights must have positive sum when renorm is true",
+            ));
+        }
+        group_weights
+            .into_iter()
+            .map(|weight| weight / total)
+            .collect()
+    } else {
+        group_weights
+    };
+
+    let mut order = (0..indices.len()).collect::<Vec<_>>();
+    order.sort_by(|&left, &right| {
+        time[indices[left]]
+            .total_cmp(&time[indices[right]])
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut event_g = vec![1.0; indices.len()];
+    let mut block_times = Vec::with_capacity(indices.len());
+    let mut post_block_g = Vec::with_capacity(indices.len());
+    let mut current_g = 1.0;
+    let mut n_at_risk = order
+        .iter()
+        .map(|&local_index| group_weights[local_index])
+        .sum::<f64>();
+
+    let mut start = 0;
+    while start < order.len() {
+        let block_time = time[indices[order[start]]];
+        let mut end = start + 1;
+        while end < order.len() && time[indices[order[end]]] == block_time {
+            end += 1;
+        }
+
+        let mut event_weight = 0.0;
+        let mut censor_weight = 0.0;
+        for &local_index in &order[start..end] {
+            event_g[local_index] = current_g;
+            if status[indices[local_index]] == 1 {
+                event_weight += group_weights[local_index];
+            } else {
+                censor_weight += group_weights[local_index];
+            }
+        }
+
+        let risk_after_events = n_at_risk - event_weight;
+        if risk_after_events > 0.0 && censor_weight > 0.0 {
+            current_g *= 1.0 - censor_weight / risk_after_events;
+        }
+        n_at_risk = risk_after_events - censor_weight;
+        block_times.push(block_time);
+        post_block_g.push(current_g);
+        start = end;
+    }
+
+    let query_g = query_times
+        .iter()
+        .map(|query_time| {
+            let block_index = block_times.partition_point(|block_time| block_time < query_time);
+            if block_index == 0 {
+                1.0
+            } else {
+                post_block_g[block_index - 1]
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let make_row = |local_index: usize| {
+        let row_index = indices[local_index];
+        let row_time = time[row_index];
+        let row_weight = group_weights[local_index];
+        let mut row = vec![0.0; query_times.len()];
+        if status[row_index] == 1 {
+            for (column, &g_at_time) in query_g.iter().enumerate() {
+                row[column] = row_weight / event_g[local_index].max(g_at_time);
+            }
+        } else {
+            for (column, (&query_time, &g_at_time)) in
+                query_times.iter().zip(query_g.iter()).enumerate()
+            {
+                if row_time >= query_time {
+                    row[column] = row_weight / g_at_time;
+                }
+            }
+        }
+        row
+    };
+
+    let work = indices.len().saturating_mul(query_times.len());
+    if work >= PARALLEL_TIME_MATRIX_WORK {
+        Ok((0..indices.len()).into_par_iter().map(make_row).collect())
+    } else {
+        Ok((0..indices.len()).map(make_row).collect())
+    }
+}
+
+/// Construct R-compatible redistribution weights at each requested time.
+pub fn rttright_time_matrix(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    query_times: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    timefix: bool,
+    renorm: bool,
+) -> PyResult<Vec<Vec<f64>>> {
+    let n = time.len();
+    if status.len() != n {
+        return Err(PyValueError::new_err(
+            "time and status must have same length",
+        ));
+    }
+    if let Some(init_weights) = weights.as_deref()
+        && init_weights.len() != n
+    {
+        return Err(PyValueError::new_err(
+            "weights must have same length as time",
+        ));
+    }
+    if let Some(strata) = strata.as_deref()
+        && strata.len() != n
+    {
+        return Err(PyValueError::new_err(
+            "time, status, and strata must have same length",
+        ));
+    }
+    validate_rttright_inputs(&time, &status, weights.as_deref())?;
+    validate_finite(&query_times, "times")?;
+
+    let time = if timefix {
+        crate::data_prep::aeq_surv_module::aeq_surv(time, None)?.time
+    } else {
+        time
+    };
+    let case_weights = weights.unwrap_or_else(|| vec![1.0; n]);
+    let strata = strata.unwrap_or_else(|| vec![0; n]);
+    let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (index, stratum) in strata.into_iter().enumerate() {
+        strata_indices.entry(stratum).or_default().push(index);
+    }
+
+    let mut matrix = vec![vec![0.0; query_times.len()]; n];
+    for indices in strata_indices.values() {
+        let rows = compute_time_matrix_group(
+            &time,
+            &status,
+            &query_times,
+            &case_weights,
+            indices,
+            renorm,
+        )?;
+        for (&row_index, row) in indices.iter().zip(rows) {
+            matrix[row_index] = row;
+        }
+    }
+    Ok(matrix)
 }
 
 #[pyfunction]
@@ -427,6 +605,80 @@ mod tests {
             err.to_string()
                 .contains("weights must have same length as time")
         );
+    }
+
+    #[test]
+    fn test_rttright_time_matrix_matches_r_layout() {
+        let result = rttright_time_matrix(
+            vec![3.0, 1.0, 2.0],
+            vec![1, 0, 1],
+            vec![1.0, 2.0, 3.0],
+            None,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert_close_slice(&result[0], &[1.0 / 3.0, 0.5, 0.5]);
+        assert_close_slice(&result[1], &[1.0 / 3.0, 0.0, 0.0]);
+        assert_close_slice(&result[2], &[1.0 / 3.0, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn test_rttright_time_matrix_handles_strata_weights_and_ties() {
+        let result = rttright_time_matrix(
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 1, 0, 1],
+            vec![1.0, 2.0, 3.0, 4.0],
+            Some(vec![2.0, 2.0, 1.0, 3.0]),
+            Some(vec![0, 0, 1, 1]),
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert_close_slice(&result[0], &[0.5, 0.0, 0.0, 0.0]);
+        assert_close_slice(&result[1], &[0.5, 1.0, 1.0, 1.0]);
+        assert_close_slice(&result[2], &[0.25, 0.25, 0.25, 0.0]);
+        assert_close_slice(&result[3], &[0.75, 0.75, 0.75, 1.0]);
+
+        let fixed = rttright_time_matrix(
+            vec![1.0, 1.0 + 5e-10, 2.0],
+            vec![0, 1, 1],
+            vec![1.0, 2.0],
+            None,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        let exact = rttright_time_matrix(
+            vec![1.0, 1.0 + 5e-10, 2.0],
+            vec![0, 1, 1],
+            vec![1.0, 2.0],
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_close_slice(&fixed[1], &[1.0, 1.0]);
+        assert_close_slice(&exact[1], &[1.0, 1.5]);
+
+        let tiny = rttright_time_matrix(
+            vec![1.0, 2.0],
+            vec![1, 1],
+            vec![1.0],
+            Some(vec![1e-12, 1e-12]),
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_close_slice(&tiny[0], &[0.5]);
+        assert_close_slice(&tiny[1], &[0.5]);
     }
 
     #[test]
