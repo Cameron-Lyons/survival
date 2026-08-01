@@ -2248,28 +2248,30 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   if (length(nomatch) != 1L) {
     stop("nomatch must be a scalar", call. = FALSE)
   }
+  if (is.factor(y1) || is.factor(y2)) {
+    stop("y1 and y2 must be sortable", call. = FALSE)
+  }
   y1 <- as.numeric(y1)
   y2 <- as.numeric(y2)
-  if (any(!is.finite(y1)) || any(!is.finite(y2))) {
-    stop("y1 and y2 must contain only finite values", call. = FALSE)
-  }
+  python_y1 <- lapply(y1, function(value) if (is.na(value)) NaN else value)
+  python_y2 <- lapply(y2, function(value) if (is.na(value)) NaN else value)
 
   if (.is_integerish_vector(id1) && .is_integerish_vector(id2)) {
     result <- .call_data_prep(
       "neardate",
-      as.integer(id1),
-      y1,
-      as.integer(id2),
-      y2,
+      as.list(as.integer(id1)),
+      python_y1,
+      as.list(as.integer(id2)),
+      python_y2,
       best = best
     )
   } else {
     result <- .call_data_prep(
       "neardate_str",
-      as.character(id1),
-      y1,
-      as.character(id2),
-      y2,
+      as.list(as.character(id1)),
+      python_y1,
+      as.list(as.character(id2)),
+      python_y2,
       best = best
     )
   }
@@ -2278,6 +2280,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   matched <- !vapply(indices, is.null, logical(1))
   values <- rep(nomatch, length(indices))
   values[matched] <- as.integer(unlist(indices[matched], use.names = FALSE)) + 1L
+  values[is.na(id1)] <- NA_integer_
   values
 }
 

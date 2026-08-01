@@ -299,10 +299,12 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
         survival.aeq_surv([1.0], float("inf"))
     with pytest.raises(ValueError, match="time values must be finite"):
         survival.aeq_surv([1.0, float("nan")])
-    with pytest.raises(ValueError, match="date1 values must be finite"):
-        survival.neardate([1], [float("nan")], [1], [1.0])
-    with pytest.raises(ValueError, match="date2 values must be finite"):
-        survival.neardate_str(["a"], [1.0], ["a"], [float("inf")])
+    missing_query = survival.neardate([1], [float("nan")], [1], [1.0])
+    infinite_reference = survival.neardate_str(["a"], [1.0], ["a"], [float("inf")])
+    assert missing_query.indices == [None]
+    assert missing_query.distances == [None]
+    assert infinite_reference.indices == [0]
+    assert infinite_reference.distances == [float("inf")]
     with pytest.raises(ValueError, match="value values must be finite"):
         survival.tcut([float("nan")], [0.0, 1.0])
     with pytest.raises(ValueError, match="breaks must be given in ascending order"):

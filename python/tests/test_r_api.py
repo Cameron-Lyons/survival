@@ -3686,6 +3686,29 @@ def test_r_style_neardate_and_tcut_use_native_data_prep_helpers():
         [5.0, 10.0],
         nomatch=0,
     ) == [1, 0]
+    missing_and_infinite = [None, 2.0, float("inf"), float("-inf")]
+    reference_dates = [1.0, None, float("inf"), float("-inf")]
+    assert survival.neardate(
+        [1, 1, 1, 1],
+        [1, 1, 1, 1],
+        missing_and_infinite,
+        reference_dates,
+        nomatch=0,
+    ) == [0, 3, 3, 4]
+    assert survival.neardate(
+        [1, 1, 1, 1],
+        [1, 1, 1, 1],
+        missing_and_infinite,
+        reference_dates,
+        best="prior",
+        nomatch=0,
+    ) == [0, 1, 3, 4]
+    assert survival.neardate([None, 1], [None, 1], [1.0, 2.0], [1.0, 2.0], nomatch=0) == [None, 2]
+    assert survival.neardate([None, 1], [None, 2], [1.0, 2.0], [1.0, 2.0], nomatch=0) == [None, 0]
+    with pytest.raises(ValueError, match="No valid entries"):
+        survival.neardate([1], [1], [1.0], [None])
+    with pytest.raises(ValueError, match="No valid entries"):
+        survival.neardate([1], [2], [1.0], [1.0])
 
     cut = survival.tcut([5.0, 15.0, 30.0], [0.0, 10.0, 20.0, 30.0])
     assert isinstance(cut, survival.TcutResult)
