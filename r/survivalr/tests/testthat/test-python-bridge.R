@@ -4438,6 +4438,53 @@ test_that("data-prep helpers match R survival shapes", {
     tolerance = 1e-12
   )
 
+  bridged_print <- bridged_pyears_formula
+  reference_print <- reference_pyears_formula
+  bridged_print$call <- reference_print$call <- quote(pyears(Surv(time, status) ~ group))
+  reference_print_method <- getFromNamespace("print.pyears", "survival")
+  reference_summary_method <- getFromNamespace("summary.pyears", "survival")
+  expect_equal(
+    capture.output(print.pyears(bridged_print)),
+    capture.output(reference_print_method(reference_print))
+  )
+
+  summary_options <- list(
+    header = FALSE,
+    call = FALSE,
+    rate = TRUE,
+    ci.r = TRUE,
+    totals = TRUE,
+    vertical = FALSE,
+    vline = TRUE,
+    digits = 4
+  )
+  expect_equal(
+    capture.output(do.call(summary.pyears, c(list(object = bridged_pyears_formula), summary_options))),
+    capture.output(do.call(reference_summary_method, c(list(object = reference_pyears_formula), summary_options)))
+  )
+  expect_equal(
+    capture.output(summary.pyears(bridged_pyears_multi, header = FALSE, call = FALSE, vline = TRUE)),
+    capture.output(reference_summary_method(reference_pyears_multi, header = FALSE, call = FALSE, vline = TRUE))
+  )
+  expect_equal(
+    capture.output(summary.pyears(bridged_pyears_formula_frame, header = FALSE, call = FALSE)),
+    capture.output(reference_summary_method(reference_pyears_formula_frame, header = FALSE, call = FALSE))
+  )
+  ratetable_summary_options <- list(
+    header = FALSE,
+    call = FALSE,
+    rate = TRUE,
+    ci.r = TRUE,
+    rr = TRUE,
+    ci.rr = TRUE,
+    digits = 5
+  )
+  expect_equal(
+    capture.output(do.call(summary.pyears, c(list(object = bridged_ratetable), ratetable_summary_options))),
+    capture.output(do.call(reference_summary_method, c(list(object = reference_ratetable), ratetable_summary_options)))
+  )
+  expect_error(summary.pyears(bridged_pyears_formula, header = "yes"), "must be single logical values")
+
   pyears_ratetable_tcut_data <- transform(
     pyears_ratetable_data,
     attained = c(0, 20, 100, 200)
