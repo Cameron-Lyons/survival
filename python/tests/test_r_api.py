@@ -6422,6 +6422,8 @@ def test_concordance_direct_surv_uses_rust_c_index():
     assert result.reverse is False
     assert result.concordant == pytest.approx(summary["concordant"])
     assert result.comparable == pytest.approx(summary["comparable"])
+    assert result.conditional_variance == pytest.approx(summary["conditional_variance"])
+    assert result.cvar == pytest.approx(result.conditional_variance)
 
     reversed_result = survival.concordance(
         survival.Surv(data["time"], data["status"]),
@@ -7064,6 +7066,9 @@ def test_concordance_formula_returns_one_result_per_score_column():
     assert result.tied_x == pytest.approx([0.0, 0.0])
     assert result.tied_y == pytest.approx([0.0, 0.0])
     assert result.tied_xy == pytest.approx([0.0, 0.0])
+    assert result.conditional_variance == pytest.approx(
+        [x1["conditional_variance"], x2["conditional_variance"]]
+    )
     assert result.n == len(data["time"])
     assert result.n_event == sum(data["status"])
 
@@ -7107,6 +7112,9 @@ def test_concordance_matrix_scores_return_parallel_cluster_variances():
     assert result.tied_y == pytest.approx([x1.tied_y, x2.tied_y])
     assert result.tied_xy == pytest.approx([x1.tied_xy, x2.tied_xy])
     assert result.variance == pytest.approx([x1.variance, x2.variance])
+    assert result.conditional_variance == pytest.approx(
+        [x1.conditional_variance, x2.conditional_variance]
+    )
 
 
 def test_concordance_summary_low_level_reports_pair_counts():
