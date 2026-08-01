@@ -380,14 +380,36 @@ def test_survcheck_accepts_formula_direct_and_legacy_inputs():
     legacy = survival.survcheck([1, 1, 2], [0.0, 1.0, 0.0], [1.0, 2.0, 2.0], [0, 1, 1])
 
     assert direct.n_subjects == 2
-    assert direct.n_transitions == 3
+    assert direct.n_observations == 3
+    assert direct.n_transitions == 2
     assert direct.n_problems == 0
     assert direct.transitions == formula.transitions
     assert direct.flags == formula.flags
     assert overlap.is_valid is False
     assert overlap.overlap_ids == [1]
+    assert overlap.overlap_rows == [1]
     assert legacy.n_subjects == 2
     assert legacy.flags == [0, 0, 0]
+
+    class Factor(list):
+        def __init__(self, values, categories):
+            super().__init__(values)
+            self.categories = categories
+
+    multistate = survival.survcheck(
+        survival.Surv(
+            [0.0, 1.0, 0.0, 2.0],
+            [1.0, 2.0, 1.0, 3.0],
+            Factor(["B", "C", "B", "C"], ["censor", "B", "C"]),
+            type="mstate",
+        ),
+        id=["a", "a", "b", "b"],
+        istate=["A", "B", "A", "A"],
+    )
+    assert multistate.jump_rows == [3]
+    assert multistate.jump_ids == [2]
+    assert multistate.current_states == [1, 2, 1, 2]
+    assert multistate.transitions == {"1 -> 2": 2, "2 -> 3": 2}
 
     right = survival.survcheck(survival.Surv([1.0, -1.0, 3.0], [1, 0, 1]))
     assert right.is_valid is False

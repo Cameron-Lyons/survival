@@ -9485,33 +9485,270 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
   )
 }
 
+.survcheck_events <- function(status, id, states) {
+  subjects <- factor(id, levels = unique(id))
+  targets <- factor(status, levels = 0:length(states))
+  counts <- table(subjects, targets)[, -1L, drop = FALSE]
+  counts <- cbind(counts, rowSums(counts))
+  count_levels <- sort(unique(c(counts)))
+  events <- if (length(count_levels) == 1L) {
+    matrix(
+      count_levels,
+      nrow = 1L,
+      ncol = 1L + length(states)
+    )
+  } else {
+    apply(counts, 2L, function(x) {
+      table(factor(x, levels = count_levels))
+    })
+  }
+  dimnames(events) <- list(
+    count = as.character(count_levels),
+    state = c(states, "(any)")
+  )
+  no_visit <- colSums(events[-1L, , drop = FALSE]) == 0L
+  if (any(no_visit)) events <- events[, !no_visit]
+  t(events)
+}
+
+.survcheck_transitions <- function(current_states, targets, states, id, response) {
+  if (ncol(response) == 2L) {
+    start <- rep(0, nrow(response))
+    stop <- as.numeric(response[, 1L])
+  } else {
+    start <- as.numeric(response[, 1L])
+    stop <- as.numeric(response[, 2L])
+  }
+  terminal <- logical(length(id))
+  subject_rows <- split(seq_along(id), factor(id, levels = unique(id)))
+  for (rows in subject_rows) {
+    ordered <- rows[order(stop[rows], start[rows])]
+    terminal[tail(ordered, 1L)] <- TRUE
+  }
+  keep <- !is.na(targets) | terminal
+  targets[is.na(targets) & terminal] <- "(censored)"
+  transitions <- table(
+    from = factor(current_states[keep], levels = states),
+    to = factor(targets[keep], levels = c(states, "(censored)"))
+  )
+  incoming <- numeric(length(states))
+  names(incoming) <- states
+  if (ncol(transitions) > 0L) {
+    state_columns <- intersect(colnames(transitions), states)
+    incoming[state_columns] <- colSums(transitions[, state_columns, drop = FALSE])
+  }
+  never <- rowSums(transitions) + incoming == 0L
+  transitions[!never, colSums(transitions) > 0L, drop = FALSE]
+}
+
+.survcheck_issue <- function(raw, name, id, row_map) {
+  rows <- as.integer(.result_field(raw, paste0(name, "_rows"))) + 1L
+  if (length(rows) == 0L) return(NULL)
+  list(row = unname(row_map[rows]), id = unique(unname(id[rows])))
+}
+
+.survcheck_timefix_response <- function(response, response_type) {
+  adjusted <- response
+  if (response_type %in% c("right", "mright")) {
+    times <- .aeq_adjust_time_columns(list(adjusted[, 1L]), sqrt(.Machine$double.eps))
+    adjusted[, 1L] <- times[[1L]]
+  } else {
+    times <- .aeq_adjust_time_columns(
+      list(adjusted[, 1L], adjusted[, 2L]),
+      sqrt(.Machine$double.eps)
+    )
+    .aeq_raise_if_zero_interval(
+      adjusted[, 1L],
+      adjusted[, 2L],
+      times[[1L]],
+      times[[2L]]
+    )
+    adjusted[, 1L] <- times[[1L]]
+    adjusted[, 2L] <- times[[2L]]
+  }
+  adjusted
+}
+
+.as_survcheck_result <- function(raw, response, id, state_names, target_states,
+                                 event_status, event_states, one_based_states,
+                                 declared_states, call, omit = NULL) {
+  current_codes <- as.integer(.result_field(raw, "current_states"))
+  if (!one_based_states) current_codes <- current_codes + 1L
+  current_states <- state_names[current_codes]
+  row_map <- seq_len(length(id) + length(omit))
+  if (length(omit)) row_map <- row_map[-as.integer(omit)]
+  issue_names <- c("overlap", "gap", "jump", "teleport")
+  issues <- stats::setNames(
+    lapply(issue_names, .survcheck_issue, raw = raw, id = id, row_map = row_map),
+    issue_names
+  )
+  flags <- c(
+    overlap = length(.result_field(raw, "overlap_rows")),
+    gap = length(.result_field(raw, "gap_rows")),
+    jump = length(.result_field(raw, "jump_rows")),
+    teleport = length(.result_field(raw, "teleport_rows")),
+    duplicate = 0L
+  )
+  out <- list(
+    states = state_names,
+    transitions = .survcheck_transitions(
+      if (is.null(declared_states)) current_states else declared_states,
+      target_states,
+      state_names,
+      id,
+      response
+    ),
+    events = .survcheck_events(event_status, id, event_states),
+    flag = flags,
+    istate = factor(current_states, levels = state_names),
+    n = c(
+      id = length(unique(id)),
+      observations = length(id),
+      transitions = as.integer(.result_field(raw, "n_transitions"))
+    )
+  )
+  for (name in issue_names) {
+    if (!is.null(issues[[name]])) out[[name]] <- issues[[name]]
+  }
+  out$Y <- response
+  out$id <- unname(id)
+  if (length(omit)) out$na.action <- omit
+  out$call <- call
+  class(out) <- "survcheck"
+  out
+}
+
 survcheck <- function(formula, data = NULL, subset = NULL, na.action = na.pass,
                       id, istate, istate0 = "(s0)", timefix = TRUE, ...) {
-  env <- parent.frame()
-  id_values <- if (missing(id)) {
-    NULL
-  } else {
-    eval(substitute(id), data, env)
+  call <- match.call()
+  if (missing(formula)) stop("a formula argument is required", call. = FALSE)
+  if (!is.logical(timefix) || length(timefix) != 1L || is.na(timefix)) {
+    stop("invalid value for timefix option", call. = FALSE)
   }
-  istate_values <- if (missing(istate)) {
-    NULL
-  } else {
-    eval(substitute(istate), data, env)
+  model_formula <- formula
+  if (inherits(model_formula, "formula")) {
+    model_environment <- new.env(parent = environment(model_formula))
+    model_environment$Surv <- .survsplit_model_frame_surv
+    environment(model_formula) <- model_environment
   }
-  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
-  .call_r_api(
+  frame_call <- call[c(1L, match(
+    c("data", "id", "istate", "subset", "na.action"),
+    names(call),
+    nomatch = 0L
+  ))]
+  frame_call$formula <- model_formula
+  frame_call[[1L]] <- quote(stats::model.frame)
+  frame <- eval(frame_call, parent.frame())
+  response <- stats::model.response(frame)
+  if (!inherits(response, "Surv")) stop("Response must be a survival object", call. = FALSE)
+  response_type <- attr(response, "type")
+  if (!(response_type %in% c("right", "counting", "mright", "mcounting"))) {
+    stop("response must be right censored", call. = FALSE)
+  }
+  if (timefix) response <- .survcheck_timefix_response(response, response_type)
+  id_values <- stats::model.extract(frame, "id")
+  if (is.null(id_values)) stop("an id argument is required", call. = FALSE)
+  if (length(id_values) != nrow(response)) stop("wrong length for id", call. = FALSE)
+  initial_values <- stats::model.extract(frame, "istate")
+  if (!is.null(initial_values) && length(initial_values) != nrow(response)) {
+    stop("wrong length for istate", call. = FALSE)
+  }
+
+  multistate <- response_type %in% c("mright", "mcounting")
+  response_states <- if (multistate) attr(response, "states") else "1"
+  raw_status <- as.integer(response[, ncol(response)])
+  if (is.null(initial_values)) {
+    state_names <- c(istate0, response_states)
+    initial_codes <- NULL
+    initial_labels <- rep(istate0, length(raw_status))
+  } else {
+    initial_factor <- if (is.factor(initial_values)) {
+      initial_values[, drop = TRUE]
+    } else {
+      as.factor(initial_values)
+    }
+    initial_labels <- as.character(initial_factor)
+    extra_states <- levels(initial_factor)[!(levels(initial_factor) %in% response_states)]
+    state_names <- c(extra_states, response_states)
+    initial_codes <- match(initial_labels, state_names)
+  }
+  target_status <- integer(length(raw_status))
+  event_rows <- !is.na(raw_status) & raw_status > 0L
+  target_labels <- rep(NA_character_, length(raw_status))
+  target_labels[event_rows] <- response_states[raw_status[event_rows]]
+  target_status[event_rows] <- match(target_labels[event_rows], state_names) -
+    if (is.null(initial_codes)) 1L else 0L
+
+  if (response_type %in% c("right", "mright")) {
+    start <- rep(0, nrow(response))
+    stop <- as.numeric(response[, 1L])
+  } else {
+    start <- as.numeric(response[, 1L])
+    stop <- as.numeric(response[, 2L])
+  }
+  id_codes <- match(id_values, unique(id_values))
+  raw <- .call_r_api(
     "survcheck",
-    response = .as_formula_string(formula),
-    data = .as_python_data(data),
-    subset = subset_values,
-    `na.action` = .as_na_action(na.action),
-    id = if (is.null(id_values)) NULL else .as_python_vector(id_values),
-    istate = if (is.null(istate_values)) NULL else .as_python_vector(istate_values),
-    istate0 = istate0,
-    timefix = timefix,
-    ...,
-    .wrap = c("survival_py_survcheck", "survival_py_object")
+    id = .as_python_vector(id_codes),
+    time1 = .as_python_vector(start),
+    time2 = .as_python_vector(stop),
+    status = .as_python_vector(target_status),
+    istate = if (is.null(initial_codes)) NULL else .as_python_vector(initial_codes)
   )
+  .as_survcheck_result(
+    raw,
+    response,
+    id_values,
+    state_names,
+    target_labels,
+    raw_status,
+    response_states,
+    !is.null(initial_codes),
+    initial_labels,
+    call,
+    attr(frame, "na.action")
+  )
+}
+
+print.survcheck <- function(x, ...) {
+  if (!is.null(call <- x$call)) {
+    cat("Call:\n")
+    dput(call)
+    cat("\n")
+  }
+  counts <- x$n
+  names(counts) <- c("Unique identifiers", "Observations", "Transitions")
+  print(counts)
+  if (!is.null(x$na.action)) {
+    cat(length(x$na.action), "observations removed due to missing", "\n")
+  }
+  cat("\nTransitions table:\n")
+  print(x$transitions)
+  cat("\n")
+  if (!is.null(x$events)) {
+    cat("Number of subjects with 0, 1, ... transitions to each state:\n")
+    print(x$events)
+    cat("\n")
+  }
+  labels <- c(
+    overlap = "Overlap check: ",
+    gap = "Gap check: ",
+    teleport = "Teleport check: ",
+    jump = "Jump check: ",
+    duplicate = "Duplicate time check: "
+  )
+  for (name in names(labels)) {
+    if (x$flag[[name]] > 0L) {
+      ids <- x[[name]]$id
+      rows <- x[[name]]$row
+      cat(
+        labels[[name]], length(ids), ifelse(length(ids) == 1L, " id (", " ids ("),
+        length(rows), " rows)\n",
+        sep = ""
+      )
+    }
+  }
+  invisible(x)
 }
 
 rttright <- function(formula, data, weights, subset, na.action,

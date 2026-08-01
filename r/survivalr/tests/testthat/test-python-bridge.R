@@ -847,15 +847,43 @@ test_that("R formula wrappers delegate to the Python survival package", {
     stop = c(1, 2, 2),
     status = c(0, 1, 1)
   )
+  compare_survcheck <- function(actual, expected) {
+    fields <- c(
+      "states", "transitions", "events", "flag", "istate",
+      "overlap", "gap", "jump", "teleport", "n"
+    )
+    for (field in fields) {
+      expect_equal(actual[[field]], expected[[field]], info = field)
+    }
+    expect_s3_class(actual, "survcheck")
+  }
   checked <- survcheck(Surv(start, stop, status) ~ 1, data = check_data, id = id)
-  expect_s3_class(checked, "survival_py_survcheck")
-  expect_equal(checked$n_subjects, 2L)
-  expect_equal(checked$n_transitions, 3L)
-  expect_true(checked$is_valid)
+  reference_checked <- survival::survcheck(
+    survival::Surv(start, stop, status) ~ 1,
+    data = check_data,
+    id = id
+  )
+  compare_survcheck(checked, reference_checked)
+  expect_equal(unname(checked$n), c(2L, 3L, 2L))
+  checked_print <- checked
+  reference_checked_print <- reference_checked
+  attr(checked_print, "call") <- attr(reference_checked_print, "call") <- NULL
+  checked_print$call <- reference_checked_print$call <- quote(
+    survcheck(Surv(start, stop, status) ~ 1, data = check_data, id = id)
+  )
+  expect_equal(
+    capture.output(print.survcheck(checked_print)),
+    capture.output(getFromNamespace("print.survcheck", "survival")(reference_checked_print))
+  )
   subset_check_data <- transform(check_data, keep = c(TRUE, TRUE, FALSE))
   subset_checked <- survcheck(Surv(start, stop, status) ~ 1, data = subset_check_data, id = id, subset = keep)
-  expect_equal(subset_checked$n_subjects, 1L)
-  expect_equal(subset_checked$n_transitions, 2L)
+  reference_subset_checked <- survival::survcheck(
+    survival::Surv(start, stop, status) ~ 1,
+    data = subset_check_data,
+    id = id,
+    subset = keep
+  )
+  compare_survcheck(subset_checked, reference_subset_checked)
 
   overlap_data <- data.frame(
     id = c("a", "a"),
@@ -864,8 +892,87 @@ test_that("R formula wrappers delegate to the Python survival package", {
     status = c(0, 1)
   )
   overlap_check <- survcheck(Surv(start, stop, status) ~ 1, data = overlap_data, id = id)
-  expect_false(overlap_check$is_valid)
-  expect_equal(overlap_check$overlap_ids, 1L)
+  reference_overlap_check <- survival::survcheck(
+    survival::Surv(start, stop, status) ~ 1,
+    data = overlap_data,
+    id = id
+  )
+  compare_survcheck(overlap_check, reference_overlap_check)
+  expect_equal(overlap_check$overlap, list(row = 2L, id = "a"))
+
+  multistate_check_data <- data.frame(
+    id = c("a", "a", "b", "b"),
+    start = c(0, 1, 0, 2),
+    stop = c(1, 2, 1, 3),
+    state = factor(c("B", "C", "B", "C"), levels = c("censor", "B", "C")),
+    initial = factor(c("A", "B", "A", "A"), levels = c("A", "B", "C"))
+  )
+  multistate_checked <- survcheck(
+    Surv(start, stop, state) ~ 1,
+    data = multistate_check_data,
+    id = id,
+    istate = initial
+  )
+  reference_multistate_checked <- survival::survcheck(
+    survival::Surv(start, stop, state) ~ 1,
+    data = multistate_check_data,
+    id = id,
+    istate = initial
+  )
+  compare_survcheck(multistate_checked, reference_multistate_checked)
+  expect_equal(multistate_checked$jump, list(row = 4L, id = "b"))
+
+  teleport_check_data <- transform(
+    multistate_check_data[1:2, ],
+    initial = factor(c("A", "A"), levels = c("A", "B", "C"))
+  )
+  teleport_checked <- survcheck(
+    Surv(start, stop, state) ~ 1,
+    data = teleport_check_data,
+    id = id,
+    istate = initial
+  )
+  reference_teleport_checked <- survival::survcheck(
+    survival::Surv(start, stop, state) ~ 1,
+    data = teleport_check_data,
+    id = id,
+    istate = initial
+  )
+  compare_survcheck(teleport_checked, reference_teleport_checked)
+  expect_equal(teleport_checked$teleport, list(row = 2L, id = "a"))
+
+  right_multistate_check_data <- data.frame(
+    id = c("a", "a"),
+    time = c(1, 2),
+    state = factor(c("B", "C"), levels = c("censor", "B", "C"))
+  )
+  right_multistate_checked <- survcheck(
+    Surv(time, state) ~ 1,
+    data = right_multistate_check_data,
+    id = id
+  )
+  reference_right_multistate_checked <- survival::survcheck(
+    survival::Surv(time, state) ~ 1,
+    data = right_multistate_check_data,
+    id = id
+  )
+  compare_survcheck(right_multistate_checked, reference_right_multistate_checked)
+
+  missing_check_data <- transform(check_data, x = c(1, NA, 2))
+  missing_checked <- survcheck(
+    Surv(start, stop, status) ~ x,
+    data = missing_check_data,
+    id = id,
+    na.action = na.omit
+  )
+  reference_missing_checked <- survival::survcheck(
+    survival::Surv(start, stop, status) ~ x,
+    data = missing_check_data,
+    id = id,
+    na.action = na.omit
+  )
+  compare_survcheck(missing_checked, reference_missing_checked)
+  expect_equal(missing_checked$na.action, reference_missing_checked$na.action)
 
   rtt_data <- data.frame(
     time = c(3, 1, 2),

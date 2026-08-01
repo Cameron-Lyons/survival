@@ -5122,14 +5122,22 @@ def test_survcheck_bindings_are_typed():
     assert _pyi_function_arg_names(stub_path, "survcheck_simple") == simple_args
     assert _pyi_class_property_names(stub_path, "SurvCheckResult") == {
         "n_subjects",
+        "n_observations",
         "n_transitions",
         "n_problems",
         "overlap_ids",
+        "overlap_rows",
         "gap_ids",
+        "gap_rows",
+        "jump_ids",
+        "jump_rows",
         "teleport_ids",
+        "teleport_rows",
         "invalid_ids",
+        "invalid_rows",
         "transitions",
         "flags",
+        "current_states",
         "is_valid",
         "messages",
     }
@@ -5145,7 +5153,9 @@ def test_survcheck_bindings_are_typed():
 
     assert type(result).__name__ == "SurvCheckResult"
     assert result.n_subjects == 2
-    assert result.transitions == {"0 -> 1": 2, "1 -> 0": 1}
+    assert result.n_observations == 3
+    assert result.n_transitions == 2
+    assert result.transitions == {"0 -> 1": 2}
     assert result.flags == [0, 0, 0]
     assert type(simple).__name__ == "SurvCheckResult"
     assert simple.is_valid is False
