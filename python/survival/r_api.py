@@ -5203,18 +5203,6 @@ def _surv2data_status_values(status: Any) -> list[int | None]:
     return values
 
 
-def _surv2data_sort_value(value: Any) -> tuple[int, Any]:
-    if isinstance(value, bool):
-        return (0, int(value))
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return (1, str(value))
-    if math.isfinite(numeric):
-        return (0, numeric)
-    return (1, str(value))
-
-
 def Surv2data(
     time: Any,
     status: Any,
@@ -5239,38 +5227,15 @@ def Surv2data(
         [str(value) for value in _materialize_1d(states, "states")] if states is not None else []
     )
 
-    order = sorted(
-        range(len(time_values)),
-        key=lambda idx: (_surv2data_sort_value(id_values[idx]), time_values[idx], idx),
+    id_codes = _encode_labels(id_values, "id")
+    result = _core.surv2data_timeline(
+        id_codes,
+        time_values,
+        status_values,
+        repeated_value,
     )
-    intervals: list[dict[str, Any]] = []
-    for pos, row_idx in enumerate(order):
-        if pos + 1 >= len(order):
-            continue
-        next_idx = order[pos + 1]
-        if _hashable_group_value(id_values[row_idx]) != _hashable_group_value(id_values[next_idx]):
-            continue
-        if time_values[row_idx] == time_values[next_idx]:
-            raise ValueError("duplicated time values for a single id")
-        event = status_values[next_idx]
-        current_state = status_values[row_idx]
-        event_code = 0 if event is None else int(event)
-        istate_code = None if current_state is None else int(current_state)
-        if not repeated_value and istate_code is not None and event_code == istate_code:
-            event_code = 0
-        intervals.append(
-            {
-                "row": row_idx,
-                "start": time_values[row_idx],
-                "stop": time_values[next_idx],
-                "status": event_code,
-                "id": id_values[row_idx],
-                "istate": istate_code,
-            }
-        )
-
-    intervals.sort(key=lambda item: item["row"])
-    starts = [float(item["start"]) for item in intervals]
+    rows = [int(value) for value in result.row_index]
+    starts = [float(value) for value in result.start]
     response_type = (
         "mright"
         if state_values and starts and all(value == 0.0 for value in starts)
@@ -5281,12 +5246,12 @@ def Surv2data(
         else "counting"
     )
     return {
-        "row": [int(item["row"]) for item in intervals],
+        "row": rows,
         "start": starts,
-        "stop": [float(item["stop"]) for item in intervals],
-        "status": [int(item["status"]) for item in intervals],
-        "id": [item["id"] for item in intervals],
-        "istate": [item["istate"] for item in intervals],
+        "stop": [float(value) for value in result.stop],
+        "status": [int(value) for value in result.status],
+        "id": [id_values[row] for row in rows],
+        "istate": [None if value is None else int(value) for value in result.istate],
         "states": state_values,
         "type": response_type,
     }

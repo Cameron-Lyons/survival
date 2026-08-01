@@ -161,6 +161,11 @@ def test_surv2data_and_survcondense_public_apis():
         [5.0, 4.0, 4.0, 5.0],
         [0, 1, 1, 0],
     )
+    timeline = survival.surv2data_timeline(
+        [1, 2, 1, 1, 2],
+        [0.0, 0.0, 5.0, 2.0, 3.0],
+        [1, 1, 3, 2, None],
+    )
     condensed = survival.survcondense(
         [2, 1, 1, 2],
         [0.0, 0.0, 5.0, 3.0],
@@ -173,6 +178,11 @@ def test_surv2data_and_survcondense_public_apis():
     assert surv2data.time2 == pytest.approx([2.0, 4.0, 3.0, 5.0])
     assert surv2data.status == [0, 1, 0, 0]
     assert surv2data.row_index == [2, 3, 4, 1]
+    assert timeline.row_index == [0, 1, 3]
+    assert timeline.start == pytest.approx([0.0, 0.0, 2.0])
+    assert timeline.stop == pytest.approx([2.0, 3.0, 5.0])
+    assert timeline.status == [2, 0, 3]
+    assert timeline.istate == [1, 1, 2]
 
     assert condensed.id == [1, 2, 2]
     assert condensed.time1 == pytest.approx([0.0, 0.0, 3.0])
@@ -201,6 +211,12 @@ def test_surv2data_and_survcondense_public_apis():
         survival.surv2data([1], [2.0], [1.0], [1])
     with pytest.raises(ValueError, match="duplicated time values for a single id"):
         survival.surv2data([1, 1], [2.0, 2.0])
+    with pytest.raises(ValueError, match="same length"):
+        survival.surv2data_timeline([1], [], [1])
+    with pytest.raises(ValueError, match="time contains NaN"):
+        survival.surv2data_timeline([1], [float("nan")], [1])
+    with pytest.raises(ValueError, match="duplicated time values"):
+        survival.surv2data_timeline([1, 1], [2.0, 2.0], [1, 2])
     with pytest.raises(ValueError, match="time1 must have same length as id"):
         survival.survcondense([1], [], [1.0], [0])
     with pytest.raises(ValueError, match="time2 must have same length as id"):

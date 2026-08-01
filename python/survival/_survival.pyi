@@ -507,6 +507,18 @@ class Surv2DataResult:
     @property
     def row_index(self) -> list[int]: ...
 
+class Surv2TimelineResult:
+    @property
+    def row_index(self) -> list[int]: ...
+    @property
+    def start(self) -> list[float]: ...
+    @property
+    def stop(self) -> list[float]: ...
+    @property
+    def status(self) -> list[int]: ...
+    @property
+    def istate(self) -> list[int | None]: ...
+
 class CondenseResult:
     @property
     def id(self) -> list[int]: ...
@@ -5589,6 +5601,12 @@ def surv2data(
     event_time: list[float] | None = None,
     event_status: list[int] | None = None,
 ) -> Surv2DataResult: ...
+def surv2data_timeline(
+    id: list[int],
+    time: list[float],
+    status: list[int | None],
+    repeated: bool = False,
+) -> Surv2TimelineResult: ...
 def survcondense(
     id: list[int],
     time1: list[float],
