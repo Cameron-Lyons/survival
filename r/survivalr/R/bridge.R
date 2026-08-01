@@ -3458,39 +3458,39 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       if (any(attr(formula_terms, "order") > 1L)) {
         stop("Pyears cannot have interaction terms", call. = FALSE)
       }
-      rcall <- NULL
+      rate_call <- NULL
       if (has_ratetable) {
         if (!missing(rmap)) {
-          rcall <- substitute(rmap)
-          if (!is.call(rcall) || rcall[[1L]] != as.name("list")) {
-            stop("Invalid rcall argument", call. = FALSE)
+          rate_call <- substitute(rmap)
+          if (!is.call(rate_call) || rate_call[[1L]] != as.name("list")) {
+            stop("Invalid rate-call argument", call. = FALSE)
           }
         }
         varlist <- names(dimnames(ratetable))
         if (is.null(varlist)) {
           varlist <- attr(ratetable, "dimid")
         }
-        mapped <- match(names(rcall)[-1L], varlist)
+        mapped <- match(names(rate_call)[-1L], varlist)
         if (any(is.na(mapped))) {
           stop(
             "Variable not found in the ratetable: ",
-            names(rcall)[-1L][is.na(mapped)],
+            names(rate_call)[-1L][is.na(mapped)],
             call. = FALSE
           )
         }
-        if (any(!(varlist %in% names(rcall)))) {
-          missing_vars <- varlist[!(varlist %in% names(rcall))]
+        if (any(!(varlist %in% names(rate_call)))) {
+          missing_vars <- varlist[!(varlist %in% names(rate_call))]
           additions <- paste(paste(missing_vars, missing_vars, sep = "="), collapse = ",")
-          if (is.null(rcall)) {
-            rcall <- parse(text = paste0("list(", additions, ")"))[[1L]]
+          if (is.null(rate_call)) {
+            rate_call <- parse(text = paste0("list(", additions, ")"))[[1L]]
           } else {
-            rcall <- parse(text = paste0(
-              "c(", paste(deparse(rcall), collapse = ""),
+            rate_call <- parse(text = paste0(
+              "c(", paste(deparse(rate_call), collapse = ""),
               ",list(", additions, "))"
             ))[[1L]]
           }
         }
-        new_variables <- all.vars(rcall)
+        new_variables <- all.vars(rate_call)
         if (length(new_variables) > 0L) {
           expanded_formula <- paste(
             paste(deparse(formula_terms), collapse = ""),
@@ -3532,7 +3532,7 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       x_values <- .pyears_formula_x(term_values, nrow(mf))
       y_values <- if (inherits(response, "Surv")) response else as.matrix(response)
       if (has_ratetable) {
-        rate_data <- data.frame(eval(rcall, mf), stringsAsFactors = TRUE)
+        rate_data <- data.frame(eval(rate_call, mf), stringsAsFactors = TRUE)
         matched <- match.ratetable(rate_data, ratetable)
         result <- .pyears_native(
           response_args,
