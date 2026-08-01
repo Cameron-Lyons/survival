@@ -60,6 +60,8 @@
 \alias{frailty.t}
 \alias{untangle.specials}
 \alias{pyears}
+\alias{print.pyears}
+\alias{summary.pyears}
 \alias{pseudo}
 \alias{pspline}
 \alias{makepredictcall.pspline}
@@ -612,6 +614,14 @@ pyears(formula, data, weights, subset, na.action, rmap, ratetable,
   x = FALSE, y = FALSE, data.frame = FALSE, time, start, stop,
   event = NULL, group = NULL)
 
+\method{print}{pyears}(x, ...)
+
+\method{summary}{pyears}(object, header = TRUE, call = header, n = TRUE,
+  event = TRUE, pyears = TRUE, expected = TRUE, rate = FALSE,
+  rr = expected, ci.r = FALSE, ci.rr = FALSE, totals = FALSE,
+  legend = TRUE, vline = FALSE, vertical = TRUE, nastring = ".",
+  conf.level = 0.95, scale = 1, ...)
+
 finegray(formula, data, weights, subset, na.action = na.pass, etype,
   prefix = "fg", count = "", id, timefix = TRUE, tstart, tstop,
   ctime, cprob, extend, keep)
@@ -969,6 +979,19 @@ interval event/censor counts when explicit \code{times} are supplied.}
 \item{rmap}{Optional rate-table variable mapping for formula
 \code{survexp} and \code{pyears} calls delegated to \pkg{survival}.}
 \item{expect}{Expected-count scale selector accepted by \code{pyears}.}
+\item{header, call}{Logical controls for the heading and fitted call in a
+\code{pyears} summary.}
+\item{pyears, expected, rate, rr, ci.r, ci.rr}{Logical controls for the
+exposure, expected-event, rate, observed-to-expected, and confidence interval
+columns in a \code{pyears} summary. The \code{n} and \code{event} arguments
+likewise control their count columns.}
+\item{totals}{Logical flag adding marginal totals to a \code{pyears} summary.}
+\item{legend}{Logical compatibility flag accepted by \code{summary.pyears}.}
+\item{vline, vertical}{Logical controls for table borders and orientation in a
+\code{pyears} summary.}
+\item{nastring}{Text used for missing cells in a \code{pyears} summary.}
+\item{conf.level}{Confidence level for \code{pyears} rate and
+observed-to-expected intervals.}
 \item{method}{Expected-survival method for \code{survexp}, tie method for
 \code{coxph.fit} and \code{clogit}, case-cohort method for \code{cch},
 penalty selection method for \code{frailty.*} and \code{pspline}, or interval method
