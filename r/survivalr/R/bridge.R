@@ -2005,14 +2005,14 @@ pspline <- function(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
 
   result <- .call_r_api(
     "pspline",
-    x = .as_python_vector(x),
+    x = if (anyNA(x)) as.list(x) else .as_python_vector(x),
     df = df,
     theta = if (missing(theta)) NULL else theta,
     nterm = nterm,
     degree = degree,
     eps = if (missing(eps)) NULL else eps,
     method = if (missing(method)) NULL else method,
-    boundary_knots = Boundary.knots,
+    boundary_knots = if (missing(Boundary.knots)) NULL else Boundary.knots,
     intercept = intercept,
     penalty = penalty,
     combine = if (missing(combine)) NULL else combine

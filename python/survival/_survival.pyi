@@ -7043,6 +7043,12 @@ def nsk(
     knots: list[float] | None = None,
     boundary_knots: tuple[float, float] | None = None,
 ) -> SplineBasisResult: ...
+def pspline_basis(
+    x: list[float],
+    nterm: int,
+    degree: int,
+    boundary_knots: tuple[float, float],
+) -> tuple[list[list[float]], list[float]]: ...
 def cox_score_residuals(
     y: list[float],
     strata: list[int],

@@ -1003,6 +1003,14 @@ test_that("R formula wrappers delegate to the Python survival package", {
     pspline(1:5, df = 3, intercept = TRUE, penalty = FALSE),
     survival::pspline(1:5, df = 3, intercept = TRUE, penalty = FALSE)
   )
+  expect_pspline_equal(
+    pspline(rep(2, 3), df = 2, penalty = FALSE),
+    survival::pspline(rep(2, 3), df = 2, penalty = FALSE)
+  )
+  expect_pspline_equal(
+    pspline(c(1, NA, 2), df = 2, penalty = FALSE),
+    survival::pspline(c(1, NA, 2), df = 2, penalty = FALSE)
+  )
 
   strata_factor <- strata(c("b", "a", "b", NA), c(2, 1, 1, 1), shortlabel = TRUE)
   expect_s3_class(strata_factor, "factor")
