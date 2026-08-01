@@ -3356,6 +3356,14 @@ def test_r_style_survobrien_uses_direct_vectors():
         "Surv(time, status) ~ x + group",
         data=data,
     )
+    formula_factor_wrapper = survival.survobrien(
+        "Surv(time, status) ~ x + factor(group)",
+        data=data,
+    )
+    formula_as_factor_wrapper = survival.survobrien(
+        "Surv(time, status) ~ x + as.factor(group)",
+        data=data,
+    )
     transformed = survival.survobrien(
         "Surv(time, status) ~ x",
         data=data,
@@ -3387,6 +3395,8 @@ def test_r_style_survobrien_uses_direct_vectors():
     assert formula["status"] == [1, 0, 0, 0, 1, 0, 1]
     assert formula[".id."] == [1, 2, 3, 4, 3, 4, 4]
     assert formula_factor["group"] == ["a", "a", "b", "b", "b", "b", "b"]
+    assert formula_factor_wrapper == formula_factor
+    assert formula_as_factor_wrapper == formula_factor
     assert formula["x"] == pytest.approx(
         [
             -1.9459101490553135,

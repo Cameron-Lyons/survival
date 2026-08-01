@@ -7024,7 +7024,7 @@ def _survobrien_formula_terms(
             raise ValueError("This function cannot deal with interaction terms")
         values = _term_values(data, term, n)
         if term.categorical:
-            keepers.append((_survobrien_term_name(term), values))
+            keepers.append((term.column, values))
             continue
         try:
             numeric = [float(value) for value in values]
