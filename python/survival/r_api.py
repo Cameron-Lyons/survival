@@ -16712,38 +16712,6 @@ def _cox_detail_rorder(rorder: Any) -> str:
     )
 
 
-def _cox_detail_event_times(
-    time: list[float],
-    status: list[int],
-    strata: list[int],
-) -> list[tuple[int, float]]:
-    event_times: dict[int, set[float]] = {}
-    for event_time, event, stratum in zip(time, status, strata, strict=True):
-        if event == 1:
-            event_times.setdefault(stratum, set()).add(event_time)
-    return [
-        (stratum, event_time)
-        for stratum in sorted(event_times)
-        for event_time in sorted(event_times[stratum])
-    ]
-
-
-def _cox_detail_at_risk(
-    time: list[float],
-    entry: list[float] | None,
-    strata: list[int],
-    stratum: int,
-    event_time: float,
-) -> list[int]:
-    return [
-        idx
-        for idx, stop in enumerate(time)
-        if strata[idx] == stratum
-        and stop >= event_time
-        and (entry is None or entry[idx] < event_time)
-    ]
-
-
 def _cox_detail_y(
     time: list[float],
     status: list[int],
@@ -19980,6 +19948,7 @@ def coxph_detail(
             rows,
             _float_vector(coefficients, "coefficients"),
             _optional_float_vector(weights, "weights", len(rows)) if weights is not None else None,
+            riskmat=include_riskmat,
         )
 
     if fit is None:
@@ -20010,7 +19979,6 @@ def coxph_detail(
 
     center = _cox_reference_center(model, "sample")
     offset = _cox_fit_offset(model, beta)
-    event_groups = _cox_detail_event_times(time, status, strata)
     detail = _core.coxph_detail(
         time,
         status,
@@ -20022,15 +19990,10 @@ def coxph_detail(
         offset=offset,
         method=method,
         center=center,
+        riskmat=include_riskmat,
     )
     detail_rows = list(detail.rows)
-    risk_matrix_columns: list[list[int]] = []
-
-    for stratum, event_time in event_groups:
-        at_risk = _cox_detail_at_risk(time, entry, strata, stratum, event_time)
-        if include_riskmat:
-            at_risk_set = set(at_risk)
-            risk_matrix_columns.append([1 if idx in at_risk_set else 0 for idx in range(n)])
+    event_groups = [(int(row.stratum), float(row.time)) for row in detail_rows]
 
     row_order = _cox_detail_row_order(time, status, strata, rorder_name)
     x_rows = [rows[idx] for idx in row_order]
@@ -20040,7 +20003,14 @@ def coxph_detail(
     risk_matrix = None
     sortorder = row_order if rorder_name == "time" else None
     if include_riskmat:
-        risk_matrix = [[column[idx] for column in risk_matrix_columns] for idx in row_order]
+        native_risk_matrix = detail.riskmat
+        if native_risk_matrix is None:
+            raise RuntimeError("native Cox detail omitted the requested risk matrix")
+        risk_matrix = (
+            native_risk_matrix
+            if rorder_name == "data"
+            else [native_risk_matrix[idx] for idx in row_order]
+        )
 
     has_case_weights = any(abs(weight - 1.0) > 1e-12 for weight in weights)
     return CoxPHDetailResult(
