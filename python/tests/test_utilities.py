@@ -81,10 +81,23 @@ def test_tmerge_family_public_apis():
         [0.5, 1.5, 0.5],
     )
     carry = survival.tmerge3([1, 1, 1, 2, 2], [False, True, False, True, False])
+    plan = survival.tmerge_plan(
+        [1, 1],
+        [0.0, 7.0],
+        [5.0, 10.0],
+        [1] * 10,
+        [-1.0, 0.0, 3.0, 5.0, 6.0, 7.0, 8.0, 8.0, 10.0, 11.0],
+    )
 
     assert merged == pytest.approx([2.0, 5.0, 4.0])
     assert indices == [1, 2, 3]
     assert carry == [1, 1, 3, 0, 5]
+    assert plan.kind == [0, 5, 3, 6, 2, 5, 3, 3, 6, 1]
+    assert plan.count == [1, 1, 1, 3, 0, 2, 2, 1]
+    assert plan.row == [0, 0, 1, 1]
+    assert plan.start == [0.0, 3.0, 7.0, 8.0]
+    assert plan.stop == [3.0, 5.0, 8.0, 10.0]
+    assert plan.censor == [True, False, True, False]
 
     negative_ids = survival.tmerge(
         [-1, -1],
@@ -100,6 +113,8 @@ def test_tmerge_family_public_apis():
         survival.tmerge([1], [], [0.0], [], [], [])
     with pytest.raises(ValueError, match="ntime must have same length as nid"):
         survival.tmerge2([1], [1.0], [1], [])
+    with pytest.raises(ValueError, match="intervals must not overlap"):
+        survival.tmerge_plan([1, 1], [0.0, 4.0], [5.0, 10.0], [], [])
     with pytest.raises(ValueError, match="miss must have same length as id"):
         survival.tmerge3([1], [])
     with pytest.raises(ValueError, match="time1 values must be finite"):

@@ -3154,8 +3154,10 @@ def test_data_prep_low_level_bindings_are_typed():
         "TcutResult",
         "TimelineResult",
         "IntervalResult",
+        "TmergePlanResult",
         "survsplit",
         "tmerge",
+        "tmerge_plan",
         "tmerge2",
         "tmerge3",
         "collapse",
@@ -3180,6 +3182,7 @@ def test_data_prep_low_level_bindings_are_typed():
     expected_args = {
         "survsplit": ["tstart", "tstop", "cut"],
         "tmerge": ["id", "time1", "newx", "nid", "ntime", "x"],
+        "tmerge_plan": ["id", "start", "stop", "nid", "ntime"],
         "tmerge2": ["id", "time1", "nid", "ntime"],
         "tmerge3": ["id", "miss"],
         "collapse": ["y", "x", "istate", "id", "wt", "order"],

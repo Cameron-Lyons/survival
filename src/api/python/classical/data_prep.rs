@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge, m)?)?;
+    m.add_function(wrap_pyfunction!(tmerge_plan, m)?)?;
     m.add_function(wrap_pyfunction!(tmerge2, m)?)?;
     m.add_function(wrap_pyfunction!(tmerge3, m)?)?;
     m.add_function(wrap_pyfunction!(survsplit, m)?)?;
@@ -28,6 +29,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         Surv2DataResult,
         TimelineResult,
         IntervalResult,
+        TmergePlanResult,
         AeqSurvResult,
         ClusterResult,
         StrataResult,

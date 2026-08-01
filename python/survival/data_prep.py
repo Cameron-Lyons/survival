@@ -32,6 +32,7 @@ __all__ = bind_names(
         "from_timeline",
         "to_timeline",
         "tmerge",
+        "tmerge_plan",
         "tmerge2",
         "tmerge3",
     ],

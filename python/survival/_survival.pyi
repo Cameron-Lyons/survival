@@ -5534,6 +5534,28 @@ def tmerge(
     ntime: list[float],
     x: list[float],
 ) -> list[float]: ...
+
+class TmergePlanResult:
+    @property
+    def kind(self) -> list[int]: ...
+    @property
+    def count(self) -> list[int]: ...
+    @property
+    def row(self) -> list[int]: ...
+    @property
+    def start(self) -> list[float]: ...
+    @property
+    def stop(self) -> list[float]: ...
+    @property
+    def censor(self) -> list[bool]: ...
+
+def tmerge_plan(
+    id: list[int],
+    start: list[float],
+    stop: list[float],
+    nid: list[int],
+    ntime: list[float],
+) -> TmergePlanResult: ...
 def tmerge2(
     id: list[int],
     time1: list[float],
