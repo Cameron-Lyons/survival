@@ -9074,8 +9074,8 @@ survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
     if (conf.type == "log") {
       xx <- ifelse(p == 0, NA, p)
       se2 <- zval * se
-      lower <- ifelse(se == 0, p, exp(log(xx) - se2 * scale))
-      upper <- ifelse(se == 0, p, exp(log(xx) + se2))
+      lower <- exp(log(xx) - se2 * scale)
+      upper <- exp(log(xx) + se2)
       if (ulimit) {
         upper <- pmin(upper, 1)
       }
@@ -9084,27 +9084,15 @@ survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
     if (conf.type == "log-log") {
       xx <- ifelse(p == 0 | p == 1, NA, p)
       se2 <- zval * se / log(xx)
-      lower <- ifelse(
-        se == 0,
-        p,
-        exp(-exp(log(-log(xx)) - se2 * scale))
-      )
-      upper <- ifelse(se == 0, p, exp(-exp(log(-log(xx)) + se2)))
+      lower <- exp(-exp(log(-log(xx)) - se2 * scale))
+      upper <- exp(-exp(log(-log(xx)) + se2))
       return(list(lower = lower, upper = upper))
     }
     if (conf.type == "logit") {
       xx <- ifelse(p == 0, NA, p)
       se2 <- zval * se * (1 + xx / (1 - xx))
-      lower <- ifelse(
-        se == 0,
-        p,
-        1 - 1 / (1 + exp(log(p / (1 - p)) - se2 * scale))
-      )
-      upper <- ifelse(
-        se == 0,
-        p,
-        1 - 1 / (1 + exp(log(p / (1 - p)) + se2))
-      )
+      lower <- 1 - 1 / (1 + exp(log(p / (1 - p)) - se2 * scale))
+      upper <- 1 - 1 / (1 + exp(log(p / (1 - p)) + se2))
       return(list(lower = lower, upper = upper))
     }
     if (conf.type == "arcsin") {
