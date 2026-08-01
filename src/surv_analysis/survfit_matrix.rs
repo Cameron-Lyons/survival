@@ -1,5 +1,6 @@
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 use crate::constants::same_time;
@@ -62,6 +63,47 @@ fn requested_times_are_sorted(values: &[f64]) -> bool {
     values.windows(2).all(|window| window[1] >= window[0])
 }
 
+fn step_positions(times: &[f64], requested_times: &[f64]) -> Vec<Option<usize>> {
+    if requested_times_are_sorted(requested_times) {
+        let mut cursor = 0;
+        return requested_times
+            .iter()
+            .map(|requested_time| {
+                while cursor < times.len() && times[cursor] <= *requested_time {
+                    cursor += 1;
+                }
+                cursor.checked_sub(1)
+            })
+            .collect();
+    }
+    requested_times
+        .iter()
+        .map(|requested_time| {
+            times
+                .partition_point(|time| time <= requested_time)
+                .checked_sub(1)
+        })
+        .collect()
+}
+
+fn validate_step_matrix(times: &[f64], values: &[Vec<f64>]) -> PyResult<()> {
+    for (row_idx, row) in values.iter().enumerate() {
+        if row.len() != times.len() {
+            return Err(value_error(format!(
+                "values row {row_idx} must have the same length as times"
+            )));
+        }
+        for (column_idx, value) in row.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(value_error(format!(
+                    "values contains non-finite value at row {row_idx}, column {column_idx}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn step_values_at_sorted_requests(
     times: &[f64],
     values: &[f64],
@@ -110,6 +152,31 @@ pub fn step_values_at(
     Ok(requested_times
         .iter()
         .map(|&requested_time| step_value_at_with_initial(&times, &values, requested_time, initial))
+        .collect())
+}
+
+#[pyfunction]
+pub fn step_matrix_values_at(
+    times: Vec<f64>,
+    values: Vec<Vec<f64>>,
+    requested_times: Vec<f64>,
+    initial: f64,
+) -> PyResult<Vec<Vec<f64>>> {
+    validate_step_times("times", &times)?;
+    validate_step_matrix(&times, &values)?;
+    validate_finite_slice("requested_times", &requested_times)?;
+    if !initial.is_finite() {
+        return Err(value_error("initial must be finite"));
+    }
+    let positions = step_positions(&times, &requested_times);
+    Ok(values
+        .par_iter()
+        .map(|row| {
+            positions
+                .iter()
+                .map(|position| position.map_or(initial, |idx| row[idx]))
+                .collect()
+        })
         .collect())
 }
 
@@ -1214,6 +1281,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unsorted, vec![50.0, -1.0, 30.0]);
+    }
+
+    #[test]
+    fn test_step_matrix_values_at_reuses_sorted_and_unsorted_positions() {
+        let values = vec![vec![10.0, 30.0, 50.0], vec![1.0, 3.0, 5.0]];
+        let sorted = step_matrix_values_at(
+            vec![1.0, 3.0, 5.0],
+            values.clone(),
+            vec![0.5, 1.0, 4.0, 6.0],
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(
+            sorted,
+            vec![vec![0.0, 10.0, 30.0, 50.0], vec![0.0, 1.0, 3.0, 5.0]]
+        );
+
+        let unsorted =
+            step_matrix_values_at(vec![1.0, 3.0, 5.0], values, vec![6.0, 0.5, 3.0], -1.0).unwrap();
+        assert_eq!(unsorted, vec![vec![50.0, -1.0, 30.0], vec![5.0, -1.0, 3.0]]);
+    }
+
+    #[test]
+    fn test_step_matrix_values_at_validates_rows_and_values() {
+        assert!(step_matrix_values_at(vec![1.0], vec![vec![]], vec![1.0], 0.0).is_err());
+        assert!(step_matrix_values_at(vec![1.0], vec![vec![f64::NAN]], vec![1.0], 0.0,).is_err());
+        assert!(step_matrix_values_at(vec![1.0], vec![vec![1.0]], vec![1.0], f64::NAN).is_err());
     }
 
     #[test]

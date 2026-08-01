@@ -3,6 +3,31 @@ use pyo3::prelude::*;
 
 use crate::constants::TIME_EPSILON;
 
+const EARLY: usize = 0;
+const LATE: usize = 1;
+const GAP: usize = 2;
+const WITHIN: usize = 3;
+const BOUNDARY: usize = 4;
+const LEADING: usize = 5;
+const TRAILING: usize = 6;
+
+#[pyclass(from_py_object)]
+#[derive(Debug, Clone)]
+pub struct TmergePlanResult {
+    #[pyo3(get)]
+    pub kind: Vec<usize>,
+    #[pyo3(get)]
+    pub count: Vec<usize>,
+    #[pyo3(get)]
+    pub row: Vec<usize>,
+    #[pyo3(get)]
+    pub start: Vec<f64>,
+    #[pyo3(get)]
+    pub stop: Vec<f64>,
+    #[pyo3(get)]
+    pub censor: Vec<bool>,
+}
+
 fn length_error(name: &str, expected_name: &str, actual: usize, expected: usize) -> PyErr {
     PyErr::new::<PyValueError, _>(format!(
         "{} must have same length as {}, got {} and {}",
@@ -88,6 +113,153 @@ fn validate_sorted_id_time(
         }
     }
     Ok(())
+}
+
+fn validate_intervals(id: &[i32], start: &[f64], stop: &[f64]) -> PyResult<()> {
+    validate_sorted_id_time("id", id, "start", start)?;
+    for index in 0..id.len() {
+        if start[index] >= stop[index] {
+            return Err(PyValueError::new_err(format!(
+                "start must be less than stop at index {}",
+                index
+            )));
+        }
+        if index > 0 && id[index] == id[index - 1] && start[index] < stop[index - 1] {
+            return Err(PyValueError::new_err(format!(
+                "intervals must not overlap within id at indices {} and {}",
+                index - 1,
+                index
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[pyfunction]
+pub fn tmerge_plan(
+    id: Vec<i32>,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    nid: Vec<i32>,
+    ntime: Vec<f64>,
+) -> PyResult<TmergePlanResult> {
+    let n = id.len();
+    if start.len() != n {
+        return Err(length_error("start", "id", start.len(), n));
+    }
+    if stop.len() != n {
+        return Err(length_error("stop", "id", stop.len(), n));
+    }
+    let nupdate = nid.len();
+    if ntime.len() != nupdate {
+        return Err(length_error("ntime", "nid", ntime.len(), nupdate));
+    }
+    validate_finite_values("start", &start)?;
+    validate_finite_values("stop", &stop)?;
+    validate_finite_values("ntime", &ntime)?;
+    validate_intervals(&id, &start, &stop)?;
+    validate_sorted_id_time("nid", &nid, "ntime", &ntime)?;
+
+    let mut kind = Vec::with_capacity(nupdate);
+    let mut count = vec![0; 8];
+    let mut cuts = vec![Vec::new(); n];
+    let mut subject_start = 0;
+    let mut previous_update: Option<(i32, f64)> = None;
+
+    for (&update_id, &update_time) in nid.iter().zip(&ntime) {
+        while subject_start < n && id[subject_start] < update_id {
+            let current = id[subject_start];
+            while subject_start < n && id[subject_start] == current {
+                subject_start += 1;
+            }
+        }
+        if subject_start == n || id[subject_start] != update_id {
+            return Err(PyValueError::new_err(format!(
+                "nid value {} has no matching id interval",
+                update_id
+            )));
+        }
+        let mut subject_end = subject_start + 1;
+        while subject_end < n && id[subject_end] == update_id {
+            subject_end += 1;
+        }
+
+        let starts = &start[subject_start..subject_end];
+        let stops = &stop[subject_start..subject_end];
+        let prior_end = starts.partition_point(|&value| value <= update_time);
+        let after = stops.partition_point(|&value| value < update_time);
+        let classification = if prior_end == 0 {
+            EARLY
+        } else if after == stops.len() {
+            LATE
+        } else {
+            let prior = prior_end - 1;
+            if after > prior {
+                GAP
+            } else if update_time == starts[prior] || update_time == stops[after] {
+                if prior == after + 1 {
+                    BOUNDARY
+                } else if update_time == starts[prior] {
+                    LEADING
+                } else {
+                    TRAILING
+                }
+            } else {
+                cuts[subject_start + prior].push(update_time);
+                WITHIN
+            }
+        };
+        kind.push(classification);
+        count[classification] += 1;
+        if previous_update == Some((update_id, update_time)) {
+            count[7] += 1;
+        }
+        previous_update = Some((update_id, update_time));
+    }
+
+    let extra = cuts
+        .iter()
+        .map(|row_cuts| {
+            row_cuts
+                .windows(2)
+                .filter(|window| window[0] != window[1])
+                .count()
+                + usize::from(!row_cuts.is_empty())
+        })
+        .sum::<usize>();
+    let capacity = n + extra;
+    let mut row = Vec::with_capacity(capacity);
+    let mut expanded_start = Vec::with_capacity(capacity);
+    let mut expanded_stop = Vec::with_capacity(capacity);
+    let mut censor = Vec::with_capacity(capacity);
+    for index in 0..n {
+        let mut left = start[index];
+        let mut previous_cut = None;
+        for &cut in &cuts[index] {
+            if previous_cut == Some(cut) {
+                continue;
+            }
+            row.push(index);
+            expanded_start.push(left);
+            expanded_stop.push(cut);
+            censor.push(true);
+            left = cut;
+            previous_cut = Some(cut);
+        }
+        row.push(index);
+        expanded_start.push(left);
+        expanded_stop.push(stop[index]);
+        censor.push(false);
+    }
+
+    Ok(TmergePlanResult {
+        kind,
+        count,
+        row,
+        start: expanded_start,
+        stop: expanded_stop,
+        censor,
+    })
 }
 
 #[pyfunction]
@@ -282,6 +454,58 @@ mod tests {
     fn tmerge2_no_matches() {
         let result = tmerge2(vec![1], vec![0.0], vec![2], vec![1.0]).unwrap();
         assert_eq!(result[0], 0);
+    }
+
+    #[test]
+    fn tmerge_plan_classifies_and_splits_subject_intervals() {
+        let result = tmerge_plan(
+            vec![1, 1],
+            vec![0.0, 7.0],
+            vec![5.0, 10.0],
+            vec![1; 10],
+            vec![-1.0, 0.0, 3.0, 5.0, 6.0, 7.0, 8.0, 8.0, 10.0, 11.0],
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.kind,
+            vec![
+                EARLY, LEADING, WITHIN, TRAILING, GAP, LEADING, WITHIN, WITHIN, TRAILING, LATE
+            ]
+        );
+        assert_eq!(result.count, vec![1, 1, 1, 3, 0, 2, 2, 1]);
+        assert_eq!(result.row, vec![0, 0, 1, 1]);
+        assert_eq!(result.start, vec![0.0, 3.0, 7.0, 8.0]);
+        assert_eq!(result.stop, vec![3.0, 5.0, 8.0, 10.0]);
+        assert_eq!(result.censor, vec![true, false, true, false]);
+    }
+
+    #[test]
+    fn tmerge_plan_recognizes_shared_boundaries() {
+        let result = tmerge_plan(
+            vec![1, 1],
+            vec![0.0, 5.0],
+            vec![5.0, 10.0],
+            vec![1],
+            vec![5.0],
+        )
+        .unwrap();
+
+        assert_eq!(result.kind, vec![BOUNDARY]);
+        assert_eq!(result.count, vec![0, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(result.row, vec![0, 1]);
+    }
+
+    #[test]
+    fn tmerge_plan_rejects_invalid_interval_layouts_and_unknown_ids() {
+        initialize_python();
+
+        let overlap =
+            tmerge_plan(vec![1, 1], vec![0.0, 4.0], vec![5.0, 10.0], vec![], vec![]).unwrap_err();
+        assert!(overlap.to_string().contains("intervals must not overlap"));
+
+        let missing = tmerge_plan(vec![1], vec![0.0], vec![5.0], vec![2], vec![1.0]).unwrap_err();
+        assert!(missing.to_string().contains("has no matching id interval"));
     }
 
     #[test]
