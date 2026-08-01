@@ -112,11 +112,34 @@ fn validate_finegray_inputs(
                 idx
             )));
         }
-        if !(0.0..=1.0).contains(&probability) || probability == 0.0 {
+        if !(0.0..=1.0).contains(&probability) {
             return Err(value_error(format!(
-                "cprob must contain values in (0, 1]; found {} at index {}",
+                "cprob must contain values in [0, 1]; found {} at index {}",
                 probability, idx
             )));
+        }
+    }
+
+    if cprob.contains(&0.0) {
+        let kept_indices: Vec<usize> = keep
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &is_kept)| is_kept.then_some(idx))
+            .collect();
+        for (&stop, &should_extend) in tstop.iter().zip(extend) {
+            if !should_extend {
+                continue;
+            }
+            let initial_cut = ctime.partition_point(|&cut_time| cut_time < stop);
+            let first_later_kept = kept_indices.partition_point(|&idx| idx <= initial_cut);
+            if initial_cut < ncut
+                && first_later_kept < kept_indices.len()
+                && cprob[initial_cut] == 0.0
+            {
+                return Err(value_error(
+                    "censoring probability is zero before a selected event",
+                ));
+            }
         }
     }
 
@@ -436,11 +459,45 @@ mod tests {
                 vec![0.0],
                 vec![1.0],
                 vec![1.0],
-                vec![0.0],
+                vec![-0.1],
                 vec![true],
                 vec![true]
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn test_finegray_allows_harmless_zero_probability_tails() {
+        let result = finegray(
+            vec![0.0, 0.0],
+            vec![1.0, 3.0],
+            vec![1.0, 2.0, 3.0],
+            vec![1.0, 0.5, 0.0],
+            vec![true, true],
+            vec![true, true, true],
+        )
+        .unwrap();
+
+        assert_eq!(result.row, vec![1, 1, 1, 2]);
+        assert_eq!(result.start, vec![0.0, 1.0, 2.0, 0.0]);
+        assert_eq!(result.end, vec![1.0, 2.0, 3.0, 3.0]);
+        assert_eq!(result.wt, vec![1.0, 0.5, 0.0, 1.0]);
+        assert_eq!(result.add, vec![0, 1, 2, 0]);
+    }
+
+    #[test]
+    fn test_finegray_rejects_zero_probability_before_later_kept_cut() {
+        let error = finegray(
+            vec![0.0],
+            vec![2.0],
+            vec![1.0, 2.0, 3.0],
+            vec![1.0, 0.0, 0.0],
+            vec![true],
+            vec![true, false, true],
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("probability is zero"));
     }
 }

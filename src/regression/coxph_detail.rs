@@ -54,13 +54,13 @@ pub struct CoxphDetail {
     #[pyo3(get)]
     pub rows: Vec<CoxphDetailRow>,
     #[pyo3(get)]
+    pub riskmat: Option<Vec<Vec<i32>>>,
+    #[pyo3(get)]
     pub n_events: usize,
     #[pyo3(get)]
     pub n_observations: usize,
     #[pyo3(get)]
     pub n_covariates: usize,
-    #[pyo3(get)]
-    pub risk_matrix: Option<Vec<Vec<i32>>>,
 }
 
 pub(crate) struct CoxphDetailOptions<'a> {
@@ -343,10 +343,10 @@ pub(crate) fn compute_coxph_detail_with_options(
     if n == 0 {
         return Ok(CoxphDetail {
             rows: vec![],
+            riskmat: include_riskmat.then(Vec::new),
             n_events: 0,
             n_observations: 0,
             n_covariates: nvar,
-            risk_matrix: include_riskmat.then(Vec::new),
         });
     }
 
@@ -380,12 +380,8 @@ pub(crate) fn compute_coxph_detail_with_options(
     let risk_weights = shifted_weighted_exp_eta_optional(&linear_predictors, weights, risk_shift);
 
     let groups = event_groups(time, status, strata_values.as_ref());
-    let mut risk_matrix = include_riskmat.then(|| {
-        (0..n)
-            .map(|_| Vec::with_capacity(groups.len()))
-            .collect::<Vec<_>>()
-    });
     let mut rows = Vec::with_capacity(groups.len());
+    let mut riskmat = include_riskmat.then(|| vec![vec![0; groups.len()]; n]);
     let mut total_events = 0;
     let mut current_stratum = None;
     let mut cumhaz = 0.0_f64;
@@ -405,7 +401,7 @@ pub(crate) fn compute_coxph_detail_with_options(
     let mut step_means = vec![0.0; nvar];
     let mut step_covariance = vec![0.0; nvar * nvar];
 
-    for (stratum, event_time) in groups {
+    for (group_index, (stratum, event_time)) in groups.into_iter().enumerate() {
         if current_stratum != Some(stratum) {
             current_stratum = Some(stratum);
             cumhaz = 0.0;
@@ -418,14 +414,9 @@ pub(crate) fn compute_coxph_detail_with_options(
             stratum,
             event_time,
         );
-        if let Some(matrix) = risk_matrix.as_mut() {
-            for row in matrix.iter_mut() {
-                row.push(0);
-            }
-            for &index in &at_risk {
-                if let Some(value) = matrix[index].last_mut() {
-                    *value = 1;
-                }
+        if let Some(matrix) = riskmat.as_mut() {
+            for &row_index in &at_risk {
+                matrix[row_index][group_index] = 1;
             }
         }
         fill_event_indices(
@@ -538,10 +529,10 @@ pub(crate) fn compute_coxph_detail_with_options(
 
     Ok(CoxphDetail {
         rows,
+        riskmat,
         n_events: total_events,
         n_observations: n,
         n_covariates: nvar,
-        risk_matrix,
     })
 }
 
@@ -557,7 +548,7 @@ pub(crate) fn compute_coxph_detail_with_options(
     offset=None,
     method="breslow".to_string(),
     center=0.0,
-    include_riskmat=false
+    riskmat=false
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_detail(
@@ -571,7 +562,7 @@ pub fn coxph_detail(
     offset: Option<Vec<f64>>,
     method: String,
     center: f64,
-    include_riskmat: bool,
+    riskmat: bool,
 ) -> PyResult<CoxphDetail> {
     let n = time.len();
     if status.len() != n || covariates.len() != n {
@@ -695,7 +686,7 @@ pub fn coxph_detail(
         offset: offset.as_deref(),
         method: &method,
         center,
-        include_riskmat,
+        include_riskmat: riskmat,
     })
 }
 
@@ -737,6 +728,7 @@ mod tests {
     }
 
     fn assert_detail_close(left: &CoxphDetail, right: &CoxphDetail) {
+        assert_eq!(left.riskmat, right.riskmat);
         assert_eq!(left.n_events, right.n_events);
         assert_eq!(left.n_observations, right.n_observations);
         assert_eq!(left.n_covariates, right.n_covariates);
@@ -1006,8 +998,42 @@ mod tests {
         assert_eq!(detail.rows[1].stratum, 2);
         assert_eq!(detail.rows[1].time, 2.0);
         assert_eq!(
-            detail.risk_matrix,
+            detail.riskmat,
             Some(vec![vec![0, 1], vec![1, 0], vec![1, 0], vec![0, 1]])
+        );
+    }
+
+    #[test]
+    fn test_coxph_detail_materializes_counting_process_risk_matrix() {
+        let time = vec![2.0, 4.0, 5.0, 5.0];
+        let status = vec![1, 1, 1, 0];
+        let entry = vec![0.0, 2.0, 0.0, 4.0];
+        let strata = vec![0, 0, 1, 1];
+        let covariates = vec![vec![0.0]; time.len()];
+
+        let detail = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &[0.0],
+            weights: None,
+            entry_times: Some(&entry),
+            strata: Some(&strata),
+            offset: None,
+            method: "breslow",
+            center: 0.0,
+            include_riskmat: true,
+        })
+        .unwrap();
+
+        assert_eq!(
+            detail.riskmat,
+            Some(vec![
+                vec![1, 0, 0],
+                vec![0, 1, 0],
+                vec![0, 0, 1],
+                vec![0, 0, 1]
+            ])
         );
     }
 }
