@@ -156,6 +156,12 @@ fn log_intervals(
         (0..se.len())
             .map(|index| {
                 let prepared = prepared_se_at(p, se, logse, index);
+                if prepared.is_nan() {
+                    return f64::NAN;
+                }
+                if prepared == 0.0 {
+                    return p[index % p.len()];
+                }
                 let log_p = log_xx(p[index % p.len()], false);
                 let scale = scale_at(selow, se, index % scale_len);
                 safe_exp(log_p - z * prepared * scale)
@@ -165,6 +171,12 @@ fn log_intervals(
     let upper = (0..se.len())
         .map(|index| {
             let prepared = prepared_se_at(p, se, logse, index);
+            if prepared.is_nan() {
+                return f64::NAN;
+            }
+            if prepared == 0.0 {
+                return p[index % p.len()];
+            }
             let value = safe_exp(log_xx(p[index % p.len()], false) + z * prepared);
             if ulimit { r_pmin(value, 1.0) } else { value }
         })
@@ -182,6 +194,12 @@ fn log_log_intervals(
     let scale_len = selow.map_or(1, <[f64]>::len);
     let calculate = |index: usize, lower: bool| {
         let prepared = prepared_se_at(p, se, logse, index);
+        if prepared.is_nan() {
+            return f64::NAN;
+        }
+        if prepared == 0.0 {
+            return p[index % p.len()];
+        }
         let log_p = log_xx(p[index % p.len()], true);
         let se2 = z * prepared / log_p;
         let transformed = r_log(-log_p);
@@ -211,6 +229,12 @@ fn logit_intervals(
     let scale_len = selow.map_or(1, <[f64]>::len);
     let calculate = |index: usize, lower: bool| {
         let prepared = prepared_se_at(p, se, logse, index);
+        if prepared.is_nan() {
+            return f64::NAN;
+        }
+        if prepared == 0.0 {
+            return p[index % p.len()];
+        }
         let probability = p[index % p.len()];
         let xx = if probability == 0.0 {
             f64::NAN
@@ -442,6 +466,13 @@ mod tests {
                 .unwrap();
         assert!(lower.is_empty());
         assert!(upper.is_empty());
+
+        for kind in ["log", "log-log", "logit"] {
+            let (lower, upper) =
+                survfit_confint_native(vec![0.0], vec![0.0], true, kind, z, None, true).unwrap();
+            assert_close(&lower, &[0.0]);
+            assert_close(&upper, &[0.0]);
+        }
     }
 
     #[test]
