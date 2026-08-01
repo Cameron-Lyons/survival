@@ -1095,6 +1095,10 @@ phase-two score matrices, and collapsed scores. The returned \code{cch} object
 carries coefficient, model-based, phase-two, and final variance components with
 R-compatible names and methods.
 
+\code{survobrien} formula expansion retains factor keeper columns, including
+their level ordering, while transforming continuous terms within each event
+risk set.
+
 Formula \code{finegray} calls use the Python formula engine and Rust interval
 expansion directly. The bridge supports weights, subsets, missing-data actions,
 strata, counting-process histories, and delayed entry; computes censoring risk

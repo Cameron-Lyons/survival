@@ -507,6 +507,18 @@ class Surv2DataResult:
     @property
     def row_index(self) -> list[int]: ...
 
+class Surv2TimelineResult:
+    @property
+    def row_index(self) -> list[int]: ...
+    @property
+    def start(self) -> list[float]: ...
+    @property
+    def stop(self) -> list[float]: ...
+    @property
+    def status(self) -> list[int]: ...
+    @property
+    def istate(self) -> list[int | None]: ...
+
 class CondenseResult:
     @property
     def id(self) -> list[int]: ...
@@ -648,9 +660,13 @@ class PSpline:
 class LinkFunctionParams:
     def __init__(self, edge: float) -> None: ...
     def blogit(self, input: float) -> float: ...
+    def blogit_many(self, input: list[float | None]) -> list[float]: ...
     def bprobit(self, input: float) -> float: ...
+    def bprobit_many(self, input: list[float | None]) -> list[float]: ...
     def bcloglog(self, input: float) -> float: ...
+    def bcloglog_many(self, input: list[float | None]) -> list[float]: ...
     def blog(self, input: float) -> float: ...
+    def blog_many(self, input: list[float | None]) -> list[float]: ...
 
 class CoxMartInput:
     @property
@@ -1105,6 +1121,8 @@ class CoxphDetailRow:
 class CoxphDetail:
     @property
     def rows(self) -> list[CoxphDetailRow]: ...
+    @property
+    def riskmat(self) -> list[list[int]] | None: ...
     @property
     def n_events(self) -> int: ...
     @property
@@ -5495,6 +5513,22 @@ class TurnbullResult:
     @property
     def converged(self) -> bool: ...
 
+class GroupedTurnbullResult:
+    @property
+    def groups(self) -> list[int]: ...
+    @property
+    def time_points(self) -> list[list[float]]: ...
+    @property
+    def survival(self) -> list[list[float]]: ...
+    @property
+    def survival_lower(self) -> list[list[float]]: ...
+    @property
+    def survival_upper(self) -> list[list[float]]: ...
+    @property
+    def n_iter(self) -> list[int]: ...
+    @property
+    def converged(self) -> list[bool]: ...
+
 class IntervalDistribution:
     Weibull: IntervalDistribution
     LogNormal: IntervalDistribution
@@ -5534,6 +5568,28 @@ def tmerge(
     ntime: list[float],
     x: list[float],
 ) -> list[float]: ...
+
+class TmergePlanResult:
+    @property
+    def kind(self) -> list[int]: ...
+    @property
+    def count(self) -> list[int]: ...
+    @property
+    def row(self) -> list[int]: ...
+    @property
+    def start(self) -> list[float]: ...
+    @property
+    def stop(self) -> list[float]: ...
+    @property
+    def censor(self) -> list[bool]: ...
+
+def tmerge_plan(
+    id: list[int],
+    start: list[float],
+    stop: list[float],
+    nid: list[int],
+    ntime: list[float],
+) -> TmergePlanResult: ...
 def tmerge2(
     id: list[int],
     time1: list[float],
@@ -5577,6 +5633,15 @@ def rttright(
     timefix: bool = True,
     renorm: bool = True,
 ) -> RttrightResult: ...
+def rttright_matrix(
+    time: list[float],
+    status: list[int],
+    times: list[float],
+    strata: list[int] | None = None,
+    weights: list[float] | None = None,
+    timefix: bool = True,
+    renorm: bool = True,
+) -> list[list[float]]: ...
 def rttright_stratified(
     time: list[float],
     status: list[int],
@@ -5591,6 +5656,12 @@ def surv2data(
     event_time: list[float] | None = None,
     event_status: list[int] | None = None,
 ) -> Surv2DataResult: ...
+def surv2data_timeline(
+    id: list[int],
+    time: list[float],
+    status: list[int | None],
+    repeated: bool = False,
+) -> Surv2TimelineResult: ...
 def survcondense(
     id: list[int],
     time1: list[float],
@@ -5619,6 +5690,11 @@ def from_timeline(
     states: list[list[int]],
     time_points: list[float],
 ) -> IntervalResult: ...
+def lvcf_indices(
+    id: list[int],
+    missing: list[bool],
+    time: list[float] | None = None,
+) -> list[int]: ...
 def turnbull_estimator(
     left: list[float],
     right: list[float],
@@ -5626,6 +5702,14 @@ def turnbull_estimator(
     tol: float = 1e-6,
     weights: list[float] | None = None,
 ) -> TurnbullResult: ...
+def turnbull_estimator_grouped(
+    left: list[float],
+    right: list[float],
+    groups: list[int],
+    max_iter: int = 1000,
+    tol: float = 1e-6,
+    weights: list[float] | None = None,
+) -> GroupedTurnbullResult: ...
 def npmle_interval(
     left: list[float],
     right: list[float],
@@ -5787,6 +5871,16 @@ def perform_pyears_calculation(
     do_event: int | None,
     ny: int | None,
 ) -> dict[str, list[float] | float]: ...
+def perform_brier_calculation(
+    observed_time: list[float],
+    status: list[int],
+    case_weights: list[float],
+    evaluation_times: list[float],
+    null_predictions: list[float],
+    model_predictions: list[list[float]],
+    censor_times: list[float],
+    censor_survival: list[float],
+) -> dict[str, list[float]]: ...
 def cox_callback(
     which: int,
     coef: list[float],
@@ -5832,6 +5926,12 @@ def step_values_at(
     requested_times: list[float],
     initial: float,
 ) -> list[float]: ...
+def step_matrix_values_at(
+    times: list[float],
+    values: list[list[float]],
+    requested_times: list[float],
+    initial: float,
+) -> list[list[float]]: ...
 def condition_cox_survfit_curves(
     times: list[float],
     cumhaz: list[list[float]],
@@ -5898,6 +5998,20 @@ def survfitkm_counting_influence(
     conf_type: str | None = None,
     timefix: bool | None = None,
 ) -> SurvFitKMInfluenceOutput: ...
+def robust_right_survfit_variance(
+    time: list[float],
+    status: list[int],
+    curve_time: list[float],
+    curve_estimate: list[float],
+    cluster: list[int],
+    weights: list[float] | None = None,
+    reverse: bool | None = None,
+    conf_level: float | None = None,
+    conf_type: str | None = None,
+    timefix: bool | None = None,
+    stype: int = 1,
+    ctype: int = 1,
+) -> tuple[list[float], list[float], list[float], list[float]]: ...
 def robust_counting_survfit_variance(
     start: list[float],
     stop: list[float],
@@ -5998,6 +6112,13 @@ def aggregate_survfit_by_group(
     groups: list[int],
     weights: list[float] | None = None,
 ) -> list[AggregateSurvfitResult]: ...
+def aggregate_shared_survfit(
+    time: list[float],
+    survs: list[list[float]],
+    std_errs: list[list[float]] | None = None,
+    weights: list[float] | None = None,
+    groups: list[int] | None = None,
+) -> list[AggregateSurvfitResult]: ...
 def survcheck(
     id: list[int],
     time1: list[float],
@@ -6089,10 +6210,10 @@ def logrank_trend(
     group: list[int],
     scores: list[float] | None = None,
 ) -> TrendTestResult: ...
-def cipoisson_exact(k: int, time: float = 1.0, p: float = 0.95) -> tuple[float, float]: ...
-def cipoisson_anscombe(k: int, time: float = 1.0, p: float = 0.95) -> tuple[float, float]: ...
+def cipoisson_exact(k: float, time: float = 1.0, p: float = 0.95) -> tuple[float, float]: ...
+def cipoisson_anscombe(k: float, time: float = 1.0, p: float = 0.95) -> tuple[float, float]: ...
 def cipoisson(
-    k: int,
+    k: float,
     time: float = 1.0,
     p: float = 0.95,
     method: str = "exact",
@@ -6809,7 +6930,13 @@ def coxph_detail(
     offset: list[float] | None = None,
     method: str = "breslow",
     center: float = 0.0,
+    riskmat: bool = False,
 ) -> CoxphDetail: ...
+def coxph_wtest(
+    matrix: list[list[float]],
+    rhs_columns: list[list[float]],
+    toler_chol: float = 1e-9,
+) -> tuple[list[float], int, list[list[float]]]: ...
 def clustered_crossprod(
     rows: list[list[float]],
     weights: list[float],
@@ -7062,6 +7189,12 @@ def nsk(
     knots: list[float] | None = None,
     boundary_knots: tuple[float, float] | None = None,
 ) -> SplineBasisResult: ...
+def pspline_basis(
+    x: list[float],
+    nterm: int,
+    degree: int,
+    boundary_knots: tuple[float, float],
+) -> tuple[list[list[float]], list[float]]: ...
 def cox_score_residuals(
     y: list[float],
     strata: list[int],

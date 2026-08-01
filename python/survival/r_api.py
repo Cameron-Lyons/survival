@@ -265,10 +265,12 @@ class _FormulaFit:
     formula: str | None = None
     coefficient_names: tuple[str, ...] | None = None
     case_weights: list[float] | None = None
+    case_weight_column: str | None = None
     robust_variance: list[list[float]] | None = None
     naive_variance: list[list[float]] | None = None
     cluster: list[Any] | None = None
     id_values: list[Any] | None = None
+    id_column: str | None = None
     x_matrix: list[list[float]] | None = None
     y_response: Surv | None = None
     model_frame: dict[str, Any] | None = None
@@ -1503,8 +1505,26 @@ def _brier_fit_response_and_data(fit: Any, newdata: Any | None) -> tuple[Surv, A
     return Surv(list(model.event_times), list(model.status)), None
 
 
-def _brier_case_weights(fit: Any, n: int) -> list[float]:
-    weights = _model_residual_weights(fit, n)
+def _brier_case_weights(
+    fit: Any,
+    model_data: Any | None,
+    n: int,
+    *,
+    use_newdata: bool,
+) -> list[float]:
+    weight_column = getattr(fit, "case_weight_column", None)
+    if use_newdata and weight_column is not None:
+        if model_data is None:
+            raise ValueError("newdata is required to evaluate case weights")
+        try:
+            source = _column(model_data, weight_column)
+        except KeyError as exc:
+            raise ValueError(f"newdata is missing weights column {weight_column!r}") from exc
+        weights = _float_vector(source, "weights")
+        if len(weights) != n:
+            raise ValueError("weights must have the same length as the Surv response")
+    else:
+        weights = _model_residual_weights(fit, n)
     if any(not math.isfinite(weight) for weight in weights):
         raise ValueError("weights must be finite")
     if any(weight < 0.0 for weight in weights):
@@ -1526,7 +1546,25 @@ def _brier_id_column(data: Any | None, name: str) -> list[Any] | None:
         return None
 
 
-def _brier_id_values(fit: Any, model_data: Any | None, n: int) -> list[Any] | None:
+def _brier_id_values(
+    fit: Any,
+    model_data: Any | None,
+    n: int,
+    *,
+    use_newdata: bool,
+) -> list[Any] | None:
+    id_column = getattr(fit, "id_column", None)
+    if use_newdata and id_column is not None:
+        if model_data is None:
+            raise ValueError("newdata is required to evaluate id")
+        try:
+            values = _materialize_labels(_column(model_data, id_column), "id")
+        except KeyError as exc:
+            raise ValueError(f"newdata is missing id column {id_column!r}") from exc
+        if len(values) != n:
+            raise ValueError("id must have the same length as the Surv response")
+        return values
+
     for name in ("(id)", "id"):
         values = _brier_id_column(model_data, name)
         if values is not None:
@@ -1661,14 +1699,6 @@ def _brier_apply_ties(dtime: list[float], dstat: list[int], ties: bool) -> list[
     ]
 
 
-def _brier_rsquared(model_brier: float, null_brier: float) -> float:
-    if null_brier == 0.0:
-        if model_brier == 0.0:
-            return math.nan
-        return math.inf if model_brier < 0.0 else -math.inf
-    return 1.0 - model_brier / null_brier
-
-
 def brier(
     fit: Any,
     times: Any | None = None,
@@ -1687,10 +1717,21 @@ def brier(
     timefix_value = _normalize_bool_option(timefix, "timefix")
     efron_value = _normalize_bool_option(efron, "efron")
     response, prediction_data = _brier_fit_response_and_data(fit, newdata)
-    id_values = _brier_id_values(fit, prediction_data, len(response))
+    using_newdata = newdata is not None
+    id_values = _brier_id_values(
+        fit,
+        prediction_data,
+        len(response),
+        use_newdata=using_newdata,
+    )
     dtime, dstat = _brier_event_times(response, timefix_value, id_values)
     n = len(dtime)
-    weights = _brier_case_weights(fit, n)
+    weights = _brier_case_weights(
+        fit,
+        prediction_data,
+        n,
+        use_newdata=using_newdata,
+    )
     eval_times = (
         _float_vector(times, "times")
         if times is not None
@@ -1717,65 +1758,26 @@ def brier(
 
     adjusted_time = _brier_apply_ties(dtime, dstat, ties_value)
     censor_fit = _brier_censoring_survival(adjusted_time, dstat, weights)
-    total_weight = sum(weights)
-    normalized_weights = [weight / total_weight for weight in weights]
-    brier_values: list[float] = []
-    rsquared_values: list[float] = []
-    eff_n: list[float] = []
-
-    for time_idx, eval_time in enumerate(eval_times):
-        censor_survival = _step_curve_at(
-            censor_fit.time,
-            censor_fit.estimate,
-            [min(time_value, eval_time) for time_value in adjusted_time],
-        )
-        null_numerator = 0.0
-        model_numerator = 0.0
-        denominator = 0.0
-        weight_square_sum = 0.0
-        null_prediction = p0[time_idx]
-        model_predictions = phat[time_idx]
-
-        for row_idx, (time_value, status, censor_value) in enumerate(
-            zip(adjusted_time, dstat, censor_survival, strict=True)
-        ):
-            if time_value < eval_time and status == 0:
-                weight = 0.0
-            elif censor_value > 0.0:
-                weight = normalized_weights[row_idx] / censor_value
-            else:
-                weight = math.inf
-
-            if time_value > eval_time:
-                null_loss = null_prediction * null_prediction
-                model_prediction = model_predictions[row_idx]
-                model_loss = model_prediction * model_prediction
-            else:
-                null_residual = status - null_prediction
-                model_residual = status - model_predictions[row_idx]
-                null_loss = null_residual * null_residual
-                model_loss = model_residual * model_residual
-
-            denominator += weight
-            weight_square_sum += weight * weight
-            null_numerator += weight * null_loss
-            model_numerator += weight * model_loss
-
-        eff_n.append(1.0 / weight_square_sum)
-        null_brier = math.nan if denominator == 0.0 else null_numerator / denominator
-        model_brier = math.nan if denominator == 0.0 else model_numerator / denominator
-        brier_values.append(model_brier)
-        rsquared_values.append(_brier_rsquared(model_brier, null_brier))
+    components = _core.perform_brier_calculation(
+        adjusted_time,
+        dstat,
+        weights,
+        eval_times,
+        p0,
+        phat,
+        censor_fit.time,
+        censor_fit.estimate,
+    )
 
     result: dict[str, Any] = {
-        "rsquared": rsquared_values,
-        "brier": brier_values,
+        "rsquared": [float(value) for value in components["rsquared"]],
+        "brier": [float(value) for value in components["brier"]],
         "times": eval_times,
     }
     if detail_value:
         result["p0"] = p0
         result["phat"] = phat
-        result["eff.n"] = eff_n
+        result["eff.n"] = [float(value) for value in components["eff_n"]]
     return result
 
 
@@ -2493,13 +2495,16 @@ def _apply_formula_na_action(
     formula: str,
     data: Any,
     na_action: str | None,
+    *,
+    exclude_columns: Sequence[str] = (),
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any]]:
     action = _normalize_na_action(na_action)
     if action == "pass":
         return data, row_aligned
 
-    columns = _formula_columns(formula, data)
+    excluded = set(exclude_columns)
+    columns = [column for column in _formula_columns(formula, data) if column not in excluded]
     n = len(_column(data, columns[0]))
     missing = _missing_row_indices(
         [
@@ -4312,15 +4317,73 @@ def strata(
 def _lvcf_order_key(value: Any) -> tuple[int, Any]:
     if _is_missing_value(value):
         raise ValueError("id must not contain missing values")
-    if isinstance(value, bool):
-        return (0, int(value))
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return (1, str(value))
-    if math.isfinite(numeric):
-        return (0, numeric)
+    if isinstance(value, Real):
+        return (0, float(value))
     return (1, str(value))
+
+
+def _lvcf_category_ranks(values: Any, name: str) -> dict[Any, int] | None:
+    categories = _mstate_categories(values)
+    if categories is None:
+        return None
+    levels = _materialize_1d(categories, f"{name} categories")
+    return {_hashable_group_value(level): rank for rank, level in enumerate(levels)}
+
+
+def _lvcf_id_ranks(values: Any, raw: list[Any] | None = None) -> tuple[list[Any], list[int]]:
+    if raw is None:
+        raw = _materialize_labels(values, "id")
+    if any(_is_missing_value(value) for value in raw):
+        raise ValueError("id must not contain missing values")
+
+    category_ranks = _lvcf_category_ranks(values, "id")
+    if category_ranks is not None:
+        try:
+            return raw, [category_ranks[_hashable_group_value(value)] for value in raw]
+        except KeyError as exc:
+            raise ValueError("id contains a value outside the declared categories") from exc
+
+    unique: dict[Any, Any] = {}
+    for value in raw:
+        unique.setdefault(_hashable_group_value(value), value)
+    ordered = sorted(unique, key=lambda key: _lvcf_order_key(unique[key]))
+    ranks = {key: rank for rank, key in enumerate(ordered)}
+    return raw, [ranks[_hashable_group_value(value)] for value in raw]
+
+
+def _lvcf_time_order(values: Any) -> tuple[list[Any], list[Any]]:
+    raw = _materialize_1d(values, "time")
+    category_ranks = _lvcf_category_ranks(values, "time")
+    if category_ranks is not None:
+        try:
+            return raw, [
+                len(category_ranks)
+                if _is_missing_value(value)
+                else category_ranks[_hashable_group_value(value)]
+                for value in raw
+            ]
+        except KeyError as exc:
+            raise ValueError("time contains a value outside the declared categories") from exc
+
+    first_observed = next((value for value in raw if not _is_missing_value(value)), None)
+    if isinstance(first_observed, Real):
+        try:
+            numeric = [math.nan if value is None else float(value) for value in raw]
+        except (TypeError, ValueError):
+            pass
+        else:
+            if not any(math.isnan(value) for value in numeric):
+                return raw, numeric
+            return raw, [(1, 0.0) if math.isnan(value) else (0, value) for value in numeric]
+
+    return raw, [
+        (2, "")
+        if _is_missing_value(value)
+        else (0, float(value))
+        if isinstance(value, Real)
+        else (1, str(value))
+        for value in raw
+    ]
 
 
 def _integerish_vector_or_none(values: Any, name: str) -> list[int] | None:
@@ -4328,6 +4391,19 @@ def _integerish_vector_or_none(values: Any, name: str) -> list[int] | None:
         return _integer_code_vector(values, name, "integer id values")
     except (TypeError, ValueError):
         return None
+
+
+def _neardate_float_vector(values: Any, name: str) -> list[float]:
+    result: list[float] = []
+    for value in _materialize_1d(values, name):
+        if _is_missing_value(value):
+            result.append(math.nan)
+            continue
+        try:
+            result.append(float(value))
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{name} must be sortable numeric values") from exc
+    return result
 
 
 def neardate(
@@ -4346,10 +4422,13 @@ def neardate(
         ("after", "prior", "closest"),
         "best must be 'after', 'prior', or 'closest'",
     )
-    y1_values = _float_vector(y1, "y1")
-    y2_values = _float_vector(y2, "y2")
-    id1_integer = _integerish_vector_or_none(id1, "id1")
-    id2_integer = _integerish_vector_or_none(id2, "id2")
+    y1_values = _neardate_float_vector(y1, "y1")
+    y2_values = _neardate_float_vector(y2, "y2")
+    id1_values = _materialize_1d(id1, "id1")
+    id2_values = _materialize_1d(id2, "id2")
+    id1_missing = [_is_missing_value(value) for value in id1_values]
+    id1_integer = _integerish_vector_or_none(id1_values, "id1")
+    id2_integer = _integerish_vector_or_none(id2_values, "id2")
     nomatch_value = None if nomatch is None else _integer_scalar(nomatch, "nomatch")
 
     if id1_integer is not None and id2_integer is not None:
@@ -4363,15 +4442,24 @@ def neardate(
         )
     else:
         result = _core.neardate_str(
-            [str(value) for value in _materialize_1d(id1, "id1")],
+            [
+                "\0missing" if missing else f"\0value:{value}"
+                for value, missing in zip(id1_values, id1_missing, strict=True)
+            ],
             y1_values,
-            [str(value) for value in _materialize_1d(id2, "id2")],
+            [
+                "\0missing" if _is_missing_value(value) else f"\0value:{value}"
+                for value in id2_values
+            ],
             y2_values,
             best_value,
             None,
         )
 
-    return [nomatch_value if idx is None else int(idx) + 1 for idx in result.indices]
+    return [
+        None if id1_missing[pos] else nomatch_value if idx is None else int(idx) + 1
+        for pos, idx in enumerate(result.indices)
+    ]
 
 
 def _tcut_default_labels(breaks: list[float]) -> list[str]:
@@ -4544,56 +4632,6 @@ def _computed_nsk_knots(
     return [_quantile_type7(inside, idx / (n_interior + 1)) for idx in range(1, n_interior + 1)]
 
 
-def _pspline_basis_row(knots: Sequence[float], x: float, order: int) -> list[float]:
-    n_basis = len(knots) - order
-    values = [0.0] * (len(knots) - 1)
-    for idx in range(len(knots) - 1):
-        if knots[idx] <= x < knots[idx + 1] or (
-            x == knots[-1] and knots[idx] <= x <= knots[idx + 1]
-        ):
-            values[idx] = 1.0
-
-    for current_order in range(2, order + 1):
-        next_values = [0.0] * (len(knots) - current_order)
-        for idx in range(len(next_values)):
-            left_denominator = knots[idx + current_order - 1] - knots[idx]
-            right_denominator = knots[idx + current_order] - knots[idx + 1]
-            left = (
-                0.0
-                if left_denominator == 0.0
-                else (x - knots[idx]) / left_denominator * values[idx]
-            )
-            right = (
-                0.0
-                if right_denominator == 0.0
-                else (knots[idx + current_order] - x) / right_denominator * values[idx + 1]
-            )
-            next_values[idx] = left + right
-        values = next_values
-    return values[:n_basis]
-
-
-def _pspline_basis_derivative_row(
-    knots: Sequence[float],
-    x: float,
-    order: int,
-) -> list[float]:
-    lower_order = _pspline_basis_row(knots, x, order - 1)
-    n_basis = len(knots) - order
-    result: list[float] = []
-    for idx in range(n_basis):
-        left_denominator = knots[idx + order - 1] - knots[idx]
-        right_denominator = knots[idx + order] - knots[idx + 1]
-        left = 0.0 if left_denominator == 0.0 else (order - 1) / left_denominator * lower_order[idx]
-        right = (
-            0.0
-            if right_denominator == 0.0
-            else (order - 1) / right_denominator * lower_order[idx + 1]
-        )
-        result.append(left - right)
-    return result
-
-
 def _pspline_difference_penalty(n_cols: int) -> list[list[float]]:
     if n_cols == 0:
         return []
@@ -4752,7 +4790,6 @@ def pspline(
     degree_value = _integer_scalar(degree, "degree")
     if degree_value < 1:
         raise ValueError("degree must be positive")
-    order = degree_value + 1
     intercept_value = _normalize_bool_option(intercept, "intercept")
     penalty_value = _normalize_bool_option(penalty, "penalty")
 
@@ -4773,43 +4810,17 @@ def pspline(
         if len(boundary_values) != 2:
             raise ValueError("Invalid values for Boundary.knots")
         boundary = (boundary_values[0], boundary_values[1])
-    if (
-        not math.isfinite(boundary[0])
-        or not math.isfinite(boundary[1])
-        or boundary[0] >= boundary[1]
-    ):
+    if not math.isfinite(boundary[0]) or not math.isfinite(boundary[1]):
+        raise ValueError("Invalid values for Boundary.knots")
+    if boundary[0] > boundary[1] or (boundary_arg is not None and boundary[0] == boundary[1]):
         raise ValueError("Invalid values for Boundary.knots")
 
-    dx = (boundary[1] - boundary[0]) / nterm_value
-    knots = [boundary[0] + dx * idx for idx in range(-degree_value, nterm_value)] + [
-        boundary[1] + dx * idx for idx in range(0, degree_value + 1)
-    ]
-
-    left_basis = _pspline_basis_row(knots, boundary[0], order)
-    left_derivative = _pspline_basis_derivative_row(knots, boundary[0], order)
-    right_basis = _pspline_basis_row(knots, boundary[1], order)
-    right_derivative = _pspline_basis_derivative_row(knots, boundary[1], order)
-
-    full_matrix: list[list[float]] = []
-    for value in x_values:
-        if math.isnan(value):
-            full_matrix.append([math.nan] * (nterm_value + degree_value))
-        elif value < boundary[0]:
-            full_matrix.append(
-                [
-                    basis + (value - boundary[0]) * derivative
-                    for basis, derivative in zip(left_basis, left_derivative, strict=True)
-                ]
-            )
-        elif value > boundary[1]:
-            full_matrix.append(
-                [
-                    basis + (value - boundary[1]) * derivative
-                    for basis, derivative in zip(right_basis, right_derivative, strict=True)
-                ]
-            )
-        else:
-            full_matrix.append(_pspline_basis_row(knots, value, order))
+    full_matrix, knots = _core.pspline_basis(
+        x_values,
+        nterm_value,
+        degree_value,
+        boundary,
+    )
 
     full_matrix, combine_values = _pspline_combine_matrix(
         full_matrix,
@@ -4861,7 +4872,10 @@ def nsk(
     x_values = _float_vector(x, "x")
     if not x_values:
         raise ValueError("x must contain at least one value")
-    if any(not math.isfinite(value) for value in x_values):
+    observed_x = [value for value in x_values if not math.isnan(value)]
+    if not observed_x:
+        raise ValueError("x must contain at least one non-missing value")
+    if any(not math.isfinite(value) for value in observed_x):
         raise ValueError("x must contain only finite values")
 
     intercept_value = _normalize_bool_option(intercept, "intercept")
@@ -4873,13 +4887,13 @@ def nsk(
 
     normalized_knots = _normalize_nsk_knots(knots)
     boundary_knots, core_knots = _normalize_nsk_boundary_knots(
-        x_values,
+        observed_x,
         normalized_knots,
         b,
         boundary_arg,
     )
     if not normalized_knots and core_knots is None:
-        core_knots = _computed_nsk_knots(x_values, boundary_knots, df_value, intercept_value)
+        core_knots = _computed_nsk_knots(observed_x, boundary_knots, df_value, intercept_value)
     spline = _core.NaturalSplineKnot(core_knots, boundary_knots, df_value, intercept_value)
     return spline.basis(x_values)
 
@@ -4892,19 +4906,32 @@ def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:
     if len(result) != len(id_values):
         raise ValueError("x must have the same length as id")
     if time is None:
+        _, id_ranks = _lvcf_id_ranks(id, id_values)
+        source = _core.lvcf_indices(
+            id_ranks,
+            [_is_missing_value(value) for value in result],
+        )
+        return [result[row_idx] for row_idx in source]
+
+    time_values, time_order = _lvcf_time_order(time)
+    if len(time_values) != len(id_values):
+        raise ValueError("time must have the same length as id")
+    id_category_ranks = _lvcf_category_ranks(id, "id")
+    if id_category_ranks is None:
         order = sorted(
             range(len(id_values)),
-            key=lambda idx: (_lvcf_order_key(id_values[idx]), idx),
+            key=lambda idx: (_lvcf_order_key(id_values[idx]), time_order[idx], idx),
         )
     else:
-        time_values = _float_vector(time, "time")
-        if len(time_values) != len(id_values):
-            raise ValueError("time must have the same length as id")
-        if any(not math.isfinite(value) for value in time_values):
-            raise ValueError("time must contain only finite values")
+        if any(_is_missing_value(value) for value in id_values):
+            raise ValueError("id must not contain missing values")
+        try:
+            id_order = [id_category_ranks[_hashable_group_value(value)] for value in id_values]
+        except KeyError as exc:
+            raise ValueError("id contains a value outside the declared categories") from exc
         order = sorted(
             range(len(id_values)),
-            key=lambda idx: (_lvcf_order_key(id_values[idx]), time_values[idx], idx),
+            key=lambda idx: (id_order[idx], time_order[idx], idx),
         )
 
     current: Any = None
@@ -5206,18 +5233,6 @@ def _surv2data_status_values(status: Any) -> list[int | None]:
     return values
 
 
-def _surv2data_sort_value(value: Any) -> tuple[int, Any]:
-    if isinstance(value, bool):
-        return (0, int(value))
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return (1, str(value))
-    if math.isfinite(numeric):
-        return (0, numeric)
-    return (1, str(value))
-
-
 def Surv2data(
     time: Any,
     status: Any,
@@ -5242,38 +5257,15 @@ def Surv2data(
         [str(value) for value in _materialize_1d(states, "states")] if states is not None else []
     )
 
-    order = sorted(
-        range(len(time_values)),
-        key=lambda idx: (_surv2data_sort_value(id_values[idx]), time_values[idx], idx),
+    id_codes = _encode_labels(id_values, "id")
+    result = _core.surv2data_timeline(
+        id_codes,
+        time_values,
+        status_values,
+        repeated_value,
     )
-    intervals: list[dict[str, Any]] = []
-    for pos, row_idx in enumerate(order):
-        if pos + 1 >= len(order):
-            continue
-        next_idx = order[pos + 1]
-        if _hashable_group_value(id_values[row_idx]) != _hashable_group_value(id_values[next_idx]):
-            continue
-        if time_values[row_idx] == time_values[next_idx]:
-            raise ValueError("duplicated time values for a single id")
-        event = status_values[next_idx]
-        current_state = status_values[row_idx]
-        event_code = 0 if event is None else int(event)
-        istate_code = None if current_state is None else int(current_state)
-        if not repeated_value and istate_code is not None and event_code == istate_code:
-            event_code = 0
-        intervals.append(
-            {
-                "row": row_idx,
-                "start": time_values[row_idx],
-                "stop": time_values[next_idx],
-                "status": event_code,
-                "id": id_values[row_idx],
-                "istate": istate_code,
-            }
-        )
-
-    intervals.sort(key=lambda item: item["row"])
-    starts = [float(item["start"]) for item in intervals]
+    rows = [int(value) for value in result.row_index]
+    starts = [float(value) for value in result.start]
     response_type = (
         "mright"
         if state_values and starts and all(value == 0.0 for value in starts)
@@ -5284,12 +5276,12 @@ def Surv2data(
         else "counting"
     )
     return {
-        "row": [int(item["row"]) for item in intervals],
+        "row": rows,
         "start": starts,
-        "stop": [float(item["stop"]) for item in intervals],
-        "status": [int(item["status"]) for item in intervals],
-        "id": [item["id"] for item in intervals],
-        "istate": [item["istate"] for item in intervals],
+        "stop": [float(value) for value in result.stop],
+        "status": [int(value) for value in result.status],
+        "id": [id_values[row] for row in rows],
+        "istate": [None if value is None else int(value) for value in result.istate],
         "states": state_values,
         "type": response_type,
     }
@@ -5970,7 +5962,22 @@ def _pyears_group_codes(
     values = _materialize_labels(group, "group")
     if len(values) != n:
         raise ValueError("group must have the same length as the response")
-    group_levels = tuple(levels) if levels is not None else _label_levels(values, "group")
+    if levels is None:
+        group_levels: list[Any] = []
+        labels: dict[Any, int] = {}
+        codes: list[float] = []
+        for value in values:
+            try:
+                code = labels.get(value)
+                if code is None:
+                    code = len(labels) + 1
+                    labels[value] = code
+                    group_levels.append(value)
+            except TypeError as exc:
+                raise TypeError("group contains unhashable labels") from exc
+            codes.append(float(code))
+        return codes, [str(value) for value in group_levels]
+    group_levels = tuple(levels)
     labels = {value: idx + 1 for idx, value in enumerate(group_levels)}
     try:
         codes = [float(labels[value]) for value in values]
@@ -6078,6 +6085,7 @@ def pyears(
 ) -> PyearsResult | dict[str, list[Any]]:
     """Tabulate person-years for direct ``Surv``/formula inputs, like R's ``pyears``."""
 
+    direct_inputs_ready = False
     if isinstance(response, str) and "~" in response:
         response, formula_group, formula_group_levels, formula_weights = _pyears_formula_inputs(
             response,
@@ -6092,7 +6100,7 @@ def pyears(
         weights = formula_weights
     else:
         formula_group_levels = None
-        start_values, stop_values, event_values, _ny, _do_event = _pyears_response_from_direct(
+        start_values, stop_values, event_values, ny, do_event = _pyears_response_from_direct(
             response,
             time=time,
             start=start,
@@ -6119,13 +6127,16 @@ def pyears(
             else:
                 group = _subset_optional_sequence(group, keep, "group")
             weights = _subset_optional_sequence(weights, keep, "weights")
-    start_values, stop_values, event_values, ny, do_event = _pyears_response_from_direct(
-        response,
-        time=time,
-        start=start,
-        stop=stop,
-        event=event,
-    )
+        else:
+            direct_inputs_ready = True
+    if not direct_inputs_ready:
+        start_values, stop_values, event_values, ny, do_event = _pyears_response_from_direct(
+            response,
+            time=time,
+            start=start,
+            stop=stop,
+            event=event,
+        )
     n = len(stop_values)
     event_for_core = [0.0] * n if event_values is None else [float(value) for value in event_values]
     _pyears_validate_time_columns(start_values, stop_values, event_values)
@@ -6211,15 +6222,6 @@ class _FineGrayInputs:
     id_values: list[Any] | None
     strata: list[Any] | None
     strata_levels: tuple[Any, ...] | None
-
-
-@dataclass(frozen=True)
-class _FineGraySplit:
-    row: list[int]
-    start: list[float]
-    end: list[float]
-    wt: list[float]
-    add: list[int]
 
 
 def _finegray_raw_column(data: Any, name: str) -> Any:
@@ -6755,44 +6757,8 @@ def _finegray_split_intervals(
     cut_probability: list[float],
     extend: list[bool],
     keep: list[bool],
-) -> FineGrayOutput | _FineGraySplit:
-    if all(probability > 0.0 for probability in cut_probability):
-        return _core.finegray(start, stop, cut_time, cut_probability, extend, keep)
-
-    rows: list[int] = []
-    output_start: list[float] = []
-    output_end: list[float] = []
-    output_weight: list[float] = []
-    output_add: list[int] = []
-    kept_indices = [idx for idx, value in enumerate(keep) if value]
-    for row_idx, (left, right, should_extend) in enumerate(zip(start, stop, extend, strict=True)):
-        cut_idx = bisect_left(cut_time, right) if should_extend else len(cut_time)
-        current_end = cut_time[cut_idx] if cut_idx < len(cut_time) else right
-        rows.append(row_idx + 1)
-        output_start.append(left)
-        output_end.append(current_end)
-        output_weight.append(1.0)
-        output_add.append(0)
-        if not should_extend or cut_idx >= len(cut_time):
-            continue
-
-        later_kept = kept_indices[bisect_right(kept_indices, cut_idx) :]
-        denominator = cut_probability[cut_idx]
-        if later_kept and denominator == 0.0:
-            raise ValueError("censoring probability is zero before a selected event")
-        for add, next_idx in enumerate(later_kept, start=1):
-            rows.append(row_idx + 1)
-            output_start.append(cut_time[next_idx - 1])
-            output_end.append(cut_time[next_idx])
-            output_weight.append(cut_probability[next_idx] / denominator)
-            output_add.append(add)
-    return _FineGraySplit(
-        row=rows,
-        start=output_start,
-        end=output_end,
-        wt=output_weight,
-        add=output_add,
-    )
+) -> FineGrayOutput:
+    return _core.finegray(start, stop, cut_time, cut_probability, extend, keep)
 
 
 _R_RESERVED_NAMES = {
@@ -7024,7 +6990,7 @@ def _survobrien_formula_terms(
             raise ValueError("This function cannot deal with interaction terms")
         values = _term_values(data, term, n)
         if term.categorical:
-            keepers.append((_survobrien_term_name(term), values))
+            keepers.append((term.column, values))
             continue
         try:
             numeric = [float(value) for value in values]
@@ -7325,10 +7291,10 @@ def _recycle_r_vector(values: list[Any], n: int, name: str) -> list[Any]:
     return [values[idx % len(values)] for idx in range(n)]
 
 
-def _cipoisson_count(value: Any) -> int | None:
+def _cipoisson_count(value: Any) -> float | None:
     if _is_missing_value(value):
         return None
-    count = _integer_scalar(value, "k")
+    count = float(value)
     if count < 0:
         raise ValueError("k must be non-negative")
     return count
@@ -7369,8 +7335,13 @@ def cipoisson(
         count = _cipoisson_count(raw_k)
         exposure = _cipoisson_float(raw_time, "time")
         confidence = _cipoisson_float(raw_p, "p")
-        if count is None or exposure is None or confidence is None or exposure <= 0.0:
+        if count is None or exposure is None or exposure <= 0.0:
             intervals.append((math.nan, math.nan))
+            continue
+        if confidence is None:
+            intervals.append(
+                (0.0, math.nan) if method_value == "exact" and count == 0 else (math.nan, math.nan)
+            )
             continue
         lower, upper = _core.cipoisson(count, exposure, confidence, method_value)
         intervals.append((float(lower), float(upper)))
@@ -7382,10 +7353,9 @@ def _bounded_link_transform(x: Any, edge: Any, method_name: str) -> float | list
     edge_value = _finite_float(edge, "edge")
     values, is_scalar = _scalar_or_vector_with_flag(x, "x")
     link = _core.LinkFunctionParams(edge_value)
-    transform = getattr(link, method_name)
-    result = [
-        math.nan if _is_missing_value(value) else float(transform(float(value))) for value in values
-    ]
+    transform = getattr(link, f"{method_name}_many")
+    prepared = [None if _is_missing_value(value) else float(value) for value in values]
+    result = [float(value) for value in transform(prepared)]
     return result[0] if is_scalar else result
 
 
@@ -8050,12 +8020,6 @@ def _rttright_divide(numerator: float, denominator: float) -> float:
     return math.inf
 
 
-def _rttright_apply_timefix(time: list[float], timefix: bool) -> list[float]:
-    if not timefix or not time:
-        return time
-    return [float(value) for value in _core.aeq_surv(time, None).time]
-
-
 def _rttright_counting_common_start(
     start: Sequence[float],
     id_values: Sequence[Any],
@@ -8196,87 +8160,6 @@ def _rttright_km_survival_at(
     return 1.0 if index == 0 else float(survival_values[index - 1])
 
 
-def _rttright_group_case_weights(
-    weights: Sequence[float],
-    indices: Sequence[int],
-    renorm: bool,
-) -> list[float]:
-    group_weights = [float(weights[idx]) for idx in indices]
-    if not renorm:
-        return group_weights
-    total = sum(group_weights)
-    if total <= 0.0:
-        raise ValueError("weights must have positive sum when renorm is true")
-    return [weight / total for weight in group_weights]
-
-
-def _rttright_group_time_matrix(
-    time: Sequence[float],
-    status: Sequence[int],
-    weights: Sequence[float],
-    query_times: Sequence[float],
-) -> list[list[float]]:
-    n = len(time)
-    n_times = len(query_times)
-    if n == 0:
-        return []
-
-    order = sorted(range(n), key=lambda idx: (time[idx], idx))
-    sorted_time = [float(time[idx]) for idx in order]
-    sorted_status = [int(status[idx]) for idx in order]
-    sorted_weights = [float(weights[idx]) for idx in order]
-
-    event_g = [1.0] * n
-    block_times: list[float] = []
-    post_block_g: list[float] = []
-    current_g = 1.0
-    n_at_risk = sum(sorted_weights)
-
-    start = 0
-    while start < n:
-        block_time = sorted_time[start]
-        end = start + 1
-        while end < n and sorted_time[end] == block_time:
-            end += 1
-
-        event_weight = 0.0
-        censor_weight = 0.0
-        for sorted_pos in range(start, end):
-            local_idx = order[sorted_pos]
-            event_g[local_idx] = current_g
-            if sorted_status[sorted_pos] == 1:
-                event_weight += sorted_weights[sorted_pos]
-            else:
-                censor_weight += sorted_weights[sorted_pos]
-
-        risk_after_events = n_at_risk - event_weight
-        if risk_after_events > 0.0 and censor_weight > 0.0:
-            current_g *= 1.0 - censor_weight / risk_after_events
-        n_at_risk = risk_after_events - censor_weight
-        block_times.append(block_time)
-        post_block_g.append(current_g)
-        start = end
-
-    query_g: list[float] = []
-    for query_time in query_times:
-        block_idx = bisect_left(block_times, query_time)
-        query_g.append(1.0 if block_idx == 0 else post_block_g[block_idx - 1])
-
-    matrix = [[0.0] * n_times for _ in range(n)]
-    for row_idx, (row_time, row_status, row_weight) in enumerate(
-        zip(time, status, weights, strict=True)
-    ):
-        for col_idx, g_at_time in enumerate(query_g):
-            if row_status == 1:
-                matrix[row_idx][col_idx] = _rttright_divide(
-                    float(row_weight),
-                    max(event_g[row_idx], g_at_time),
-                )
-            elif float(row_time) >= float(query_times[col_idx]):
-                matrix[row_idx][col_idx] = _rttright_divide(float(row_weight), g_at_time)
-    return matrix
-
-
 def _rttright_time_matrix(
     time: Sequence[float],
     status: Sequence[int],
@@ -8286,41 +8169,18 @@ def _rttright_time_matrix(
     timefix: bool,
     renorm: bool,
 ) -> list[float] | list[list[float]]:
-    time_values = _rttright_apply_timefix([float(value) for value in time], timefix)
+    time_values = [float(value) for value in time]
     status_values = [int(value) for value in status]
-    n = len(time_values)
-    if len(status_values) != n:
-        raise ValueError("time and status must have same length")
-    if any(value not in (0, 1) for value in status_values):
-        raise ValueError("status must contain only 0/1 values")
-    if any(not math.isfinite(value) for value in time_values):
-        raise ValueError("time must be finite")
-
     query_times = _rttright_times_vector(times)
-    case_weights = _rttright_initial_weights(weights, n)
-    matrix = [[0.0] * len(query_times) for _ in range(n)]
-
-    if group is None:
-        group_values = [0] * n
-    else:
-        group_values = [int(value) for value in group]
-        if len(group_values) != n:
-            raise ValueError("rttright strata must have the same length as the Surv response")
-
-    group_indices: dict[int, list[int]] = {}
-    for idx, group_value in enumerate(group_values):
-        group_indices.setdefault(group_value, []).append(idx)
-
-    for indices in group_indices.values():
-        group_weights = _rttright_group_case_weights(case_weights, indices, renorm)
-        group_matrix = _rttright_group_time_matrix(
-            [time_values[idx] for idx in indices],
-            [status_values[idx] for idx in indices],
-            group_weights,
-            query_times,
-        )
-        for local_idx, row_idx in enumerate(indices):
-            matrix[row_idx] = group_matrix[local_idx]
+    matrix = _core.rttright_matrix(
+        time_values,
+        status_values,
+        query_times,
+        None if group is None else [int(value) for value in group],
+        None if weights is None else _float_vector(weights, "weights"),
+        timefix,
+        renorm,
+    )
 
     if len(query_times) == 1:
         return [row[0] for row in matrix]
@@ -8784,15 +8644,9 @@ def _pseudo_counting_residual_rows(
     times = [float(value) for value in fit.time]
     requested_times = [float(value) for value in eval_times]
     if pseudo_type == "survival":
-        return [
-            _core.step_values_at(times, [float(value) for value in row], requested_times, 0.0)
-            for row in influence.influence_surv
-        ]
+        return _core.step_matrix_values_at(times, influence.influence_surv, requested_times, 0.0)
     if pseudo_type == "cumhaz":
-        return [
-            _core.step_values_at(times, [float(value) for value in row], requested_times, 0.0)
-            for row in influence.influence_chaz
-        ]
+        return _core.step_matrix_values_at(times, influence.influence_chaz, requested_times, 0.0)
     return [
         _pseudo_integrated_step_values(times, [float(value) for value in row], requested_times)
         for row in influence.influence_surv
@@ -9615,86 +9469,6 @@ def _tmerge_initial_frame(
     return result
 
 
-def _tmerge_interval_index(
-    columns: Mapping[str, list[Any]],
-    idname: str,
-    startname: str,
-    stopname: str,
-) -> dict[Any, tuple[list[int], list[float], list[float]]]:
-    result: dict[Any, tuple[list[int], list[float], list[float]]] = {}
-    for row, (row_id, start, stop) in enumerate(
-        zip(columns[idname], columns[startname], columns[stopname], strict=True)
-    ):
-        rows, starts, stops = result.setdefault(_hashable_group_value(row_id), ([], [], []))
-        rows.append(row)
-        starts.append(float(start))
-        stops.append(float(stop))
-    return result
-
-
-def _tmerge_classify(
-    intervals: Mapping[Any, tuple[list[int], list[float], list[float]]],
-    row_id: Any,
-    time: float,
-) -> str:
-    subject = intervals.get(_hashable_group_value(row_id))
-    if subject is None:
-        return "missid"
-    _rows, starts, stops = subject
-    prior = bisect_right(starts, time) - 1
-    if prior < 0:
-        return "early"
-    after = bisect_left(stops, time)
-    if after == len(stops):
-        return "late"
-    if after > prior:
-        return "gap"
-    if time == starts[prior] or time == stops[after]:
-        if prior == after + 1:
-            return "boundary"
-        if time == starts[prior]:
-            return "leading"
-        return "trailing"
-    return "within"
-
-
-def _tmerge_split_rows(
-    columns: dict[str, list[Any]],
-    idname: str,
-    startname: str,
-    stopname: str,
-    event_censors: Mapping[str, Any],
-    intervals: Mapping[Any, tuple[list[int], list[float], list[float]]],
-    update_ids: Sequence[Any],
-    update_times: Sequence[float],
-    classifications: Sequence[str],
-) -> dict[str, list[Any]]:
-    cuts: dict[int, set[float]] = {}
-    for row_id, time, kind in zip(update_ids, update_times, classifications, strict=True):
-        if kind != "within":
-            continue
-        rows, starts, _stops = intervals[_hashable_group_value(row_id)]
-        local_row = bisect_right(starts, time) - 1
-        cuts.setdefault(rows[local_row], set()).add(time)
-    if not cuts:
-        return columns
-    result = {name: [] for name in columns}
-    for row_idx in range(len(columns[idname])):
-        points = [float(columns[startname][row_idx])]
-        points.extend(sorted(cuts.get(row_idx, ())))
-        points.append(float(columns[stopname][row_idx]))
-        segment_count = len(points) - 1
-        for segment in range(segment_count):
-            for name, values in columns.items():
-                value = values[row_idx]
-                if name in event_censors and segment < segment_count - 1:
-                    value = event_censors[name]
-                result[name].append(value)
-            result[startname][-1] = points[segment]
-            result[stopname][-1] = points[segment + 1]
-    return result
-
-
 def _tmerge_default_censor(
     values: Sequence[Any],
     categories: Sequence[Any] | None = None,
@@ -9745,17 +9519,26 @@ def _tmerge_apply_operation(
         if operation.value is None
         else _tmerge_resolve_vector(operation.value, data2, n2, f"{name} value", scalar=True)
     )
-    base_id_values = columns[str(options["idname"])]
-    base_start_values = columns[str(options["tstartname"])]
-    known_ids = {_hashable_group_value(value) for value in base_id_values}
-    subject_min_starts: dict[Any, float] = {}
+    idname = str(options["idname"])
+    startname = str(options["tstartname"])
+    stopname = str(options["tstopname"])
+    base_id_values = columns[idname]
+    base_start_values = columns[startname]
+    level_order: dict[Any, int] = {}
+    base_codes: list[int] = []
+    subject_min_starts: dict[int, float] = {}
     for base_id, start in zip(base_id_values, base_start_values, strict=True):
+        if _is_missing_value(base_id):
+            raise ValueError("id cannot have missing values")
         key = _hashable_group_value(base_id)
-        subject_min_starts[key] = min(subject_min_starts.get(key, math.inf), float(start))
-    updates: list[tuple[Any, float, Any, int]] = []
+        code = level_order.setdefault(key, len(level_order))
+        base_codes.append(code)
+        subject_min_starts[code] = min(subject_min_starts.get(code, math.inf), float(start))
+    updates: list[tuple[int, float, Any, int]] = []
     missid = 0
     for idx, (row_id, raw_time) in enumerate(zip(data2_ids, times_raw, strict=True)):
-        if _hashable_group_value(row_id) not in known_ids:
+        code = level_order.get(_hashable_group_value(row_id))
+        if code is None:
             missid += 1
             continue
         raw_value = None if values_raw is None else values_raw[idx]
@@ -9767,56 +9550,43 @@ def _tmerge_apply_operation(
         if (
             operation.kind in {"tdc", "cumtdc"}
             and float(options["delay"]) > 0.0
-            and time > subject_min_starts[_hashable_group_value(row_id)]
+            and time > subject_min_starts[code]
         ):
             time += float(options["delay"])
-        updates.append((row_id, time, raw_value, idx))
+        updates.append((code, time, raw_value, idx))
 
-    level_order = {
-        _hashable_group_value(value): idx
-        for idx, value in enumerate(dict.fromkeys(columns[str(options["idname"])]))
-    }
-    updates.sort(key=lambda item: (level_order[_hashable_group_value(item[0])], item[1], item[3]))
-    intervals = _tmerge_interval_index(
-        columns,
-        str(options["idname"]),
-        str(options["tstartname"]),
-        str(options["tstopname"]),
-    )
-    classifications = [
-        _tmerge_classify(intervals, row_id, time) for row_id, time, _value, _idx in updates
-    ]
-    counts = dict.fromkeys(_TMERGE_COUNT_NAMES, 0)
-    counts["missid"] = missid
-    for kind in classifications:
-        counts[kind] += 1
-    seen: set[tuple[Any, float]] = set()
-    for row_id, time, _value, _idx in updates:
-        key = (_hashable_group_value(row_id), time)
-        if key in seen:
-            counts["tied"] += 1
-        else:
-            seen.add(key)
-
-    update_ids = [item[0] for item in updates]
+    updates.sort(key=lambda item: (item[0], item[1], item[3]))
+    update_codes = [item[0] for item in updates]
     update_times = [item[1] for item in updates]
-    columns = _tmerge_split_rows(
-        columns,
-        str(options["idname"]),
-        str(options["tstartname"]),
-        str(options["tstopname"]),
-        event_censors,
-        intervals,
-        update_ids,
-        update_times,
-        classifications,
-    )
-    base_ids = columns[str(options["idname"])]
-    _levels, lookup = _tmerge_unique_levels(base_ids, "id")
-    base_codes = [lookup[_hashable_group_value(value)] for value in base_ids]
-    update_codes = [lookup[_hashable_group_value(value)] for value in update_ids]
-    starts = [float(value) for value in columns[str(options["tstartname"])]]
     update_values = [item[2] for item in updates]
+    plan = _core.tmerge_plan(
+        base_codes,
+        [float(value) for value in base_start_values],
+        [float(value) for value in columns[stopname]],
+        update_codes,
+        update_times,
+    )
+    classifications = list(plan.kind)
+    counts = dict(zip(_TMERGE_COUNT_NAMES[:8], plan.count, strict=True))
+    counts["missid"] = missid
+
+    source_rows = list(plan.row)
+    if len(source_rows) > len(base_codes):
+        split_censor = list(plan.censor)
+        columns = {
+            column_name: [
+                event_censors[column_name] if split_censor[idx] else values[source_row]
+                for idx, source_row in enumerate(source_rows)
+            ]
+            if column_name in event_censors
+            else [values[source_row] for source_row in source_rows]
+            for column_name, values in columns.items()
+        }
+        columns[startname] = list(plan.start)
+        columns[stopname] = list(plan.stop)
+        base_codes = [base_codes[source_row] for source_row in source_rows]
+    base_ids = columns[idname]
+    starts = list(plan.start)
 
     if operation.kind == "tdc":
         if name in event_censors:
@@ -9880,10 +9650,9 @@ def _tmerge_apply_operation(
     if operation.kind == "cumevent":
         cumulative: dict[Any, float] = {}
         event_values: list[Any] = []
-        for row_id, value in zip(update_ids, raw_event_values, strict=True):
-            key = _hashable_group_value(row_id)
-            cumulative[key] = cumulative.get(key, 0.0) + _tmerge_numeric_value(value, name)
-            event_values.append(cumulative[key])
+        for code, value in zip(update_codes, raw_event_values, strict=True):
+            cumulative[code] = cumulative.get(code, 0.0) + _tmerge_numeric_value(value, name)
+            event_values.append(cumulative[code])
     else:
         event_values = raw_event_values
     censor = event_censors.get(
@@ -9896,12 +9665,10 @@ def _tmerge_apply_operation(
     if name not in event_censors:
         columns[name] = [censor] * len(base_ids)
     target = {
-        (_hashable_group_value(row_id), float(stop)): idx
-        for idx, (row_id, stop) in enumerate(
-            zip(base_ids, columns[str(options["tstopname"])], strict=True)
-        )
+        (code, float(stop)): idx
+        for idx, (code, stop) in enumerate(zip(base_codes, columns[stopname], strict=True))
     }
-    valid = {"within", "boundary", "trailing"}
+    valid = {3, 4, 6}
     for update, kind, value, raw_value in zip(
         updates,
         classifications,
@@ -9915,8 +9682,8 @@ def _tmerge_apply_operation(
             and float(raw_value) == 0.0
         ):
             continue
-        row_id, time, _unused, _source = update
-        row_idx = target.get((_hashable_group_value(row_id), time))
+        code, time, _unused, _source = update
+        row_idx = target.get((code, time))
         if row_idx is not None:
             columns[name][row_idx] = value
     event_censors[name] = censor
@@ -11068,19 +10835,13 @@ def _survfit_residual_rows_at_times(
     curve_times = [float(value) for value in influence.time]
     eval_times = [float(value) for value in times]
     if residual_type == "cumhaz":
-        return [
-            _core.step_values_at(curve_times, [float(value) for value in row], eval_times, 0.0)
-            for row in influence.influence_chaz
-        ]
+        return _core.step_matrix_values_at(curve_times, influence.influence_chaz, eval_times, 0.0)
     if residual_type == "auc":
         return [
             _pseudo_integrated_step_values(curve_times, [float(value) for value in row], eval_times)
             for row in influence.influence_surv
         ]
-    return [
-        _core.step_values_at(curve_times, [float(value) for value in row], eval_times, 0.0)
-        for row in influence.influence_surv
-    ]
+    return _core.step_matrix_values_at(curve_times, influence.influence_surv, eval_times, 0.0)
 
 
 def _survfit_residual_matrix(
@@ -11495,15 +11256,6 @@ def _survfit_robust_km_result(
     )
 
 
-def _matrix_column_norms(matrix: list[list[float]]) -> list[float]:
-    if not matrix:
-        return []
-    width = len(matrix[0])
-    return [
-        math.sqrt(sum(float(row[col]) * float(row[col]) for row in matrix)) for col in range(width)
-    ]
-
-
 def _survfit_robust_right_result(
     result: SurvfitResult,
     response: Surv,
@@ -11524,32 +11276,20 @@ def _survfit_robust_right_result(
     if len(cluster_values) != len(response):
         raise ValueError("cluster must have the same length as the Surv response")
 
-    influence = survfitkm_influence(
+    std_err, std_chaz, conf_lower, conf_upper = _core.robust_right_survfit_variance(
         list(response.time),
         list(response.event),
-        cluster_values,
+        [float(value) for value in result.time],
+        [float(value) for value in result.estimate],
+        _encode_labels(cluster_values, "cluster"),
         weights=weights,
         reverse=reverse,
-        stype=computation.stype,
-        ctype=computation.ctype,
         conf_level=conf_level,
         conf_type=conf_type,
         timefix=timefix,
+        stype=computation.stype,
+        ctype=computation.ctype,
     )
-    std_err = _matrix_column_norms(influence.influence_surv)
-    std_chaz = _matrix_column_norms(influence.influence_chaz)
-    if conf_type == "none":
-        conf_lower: list[float] = []
-        conf_upper: list[float] = []
-    else:
-        alpha = 1.0 - conf_level
-        z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
-        intervals = [
-            _survfit_confidence_interval(estimate, se, z, conf_type)
-            for estimate, se in zip(result.estimate, std_err, strict=True)
-        ]
-        conf_lower = [lower for lower, _upper in intervals]
-        conf_upper = [upper for _lower, upper in intervals]
 
     return SurvfitResult(
         time=result.time,
@@ -11557,11 +11297,11 @@ def _survfit_robust_right_result(
         n_event=result.n_event,
         n_censor=result.n_censor,
         estimate=result.estimate,
-        std_err=std_err,
-        conf_lower=conf_lower,
-        conf_upper=conf_upper,
+        std_err=[float(value) for value in std_err],
+        conf_lower=[float(value) for value in conf_lower],
+        conf_upper=[float(value) for value in conf_upper],
         cumhaz=result.cumhaz,
-        std_chaz=std_chaz,
+        std_chaz=[float(value) for value in std_chaz],
         n_enter=result.n_enter,
         n_risk_count=result.n_risk_count,
         n_event_count=result.n_event_count,
@@ -12247,7 +11987,7 @@ def aggregate_survfit_result(
             model=result.model,
         )
 
-    curve_times = [[float(value) for value in result.time] for _ in range(n_curves)]
+    curve_time = [float(value) for value in result.time]
     curve_survs = [[float(value) for value in curve] for curve in result.surv]
     curve_std_errs = (
         [[float(value) for value in curve] for curve in result.std_err] if result.std_err else None
@@ -12255,15 +11995,15 @@ def aggregate_survfit_result(
     curve_weights = _float_vector(weights, "weights") if weights is not None else None
 
     if groups is None:
-        aggregate = _core.aggregate_survfit(
-            curve_times,
+        aggregates = _core.aggregate_shared_survfit(
+            curve_time,
             curve_survs,
             curve_std_errs,
             curve_weights,
             None,
         )
         linear_predictor = _weighted_average(result.linear_predictors, curve_weights)
-        return _cox_survfit_from_aggregates(result, [aggregate], [linear_predictor])
+        return _cox_survfit_from_aggregates(result, aggregates, [linear_predictor])
 
     group_codes = _integer_code_vector(groups, "groups", "integer group codes")
     if len(group_codes) != n_curves:
@@ -12271,34 +12011,24 @@ def aggregate_survfit_result(
     if any(code < 1 for code in group_codes):
         raise ValueError("groups must use positive integer group codes")
 
-    if len(set(group_codes)) == 1:
-        return aggregate_survfit_result(result, weights=curve_weights)
-
-    indices_by_group: dict[int, list[int]] = {}
+    aggregates = _core.aggregate_shared_survfit(
+        curve_time,
+        curve_survs,
+        curve_std_errs,
+        curve_weights,
+        group_codes,
+    )
+    predictor_sums: dict[int, float] = {}
+    predictor_weights: dict[int, float] = {}
     for idx, code in enumerate(group_codes):
-        indices_by_group.setdefault(code, []).append(idx)
-
-    aggregates = []
-    linear_predictors = []
-    for code in sorted(indices_by_group):
-        indices = indices_by_group[code]
-        group_weights = (
-            [curve_weights[idx] for idx in indices] if curve_weights is not None else None
+        weight = 1.0 if curve_weights is None else curve_weights[idx]
+        predictor_sums[code] = predictor_sums.get(code, 0.0) + (
+            float(result.linear_predictors[idx]) * weight
         )
-        aggregate = _core.aggregate_survfit(
-            [curve_times[idx] for idx in indices],
-            [curve_survs[idx] for idx in indices],
-            [curve_std_errs[idx] for idx in indices] if curve_std_errs is not None else None,
-            group_weights,
-            None,
-        )
-        aggregates.append(aggregate)
-        linear_predictors.append(
-            _weighted_average(
-                [float(result.linear_predictors[idx]) for idx in indices],
-                group_weights,
-            )
-        )
+        predictor_weights[code] = predictor_weights.get(code, 0.0) + weight
+    linear_predictors = [
+        predictor_sums[code] / predictor_weights[code] for code in sorted(predictor_sums)
+    ]
 
     return _cox_survfit_from_aggregates(result, aggregates, linear_predictors)
 
@@ -13441,19 +13171,39 @@ def survfit(
                 else result
             )
 
-        turnbull_results: dict[Any, Any] = {}
-        for label, indices in _group_indices(
-            group, len(response), levels=formula_group_levels
-        ).items():
-            group_response = _subset_surv(response, indices)
-            left, right = _turnbull_intervals(group_response)
-            group_weights = [wt[idx] for idx in indices] if wt is not None else None
-            turnbull_results[label] = _core.turnbull_estimator(left, right, weights=group_weights)
-        return (
-            _survfit_with_model_frame(turnbull_results, model_frame)
-            if keep_model and model_frame is not None
-            else turnbull_results
+        grouped_indices = _group_indices(group, len(response), levels=formula_group_levels)
+        group_codes = [0] * len(response)
+        for group_code, indices in enumerate(grouped_indices.values()):
+            for idx in indices:
+                group_codes[idx] = group_code
+        left, right = _turnbull_intervals(response)
+        raw_grouped = _core.turnbull_estimator_grouped(
+            left,
+            right,
+            group_codes,
+            weights=wt,
         )
+        raw_groups = [int(value) for value in raw_grouped.groups]
+        if raw_groups != list(range(len(grouped_indices))):
+            raise RuntimeError("grouped Turnbull fit returned inconsistent group codes")
+        raw_time_points = raw_grouped.time_points
+        raw_survival = raw_grouped.survival
+        raw_survival_lower = raw_grouped.survival_lower
+        raw_survival_upper = raw_grouped.survival_upper
+        raw_n_iter = raw_grouped.n_iter
+        raw_converged = raw_grouped.converged
+        return {
+            label: TurnbullSurvfitResult(
+                time_points=raw_time_points[curve_idx],
+                survival=raw_survival[curve_idx],
+                survival_lower=raw_survival_lower[curve_idx],
+                survival_upper=raw_survival_upper[curve_idx],
+                n_iter=raw_n_iter[curve_idx],
+                converged=raw_converged[curve_idx],
+                model=model_frame if keep_model else None,
+            )
+            for curve_idx, label in enumerate(grouped_indices)
+        }
 
     wt = _float_vector(weights, "weights") if weights is not None else None
     if wt is not None and len(wt) != len(response):
@@ -14018,79 +13768,6 @@ def _coxph_wtest_var_matrix(var: Any) -> tuple[list[list[float]], int]:
     return [], len(values)
 
 
-def _coxph_solve_linear_system(matrix: list[list[float]], rhs: Sequence[float]) -> list[float]:
-    n = len(matrix)
-    if n == 0:
-        return []
-    augmented = [list(row) + [float(rhs[idx])] for idx, row in enumerate(matrix)]
-    for col in range(n):
-        pivot = max(range(col, n), key=lambda row: abs(augmented[row][col]))
-        if abs(augmented[pivot][col]) <= 1e-14:
-            raise ValueError("First argument must be a square matrix")
-        if pivot != col:
-            augmented[col], augmented[pivot] = augmented[pivot], augmented[col]
-        pivot_value = augmented[col][col]
-        for row in range(col + 1, n):
-            factor = augmented[row][col] / pivot_value
-            if factor == 0.0:
-                continue
-            for idx in range(col, n + 1):
-                augmented[row][idx] -= factor * augmented[col][idx]
-    solution = [0.0] * n
-    for row in range(n - 1, -1, -1):
-        total = augmented[row][n] - sum(
-            augmented[row][col] * solution[col] for col in range(row + 1, n)
-        )
-        solution[row] = total / augmented[row][row]
-    return solution
-
-
-def _coxph_wtest_active_indices(matrix: list[list[float]], toler_chol: float) -> list[int]:
-    n = len(matrix)
-    max_diag = max((abs(matrix[idx][idx]) for idx in range(n)), default=0.0)
-    threshold = toler_chol * max_diag
-    active: list[int] = []
-    for idx in range(n):
-        variance = matrix[idx][idx]
-        if active:
-            submatrix = [[matrix[row][col] for col in active] for row in active]
-            covariance = [matrix[idx][col] for col in active]
-            projected = _coxph_solve_linear_system(submatrix, covariance)
-            variance -= sum(value * coef for value, coef in zip(covariance, projected, strict=True))
-        if variance > threshold and variance > 0.0:
-            active.append(idx)
-    return active
-
-
-def _coxph_wtest_solve(
-    matrix: list[list[float]],
-    b_columns: list[list[float]],
-    toler_chol: float,
-) -> tuple[list[float], int, list[list[float]]]:
-    n = len(matrix)
-    active = _coxph_wtest_active_indices(matrix, toler_chol)
-    if not active:
-        return [0.0 for _ in b_columns], 0, [[0.0 for _ in b_columns] for _ in range(n)]
-
-    submatrix = [[matrix[row][col] for col in active] for row in active]
-    solve_columns: list[list[float]] = []
-    tests: list[float] = []
-    for column in b_columns:
-        rhs = [column[idx] for idx in active]
-        active_solution = _coxph_solve_linear_system(submatrix, rhs)
-        solution = [0.0] * n
-        for idx, value in zip(active, active_solution, strict=True):
-            solution[idx] = value
-        solve_columns.append(solution)
-        tests.append(sum(value * coef for value, coef in zip(column, solution, strict=True)))
-
-    solve_rows = [
-        [solve_columns[col_idx][row_idx] for col_idx in range(len(solve_columns))]
-        for row_idx in range(n)
-    ]
-    return tests, len(active), solve_rows
-
-
 def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     """Compute the Wald test helper exported as R's ``coxph.wtest``."""
 
@@ -14138,7 +13815,7 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     b_columns = [
         [b_numeric[row_idx][col_idx] for row_idx in range(nvar)] for col_idx in range(ntest)
     ]
-    tests, df, solve_rows = _coxph_wtest_solve(matrix, b_columns, toler_value)
+    tests, df, solve_rows = _core.coxph_wtest(matrix, b_columns, toler_value)
     solve: list[float] | list[list[float]] = (
         solve_rows if b_is_matrix and ntest > 1 else [row[0] for row in solve_rows]
     )
@@ -16534,38 +16211,6 @@ def _cox_detail_rorder(rorder: Any) -> str:
         ("data", "time"),
         "rorder must be 'data' or 'time'",
     )
-
-
-def _cox_detail_event_times(
-    time: list[float],
-    status: list[int],
-    strata: list[int],
-) -> list[tuple[int, float]]:
-    event_times: dict[int, set[float]] = {}
-    for event_time, event, stratum in zip(time, status, strata, strict=True):
-        if event == 1:
-            event_times.setdefault(stratum, set()).add(event_time)
-    return [
-        (stratum, event_time)
-        for stratum in sorted(event_times)
-        for event_time in sorted(event_times[stratum])
-    ]
-
-
-def _cox_detail_at_risk(
-    time: list[float],
-    entry: list[float] | None,
-    strata: list[int],
-    stratum: int,
-    event_time: float,
-) -> list[int]:
-    return [
-        idx
-        for idx, stop in enumerate(time)
-        if strata[idx] == stratum
-        and stop >= event_time
-        and (entry is None or entry[idx] < event_time)
-    ]
 
 
 def _cox_detail_y(
@@ -19804,6 +19449,7 @@ def coxph_detail(
             rows,
             _float_vector(coefficients, "coefficients"),
             _optional_float_vector(weights, "weights", len(rows)) if weights is not None else None,
+            riskmat=include_riskmat,
         )
 
     if fit is None:
@@ -19834,7 +19480,6 @@ def coxph_detail(
 
     center = _cox_reference_center(model, "sample")
     offset = _cox_fit_offset(model, beta)
-    event_groups = _cox_detail_event_times(time, status, strata)
     detail = _core.coxph_detail(
         time,
         status,
@@ -19846,15 +19491,10 @@ def coxph_detail(
         offset=offset,
         method=method,
         center=center,
+        riskmat=include_riskmat,
     )
     detail_rows = list(detail.rows)
-    risk_matrix_columns: list[list[int]] = []
-
-    for stratum, event_time in event_groups:
-        at_risk = _cox_detail_at_risk(time, entry, strata, stratum, event_time)
-        if include_riskmat:
-            at_risk_set = set(at_risk)
-            risk_matrix_columns.append([1 if idx in at_risk_set else 0 for idx in range(n)])
+    event_groups = [(int(row.stratum), float(row.time)) for row in detail_rows]
 
     row_order = _cox_detail_row_order(time, status, strata, rorder_name)
     x_rows = [rows[idx] for idx in row_order]
@@ -19864,7 +19504,14 @@ def coxph_detail(
     risk_matrix = None
     sortorder = row_order if rorder_name == "time" else None
     if include_riskmat:
-        risk_matrix = [[column[idx] for column in risk_matrix_columns] for idx in row_order]
+        native_risk_matrix = detail.riskmat
+        if native_risk_matrix is None:
+            raise RuntimeError("native Cox detail omitted the requested risk matrix")
+        risk_matrix = (
+            native_risk_matrix
+            if rorder_name == "data"
+            else [native_risk_matrix[idx] for idx in row_order]
+        )
 
     has_case_weights = any(abs(weight - 1.0) > 1e-12 for weight in weights)
     return CoxPHDetailResult(
@@ -20163,6 +19810,20 @@ def aareg(
     if not isinstance(formula, str):
         raise TypeError("aareg formula must be a string or AaregOptions")
 
+    response_spec = _formula_response_spec(formula)
+    _lhs, _separator, rhs = formula.partition("~")
+    formula_terms = _split_terms(rhs, _dot_terms(data, response_spec.columns))
+    if len(formula_terms.clusters) > 1:
+        raise ValueError("a formula cannot have multiple cluster terms")
+    ignored_formula_clusters: tuple[str, ...] = ()
+    if formula_terms.clusters and cluster is not None:
+        ignored_formula_clusters = tuple(formula_terms.clusters)
+        warnings.warn(
+            "cluster appears both in a formula and as an argument, formula term ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     if subset is not None:
         data, aligned = _subset_formula_inputs(
             formula,
@@ -20177,21 +19838,19 @@ def aareg(
         formula,
         data,
         na_action,
+        exclude_columns=ignored_formula_clusters,
         weights=weights,
         cluster=cluster,
     )
     weights = aligned["weights"]
     cluster = aligned["cluster"]
 
-    response_spec = _formula_response_spec(formula)
     response, terms = _parse_formula(formula, data)
     if response.type not in {"right", "counting"}:
         raise ValueError(f'Aalen model does not support "{response.type}" survival data')
     if terms.strata:
         raise ValueError("strata terms are not allowed in aareg formulas")
-    if terms.clusters:
-        if cluster is not None:
-            raise ValueError("use only one of formula cluster(...) or cluster")
+    if terms.clusters and cluster is None:
         cluster = _combined_columns(data, terms.clusters, len(response))
     if terms.offsets:
         _offset_vector(data, terms.offsets, len(response))
@@ -20244,7 +19903,7 @@ def aareg(
             data,
             response,
             design,
-            extra_columns=terms.clusters,
+            extra_columns=() if ignored_formula_clusters else terms.clusters,
             weights=weights,
             cluster=cluster_values,
         )
@@ -20317,6 +19976,8 @@ def coxph(
 ):
     """Fit a Cox proportional hazards model from Surv plus covariates."""
 
+    case_weight_column = kwargs.pop("_weights_column", None)
+    id_column = kwargs.pop("_id_column", None)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     singular_ok = _pop_dotted_keyword(
         kwargs,
@@ -20332,6 +19993,16 @@ def coxph(
     method_name = _cox_tie_method(method, ties)
     robust_value = _normalize_optional_bool_option(robust, "robust")
     explicit_weights = weights is not None
+    if case_weight_column is None and isinstance(weights, str):
+        case_weight_column = weights
+    if id_column is None and isinstance(id, str):
+        id_column = id
+    for column, name in (
+        (case_weight_column, "_weights_column"),
+        (id_column, "_id_column"),
+    ):
+        if column is not None and (not isinstance(column, str) or not column):
+            raise TypeError(f"{name} must be a non-empty string")
     keep_model = _normalize_bool_option_with_default(model, "model", False)
     keep_y = _normalize_bool_option_with_default(y, "y", True)
     singular_ok_value = _normalize_bool_option_with_default(singular_ok, "singular_ok", True)
@@ -20358,6 +20029,8 @@ def coxph(
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
+        weights = _column_or_values(data, weights, "weights") if weights is not None else None
+        id_arg = _column_or_values(data, id_arg, "id") if id_arg is not None else None
         if subset is not None:
             data, aligned = _subset_formula_inputs(
                 response,
@@ -20600,10 +20273,12 @@ def coxph(
             formula=formula_string,
             coefficient_names=direct_coefficient_names,
             case_weights=case_weights,
+            case_weight_column=case_weight_column,
             robust_variance=robust_variance,
             naive_variance=naive_variance,
             cluster=cluster_values,
             id_values=id_values,
+            id_column=id_column,
             x_matrix=formula_x_matrix,
             y_response=response if formula_design is not None and keep_y else None,
             model_frame=model_frame,

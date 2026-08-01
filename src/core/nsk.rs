@@ -106,7 +106,11 @@ impl NaturalSplineKnot {
     pub fn basis(&self, x: Vec<f64>) -> PyResult<SplineBasisResult> {
         let n = x.len();
         validate_df(self.df, self.intercept)?;
-        validate_finite_slice(&x, "x")?;
+        if let Some((idx, value)) = x.iter().enumerate().find(|(_, value)| value.is_infinite()) {
+            return Err(value_error(format!(
+                "x contains non-finite value {value} at index {idx}"
+            )));
+        }
         validate_finite_slice(&self.knots, "knots")?;
         if !uses_data_boundary(self.boundary_knots) {
             validate_boundary_knots(self.boundary_knots)?;
@@ -122,8 +126,13 @@ impl NaturalSplineKnot {
             });
         }
 
+        let observed_x: Vec<f64> = x.iter().copied().filter(|value| !value.is_nan()).collect();
+        if observed_x.is_empty() {
+            return Err(value_error("x must contain at least one non-missing value"));
+        }
+
         let mut all_knots = resolve_all_knots(
-            &x,
+            &observed_x,
             &self.knots,
             self.boundary_knots,
             self.df,
@@ -141,7 +150,13 @@ impl NaturalSplineKnot {
 
         let basis: Vec<f64> = x
             .par_iter()
-            .flat_map(|&xi| natural_spline_raw_basis_at_point(xi, &all_knots))
+            .flat_map(|&xi| {
+                if xi.is_nan() {
+                    vec![f64::NAN; n_raw_basis]
+                } else {
+                    natural_spline_raw_basis_at_point(xi, &all_knots)
+                }
+            })
             .collect();
 
         let transformed_basis =
@@ -411,14 +426,18 @@ fn transform_to_knot_heights(
         })
         .collect();
 
-    if let Some((idx, value)) = transformed
-        .iter()
-        .enumerate()
-        .find(|(_, value)| !value.is_finite())
-    {
-        return Err(value_error(format!(
-            "knot-height transform produced non-finite value {value} at index {idx}"
-        )));
+    let n_output = n_basis - usize::from(!intercept);
+    for (row_idx, row) in transformed.chunks(n_output).enumerate() {
+        if row.iter().all(|value| value.is_nan()) {
+            continue;
+        }
+        if let Some((col_idx, value)) = row.iter().enumerate().find(|(_, value)| !value.is_finite())
+        {
+            let idx = row_idx * n_output + col_idx;
+            return Err(value_error(format!(
+                "knot-height transform produced non-finite value {value} at index {idx}"
+            )));
+        }
     }
 
     Ok(transformed)
@@ -503,7 +522,8 @@ mod tests {
     fn test_nsk_rejects_malformed_inputs() {
         initialize_python();
 
-        assert!(nsk(vec![1.0, f64::NAN], Some(3), None, None).is_err());
+        assert!(nsk(vec![1.0, f64::INFINITY], Some(3), None, None).is_err());
+        assert!(nsk(vec![f64::NAN, f64::NAN], Some(3), None, None).is_err());
         assert!(nsk(vec![1.0, 1.0], Some(3), None, None).is_err());
         assert!(nsk(vec![1.0, 2.0], Some(0), None, None).is_err());
         assert!(nsk(vec![1.0, 2.0], Some(3), None, Some((2.0, 2.0))).is_err());
@@ -514,6 +534,35 @@ mod tests {
             .expect("duplicate computed quantile knots collapse like R survival::nsk");
         assert_eq!(tied.n_cols, 2);
         assert_eq!(tied.knots, vec![1.0]);
+    }
+
+    #[test]
+    fn test_nsk_preserves_missing_rows_and_uses_observed_values_for_knots() {
+        let result = nsk(vec![1.0, f64::NAN, 2.0, 3.0, 4.0], Some(3), None, None).unwrap();
+        let observed = nsk(vec![1.0, 2.0, 3.0, 4.0], Some(3), None, None).unwrap();
+
+        assert_eq!(result.n_rows, 5);
+        assert_eq!(result.n_cols, observed.n_cols);
+        assert_eq!(result.knots, observed.knots);
+        assert_eq!(result.boundary_knots, observed.boundary_knots);
+        assert!(
+            result.basis[result.n_cols..2 * result.n_cols]
+                .iter()
+                .all(|value| value.is_nan())
+        );
+
+        for (result_row, observed_row) in [0, 2, 3, 4].into_iter().zip(0..4) {
+            let result_start = result_row * result.n_cols;
+            let observed_start = observed_row * observed.n_cols;
+            for col_idx in 0..result.n_cols {
+                assert!(
+                    (result.basis[result_start + col_idx]
+                        - observed.basis[observed_start + col_idx])
+                        .abs()
+                        < 1e-12
+                );
+            }
+        }
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub(crate) mod survfitaj_module;
 pub(crate) mod survfitkm_module;
 
 pub use aggregate_survfit_module::{
-    AggregateSurvfitResult, aggregate_survfit, aggregate_survfit_by_group,
+    AggregateSurvfitResult, aggregate_shared_survfit, aggregate_survfit, aggregate_survfit_by_group,
 };
 pub use agsurv4_module::agsurv4;
 pub use agsurv5_module::agsurv5;
@@ -68,8 +68,8 @@ pub use statefig_module::{
 pub use survfit_confint_module::survfit_confint_native;
 pub use survfit_matrix::{
     SurvfitMatrixResult, basehaz, condition_cox_survfit_curves, cox_survfit_from_baseline,
-    step_values_at, survfit_from_cumhaz, survfit_from_hazard, survfit_from_matrix,
-    survfit_multistate,
+    step_matrix_values_at, step_values_at, survfit_from_cumhaz, survfit_from_hazard,
+    survfit_from_matrix, survfit_multistate,
 };
 pub use survfitaj_extended_module::{
     AalenJohansenExtendedConfig, AalenJohansenExtendedResult, TransitionMatrix, TransitionType,
@@ -79,7 +79,7 @@ pub use survfitaj_module::{SurvFitAJ, survfitaj};
 pub use survfitkm_module::{
     CountingSurvfitTables, KaplanMeierConfig, SurvFitKMInfluenceOutput, SurvFitKMOutput,
     SurvfitCurveResult, SurvfitKMOptions, compute_robust_survfitkm_with_timefix, compute_survfitkm,
-    counting_survfit_tables, robust_counting_survfit_variance, robust_survfitkm,
-    survfit_curve_from_tables, survfitkm, survfitkm_counting_influence, survfitkm_influence,
-    survfitkm_with_options,
+    counting_survfit_tables, robust_counting_survfit_variance, robust_right_survfit_variance,
+    robust_survfitkm, survfit_curve_from_tables, survfitkm, survfitkm_counting_influence,
+    survfitkm_influence, survfitkm_with_options,
 };

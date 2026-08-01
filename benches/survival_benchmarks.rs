@@ -1012,6 +1012,33 @@ mod simd_bench {
     }
 }
 
+mod timeline_range_bench {
+    use super::*;
+    use survival::data_prep::to_timeline;
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn interval_projection(bencher: divan::Bencher, n: usize) {
+        let subjects = 100;
+        let id: Vec<i32> = (0..n).map(|row| (row % subjects) as i32).collect();
+        let time1: Vec<f64> = (0..n).map(|row| (row / subjects) as f64).collect();
+        let time2: Vec<f64> = time1.iter().map(|time| time + 1.0).collect();
+        let status: Vec<i32> = (0..n).map(|row| (row % 4) as i32).collect();
+
+        bencher.bench_local(|| {
+            black_box(
+                to_timeline(
+                    id.clone(),
+                    time1.clone(),
+                    time2.clone(),
+                    status.clone(),
+                    None,
+                )
+                .expect("benchmark timeline intervals should be valid"),
+            )
+        });
+    }
+}
+
 mod tmerge_bench {
     use super::*;
     use survival::data_prep::{tmerge, tmerge2};
@@ -1056,6 +1083,33 @@ mod tmerge_bench {
                     increment.clone(),
                 )
                 .expect("benchmark tmerge inputs should be valid"),
+            )
+        });
+    }
+}
+
+mod surv2data_bench {
+    use super::*;
+    use survival::data_prep::surv2data_timeline;
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn timeline_construction(bencher: divan::Bencher, n: usize) {
+        let id: Vec<i64> = (0..n).map(|row| (row / 10) as i64).collect();
+        let time: Vec<f64> = (0..n).map(|row| (9 - row % 10) as f64).collect();
+        let status: Vec<Option<i32>> = (0..n)
+            .map(|row| {
+                Some(if row % 4 == 0 {
+                    0
+                } else {
+                    (row % 3 + 1) as i32
+                })
+            })
+            .collect();
+
+        bencher.bench_local(|| {
+            black_box(
+                surv2data_timeline(id.clone(), time.clone(), status.clone(), false)
+                    .expect("benchmark Surv2data timeline should be valid"),
             )
         });
     }
