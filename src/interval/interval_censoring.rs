@@ -413,6 +413,20 @@ fn turnbull_case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
     weights.map_or(1.0, |values| values[index])
 }
 
+#[inline]
+fn turnbull_support_range(all_points: &[f64], left: f64, right: f64) -> (usize, usize) {
+    if left.is_nan() || right.is_nan() {
+        return (0, 0);
+    }
+    let start = all_points.partition_point(|&time| time < left);
+    let end = if right == f64::INFINITY {
+        all_points.len()
+    } else {
+        all_points.partition_point(|&time| time <= right)
+    };
+    (start, end.max(start))
+}
+
 fn validate_turnbull_inputs(left: &[f64], right: &[f64], weights: Option<&[f64]>) -> PyResult<()> {
     let n = left.len();
     if right.len() != n {
@@ -486,6 +500,11 @@ fn compute_turnbull_estimator(
     }
 
     let m = all_points.len();
+    let support_ranges: Vec<(usize, usize)> = left
+        .iter()
+        .zip(right)
+        .map(|(&left, &right)| turnbull_support_range(&all_points, left, right))
+        .collect();
     let mut p = vec![1.0 / m as f64; m];
 
     let mut converged = false;
@@ -497,23 +516,18 @@ fn compute_turnbull_estimator(
 
         let mut p_new = vec![0.0; m];
 
-        for i in 0..n {
+        for (i, &(start, end)) in support_ranges.iter().enumerate() {
             let case_weight = turnbull_case_weight(weights, i);
             if case_weight == 0.0 {
                 continue;
             }
             let mut sum_p = 0.0;
-            let mut contributing_intervals: Vec<usize> = Vec::new();
-
-            for (j, &t) in all_points.iter().enumerate() {
-                if t >= left[i] && (right[i] == f64::INFINITY || t <= right[i]) {
-                    sum_p += p[j];
-                    contributing_intervals.push(j);
-                }
+            for &probability in &p[start..end] {
+                sum_p += probability;
             }
 
             if sum_p > 0.0 {
-                for &j in &contributing_intervals {
+                for j in start..end {
                     let w = p[j] / sum_p;
                     p_new[j] += case_weight * w;
                 }
@@ -685,6 +699,35 @@ mod tests {
         let result = turnbull_estimator(left, right, 100, 1e-4, None).unwrap();
         assert!(!result.time_points.is_empty());
         assert!(result.survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
+    }
+
+    #[test]
+    fn test_turnbull_support_range_matches_interval_membership() {
+        let points = vec![-1.0, 1.0, 2.0, 3.0, 5.0, f64::INFINITY];
+        let cases = [
+            (0.0, 1.0),
+            (2.0, 3.0),
+            (3.0, f64::INFINITY),
+            (4.0, 2.0),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (f64::INFINITY, f64::INFINITY),
+            (f64::NEG_INFINITY, f64::NEG_INFINITY),
+            (f64::NAN, f64::INFINITY),
+            (0.0, f64::NAN),
+        ];
+
+        for (left, right) in cases {
+            let (start, end) = turnbull_support_range(&points, left, right);
+            let actual: Vec<usize> = (start..end).collect();
+            let expected: Vec<usize> = points
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &time)| {
+                    (time >= left && (right == f64::INFINITY || time <= right)).then_some(idx)
+                })
+                .collect();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
