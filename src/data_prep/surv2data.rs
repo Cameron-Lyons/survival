@@ -20,6 +20,88 @@ pub struct Surv2DataResult {
     pub row_index: Vec<usize>,
 }
 
+#[pyclass(from_py_object)]
+#[derive(Debug, Clone)]
+pub struct Surv2TimelineResult {
+    #[pyo3(get)]
+    pub row_index: Vec<usize>,
+    #[pyo3(get)]
+    pub start: Vec<f64>,
+    #[pyo3(get)]
+    pub stop: Vec<f64>,
+    #[pyo3(get)]
+    pub status: Vec<i32>,
+    #[pyo3(get)]
+    pub istate: Vec<Option<i32>>,
+}
+
+#[pyfunction]
+#[pyo3(signature = (id, time, status, repeated=false))]
+pub fn surv2data_timeline(
+    id: Vec<i64>,
+    time: Vec<f64>,
+    status: Vec<Option<i32>>,
+    repeated: bool,
+) -> PyResult<Surv2TimelineResult> {
+    let n = id.len();
+    if time.len() != n || status.len() != n {
+        return Err(PyValueError::new_err(
+            "id, time, and status must have the same length",
+        ));
+    }
+    validate_no_nan(&time, "time")?;
+
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_unstable_by(|&left, &right| {
+        id[left]
+            .cmp(&id[right])
+            .then_with(|| time[left].total_cmp(&time[right]))
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut intervals = vec![None; n];
+    let mut n_intervals = 0;
+    for pair in order.windows(2) {
+        let current = pair[0];
+        let next = pair[1];
+        if id[current] != id[next] {
+            continue;
+        }
+        if time[current] == time[next] {
+            return Err(PyValueError::new_err(
+                "duplicated time values for a single id",
+            ));
+        }
+
+        let current_state = status[current];
+        let mut event = status[next].unwrap_or(0);
+        if !repeated && current_state == Some(event) {
+            event = 0;
+        }
+        intervals[current] = Some((time[current], time[next], event, current_state));
+        n_intervals += 1;
+    }
+
+    let mut result = Surv2TimelineResult {
+        row_index: Vec::with_capacity(n_intervals),
+        start: Vec::with_capacity(n_intervals),
+        stop: Vec::with_capacity(n_intervals),
+        status: Vec::with_capacity(n_intervals),
+        istate: Vec::with_capacity(n_intervals),
+    };
+    for (row_index, interval) in intervals.into_iter().enumerate() {
+        let Some((start, stop, event, istate)) = interval else {
+            continue;
+        };
+        result.row_index.push(row_index);
+        result.start.push(start);
+        result.stop.push(stop);
+        result.status.push(event);
+        result.istate.push(istate);
+    }
+    Ok(result)
+}
+
 #[pyfunction]
 #[pyo3(signature = (id, time, event_time=None, event_status=None))]
 pub fn surv2data(
@@ -310,6 +392,55 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("duplicated time values for a single id")
+        );
+    }
+
+    #[test]
+    fn surv2data_timeline_builds_original_row_order_and_suppresses_stutter() {
+        let result = surv2data_timeline(
+            vec![1, 2, 1, 1, 2],
+            vec![0.0, 0.0, 5.0, 2.0, 3.0],
+            vec![Some(1), Some(1), Some(3), Some(2), None],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.row_index, vec![0, 1, 3]);
+        assert_eq!(result.start, vec![0.0, 0.0, 2.0]);
+        assert_eq!(result.stop, vec![2.0, 3.0, 5.0]);
+        assert_eq!(result.status, vec![2, 0, 3]);
+        assert_eq!(result.istate, vec![Some(1), Some(1), Some(2)]);
+
+        let stutter = surv2data_timeline(
+            vec![1, 1, 1],
+            vec![0.0, 1.0, 2.0],
+            vec![Some(1), Some(1), Some(2)],
+            false,
+        )
+        .unwrap();
+        let repeated = surv2data_timeline(
+            vec![1, 1, 1],
+            vec![0.0, 1.0, 2.0],
+            vec![Some(1), Some(1), Some(2)],
+            true,
+        )
+        .unwrap();
+        assert_eq!(stutter.status, vec![0, 2]);
+        assert_eq!(repeated.status, vec![1, 2]);
+    }
+
+    #[test]
+    fn surv2data_timeline_validates_lengths_missing_times_and_duplicates() {
+        assert!(surv2data_timeline(vec![1], vec![], vec![Some(1)], false).is_err());
+        assert!(surv2data_timeline(vec![1], vec![f64::NAN], vec![Some(1)], false).is_err());
+        assert!(
+            surv2data_timeline(
+                vec![1, 1],
+                vec![f64::INFINITY, f64::INFINITY],
+                vec![Some(1), Some(2)],
+                false,
+            )
+            .is_err()
         );
     }
 }

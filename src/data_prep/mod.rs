@@ -28,7 +28,7 @@ pub use collapse_module::collapse;
 pub use neardate_module::{NearDateResult, neardate, neardate_str};
 pub use rttright_module::{RttrightResult, rttright, rttright_stratified};
 pub use strata_module::{StrataResult, strata, strata_str};
-pub use surv2data_module::{Surv2DataResult, surv2data};
+pub use surv2data_module::{Surv2DataResult, Surv2TimelineResult, surv2data, surv2data_timeline};
 pub use survcondense_module::{CondenseResult, survcondense};
 pub use survsplit_module::{SplitResult, survsplit};
 pub use tcut_module::{TcutResult, tcut, tcut_expand};

@@ -1061,6 +1061,33 @@ mod tmerge_bench {
     }
 }
 
+mod surv2data_bench {
+    use super::*;
+    use survival::data_prep::surv2data_timeline;
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn timeline_construction(bencher: divan::Bencher, n: usize) {
+        let id: Vec<i64> = (0..n).map(|row| (row / 10) as i64).collect();
+        let time: Vec<f64> = (0..n).map(|row| (9 - row % 10) as f64).collect();
+        let status: Vec<Option<i32>> = (0..n)
+            .map(|row| {
+                Some(if row % 4 == 0 {
+                    0
+                } else {
+                    (row % 3 + 1) as i32
+                })
+            })
+            .collect();
+
+        bencher.bench_local(|| {
+            black_box(
+                surv2data_timeline(id.clone(), time.clone(), status.clone(), false)
+                    .expect("benchmark Surv2data timeline should be valid"),
+            )
+        });
+    }
+}
+
 fn main() {
     divan::main();
 }

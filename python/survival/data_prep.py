@@ -20,6 +20,8 @@ __all__ = bind_names(
         "strata_str",
         "Surv2DataResult",
         "surv2data",
+        "Surv2TimelineResult",
+        "surv2data_timeline",
         "CondenseResult",
         "survcondense",
         "SplitResult",

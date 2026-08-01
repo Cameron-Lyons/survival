@@ -7,6 +7,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survsplit, m)?)?;
     m.add_function(wrap_pyfunction!(survcondense, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data, m)?)?;
+    m.add_function(wrap_pyfunction!(surv2data_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(to_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(aeq_surv, m)?)?;
@@ -26,6 +27,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         SplitResult,
         CondenseResult,
         Surv2DataResult,
+        Surv2TimelineResult,
         TimelineResult,
         IntervalResult,
         AeqSurvResult,
