@@ -26,6 +26,11 @@ model retention options.
 `coxph` formula fits support `tt(...)` terms for right-censored and
 counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
+Low-level `survreg.fit` calls for the built-in extreme-value, logistic,
+Gaussian, and Student-t distributions use the Rust AFT optimizer directly.
+The returned coefficient, null-fit, covariance, likelihood, score, and linear
+predictor components retain the standard R shape for fixed, stratified, and
+interval-censored fits.
 
 Time-dependent data construction is also native: `tmerge` evaluates the
 familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the
