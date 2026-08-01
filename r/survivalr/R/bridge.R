@@ -8152,6 +8152,30 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
     stop("id is required", call. = FALSE)
   }
   env <- parent.frame()
+  start_missing <- missing(start)
+  end_missing <- missing(end)
+  event_missing <- missing(event)
+  event_source <- NULL
+  response_call <- formula[[2L]]
+  if (
+    is.call(response_call) &&
+      is.name(response_call[[1L]]) &&
+      identical(response_call[[1L]], quote(Surv))
+  ) {
+    matched_response <- match.call(Surv, response_call)
+    if (start_missing && !is.null(matched_response$time) && is.name(matched_response$time)) {
+      start <- as.character(matched_response$time)
+    }
+    if (end_missing && !is.null(matched_response$time2) && is.name(matched_response$time2)) {
+      end <- as.character(matched_response$time2)
+    }
+    if (event_missing && !is.null(matched_response$event) && is.name(matched_response$event)) {
+      event <- as.character(matched_response$event)
+    }
+    if (!is.null(matched_response$event)) {
+      event_source <- eval(matched_response$event, data, env)
+    }
+  }
   id_name <- paste(deparse(substitute(id), width.cutoff = 500L), collapse = " ")
   weight_name <- if (missing(weights)) {
     NULL
@@ -8180,7 +8204,15 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
   for (column in strata_columns) {
     frame[[column]] <- factor(frame[[column]])
   }
-  .restore_r_column_classes(frame, data)
+  event_values <- frame[[event]]
+  frame <- .restore_r_column_classes(frame, data)
+  if (is.factor(event_source)) {
+    frame[[event]] <- factor(
+      as.character(event_values),
+      levels = c("censor", levels(event_source)[-1L])
+    )
+  }
+  frame
 }
 
 coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {

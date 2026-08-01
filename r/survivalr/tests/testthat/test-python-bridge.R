@@ -4285,6 +4285,48 @@ test_that("data-prep helpers match R survival shapes", {
     survcondense(condense_offset_formula, data = condense_special_data, id = id),
     survival::survcondense(condense_offset_formula, data = condense_special_data, id = id)
   )
+  condense_multistate_data <- data.frame(
+    id = rep(1:3, each = 2),
+    tstart = rep(c(0, 1), 3),
+    tstop = rep(c(1, 2), 3),
+    state = factor(
+      c("a", "censor", "b", "a", "a", "b"),
+      levels = c("censor", "a", "b")
+    ),
+    x = rep(1:3, each = 2)
+  )
+  condense_multistate_formula <- Surv(tstart, tstop, state) ~ x
+  environment(condense_multistate_formula) <- environment(reference_formula)
+  expect_equal(
+    survcondense(
+      condense_multistate_formula,
+      data = condense_multistate_data,
+      id = id
+    ),
+    survival::survcondense(
+      condense_multistate_formula,
+      data = condense_multistate_data,
+      id = id
+    )
+  )
+  expect_equal(
+    survcondense(
+      condense_multistate_formula,
+      data = condense_multistate_data,
+      id = id,
+      start = "begin",
+      end = "finish",
+      event = "transition"
+    ),
+    survival::survcondense(
+      condense_multistate_formula,
+      data = condense_multistate_data,
+      id = id,
+      start = "begin",
+      end = "finish",
+      event = "transition"
+    )
+  )
 })
 
 test_that("Cox bridge agrees with R survival on a small right-censored fixture", {
