@@ -2401,6 +2401,10 @@ class SurvFitKMInfluenceOutput:
     def influence_surv(self) -> list[list[float]]: ...
     @property
     def influence_chaz(self) -> list[list[float]]: ...
+    @property
+    def std_err(self) -> list[float]: ...
+    @property
+    def std_chaz(self) -> list[float]: ...
 
 class CountingSurvfitTables:
     @property
@@ -6035,6 +6039,7 @@ def survfitkm_influence(
     conf_level: float | None = None,
     conf_type: str | None = None,
     timefix: bool | None = None,
+    include_influence: bool = True,
 ) -> SurvFitKMInfluenceOutput: ...
 def survfitkm_counting_influence(
     start: list[float],
