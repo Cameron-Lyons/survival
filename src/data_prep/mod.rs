@@ -28,7 +28,9 @@ pub use cluster_module::{ClusterResult, cluster, cluster_str};
 pub use collapse_module::collapse;
 pub use lvcf::lvcf_indices;
 pub use neardate_module::{NearDateResult, neardate, neardate_str};
-pub use rttright_module::{RttrightResult, rttright, rttright_matrix, rttright_stratified};
+pub use rttright_module::{
+    RttrightResult, rttright, rttright_matrix, rttright_stratified, rttright_time_matrix,
+};
 pub use strata_module::{StrataResult, strata, strata_str};
 pub use surv2data_module::{Surv2DataResult, Surv2TimelineResult, surv2data, surv2data_timeline};
 pub use survcondense_module::{CondenseResult, survcondense};

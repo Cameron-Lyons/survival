@@ -8171,13 +8171,29 @@ def _rttright_time_matrix(
 ) -> list[float] | list[list[float]]:
     time_values = [float(value) for value in time]
     status_values = [int(value) for value in status]
+    n = len(time_values)
+    if len(status_values) != n:
+        raise ValueError("time and status must have same length")
+    if any(value not in (0, 1) for value in status_values):
+        raise ValueError("status must contain only 0/1 values")
+    if any(not math.isfinite(value) for value in time_values):
+        raise ValueError("time must be finite")
+
     query_times = _rttright_times_vector(times)
-    matrix = _core.rttright_matrix(
+    case_weights = _rttright_initial_weights(weights, n)
+    if group is None:
+        group_values = None
+    else:
+        group_values = [int(value) for value in group]
+        if len(group_values) != n:
+            raise ValueError("rttright strata must have the same length as the Surv response")
+
+    matrix = _core.rttright_time_matrix(
         time_values,
         status_values,
         query_times,
-        None if group is None else [int(value) for value in group],
-        None if weights is None else _float_vector(weights, "weights"),
+        case_weights,
+        group_values,
         timefix,
         renorm,
     )
