@@ -1044,12 +1044,14 @@ survival when the fitted Cox model used Efron ties.}
 \item{complete}{Logical flag requesting the full variance matrix where the
 Python fit exposes extra parameters such as estimated survreg scale terms.}
 \item{offset, init, control, rownames, resid, nocenter}{Low-level
-\code{coxph.fit}, \code{agexact.fit}, \code{agreg.fit}, and delegated
-\code{survreg.fit}/\code{survpenal.fit} optimizer inputs matching the R
+\code{coxph.fit}, \code{agexact.fit}, \code{agreg.fit}, native built-in
+\code{survreg.fit}, and delegated \code{survpenal.fit} optimizer inputs matching the R
 \pkg{survival} entry points. \code{offset} is also accepted by
 \code{statefig}.}
-\item{controlvals, dist, nstrat, pcols, pattr, assign}{Low-level delegated
-\code{survreg.fit} and \code{survpenal.fit} inputs.}
+\item{controlvals, dist, nstrat, pcols, pattr, assign}{Low-level
+\code{survreg.fit} and \code{survpenal.fit} inputs. Built-in extreme-value,
+logistic, Gaussian, and Student-t \code{survreg.fit} distributions use the
+Rust optimizer; custom density callbacks retain the upstream fallback.}
 \item{varmat, wt, risk, newrisk, position, oldid, x2, risk2, strata2,
 survtype, vartype, unlist}{Low-level delegated Cox survival-curve inputs.}
 \item{var}{Variance matrix for \code{coxph.wtest}.}
@@ -1097,6 +1099,11 @@ expansion directly. The bridge supports weights, subsets, missing-data actions,
 strata, counting-process histories, and delayed entry; computes censoring risk
 sets with sorted sweeps; and restores factor and \code{I(...)} column classes
 on the returned data frame.
+
+Built-in \code{survreg.fit} matrix calls use positive-definite
+observed-information steps with an outer-product fallback. Fixed and
+stratified scales, left and interval censoring, null likelihoods, covariance,
+scores, and linear predictors are returned in the usual low-level R shape.
 }
 \seealso{
 \code{\link{survival_python_config}}

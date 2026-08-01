@@ -4577,6 +4577,93 @@ test_that("Cox zph bridge remaps partially aliased terms like R survival", {
   }
 })
 
+test_that("survreg.fit matches built-in low-level fits", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  x <- cbind(
+    `(Intercept)` = 1,
+    x = c(-1, 0, 1, 2, 3, 4)
+  )
+  y <- unclass(survival::Surv(
+    c(1.2, 2.1, 3.0, 4.5, 6.2, 8.1),
+    c(1, 1, 0, 1, 1, 0)
+  ))
+  weights <- rep(1, nrow(x))
+  offset <- rep(0, nrow(x))
+  control <- survreg.control(maxiter = 150, rel.tolerance = 1e-10)
+  reference_control <- survival::survreg.control(maxiter = 150, rel.tolerance = 1e-10)
+
+  compare_fit <- function(dist, scale = 0, parms = NULL, tolerance = 1e-5) {
+    bridged <- survreg.fit(
+      x, y, weights, offset, NULL, control, dist,
+      scale = scale, nstrat = 1, parms = parms
+    )
+    reference <- survival::survreg.fit(
+      x, y, weights, offset, NULL, reference_control, dist,
+      scale = scale, nstrat = 1, parms = parms
+    )
+    expect_equal(names(bridged), names(reference))
+    expect_equal(bridged$coefficients, reference$coefficients, tolerance = tolerance)
+    expect_equal(bridged$icoef, reference$icoef, tolerance = tolerance)
+    expect_equal(bridged$var, reference$var, tolerance = tolerance)
+    expect_equal(bridged$loglik, reference$loglik, tolerance = tolerance)
+    expect_equal(bridged$linear.predictors, reference$linear.predictors, tolerance = tolerance)
+    expect_equal(bridged$df, reference$df)
+    expect_lt(max(abs(bridged$score)), 1e-5)
+  }
+
+  for (distribution in c("gaussian", "logistic", "extreme")) {
+    compare_fit(distribution)
+  }
+  compare_fit("gaussian", scale = 1.5)
+  compare_fit(survreg.distributions$t, parms = 5, tolerance = 1e-4)
+
+  stratified_x <- cbind(
+    `(Intercept)` = 1,
+    x = c(-2, -1, 0, 1, -2, -1, 0, 1)
+  )
+  stratified_y <- unclass(survival::Surv(
+    c(1, 2, 3, 5, 2, 4, 6, 9),
+    c(1, 1, 0, 1, 1, 0, 1, 1)
+  ))
+  strata <- rep(1:2, each = 4)
+  bridged_stratified <- survreg.fit(
+    stratified_x, stratified_y, rep(1, 8), rep(0, 8), NULL,
+    control, "gaussian", nstrat = 2, strata = strata
+  )
+  reference_stratified <- survival::survreg.fit(
+    stratified_x, stratified_y, rep(1, 8), rep(0, 8), NULL,
+    reference_control, "gaussian", nstrat = 2, strata = strata
+  )
+  expect_equal(
+    bridged_stratified$coefficients,
+    reference_stratified$coefficients,
+    tolerance = 1e-5
+  )
+  expect_equal(bridged_stratified$var, reference_stratified$var, tolerance = 1e-5)
+  expect_equal(bridged_stratified$loglik, reference_stratified$loglik, tolerance = 1e-5)
+
+  interval_x <- cbind(`(Intercept)` = 1, x = c(0.2, 0.4, 0.1, 0.8, 1.0))
+  interval_y <- cbind(
+    time = c(1, 2, 3, 4, 5),
+    time2 = c(1, 2, 3, 4.5, 5),
+    status = c(1, 2, 0, 3, 1)
+  )
+  bridged_interval <- survreg.fit(
+    interval_x, interval_y, rep(1, 5), rep(0, 5), NULL,
+    control, "gaussian"
+  )
+  reference_interval <- survival::survreg.fit(
+    interval_x, interval_y, rep(1, 5), rep(0, 5), NULL,
+    reference_control, "gaussian"
+  )
+  expect_equal(bridged_interval$coefficients, reference_interval$coefficients, tolerance = 1e-5)
+  expect_equal(bridged_interval$var, reference_interval$var, tolerance = 1e-5)
+  expect_equal(bridged_interval$loglik, reference_interval$loglik, tolerance = 1e-5)
+})
+
 test_that("survreg bridge agrees with R survival distributions", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
