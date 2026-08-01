@@ -30,6 +30,11 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(to_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(lvcf_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_replacements, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_numeric_numeric, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_numeric_str, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_str_numeric, m)?)?;
+    m.add_function(wrap_pyfunction!(nostutter_str_str, m)?)?;
     m.add_function(wrap_pyfunction!(aeq_surv, m)?)?;
     m.add_function(wrap_pyfunction!(cluster, m)?)?;
     m.add_function(wrap_pyfunction!(cluster_str, m)?)?;
