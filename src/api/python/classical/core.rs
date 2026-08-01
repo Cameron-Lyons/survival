@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(perform_brier_calculation, m)?)?;
     m.add_function(wrap_pyfunction!(perform_cox_regression_frailty, m)?)?;
     m.add_function(wrap_pyfunction!(perform_pyears_calculation, m)?)?;
     m.add_function(wrap_pyfunction!(perform_survexp_fit, m)?)?;
@@ -80,6 +81,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cipoisson, m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_exact, m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_anscombe, m)?)?;
+    m.add_function(wrap_pyfunction!(pspline_basis, m)?)?;
     m.add_function(wrap_pyfunction!(crate::concordance::basic::concordance, m)?)?;
     m.add_function(wrap_pyfunction!(agexact, m)?)?;
     m.add_function(wrap_pyfunction!(compute_baseline_survival_steps, m)?)?;

@@ -4,6 +4,24 @@ use std::collections::HashMap;
 use std::fmt;
 
 const DAYS_PER_YEAR: f64 = 365.25;
+const DAYS_BEFORE_MONTH: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn days_in_year(year: i32) -> i32 {
+    if is_leap_year(year) { 366 } else { 365 }
+}
+
+fn day_number(year: i32, month: u32, day: u32) -> i64 {
+    let previous_year = i64::from(year) - 1;
+    let days_before_year = 365 * previous_year + previous_year.div_euclid(4)
+        - previous_year.div_euclid(100)
+        + previous_year.div_euclid(400);
+    let leap_day = i64::from(month > 2 && is_leap_year(year));
+    days_before_year + DAYS_BEFORE_MONTH[(month - 1) as usize] + i64::from(day - 1) + leap_day
+}
 
 fn value_error(message: impl Into<String>) -> PyErr {
     PyValueError::new_err(message.into())
@@ -449,14 +467,6 @@ pub fn ratetable_date(
 
     let days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-    fn is_leap_year(y: i32) -> bool {
-        (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
-    }
-
-    fn days_in_year(y: i32) -> f64 {
-        if is_leap_year(y) { 366.0 } else { 365.0 }
-    }
-
     let max_day = if month == 2 && is_leap_year(year) {
         29
     } else {
@@ -466,21 +476,7 @@ pub fn ratetable_date(
         return Err(value_error("day is invalid for the given month and year"));
     }
 
-    let mut total_days: f64 = 0.0;
-
-    for y in origin_year..year {
-        total_days += days_in_year(y);
-    }
-
-    for m in 1..month {
-        let mut d = days_per_month[(m - 1) as usize] as f64;
-        if m == 2 && is_leap_year(year) {
-            d += 1.0;
-        }
-        total_days += d;
-    }
-
-    total_days += (day - 1) as f64;
+    let total_days = (day_number(year, month, day) - day_number(origin_year, 1, 1)) as f64;
 
     let years = total_days / 365.25;
 
@@ -495,14 +491,6 @@ pub fn ratetable_date(
 pub fn days_to_date(days: f64, origin_year: i32) -> PyResult<(i32, u32, u32)> {
     if !days.is_finite() || days < 0.0 {
         return Err(value_error("days must be a finite non-negative value"));
-    }
-
-    fn is_leap_year(y: i32) -> bool {
-        (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
-    }
-
-    fn days_in_year(y: i32) -> i32 {
-        if is_leap_year(y) { 366 } else { 365 }
     }
 
     let days_per_month_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -644,6 +632,16 @@ mod tests {
                 .abs()
                 < 1e-10
         );
+    }
+
+    #[test]
+    fn ratetable_date_supports_pre_origin_and_century_boundaries() {
+        let pre_origin = ratetable_date(1940, 1, 1, 1960).unwrap();
+        assert_eq!(pre_origin.days, -7305.0);
+        assert_eq!(ratetable_date(1959, 12, 31, 1960).unwrap().days, -1.0);
+
+        assert_eq!(ratetable_date(1900, 3, 1, 1900).unwrap().days, 59.0);
+        assert_eq!(ratetable_date(2000, 3, 1, 2000).unwrap().days, 60.0);
     }
 
     #[test]

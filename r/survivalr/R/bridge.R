@@ -2075,14 +2075,14 @@ pspline <- function(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
 
   result <- .call_r_api(
     "pspline",
-    x = .as_python_vector(x),
+    x = if (anyNA(x)) as.list(x) else .as_python_vector(x),
     df = df,
     theta = if (missing(theta)) NULL else theta,
     nterm = nterm,
     degree = degree,
     eps = if (missing(eps)) NULL else eps,
     method = if (missing(method)) NULL else method,
-    boundary_knots = Boundary.knots,
+    boundary_knots = if (missing(Boundary.knots)) NULL else Boundary.knots,
     intercept = intercept,
     penalty = penalty,
     combine = if (missing(combine)) NULL else combine
@@ -2248,28 +2248,30 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   if (length(nomatch) != 1L) {
     stop("nomatch must be a scalar", call. = FALSE)
   }
+  if (is.factor(y1) || is.factor(y2)) {
+    stop("y1 and y2 must be sortable", call. = FALSE)
+  }
   y1 <- as.numeric(y1)
   y2 <- as.numeric(y2)
-  if (any(!is.finite(y1)) || any(!is.finite(y2))) {
-    stop("y1 and y2 must contain only finite values", call. = FALSE)
-  }
+  python_y1 <- lapply(y1, function(value) if (is.na(value)) NaN else value)
+  python_y2 <- lapply(y2, function(value) if (is.na(value)) NaN else value)
 
   if (.is_integerish_vector(id1) && .is_integerish_vector(id2)) {
     result <- .call_data_prep(
       "neardate",
-      as.integer(id1),
-      y1,
-      as.integer(id2),
-      y2,
+      as.list(as.integer(id1)),
+      python_y1,
+      as.list(as.integer(id2)),
+      python_y2,
       best = best
     )
   } else {
     result <- .call_data_prep(
       "neardate_str",
-      as.character(id1),
-      y1,
-      as.character(id2),
-      y2,
+      as.list(as.character(id1)),
+      python_y1,
+      as.list(as.character(id2)),
+      python_y2,
       best = best
     )
   }
@@ -2278,6 +2280,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   matched <- !vapply(indices, is.null, logical(1))
   values <- rep(nomatch, length(indices))
   values[matched] <- as.integer(unlist(indices[matched], use.names = FALSE)) + 1L
+  values[is.na(id1)] <- NA_integer_
   values
 }
 
@@ -2990,30 +2993,30 @@ blog <- function(edge = 0.05) {
     stats::terms(formula_value)
   }
 
-  rcall <- if ("rmap" %in% names(Call)) Call$rmap else NULL
-  if (!is.null(rcall) && (!is.call(rcall) || rcall[[1L]] != as.name("list"))) {
-    stop("Invalid rcall argument", call. = FALSE)
+  rate_call <- if ("rmap" %in% names(Call)) Call$rmap else NULL
+  if (!is.null(rate_call) && (!is.call(rate_call) || rate_call[[1L]] != as.name("list"))) {
+    stop("Invalid rate-call argument", call. = FALSE)
   }
   varlist <- names(dimnames(ratetable))
   if (is.null(varlist)) {
     varlist <- attr(ratetable, "dimid")
   }
-  mapped <- match(names(rcall)[-1L], varlist)
+  mapped <- match(names(rate_call)[-1L], varlist)
   if (any(is.na(mapped))) {
-    stop("Variable not found in the ratetable: ", names(rcall)[-1L][is.na(mapped)], call. = FALSE)
+    stop("Variable not found in the ratetable: ", names(rate_call)[-1L][is.na(mapped)], call. = FALSE)
   }
-  if (any(!(varlist %in% names(rcall)))) {
-    missing_vars <- varlist[!(varlist %in% names(rcall))]
+  if (any(!(varlist %in% names(rate_call)))) {
+    missing_vars <- varlist[!(varlist %in% names(rate_call))]
     additions <- paste(paste(missing_vars, missing_vars, sep = "="), collapse = ",")
-    if (is.null(rcall)) {
-      rcall <- parse(text = paste0("list(", additions, ")"))[[1L]]
+    if (is.null(rate_call)) {
+      rate_call <- parse(text = paste0("list(", additions, ")"))[[1L]]
     } else {
-      rcall <- parse(text = paste0(
-        "c(", paste(deparse(rcall), collapse = ""), ",list(", additions, "))"
+      rate_call <- parse(text = paste0(
+        "c(", paste(deparse(rate_call), collapse = ""), ",list(", additions, "))"
       ))[[1L]]
     }
   }
-  new_variables <- all.vars(rcall)
+  new_variables <- all.vars(rate_call)
   if (length(new_variables) > 0L) {
     expanded_formula <- paste(
       paste(deparse(Terms), collapse = ""),
@@ -3098,7 +3101,7 @@ blog <- function(edge = 0.05) {
   }
 
   output_variables <- attr(Terms, "term.labels")
-  rate_data <- data.frame(eval(rcall, model_frame), stringsAsFactors = TRUE)
+  rate_data <- data.frame(eval(rate_call, model_frame), stringsAsFactors = TRUE)
   if (no_response) {
     response <- rep(max(requested_times), n)
   }
@@ -3838,8 +3841,52 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
   )
 }
 
+.survobrien_result_frame <- function(result, data) {
+  frame <- as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE)
+  if (ncol(frame) > 0L || length(result) == 0L) {
+    return(frame)
+  }
+  empty_columns <- lapply(names(result), function(column) {
+    if (column %in% names(data)) {
+      return(data[[column]][integer()])
+    }
+    if (column %in% c("status", ".id.", ".strata.")) {
+      return(integer())
+    }
+    numeric()
+  })
+  names(empty_columns) <- names(result)
+  as.data.frame(empty_columns, check.names = TRUE, stringsAsFactors = FALSE)
+}
+
+.survobrien_restore_row_names <- function(frame, call, formula, data, enclos) {
+  if (nrow(frame) <= 1L || !".id." %in% names(frame) ||
+      anyDuplicated(frame[[".id."]])) {
+    return(frame)
+  }
+  model_args <- match(
+    c("formula", "data", "subset", "na.action"),
+    names(call),
+    nomatch = 0L
+  )
+  model_call <- call[c(1L, model_args[model_args > 0L])]
+  model_call[[1L]] <- quote(stats::model.frame)
+  model_call$formula <- stats::terms(
+    formula,
+    c("strata", "cluster", "tt"),
+    data = data
+  )
+  model_rows <- row.names(eval(model_call, enclos))
+  output_rows <- model_rows[as.integer(frame[[".id."]])]
+  if (!identical(output_rows, as.character(seq_len(nrow(frame))))) {
+    row.names(frame) <- output_rows
+  }
+  frame
+}
+
 survobrien <- function(formula, data, subset, na.action, transform,
                        time, status, covariate, strata = NULL) {
+  call <- match.call()
   direct_time <- NULL
   if (!missing(time)) {
     direct_time <- time
@@ -3856,10 +3903,16 @@ survobrien <- function(formula, data, subset, na.action, transform,
         `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
         transform = if (missing(transform)) NULL else transform
       )
-      frame <- as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE)
+      frame <- .survobrien_result_frame(result, data)
+      frame <- .survobrien_restore_row_names(
+        frame,
+        call,
+        formula,
+        data,
+        parent.frame()
+      )
       return(.restore_r_column_classes(frame, data))
     }
-    call <- match.call()
     call[[1L]] <- quote(survival::survobrien)
     return(eval.parent(call))
   }
@@ -3890,14 +3943,27 @@ survobrien <- function(formula, data, subset, na.action, transform,
     return(is.factor(value) || (is.numeric(value) && !inherits(value, "AsIs")))
   }
   match <- regexec(
-    "^(log|sqrt|exp|identity|as\\.numeric)\\(([[:space:]]*[^()]+[[:space:]]*)\\)$",
+    paste0(
+      "^(log|sqrt|exp|identity|as\\.numeric|factor|as\\.factor)",
+      "\\(([[:space:]]*[^()]+[[:space:]]*)\\)$"
+    ),
     label
   )
   pieces <- regmatches(label, match)[[1L]]
   if (length(pieces) == 0L) {
     return(FALSE)
   }
+  transform <- pieces[[2L]]
   column <- trimws(pieces[[3L]])
+  if (transform %in% c("factor", "as.factor")) {
+    return(
+      column %in% names(data) &&
+        (is.factor(data[[column]]) ||
+          is.character(data[[column]]) ||
+          is.numeric(data[[column]]) ||
+          is.logical(data[[column]]))
+    )
+  }
   column %in% names(data) && is.numeric(data[[column]]) && !is.factor(data[[column]])
 }
 
@@ -3920,10 +3986,14 @@ survobrien <- function(formula, data, subset, na.action, transform,
   }
   factor_terms <- vapply(
     labels,
-    function(label) label %in% names(data) && is.factor(data[[label]]),
+    function(label) {
+      (label %in% names(data) && is.factor(data[[label]])) ||
+        grepl("^(factor|as\\.factor)\\(", label)
+    },
     logical(1)
   )
-  if (any(factor_terms) && length(specials$strata) > 0L) {
+  if (any(factor_terms) && length(specials$strata) > 0L &&
+      length(specials$cluster) > 0L) {
     return(FALSE)
   }
   all(vapply(labels, .survobrien_formula_supported_term, logical(1), data = data))
@@ -8414,6 +8484,12 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") 
     parent.frame(),
     vector_args = c("weights", "offset", "strata", "cluster", "id")
   )
+  if (!is.null(dots$weights) && is.name(dots$weights)) {
+    evaluated_dots[["_weights_column"]] <- as.character(dots$weights)
+  }
+  if (!is.null(dots$id) && is.name(dots$id)) {
+    evaluated_dots[["_id_column"]] <- as.character(dots$id)
+  }
   do.call(
     .call_r_api,
     c(
