@@ -30,6 +30,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(to_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(lvcf_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(lvcf_numeric_indices, m)?)?;
     m.add_function(wrap_pyfunction!(nostutter_replacements, m)?)?;
     m.add_function(wrap_pyfunction!(nostutter_numeric_numeric, m)?)?;
     m.add_function(wrap_pyfunction!(nostutter_numeric_str, m)?)?;
