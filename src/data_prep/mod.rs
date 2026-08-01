@@ -26,7 +26,7 @@ pub use aeq_surv_module::{AeqSurvResult, aeq_surv};
 pub use cluster_module::{ClusterResult, cluster, cluster_str};
 pub use collapse_module::collapse;
 pub use neardate_module::{NearDateResult, neardate, neardate_str};
-pub use rttright_module::{RttrightResult, rttright, rttright_stratified};
+pub use rttright_module::{RttrightResult, rttright, rttright_matrix, rttright_stratified};
 pub use strata_module::{StrataResult, strata, strata_str};
 pub use surv2data_module::{Surv2DataResult, surv2data};
 pub use survcondense_module::{CondenseResult, survcondense};

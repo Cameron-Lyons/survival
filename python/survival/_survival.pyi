@@ -5577,6 +5577,15 @@ def rttright(
     timefix: bool = True,
     renorm: bool = True,
 ) -> RttrightResult: ...
+def rttright_matrix(
+    time: list[float],
+    status: list[int],
+    times: list[float],
+    strata: list[int] | None = None,
+    weights: list[float] | None = None,
+    timefix: bool = True,
+    renorm: bool = True,
+) -> list[list[float]]: ...
 def rttright_stratified(
     time: list[float],
     status: list[int],
