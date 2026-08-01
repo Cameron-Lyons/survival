@@ -225,7 +225,14 @@ if (getRversion() >= "2.15.1") {
     return(NULL)
   }
   if (is.data.frame(data)) {
-    return(lapply(data, .as_python_vector))
+    return(lapply(data, function(column) {
+      value <- .as_python_vector(column)
+      if (is.factor(column)) {
+        value
+      } else {
+        as.list(value)
+      }
+    }))
   }
   data
 }
@@ -2463,11 +2470,11 @@ Surv2 <- function(time, event, repeated = FALSE) {
   out
 }
 
-is.Surv <- function(value) {
-  if (inherits(value, "Surv")) {
+is.Surv <- function(x) {
+  if (inherits(x, "Surv")) {
     return(TRUE)
   }
-  .call_r_api("is_surv", value)
+  .call_r_api("is_surv", x)
 }
 
 is.ratetable <- function(x, verbose = FALSE) {
@@ -8416,7 +8423,8 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
   )
 }
 
-survdiff <- function(formula, data = NULL, ..., group = NULL, subset = NULL, na.action = "fail") {
+survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
+                     rho = 0, timefix = TRUE, ..., group = NULL) {
   env <- parent.frame()
   group_values <- .eval_formula_arg(substitute(group), missing(group), data, env, vector = TRUE)
   subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
@@ -8427,6 +8435,8 @@ survdiff <- function(formula, data = NULL, ..., group = NULL, subset = NULL, na.
     group = group_values,
     subset = subset_values,
     `na.action` = .as_na_action(na.action),
+    rho = rho,
+    timefix = timefix,
     ...,
     .wrap = c("survival_py_survdiff", "survival_py_object")
   )
@@ -9031,10 +9041,11 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail"
   )
 }
 
-basehaz <- function(fit, ..., centered = TRUE) {
+basehaz <- function(fit, newdata, centered = TRUE, ...) {
   .call_r_api(
     "basehaz",
     fit,
+    newdata = if (missing(newdata)) NULL else .as_python_data(newdata),
     centered = centered,
     ...,
     .wrap = c("survival_py_basehaz", "survival_py_object")
@@ -9515,25 +9526,37 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   out
 }
 
-cox.zph <- function(fit, ...) {
-  .call_r_api("cox_zph", fit, ..., .wrap = c("survival_py_cox_zph", "survival_py_object"))
+cox.zph <- function(fit, transform = "km", terms = TRUE, singledf = FALSE,
+                    global = TRUE, ...) {
+  .call_r_api(
+    "cox_zph",
+    fit,
+    transform = transform,
+    terms = terms,
+    singledf = singledf,
+    global = global,
+    ...,
+    .wrap = c("survival_py_cox_zph", "survival_py_object")
+  )
 }
 
 cox_zph <- function(fit, ...) {
   cox.zph(fit, ...)
 }
 
-coxph.detail <- function(fit, ...) {
+coxph.detail <- function(object, riskmat = FALSE, rorder = c("data", "time"), ...) {
   .call_r_api(
     "coxph_detail",
-    fit,
+    object,
+    riskmat = riskmat,
+    rorder = match.arg(rorder),
     ...,
     .wrap = c("survival_py_coxph_detail", "survival_py_object")
   )
 }
 
-coxph_detail <- function(fit, ...) {
-  coxph.detail(fit, ...)
+coxph_detail <- function(object, ...) {
+  coxph.detail(object, ...)
 }
 
 coxph.wtest <- function(var, b, toler.chol = 1e-09) {
