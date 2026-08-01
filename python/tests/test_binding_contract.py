@@ -3181,6 +3181,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "Surv2DataResult",
         "Surv2TimelineResult",
         "CondenseResult",
+        "CondensePlanResult",
         "TcutResult",
         "TimelineResult",
         "IntervalResult",
@@ -3204,6 +3205,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "surv2data",
         "surv2data_timeline",
         "survcondense",
+        "survcondense_plan",
         "tcut",
         "tcut_expand",
         "to_timeline",
@@ -3240,6 +3242,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "surv2data": ["id", "time", "event_time", "event_status"],
         "surv2data_timeline": ["id", "time", "status", "repeated"],
         "survcondense": ["id", "time1", "time2", "status"],
+        "survcondense_plan": ["id_order", "start", "stop", "row_code"],
         "tcut": ["value", "breaks", "labels"],
         "tcut_expand": ["start", "stop", "cuts"],
         "to_timeline": ["id", "time1", "time2", "status", "time_points"],
@@ -3276,12 +3279,23 @@ def test_data_prep_low_level_bindings_are_typed():
         "Surv2DataResult": {"id", "time1", "time2", "status", "row_index"},
         "Surv2TimelineResult": {"row_index", "start", "stop", "status", "istate"},
         "CondenseResult": {"id", "time1", "time2", "status", "row_map"},
+        "CondensePlanResult": {"start", "keep"},
         "TcutResult": {"values", "codes", "levels", "breaks", "counts"},
         "TimelineResult": {"id", "states", "time_points"},
         "IntervalResult": {"id", "time1", "time2", "status"},
     }
     for class_name, properties in expected_properties.items():
         assert _pyi_class_property_names(stub_path, class_name) == properties
+
+    plan = core.survcondense_plan(
+        [1, 0, 0, 1],
+        [0.0, 0.0, 5.0, 3.0],
+        [3.0, 5.0, 8.0, 5.0],
+        [1, 2, 2, 1],
+    )
+    assert type(plan).__name__ == "CondensePlanResult"
+    assert plan.keep == [2, 3]
+    assert plan.start == pytest.approx([0.0, 0.0, 0.0, 0.0])
 
     collapsed = core.collapse(
         [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0],
