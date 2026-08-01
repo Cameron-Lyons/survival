@@ -122,14 +122,14 @@ fn event_blocks(time: &[f64], status: &[i32]) -> Vec<EventBlock> {
     blocks
 }
 
-fn event_block_index(blocks: &[EventBlock], eval_time: f64) -> Option<usize> {
-    blocks
-        .iter()
-        .position(|block| block.time > eval_time + TIME_EPSILON)
-        .map_or_else(
-            || blocks.len().checked_sub(1),
-            |idx| if idx == 0 { None } else { Some(idx - 1) },
-        )
+fn sorted_time_indices(times: &[f64]) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..times.len()).collect();
+    indices.sort_by(|&left, &right| {
+        times[left]
+            .total_cmp(&times[right])
+            .then_with(|| left.cmp(&right))
+    });
+    indices
 }
 
 fn subject_at_risk(subject_time: f64, event_time: f64) -> bool {
@@ -149,22 +149,22 @@ fn compute_ij_pseudo(
     let n = time.len();
     let n_f64 = n as f64;
     let blocks = event_blocks(time, status);
+    let eval_order = sorted_time_indices(eval_times);
+    let is_survival = type_ == "survival";
 
     (0..n)
         .into_par_iter()
         .map(|row| {
-            eval_times
-                .iter()
-                .map(|&eval_time| {
-                    let Some(last_idx) = event_block_index(&blocks, eval_time) else {
-                        return if type_ == "survival" { 1.0 } else { 0.0 };
-                    };
-                    let mut influence = 0.0;
-                    for block in &blocks[..=last_idx] {
-                        if !subject_at_risk(time[row], block.time) {
-                            continue;
-                        }
-                        if type_ == "survival" {
+            let mut values = vec![0.0; eval_times.len()];
+            let mut influence = 0.0;
+            let mut block_idx = 0;
+            for &eval_idx in &eval_order {
+                let eval_time = eval_times[eval_idx];
+                while block_idx < blocks.len() && blocks[block_idx].time <= eval_time + TIME_EPSILON
+                {
+                    let block = &blocks[block_idx];
+                    if subject_at_risk(time[row], block.time) {
+                        if is_survival {
                             if subject_event_at_time(time[row], status[row], block.time) {
                                 influence -= 1.0 / block.risk;
                             } else if block.risk > block.events + DIVISION_FLOOR {
@@ -177,14 +177,21 @@ fn compute_ij_pseudo(
                             influence -= block.events / (block.risk * block.risk);
                         }
                     }
-                    let block = &blocks[last_idx];
-                    if type_ == "survival" {
+                    block_idx += 1;
+                }
+
+                values[eval_idx] = if block_idx == 0 {
+                    if is_survival { 1.0 } else { 0.0 }
+                } else {
+                    let block = &blocks[block_idx - 1];
+                    if is_survival {
                         block.survival + n_f64 * block.survival * influence
                     } else {
                         block.cumhaz + n_f64 * influence
                     }
-                })
-                .collect()
+                };
+            }
+            values
         })
         .collect()
 }
@@ -273,6 +280,23 @@ fn default_event_times(time: &[f64], status: &[i32]) -> Vec<f64> {
     event_times
 }
 
+fn rmst_values_at(km_times: &[f64], km_surv: &[f64], eval_times: &[f64]) -> Vec<f64> {
+    let mut prefix = Vec::with_capacity(km_times.len());
+    prefix.push(0.0);
+    for idx in 1..km_times.len() {
+        prefix.push(prefix[idx - 1] + km_surv[idx - 1] * (km_times[idx] - km_times[idx - 1]));
+    }
+
+    eval_times
+        .iter()
+        .map(|&eval_time| {
+            let idx = km_times.partition_point(|&time| time <= eval_time);
+            let idx = idx.saturating_sub(1);
+            prefix[idx] + km_surv[idx] * (eval_time - km_times[idx])
+        })
+        .collect()
+}
+
 fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> Vec<f64> {
     let n = time.len();
     if n == 0 {
@@ -333,39 +357,22 @@ fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> 
         start = end;
     }
 
+    if type_ == "rmst" {
+        return rmst_values_at(&km_times, &km_surv, eval_times);
+    }
+
     let mut result = Vec::with_capacity(eval_times.len());
-
     for &eval_t in eval_times {
-        let idx = km_times
-            .iter()
-            .position(|&t| t > eval_t + TIME_EPSILON)
-            .unwrap_or(km_times.len());
-        let idx = if idx > 0 { idx - 1 } else { 0 };
-
         let val = match type_ {
-            "survival" => km_surv[idx],
-            "cumhaz" => km_cumhaz[idx],
-            "rmst" => {
-                let mut rmst = 0.0;
-                let mut prev_t = 0.0;
-                let mut prev_s = 1.0;
-
-                for i in 0..km_times.len() {
-                    if km_times[i] >= eval_t {
-                        rmst += prev_s * (eval_t - prev_t);
-                        break;
-                    }
-                    rmst += prev_s * (km_times[i] - prev_t);
-                    prev_t = km_times[i];
-                    prev_s = km_surv[i];
-
-                    if i == km_times.len() - 1 {
-                        rmst += prev_s * (eval_t - prev_t);
-                    }
-                }
-                rmst
+            "survival" => {
+                let idx = km_times.partition_point(|&time| time <= eval_t + TIME_EPSILON);
+                km_surv[idx.saturating_sub(1)]
             }
-            _ => km_surv[idx],
+            "cumhaz" => {
+                let idx = km_times.partition_point(|&time| time <= eval_t + TIME_EPSILON);
+                km_cumhaz[idx.saturating_sub(1)]
+            }
+            _ => unreachable!("pseudo type is validated before Kaplan-Meier evaluation"),
         };
         result.push(val);
     }
@@ -395,6 +402,94 @@ mod tests {
         );
     }
 
+    fn reference_compute_ij_pseudo(
+        time: &[f64],
+        status: &[i32],
+        eval_times: &[f64],
+        type_: &str,
+    ) -> Vec<Vec<f64>> {
+        let n_f64 = time.len() as f64;
+        let blocks = event_blocks(time, status);
+        (0..time.len())
+            .map(|row| {
+                eval_times
+                    .iter()
+                    .map(|&eval_time| {
+                        let last_idx = blocks
+                            .iter()
+                            .position(|block| block.time > eval_time + TIME_EPSILON)
+                            .map_or_else(
+                                || blocks.len().checked_sub(1),
+                                |idx| if idx == 0 { None } else { Some(idx - 1) },
+                            );
+                        let Some(last_idx) = last_idx else {
+                            return if type_ == "survival" { 1.0 } else { 0.0 };
+                        };
+                        let mut influence = 0.0;
+                        for block in &blocks[..=last_idx] {
+                            if !subject_at_risk(time[row], block.time) {
+                                continue;
+                            }
+                            if type_ == "survival" {
+                                if subject_event_at_time(time[row], status[row], block.time) {
+                                    influence -= 1.0 / block.risk;
+                                } else if block.risk > block.events + DIVISION_FLOOR {
+                                    influence +=
+                                        block.events / (block.risk * (block.risk - block.events));
+                                }
+                            } else if subject_event_at_time(time[row], status[row], block.time) {
+                                influence +=
+                                    (block.risk - block.events) / (block.risk * block.risk);
+                            } else {
+                                influence -= block.events / (block.risk * block.risk);
+                            }
+                        }
+                        let block = &blocks[last_idx];
+                        if type_ == "survival" {
+                            block.survival + n_f64 * block.survival * influence
+                        } else {
+                            block.cumhaz + n_f64 * influence
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn reference_rmst_values(km_times: &[f64], km_surv: &[f64], eval_times: &[f64]) -> Vec<f64> {
+        eval_times
+            .iter()
+            .map(|&eval_time| {
+                let mut rmst = 0.0;
+                let mut previous_time = 0.0;
+                let mut previous_survival = 1.0;
+                for idx in 0..km_times.len() {
+                    if km_times[idx] >= eval_time {
+                        rmst += previous_survival * (eval_time - previous_time);
+                        break;
+                    }
+                    rmst += previous_survival * (km_times[idx] - previous_time);
+                    previous_time = km_times[idx];
+                    previous_survival = km_surv[idx];
+                    if idx == km_times.len() - 1 {
+                        rmst += previous_survival * (eval_time - previous_time);
+                    }
+                }
+                rmst
+            })
+            .collect()
+    }
+
+    fn assert_matrix_close(actual: &[Vec<f64>], expected: &[Vec<f64>]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual_row, expected_row) in actual.iter().zip(expected) {
+            assert_eq!(actual_row.len(), expected_row.len());
+            for (&actual_value, &expected_value) in actual_row.iter().zip(expected_row) {
+                assert_close(actual_value, expected_value);
+            }
+        }
+    }
+
     #[test]
     fn test_pseudo_basic() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -409,6 +504,66 @@ mod tests {
         for t_idx in 0..result.time.len() {
             let avg: f64 = result.pseudo.iter().map(|p| p[t_idx]).sum::<f64>() / 5.0;
             assert!(avg.is_finite());
+        }
+    }
+
+    #[test]
+    fn ij_pseudo_time_sweep_matches_repeated_block_scans() {
+        for case_idx in 0..200 {
+            let n = 3 + case_idx % 19;
+            let time: Vec<f64> = (0..n)
+                .map(|idx| {
+                    let base = 1 + (idx * 7 + case_idx * 3) % 11;
+                    let jitter = if (idx + case_idx) % 5 == 0 {
+                        TIME_EPSILON / 2.0
+                    } else {
+                        0.0
+                    };
+                    base as f64 + jitter
+                })
+                .collect();
+            let status: Vec<i32> = (0..n)
+                .map(|idx| i32::from((idx * 5 + case_idx) % 4 != 0))
+                .collect();
+            let eval_times: Vec<f64> = (0..17)
+                .map(|idx| {
+                    let base = (idx * 5 + case_idx * 2) % 14;
+                    let jitter = if (idx + case_idx) % 3 == 0 {
+                        TIME_EPSILON / 2.0
+                    } else {
+                        0.0
+                    };
+                    base as f64 + jitter
+                })
+                .collect();
+
+            for type_ in ["survival", "cumhaz"] {
+                assert_matrix_close(
+                    &compute_ij_pseudo(&time, &status, &eval_times, type_),
+                    &reference_compute_ij_pseudo(&time, &status, &eval_times, type_),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rmst_prefix_areas_match_repeated_step_scans() {
+        for size in 1..80 {
+            let km_times: Vec<f64> = (0..size)
+                .map(|idx| idx as f64 * 0.75 + (idx % 3) as f64 * 0.125)
+                .collect();
+            let km_surv: Vec<f64> = (0..size)
+                .map(|idx| 1.0 - 0.8 * idx as f64 / size as f64)
+                .collect();
+            let eval_times: Vec<f64> = (0..97)
+                .map(|idx| ((idx * 31 + size * 7) % 101) as f64 * 0.625)
+                .collect();
+
+            let actual = rmst_values_at(&km_times, &km_surv, &eval_times);
+            let expected = reference_rmst_values(&km_times, &km_surv, &eval_times);
+            for (actual_value, expected_value) in actual.into_iter().zip(expected) {
+                assert_close(actual_value, expected_value);
+            }
         }
     }
 
