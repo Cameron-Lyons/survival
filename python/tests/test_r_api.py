@@ -254,6 +254,11 @@ def test_aeqSurv_adjusts_surv_response_like_r():
 
 
 def test_survSplit_splits_right_and_counting_surv_responses_like_r():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
     right = survival.Surv([5.0, 8.0], [1, 0])
     right_split = survival.survSplit(
         right,
@@ -294,6 +299,54 @@ def test_survSplit_splits_right_and_counting_surv_responses_like_r():
         "stop": [3.0, 5.0, 3.0, 6.0, 8.0],
         "status": [0, 1, 0, 0, 0],
         "episode": [1, 2, 1, 2, 3],
+    }
+
+    multistate_right = survival.Surv(
+        [1.0, 3.0, 4.0],
+        Factor(["a", "censor", "b"], ["censor", "a", "b"]),
+        type="mstate",
+    )
+    multistate_right_split = survival.survSplit(
+        multistate_right,
+        {"x": [11, 12, 13]},
+        cut=[2.0, 3.5],
+        episode="episode",
+        id="subject",
+        end="time",
+        event="state",
+    )
+    assert multistate_right_split == {
+        "x": [11, 12, 12, 13, 13, 13],
+        "subject": [1, 2, 2, 3, 3, 3],
+        "tstart": [0.0, 0.0, 2.0, 0.0, 2.0, 3.5],
+        "time": [1.0, 2.0, 3.0, 2.0, 3.5, 4.0],
+        "state": [1, 0, 0, 0, 0, 2],
+        "episode": [1, 1, 2, 1, 2, 3],
+    }
+
+    multistate_counting = survival.Surv(
+        [0.0, 1.0],
+        [3.0, 4.0],
+        Factor(["a", "b"], ["censor", "a", "b"]),
+        type="mstate",
+    )
+    multistate_counting_split = survival.survSplit(
+        multistate_counting,
+        {"x": [1, 2]},
+        cut=[2.0],
+        start="start",
+        end="stop",
+        event="state",
+        episode="episode",
+        id="subject",
+    )
+    assert multistate_counting_split == {
+        "x": [1, 1, 2, 2],
+        "subject": [1, 1, 2, 2],
+        "start": [0.0, 2.0, 1.0, 2.0],
+        "stop": [2.0, 3.0, 2.0, 4.0],
+        "state": [0, 1, 0, 2],
+        "episode": [1, 2, 1, 2],
     }
 
     with pytest.raises(ValueError, match="not valid for interval2"):

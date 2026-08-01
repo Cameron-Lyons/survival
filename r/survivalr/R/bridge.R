@@ -439,11 +439,17 @@ attrassign.lm <- function(object, ...) {
 }
 
 .survsplit_response_names <- function(formula, response) {
+  response_expr <- formula[[2L]]
+  if (is.call(response_expr)) {
+    args <- as.list(response_expr[-1L])
+    if (length(args) >= 2L && all(vapply(args, is.name, logical(1)))) {
+      return(vapply(args, as.character, character(1)))
+    }
+  }
   response_names <- colnames(response)
   if (!is.null(response_names) && length(response_names) >= 2L) {
     return(response_names)
   }
-  response_expr <- formula[[2L]]
   if (!is.call(response_expr)) {
     return(character())
   }
@@ -537,6 +543,10 @@ attrassign.lm <- function(object, ...) {
     if (!missing(event)) {
       args <- c(args, list(event))
     }
+  }
+  factor_response <- .surv_factor_response(args, type = type, origin = origin)
+  if (!is.null(factor_response)) {
+    return(factor_response)
   }
   args <- c(args, .compact_null(list(type = type, origin = origin)))
   .survsplit_minimal_surv(args)
@@ -8121,10 +8131,19 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
     id = if (missing(id)) NULL else as.character(id),
     zero = zero
   )
-  .restore_r_column_classes(
+  output <- .restore_r_column_classes(
     as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE),
     covariates
   )
+  states <- attr(response, "states")
+  if (!is.null(states)) {
+    output[[event_name]] <- factor(
+      as.integer(output[[event_name]]),
+      levels = 0:length(states),
+      labels = c("censor", states)
+    )
+  }
+  output
 }
 
 survcondense <- function(formula, data, subset, weights, na.action = na.pass,
