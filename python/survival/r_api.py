@@ -482,6 +482,7 @@ class ConcordanceResult:
     dfbeta: list[float] | list[list[float] | None] | None = None
     influence: list[list[float]] | list[list[list[float]] | None] | None = None
     variance: float | list[float | None] | None = None
+    conditional_variance: float | list[float] | None = None
     score_names: list[str] | None = None
 
     @property
@@ -491,6 +492,10 @@ class ConcordanceResult:
     @property
     def var(self) -> float | list[float | None] | None:
         return self.variance
+
+    @property
+    def cvar(self) -> float | list[float] | None:
+        return self.conditional_variance
 
 
 @dataclass(frozen=True)
@@ -18701,6 +18706,7 @@ def _single_score_concordance_result(
         dfbeta=dfbeta if influence_value in {1, 3} else None,
         influence=influence_rows if influence_value in {2, 3} else None,
         variance=variance if influence_value or cluster_values is not None else None,
+        conditional_variance=float(summary["conditional_variance"]),
     )
 
 
@@ -18754,6 +18760,12 @@ def _multi_score_concordance_result(
             if influence_value or cluster_values is not None
             else None
         ),
+        conditional_variance=[
+            float(result.conditional_variance)
+            if isinstance(result.conditional_variance, int | float)
+            else math.nan
+            for result in results
+        ],
         score_names=score_names,
     )
 
@@ -18900,6 +18912,7 @@ def concordance(
                 dfbeta=result.dfbeta,
                 influence=result.influence,
                 variance=result.variance,
+                conditional_variance=result.conditional_variance,
                 score_names=score_names,
             )
             if score_names is not None
