@@ -3567,9 +3567,11 @@ def test_turnbull_estimator_weights_are_typed():
 
     assert {
         "TurnbullResult",
+        "GroupedTurnbullResult",
         "IntervalDistribution",
         "IntervalCensoredResult",
         "turnbull_estimator",
+        "turnbull_estimator_grouped",
         "npmle_interval",
         "interval_censored_regression",
     } <= stub_names
@@ -3581,6 +3583,65 @@ def test_turnbull_estimator_weights_are_typed():
         "tol",
         "weights",
     ]
+    assert list(inspect.signature(core.turnbull_estimator_grouped).parameters) == [
+        "left",
+        "right",
+        "groups",
+        "max_iter",
+        "tol",
+        "weights",
+    ]
+    assert _pyi_function_arg_names(stub_path, "turnbull_estimator_grouped") == [
+        "left",
+        "right",
+        "groups",
+        "max_iter",
+        "tol",
+        "weights",
+    ]
+    assert _pyi_class_property_names(stub_path, "GroupedTurnbullResult") == {
+        "groups",
+        "time_points",
+        "survival",
+        "survival_lower",
+        "survival_upper",
+        "n_iter",
+        "converged",
+    }
+    raw_left = [0.0, 1.0, 2.0, 0.0, 2.0, 3.0]
+    raw_right = [1.0, 3.0, float("inf"), 2.0, 2.0, 5.0]
+    raw_groups = [7, 3, 7, 3, 7, 3]
+    raw_weights = [1.0, 0.5, 1.5, 2.0, 0.75, 1.25]
+    grouped = core.turnbull_estimator_grouped(
+        raw_left,
+        raw_right,
+        raw_groups,
+        weights=raw_weights,
+    )
+    assert type(grouped).__name__ == "GroupedTurnbullResult"
+    assert grouped.groups == [3, 7]
+    for curve_idx, group in enumerate(grouped.groups):
+        indices = [idx for idx, value in enumerate(raw_groups) if value == group]
+        expected = core.turnbull_estimator(
+            [raw_left[idx] for idx in indices],
+            [raw_right[idx] for idx in indices],
+            weights=[raw_weights[idx] for idx in indices],
+        )
+        assert grouped.time_points[curve_idx] == pytest.approx(expected.time_points)
+        assert grouped.survival[curve_idx] == pytest.approx(expected.survival)
+        assert grouped.survival_lower[curve_idx] == pytest.approx(expected.survival_lower)
+        assert grouped.survival_upper[curve_idx] == pytest.approx(expected.survival_upper)
+        assert grouped.n_iter[curve_idx] == expected.n_iter
+        assert grouped.converged[curve_idx] == expected.converged
+    with pytest.raises(ValueError, match="groups"):
+        core.turnbull_estimator_grouped([0.0, 1.0], [1.0, 2.0], [0])
+    with pytest.raises(ValueError, match="positive value per group"):
+        core.turnbull_estimator_grouped(
+            [0.0, 1.0],
+            [1.0, 2.0],
+            [0, 1],
+            weights=[1.0, 0.0],
+        )
     assert list(inspect.signature(core.interval_censored_regression).parameters) == [
         "left",
         "right",

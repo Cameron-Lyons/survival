@@ -5513,6 +5513,22 @@ class TurnbullResult:
     @property
     def converged(self) -> bool: ...
 
+class GroupedTurnbullResult:
+    @property
+    def groups(self) -> list[int]: ...
+    @property
+    def time_points(self) -> list[list[float]]: ...
+    @property
+    def survival(self) -> list[list[float]]: ...
+    @property
+    def survival_lower(self) -> list[list[float]]: ...
+    @property
+    def survival_upper(self) -> list[list[float]]: ...
+    @property
+    def n_iter(self) -> list[int]: ...
+    @property
+    def converged(self) -> list[bool]: ...
+
 class IntervalDistribution:
     Weibull: IntervalDistribution
     LogNormal: IntervalDistribution
@@ -5686,6 +5702,14 @@ def turnbull_estimator(
     tol: float = 1e-6,
     weights: list[float] | None = None,
 ) -> TurnbullResult: ...
+def turnbull_estimator_grouped(
+    left: list[float],
+    right: list[float],
+    groups: list[int],
+    max_iter: int = 1000,
+    tol: float = 1e-6,
+    weights: list[float] | None = None,
+) -> GroupedTurnbullResult: ...
 def npmle_interval(
     left: list[float],
     right: list[float],

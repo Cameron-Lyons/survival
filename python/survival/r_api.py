@@ -13434,19 +13434,39 @@ def survfit(
                 else result
             )
 
-        turnbull_results: dict[Any, Any] = {}
-        for label, indices in _group_indices(
-            group, len(response), levels=formula_group_levels
-        ).items():
-            group_response = _subset_surv(response, indices)
-            left, right = _turnbull_intervals(group_response)
-            group_weights = [wt[idx] for idx in indices] if wt is not None else None
-            turnbull_results[label] = _core.turnbull_estimator(left, right, weights=group_weights)
-        return (
-            _survfit_with_model_frame(turnbull_results, model_frame)
-            if keep_model and model_frame is not None
-            else turnbull_results
+        grouped_indices = _group_indices(group, len(response), levels=formula_group_levels)
+        group_codes = [0] * len(response)
+        for group_code, indices in enumerate(grouped_indices.values()):
+            for idx in indices:
+                group_codes[idx] = group_code
+        left, right = _turnbull_intervals(response)
+        raw_grouped = _core.turnbull_estimator_grouped(
+            left,
+            right,
+            group_codes,
+            weights=wt,
         )
+        raw_groups = [int(value) for value in raw_grouped.groups]
+        if raw_groups != list(range(len(grouped_indices))):
+            raise RuntimeError("grouped Turnbull fit returned inconsistent group codes")
+        raw_time_points = raw_grouped.time_points
+        raw_survival = raw_grouped.survival
+        raw_survival_lower = raw_grouped.survival_lower
+        raw_survival_upper = raw_grouped.survival_upper
+        raw_n_iter = raw_grouped.n_iter
+        raw_converged = raw_grouped.converged
+        return {
+            label: TurnbullSurvfitResult(
+                time_points=raw_time_points[curve_idx],
+                survival=raw_survival[curve_idx],
+                survival_lower=raw_survival_lower[curve_idx],
+                survival_upper=raw_survival_upper[curve_idx],
+                n_iter=raw_n_iter[curve_idx],
+                converged=raw_converged[curve_idx],
+                model=model_frame if keep_model else None,
+            )
+            for curve_idx, label in enumerate(grouped_indices)
+        }
 
     wt = _float_vector(weights, "weights") if weights is not None else None
     if wt is not None and len(wt) != len(response):
