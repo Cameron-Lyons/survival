@@ -16618,12 +16618,6 @@ def test_r_api_rejects_unsupported_formula_features():
     )
     assert nonrobust_id.robust is False
 
-    with pytest.raises(NotImplementedError, match="istate"):
-        survival.coxph("Surv(time, status) ~ x1", data=_toy_data(), istate=_toy_data()["status"])
-
-    with pytest.raises(NotImplementedError, match="statedata"):
-        survival.coxph("Surv(time, status) ~ x1", data=_toy_data(), statedata={"states": [1]})
-
     with pytest.raises(ValueError, match="nocenter"):
         survival.coxph("Surv(time, status) ~ x1", data=_toy_data(), nocenter=[0.0, float("nan")])
 
@@ -17055,9 +17049,6 @@ def test_r_api_rejects_unsupported_formula_features():
     robust_fh = survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), robust=True, type="fh")
     assert robust_fh.std_err == pytest.approx([0.2144409712, 0.2144409712])
 
-    with pytest.raises(NotImplementedError, match="istate"):
-        survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), istate=[0, 1])
-
     etype_fit = survival.survfit(
         survival.Surv([1.0, 2.0], [1, 0]),
         etype=[1, 2],
@@ -17197,6 +17188,49 @@ def test_r_api_rejects_unsupported_formula_features():
             data=_toy_data(),
             offset=[0.0] * 8,
         )
+
+
+def test_ordinary_istate_matches_r_model_frame_semantics():
+    ordinary_curve = survival.survfit(
+        survival.Surv([1.0, 2.0], [1, 0]),
+        istate=["entry", "other"],
+        model=True,
+    )
+    curve_reference = survival.survfit(survival.Surv([1.0, 2.0], [1, 0]))
+    assert ordinary_curve.estimate == pytest.approx(curve_reference.estimate)
+    assert ordinary_curve.model["(istate)"] == ["entry", "other"]
+
+    data = _toy_data()
+    ordinary_fit = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=data,
+        istate="group",
+        statedata={"states": ["A", "B"]},
+        model=True,
+        max_iter=0,
+    )
+    fit_reference = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=data,
+        model=True,
+        max_iter=0,
+    )
+    assert ordinary_fit.coefficients[0] == pytest.approx(fit_reference.coefficients[0])
+    assert ordinary_fit.model["(istate)"] == data["group"]
+    assert ordinary_fit.model["group"] == data["group"]
+
+    missing_istate_data = _toy_data()
+    missing_istate_data["group"] = [*missing_istate_data["group"][:-1], None]
+    omitted_fit = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=missing_istate_data,
+        istate="group",
+        na_action="omit",
+        model=True,
+        max_iter=0,
+    )
+    assert omitted_fit.model["(istate)"] == missing_istate_data["group"][:-1]
+    assert len(omitted_fit.y) == len(missing_istate_data["group"]) - 1
 
 
 def _cch_parity_data() -> dict[str, list[object]]:
