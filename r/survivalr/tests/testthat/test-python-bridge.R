@@ -193,13 +193,12 @@ test_that("R formula wrappers delegate to the Python survival package", {
     ),
     "type= 'mstate' is deprecated"
   )
-  expect_warning(
-    reference_explicit_multistate_response <- survival::Surv(
+  reference_explicit_multistate_response <- suppressWarnings(
+    survival::Surv(
       c(1, 2, 3),
       factor(c("censor", "relapse", "death")),
       type = "mstate"
-    ),
-    "type= 'mstate' is deprecated"
+    )
   )
   expect_equal(explicit_multistate_response, reference_explicit_multistate_response)
   expect_warning(
@@ -210,13 +209,12 @@ test_that("R formula wrappers delegate to the Python survival package", {
     ),
     "type= 'mstate' is deprecated"
   )
-  expect_warning(
-    reference_numeric_multistate_response <- survival::Surv(
+  reference_numeric_multistate_response <- suppressWarnings(
+    survival::Surv(
       c(1, 2),
       c(0, 1),
       type = "mstate"
-    ),
-    "type= 'mstate' is deprecated"
+    )
   )
   expect_equal(
     .as_native_surv(explicit_numeric_multistate_response),
@@ -245,14 +243,13 @@ test_that("R formula wrappers delegate to the Python survival package", {
     ),
     "type= 'mstate' is deprecated"
   )
-  expect_warning(
-    reference_explicit_multistate_counting_response <- survival::Surv(
+  reference_explicit_multistate_counting_response <- suppressWarnings(
+    survival::Surv(
       c(0, 0),
       c(1, 2),
       factor(c("a", "b")),
       type = "mstate"
-    ),
-    "type= 'mstate' is deprecated"
+    )
   )
   expect_equal(
     explicit_multistate_counting_response,
@@ -267,14 +264,13 @@ test_that("R formula wrappers delegate to the Python survival package", {
     ),
     "type= 'mstate' is deprecated"
   )
-  expect_warning(
-    reference_numeric_multistate_counting_response <- survival::Surv(
+  reference_numeric_multistate_counting_response <- suppressWarnings(
+    survival::Surv(
       c(0, 0),
       c(1, 2),
       c(0, 1),
       type = "mstate"
-    ),
-    "type= 'mstate' is deprecated"
+    )
   )
   expect_equal(
     .as_native_surv(explicit_numeric_multistate_counting_response),
