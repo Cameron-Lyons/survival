@@ -1326,8 +1326,9 @@ test_that("R formula wrappers delegate to the Python survival package", {
     bridged_pspline_call_method(bridged_pspline_basis, original_pspline_call),
     reference_pspline_call_method(bridged_pspline_basis, original_pspline_call)
   )
-  expect_null(
-    bridged_pspline_call_method(bridged_pspline_basis, original_pspline_call)$df
+  expect_equal(
+    bridged_pspline_call_method(bridged_pspline_basis, original_pspline_call)$df,
+    attr(bridged_pspline_basis, "df")
   )
   unrelated_pspline_call <- quote(stats::poly(value, degree = 3))
   expect_identical(

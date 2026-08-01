@@ -2229,8 +2229,14 @@ makepredictcall.pspline <- function(var, call) {
     return(call)
   }
   new_call <- call[1L:2L]
+  attribute_names <- c(
+    "nterm", "intercept", "Boundary.knots", "combine", "degree"
+  )
+  if ("df" %in% names(call)) {
+    attribute_names <- c(attribute_names, "df")
+  }
   index <- match(
-    c("nterm", "intercept", "Boundary.knots", "combine", "degree"),
+    attribute_names,
     names(attributes(var)),
     nomatch = 0
   )
@@ -9387,25 +9393,37 @@ survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
     if (conf.type == "log") {
       xx <- ifelse(p == 0, NA, p)
       se2 <- zval * se
-      lower <- exp(log(xx) - se2 * scale)
-      upper <- exp(log(xx) + se2)
-      if (ulimit) {
-        upper <- pmin(upper, 1)
-      }
-      return(list(lower = lower, upper = upper))
+      lower <- ifelse(se == 0, p, exp(log(xx) - se2 * scale))
+      upper <- ifelse(se == 0, p, exp(log(xx) + se2))
+      return(list(
+        lower = lower,
+        upper = if (ulimit) pmin(upper, 1) else upper
+      ))
     }
     if (conf.type == "log-log") {
       xx <- ifelse(p == 0 | p == 1, NA, p)
       se2 <- zval * se / log(xx)
-      lower <- exp(-exp(log(-log(xx)) - se2 * scale))
-      upper <- exp(-exp(log(-log(xx)) + se2))
+      lower <- ifelse(
+        se == 0,
+        p,
+        exp(-exp(log(-log(xx)) - se2 * scale))
+      )
+      upper <- ifelse(se == 0, p, exp(-exp(log(-log(xx)) + se2)))
       return(list(lower = lower, upper = upper))
     }
     if (conf.type == "logit") {
       xx <- ifelse(p == 0, NA, p)
       se2 <- zval * se * (1 + xx / (1 - xx))
-      lower <- 1 - 1 / (1 + exp(log(p / (1 - p)) - se2 * scale))
-      upper <- 1 - 1 / (1 + exp(log(p / (1 - p)) + se2))
+      lower <- ifelse(
+        se == 0,
+        p,
+        1 - 1 / (1 + exp(log(p / (1 - p)) - se2 * scale))
+      )
+      upper <- ifelse(
+        se == 0,
+        p,
+        1 - 1 / (1 + exp(log(p / (1 - p)) + se2))
+      )
       return(list(lower = lower, upper = upper))
     }
     if (conf.type == "arcsin") {
@@ -9489,26 +9507,31 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
   subjects <- factor(id, levels = unique(id))
   targets <- factor(status, levels = 0:length(states))
   counts <- table(subjects, targets)[, -1L, drop = FALSE]
+  if (all(counts == 0L)) {
+    return(NULL)
+  }
+  if (ncol(counts) == 1L) {
+    frequencies <- table(counts)
+    state_name <- states[as.integer(colnames(counts))]
+    return(matrix(
+      frequencies,
+      nrow = 1L,
+      dimnames = list(state_name, names(frequencies))
+    ))
+  }
+
   counts <- cbind(counts, rowSums(counts))
   count_levels <- sort(unique(c(counts)))
-  events <- if (length(count_levels) == 1L) {
-    matrix(
-      count_levels,
-      nrow = 1L,
-      ncol = 1L + length(states)
-    )
-  } else {
-    apply(counts, 2L, function(x) {
-      table(factor(x, levels = count_levels))
-    })
-  }
+  events <- t(apply(counts, 2L, function(x) {
+    table(factor(x, levels = count_levels))
+  }))
   dimnames(events) <- list(
-    count = as.character(count_levels),
-    state = c(states, "(any)")
+    state = c(states, "(any)"),
+    count = as.character(count_levels)
   )
-  no_visit <- colSums(events[-1L, , drop = FALSE]) == 0L
-  if (any(no_visit)) events <- events[, !no_visit]
-  t(events)
+  no_visit <- rowSums(events[, -1L, drop = FALSE]) == 0L
+  if (any(no_visit)) events <- events[!no_visit, , drop = FALSE]
+  events
 }
 
 .survcheck_transitions <- function(current_states, targets, states, id, response) {
@@ -9655,7 +9678,7 @@ survcheck <- function(formula, data = NULL, subset = NULL, na.action = na.pass,
   }
 
   multistate <- response_type %in% c("mright", "mcounting")
-  response_states <- if (multistate) attr(response, "states") else "1"
+  response_states <- if (multistate) attr(response, "states") else "event"
   raw_status <- as.integer(response[, ncol(response)])
   if (is.null(initial_values)) {
     state_names <- c(istate0, response_states)
