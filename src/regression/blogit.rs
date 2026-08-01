@@ -12,6 +12,20 @@ fn bounded_unit_interval(input: f64, edge: f64) -> f64 {
 pub struct LinkFunctionParams {
     edge: f64,
 }
+
+impl LinkFunctionParams {
+    fn transform_many(
+        &self,
+        input: Vec<Option<f64>>,
+        transform: fn(&Self, f64) -> f64,
+    ) -> Vec<f64> {
+        input
+            .into_iter()
+            .map(|value| value.map_or(f64::NAN, |value| transform(self, value)))
+            .collect()
+    }
+}
+
 #[pymethods]
 impl LinkFunctionParams {
     #[new]
@@ -23,17 +37,29 @@ impl LinkFunctionParams {
         let adjusted_input = bounded_unit_interval(input, self.edge);
         adjusted_input.ln() - (1.0 - adjusted_input).ln()
     }
+    fn blogit_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
+        self.transform_many(input, Self::blogit)
+    }
     fn bprobit(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
         probit(adjusted_input)
+    }
+    fn bprobit_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
+        self.transform_many(input, Self::bprobit)
     }
     fn bcloglog(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
         cloglog(adjusted_input)
     }
+    fn bcloglog_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
+        self.transform_many(input, Self::bcloglog)
+    }
     fn blog(&self, input: f64) -> f64 {
         let adjusted_input = if input < self.edge { self.edge } else { input };
         adjusted_input.ln()
+    }
+    fn blog_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
+        self.transform_many(input, Self::blog)
     }
 }
 
@@ -63,6 +89,34 @@ mod tests {
             assert!((link.blogit(input) - 0.4054651081081642).abs() < 1e-9);
             assert!((link.bprobit(input) - 0.2533471031357997).abs() < 1e-8);
             assert!((link.bcloglog(input) - -0.08742157179075517).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn bounded_link_vectors_match_scalars_and_preserve_missing_values() {
+        let link = LinkFunctionParams { edge: 0.05 };
+        let input = vec![Some(0.0), None, Some(0.5), Some(1.0)];
+
+        for (actual, transform) in [
+            (
+                link.blogit_many(input.clone()),
+                LinkFunctionParams::blogit as fn(&LinkFunctionParams, f64) -> f64,
+            ),
+            (
+                link.bprobit_many(input.clone()),
+                LinkFunctionParams::bprobit,
+            ),
+            (
+                link.bcloglog_many(input.clone()),
+                LinkFunctionParams::bcloglog,
+            ),
+            (link.blog_many(input.clone()), LinkFunctionParams::blog),
+        ] {
+            assert_eq!(actual.len(), input.len());
+            assert!(actual[1].is_nan());
+            for idx in [0, 2, 3] {
+                assert!((actual[idx] - transform(&link, input[idx].unwrap())).abs() < 1e-12);
+            }
         }
     }
 }

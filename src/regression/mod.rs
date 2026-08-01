@@ -17,6 +17,8 @@ pub(crate) mod coxph_detail_module;
 pub(crate) mod coxph_diagnostics;
 pub(crate) mod coxph_model;
 pub(crate) mod coxph_support;
+#[path = "coxph_wtest.rs"]
+pub(crate) mod coxph_wtest_module;
 pub(crate) mod cure_models;
 pub(crate) mod elastic_net;
 pub(crate) mod exact_ties;
@@ -57,6 +59,7 @@ pub use coxph_diagnostics::{
     cox_zph_term_matrix, prediction_se_from_variance, scale_schoenfeld_residuals,
     term_prediction_se_from_variance,
 };
+pub use coxph_wtest_module::coxph_wtest;
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
     CureModelComparisonResult, LinkFunction, MixtureCureConfig, MixtureCureResult,

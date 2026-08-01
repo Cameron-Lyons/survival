@@ -62,6 +62,23 @@ fn sorted_unique_time_points(time1: &[f64], time2: &[f64]) -> Vec<f64> {
     times
 }
 
+fn fill_timeline_interval(row: &mut [i32], times: &[f64], start: f64, stop: f64, status: i32) {
+    let start_col = times.partition_point(|&time| time < start);
+    let stop_col = times.partition_point(|&time| time < stop);
+    if start_col < stop_col {
+        row[start_col..stop_col].fill(status);
+    }
+
+    if let Some(col) = stop_col.checked_sub(1)
+        && (times[col] - stop).abs() < TIME_EPSILON
+    {
+        row[col] = status;
+    }
+    if stop_col < times.len() && (times[stop_col] - stop).abs() < TIME_EPSILON {
+        row[stop_col] = status;
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (id, time1, time2, status, time_points=None))]
 pub fn to_timeline(
@@ -142,16 +159,7 @@ pub fn to_timeline(
         let t2 = time2[i];
         let stat = status[i];
 
-        for (col, &t) in times.iter().enumerate() {
-            if t >= t1 && t < t2 {
-                states[row][col] = stat;
-            }
-        }
-        for (col, &t) in times.iter().enumerate() {
-            if (t - t2).abs() < 1e-9 {
-                states[row][col] = stat;
-            }
-        }
+        fill_timeline_interval(&mut states[row], &times, t1, t2, stat);
     }
 
     Ok(TimelineResult {
@@ -256,6 +264,69 @@ mod tests {
 
         assert_eq!(result.time_points, vec![0.0, 1.0004, 1.0008]);
         assert_eq!(result.states, vec![vec![0, 1, 1]]);
+    }
+
+    #[test]
+    fn test_to_timeline_range_fill_matches_boundary_sweep() {
+        let id = vec![2, 1, 1, 2];
+        let time1 = vec![1.0, 0.0, 2.0, 0.0];
+        let time2 = vec![3.0, 2.0, 4.0, 1.0];
+        let status = vec![4, 2, 3, 1];
+        let time_points = vec![0.0, 0.5, 1.0, 2.0, 3.0, 4.0];
+        let result = to_timeline(
+            id.clone(),
+            time1.clone(),
+            time2.clone(),
+            status.clone(),
+            Some(time_points.clone()),
+        )
+        .unwrap();
+
+        let mut expected = vec![vec![0; time_points.len()]; result.id.len()];
+        let id_rows: HashMap<i32, usize> = result
+            .id
+            .iter()
+            .enumerate()
+            .map(|(row, &value)| (value, row))
+            .collect();
+        for index in 0..id.len() {
+            let row = id_rows[&id[index]];
+            for (col, &time) in time_points.iter().enumerate() {
+                if time >= time1[index] && time < time2[index] {
+                    expected[row][col] = status[index];
+                }
+                if (time - time2[index]).abs() < TIME_EPSILON {
+                    expected[row][col] = status[index];
+                }
+            }
+        }
+
+        assert_eq!(result.states, expected);
+    }
+
+    #[test]
+    fn test_to_timeline_range_fill_preserves_near_stop_points() {
+        let time_points = vec![
+            0.0,
+            0.5,
+            1.0 - 0.75 * TIME_EPSILON,
+            1.0 + 0.75 * TIME_EPSILON,
+            2.0,
+        ];
+        let result =
+            to_timeline(vec![1], vec![0.0], vec![1.0], vec![7], Some(time_points)).unwrap();
+
+        assert_eq!(result.states, vec![vec![7, 7, 7, 7, 0]]);
+
+        let tolerance_reversed = to_timeline(
+            vec![1],
+            vec![1.0 + 0.5 * TIME_EPSILON],
+            vec![1.0],
+            vec![9],
+            None,
+        )
+        .unwrap();
+        assert_eq!(tolerance_reversed.states, vec![vec![9]]);
     }
 
     #[test]
