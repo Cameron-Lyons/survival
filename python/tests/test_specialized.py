@@ -325,7 +325,28 @@ def test_finegray_validates_public_inputs():
         survival.regression.finegray([0.0], [1.0], [2.0, 1.0], [1.0, 1.0], [True], [True, True])
 
     with pytest.raises(ValueError, match="cprob must contain values"):
-        survival.regression.finegray([0.0], [1.0], [1.0], [0.0], [True], [True])
+        survival.regression.finegray([0.0], [1.0], [1.0], [-0.1], [True], [True])
+
+    harmless_zero = survival.regression.finegray(
+        [0.0, 0.0],
+        [1.0, 3.0],
+        [1.0, 2.0, 3.0],
+        [1.0, 0.5, 0.0],
+        [True, True],
+        [True, True, True],
+    )
+    assert harmless_zero.row == [1, 1, 1, 2]
+    assert harmless_zero.wt == pytest.approx([1.0, 0.5, 0.0, 1.0])
+
+    with pytest.raises(ValueError, match="probability is zero"):
+        survival.regression.finegray(
+            [0.0],
+            [2.0],
+            [1.0, 2.0, 3.0],
+            [1.0, 0.0, 0.0],
+            [True],
+            [True, False, True],
+        )
 
 
 def test_finegray_regression_and_cif_public_api():

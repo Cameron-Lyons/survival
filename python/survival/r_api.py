@@ -6213,15 +6213,6 @@ class _FineGrayInputs:
     strata_levels: tuple[Any, ...] | None
 
 
-@dataclass(frozen=True)
-class _FineGraySplit:
-    row: list[int]
-    start: list[float]
-    end: list[float]
-    wt: list[float]
-    add: list[int]
-
-
 def _finegray_raw_column(data: Any, name: str) -> Any:
     if isinstance(data, Mapping):
         try:
@@ -6755,44 +6746,8 @@ def _finegray_split_intervals(
     cut_probability: list[float],
     extend: list[bool],
     keep: list[bool],
-) -> FineGrayOutput | _FineGraySplit:
-    if all(probability > 0.0 for probability in cut_probability):
-        return _core.finegray(start, stop, cut_time, cut_probability, extend, keep)
-
-    rows: list[int] = []
-    output_start: list[float] = []
-    output_end: list[float] = []
-    output_weight: list[float] = []
-    output_add: list[int] = []
-    kept_indices = [idx for idx, value in enumerate(keep) if value]
-    for row_idx, (left, right, should_extend) in enumerate(zip(start, stop, extend, strict=True)):
-        cut_idx = bisect_left(cut_time, right) if should_extend else len(cut_time)
-        current_end = cut_time[cut_idx] if cut_idx < len(cut_time) else right
-        rows.append(row_idx + 1)
-        output_start.append(left)
-        output_end.append(current_end)
-        output_weight.append(1.0)
-        output_add.append(0)
-        if not should_extend or cut_idx >= len(cut_time):
-            continue
-
-        later_kept = kept_indices[bisect_right(kept_indices, cut_idx) :]
-        denominator = cut_probability[cut_idx]
-        if later_kept and denominator == 0.0:
-            raise ValueError("censoring probability is zero before a selected event")
-        for add, next_idx in enumerate(later_kept, start=1):
-            rows.append(row_idx + 1)
-            output_start.append(cut_time[next_idx - 1])
-            output_end.append(cut_time[next_idx])
-            output_weight.append(cut_probability[next_idx] / denominator)
-            output_add.append(add)
-    return _FineGraySplit(
-        row=rows,
-        start=output_start,
-        end=output_end,
-        wt=output_weight,
-        add=output_add,
-    )
+) -> FineGrayOutput:
+    return _core.finegray(start, stop, cut_time, cut_probability, extend, keep)
 
 
 _R_RESERVED_NAMES = {
