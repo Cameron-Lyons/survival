@@ -12,6 +12,13 @@
 \alias{attrassign.lm}
 \alias{is.Surv}
 \alias{is.ratetable}
+\alias{[.ratetable}
+\alias{as.matrix.ratetable}
+\alias{is.na.ratetable}
+\alias{Math.ratetable}
+\alias{Ops.ratetable}
+\alias{print.ratetable}
+\alias{summary.ratetable}
 \alias{ratetableDate}
 \alias{ratetableDate.chron}
 \alias{ratetableDate.date}
@@ -39,10 +46,13 @@
 \alias{blog}
 \alias{aeqSurv}
 \alias{tcut}
+\alias{[.tcut}
+\alias{levels.tcut}
 \alias{neardate}
 \alias{lvcf}
 \alias{nostutter}
 \alias{nsk}
+\alias{makepredictcall.nsk}
 \alias{ridge}
 \alias{frailty}
 \alias{frailty.gamma}
@@ -50,8 +60,12 @@
 \alias{frailty.t}
 \alias{untangle.specials}
 \alias{pyears}
+\alias{print.pyears}
+\alias{summary.pyears}
 \alias{pseudo}
 \alias{pspline}
+\alias{makepredictcall.pspline}
+\alias{predict.pspline}
 \alias{survfit}
 \alias{survfitKM}
 \alias{survfit0}
@@ -105,6 +119,8 @@
 \alias{survfitcoxph.fit}
 \alias{survpenal.fit}
 \alias{tmerge}
+\alias{[.tmerge}
+\alias{summary.tmerge}
 \alias{survival_python_config}
 \alias{survfit.character}
 \alias{survfit.formula}
@@ -379,6 +395,20 @@ is.Surv(x)
 
 is.ratetable(x, verbose = FALSE)
 
+\method{[}{ratetable}(x, ..., drop = TRUE)
+
+\method{as.matrix}{ratetable}(x, ...)
+
+\method{is.na}{ratetable}(x)
+
+\method{Math}{ratetable}(x, ...)
+
+\method{Ops}{ratetable}(e1, e2)
+
+\method{print}{ratetable}(x, ...)
+
+\method{summary}{ratetable}(object, ...)
+
 ratetableDate(x)
 
 ratetable(...)
@@ -410,6 +440,8 @@ nostutter(id, x, censor = 0, single = FALSE)
 nsk(x, df = NULL, knots = NULL, intercept = FALSE, b = 0.05,
   Boundary.knots = stats::quantile(x, c(b, 1 - b), na.rm = TRUE))
 
+\method{makepredictcall}{nsk}(var, call)
+
 ridge(..., theta, df = nvar/2, eps = 0.1, scale = TRUE)
 
 frailty(x, distribution = "gamma", ...)
@@ -426,6 +458,10 @@ frailty.t(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
 pspline(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
   eps = 0.1, method, Boundary.knots = range(x),
   intercept = FALSE, penalty = TRUE, combine, ...)
+
+\method{makepredictcall}{pspline}(var, call)
+
+\method{predict}{pspline}(object, newx, ...)
 
 untangle.specials(tt, special, order = 1)
 
@@ -581,6 +617,14 @@ pyears(formula, data, weights, subset, na.action, rmap, ratetable,
   x = FALSE, y = FALSE, data.frame = FALSE, time, start, stop,
   event = NULL, group = NULL)
 
+\method{print}{pyears}(x, ...)
+
+\method{summary}{pyears}(object, header = TRUE, call = header, n = TRUE,
+  event = TRUE, pyears = TRUE, expected = TRUE, rate = FALSE,
+  rr = expected, ci.r = FALSE, ci.rr = FALSE, totals = FALSE,
+  legend = TRUE, vline = FALSE, vertical = TRUE, nastring = ".",
+  conf.level = 0.95, scale = 1, ...)
+
 finegray(formula, data, weights, subset, na.action = na.pass, etype,
   prefix = "fg", count = "", id, timefix = TRUE, tstart, tstop,
   ctime, cprob, extend, keep)
@@ -598,6 +642,10 @@ clogit(formula, data, weights, subset, na.action,
 fromtimeline(formula, data, id, istate = "istate")
 
 tmerge(data1, data2, id, ..., tstart, tstop, options)
+
+\method{[}{tmerge}(x, ..., drop = TRUE)
+
+\method{summary}{tmerge}(object, ...)
 
 totimeline(formula, data, id, istate)
 
@@ -717,6 +765,10 @@ yates_setup(fit, ...)
 survival_python_config()
 
 tcut(x, breaks, labels, scale = 1)
+
+\method{[}{tcut}(x, ..., drop = FALSE)
+
+\method{levels}{tcut}(x)
 
 neardate(id1, id2, y1, y2, best = c("after", "prior"),
   nomatch = NA_integer_)
@@ -849,6 +901,7 @@ plotted line, residual, or pseudo-value type.}
 \item{origin}{Optional time origin passed to the Python response constructor.}
 \item{value}{Object to test.}
 \item{verbose}{Logical flag accepted by \code{is.ratetable}.}
+\item{e1, e2}{Operands for rate-table arithmetic and comparisons.}
 \item{edge}{Lower/upper probability clamp for bounded link helpers
 \code{blogit}, \code{bprobit}, \code{bcloglog}, and \code{blog}.}
 \item{tolerance}{Near-tie tolerance for \code{aeqSurv} and survival
@@ -872,6 +925,8 @@ first knot-height column, or whether \code{pspline} includes an intercept.}
 \item{b}{Boundary quantile used by the default \code{nsk} boundary knots.}
 \item{Boundary.knots}{Boundary knots for \code{nsk} and \code{pspline};
 logical values follow the compatibility behavior of \code{survival::nsk}.}
+\item{call}{Model call updated with fitted spline metadata for prediction.}
+\item{newx}{New predictor values for \code{predict.pspline}.}
 \item{theta}{Fixed penalty parameter for \code{ridge}, \code{frailty.*}, and
 \code{pspline}.}
 \item{sparse}{Logical flag controlling sparse frailty coding.}
@@ -933,6 +988,19 @@ interval event/censor counts when explicit \code{times} are supplied.}
 \item{rmap}{Optional rate-table variable mapping for formula
 \code{survexp} and \code{pyears} calls delegated to \pkg{survival}.}
 \item{expect}{Expected-count scale selector accepted by \code{pyears}.}
+\item{header, call}{Logical controls for the heading and fitted call in a
+\code{pyears} summary.}
+\item{pyears, expected, rate, rr, ci.r, ci.rr}{Logical controls for the
+exposure, expected-event, rate, observed-to-expected, and confidence interval
+columns in a \code{pyears} summary. The \code{n} and \code{event} arguments
+likewise control their count columns.}
+\item{totals}{Logical flag adding marginal totals to a \code{pyears} summary.}
+\item{legend}{Logical compatibility flag accepted by \code{summary.pyears}.}
+\item{vline, vertical}{Logical controls for table borders and orientation in a
+\code{pyears} summary.}
+\item{nastring}{Text used for missing cells in a \code{pyears} summary.}
+\item{conf.level}{Confidence level for \code{pyears} rate and
+observed-to-expected intervals.}
 \item{method}{Expected-survival method for \code{survexp}, tie method for
 \code{coxph.fit} and \code{clogit}, case-cohort method for \code{cch},
 penalty selection method for \code{frailty.*} and \code{pspline}, or interval method
@@ -1078,7 +1146,8 @@ logistic, Gaussian, and Student-t \code{survreg.fit} distributions use the
 Rust optimizer; custom density callbacks retain the upstream fallback.}
 \item{varmat, wt, risk, newrisk, position, oldid, x2, risk2, strata2,
 survtype, vartype, unlist}{Low-level Cox survival-curve inputs.}
-\item{var}{Variance matrix for \code{coxph.wtest}.}
+\item{var}{Variance matrix for \code{coxph.wtest}, or a constructed spline
+basis passed to a \code{makepredictcall} method.}
 \item{parm}{Optional coefficient names or 1-based coefficient indices.}
 \item{level}{Confidence level for coefficient intervals.}
 \item{se.fit}{Logical flag requesting standard errors when supported.}

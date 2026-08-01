@@ -4978,29 +4978,54 @@ def nostutter(
     if any(_is_missing_value(value) for value in id_values):
         raise ValueError("id must not contain missing values")
 
-    current: Any = None
-    previous_id: Any = None
+    if not result:
+        return []
+
+    id_sample = id_values[0]
+    state_sample = next((value for value in result if not _is_missing_value(value)), censor)
+    replacements: list[bool] | None = None
+    try:
+        if isinstance(id_sample, Real):
+            if isinstance(state_sample, Real) and isinstance(censor, Real):
+                replacements = list(
+                    _core.nostutter_numeric_numeric(id_values, result, censor, single)
+                )
+            if isinstance(state_sample, str) and isinstance(censor, str):
+                replacements = list(_core.nostutter_numeric_str(id_values, result, censor, single))
+        elif isinstance(id_sample, str):
+            if isinstance(state_sample, Real) and isinstance(censor, Real):
+                replacements = list(_core.nostutter_str_numeric(id_values, result, censor, single))
+            if isinstance(state_sample, str) and isinstance(censor, str):
+                replacements = list(_core.nostutter_str_str(id_values, result, censor, single))
+    except TypeError:
+        pass
+
+    if replacements is not None:
+        return [
+            censor if replace else value
+            for replace, value in zip(replacements, result, strict=True)
+        ]
+
     censor_key = _hashable_group_value(censor)
-    used_for_id: set[Any] = set()
-    for row_idx, (id_value, value) in enumerate(zip(id_values, result, strict=True)):
-        id_key = _hashable_group_value(id_value)
-        if row_idx == 0 or id_key != previous_id:
-            used_for_id = set()
-            current = censor if _is_missing_value(value) else value
-            current_key = _hashable_group_value(current)
-            if single and current_key != censor_key and not _is_missing_value(value):
-                used_for_id.add(current_key)
-        elif not _is_missing_value(value):
-            value_key = _hashable_group_value(value)
-            current_key = _hashable_group_value(current)
-            if value_key == current_key or (single and value_key in used_for_id):
-                result[row_idx] = censor
-            elif value_key != censor_key:
-                current = value
-                if single:
-                    used_for_id.add(value_key)
-        previous_id = id_key
-    return result
+    id_levels: dict[Any, int] = {}
+    id_codes: list[int] = []
+    for value in id_values:
+        key = _hashable_group_value(value)
+        id_codes.append(id_levels.setdefault(key, len(id_levels)))
+
+    state_levels = {censor_key: 0}
+    state_codes: list[int | None] = []
+    for value in result:
+        if _is_missing_value(value):
+            state_codes.append(None)
+            continue
+        key = _hashable_group_value(value)
+        state_codes.append(state_levels.setdefault(key, len(state_levels)))
+
+    replacements = _core.nostutter_replacements(id_codes, state_codes, 0, single)
+    return [
+        censor if replace else value for replace, value in zip(replacements, result, strict=True)
+    ]
 
 
 @dataclass(frozen=True, init=False)
@@ -7553,14 +7578,6 @@ def _hashable_group_value(value: Any) -> Any:
     return value
 
 
-def _survcondense_same_or_missing(left: Any, right: Any) -> bool:
-    left_missing = _is_missing_value(left)
-    right_missing = _is_missing_value(right)
-    if left_missing or right_missing:
-        return left_missing and right_missing
-    return left == right
-
-
 def _survcondense_order_key(value: Any) -> tuple[int, int, Any]:
     if _is_missing_value(value):
         return (1, 0, "")
@@ -7573,51 +7590,59 @@ def _survcondense_order_key(value: Any) -> tuple[int, int, Any]:
     return (0, 1, str(value))
 
 
-def _survcondense_rle(values: Sequence[bool]) -> tuple[list[bool], list[int], list[int]]:
-    if not values:
-        return [], [], []
+def _survcondense_id_order_codes(values: Sequence[Any]) -> list[int]:
+    if all(
+        isinstance(value, bool | int | float) and math.isfinite(float(value)) for value in values
+    ):
+        keys: list[Any] = [float(value) for value in values]
+    elif all(isinstance(value, str) for value in values):
+        keys = list(values)
+    else:
+        keys = [_survcondense_order_key(value) for value in values]
+    levels = {value: idx for idx, value in enumerate(sorted(set(keys)))}
+    return [levels[value] for value in keys]
 
-    run_values = [bool(values[0])]
-    run_lengths = [1]
-    for value in values[1:]:
-        value = bool(value)
-        if value == run_values[-1]:
-            run_lengths[-1] += 1
+
+def _survcondense_compress_rows(columns: Sequence[Sequence[Any]]) -> list[int]:
+    normalized: list[Sequence[Any]] = []
+    for column in columns:
+        if any(_is_missing_value(value) for value in column):
+            normalized.append(
+                [
+                    (0, None) if _is_missing_value(value) else (1, _hashable_group_value(value))
+                    for value in column
+                ]
+            )
         else:
-            run_values.append(value)
-            run_lengths.append(1)
+            normalized.append(column)
 
-    cumulative: list[int] = []
-    total = 0
-    for length in run_lengths:
-        total += length
-        cumulative.append(total)
-    return run_values, run_lengths, cumulative
-
-
-def _survcondense_adjust_starts_like_r(
-    starts: list[float],
-    order: Sequence[int],
-    droprow: Sequence[bool],
-) -> None:
-    if not any(droprow):
-        return
-
-    run_values, run_lengths, cumulative = _survcondense_rle(droprow)
-    del run_lengths
-    if len(cumulative) == 2:
-        starts[cumulative[0]] = starts[0]
-        return
-    if len(cumulative) == 3:
-        starts[cumulative[1]] = starts[cumulative[0]]
-        return
-
-    run_start = 0
-    for value, run_end_exclusive in zip(run_values, cumulative, strict=True):
-        run_end = run_end_exclusive - 1
-        if value and run_end + 1 < len(order):
-            starts[order[run_end + 1]] = starts[order[run_start]]
-        run_start = run_end_exclusive
+    levels: dict[Any, int] = {}
+    codes: list[int] = []
+    try:
+        for signature in zip(*normalized, strict=True):
+            code = levels.get(signature)
+            if code is None:
+                code = len(levels) + 1
+                levels[signature] = code
+            codes.append(code)
+        return codes
+    except TypeError:
+        levels.clear()
+        codes.clear()
+        robust_columns = [
+            [
+                (0, None) if _is_missing_value(value) else (1, _hashable_group_value(value))
+                for value in column
+            ]
+            for column in columns
+        ]
+        for signature in zip(*robust_columns, strict=True):
+            code = levels.get(signature)
+            if code is None:
+                code = len(levels) + 1
+                levels[signature] = code
+            codes.append(code)
+        return codes
 
 
 def _survcondense_unique_columns(
@@ -7700,27 +7725,14 @@ def _survcondense_from_formula(
         comparison_columns.append(weights)
     comparison_columns.append(id_values)
 
-    order = sorted(
-        range(len(response)),
-        key=lambda idx: (_survcondense_order_key(id_values[idx]), response.time[idx]),
+    plan = _core.survcondense_plan(
+        _survcondense_id_order_codes(id_values),
+        list(response.start),
+        list(response.time),
+        _survcondense_compress_rows(comparison_columns),
     )
-    droprow = [False] * len(response)
-    if len(response) > 1:
-        for sorted_idx, current_idx in enumerate(order[:-1]):
-            next_idx = order[sorted_idx + 1]
-            xdup = all(
-                _survcondense_same_or_missing(values[next_idx], values[current_idx])
-                for values in comparison_columns
-            )
-            ydup = response.start[next_idx] == response.time[current_idx]
-            droprow[sorted_idx] = bool(xdup and ydup)
-
-    starts = list(response.start)
-    _survcondense_adjust_starts_like_r(starts, order, droprow)
-    drop_indices = {order[pos] for pos, drop in enumerate(droprow) if drop}
-    keep_indices = (
-        [idx for idx in range(len(response)) if idx not in drop_indices] if any(droprow) else []
-    )
+    starts = [float(value) for value in plan.start]
+    keep_indices = [int(value) for value in plan.keep]
 
     if weights is not None:
         model_columns.append((str(weights_output_name), weights))

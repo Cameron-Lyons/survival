@@ -547,6 +547,12 @@ class CondenseResult:
     @property
     def row_map(self) -> list[list[int]]: ...
 
+class CondensePlanResult:
+    @property
+    def start(self) -> list[float]: ...
+    @property
+    def keep(self) -> list[int]: ...
+
 class TcutResult:
     @property
     def values(self) -> list[float]: ...
@@ -5748,6 +5754,12 @@ def survcondense(
     time2: list[float],
     status: list[int],
 ) -> CondenseResult: ...
+def survcondense_plan(
+    id_order: list[int],
+    start: list[float],
+    stop: list[float],
+    row_code: list[int],
+) -> CondensePlanResult: ...
 def tcut(
     value: list[float],
     breaks: float | list[float],
@@ -5775,6 +5787,36 @@ def lvcf_indices(
     missing: list[bool],
     time: list[float] | None = None,
 ) -> list[int]: ...
+def nostutter_replacements(
+    id: list[int],
+    state: list[int | None],
+    censor: int,
+    single: bool = False,
+) -> list[bool]: ...
+def nostutter_numeric_numeric(
+    id: list[int | float],
+    state: list[int | float | None],
+    censor: int | float,
+    single: bool = False,
+) -> list[bool]: ...
+def nostutter_numeric_str(
+    id: list[int | float],
+    state: list[str | None],
+    censor: str,
+    single: bool = False,
+) -> list[bool]: ...
+def nostutter_str_numeric(
+    id: list[str],
+    state: list[int | float | None],
+    censor: int | float,
+    single: bool = False,
+) -> list[bool]: ...
+def nostutter_str_str(
+    id: list[str],
+    state: list[str | None],
+    censor: str,
+    single: bool = False,
+) -> list[bool]: ...
 def turnbull_estimator(
     left: list[float],
     right: list[float],

@@ -896,6 +896,30 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
     )
     stuttered_single_with_censor_gap = survival.nostutter([1, 1, 1], [1, 0, 1], single=True)
     stuttered_single_with_missing = survival.nostutter([1, 1, 1, 1], [None, 1, 2, 1], single=True)
+    stuttered_character = survival.nostutter(
+        [1, 1, 1, 2, 2],
+        ["censor", "a", "a", "b", "b"],
+        censor="censor",
+    )
+    stuttered_character_ids = survival.nostutter(
+        ["a", "a", "a", "b", "b"],
+        [1, 2, 2, 1, 1],
+    )
+    stuttered_character_ids_and_states = survival.nostutter(
+        ["a", "a", "a", "b", "b"],
+        ["censor", "x", "x", "y", "y"],
+        censor="censor",
+    )
+    stuttered_large_integers = survival.nostutter(
+        [2**53, 2**53, 2**53, 2**53 + 1],
+        [2**53, 2**53 + 1, 2**53 + 1, 2**53 + 1],
+    )
+    stuttered_large_integer_ids_character = survival.nostutter(
+        [2**53, 2**53 + 1],
+        ["x", "x"],
+        censor="censor",
+    )
+    stuttered_mixed_fallback = survival.nostutter([1, 1, 1], [1, "x", "x"])
 
     assert carried == [10.0, 10.0, 12.0, None, 20.0]
     assert carried_by_time == [10.0, 10.0, 10.0]
@@ -910,6 +934,12 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
     assert stuttered_single == [1, 2, 0, 3, 1, 0, 2]
     assert stuttered_single_with_censor_gap == [1, 0, 0]
     assert stuttered_single_with_missing == [None, 1, 2, 0]
+    assert stuttered_character == ["censor", "a", "censor", "b", "censor"]
+    assert stuttered_character_ids == [1, 2, 0, 1, 0]
+    assert stuttered_character_ids_and_states == ["censor", "x", "censor", "y", "censor"]
+    assert stuttered_large_integers == [2**53, 2**53 + 1, 0, 2**53 + 1]
+    assert stuttered_large_integer_ids_character == ["x", "x"]
+    assert stuttered_mixed_fallback == [1, "x", 0]
 
     with pytest.raises(ValueError, match="same length"):
         survival.lvcf([1], [1, None])
@@ -1259,6 +1289,18 @@ def test_survcondense_accepts_formula_and_preserves_direct_api():
         weights="wt",
         id="id",
     )
+    missing_values = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ x",
+        data={
+            "id": ["b", "a", "b", "a"],
+            "tstart": [0.0, 0.0, 1.0, 1.0],
+            "tstop": [1.0, 1.0, 2.0, 2.0],
+            "event": [0, 0, 0, 0],
+            "x": [None, "x", None, "x"],
+        },
+        id="id",
+        na_action="pass",
+    )
     special_data = {
         **data,
         "site": ["south", "north", "north", "south"],
@@ -1326,6 +1368,13 @@ def test_survcondense_accepts_formula_and_preserves_direct_api():
         "event": [0, 0],
     }
     assert no_drops == {"x": [], "wt": [], "id": [], "tstart": [], "tstop": [], "event": []}
+    assert missing_values == {
+        "x": [None, "x"],
+        "id": ["b", "a"],
+        "tstart": [0.0, 0.0],
+        "tstop": [2.0, 2.0],
+        "event": [0, 0],
+    }
     assert strata == {
         "strata(site)": ["north", "south"],
         "id": [1, 2],
