@@ -438,7 +438,7 @@ fn concordance_summary_quadratic(
                 comparable += pair_weight;
                 if risk_scores[i] > risk_scores[j] {
                     concordant += pair_weight;
-                } else if (risk_scores[i] - risk_scores[j]).abs() < DIVISION_FLOOR {
+                } else if risk_scores[i] == risk_scores[j] {
                     concordant += TIED_PAIR_WEIGHT * pair_weight;
                 }
             } else if j_comparable {
@@ -453,7 +453,7 @@ fn concordance_summary_quadratic(
                 comparable += pair_weight;
                 if risk_scores[j] > risk_scores[i] {
                     concordant += pair_weight;
-                } else if (risk_scores[i] - risk_scores[j]).abs() < DIVISION_FLOOR {
+                } else if risk_scores[i] == risk_scores[j] {
                     concordant += TIED_PAIR_WEIGHT * pair_weight;
                 }
             }
@@ -749,13 +749,13 @@ fn concordance_contribution_for_rank(
     risk_score: f64,
 ) -> f64 {
     let less_end = risk_levels.partition_point(|&risk| risk < risk_score);
-    let near_tie_end = risk_levels.partition_point(|&risk| risk - risk_score < DIVISION_FLOOR);
+    let tie_end = risk_levels.partition_point(|&risk| risk <= risk_score);
 
     let lower_risk_count = prefix_count_before(at_risk, less_end);
-    let lower_or_near_tied_count = prefix_count_before(at_risk, near_tie_end);
-    let near_tied_count = lower_or_near_tied_count - lower_risk_count;
+    let lower_or_tied_count = prefix_count_before(at_risk, tie_end);
+    let tied_count = lower_or_tied_count - lower_risk_count;
 
-    lower_risk_count + TIED_PAIR_WEIGHT * near_tied_count
+    lower_risk_count + TIED_PAIR_WEIGHT * tied_count
 }
 
 #[inline]
@@ -1419,12 +1419,16 @@ mod tests {
     }
 
     #[test]
-    fn test_ranked_concordance_preserves_tie_tolerance() {
+    fn test_ranked_concordance_distinguishes_near_equal_risk_scores() {
         let time = [1.0, 2.0, 3.0, 4.0];
         let event = [1, 1, 1, 1];
         let risk = [0.4, 0.4 + DIVISION_FLOOR / 2.0, 0.1, 0.8];
+        let tied_risk = [0.4, 0.4, 0.1, 0.8];
 
         assert_ranked_matches_quadratic(&risk, &time, &event, None);
+        let distinct = concordance_summary_with_horizon(&risk, &time, &event, None);
+        let tied = concordance_summary_with_horizon(&tied_risk, &time, &event, None);
+        assert!((tied.concordant - distinct.concordant - 0.5).abs() < DIVISION_FLOOR);
     }
 
     #[test]
