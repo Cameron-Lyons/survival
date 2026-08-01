@@ -3,6 +3,8 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
 
+const DAYS_PER_YEAR: f64 = 365.25;
+
 fn value_error(message: impl Into<String>) -> PyErr {
     PyValueError::new_err(message.into())
 }
@@ -194,47 +196,47 @@ impl RateTable {
             return Ok(0.0);
         }
 
+        let mut indices: Vec<usize> = self
+            .dimensions
+            .iter()
+            .map(|dimension| match dimension.dim_type {
+                DimType::Factor if is_sex_dimension(&dimension.name) => {
+                    factor_index(dimension, sex.unwrap_or(0) as usize)
+                }
+                DimType::Factor => factor_index(dimension, 0),
+                DimType::Continuous => find_interval(&dimension.cutpoints, 0.0),
+                DimType::Age | DimType::Year => 0,
+            })
+            .collect();
         let mut cumhaz = 0.0;
         let mut current_age = age_start;
         let mut current_year = year_start;
+        let mut remaining = age_end - age_start;
 
-        let mut coords = HashMap::with_capacity(self.dimensions.len());
-        let mut age_key = None;
-        let mut year_key = None;
-
-        for dim in &self.dimensions {
-            match dim.dim_type {
-                DimType::Age => {
-                    age_key = Some(dim.name.clone());
-                    coords.insert(dim.name.clone(), current_age);
+        while remaining > 0.0 {
+            let mut interval = remaining;
+            for (index, dimension) in self.dimensions.iter().enumerate() {
+                match dimension.dim_type {
+                    DimType::Age => {
+                        indices[index] = find_interval(&dimension.cutpoints, current_age);
+                        if let Some(boundary) = next_cutpoint(&dimension.cutpoints, current_age) {
+                            interval = interval.min(boundary - current_age);
+                        }
+                    }
+                    DimType::Year => {
+                        indices[index] = find_interval(&dimension.cutpoints, current_year);
+                        if let Some(boundary) = next_cutpoint(&dimension.cutpoints, current_year) {
+                            interval = interval.min((boundary - current_year) * DAYS_PER_YEAR);
+                        }
+                    }
+                    DimType::Factor | DimType::Continuous => {}
                 }
-                DimType::Year => {
-                    year_key = Some(dim.name.clone());
-                    coords.insert(dim.name.clone(), current_year);
-                }
-                DimType::Factor if dim.name.to_lowercase().contains("sex") => {
-                    coords.insert(dim.name.clone(), sex.unwrap_or(0) as f64);
-                }
-                _ => {}
-            }
-        }
-
-        let step = 1.0;
-        while current_age < age_end {
-            if let Some(ref key) = age_key {
-                coords.insert(key.clone(), current_age);
-            }
-            if let Some(ref key) = year_key {
-                coords.insert(key.clone(), current_year);
             }
 
-            if let Ok(rate) = self.lookup(coords.clone()) {
-                let actual_step = (age_end - current_age).min(step);
-                cumhaz += rate * actual_step;
-            }
-
-            current_age += step;
-            current_year += step / 365.25;
+            cumhaz += self.rates[self.indices_to_flat(&indices)] * interval;
+            remaining -= interval;
+            current_age += interval;
+            current_year += interval / DAYS_PER_YEAR;
         }
 
         Ok(cumhaz)
@@ -299,6 +301,29 @@ impl RateTable {
 
         flat_idx.min(self.rates.len().saturating_sub(1))
     }
+}
+
+fn is_sex_dimension(name: &str) -> bool {
+    name.as_bytes()
+        .windows(3)
+        .any(|window| window.eq_ignore_ascii_case(b"sex"))
+}
+
+fn factor_index(dimension: &RateDimension, value: usize) -> usize {
+    value.min(
+        dimension
+            .levels
+            .as_ref()
+            .map_or(0, |levels| levels.len().saturating_sub(1)),
+    )
+}
+
+fn next_cutpoint(cutpoints: &[f64], value: f64) -> Option<f64> {
+    let index = match cutpoints.binary_search_by(|probe| probe.total_cmp(&value)) {
+        Ok(index) => index + 1,
+        Err(index) => index,
+    };
+    cutpoints.get(index).copied()
 }
 
 fn find_interval(cutpoints: &[f64], value: f64) -> usize {
@@ -549,6 +574,76 @@ mod tests {
         let mut coords = HashMap::new();
         coords.insert("age".to_string(), 15.0);
         assert_eq!(rt.lookup(coords).unwrap(), 0.02);
+    }
+
+    #[test]
+    fn cumulative_hazard_integrates_exactly_across_age_cutpoints() {
+        let dimensions = vec![RateDimension::new(
+            "age".to_string(),
+            DimType::Age,
+            vec![0.0, 10.0, 20.0],
+            None,
+        )];
+        let table = RateTable::new(dimensions, vec![0.1, 0.2], None).unwrap();
+
+        assert!((table.cumulative_hazard(8.0, 12.0, 2000.0, None).unwrap() - 0.6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cumulative_hazard_integrates_exactly_across_year_cutpoints() {
+        let dimensions = vec![RateDimension::new(
+            "year".to_string(),
+            DimType::Year,
+            vec![2000.0, 2001.0, 2002.0],
+            None,
+        )];
+        let table = RateTable::new(dimensions, vec![0.1, 0.2], None).unwrap();
+        let expected = 0.5 * DAYS_PER_YEAR * 0.1 + 0.5 * DAYS_PER_YEAR * 0.2;
+
+        assert!(
+            (table
+                .cumulative_hazard(0.0, DAYS_PER_YEAR, 2000.5, None)
+                .unwrap()
+                - expected)
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn cumulative_hazard_splits_at_the_earliest_dimension_boundary() {
+        let dimensions = vec![
+            RateDimension::new("age".to_string(), DimType::Age, vec![0.0, 10.0, 20.0], None),
+            RateDimension::new(
+                "year".to_string(),
+                DimType::Year,
+                vec![2000.0, 2001.0, 2002.0],
+                None,
+            ),
+            RateDimension::new(
+                "sex".to_string(),
+                DimType::Factor,
+                vec![],
+                Some(vec!["male".to_string(), "female".to_string()]),
+            ),
+        ];
+        let table = RateTable::new(
+            dimensions,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            None,
+        )
+        .unwrap();
+        let year_interval = 0.01 * DAYS_PER_YEAR;
+        let expected = 2.0 * 2.0 + (year_interval - 2.0) * 6.0 + (4.0 - year_interval) * 8.0;
+
+        assert!(
+            (table
+                .cumulative_hazard(8.0, 12.0, 2000.99, Some(1))
+                .unwrap()
+                - expected)
+                .abs()
+                < 1e-10
+        );
     }
 
     #[test]

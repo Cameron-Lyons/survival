@@ -416,6 +416,22 @@ def test_ratetable_and_survexp_public_apis():
     assert all(0.0 < value <= 1.0 for value in individual)
 
 
+def test_ratetable_integrates_exactly_across_age_and_year_cutpoints():
+    age_table = survival.RateTable(
+        [survival.RateDimension("age", survival.DimType.Age, [0.0, 10.0, 20.0])],
+        [0.1, 0.2],
+    )
+    year_table = survival.RateTable(
+        [survival.RateDimension("year", survival.DimType.Year, [2000.0, 2001.0, 2002.0])],
+        [0.1, 0.2],
+    )
+
+    assert age_table.cumulative_hazard(8.0, 12.0, 2000.0) == pytest.approx(0.6)
+    assert year_table.cumulative_hazard(0.0, 365.25, 2000.5) == pytest.approx(
+        0.5 * 365.25 * 0.1 + 0.5 * 365.25 * 0.2
+    )
+
+
 def test_survexp_validates_method():
     ratetable = survival.create_simple_ratetable(
         age_breaks=[0.0, 36500.0, 73000.0],
