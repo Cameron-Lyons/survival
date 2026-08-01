@@ -4327,6 +4327,19 @@ def _integerish_vector_or_none(values: Any, name: str) -> list[int] | None:
         return None
 
 
+def _neardate_float_vector(values: Any, name: str) -> list[float]:
+    result: list[float] = []
+    for value in _materialize_1d(values, name):
+        if _is_missing_value(value):
+            result.append(math.nan)
+            continue
+        try:
+            result.append(float(value))
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{name} must be sortable numeric values") from exc
+    return result
+
+
 def neardate(
     id1: Any,
     id2: Any,
@@ -4343,10 +4356,13 @@ def neardate(
         ("after", "prior", "closest"),
         "best must be 'after', 'prior', or 'closest'",
     )
-    y1_values = _float_vector(y1, "y1")
-    y2_values = _float_vector(y2, "y2")
-    id1_integer = _integerish_vector_or_none(id1, "id1")
-    id2_integer = _integerish_vector_or_none(id2, "id2")
+    y1_values = _neardate_float_vector(y1, "y1")
+    y2_values = _neardate_float_vector(y2, "y2")
+    id1_values = _materialize_1d(id1, "id1")
+    id2_values = _materialize_1d(id2, "id2")
+    id1_missing = [_is_missing_value(value) for value in id1_values]
+    id1_integer = _integerish_vector_or_none(id1_values, "id1")
+    id2_integer = _integerish_vector_or_none(id2_values, "id2")
     nomatch_value = None if nomatch is None else _integer_scalar(nomatch, "nomatch")
 
     if id1_integer is not None and id2_integer is not None:
@@ -4360,15 +4376,24 @@ def neardate(
         )
     else:
         result = _core.neardate_str(
-            [str(value) for value in _materialize_1d(id1, "id1")],
+            [
+                "\0missing" if missing else f"\0value:{value}"
+                for value, missing in zip(id1_values, id1_missing, strict=True)
+            ],
             y1_values,
-            [str(value) for value in _materialize_1d(id2, "id2")],
+            [
+                "\0missing" if _is_missing_value(value) else f"\0value:{value}"
+                for value in id2_values
+            ],
             y2_values,
             best_value,
             None,
         )
 
-    return [nomatch_value if idx is None else int(idx) + 1 for idx in result.indices]
+    return [
+        None if id1_missing[pos] else nomatch_value if idx is None else int(idx) + 1
+        for pos, idx in enumerate(result.indices)
+    ]
 
 
 def _tcut_default_labels(breaks: list[float]) -> list[str]:

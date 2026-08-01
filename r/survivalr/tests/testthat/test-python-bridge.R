@@ -3208,6 +3208,42 @@ test_that("data-prep helpers match R survival shapes", {
     neardate(c("a", "b"), c("a", "b"), c(4, 12), c(5, 10), nomatch = 0L),
     survival::neardate(c("a", "b"), c("a", "b"), c(4, 12), c(5, 10), nomatch = 0L)
   )
+  neardate_queries <- c(NA, 2, Inf, -Inf)
+  neardate_references <- c(1, NA, Inf, -Inf)
+  expect_equal(
+    neardate(
+      rep(1, 4), rep(1, 4), neardate_queries, neardate_references,
+      nomatch = 0L
+    ),
+    survival::neardate(
+      rep(1, 4), rep(1, 4), neardate_queries, neardate_references,
+      nomatch = 0L
+    )
+  )
+  expect_equal(
+    neardate(
+      rep(1, 4), rep(1, 4), neardate_queries, neardate_references,
+      best = "prior", nomatch = 0L
+    ),
+    survival::neardate(
+      rep(1, 4), rep(1, 4), neardate_queries, neardate_references,
+      best = "prior", nomatch = 0L
+    )
+  )
+  expect_equal(
+    neardate(c(NA, 1), c(NA, 1), c(1, 2), c(1, 2), nomatch = 0L),
+    survival::neardate(c(NA, 1), c(NA, 1), c(1, 2), c(1, 2), nomatch = 0L)
+  )
+  expect_equal(
+    neardate(c(NA, 1), c(NA, 2), c(1, 2), c(1, 2), nomatch = 0L),
+    survival::neardate(c(NA, 1), c(NA, 2), c(1, 2), c(1, 2), nomatch = 0L)
+  )
+  expect_error(neardate(1, 1, 1, NA), "No valid entries")
+  expect_error(survival::neardate(1, 1, 1, NA), "No valid entries")
+  expect_error(neardate(1, 2, 1, 1), "No valid entries")
+  expect_error(survival::neardate(1, 2, 1, 1), "No valid entries")
+  expect_error(neardate(1, 1, factor("2020-01-01"), 1), "sortable")
+  expect_error(survival::neardate(1, 1, factor("2020-01-01"), 1), "sortable")
   reference_lvcf <- get0("lvcf", envir = asNamespace("survival"), inherits = FALSE)
   expect_equal(
     lvcf(c(1, 1, 1, 2, 2), c(10, NA, 12, NA, 20)),
