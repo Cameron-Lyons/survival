@@ -4352,7 +4352,7 @@ def _lvcf_id_ranks(values: Any, raw: list[Any] | None = None) -> tuple[list[Any]
 
 
 def _lvcf_time_order(values: Any) -> tuple[list[Any], list[Any]]:
-    raw = _materialize_1d(values, "time")
+    raw = _lvcf_vector(values, "time")
     category_ranks = _lvcf_category_ranks(values, "time")
     if category_ranks is not None:
         try:
@@ -4372,9 +4372,7 @@ def _lvcf_time_order(values: Any) -> tuple[list[Any], list[Any]]:
         except (TypeError, ValueError):
             pass
         else:
-            if not any(math.isnan(value) for value in numeric):
-                return raw, numeric
-            return raw, [(1, 0.0) if math.isnan(value) else (0, value) for value in numeric]
+            return raw, numeric
 
     return raw, [
         (2, "")
@@ -4384,6 +4382,36 @@ def _lvcf_time_order(values: Any) -> tuple[list[Any], list[Any]]:
         else (1, str(value))
         for value in raw
     ]
+
+
+def _lvcf_time_ranks(values: list[Any]) -> list[float]:
+    if all(isinstance(value, Real) for value in values):
+        return [float(value) for value in values]
+    levels = {value: rank for rank, value in enumerate(sorted(set(values)))}
+    return [float(levels[value]) for value in values]
+
+
+def _lvcf_numeric_ids_are_exact(values: list[Any]) -> bool:
+    for value in values:
+        if not isinstance(value, Real):
+            return False
+        try:
+            exact_integer = index(value)
+        except TypeError:
+            pass
+        else:
+            if abs(exact_integer) > 1 << 53:
+                return False
+    return True
+
+
+def _lvcf_vector(values: Any, name: str, *, labels: bool = False) -> list[Any]:
+    if values is None:
+        return [None]
+    try:
+        return _materialize_labels(values, name) if labels else _materialize_1d(values, name)
+    except TypeError:
+        return [values]
 
 
 def _integerish_vector_or_none(values: Any, name: str) -> list[int] | None:
@@ -4917,50 +4945,32 @@ def nsk(
 def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:
     """Carry the last non-missing value forward within each id, like R's ``lvcf``."""
 
-    id_values = _materialize_labels(id, "id")
-    result = _materialize_1d(x, "x")
+    id_values = _lvcf_vector(id, "id", labels=True)
+    result = _lvcf_vector(x, "x")
     if len(result) != len(id_values):
         raise ValueError("x must have the same length as id")
+    if any(_is_missing_value(value) for value in id_values):
+        raise ValueError("id must not contain missing values")
+    missing = [_is_missing_value(value) for value in result]
+    numeric_ids_are_exact = _lvcf_numeric_ids_are_exact(id_values)
     if time is None:
-        _, id_ranks = _lvcf_id_ranks(id, id_values)
-        source = _core.lvcf_indices(
-            id_ranks,
-            [_is_missing_value(value) for value in result],
+        source = (
+            _core.lvcf_numeric_indices(id_values, missing)
+            if numeric_ids_are_exact
+            else _core.lvcf_indices(_lvcf_id_ranks(id, id_values)[1], missing)
         )
         return [result[row_idx] for row_idx in source]
 
     time_values, time_order = _lvcf_time_order(time)
     if len(time_values) != len(id_values):
         raise ValueError("time must have the same length as id")
-    id_category_ranks = _lvcf_category_ranks(id, "id")
-    if id_category_ranks is None:
-        order = sorted(
-            range(len(id_values)),
-            key=lambda idx: (_lvcf_order_key(id_values[idx]), time_order[idx], idx),
-        )
-    else:
-        if any(_is_missing_value(value) for value in id_values):
-            raise ValueError("id must not contain missing values")
-        try:
-            id_order = [id_category_ranks[_hashable_group_value(value)] for value in id_values]
-        except KeyError as exc:
-            raise ValueError("id contains a value outside the declared categories") from exc
-        order = sorted(
-            range(len(id_values)),
-            key=lambda idx: (id_order[idx], time_order[idx], idx),
-        )
-
-    current: Any = None
-    previous_id: Any = None
-    for position, row_idx in enumerate(order):
-        id_key = _hashable_group_value(id_values[row_idx])
-        value = result[row_idx]
-        if position == 0 or not _is_missing_value(value) or id_key != previous_id:
-            current = value
-        else:
-            result[row_idx] = current
-        previous_id = id_key
-    return result
+    time_ranks = _lvcf_time_ranks(time_order)
+    source = (
+        _core.lvcf_numeric_indices(id_values, missing, time_ranks)
+        if numeric_ids_are_exact
+        else _core.lvcf_indices(_lvcf_id_ranks(id, id_values)[1], missing, time_ranks)
+    )
+    return [result[row_idx] for row_idx in source]
 
 
 def nostutter(

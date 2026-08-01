@@ -794,6 +794,7 @@ BINDINGS = (
     "longitudinal_dynamic_pred",
     "lrt_test",
     "lvcf_indices",
+    "lvcf_numeric_indices",
     "marginal_recurrent_model",
     "marginal_structural_model",
     "mc_dropout_uncertainty",

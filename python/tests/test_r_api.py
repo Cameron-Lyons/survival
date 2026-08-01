@@ -1,4 +1,5 @@
 import math
+import random
 from bisect import bisect_right
 from itertools import combinations
 from statistics import NormalDist
@@ -865,6 +866,8 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
     carried_by_factor_id = survival.lvcf(factor_id, [None, 1, 2, None])
     factor_time = survival.r_api._r_factor(["b", "a", "c"], ["c", "b", "a"])
     carried_by_factor_time = survival.lvcf([1, 1, 1], ["x", None, None], factor_time)
+    carried_scalar = survival.lvcf(1, 10, time=2)
+    carried_missing_scalar = survival.lvcf("a", None)
     stuttered = survival.nostutter([1, 1, 1, 2, 2], [0, 1, 1, 1, 1])
     stuttered_with_missing = survival.nostutter([1, 1, 1], [None, 1, 1])
     stuttered_single = survival.nostutter(
@@ -883,6 +886,8 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
     assert carried_by_character_time == ["x", None, "x"]
     assert carried_by_factor_id == [None, 1, 2, 1]
     assert carried_by_factor_time == ["x", "x", None]
+    assert carried_scalar == [10]
+    assert carried_missing_scalar == [None]
     assert stuttered == [0, 1, 0, 1, 0]
     assert stuttered_with_missing == [None, 1, 0]
     assert stuttered_single == [1, 2, 0, 3, 1, 0, 2]
@@ -893,6 +898,65 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
         survival.lvcf([1], [1, None])
     with pytest.raises(ValueError, match="missing"):
         survival.nostutter([1, None], [0, 1])
+
+
+def _reference_lvcf_with_time(ids, values, times):
+    def id_key(value):
+        return (0, float(value)) if isinstance(value, int | float) else (1, str(value))
+
+    def time_key(value):
+        if value is None or isinstance(value, float) and math.isnan(value):
+            return (2, "")
+        if isinstance(value, int | float):
+            return (0, float(value))
+        return (1, str(value))
+
+    result = list(values)
+    order = sorted(
+        range(len(ids)),
+        key=lambda idx: (id_key(ids[idx]), time_key(times[idx]), idx),
+    )
+    current = None
+    previous_id = None
+    for position, row_idx in enumerate(order):
+        value = result[row_idx]
+        if position == 0 or value is not None or ids[row_idx] != previous_id:
+            current = value
+        else:
+            result[row_idx] = current
+        previous_id = ids[row_idx]
+    return result
+
+
+@pytest.mark.parametrize(
+    ("character_id", "character_time"),
+    [(False, False), (False, True), (True, False), (True, True)],
+)
+def test_lvcf_time_scan_matches_reference_randomized(character_id, character_time):
+    rng = random.Random(20260801 + 2 * int(character_id) + int(character_time))  # noqa: S311
+    for _case in range(200):
+        n = rng.randrange(0, 80)
+        ids = [rng.choice("abcde") if character_id else rng.randrange(5) for _ in range(n)]
+        values = [None if rng.random() < 0.45 else rng.randrange(-20, 21) for _ in range(n)]
+        if character_time:
+            times = [None if rng.random() < 0.1 else rng.choice("abcdef") for _ in range(n)]
+        else:
+            times = [None if rng.random() < 0.1 else rng.randrange(-5, 11) for _ in range(n)]
+
+        assert survival.lvcf(ids, values, time=times) == _reference_lvcf_with_time(
+            ids,
+            values,
+            times,
+        )
+
+
+def test_lvcf_preserves_large_integer_id_groups():
+    large = 1 << 53
+    assert survival.lvcf(
+        [large, large + 1, large, large + 1],
+        [10, 20, None, None],
+        time=[1, 1, 2, 2],
+    ) == [10, 20, 10, 20]
 
 
 def test_coxph_wtest_matches_r_wald_helper_shapes():

@@ -3217,6 +3217,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "to_timeline",
         "from_timeline",
         "lvcf_indices",
+        "lvcf_numeric_indices",
     }
     assert expected_names <= stub_names
 
@@ -3264,6 +3265,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "to_timeline": ["id", "time1", "time2", "status", "time_points"],
         "from_timeline": ["id", "states", "time_points"],
         "lvcf_indices": ["id", "missing", "time"],
+        "lvcf_numeric_indices": ["id", "missing", "time"],
     }
     for name, args in expected_args.items():
         assert list(inspect.signature(getattr(core, name)).parameters) == args
