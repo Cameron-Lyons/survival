@@ -187,6 +187,16 @@ def test_strata_matches_r_factor_codes_and_preserves_low_level_call():
         survival.strata(["a", "b"], [1])
 
 
+def test_strata_counts_high_cardinality_levels_once():
+    values = [f"group-{idx:04d}" for idx in range(2_000)]
+
+    result = survival.strata(values)
+
+    assert result.codes == list(range(1, len(values) + 1))
+    assert result.levels == values
+    assert result.counts == [1] * len(values)
+
+
 def test_aeqSurv_adjusts_surv_response_like_r():
     right = survival.Surv([1.0, 1.0 + 1e-8, 2.0], [1, 0, 1])
     adjusted_right = survival.aeqSurv(right, tolerance=1e-7)
