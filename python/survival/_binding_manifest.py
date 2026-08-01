@@ -822,6 +822,7 @@ BINDINGS = (
     "parallel_matrix_operations",
     "pattern_mixture_model",
     "perform_agscore3_calculation",
+    "perform_brier_calculation",
     "perform_concordance1_calculation",
     "perform_concordance3_calculation",
     "perform_concordance_calculation",

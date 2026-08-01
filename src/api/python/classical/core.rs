@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(perform_brier_calculation, m)?)?;
     m.add_function(wrap_pyfunction!(perform_cox_regression_frailty, m)?)?;
     m.add_function(wrap_pyfunction!(perform_pyears_calculation, m)?)?;
     m.add_function(wrap_pyfunction!(perform_concordance1_calculation, m)?)?;

@@ -5327,6 +5327,7 @@ def test_low_level_bridge_bindings_are_typed():
         "perform_pystep_simple_calculation",
         "perform_pystep_calculation",
         "perform_pyears_calculation",
+        "perform_brier_calculation",
         "cox_callback",
     } <= stub_names
 
@@ -5404,6 +5405,16 @@ def test_low_level_bridge_bindings_are_typed():
             "observed_data",
             "do_event",
             "ny",
+        ],
+        "perform_brier_calculation": [
+            "observed_time",
+            "status",
+            "case_weights",
+            "evaluation_times",
+            "null_predictions",
+            "model_predictions",
+            "censor_times",
+            "censor_survival",
         ],
         "cox_callback": [
             "which",
@@ -5507,6 +5518,21 @@ def test_low_level_bridge_bindings_are_typed():
     )
     assert sorted(pyears) == ["offtable", "pcount", "pexpect", "pn", "pyears"]
     assert pyears["pyears"] == pytest.approx([2.0])
+
+    brier_components = core.perform_brier_calculation(
+        [1.0, 2.5, 3.0, 4.5],
+        [1, 0, 1, 0],
+        [1.0, 2.0, 1.0, 1.0],
+        [2.0, 4.0],
+        [0.2, 0.6],
+        [[0.1, 0.2, 0.3, 0.4], [0.4, 0.5, 0.6, 0.7]],
+        [0.0, 2.5, 4.5],
+        [1.0, 0.6, 0.0],
+    )
+    assert sorted(brier_components) == ["brier", "eff_n", "rsquared"]
+    assert brier_components["brier"] == pytest.approx([0.228, 0.3330769230769231])
+    assert brier_components["rsquared"] == pytest.approx([-0.425, -0.4058441558441557])
+    assert brier_components["eff_n"] == pytest.approx([3.571428571428571, 3.813559322033898])
 
     def callback(coef, *, which):
         return {

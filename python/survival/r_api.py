@@ -1699,14 +1699,6 @@ def _brier_apply_ties(dtime: list[float], dstat: list[int], ties: bool) -> list[
     ]
 
 
-def _brier_rsquared(model_brier: float, null_brier: float) -> float:
-    if null_brier == 0.0:
-        if model_brier == 0.0:
-            return math.nan
-        return math.inf if model_brier < 0.0 else -math.inf
-    return 1.0 - model_brier / null_brier
-
-
 def brier(
     fit: Any,
     times: Any | None = None,
@@ -1766,65 +1758,26 @@ def brier(
 
     adjusted_time = _brier_apply_ties(dtime, dstat, ties_value)
     censor_fit = _brier_censoring_survival(adjusted_time, dstat, weights)
-    total_weight = sum(weights)
-    normalized_weights = [weight / total_weight for weight in weights]
-    brier_values: list[float] = []
-    rsquared_values: list[float] = []
-    eff_n: list[float] = []
-
-    for time_idx, eval_time in enumerate(eval_times):
-        censor_survival = _step_curve_at(
-            censor_fit.time,
-            censor_fit.estimate,
-            [min(time_value, eval_time) for time_value in adjusted_time],
-        )
-        null_numerator = 0.0
-        model_numerator = 0.0
-        denominator = 0.0
-        weight_square_sum = 0.0
-        null_prediction = p0[time_idx]
-        model_predictions = phat[time_idx]
-
-        for row_idx, (time_value, status, censor_value) in enumerate(
-            zip(adjusted_time, dstat, censor_survival, strict=True)
-        ):
-            if time_value < eval_time and status == 0:
-                weight = 0.0
-            elif censor_value > 0.0:
-                weight = normalized_weights[row_idx] / censor_value
-            else:
-                weight = math.inf
-
-            if time_value > eval_time:
-                null_loss = null_prediction * null_prediction
-                model_prediction = model_predictions[row_idx]
-                model_loss = model_prediction * model_prediction
-            else:
-                null_residual = status - null_prediction
-                model_residual = status - model_predictions[row_idx]
-                null_loss = null_residual * null_residual
-                model_loss = model_residual * model_residual
-
-            denominator += weight
-            weight_square_sum += weight * weight
-            null_numerator += weight * null_loss
-            model_numerator += weight * model_loss
-
-        eff_n.append(1.0 / weight_square_sum)
-        null_brier = math.nan if denominator == 0.0 else null_numerator / denominator
-        model_brier = math.nan if denominator == 0.0 else model_numerator / denominator
-        brier_values.append(model_brier)
-        rsquared_values.append(_brier_rsquared(model_brier, null_brier))
+    components = _core.perform_brier_calculation(
+        adjusted_time,
+        dstat,
+        weights,
+        eval_times,
+        p0,
+        phat,
+        censor_fit.time,
+        censor_fit.estimate,
+    )
 
     result: dict[str, Any] = {
-        "rsquared": rsquared_values,
-        "brier": brier_values,
+        "rsquared": [float(value) for value in components["rsquared"]],
+        "brier": [float(value) for value in components["brier"]],
         "times": eval_times,
     }
     if detail_value:
         result["p0"] = p0
         result["phat"] = phat
-        result["eff.n"] = eff_n
+        result["eff.n"] = [float(value) for value in components["eff_n"]]
     return result
 
 

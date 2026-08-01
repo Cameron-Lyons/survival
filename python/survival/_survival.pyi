@@ -5847,6 +5847,16 @@ def perform_pyears_calculation(
     do_event: int | None,
     ny: int | None,
 ) -> dict[str, list[float] | float]: ...
+def perform_brier_calculation(
+    observed_time: list[float],
+    status: list[int],
+    case_weights: list[float],
+    evaluation_times: list[float],
+    null_predictions: list[float],
+    model_predictions: list[list[float]],
+    censor_times: list[float],
+    censor_survival: list[float],
+) -> dict[str, list[float]]: ...
 def cox_callback(
     which: int,
     coef: list[float],
