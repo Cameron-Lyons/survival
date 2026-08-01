@@ -12465,7 +12465,7 @@ def aggregate_survfit_result(
             model=result.model,
         )
 
-    curve_times = [[float(value) for value in result.time] for _ in range(n_curves)]
+    curve_time = [float(value) for value in result.time]
     curve_survs = [[float(value) for value in curve] for curve in result.surv]
     curve_std_errs = (
         [[float(value) for value in curve] for curve in result.std_err] if result.std_err else None
@@ -12473,15 +12473,15 @@ def aggregate_survfit_result(
     curve_weights = _float_vector(weights, "weights") if weights is not None else None
 
     if groups is None:
-        aggregate = _core.aggregate_survfit(
-            curve_times,
+        aggregates = _core.aggregate_shared_survfit(
+            curve_time,
             curve_survs,
             curve_std_errs,
             curve_weights,
             None,
         )
         linear_predictor = _weighted_average(result.linear_predictors, curve_weights)
-        return _cox_survfit_from_aggregates(result, [aggregate], [linear_predictor])
+        return _cox_survfit_from_aggregates(result, aggregates, [linear_predictor])
 
     group_codes = _integer_code_vector(groups, "groups", "integer group codes")
     if len(group_codes) != n_curves:
@@ -12489,34 +12489,24 @@ def aggregate_survfit_result(
     if any(code < 1 for code in group_codes):
         raise ValueError("groups must use positive integer group codes")
 
-    if len(set(group_codes)) == 1:
-        return aggregate_survfit_result(result, weights=curve_weights)
-
-    indices_by_group: dict[int, list[int]] = {}
+    aggregates = _core.aggregate_shared_survfit(
+        curve_time,
+        curve_survs,
+        curve_std_errs,
+        curve_weights,
+        group_codes,
+    )
+    predictor_sums: dict[int, float] = {}
+    predictor_weights: dict[int, float] = {}
     for idx, code in enumerate(group_codes):
-        indices_by_group.setdefault(code, []).append(idx)
-
-    aggregates = []
-    linear_predictors = []
-    for code in sorted(indices_by_group):
-        indices = indices_by_group[code]
-        group_weights = (
-            [curve_weights[idx] for idx in indices] if curve_weights is not None else None
+        weight = 1.0 if curve_weights is None else curve_weights[idx]
+        predictor_sums[code] = predictor_sums.get(code, 0.0) + (
+            float(result.linear_predictors[idx]) * weight
         )
-        aggregate = _core.aggregate_survfit(
-            [curve_times[idx] for idx in indices],
-            [curve_survs[idx] for idx in indices],
-            [curve_std_errs[idx] for idx in indices] if curve_std_errs is not None else None,
-            group_weights,
-            None,
-        )
-        aggregates.append(aggregate)
-        linear_predictors.append(
-            _weighted_average(
-                [float(result.linear_predictors[idx]) for idx in indices],
-                group_weights,
-            )
-        )
+        predictor_weights[code] = predictor_weights.get(code, 0.0) + weight
+    linear_predictors = [
+        predictor_sums[code] / predictor_weights[code] for code in sorted(predictor_sums)
+    ]
 
     return _cox_survfit_from_aggregates(result, aggregates, linear_predictors)
 

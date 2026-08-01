@@ -505,6 +505,7 @@ BINDINGS = (
     "adversarial_training_survival",
     "aeq_surv",
     "agexact",
+    "aggregate_shared_survfit",
     "aggregate_survfit",
     "aggregate_survfit_by_group",
     "aggregate_survshap",
@@ -1714,6 +1715,7 @@ MODULE_BINDINGS = {
     ),
     "surv_analysis": (
         "AggregateSurvfitResult",
+        "aggregate_shared_survfit",
         "aggregate_survfit",
         "aggregate_survfit_by_group",
         "agsurv4",

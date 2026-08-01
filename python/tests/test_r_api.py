@@ -4870,6 +4870,30 @@ def test_aggregate_survfit_result_averages_cox_prediction_curves():
     assert grouped.surv[0] == pytest.approx(curves.surv[1])
     assert grouped.surv[1] == pytest.approx(expected_group)
 
+    uncertain = survival.r_api.CoxSurvfitResult(
+        time=[1.0, 2.0],
+        surv=[[0.9, 0.8], [0.8, 0.6], [0.7, 0.4]],
+        cumhaz=[[], [], []],
+        linear_predictors=[1.0, 2.0, 3.0],
+        std_err=[[0.1, 0.2], [0.3, 0.4], [0.2, 0.1]],
+        std_chaz=[[0.0], [0.0], [0.0]],
+        conf_lower=[[0.0], [0.0], [0.0]],
+        conf_upper=[[1.0], [1.0], [1.0]],
+    )
+    weighted = survival.r_api.aggregate_survfit_result(
+        uncertain,
+        groups=[2, 1, 2],
+        weights=[1.0, 2.0, 3.0],
+    )
+    assert weighted.surv[0] == pytest.approx([0.8, 0.6])
+    assert weighted.surv[1] == pytest.approx([0.75, 0.5])
+    assert weighted.std_err[0] == pytest.approx([0.3, 0.4])
+    assert weighted.std_err[1] == pytest.approx(
+        [math.hypot(0.25 * 0.1, 0.75 * 0.2), math.hypot(0.25 * 0.2, 0.75 * 0.1)]
+    )
+    assert weighted.linear_predictors == pytest.approx([2.0, 2.5])
+    assert len(weighted.conf_lower) == len(weighted.conf_upper) == 2
+
     with pytest.raises(TypeError, match="data.*margin"):
         survival.r_api.aggregate_survfit_result(object())
     with pytest.raises(ValueError, match="same length"):

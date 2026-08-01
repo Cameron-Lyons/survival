@@ -49,6 +49,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pseudo_gee_regression, m)?)?;
     m.add_function(wrap_pyfunction!(aggregate_survfit, m)?)?;
     m.add_function(wrap_pyfunction!(aggregate_survfit_by_group, m)?)?;
+    m.add_function(wrap_pyfunction!(aggregate_shared_survfit, m)?)?;
     m.add_function(wrap_pyfunction!(survcheck, m)?)?;
     m.add_function(wrap_pyfunction!(survcheck_simple, m)?)?;
     m.add_function(wrap_pyfunction!(royston, m)?)?;

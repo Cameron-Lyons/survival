@@ -5989,6 +5989,13 @@ def aggregate_survfit_by_group(
     groups: list[int],
     weights: list[float] | None = None,
 ) -> list[AggregateSurvfitResult]: ...
+def aggregate_shared_survfit(
+    time: list[float],
+    survs: list[list[float]],
+    std_errs: list[list[float]] | None = None,
+    weights: list[float] | None = None,
+    groups: list[int] | None = None,
+) -> list[AggregateSurvfitResult]: ...
 def survcheck(
     id: list[int],
     time1: list[float],

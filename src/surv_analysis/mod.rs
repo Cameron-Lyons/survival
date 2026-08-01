@@ -27,7 +27,7 @@ pub(crate) mod survfitaj_module;
 pub(crate) mod survfitkm_module;
 
 pub use aggregate_survfit_module::{
-    AggregateSurvfitResult, aggregate_survfit, aggregate_survfit_by_group,
+    AggregateSurvfitResult, aggregate_shared_survfit, aggregate_survfit, aggregate_survfit_by_group,
 };
 pub use agsurv4_module::agsurv4;
 pub use agsurv5_module::agsurv5;
