@@ -3785,6 +3785,35 @@ test_that("data-prep helpers match R survival shapes", {
     year = as.Date(c("2000-01-01", "2001-01-01"))
   )
   expect_equal(bridged_rtable, reference_rtable)
+  bridged_subset_method <- get("[.ratetable2", envir = asNamespace("survivalr"))
+  reference_subset_method <- get("[.ratetable2", envir = asNamespace("survival"))
+  subset_rows <- c(2L, 1L, 2L)
+  expect_equal(
+    bridged_subset_method(bridged_rtable, subset_rows),
+    reference_subset_method(bridged_rtable, subset_rows)
+  )
+  expect_equal(
+    bridged_subset_method(bridged_rtable, 1L, drop = TRUE),
+    reference_subset_method(bridged_rtable, 1L, drop = TRUE)
+  )
+  expect_error(
+    bridged_subset_method(bridged_rtable, 1L, 1L),
+    "This should never be called!",
+    fixed = TRUE
+  )
+
+  missing_rtable <- ratetable(
+    age = c(50, NA, 70) * 365.25,
+    sex = factor(c("male", "female", NA), levels = c("female", "male")),
+    year = as.Date(c("2000-01-01", "2001-01-01", NA))
+  )
+  bridged_missing_method <- get("is.na.ratetable2", envir = asNamespace("survivalr"))
+  reference_missing_method <- get("is.na.ratetable2", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_missing_method(missing_rtable),
+    reference_missing_method(missing_rtable)
+  )
+  expect_equal(is.na(missing_rtable), c(FALSE, TRUE, TRUE))
   bridged_match <- match.ratetable(bridged_rtable, survival::survexp.us)
   reference_match <- survival::match.ratetable(reference_rtable, survival::survexp.us)
   expect_equal(bridged_match, reference_match)
