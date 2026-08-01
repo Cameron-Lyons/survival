@@ -3959,6 +3959,44 @@ totimeline <- function(formula, data, id, istate) {
   factor(codes, levels = seq_along(states), labels = states)
 }
 
+.surv2data_fill_vector <- function(value, id, time) {
+  missing <- is.na(value)
+  if (!any(missing)) {
+    return(value)
+  }
+  source <- .call_data_prep(
+    "lvcf_indices",
+    as.list(as.integer(id)),
+    as.list(as.logical(missing)),
+    as.list(as.numeric(time))
+  )
+  source <- as.integer(.as_numeric_vector(source)) + 1L
+  update <- missing & source != seq_along(source)
+  value[update] <- value[source[update]]
+  value
+}
+
+.surv2data_fill_model_frame <- function(frame, id, time) {
+  if (nrow(frame) == 0L) {
+    return(frame)
+  }
+  id_codes <- match(id, unique(id))
+  excluded <- match(c("(id)", "(cluster)"), names(frame), nomatch = 0L)
+  fill_columns <- setdiff(seq_along(frame)[-1L], excluded)
+  for (index in fill_columns) {
+    value <- frame[[index]]
+    if (is.matrix(value)) {
+      for (column in seq_len(ncol(value))) {
+        value[, column] <- .surv2data_fill_vector(value[, column], id_codes, time)
+      }
+      frame[[index]] <- value
+    } else {
+      frame[[index]] <- .surv2data_fill_vector(value, id_codes, time)
+    }
+  }
+  frame
+}
+
 Surv2data <- function(formula, data, subset, id) {
   call <- match.call()
   indx <- match(
@@ -3988,6 +4026,11 @@ Surv2data <- function(formula, data, subset, id) {
   )
   rows <- as.integer(.as_numeric_vector(.result_field(result, "row"))) + 1L
   mf2 <- mf[rows, , drop = FALSE]
+  mf2 <- .surv2data_fill_model_frame(
+    mf2,
+    id_values[rows],
+    .as_numeric_vector(.result_field(result, "start"))
+  )
   mf2[["Surv2.y"]] <- .as_surv2data_response(result)
 
   id_result <- .result_field(result, "id")

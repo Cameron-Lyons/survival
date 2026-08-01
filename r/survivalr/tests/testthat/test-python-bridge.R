@@ -378,6 +378,30 @@ test_that("R formula wrappers delegate to the Python survival package", {
     Surv2data(survival::Surv2(time, state) ~ z + x, data = timeline_data, id = id),
     survival::Surv2data(survival::Surv2(time, state) ~ z + x, data = timeline_data, id = id)
   )
+  timeline_missing_data <- data.frame(
+    id = c(1, 2, 1, 2, 1, 2),
+    time = c(0, 0, 2, 3, 5, 6),
+    state = factor(
+      c("entry", "entry", "ill", "ill", "death", "death"),
+      levels = c("censor", "entry", "ill", "death")
+    ),
+    x = c(10, 20, NA, NA, 12, 22),
+    z = factor(c("A", "B", NA, NA, "C", "D")),
+    observed = c(TRUE, FALSE, NA, NA, TRUE, TRUE),
+    visit = as.Date("2026-01-01") + c(0, 1, NA, NA, 4, 5)
+  )
+  expect_equal(
+    Surv2data(
+      survival::Surv2(time, state) ~ x + z + observed + visit,
+      data = timeline_missing_data,
+      id = id
+    ),
+    survival::Surv2data(
+      survival::Surv2(time, state) ~ x + z + observed + visit,
+      data = timeline_missing_data,
+      id = id
+    )
+  )
 
   counting_data <- data.frame(
     id = c(1, 1, 2),
