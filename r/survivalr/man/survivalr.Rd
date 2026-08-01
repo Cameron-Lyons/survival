@@ -14,6 +14,8 @@
 \alias{is.ratetable}
 \alias{ratetableDate}
 \alias{ratetable}
+\alias{[.ratetable2}
+\alias{is.na.ratetable2}
 \alias{match.ratetable}
 \alias{cch}
 \alias{coef.cch}
@@ -372,6 +374,10 @@ is.ratetable(x, verbose = FALSE)
 ratetableDate(x)
 
 ratetable(...)
+
+\method{[}{ratetable2}(x, rows, cols, drop = FALSE)
+
+\method{is.na}{ratetable2}(x)
 
 match.ratetable(R, ratetable)
 
@@ -1031,9 +1037,9 @@ Cox coefficient tables.}
 compatibility.}
 \item{quote}{Logical flag controlling whether printed survival-time labels are
 quoted.}
-\item{i, j, name, exact, drop}{Row and column subset controls for native
-\code{Surv} and \code{Surv2} objects, plus list-field extraction controls for
-Python-backed \code{survfit} objects.}
+\item{i, j, rows, cols, name, exact, drop}{Row and column subset controls for
+native \code{Surv}, \code{Surv2}, and \code{ratetable2} objects, plus
+list-field extraction controls for Python-backed \code{survfit} objects.}
 \item{centered}{Logical flag for centered baseline hazards.}
 \item{detail}{Logical flag requesting detailed \code{brier} output.}
 \item{efron}{Logical flag selecting Efron-compatible \code{brier} baseline

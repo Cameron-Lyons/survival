@@ -2699,6 +2699,24 @@ ratetable <- function(...) {
   x
 }
 
+`[.ratetable2` <- function(x, rows, cols, drop = FALSE) {
+  if (!missing(cols)) {
+    stop("This should never be called!")
+  }
+  att <- attributes(x)
+  attributes(x) <- att[c("dim", "dimnames")]
+  result <- x[rows, , drop = FALSE]
+  attr(result, "isDate") <- att$isDate
+  attr(result, "levlist") <- att$levlist
+  class(result) <- "ratetable2"
+  result
+}
+
+is.na.ratetable2 <- function(x) {
+  attributes(x) <- list(dim = dim(x))
+  as.vector((1 * is.na(x)) %*% rep(1, ncol(x)) > 0)
+}
+
 match.ratetable <- function(R, ratetable) {
   datecheck <- function(x) {
     inherits(x, c("Date", "POSIXt", "date", "chron", "rtabledate"))
