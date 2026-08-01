@@ -4267,6 +4267,87 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_concordance$n, reference_concordance$n)
 })
 
+test_that("Fitted-model concordance supports joint Cox and survreg comparisons", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1.2, 2.1, 2.8, 3.4, 4.2, 5.0, 6.3, 7.1),
+    status = c(1, 1, 0, 1, 1, 0, 1, 0),
+    x = c(0.1, 0.3, 0.2, 0.8, 1.0, 0.7, 1.4, 1.1),
+    z = c(1, 0, 1, 0, 1, 1, 0, 0)
+  )
+  cox_x <- coxph(Surv(time, status) ~ x, data = data, eps = 1e-10, max_iter = 50)
+  cox_z <- coxph(Surv(time, status) ~ z, data = data, eps = 1e-10, max_iter = 50)
+  cox_x_single <- concordance(cox_x, influence = 1)
+  cox_z_single <- concordance(cox_z, influence = 1)
+  cox_joint <- concordance(cox_x, cox_z, influence = 3, ranks = TRUE)
+
+  expect_s3_class(cox_joint, "concordance")
+  expect_equal(names(cox_joint$concordance), c("cox_x", "cox_z"))
+  expect_equal(unname(cox_joint$concordance), c(cox_x_single$concordance, cox_z_single$concordance))
+  expect_equal(cox_joint$count[1L, ], cox_x_single$count)
+  expect_equal(cox_joint$count[2L, ], cox_z_single$count)
+  expect_equal(
+    cox_joint$var,
+    crossprod(cbind(cox_x_single$dfbeta, cox_z_single$dfbeta)),
+    tolerance = 1e-12
+  )
+  expect_equal(dim(cox_joint$dfbeta), c(nrow(data), 2L))
+  expect_equal(dim(cox_joint$influence), c(nrow(data), 5L, 2L))
+  expect_equal(dimnames(cox_joint$influence)[[3L]], c("cox_x", "cox_z"))
+  expect_equal(unique(cox_joint$ranks$fit), c("cox_x", "cox_z"))
+  expect_equal(
+    concordance(cox_x, cox_z, newdata = data)$concordance,
+    concordance(cox_x, cox_z)$concordance
+  )
+
+  weighted_data <- transform(data, wt = seq_len(nrow(data)) / nrow(data) + 0.5)
+  weighted_x <- coxph(Surv(time, status) ~ x, data = weighted_data, weights = wt)
+  weighted_z <- coxph(Surv(time, status) ~ z, data = weighted_data, weights = wt)
+  expect_equal(nrow(concordance(weighted_x, weighted_z)$count), 2L)
+  expect_error(concordance(weighted_x, cox_z), "same weight vector")
+
+  survreg_x <- survreg(
+    Surv(time, status) ~ x,
+    data = data,
+    dist = "weibull",
+    max_iter = 150,
+    eps = 1e-10
+  )
+  survreg_z <- survreg(
+    Surv(time, status) ~ z,
+    data = data,
+    dist = "weibull",
+    max_iter = 150,
+    eps = 1e-10
+  )
+  survreg_joint <- concordance(survreg_x, survreg_z, influence = 1)
+  reference_survreg_x <- survival::survreg(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    dist = "weibull"
+  )
+  reference_survreg_z <- survival::survreg(
+    survival::Surv(time, status) ~ z,
+    data = data,
+    dist = "weibull"
+  )
+  reference_survreg_joint <- survival::concordance(reference_survreg_x, reference_survreg_z)
+  expect_equal(
+    unname(survreg_joint$concordance),
+    unname(reference_survreg_joint$concordance),
+    tolerance = 1e-12
+  )
+  expect_equal(dim(survreg_joint$var), c(2L, 2L))
+  expect_equal(dim(survreg_joint$dfbeta), c(nrow(data), 2L))
+
+  short_fit <- coxph(Surv(time, status) ~ x, data = data[-1L, ], max_iter = 0)
+  expect_error(concordance(cox_x, short_fit), "same sample size")
+  expect_error(concordance(cox_x, bad = survreg_x), "bad argument is not an appropriate fit object")
+})
+
 test_that("Cox time transforms agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
