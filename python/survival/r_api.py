@@ -5771,7 +5771,7 @@ def _normalize_survexp_method(
         raise TypeError("method must be a string")
     value = method.strip().lower().replace("_", ".")
     aliases = {
-        "ederer": "hakulinen",
+        "ederer": "ederer",
         "hakulinen": "hakulinen",
         "conditional": "conditional",
         "individual": "individual",
