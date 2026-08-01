@@ -34,6 +34,7 @@
 \alias{lvcf}
 \alias{nostutter}
 \alias{nsk}
+\alias{makepredictcall.nsk}
 \alias{ridge}
 \alias{frailty}
 \alias{frailty.gamma}
@@ -43,6 +44,8 @@
 \alias{pyears}
 \alias{pseudo}
 \alias{pspline}
+\alias{makepredictcall.pspline}
+\alias{predict.pspline}
 \alias{survfit}
 \alias{survfitKM}
 \alias{survfit0}
@@ -396,6 +399,8 @@ nostutter(id, x, censor = 0, single = FALSE)
 nsk(x, df = NULL, knots = NULL, intercept = FALSE, b = 0.05,
   Boundary.knots = stats::quantile(x, c(b, 1 - b), na.rm = TRUE))
 
+\method{makepredictcall}{nsk}(var, call)
+
 ridge(..., theta, df = nvar/2, eps = 0.1, scale = TRUE)
 
 frailty(x, distribution = "gamma", ...)
@@ -412,6 +417,10 @@ frailty.t(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
 pspline(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
   eps = 0.1, method, Boundary.knots = range(x),
   intercept = FALSE, penalty = TRUE, combine, ...)
+
+\method{makepredictcall}{pspline}(var, call)
+
+\method{predict}{pspline}(object, newx, ...)
 
 untangle.specials(tt, special, order = 1)
 
@@ -855,6 +864,8 @@ first knot-height column, or whether \code{pspline} includes an intercept.}
 \item{b}{Boundary quantile used by the default \code{nsk} boundary knots.}
 \item{Boundary.knots}{Boundary knots for \code{nsk} and \code{pspline};
 logical values follow the compatibility behavior of \code{survival::nsk}.}
+\item{call}{Model call updated with fitted spline metadata for prediction.}
+\item{newx}{New predictor values for \code{predict.pspline}.}
 \item{theta}{Fixed penalty parameter for \code{ridge}, \code{frailty.*}, and
 \code{pspline}.}
 \item{sparse}{Logical flag controlling sparse frailty coding.}
@@ -1055,7 +1066,8 @@ logistic, Gaussian, and Student-t \code{survreg.fit} distributions use the
 Rust optimizer; custom density callbacks retain the upstream fallback.}
 \item{varmat, wt, risk, newrisk, position, oldid, x2, risk2, strata2,
 survtype, vartype, unlist}{Low-level Cox survival-curve inputs.}
-\item{var}{Variance matrix for \code{coxph.wtest}.}
+\item{var}{Variance matrix for \code{coxph.wtest}, or a constructed spline
+basis passed to a \code{makepredictcall} method.}
 \item{parm}{Optional coefficient names or 1-based coefficient indices.}
 \item{level}{Confidence level for coefficient intervals.}
 \item{se.fit}{Logical flag requesting standard errors when supported.}

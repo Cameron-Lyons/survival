@@ -1603,6 +1603,18 @@ nsk <- function(x, df = NULL, knots = NULL, intercept = FALSE, b = 0.05,
   out
 }
 
+makepredictcall.nsk <- function(var, call) {
+  if (
+    as.character(call)[1L] == "nsk" ||
+      (is.call(call) && identical(eval(call[[1L]]), nsk))
+  ) {
+    spline_attributes <- attributes(var)[c("knots", "Boundary.knots", "intercept")]
+    call <- call[1L:2L]
+    call[names(spline_attributes)] <- spline_attributes
+  }
+  call
+}
+
 ridge <- function(..., theta, df = nvar / 2, eps = 0.1, scale = TRUE) {
   x <- cbind(...)
   nvar <- ncol(x)
@@ -2203,6 +2215,37 @@ pspline <- function(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
   }
   class(out) <- c("pspline", "coxph.penalty")
   out
+}
+
+makepredictcall.pspline <- function(var, call) {
+  if (call[[1L]] != as.name("pspline")) {
+    return(call)
+  }
+  new_call <- call[1L:2L]
+  index <- match(
+    c("nterm", "intercept", "Boundary.knots", "combine", "degree", "df"),
+    names(attributes(var)),
+    nomatch = 0
+  )
+  spline_attributes <- attributes(var)[index]
+  new_call[names(spline_attributes)] <- spline_attributes
+  new_call
+}
+
+predict.pspline <- function(object, newx, ...) {
+  if (missing(newx)) {
+    return(object)
+  }
+  index <- match(
+    c("nterm", "intercept", "Boundary.knots", "combine", "degree"),
+    names(attributes(object)),
+    nomatch = 0
+  )
+  spline_attributes <- c(
+    list(x = newx, penalty = FALSE),
+    attributes(object)[index]
+  )
+  do.call("pspline", spline_attributes)
 }
 
 tcut <- function(x, breaks, labels, scale = 1) {
