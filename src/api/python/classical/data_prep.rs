@@ -9,6 +9,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survcondense, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data_timeline, m)?)?;
+    m.add_function(wrap_pyfunction!(from_timeline_rows, m)?)?;
     m.add_function(wrap_pyfunction!(to_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(lvcf_indices, m)?)?;
@@ -31,6 +32,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         CondenseResult,
         Surv2DataResult,
         Surv2TimelineResult,
+        FromTimelineRowsResult,
         TimelineResult,
         IntervalResult,
         TmergePlanResult,

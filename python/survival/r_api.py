@@ -5462,40 +5462,12 @@ def fromtimeline(
     id_name_value = str(id_name)
     column_names, columns = _fromtimeline_data_columns(data, n)
     static_columns = _fromtimeline_static_columns(columns, id_values, column_names, id_name_value)
-
-    groups: dict[Any, list[int]] = {}
-    ordered_keys: list[Any] = []
-    for row_idx, id_value in enumerate(id_values):
-        key = _hashable_group_value(id_value)
-        if key not in groups:
-            ordered_keys.append(key)
-            groups[key] = []
-        groups[key].append(row_idx)
-
-    output_start: list[float] = []
-    output_stop: list[float] = []
-    output_status: list[int] = []
-    output_istate: list[int] = []
-    static_rows: list[int] = []
-    dynamic_rows: list[int] = []
-    removed_ids: list[Any] = []
-
-    for key in ordered_keys:
-        rows = sorted(groups[key], key=lambda idx: (time_values[idx], idx))
-        if len(rows) < 2 or time_values[rows[0]] == time_values[rows[-1]]:
-            removed_ids.append(id_values[rows[0]])
-            continue
-        if status_values[rows[0]] == 0:
-            raise ValueError("no observation should start in a censored state")
-        first_row = rows[0]
-        for position, row_idx in enumerate(rows[:-1]):
-            next_idx = rows[position + 1]
-            output_start.append(time_values[row_idx])
-            output_stop.append(time_values[next_idx])
-            output_status.append(status_values[next_idx])
-            output_istate.append(status_values[row_idx])
-            static_rows.append(first_row)
-            dynamic_rows.append(row_idx)
+    id_codes = _encode_labels(
+        [_hashable_group_value(value) for value in id_values],
+        "id",
+    )
+    plan = _core.from_timeline_rows(id_codes, time_values, status_values)
+    removed_ids = [id_values[int(row)] for row in plan.removed_row]
 
     state_values = _totimeline_state_values(states) if states is not None else []
     if state_values:
@@ -5506,13 +5478,13 @@ def fromtimeline(
         istate_levels = []
 
     return {
-        "start": output_start,
-        "stop": output_stop,
-        "status": output_status,
-        "istate": output_istate,
+        "start": plan.start,
+        "stop": plan.stop,
+        "status": plan.status,
+        "istate": plan.istate,
         "static": static_columns,
-        "static_row": static_rows,
-        "dynamic_row": dynamic_rows,
+        "static_row": plan.static_row,
+        "dynamic_row": plan.dynamic_row,
         "state_levels": state_levels,
         "istate_levels": istate_levels,
         "removed_id": removed_ids,
