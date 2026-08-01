@@ -885,6 +885,7 @@ BINDINGS = (
     "royston",
     "royston_from_model",
     "rttright",
+    "rttright_matrix",
     "rttright_stratified",
     "sample_size_logrank",
     "sample_size_survival",

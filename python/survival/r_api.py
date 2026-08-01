@@ -8093,12 +8093,6 @@ def _rttright_divide(numerator: float, denominator: float) -> float:
     return math.inf
 
 
-def _rttright_apply_timefix(time: list[float], timefix: bool) -> list[float]:
-    if not timefix or not time:
-        return time
-    return [float(value) for value in _core.aeq_surv(time, None).time]
-
-
 def _rttright_counting_common_start(
     start: Sequence[float],
     id_values: Sequence[Any],
@@ -8239,87 +8233,6 @@ def _rttright_km_survival_at(
     return 1.0 if index == 0 else float(survival_values[index - 1])
 
 
-def _rttright_group_case_weights(
-    weights: Sequence[float],
-    indices: Sequence[int],
-    renorm: bool,
-) -> list[float]:
-    group_weights = [float(weights[idx]) for idx in indices]
-    if not renorm:
-        return group_weights
-    total = sum(group_weights)
-    if total <= 0.0:
-        raise ValueError("weights must have positive sum when renorm is true")
-    return [weight / total for weight in group_weights]
-
-
-def _rttright_group_time_matrix(
-    time: Sequence[float],
-    status: Sequence[int],
-    weights: Sequence[float],
-    query_times: Sequence[float],
-) -> list[list[float]]:
-    n = len(time)
-    n_times = len(query_times)
-    if n == 0:
-        return []
-
-    order = sorted(range(n), key=lambda idx: (time[idx], idx))
-    sorted_time = [float(time[idx]) for idx in order]
-    sorted_status = [int(status[idx]) for idx in order]
-    sorted_weights = [float(weights[idx]) for idx in order]
-
-    event_g = [1.0] * n
-    block_times: list[float] = []
-    post_block_g: list[float] = []
-    current_g = 1.0
-    n_at_risk = sum(sorted_weights)
-
-    start = 0
-    while start < n:
-        block_time = sorted_time[start]
-        end = start + 1
-        while end < n and sorted_time[end] == block_time:
-            end += 1
-
-        event_weight = 0.0
-        censor_weight = 0.0
-        for sorted_pos in range(start, end):
-            local_idx = order[sorted_pos]
-            event_g[local_idx] = current_g
-            if sorted_status[sorted_pos] == 1:
-                event_weight += sorted_weights[sorted_pos]
-            else:
-                censor_weight += sorted_weights[sorted_pos]
-
-        risk_after_events = n_at_risk - event_weight
-        if risk_after_events > 0.0 and censor_weight > 0.0:
-            current_g *= 1.0 - censor_weight / risk_after_events
-        n_at_risk = risk_after_events - censor_weight
-        block_times.append(block_time)
-        post_block_g.append(current_g)
-        start = end
-
-    query_g: list[float] = []
-    for query_time in query_times:
-        block_idx = bisect_left(block_times, query_time)
-        query_g.append(1.0 if block_idx == 0 else post_block_g[block_idx - 1])
-
-    matrix = [[0.0] * n_times for _ in range(n)]
-    for row_idx, (row_time, row_status, row_weight) in enumerate(
-        zip(time, status, weights, strict=True)
-    ):
-        for col_idx, g_at_time in enumerate(query_g):
-            if row_status == 1:
-                matrix[row_idx][col_idx] = _rttright_divide(
-                    float(row_weight),
-                    max(event_g[row_idx], g_at_time),
-                )
-            elif float(row_time) >= float(query_times[col_idx]):
-                matrix[row_idx][col_idx] = _rttright_divide(float(row_weight), g_at_time)
-    return matrix
-
-
 def _rttright_time_matrix(
     time: Sequence[float],
     status: Sequence[int],
@@ -8329,41 +8242,18 @@ def _rttright_time_matrix(
     timefix: bool,
     renorm: bool,
 ) -> list[float] | list[list[float]]:
-    time_values = _rttright_apply_timefix([float(value) for value in time], timefix)
+    time_values = [float(value) for value in time]
     status_values = [int(value) for value in status]
-    n = len(time_values)
-    if len(status_values) != n:
-        raise ValueError("time and status must have same length")
-    if any(value not in (0, 1) for value in status_values):
-        raise ValueError("status must contain only 0/1 values")
-    if any(not math.isfinite(value) for value in time_values):
-        raise ValueError("time must be finite")
-
     query_times = _rttright_times_vector(times)
-    case_weights = _rttright_initial_weights(weights, n)
-    matrix = [[0.0] * len(query_times) for _ in range(n)]
-
-    if group is None:
-        group_values = [0] * n
-    else:
-        group_values = [int(value) for value in group]
-        if len(group_values) != n:
-            raise ValueError("rttright strata must have the same length as the Surv response")
-
-    group_indices: dict[int, list[int]] = {}
-    for idx, group_value in enumerate(group_values):
-        group_indices.setdefault(group_value, []).append(idx)
-
-    for indices in group_indices.values():
-        group_weights = _rttright_group_case_weights(case_weights, indices, renorm)
-        group_matrix = _rttright_group_time_matrix(
-            [time_values[idx] for idx in indices],
-            [status_values[idx] for idx in indices],
-            group_weights,
-            query_times,
-        )
-        for local_idx, row_idx in enumerate(indices):
-            matrix[row_idx] = group_matrix[local_idx]
+    matrix = _core.rttright_matrix(
+        time_values,
+        status_values,
+        query_times,
+        None if group is None else [int(value) for value in group],
+        None if weights is None else _float_vector(weights, "weights"),
+        timefix,
+        renorm,
+    )
 
     if len(query_times) == 1:
         return [row[0] for row in matrix]

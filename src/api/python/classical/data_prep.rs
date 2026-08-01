@@ -21,6 +21,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tcut, m)?)?;
     m.add_function(wrap_pyfunction!(tcut_expand, m)?)?;
     m.add_function(wrap_pyfunction!(rttright, m)?)?;
+    m.add_function(wrap_pyfunction!(rttright_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_stratified, m)?)?;
 
     register_classes!(
