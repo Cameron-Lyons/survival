@@ -3682,6 +3682,19 @@ test_that("data-prep helpers match R survival shapes", {
     survival::cipoisson(5, time = 10, method = "anscombe"),
     tolerance = 1e-6
   )
+  cipoisson_edges <- list(
+    list(k = c(1.2, 2.8), time = c(2, 4), p = c(0, 1)),
+    list(k = c(0, 1.2, Inf), time = Inf, p = 0.95),
+    list(k = c(0, 1.2, Inf), time = 1, p = 1),
+    list(k = c(0, 1.2), time = 1, p = NA_real_)
+  )
+  for (args in cipoisson_edges) {
+    expect_equal(
+      do.call(cipoisson, args),
+      do.call(survival::cipoisson, args),
+      tolerance = 1e-6
+    )
+  }
 
   link_x <- c(0, 0.01, 0.05, 0.5, 0.95, 0.99, 1)
   for (link_name in c("blogit", "bprobit", "bcloglog", "blog")) {
