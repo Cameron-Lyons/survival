@@ -547,6 +547,43 @@ test_that("R formula wrappers delegate to the Python survival package", {
       y = TRUE
     )
   )
+  bridged_aareg_cluster_override <- NULL
+  expect_warning(
+    bridged_aareg_cluster_override <- aareg(
+      survival::Surv(time, status) ~ x + cluster(cluster),
+      data = aareg_data,
+      cluster = group,
+      nmin = 1
+    ),
+    "formula term ignored"
+  )
+  reference_aareg_cluster_override <- NULL
+  expect_warning(
+    reference_aareg_cluster_override <- survival::aareg(
+      survival::Surv(time, status) ~ x + cluster(cluster),
+      data = aareg_data,
+      cluster = group,
+      nmin = 1
+    ),
+    "formula term ignored"
+  )
+  compare_aareg(bridged_aareg_cluster_override, reference_aareg_cluster_override)
+  expect_error(
+    aareg(
+      survival::Surv(time, status) ~ x + cluster(group) + cluster(cluster),
+      data = aareg_data,
+      nmin = 1
+    ),
+    "multiple cluster terms"
+  )
+  expect_error(
+    aareg(
+      survival::Surv(time, status) ~ x:cluster(group),
+      data = aareg_data,
+      nmin = 1
+    ),
+    "cluster.*interaction"
+  )
   tmerge_data <- data.frame(id = 1:2, tstop = c(5, 6))
   bridged_tmerge <- tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
   reference_tmerge <- survival::tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
@@ -1056,6 +1093,14 @@ test_that("R formula wrappers delegate to the Python survival package", {
     pspline(1:5, df = 3, intercept = TRUE, penalty = FALSE),
     survival::pspline(1:5, df = 3, intercept = TRUE, penalty = FALSE)
   )
+  expect_pspline_equal(
+    pspline(rep(2, 3), df = 2, penalty = FALSE),
+    survival::pspline(rep(2, 3), df = 2, penalty = FALSE)
+  )
+  expect_pspline_equal(
+    pspline(c(1, NA, 2), df = 2, penalty = FALSE),
+    survival::pspline(c(1, NA, 2), df = 2, penalty = FALSE)
+  )
 
   strata_factor <- strata(c("b", "a", "b", NA), c(2, 1, 1, 1), shortlabel = TRUE)
   expect_s3_class(strata_factor, "factor")
@@ -1267,6 +1312,19 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(
     coxph.wtest(diag(2), matrix(c(1, 2, 3, 4), nrow = 2)),
     survival::coxph.wtest(diag(2), matrix(c(1, 2, 3, 4), nrow = 2))
+  )
+  expect_equal(
+    coxph.wtest(matrix(0, 2, 2), c(1, 2)),
+    survival::coxph.wtest(matrix(0, 2, 2), c(1, 2))
+  )
+  expect_equal(
+    coxph.wtest(matrix(c(1, 2, 2, 1), 2), c(1, 2)),
+    survival::coxph.wtest(matrix(c(1, 2, 2, 1), 2), c(1, 2))
+  )
+  asymmetric_wtest <- matrix(c(2, 0.25, 7, 1), 2, byrow = TRUE)
+  expect_equal(
+    coxph.wtest(asymmetric_wtest, c(1, 2)),
+    survival::coxph.wtest(asymmetric_wtest, c(1, 2))
   )
   expect_equal(coxph.wtest(diag(2), c(NA, 2)), survival::coxph.wtest(diag(2), c(NA, 2)))
 
@@ -2196,6 +2254,52 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_lt(max(abs(bridged_brier$rsquared - reference_brier$rsquared)), 3e-3)
   expect_lt(max(abs(bridged_brier$phat - reference_brier$phat)), 3e-3)
 
+  brier_weighted_data <- transform(brier_data, wt = 1)
+  brier_weighted_newdata <- transform(
+    brier_weighted_data,
+    wt = c(8, 1, 1, 1, 1, 1, 1, 1)
+  )
+  brier_weighted_fit <- coxph(
+    Surv(time, status) ~ x,
+    data = brier_weighted_data,
+    weights = wt,
+    max_iter = 50,
+    model = TRUE
+  )
+  reference_brier_weighted_fit <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = brier_weighted_data,
+    weights = wt,
+    iter.max = 50,
+    model = TRUE,
+    y = TRUE
+  )
+  bridged_brier_weighted <- brier(
+    brier_weighted_fit,
+    times = c(2, 4, 6),
+    newdata = brier_weighted_newdata,
+    detail = TRUE
+  )
+  reference_brier_weighted <- survival::brier(
+    reference_brier_weighted_fit,
+    times = c(2, 4, 6),
+    newdata = brier_weighted_newdata,
+    detail = TRUE
+  )
+  expect_equal(
+    bridged_brier_weighted$eff.n,
+    reference_brier_weighted$eff.n,
+    tolerance = 1e-12
+  )
+  expect_lt(
+    max(abs(bridged_brier_weighted$brier - reference_brier_weighted$brier)),
+    3e-3
+  )
+  expect_lt(
+    max(abs(bridged_brier_weighted$rsquared - reference_brier_weighted$rsquared)),
+    3e-3
+  )
+
   brier_counting_data <- data.frame(
     start = rep(0, nrow(brier_data)),
     stop = brier_data$time,
@@ -2275,6 +2379,46 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_lt(max(abs(bridged_brier_common_start$brier - reference_brier_common_start$brier)), 3e-3)
   expect_equal(bridged_brier_common_start$rsquared, reference_brier_common_start$rsquared, tolerance = 3e-3)
   expect_lt(max(abs(bridged_brier_common_start$phat - reference_brier_common_start$phat)), 3e-3)
+
+  brier_custom_id_data <- transform(
+    brier_common_start_data[names(brier_common_start_data) != "id"],
+    subject = brier_common_start_data$id
+  )
+  brier_custom_id_fit <- coxph(
+    Surv(start, stop, status) ~ x,
+    data = brier_custom_id_data,
+    id = subject,
+    max_iter = 0,
+    model = TRUE
+  )
+  reference_brier_custom_id_fit <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x,
+    data = brier_custom_id_data,
+    id = subject,
+    iter.max = 0,
+    model = TRUE,
+    y = TRUE
+  )
+  brier_bad_id_newdata <- transform(
+    brier_custom_id_data,
+    subject = c(1, 2, 2, 1, 3, 3)
+  )
+  expect_error(
+    brier(
+      brier_custom_id_fit,
+      times = c(3, 5, 7),
+      newdata = brier_bad_id_newdata
+    ),
+    "survcheck"
+  )
+  expect_error(
+    survival::brier(
+      reference_brier_custom_id_fit,
+      times = c(3, 5, 7),
+      newdata = brier_bad_id_newdata
+    ),
+    "survcheck"
+  )
 
   brier_gap_data <- transform(brier_common_start_data, start = c(0, 3, 0, 3, 0, 4))
   brier_gap_fit <- coxph(
@@ -3369,6 +3513,42 @@ test_that("data-prep helpers match R survival shapes", {
     neardate(c("a", "b"), c("a", "b"), c(4, 12), c(5, 10), nomatch = 0L),
     survival::neardate(c("a", "b"), c("a", "b"), c(4, 12), c(5, 10), nomatch = 0L)
   )
+  neardate_queries <- c(NA, 2, Inf, -Inf)
+  neardate_references <- c(1, NA, Inf, -Inf)
+  expect_equal(
+    neardate(
+      rep(1, 4), rep(1, 4), neardate_queries, neardate_references,
+      nomatch = 0L
+    ),
+    survival::neardate(
+      rep(1, 4), rep(1, 4), neardate_queries, neardate_references,
+      nomatch = 0L
+    )
+  )
+  expect_equal(
+    neardate(
+      rep(1, 4), rep(1, 4), neardate_queries, neardate_references,
+      best = "prior", nomatch = 0L
+    ),
+    survival::neardate(
+      rep(1, 4), rep(1, 4), neardate_queries, neardate_references,
+      best = "prior", nomatch = 0L
+    )
+  )
+  expect_equal(
+    neardate(c(NA, 1), c(NA, 1), c(1, 2), c(1, 2), nomatch = 0L),
+    survival::neardate(c(NA, 1), c(NA, 1), c(1, 2), c(1, 2), nomatch = 0L)
+  )
+  expect_equal(
+    neardate(c(NA, 1), c(NA, 2), c(1, 2), c(1, 2), nomatch = 0L),
+    survival::neardate(c(NA, 1), c(NA, 2), c(1, 2), c(1, 2), nomatch = 0L)
+  )
+  expect_error(neardate(1, 1, 1, NA), "No valid entries")
+  expect_error(survival::neardate(1, 1, 1, NA), "No valid entries")
+  expect_error(neardate(1, 2, 1, 1), "No valid entries")
+  expect_error(survival::neardate(1, 2, 1, 1), "No valid entries")
+  expect_error(neardate(1, 1, factor("2020-01-01"), 1), "sortable")
+  expect_error(survival::neardate(1, 1, factor("2020-01-01"), 1), "sortable")
   reference_lvcf <- get0("lvcf", envir = asNamespace("survival"), inherits = FALSE)
   expect_equal(
     lvcf(c(1, 1, 1, 2, 2), c(10, NA, 12, NA, 20)),
@@ -3386,6 +3566,25 @@ test_that("data-prep helpers match R survival shapes", {
       reference_lvcf(c(1, 1, 1), c(NA, 10, NA), c(2, 1, 3))
     }
   )
+  if (!is.null(reference_lvcf)) {
+    for (special_time in list(
+      c(1, NA, 2),
+      c(1, Inf, 2),
+      c(1, -Inf, 2),
+      c("b", "a", "c"),
+      factor(c("b", "a", "c"), levels = c("c", "b", "a"))
+    )) {
+      expect_equal(
+        lvcf(c(1, 1, 1), c(10, NA, 20), special_time),
+        reference_lvcf(c(1, 1, 1), c(10, NA, 20), special_time)
+      )
+    }
+    lvcf_factor_id <- factor(c("b", "a", "b", "a"), levels = c("b", "a"))
+    expect_equal(
+      lvcf(lvcf_factor_id, c(NA, 1, 2, NA)),
+      reference_lvcf(lvcf_factor_id, c(NA, 1, 2, NA))
+    )
+  }
   lvcf_factor <- factor(c("a", NA, "b", NA), levels = c("a", "b"))
   expect_equal(
     lvcf(c(1, 1, 1, 2), lvcf_factor),
@@ -3504,8 +3703,21 @@ test_that("data-prep helpers match R survival shapes", {
     survival::cipoisson(5, time = 10, method = "anscombe"),
     tolerance = 1e-6
   )
+  cipoisson_edges <- list(
+    list(k = c(1.2, 2.8), time = c(2, 4), p = c(0, 1)),
+    list(k = c(0, 1.2, Inf), time = Inf, p = 0.95),
+    list(k = c(0, 1.2, Inf), time = 1, p = 1),
+    list(k = c(0, 1.2), time = 1, p = NA_real_)
+  )
+  for (args in cipoisson_edges) {
+    expect_equal(
+      do.call(cipoisson, args),
+      do.call(survival::cipoisson, args),
+      tolerance = 1e-6
+    )
+  }
 
-  link_x <- c(0, 0.01, 0.05, 0.5, 0.95, 0.99, 1)
+  link_x <- c(0, 0.01, 0.05, 0.5, 0.95, 0.99, 1, NA)
   for (link_name in c("blogit", "bprobit", "bcloglog", "blog")) {
     bridged_link <- get(link_name)(0.05)
     reference_link <- get(link_name, asNamespace("survival"))(0.05)
@@ -4307,10 +4519,49 @@ test_that("data-prep helpers match R survival shapes", {
   expect_s3_class(bridged_obrien_factor$keeper, "factor")
   expect_equal(levels(bridged_obrien_factor$keeper), c("b", "a"))
   expect_equal(bridged_obrien_factor, reference_obrien_factor)
-  expect_false(.survobrien_formula_python_eligible(
-    survival::Surv(time, status) ~ x + keeper + strata(group),
+  factor_strata_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
+  expect_true(.survobrien_formula_python_eligible(
+    factor_strata_formula,
     obrien_factor_data
   ))
+  expect_equal(
+    survobrien(factor_strata_formula, data = obrien_factor_data),
+    survival::survobrien(factor_strata_formula, data = obrien_factor_data)
+  )
+  for (wrapper in c("factor", "as.factor")) {
+    wrapper_formula <- stats::as.formula(paste0(
+      "survival::Surv(time, status) ~ x + ", wrapper, "(group) + strata(group)"
+    ))
+    expect_true(.survobrien_formula_python_eligible(wrapper_formula, obrien_factor_data))
+    expect_equal(
+      survobrien(wrapper_formula, data = obrien_factor_data),
+      survival::survobrien(wrapper_formula, data = obrien_factor_data)
+    )
+  }
+  obrien_factor_row_names <- data.frame(
+    time = c(5, 7, 1, 6),
+    status = c(0, 1, 1, 1),
+    x = c(0.1, 0.4, 0.2, 0.8),
+    group = c("a", "b", "b", "b")
+  )
+  obrien_factor_row_names$keeper <- factor(obrien_factor_row_names$group)
+  row_name_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
+  expect_equal(
+    survobrien(row_name_formula, data = obrien_factor_row_names),
+    survival::survobrien(row_name_formula, data = obrien_factor_row_names)
+  )
+  obrien_empty_risk <- data.frame(
+    time = c(2, 3, 4),
+    status = c(1, 1, 0),
+    x = c(0.1, 0.4, 0.2),
+    group = c("a", "b", "b")
+  )
+  obrien_empty_risk$keeper <- factor(obrien_empty_risk$group)
+  empty_risk_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
+  expect_equal(
+    survobrien(empty_risk_formula, data = obrien_empty_risk),
+    survival::survobrien(empty_risk_formula, data = obrien_empty_risk)
+  )
 
   obrien_counting_data <- data.frame(
     start = c(0, 0, 1, 2),
@@ -4348,6 +4599,23 @@ test_that("data-prep helpers match R survival shapes", {
     ),
     survival::survobrien(
       survival::Surv(start, stop, status) ~ x + strata(group),
+      data = obrien_counting_strata_data
+    )
+  )
+  obrien_counting_strata_data$keeper <- factor(
+    obrien_counting_strata_data$group,
+    levels = c("b", "a")
+  )
+  counting_factor_strata_formula <-
+    survival::Surv(start, stop, status) ~ x + keeper + strata(group)
+  expect_true(.survobrien_formula_python_eligible(
+    counting_factor_strata_formula,
+    obrien_counting_strata_data
+  ))
+  expect_equal(
+    survobrien(counting_factor_strata_formula, data = obrien_counting_strata_data),
+    survival::survobrien(
+      counting_factor_strata_formula,
       data = obrien_counting_strata_data
     )
   )
@@ -4793,8 +5061,17 @@ test_that("Cox detail weighted tied-event moments agree with R survival", {
       ties = method,
       control = survival::coxph.control(iter.max = 0)
     )
-    bridged_detail <- coxph.detail(bridged)
-    reference_detail <- survival::coxph.detail(reference)
+    bridged_detail <- coxph.detail(bridged, riskmat = TRUE)
+    reference_detail <- survival::coxph.detail(reference, riskmat = TRUE)
+
+    bridged_riskmat <- do.call(
+      rbind,
+      survivalr:::.result_field(bridged_detail, "riskmat")
+    )
+    expect_equal(
+      unname(bridged_riskmat),
+      unname(reference_detail$riskmat)
+    )
 
     for (field in c("means", "score", "imat", "hazard", "varhaz", "wtrisk")) {
       actual <- as.numeric(unlist(survivalr:::.result_field(bridged_detail, field)))

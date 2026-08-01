@@ -3,6 +3,7 @@ use crate::internal::matrix::lu_solve;
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::fmt;
 
 #[derive(Debug)]
@@ -86,6 +87,174 @@ fn validate_positive_scalar(value: f64, field: &str) -> PyResult<()> {
         return Err(value_error(format!("{field} must be positive")));
     }
     Ok(())
+}
+
+fn r_pspline_basis_row(knots: &[f64], x: f64, order: usize) -> Vec<f64> {
+    let n_basis = knots.len() - order;
+    let mut values = vec![0.0; knots.len() - 1];
+    for idx in 0..knots.len() - 1 {
+        if (knots[idx] <= x && x < knots[idx + 1])
+            || (x == knots[knots.len() - 1] && knots[idx] <= x && x <= knots[idx + 1])
+        {
+            values[idx] = 1.0;
+        }
+    }
+
+    for current_order in 2..=order {
+        let mut next_values = vec![0.0; knots.len() - current_order];
+        for idx in 0..next_values.len() {
+            let left_denominator = knots[idx + current_order - 1] - knots[idx];
+            let right_denominator = knots[idx + current_order] - knots[idx + 1];
+            let left = if left_denominator == 0.0 {
+                0.0
+            } else {
+                (x - knots[idx]) / left_denominator * values[idx]
+            };
+            let right = if right_denominator == 0.0 {
+                0.0
+            } else {
+                (knots[idx + current_order] - x) / right_denominator * values[idx + 1]
+            };
+            next_values[idx] = left + right;
+        }
+        values = next_values;
+    }
+    values.truncate(n_basis);
+    values
+}
+
+fn r_pspline_basis_derivative_row(knots: &[f64], x: f64, order: usize) -> Vec<f64> {
+    let lower_order = r_pspline_basis_row(knots, x, order - 1);
+    let n_basis = knots.len() - order;
+    (0..n_basis)
+        .map(|idx| {
+            let left_denominator = knots[idx + order - 1] - knots[idx];
+            let right_denominator = knots[idx + order] - knots[idx + 1];
+            let left = if left_denominator == 0.0 {
+                0.0
+            } else {
+                (order - 1) as f64 / left_denominator * lower_order[idx]
+            };
+            let right = if right_denominator == 0.0 {
+                0.0
+            } else {
+                (order - 1) as f64 / right_denominator * lower_order[idx + 1]
+            };
+            left - right
+        })
+        .collect()
+}
+
+fn r_pspline_knots(boundary_knots: (f64, f64), nterm: usize, degree: usize) -> PyResult<Vec<f64>> {
+    let knot_count = nterm
+        .checked_add(
+            degree
+                .checked_mul(2)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| value_error("degree is too large"))?,
+        )
+        .ok_or_else(|| value_error("nterm and degree are too large"))?;
+    let (lower, upper) = boundary_knots;
+    let dx = (upper - lower) / nterm as f64;
+    let mut knots = Vec::with_capacity(knot_count);
+    for idx in 0..nterm + degree {
+        knots.push(lower + dx * (idx as f64 - degree as f64));
+    }
+    for idx in 0..=degree {
+        knots.push(upper + dx * idx as f64);
+    }
+    Ok(knots)
+}
+
+pub(crate) fn pspline_basis_core(
+    x: &[f64],
+    nterm: usize,
+    degree: usize,
+    boundary_knots: (f64, f64),
+) -> PyResult<(Vec<Vec<f64>>, Vec<f64>)> {
+    if nterm < 3 {
+        return Err(value_error("nterm must be at least 3"));
+    }
+    if degree == 0 {
+        return Err(value_error("degree must be positive"));
+    }
+    let (lower, upper) = boundary_knots;
+    if !lower.is_finite() || !upper.is_finite() || lower > upper {
+        return Err(value_error(
+            "boundary_knots must be finite and non-decreasing",
+        ));
+    }
+    for (idx, value) in x.iter().copied().enumerate() {
+        if value.is_infinite() {
+            return Err(value_error(format!(
+                "x contains infinite value {value} at index {idx}"
+            )));
+        }
+    }
+
+    let n_basis = nterm
+        .checked_add(degree)
+        .ok_or_else(|| value_error("nterm and degree are too large"))?;
+    let knots = r_pspline_knots(boundary_knots, nterm, degree)?;
+    if lower == upper {
+        if x.iter().any(|value| !value.is_nan() && *value != lower) {
+            return Err(value_error(
+                "zero-width boundary_knots require all observed x values to match the boundary",
+            ));
+        }
+        let basis = x
+            .iter()
+            .map(|value| {
+                if value.is_nan() {
+                    vec![f64::NAN; n_basis]
+                } else {
+                    let mut row = vec![0.0; n_basis];
+                    row[nterm - 1] = 1.0;
+                    row
+                }
+            })
+            .collect();
+        return Ok((basis, knots));
+    }
+
+    let order = degree + 1;
+    let left_basis = r_pspline_basis_row(&knots, lower, order);
+    let left_derivative = r_pspline_basis_derivative_row(&knots, lower, order);
+    let right_basis = r_pspline_basis_row(&knots, upper, order);
+    let right_derivative = r_pspline_basis_derivative_row(&knots, upper, order);
+    let basis = x
+        .par_iter()
+        .map(|value| {
+            if value.is_nan() {
+                vec![f64::NAN; n_basis]
+            } else if *value < lower {
+                left_basis
+                    .iter()
+                    .zip(&left_derivative)
+                    .map(|(basis, derivative)| basis + (value - lower) * derivative)
+                    .collect()
+            } else if *value > upper {
+                right_basis
+                    .iter()
+                    .zip(&right_derivative)
+                    .map(|(basis, derivative)| basis + (value - upper) * derivative)
+                    .collect()
+            } else {
+                r_pspline_basis_row(&knots, *value, order)
+            }
+        })
+        .collect();
+    Ok((basis, knots))
+}
+
+#[pyfunction]
+pub fn pspline_basis(
+    x: Vec<f64>,
+    nterm: usize,
+    degree: usize,
+    boundary_knots: (f64, f64),
+) -> PyResult<(Vec<Vec<f64>>, Vec<f64>)> {
+    pspline_basis_core(&x, nterm, degree, boundary_knots)
 }
 
 #[pyclass]
@@ -642,5 +811,41 @@ mod tests {
             .expect_err("non-finite prediction input should be rejected");
 
         assert!(err.to_string().contains("new_x contains non-finite"));
+    }
+
+    #[test]
+    fn r_pspline_basis_matches_boundary_and_extrapolation_rows() {
+        let (basis, knots) = pspline_basis_core(&[0.0, 1.0, 5.0, 6.0], 8, 3, (1.0, 5.0)).unwrap();
+
+        assert_eq!(basis.len(), 4);
+        assert_eq!(basis[0].len(), 11);
+        assert_eq!(knots.len(), 15);
+        let expected_left = [7.0 / 6.0, 2.0 / 3.0, -5.0 / 6.0];
+        for (actual, expected) in basis[0][..3].iter().zip(expected_left) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        let expected_right = [-5.0 / 6.0, 2.0 / 3.0, 7.0 / 6.0];
+        for (actual, expected) in basis[3][8..].iter().zip(expected_right) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn r_pspline_basis_preserves_missing_and_constant_rows() {
+        let (basis, knots) = pspline_basis_core(&[2.0, f64::NAN, 2.0], 5, 3, (2.0, 2.0)).unwrap();
+
+        assert_eq!(knots, vec![2.0; 12]);
+        assert_eq!(basis[0], vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+        assert!(basis[1].iter().all(|value| value.is_nan()));
+        assert_eq!(basis[2], basis[0]);
+    }
+
+    #[test]
+    fn r_pspline_basis_rejects_invalid_inputs() {
+        assert!(pspline_basis_core(&[1.0], 2, 3, (0.0, 1.0)).is_err());
+        assert!(pspline_basis_core(&[1.0], 3, 0, (0.0, 1.0)).is_err());
+        assert!(pspline_basis_core(&[f64::INFINITY], 3, 1, (0.0, 1.0)).is_err());
+        assert!(pspline_basis_core(&[1.0], 3, 1, (1.0, 0.0)).is_err());
+        assert!(pspline_basis_core(&[2.0], 3, 1, (1.0, 1.0)).is_err());
     }
 }

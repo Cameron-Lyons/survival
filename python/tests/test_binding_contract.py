@@ -794,6 +794,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "CoxphDetailRow",
         "coxph_fit",
         "coxph_detail",
+        "coxph_wtest",
     } <= stub_names
 
     expected_args = {
@@ -823,7 +824,9 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "offset",
             "method",
             "center",
+            "riskmat",
         ],
+        "coxph_wtest": ["matrix", "rhs_columns", "toler_chol"],
     }
     for name, args in expected_args.items():
         assert list(inspect.signature(getattr(core, name)).parameters) == args
@@ -907,6 +910,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     }
     assert _pyi_class_property_names(stub_path, "CoxphDetail") == {
         "rows",
+        "riskmat",
         "n_events",
         "n_observations",
         "n_covariates",
@@ -1001,6 +1005,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     assert detail.n_events == sum(status)
     assert detail.n_observations == len(time)
     assert detail.n_covariates == 1
+    assert detail.riskmat is None
     assert len(detail.rows) == sum(status)
     assert detail.times() == pytest.approx([1.0, 3.0, 4.0, 6.0, 8.0])
     assert len(detail.hazards()) == sum(status)
@@ -1012,6 +1017,17 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     assert len(detail.variance_hazards()) == sum(status)
     assert len(detail.weighted_risk()) == sum(status)
     assert len(detail.schoenfeld_residuals()) == sum(status)
+
+    detail_with_riskmat = core.coxph_detail(
+        time,
+        status,
+        covariates,
+        fit.coefficients[-1],
+        riskmat=True,
+    )
+    assert detail_with_riskmat.riskmat is not None
+    assert detail_with_riskmat.riskmat[0] == [1, 0, 0, 0, 0]
+    assert detail_with_riskmat.riskmat[-1] == [1, 1, 1, 1, 1]
 
     first_row = detail.rows[0]
     assert type(first_row).__name__ == "CoxphDetailRow"
@@ -3150,12 +3166,15 @@ def test_data_prep_low_level_bindings_are_typed():
         "NearDateResult",
         "RttrightResult",
         "Surv2DataResult",
+        "Surv2TimelineResult",
         "CondenseResult",
         "TcutResult",
         "TimelineResult",
         "IntervalResult",
+        "TmergePlanResult",
         "survsplit",
         "tmerge",
+        "tmerge_plan",
         "tmerge2",
         "tmerge3",
         "collapse",
@@ -3167,19 +3186,23 @@ def test_data_prep_low_level_bindings_are_typed():
         "neardate",
         "neardate_str",
         "rttright",
+        "rttright_matrix",
         "rttright_stratified",
         "surv2data",
+        "surv2data_timeline",
         "survcondense",
         "tcut",
         "tcut_expand",
         "to_timeline",
         "from_timeline",
+        "lvcf_indices",
     }
     assert expected_names <= stub_names
 
     expected_args = {
         "survsplit": ["tstart", "tstop", "cut"],
         "tmerge": ["id", "time1", "newx", "nid", "ntime", "x"],
+        "tmerge_plan": ["id", "start", "stop", "nid", "ntime"],
         "tmerge2": ["id", "time1", "nid", "ntime"],
         "tmerge3": ["id", "miss"],
         "collapse": ["y", "x", "istate", "id", "wt", "order"],
@@ -3191,13 +3214,24 @@ def test_data_prep_low_level_bindings_are_typed():
         "neardate": ["id1", "date1", "id2", "date2", "best", "nomatch"],
         "neardate_str": ["id1", "date1", "id2", "date2", "best", "nomatch"],
         "rttright": ["time", "status", "weights", "timefix", "renorm"],
+        "rttright_matrix": [
+            "time",
+            "status",
+            "times",
+            "strata",
+            "weights",
+            "timefix",
+            "renorm",
+        ],
         "rttright_stratified": ["time", "status", "strata", "weights", "timefix", "renorm"],
         "surv2data": ["id", "time", "event_time", "event_status"],
+        "surv2data_timeline": ["id", "time", "status", "repeated"],
         "survcondense": ["id", "time1", "time2", "status"],
         "tcut": ["value", "breaks", "labels"],
         "tcut_expand": ["start", "stop", "cuts"],
         "to_timeline": ["id", "time1", "time2", "status", "time_points"],
         "from_timeline": ["id", "states", "time_points"],
+        "lvcf_indices": ["id", "missing", "time"],
     }
     for name, args in expected_args.items():
         assert list(inspect.signature(getattr(core, name)).parameters) == args
@@ -3227,6 +3261,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "NearDateResult": {"indices", "distances", "n_matched"},
         "RttrightResult": {"weights", "time", "status", "order"},
         "Surv2DataResult": {"id", "time1", "time2", "status", "row_index"},
+        "Surv2TimelineResult": {"row_index", "start", "stop", "status", "istate"},
         "CondenseResult": {"id", "time1", "time2", "status", "row_map"},
         "TcutResult": {"values", "codes", "levels", "breaks", "counts"},
         "TimelineResult": {"id", "states", "time_points"},
@@ -3532,9 +3567,11 @@ def test_turnbull_estimator_weights_are_typed():
 
     assert {
         "TurnbullResult",
+        "GroupedTurnbullResult",
         "IntervalDistribution",
         "IntervalCensoredResult",
         "turnbull_estimator",
+        "turnbull_estimator_grouped",
         "npmle_interval",
         "interval_censored_regression",
     } <= stub_names
@@ -3546,6 +3583,65 @@ def test_turnbull_estimator_weights_are_typed():
         "tol",
         "weights",
     ]
+    assert list(inspect.signature(core.turnbull_estimator_grouped).parameters) == [
+        "left",
+        "right",
+        "groups",
+        "max_iter",
+        "tol",
+        "weights",
+    ]
+    assert _pyi_function_arg_names(stub_path, "turnbull_estimator_grouped") == [
+        "left",
+        "right",
+        "groups",
+        "max_iter",
+        "tol",
+        "weights",
+    ]
+    assert _pyi_class_property_names(stub_path, "GroupedTurnbullResult") == {
+        "groups",
+        "time_points",
+        "survival",
+        "survival_lower",
+        "survival_upper",
+        "n_iter",
+        "converged",
+    }
+    raw_left = [0.0, 1.0, 2.0, 0.0, 2.0, 3.0]
+    raw_right = [1.0, 3.0, float("inf"), 2.0, 2.0, 5.0]
+    raw_groups = [7, 3, 7, 3, 7, 3]
+    raw_weights = [1.0, 0.5, 1.5, 2.0, 0.75, 1.25]
+    grouped = core.turnbull_estimator_grouped(
+        raw_left,
+        raw_right,
+        raw_groups,
+        weights=raw_weights,
+    )
+    assert type(grouped).__name__ == "GroupedTurnbullResult"
+    assert grouped.groups == [3, 7]
+    for curve_idx, group in enumerate(grouped.groups):
+        indices = [idx for idx, value in enumerate(raw_groups) if value == group]
+        expected = core.turnbull_estimator(
+            [raw_left[idx] for idx in indices],
+            [raw_right[idx] for idx in indices],
+            weights=[raw_weights[idx] for idx in indices],
+        )
+        assert grouped.time_points[curve_idx] == pytest.approx(expected.time_points)
+        assert grouped.survival[curve_idx] == pytest.approx(expected.survival)
+        assert grouped.survival_lower[curve_idx] == pytest.approx(expected.survival_lower)
+        assert grouped.survival_upper[curve_idx] == pytest.approx(expected.survival_upper)
+        assert grouped.n_iter[curve_idx] == expected.n_iter
+        assert grouped.converged[curve_idx] == expected.converged
+    with pytest.raises(ValueError, match="groups"):
+        core.turnbull_estimator_grouped([0.0, 1.0], [1.0, 2.0], [0])
+    with pytest.raises(ValueError, match="positive value per group"):
+        core.turnbull_estimator_grouped(
+            [0.0, 1.0],
+            [1.0, 2.0],
+            [0, 1],
+            weights=[1.0, 0.0],
+        )
     assert list(inspect.signature(core.interval_censored_regression).parameters) == [
         "left",
         "right",
@@ -3722,6 +3818,7 @@ def test_survfitkm_bindings_are_typed():
         "survfitkm_influence",
         "survfitkm_counting_influence",
         "robust_survfitkm",
+        "robust_right_survfit_variance",
         "robust_counting_survfit_variance",
         "survfitkm_with_options",
         "counting_survfit_tables",
@@ -3827,6 +3924,34 @@ def test_survfitkm_bindings_are_typed():
         "conf_level",
         "conf_type",
         "timefix",
+    ]
+    assert list(inspect.signature(core.robust_right_survfit_variance).parameters) == [
+        "time",
+        "status",
+        "curve_time",
+        "curve_estimate",
+        "cluster",
+        "weights",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+        "stype",
+        "ctype",
+    ]
+    assert _pyi_function_arg_names(stub_path, "robust_right_survfit_variance") == [
+        "time",
+        "status",
+        "curve_time",
+        "curve_estimate",
+        "cluster",
+        "weights",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+        "stype",
+        "ctype",
     ]
     assert list(inspect.signature(core.robust_counting_survfit_variance).parameters) == [
         "start",
@@ -4059,6 +4184,13 @@ def test_survfitkm_bindings_are_typed():
         [1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
         [0, 0, 1, 1, 2, 2],
     )
+    robust_right = core.robust_right_survfit_variance(
+        [1.0, 2.0, 3.0, 4.0],
+        [1.0, 0.0, 1.0, 0.0],
+        influence.time,
+        [0.75, 0.75, 0.375, 0.375],
+        [0, 1, 2, 3],
+    )
     robust_counting = core.robust_counting_survfit_variance(
         [0.0, 2.0, 0.0, 3.0, 0.0, 4.0],
         [2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
@@ -4158,6 +4290,18 @@ def test_survfitkm_bindings_are_typed():
     assert robust.std_err == pytest.approx(
         [0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0]
     )
+    assert robust_right[0] == pytest.approx(
+        [
+            sum(row[column] ** 2 for row in influence.influence_surv) ** 0.5
+            for column in range(len(influence.time))
+        ]
+    )
+    assert robust_right[1] == pytest.approx(
+        [
+            sum(row[column] ** 2 for row in influence.influence_chaz) ** 0.5
+            for column in range(len(influence.time))
+        ]
+    )
     assert robust_counting[0] == pytest.approx([0.0, 0.2721655, 0.1814437, 0.1814437, 0.0])
     assert robust_counting[1] == pytest.approx([0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655])
     assert with_options.conf_lower != pytest.approx(result.conf_lower)
@@ -4203,6 +4347,7 @@ def test_survfit_matrix_bindings_are_typed():
         "survfit_from_matrix",
         "survfit_multistate",
         "step_values_at",
+        "step_matrix_values_at",
         "condition_cox_survfit_curves",
         "cox_survfit_from_baseline",
     } <= stub_names
@@ -4264,6 +4409,18 @@ def test_survfit_matrix_bindings_are_typed():
         "requested_times",
         "initial",
     ]
+    assert list(inspect.signature(core.step_matrix_values_at).parameters) == [
+        "times",
+        "values",
+        "requested_times",
+        "initial",
+    ]
+    assert _pyi_function_arg_names(stub_path, "step_matrix_values_at") == [
+        "times",
+        "values",
+        "requested_times",
+        "initial",
+    ]
     assert list(inspect.signature(core.condition_cox_survfit_curves).parameters) == [
         "times",
         "cumhaz",
@@ -4312,6 +4469,14 @@ def test_survfit_matrix_bindings_are_typed():
         [0.5, 1.0, 4.0, 6.0],
         0.0,
     ) == pytest.approx([0.0, 10.0, 30.0, 50.0])
+    projected = core.step_matrix_values_at(
+        [1.0, 3.0, 5.0],
+        [[10.0, 30.0, 50.0], [1.0, 3.0, 5.0]],
+        [6.0, 0.5, 3.0],
+        -1.0,
+    )
+    assert projected[0] == pytest.approx([50.0, -1.0, 30.0])
+    assert projected[1] == pytest.approx([5.0, -1.0, 3.0])
     conditioned_time, conditioned_surv, conditioned_cumhaz = core.condition_cox_survfit_curves(
         [1.0, 3.0, 5.0],
         [[0.2, 0.6, 1.1]],
@@ -4695,6 +4860,7 @@ def test_aggregate_survfit_bindings_are_typed():
 
     assert {
         "AggregateSurvfitResult",
+        "aggregate_shared_survfit",
         "aggregate_survfit",
         "aggregate_survfit_by_group",
     } <= stub_names
@@ -4712,6 +4878,13 @@ def test_aggregate_survfit_bindings_are_typed():
         "groups",
         "weights",
     ]
+    assert list(inspect.signature(core.aggregate_shared_survfit).parameters) == [
+        "time",
+        "survs",
+        "std_errs",
+        "weights",
+        "groups",
+    ]
     assert _pyi_function_arg_names(stub_path, "aggregate_survfit") == [
         "times",
         "survs",
@@ -4724,6 +4897,13 @@ def test_aggregate_survfit_bindings_are_typed():
         "survs",
         "groups",
         "weights",
+    ]
+    assert _pyi_function_arg_names(stub_path, "aggregate_shared_survfit") == [
+        "time",
+        "survs",
+        "std_errs",
+        "weights",
+        "groups",
     ]
     assert _pyi_class_property_names(stub_path, "AggregateSurvfitResult") == {
         "time",
@@ -4756,6 +4936,17 @@ def test_aggregate_survfit_bindings_are_typed():
     )
     assert [item.n_curves for item in grouped] == [1, 2]
     assert all(type(item).__name__ == "AggregateSurvfitResult" for item in grouped)
+
+    shared = core.aggregate_shared_survfit(
+        [1.0, 2.0],
+        [[0.9, 0.8], [0.8, 0.6], [0.7, 0.4]],
+        [[0.1, 0.2], [0.3, 0.4], [0.2, 0.1]],
+        [1.0, 2.0, 3.0],
+        [2, 1, 2],
+    )
+    assert [item.n_curves for item in shared] == [1, 2]
+    assert shared[1].surv == pytest.approx([0.75, 0.5])
+    assert shared[1].weights == pytest.approx([0.25, 0.75])
 
 
 def test_survcheck_bindings_are_typed():
@@ -5041,6 +5232,18 @@ def test_frailty_cox_and_link_function_bindings_are_typed_to_runtime_surface():
             "self",
             "input",
         ]
+        vector_method_name = f"{method_name}_many"
+        assert list(
+            inspect.signature(getattr(core.LinkFunctionParams, vector_method_name)).parameters
+        ) == [
+            "self",
+            "input",
+        ]
+        assert _pyi_class_method_arg_names(
+            stub_path,
+            "LinkFunctionParams",
+            vector_method_name,
+        ) == ["self", "input"]
 
     link = core.LinkFunctionParams(0.001)
     assert link.blogit(0.5) == pytest.approx(0.0)
@@ -5049,6 +5252,10 @@ def test_frailty_cox_and_link_function_bindings_are_typed_to_runtime_surface():
     assert link.blog(0.5) == pytest.approx(math.log(0.5))
     assert math.isfinite(link.blogit(0.0))
     assert math.isfinite(link.blogit(1.0))
+    vector_values = link.blogit_many([0.0, None, 0.5, 1.0])
+    assert vector_values[0] == pytest.approx(link.blogit(0.0))
+    assert math.isnan(vector_values[1])
+    assert vector_values[2:] == pytest.approx([link.blogit(0.5), link.blogit(1.0)])
 
     bounded = core.LinkFunctionParams(0.05)
     assert bounded.bprobit(0.0) == pytest.approx(-1.6448536)
@@ -5207,6 +5414,7 @@ def test_low_level_bridge_bindings_are_typed():
         "perform_pystep_simple_calculation",
         "perform_pystep_calculation",
         "perform_pyears_calculation",
+        "perform_brier_calculation",
         "cox_callback",
     } <= stub_names
 
@@ -5284,6 +5492,16 @@ def test_low_level_bridge_bindings_are_typed():
             "observed_data",
             "do_event",
             "ny",
+        ],
+        "perform_brier_calculation": [
+            "observed_time",
+            "status",
+            "case_weights",
+            "evaluation_times",
+            "null_predictions",
+            "model_predictions",
+            "censor_times",
+            "censor_survival",
         ],
         "cox_callback": [
             "which",
@@ -5387,6 +5605,21 @@ def test_low_level_bridge_bindings_are_typed():
     )
     assert sorted(pyears) == ["offtable", "pcount", "pexpect", "pn", "pyears"]
     assert pyears["pyears"] == pytest.approx([2.0])
+
+    brier_components = core.perform_brier_calculation(
+        [1.0, 2.5, 3.0, 4.5],
+        [1, 0, 1, 0],
+        [1.0, 2.0, 1.0, 1.0],
+        [2.0, 4.0],
+        [0.2, 0.6],
+        [[0.1, 0.2, 0.3, 0.4], [0.4, 0.5, 0.6, 0.7]],
+        [0.0, 2.5, 4.5],
+        [1.0, 0.6, 0.0],
+    )
+    assert sorted(brier_components) == ["brier", "eff_n", "rsquared"]
+    assert brier_components["brier"] == pytest.approx([0.228, 0.3330769230769231])
+    assert brier_components["rsquared"] == pytest.approx([-0.425, -0.4058441558441557])
+    assert brier_components["eff_n"] == pytest.approx([3.571428571428571, 3.813559322033898])
 
     def callback(coef, *, which):
         return {
@@ -9155,6 +9388,7 @@ def test_core_utility_bindings_are_typed():
         "SplineBasisResult",
         "PSpline",
         "nsk",
+        "pspline_basis",
         "cox_score_residuals",
         "schoenfeld_residuals",
         "concordance",
@@ -9191,6 +9425,7 @@ def test_core_utility_bindings_are_typed():
 
     expected_args = {
         "nsk": ["x", "df", "knots", "boundary_knots"],
+        "pspline_basis": ["x", "nterm", "degree", "boundary_knots"],
         "cox_score_residuals": ["y", "strata", "covar", "score", "weights", "nvar", "method"],
         "schoenfeld_residuals": ["y", "score", "strata", "covar", "nvar", "method"],
         "concordance": ["y", "x", "wt", "timewt", "sortstart", "sortstop"],
@@ -9198,6 +9433,17 @@ def test_core_utility_bindings_are_typed():
     for name, args in expected_args.items():
         assert list(inspect.signature(getattr(core, name)).parameters) == args
         assert _pyi_function_arg_names(stub_path, name) == args
+
+    constant_basis, constant_knots = core.pspline_basis(
+        [2.0, float("nan"), 2.0],
+        5,
+        3,
+        (2.0, 2.0),
+    )
+    assert constant_basis[0] == pytest.approx([0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    assert all(math.isnan(value) for value in constant_basis[1])
+    assert constant_basis[2] == pytest.approx(constant_basis[0])
+    assert constant_knots == pytest.approx([2.0] * 12)
 
     assert _pyi_class_annotation_names(stub_path, "CovariateMatrix") == {
         "values",
@@ -9341,8 +9587,13 @@ def test_core_nsk_rejects_malformed_inputs():
     setup_survival_import()
     core = importlib.import_module("survival._survival")
 
+    missing = core.nsk([1.0, float("nan"), 2.0, 3.0], 3, None, None)
+    assert missing.n_rows == 4
+    assert all(math.isnan(value) for value in missing.basis[missing.n_cols : 2 * missing.n_cols])
     with pytest.raises(ValueError, match="x contains non-finite"):
-        core.nsk([1.0, float("nan")], 3, None, None)
+        core.nsk([1.0, float("inf")], 3, None, None)
+    with pytest.raises(ValueError, match="at least one non-missing"):
+        core.nsk([float("nan"), float("nan")], 3, None, None)
     with pytest.raises(ValueError, match="non-zero finite range"):
         core.nsk([1.0, 1.0], 3, None, None)
     with pytest.raises(ValueError, match="df must be at least 1"):
