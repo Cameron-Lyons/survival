@@ -30,6 +30,11 @@ Low-level `coxsurv.fit` and `survfitcoxph.fit` calls use a Rust risk-set sweep
 for weighted, stratified, tied-event, and counting-process baselines. Their R
 assembly preserves multiple prediction rows, standard errors, and individual
 time-dependent trajectories.
+Low-level `survreg.fit` calls for the built-in extreme-value, logistic,
+Gaussian, and Student-t distributions use the Rust AFT optimizer directly.
+The returned coefficient, null-fit, covariance, likelihood, score, and linear
+predictor components retain the standard R shape for fixed, stratified, and
+interval-censored fits.
 
 Time-dependent data construction is also native: `tmerge` evaluates the
 familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the
