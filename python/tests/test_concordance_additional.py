@@ -72,6 +72,16 @@ def test_counting_concordance_keeps_near_equal_risk_scores_distinct():
     assert summary["concordance"] == pytest.approx(0.0)
 
 
+def test_concordance_summary_reports_reference_conditional_variance():
+    summary = survival.core.concordance_summary(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 1, 0, 1],
+        [0.2, 0.4, 0.4, 1.0],
+    )
+
+    assert summary["conditional_variance"] == pytest.approx(0.065)
+
+
 def test_concordance_summary_groups_near_tied_event_times():
     exact_time = [1.0, 1.0, 2.0, 3.0]
     near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
@@ -129,6 +139,7 @@ def test_counting_concordance_summary_handles_duplicate_event_times():
     assert summary["concordant"] == pytest.approx(6.0)
     assert summary["comparable"] == pytest.approx(8.0)
     assert summary["concordance"] == pytest.approx(0.75)
+    assert summary["conditional_variance"] == pytest.approx(0.075)
 
     weighted = survival.core.counting_concordance_summary(
         start, stop, status, risk, weights=weights
@@ -136,6 +147,7 @@ def test_counting_concordance_summary_handles_duplicate_event_times():
     assert weighted["concordant"] == pytest.approx(7.5)
     assert weighted["comparable"] == pytest.approx(12.0)
     assert weighted["concordance"] == pytest.approx(0.625)
+    assert weighted["conditional_variance"] == pytest.approx(0.0472411186696901)
 
 
 def test_concordance_public_apis_validate_values():

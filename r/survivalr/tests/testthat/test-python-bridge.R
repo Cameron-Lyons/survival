@@ -2776,7 +2776,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(bridged_concordancefit$count, reference_concordancefit$count, tolerance = 1e-12)
   expect_equal(bridged_concordancefit$n, reference_concordancefit$n)
   expect_equal(bridged_concordancefit$var, reference_concordancefit$var, tolerance = 1e-12)
-  expect_true(is.finite(bridged_concordancefit$cvar))
+  expect_equal(bridged_concordancefit$cvar, reference_concordancefit$cvar, tolerance = 1e-12)
   expect_equal(bridged_concordancefit$dfbeta, reference_concordancefit$dfbeta, tolerance = 1e-12)
   expect_equal(bridged_concordancefit$influence, reference_concordancefit$influence, tolerance = 1e-12)
   expect_equal(bridged_concordancefit$ranks, reference_concordancefit$ranks, tolerance = 1e-12)
