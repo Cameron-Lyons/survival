@@ -2654,6 +2654,61 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(symbol_concordance_frame$variance, string_column_concordance_frame$variance)
   expect_equal(subset_symbol_concordance_frame$concordance, as.numeric(reference_subset_symbol_concordance$concordance))
   expect_equal(subset_symbol_concordance_frame$variance, as.numeric(reference_subset_symbol_concordance$var))
+  near_risk <- c(0.5, 0.5 + 5e-13, 0.1, 0.8)
+  near_risk_concordance <- concordancefit(
+    response,
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_near_risk_concordance <- survival::concordancefit(
+    survival::Surv(data$time, data$status),
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(near_risk_concordance$concordance, reference_near_risk_concordance$concordance)
+  expect_equal(near_risk_concordance$count, reference_near_risk_concordance$count)
+  expect_equal(near_risk_concordance$dfbeta, reference_near_risk_concordance$dfbeta)
+  expect_equal(near_risk_concordance$influence, reference_near_risk_concordance$influence)
+  expect_equal(near_risk_concordance$ranks, reference_near_risk_concordance$ranks)
+  counting_near_risk_response <- Surv(
+    c(0, 0, 1, 1),
+    c(1, 2, 3, 4),
+    c(1, 0, 1, 1)
+  )
+  counting_near_risk_concordance <- concordancefit(
+    counting_near_risk_response,
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_counting_near_risk_concordance <- survival::concordancefit(
+    survival::Surv(c(0, 0, 1, 1), c(1, 2, 3, 4), c(1, 0, 1, 1)),
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(
+    counting_near_risk_concordance$concordance,
+    reference_counting_near_risk_concordance$concordance
+  )
+  expect_equal(
+    counting_near_risk_concordance$count,
+    reference_counting_near_risk_concordance$count
+  )
+  expect_equal(
+    counting_near_risk_concordance$dfbeta,
+    reference_counting_near_risk_concordance$dfbeta
+  )
+  expect_equal(
+    counting_near_risk_concordance$influence,
+    reference_counting_near_risk_concordance$influence
+  )
+  expect_equal(
+    counting_near_risk_concordance$ranks,
+    reference_counting_near_risk_concordance$ranks
+  )
   old_concordance <- suppressWarnings(survConcordance(
     Surv(time, status) ~ x,
     data = data
