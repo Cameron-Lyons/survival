@@ -34,12 +34,22 @@ def test_cipoisson():
     assert survival.cipoisson(k=5, method="e") == pytest.approx(survival.cipoisson_exact(5))
     assert survival.cipoisson(k=5, method="a") == pytest.approx(survival.cipoisson_anscombe(5))
 
-    with pytest.raises(ValueError, match="time must be positive and finite"):
+    with pytest.raises(ValueError, match="time must be positive"):
         survival.cipoisson_exact(k=1, time=0.0, p=0.95)
     with pytest.raises(ValueError, match="p must be a confidence level between 0 and 1"):
-        survival.cipoisson_anscombe(k=1, time=1.0, p=1.0)
+        survival.cipoisson_anscombe(k=1, time=1.0, p=1.1)
     with pytest.raises(ValueError, match="method must uniquely match"):
         survival.cipoisson(k=1, time=1.0, p=0.95, method="")
+
+
+def test_cipoisson_supports_r_numeric_edge_cases():
+    assert survival.cipoisson_exact(1.2, 2.0, 0.0) == pytest.approx(
+        (0.443968106737396, 0.938570591679505)
+    )
+    assert survival.cipoisson_exact(1.2, 1.0, 1.0) == (0.0, float("inf"))
+    assert survival.cipoisson_exact(1.2, float("inf"), 0.95) == (0.0, 0.0)
+    infinite_count = survival.cipoisson_exact(float("inf"), float("inf"), 0.95)
+    assert all(value != value for value in infinite_count)
 
 
 def test_model_selection_public_apis_and_validation():

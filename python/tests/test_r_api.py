@@ -2605,6 +2605,12 @@ def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
     recycled = survival.cipoisson([1, 2], time=[1.0, 2.0, 3.0])
     anscombe = survival.cipoisson(5, time=10.0, method="anscombe")
     missing_time = survival.cipoisson([1, 2], time=[0.0, 2.0])
+    numeric_edges = survival.cipoisson(
+        [1.2, 2.8, float("inf")],
+        time=[2.0, 4.0, float("inf")],
+        p=[0.0, 1.0, 0.95],
+    )
+    missing_confidence = survival.cipoisson([0, 1.2], p=[None, None])
 
     assert scalar == pytest.approx((0.1623486, 1.1668332))
     assert [value for row in vector for value in row] == pytest.approx(
@@ -2617,6 +2623,12 @@ def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
     assert math.isnan(missing_time[0][0])
     assert math.isnan(missing_time[0][1])
     assert missing_time[1] == pytest.approx((0.121104639, 3.612344))
+    assert numeric_edges[0] == pytest.approx((0.443968106737396, 0.938570591679505))
+    assert numeric_edges[1] == (0.0, float("inf"))
+    assert all(math.isnan(value) for value in numeric_edges[2])
+    assert missing_confidence[0][0] == 0.0
+    assert math.isnan(missing_confidence[0][1])
+    assert all(math.isnan(value) for value in missing_confidence[1])
     with pytest.raises(ValueError, match="k must be non-negative"):
         survival.cipoisson(-1)
     with pytest.raises(ValueError, match="method must"):

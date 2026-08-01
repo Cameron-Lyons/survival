@@ -7294,10 +7294,10 @@ def _recycle_r_vector(values: list[Any], n: int, name: str) -> list[Any]:
     return [values[idx % len(values)] for idx in range(n)]
 
 
-def _cipoisson_count(value: Any) -> int | None:
+def _cipoisson_count(value: Any) -> float | None:
     if _is_missing_value(value):
         return None
-    count = _integer_scalar(value, "k")
+    count = float(value)
     if count < 0:
         raise ValueError("k must be non-negative")
     return count
@@ -7338,8 +7338,13 @@ def cipoisson(
         count = _cipoisson_count(raw_k)
         exposure = _cipoisson_float(raw_time, "time")
         confidence = _cipoisson_float(raw_p, "p")
-        if count is None or exposure is None or confidence is None or exposure <= 0.0:
+        if count is None or exposure is None or exposure <= 0.0:
             intervals.append((math.nan, math.nan))
+            continue
+        if confidence is None:
+            intervals.append(
+                (0.0, math.nan) if method_value == "exact" and count == 0 else (math.nan, math.nan)
+            )
             continue
         lower, upper = _core.cipoisson(count, exposure, confidence, method_value)
         intervals.append((float(lower), float(upper)))
