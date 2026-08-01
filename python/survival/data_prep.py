@@ -22,6 +22,8 @@ __all__ = bind_names(
         "surv2data",
         "Surv2TimelineResult",
         "surv2data_timeline",
+        "FromTimelineRowsResult",
+        "from_timeline_rows",
         "CondenseResult",
         "survcondense",
         "SplitResult",

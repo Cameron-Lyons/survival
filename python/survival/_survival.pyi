@@ -519,6 +519,22 @@ class Surv2TimelineResult:
     @property
     def istate(self) -> list[int | None]: ...
 
+class FromTimelineRowsResult:
+    @property
+    def start(self) -> list[float]: ...
+    @property
+    def stop(self) -> list[float]: ...
+    @property
+    def status(self) -> list[int]: ...
+    @property
+    def istate(self) -> list[int]: ...
+    @property
+    def static_row(self) -> list[int]: ...
+    @property
+    def dynamic_row(self) -> list[int]: ...
+    @property
+    def removed_row(self) -> list[int]: ...
+
 class CondenseResult:
     @property
     def id(self) -> list[int]: ...
@@ -2401,6 +2417,10 @@ class SurvFitKMInfluenceOutput:
     def influence_surv(self) -> list[list[float]]: ...
     @property
     def influence_chaz(self) -> list[list[float]]: ...
+    @property
+    def std_err(self) -> list[float]: ...
+    @property
+    def std_chaz(self) -> list[float]: ...
 
 class CountingSurvfitTables:
     @property
@@ -5701,6 +5721,11 @@ def surv2data_timeline(
     status: list[int | None],
     repeated: bool = False,
 ) -> Surv2TimelineResult: ...
+def from_timeline_rows(
+    id: list[int],
+    time: list[float],
+    status: list[int],
+) -> FromTimelineRowsResult: ...
 def survcondense(
     id: list[int],
     time1: list[float],
@@ -5962,6 +5987,15 @@ def survfit_multistate(
     transition_hazards: list[list[list[float]]],
     initial_state: int,
 ) -> SurvfitMatrixResult: ...
+def survfit_confint_native(
+    p: list[float],
+    se: list[float],
+    logse: bool,
+    conf_type: str,
+    z: float,
+    selow: list[float] | None = None,
+    ulimit: bool = True,
+) -> tuple[list[float], list[float]]: ...
 def step_values_at(
     times: list[float],
     values: list[float],
@@ -6035,6 +6069,7 @@ def survfitkm_influence(
     conf_level: float | None = None,
     conf_type: str | None = None,
     timefix: bool | None = None,
+    include_influence: bool = True,
 ) -> SurvFitKMInfluenceOutput: ...
 def survfitkm_counting_influence(
     start: list[float],
