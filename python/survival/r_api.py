@@ -7982,8 +7982,10 @@ def _rttright_validate_id(response: Surv, id: Any | None) -> list[Any] | None:
     id_values = _materialize_labels(id, "id")
     if len(id_values) != len(response):
         raise ValueError("id must have the same length as the Surv response")
-    if response.type not in {"right", "counting"}:
-        raise NotImplementedError("rttright id handling is currently supported only for right data")
+    if response.type not in {"right", "mright", "counting"}:
+        raise NotImplementedError(
+            "rttright id handling is currently supported only for right-censored data"
+        )
 
     seen: set[Any] = set()
     for value in id_values:
@@ -7997,6 +7999,10 @@ def _rttright_validate_id(response: Surv, id: Any | None) -> list[Any] | None:
             raise ValueError("one or more flags are >0 in survcheck")
         seen.add(key)
     return id_values
+
+
+def _rttright_binary_status(response: Surv) -> list[int]:
+    return [1 if int(value) > 0 else 0 for value in response.event]
 
 
 def _rttright_divide(numerator: float, denominator: float) -> float:
@@ -8432,10 +8438,11 @@ def _rttright_core_weights(
     timefix: bool,
     renorm: bool,
 ) -> list[float]:
+    status = _rttright_binary_status(response)
     if group is not None:
         result = _core.rttright_stratified(
             list(response.time),
-            list(response.event),
+            status,
             list(group),
             None if weights is None else _float_vector(weights, "weights"),
             timefix,
@@ -8444,7 +8451,7 @@ def _rttright_core_weights(
         return [float(weight) for weight in result.weights]
     result = _core.rttright(
         list(response.time),
-        list(response.event),
+        status,
         None if weights is None else _float_vector(weights, "weights"),
         timefix,
         renorm,
@@ -9158,6 +9165,8 @@ def rttright(
 
     if not isinstance(response, Surv):
         raise TypeError("rttright response must be a Surv object, formula, or time vector")
+    if response.type == "mcounting":
+        raise NotImplementedError("function not defined for delayed entry or multistate data")
     _rttright_validate_id(response, id_values)
     if response.type == "counting":
         return _rttright_counting_result(
@@ -9169,12 +9178,13 @@ def rttright(
             timefix,
             renorm,
         )
-    if response.type != "right":
+    if response.type not in {"right", "mright"}:
         raise ValueError(f"rttright is not valid for {response.type} censored survival data")
     if times is not None:
+        status_values = _rttright_binary_status(response)
         return _rttright_time_matrix(
             list(response.time),
-            list(response.event),
+            status_values,
             weights,
             times,
             group,

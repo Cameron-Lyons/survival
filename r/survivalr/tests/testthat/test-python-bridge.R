@@ -773,6 +773,37 @@ test_that("R formula wrappers delegate to the Python survival package", {
     )
   )
 
+  multistate_rtt <- data.frame(
+    time = c(1, 2, 3, 4, 5, 6),
+    state = factor(
+      c("a", "censor", "b", "a", "censor", "b"),
+      levels = c("censor", "a", "b")
+    ),
+    group = rep(c("x", "y"), each = 3),
+    wt = c(2, 1, 3, 1, 4, 2),
+    id = letters[1:6]
+  )
+  expect_equal(
+    rttright(Surv(time, state) ~ 1, data = multistate_rtt, id = id),
+    survival::rttright(survival::Surv(time, state) ~ 1, data = multistate_rtt, id = id)
+  )
+  expect_equal(
+    rttright(Surv(time, state) ~ group, data = multistate_rtt, weights = wt),
+    survival::rttright(
+      survival::Surv(time, state) ~ group,
+      data = multistate_rtt,
+      weights = wt
+    )
+  )
+  expect_equal(
+    rttright(Surv(time, state) ~ group, data = multistate_rtt, times = c(2, 4, 6)),
+    survival::rttright(
+      survival::Surv(time, state) ~ group,
+      data = multistate_rtt,
+      times = c(2, 4, 6)
+    )
+  )
+
   counting_rtt <- data.frame(
     id = c("a", "a", "b", "b"),
     start = c(0, 1, 0, 2),

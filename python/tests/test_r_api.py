@@ -557,6 +557,53 @@ def test_rttright_formula_wrapper_preserves_legacy_direct_api():
         )
 
 
+def test_rttright_supports_simple_multistate_right_censoring():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "state": Factor(
+            ["a", "censor", "b", "a"],
+            ["censor", "a", "b"],
+        ),
+        "id": ["a", "b", "c", "d"],
+    }
+
+    result = survival.rttright("Surv(time, state) ~ 1", data=data, id="id")
+    timed = survival.rttright(
+        "Surv(time, state) ~ 1",
+        data=data,
+        times=[1.0, 2.0, 3.0, 4.0],
+    )
+
+    assert result == pytest.approx([0.25, 0.0, 0.375, 0.375])
+    for actual_row, expected_row in zip(
+        timed,
+        [
+            [0.25, 0.25, 0.25, 0.25],
+            [0.25, 0.25, 0.0, 0.0],
+            [0.25, 0.25, 0.375, 0.375],
+            [0.25, 0.25, 0.375, 0.375],
+        ],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
+
+    with pytest.raises(NotImplementedError, match="delayed entry or multistate"):
+        survival.rttright(
+            survival.Surv(
+                [0.0, 1.0],
+                [1.0, 2.0],
+                Factor(["a", "censor"], ["censor", "a"]),
+                type="mstate",
+            ),
+            id=["a", "a"],
+        )
+
+
 def test_r_api_statefig_matches_r_coordinate_layouts():
     connect = [[0.0, 1.0], [0.0, 0.0]]
 
