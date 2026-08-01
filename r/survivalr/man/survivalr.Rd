@@ -904,7 +904,8 @@ bridged fitted Cox model accepted by \code{survival.r_api}.}
 \item{na.rm}{Logical flag controlling whether missing \code{Surv} rows are
 removed before computing survival quantiles.}
 \item{group}{Optional group vector for direct \code{survdiff} and
-\code{pyears} calls.}
+\code{pyears} calls. Python \code{pyears} also accepts a \code{tcut} result
+for a time-changing group.}
 \item{by}{Optional grouping vector or list for aggregating Python-backed Cox
 \code{survfit} prediction curves across their \code{data} margin.}
 \item{FUN}{Summary function for \code{aggregate.survival_py_survfit};
@@ -922,8 +923,8 @@ for \code{cipoisson}. Direct Python \code{survexp} calls accept
 \code{"ederer"}, \code{"hakulinen"}, \code{"conditional"},
 \code{"individual.h"}, and \code{"individual.s"}. For \code{yates}, method
 selects the direct or SGTT contrast path.}
-\item{etype, prefix, count}{Formula \code{finegray} options delegated to
-\code{survival::finegray}.}
+\item{etype, prefix, count}{Formula \code{finegray} endpoint and output-column
+options handled by the native bridge.}
 \item{transform}{Formula \code{survobrien} option delegated to
 \code{survival::survobrien}.}
 \item{covariate}{Direct numeric covariate vector for Python-backed
@@ -1097,6 +1098,12 @@ R-compatible names and methods.
 \code{survobrien} formula expansion retains factor keeper columns, including
 their level ordering, while transforming continuous terms within each event
 risk set.
+
+Formula \code{finegray} calls use the Python formula engine and Rust interval
+expansion directly. The bridge supports weights, subsets, missing-data actions,
+strata, counting-process histories, and delayed entry; computes censoring risk
+sets with sorted sweeps; and restores factor and \code{I(...)} column classes
+on the returned data frame.
 
 \code{coxsurv.fit} and \code{survfitcoxph.fit} use a Rust risk-set sweep for
 weighted right-censored and counting-process baselines, including strata and

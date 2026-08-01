@@ -4,7 +4,7 @@ use survival::regression::{
 };
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
-    nelson_aalen, uno_c_index, weighted_logrank_test,
+    nelson_aalen, pseudo, uno_c_index, weighted_logrank_test,
 };
 
 fn generate_survival_data(n: usize) -> (Vec<f64>, Vec<f64>, Vec<i32>) {
@@ -105,6 +105,46 @@ mod nelson_aalen_bench {
         let (time, _, status_i32) = generate_survival_data(n);
 
         bencher.bench_local(|| nelson_aalen(&time, &status_i32, None, 0.95));
+    }
+}
+
+mod pseudo_bench {
+    use super::*;
+
+    fn inputs(n: usize) -> (Vec<f64>, Vec<i32>, Vec<f64>) {
+        let (time, _, status) = generate_survival_data(n);
+        let eval_times = (0..n).map(|idx| idx as f64 * 0.5 + 0.25).collect();
+        (time, status, eval_times)
+    }
+
+    fn run(bencher: divan::Bencher, n: usize, type_: &'static str) {
+        let (time, status, eval_times) = inputs(n);
+        bencher.bench_local(|| {
+            black_box(
+                pseudo(
+                    time.clone(),
+                    status.clone(),
+                    Some(eval_times.clone()),
+                    Some(type_),
+                )
+                .expect("benchmark pseudo-value inputs should be valid"),
+            )
+        });
+    }
+
+    #[divan::bench(args = [100, 500])]
+    fn survival_time_grid(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "survival");
+    }
+
+    #[divan::bench(args = [100, 500])]
+    fn cumulative_hazard_time_grid(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "cumhaz");
+    }
+
+    #[divan::bench(args = [100, 500])]
+    fn restricted_mean_time_grid(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "rmst");
     }
 }
 

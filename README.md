@@ -142,6 +142,8 @@ columns and external row-aligned arrays such as `weights`, `offset`, and
 `strata`.
 R `survobrien` formula expansion preserves factor keeper columns while applying
 the risk-set transform only to continuous terms.
+R `finegray` formulas use the same Python formula engine and Rust interval
+expansion, with sorted censoring-risk sweeps and R-compatible factor classes.
 Kaplan-Meier `survfit` calls honor `conf_level=`, R-style `conf_type=`
 choices for confidence intervals, `start_time=` for conditional curves, and
 `time0=True` to include the starting row.
@@ -351,6 +353,16 @@ print(result["coefficients"])
 ```
 
 ### Person-Years Calculation
+
+The high-level API accepts a `tcut` result directly for time-changing groups:
+
+```python
+import survival
+
+response = survival.Surv([25.0, 8.0], [1, 0])
+attained = survival.tcut([0.0, 5.0], [0.0, 10.0, 20.0, 30.0])
+result = survival.pyears(response, group=attained, scale=1)
+```
 
 ```python
 from survival import pybridge

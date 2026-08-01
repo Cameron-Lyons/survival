@@ -97,9 +97,9 @@ pub fn survexp(
     validate_optional_sex(sex, n)?;
 
     let calc_method = method.unwrap_or("hakulinen");
-    if !["hakulinen", "conditional", "individual"].contains(&calc_method) {
+    if !["ederer", "hakulinen", "conditional", "individual"].contains(&calc_method) {
         return Err(value_error(
-            "method must be 'hakulinen', 'conditional', or 'individual'",
+            "method must be 'ederer', 'hakulinen', 'conditional', or 'individual'",
         ));
     }
 
@@ -126,10 +126,30 @@ pub fn survexp(
     validate_eval_times(&eval_times)?;
 
     match calc_method {
+        "ederer" => compute_ederer(&time, &age, &year, sex, ratetable, &eval_times),
         "hakulinen" => compute_hakulinen(&time, &age, &year, sex, ratetable, &eval_times),
         "conditional" => compute_conditional(&time, &age, &year, sex, ratetable, &eval_times),
         "individual" => compute_individual(&time, &age, &year, sex, ratetable, &eval_times),
         _ => compute_hakulinen(&time, &age, &year, sex, ratetable, &eval_times),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CohortMethod {
+    Ederer,
+    Hakulinen,
+}
+
+impl CohortMethod {
+    fn uses_observed_risk_set(self) -> bool {
+        matches!(self, Self::Hakulinen)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ederer => "ederer",
+            Self::Hakulinen => "hakulinen",
+        }
     }
 }
 
@@ -141,22 +161,58 @@ fn compute_hakulinen(
     ratetable: &RateTable,
     eval_times: &[f64],
 ) -> PyResult<SurvExpResult> {
+    compute_cohort_average(
+        time,
+        age,
+        year,
+        sex,
+        ratetable,
+        eval_times,
+        CohortMethod::Hakulinen,
+    )
+}
+
+fn compute_ederer(
+    time: &[f64],
+    age: &[f64],
+    year: &[f64],
+    sex: Option<&[i32]>,
+    ratetable: &RateTable,
+    eval_times: &[f64],
+) -> PyResult<SurvExpResult> {
+    compute_cohort_average(
+        time,
+        age,
+        year,
+        sex,
+        ratetable,
+        eval_times,
+        CohortMethod::Ederer,
+    )
+}
+
+fn compute_cohort_average(
+    time: &[f64],
+    age: &[f64],
+    year: &[f64],
+    sex: Option<&[i32]>,
+    ratetable: &RateTable,
+    eval_times: &[f64],
+    method: CohortMethod,
+) -> PyResult<SurvExpResult> {
     let n = time.len();
 
     let results: Vec<(f64, f64, f64)> = eval_times
         .par_iter()
         .map(|&eval_t| {
             let (total_surv, total_cumhaz, count) = (0..n)
-                .filter(|&i| time[i] >= eval_t)
+                .filter(|&i| !method.uses_observed_risk_set() || time[i] >= eval_t)
                 .map(|i| {
                     let age_at_eval = age[i] + eval_t;
-                    let exp_surv = ratetable
-                        .expected_survival(age[i], age_at_eval, year[i], Some(sex_at(sex, i)))
-                        .unwrap_or(1.0);
                     let exp_cumhaz = ratetable
                         .cumulative_hazard(age[i], age_at_eval, year[i], Some(sex_at(sex, i)))
                         .unwrap_or(0.0);
-                    (exp_surv, exp_cumhaz, 1.0)
+                    ((-exp_cumhaz).exp(), exp_cumhaz, 1.0)
                 })
                 .fold((0.0, 0.0, 0.0), |acc, x| {
                     (acc.0 + x.0, acc.1 + x.1, acc.2 + x.2)
@@ -181,7 +237,7 @@ fn compute_hakulinen(
         surv,
         n_risk,
         cumhaz,
-        method: "hakulinen".to_string(),
+        method: method.as_str().to_string(),
         n,
     })
 }
@@ -392,6 +448,53 @@ mod tests {
     }
 
     #[test]
+    fn ederer_keeps_the_full_reference_cohort() {
+        let rt = create_test_ratetable();
+        let time = vec![180.0, 1095.0];
+        let age = vec![14610.0, 25567.5];
+        let year = vec![2000.0, 2000.0];
+        let sex = vec![0, 1];
+        let times = vec![365.25, 730.5];
+
+        let ederer = survexp(
+            time.clone(),
+            age.clone(),
+            year.clone(),
+            &rt,
+            Some(sex.clone()),
+            Some(times.clone()),
+            Some("ederer"),
+        )
+        .unwrap();
+        let hakulinen = survexp(
+            time,
+            age.clone(),
+            year.clone(),
+            &rt,
+            Some(sex.clone()),
+            Some(times.clone()),
+            Some("hakulinen"),
+        )
+        .unwrap();
+
+        assert_eq!(ederer.method, "ederer");
+        assert_eq!(ederer.n_risk, vec![2.0, 2.0]);
+        assert_eq!(hakulinen.n_risk, vec![1.0, 1.0]);
+        for (index, eval_time) in times.into_iter().enumerate() {
+            let individual = survexp_individual(
+                vec![eval_time, eval_time],
+                age.clone(),
+                year.clone(),
+                &rt,
+                Some(sex.clone()),
+            )
+            .unwrap();
+            let expected = individual.iter().sum::<f64>() / individual.len() as f64;
+            assert!((ederer.surv[index] - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn survexp_default_sex_matches_explicit_zero_sex() {
         let rt = create_test_ratetable();
 
@@ -400,7 +503,7 @@ mod tests {
         let year = vec![2000.0, 2000.0, 2000.0];
         let times = vec![365.0, 730.0, 1095.0];
 
-        for method in ["hakulinen", "conditional", "individual"] {
+        for method in ["ederer", "hakulinen", "conditional", "individual"] {
             let default_result = survexp(
                 time.clone(),
                 age.clone(),

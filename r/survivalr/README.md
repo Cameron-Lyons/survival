@@ -28,6 +28,10 @@ counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
 `survobrien` formula expansion preserves factor keeper columns and their level
 ordering while transforming continuous terms within each event risk set.
+`finegray` formulas use the Python formula engine and Rust interval-expansion
+kernel directly, including weights, subsets, missing-data handling, strata,
+counting-process histories, and delayed entry. Censoring risk sets are computed
+with sorted sweeps, and factor and `I(...)` column classes are restored in R.
 Low-level `coxsurv.fit` and `survfitcoxph.fit` calls use a Rust risk-set sweep
 for weighted, stratified, tied-event, and counting-process baselines. Their R
 assembly preserves multiple prediction rows, standard errors, and individual
@@ -42,6 +46,11 @@ Time-dependent data construction is also native: `tmerge` evaluates the
 familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the
 Rust-backed sweep kernels, and returns an ordinary R `tmerge` object with
 `tm.retain` and `tcount` attributes preserved across repeated calls.
+
+`pyears` formulas containing `tcut(...)` terms also use the Rust interval
+sweep. Right-censored and counting-process responses, case weights, multiple
+cut dimensions, ordinary factor dimensions, event placement, and off-table
+time retain the upstream R result shape.
 
 ```r
 baseline <- data.frame(id = 1:2, group = c("control", "treated"))
