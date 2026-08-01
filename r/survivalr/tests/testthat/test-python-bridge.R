@@ -4009,6 +4009,156 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(bridged_pyears_tcut_weighted$n, reference_pyears_tcut_weighted$n)
   expect_equal(bridged_pyears_tcut_weighted$event, reference_pyears_tcut_weighted$event)
 
+  pyears_ratetable_data <- data.frame(
+    time = c(30, 120, 365, 700),
+    status = c(1, 0, 1, 1),
+    group = factor(c("a", "a", "b", "b")),
+    age = c(45, 55, 65, 75) * 365.25,
+    sex = factor(c("male", "female", "male", "female")),
+    year = as.Date(c("1995-03-01", "2000-07-01", "2005-11-01", "2010-01-01"))
+  )
+  for (expected_scale in c("event", "pyears")) {
+    bridged_ratetable <- pyears(
+      survival::Surv(time, status) ~ group,
+      data = pyears_ratetable_data,
+      ratetable = survival::survexp.us,
+      scale = 365.25,
+      expect = expected_scale
+    )
+    reference_ratetable <- survival::pyears(
+      survival::Surv(time, status) ~ group,
+      data = pyears_ratetable_data,
+      ratetable = survival::survexp.us,
+      scale = 365.25,
+      expect = expected_scale
+    )
+    expect_equal(bridged_ratetable$pyears, reference_ratetable$pyears, tolerance = 1e-12)
+    expect_equal(bridged_ratetable$n, reference_ratetable$n)
+    expect_equal(bridged_ratetable$event, reference_ratetable$event)
+    expect_equal(bridged_ratetable$expected, reference_ratetable$expected, tolerance = 1e-12)
+    expect_equal(bridged_ratetable$offtable, reference_ratetable$offtable)
+    expect_equal(bridged_ratetable$summary, reference_ratetable$summary)
+  }
+
+  pyears_ratetable_frame <- pyears(
+    survival::Surv(time, status) ~ group,
+    data = pyears_ratetable_data,
+    ratetable = survival::survexp.us,
+    scale = 365.25,
+    data.frame = TRUE
+  )
+  reference_ratetable_frame <- survival::pyears(
+    survival::Surv(time, status) ~ group,
+    data = pyears_ratetable_data,
+    ratetable = survival::survexp.us,
+    scale = 365.25,
+    data.frame = TRUE
+  )
+  expect_equal(
+    pyears_ratetable_frame$data,
+    reference_ratetable_frame$data,
+    tolerance = 1e-12
+  )
+
+  pyears_ratetable_tcut_data <- transform(
+    pyears_ratetable_data,
+    attained = c(0, 20, 100, 200)
+  )
+  bridged_ratetable_tcut <- pyears(
+    survival::Surv(time, status) ~ tcut(attained, c(0, 365, 730, 1460)),
+    data = pyears_ratetable_tcut_data,
+    ratetable = survival::survexp.us,
+    scale = 365.25
+  )
+  reference_ratetable_tcut <- survival::pyears(
+    survival::Surv(time, status) ~ tcut(attained, c(0, 365, 730, 1460)),
+    data = pyears_ratetable_tcut_data,
+    ratetable = survival::survexp.us,
+    scale = 365.25
+  )
+  expect_equal(bridged_ratetable_tcut$pyears, reference_ratetable_tcut$pyears)
+  expect_equal(bridged_ratetable_tcut$event, reference_ratetable_tcut$event)
+  expect_equal(bridged_ratetable_tcut$expected, reference_ratetable_tcut$expected, tolerance = 1e-12)
+  expect_equal(bridged_ratetable_tcut$offtable, reference_ratetable_tcut$offtable)
+
+  remapped_pyears_data <- transform(pyears_ratetable_data, attained_age = age)
+  expect_equal(
+    pyears(
+      survival::Surv(time, status) ~ group,
+      data = remapped_pyears_data,
+      ratetable = survival::survexp.us,
+      rmap = list(age = attained_age),
+      scale = 365.25
+    )$expected,
+    survival::pyears(
+      survival::Surv(time, status) ~ group,
+      data = remapped_pyears_data,
+      ratetable = survival::survexp.us,
+      rmap = list(age = attained_age),
+      scale = 365.25
+    )$expected,
+    tolerance = 1e-12
+  )
+
+  pyears_ratetable_counting <- transform(
+    pyears_ratetable_data,
+    start = c(0, 30, 100, 200),
+    stop = time
+  )
+  bridged_ratetable_counting <- pyears(
+    survival::Surv(start, stop, status) ~ group,
+    data = pyears_ratetable_counting,
+    ratetable = survival::survexp.us,
+    scale = 365.25,
+    x = TRUE,
+    y = TRUE
+  )
+  reference_ratetable_counting <- survival::pyears(
+    survival::Surv(start, stop, status) ~ group,
+    data = pyears_ratetable_counting,
+    ratetable = survival::survexp.us,
+    scale = 365.25,
+    x = TRUE,
+    y = TRUE
+  )
+  expect_equal(
+    bridged_ratetable_counting$pyears,
+    reference_ratetable_counting$pyears,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    bridged_ratetable_counting$expected,
+    reference_ratetable_counting$expected,
+    tolerance = 1e-12
+  )
+  expect_equal(bridged_ratetable_counting$event, reference_ratetable_counting$event)
+  expect_equal(bridged_ratetable_counting$x, reference_ratetable_counting$x)
+  expect_equal(bridged_ratetable_counting$y, reference_ratetable_counting$y)
+
+  bridged_ratetable_model <- pyears(
+    survival::Surv(time, status) ~ 1,
+    data = pyears_ratetable_data,
+    ratetable = survival::survexp.us,
+    scale = 1,
+    model = TRUE
+  )
+  reference_ratetable_model <- survival::pyears(
+    survival::Surv(time, status) ~ 1,
+    data = pyears_ratetable_data,
+    ratetable = survival::survexp.us,
+    scale = 1,
+    model = TRUE
+  )
+  expect_equal(bridged_ratetable_model$pyears, reference_ratetable_model$pyears)
+  expect_equal(bridged_ratetable_model$expected, reference_ratetable_model$expected, tolerance = 1e-12)
+  expect_equal(names(bridged_ratetable_model$model), names(reference_ratetable_model$model))
+  for (column in names(bridged_ratetable_model$model)) {
+    expect_equal(
+      bridged_ratetable_model$model[[column]],
+      reference_ratetable_model$model[[column]]
+    )
+  }
+
   bridged_finegray <- finegray(
     c(0, 0, 0, 0),
     tstop = c(1, 2, 3, 4),

@@ -3078,7 +3078,10 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
 }
 
 .as_pyears_result <- function(result, call, data.frame = FALSE, terms = NULL,
-                              group_name = NULL, group_info = NULL) {
+                              group_name = NULL, group_info = NULL,
+                              model_frame = NULL, x_values = NULL, y_values = NULL,
+                              include_model = FALSE, include_x = FALSE,
+                              include_y = FALSE) {
   groups <- as.character(.result_field(result, "group"))
   pyears_values <- .as_numeric_vector(.result_field(result, "pyears"))
   n_values <- .as_numeric_vector(.result_field(result, "n"))
@@ -3152,53 +3155,64 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
       tcut = isTRUE(.result_field(result, "tcut")),
       observations = as.integer(.result_field(result, "observations"))
     )
-    if (!is.null(terms)) {
-      out$terms <- terms
+  } else {
+    out <- list(
+      call = call,
+      pyears = pyears_values,
+      n = n_values,
+      offtable = as.numeric(.result_field(result, "offtable")),
+      tcut = isTRUE(.result_field(result, "tcut")),
+      observations = as.integer(.result_field(result, "observations"))
+    )
+    if (!is.null(expected_values)) {
+      expected <- if (is.null(group_info)) .as_numeric_vector(expected_values) else expected_values
+      if (is.null(group_info) && grouped && !is.null(group_name)) {
+        expected <- structure(
+          expected,
+          dim = length(pyears_values),
+          dimnames = stats::setNames(list(groups), group_name)
+        )
+      } else if (is.null(group_info) && grouped) {
+        names(expected) <- groups
+      }
+      out$expected <- expected
     }
-    class(out) <- "pyears"
-    return(out)
-  }
-  out <- list(
-    call = call,
-    pyears = pyears_values,
-    n = n_values,
-    offtable = as.numeric(.result_field(result, "offtable")),
-    tcut = isTRUE(.result_field(result, "tcut")),
-    observations = as.integer(.result_field(result, "observations"))
-  )
-  if (!is.null(expected_values)) {
-    expected <- if (is.null(group_info)) .as_numeric_vector(expected_values) else expected_values
-    if (is.null(group_info) && grouped && !is.null(group_name)) {
-      expected <- structure(
-        expected,
-        dim = length(pyears_values),
-        dimnames = stats::setNames(list(groups), group_name)
-      )
-    } else if (is.null(group_info) && grouped) {
-      names(expected) <- groups
+    if (!is.null(event_values)) {
+      events <- if (is.null(group_info)) .as_numeric_vector(event_values) else event_values
+      if (is.null(group_info) && grouped && !is.null(group_name)) {
+        events <- structure(
+          events,
+          dim = length(pyears_values),
+          dimnames = stats::setNames(list(groups), group_name)
+        )
+      } else if (is.null(group_info) && grouped) {
+        names(events) <- groups
+      }
+      out$event <- events
     }
-    out$expected <- expected
   }
-  if (!is.null(event_values)) {
-    events <- if (is.null(group_info)) .as_numeric_vector(event_values) else event_values
-    if (is.null(group_info) && grouped && !is.null(group_name)) {
-      events <- structure(
-        events,
-        dim = length(pyears_values),
-        dimnames = stats::setNames(list(groups), group_name)
-      )
-    } else if (is.null(group_info) && grouped) {
-      names(events) <- groups
-    }
-    out$event <- events
+
+  observations <- out$observations
+  out$observations <- NULL
+  summary_values <- .result_field(result, "summary")
+  if (!is.null(summary_values)) {
+    out$summary <- summary_values
   }
-  if ("observations" %in% names(out)) {
-    observations <- out$observations
-    out$observations <- NULL
-    out$observations <- observations
-  }
+  out$observations <- observations
   if (!is.null(terms)) {
     out$terms <- terms
+  }
+  if (!is.null(model_frame)) {
+    omitted <- attr(model_frame, "na.action")
+    if (length(omitted)) {
+      out$na.action <- omitted
+    }
+    if (isTRUE(include_model)) {
+      out$model <- model_frame
+    } else {
+      if (isTRUE(include_x)) out$x <- x_values
+      if (isTRUE(include_y)) out$y <- y_values
+    }
   }
   class(out) <- "pyears"
   out
@@ -3208,10 +3222,10 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
   if (!inherits(formula, "formula") || missing(data) || is.null(data)) {
     return(FALSE)
   }
-  if (!missing(rmap) || (!missing(ratetable) && !is.null(ratetable))) {
-    return(FALSE)
+  if (!missing(ratetable)) {
+    return(is.ratetable(ratetable))
   }
-  TRUE
+  missing(rmap)
 }
 
 .pyears_formula_response_args <- function(response) {
@@ -3249,34 +3263,61 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
   )
 }
 
-.pyears_tcut_native <- function(response_args, term_values, weights, scale) {
+.pyears_formula_x <- function(term_values, n) {
+  if (is.null(term_values) || length(term_values) == 0L) {
+    return(rep(1, n))
+  }
+  values <- matrix(0, n, length(term_values))
+  for (idx in seq_along(term_values)) {
+    value <- term_values[[idx]]
+    values[, idx] <- if (inherits(value, "tcut")) {
+      as.numeric(value)
+    } else {
+      as.numeric(as.factor(value))
+    }
+  }
+  values
+}
+
+.pyears_native <- function(response_args, term_values, weights, scale, expect,
+                           ratetable = NULL, expected_data = NULL,
+                           summary = NULL) {
   scale <- .as_finite_scalar(scale, "scale", positive = TRUE)
   py_sequence <- function(value) {
     value <- unname(value)
     if (length(value) <= 1L) as.list(value) else value
   }
   n <- length(weights)
-  observed_factors <- integer(length(term_values))
-  observed_dims <- integer(length(term_values))
-  observed_cuts <- vector("list", length(term_values))
-  observed_data <- vector("list", length(term_values))
+  if (is.null(term_values) || length(term_values) == 0L) {
+    observed_factors <- 1L
+    observed_dims <- 1L
+    observed_cuts <- list(numeric())
+    observed_data <- list(rep(1, n))
+    groups <- "(all)"
+  } else {
+    observed_factors <- integer(length(term_values))
+    observed_dims <- integer(length(term_values))
+    observed_cuts <- vector("list", length(term_values))
+    observed_data <- vector("list", length(term_values))
 
-  for (idx in seq_along(term_values)) {
-    value <- term_values[[idx]]
-    if (inherits(value, "tcut")) {
-      cuts <- as.numeric(attr(value, "cutpoints"))
-      observed_factors[[idx]] <- 0L
-      observed_dims[[idx]] <- length(cuts) - 1L
-      observed_cuts[[idx]] <- cuts
-      observed_data[[idx]] <- as.numeric(value)
-    } else {
-      levels <- .pyears_group_values(value)
-      codes <- match(as.character(value), as.character(levels))
-      observed_factors[[idx]] <- 1L
-      observed_dims[[idx]] <- length(levels)
-      observed_cuts[[idx]] <- numeric()
-      observed_data[[idx]] <- as.numeric(codes)
+    for (idx in seq_along(term_values)) {
+      value <- term_values[[idx]]
+      if (inherits(value, "tcut")) {
+        cuts <- as.numeric(attr(value, "cutpoints"))
+        observed_factors[[idx]] <- 0L
+        observed_dims[[idx]] <- length(cuts) - 1L
+        observed_cuts[[idx]] <- cuts
+        observed_data[[idx]] <- as.numeric(value)
+      } else {
+        levels <- .pyears_group_values(value)
+        codes <- match(as.character(value), as.character(levels))
+        observed_factors[[idx]] <- 1L
+        observed_dims[[idx]] <- length(levels)
+        observed_cuts[[idx]] <- numeric()
+        observed_data[[idx]] <- as.numeric(codes)
+      }
     }
+    groups <- as.character(seq_len(prod(observed_dims)))
   }
 
   if (!is.null(response_args$direct)) {
@@ -3293,36 +3334,102 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
     do_event <- 1L
   }
 
+  if (is.null(ratetable)) {
+    expected_dim <- 0L
+    expected_factors <- integer()
+    expected_dims <- integer()
+    expected_cuts <- numeric()
+    expected_rates <- numeric()
+    expected_values <- numeric()
+  } else {
+    atts <- attributes(ratetable)
+    expected_dim <- length(atts$dim)
+    expected_dims <- as.integer(atts$dim)
+    expected_rates <- as.numeric(ratetable)
+    expected_values <- as.numeric(expected_data)
+    expected_cuts <- lapply(atts$cutpoints, function(value) {
+      if (!is.null(value) && inherits(value, c("Date", "POSIXt", "date", "chron"))) {
+        ratetableDate(value)
+      } else {
+        value
+      }
+    })
+    if (is.null(atts$type)) {
+      expected_factors <- as.integer(atts$factor)
+      us_special <- expected_factors > 1L
+    } else {
+      expected_factors <- as.integer(atts$type == 1L)
+      us_special <- atts$type == 4L
+    }
+    if (any(us_special)) {
+      if (sum(us_special) > 1L) {
+        stop("more than one type=4 in a rate table", call. = FALSE)
+      }
+      dimid <- if (is.null(atts$dimid)) names(atts$dimnames) else atts$dimid
+      age_year <- match(c("age", "year"), dimid)
+      if (any(is.na(age_year))) {
+        stop("ratetable does not have expected shape", call. = FALSE)
+      }
+      birth_date <- as.Date("1970-01-01") +
+        (expected_data[, age_year[[2L]]] - expected_data[, age_year[[1L]]])
+      birth_year <- format(birth_date, "%Y")
+      offset <- as.numeric(birth_date - as.Date(paste0(birth_year, "-01-01")))
+      expected_data[, age_year[[2L]]] <- expected_data[, age_year[[2L]]] - offset
+      expected_values <- as.numeric(expected_data)
+      if (any(expected_factors > 1L)) {
+        special_dimension <- which(us_special)[[1L]]
+        year_count <- length(expected_cuts[[special_dimension]])
+        interpolation <- expected_factors[[special_dimension]]
+        expected_cuts[[special_dimension]] <- round(
+          stats::approx(
+            interpolation * seq_len(year_count),
+            expected_cuts[[special_dimension]],
+            interpolation:(interpolation * year_count)
+          )$y - 1e-4
+        )
+      }
+    }
+    expected_cuts <- as.numeric(unlist(expected_cuts, use.names = FALSE))
+  }
+
   raw <- .call_pybridge(
     "perform_pyears_calculation",
     py_sequence(as.numeric(time_data)),
     py_sequence(as.numeric(weights)),
-    0L,
-    py_sequence(integer()),
-    py_sequence(integer()),
-    py_sequence(numeric()),
-    py_sequence(numeric()),
-    py_sequence(numeric()),
-    as.integer(length(term_values)),
+    as.integer(expected_dim),
+    py_sequence(expected_factors),
+    py_sequence(expected_dims),
+    py_sequence(expected_cuts),
+    py_sequence(expected_rates),
+    py_sequence(expected_values),
+    as.integer(length(observed_dims)),
     py_sequence(observed_factors),
     py_sequence(observed_dims),
     py_sequence(as.numeric(unlist(observed_cuts, use.names = FALSE))),
-    1L,
+    as.integer(expect == "event"),
     py_sequence(as.numeric(unlist(observed_data, use.names = FALSE))),
     do_event,
     ny
   )
 
-  list(
+  result <- list(
     pyears = .as_numeric_vector(.result_field(raw, "pyears")) / scale,
     n = .as_numeric_vector(.result_field(raw, "pn")),
     offtable = as.numeric(.result_field(raw, "offtable")) / scale,
-    group = as.character(seq_len(prod(observed_dims))),
+    group = groups,
     observations = n,
     event = if (do_event == 1L) .as_numeric_vector(.result_field(raw, "pcount")) else NULL,
-    expected = NULL,
-    tcut = TRUE
+    expected = if (is.null(ratetable)) {
+      NULL
+    } else if (expect == "pyears") {
+      .as_numeric_vector(.result_field(raw, "pexpect")) / scale
+    } else {
+      .as_numeric_vector(.result_field(raw, "pexpect"))
+    },
+    tcut = !is.null(term_values) && any(vapply(term_values, inherits, logical(1), "tcut"))
   )
+  if (!is.null(summary)) result$summary <- summary
+  result
 }
 
 pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
@@ -3339,6 +3446,7 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
   if (is.null(direct_time) && missing(start) && missing(stop)) {
     if (!missing(formula) && .pyears_formula_python_eligible(formula, data, rmap, ratetable)) {
       output_terms <- stats::terms(formula, data = data)
+      has_ratetable <- !missing(ratetable)
       model_formula <- formula
       model_env <- new.env(parent = environment(model_formula))
       model_env$Surv <- .survsplit_model_frame_surv
@@ -3346,6 +3454,51 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       formula_terms <- stats::terms(model_formula, data = data)
       if (any(attr(formula_terms, "order") > 1L)) {
         stop("Pyears cannot have interaction terms", call. = FALSE)
+      }
+      rcall <- NULL
+      if (has_ratetable) {
+        if (!missing(rmap)) {
+          rcall <- substitute(rmap)
+          if (!is.call(rcall) || rcall[[1L]] != as.name("list")) {
+            stop("Invalid rcall argument", call. = FALSE)
+          }
+        }
+        varlist <- names(dimnames(ratetable))
+        if (is.null(varlist)) {
+          varlist <- attr(ratetable, "dimid")
+        }
+        mapped <- match(names(rcall)[-1L], varlist)
+        if (any(is.na(mapped))) {
+          stop(
+            "Variable not found in the ratetable: ",
+            names(rcall)[-1L][is.na(mapped)],
+            call. = FALSE
+          )
+        }
+        if (any(!(varlist %in% names(rcall)))) {
+          missing_vars <- varlist[!(varlist %in% names(rcall))]
+          additions <- paste(paste(missing_vars, missing_vars, sep = "="), collapse = ",")
+          if (is.null(rcall)) {
+            rcall <- parse(text = paste0("list(", additions, ")"))[[1L]]
+          } else {
+            rcall <- parse(text = paste0(
+              "c(", paste(deparse(rcall), collapse = ""),
+              ",list(", additions, "))"
+            ))[[1L]]
+          }
+        }
+        new_variables <- all.vars(rcall)
+        if (length(new_variables) > 0L) {
+          expanded_formula <- paste(
+            paste(deparse(formula_terms), collapse = ""),
+            paste(new_variables, collapse = "+"),
+            sep = "+"
+          )
+          formula_terms <- stats::terms(
+            stats::as.formula(expanded_formula, environment(formula_terms)),
+            data = data
+          )
+        }
       }
       model_call <- match.call()[c(1L, match(
         c("formula", "data", "weights", "subset", "na.action"),
@@ -3360,7 +3513,7 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
         stop("Follow-up time must appear in the formula", call. = FALSE)
       }
       response_args <- .pyears_formula_response_args(response)
-      term_labels <- attr(formula_terms, "term.labels")
+      term_labels <- attr(output_terms, "term.labels")
       term_values <- if (length(term_labels) == 0L) {
         NULL
       } else {
@@ -3373,12 +3526,20 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       if (is.null(weight_values)) {
         weight_values <- rep(1, nrow(mf))
       }
-      if (has_tcut) {
-        result <- .pyears_tcut_native(
+      x_values <- .pyears_formula_x(term_values, nrow(mf))
+      y_values <- if (inherits(response, "Surv")) response else as.matrix(response)
+      if (has_ratetable) {
+        rate_data <- data.frame(eval(rcall, mf), stringsAsFactors = TRUE)
+        matched <- match.ratetable(rate_data, ratetable)
+        result <- .pyears_native(
           response_args,
           term_values,
           weight_values,
-          scale
+          scale,
+          expect,
+          ratetable = ratetable,
+          expected_data = matched$R,
+          summary = matched$summ
         )
         return(.as_pyears_result(
           result,
@@ -3386,7 +3547,36 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
           data.frame = data.frame,
           terms = output_terms,
           group_name = if (length(term_labels) == 1L) term_labels[[1L]] else NULL,
-          group_info = group_info
+          group_info = group_info,
+          model_frame = mf,
+          x_values = x_values,
+          y_values = y_values,
+          include_model = model,
+          include_x = x,
+          include_y = y
+        ))
+      }
+      if (has_tcut) {
+        result <- .pyears_native(
+          response_args,
+          term_values,
+          weight_values,
+          scale,
+          expect
+        )
+        return(.as_pyears_result(
+          result,
+          match.call(),
+          data.frame = data.frame,
+          terms = output_terms,
+          group_name = if (length(term_labels) == 1L) term_labels[[1L]] else NULL,
+          group_info = group_info,
+          model_frame = mf,
+          x_values = x_values,
+          y_values = y_values,
+          include_model = model,
+          include_x = x,
+          include_y = y
         ))
       }
       result <- .call_r_api(
@@ -3407,7 +3597,13 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
         data.frame = data.frame,
         terms = output_terms,
         group_name = if (length(term_labels) == 1L) term_labels[[1L]] else NULL,
-        group_info = group_info
+        group_info = group_info,
+        model_frame = mf,
+        x_values = x_values,
+        y_values = y_values,
+        include_model = model,
+        include_x = x,
+        include_y = y
       ))
     }
     call <- match.call()
