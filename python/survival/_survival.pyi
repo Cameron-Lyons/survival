@@ -7071,6 +7071,7 @@ def survreg_distribution(
     scale: list[float],
     distribution: str,
     kind: str,
+    parms: float | None = None,
 ) -> list[float]: ...
 def survreg_quantile_prediction_se_matrix(
     rows: list[list[float]],

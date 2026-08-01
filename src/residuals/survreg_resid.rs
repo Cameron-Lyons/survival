@@ -1,4 +1,4 @@
-use crate::internal::statistical::{ln_gamma, normal_cdf};
+use crate::internal::statistical::{normal_cdf, student_t_cdf, student_t_pdf};
 use pyo3::prelude::*;
 
 const LOG_PROBABILITY_FLOOR: f64 = -690.0;
@@ -80,95 +80,6 @@ fn gaussian_cdf(z: f64) -> f64 {
 
 fn gaussian_pdf(z: f64) -> f64 {
     (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
-}
-
-fn regularized_beta(a: f64, b: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    let bt = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        bt * beta_continued_fraction(a, b, x) / a
-    } else {
-        1.0 - bt * beta_continued_fraction(b, a, 1.0 - x) / b
-    }
-}
-
-fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
-    let qab = a + b;
-    let qap = a + 1.0;
-    let qam = a - 1.0;
-    let mut c = 1.0;
-    let mut d = 1.0 - qab * x / qap;
-    if d.abs() < 1e-30 {
-        d = 1e-30;
-    }
-    d = 1.0 / d;
-    let mut h = d;
-    for m in 1..=200 {
-        let m = m as f64;
-        let m2 = 2.0 * m;
-        let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1.0 + aa * d;
-        if d.abs() < 1e-30 {
-            d = 1e-30;
-        }
-        c = 1.0 + aa / c;
-        if c.abs() < 1e-30 {
-            c = 1e-30;
-        }
-        d = 1.0 / d;
-        h *= d * c;
-
-        let aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1.0 + aa * d;
-        if d.abs() < 1e-30 {
-            d = 1e-30;
-        }
-        c = 1.0 + aa / c;
-        if c.abs() < 1e-30 {
-            c = 1e-30;
-        }
-        d = 1.0 / d;
-        let delta = d * c;
-        h *= delta;
-        if (delta - 1.0).abs() < 1e-12 {
-            break;
-        }
-    }
-    h
-}
-
-fn student_t_pdf(z: f64, df: f64) -> f64 {
-    if !z.is_finite() {
-        return if z.is_nan() { f64::NAN } else { 0.0 };
-    }
-    let log_coef = ln_gamma((df + 1.0) / 2.0)
-        - ln_gamma(df / 2.0)
-        - 0.5 * (df.ln() + std::f64::consts::PI.ln());
-    (log_coef - ((df + 1.0) / 2.0) * (1.0 + z * z / df).ln()).exp()
-}
-
-fn student_t_cdf(z: f64, df: f64) -> f64 {
-    if z == f64::INFINITY {
-        return 1.0;
-    }
-    if z == f64::NEG_INFINITY {
-        return 0.0;
-    }
-    if z == 0.0 {
-        return 0.5;
-    }
-    let x = df / (df + z * z);
-    let ibeta = regularized_beta(df / 2.0, 0.5, x);
-    if z > 0.0 {
-        1.0 - 0.5 * ibeta
-    } else {
-        0.5 * ibeta
-    }
 }
 
 fn student_t_pdf_derivative(z: f64, df: f64) -> f64 {
