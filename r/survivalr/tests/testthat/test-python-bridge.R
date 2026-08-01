@@ -185,6 +185,41 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(attr(factor_response, "inputAttributes"), attr(reference_factor_response, "inputAttributes"))
   expect_equal(format(factor_response), format(reference_factor_response))
   expect_equal(is.na(factor_response), is.na(reference_factor_response))
+  expect_warning(
+    explicit_multistate_response <- Surv(
+      c(1, 2, 3),
+      factor(c("censor", "relapse", "death")),
+      type = "mstate"
+    ),
+    "type= 'mstate' is deprecated"
+  )
+  reference_explicit_multistate_response <- suppressWarnings(
+    survival::Surv(
+      c(1, 2, 3),
+      factor(c("censor", "relapse", "death")),
+      type = "mstate"
+    )
+  )
+  expect_equal(explicit_multistate_response, reference_explicit_multistate_response)
+  expect_warning(
+    explicit_numeric_multistate_response <- Surv(
+      c(1, 2),
+      c(0, 1),
+      type = "mstate"
+    ),
+    "type= 'mstate' is deprecated"
+  )
+  reference_numeric_multistate_response <- suppressWarnings(
+    survival::Surv(
+      c(1, 2),
+      c(0, 1),
+      type = "mstate"
+    )
+  )
+  expect_equal(
+    .as_native_surv(explicit_numeric_multistate_response),
+    reference_numeric_multistate_response
+  )
   factor_counting_response <- Surv(c(0, 0), c(1, 2), factor(c("a", "b")), type = "counting")
   reference_factor_counting_response <- survival::Surv(
     c(0, 0),
@@ -199,6 +234,48 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(attr(factor_counting_response, "inputAttributes"), attr(reference_factor_counting_response, "inputAttributes"))
   expect_equal(format(factor_counting_response), format(reference_factor_counting_response))
   expect_equal(is.na(factor_counting_response), is.na(reference_factor_counting_response))
+  expect_warning(
+    explicit_multistate_counting_response <- Surv(
+      c(0, 0),
+      c(1, 2),
+      factor(c("a", "b")),
+      type = "mstate"
+    ),
+    "type= 'mstate' is deprecated"
+  )
+  reference_explicit_multistate_counting_response <- suppressWarnings(
+    survival::Surv(
+      c(0, 0),
+      c(1, 2),
+      factor(c("a", "b")),
+      type = "mstate"
+    )
+  )
+  expect_equal(
+    explicit_multistate_counting_response,
+    reference_explicit_multistate_counting_response
+  )
+  expect_warning(
+    explicit_numeric_multistate_counting_response <- Surv(
+      c(0, 0),
+      c(1, 2),
+      c(0, 1),
+      type = "mstate"
+    ),
+    "type= 'mstate' is deprecated"
+  )
+  reference_numeric_multistate_counting_response <- suppressWarnings(
+    survival::Surv(
+      c(0, 0),
+      c(1, 2),
+      c(0, 1),
+      type = "mstate"
+    )
+  )
+  expect_equal(
+    .as_native_surv(explicit_numeric_multistate_counting_response),
+    reference_numeric_multistate_counting_response
+  )
   reference_model_frame_formula <- Surv(time, status) ~ group + x
   reference_model_frame_env <- list2env(list(Surv = survival::Surv), parent = parent.frame())
   environment(reference_model_frame_formula) <- reference_model_frame_env

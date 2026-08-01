@@ -476,8 +476,18 @@ attrassign.lm <- function(object, ...) {
   stop("Surv response requires at least two arguments", call. = FALSE)
 }
 
+.warn_deprecated_surv_mstate_type <- function(type) {
+  if (identical(type, "mstate")) {
+    warning(
+      "type= 'mstate' is deprecated, use a factor variable as status",
+      call. = FALSE
+    )
+  }
+}
+
 .survsplit_model_frame_surv <- function(time, time2, event, type = NULL,
                                         origin = 0, time1, start, stop, status) {
+  .warn_deprecated_surv_mstate_type(type)
   use_named_response <- !missing(time1) || !missing(start) ||
     !missing(stop) || !missing(status)
 
@@ -2207,6 +2217,8 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   }
   matched_type <- if (is.null(type)) {
     NULL
+  } else if (identical(type, "mstate")) {
+    "mstate"
   } else {
     match.arg(type, c("right", "left", "interval", "counting", "interval2"))
   }
@@ -2243,6 +2255,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
 
 .native_model_frame_surv <- function(time, time2, event, type = NULL,
                                      origin = 0, time1, start, stop, status) {
+  .warn_deprecated_surv_mstate_type(type)
   use_named_response <- !missing(time1) || !missing(start) ||
     !missing(stop) || !missing(status)
 
@@ -2287,6 +2300,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
 }
 
 Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop, status) {
+  .warn_deprecated_surv_mstate_type(type)
   use_named_response <- !missing(time1) || !missing(start) ||
     !missing(stop) || !missing(status)
 
@@ -6089,7 +6103,7 @@ model.frame.formula <- function(formula, ...) {
       stop = time,
       status = status
     )
-    attr(out, "type") <- "counting"
+    attr(out, "type") <- surv_type
   } else if (!is.null(time2)) {
     time2 <- .as_numeric_vector(time2)
     if (identical(surv_type, "interval2")) {
@@ -6113,6 +6127,9 @@ model.frame.formula <- function(formula, ...) {
   } else {
     out <- cbind(time = time, status = status)
     attr(out, "type") <- surv_type
+  }
+  if (surv_type %in% c("mright", "mcounting")) {
+    attr(out, "states") <- as.character(.result_field(x, "states"))
   }
   class(out) <- "Surv"
   out
