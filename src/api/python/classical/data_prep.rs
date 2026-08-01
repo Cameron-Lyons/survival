@@ -18,13 +18,16 @@ fn rttright_time_matrix_py(
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge, m)?)?;
+    m.add_function(wrap_pyfunction!(tmerge_plan, m)?)?;
     m.add_function(wrap_pyfunction!(tmerge2, m)?)?;
     m.add_function(wrap_pyfunction!(tmerge3, m)?)?;
     m.add_function(wrap_pyfunction!(survsplit, m)?)?;
     m.add_function(wrap_pyfunction!(survcondense, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data, m)?)?;
+    m.add_function(wrap_pyfunction!(surv2data_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(to_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline, m)?)?;
+    m.add_function(wrap_pyfunction!(lvcf_indices, m)?)?;
     m.add_function(wrap_pyfunction!(aeq_surv, m)?)?;
     m.add_function(wrap_pyfunction!(cluster, m)?)?;
     m.add_function(wrap_pyfunction!(cluster_str, m)?)?;
@@ -35,6 +38,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tcut, m)?)?;
     m.add_function(wrap_pyfunction!(tcut_expand, m)?)?;
     m.add_function(wrap_pyfunction!(rttright, m)?)?;
+    m.add_function(wrap_pyfunction!(rttright_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_stratified, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_time_matrix_py, m)?)?;
 
@@ -43,8 +47,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         SplitResult,
         CondenseResult,
         Surv2DataResult,
+        Surv2TimelineResult,
         TimelineResult,
         IntervalResult,
+        TmergePlanResult,
         AeqSurvResult,
         ClusterResult,
         StrataResult,
