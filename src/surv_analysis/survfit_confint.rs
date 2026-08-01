@@ -150,32 +150,21 @@ fn log_intervals(
     ulimit: bool,
 ) -> (Vec<f64>, Vec<f64>) {
     let scale_len = selow.map_or(1, <[f64]>::len);
-    let lower = (0..se.len())
-        .map(|index| {
-            let prepared = prepared_se_at(p, se, logse, index);
-            if prepared.is_nan() {
-                return f64::NAN;
-            }
-            if prepared == 0.0 {
-                return p[index % p.len()];
-            }
-            if scale_len == 0 {
-                return f64::NAN;
-            }
-            let log_p = log_xx(p[index % p.len()], false);
-            let scale = scale_at(selow, se, index % scale_len);
-            safe_exp(log_p - z * prepared * scale)
-        })
-        .collect();
+    let lower = if scale_len == 0 {
+        Vec::new()
+    } else {
+        (0..se.len())
+            .map(|index| {
+                let prepared = prepared_se_at(p, se, logse, index);
+                let log_p = log_xx(p[index % p.len()], false);
+                let scale = scale_at(selow, se, index % scale_len);
+                safe_exp(log_p - z * prepared * scale)
+            })
+            .collect()
+    };
     let upper = (0..se.len())
         .map(|index| {
             let prepared = prepared_se_at(p, se, logse, index);
-            if prepared.is_nan() {
-                return f64::NAN;
-            }
-            if prepared == 0.0 {
-                return p[index % p.len()];
-            }
             let value = safe_exp(log_xx(p[index % p.len()], false) + z * prepared);
             if ulimit { r_pmin(value, 1.0) } else { value }
         })
@@ -193,12 +182,6 @@ fn log_log_intervals(
     let scale_len = selow.map_or(1, <[f64]>::len);
     let calculate = |index: usize, lower: bool| {
         let prepared = prepared_se_at(p, se, logse, index);
-        if prepared.is_nan() {
-            return f64::NAN;
-        }
-        if prepared == 0.0 {
-            return p[index % p.len()];
-        }
         let log_p = log_xx(p[index % p.len()], true);
         let se2 = z * prepared / log_p;
         let transformed = r_log(-log_p);
@@ -209,16 +192,11 @@ fn log_log_intervals(
         };
         safe_exp(-safe_exp(adjusted))
     };
-    let lower = (0..se.len())
-        .map(|index| {
-            let prepared = prepared_se_at(p, se, logse, index);
-            if scale_len == 0 && prepared != 0.0 {
-                f64::NAN
-            } else {
-                calculate(index, true)
-            }
-        })
-        .collect();
+    let lower = if scale_len == 0 {
+        Vec::new()
+    } else {
+        (0..se.len()).map(|index| calculate(index, true)).collect()
+    };
     let upper = (0..se.len()).map(|index| calculate(index, false)).collect();
     (lower, upper)
 }
@@ -233,12 +211,6 @@ fn logit_intervals(
     let scale_len = selow.map_or(1, <[f64]>::len);
     let calculate = |index: usize, lower: bool| {
         let prepared = prepared_se_at(p, se, logse, index);
-        if prepared.is_nan() {
-            return f64::NAN;
-        }
-        if prepared == 0.0 {
-            return p[index % p.len()];
-        }
         let probability = p[index % p.len()];
         let xx = if probability == 0.0 {
             f64::NAN
@@ -254,16 +226,11 @@ fn logit_intervals(
         };
         1.0 - 1.0 / (1.0 + safe_exp(adjusted))
     };
-    let lower = (0..se.len())
-        .map(|index| {
-            let prepared = prepared_se_at(p, se, logse, index);
-            if scale_len == 0 && prepared != 0.0 {
-                f64::NAN
-            } else {
-                calculate(index, true)
-            }
-        })
-        .collect();
+    let lower = if scale_len == 0 {
+        Vec::new()
+    } else {
+        (0..se.len()).map(|index| calculate(index, true)).collect()
+    };
     let upper = (0..se.len()).map(|index| calculate(index, false)).collect();
     (lower, upper)
 }
@@ -347,12 +314,7 @@ pub fn survfit_confint_native(
         return Ok((Vec::new(), Vec::new()));
     }
     if p.is_empty() {
-        return Ok(match interval_type {
-            ConfidenceType::Log | ConfidenceType::LogLog | ConfidenceType::Logit => {
-                (vec![f64::NAN; se.len()], vec![f64::NAN; se.len()])
-            }
-            ConfidenceType::Plain | ConfidenceType::Arcsin => (Vec::new(), Vec::new()),
-        });
+        return Ok((Vec::new(), Vec::new()));
     }
     let selow = selow.as_deref();
     Ok(match interval_type {
@@ -472,14 +434,14 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_close(&lower, &[0.2, f64::NAN]);
+        assert!(lower.is_empty());
         assert_eq!(upper.len(), 2);
 
         let (lower, upper) =
             survfit_confint_native(Vec::new(), vec![0.1, 0.2], true, "log-log", z, None, true)
                 .unwrap();
-        assert!(lower.iter().all(|value| value.is_nan()));
-        assert!(upper.iter().all(|value| value.is_nan()));
+        assert!(lower.is_empty());
+        assert!(upper.is_empty());
     }
 
     #[test]

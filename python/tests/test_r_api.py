@@ -4607,12 +4607,10 @@ def test_survfit_confint_matches_r_exported_helper():
     assert recycled.upper == pytest.approx([0.23919928, 0.69599640, 0.31759784])
     assert scaled.lower == pytest.approx([0.4020018])
     assert scaled.upper == pytest.approx([0.6959964])
-    assert len(empty_p_log.lower) == len(empty_p_log.upper) == 1
-    assert math.isnan(empty_p_log.lower[0])
-    assert math.isnan(empty_p_log.upper[0])
+    assert empty_p_log.lower == empty_p_log.upper == []
     assert empty_se_log.lower == empty_se_log.upper == []
-    assert empty_selow_log.lower[0] == pytest.approx(0.2)
-    assert math.isnan(empty_selow_log.lower[1])
+    assert empty_selow_log.lower == []
+    assert len(empty_selow_log.upper) == 2
     assert recycled_logse.lower == pytest.approx([0.004003602, 0.010009004])
     assert recycled_logse.upper == pytest.approx([0.3959964, 0.9899910])
     assert tuple(scaled) == (scaled.lower, scaled.upper)
