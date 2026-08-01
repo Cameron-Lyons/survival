@@ -2,6 +2,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 
+use super::aeq_surv_module::aeq_surv;
 use crate::constants::{DIVISION_FLOOR, same_time};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
@@ -239,6 +240,163 @@ pub fn rttright_stratified(
     })
 }
 
+#[inline]
+fn rttright_divide(numerator: f64, denominator: f64) -> f64 {
+    if denominator != 0.0 {
+        numerator / denominator
+    } else if numerator == 0.0 {
+        f64::NAN
+    } else {
+        f64::INFINITY
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    time,
+    status,
+    times,
+    strata=None,
+    weights=None,
+    timefix=true,
+    renorm=true
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn rttright_matrix(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    times: Vec<f64>,
+    strata: Option<Vec<i32>>,
+    weights: Option<Vec<f64>>,
+    timefix: bool,
+    renorm: bool,
+) -> PyResult<Vec<Vec<f64>>> {
+    let n = time.len();
+    if status.len() != n {
+        return Err(PyValueError::new_err(
+            "time and status must have same length",
+        ));
+    }
+    if let Some(values) = strata.as_ref()
+        && values.len() != n
+    {
+        return Err(PyValueError::new_err(
+            "strata must have same length as time",
+        ));
+    }
+    if let Some(values) = weights.as_ref()
+        && values.len() != n
+    {
+        return Err(PyValueError::new_err(
+            "weights must have same length as time",
+        ));
+    }
+    validate_rttright_inputs(&time, &status, weights.as_deref())?;
+    validate_finite(&times, "times")?;
+
+    if n == 0 {
+        return Ok(vec![]);
+    }
+
+    let time = if timefix {
+        aeq_surv(time, None)?.time
+    } else {
+        time
+    };
+    let strata = strata.unwrap_or_else(|| vec![0; n]);
+    let case_weights = weights.unwrap_or_else(|| vec![1.0; n]);
+    let mut matrix = vec![vec![0.0; times.len()]; n];
+    let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (index, &stratum) in strata.iter().enumerate() {
+        strata_indices.entry(stratum).or_default().push(index);
+    }
+
+    for indices in strata_indices.values_mut() {
+        let total_weight = indices
+            .iter()
+            .map(|&index| case_weights[index])
+            .sum::<f64>();
+        if renorm && total_weight <= 0.0 {
+            return Err(PyValueError::new_err(
+                "weights must have positive sum when renorm is true",
+            ));
+        }
+        let scale = if renorm { total_weight } else { 1.0 };
+        indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
+
+        let normalized_weights = indices
+            .iter()
+            .map(|&index| case_weights[index] / scale)
+            .collect::<Vec<_>>();
+        let mut event_g = vec![1.0; indices.len()];
+        let mut block_times = Vec::with_capacity(indices.len());
+        let mut post_block_g = Vec::with_capacity(indices.len());
+        let mut current_g = 1.0;
+        let mut n_at_risk = normalized_weights.iter().sum::<f64>();
+
+        let mut start = 0;
+        while start < indices.len() {
+            let block_time = time[indices[start]];
+            let mut end = start + 1;
+            while end < indices.len() && time[indices[end]] == block_time {
+                end += 1;
+            }
+
+            let mut event_weight = 0.0;
+            let mut censor_weight = 0.0;
+            for sorted_position in start..end {
+                event_g[sorted_position] = current_g;
+                if status[indices[sorted_position]] == 1 {
+                    event_weight += normalized_weights[sorted_position];
+                } else {
+                    censor_weight += normalized_weights[sorted_position];
+                }
+            }
+
+            let risk_after_events = n_at_risk - event_weight;
+            if risk_after_events > 0.0 && censor_weight > 0.0 {
+                current_g *= 1.0 - censor_weight / risk_after_events;
+            }
+            n_at_risk = risk_after_events - censor_weight;
+            block_times.push(block_time);
+            post_block_g.push(current_g);
+            start = end;
+        }
+
+        let query_g = times
+            .iter()
+            .map(|query_time| {
+                let block_index = block_times.partition_point(|block_time| block_time < query_time);
+                if block_index == 0 {
+                    1.0
+                } else {
+                    post_block_g[block_index - 1]
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for (sorted_position, &row_index) in indices.iter().enumerate() {
+            let row_weight = normalized_weights[sorted_position];
+            if status[row_index] == 1 {
+                for (column_index, &g_at_time) in query_g.iter().enumerate() {
+                    matrix[row_index][column_index] =
+                        rttright_divide(row_weight, event_g[sorted_position].max(g_at_time));
+                }
+            } else {
+                for (column_index, (&query_time, &g_at_time)) in
+                    times.iter().zip(&query_g).enumerate()
+                {
+                    if time[row_index] >= query_time {
+                        matrix[row_index][column_index] = rttright_divide(row_weight, g_at_time);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(matrix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +406,13 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         for (left, right) in actual.iter().zip(expected.iter()) {
             assert!((left - right).abs() < 1e-12, "{actual:?} != {expected:?}");
+        }
+    }
+
+    fn assert_nested_close(actual: &[Vec<f64>], expected: &[Vec<f64>]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual_row, expected_row) in actual.iter().zip(expected) {
+            assert_close_slice(actual_row, expected_row);
         }
     }
 
@@ -427,6 +592,121 @@ mod tests {
             err.to_string()
                 .contains("weights must have same length as time")
         );
+    }
+
+    #[test]
+    fn test_rttright_matrix_matches_right_censored_reference() {
+        let result = rttright_matrix(
+            vec![3.0, 1.0, 2.0],
+            vec![1, 0, 1],
+            vec![1.0, 2.0, 3.0],
+            None,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert_nested_close(
+            &result,
+            &[
+                vec![1.0 / 3.0, 0.5, 0.5],
+                vec![1.0 / 3.0, 0.0, 0.0],
+                vec![1.0 / 3.0, 0.5, 0.5],
+            ],
+        );
+    }
+
+    #[test]
+    fn test_rttright_matrix_preserves_strata_and_weights() {
+        let result = rttright_matrix(
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 1, 0, 1],
+            vec![1.0, 2.0, 3.0, 4.0],
+            Some(vec![0, 0, 1, 1]),
+            Some(vec![2.0, 1.0, 3.0, 1.0]),
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert_nested_close(
+            &result,
+            &[
+                vec![2.0 / 3.0, 0.0, 0.0, 0.0],
+                vec![1.0 / 3.0, 1.0, 1.0, 1.0],
+                vec![0.75, 0.75, 0.75, 0.0],
+                vec![0.25, 0.25, 0.25, 1.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn test_rttright_matrix_timefix_controls_near_ties() {
+        let time = vec![1.0, 1.0 + 5e-10, 2.0];
+        let status = vec![0, 1, 1];
+        let times = time.clone();
+        let fixed = rttright_matrix(
+            time.clone(),
+            status.clone(),
+            times.clone(),
+            None,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        let exact = rttright_matrix(time, status, times, None, None, false, false).unwrap();
+
+        assert_nested_close(
+            &fixed,
+            &[
+                vec![1.0, 0.0, 0.0],
+                vec![1.0, 1.0, 1.0],
+                vec![1.0, 2.0, 2.0],
+            ],
+        );
+        assert_nested_close(
+            &exact,
+            &[
+                vec![1.0, 0.0, 0.0],
+                vec![1.0, 1.5, 1.5],
+                vec![1.0, 1.5, 1.5],
+            ],
+        );
+    }
+
+    #[test]
+    fn test_rttright_matrix_rejects_malformed_inputs() {
+        initialize_python();
+
+        let bad_strata = rttright_matrix(
+            vec![1.0],
+            vec![1],
+            vec![1.0],
+            Some(vec![]),
+            None,
+            true,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            bad_strata
+                .to_string()
+                .contains("strata must have same length as time")
+        );
+
+        let bad_times = rttright_matrix(
+            vec![1.0],
+            vec![1],
+            vec![f64::INFINITY],
+            None,
+            None,
+            true,
+            true,
+        )
+        .unwrap_err();
+        assert!(bad_times.to_string().contains("times contains non-finite"));
     }
 
     #[test]
