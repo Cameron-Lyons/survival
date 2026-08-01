@@ -7,6 +7,7 @@ pub(crate) mod collapse_module;
 pub(crate) mod lvcf;
 #[path = "neardate.rs"]
 pub(crate) mod neardate_module;
+pub(crate) mod nostutter;
 #[path = "rttright.rs"]
 pub(crate) mod rttright_module;
 #[path = "strata.rs"]
@@ -28,6 +29,10 @@ pub use cluster_module::{ClusterResult, cluster, cluster_str};
 pub use collapse_module::collapse;
 pub use lvcf::{lvcf_indices, lvcf_numeric_indices};
 pub use neardate_module::{NearDateResult, neardate, neardate_str};
+pub use nostutter::{
+    nostutter_numeric_numeric, nostutter_numeric_str, nostutter_replacements,
+    nostutter_str_numeric, nostutter_str_str,
+};
 pub use rttright_module::{
     RttrightResult, rttright, rttright_matrix, rttright_stratified, rttright_time_matrix,
 };

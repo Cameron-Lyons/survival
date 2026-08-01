@@ -4988,29 +4988,54 @@ def nostutter(
     if any(_is_missing_value(value) for value in id_values):
         raise ValueError("id must not contain missing values")
 
-    current: Any = None
-    previous_id: Any = None
+    if not result:
+        return []
+
+    id_sample = id_values[0]
+    state_sample = next((value for value in result if not _is_missing_value(value)), censor)
+    replacements: list[bool] | None = None
+    try:
+        if isinstance(id_sample, Real):
+            if isinstance(state_sample, Real) and isinstance(censor, Real):
+                replacements = list(
+                    _core.nostutter_numeric_numeric(id_values, result, censor, single)
+                )
+            if isinstance(state_sample, str) and isinstance(censor, str):
+                replacements = list(_core.nostutter_numeric_str(id_values, result, censor, single))
+        elif isinstance(id_sample, str):
+            if isinstance(state_sample, Real) and isinstance(censor, Real):
+                replacements = list(_core.nostutter_str_numeric(id_values, result, censor, single))
+            if isinstance(state_sample, str) and isinstance(censor, str):
+                replacements = list(_core.nostutter_str_str(id_values, result, censor, single))
+    except TypeError:
+        pass
+
+    if replacements is not None:
+        return [
+            censor if replace else value
+            for replace, value in zip(replacements, result, strict=True)
+        ]
+
     censor_key = _hashable_group_value(censor)
-    used_for_id: set[Any] = set()
-    for row_idx, (id_value, value) in enumerate(zip(id_values, result, strict=True)):
-        id_key = _hashable_group_value(id_value)
-        if row_idx == 0 or id_key != previous_id:
-            used_for_id = set()
-            current = censor if _is_missing_value(value) else value
-            current_key = _hashable_group_value(current)
-            if single and current_key != censor_key and not _is_missing_value(value):
-                used_for_id.add(current_key)
-        elif not _is_missing_value(value):
-            value_key = _hashable_group_value(value)
-            current_key = _hashable_group_value(current)
-            if value_key == current_key or (single and value_key in used_for_id):
-                result[row_idx] = censor
-            elif value_key != censor_key:
-                current = value
-                if single:
-                    used_for_id.add(value_key)
-        previous_id = id_key
-    return result
+    id_levels: dict[Any, int] = {}
+    id_codes: list[int] = []
+    for value in id_values:
+        key = _hashable_group_value(value)
+        id_codes.append(id_levels.setdefault(key, len(id_levels)))
+
+    state_levels = {censor_key: 0}
+    state_codes: list[int | None] = []
+    for value in result:
+        if _is_missing_value(value):
+            state_codes.append(None)
+            continue
+        key = _hashable_group_value(value)
+        state_codes.append(state_levels.setdefault(key, len(state_levels)))
+
+    replacements = _core.nostutter_replacements(id_codes, state_codes, 0, single)
+    return [
+        censor if replace else value for replace, value in zip(replacements, result, strict=True)
+    ]
 
 
 @dataclass(frozen=True, init=False)

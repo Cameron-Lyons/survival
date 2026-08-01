@@ -4232,6 +4232,357 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
   .as_pyears_result(result, match.call(), data.frame = data.frame)
 }
 
+.pyears_total <- function(x, na = FALSE) {
+  dimensions <- dim(x)
+  dimension_names <- dimnames(x)
+  if (length(dimensions) == 1L) {
+    values <- if (na) c(x, NA) else c(x, sum(x))
+    return(array(
+      values,
+      dim = length(x) + 1L,
+      dimnames = list(c(dimension_names[[1L]], "Total"))
+    ))
+  }
+  if (length(dimensions) == 2L) {
+    values <- if (na) {
+      rbind(cbind(x, NA), NA)
+    } else {
+      cbind(rbind(x, colSums(x)), c(rowSums(x), sum(x)))
+    }
+    return(array(
+      values,
+      dim = dimensions + 1L,
+      dimnames = list(
+        c(dimension_names[[1L]], "Total"),
+        c(dimension_names[[2L]], "Total")
+      )
+    ))
+  }
+
+  output_dimensions <- dimensions
+  output_dimensions[1:2] <- dimensions[1:2] + 1L
+  dimension_names[[1L]] <- c(dimension_names[[1L]], "Total")
+  dimension_names[[2L]] <- c(dimension_names[[2L]], "Total")
+  output <- array(x[[1L]], dim = output_dimensions, dimnames = dimension_names)
+  base_indices <- lapply(dimensions, seq_len)
+  output <- do.call(`[<-`, c(list(output), base_indices, list(value = x)))
+
+  if (na) {
+    first_totals <- second_totals <- joint_totals <- NA
+  } else {
+    indices <- seq_along(dimensions)
+    first_totals <- apply(x, indices[-1L], sum)
+    second_totals <- apply(x, indices[-2L], sum)
+    joint_totals <- apply(x, indices[-(1:2)], sum)
+  }
+  first_indices <- base_indices
+  first_indices[[1L]] <- output_dimensions[[1L]]
+  output <- do.call(`[<-`, c(list(output), first_indices, list(value = first_totals)))
+  second_indices <- base_indices
+  second_indices[[2L]] <- output_dimensions[[2L]]
+  output <- do.call(`[<-`, c(list(output), second_indices, list(value = second_totals)))
+  joint_indices <- base_indices
+  joint_indices[[1L]] <- output_dimensions[[1L]]
+  joint_indices[[2L]] <- output_dimensions[[2L]]
+  do.call(`[<-`, c(list(output), joint_indices, list(value = joint_totals)))
+}
+
+.pyears_format <- function(x, nastring, ...) {
+  if (is.matrix(x)) {
+    paste(
+      ifelse(is.na(x[, 1L]), nastring, format(x[, 1L], ...)),
+      "-",
+      ifelse(is.na(x[, 2L]), nastring, format(x[, 2L], ...))
+    )
+  } else {
+    ifelse(is.na(x), nastring, format(x, ...))
+  }
+}
+
+.pyears_pad <- function(x, width, pad = " ") {
+  characters <- nchar(x)
+  added <- width - characters
+  left <- pmax(0, floor(added / 2))
+  right <- pmax(0, width - (characters + left))
+  if (all(right <= 0)) {
+    if (length(x) >= length(width)) x else rep(x, length = length(width))
+  } else {
+    padding <- paste(rep(pad, max(right)), collapse = "")
+    paste0(substring(padding, 1L, left), x, substring(padding, 1L, right))
+  }
+}
+
+.pyears_box <- function(values, dimensions, nastring, ...) {
+  intervals <- substring(names(values), 1L, 3L) == "ci."
+  integers <- vapply(values, function(x) all(x == floor(x) | is.na(x)), logical(1))
+  integers <- !intervals & integers
+  real <- !intervals & !integers
+  cells <- prod(dimensions)
+  output <- matrix("", nrow = cells, ncol = length(intervals))
+  if (any(integers)) {
+    if (any(vapply(values[integers], length, integer(1)) != cells)) {
+      stop("programming length error, notify package author")
+    }
+    items <- unlist(values[integers])
+    output[, integers] <- ifelse(is.na(items), nastring, format(items))
+  }
+  if (any(real)) {
+    if (any(vapply(values[real], length, integer(1)) != cells)) {
+      stop("programming length error, notify package author")
+    }
+    items <- unlist(values[real])
+    output[, real] <- ifelse(is.na(items), nastring, format(items, ...))
+  }
+  if (any(intervals)) {
+    if (any(vapply(values[intervals], length, integer(1)) != cells * 2L)) {
+      stop("programming length error, notify package author")
+    }
+    items <- unlist(values[intervals])
+    items <- array(
+      ifelse(is.na(items), nastring, format(items, ...)),
+      dim = c(cells, 2L, sum(intervals))
+    )
+    output[, intervals] <- paste(items[, 1L, ], items[, 2L, ], sep = "-")
+  }
+  array(output, dim = c(dimensions, length(intervals)))
+}
+
+.pyears_show <- function(values, labels, row_names, column_names, vline) {
+  column_width <- c(
+    max(nchar(row_names), nchar(labels[[1L]])),
+    rep(max(nchar(values[1L, 1L, ]), nchar(column_names)), length(column_names))
+  )
+  column_width[[2L]] <- max(column_width[[2L]], nchar(labels[[2L]]))
+  column_count <- length(column_width)
+  dimensions <- dim(values)
+  row_line <- ceiling(dimensions[[3L]] / 2)
+  if (vline) {
+    cat("+", paste(.pyears_pad("-", column_width, pad = "-"), collapse = "+"), "+\n", sep = "")
+    header <- rep(" ", column_count)
+    header[[2L]] <- labels[[2L]]
+    cat("|", paste(.pyears_pad(header, column_width), collapse = "|"), "|\n", sep = "")
+    cat("|", paste(.pyears_pad(c(labels[[1L]], column_names), column_width), collapse = "|"), "|\n", sep = "")
+    cat("+", paste(.pyears_pad("=", column_width, pad = "="), collapse = "+"), "+\n", sep = "")
+    for (i in seq_len(dimensions[[1L]])) {
+      for (j in seq_len(dimensions[[3L]])) {
+        row <- if (j == row_line) c(row_names[[i]], values[i, , j]) else c("", values[i, , j])
+        cat("|", paste(.pyears_pad(row, column_width), collapse = "|"), "|\n", sep = "")
+      }
+      cat("+", paste(.pyears_pad("-", column_width, "-"), collapse = "+"), "+\n", sep = "")
+    }
+  } else {
+    cat(paste(.pyears_pad("-", column_width, "-"), collapse = "-"), "\n")
+    header <- rep(" ", column_count)
+    header[[2L]] <- labels[[2L]]
+    cat(paste(.pyears_pad(header, column_width), collapse = " "), "\n")
+    cat(paste(.pyears_pad(c(labels[[1L]], column_names), column_width), collapse = " "), "\n")
+    cat(paste(.pyears_pad("-", column_width, pad = "-"), collapse = " "), "\n")
+    for (i in seq_len(dimensions[[1L]])) {
+      for (j in seq_len(dimensions[[3L]])) {
+        row <- if (j == row_line) c(row_names[[i]], values[i, , j]) else c("", values[i, , j])
+        cat(paste(.pyears_pad(row, column_width), collapse = " "), "\n")
+      }
+      if (i < dimensions[[1L]]) cat(" \n")
+    }
+    cat(paste(.pyears_pad("-", column_width, "-"), collapse = "-"), "\n")
+  }
+}
+
+print.pyears <- function(x, ...) {
+  if (!is.null(call <- x$call)) {
+    cat("Call:\n")
+    dput(call)
+    cat("\n")
+  }
+  if (is.null(x$data)) {
+    if (!is.null(x$event)) cat("Total number of events:", format(sum(x$event)), "\n")
+    cat(
+      "Total number of person-years tabulated:", format(sum(x$pyears)),
+      "\nTotal number of person-years off table:", format(x$offtable), "\n"
+    )
+  } else {
+    if (!is.null(x$data$event)) cat("Total number of events:", format(sum(x$data$event)), "\n")
+    cat(
+      "Total number of person-years tabulated:", format(sum(x$data$pyears)),
+      "\nTotal number of person-years off table:", format(x$offtable), "\n"
+    )
+  }
+  if (!is.null(x$summary)) cat("Matches to the chosen rate table:\n  ", x$summary)
+  cat("Observations in the data set:", x$observations, "\n")
+  if (!is.null(x$na.action)) cat("  (", stats::naprint(x$na.action), ")\n", sep = "")
+  cat("\n")
+  invisible(x)
+}
+
+summary.pyears <- function(
+    object, header = TRUE, call = header, n = TRUE, event = TRUE,
+    pyears = TRUE, expected = TRUE, rate = FALSE, rr = expected,
+    ci.r = FALSE, ci.rr = FALSE, totals = FALSE, legend = TRUE,
+    vline = FALSE, vertical = TRUE, nastring = ".", conf.level = 0.95,
+    scale = 1, ...) {
+  if (!inherits(object, "pyears")) stop("input must be a pyears object")
+  valid <- c(
+    is.logical(header), is.logical(call), is.logical(n), is.logical(event),
+    is.logical(pyears), is.logical(expected), is.logical(rate), is.logical(ci.r),
+    is.logical(rr), is.logical(ci.rr), is.logical(vline), is.logical(vertical),
+    is.logical(legend), is.logical(totals)
+  )
+  argument_names <- c(
+    "header", "call", "n", "event", "pyears", "expected", "rate", "ci.r",
+    "rr", "ci.rr", "vline", "vertical", "legend", "totals"
+  )
+  if (any(!valid) || length(valid) != 14L || any(is.na(valid))) {
+    stop(
+      "the ", paste(argument_names[!valid], collapse = ", "),
+      "argument(s) must be single logical values"
+    )
+  }
+  if (!is.numeric(conf.level) || conf.level <= 0 || conf.level >= 1 |
+    length(conf.level) > 1L || is.na(conf.level) > 1) {
+    stop("conf.level must be a single numeric between 0 and 1")
+  }
+  if (is.na(scale) || !is.numeric(scale) || length(scale) != 1L || scale <= 0) {
+    stop("scale must be a value > 0")
+  }
+
+  variable_names <- attr(stats::terms(object), "term.labels")
+  if (!is.null(object$data)) {
+    tabular_data <- object$data[variable_names]
+    dimension_names <- lapply(tabular_data, function(x) {
+      if (is.factor(x)) levels(x) else sort(unique(x))
+    })
+    dimensions <- vapply(dimension_names, length, integer(1))
+    index <- tapply(tabular_data[, 1L], tabular_data)
+    restore <- intersect(c("n", "event", "pyears", "expected"), names(object$data))
+    restored <- lapply(object$data[restore], function(x) {
+      values <- array(0L, dim = dimensions, dimnames = dimension_names)
+      values[index] <- x
+      values
+    })
+    object <- c(object, restored)
+  }
+  if (is.null(object$expected)) {
+    expected <- rr <- ci.rr <- FALSE
+  }
+  if (is.null(object$event)) {
+    event <- rate <- ci.r <- rr <- ci.rr <- FALSE
+  }
+  if (call && !is.null(object$call)) {
+    cat("Call: ")
+    dput(object$call)
+    cat("\n")
+  }
+  if (header) {
+    cat("number of observations =", object$observations)
+    if (length(object$omit)) {
+      cat("  (", stats::naprint(object$omit), ")\n", sep = "")
+    } else {
+      cat("\n")
+    }
+    if (object$offtable > 0) {
+      cat(" Total time lost (off table)", format(object$offtable), "\n")
+    }
+    cat("\n")
+  }
+  if (totals) {
+    has_time_cut <- if (is.null(object$tcut)) TRUE else object$tcut
+    object$n <- .pyears_total(object$n, na = has_time_cut)
+    object$pyears <- .pyears_total(object$pyears)
+    if (event) object$event <- .pyears_total(object$event)
+    if (expected) object$expected <- .pyears_total(object$expected)
+  }
+
+  dimensions <- dim(object$n)
+  variable_names <- attr(stats::terms(object), "term.labels")
+  selected_names <- argument_names[3:6][c(n, event, pyears, expected)]
+  values <- object[selected_names]
+  if (rate) {
+    selected_names <- c(selected_names, "rate")
+    values$rate <- scale * object$event / object$pyears
+  }
+  if (ci.r) {
+    selected_names <- c(selected_names, "ci.r")
+    values$ci.r <- cipoisson(object$event, object$pyears, p = conf.level) * scale
+  }
+  if (rr) {
+    selected_names <- c(selected_names, "rr")
+    values$rr <- object$event / object$expected
+  }
+  if (ci.rr) {
+    selected_names <- c(selected_names, "ci.rr")
+    values$ci.rr <- cipoisson(object$event, object$expected, p = conf.level)
+  }
+  display_names <- c(
+    n = "N", event = "Events", pyears = "Time", expected = "Expected events",
+    rate = "Event rate", ci.r = "CI (rate)", rr = "Obs/Exp", ci.rr = "CI (O/E)"
+  )[selected_names]
+
+  if (length(dimensions) == 1L) {
+    column_names <- names(object$n)
+    if (vertical) {
+      values <- lapply(values, .pyears_format, nastring, ...)
+      printed_width <- vapply(values, function(x) nchar(x[[1L]]), integer(1))
+      column_width <- pmax(printed_width, nchar(display_names)) + 2L
+      for (i in seq_along(values)) values[[i]] <- .pyears_pad(values[[i]], column_width[[i]])
+      column_width <- c(max(nchar(variable_names), nchar(column_names)) + 2L, column_width)
+      left_column <- list(.pyears_pad(column_names, column_width[[1L]]))
+      headings <- .pyears_pad(c(variable_names, display_names), column_width)
+    } else {
+      matrix_values <- .pyears_box(values, length(values[[1L]]), nastring, ...)
+      column_width <- pmax(nchar(column_names), apply(nchar(matrix_values), 1L, max)) + 2L
+      values <- split(matrix_values, row(matrix_values))
+      for (i in seq_along(values)) values[[i]] <- .pyears_pad(values[[i]], column_width[[i]])
+      column_width <- c(max(nchar(variable_names), nchar(display_names)) + 2L, column_width)
+      left_column <- list(.pyears_pad(display_names, column_width[[1L]]))
+      headings <- .pyears_pad(c(variable_names, column_names), column_width)
+    }
+    if (vline) {
+      cat(paste(headings, collapse = "|"), "\n")
+      cat(paste(.pyears_pad("-", column_width, "-"), collapse = "|"), "\n")
+      rows <- do.call("paste", c(left_column, values, list(sep = "|")))
+    } else {
+      cat(paste(headings, collapse = " "), "\n")
+      cat(paste(.pyears_pad("-", column_width, "-"), collapse = " "), "\n")
+      rows <- do.call("paste", c(left_column, values, list(sep = " ")))
+    }
+    cat(rows, sep = "\n")
+  } else {
+    if (header) {
+      width <- max(nchar(display_names))
+      if (vline) {
+        cat("+", .pyears_pad("-", width, "-"), "+\n", sep = "")
+        cat(paste0("|", .pyears_pad(display_names, width), "|"), sep = "\n")
+        cat("+", .pyears_pad("-", width, "-"), "+\n\n", sep = "")
+      } else {
+        cat(.pyears_pad("-", width, "-"), "\n")
+        cat(.pyears_pad(display_names, width), sep = "\n")
+        cat(.pyears_pad("-", width, "-"), "\n\n")
+      }
+    }
+    table_names <- variable_names[1:2]
+    row_names <- dimnames(object$n)[[1L]]
+    column_names <- dimnames(object$n)[[2L]]
+    if (length(dimensions) > 2L) {
+      matrix_values <- .pyears_box(
+        values,
+        c(dimensions[[1L]], dimensions[[2L]], prod(dimensions[-(1:2)])),
+        nastring,
+        ...
+      )
+      outer_labels <- do.call("expand.grid", dimnames(object$n)[-(1:2)])
+      label_names <- names(outer_labels)
+      for (i in seq_len(nrow(outer_labels))) {
+        cat(paste(":", paste(label_names, outer_labels[i, ], sep = "=")), "\n")
+        .pyears_show(matrix_values[, , i, ], table_names, row_names, column_names, vline)
+      }
+    } else {
+      matrix_values <- .pyears_box(values, dimensions, nastring, ...)
+      .pyears_show(matrix_values, table_names, row_names, column_names, vline)
+    }
+  }
+  invisible(object)
+}
+
 .finegray_python_vector <- function(value) {
   as.list(.as_python_vector(value))
 }
@@ -5739,6 +6090,23 @@ tmerge <- function(data1, data2, id, ..., tstart, tstop, options) {
   row.names(output) <- NULL
   class(output) <- c("tmerge", "data.frame")
   output
+}
+
+`[.tmerge` <- function(x, ..., drop = TRUE) {
+  class(x) <- "data.frame"
+  attr(x, "tm.retain") <- NULL
+  attr(x, "tcount") <- NULL
+  attr(x, "call") <- NULL
+  do.call(`[.data.frame`, c(list(x), list(...), list(drop = drop)))
+}
+
+summary.tmerge <- function(object, ...) {
+  if (!is.null(call <- attr(object, "call"))) {
+    cat("Call:\n")
+    dput(call)
+    cat("\n")
+  }
+  print(attr(object, "tcount"))
 }
 
 .coxsurv_baseline <- function(y, x, wt, risk, survtype, vartype) {

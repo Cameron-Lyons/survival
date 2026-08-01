@@ -5776,6 +5776,36 @@ def lvcf_numeric_indices(
     missing: list[bool],
     time: list[float] | None = None,
 ) -> list[int]: ...
+def nostutter_replacements(
+    id: list[int],
+    state: list[int | None],
+    censor: int,
+    single: bool = False,
+) -> list[bool]: ...
+def nostutter_numeric_numeric(
+    id: list[int | float],
+    state: list[int | float | None],
+    censor: int | float,
+    single: bool = False,
+) -> list[bool]: ...
+def nostutter_numeric_str(
+    id: list[int | float],
+    state: list[str | None],
+    censor: str,
+    single: bool = False,
+) -> list[bool]: ...
+def nostutter_str_numeric(
+    id: list[str],
+    state: list[int | float | None],
+    censor: int | float,
+    single: bool = False,
+) -> list[bool]: ...
+def nostutter_str_str(
+    id: list[str],
+    state: list[str | None],
+    censor: str,
+    single: bool = False,
+) -> list[bool]: ...
 def turnbull_estimator(
     left: list[float],
     right: list[float],

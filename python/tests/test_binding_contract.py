@@ -3218,6 +3218,11 @@ def test_data_prep_low_level_bindings_are_typed():
         "from_timeline",
         "lvcf_indices",
         "lvcf_numeric_indices",
+        "nostutter_replacements",
+        "nostutter_numeric_numeric",
+        "nostutter_numeric_str",
+        "nostutter_str_numeric",
+        "nostutter_str_str",
     }
     assert expected_names <= stub_names
 
@@ -3266,6 +3271,11 @@ def test_data_prep_low_level_bindings_are_typed():
         "from_timeline": ["id", "states", "time_points"],
         "lvcf_indices": ["id", "missing", "time"],
         "lvcf_numeric_indices": ["id", "missing", "time"],
+        "nostutter_replacements": ["id", "state", "censor", "single"],
+        "nostutter_numeric_numeric": ["id", "state", "censor", "single"],
+        "nostutter_numeric_str": ["id", "state", "censor", "single"],
+        "nostutter_str_numeric": ["id", "state", "censor", "single"],
+        "nostutter_str_str": ["id", "state", "censor", "single"],
     }
     for name, args in expected_args.items():
         assert list(inspect.signature(getattr(core, name)).parameters) == args
@@ -3323,6 +3333,17 @@ def test_data_prep_low_level_bindings_are_typed():
     assert type(plan).__name__ == "CondensePlanResult"
     assert plan.keep == [2, 3]
     assert plan.start == pytest.approx([0.0, 0.0, 0.0, 0.0])
+
+    assert core.nostutter_replacements(
+        [1, 1, 1, 2, 2],
+        [0, 1, 1, 1, 1],
+        0,
+    ) == [False, False, True, False, True]
+    assert core.nostutter_numeric_str(
+        [1, 1, 1, 2, 2],
+        ["censor", "a", "a", "b", "b"],
+        "censor",
+    ) == [False, False, True, False, True]
 
     timeline_rows = core.from_timeline_rows(
         [0, 1, 0, 1, 0, 2],
