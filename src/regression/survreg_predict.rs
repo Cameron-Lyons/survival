@@ -1,4 +1,6 @@
-use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
+use crate::internal::statistical::{
+    normal_cdf, normal_inverse_cdf, student_t_cdf, student_t_inverse_cdf, student_t_pdf,
+};
 use pyo3::prelude::*;
 
 fn value_error(message: impl Into<String>) -> PyErr {
@@ -146,11 +148,15 @@ fn validate_distribution(distribution: &str) -> PyResult<()> {
             | "log_gaussian"
             | "loglogistic"
             | "log_logistic"
+            | "t"
+            | "student"
+            | "student_t"
+            | "studentt"
     ) {
         return Ok(());
     }
     Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, or loglogistic",
+        "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, loglogistic, or t",
     ))
 }
 
@@ -160,6 +166,10 @@ fn validated_distribution_key(distribution: &str) -> String {
         "distribution was validated"
     );
     distribution_key(distribution)
+}
+
+fn is_student_t_distribution(key: &str) -> bool {
+    matches!(key, "t" | "student" | "student_t" | "studentt")
 }
 
 fn validate_prediction_distribution(distribution: &str) -> PyResult<()> {
@@ -248,7 +258,12 @@ impl SurvregDistributionKind {
     }
 }
 
-fn validate_equal_lengths(values: &[f64], mean: &[f64], scale: &[f64]) -> PyResult<()> {
+fn validate_equal_lengths(
+    values: &[f64],
+    mean: &[f64],
+    scale: &[f64],
+    require_finite_mean: bool,
+) -> PyResult<()> {
     let n = values.len();
     if mean.len() != n {
         return Err(value_error(format!(
@@ -264,11 +279,13 @@ fn validate_equal_lengths(values: &[f64], mean: &[f64], scale: &[f64]) -> PyResu
             n
         )));
     }
-    for (idx, &value) in mean.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "mean contains non-finite value at index {idx}"
-            )));
+    if require_finite_mean {
+        for (idx, &value) in mean.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(value_error(format!(
+                    "mean contains non-finite value at index {idx}"
+                )));
+            }
         }
     }
     for (idx, &value) in scale.iter().enumerate() {
@@ -332,20 +349,49 @@ fn survreg_quantile_value(
 }
 
 #[pyfunction]
-#[pyo3(signature = (values, mean, scale, distribution, kind))]
+#[pyo3(signature = (values, mean, scale, distribution, kind, parms=None))]
 pub fn survreg_distribution(
     values: Vec<f64>,
     mean: Vec<f64>,
     scale: Vec<f64>,
     distribution: String,
     kind: String,
+    parms: Option<f64>,
 ) -> PyResult<Vec<f64>> {
     validate_distribution(&distribution)?;
-    validate_equal_lengths(&values, &mean, &scale)?;
     let key = validated_distribution_key(&distribution);
+    validate_equal_lengths(&values, &mean, &scale, !is_student_t_distribution(&key))?;
     let log_transform = response_uses_log_transform(&key);
     let kind = SurvregDistributionKind::from_str(&kind)
         .ok_or_else(|| value_error("kind must be one of density, distribution, or quantile"))?;
+
+    if is_student_t_distribution(&key) {
+        let df = parms.ok_or_else(|| value_error("parms is required for distribution='t'"))?;
+        if !df.is_finite() || df <= 0.0 {
+            return Err(value_error(
+                "parms for distribution='t' must be a positive finite value",
+            ));
+        }
+        return values
+            .iter()
+            .zip(mean.iter())
+            .zip(scale.iter())
+            .map(|((&value, &mean_value), &scale_value)| match kind {
+                SurvregDistributionKind::Density => {
+                    Ok(student_t_pdf((value - mean_value) / scale_value, df) / scale_value)
+                }
+                SurvregDistributionKind::Distribution => {
+                    Ok(student_t_cdf((value - mean_value) / scale_value, df))
+                }
+                SurvregDistributionKind::Quantile => {
+                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                        return Err(value_error("p must be between 0 and 1"));
+                    }
+                    Ok(mean_value + scale_value * student_t_inverse_cdf(value, df))
+                }
+            })
+            .collect();
+    }
 
     let mut result = Vec::with_capacity(values.len());
     match kind {
@@ -822,6 +868,7 @@ mod tests {
             vec![1.2, 1.2],
             "weibull".to_string(),
             "density".to_string(),
+            None,
         )
         .expect("density should compute");
         let cdf = survreg_distribution(
@@ -830,6 +877,7 @@ mod tests {
             vec![1.2, 1.2],
             "weibull".to_string(),
             "distribution".to_string(),
+            None,
         )
         .expect("cdf should compute");
         let quantiles = survreg_distribution(
@@ -838,6 +886,7 @@ mod tests {
             vec![1.2, 1.2, 1.2],
             "weibull".to_string(),
             "quantile".to_string(),
+            None,
         )
         .expect("quantile should compute");
 
@@ -848,6 +897,74 @@ mod tests {
         assert!((quantiles[0] - 0.3696942).abs() < 1e-7);
         assert!((quantiles[1] - 1.0620325).abs() < 1e-7);
         assert!((quantiles[2] - 2.4399099).abs() < 1e-7);
+    }
+
+    #[test]
+    fn test_survreg_student_t_distribution_matches_r_reference_values() {
+        let density = survreg_distribution(
+            vec![1.0, 2.0],
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+            "t".to_string(),
+            "density".to_string(),
+            Some(5.0),
+        )
+        .expect("density should compute");
+        let cdf = survreg_distribution(
+            vec![1.0, 2.0],
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+            "student-t".to_string(),
+            "distribution".to_string(),
+            Some(5.0),
+        )
+        .expect("cdf should compute");
+        let quantiles = survreg_distribution(
+            vec![0.0, 0.25, 0.5, 1.0],
+            vec![0.0; 4],
+            vec![1.0; 4],
+            "student_t".to_string(),
+            "quantile".to_string(),
+            Some(5.0),
+        )
+        .expect("quantiles should compute");
+
+        assert!((density[0] - 0.2196798).abs() < 1e-7);
+        assert!((density[1] - 0.06509031).abs() < 1e-8);
+        assert!((cdf[0] - 0.8183913).abs() < 1e-7);
+        assert!((cdf[1] - 0.9490303).abs() < 1e-7);
+        assert_eq!(quantiles[0], f64::NEG_INFINITY);
+        assert!((quantiles[1] + 0.7266868).abs() < 1e-7);
+        assert_eq!(quantiles[2], 0.0);
+        assert_eq!(quantiles[3], f64::INFINITY);
+
+        let infinite_locations = survreg_distribution(
+            vec![1.0, f64::INFINITY, f64::NEG_INFINITY],
+            vec![f64::INFINITY, 0.0, 0.0],
+            vec![1.0; 3],
+            "t".to_string(),
+            "distribution".to_string(),
+            Some(5.0),
+        )
+        .expect("infinite locations should follow R semantics");
+        assert_eq!(infinite_locations, vec![0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn test_survreg_student_t_distribution_requires_valid_df() {
+        for parms in [None, Some(0.0), Some(f64::INFINITY)] {
+            assert!(
+                survreg_distribution(
+                    vec![0.5],
+                    vec![0.0],
+                    vec![1.0],
+                    "t".to_string(),
+                    "quantile".to_string(),
+                    parms,
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

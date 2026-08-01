@@ -539,6 +539,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
             "scale",
             "distribution",
             "kind",
+            "parms",
         ],
         "survreg_quantile_prediction_se_matrix": [
             "rows",

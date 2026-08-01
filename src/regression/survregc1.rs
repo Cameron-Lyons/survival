@@ -1,5 +1,5 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, PARALLEL_THRESHOLD_MEDIUM};
-use crate::internal::statistical::{erf, erfc, ln_gamma};
+use crate::internal::statistical::{erf, erfc, student_t_cdf, student_t_pdf};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
 use std::fmt;
@@ -490,99 +490,6 @@ fn exvalue_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
             case,
             distribution: "extreme value".to_string(),
         }),
-    }
-}
-
-#[inline]
-fn regularized_beta(a: f64, b: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    let bt = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        bt * beta_continued_fraction(a, b, x) / a
-    } else {
-        1.0 - bt * beta_continued_fraction(b, a, 1.0 - x) / b
-    }
-}
-
-#[inline]
-fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
-    let qab = a + b;
-    let qap = a + 1.0;
-    let qam = a - 1.0;
-    let mut c = 1.0;
-    let mut d = 1.0 - qab * x / qap;
-    if d.abs() < 1e-30 {
-        d = 1e-30;
-    }
-    d = 1.0 / d;
-    let mut h = d;
-    for m in 1..=200 {
-        let m = m as f64;
-        let m2 = 2.0 * m;
-        let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1.0 + aa * d;
-        if d.abs() < 1e-30 {
-            d = 1e-30;
-        }
-        c = 1.0 + aa / c;
-        if c.abs() < 1e-30 {
-            c = 1e-30;
-        }
-        d = 1.0 / d;
-        h *= d * c;
-
-        let aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1.0 + aa * d;
-        if d.abs() < 1e-30 {
-            d = 1e-30;
-        }
-        c = 1.0 + aa / c;
-        if c.abs() < 1e-30 {
-            c = 1e-30;
-        }
-        d = 1.0 / d;
-        let delta = d * c;
-        h *= delta;
-        if (delta - 1.0).abs() < 1e-12 {
-            break;
-        }
-    }
-    h
-}
-
-#[inline]
-fn student_t_pdf(z: f64, df: f64) -> f64 {
-    if !z.is_finite() {
-        return if z.is_nan() { f64::NAN } else { 0.0 };
-    }
-    let log_coef = ln_gamma((df + 1.0) / 2.0)
-        - ln_gamma(df / 2.0)
-        - 0.5 * (df.ln() + std::f64::consts::PI.ln());
-    (log_coef - ((df + 1.0) / 2.0) * (1.0 + z * z / df).ln()).exp()
-}
-
-#[inline]
-fn student_t_cdf(z: f64, df: f64) -> f64 {
-    if z == f64::INFINITY {
-        return 1.0;
-    }
-    if z == f64::NEG_INFINITY {
-        return 0.0;
-    }
-    if z == 0.0 {
-        return 0.5;
-    }
-    let x = df / (df + z * z);
-    let ibeta = regularized_beta(df / 2.0, 0.5, x);
-    if z > 0.0 {
-        1.0 - 0.5 * ibeta
-    } else {
-        0.5 * ibeta
     }
 }
 

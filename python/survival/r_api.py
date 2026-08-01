@@ -17419,7 +17419,14 @@ def _survreg_quantile_scores(fit: Any, probabilities: list[float]) -> list[float
         df = _survreg_t_fit_degrees_of_freedom(
             getattr(fit, "distribution_parameters", None),
         )
-        return [_student_t_ppf(value, df) for value in probabilities]
+        return _core.survreg_distribution(
+            probabilities,
+            [0.0] * len(probabilities),
+            [1.0] * len(probabilities),
+            "t",
+            "quantile",
+            df,
+        )
     return [math.log(-math.log1p(-value)) for value in probabilities]
 
 
@@ -17456,123 +17463,6 @@ def _survreg_t_fit_degrees_of_freedom(parms: Any | None) -> float:
     if df <= 2.0:
         raise ValueError("Degrees of freedom must be >=3")
     return df
-
-
-def _regularized_beta_continued_fraction(a: float, b: float, x: float) -> float:
-    eps = 3e-14
-    fpmin = 1e-300
-    qab = a + b
-    qap = a + 1.0
-    qam = a - 1.0
-    c = 1.0
-    d = 1.0 - qab * x / qap
-    if abs(d) < fpmin:
-        d = fpmin
-    d = 1.0 / d
-    h = d
-    for m in range(1, 201):
-        m2 = 2 * m
-        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
-        d = 1.0 + aa * d
-        if abs(d) < fpmin:
-            d = fpmin
-        c = 1.0 + aa / c
-        if abs(c) < fpmin:
-            c = fpmin
-        d = 1.0 / d
-        h *= d * c
-        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
-        d = 1.0 + aa * d
-        if abs(d) < fpmin:
-            d = fpmin
-        c = 1.0 + aa / c
-        if abs(c) < fpmin:
-            c = fpmin
-        d = 1.0 / d
-        delta = d * c
-        h *= delta
-        if abs(delta - 1.0) <= eps:
-            break
-    return h
-
-
-def _regularized_incomplete_beta(x: float, a: float, b: float) -> float:
-    if x <= 0.0:
-        return 0.0
-    if x >= 1.0:
-        return 1.0
-    log_beta = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
-    front = math.exp(a * math.log(x) + b * math.log1p(-x) - log_beta)
-    if x < (a + 1.0) / (a + b + 2.0):
-        return front * _regularized_beta_continued_fraction(a, b, x) / a
-    return 1.0 - front * _regularized_beta_continued_fraction(b, a, 1.0 - x) / b
-
-
-def _student_t_pdf(value: float, df: float) -> float:
-    if math.isinf(value):
-        return 0.0
-    coefficient = math.exp(
-        math.lgamma((df + 1.0) / 2.0)
-        - math.lgamma(df / 2.0)
-        - 0.5 * (math.log(df) + math.log(math.pi))
-    )
-    return coefficient * (1.0 + value * value / df) ** (-(df + 1.0) / 2.0)
-
-
-def _student_t_cdf(value: float, df: float) -> float:
-    if math.isinf(value):
-        return 0.0 if value < 0.0 else 1.0
-    if value == 0.0:
-        return 0.5
-    x = df / (df + value * value)
-    ibeta = _regularized_incomplete_beta(x, df / 2.0, 0.5)
-    return 1.0 - 0.5 * ibeta if value > 0.0 else 0.5 * ibeta
-
-
-def _student_t_ppf(probability: float, df: float) -> float:
-    if probability < 0.0 or probability > 1.0 or math.isnan(probability):
-        raise ValueError("p must be between 0 and 1")
-    if probability == 0.0:
-        return float("-inf")
-    if probability == 1.0:
-        return float("inf")
-    if probability == 0.5:
-        return 0.0
-    if probability < 0.5:
-        return -_student_t_ppf(1.0 - probability, df)
-    low = 0.0
-    high = 1.0
-    while _student_t_cdf(high, df) < probability:
-        high *= 2.0
-    for _ in range(120):
-        mid = (low + high) / 2.0
-        if _student_t_cdf(mid, df) < probability:
-            low = mid
-        else:
-            high = mid
-    return (low + high) / 2.0
-
-
-def _survreg_t_distribution_values(
-    values: list[float],
-    means: list[float],
-    scales: list[float],
-    df: float,
-    kind: str,
-) -> list[float]:
-    result: list[float] = []
-    for value, mean, scale in zip(values, means, scales, strict=True):
-        if not math.isfinite(scale) or scale <= 0.0:
-            raise ValueError("scale must contain positive finite values")
-        if kind == "density":
-            result.append(_student_t_pdf((value - mean) / scale, df) / scale)
-        elif kind == "distribution":
-            result.append(_student_t_cdf((value - mean) / scale, df))
-        elif kind == "quantile":
-            result.append(mean + scale * _student_t_ppf(value, df))
-        else:
-            raise ValueError("kind must be density, distribution, or quantile")
-    return result
 
 
 def _expand_survreg_distribution_inputs(
@@ -17626,20 +17516,16 @@ def _survreg_distribution_values(
         mean,
         scale,
     )
-    if distribution_name == "t":
-        return _survreg_t_distribution_values(
-            value_values,
-            mean_values,
-            scale_values,
-            _survreg_t_degrees_of_freedom(parms),
-            kind,
-        )
+    distribution_parms = (
+        _survreg_t_degrees_of_freedom(parms) if distribution_name == "t" else None
+    )
     return _core.survreg_distribution(
         value_values,
         mean_values,
         scale_values,
         distribution_name,
         kind,
+        distribution_parms,
     )
 
 
@@ -17702,20 +17588,16 @@ def rsurvreg(
         scale,
         target_length=count,
     )
-    if distribution_name == "t":
-        return _survreg_t_distribution_values(
-            probability_values,
-            mean_values,
-            scale_values,
-            _survreg_t_degrees_of_freedom(parms),
-            "quantile",
-        )
+    distribution_parms = (
+        _survreg_t_degrees_of_freedom(parms) if distribution_name == "t" else None
+    )
     return _core.survreg_distribution(
         probability_values,
         mean_values,
         scale_values,
         distribution_name,
         "quantile",
+        distribution_parms,
     )
 
 

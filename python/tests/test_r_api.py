@@ -14228,6 +14228,18 @@ def test_survreg_distribution_helpers_match_r_reference_values(monkeypatch):
         distribution="t",
         parms=5,
     ) == pytest.approx([-0.7266868, 0.0])
+    assert survival.dsurvreg(
+        [1.0, math.inf, -math.inf],
+        mean=[math.inf, 0.0, 0.0],
+        distribution="t",
+        parms=5,
+    ) == [0.0, 0.0, 0.0]
+    assert survival.psurvreg(
+        [1.0, math.inf, -math.inf],
+        mean=[math.inf, 0.0, 0.0],
+        distribution="t",
+        parms=5,
+    ) == [0.0, 1.0, 0.0]
 
     assert survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="loggaussian") == (
         pytest.approx(survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="lognormal"))
