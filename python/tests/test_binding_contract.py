@@ -4773,6 +4773,7 @@ def test_aggregate_survfit_bindings_are_typed():
 
     assert {
         "AggregateSurvfitResult",
+        "aggregate_shared_survfit",
         "aggregate_survfit",
         "aggregate_survfit_by_group",
     } <= stub_names
@@ -4790,6 +4791,13 @@ def test_aggregate_survfit_bindings_are_typed():
         "groups",
         "weights",
     ]
+    assert list(inspect.signature(core.aggregate_shared_survfit).parameters) == [
+        "time",
+        "survs",
+        "std_errs",
+        "weights",
+        "groups",
+    ]
     assert _pyi_function_arg_names(stub_path, "aggregate_survfit") == [
         "times",
         "survs",
@@ -4802,6 +4810,13 @@ def test_aggregate_survfit_bindings_are_typed():
         "survs",
         "groups",
         "weights",
+    ]
+    assert _pyi_function_arg_names(stub_path, "aggregate_shared_survfit") == [
+        "time",
+        "survs",
+        "std_errs",
+        "weights",
+        "groups",
     ]
     assert _pyi_class_property_names(stub_path, "AggregateSurvfitResult") == {
         "time",
@@ -4834,6 +4849,17 @@ def test_aggregate_survfit_bindings_are_typed():
     )
     assert [item.n_curves for item in grouped] == [1, 2]
     assert all(type(item).__name__ == "AggregateSurvfitResult" for item in grouped)
+
+    shared = core.aggregate_shared_survfit(
+        [1.0, 2.0],
+        [[0.9, 0.8], [0.8, 0.6], [0.7, 0.4]],
+        [[0.1, 0.2], [0.3, 0.4], [0.2, 0.1]],
+        [1.0, 2.0, 3.0],
+        [2, 1, 2],
+    )
+    assert [item.n_curves for item in shared] == [1, 2]
+    assert shared[1].surv == pytest.approx([0.75, 0.5])
+    assert shared[1].weights == pytest.approx([0.25, 0.75])
 
 
 def test_survcheck_bindings_are_typed():
