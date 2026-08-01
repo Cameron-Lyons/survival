@@ -5015,6 +5015,18 @@ def test_frailty_cox_and_link_function_bindings_are_typed_to_runtime_surface():
             "self",
             "input",
         ]
+        vector_method_name = f"{method_name}_many"
+        assert list(
+            inspect.signature(getattr(core.LinkFunctionParams, vector_method_name)).parameters
+        ) == [
+            "self",
+            "input",
+        ]
+        assert _pyi_class_method_arg_names(
+            stub_path,
+            "LinkFunctionParams",
+            vector_method_name,
+        ) == ["self", "input"]
 
     link = core.LinkFunctionParams(0.001)
     assert link.blogit(0.5) == pytest.approx(0.0)
@@ -5023,6 +5035,10 @@ def test_frailty_cox_and_link_function_bindings_are_typed_to_runtime_surface():
     assert link.blog(0.5) == pytest.approx(math.log(0.5))
     assert math.isfinite(link.blogit(0.0))
     assert math.isfinite(link.blogit(1.0))
+    vector_values = link.blogit_many([0.0, None, 0.5, 1.0])
+    assert vector_values[0] == pytest.approx(link.blogit(0.0))
+    assert math.isnan(vector_values[1])
+    assert vector_values[2:] == pytest.approx([link.blogit(0.5), link.blogit(1.0)])
 
     bounded = core.LinkFunctionParams(0.05)
     assert bounded.bprobit(0.0) == pytest.approx(-1.6448536)
