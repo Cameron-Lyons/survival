@@ -4957,12 +4957,214 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
   eval.parent(call)
 }
 
+.survreg_fit_distribution <- function(dist, parms) {
+  definition <- if (is.character(dist)) {
+    survreg.distributions[[dist]]
+  } else {
+    dist
+  }
+  if (is.null(definition)) {
+    stop("Unrecognized distribution", call. = FALSE)
+  }
+  if (!is.function(definition$density)) {
+    stop("Missing density function in the definition of the distribution", call. = FALSE)
+  }
+
+  distribution <- switch(
+    as.character(definition$name),
+    "Extreme value" = "extreme",
+    "Logistic" = "logistic",
+    "Gaussian" = "gaussian",
+    "Student-t" = "t",
+    NULL
+  )
+  if (is.null(distribution)) {
+    return(NULL)
+  }
+  parameter <- if (identical(distribution, "t")) {
+    values <- if (is.null(parms)) definition$parms else parms
+    if (is.null(values) || length(values) != 1L) {
+      stop("Student-t distribution requires one degrees-of-freedom parameter", call. = FALSE)
+    }
+    as.numeric(values[[1L]])
+  } else {
+    NULL
+  }
+  list(name = distribution, parameter = parameter)
+}
+
+.survreg_fit_start <- function(y, x, weights, offset, strata, nstrat,
+                               fixed_scale, null_scale = NULL) {
+  status <- y[, ncol(y)]
+  proxy <- ifelse(status == 3, rowMeans(y[, 1:2, drop = FALSE]), y[, 1L])
+  target <- proxy - offset
+  location <- if (ncol(x) == 0L) {
+    numeric()
+  } else {
+    fitted <- try(stats::lm.wfit(x, target, weights)$coefficients, silent = TRUE)
+    if (inherits(fitted, "try-error")) rep(0, ncol(x)) else as.numeric(fitted)
+  }
+  location[!is.finite(location)] <- 0
+  if (!is.null(fixed_scale)) {
+    return(location)
+  }
+  if (!is.null(null_scale)) {
+    return(c(location, null_scale))
+  }
+
+  center <- sum(weights * target) / sum(weights)
+  residual <- target - center
+  log_scale <- vapply(seq_len(nstrat), function(group) {
+    keep <- strata == group
+    variance <- sum(weights[keep] * residual[keep]^2) / sum(weights[keep])
+    log(max(sqrt(variance), sqrt(.Machine$double.eps)))
+  }, numeric(1))
+  c(center, log_scale)
+}
+
+.survreg_fit_core <- function(x, y, weights, offset, initial, controlvals,
+                              distribution, distribution_parameter,
+                              fixed_scale, strata) {
+  .call_regression(
+    "survreg",
+    time = .as_python_vector(y[, 1L]),
+    status = .as_python_vector(y[, ncol(y)]),
+    covariates = .coxph_fit_covariates(x, nrow(x)),
+    weights = .as_python_vector(weights),
+    offsets = .as_python_vector(offset),
+    initial_beta = as.list(unname(initial)),
+    strata = .as_python_vector(as.integer(strata) - 1L),
+    distribution = distribution,
+    max_iter = as.integer(controlvals$iter.max),
+    eps = as.numeric(controlvals$rel.tolerance),
+    tol_chol = as.numeric(controlvals$toler.chol),
+    time2 = if (ncol(y) == 3L) .as_python_vector(y[, 2L]) else NULL,
+    fixed_scale = fixed_scale,
+    distribution_parameter = distribution_parameter
+  )
+}
+
 survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
                         scale = 0, nstrat = 1, strata, parms = NULL,
                         assign) {
-  call <- match.call()
-  call[[1L]] <- quote(survival::survreg.fit)
-  eval.parent(call)
+  if (!is.matrix(x)) {
+    stop("Invalid X matrix ", call. = FALSE)
+  }
+  if (!is.matrix(y) || !ncol(y) %in% c(2L, 3L) || nrow(y) != nrow(x)) {
+    stop("Invalid survival response", call. = FALSE)
+  }
+  n <- nrow(x)
+  nvar <- ncol(x)
+  if (missing(offset) || is.null(offset)) {
+    offset <- rep(0, n)
+  }
+  if (missing(weights) || is.null(weights)) {
+    weights <- rep(1, n)
+  }
+  if (length(weights) != n || any(!is.finite(weights)) || any(weights <= 0)) {
+    stop("Invalid weights, must be >0", call. = FALSE)
+  }
+  if (length(offset) != n || any(!is.finite(offset))) {
+    stop("Invalid offset", call. = FALSE)
+  }
+  if (length(scale) != 1L || !is.finite(scale) || scale < 0) {
+    stop("Invalid scale", call. = FALSE)
+  }
+  nstrat <- .as_integer_scalar(nstrat, "nstrat", positive = TRUE)
+  if (scale > 0 && nstrat > 1L) {
+    stop("Cannot have both a fixed scale and strata", call. = FALSE)
+  }
+  if (nstrat == 1L) {
+    strata <- rep(1L, n)
+  } else {
+    if (missing(strata) || length(strata) != n) {
+      stop("Invalid strata variable", call. = FALSE)
+    }
+    strata <- as.integer(strata)
+    if (anyNA(strata) || any(strata < 1L | strata > nstrat)) {
+      stop("Invalid strata variable", call. = FALSE)
+    }
+  }
+
+  native_distribution <- .survreg_fit_distribution(dist, parms)
+  if (is.null(native_distribution)) {
+    call <- match.call()
+    call[[1L]] <- quote(survival::survreg.fit)
+    return(eval.parent(call))
+  }
+  fixed_scale <- if (scale > 0) as.numeric(scale) else NULL
+  null_x <- matrix(1, nrow = n, ncol = 1L)
+  null_start <- .survreg_fit_start(
+    y, null_x, weights, offset, strata, nstrat, fixed_scale
+  )
+  null_control <- controlvals
+  null_control$iter.max <- 20L
+  null_fit <- .survreg_fit_core(
+    null_x, y, weights, offset, null_start, null_control,
+    native_distribution$name, native_distribution$parameter,
+    fixed_scale, strata
+  )
+  null_coef <- .as_numeric_vector(.result_field(null_fit, "coefficients"))
+  null_scale <- if (is.null(fixed_scale)) null_coef[-1L] else numeric()
+
+  if (missing(init) || is.null(init)) {
+    initial <- .survreg_fit_start(
+      y, x, weights, offset, strata, nstrat, fixed_scale, null_scale
+    )
+  } else {
+    initial <- as.numeric(init)
+    if (is.null(fixed_scale) && length(initial) == nvar) {
+      initial <- c(initial, null_scale)
+    }
+    expected <- nvar + if (is.null(fixed_scale)) nstrat else 0L
+    if (length(initial) != expected) {
+      stop("Wrong length for initial parameters", call. = FALSE)
+    }
+  }
+
+  fit <- .survreg_fit_core(
+    x, y, weights, offset, initial, controlvals,
+    native_distribution$name, native_distribution$parameter,
+    fixed_scale, strata
+  )
+  if (controlvals$iter.max > 1L && .result_field(fit, "convergence_flag") != 0L) {
+    warning("Ran out of iterations and did not converge", call. = FALSE)
+  }
+
+  coefficient_names <- colnames(x)
+  if (is.null(coefficient_names)) {
+    coefficient_names <- paste("x", seq_len(nvar))
+  }
+  if (is.null(fixed_scale)) {
+    coefficient_names <- c(coefficient_names, rep("Log(scale)", nstrat))
+  }
+  coefficients <- .as_numeric_vector(.result_field(fit, "coefficients"))
+  names(coefficients) <- coefficient_names
+  variance <- .as_numeric_matrix(.result_field(fit, "variance_matrix"))
+  dimnames(variance) <- NULL
+  icoef <- if (is.null(fixed_scale)) {
+    null_coef
+  } else {
+    c(null_coef, log(fixed_scale))
+  }
+  names(icoef) <- c("Intercept", rep("Log(scale)", nstrat))
+  full_loglik <- as.numeric(.result_field(fit, "log_likelihood"))
+  null_loglik <- if (nvar == 1L && all(x == 1)) {
+    full_loglik
+  } else {
+    as.numeric(.result_field(null_fit, "log_likelihood"))
+  }
+
+  list(
+    coefficients = coefficients,
+    icoef = icoef,
+    var = variance,
+    loglik = c(null_loglik, full_loglik),
+    iter = as.integer(.result_field(fit, "iterations")),
+    linear.predictors = .as_numeric_vector(.result_field(fit, "linear_predictors")),
+    df = length(coefficients),
+    score = .as_numeric_vector(.result_field(fit, "score_vector"))
+  )
 }
 
 .as_data_frame_model_matrix <- function(x, row.names = NULL, optional = FALSE,
