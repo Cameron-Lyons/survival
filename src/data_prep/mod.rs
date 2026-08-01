@@ -35,4 +35,4 @@ pub use survcondense_module::{CondenseResult, survcondense};
 pub use survsplit_module::{SplitResult, survsplit};
 pub use tcut_module::{TcutResult, tcut, tcut_expand};
 pub use timeline::{IntervalResult, TimelineResult, from_timeline, to_timeline};
-pub use tmerge_module::{tmerge, tmerge2, tmerge3};
+pub use tmerge_module::{TmergePlanResult, tmerge, tmerge_plan, tmerge2, tmerge3};

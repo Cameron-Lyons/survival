@@ -9542,86 +9542,6 @@ def _tmerge_initial_frame(
     return result
 
 
-def _tmerge_interval_index(
-    columns: Mapping[str, list[Any]],
-    idname: str,
-    startname: str,
-    stopname: str,
-) -> dict[Any, tuple[list[int], list[float], list[float]]]:
-    result: dict[Any, tuple[list[int], list[float], list[float]]] = {}
-    for row, (row_id, start, stop) in enumerate(
-        zip(columns[idname], columns[startname], columns[stopname], strict=True)
-    ):
-        rows, starts, stops = result.setdefault(_hashable_group_value(row_id), ([], [], []))
-        rows.append(row)
-        starts.append(float(start))
-        stops.append(float(stop))
-    return result
-
-
-def _tmerge_classify(
-    intervals: Mapping[Any, tuple[list[int], list[float], list[float]]],
-    row_id: Any,
-    time: float,
-) -> str:
-    subject = intervals.get(_hashable_group_value(row_id))
-    if subject is None:
-        return "missid"
-    _rows, starts, stops = subject
-    prior = bisect_right(starts, time) - 1
-    if prior < 0:
-        return "early"
-    after = bisect_left(stops, time)
-    if after == len(stops):
-        return "late"
-    if after > prior:
-        return "gap"
-    if time == starts[prior] or time == stops[after]:
-        if prior == after + 1:
-            return "boundary"
-        if time == starts[prior]:
-            return "leading"
-        return "trailing"
-    return "within"
-
-
-def _tmerge_split_rows(
-    columns: dict[str, list[Any]],
-    idname: str,
-    startname: str,
-    stopname: str,
-    event_censors: Mapping[str, Any],
-    intervals: Mapping[Any, tuple[list[int], list[float], list[float]]],
-    update_ids: Sequence[Any],
-    update_times: Sequence[float],
-    classifications: Sequence[str],
-) -> dict[str, list[Any]]:
-    cuts: dict[int, set[float]] = {}
-    for row_id, time, kind in zip(update_ids, update_times, classifications, strict=True):
-        if kind != "within":
-            continue
-        rows, starts, _stops = intervals[_hashable_group_value(row_id)]
-        local_row = bisect_right(starts, time) - 1
-        cuts.setdefault(rows[local_row], set()).add(time)
-    if not cuts:
-        return columns
-    result = {name: [] for name in columns}
-    for row_idx in range(len(columns[idname])):
-        points = [float(columns[startname][row_idx])]
-        points.extend(sorted(cuts.get(row_idx, ())))
-        points.append(float(columns[stopname][row_idx]))
-        segment_count = len(points) - 1
-        for segment in range(segment_count):
-            for name, values in columns.items():
-                value = values[row_idx]
-                if name in event_censors and segment < segment_count - 1:
-                    value = event_censors[name]
-                result[name].append(value)
-            result[startname][-1] = points[segment]
-            result[stopname][-1] = points[segment + 1]
-    return result
-
-
 def _tmerge_default_censor(
     values: Sequence[Any],
     categories: Sequence[Any] | None = None,
@@ -9672,17 +9592,26 @@ def _tmerge_apply_operation(
         if operation.value is None
         else _tmerge_resolve_vector(operation.value, data2, n2, f"{name} value", scalar=True)
     )
-    base_id_values = columns[str(options["idname"])]
-    base_start_values = columns[str(options["tstartname"])]
-    known_ids = {_hashable_group_value(value) for value in base_id_values}
-    subject_min_starts: dict[Any, float] = {}
+    idname = str(options["idname"])
+    startname = str(options["tstartname"])
+    stopname = str(options["tstopname"])
+    base_id_values = columns[idname]
+    base_start_values = columns[startname]
+    level_order: dict[Any, int] = {}
+    base_codes: list[int] = []
+    subject_min_starts: dict[int, float] = {}
     for base_id, start in zip(base_id_values, base_start_values, strict=True):
+        if _is_missing_value(base_id):
+            raise ValueError("id cannot have missing values")
         key = _hashable_group_value(base_id)
-        subject_min_starts[key] = min(subject_min_starts.get(key, math.inf), float(start))
-    updates: list[tuple[Any, float, Any, int]] = []
+        code = level_order.setdefault(key, len(level_order))
+        base_codes.append(code)
+        subject_min_starts[code] = min(subject_min_starts.get(code, math.inf), float(start))
+    updates: list[tuple[int, float, Any, int]] = []
     missid = 0
     for idx, (row_id, raw_time) in enumerate(zip(data2_ids, times_raw, strict=True)):
-        if _hashable_group_value(row_id) not in known_ids:
+        code = level_order.get(_hashable_group_value(row_id))
+        if code is None:
             missid += 1
             continue
         raw_value = None if values_raw is None else values_raw[idx]
@@ -9694,56 +9623,43 @@ def _tmerge_apply_operation(
         if (
             operation.kind in {"tdc", "cumtdc"}
             and float(options["delay"]) > 0.0
-            and time > subject_min_starts[_hashable_group_value(row_id)]
+            and time > subject_min_starts[code]
         ):
             time += float(options["delay"])
-        updates.append((row_id, time, raw_value, idx))
+        updates.append((code, time, raw_value, idx))
 
-    level_order = {
-        _hashable_group_value(value): idx
-        for idx, value in enumerate(dict.fromkeys(columns[str(options["idname"])]))
-    }
-    updates.sort(key=lambda item: (level_order[_hashable_group_value(item[0])], item[1], item[3]))
-    intervals = _tmerge_interval_index(
-        columns,
-        str(options["idname"]),
-        str(options["tstartname"]),
-        str(options["tstopname"]),
-    )
-    classifications = [
-        _tmerge_classify(intervals, row_id, time) for row_id, time, _value, _idx in updates
-    ]
-    counts = dict.fromkeys(_TMERGE_COUNT_NAMES, 0)
-    counts["missid"] = missid
-    for kind in classifications:
-        counts[kind] += 1
-    seen: set[tuple[Any, float]] = set()
-    for row_id, time, _value, _idx in updates:
-        key = (_hashable_group_value(row_id), time)
-        if key in seen:
-            counts["tied"] += 1
-        else:
-            seen.add(key)
-
-    update_ids = [item[0] for item in updates]
+    updates.sort(key=lambda item: (item[0], item[1], item[3]))
+    update_codes = [item[0] for item in updates]
     update_times = [item[1] for item in updates]
-    columns = _tmerge_split_rows(
-        columns,
-        str(options["idname"]),
-        str(options["tstartname"]),
-        str(options["tstopname"]),
-        event_censors,
-        intervals,
-        update_ids,
-        update_times,
-        classifications,
-    )
-    base_ids = columns[str(options["idname"])]
-    _levels, lookup = _tmerge_unique_levels(base_ids, "id")
-    base_codes = [lookup[_hashable_group_value(value)] for value in base_ids]
-    update_codes = [lookup[_hashable_group_value(value)] for value in update_ids]
-    starts = [float(value) for value in columns[str(options["tstartname"])]]
     update_values = [item[2] for item in updates]
+    plan = _core.tmerge_plan(
+        base_codes,
+        [float(value) for value in base_start_values],
+        [float(value) for value in columns[stopname]],
+        update_codes,
+        update_times,
+    )
+    classifications = list(plan.kind)
+    counts = dict(zip(_TMERGE_COUNT_NAMES[:8], plan.count, strict=True))
+    counts["missid"] = missid
+
+    source_rows = list(plan.row)
+    if len(source_rows) > len(base_codes):
+        split_censor = list(plan.censor)
+        columns = {
+            column_name: [
+                event_censors[column_name] if split_censor[idx] else values[source_row]
+                for idx, source_row in enumerate(source_rows)
+            ]
+            if column_name in event_censors
+            else [values[source_row] for source_row in source_rows]
+            for column_name, values in columns.items()
+        }
+        columns[startname] = list(plan.start)
+        columns[stopname] = list(plan.stop)
+        base_codes = [base_codes[source_row] for source_row in source_rows]
+    base_ids = columns[idname]
+    starts = list(plan.start)
 
     if operation.kind == "tdc":
         if name in event_censors:
@@ -9807,10 +9723,9 @@ def _tmerge_apply_operation(
     if operation.kind == "cumevent":
         cumulative: dict[Any, float] = {}
         event_values: list[Any] = []
-        for row_id, value in zip(update_ids, raw_event_values, strict=True):
-            key = _hashable_group_value(row_id)
-            cumulative[key] = cumulative.get(key, 0.0) + _tmerge_numeric_value(value, name)
-            event_values.append(cumulative[key])
+        for code, value in zip(update_codes, raw_event_values, strict=True):
+            cumulative[code] = cumulative.get(code, 0.0) + _tmerge_numeric_value(value, name)
+            event_values.append(cumulative[code])
     else:
         event_values = raw_event_values
     censor = event_censors.get(
@@ -9823,12 +9738,10 @@ def _tmerge_apply_operation(
     if name not in event_censors:
         columns[name] = [censor] * len(base_ids)
     target = {
-        (_hashable_group_value(row_id), float(stop)): idx
-        for idx, (row_id, stop) in enumerate(
-            zip(base_ids, columns[str(options["tstopname"])], strict=True)
-        )
+        (code, float(stop)): idx
+        for idx, (code, stop) in enumerate(zip(base_codes, columns[stopname], strict=True))
     }
-    valid = {"within", "boundary", "trailing"}
+    valid = {3, 4, 6}
     for update, kind, value, raw_value in zip(
         updates,
         classifications,
@@ -9842,8 +9755,8 @@ def _tmerge_apply_operation(
             and float(raw_value) == 0.0
         ):
             continue
-        row_id, time, _unused, _source = update
-        row_idx = target.get((_hashable_group_value(row_id), time))
+        code, time, _unused, _source = update
+        row_idx = target.get((code, time))
         if row_idx is not None:
             columns[name][row_idx] = value
     event_censors[name] = censor
