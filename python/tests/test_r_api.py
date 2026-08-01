@@ -2961,6 +2961,28 @@ def test_r_style_pyears_tabulates_surv_inputs():
         survival.pyears([1.0], scale=0)
 
 
+def test_pyears_normalizes_direct_inputs_once_without_subsetting(monkeypatch):
+    original = survival.r_api._pyears_response_from_direct
+    calls = 0
+
+    def tracked(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(survival.r_api, "_pyears_response_from_direct", tracked)
+
+    result = survival.pyears(
+        [10.0, 20.0, 30.0],
+        event=[1, 0, 1],
+        group=["a", "b", "a"],
+        scale=1,
+    )
+
+    assert result.pyears == pytest.approx([40.0, 20.0])
+    assert calls == 1
+
+
 def test_r_style_finegray_matches_right_multistate_fixture():
     data = {
         "id": list(range(1, 9)),
