@@ -9119,33 +9119,28 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
 
 .survcheck_events <- function(status, id, states) {
   subjects <- factor(id, levels = unique(id))
-  targets <- factor(status, levels = seq_along(states))
-  counts <- table(subjects, targets)
-  if (all(counts == 0L)) return(NULL)
-  if (ncol(counts) == 1L) {
-    frequencies <- table(counts[, 1L])
-    return(matrix(
-      as.integer(frequencies),
-      nrow = 1L,
-      dimnames = list(states[[1L]], names(frequencies))
-    ))
-  }
-
+  targets <- factor(status, levels = 0:length(states))
+  counts <- table(subjects, targets)[, -1L, drop = FALSE]
   counts <- cbind(counts, rowSums(counts))
   count_levels <- sort(unique(as.integer(counts)))
-  events <- t(apply(counts, 2L, function(x) {
-    table(factor(x, levels = count_levels))
-  }))
-  dimnames(events) <- list(
-    state = c(states, "(any)"),
-    count = as.character(count_levels)
-  )
-  no_visit <- if (ncol(events) == 1L) {
-    rep(TRUE, nrow(events))
+  events <- if (length(count_levels) == 1L) {
+    matrix(
+      count_levels,
+      nrow = 1L,
+      ncol = 1L + length(states)
+    )
   } else {
-    rowSums(events[, -1L, drop = FALSE]) == 0L
+    apply(counts, 2L, function(x) {
+      table(factor(x, levels = count_levels))
+    })
   }
-  events[!no_visit, , drop = FALSE]
+  dimnames(events) <- list(
+    count = as.character(count_levels),
+    state = c(states, "(any)")
+  )
+  no_visit <- colSums(events[-1L, , drop = FALSE]) == 0L
+  if (any(no_visit)) events <- events[, !no_visit, drop = FALSE]
+  t(events)
 }
 
 .survcheck_transitions <- function(current_states, targets, states, id, response) {
