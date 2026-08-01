@@ -2936,6 +2936,10 @@ def test_r_style_bounded_link_helpers_match_survival_link_functions():
     assert survival.bcloglog([0.0, 0.75, 1.0], edge=0.6) == pytest.approx(
         [-0.08742157, -0.08742157, -0.08742157]
     )
+    missing = survival.blogit([0.0, None, 1.0])
+    assert missing[0] == pytest.approx(-2.94443898)
+    assert math.isnan(missing[1])
+    assert missing[2] == pytest.approx(2.94443898)
 
 
 def test_r_style_pyears_tabulates_surv_inputs():

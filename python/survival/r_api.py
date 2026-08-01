@@ -7426,10 +7426,9 @@ def _bounded_link_transform(x: Any, edge: Any, method_name: str) -> float | list
     edge_value = _finite_float(edge, "edge")
     values, is_scalar = _scalar_or_vector_with_flag(x, "x")
     link = _core.LinkFunctionParams(edge_value)
-    transform = getattr(link, method_name)
-    result = [
-        math.nan if _is_missing_value(value) else float(transform(float(value))) for value in values
-    ]
+    transform = getattr(link, f"{method_name}_many")
+    prepared = [None if _is_missing_value(value) else float(value) for value in values]
+    result = [float(value) for value in transform(prepared)]
     return result[0] if is_scalar else result
 
 

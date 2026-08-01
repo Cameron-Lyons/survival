@@ -3704,7 +3704,7 @@ test_that("data-prep helpers match R survival shapes", {
     )
   }
 
-  link_x <- c(0, 0.01, 0.05, 0.5, 0.95, 0.99, 1)
+  link_x <- c(0, 0.01, 0.05, 0.5, 0.95, 0.99, 1, NA)
   for (link_name in c("blogit", "bprobit", "bcloglog", "blog")) {
     bridged_link <- get(link_name)(0.05)
     reference_link <- get(link_name, asNamespace("survival"))(0.05)
