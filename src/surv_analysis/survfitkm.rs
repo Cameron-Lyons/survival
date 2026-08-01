@@ -893,6 +893,78 @@ pub struct SurvFitKMOutput {
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
+pub struct GroupedSurvFitKMOutput {
+    #[pyo3(get)]
+    pub groups: Vec<i32>,
+    #[pyo3(get)]
+    pub time: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_risk: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_risk_count: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_event: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_event_count: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_censor: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_censor_count: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub estimate: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub std_err: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub cumhaz: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub std_chaz: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub conf_lower: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub conf_upper: Vec<Vec<f64>>,
+}
+
+impl GroupedSurvFitKMOutput {
+    fn from_curves(curves: Vec<(i32, SurvFitKMOutput)>) -> Self {
+        let curve_count = curves.len();
+        let mut output = Self {
+            groups: Vec::with_capacity(curve_count),
+            time: Vec::with_capacity(curve_count),
+            n_risk: Vec::with_capacity(curve_count),
+            n_risk_count: Vec::with_capacity(curve_count),
+            n_event: Vec::with_capacity(curve_count),
+            n_event_count: Vec::with_capacity(curve_count),
+            n_censor: Vec::with_capacity(curve_count),
+            n_censor_count: Vec::with_capacity(curve_count),
+            estimate: Vec::with_capacity(curve_count),
+            std_err: Vec::with_capacity(curve_count),
+            cumhaz: Vec::with_capacity(curve_count),
+            std_chaz: Vec::with_capacity(curve_count),
+            conf_lower: Vec::with_capacity(curve_count),
+            conf_upper: Vec::with_capacity(curve_count),
+        };
+        for (group, curve) in curves {
+            output.groups.push(group);
+            output.time.push(curve.time);
+            output.n_risk.push(curve.n_risk);
+            output.n_risk_count.push(curve.n_risk_count);
+            output.n_event.push(curve.n_event);
+            output.n_event_count.push(curve.n_event_count);
+            output.n_censor.push(curve.n_censor);
+            output.n_censor_count.push(curve.n_censor_count);
+            output.estimate.push(curve.estimate);
+            output.std_err.push(curve.std_err);
+            output.cumhaz.push(curve.cumhaz);
+            output.std_chaz.push(curve.std_chaz);
+            output.conf_lower.push(curve.conf_lower);
+            output.conf_upper.push(curve.conf_upper);
+        }
+        output
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
 pub struct SurvFitKMInfluenceOutput {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -915,6 +987,32 @@ impl SurvFitKMOutput {
     pub fn cumulative_hazard_std_err(&self) -> Vec<f64> {
         self.std_chaz.clone()
     }
+}
+
+fn validate_survfitkm_data(
+    time: &[f64],
+    status: &[f64],
+    weights: Option<Vec<f64>>,
+) -> PyResult<Vec<f64>> {
+    validate_non_empty(time, "time")?;
+    validate_length(time.len(), status.len(), "status")?;
+    validate_no_nan(time, "time")?;
+    validate_finite(time, "time")?;
+    validate_non_negative(time, "time")?;
+    validate_no_nan(status, "status")?;
+    validate_finite(status, "status")?;
+    validate_binary_f64(status, "status")?;
+    let weights = match weights {
+        Some(values) => {
+            validate_length(time.len(), values.len(), "weights")?;
+            validate_no_nan(&values, "weights")?;
+            validate_finite(&values, "weights")?;
+            validate_non_negative(&values, "weights")?;
+            values
+        }
+        None => vec![1.0; time.len()],
+    };
+    Ok(weights)
 }
 
 #[pyfunction]
@@ -945,24 +1043,7 @@ pub fn survfitkm(
     };
     validate_conf_level(config.conf_level)?;
     let timefix = timefix.unwrap_or(true);
-    validate_non_empty(&time, "time")?;
-    validate_length(time.len(), status.len(), "status")?;
-    validate_no_nan(&time, "time")?;
-    validate_finite(&time, "time")?;
-    validate_non_negative(&time, "time")?;
-    validate_no_nan(&status, "status")?;
-    validate_finite(&status, "status")?;
-    validate_binary_f64(&status, "status")?;
-    let weights = match weights_opt {
-        Some(w) => {
-            validate_length(time.len(), w.len(), "weights")?;
-            validate_no_nan(&w, "weights")?;
-            validate_finite(&w, "weights")?;
-            validate_non_negative(&w, "weights")?;
-            w
-        }
-        None => vec![1.0; time.len()],
-    };
+    let weights = validate_survfitkm_data(&time, &status, weights_opt)?;
     let position = match position_opt {
         Some(p) => {
             validate_length(time.len(), p.len(), "position")?;
@@ -982,6 +1063,96 @@ pub fn survfitkm(
         &config,
         timefix,
     ))
+}
+
+fn compute_grouped_survfitkm(
+    time: &[f64],
+    status: &[f64],
+    groups: &[i32],
+    weights: &[f64],
+    entry_times: Option<&[f64]>,
+    config: &KaplanMeierConfig,
+    timefix: bool,
+) -> GroupedSurvFitKMOutput {
+    let mut indices_by_group: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (idx, &group) in groups.iter().enumerate() {
+        indices_by_group.entry(group).or_default().push(idx);
+    }
+    let grouped_indices: Vec<(i32, Vec<usize>)> = indices_by_group.into_iter().collect();
+    let compute = |(group, indices): &(i32, Vec<usize>)| {
+        let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
+        let group_status: Vec<f64> = indices.iter().map(|&idx| status[idx]).collect();
+        let group_weights: Vec<f64> = indices.iter().map(|&idx| weights[idx]).collect();
+        let group_entry =
+            entry_times.map(|values| indices.iter().map(|&idx| values[idx]).collect::<Vec<f64>>());
+        let position = vec![0; indices.len()];
+        (
+            *group,
+            compute_survfitkm_with_timefix(
+                &group_time,
+                &group_status,
+                &group_weights,
+                group_entry.as_deref(),
+                &position,
+                config,
+                timefix,
+            ),
+        )
+    };
+
+    let curves = if time.len() >= PARALLEL_THRESHOLD_XLARGE && grouped_indices.len() > 1 {
+        grouped_indices.par_iter().map(compute).collect()
+    } else {
+        grouped_indices.iter().map(compute).collect()
+    };
+    GroupedSurvFitKMOutput::from_curves(curves)
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, status, groups, weights=None, entry_times=None, reverse=None, conf_level=None, conf_type=None, timefix=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn survfitkm_grouped(
+    py: Python<'_>,
+    time: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
+    groups: &Bound<'_, PyAny>,
+    weights: Option<&Bound<'_, PyAny>>,
+    entry_times: Option<&Bound<'_, PyAny>>,
+    reverse: Option<bool>,
+    conf_level: Option<f64>,
+    conf_type: Option<String>,
+    timefix: Option<bool>,
+) -> PyResult<GroupedSurvFitKMOutput> {
+    let time = extract_vec_f64(time)?;
+    let status = extract_vec_f64(status)?;
+    let groups = extract_vec_i32(groups)?;
+    let weights = extract_optional_vec_f64(weights)?;
+    let entry_times = extract_optional_vec_f64(entry_times)?;
+    let config = KaplanMeierConfig {
+        reverse: reverse.unwrap_or(false),
+        computation_type: 0,
+        conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
+        conf_type: normalize_conf_type(conf_type.as_deref())?,
+    };
+    validate_conf_level(config.conf_level)?;
+    let timefix = timefix.unwrap_or(true);
+    validate_length(time.len(), groups.len(), "groups")?;
+    let weights = validate_survfitkm_data(&time, &status, weights)?;
+    if let Some(ref entry) = entry_times {
+        validate_entry_times(&time, entry, timefix)?;
+    }
+
+    Ok(py.detach(move || {
+        compute_grouped_survfitkm(
+            &time,
+            &status,
+            &groups,
+            &weights,
+            entry_times.as_deref(),
+            &config,
+            timefix,
+        )
+    }))
 }
 
 pub fn compute_survfitkm(
@@ -2434,6 +2605,62 @@ mod tests {
         assert_eq!(config.computation_type, 1);
         assert!((config.conf_level - 0.99).abs() < 1e-10);
         assert_eq!(config.conf_type, "plain");
+    }
+
+    #[test]
+    fn test_grouped_survfitkm_matches_individual_curves() {
+        let time = vec![1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5];
+        let status = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0];
+        let groups = vec![4, 2, 4, 2, 4, 2, 4, 2];
+        let weights = vec![1.0, 0.5, 1.5, 2.0, 0.75, 1.25, 2.5, 1.0];
+        let entry = vec![0.0, 0.0, 0.5, 0.25, 1.0, 1.25, 2.0, 2.25];
+        let config = KaplanMeierConfig {
+            reverse: false,
+            computation_type: 0,
+            conf_level: 0.9,
+            conf_type: "log-log".to_string(),
+        };
+
+        let grouped = compute_grouped_survfitkm(
+            &time,
+            &status,
+            &groups,
+            &weights,
+            Some(&entry),
+            &config,
+            true,
+        );
+        assert_eq!(grouped.groups, vec![2, 4]);
+
+        for (curve_idx, &group) in grouped.groups.iter().enumerate() {
+            let indices: Vec<usize> = groups
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &value)| (value == group).then_some(idx))
+                .collect();
+            let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
+            let group_status: Vec<f64> = indices.iter().map(|&idx| status[idx]).collect();
+            let group_weights: Vec<f64> = indices.iter().map(|&idx| weights[idx]).collect();
+            let group_entry: Vec<f64> = indices.iter().map(|&idx| entry[idx]).collect();
+            let position = vec![0; indices.len()];
+            let expected = compute_survfitkm_with_timefix(
+                &group_time,
+                &group_status,
+                &group_weights,
+                Some(&group_entry),
+                &position,
+                &config,
+                true,
+            );
+            assert_eq!(grouped.time[curve_idx], expected.time);
+            assert_eq!(grouped.n_risk[curve_idx], expected.n_risk);
+            assert_eq!(grouped.n_event[curve_idx], expected.n_event);
+            assert_eq!(grouped.n_censor[curve_idx], expected.n_censor);
+            assert_eq!(grouped.estimate[curve_idx], expected.estimate);
+            assert_eq!(grouped.std_err[curve_idx], expected.std_err);
+            assert_eq!(grouped.conf_lower[curve_idx], expected.conf_lower);
+            assert_eq!(grouped.conf_upper[curve_idx], expected.conf_upper);
+        }
     }
 
     #[test]

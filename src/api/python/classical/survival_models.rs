@@ -5,6 +5,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agsurv5, m)?)?;
     m.add_function(wrap_pyfunction!(cox_survfit_baseline, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm, m)?)?;
+    m.add_function(wrap_pyfunction!(survfitkm_grouped, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_with_options, m)?)?;
     m.add_function(wrap_pyfunction!(robust_survfitkm, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_influence, m)?)?;
@@ -111,6 +112,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         GEEConfig,
         GEEResult,
         SurvFitKMOutput,
+        GroupedSurvFitKMOutput,
         SurvFitKMInfluenceOutput,
         CountingSurvfitTables,
         SurvfitCurveResult,

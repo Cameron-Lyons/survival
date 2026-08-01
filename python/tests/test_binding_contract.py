@@ -3822,12 +3822,14 @@ def test_survfitkm_bindings_are_typed():
 
     assert {
         "SurvFitKMOutput",
+        "GroupedSurvFitKMOutput",
         "SurvFitKMInfluenceOutput",
         "CountingSurvfitTables",
         "SurvfitCurveResult",
         "KaplanMeierConfig",
         "SurvfitKMOptions",
         "survfitkm",
+        "survfitkm_grouped",
         "survfitkm_influence",
         "survfitkm_counting_influence",
         "robust_survfitkm",
@@ -3858,6 +3860,28 @@ def test_survfitkm_bindings_are_typed():
         "position",
         "reverse",
         "computation_type",
+        "conf_level",
+        "conf_type",
+        "timefix",
+    ]
+    assert list(inspect.signature(core.survfitkm_grouped).parameters) == [
+        "time",
+        "status",
+        "groups",
+        "weights",
+        "entry_times",
+        "reverse",
+        "conf_level",
+        "conf_type",
+        "timefix",
+    ]
+    assert _pyi_function_arg_names(stub_path, "survfitkm_grouped") == [
+        "time",
+        "status",
+        "groups",
+        "weights",
+        "entry_times",
+        "reverse",
         "conf_level",
         "conf_type",
         "timefix",
@@ -4137,6 +4161,22 @@ def test_survfitkm_bindings_are_typed():
         "conf_lower",
         "conf_upper",
     }
+    assert _pyi_class_property_names(stub_path, "GroupedSurvFitKMOutput") == {
+        "groups",
+        "time",
+        "n_risk",
+        "n_risk_count",
+        "n_event",
+        "n_event_count",
+        "n_censor",
+        "n_censor_count",
+        "estimate",
+        "std_err",
+        "cumhaz",
+        "std_chaz",
+        "conf_lower",
+        "conf_upper",
+    }
     assert _pyi_class_property_names(stub_path, "SurvFitKMInfluenceOutput") == {
         "time",
         "influence_surv",
@@ -4168,6 +4208,11 @@ def test_survfitkm_bindings_are_typed():
     }
 
     result = core.survfitkm([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 0.0, 1.0])
+    grouped = core.survfitkm_grouped(
+        [1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+        [1.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+        [7, 3, 7, 3, 7, 3],
+    )
     influence = core.survfitkm_influence(
         [1.0, 2.0, 3.0, 4.0],
         [1.0, 0.0, 1.0, 0.0],
@@ -4260,6 +4305,13 @@ def test_survfitkm_bindings_are_typed():
     )
 
     assert type(result).__name__ == "SurvFitKMOutput"
+    assert type(grouped).__name__ == "GroupedSurvFitKMOutput"
+    assert grouped.groups == [3, 7]
+    assert grouped.time[0] == pytest.approx([1.0, 2.0, 3.0])
+    assert grouped.estimate[0] == pytest.approx([1.0, 0.5, 0.5])
+    assert grouped.estimate[1] == pytest.approx([2.0 / 3.0, 2.0 / 3.0, 0.0])
+    with pytest.raises(ValueError, match="groups"):
+        core.survfitkm_grouped([1.0, 2.0], [1.0, 0.0], [0])
     assert result.time == pytest.approx([1.0, 2.0, 3.0, 4.0])
     assert result.n_risk == pytest.approx([4.0, 3.0, 2.0, 1.0])
     assert result.n_risk_count == pytest.approx([4.0, 3.0, 2.0, 1.0])
