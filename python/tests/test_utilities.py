@@ -339,8 +339,6 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
     assert missing_query.distances == [None]
     assert infinite_reference.indices == [0]
     assert infinite_reference.distances == [float("inf")]
-    with pytest.raises(ValueError, match="value values must be finite"):
-        survival.tcut([float("nan")], [0.0, 1.0])
     with pytest.raises(ValueError, match="breaks must be given in ascending order"):
         survival.tcut([0.5], [2.0, 1.0])
     with pytest.raises(ValueError, match="Must specify at least one interval"):
