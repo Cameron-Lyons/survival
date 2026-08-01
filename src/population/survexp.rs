@@ -5,6 +5,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+const DAYS_PER_YEAR: f64 = 365.25;
+const SUBJECT_BATCH_SIZE: usize = 2048;
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SurvExpResult {
@@ -153,6 +156,109 @@ impl CohortMethod {
     }
 }
 
+struct CurveAverages {
+    survival: Vec<f64>,
+    mean_cumhaz: Vec<f64>,
+    n_risk: Vec<f64>,
+}
+
+fn subject_cumulative_hazards(
+    age: f64,
+    year: f64,
+    sex: i32,
+    ratetable: &RateTable,
+    eval_times: &[f64],
+) -> Vec<f64> {
+    let mut result = Vec::with_capacity(eval_times.len());
+    let mut previous_time = 0.0;
+    let mut cumulative_hazard = 0.0;
+
+    for &eval_time in eval_times {
+        if eval_time < previous_time {
+            cumulative_hazard = ratetable
+                .cumulative_hazard(age, age + eval_time, year, Some(sex))
+                .unwrap_or(0.0);
+        } else {
+            cumulative_hazard += ratetable
+                .cumulative_hazard(
+                    age + previous_time,
+                    age + eval_time,
+                    year + previous_time / DAYS_PER_YEAR,
+                    Some(sex),
+                )
+                .unwrap_or(0.0);
+        }
+        result.push(cumulative_hazard);
+        previous_time = eval_time;
+    }
+    result
+}
+
+fn compute_curve_averages(
+    time: &[f64],
+    age: &[f64],
+    year: &[f64],
+    sex: Option<&[i32]>,
+    ratetable: &RateTable,
+    eval_times: &[f64],
+    observed_risk_set: bool,
+) -> CurveAverages {
+    let n_times = eval_times.len();
+    let mut survival_totals = vec![0.0; n_times];
+    let mut hazard_totals = vec![0.0; n_times];
+    let mut n_risk = vec![0.0; n_times];
+
+    for batch_start in (0..time.len()).step_by(SUBJECT_BATCH_SIZE) {
+        let batch_end = (batch_start + SUBJECT_BATCH_SIZE).min(time.len());
+        let batch_hazards = (batch_start..batch_end)
+            .into_par_iter()
+            .map(|index| {
+                subject_cumulative_hazards(
+                    age[index],
+                    year[index],
+                    sex_at(sex, index),
+                    ratetable,
+                    eval_times,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        for (offset, hazards) in batch_hazards.into_iter().enumerate() {
+            let subject = batch_start + offset;
+            for (time_index, (&eval_time, cumulative_hazard)) in
+                eval_times.iter().zip(hazards).enumerate()
+            {
+                if observed_risk_set && time[subject] < eval_time {
+                    continue;
+                }
+                survival_totals[time_index] += (-cumulative_hazard).exp();
+                hazard_totals[time_index] += cumulative_hazard;
+                n_risk[time_index] += 1.0;
+            }
+        }
+    }
+
+    let mut survival = Vec::with_capacity(n_times);
+    let mut mean_cumhaz = Vec::with_capacity(n_times);
+    for ((survival_total, hazard_total), count) in
+        survival_totals.into_iter().zip(hazard_totals).zip(&n_risk)
+    {
+        if *count > 0.0 {
+            survival.push(survival_total / count);
+            mean_cumhaz.push(hazard_total / count);
+        } else {
+            survival.push(0.0);
+            mean_cumhaz.push(0.0);
+        }
+    }
+
+    CurveAverages {
+        survival,
+        mean_cumhaz,
+        n_risk,
+    }
+}
+
 fn compute_hakulinen(
     time: &[f64],
     age: &[f64],
@@ -201,42 +307,21 @@ fn compute_cohort_average(
     method: CohortMethod,
 ) -> PyResult<SurvExpResult> {
     let n = time.len();
-
-    let results: Vec<(f64, f64, f64)> = eval_times
-        .par_iter()
-        .map(|&eval_t| {
-            let (total_surv, total_cumhaz, count) = (0..n)
-                .filter(|&i| !method.uses_observed_risk_set() || time[i] >= eval_t)
-                .map(|i| {
-                    let age_at_eval = age[i] + eval_t;
-                    let exp_cumhaz = ratetable
-                        .cumulative_hazard(age[i], age_at_eval, year[i], Some(sex_at(sex, i)))
-                        .unwrap_or(0.0);
-                    ((-exp_cumhaz).exp(), exp_cumhaz, 1.0)
-                })
-                .fold((0.0, 0.0, 0.0), |acc, x| {
-                    (acc.0 + x.0, acc.1 + x.1, acc.2 + x.2)
-                });
-
-            let surv = if count > 0.0 { total_surv / count } else { 0.0 };
-            let cumhaz = if count > 0.0 {
-                total_cumhaz / count
-            } else {
-                0.0
-            };
-            (surv, cumhaz, count)
-        })
-        .collect();
-
-    let surv: Vec<f64> = results.iter().map(|r| r.0).collect();
-    let cumhaz: Vec<f64> = results.iter().map(|r| r.1).collect();
-    let n_risk: Vec<f64> = results.iter().map(|r| r.2).collect();
+    let averages = compute_curve_averages(
+        time,
+        age,
+        year,
+        sex,
+        ratetable,
+        eval_times,
+        method.uses_observed_risk_set(),
+    );
 
     Ok(SurvExpResult {
         time: eval_times.to_vec(),
-        surv,
-        n_risk,
-        cumhaz,
+        surv: averages.survival,
+        n_risk: averages.n_risk,
+        cumhaz: averages.mean_cumhaz,
         method: method.as_str().to_string(),
         n,
     })
@@ -271,7 +356,7 @@ fn compute_conditional(
             at_risk_count += 1;
             let age_start = age[i] + prev_time;
             let age_end = age[i] + eval_t;
-            let year_start = year[i] + prev_time / 365.25;
+            let year_start = year[i] + prev_time / DAYS_PER_YEAR;
 
             let interval_hazard = ratetable
                 .cumulative_hazard(age_start, age_end, year_start, Some(sex_at(sex, i)))
@@ -324,52 +409,23 @@ fn compute_individual(
     eval_times: &[f64],
 ) -> PyResult<SurvExpResult> {
     let n = time.len();
-    let n_times = eval_times.len();
-
-    let individual_surv: Vec<Vec<f64>> = (0..n)
-        .into_par_iter()
-        .map(|i| {
-            eval_times
-                .iter()
-                .map(|&eval_t| {
-                    let age_at_eval = age[i] + eval_t;
-                    ratetable
-                        .expected_survival(age[i], age_at_eval, year[i], Some(sex_at(sex, i)))
-                        .unwrap_or(1.0)
-                })
-                .collect()
+    let averages = compute_curve_averages(time, age, year, sex, ratetable, eval_times, true);
+    let cumhaz = averages
+        .survival
+        .iter()
+        .map(|&survival| {
+            if survival > 0.0 {
+                -survival.ln()
+            } else {
+                f64::INFINITY
+            }
         })
         .collect();
 
-    let mut surv = vec![0.0; n_times];
-    let mut cumhaz = vec![0.0; n_times];
-    let mut n_risk = vec![0.0; n_times];
-
-    for t_idx in 0..n_times {
-        let eval_t = eval_times[t_idx];
-        let mut total = 0.0;
-        let mut count = 0.0;
-
-        for i in 0..n {
-            if time[i] >= eval_t {
-                total += individual_surv[i][t_idx];
-                count += 1.0;
-            }
-        }
-
-        n_risk[t_idx] = count;
-        surv[t_idx] = if count > 0.0 { total / count } else { 0.0 };
-        cumhaz[t_idx] = if surv[t_idx] > 0.0 {
-            -surv[t_idx].ln()
-        } else {
-            f64::INFINITY
-        };
-    }
-
     Ok(SurvExpResult {
         time: eval_times.to_vec(),
-        surv,
-        n_risk,
+        surv: averages.survival,
+        n_risk: averages.n_risk,
         cumhaz,
         method: "individual".to_string(),
         n,
@@ -538,6 +594,67 @@ mod tests {
         let explicit_zero_individual =
             survexp_individual(time, age, year, &rt, Some(vec![0; 3])).unwrap();
         assert_eq!(default_individual, explicit_zero_individual);
+    }
+
+    #[test]
+    fn incremental_curve_averages_match_direct_integration_across_batches() {
+        let rt = create_test_ratetable();
+        let n = SUBJECT_BATCH_SIZE + 3;
+        let time = (0..n)
+            .map(|index| 300.0 + (index % 9) as f64 * 100.0)
+            .collect::<Vec<_>>();
+        let age = (0..n)
+            .map(|index| 15000.0 + (index % 13) as f64 * 2500.0)
+            .collect::<Vec<_>>();
+        let year = (0..n)
+            .map(|index| 1995.0 + (index % 17) as f64)
+            .collect::<Vec<_>>();
+        let sex = (0..n).map(|index| (index % 2) as i32).collect::<Vec<_>>();
+        let eval_times = vec![180.0, 540.0, 900.0];
+
+        for observed_risk_set in [false, true] {
+            let averages = compute_curve_averages(
+                &time,
+                &age,
+                &year,
+                Some(&sex),
+                &rt,
+                &eval_times,
+                observed_risk_set,
+            );
+            for (time_index, &eval_time) in eval_times.iter().enumerate() {
+                let mut expected_survival = 0.0;
+                let mut expected_hazard = 0.0;
+                let mut expected_count = 0.0;
+                for subject in 0..n {
+                    if observed_risk_set && time[subject] < eval_time {
+                        continue;
+                    }
+                    let hazard = rt
+                        .cumulative_hazard(
+                            age[subject],
+                            age[subject] + eval_time,
+                            year[subject],
+                            Some(sex[subject]),
+                        )
+                        .unwrap();
+                    expected_survival += (-hazard).exp();
+                    expected_hazard += hazard;
+                    expected_count += 1.0;
+                }
+                assert_eq!(averages.n_risk[time_index], expected_count);
+                if expected_count > 0.0 {
+                    assert!(
+                        (averages.survival[time_index] - expected_survival / expected_count).abs()
+                            < 1e-12
+                    );
+                    assert!(
+                        (averages.mean_cumhaz[time_index] - expected_hazard / expected_count).abs()
+                            < 1e-12
+                    );
+                }
+            }
+        }
     }
 
     #[test]

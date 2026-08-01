@@ -1,6 +1,8 @@
-use crate::constants::clamped_normal_ci_bounds_95;
+use crate::constants::{PARALLEL_THRESHOLD_XLARGE, clamped_normal_ci_bounds_95};
 use crate::internal::statistical::erf;
 use pyo3::prelude::*;
+use rayon::prelude::*;
+use std::collections::BTreeMap;
 
 type DistributionFn = fn(f64, f64, f64) -> f64;
 type DistributionFns = (DistributionFn, DistributionFn);
@@ -362,27 +364,63 @@ pub struct TurnbullResult {
     pub converged: bool,
 }
 
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct GroupedTurnbullResult {
+    #[pyo3(get)]
+    pub groups: Vec<i32>,
+    #[pyo3(get)]
+    pub time_points: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub survival: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub survival_lower: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub survival_upper: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_iter: Vec<usize>,
+    #[pyo3(get)]
+    pub converged: Vec<bool>,
+}
+
+impl GroupedTurnbullResult {
+    fn from_curves(curves: Vec<(i32, TurnbullResult)>) -> Self {
+        let curve_count = curves.len();
+        let mut output = Self {
+            groups: Vec::with_capacity(curve_count),
+            time_points: Vec::with_capacity(curve_count),
+            survival: Vec::with_capacity(curve_count),
+            survival_lower: Vec::with_capacity(curve_count),
+            survival_upper: Vec::with_capacity(curve_count),
+            n_iter: Vec::with_capacity(curve_count),
+            converged: Vec::with_capacity(curve_count),
+        };
+        for (group, curve) in curves {
+            output.groups.push(group);
+            output.time_points.push(curve.time_points);
+            output.survival.push(curve.survival);
+            output.survival_lower.push(curve.survival_lower);
+            output.survival_upper.push(curve.survival_upper);
+            output.n_iter.push(curve.n_iter);
+            output.converged.push(curve.converged);
+        }
+        output
+    }
+}
+
 #[inline]
 fn turnbull_case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
     weights.map_or(1.0, |values| values[index])
 }
 
-#[pyfunction]
-#[pyo3(signature = (left, right, max_iter=1000, tol=1e-6, weights=None))]
-pub fn turnbull_estimator(
-    left: Vec<f64>,
-    right: Vec<f64>,
-    max_iter: usize,
-    tol: f64,
-    weights: Option<Vec<f64>>,
-) -> PyResult<TurnbullResult> {
+fn validate_turnbull_inputs(left: &[f64], right: &[f64], weights: Option<&[f64]>) -> PyResult<()> {
     let n = left.len();
     if right.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "left and right must have same length",
         ));
     }
-    let weights_ref = weights.as_deref();
+    let weights_ref = weights;
     if let Some(values) = weights_ref {
         if values.len() != n {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -411,7 +449,18 @@ pub fn turnbull_estimator(
             ));
         }
     }
-    let total_weight = weights_ref.map_or(n as f64, |values| values.iter().sum());
+    Ok(())
+}
+
+fn compute_turnbull_estimator(
+    left: &[f64],
+    right: &[f64],
+    max_iter: usize,
+    tol: f64,
+    weights: Option<&[f64]>,
+) -> TurnbullResult {
+    let n = left.len();
+    let total_weight = weights.map_or(n as f64, |values| values.iter().sum());
 
     let mut all_points: Vec<f64> = Vec::new();
     for i in 0..n {
@@ -426,14 +475,14 @@ pub fn turnbull_estimator(
     all_points.dedup();
 
     if all_points.is_empty() {
-        return Ok(TurnbullResult {
+        return TurnbullResult {
             time_points: vec![],
             survival: vec![],
             survival_lower: vec![],
             survival_upper: vec![],
             n_iter: 0,
             converged: true,
-        });
+        };
     }
 
     let m = all_points.len();
@@ -449,7 +498,7 @@ pub fn turnbull_estimator(
         let mut p_new = vec![0.0; m];
 
         for i in 0..n {
-            let case_weight = turnbull_case_weight(weights_ref, i);
+            let case_weight = turnbull_case_weight(weights, i);
             if case_weight == 0.0 {
                 continue;
             }
@@ -504,14 +553,107 @@ pub fn turnbull_estimator(
 
     let (survival_lower, survival_upper) = clamped_normal_ci_bounds_95(&survival, &se, 0.0, 1.0);
 
-    Ok(TurnbullResult {
+    TurnbullResult {
         time_points: all_points,
         survival,
         survival_lower,
         survival_upper,
         n_iter,
         converged,
-    })
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (left, right, max_iter=1000, tol=1e-6, weights=None))]
+pub fn turnbull_estimator(
+    left: Vec<f64>,
+    right: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+    weights: Option<Vec<f64>>,
+) -> PyResult<TurnbullResult> {
+    validate_turnbull_inputs(&left, &right, weights.as_deref())?;
+    Ok(compute_turnbull_estimator(
+        &left,
+        &right,
+        max_iter,
+        tol,
+        weights.as_deref(),
+    ))
+}
+
+fn compute_grouped_turnbull(
+    left: &[f64],
+    right: &[f64],
+    groups: &[i32],
+    weights: &[f64],
+    max_iter: usize,
+    tol: f64,
+) -> GroupedTurnbullResult {
+    let mut indices_by_group: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (idx, &group) in groups.iter().enumerate() {
+        indices_by_group.entry(group).or_default().push(idx);
+    }
+    let grouped_indices: Vec<(i32, Vec<usize>)> = indices_by_group.into_iter().collect();
+    let compute = |(group, indices): &(i32, Vec<usize>)| {
+        let group_left: Vec<f64> = indices.iter().map(|&idx| left[idx]).collect();
+        let group_right: Vec<f64> = indices.iter().map(|&idx| right[idx]).collect();
+        let group_weights: Vec<f64> = indices.iter().map(|&idx| weights[idx]).collect();
+        (
+            *group,
+            compute_turnbull_estimator(
+                &group_left,
+                &group_right,
+                max_iter,
+                tol,
+                Some(&group_weights),
+            ),
+        )
+    };
+    let curves = if left.len() >= PARALLEL_THRESHOLD_XLARGE && grouped_indices.len() > 1 {
+        grouped_indices.par_iter().map(compute).collect()
+    } else {
+        grouped_indices.iter().map(compute).collect()
+    };
+    GroupedTurnbullResult::from_curves(curves)
+}
+
+#[pyfunction]
+#[pyo3(signature = (left, right, groups, max_iter=1000, tol=1e-6, weights=None))]
+pub fn turnbull_estimator_grouped(
+    py: Python<'_>,
+    left: Vec<f64>,
+    right: Vec<f64>,
+    groups: Vec<i32>,
+    max_iter: usize,
+    tol: f64,
+    weights: Option<Vec<f64>>,
+) -> PyResult<GroupedTurnbullResult> {
+    validate_turnbull_inputs(&left, &right, weights.as_deref())?;
+    if groups.len() != left.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "groups must have same length as left and right",
+        ));
+    }
+    let weights = weights.unwrap_or_else(|| vec![1.0; left.len()]);
+    let mut group_has_positive_weight = BTreeMap::new();
+    for (&group, &weight) in groups.iter().zip(&weights) {
+        group_has_positive_weight
+            .entry(group)
+            .and_modify(|has_positive| *has_positive |= weight > 0.0)
+            .or_insert(weight > 0.0);
+    }
+    if group_has_positive_weight.values().any(|value| !value) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "weights must include at least one positive value per group",
+        ));
+    }
+
+    Ok(
+        py.detach(move || {
+            compute_grouped_turnbull(&left, &right, &groups, &weights, max_iter, tol)
+        }),
+    )
 }
 
 #[pyfunction]
@@ -578,6 +720,42 @@ mod tests {
         assert_eq!(weighted.time_points, replicated.time_points);
         for (actual, expected) in weighted.survival.iter().zip(replicated.survival.iter()) {
             assert!((actual - expected).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_grouped_turnbull_matches_individual_weighted_curves() {
+        let left = vec![0.0, 1.0, 2.0, 0.0, 2.0, 3.0, 4.0, 3.0];
+        let right = vec![1.0, 3.0, f64::INFINITY, 2.0, 2.0, 5.0, 4.0, f64::INFINITY];
+        let groups = vec![7, 3, 7, 3, 7, 3, 7, 3];
+        let weights = vec![1.0, 0.5, 1.5, 2.0, 0.75, 1.25, 2.5, 1.0];
+
+        let grouped = compute_grouped_turnbull(&left, &right, &groups, &weights, 1000, 1e-6);
+        assert_eq!(grouped.groups, vec![3, 7]);
+
+        for (curve_idx, &group) in grouped.groups.iter().enumerate() {
+            let indices: Vec<usize> = groups
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &value)| (value == group).then_some(idx))
+                .collect();
+            let group_left: Vec<f64> = indices.iter().map(|&idx| left[idx]).collect();
+            let group_right: Vec<f64> = indices.iter().map(|&idx| right[idx]).collect();
+            let group_weights: Vec<f64> = indices.iter().map(|&idx| weights[idx]).collect();
+            let expected = compute_turnbull_estimator(
+                &group_left,
+                &group_right,
+                1000,
+                1e-6,
+                Some(&group_weights),
+            );
+
+            assert_eq!(grouped.time_points[curve_idx], expected.time_points);
+            assert_eq!(grouped.survival[curve_idx], expected.survival);
+            assert_eq!(grouped.survival_lower[curve_idx], expected.survival_lower);
+            assert_eq!(grouped.survival_upper[curve_idx], expected.survival_upper);
+            assert_eq!(grouped.n_iter[curve_idx], expected.n_iter);
+            assert_eq!(grouped.converged[curve_idx], expected.converged);
         }
     }
 

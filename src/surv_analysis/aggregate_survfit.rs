@@ -322,6 +322,122 @@ pub fn aggregate_survfit_by_group(
     Ok(results)
 }
 
+#[pyfunction]
+#[pyo3(signature = (time, survs, std_errs=None, weights=None, groups=None))]
+pub fn aggregate_shared_survfit(
+    time: Vec<f64>,
+    survs: Vec<Vec<f64>>,
+    std_errs: Option<Vec<Vec<f64>>>,
+    weights: Option<Vec<f64>>,
+    groups: Option<Vec<i32>>,
+) -> PyResult<Vec<AggregateSurvfitResult>> {
+    let n_curves = survs.len();
+    if let Some(values) = std_errs.as_ref()
+        && values.len() != n_curves
+    {
+        return Err(value_error(
+            "std_errs must have same length as number of curves",
+        ));
+    }
+    if let Some(values) = weights.as_ref()
+        && values.len() != n_curves
+    {
+        return Err(value_error(
+            "weights must have same length as number of curves",
+        ));
+    }
+    if let Some(values) = groups.as_ref()
+        && values.len() != n_curves
+    {
+        return Err(value_error(
+            "groups must have same length as number of curves",
+        ));
+    }
+    validate_time_curve("time", &time)?;
+    for (index, curve) in survs.iter().enumerate() {
+        if curve.len() != time.len() {
+            return Err(value_error(format!(
+                "survs[{index}] must have the same length as time"
+            )));
+        }
+        validate_probability_curve(&format!("survs[{index}]"), curve)?;
+    }
+    if let Some(curves) = std_errs.as_ref() {
+        for (index, curve) in curves.iter().enumerate() {
+            if curve.len() != time.len() {
+                return Err(value_error(format!(
+                    "std_errs[{index}] must have the same length as time"
+                )));
+            }
+            validate_nonnegative_finite_curve(&format!("std_errs[{index}]"), curve)?;
+        }
+    }
+    if let Some(values) = weights.as_ref() {
+        validate_nonnegative_finite_curve("weights", values)?;
+    }
+    if n_curves == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut aggregate_time = time.clone();
+    aggregate_time.sort_by(|a, b| a.total_cmp(b));
+    aggregate_time.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
+    let source_indices = aggregate_time
+        .iter()
+        .map(|&eval_time| {
+            time.iter()
+                .position(|&source_time| source_time > eval_time + TIME_EPSILON)
+                .unwrap_or(time.len())
+                .checked_sub(1)
+        })
+        .collect::<Vec<_>>();
+
+    let group_values = groups.unwrap_or_else(|| vec![0; n_curves]);
+    let mut grouped: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (index, group) in group_values.into_iter().enumerate() {
+        grouped.entry(group).or_default().push(index);
+    }
+
+    let mut results = Vec::with_capacity(grouped.len());
+    for indices in grouped.into_values() {
+        let group_weights = weights
+            .as_ref()
+            .map(|values| indices.iter().map(|&index| values[index]).collect());
+        let normalized = normalized_weights(group_weights, indices.len())?;
+        let mut surv = vec![0.0; aggregate_time.len()];
+        let mut variance = vec![0.0; aggregate_time.len()];
+        for (&curve_index, &weight) in indices.iter().zip(&normalized) {
+            for (aggregate, source_index) in surv.iter_mut().zip(&source_indices) {
+                let value = source_index
+                    .map(|index| survs[curve_index][index])
+                    .unwrap_or(1.0);
+                *aggregate += weight * value;
+            }
+            if let Some(curves) = std_errs.as_ref() {
+                let weight_squared = weight * weight;
+                for (aggregate, source_index) in variance.iter_mut().zip(&source_indices) {
+                    let value = source_index
+                        .map(|index| curves[curve_index][index])
+                        .unwrap_or(0.0);
+                    *aggregate += weight_squared * value * value;
+                }
+            }
+        }
+        let std_err = variance.into_iter().map(f64::sqrt).collect::<Vec<_>>();
+        let (lower, upper) = clamped_normal_ci_bounds(&surv, &std_err, z_score(0.95), 0.0, 1.0);
+        results.push(AggregateSurvfitResult {
+            time: aggregate_time.clone(),
+            surv,
+            std_err,
+            lower,
+            upper,
+            n_curves: indices.len(),
+            weights: normalized,
+        });
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,5 +541,61 @@ mod tests {
         assert_eq!(result[1].weights, vec![1.0 / 3.0, 2.0 / 3.0]);
         assert!((result[1].surv[0] - 0.8333333333333333).abs() < 1e-12);
         assert!((result[1].surv[1] - 0.7333333333333333).abs() < 1e-12);
+    }
+
+    #[test]
+    fn aggregate_shared_survfit_groups_weighted_curves_and_errors() {
+        let result = aggregate_shared_survfit(
+            vec![1.0, 2.0],
+            vec![vec![0.9, 0.8], vec![0.8, 0.6], vec![0.7, 0.4]],
+            Some(vec![vec![0.1, 0.2], vec![0.3, 0.4], vec![0.2, 0.1]]),
+            Some(vec![1.0, 2.0, 3.0]),
+            Some(vec![2, 1, 2]),
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].n_curves, 1);
+        assert_eq!(result[0].surv, vec![0.8, 0.6]);
+        assert_eq!(result[0].std_err, vec![0.3, 0.4]);
+        assert_eq!(result[1].n_curves, 2);
+        assert_eq!(result[1].weights, vec![0.25, 0.75]);
+        assert!((result[1].surv[0] - 0.75).abs() < 1e-12);
+        assert!((result[1].surv[1] - 0.5).abs() < 1e-12);
+        assert!((result[1].std_err[0] - 0.152_069_063_257_455_5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn aggregate_shared_survfit_validates_shared_shapes_and_group_weights() {
+        assert!(
+            aggregate_shared_survfit(vec![1.0], vec![vec![0.9, 0.8]], None, None, None).is_err()
+        );
+        assert!(
+            aggregate_shared_survfit(
+                vec![1.0],
+                vec![vec![0.9], vec![0.8]],
+                None,
+                Some(vec![0.0, 1.0]),
+                Some(vec![1, 2]),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn aggregate_shared_survfit_preserves_step_deduplication() {
+        let result = aggregate_shared_survfit(
+            vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0],
+            vec![vec![0.9, 0.8, 0.7], vec![0.7, 0.6, 0.5]],
+            Some(vec![vec![0.1, 0.2, 0.3], vec![0.3, 0.4, 0.5]]),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].time, vec![1.0, 2.0]);
+        assert_eq!(result[0].surv, vec![0.7, 0.6]);
+        assert!((result[0].std_err[0] - 0.223_606_797_749_978_96).abs() < 1e-12);
     }
 }

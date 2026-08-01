@@ -81,10 +81,23 @@ def test_tmerge_family_public_apis():
         [0.5, 1.5, 0.5],
     )
     carry = survival.tmerge3([1, 1, 1, 2, 2], [False, True, False, True, False])
+    plan = survival.tmerge_plan(
+        [1, 1],
+        [0.0, 7.0],
+        [5.0, 10.0],
+        [1] * 10,
+        [-1.0, 0.0, 3.0, 5.0, 6.0, 7.0, 8.0, 8.0, 10.0, 11.0],
+    )
 
     assert merged == pytest.approx([2.0, 5.0, 4.0])
     assert indices == [1, 2, 3]
     assert carry == [1, 1, 3, 0, 5]
+    assert plan.kind == [0, 5, 3, 6, 2, 5, 3, 3, 6, 1]
+    assert plan.count == [1, 1, 1, 3, 0, 2, 2, 1]
+    assert plan.row == [0, 0, 1, 1]
+    assert plan.start == [0.0, 3.0, 7.0, 8.0]
+    assert plan.stop == [3.0, 5.0, 8.0, 10.0]
+    assert plan.censor == [True, False, True, False]
 
     negative_ids = survival.tmerge(
         [-1, -1],
@@ -100,6 +113,8 @@ def test_tmerge_family_public_apis():
         survival.tmerge([1], [], [0.0], [], [], [])
     with pytest.raises(ValueError, match="ntime must have same length as nid"):
         survival.tmerge2([1], [1.0], [1], [])
+    with pytest.raises(ValueError, match="intervals must not overlap"):
+        survival.tmerge_plan([1, 1], [0.0, 4.0], [5.0, 10.0], [], [])
     with pytest.raises(ValueError, match="miss must have same length as id"):
         survival.tmerge3([1], [])
     with pytest.raises(ValueError, match="time1 values must be finite"):
@@ -161,6 +176,11 @@ def test_surv2data_and_survcondense_public_apis():
         [5.0, 4.0, 4.0, 5.0],
         [0, 1, 1, 0],
     )
+    timeline = survival.surv2data_timeline(
+        [1, 2, 1, 1, 2],
+        [0.0, 0.0, 5.0, 2.0, 3.0],
+        [1, 1, 3, 2, None],
+    )
     condensed = survival.survcondense(
         [2, 1, 1, 2],
         [0.0, 0.0, 5.0, 3.0],
@@ -173,6 +193,11 @@ def test_surv2data_and_survcondense_public_apis():
     assert surv2data.time2 == pytest.approx([2.0, 4.0, 3.0, 5.0])
     assert surv2data.status == [0, 1, 0, 0]
     assert surv2data.row_index == [2, 3, 4, 1]
+    assert timeline.row_index == [0, 1, 3]
+    assert timeline.start == pytest.approx([0.0, 0.0, 2.0])
+    assert timeline.stop == pytest.approx([2.0, 3.0, 5.0])
+    assert timeline.status == [2, 0, 3]
+    assert timeline.istate == [1, 1, 2]
 
     assert condensed.id == [1, 2, 2]
     assert condensed.time1 == pytest.approx([0.0, 0.0, 3.0])
@@ -201,6 +226,12 @@ def test_surv2data_and_survcondense_public_apis():
         survival.surv2data([1], [2.0], [1.0], [1])
     with pytest.raises(ValueError, match="duplicated time values for a single id"):
         survival.surv2data([1, 1], [2.0, 2.0])
+    with pytest.raises(ValueError, match="same length"):
+        survival.surv2data_timeline([1], [], [1])
+    with pytest.raises(ValueError, match="time contains NaN"):
+        survival.surv2data_timeline([1], [float("nan")], [1])
+    with pytest.raises(ValueError, match="duplicated time values"):
+        survival.surv2data_timeline([1, 1], [2.0, 2.0], [1, 2])
     with pytest.raises(ValueError, match="time1 must have same length as id"):
         survival.survcondense([1], [], [1.0], [0])
     with pytest.raises(ValueError, match="time2 must have same length as id"):
@@ -299,10 +330,12 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
         survival.aeq_surv([1.0], float("inf"))
     with pytest.raises(ValueError, match="time values must be finite"):
         survival.aeq_surv([1.0, float("nan")])
-    with pytest.raises(ValueError, match="date1 values must be finite"):
-        survival.neardate([1], [float("nan")], [1], [1.0])
-    with pytest.raises(ValueError, match="date2 values must be finite"):
-        survival.neardate_str(["a"], [1.0], ["a"], [float("inf")])
+    missing_query = survival.neardate([1], [float("nan")], [1], [1.0])
+    infinite_reference = survival.neardate_str(["a"], [1.0], ["a"], [float("inf")])
+    assert missing_query.indices == [None]
+    assert missing_query.distances == [None]
+    assert infinite_reference.indices == [0]
+    assert infinite_reference.distances == [float("inf")]
     with pytest.raises(ValueError, match="value values must be finite"):
         survival.tcut([float("nan")], [0.0, 1.0])
     with pytest.raises(ValueError, match="breaks must be given in ascending order"):
@@ -325,6 +358,7 @@ def test_timeline_public_apis_and_validation():
     )
     intervals = survival.from_timeline(timeline.id, timeline.states, timeline.time_points)
     precise = survival.to_timeline([1, 1], [0.0, 1.0004], [1.0004, 1.0008], [0, 1])
+    tolerance_reversed = survival.to_timeline([1], [1.0 + 0.5e-9], [1.0], [9])
 
     assert timeline.id == [1, 2]
     assert timeline.time_points == pytest.approx([0.0, 5.0, 10.0])
@@ -335,6 +369,7 @@ def test_timeline_public_apis_and_validation():
     assert intervals.status == [0, 1, 2, 2]
     assert precise.time_points == pytest.approx([0.0, 1.0004, 1.0008])
     assert precise.states == [[0, 1, 1]]
+    assert tolerance_reversed.states == [[9]]
 
     with pytest.raises(ValueError, match="time1 must have same length as id"):
         survival.to_timeline([1], [], [1.0], [0])
