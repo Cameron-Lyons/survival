@@ -510,28 +510,27 @@ test_that("R formula wrappers delegate to the Python survival package", {
     group = factor(c("low", "high", "low", "high", "low", "high")),
     cluster = c("a", "a", "b", "b", "c", "c")
   )
-  compare_aareg(
-    aareg(
-      survival::Surv(time, status) ~ x + z,
-      data = aareg_data,
-      weights = weight,
-      cluster = cluster,
-      nmin = 1,
-      model = TRUE,
-      x = TRUE,
-      y = TRUE
-    ),
-    survival::aareg(
-      survival::Surv(time, status) ~ x + z,
-      data = aareg_data,
-      weights = weight,
-      cluster = cluster,
-      nmin = 1,
-      model = TRUE,
-      x = TRUE,
-      y = TRUE
-    )
+  bridged_aareg <- aareg(
+    survival::Surv(time, status) ~ x + z,
+    data = aareg_data,
+    weights = weight,
+    cluster = cluster,
+    nmin = 1,
+    model = TRUE,
+    x = TRUE,
+    y = TRUE
   )
+  reference_aareg <- survival::aareg(
+    survival::Surv(time, status) ~ x + z,
+    data = aareg_data,
+    weights = weight,
+    cluster = cluster,
+    nmin = 1,
+    model = TRUE,
+    x = TRUE,
+    y = TRUE
+  )
+  compare_aareg(bridged_aareg, reference_aareg)
   compare_aareg(
     aareg(
       survival::Surv(time, status) ~ x + group + cluster(cluster),
@@ -592,6 +591,43 @@ test_that("R formula wrappers delegate to the Python survival package", {
     "formula term ignored"
   )
   compare_aareg(bridged_aareg_cluster_override, reference_aareg_cluster_override)
+
+  reference_aareg_subset <- getFromNamespace("[.aareg", "survival")
+  reference_aareg_summary <- getFromNamespace("summary.aareg", "survival")
+  reference_aareg_print <- getFromNamespace("print.aareg", "survival")
+  reference_aareg_summary_print <- getFromNamespace("print.summary.aareg", "survival")
+  expect_equal(
+    labels.aareg(bridged_aareg),
+    attr(reference_aareg$terms, "term.labels")
+  )
+  compare_aareg(
+    `[.aareg`(bridged_aareg, 1:2),
+    reference_aareg_subset(reference_aareg, 1:2)
+  )
+  bridged_aareg_summary <- summary.aareg(bridged_aareg)
+  reference_aareg_summary_result <- reference_aareg_summary(reference_aareg)
+  expect_equal(bridged_aareg_summary, reference_aareg_summary_result, tolerance = 1e-10)
+  expect_equal(
+    summary.aareg(bridged_aareg, maxtime = 3, test = "nrisk", scale = 2),
+    reference_aareg_summary(reference_aareg, maxtime = 3, test = "nrisk", scale = 2),
+    tolerance = 1e-10
+  )
+  bridged_aareg_print <- bridged_aareg
+  reference_aareg_print_result <- reference_aareg
+  bridged_aareg_print$call <- reference_aareg_print_result$call <- quote(aareg(Surv(time, status) ~ x + z))
+  expect_equal(
+    capture.output(print.aareg(bridged_aareg_print)),
+    capture.output(reference_aareg_print(reference_aareg_print_result))
+  )
+  expect_equal(
+    capture.output(print.summary.aareg(bridged_aareg_summary)),
+    capture.output(reference_aareg_summary_print(reference_aareg_summary_result))
+  )
+  grDevices::pdf(NULL)
+  expect_silent(plot.aareg(bridged_aareg, se = TRUE))
+  expect_silent(lines.aareg(bridged_aareg, se = FALSE, maxtime = 3))
+  grDevices::dev.off()
+
   expect_error(
     aareg(
       survival::Surv(time, status) ~ x + cluster(group) + cluster(cluster),
