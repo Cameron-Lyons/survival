@@ -5871,6 +5871,18 @@ def perform_pyears_calculation(
     do_event: int | None,
     ny: int | None,
 ) -> dict[str, list[float] | float]: ...
+def perform_survexp_fit(
+    conditional: bool,
+    expected_factors: list[int],
+    expected_dims: list[int],
+    expected_cuts: list[float],
+    expected_rates: list[float],
+    groups: list[int],
+    expected_data: list[float],
+    followup: list[float],
+    times: list[float],
+    n_groups: int,
+) -> dict[str, list[float] | list[int]]: ...
 def perform_brier_calculation(
     observed_time: list[float],
     status: list[int],

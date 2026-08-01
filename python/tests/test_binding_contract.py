@@ -5389,6 +5389,7 @@ def test_low_level_bridge_bindings_are_typed():
         "perform_pystep_simple_calculation",
         "perform_pystep_calculation",
         "perform_pyears_calculation",
+        "perform_survexp_fit",
         "perform_brier_calculation",
         "cox_callback",
     } <= stub_names
@@ -5467,6 +5468,18 @@ def test_low_level_bridge_bindings_are_typed():
             "observed_data",
             "do_event",
             "ny",
+        ],
+        "perform_survexp_fit": [
+            "conditional",
+            "expected_factors",
+            "expected_dims",
+            "expected_cuts",
+            "expected_rates",
+            "groups",
+            "expected_data",
+            "followup",
+            "times",
+            "n_groups",
         ],
         "perform_brier_calculation": [
             "observed_time",
@@ -5580,6 +5593,21 @@ def test_low_level_bridge_bindings_are_typed():
     )
     assert sorted(pyears) == ["offtable", "pcount", "pexpect", "pn", "pyears"]
     assert pyears["pyears"] == pytest.approx([2.0])
+
+    survexp = core.perform_survexp_fit(
+        False,
+        [0],
+        [1],
+        [0.0],
+        [0.1],
+        [1, 1],
+        [0.0, 0.0],
+        [2.0, 1.0],
+        [1.0, 2.0],
+        1,
+    )
+    assert survexp["surv"] == pytest.approx([math.exp(-0.1), math.exp(-0.1)])
+    assert survexp["n"] == [2, 1]
 
     brier_components = core.perform_brier_calculation(
         [1.0, 2.5, 3.0, 4.5],

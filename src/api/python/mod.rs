@@ -4,6 +4,7 @@ use crate::pybridge::brier::perform_brier_calculation;
 use crate::pybridge::cox_py_callback::cox_callback;
 use crate::pybridge::pyears3b::perform_pyears_calculation;
 use crate::pybridge::pystep::{perform_pystep_calculation, perform_pystep_simple_calculation};
+use crate::pybridge::survexp_fit::perform_survexp_fit;
 use crate::validation::hypothesis_tests::{score_test_py, wald_test_py};
 use crate::*;
 

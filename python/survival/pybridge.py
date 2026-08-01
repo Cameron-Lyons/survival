@@ -5,6 +5,7 @@ __all__ = bind_names(
     [
         "cox_callback",
         "perform_pyears_calculation",
+        "perform_survexp_fit",
         "perform_pystep_calculation",
         "perform_pystep_simple_calculation",
     ],
