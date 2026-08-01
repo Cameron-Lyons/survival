@@ -4,7 +4,9 @@ use crate::internal::statistical::chi2_sf;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
 };
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use std::cmp::Ordering;
 
 const RANK_TIE_TOLERANCE: f64 = 1e-10;
 
@@ -88,6 +90,104 @@ pub fn survobrien(
     validate_survobrien_inputs(&time_vec, &status_vec, &covariate_vec, strata)?;
     let result = compute_survobrien(&time_vec, &status_vec, &covariate_vec, strata);
     Ok(result)
+}
+
+fn validate_survobrien_transform_groups(
+    columns: &[Vec<f64>],
+    row_indices: &[usize],
+    group_sizes: &[usize],
+) -> PyResult<()> {
+    let n_rows = columns.first().map_or(0, Vec::len);
+    for column in columns {
+        if column.len() != n_rows {
+            return Err(PyValueError::new_err(
+                "survobrien transform columns must have equal lengths",
+            ));
+        }
+        validate_finite(column, "columns")?;
+    }
+
+    if columns.is_empty() && !row_indices.is_empty() {
+        return Err(PyValueError::new_err(
+            "survobrien transform requires columns when row indices are present",
+        ));
+    }
+    if row_indices.iter().any(|&index| index >= n_rows) {
+        return Err(PyValueError::new_err(
+            "survobrien transform row index is out of bounds",
+        ));
+    }
+
+    let grouped_rows = group_sizes.iter().try_fold(0usize, |total, &size| {
+        total
+            .checked_add(size)
+            .ok_or_else(|| PyValueError::new_err("survobrien transform group sizes overflowed"))
+    })?;
+    if grouped_rows != row_indices.len() {
+        return Err(PyValueError::new_err(
+            "survobrien transform group sizes must sum to the row index count",
+        ));
+    }
+    Ok(())
+}
+
+fn transform_survobrien_groups(
+    columns: &[Vec<f64>],
+    row_indices: &[usize],
+    group_sizes: &[usize],
+) -> Vec<Vec<f64>> {
+    let mut transformed = columns
+        .iter()
+        .map(|_| vec![0.0; row_indices.len()])
+        .collect::<Vec<_>>();
+
+    for (column, output) in columns.iter().zip(transformed.iter_mut()) {
+        let mut offset = 0;
+        let mut order = Vec::new();
+        for &group_size in group_sizes {
+            let group_end = offset + group_size;
+            order.clear();
+            order.extend(offset..group_end);
+            order.sort_unstable_by(|&left, &right| {
+                let left_value = column[row_indices[left]];
+                let right_value = column[row_indices[right]];
+                if left_value == right_value {
+                    Ordering::Equal
+                } else {
+                    left_value.total_cmp(&right_value)
+                }
+            });
+
+            let mut start = 0;
+            while start < group_size {
+                let mut end = start + 1;
+                let tie_value = column[row_indices[order[start]]];
+                while end < group_size && column[row_indices[order[end]]] == tie_value {
+                    end += 1;
+                }
+                let rank = ((start + 1) as f64 + end as f64) / 2.0;
+                let probability = (rank - 0.5) / group_size as f64;
+                let value = (probability / (1.0 - probability)).ln();
+                for position in start..end {
+                    output[order[position]] = value;
+                }
+                start = end;
+            }
+            offset = group_end;
+        }
+    }
+    transformed
+}
+
+#[pyfunction]
+pub fn survobrien_transform_groups(
+    py: Python<'_>,
+    columns: Vec<Vec<f64>>,
+    row_indices: Vec<usize>,
+    group_sizes: Vec<usize>,
+) -> PyResult<Vec<Vec<f64>>> {
+    validate_survobrien_transform_groups(&columns, &row_indices, &group_sizes)?;
+    Ok(py.detach(move || transform_survobrien_groups(&columns, &row_indices, &group_sizes)))
 }
 
 fn compute_survobrien(
@@ -349,5 +449,50 @@ mod tests {
         let err = validate_survobrien_inputs(&[1.0, 2.0], &[1, 0], &[0.1, 0.2], Some(&[1]))
             .expect_err("strata length mismatch should fail");
         assert!(err.to_string().contains("strata length mismatch"));
+    }
+
+    #[test]
+    fn test_survobrien_transform_groups_handles_ties_and_empty_groups() {
+        let columns = vec![vec![4.0, 1.0, 1.0, 3.0], vec![0.0, 2.0, 1.0, 2.0]];
+        let rows = vec![0, 1, 2, 3, 2];
+        let actual = transform_survobrien_groups(&columns, &rows, &[4, 0, 1]);
+
+        let low_tie = (0.25_f64 / 0.75).ln();
+        let high = (0.875_f64 / 0.125).ln();
+        assert_eq!(actual.len(), 2);
+        assert!((actual[0][0] - high).abs() < 1e-12);
+        assert!((actual[0][1] - low_tie).abs() < 1e-12);
+        assert!((actual[0][2] - low_tie).abs() < 1e-12);
+        assert_eq!(actual[0][4], 0.0);
+        assert_eq!(actual[1][4], 0.0);
+    }
+
+    #[test]
+    fn test_survobrien_transform_groups_ties_signed_zero() {
+        let columns = vec![vec![-0.0, 0.0, 1.0]];
+        let actual = transform_survobrien_groups(&columns, &[0, 1, 2], &[3]);
+
+        assert_eq!(actual[0][0], actual[0][1]);
+        assert!(actual[0][0] < 0.0);
+        assert!(actual[0][2] > 0.0);
+    }
+
+    #[test]
+    fn test_survobrien_transform_groups_validates_shape_and_indices() {
+        let err = validate_survobrien_transform_groups(&[vec![1.0, 2.0], vec![1.0]], &[0], &[1])
+            .expect_err("unequal column lengths should fail");
+        assert!(err.to_string().contains("equal lengths"));
+
+        let err = validate_survobrien_transform_groups(&[vec![1.0]], &[1], &[1])
+            .expect_err("out-of-bounds index should fail");
+        assert!(err.to_string().contains("out of bounds"));
+
+        let err = validate_survobrien_transform_groups(&[vec![1.0]], &[0], &[0])
+            .expect_err("incorrect group size total should fail");
+        assert!(err.to_string().contains("must sum"));
+
+        let err = validate_survobrien_transform_groups(&[vec![f64::INFINITY]], &[0], &[1])
+            .expect_err("non-finite values should fail");
+        assert!(err.to_string().contains("non-finite"));
     }
 }

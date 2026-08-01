@@ -7192,22 +7192,32 @@ def _survobrien_formula_frame(
     if not terms.clusters:
         frame[".id."] = [idx + 1 for idx in row_indices]
 
-    grouped_indices: list[list[int]] = []
-    start = 0
-    for _event_time, indices in event_sets:
-        grouped_indices.append(list(range(start, start + len(indices))))
-        start += len(indices)
-
-    for name, values in continuous:
-        output = [0.0] * len(row_indices)
-        for positions in grouped_indices:
-            transformed = _survobrien_transform_values(
-                [values[row_indices[pos]] for pos in positions],
-                transform,
-            )
-            for pos, value in zip(positions, transformed, strict=True):
-                output[pos] = value
-        frame[name] = output
+    group_sizes = [len(indices) for _event_time, indices in event_sets]
+    if transform is None:
+        transformed_columns = _core.survobrien_transform_groups(
+            [values for _name, values in continuous],
+            row_indices,
+            group_sizes,
+        )
+        for (name, _values), output in zip(
+            continuous,
+            transformed_columns,
+            strict=True,
+        ):
+            frame[name] = output
+    else:
+        for name, values in continuous:
+            output = [0.0] * len(row_indices)
+            offset = 0
+            for group_size in group_sizes:
+                positions = range(offset, offset + group_size)
+                transformed = _survobrien_transform_values(
+                    [values[row_indices[pos]] for pos in positions],
+                    transform,
+                )
+                output[offset : offset + group_size] = transformed
+                offset += group_size
+            frame[name] = output
     frame[".strata."] = set_numbers
     return frame
 
