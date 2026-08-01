@@ -12,6 +12,13 @@
 \alias{attrassign.lm}
 \alias{is.Surv}
 \alias{is.ratetable}
+\alias{[.ratetable}
+\alias{as.matrix.ratetable}
+\alias{is.na.ratetable}
+\alias{Math.ratetable}
+\alias{Ops.ratetable}
+\alias{print.ratetable}
+\alias{summary.ratetable}
 \alias{ratetableDate}
 \alias{ratetable}
 \alias{match.ratetable}
@@ -368,6 +375,20 @@ attrassign(object, ...)
 is.Surv(value)
 
 is.ratetable(x, verbose = FALSE)
+
+\method{[}{ratetable}(x, ..., drop = TRUE)
+
+\method{as.matrix}{ratetable}(x, ...)
+
+\method{is.na}{ratetable}(x)
+
+\method{Math}{ratetable}(x, ...)
+
+\method{Ops}{ratetable}(e1, e2)
+
+\method{print}{ratetable}(x, ...)
+
+\method{summary}{ratetable}(object, ...)
 
 ratetableDate(x)
 
@@ -832,6 +853,7 @@ plotted line, residual, or pseudo-value type.}
 \item{origin}{Optional time origin passed to the Python response constructor.}
 \item{value}{Object to test.}
 \item{verbose}{Logical flag accepted by \code{is.ratetable}.}
+\item{e1, e2}{Operands for rate-table arithmetic and comparisons.}
 \item{edge}{Lower/upper probability clamp for bounded link helpers
 \code{blogit}, \code{bprobit}, \code{bcloglog}, and \code{blog}.}
 \item{tolerance}{Near-tie tolerance for \code{aeqSurv} and survival

@@ -3684,6 +3684,102 @@ test_that("data-prep helpers match R survival shapes", {
     "sex"
   )
 
+  population_table <- survival::survexp.us[1:4, , 1:3, drop = FALSE]
+  bridged_subset_method <- get("[.ratetable", envir = asNamespace("survivalr"))
+  reference_subset_method <- get("[.ratetable", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_subset_method(
+      population_table,
+      c(4L, 2L), 1L, c(3L, 1L),
+      drop = FALSE
+    ),
+    reference_subset_method(
+      population_table,
+      c(4L, 2L), 1L, c(3L, 1L),
+      drop = FALSE
+    )
+  )
+  expect_equal(
+    bridged_subset_method(population_table, c(4L, 2L), 1L, c(3L, 1L)),
+    reference_subset_method(population_table, c(4L, 2L), 1L, c(3L, 1L))
+  )
+  expect_equal(
+    bridged_subset_method(population_table, 1L, 1L, 1L),
+    reference_subset_method(population_table, 1L, 1L, 1L)
+  )
+
+  bridged_matrix_method <- get("as.matrix.ratetable", envir = asNamespace("survivalr"))
+  reference_matrix_method <- get("as.matrix.ratetable", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_matrix_method(population_table),
+    reference_matrix_method(population_table)
+  )
+  missing_population_table <- population_table
+  missing_population_table[2L, 1L, 1L] <- NA_real_
+  bridged_missing_method <- get("is.na.ratetable", envir = asNamespace("survivalr"))
+  reference_missing_method <- get("is.na.ratetable", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_missing_method(missing_population_table),
+    reference_missing_method(missing_population_table)
+  )
+
+  bridged_math_method <- get("Math.ratetable", envir = asNamespace("survivalr"))
+  reference_math_method <- get("Math.ratetable", envir = asNamespace("survival"))
+  bridged_ops_method <- get("Ops.ratetable", envir = asNamespace("survivalr"))
+  reference_ops_method <- get("Ops.ratetable", envir = asNamespace("survival"))
+  bridged_print_method <- get("print.ratetable", envir = asNamespace("survivalr"))
+  reference_print_method <- get("print.ratetable", envir = asNamespace("survival"))
+  registerS3method("Math", "survivalr_rate_fixture", bridged_math_method)
+  registerS3method("Math", "survival_rate_fixture", reference_math_method)
+  registerS3method("Ops", "survivalr_rate_fixture", bridged_ops_method)
+  registerS3method("Ops", "survival_rate_fixture", reference_ops_method)
+  registerS3method("print", "survivalr_rate_fixture", bridged_print_method)
+  registerS3method("print", "survival_rate_fixture", reference_print_method)
+  bridged_fixture <- population_table
+  reference_fixture <- population_table
+  class(bridged_fixture) <- "survivalr_rate_fixture"
+  class(reference_fixture) <- "survival_rate_fixture"
+  expect_equal(log(bridged_fixture), log(reference_fixture))
+  expect_equal(bridged_fixture + 1, reference_fixture + 1)
+  expect_equal(1 + bridged_fixture, 1 + reference_fixture)
+  expect_equal(
+    bridged_fixture == bridged_fixture,
+    reference_fixture == reference_fixture
+  )
+  expect_equal(
+    capture.output(print(bridged_fixture)),
+    capture.output(print(reference_fixture))
+  )
+  attr(bridged_fixture, "dimid") <- NULL
+  attr(reference_fixture, "dimid") <- NULL
+  expect_equal(
+    capture.output(print(bridged_fixture)),
+    capture.output(print(reference_fixture))
+  )
+
+  bridged_summary_method <- get("summary.ratetable", envir = asNamespace("survivalr"))
+  reference_summary_method <- get("summary.ratetable", envir = asNamespace("survival"))
+  bridged_summary_output <- capture.output(
+    bridged_summary <- bridged_summary_method(population_table)
+  )
+  reference_summary_output <- capture.output(
+    reference_summary <- reference_summary_method(population_table)
+  )
+  expect_equal(bridged_summary_output, reference_summary_output)
+  expect_equal(bridged_summary, reference_summary)
+  legacy_population_table <- population_table
+  attr(legacy_population_table, "factor") <- c(0, 1, 365.25)
+  attr(legacy_population_table, "type") <- NULL
+  bridged_legacy_output <- capture.output(
+    bridged_legacy_summary <- bridged_summary_method(legacy_population_table)
+  )
+  reference_legacy_output <- capture.output(
+    reference_legacy_summary <- reference_summary_method(legacy_population_table)
+  )
+  expect_equal(bridged_legacy_output, reference_legacy_output)
+  expect_equal(bridged_legacy_summary, reference_legacy_summary)
+  expect_error(bridged_summary_method(1), "Argument is not a rate table")
+
   bridged_ci <- cipoisson(5, time = 10)
   reference_ci <- survival::cipoisson(5, time = 10)
   expect_equal(bridged_ci, reference_ci, tolerance = 1e-6)
