@@ -28,6 +28,11 @@ counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
 `survobrien` formula expansion preserves factor keeper columns and their level
 ordering while transforming continuous terms within each event risk set.
+Low-level `survreg.fit` calls for the built-in extreme-value, logistic,
+Gaussian, and Student-t distributions use the Rust AFT optimizer directly.
+The returned coefficient, null-fit, covariance, likelihood, score, and linear
+predictor components retain the standard R shape for fixed, stratified, and
+interval-censored fits.
 
 Time-dependent data construction is also native: `tmerge` evaluates the
 familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the
