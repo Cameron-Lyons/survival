@@ -4,6 +4,7 @@ __all__ = bind_names(
     globals(),
     [
         "AggregateSurvfitResult",
+        "aggregate_shared_survfit",
         "aggregate_survfit",
         "aggregate_survfit_by_group",
         "agsurv4",

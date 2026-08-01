@@ -713,6 +713,7 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
         "status": [1, 1, 0, 1, 0, 1, 1, 0],
         "x": [0.2, 0.4, 0.1, 0.8, 1.0, 1.2, 0.6, 1.4],
+        "wt": [1.0] * 8,
     }
     fit = survival.coxph("Surv(time, status) ~ x", data=data, model=True, max_iter=50)
     assert fit.coefficients[0] == pytest.approx([-2.1132119551866904], abs=3e-5)
@@ -729,6 +730,30 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
     )
     assert len(result["phat"]) == 3
     assert all(len(row) == len(data["time"]) for row in result["phat"])
+
+    weighted_fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        weights="wt",
+        model=True,
+        max_iter=50,
+    )
+    weighted_newdata = {**data, "wt": [8.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}
+    weighted_result = survival.r_api.brier(
+        weighted_fit,
+        times=[2.0, 4.0, 6.0],
+        newdata=weighted_newdata,
+        detail=True,
+    )
+    assert weighted_result["eff.n"] == pytest.approx([3.1690140845, 3.1163434903, 3.0356177407])
+    assert weighted_result["brier"] == pytest.approx(
+        [0.21987334, 0.09626662, 0.12947811],
+        abs=1e-6,
+    )
+    assert weighted_result["rsquared"] == pytest.approx(
+        [0.0838611, 0.5575983, 0.2284805],
+        abs=1e-6,
+    )
 
     counting_data = {
         "start": [0.0] * len(data["time"]),
@@ -791,6 +816,25 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
     with pytest.raises(ValueError, match="survcheck"):
         survival.r_api.brier(gap_fit, times=[3.0, 5.0, 7.0])
 
+    custom_id_data = {
+        **{name: values for name, values in common_start_data.items() if name != "id"},
+        "subject": common_start_data["id"],
+    }
+    custom_id_fit = survival.coxph(
+        "Surv(start, stop, status) ~ x",
+        data=custom_id_data,
+        id="subject",
+        model=True,
+        max_iter=0,
+    )
+    bad_id_newdata = {**custom_id_data, "subject": [1, 2, 2, 1, 3, 3]}
+    with pytest.raises(ValueError, match="survcheck"):
+        survival.r_api.brier(
+            custom_id_fit,
+            times=[3.0, 5.0, 7.0],
+            newdata=bad_id_newdata,
+        )
+
     staggered_data = {**counting_data, "start": [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]}
     staggered_fit = survival.coxph(
         "Surv(start, stop, status) ~ x",
@@ -809,6 +853,18 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
 def test_lvcf_and_nostutter_match_r_data_prep_helpers():
     carried = survival.lvcf([1, 1, 1, 2, 2], [10.0, None, 12.0, None, 20.0])
     carried_by_time = survival.lvcf([1, 1, 1], [None, 10.0, None], time=[2.0, 1.0, 3.0])
+    carried_with_missing_time = survival.lvcf([1, 1, 1], [10.0, None, 20.0], time=[1.0, None, 2.0])
+    carried_with_infinite_time = survival.lvcf(
+        [1, 1, 1], [10.0, None, 20.0], time=[1.0, math.inf, 2.0]
+    )
+    carried_with_negative_infinity = survival.lvcf(
+        [1, 1, 1], [10.0, None, 20.0], time=[1.0, -math.inf, 2.0]
+    )
+    carried_by_character_time = survival.lvcf([1, 1, 1], ["x", None, None], time=["b", "a", "c"])
+    factor_id = survival.r_api._r_factor(["b", "a", "b", "a"], ["b", "a"])
+    carried_by_factor_id = survival.lvcf(factor_id, [None, 1, 2, None])
+    factor_time = survival.r_api._r_factor(["b", "a", "c"], ["c", "b", "a"])
+    carried_by_factor_time = survival.lvcf([1, 1, 1], ["x", None, None], factor_time)
     stuttered = survival.nostutter([1, 1, 1, 2, 2], [0, 1, 1, 1, 1])
     stuttered_with_missing = survival.nostutter([1, 1, 1], [None, 1, 1])
     stuttered_single = survival.nostutter(
@@ -821,6 +877,12 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
 
     assert carried == [10.0, 10.0, 12.0, None, 20.0]
     assert carried_by_time == [10.0, 10.0, 10.0]
+    assert carried_with_missing_time == [10.0, 20.0, 20.0]
+    assert carried_with_infinite_time == [10.0, 20.0, 20.0]
+    assert carried_with_negative_infinity == [10.0, None, 20.0]
+    assert carried_by_character_time == ["x", None, "x"]
+    assert carried_by_factor_id == [None, 1, 2, 1]
+    assert carried_by_factor_time == ["x", "x", None]
     assert stuttered == [0, 1, 0, 1, 0]
     assert stuttered_with_missing == [None, 1, 0]
     assert stuttered_single == [1, 2, 0, 3, 1, 0, 2]
@@ -829,8 +891,6 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
 
     with pytest.raises(ValueError, match="same length"):
         survival.lvcf([1], [1, None])
-    with pytest.raises(ValueError, match="finite"):
-        survival.lvcf([1], [1], time=[float("inf")])
     with pytest.raises(ValueError, match="missing"):
         survival.nostutter([1, None], [0, 1])
 
@@ -840,6 +900,8 @@ def test_coxph_wtest_matches_r_wald_helper_shapes():
     correlated = survival.coxph_wtest([[2.0, 0.5], [0.5, 1.0]], [1.0, 2.0])
     singular = survival.coxph_wtest([[1.0, 2.0], [2.0, 4.0]], [1.0, 2.0])
     trailing = survival.coxph_wtest([[0.0, 0.0], [0.0, 2.0]], [1.0, 2.0])
+    zero = survival.coxph_wtest([[0.0, 0.0], [0.0, 0.0]], [1.0, 2.0])
+    indefinite = survival.coxph_wtest([[1.0, 2.0], [2.0, 1.0]], [1.0, 2.0])
     matrix_rhs = survival.coxph_wtest(
         [[1.0, 0.0], [0.0, 1.0]],
         [[1.0, 3.0], [2.0, 4.0]],
@@ -858,6 +920,12 @@ def test_coxph_wtest_matches_r_wald_helper_shapes():
     assert trailing.df == 1
     assert trailing.test == pytest.approx([2.0])
     assert trailing.solve == pytest.approx([0.0, 1.0])
+    assert zero.test == pytest.approx([0.0])
+    assert zero.df == 0
+    assert zero.solve == pytest.approx([0.0, 0.0])
+    assert indefinite.test == pytest.approx([1.0])
+    assert indefinite.df == 1
+    assert indefinite.solve == pytest.approx([1.0, 0.0])
     assert matrix_rhs.test == pytest.approx([5.0, 25.0])
     assert len(matrix_rhs.solve) == 2
     for actual_row, expected_row in zip(
@@ -2531,6 +2599,19 @@ def test_surv2data_converts_timeline_rows_to_counting_transitions():
     assert result["states"] == ["entry", "ill", "death"]
     assert result["type"] == "mcounting"
 
+    shuffled = survival.Surv2data(
+        [5.0, 0.0, 3.0, 2.0, 0.0],
+        [3, 1, 0, 2, 1],
+        states=["entry", "ill", "death"],
+        id=["a", "a", "b", "a", "b"],
+    )
+    assert shuffled["row"] == [1, 3, 4]
+    assert shuffled["start"] == pytest.approx([0.0, 2.0, 0.0])
+    assert shuffled["stop"] == pytest.approx([2.0, 5.0, 3.0])
+    assert shuffled["status"] == [2, 3, 0]
+    assert shuffled["id"] == ["a", "a", "b"]
+    assert shuffled["istate"] == [1, 2, 1]
+
     repeated_result = survival.Surv2data(
         [0.0, 1.0, 2.0],
         [1, 1, 2],
@@ -2750,7 +2831,10 @@ def test_r_style_ratetable_helpers_delegate_to_population_core():
 
     assert survival.ratetableDate(2000, 2, 29) == pytest.approx(11016.0)
     assert survival.ratetableDate("2000-02-29") == pytest.approx(11016.0)
-    assert survival.ratetableDate(["2000-02-29", "2001-01-01"]) == pytest.approx([11016.0, 11323.0])
+    assert survival.ratetableDate("1940-01-01") == pytest.approx(-10958.0)
+    assert survival.ratetableDate(["1940-01-01", "2000-02-29", "2001-01-01"]) == pytest.approx(
+        [-10958.0, 11016.0, 11323.0]
+    )
     assert survival.ratetableDate(11016.0) == pytest.approx(11016.0)
     with pytest.raises(ValueError, match="day is invalid"):
         survival.ratetableDate(2001, 2, 29)
@@ -2807,6 +2891,12 @@ def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
     recycled = survival.cipoisson([1, 2], time=[1.0, 2.0, 3.0])
     anscombe = survival.cipoisson(5, time=10.0, method="anscombe")
     missing_time = survival.cipoisson([1, 2], time=[0.0, 2.0])
+    numeric_edges = survival.cipoisson(
+        [1.2, 2.8, float("inf")],
+        time=[2.0, 4.0, float("inf")],
+        p=[0.0, 1.0, 0.95],
+    )
+    missing_confidence = survival.cipoisson([0, 1.2], p=[None, None])
 
     assert scalar == pytest.approx((0.1623486, 1.1668332))
     assert [value for row in vector for value in row] == pytest.approx(
@@ -2819,6 +2909,12 @@ def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
     assert math.isnan(missing_time[0][0])
     assert math.isnan(missing_time[0][1])
     assert missing_time[1] == pytest.approx((0.121104639, 3.612344))
+    assert numeric_edges[0] == pytest.approx((0.443968106737396, 0.938570591679505))
+    assert numeric_edges[1] == (0.0, float("inf"))
+    assert all(math.isnan(value) for value in numeric_edges[2])
+    assert missing_confidence[0][0] == 0.0
+    assert math.isnan(missing_confidence[0][1])
+    assert all(math.isnan(value) for value in missing_confidence[1])
     with pytest.raises(ValueError, match="k must be non-negative"):
         survival.cipoisson(-1)
     with pytest.raises(ValueError, match="method must"):
@@ -2851,6 +2947,10 @@ def test_r_style_bounded_link_helpers_match_survival_link_functions():
     assert survival.bcloglog([0.0, 0.75, 1.0], edge=0.6) == pytest.approx(
         [-0.08742157, -0.08742157, -0.08742157]
     )
+    missing = survival.blogit([0.0, None, 1.0])
+    assert missing[0] == pytest.approx(-2.94443898)
+    assert math.isnan(missing[1])
+    assert missing[2] == pytest.approx(2.94443898)
 
 
 def test_r_style_pyears_tabulates_surv_inputs():
@@ -2959,6 +3059,28 @@ def test_r_style_pyears_tabulates_surv_inputs():
         survival.pyears([1.0, 2.0], event=[1], scale=1)
     with pytest.raises(ValueError, match="scale must be positive"):
         survival.pyears([1.0], scale=0)
+
+
+def test_pyears_normalizes_direct_inputs_once_without_subsetting(monkeypatch):
+    original = survival.r_api._pyears_response_from_direct
+    calls = 0
+
+    def tracked(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(survival.r_api, "_pyears_response_from_direct", tracked)
+
+    result = survival.pyears(
+        [10.0, 20.0, 30.0],
+        event=[1, 0, 1],
+        group=["a", "b", "a"],
+        scale=1,
+    )
+
+    assert result.pyears == pytest.approx([40.0, 20.0])
+    assert calls == 1
 
 
 def test_r_style_finegray_matches_right_multistate_fixture():
@@ -3352,6 +3474,18 @@ def test_r_style_survobrien_uses_direct_vectors():
         "Surv(time, status) ~ x + cluster(id)",
         data=data,
     )
+    formula_factor = survival.survobrien(
+        "Surv(time, status) ~ x + group",
+        data=data,
+    )
+    formula_factor_wrapper = survival.survobrien(
+        "Surv(time, status) ~ x + factor(group)",
+        data=data,
+    )
+    formula_as_factor_wrapper = survival.survobrien(
+        "Surv(time, status) ~ x + as.factor(group)",
+        data=data,
+    )
     transformed = survival.survobrien(
         "Surv(time, status) ~ x",
         data=data,
@@ -3382,6 +3516,9 @@ def test_r_style_survobrien_uses_direct_vectors():
     assert formula["time"] == pytest.approx([1.0, 2.0, 3.0, 4.0, 3.0, 4.0, 4.0])
     assert formula["status"] == [1, 0, 0, 0, 1, 0, 1]
     assert formula[".id."] == [1, 2, 3, 4, 3, 4, 4]
+    assert formula_factor["group"] == ["a", "a", "b", "b", "b", "b", "b"]
+    assert formula_factor_wrapper == formula_factor
+    assert formula_as_factor_wrapper == formula_factor
     assert formula["x"] == pytest.approx(
         [
             -1.9459101490553135,
@@ -3507,6 +3644,7 @@ def test_r_style_nsk_wraps_native_spline_basis():
         knots=[2.0, 4.0],
         boundary_knots=[2.5, 3.5],
     )
+    missing = survival.nsk([1.0, math.nan, 2.0, 3.0, 4.0, 5.0], df=3)
 
     assert isinstance(basis, survival._survival.SplineBasisResult)
     assert survival.nsk is survival.r_api.nsk
@@ -3541,10 +3679,20 @@ def test_r_style_nsk_wraps_native_spline_basis():
     assert inside_boundary.boundary_knots == pytest.approx((2.0, 4.0))
     assert inside_boundary.basis[0] == pytest.approx(-0.5)
 
+    assert missing.n_rows == 6
+    assert missing.n_cols == basis.n_cols
+    assert missing.knots == pytest.approx(basis.knots)
+    assert missing.boundary_knots == pytest.approx(basis.boundary_knots)
+    assert all(math.isnan(value) for value in missing.basis[3:6])
+    assert missing.basis[:3] == pytest.approx(basis.basis[:3])
+    assert missing.basis[6:] == pytest.approx(basis.basis[3:])
+
     with pytest.raises(ValueError, match="Boundary.knots"):
         survival.nsk([1.0, 2.0, 3.0], knots=[2.0], Boundary_knots=None)
     with pytest.raises(ValueError, match="x must contain only finite values"):
-        survival.nsk([1.0, math.nan], df=3)
+        survival.nsk([1.0, math.inf], df=3)
+    with pytest.raises(ValueError, match="at least one non-missing"):
+        survival.nsk([math.nan, math.nan], df=3)
 
 
 def test_r_style_pspline_builds_survival_basis_contract():
@@ -3562,6 +3710,8 @@ def test_r_style_pspline_builds_survival_basis_contract():
         df=3,
         combine=[1] * 10,
     )
+    constant = survival.pspline([2.0, 2.0, 2.0], df=2)
+    missing = survival.pspline([1.0, float("nan"), 2.0], df=2)
 
     assert survival.pspline is survival.r_api.pspline
     assert basis["method"] == "df"
@@ -3586,6 +3736,10 @@ def test_r_style_pspline_builds_survival_basis_contract():
     assert aic["n_cols"] == 17
     assert combined["combine"] == [1] * 10
     assert combined["n_cols"] == 1
+    assert constant["boundary_knots"] == [2.0, 2.0]
+    assert constant["basis"][0] == pytest.approx([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    assert constant["basis"] == [constant["basis"][0]] * 3
+    assert all(math.isnan(value) for value in missing["basis"][1])
 
     with pytest.raises(ValueError, match="Invalid value for theta"):
         survival.pspline([1.0, 2.0, 3.0], theta=1.0)
@@ -3637,6 +3791,29 @@ def test_r_style_neardate_and_tcut_use_native_data_prep_helpers():
         [5.0, 10.0],
         nomatch=0,
     ) == [1, 0]
+    missing_and_infinite = [None, 2.0, float("inf"), float("-inf")]
+    reference_dates = [1.0, None, float("inf"), float("-inf")]
+    assert survival.neardate(
+        [1, 1, 1, 1],
+        [1, 1, 1, 1],
+        missing_and_infinite,
+        reference_dates,
+        nomatch=0,
+    ) == [0, 3, 3, 4]
+    assert survival.neardate(
+        [1, 1, 1, 1],
+        [1, 1, 1, 1],
+        missing_and_infinite,
+        reference_dates,
+        best="prior",
+        nomatch=0,
+    ) == [0, 1, 3, 4]
+    assert survival.neardate([None, 1], [None, 1], [1.0, 2.0], [1.0, 2.0], nomatch=0) == [None, 2]
+    assert survival.neardate([None, 1], [None, 2], [1.0, 2.0], [1.0, 2.0], nomatch=0) == [None, 0]
+    with pytest.raises(ValueError, match="No valid entries"):
+        survival.neardate([1], [1], [1.0], [None])
+    with pytest.raises(ValueError, match="No valid entries"):
+        survival.neardate([1], [2], [1.0], [1.0])
 
     cut = survival.tcut([5.0, 15.0, 30.0], [0.0, 10.0, 20.0, 30.0])
     assert isinstance(cut, survival.TcutResult)
@@ -4104,6 +4281,15 @@ def test_survfit_non_km_right_censored_curves_support_robust_variance():
 
     fh = survival.survfit(response, cluster=cluster, type="fleming-harrington")
     fh2 = survival.survfit(response, cluster=cluster, type="fh2")
+    reverse_fh2 = survival.survfit(response, cluster=cluster, type="fh2", reverse=True)
+    reverse_influence = survival.survfitkm_influence(
+        time,
+        status,
+        cluster,
+        reverse=True,
+        stype=2,
+        ctype=2,
+    )
     km_survival_fh2_hazard = survival.survfit(response, cluster=cluster, stype=1, ctype=2)
     grouped = survival.survfit(
         response,
@@ -4128,6 +4314,18 @@ def test_survfit_non_km_right_censored_curves_support_robust_variance():
     assert fh2.std_err == pytest.approx([0.1627183900, 0.1508161491, 0.1508161491])
     assert fh2.std_chaz == pytest.approx([0.2347891095, 0.5007272489, 0.5007272489])
     assert fh2.conf_lower == pytest.approx([0.4374272533, 0.1128825508, 0.1128825508])
+    assert reverse_fh2.std_err == pytest.approx(
+        [
+            math.sqrt(sum(row[column] ** 2 for row in reverse_influence.influence_surv))
+            for column in range(len(reverse_influence.time))
+        ]
+    )
+    assert reverse_fh2.std_chaz == pytest.approx(
+        [
+            math.sqrt(sum(row[column] ** 2 for row in reverse_influence.influence_chaz))
+            for column in range(len(reverse_influence.time))
+        ]
+    )
     assert km_survival_fh2_hazard.estimate == pytest.approx([2.0 / 3.0, 2.0 / 9.0, 2.0 / 9.0])
     assert km_survival_fh2_hazard.std_err == pytest.approx(
         [0.1924500897, 0.1924500897, 0.1924500897]
@@ -4887,6 +5085,30 @@ def test_aggregate_survfit_result_averages_cox_prediction_curves():
     assert grouped.surv[0] == pytest.approx(curves.surv[1])
     assert grouped.surv[1] == pytest.approx(expected_group)
 
+    uncertain = survival.r_api.CoxSurvfitResult(
+        time=[1.0, 2.0],
+        surv=[[0.9, 0.8], [0.8, 0.6], [0.7, 0.4]],
+        cumhaz=[[], [], []],
+        linear_predictors=[1.0, 2.0, 3.0],
+        std_err=[[0.1, 0.2], [0.3, 0.4], [0.2, 0.1]],
+        std_chaz=[[0.0], [0.0], [0.0]],
+        conf_lower=[[0.0], [0.0], [0.0]],
+        conf_upper=[[1.0], [1.0], [1.0]],
+    )
+    weighted = survival.r_api.aggregate_survfit_result(
+        uncertain,
+        groups=[2, 1, 2],
+        weights=[1.0, 2.0, 3.0],
+    )
+    assert weighted.surv[0] == pytest.approx([0.8, 0.6])
+    assert weighted.surv[1] == pytest.approx([0.75, 0.5])
+    assert weighted.std_err[0] == pytest.approx([0.3, 0.4])
+    assert weighted.std_err[1] == pytest.approx(
+        [math.hypot(0.25 * 0.1, 0.75 * 0.2), math.hypot(0.25 * 0.2, 0.75 * 0.1)]
+    )
+    assert weighted.linear_predictors == pytest.approx([2.0, 2.5])
+    assert len(weighted.conf_lower) == len(weighted.conf_upper) == 2
+
     with pytest.raises(TypeError, match="data.*margin"):
         survival.r_api.aggregate_survfit_result(object())
     with pytest.raises(ValueError, match="same length"):
@@ -5513,6 +5735,36 @@ def test_survfit_formula_splits_interval_weights_by_group():
     assert grouped_with_model["A"].survival == pytest.approx(expected_a.survival)
     assert grouped_with_model["B"].survival == pytest.approx(expected_b.survival)
     assert grouped_with_model["A"].model["(weights)"] == pytest.approx(data["weights"])
+    assert grouped_with_model["A"].model is grouped_with_model["B"].model
+
+
+def test_survfit_grouped_turnbull_preserves_first_seen_label_order():
+    left = [0.0, 1.0, 2.0, 0.0, 2.0, 3.0, 4.0, 3.0]
+    right = [1.0, 3.0, float("inf"), 2.0, 2.0, 5.0, 4.0, float("inf")]
+    groups = ["later", "first", "later", "first", "later", "first", "later", "first"]
+    weights = [1.0, 0.5, 1.5, 2.0, 0.75, 1.25, 2.5, 1.0]
+    response = survival.Surv(left, right, type="interval2")
+
+    grouped = survival.survfit(response, group=groups, weights=weights)
+
+    assert list(grouped) == ["later", "first"]
+    for label in grouped:
+        indices = [idx for idx, value in enumerate(groups) if value == label]
+        expected = survival.survfit(
+            survival.Surv(
+                [left[idx] for idx in indices],
+                [right[idx] for idx in indices],
+                type="interval2",
+            ),
+            weights=[weights[idx] for idx in indices],
+        )
+        assert isinstance(grouped[label], survival.r_api.TurnbullSurvfitResult)
+        assert grouped[label].time_points == pytest.approx(expected.time_points)
+        assert grouped[label].survival == pytest.approx(expected.survival)
+        assert grouped[label].survival_lower == pytest.approx(expected.survival_lower)
+        assert grouped[label].survival_upper == pytest.approx(expected.survival_upper)
+        assert grouped[label].n_iter == expected.n_iter
+        assert grouped[label].converged == expected.converged
 
 
 def test_survfit_formula_accepts_named_interval2_response_arguments():
@@ -17246,6 +17498,7 @@ def test_aareg_formula_validates_model_specific_options():
         "status": [1, 1, 1, 1],
         "x": [0.0, 1.0, 0.5, 2.0],
         "group": ["a", "a", "b", "b"],
+        "cluster": ["w", "x", "y", "z"],
     }
 
     with pytest.raises(ValueError, match="strata terms are not allowed"):
@@ -17254,6 +17507,42 @@ def test_aareg_formula_validates_model_specific_options():
         survival.aareg("Surv(time, status) ~ x", data=data, nmin=1, taper=0)
     with pytest.raises(ValueError, match="test must be"):
         survival.aareg("Surv(time, status) ~ x", data=data, nmin=1, test="bogus")
+    with pytest.raises(ValueError, match="multiple cluster terms"):
+        survival.aareg(
+            "Surv(time, status) ~ x + cluster(group) + cluster(cluster)",
+            data=data,
+            nmin=1,
+        )
+    with pytest.raises(ValueError, match="cluster"):
+        survival.aareg("Surv(time, status) ~ x:cluster(group)", data=data, nmin=1)
+
+
+def test_aareg_explicit_cluster_overrides_formula_cluster_like_r():
+    data = {
+        "time": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+        "status": [1, 1, 1, 1, 0, 1],
+        "x": [0.0, 1.0, 2.0, 1.0, 3.0, -1.0],
+        "formula_cluster": ["a", "a", None, "b", "c", "c"],
+        "explicit_cluster": ["left", "right", "left", "right", "left", "right"],
+    }
+
+    with pytest.warns(RuntimeWarning, match="formula term ignored"):
+        fit = survival.aareg(
+            "Surv(time, status) ~ x + cluster(formula_cluster)",
+            data=data,
+            cluster=data["explicit_cluster"],
+            nmin=1,
+            na_action="omit",
+            model=True,
+        )
+
+    assert fit.n[0] == len(data["time"])
+    assert fit.cluster_levels == ["left", "right"]
+    assert fit.dfbeta is not None
+    assert len(fit.dfbeta) == 2
+    assert fit.model is not None
+    assert "formula_cluster" not in fit.model
+    assert fit.model["(cluster)"] == data["explicit_cluster"]
 
 
 def test_r_style_tmerge_matches_mixed_operation_fixture():

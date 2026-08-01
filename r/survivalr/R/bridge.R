@@ -270,6 +270,28 @@ if (getRversion() >= "2.15.1") {
   }
 }
 
+.as_python_formula_subset <- function(value, data) {
+  if (is.null(value)) {
+    return(NULL)
+  }
+  n <- if (is.data.frame(data) || is.matrix(data)) {
+    nrow(data)
+  } else if (is.list(data) && length(data) > 0L) {
+    length(data[[1L]])
+  } else {
+    NROW(data)
+  }
+  rows <- seq_len(n)
+  if (is.data.frame(data)) {
+    names(rows) <- row.names(data)
+  }
+  selected <- rows[value]
+  if (anyNA(selected)) {
+    stop("subset contains unknown or missing rows", call. = FALSE)
+  }
+  as.integer(unname(selected) - 1L)
+}
+
 .strata_expr_labels <- function(exprs, n) {
   if (n == 0L) {
     return(character())
@@ -2054,14 +2076,14 @@ pspline <- function(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
 
   result <- .call_r_api(
     "pspline",
-    x = .as_python_vector(x),
+    x = if (anyNA(x)) as.list(x) else .as_python_vector(x),
     df = df,
     theta = if (missing(theta)) NULL else theta,
     nterm = nterm,
     degree = degree,
     eps = if (missing(eps)) NULL else eps,
     method = if (missing(method)) NULL else method,
-    boundary_knots = Boundary.knots,
+    boundary_knots = if (missing(Boundary.knots)) NULL else Boundary.knots,
     intercept = intercept,
     penalty = penalty,
     combine = if (missing(combine)) NULL else combine
@@ -2234,28 +2256,30 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   if (length(nomatch) != 1L) {
     stop("nomatch must be a scalar", call. = FALSE)
   }
+  if (is.factor(y1) || is.factor(y2)) {
+    stop("y1 and y2 must be sortable", call. = FALSE)
+  }
   y1 <- as.numeric(y1)
   y2 <- as.numeric(y2)
-  if (any(!is.finite(y1)) || any(!is.finite(y2))) {
-    stop("y1 and y2 must contain only finite values", call. = FALSE)
-  }
+  python_y1 <- lapply(y1, function(value) if (is.na(value)) NaN else value)
+  python_y2 <- lapply(y2, function(value) if (is.na(value)) NaN else value)
 
   if (.is_integerish_vector(id1) && .is_integerish_vector(id2)) {
     result <- .call_data_prep(
       "neardate",
-      as.integer(id1),
-      y1,
-      as.integer(id2),
-      y2,
+      as.list(as.integer(id1)),
+      python_y1,
+      as.list(as.integer(id2)),
+      python_y2,
       best = best
     )
   } else {
     result <- .call_data_prep(
       "neardate_str",
-      as.character(id1),
-      y1,
-      as.character(id2),
-      y2,
+      as.list(as.character(id1)),
+      python_y1,
+      as.list(as.character(id2)),
+      python_y2,
       best = best
     )
   }
@@ -2264,6 +2288,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   matched <- !vapply(indices, is.null, logical(1))
   values <- rep(nomatch, length(indices))
   values[matched] <- as.integer(unlist(indices[matched], use.names = FALSE)) + 1L
+  values[is.na(id1)] <- NA_integer_
   values
 }
 
@@ -3420,307 +3445,8 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
   .as_pyears_result(result, match.call(), data.frame = data.frame)
 }
 
-.finegray_model_frame_surv <- function(time, time2, event, type = NULL, origin = 0,
-                                       time1, start, stop, status) {
-  if (missing(time) && !missing(time1)) {
-    time <- time1
-  }
-  if (missing(time) && !missing(start)) {
-    time <- start
-  }
-  if (missing(time2) && !missing(stop)) {
-    time2 <- stop
-  }
-  if (missing(event) && !missing(status)) {
-    event <- status
-  }
-  if (missing(time)) {
-    stop("Must have a time argument")
-  }
-  if (inherits(time, "difftime")) {
-    time <- unclass(time)
-  }
-  if (!is.numeric(time)) {
-    stop("Time variable is not numeric")
-  }
-  counting <- !missing(time2) && !missing(event)
-  if (!counting && missing(event)) {
-    event <- time2
-  }
-  if (missing(event)) {
-    stop("Wrong number of args for this type of survival data")
-  }
-  if (length(event) != length(time)) {
-    stop("Time and status are different lengths")
-  }
-  if (counting) {
-    if (inherits(time2, "difftime")) {
-      time2 <- unclass(time2)
-    }
-    if (!is.numeric(time2)) {
-      stop("Time variable is not numeric")
-    }
-    if (length(time2) != length(time)) {
-      stop("Start and stop are different lengths")
-    }
-  }
-  if (is.factor(event)) {
-    mstat <- as.factor(event)
-    event_status <- as.numeric(mstat) - 1L
-    states <- levels(mstat)[-1L]
-    if (any(is.na(states) | states == "")) {
-      stop("each state must have a non-blank name")
-    }
-    out <- if (counting) {
-      cbind(start = as.numeric(time) - origin, stop = as.numeric(time2) - origin, status = event_status)
-    } else {
-      cbind(time = as.numeric(time) - origin, status = event_status)
-    }
-    attr(out, "type") <- if (counting) "mcounting" else "mright"
-    attr(out, "states") <- states
-    attr(out, "inputAttributes") <- list(event = attributes(event))
-    class(out) <- "Surv"
-    return(out)
-  }
-  event_status <- if (is.logical(event)) {
-    as.numeric(event)
-  } else if (is.numeric(event)) {
-    if (max(event[!is.na(event)]) == 2) event - 1 else event
-  } else {
-    stop("Invalid status value, must be logical or numeric")
-  }
-  out <- if (counting) {
-    cbind(start = as.numeric(time) - origin, stop = as.numeric(time2) - origin, status = event_status)
-  } else {
-    cbind(time = as.numeric(time) - origin, status = event_status)
-  }
-  attr(out, "type") <- if (counting) "counting" else "right"
-  class(out) <- "Surv"
-  out
-}
-
-.finegray_censor_surv <- function(start, stop, event) {
-  event_times <- sort(unique(stop[event]))
-  if (length(event_times) == 0L) {
-    return(list(time = numeric(), surv = numeric(), n.event = numeric()))
-  }
-  surv <- 1
-  out_time <- numeric()
-  out_surv <- numeric()
-  out_event <- numeric()
-  for (time in event_times) {
-    n_risk <- sum(start < time & stop >= time)
-    n_event <- sum(event & stop == time)
-    if (n_risk > 0L && n_event > 0L) {
-      surv <- surv * (1 - n_event / n_risk)
-      out_time <- c(out_time, time)
-      out_surv <- c(out_surv, surv)
-      out_event <- c(out_event, n_event)
-    }
-  }
-  list(time = out_time, surv = out_surv, n.event = out_event)
-}
-
 .finegray_python_vector <- function(value) {
   as.list(.as_python_vector(value))
-}
-
-.finegray_formula_bridge <- function(call, env, na.action, etype, etype_missing,
-                                     prefix, count, count_missing, timefix) {
-  if (is.null(call$formula)) {
-    return(NULL)
-  }
-  formula <- eval(call$formula, env)
-  if (!inherits(formula, "formula")) {
-    return(NULL)
-  }
-  model_formula <- formula
-  model_env <- new.env(parent = environment(model_formula))
-  model_env$Surv <- .finegray_model_frame_surv
-  environment(model_formula) <- model_env
-
-  data_value <- if (is.null(call$data)) NULL else eval(call$data, env)
-  special <- c("strata", "cluster")
-  formula_terms <- if (is.null(data_value)) {
-    stats::terms(model_formula, specials = special)
-  } else {
-    stats::terms(model_formula, specials = special, data = data_value)
-  }
-  indx <- match(c("formula", "data", "weights", "subset", "id"), names(call), nomatch = 0L)
-  model_call <- call[c(1L, indx)]
-  model_call$formula <- formula_terms
-  model_call$na.action <- na.action
-  model_call[[1L]] <- quote(stats::model.frame)
-  mf <- eval(model_call, env)
-  if (nrow(mf) == 0L) {
-    stop("No (non-missing) observations")
-  }
-
-  Terms <- stats::terms(mf)
-  Y <- stats::model.extract(mf, "response")
-  if (!inherits(Y, "Surv")) {
-    stop("Response must be a survival object")
-  }
-  type <- attr(Y, "type")
-  if (!identical(type, "mright") && !identical(type, "mcounting")) {
-    return(NULL)
-  }
-  nY <- ncol(Y)
-  states <- attr(Y, "states")
-  if (length(states) < 2L) {
-    stop("survival time has only a single state")
-  }
-  if (isTRUE(timefix)) {
-    Y[, 1L] <- as.numeric(Y[, 1L])
-  }
-
-  strats <- attr(Terms, "specials")$strata
-  if (length(strats)) {
-    stemp <- untangle.specials(Terms, "strata", 1)
-    if (length(stemp$vars) == 1L) {
-      strata_values <- mf[[stemp$vars]]
-    } else {
-      strata_values <- strata(mf[, stemp$vars, drop = FALSE], shortlabel = TRUE)
-    }
-    istrat <- as.numeric(strata_values)
-    mf[stemp$vars] <- NULL
-  } else {
-    istrat <- rep(1, nrow(mf))
-  }
-
-  id <- stats::model.extract(mf, "id")
-  if (!is.null(id)) {
-    mf["(id)"] <- NULL
-  }
-  user.weights <- stats::model.weights(mf)
-  if (is.null(user.weights)) {
-    user.weights <- rep(1, nrow(mf))
-  }
-  cluster <- attr(Terms, "specials")$cluster
-  if (length(cluster)) {
-    stop("a cluster() term is not valid")
-  }
-
-  if (isTRUE(etype_missing)) {
-    enum <- 1L
-  } else {
-    index <- match(etype, states)
-    if (any(is.na(index))) {
-      stop("etype argument has a state that is not in the data")
-    }
-    enum <- index[[1L]]
-    if (length(index) > 1L) {
-      warning("only the first endpoint was used")
-    }
-  }
-  count_name <- if (isTRUE(count_missing)) NULL else make.names(count)
-  oname <- paste0(prefix, c("start", "stop", "status", "wt"))
-
-  delay <- FALSE
-  if (identical(type, "mcounting")) {
-    if (is.null(id)) {
-      stop("(start, stop] data requires a subject id")
-    }
-    index <- order(id, Y[, 2L])
-    sorty <- Y[index, , drop = FALSE]
-    first_index <- which(!duplicated(id[index]))
-    last_index <- c(first_index[-1L] - 1L, length(id))
-    if (any(sorty[-last_index, 3L] != 0)) {
-      stop("a subject has a transition before their last time point")
-    }
-    delta <- c(sorty[-1L, 1L], 0) - sorty[, 2L]
-    if (any(delta[-last_index] != 0)) {
-      stop("a subject has gaps in time")
-    }
-    if (any(Y[first_index, 1L] > min(Y[, 2L]))) {
-      delay <- TRUE
-    }
-    first <- last <- rep(FALSE, nrow(mf))
-    first[index[first_index]] <- TRUE
-    last[index[last_index]] <- TRUE
-  } else {
-    last <- rep(TRUE, nrow(mf))
-  }
-  if (nY == 2L) {
-    temp <- min(Y[, 1L], na.rm = TRUE)
-    zero <- if (temp > 0) 0 else 2 * temp - 1
-    Y <- cbind(zero, Y)
-  }
-  utime <- sort(unique(c(Y[, 1:2])))
-  newtime <- matrix(findInterval(Y[, 1:2], utime), ncol = 2L)
-  status <- Y[, 3L]
-  newtime[status != 0, 2L] <- newtime[status != 0, 2L] - 0.2
-
-  stratfun <- function(stratum) {
-    keep <- istrat == stratum
-    times <- sort(unique(Y[keep & status == enum, 2L]))
-    if (length(times) == 0L) {
-      return(NULL)
-    }
-    tdata <- mf[keep, -1L, drop = FALSE]
-    maxtime <- max(Y[keep, 2L])
-    gsurv <- .finegray_censor_surv(
-      newtime[keep, 1L],
-      newtime[keep, 2L],
-      last[keep] & status[keep] == 0
-    )
-    if (isTRUE(delay)) {
-      hsurv <- .finegray_censor_surv(
-        -newtime[keep, 2L],
-        -newtime[keep, 1L],
-        first[keep]
-      )
-      dtime <- rev(-hsurv$time[hsurv$n.event > 0])
-      dprob <- c(rev(hsurv$surv[hsurv$n.event > 0])[-1L], 1)
-      ctime_index <- gsurv$time[gsurv$n.event > 0]
-      cprob_index <- c(1, gsurv$surv[gsurv$n.event > 0])
-      temp <- sort(unique(c(dtime, ctime_index)))
-      index1 <- findInterval(temp, dtime)
-      index2 <- findInterval(temp, ctime_index)
-      ctime <- utime[temp]
-      cprob <- dprob[index1] * cprob_index[index2 + 1L]
-    } else {
-      ctime <- utime[gsurv$time[gsurv$n.event > 0]]
-      cprob <- gsurv$surv[gsurv$n.event > 0]
-    }
-    ct2 <- c(ctime, maxtime)
-    cp2 <- c(1, cprob)
-    index <- findInterval(times, ct2, left.open = TRUE)
-    index <- sort(unique(index))
-    ckeep <- rep(FALSE, length(ct2))
-    ckeep[index] <- TRUE
-    expand <- (Y[keep, 3L] != 0 & Y[keep, 3L] != enum & last[keep])
-    keep_arg <- c(TRUE, ckeep)[seq_along(ct2)]
-    split <- .call_regression(
-      "finegray",
-      .finegray_python_vector(Y[keep, 1L]),
-      .finegray_python_vector(Y[keep, 2L]),
-      .finegray_python_vector(ct2),
-      .finegray_python_vector(cp2),
-      .finegray_python_vector(expand),
-      .finegray_python_vector(keep_arg)
-    )
-    rows <- as.integer(.result_field(split, "row"))
-    tdata <- tdata[rows, , drop = FALSE]
-    tstat <- ifelse((status[keep])[rows] == enum, 1, 0)
-    tdata[[oname[[1L]]]] <- .as_numeric_vector(.result_field(split, "start"))
-    tdata[[oname[[2L]]]] <- .as_numeric_vector(.result_field(split, "end"))
-    tdata[[oname[[3L]]]] <- tstat
-    tdata[[oname[[4L]]]] <- .as_numeric_vector(.result_field(split, "wt")) * user.weights[keep][rows]
-    if (!is.null(count_name)) {
-      tdata[[count_name]] <- as.integer(.result_field(split, "add"))
-    }
-    tdata
-  }
-
-  if (max(istrat) == 1L) {
-    result <- stratfun(1L)
-  } else {
-    result <- do.call("rbind", lapply(seq_len(max(istrat)), stratfun))
-  }
-  rownames(result) <- NULL
-  attr(result, "event") <- states[[enum]]
-  result
 }
 
 finegray <- function(formula, data, weights, subset, na.action = na.pass,
@@ -3733,24 +3459,54 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
     direct_start <- formula
   }
   if (is.null(direct_start)) {
-    call <- match.call()
-    bridged <- .finegray_formula_bridge(
-      call,
-      parent.frame(),
-      na.action,
-      etype = if (missing(etype)) NULL else etype,
-      etype_missing = missing(etype),
+    if (missing(formula) || missing(data) || is.null(data) || !inherits(formula, "formula")) {
+      call <- match.call()
+      call[[1L]] <- quote(survival::finegray)
+      return(eval.parent(call))
+    }
+    env <- parent.frame()
+    weight_values <- .eval_formula_arg(
+      substitute(weights), missing(weights), data, env, vector = TRUE
+    )
+    subset_values <- .as_python_formula_subset(
+      .eval_formula_arg(substitute(subset), missing(subset), data, env),
+      data
+    )
+    id_values <- .eval_formula_arg(
+      substitute(id), missing(id), data, env, vector = TRUE
+    )
+    result <- .call_r_api(
+      "finegray",
+      .as_formula_string(formula),
+      data = .as_python_data(data),
+      weights = weight_values,
+      subset = subset_values,
+      `na_action` = .as_na_action(na.action),
+      etype = if (missing(etype)) NULL else .as_python_optional_vector(etype),
       prefix = prefix,
-      count = count,
-      count_missing = missing(count),
+      count = if (missing(count)) NULL else count,
+      id = id_values,
       timefix = timefix
     )
-    if (!is.null(bridged)) {
-      return(bridged)
+    model_call <- match.call()[c(1L, match(
+      c("formula", "data", "weights", "subset", "id"),
+      names(match.call()),
+      nomatch = 0L
+    ))]
+    model_call$na.action <- na.action
+    model_call[[1L]] <- quote(stats::model.frame)
+    model_frame <- eval(model_call, env)
+    frame <- .restore_r_column_classes(
+      .as_r_data_frame(result, check.names = FALSE, stringsAsFactors = FALSE),
+      model_frame
+    )
+    for (column in intersect(names(frame), names(model_frame))) {
+      if (inherits(model_frame[[column]], "AsIs")) {
+        class(frame[[column]]) <- class(model_frame[[column]])
+      }
     }
-    call <- match.call()
-    call[[1L]] <- quote(survival::finegray)
-    return(eval.parent(call))
+    attr(frame, "event") <- as.character(.result_field(result, "event"))
+    return(frame)
   }
   if (missing(tstop) || missing(ctime) || missing(cprob) || missing(extend) || missing(keep)) {
     stop("direct finegray bridge requires tstart, tstop, ctime, cprob, extend, and keep", call. = FALSE)
@@ -3773,8 +3529,52 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
   )
 }
 
+.survobrien_result_frame <- function(result, data) {
+  frame <- as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE)
+  if (ncol(frame) > 0L || length(result) == 0L) {
+    return(frame)
+  }
+  empty_columns <- lapply(names(result), function(column) {
+    if (column %in% names(data)) {
+      return(data[[column]][integer()])
+    }
+    if (column %in% c("status", ".id.", ".strata.")) {
+      return(integer())
+    }
+    numeric()
+  })
+  names(empty_columns) <- names(result)
+  as.data.frame(empty_columns, check.names = TRUE, stringsAsFactors = FALSE)
+}
+
+.survobrien_restore_row_names <- function(frame, call, formula, data, enclos) {
+  if (nrow(frame) <= 1L || !".id." %in% names(frame) ||
+      anyDuplicated(frame[[".id."]])) {
+    return(frame)
+  }
+  model_args <- match(
+    c("formula", "data", "subset", "na.action"),
+    names(call),
+    nomatch = 0L
+  )
+  model_call <- call[c(1L, model_args[model_args > 0L])]
+  model_call[[1L]] <- quote(stats::model.frame)
+  model_call$formula <- stats::terms(
+    formula,
+    c("strata", "cluster", "tt"),
+    data = data
+  )
+  model_rows <- row.names(eval(model_call, enclos))
+  output_rows <- model_rows[as.integer(frame[[".id."]])]
+  if (!identical(output_rows, as.character(seq_len(nrow(frame))))) {
+    row.names(frame) <- output_rows
+  }
+  frame
+}
+
 survobrien <- function(formula, data, subset, na.action, transform,
                        time, status, covariate, strata = NULL) {
+  call <- match.call()
   direct_time <- NULL
   if (!missing(time)) {
     direct_time <- time
@@ -3791,9 +3591,16 @@ survobrien <- function(formula, data, subset, na.action, transform,
         `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
         transform = if (missing(transform)) NULL else transform
       )
-      return(as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE))
+      frame <- .survobrien_result_frame(result, data)
+      frame <- .survobrien_restore_row_names(
+        frame,
+        call,
+        formula,
+        data,
+        parent.frame()
+      )
+      return(.restore_r_column_classes(frame, data))
     }
-    call <- match.call()
     call[[1L]] <- quote(survival::survobrien)
     return(eval.parent(call))
   }
@@ -3818,19 +3625,33 @@ survobrien <- function(formula, data, subset, na.action, transform,
   )
 }
 
-.survobrien_formula_numeric_term <- function(label, data) {
+.survobrien_formula_supported_term <- function(label, data) {
   if (label %in% names(data)) {
-    return(is.numeric(data[[label]]) && !is.factor(data[[label]]))
+    value <- data[[label]]
+    return(is.factor(value) || (is.numeric(value) && !inherits(value, "AsIs")))
   }
   match <- regexec(
-    "^(log|sqrt|exp|identity|as\\.numeric)\\(([[:space:]]*[^()]+[[:space:]]*)\\)$",
+    paste0(
+      "^(log|sqrt|exp|identity|as\\.numeric|factor|as\\.factor)",
+      "\\(([[:space:]]*[^()]+[[:space:]]*)\\)$"
+    ),
     label
   )
   pieces <- regmatches(label, match)[[1L]]
   if (length(pieces) == 0L) {
     return(FALSE)
   }
+  transform <- pieces[[2L]]
   column <- trimws(pieces[[3L]])
+  if (transform %in% c("factor", "as.factor")) {
+    return(
+      column %in% names(data) &&
+        (is.factor(data[[column]]) ||
+          is.character(data[[column]]) ||
+          is.numeric(data[[column]]) ||
+          is.logical(data[[column]]))
+    )
+  }
   column %in% names(data) && is.numeric(data[[column]]) && !is.factor(data[[column]])
 }
 
@@ -3851,7 +3672,19 @@ survobrien <- function(formula, data, subset, na.action, transform,
   if (length(labels) == 0L) {
     return(FALSE)
   }
-  all(vapply(labels, .survobrien_formula_numeric_term, logical(1), data = data))
+  factor_terms <- vapply(
+    labels,
+    function(label) {
+      (label %in% names(data) && is.factor(data[[label]])) ||
+        grepl("^(factor|as\\.factor)\\(", label)
+    },
+    logical(1)
+  )
+  if (any(factor_terms) && length(specials$strata) > 0L &&
+      length(specials$cluster) > 0L) {
+    return(FALSE)
+  }
+  all(vapply(labels, .survobrien_formula_supported_term, logical(1), data = data))
 }
 
 fromtimeline <- function(formula, data, id, istate = "istate") {
@@ -8339,6 +8172,12 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") 
     parent.frame(),
     vector_args = c("weights", "offset", "strata", "cluster", "id")
   )
+  if (!is.null(dots$weights) && is.name(dots$weights)) {
+    evaluated_dots[["_weights_column"]] <- as.character(dots$weights)
+  }
+  if (!is.null(dots$id) && is.name(dots$id)) {
+    evaluated_dots[["_id_column"]] <- as.character(dots$id)
+  }
   do.call(
     .call_r_api,
     c(
