@@ -10451,6 +10451,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     n = as.integer(.result_field(result, "n"))
   )
   variance <- .result_field(result, "variance")
+  conditional_variance <- .as_numeric_vector(.result_field(result, "conditional_variance"))
   dfbeta <- .result_field(result, "dfbeta")
   dfbeta_matrix <- NULL
   if (multi_score && !is.null(dfbeta)) {
@@ -10464,10 +10465,13 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (isTRUE(std.err) && !is.null(variance)) {
     if (multi_score && !is.null(dfbeta_matrix)) {
       out$var <- 4 * crossprod(dfbeta_matrix)
-      out$cvar <- 4 * .as_numeric_vector(variance)
     } else {
       out$var <- 4 * .as_numeric_vector(variance)
-      out$cvar <- out$var
+    }
+    out$cvar <- if (length(conditional_variance) == 1L) {
+      conditional_variance[[1L]]
+    } else {
+      conditional_variance
     }
   }
   if (influence %in% c(1L, 3L)) {

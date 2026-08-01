@@ -27,7 +27,7 @@ pub(crate) mod tmerge_module;
 pub use aeq_surv_module::{AeqSurvResult, aeq_surv};
 pub use cluster_module::{ClusterResult, cluster, cluster_str};
 pub use collapse_module::collapse;
-pub use lvcf::lvcf_indices;
+pub use lvcf::{lvcf_indices, lvcf_numeric_indices};
 pub use neardate_module::{NearDateResult, neardate, neardate_str};
 pub use nostutter::{
     nostutter_numeric_numeric, nostutter_numeric_str, nostutter_replacements,

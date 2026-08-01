@@ -387,11 +387,14 @@ class ConcordanceResult:
     dfbeta: list[float] | list[list[float] | None] | None
     influence: list[list[float]] | list[list[list[float]] | None] | None
     variance: float | list[float | None] | None
+    conditional_variance: float | list[float] | None
     score_names: list[str] | None
     @property
     def c_index(self) -> float | list[float]: ...
     @property
     def var(self) -> float | list[float | None] | None: ...
+    @property
+    def cvar(self) -> float | list[float] | None: ...
 
 class PredictResult:
     fit: Any
