@@ -4177,6 +4177,7 @@ def test_survfit_matrix_bindings_are_typed():
         "survfit_from_matrix",
         "survfit_multistate",
         "step_values_at",
+        "step_matrix_values_at",
         "condition_cox_survfit_curves",
         "cox_survfit_from_baseline",
     } <= stub_names
@@ -4238,6 +4239,18 @@ def test_survfit_matrix_bindings_are_typed():
         "requested_times",
         "initial",
     ]
+    assert list(inspect.signature(core.step_matrix_values_at).parameters) == [
+        "times",
+        "values",
+        "requested_times",
+        "initial",
+    ]
+    assert _pyi_function_arg_names(stub_path, "step_matrix_values_at") == [
+        "times",
+        "values",
+        "requested_times",
+        "initial",
+    ]
     assert list(inspect.signature(core.condition_cox_survfit_curves).parameters) == [
         "times",
         "cumhaz",
@@ -4286,6 +4299,14 @@ def test_survfit_matrix_bindings_are_typed():
         [0.5, 1.0, 4.0, 6.0],
         0.0,
     ) == pytest.approx([0.0, 10.0, 30.0, 50.0])
+    projected = core.step_matrix_values_at(
+        [1.0, 3.0, 5.0],
+        [[10.0, 30.0, 50.0], [1.0, 3.0, 5.0]],
+        [6.0, 0.5, 3.0],
+        -1.0,
+    )
+    assert projected[0] == pytest.approx([50.0, -1.0, 30.0])
+    assert projected[1] == pytest.approx([5.0, -1.0, 3.0])
     conditioned_time, conditioned_surv, conditioned_cumhaz = core.condition_cox_survfit_curves(
         [1.0, 3.0, 5.0],
         [[0.2, 0.6, 1.1]],

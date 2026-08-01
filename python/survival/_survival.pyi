@@ -5823,6 +5823,12 @@ def step_values_at(
     requested_times: list[float],
     initial: float,
 ) -> list[float]: ...
+def step_matrix_values_at(
+    times: list[float],
+    values: list[list[float]],
+    requested_times: list[float],
+    initial: float,
+) -> list[list[float]]: ...
 def condition_cox_survfit_curves(
     times: list[float],
     cumhaz: list[list[float]],
