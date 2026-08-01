@@ -4474,14 +4474,30 @@ def tcut(
 ) -> TcutResult:
     """Create a Rust-backed R-style ``tcut`` interval result."""
 
-    x_values = _float_vector(x, "x")
-    break_values = _float_vector(breaks, "breaks")
-    if len(break_values) < 2:
-        raise ValueError("breaks must have at least 2 elements")
+    x_values = [
+        math.nan if _is_missing_value(value) else float(value) for value in _materialize_1d(x, "x")
+    ]
+    break_values = [
+        math.nan if _is_missing_value(value) else float(value)
+        for value in _scalar_or_vector(breaks, "breaks")
+    ]
+    if not break_values:
+        raise ValueError("breaks must have at least 1 element")
+    if any(math.isnan(value) for value in break_values):
+        raise ValueError("breaks must be given in ascending order and contain no NA's")
+    if len(break_values) == 1:
+        label_values = (
+            None if labels is None else [str(value) for value in _materialize_1d(labels, "labels")]
+        )
+        return _core.tcut(
+            [value * _normalize_positive_scale(scale) for value in x_values],
+            break_values[0],
+            label_values,
+        )
     if any(
-        later <= earlier for earlier, later in zip(break_values[:-1], break_values[1:], strict=True)
+        later < earlier for earlier, later in zip(break_values[:-1], break_values[1:], strict=True)
     ):
-        raise ValueError("breaks must be strictly increasing")
+        raise ValueError("breaks must be given in ascending order and contain no NA's")
     scale_value = _normalize_positive_scale(scale)
     label_values = (
         _tcut_default_labels(break_values)
@@ -5462,40 +5478,12 @@ def fromtimeline(
     id_name_value = str(id_name)
     column_names, columns = _fromtimeline_data_columns(data, n)
     static_columns = _fromtimeline_static_columns(columns, id_values, column_names, id_name_value)
-
-    groups: dict[Any, list[int]] = {}
-    ordered_keys: list[Any] = []
-    for row_idx, id_value in enumerate(id_values):
-        key = _hashable_group_value(id_value)
-        if key not in groups:
-            ordered_keys.append(key)
-            groups[key] = []
-        groups[key].append(row_idx)
-
-    output_start: list[float] = []
-    output_stop: list[float] = []
-    output_status: list[int] = []
-    output_istate: list[int] = []
-    static_rows: list[int] = []
-    dynamic_rows: list[int] = []
-    removed_ids: list[Any] = []
-
-    for key in ordered_keys:
-        rows = sorted(groups[key], key=lambda idx: (time_values[idx], idx))
-        if len(rows) < 2 or time_values[rows[0]] == time_values[rows[-1]]:
-            removed_ids.append(id_values[rows[0]])
-            continue
-        if status_values[rows[0]] == 0:
-            raise ValueError("no observation should start in a censored state")
-        first_row = rows[0]
-        for position, row_idx in enumerate(rows[:-1]):
-            next_idx = rows[position + 1]
-            output_start.append(time_values[row_idx])
-            output_stop.append(time_values[next_idx])
-            output_status.append(status_values[next_idx])
-            output_istate.append(status_values[row_idx])
-            static_rows.append(first_row)
-            dynamic_rows.append(row_idx)
+    id_codes = _encode_labels(
+        [_hashable_group_value(value) for value in id_values],
+        "id",
+    )
+    plan = _core.from_timeline_rows(id_codes, time_values, status_values)
+    removed_ids = [id_values[int(row)] for row in plan.removed_row]
 
     state_values = _totimeline_state_values(states) if states is not None else []
     if state_values:
@@ -5506,13 +5494,13 @@ def fromtimeline(
         istate_levels = []
 
     return {
-        "start": output_start,
-        "stop": output_stop,
-        "status": output_status,
-        "istate": output_istate,
+        "start": plan.start,
+        "stop": plan.stop,
+        "status": plan.status,
+        "istate": plan.istate,
         "static": static_columns,
-        "static_row": static_rows,
-        "dynamic_row": dynamic_rows,
+        "static_row": plan.static_row,
+        "dynamic_row": plan.dynamic_row,
         "state_levels": state_levels,
         "istate_levels": istate_levels,
         "removed_id": removed_ids,
@@ -8158,13 +8146,29 @@ def _rttright_time_matrix(
 ) -> list[float] | list[list[float]]:
     time_values = [float(value) for value in time]
     status_values = [int(value) for value in status]
+    n = len(time_values)
+    if len(status_values) != n:
+        raise ValueError("time and status must have same length")
+    if any(value not in (0, 1) for value in status_values):
+        raise ValueError("status must contain only 0/1 values")
+    if any(not math.isfinite(value) for value in time_values):
+        raise ValueError("time must be finite")
+
     query_times = _rttright_times_vector(times)
-    matrix = _core.rttright_matrix(
+    case_weights = _rttright_initial_weights(weights, n)
+    if group is None:
+        group_values = None
+    else:
+        group_values = [int(value) for value in group]
+        if len(group_values) != n:
+            raise ValueError("rttright strata must have the same length as the Surv response")
+
+    matrix = _core.rttright_time_matrix(
         time_values,
         status_values,
         query_times,
-        None if group is None else [int(value) for value in group],
-        None if weights is None else _float_vector(weights, "weights"),
+        case_weights,
+        group_values,
         timefix,
         renorm,
     )
@@ -10287,141 +10291,6 @@ def _r_numeric_vector(values: Any, name: str) -> list[float]:
     return result
 
 
-def _r_output_length(*vectors: Sequence[float]) -> int:
-    if any(len(vector) == 0 for vector in vectors):
-        return 0
-    return max((len(vector) for vector in vectors), default=0)
-
-
-def _r_value(vector: Sequence[float], idx: int) -> float:
-    return float(vector[idx % len(vector)])
-
-
-def _r_unary(vector: Sequence[float], op: Any) -> list[float]:
-    return [op(value) for value in vector]
-
-
-def _r_binary(left: Sequence[float], right: Sequence[float], op: Any) -> list[float]:
-    n = _r_output_length(left, right)
-    return [op(_r_value(left, idx), _r_value(right, idx)) for idx in range(n)]
-
-
-def _r_add(left: Sequence[float], right: Sequence[float]) -> list[float]:
-    return _r_binary(left, right, lambda x, y: x + y)
-
-
-def _r_sub(left: Sequence[float], right: Sequence[float]) -> list[float]:
-    return _r_binary(left, right, lambda x, y: x - y)
-
-
-def _r_mul(left: Sequence[float], right: Sequence[float]) -> list[float]:
-    return _r_binary(left, right, lambda x, y: x * y)
-
-
-def _r_div(left: Sequence[float], right: Sequence[float]) -> list[float]:
-    def divide(x: float, y: float) -> float:
-        try:
-            return x / y
-        except ZeroDivisionError:
-            if x == 0.0:
-                return math.nan
-            return math.copysign(math.inf, x * y if y else x)
-
-    return _r_binary(left, right, divide)
-
-
-def _r_scalar_mul(vector: Sequence[float], scalar: float) -> list[float]:
-    return [value * scalar for value in vector]
-
-
-def _r_eq_zero(vector: Sequence[float]) -> list[bool | float]:
-    return [math.nan if math.isnan(value) else value == 0.0 for value in vector]
-
-
-def _r_eq_one(vector: Sequence[float]) -> list[bool | float]:
-    return [math.nan if math.isnan(value) else value == 1.0 for value in vector]
-
-
-def _r_or(left: Sequence[bool | float], right: Sequence[bool | float]) -> list[bool | float]:
-    n = _r_output_length(left, right)
-    result: list[bool | float] = []
-    for idx in range(n):
-        lval = left[idx % len(left)]
-        rval = right[idx % len(right)]
-        if lval is True or rval is True:
-            result.append(True)
-        elif lval is False and rval is False:
-            result.append(False)
-        else:
-            result.append(math.nan)
-    return result
-
-
-def _r_ifelse(
-    condition: Sequence[bool | float],
-    yes: Sequence[float],
-    no: Sequence[float],
-) -> list[float]:
-    if len(condition) == 0 or len(yes) == 0 or len(no) == 0:
-        return []
-    result: list[float] = []
-    for idx, cond in enumerate(condition):
-        if cond is True:
-            result.append(_r_value(yes, idx))
-        elif cond is False:
-            result.append(_r_value(no, idx))
-        else:
-            result.append(math.nan)
-    return result
-
-
-def _r_log(value: float) -> float:
-    if math.isnan(value) or value <= 0.0:
-        return math.nan
-    return math.log(value)
-
-
-def _r_sqrt(value: float) -> float:
-    if math.isnan(value) or value < 0.0:
-        return math.nan
-    return math.sqrt(value)
-
-
-def _r_asin(value: float) -> float:
-    if math.isnan(value) or value < -1.0 or value > 1.0:
-        return math.nan
-    return math.asin(value)
-
-
-def _r_exp(value: float) -> float:
-    return math.nan if math.isnan(value) else _safe_exp(value)
-
-
-def _r_pmax_zero(values: Sequence[float]) -> list[float]:
-    return [math.nan if math.isnan(value) else max(value, 0.0) for value in values]
-
-
-def _r_pmin(values: Sequence[float], limit: float) -> list[float]:
-    return [math.nan if math.isnan(value) else min(value, limit) for value in values]
-
-
-def _survfit_confint_scale(se: list[float], selow: Any | None) -> list[float]:
-    if selow is None:
-        return [1.0]
-    selow_values = _r_numeric_vector(selow, "selow")
-    return _r_ifelse(
-        _r_eq_zero(selow_values),
-        [1.0],
-        _r_div(selow_values, se),
-    )
-
-
-def _survfit_confint_prepared_se(p: list[float], se: list[float], logse: bool) -> list[float]:
-    if logse:
-        return se
-    return _r_ifelse(_r_eq_zero(se), [0.0], _r_div(se, p))
-
-
 def survfit_confint(
     p: Any,
     se: Any,
@@ -10454,99 +10323,16 @@ def survfit_confint(
     se_values = _r_numeric_vector(se, "se")
     confidence = _normalize_conf_level(conf_int, "conf_int")
     zval = NormalDist().inv_cdf(1.0 - (1.0 - confidence) / 2.0)
-    scale = _survfit_confint_scale(se_values, selow)
-    se_values = _survfit_confint_prepared_se(p_values, se_values, bool(logse))
-
-    if conf_type == "plain":
-        se2 = _r_scalar_mul(_r_mul(se_values, p_values), zval)
-        lower = _r_pmax_zero(_r_sub(p_values, _r_mul(se2, scale)))
-        upper_raw = _r_add(p_values, se2)
-        upper = _r_pmin(upper_raw, 1.0) if bool(ulimit) else upper_raw
-        return SurvfitConfidenceIntervalResult(lower=lower, upper=upper)
-
-    if conf_type == "log":
-        xx = _r_ifelse(_r_eq_zero(p_values), [math.nan], p_values)
-        se2 = _r_scalar_mul(se_values, zval)
-        log_xx = _r_unary(xx, _r_log)
-        temp1 = _r_ifelse(
-            _r_eq_zero(se_values),
-            p_values,
-            _r_unary(_r_sub(log_xx, _r_mul(se2, scale)), _r_exp),
-        )
-        temp2 = _r_ifelse(
-            _r_eq_zero(se_values),
-            p_values,
-            _r_unary(_r_add(log_xx, se2), _r_exp),
-        )
-        upper = _r_pmin(temp2, 1.0) if bool(ulimit) else temp2
-        return SurvfitConfidenceIntervalResult(lower=temp1, upper=upper)
-
-    if conf_type == "log-log":
-        xx = _r_ifelse(_r_or(_r_eq_zero(p_values), _r_eq_one(p_values)), [math.nan], p_values)
-        log_xx = _r_unary(xx, _r_log)
-        se2 = _r_scalar_mul(_r_div(se_values, log_xx), zval)
-        log_neg_log_xx = _r_unary(_r_scalar_mul(log_xx, -1.0), _r_log)
-        temp1 = _r_ifelse(
-            _r_eq_zero(se_values),
-            p_values,
-            _r_unary(
-                _r_scalar_mul(
-                    _r_unary(_r_sub(log_neg_log_xx, _r_mul(se2, scale)), _r_exp),
-                    -1.0,
-                ),
-                _r_exp,
-            ),
-        )
-        temp2 = _r_ifelse(
-            _r_eq_zero(se_values),
-            p_values,
-            _r_unary(
-                _r_scalar_mul(_r_unary(_r_add(log_neg_log_xx, se2), _r_exp), -1.0),
-                _r_exp,
-            ),
-        )
-        return SurvfitConfidenceIntervalResult(lower=temp1, upper=temp2)
-
-    if conf_type == "logit":
-        xx = _r_ifelse(_r_eq_zero(p_values), [math.nan], p_values)
-        one_minus_xx = _r_sub([1.0], xx)
-        se2 = _r_scalar_mul(_r_mul(se_values, _r_add([1.0], _r_div(xx, one_minus_xx))), zval)
-        logit_p = _r_unary(_r_div(p_values, _r_sub([1.0], p_values)), _r_log)
-        temp1 = _r_ifelse(
-            _r_eq_zero(se_values),
-            p_values,
-            _r_sub(
-                [1.0],
-                _r_div(
-                    [1.0],
-                    _r_add(
-                        [1.0],
-                        _r_unary(_r_sub(logit_p, _r_mul(se2, scale)), _r_exp),
-                    ),
-                ),
-            ),
-        )
-        temp2 = _r_ifelse(
-            _r_eq_zero(se_values),
-            p_values,
-            _r_sub(
-                [1.0],
-                _r_div([1.0], _r_add([1.0], _r_unary(_r_add(logit_p, se2), _r_exp))),
-            ),
-        )
-        return SurvfitConfidenceIntervalResult(lower=temp1, upper=temp2)
-
-    xx = _r_ifelse(_r_eq_zero(p_values), [math.nan], p_values)
-    sqrt_xx = _r_unary(xx, _r_sqrt)
-    se2 = _r_scalar_mul(
-        _r_mul(se_values, _r_unary(_r_div(xx, _r_sub([1.0], xx)), _r_sqrt)),
-        0.5 * zval,
+    selow_values = None if selow is None else _r_numeric_vector(selow, "selow")
+    lower, upper = _core.survfit_confint_native(
+        p_values,
+        se_values,
+        bool(logse),
+        conf_type,
+        zval,
+        selow_values,
+        bool(ulimit),
     )
-    asin_sqrt_xx = _r_unary(sqrt_xx, _r_asin)
-    lower_angle = _r_pmax_zero(_r_sub(asin_sqrt_xx, _r_mul(se2, scale)))
-    upper_angle = _r_pmin(_r_add(asin_sqrt_xx, se2), math.pi / 2.0)
-    lower = [math.sin(value) ** 2 if not math.isnan(value) else math.nan for value in lower_angle]
-    upper = [math.sin(value) ** 2 if not math.isnan(value) else math.nan for value in upper_angle]
     return SurvfitConfidenceIntervalResult(lower=lower, upper=upper)
 
 
@@ -13311,8 +13097,6 @@ def survfit(
         and (response.start is None or id_values is None)
     ):
         raise ValueError("survfit entry=TRUE requires counting-process Surv input and id")
-    if istate is not None and response.type not in {"mright", "mcounting"}:
-        raise NotImplementedError("survfit istate requires a multi-state Surv response")
     if response.type in {"mright", "mcounting"}:
         if robust_value is False:
             raise ValueError("multi-state survfit supports only a robust variance")
@@ -16499,12 +16283,13 @@ def _cox_detail_row_order(
 
 def _cox_detail_strata_table(
     strata: list[int],
-    event_groups: list[tuple[int, float]],
+    detail_rows: Sequence[Any],
 ) -> dict[int, int] | None:
     if len(set(strata)) <= 1:
         return None
     table: dict[int, int] = {}
-    for stratum, _event_time in event_groups:
+    for row in detail_rows:
+        stratum = int(row.stratum)
         table[stratum] = table.get(stratum, 0) + 1
     return table
 
@@ -19631,7 +19416,6 @@ def coxph_detail(
         riskmat=include_riskmat,
     )
     detail_rows = list(detail.rows)
-    event_groups = [(int(row.stratum), float(row.time)) for row in detail_rows]
 
     row_order = _cox_detail_row_order(time, status, strata, rorder_name)
     x_rows = [rows[idx] for idx in row_order]
@@ -19644,11 +19428,7 @@ def coxph_detail(
         native_risk_matrix = detail.riskmat
         if native_risk_matrix is None:
             raise RuntimeError("native Cox detail omitted the requested risk matrix")
-        risk_matrix = (
-            native_risk_matrix
-            if rorder_name == "data"
-            else [native_risk_matrix[idx] for idx in row_order]
-        )
+        risk_matrix = [list(native_risk_matrix[idx]) for idx in row_order]
 
     has_case_weights = any(abs(weight - 1.0) > 1e-12 for weight in weights)
     return CoxPHDetailResult(
@@ -19666,7 +19446,7 @@ def coxph_detail(
         wtrisk=[float(row.wtrisk) for row in detail_rows],
         x=x_rows,
         y=y_rows,
-        strata=_cox_detail_strata_table(strata, event_groups),
+        strata=_cox_detail_strata_table(strata, detail_rows),
         riskmat=risk_matrix,
         weights=ordered_weights if has_case_weights else None,
         nevent_wt=[float(row.n_event_weight) for row in detail_rows] if has_case_weights else None,
@@ -20145,8 +19925,6 @@ def coxph(
     singular_ok_value = _normalize_bool_option_with_default(singular_ok, "singular_ok", True)
     nocenter_values = _normalize_numeric_sequence_or_none(nocenter, "nocenter")
     id_arg = id
-    if istate is not None or statedata is not None:
-        raise NotImplementedError("coxph multi-state istate/statedata inputs are not supported")
     if init is not None and initial_beta is not None:
         raise ValueError("use only one of init or initial_beta")
     max_iter = _integer_scalar(max_iter, "max_iter")
@@ -20163,11 +19941,15 @@ def coxph(
     time_transform_expanded = False
     time_transform_observed_n: int | None = None
     formula_x = False
+    istate_column: str | None = None
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
         weights = _column_or_values(data, weights, "weights") if weights is not None else None
         id_arg = _column_or_values(data, id_arg, "id") if id_arg is not None else None
+        istate_column = istate if isinstance(istate, str) else None
+        if istate_column is not None:
+            istate = _column(data, istate_column)
         if subset is not None:
             data, aligned = _subset_formula_inputs(
                 response,
@@ -20178,12 +19960,14 @@ def coxph(
                 strata=strata,
                 cluster=cluster,
                 id=id_arg,
+                istate=istate,
             )
             weights = aligned["weights"]
             offset = aligned["offset"]
             strata = aligned["strata"]
             cluster = aligned["cluster"]
             id_arg = aligned["id"]
+            istate = aligned["istate"]
             subset = None
         data, aligned = _apply_formula_na_action(
             response,
@@ -20194,12 +19978,14 @@ def coxph(
             strata=strata,
             cluster=cluster,
             id=id_arg,
+            istate=istate,
         )
         weights = aligned["weights"]
         offset = aligned["offset"]
         strata = aligned["strata"]
         cluster = aligned["cluster"]
         id_arg = aligned["id"]
+        istate = aligned["istate"]
         na_action = "pass"
         if x is not None:
             if not _is_bool_like(x):
@@ -20241,6 +20027,7 @@ def coxph(
         strata = _subset_optional_sequence(strata, indices, "strata")
         cluster = _subset_optional_sequence(cluster, indices, "cluster")
         id_arg = _subset_optional_sequence(id_arg, indices, "id")
+        istate = _subset_optional_sequence(istate, indices, "istate")
     response, aligned = _apply_surv_na_action(
         response,
         na_action,
@@ -20251,6 +20038,7 @@ def coxph(
         strata=strata,
         cluster=cluster,
         id=id_arg,
+        istate=istate,
     )
     x = aligned["x"]
     weights = aligned["weights"]
@@ -20258,6 +20046,7 @@ def coxph(
     strata = aligned["strata"]
     cluster = aligned["cluster"]
     id_arg = aligned["id"]
+    istate = aligned["istate"]
     if response.type not in {"right", "counting"}:
         raise NotImplementedError(
             "coxph currently supports right-censored and counting Surv responses"
@@ -20275,6 +20064,7 @@ def coxph(
         offset = _subset_optional_sequence(offset, source_indices, "offset")
         cluster = _subset_optional_sequence(cluster, source_indices, "cluster")
         id_arg = _subset_optional_sequence(id_arg, source_indices, "id")
+        istate = _subset_optional_sequence(istate, source_indices, "istate")
         transform_weights = _optional_float_vector(weights, "weights", expanded_n)
         transformed = _cox_time_transform_values(
             formula_model_data,
@@ -20303,6 +20093,9 @@ def coxph(
     id_values = _materialize_labels(id_arg, "id") if id_arg is not None else None
     if id_values is not None and len(id_values) != n:
         raise ValueError("id must have the same length as the Surv response")
+    istate_values = _materialize_1d(istate, "istate") if istate is not None else None
+    if istate_values is not None and len(istate_values) != n:
+        raise ValueError("istate must have the same length as the Surv response")
     fit_strata = _encode_groups(strata, n) if strata is not None else None
     fit_weights = _optional_float_vector(weights, "weights", n)
     case_weights = fit_weights if explicit_weights else None
@@ -20332,6 +20125,14 @@ def coxph(
                 id=id_values,
             )
         )
+        if istate_values is not None:
+            model_frame["(istate)"] = istate_values
+            if (
+                istate_column is not None
+                and formula_model_data is not None
+                and istate_column not in model_frame
+            ):
+                model_frame[istate_column] = _column(formula_model_data, istate_column)
 
     fit_times = list(response.time)
     entry_times = list(response.start) if response.start is not None else None

@@ -1000,13 +1000,16 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         None,
         "breslow",
         0.0,
+        True,
     )
 
     assert type(detail).__name__ == "CoxphDetail"
     assert detail.n_events == sum(status)
     assert detail.n_observations == len(time)
     assert detail.n_covariates == 1
-    assert detail.riskmat is None
+    assert detail.riskmat is not None
+    assert len(detail.riskmat) == len(time)
+    assert all(len(row) == sum(status) for row in detail.riskmat)
     assert len(detail.rows) == sum(status)
     assert detail.times() == pytest.approx([1.0, 3.0, 4.0, 6.0, 8.0])
     assert len(detail.hazards()) == sum(status)
@@ -3180,6 +3183,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "RttrightResult",
         "Surv2DataResult",
         "Surv2TimelineResult",
+        "FromTimelineRowsResult",
         "CondenseResult",
         "CondensePlanResult",
         "TcutResult",
@@ -3202,8 +3206,10 @@ def test_data_prep_low_level_bindings_are_typed():
         "rttright",
         "rttright_matrix",
         "rttright_stratified",
+        "rttright_time_matrix",
         "surv2data",
         "surv2data_timeline",
+        "from_timeline_rows",
         "survcondense",
         "survcondense_plan",
         "tcut",
@@ -3239,8 +3245,18 @@ def test_data_prep_low_level_bindings_are_typed():
             "renorm",
         ],
         "rttright_stratified": ["time", "status", "strata", "weights", "timefix", "renorm"],
+        "rttright_time_matrix": [
+            "time",
+            "status",
+            "times",
+            "weights",
+            "strata",
+            "timefix",
+            "renorm",
+        ],
         "surv2data": ["id", "time", "event_time", "event_status"],
         "surv2data_timeline": ["id", "time", "status", "repeated"],
+        "from_timeline_rows": ["id", "time", "status"],
         "survcondense": ["id", "time1", "time2", "status"],
         "survcondense_plan": ["id_order", "start", "stop", "row_code"],
         "tcut": ["value", "breaks", "labels"],
@@ -3278,6 +3294,15 @@ def test_data_prep_low_level_bindings_are_typed():
         "RttrightResult": {"weights", "time", "status", "order"},
         "Surv2DataResult": {"id", "time1", "time2", "status", "row_index"},
         "Surv2TimelineResult": {"row_index", "start", "stop", "status", "istate"},
+        "FromTimelineRowsResult": {
+            "start",
+            "stop",
+            "status",
+            "istate",
+            "static_row",
+            "dynamic_row",
+            "removed_row",
+        },
         "CondenseResult": {"id", "time1", "time2", "status", "row_map"},
         "CondensePlanResult": {"start", "keep"},
         "TcutResult": {"values", "codes", "levels", "breaks", "counts"},
@@ -3297,6 +3322,19 @@ def test_data_prep_low_level_bindings_are_typed():
     assert plan.keep == [2, 3]
     assert plan.start == pytest.approx([0.0, 0.0, 0.0, 0.0])
 
+    timeline_rows = core.from_timeline_rows(
+        [0, 1, 0, 1, 0, 2],
+        [0.0, 3.0, 4.0, 0.0, 2.0, 1.0],
+        [1, 2, 3, 1, 2, 1],
+    )
+    assert timeline_rows.start == [0.0, 2.0, 0.0]
+    assert timeline_rows.stop == [2.0, 4.0, 3.0]
+    assert timeline_rows.status == [2, 3, 2]
+    assert timeline_rows.istate == [1, 2, 1]
+    assert timeline_rows.static_row == [0, 0, 3]
+    assert timeline_rows.dynamic_row == [0, 4, 3]
+    assert timeline_rows.removed_row == [5]
+
     collapsed = core.collapse(
         [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0],
         [1, 1, 1, 1],
@@ -3309,6 +3347,19 @@ def test_data_prep_low_level_bindings_are_typed():
         "matrix": [[1, 1], [2, 2], [3, 3], [4, 4]],
         "dimnames": ["start", "end"],
     }
+
+    timed_weights = core.rttright_time_matrix(
+        [3.0, 1.0, 2.0],
+        [1, 0, 1],
+        [1.0, 2.0, 3.0],
+        None,
+        None,
+        True,
+        True,
+    )
+    assert timed_weights[0] == pytest.approx([1.0 / 3.0, 0.5, 0.5])
+    assert timed_weights[1] == pytest.approx([1.0 / 3.0, 0.0, 0.0])
+    assert timed_weights[2] == pytest.approx([1.0 / 3.0, 0.5, 0.5])
 
 
 def test_cox_counting_low_level_bindings_are_typed():
@@ -3931,6 +3982,7 @@ def test_survfitkm_bindings_are_typed():
         "conf_level",
         "conf_type",
         "timefix",
+        "include_influence",
     ]
     assert _pyi_function_arg_names(stub_path, "survfitkm_influence") == [
         "time",
@@ -3943,6 +3995,7 @@ def test_survfitkm_bindings_are_typed():
         "conf_level",
         "conf_type",
         "timefix",
+        "include_influence",
     ]
     assert list(inspect.signature(core.survfitkm_counting_influence).parameters) == [
         "start",
@@ -4195,6 +4248,8 @@ def test_survfitkm_bindings_are_typed():
         "time",
         "influence_surv",
         "influence_chaz",
+        "std_err",
+        "std_chaz",
     }
     assert _pyi_class_property_names(stub_path, "CountingSurvfitTables") == {
         "time",
@@ -4231,6 +4286,12 @@ def test_survfitkm_bindings_are_typed():
         [1.0, 2.0, 3.0, 4.0],
         [1.0, 0.0, 1.0, 0.0],
         [0, 1, 2, 3],
+    )
+    influence_norms = core.survfitkm_influence(
+        [1.0, 2.0, 3.0, 4.0],
+        [1.0, 0.0, 1.0, 0.0],
+        [0, 1, 2, 3],
+        include_influence=False,
     )
     counting_influence = core.survfitkm_counting_influence(
         [0.0, 10.0, 25.0, 0.0, 5.0],
@@ -4340,6 +4401,22 @@ def test_survfitkm_bindings_are_typed():
     assert influence.time == pytest.approx([1.0, 2.0, 3.0, 4.0])
     assert influence.influence_chaz[0] == pytest.approx([0.1875, 0.1875, 0.1875, 0.1875])
     assert influence.influence_surv[3] == pytest.approx([0.0625, 0.0625, 0.21875, 0.21875])
+    assert influence.std_err == pytest.approx(
+        [
+            math.sqrt(sum(row[column] ** 2 for row in influence.influence_surv))
+            for column in range(len(influence.time))
+        ]
+    )
+    assert influence.std_chaz == pytest.approx(
+        [
+            math.sqrt(sum(row[column] ** 2 for row in influence.influence_chaz))
+            for column in range(len(influence.time))
+        ]
+    )
+    assert influence_norms.influence_surv == []
+    assert influence_norms.influence_chaz == []
+    assert influence_norms.std_err == pytest.approx(influence.std_err)
+    assert influence_norms.std_chaz == pytest.approx(influence.std_chaz)
     assert robust.std_err == pytest.approx(
         [0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0]
     )

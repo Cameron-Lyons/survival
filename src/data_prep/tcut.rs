@@ -76,10 +76,20 @@ fn tcut_breaks_and_default_labels(
                 "value must be non-empty when breaks is a scalar interval count",
             ));
         }
+        if value.iter().any(|current| current.is_infinite()) {
+            return Err(PyErr::new::<PyValueError, _>(
+                "value must not contain infinite values when breaks is a scalar interval count",
+            ));
+        }
 
-        let mut min_value = value[0];
-        let mut max_value = value[0];
-        for &current in &value[1..] {
+        let mut finite_values = value.iter().copied().filter(|current| current.is_finite());
+        let Some(mut min_value) = finite_values.next() else {
+            return Err(PyErr::new::<PyValueError, _>(
+                "value must contain a finite value when breaks is a scalar interval count",
+            ));
+        };
+        let mut max_value = min_value;
+        for current in finite_values {
             min_value = min_value.min(current);
             max_value = max_value.max(current);
         }
@@ -106,7 +116,11 @@ fn tcut_breaks_and_default_labels(
             "breaks must have at least 2 elements",
         ));
     }
-    validate_finite_values("breaks", &breaks)?;
+    if breaks.iter().any(|value| value.is_nan()) {
+        return Err(PyErr::new::<PyValueError, _>(
+            "breaks must be given in ascending order and contain no NA's",
+        ));
+    }
     for window in breaks.windows(2) {
         if window[0] > window[1] {
             return Err(PyErr::new::<PyValueError, _>(
@@ -164,7 +178,6 @@ fn tcut_from_vecs(
     breaks: Vec<f64>,
     labels: Option<Vec<String>>,
 ) -> PyResult<TcutResult> {
-    validate_finite_values("value", &value)?;
     let (cut_breaks, default_labels) = tcut_breaks_and_default_labels(&value, breaks)?;
 
     let n_intervals = cut_breaks.len() - 1;
@@ -205,7 +218,7 @@ fn tcut_from_vecs(
 
 fn find_interval(breaks: &[f64], value: f64) -> i32 {
     let n = breaks.len();
-    if n < 2 {
+    if n < 2 || value.is_nan() {
         return -1;
     }
 
@@ -321,6 +334,16 @@ mod tests {
     }
 
     #[test]
+    fn test_tcut_scalar_break_count_preserves_missing_values() {
+        let result = tcut_from_vecs(vec![1.0, f64::NAN, 3.0], vec![2.0], None).unwrap();
+
+        assert_eq!(result.codes, vec![0, -1, 1]);
+        assert_eq!(result.levels, vec!["Range 1", "Range 2"]);
+        assert_eq!(result.breaks, vec![0.98, 2.0, 3.02]);
+        assert_eq!(result.counts, vec![1, 1]);
+    }
+
+    #[test]
     fn test_tcut_outside_range() {
         let values = vec![-5.0, 50.0, 15.0];
         let breaks = vec![0.0, 10.0, 20.0, 30.0];
@@ -352,6 +375,19 @@ mod tests {
     }
 
     #[test]
+    fn test_tcut_preserves_special_values_and_infinite_breaks() {
+        let result = tcut_from_vecs(
+            vec![5.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY],
+            vec![f64::NEG_INFINITY, 10.0, 20.0, f64::INFINITY],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.codes, vec![0, -1, 2, 0]);
+        assert_eq!(result.counts, vec![2, 0, 1]);
+    }
+
+    #[test]
     fn test_tcut_expand_basic() {
         let start = vec![0.0, 5.0];
         let stop = vec![25.0, 15.0];
@@ -378,9 +414,9 @@ mod tests {
 
     #[test]
     fn test_tcut_rejects_malformed_breaks_and_values() {
-        assert!(tcut_from_vecs(vec![f64::NAN], vec![0.0, 1.0], None).is_err());
-        assert!(tcut_from_vecs(vec![0.5], vec![0.0, f64::INFINITY], None).is_err());
+        assert!(tcut_from_vecs(vec![0.5], vec![0.0, f64::NAN], None).is_err());
         assert!(tcut_from_vecs(vec![0.5], vec![2.0, 1.0], None).is_err());
+        assert!(tcut_from_vecs(vec![f64::NAN], vec![2.0], None).is_err());
         assert!(tcut_from_vecs(vec![0.5], vec![0.0], None).is_err());
         assert!(tcut_from_vecs(Vec::new(), vec![2.0], None).is_err());
     }

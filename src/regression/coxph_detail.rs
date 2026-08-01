@@ -987,7 +987,7 @@ mod tests {
             offset: None,
             method: "breslow",
             center: 0.0,
-            include_riskmat: false,
+            include_riskmat: true,
         })
         .unwrap();
 
@@ -997,6 +997,10 @@ mod tests {
         assert_eq!(detail.rows[0].n_event, 2);
         assert_eq!(detail.rows[1].stratum, 2);
         assert_eq!(detail.rows[1].time, 2.0);
+        assert_eq!(
+            detail.riskmat,
+            Some(vec![vec![0, 1], vec![1, 0], vec![1, 0], vec![0, 1]])
+        );
     }
 
     #[test]

@@ -270,6 +270,7 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
     cut_boundaries = survival.tcut([0.0, 10.0, 20.0, 30.0], [0.0, 10.0, 20.0, 30.0])
     cut_generated = survival.tcut([5.0, 15.0, 25.0], 3.0)
     cut_duplicate_break = survival.tcut([5.0, 15.0, 25.0], [0.0, 10.0, 10.0, 30.0])
+    cut_missing = survival.tcut([float("nan")], [0.0, 1.0])
     expanded = survival.tcut_expand([0.0], [25.0], [0.0, 10.0, 20.0, 30.0])
     expanded_edges = survival.tcut_expand([-5.0, 35.0], [25.0, 40.0], [0.0, 10.0, 20.0])
 
@@ -308,6 +309,8 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
     assert cut_generated.counts == [1, 1, 1]
     assert cut_duplicate_break.codes == [0, 2, 2]
     assert cut_duplicate_break.counts == [1, 0, 2]
+    assert cut_missing.codes == [-1]
+    assert cut_missing.counts == [0]
 
     start, stop, codes, original = expanded
     assert start == pytest.approx([0.0, 10.0, 20.0])
@@ -336,8 +339,6 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
     assert missing_query.distances == [None]
     assert infinite_reference.indices == [0]
     assert infinite_reference.distances == [float("inf")]
-    with pytest.raises(ValueError, match="value values must be finite"):
-        survival.tcut([float("nan")], [0.0, 1.0])
     with pytest.raises(ValueError, match="breaks must be given in ascending order"):
         survival.tcut([0.5], [2.0, 1.0])
     with pytest.raises(ValueError, match="Must specify at least one interval"):
