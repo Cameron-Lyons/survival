@@ -1126,6 +1126,78 @@ test_that("R formula wrappers delegate to the Python survival package", {
     survival::pspline(c(1, NA, 2), df = 2, penalty = FALSE)
   )
 
+  bridged_nsk_basis <- nsk(1:10, df = 4)
+  bridged_nsk_call_method <- get(
+    "makepredictcall.nsk",
+    envir = asNamespace("survivalr")
+  )
+  reference_nsk_call_method <- get(
+    "makepredictcall.nsk",
+    envir = asNamespace("survival")
+  )
+  original_nsk_call <- quote(nsk(value, df = 4, b = 0.2))
+  expect_equal(
+    bridged_nsk_call_method(bridged_nsk_basis, original_nsk_call),
+    reference_nsk_call_method(bridged_nsk_basis, original_nsk_call)
+  )
+  namespaced_nsk_call <- bridged_nsk_call_method(
+    bridged_nsk_basis,
+    quote(survivalr::nsk(value, df = 4))
+  )
+  expect_identical(namespaced_nsk_call[[1L]], quote(survivalr::nsk))
+  expect_equal(namespaced_nsk_call$knots, attr(bridged_nsk_basis, "knots"))
+  expect_equal(
+    namespaced_nsk_call$Boundary.knots,
+    attr(bridged_nsk_basis, "Boundary.knots")
+  )
+  unrelated_nsk_call <- quote(splines::ns(value, df = 4))
+  expect_identical(
+    bridged_nsk_call_method(bridged_nsk_basis, unrelated_nsk_call),
+    unrelated_nsk_call
+  )
+
+  bridged_pspline_basis <- pspline(1:10, df = 4)
+  reference_pspline_basis <- survival::pspline(1:10, df = 4)
+  bridged_pspline_call_method <- get(
+    "makepredictcall.pspline",
+    envir = asNamespace("survivalr")
+  )
+  reference_pspline_call_method <- get(
+    "makepredictcall.pspline",
+    envir = asNamespace("survival")
+  )
+  original_pspline_call <- quote(pspline(value, df = 4, nterm = 10))
+  expect_equal(
+    bridged_pspline_call_method(bridged_pspline_basis, original_pspline_call),
+    reference_pspline_call_method(bridged_pspline_basis, original_pspline_call)
+  )
+  expect_null(
+    bridged_pspline_call_method(bridged_pspline_basis, original_pspline_call)$df
+  )
+  unrelated_pspline_call <- quote(stats::poly(value, degree = 3))
+  expect_identical(
+    bridged_pspline_call_method(bridged_pspline_basis, unrelated_pspline_call),
+    unrelated_pspline_call
+  )
+
+  bridged_pspline_predict_method <- get(
+    "predict.pspline",
+    envir = asNamespace("survivalr")
+  )
+  reference_pspline_predict_method <- get(
+    "predict.pspline",
+    envir = asNamespace("survival")
+  )
+  expect_identical(
+    bridged_pspline_predict_method(bridged_pspline_basis),
+    bridged_pspline_basis
+  )
+  prediction_values <- c(0, 2.5, 5, 10, 12)
+  expect_pspline_equal(
+    bridged_pspline_predict_method(bridged_pspline_basis, prediction_values),
+    reference_pspline_predict_method(reference_pspline_basis, prediction_values)
+  )
+
   strata_factor <- strata(c("b", "a", "b", NA), c(2, 1, 1, 1), shortlabel = TRUE)
   expect_s3_class(strata_factor, "factor")
   expect_equal(as.integer(strata_factor), c(3L, 1L, 2L, NA))
