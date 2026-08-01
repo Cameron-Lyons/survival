@@ -948,7 +948,8 @@ first knot-height column, or whether \code{pspline} includes an intercept.}
 \item{b}{Boundary quantile used by the default \code{nsk} boundary knots.}
 \item{Boundary.knots}{Boundary knots for \code{nsk} and \code{pspline};
 logical values follow the compatibility behavior of \code{survival::nsk}.}
-\item{call}{Model call updated with fitted spline metadata for prediction.}
+\item{call}{Model call updated with fitted spline metadata for prediction,
+or a logical control for showing the fitted call in a \code{pyears} summary.}
 \item{newx}{New predictor values for \code{predict.pspline}.}
 \item{theta}{Fixed penalty parameter for \code{ridge}, \code{frailty.*}, and
 \code{pspline}.}
@@ -1011,8 +1012,7 @@ interval event/censor counts when explicit \code{times} are supplied.}
 \item{rmap}{Optional rate-table variable mapping for formula
 \code{survexp} and \code{pyears} calls delegated to \pkg{survival}.}
 \item{expect}{Expected-count scale selector accepted by \code{pyears}.}
-\item{header, call}{Logical controls for the heading and fitted call in a
-\code{pyears} summary.}
+\item{header}{Logical control for the heading in a \code{pyears} summary.}
 \item{pyears, expected, rate, rr, ci.r, ci.rr}{Logical controls for the
 exposure, expected-event, rate, observed-to-expected, and confidence interval
 columns in a \code{pyears} summary. The \code{n} and \code{event} arguments
