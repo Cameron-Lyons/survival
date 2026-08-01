@@ -118,7 +118,7 @@ pub use rmst_module::{
 };
 pub use royston_module::{RoystonResult, royston, royston_from_model};
 pub use survcheck_module::{SurvCheckResult, survcheck, survcheck_simple};
-pub use survobrien_module::{SurvObrienResult, survobrien};
+pub use survobrien_module::{SurvObrienResult, survobrien, survobrien_transform_groups};
 pub use time_dependent_auc_module::{
     CumulativeDynamicAUCResult, TimeDepAUCResult, cumulative_dynamic_auc,
     cumulative_dynamic_auc_core, time_dependent_auc, time_dependent_auc_core,

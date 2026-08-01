@@ -1,4 +1,5 @@
 import math
+import random
 from bisect import bisect_right
 from itertools import combinations
 from statistics import NormalDist
@@ -3580,6 +3581,41 @@ def test_r_style_survobrien_uses_direct_vectors():
         "x": [0.0],
         ".strata.": [4],
     }
+
+
+def test_survobrien_group_transform_matches_python_reference():
+    from survival.r_api import _survobrien_default_transform
+
+    rng = random.Random(20260801)  # noqa: S311
+    value_pool = [-2.0, -0.0, 0.0, 0.5, 0.5, 3.0]
+    for _ in range(200):
+        n_rows = rng.randrange(1, 30)
+        columns = [
+            [rng.choice(value_pool) for _ in range(n_rows)] for _ in range(rng.randrange(1, 5))
+        ]
+        group_sizes = [rng.randrange(0, 20) for _ in range(rng.randrange(0, 10))]
+        row_indices = [rng.randrange(n_rows) for _ in range(sum(group_sizes, start=0))]
+
+        actual = survival._survival.survobrien_transform_groups(
+            columns,
+            row_indices,
+            group_sizes,
+        )
+        expected = []
+        for column in columns:
+            transformed = []
+            offset = 0
+            for group_size in group_sizes:
+                group_rows = row_indices[offset : offset + group_size]
+                transformed.extend(
+                    _survobrien_default_transform([column[row] for row in group_rows])
+                )
+                offset += group_size
+            expected.append(transformed)
+
+        assert len(actual) == len(expected)
+        for actual_column, expected_column in zip(actual, expected, strict=True):
+            assert actual_column == pytest.approx(expected_column)
 
 
 def test_r_style_yates_direct_helpers_wrap_rust_kernels():

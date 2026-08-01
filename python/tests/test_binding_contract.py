@@ -3574,13 +3574,24 @@ def test_survobrien_and_trend_bindings_are_typed():
     stub_path = PACKAGE_ROOT / "_survival.pyi"
     stub_names = _pyi_top_level_names(stub_path)
 
-    assert {"SurvObrienResult", "TrendTestResult", "survobrien", "logrank_trend"} <= stub_names
+    assert {
+        "SurvObrienResult",
+        "TrendTestResult",
+        "survobrien",
+        "survobrien_transform_groups",
+        "logrank_trend",
+    } <= stub_names
 
     assert list(inspect.signature(core.survobrien).parameters) == [
         "time",
         "status",
         "covariate",
         "strata",
+    ]
+    assert list(inspect.signature(core.survobrien_transform_groups).parameters) == [
+        "columns",
+        "row_indices",
+        "group_sizes",
     ]
     assert list(inspect.signature(core.logrank_trend).parameters) == [
         "time",
@@ -3593,6 +3604,11 @@ def test_survobrien_and_trend_bindings_are_typed():
         "status",
         "covariate",
         "strata",
+    ]
+    assert _pyi_function_arg_names(stub_path, "survobrien_transform_groups") == [
+        "columns",
+        "row_indices",
+        "group_sizes",
     ]
     assert _pyi_function_arg_names(stub_path, "logrank_trend") == [
         "time",
@@ -3621,6 +3637,11 @@ def test_survobrien_and_trend_bindings_are_typed():
         [0.2, 0.5, 0.9],
         None,
     )
+    transformed = core.survobrien_transform_groups(
+        [[4.0, 1.0, 1.0, 3.0]],
+        [0, 1, 2, 3, 2],
+        [4, 0, 1],
+    )
     trend = core.logrank_trend(
         [1.0, 2.0, 3.0, 4.0],
         [1, 0, 1, 1],
@@ -3629,6 +3650,15 @@ def test_survobrien_and_trend_bindings_are_typed():
     )
 
     assert type(obrien).__name__ == "SurvObrienResult"
+    assert transformed[0] == pytest.approx(
+        [
+            1.9459101490553132,
+            -1.0986122886681098,
+            -1.0986122886681098,
+            0.5108256237659907,
+            0.0,
+        ]
+    )
     assert obrien.df == 1
     assert len(obrien.scores) == 3
     assert 0.0 <= obrien.p_value <= 1.0

@@ -6541,6 +6541,11 @@ def survobrien(
     covariate: list[float],
     strata: list[int] | None = None,
 ) -> SurvObrienResult: ...
+def survobrien_transform_groups(
+    columns: list[list[float]],
+    row_indices: list[int],
+    group_sizes: list[int],
+) -> list[list[float]]: ...
 def finegray(
     tstart: list[float],
     tstop: list[float],
