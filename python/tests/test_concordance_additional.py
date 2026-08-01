@@ -42,21 +42,34 @@ def test_legacy_concordance_validates_index_inputs():
         survival.core.concordance(y, [0, 1, 2], wt, timewt, [0, 1, 3], [0, 1, 2])
 
 
-def test_concordance_summary_counts_near_tied_risk_scores():
+def test_concordance_summary_keeps_near_equal_risk_scores_distinct():
     summary = survival.core.concordance_summary(
         [1.0, 2.0, 3.0],
         [1, 1, 1],
-        [0.5, 0.5 + 5e-11, 0.1],
+        [0.5, 0.5 + 5e-13, 0.1],
     )
 
     assert summary["comparable"] == pytest.approx(3.0)
-    assert summary["concordant"] == pytest.approx(2.5)
-    assert summary["concordance"] == pytest.approx(2.5 / 3.0)
+    assert summary["concordant"] == pytest.approx(2.0)
+    assert summary["concordance"] == pytest.approx(2.0 / 3.0)
     assert survival.core.concordance_index(
         [1.0, 2.0, 3.0],
         [1, 1, 1],
-        [0.5, 0.5 + 5e-11, 0.1],
-    ) == pytest.approx(2.5 / 3.0)
+        [0.5, 0.5 + 5e-13, 0.1],
+    ) == pytest.approx(2.0 / 3.0)
+
+
+def test_counting_concordance_keeps_near_equal_risk_scores_distinct():
+    summary = survival.core.counting_concordance_summary(
+        [0.0, 0.0, 1.0, 1.0],
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 1],
+        [0.5, 0.5 + 5e-13, 0.1, 0.8],
+    )
+
+    assert summary["comparable"] == pytest.approx(2.0)
+    assert summary["concordant"] == pytest.approx(0.0)
+    assert summary["concordance"] == pytest.approx(0.0)
 
 
 def test_concordance_summary_reports_reference_conditional_variance():
