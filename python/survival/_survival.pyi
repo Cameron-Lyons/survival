@@ -5787,6 +5787,11 @@ def lvcf_indices(
     missing: list[bool],
     time: list[float] | None = None,
 ) -> list[int]: ...
+def lvcf_numeric_indices(
+    id: list[float],
+    missing: list[bool],
+    time: list[float] | None = None,
+) -> list[int]: ...
 def nostutter_replacements(
     id: list[int],
     state: list[int | None],
