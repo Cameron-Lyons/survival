@@ -378,6 +378,30 @@ test_that("R formula wrappers delegate to the Python survival package", {
     Surv2data(survival::Surv2(time, state) ~ z + x, data = timeline_data, id = id),
     survival::Surv2data(survival::Surv2(time, state) ~ z + x, data = timeline_data, id = id)
   )
+  timeline_missing_data <- data.frame(
+    id = c(1, 2, 1, 2, 1, 2),
+    time = c(0, 0, 2, 3, 5, 6),
+    state = factor(
+      c("entry", "entry", "ill", "ill", "death", "death"),
+      levels = c("censor", "entry", "ill", "death")
+    ),
+    x = c(10, 20, NA, NA, 12, 22),
+    z = factor(c("A", "B", NA, NA, "C", "D")),
+    observed = c(TRUE, FALSE, NA, NA, TRUE, TRUE),
+    visit = as.Date("2026-01-01") + c(0, 1, NA, NA, 4, 5)
+  )
+  expect_equal(
+    Surv2data(
+      survival::Surv2(time, state) ~ x + z + observed + visit,
+      data = timeline_missing_data,
+      id = id
+    ),
+    survival::Surv2data(
+      survival::Surv2(time, state) ~ x + z + observed + visit,
+      data = timeline_missing_data,
+      id = id
+    )
+  )
 
   counting_data <- data.frame(
     id = c(1, 1, 2),
@@ -1835,6 +1859,29 @@ test_that("R formula wrappers delegate to the Python survival package", {
     reference_survfit_confint(0.5, 0.1, logse = FALSE, conf.type = "plain", selow = 0.05, ulimit = FALSE),
     tolerance = 1e-12
   )
+  expect_equal(
+    survfit_confint(c(0.2, 0.5), 0.1, logse = FALSE, conf.type = "plain"),
+    reference_survfit_confint(c(0.2, 0.5), 0.1, logse = FALSE, conf.type = "plain"),
+    tolerance = 1e-12
+  )
+  for (conf_type in c("plain", "log", "log-log", "logit", "arcsin")) {
+    for (case in list(
+      list(p = numeric(), se = 0.1, selow = 0.05),
+      list(p = 0.5, se = numeric(), selow = 0.05),
+      list(p = c(0.2, 0.5), se = c(0, 0.1), selow = numeric())
+    )) {
+      expect_equal(
+        survfit_confint(case$p, case$se, conf.type = conf_type, selow = case$selow),
+        suppressWarnings(reference_survfit_confint(
+          case$p,
+          case$se,
+          conf.type = conf_type,
+          selow = case$selow
+        )),
+        tolerance = 1e-12
+      )
+    }
+  }
   expect_error(survfit_confint(0.5, 0.1, conf.type = "p"), "invalid conf.int type")
   pseudo_data <- data.frame(time = c(1, 2, 3, 4), status = c(1, 0, 1, 1))
   pseudo_fit <- survfit(Surv(time, status) ~ 1, data = pseudo_data, model = TRUE)
@@ -3628,6 +3675,29 @@ test_that("data-prep helpers match R survival shapes", {
       lvcf(lvcf_factor_id, c(NA, 1, 2, NA)),
       reference_lvcf(lvcf_factor_id, c(NA, 1, 2, NA))
     )
+    for (structured in list(
+      structure(c(1, NA, 3), names = c("a", "b", "c")),
+      structure(c(1L, NA, 3L), names = c("a", "b", "c")),
+      structure(c(TRUE, NA, FALSE), names = c("a", "b", "c")),
+      structure(c("x", NA, "z"), names = c("a", "b", "c")),
+      structure(c(1, NA, 3), names = c("a", "b", "c"), source = "probe")
+    )) {
+      expect_equal(lvcf(c(1, 1, 1), structured), reference_lvcf(c(1, 1, 1), structured))
+    }
+    lvcf_matrix <- matrix(
+      c(1, NA, 3, 4, NA, 6),
+      nrow = 3,
+      dimnames = list(c("a", "b", "c"), c("u", "v"))
+    )
+    expect_equal(lvcf(rep(1, 6), lvcf_matrix), reference_lvcf(rep(1, 6), lvcf_matrix))
+    named_lvcf_factor <- structure(
+      factor(c("a", NA, "b"), levels = c("a", "b")),
+      names = c("a", "b", "c")
+    )
+    expect_equal(
+      lvcf(c(1, 1, 1), named_lvcf_factor),
+      reference_lvcf(c(1, 1, 1), named_lvcf_factor)
+    )
   }
   lvcf_factor <- factor(c("a", NA, "b", NA), levels = c("a", "b"))
   expect_equal(
@@ -3700,6 +3770,32 @@ test_that("data-prep helpers match R survival shapes", {
   reference_date <- survival::ratetableDate(as.Date(c("1940-01-01", "2000-02-29", "2001-01-01")))
   expect_equal(unclass(bridged_date), unclass(reference_date))
   expect_equal(class(bridged_date), class(reference_date))
+  ratetable_date_cases <- list(
+    default = 42.5,
+    integer = c(10000L, 10001L),
+    Date = as.Date(c("1970-01-01", "2000-02-29")),
+    POSIXt = as.POSIXct(c("1970-01-01", "2000-02-29"), tz = "UTC"),
+    date = structure(c(10000, 10001), class = "date"),
+    dates = structure(
+      c(0, 1),
+      class = "dates",
+      origin = c(month = 1, day = 1, year = 1970)
+    ),
+    chron = structure(
+      c(0, 1),
+      class = "chron",
+      origin = c(month = 1, day = 1, year = 1970)
+    )
+  )
+  for (method in names(ratetable_date_cases)) {
+    method_name <- paste0("ratetableDate.", method)
+    bridged_method <- get(method_name, envir = asNamespace("survivalr"))
+    reference_method <- get(method_name, envir = asNamespace("survival"))
+    expect_equal(
+      bridged_method(ratetable_date_cases[[method]]),
+      reference_method(ratetable_date_cases[[method]])
+    )
+  }
   bridged_rtable <- ratetable(
     age = c(50, 60) * 365.25,
     sex = factor(c("male", "female")),
@@ -3711,6 +3807,35 @@ test_that("data-prep helpers match R survival shapes", {
     year = as.Date(c("2000-01-01", "2001-01-01"))
   )
   expect_equal(bridged_rtable, reference_rtable)
+  bridged_subset_method <- get("[.ratetable2", envir = asNamespace("survivalr"))
+  reference_subset_method <- get("[.ratetable2", envir = asNamespace("survival"))
+  subset_rows <- c(2L, 1L, 2L)
+  expect_equal(
+    bridged_subset_method(bridged_rtable, subset_rows),
+    reference_subset_method(bridged_rtable, subset_rows)
+  )
+  expect_equal(
+    bridged_subset_method(bridged_rtable, 1L, drop = TRUE),
+    reference_subset_method(bridged_rtable, 1L, drop = TRUE)
+  )
+  expect_error(
+    bridged_subset_method(bridged_rtable, 1L, 1L),
+    "This should never be called!",
+    fixed = TRUE
+  )
+
+  missing_rtable <- ratetable(
+    age = c(50, NA, 70) * 365.25,
+    sex = factor(c("male", "female", NA), levels = c("female", "male")),
+    year = as.Date(c("2000-01-01", "2001-01-01", NA))
+  )
+  bridged_missing_method <- get("is.na.ratetable2", envir = asNamespace("survivalr"))
+  reference_missing_method <- get("is.na.ratetable2", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_missing_method(missing_rtable),
+    reference_missing_method(missing_rtable)
+  )
+  expect_equal(is.na(missing_rtable), c(FALSE, TRUE, TRUE))
   bridged_match <- match.ratetable(bridged_rtable, survival::survexp.us)
   reference_match <- survival::match.ratetable(reference_rtable, survival::survexp.us)
   expect_equal(bridged_match, reference_match)
@@ -5106,6 +5231,99 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   expect_equal(bridged_concordance$count, direct_concordance$count, tolerance = 1e-12)
   expect_equal(bridged_concordance$concordance, reference_concordance$concordance, tolerance = 1e-02)
   expect_equal(bridged_concordance$n, reference_concordance$n)
+})
+
+test_that("public helper signatures accept R-style named and positional calls", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  expect_identical(names(formals(is.Surv)), names(formals(survival::is.Surv)))
+  expect_identical(
+    head(names(formals(survdiff)), 6L),
+    names(formals(survival::survdiff))
+  )
+  expect_identical(
+    head(names(formals(basehaz)), 3L),
+    names(formals(survival::basehaz))
+  )
+  expect_identical(
+    head(names(formals(cox.zph)), 5L),
+    names(formals(survival::cox.zph))
+  )
+  expect_identical(
+    head(names(formals(coxph.detail)), 3L),
+    names(formals(survival::coxph.detail))
+  )
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 1, 0, 1, 0),
+    group = rep(c("control", "treated"), 4),
+    x = c(0.1, 0.4, 0.2, 0.8, 1.1, 0.7, 1.5, 1.2),
+    z = c(1, 0, 1, 0, 1, 1, 0, 0)
+  )
+  response <- Surv(data$time, data$status)
+  expect_true(is.Surv(x = response))
+
+  keep <- c(TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE)
+  bridged_diff <- survdiff(
+    Surv(time, status) ~ group,
+    data,
+    keep,
+    stats::na.omit,
+    rho = 0.5,
+    timefix = FALSE
+  )
+  reference_diff <- survival::survdiff(
+    survival::Surv(time, status) ~ group,
+    data,
+    keep,
+    stats::na.omit,
+    rho = 0.5
+  )
+  bridged_diff_frame <- as.data.frame(bridged_diff)
+  expect_equal(bridged_diff_frame$observed, unname(reference_diff$obs), tolerance = 1e-06)
+  expect_equal(bridged_diff_frame$expected, unname(reference_diff$exp), tolerance = 1e-06)
+  expect_equal(
+    bridged_diff_frame$variance,
+    unname(diag(reference_diff$var)),
+    tolerance = 1e-06
+  )
+  expect_equal(as.numeric(bridged_diff$statistic), reference_diff$chisq, tolerance = 1e-06)
+  expect_equal(as.numeric(bridged_diff$p_value), reference_diff$pvalue, tolerance = 1e-06)
+
+  bridged <- coxph(Surv(time, status) ~ x + z, data = data, eps = 1e-10, max_iter = 50)
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x + z,
+    data = data,
+    control = survival::coxph.control(eps = 1e-10, iter.max = 50),
+    x = TRUE,
+    y = TRUE
+  )
+  newdata <- data.frame(x = 0.35, z = 1)
+  expect_equal(
+    unname(predict(bridged, newdata, type = "lp")),
+    unname(stats::predict(reference, newdata, type = "lp")),
+    tolerance = 1e-05
+  )
+  bridged_hazard <- as.data.frame(basehaz(bridged, newdata, FALSE))
+  reference_hazard <- survival::basehaz(reference, newdata, FALSE)
+  expect_equal(bridged_hazard$time, reference_hazard$time)
+  expect_equal(bridged_hazard$cumhaz, reference_hazard$hazard, tolerance = 2e-04)
+
+  bridged_zph <- as.data.frame(cox.zph(bridged, "rank", FALSE, FALSE, FALSE))
+  reference_zph <- survival::cox.zph(reference, "rank", FALSE, FALSE, FALSE)
+  expect_equal(bridged_zph$name, rownames(reference_zph$table))
+  expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+
+  bridged_detail <- coxph.detail(object = bridged, TRUE, "time")
+  reference_detail <- survival::coxph.detail(object = reference, TRUE, "time")
+  bridged_riskmat <- do.call(
+    rbind,
+    survivalr:::.result_field(bridged_detail, "riskmat")
+  )
+  expect_equal(unname(bridged_riskmat), unname(reference_detail$riskmat))
 })
 
 test_that("Fitted-model concordance supports joint Cox and survreg comparisons", {
@@ -6873,4 +7091,58 @@ test_that("low-level Cox survival curves match individual trajectories", {
     do.call(survival::survfitcoxph.fit, wrapper_args),
     tolerance = 1e-10
   )
+})
+
+test_that("ordinary istate inputs match R model-frame semantics", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1, 2, 3, 4, 5, 6, 7, 8),
+    status = c(1, 1, 0, 1, 0, 1, 0, 1),
+    x = c(0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5),
+    state = factor(c("entry", "other", "entry", "other", "entry", "other", "entry", "other"))
+  )
+  reference_survfit <- getS3method("survfit", "formula", envir = asNamespace("survival"))
+
+  bridged_curve <- survfit(
+    Surv(time, status) ~ 1,
+    data = data,
+    istate = state,
+    model = TRUE
+  )
+  reference_curve <- reference_survfit(
+    survival::Surv(time, status) ~ 1,
+    data = data,
+    istate = state,
+    model = TRUE
+  )
+  expect_equal(bridged_curve$surv, reference_curve$surv, tolerance = 1e-12)
+  bridged_curve_frame <- model.frame(bridged_curve)
+  curve_istate_name <- grep("istate", names(bridged_curve_frame), value = TRUE)
+  expect_length(curve_istate_name, 1L)
+  expect_equal(as.character(bridged_curve_frame[[curve_istate_name]]), as.character(data$state))
+
+  bridged_fit <- coxph(
+    Surv(time, status) ~ x,
+    data = data,
+    istate = state,
+    statedata = data.frame(state = levels(data$state)),
+    model = TRUE,
+    control = coxph.control(iter.max = 50L, eps = 1e-09)
+  )
+  reference_fit <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    istate = state,
+    statedata = data.frame(state = levels(data$state)),
+    model = TRUE,
+    control = survival::coxph.control(iter.max = 50L, eps = 1e-09)
+  )
+  expect_equal(coef(bridged_fit), coef(reference_fit), tolerance = 1e-5)
+  bridged_fit_frame <- model.frame(bridged_fit)
+  fit_istate_name <- grep("istate", names(bridged_fit_frame), value = TRUE)
+  expect_length(fit_istate_name, 1L)
+  expect_equal(as.character(bridged_fit_frame[[fit_istate_name]]), as.character(data$state))
 })

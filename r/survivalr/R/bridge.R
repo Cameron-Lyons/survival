@@ -225,7 +225,14 @@ if (getRversion() >= "2.15.1") {
     return(NULL)
   }
   if (is.data.frame(data)) {
-    return(lapply(data, .as_python_vector))
+    return(lapply(data, function(column) {
+      value <- .as_python_vector(column)
+      if (is.factor(column)) {
+        value
+      } else {
+        as.list(value)
+      }
+    }))
   }
   data
 }
@@ -2475,11 +2482,11 @@ Surv2 <- function(time, event, repeated = FALSE) {
   out
 }
 
-is.Surv <- function(value) {
-  if (inherits(value, "Surv")) {
+is.Surv <- function(x) {
+  if (inherits(x, "Surv")) {
     return(TRUE)
   }
-  .call_r_api("is_surv", value)
+  .call_r_api("is_surv", x)
 }
 
 is.ratetable <- function(x, verbose = FALSE) {
@@ -2676,12 +2683,51 @@ is.ratetable <- function(x, verbose = FALSE) {
   }
 }
 
+.as_ratetable_date <- function(x) {
+  output <- as.vector(x)
+  class(output) <- "rtabledate"
+  output
+}
+
 ratetableDate <- function(x) {
-  if (!(inherits(x, "Date") || inherits(x, "POSIXt"))) {
-    return(x)
-  }
-  days <- as.numeric(as.Date(x))
-  structure(days, class = "rtabledate")
+  UseMethod("ratetableDate", x)
+}
+
+ratetableDate.default <- function(x) {
+  x
+}
+
+ratetableDate.integer <- function(x) {
+  .as_ratetable_date(x - 3653)
+}
+
+ratetableDate.Date <- function(x) {
+  .as_ratetable_date(x)
+}
+
+ratetableDate.POSIXt <- function(x) {
+  .as_ratetable_date(as.Date(x))
+}
+
+ratetableDate.date <- function(x) {
+  .as_ratetable_date(x - 3653)
+}
+
+.ratetable_date_from_origin <- function(x) {
+  origin <- attr(x, "origin")
+  date <- as.Date(paste(
+    origin["year"], origin["month"], origin["day"],
+    sep = "/"
+  ))
+  .as_ratetable_date(as.numeric(x) + date)
+}
+
+ratetableDate.dates <- function(x) {
+  .ratetable_date_from_origin(x)
+}
+
+ratetableDate.chron <- function(x) {
+  .ratetable_date_from_origin(x)
 }
 
 ratetable <- function(...) {
@@ -2717,6 +2763,24 @@ ratetable <- function(...) {
   attr(x, "levlist") <- levlist
   class(x) <- "ratetable2"
   x
+}
+
+`[.ratetable2` <- function(x, rows, cols, drop = FALSE) {
+  if (!missing(cols)) {
+    stop("This should never be called!")
+  }
+  att <- attributes(x)
+  attributes(x) <- att[c("dim", "dimnames")]
+  result <- x[rows, , drop = FALSE]
+  attr(result, "isDate") <- att$isDate
+  attr(result, "levlist") <- att$levlist
+  class(result) <- "ratetable2"
+  result
+}
+
+is.na.ratetable2 <- function(x) {
+  attributes(x) <- list(dim = dim(x))
+  as.vector((1 * is.na(x)) %*% rep(1, ncol(x)) > 0)
 }
 
 match.ratetable <- function(R, ratetable) {
@@ -2844,15 +2908,16 @@ lvcf <- function(id, x, time) {
     return(factor(.as_nullable_character_vector(result), levels = levels(x)))
   }
   if (is.integer(x)) {
-    return(as.integer(.as_nullable_numeric_vector(result)))
+    output <- as.integer(.as_nullable_numeric_vector(result))
+  } else if (is.numeric(x)) {
+    output <- .as_nullable_numeric_vector(result)
+  } else if (is.logical(x)) {
+    output <- .as_nullable_logical_vector(result)
+  } else {
+    output <- .as_nullable_character_vector(result)
   }
-  if (is.numeric(x)) {
-    return(.as_nullable_numeric_vector(result))
-  }
-  if (is.logical(x)) {
-    return(.as_nullable_logical_vector(result))
-  }
-  .as_nullable_character_vector(result)
+  attributes(output) <- attributes(x)
+  output
 }
 
 nostutter <- function(id, x, censor = 0, single = FALSE) {
@@ -4495,6 +4560,44 @@ totimeline <- function(formula, data, id, istate) {
   factor(codes, levels = seq_along(states), labels = states)
 }
 
+.surv2data_fill_vector <- function(value, id, time) {
+  missing <- is.na(value)
+  if (!any(missing)) {
+    return(value)
+  }
+  source <- .call_data_prep(
+    "lvcf_indices",
+    as.list(as.integer(id)),
+    as.list(as.logical(missing)),
+    as.list(as.numeric(time))
+  )
+  source <- as.integer(.as_numeric_vector(source)) + 1L
+  update <- missing & source != seq_along(source)
+  value[update] <- value[source[update]]
+  value
+}
+
+.surv2data_fill_model_frame <- function(frame, id, time) {
+  if (nrow(frame) == 0L) {
+    return(frame)
+  }
+  id_codes <- match(id, unique(id))
+  excluded <- match(c("(id)", "(cluster)"), names(frame), nomatch = 0L)
+  fill_columns <- setdiff(seq_along(frame)[-1L], excluded)
+  for (index in fill_columns) {
+    value <- frame[[index]]
+    if (is.matrix(value)) {
+      for (column in seq_len(ncol(value))) {
+        value[, column] <- .surv2data_fill_vector(value[, column], id_codes, time)
+      }
+      frame[[index]] <- value
+    } else {
+      frame[[index]] <- .surv2data_fill_vector(value, id_codes, time)
+    }
+  }
+  frame
+}
+
 Surv2data <- function(formula, data, subset, id) {
   call <- match.call()
   indx <- match(
@@ -4524,6 +4627,11 @@ Surv2data <- function(formula, data, subset, id) {
   )
   rows <- as.integer(.as_numeric_vector(.result_field(result, "row"))) + 1L
   mf2 <- mf[rows, , drop = FALSE]
+  mf2 <- .surv2data_fill_model_frame(
+    mf2,
+    id_values[rows],
+    .as_numeric_vector(.result_field(result, "start"))
+  )
   mf2[["Surv2.y"]] <- .as_surv2data_response(result)
 
   id_result <- .result_field(result, "id")
@@ -8389,10 +8497,9 @@ survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
     selow = if (missing(selow)) NULL else .as_python_vector(selow),
     ulimit = ulimit
   )
-  list(
-    lower = .as_numeric_vector(.result_field(result, "lower")),
-    upper = .as_numeric_vector(.result_field(result, "upper"))
-  )
+  lower <- .as_numeric_vector(.result_field(result, "lower"))
+  upper <- .as_numeric_vector(.result_field(result, "upper"))
+  list(lower = lower, upper = upper)
 }
 
 pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
@@ -8429,7 +8536,8 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
   )
 }
 
-survdiff <- function(formula, data = NULL, ..., group = NULL, subset = NULL, na.action = "fail") {
+survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
+                     rho = 0, timefix = TRUE, ..., group = NULL) {
   env <- parent.frame()
   group_values <- .eval_formula_arg(substitute(group), missing(group), data, env, vector = TRUE)
   subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
@@ -8440,6 +8548,8 @@ survdiff <- function(formula, data = NULL, ..., group = NULL, subset = NULL, na.
     group = group_values,
     subset = subset_values,
     `na.action` = .as_na_action(na.action),
+    rho = rho,
+    timefix = timefix,
     ...,
     .wrap = c("survival_py_survdiff", "survival_py_object")
   )
@@ -8698,7 +8808,7 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") 
     dots,
     data,
     parent.frame(),
-    vector_args = c("weights", "offset", "strata", "cluster", "id")
+    vector_args = c("weights", "offset", "strata", "cluster", "id", "istate")
   )
   if (!is.null(dots$weights) && is.name(dots$weights)) {
     evaluated_dots[["_weights_column"]] <- as.character(dots$weights)
@@ -9044,10 +9154,11 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail"
   )
 }
 
-basehaz <- function(fit, ..., centered = TRUE) {
+basehaz <- function(fit, newdata, centered = TRUE, ...) {
   .call_r_api(
     "basehaz",
     fit,
+    newdata = if (missing(newdata)) NULL else .as_python_data(newdata),
     centered = centered,
     ...,
     .wrap = c("survival_py_basehaz", "survival_py_object")
@@ -9528,25 +9639,37 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   out
 }
 
-cox.zph <- function(fit, ...) {
-  .call_r_api("cox_zph", fit, ..., .wrap = c("survival_py_cox_zph", "survival_py_object"))
+cox.zph <- function(fit, transform = "km", terms = TRUE, singledf = FALSE,
+                    global = TRUE, ...) {
+  .call_r_api(
+    "cox_zph",
+    fit,
+    transform = transform,
+    terms = terms,
+    singledf = singledf,
+    global = global,
+    ...,
+    .wrap = c("survival_py_cox_zph", "survival_py_object")
+  )
 }
 
 cox_zph <- function(fit, ...) {
   cox.zph(fit, ...)
 }
 
-coxph.detail <- function(fit, ...) {
+coxph.detail <- function(object, riskmat = FALSE, rorder = c("data", "time"), ...) {
   .call_r_api(
     "coxph_detail",
-    fit,
+    object,
+    riskmat = riskmat,
+    rorder = match.arg(rorder),
     ...,
     .wrap = c("survival_py_coxph_detail", "survival_py_object")
   )
 }
 
-coxph_detail <- function(fit, ...) {
-  coxph.detail(fit, ...)
+coxph_detail <- function(object, ...) {
+  coxph.detail(object, ...)
 }
 
 coxph.wtest <- function(var, b, toler.chol = 1e-09) {

@@ -35,6 +35,102 @@ pub struct Surv2TimelineResult {
     pub istate: Vec<Option<i32>>,
 }
 
+#[pyclass(from_py_object)]
+#[derive(Debug, Clone)]
+pub struct FromTimelineRowsResult {
+    #[pyo3(get)]
+    pub start: Vec<f64>,
+    #[pyo3(get)]
+    pub stop: Vec<f64>,
+    #[pyo3(get)]
+    pub status: Vec<i32>,
+    #[pyo3(get)]
+    pub istate: Vec<i32>,
+    #[pyo3(get)]
+    pub static_row: Vec<usize>,
+    #[pyo3(get)]
+    pub dynamic_row: Vec<usize>,
+    #[pyo3(get)]
+    pub removed_row: Vec<usize>,
+}
+
+fn validate_parallel_len(field: &str, actual: usize, expected: usize) -> PyResult<()> {
+    if actual != expected {
+        return Err(PyValueError::new_err(format!(
+            "{field} must have the same length as id"
+        )));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+pub fn from_timeline_rows(
+    id: Vec<usize>,
+    time: Vec<f64>,
+    status: Vec<i32>,
+) -> PyResult<FromTimelineRowsResult> {
+    let n = id.len();
+    validate_parallel_len("time", time.len(), n)?;
+    validate_parallel_len("status", status.len(), n)?;
+    validate_no_nan(&time, "time")?;
+    validate_finite(&time, "time")?;
+
+    let mut group_index: HashMap<usize, usize> = HashMap::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (row, &subject) in id.iter().enumerate() {
+        let index = match group_index.get(&subject) {
+            Some(&index) => index,
+            None => {
+                let index = groups.len();
+                group_index.insert(subject, index);
+                groups.push(Vec::new());
+                index
+            }
+        };
+        groups[index].push(row);
+    }
+
+    let capacity = n.saturating_sub(groups.len());
+    let mut result = FromTimelineRowsResult {
+        start: Vec::with_capacity(capacity),
+        stop: Vec::with_capacity(capacity),
+        status: Vec::with_capacity(capacity),
+        istate: Vec::with_capacity(capacity),
+        static_row: Vec::with_capacity(capacity),
+        dynamic_row: Vec::with_capacity(capacity),
+        removed_row: Vec::new(),
+    };
+    for mut rows in groups {
+        rows.sort_unstable_by(|&left, &right| {
+            time[left]
+                .total_cmp(&time[right])
+                .then_with(|| left.cmp(&right))
+        });
+        let first_row = rows[0];
+        let last_row = rows[rows.len() - 1];
+        if rows.len() < 2 || time[first_row] == time[last_row] {
+            result.removed_row.push(first_row);
+            continue;
+        }
+        if status[first_row] == 0 {
+            return Err(PyValueError::new_err(
+                "no observation should start in a censored state",
+            ));
+        }
+        for pair in rows.windows(2) {
+            let row = pair[0];
+            let next = pair[1];
+            result.start.push(time[row]);
+            result.stop.push(time[next]);
+            result.status.push(status[next]);
+            result.istate.push(status[row]);
+            result.static_row.push(first_row);
+            result.dynamic_row.push(row);
+        }
+    }
+    Ok(result)
+}
+
 #[pyfunction]
 #[pyo3(signature = (id, time, status, repeated=false))]
 pub fn surv2data_timeline(
@@ -442,5 +538,30 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn from_timeline_rows_sorts_within_subject_and_tracks_removed_rows() {
+        let result = from_timeline_rows(
+            vec![0, 1, 0, 1, 0, 2],
+            vec![0.0, 3.0, 4.0, 0.0, 2.0, 1.0],
+            vec![1, 2, 3, 1, 2, 1],
+        )
+        .unwrap();
+
+        assert_eq!(result.start, vec![0.0, 2.0, 0.0]);
+        assert_eq!(result.stop, vec![2.0, 4.0, 3.0]);
+        assert_eq!(result.status, vec![2, 3, 2]);
+        assert_eq!(result.istate, vec![1, 2, 1]);
+        assert_eq!(result.static_row, vec![0, 0, 3]);
+        assert_eq!(result.dynamic_row, vec![0, 4, 3]);
+        assert_eq!(result.removed_row, vec![5]);
+    }
+
+    #[test]
+    fn timeline_rows_validate_inputs_and_initial_states() {
+        assert!(from_timeline_rows(vec![0], vec![], vec![1]).is_err());
+        assert!(from_timeline_rows(vec![0], vec![f64::NAN], vec![1]).is_err());
+        assert!(from_timeline_rows(vec![0, 0], vec![0.0, 1.0], vec![0, 1]).is_err());
     }
 }

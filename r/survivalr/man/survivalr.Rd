@@ -13,7 +13,16 @@
 \alias{is.Surv}
 \alias{is.ratetable}
 \alias{ratetableDate}
+\alias{ratetableDate.chron}
+\alias{ratetableDate.date}
+\alias{ratetableDate.Date}
+\alias{ratetableDate.dates}
+\alias{ratetableDate.default}
+\alias{ratetableDate.integer}
+\alias{ratetableDate.POSIXt}
 \alias{ratetable}
+\alias{[.ratetable2}
+\alias{is.na.ratetable2}
 \alias{match.ratetable}
 \alias{cch}
 \alias{coef.cch}
@@ -367,13 +376,17 @@ attrassign(object, ...)
 
 \method{attrassign}{lm}(object, ...)
 
-is.Surv(value)
+is.Surv(x)
 
 is.ratetable(x, verbose = FALSE)
 
 ratetableDate(x)
 
 ratetable(...)
+
+\method{[}{ratetable2}(x, rows, cols, drop = FALSE)
+
+\method{is.na}{ratetable2}(x)
 
 match.ratetable(R, ratetable)
 
@@ -554,8 +567,8 @@ survSplit(formula, data, subset, na.action = na.pass, cut,
 survcondense(formula, data, subset, weights, na.action = na.pass,
   id, start = "tstart", end = "tstop", event = "event")
 
-survdiff(formula, data = NULL, ..., group = NULL, subset = NULL,
-  na.action = "fail")
+survdiff(formula, data = NULL, subset = NULL, na.action = "fail",
+  rho = 0, timefix = TRUE, ..., group = NULL)
 
 survexp(formula, data, weights, subset, na.action, rmap, times,
   method = c("ederer", "hakulinen", "conditional", "individual.h",
@@ -642,7 +655,7 @@ survpenal.fit(x, y, weights, offset, init, controlvals, dist,
 
 survregDtest(dlist, verbose = FALSE)
 
-basehaz(fit, ..., centered = TRUE)
+basehaz(fit, newdata, centered = TRUE, ...)
 
 brier(fit, times, newdata, ties = TRUE, detail = FALSE,
   timefix = TRUE, efron = FALSE)
@@ -665,15 +678,16 @@ survConcordance(formula, data, weights, subset, na.action)
 
 survConcordance.fit(y, x, strata, weight)
 
-cox.zph(fit, ...)
+cox.zph(fit, transform = "km", terms = TRUE, singledf = FALSE,
+  global = TRUE, ...)
 
 cox_zph(fit, ...)
 
-coxph.detail(fit, ...)
+coxph.detail(object, riskmat = FALSE, rorder = c("data", "time"), ...)
 
 coxph.wtest(var, b, toler.chol = 1e-09)
 
-coxph_detail(fit, ...)
+coxph_detail(object, ...)
 
 coxsurv.fit(ctype, stype, se.fit, varmat, cluster, y, x, wt,
   risk, position, strata, oldid, y2, x2, risk2, strata2,
@@ -932,7 +946,9 @@ selects the direct or SGTT contrast path.}
 \item{etype, prefix, count}{Formula \code{finegray} endpoint and output-column
 options handled by the native bridge.}
 \item{transform}{Formula \code{survobrien} option delegated to
-\code{survival::survobrien}.}
+\code{survival::survobrien}, or the time-axis transform for \code{cox.zph}.}
+\item{terms, singledf, global}{Logical controls for term grouping,
+single-degree-of-freedom tests, and the global test in \code{cox.zph}.}
 \item{covariate}{Direct numeric covariate vector for Python-backed
 \code{survobrien}.}
 \item{scores, risk.scores}{Optional direct concordance score vectors or
@@ -1021,7 +1037,8 @@ quantiles and Cox summaries.}
 \code{survreg} helper distribution; ignored by the other built-in helper
 distributions to match R.}
 \item{eps, toler.chol, iter.max, toler.inf, outer.max, timefix}{Control
-options passed through \code{coxph.control}. \code{eps} is also the
+options passed through \code{coxph.control}. \code{timefix} also controls
+near-tie correction in \code{survdiff}. \code{eps} is also the
 convergence tolerance used when \code{ridge}, \code{frailty.*}, or
 \code{pspline} searches for a penalty matching \code{df}.}
 \item{maxiter, rel.tolerance, debug}{Control options passed through
@@ -1037,10 +1054,13 @@ Cox coefficient tables.}
 compatibility.}
 \item{quote}{Logical flag controlling whether printed survival-time labels are
 quoted.}
-\item{i, j, name, exact, drop}{Row and column subset controls for native
-\code{Surv} and \code{Surv2} objects, plus list-field extraction controls for
-Python-backed \code{survfit} objects.}
+\item{i, j, rows, cols, name, exact, drop}{Row and column subset controls for
+native \code{Surv}, \code{Surv2}, and \code{ratetable2} objects, plus
+list-field extraction controls for Python-backed \code{survfit} objects.}
 \item{centered}{Logical flag for centered baseline hazards.}
+\item{rho}{Fleming--Harrington weight exponent for \code{survdiff}.}
+\item{riskmat, rorder}{Logical risk-matrix request and data/time row-order
+selector for \code{coxph.detail}.}
 \item{detail}{Logical flag requesting detailed \code{brier} output.}
 \item{efron}{Logical flag selecting Efron-compatible \code{brier} baseline
 survival when the fitted Cox model used Efron ties.}
