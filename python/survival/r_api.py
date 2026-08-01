@@ -9989,7 +9989,7 @@ def survSplit(
 
     if not isinstance(response, Surv):
         raise TypeError("survSplit response must be a Surv object")
-    if response.type not in {"right", "counting"}:
+    if response.type not in {"right", "mright", "counting", "mcounting"}:
         raise ValueError(f"not valid for {response.type} censored survival data")
 
     cut_values = _float_vector(cut, "cut")

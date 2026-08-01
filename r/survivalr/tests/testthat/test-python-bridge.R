@@ -602,6 +602,59 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(as.integer(counting_split$status), c(0L, 1L, 0L, 0L, 0L))
   expect_equal(as.integer(counting_split$episode), c(1L, 2L, 1L, 2L, 3L))
 
+  split_multistate <- data.frame(
+    time = c(1, 3, 4),
+    state = factor(c("a", "censor", "b"), levels = c("censor", "a", "b")),
+    x = 11:13
+  )
+  multistate_split <- survSplit(
+    Surv(time, state) ~ x,
+    data = split_multistate,
+    cut = c(2, 3.5),
+    episode = "episode",
+    id = "subject"
+  )
+  reference_multistate_formula <- Surv(time, state) ~ x
+  environment(reference_multistate_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  reference_multistate_split <- survival::survSplit(
+    reference_multistate_formula,
+    data = split_multistate,
+    cut = c(2, 3.5),
+    episode = "episode",
+    id = "subject"
+  )
+  expect_equal(multistate_split, reference_multistate_split)
+
+  split_multistate_counting <- data.frame(
+    start = c(0, 1),
+    stop = c(3, 4),
+    state = factor(c("a", "b"), levels = c("censor", "a", "b")),
+    x = 1:2
+  )
+  multistate_counting_split <- survSplit(
+    Surv(start, stop, state) ~ x,
+    data = split_multistate_counting,
+    cut = 2,
+    episode = "episode",
+    id = "subject"
+  )
+  reference_multistate_counting_formula <- Surv(start, stop, state) ~ x
+  environment(reference_multistate_counting_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  reference_multistate_counting_split <- survival::survSplit(
+    reference_multistate_counting_formula,
+    data = split_multistate_counting,
+    cut = 2,
+    episode = "episode",
+    id = "subject"
+  )
+  expect_equal(multistate_counting_split, reference_multistate_counting_split)
+
   check_data <- data.frame(
     id = c(1, 1, 2),
     start = c(0, 1, 0),
