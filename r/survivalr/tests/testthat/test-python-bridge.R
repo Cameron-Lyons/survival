@@ -611,6 +611,18 @@ test_that("R formula wrappers delegate to the Python survival package", {
   tmerge_data <- data.frame(id = 1:2, tstop = c(5, 6))
   bridged_tmerge <- tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
   reference_tmerge <- survival::tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+  attr(bridged_tmerge, "call") <- attr(reference_tmerge, "call") <- quote(
+    tmerge(tmerge_data, tmerge_data, id = id, tstop = tstop)
+  )
+  reference_tmerge_summary <- getFromNamespace("summary.tmerge", "survival")
+  expect_equal(
+    capture.output(summary.tmerge(bridged_tmerge)),
+    capture.output(reference_tmerge_summary(reference_tmerge))
+  )
+  expect_equal(
+    `[.tmerge`(bridged_tmerge, 1:2, c("id", "tstop"), drop = FALSE),
+    reference_tmerge[1:2, c("id", "tstop"), drop = FALSE]
+  )
   attr(bridged_tmerge, "call") <- NULL
   attr(reference_tmerge, "call") <- NULL
   expect_equal(
@@ -2643,6 +2655,61 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(symbol_concordance_frame$variance, string_column_concordance_frame$variance)
   expect_equal(subset_symbol_concordance_frame$concordance, as.numeric(reference_subset_symbol_concordance$concordance))
   expect_equal(subset_symbol_concordance_frame$variance, as.numeric(reference_subset_symbol_concordance$var))
+  near_risk <- c(0.5, 0.5 + 5e-13, 0.1, 0.8)
+  near_risk_concordance <- concordancefit(
+    response,
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_near_risk_concordance <- survival::concordancefit(
+    survival::Surv(data$time, data$status),
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(near_risk_concordance$concordance, reference_near_risk_concordance$concordance)
+  expect_equal(near_risk_concordance$count, reference_near_risk_concordance$count)
+  expect_equal(near_risk_concordance$dfbeta, reference_near_risk_concordance$dfbeta)
+  expect_equal(near_risk_concordance$influence, reference_near_risk_concordance$influence)
+  expect_equal(near_risk_concordance$ranks, reference_near_risk_concordance$ranks)
+  counting_near_risk_response <- Surv(
+    c(0, 0, 1, 1),
+    c(1, 2, 3, 4),
+    c(1, 0, 1, 1)
+  )
+  counting_near_risk_concordance <- concordancefit(
+    counting_near_risk_response,
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_counting_near_risk_concordance <- survival::concordancefit(
+    survival::Surv(c(0, 0, 1, 1), c(1, 2, 3, 4), c(1, 0, 1, 1)),
+    near_risk,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(
+    counting_near_risk_concordance$concordance,
+    reference_counting_near_risk_concordance$concordance
+  )
+  expect_equal(
+    counting_near_risk_concordance$count,
+    reference_counting_near_risk_concordance$count
+  )
+  expect_equal(
+    counting_near_risk_concordance$dfbeta,
+    reference_counting_near_risk_concordance$dfbeta
+  )
+  expect_equal(
+    counting_near_risk_concordance$influence,
+    reference_counting_near_risk_concordance$influence
+  )
+  expect_equal(
+    counting_near_risk_concordance$ranks,
+    reference_counting_near_risk_concordance$ranks
+  )
   old_concordance <- suppressWarnings(survConcordance(
     Surv(time, status) ~ x,
     data = data
@@ -4680,6 +4747,53 @@ test_that("data-prep helpers match R survival shapes", {
     reference_ratetable_frame$data,
     tolerance = 1e-12
   )
+
+  bridged_print <- bridged_pyears_formula
+  reference_print <- reference_pyears_formula
+  bridged_print$call <- reference_print$call <- quote(pyears(Surv(time, status) ~ group))
+  reference_print_method <- getFromNamespace("print.pyears", "survival")
+  reference_summary_method <- getFromNamespace("summary.pyears", "survival")
+  expect_equal(
+    capture.output(print.pyears(bridged_print)),
+    capture.output(reference_print_method(reference_print))
+  )
+
+  summary_options <- list(
+    header = FALSE,
+    call = FALSE,
+    rate = TRUE,
+    ci.r = TRUE,
+    totals = TRUE,
+    vertical = FALSE,
+    vline = TRUE,
+    digits = 4
+  )
+  expect_equal(
+    capture.output(do.call(summary.pyears, c(list(object = bridged_pyears_formula), summary_options))),
+    capture.output(do.call(reference_summary_method, c(list(object = reference_pyears_formula), summary_options)))
+  )
+  expect_equal(
+    capture.output(summary.pyears(bridged_pyears_multi, header = FALSE, call = FALSE, vline = TRUE)),
+    capture.output(reference_summary_method(reference_pyears_multi, header = FALSE, call = FALSE, vline = TRUE))
+  )
+  expect_equal(
+    capture.output(summary.pyears(bridged_pyears_formula_frame, header = FALSE, call = FALSE)),
+    capture.output(reference_summary_method(reference_pyears_formula_frame, header = FALSE, call = FALSE))
+  )
+  ratetable_summary_options <- list(
+    header = FALSE,
+    call = FALSE,
+    rate = TRUE,
+    ci.r = TRUE,
+    rr = TRUE,
+    ci.rr = TRUE,
+    digits = 5
+  )
+  expect_equal(
+    capture.output(do.call(summary.pyears, c(list(object = bridged_ratetable), ratetable_summary_options))),
+    capture.output(do.call(reference_summary_method, c(list(object = reference_ratetable), ratetable_summary_options)))
+  )
+  expect_error(summary.pyears(bridged_pyears_formula, header = "yes"), "must be single logical values")
 
   pyears_ratetable_tcut_data <- transform(
     pyears_ratetable_data,
