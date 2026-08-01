@@ -8617,33 +8617,67 @@ def _pseudo_curve_values(
     return _pseudo_rmst_values(times, [float(value) for value in curve.estimate], eval_times)
 
 
+def _integrated_step_values(
+    curve_time: Sequence[float],
+    step_values: Sequence[float],
+    eval_times: Sequence[float],
+    *,
+    start_time: float,
+    initial_value: float,
+) -> list[float]:
+    times = [float(value) for value in curve_time]
+    values = [float(value) for value in step_values]
+    if len(times) != len(values):
+        raise ValueError("curve_time and step_values must have the same length")
+
+    origin = float(start_time)
+    value_at_origin = float(initial_value)
+    active_times: list[float] = []
+    active_values: list[float] = []
+    prefix_areas: list[float] = []
+    previous_time = origin
+    previous_value = value_at_origin
+    area = 0.0
+    for time, value in zip(times, values, strict=True):
+        if time < origin:
+            value_at_origin = value
+            previous_value = value
+            continue
+        area += previous_value * (time - previous_time)
+        active_times.append(time)
+        active_values.append(value)
+        prefix_areas.append(area)
+        previous_time = time
+        previous_value = value
+
+    result: list[float] = []
+    for eval_time in eval_times:
+        target = float(eval_time)
+        if target <= origin:
+            result.append(0.0)
+            continue
+        position = bisect_right(active_times, target) - 1
+        if position < 0:
+            result.append(value_at_origin * (target - origin))
+            continue
+        result.append(
+            prefix_areas[position] + active_values[position] * (target - active_times[position])
+        )
+    return result
+
+
 def _pseudo_integrated_step_values(
     curve_time: Sequence[float],
     step_values: Sequence[float],
     eval_times: Sequence[float],
 ) -> list[float]:
-    result: list[float] = []
-    times = [float(value) for value in curve_time]
-    values = [float(value) for value in step_values]
-    for eval_time in eval_times:
-        target = float(eval_time)
-        area = 0.0
-        previous_time = 0.0
-        previous_value = 0.0
-        for time, value in zip(times, values, strict=True):
-            if target <= previous_time:
-                break
-            upper = min(target, time)
-            if upper > previous_time:
-                area += previous_value * (upper - previous_time)
-                previous_time = upper
-            if time > target:
-                break
-            previous_value = value
-        if target > previous_time:
-            area += previous_value * (target - previous_time)
-        result.append(area)
-    return result
+    return _integrated_step_values(
+        curve_time,
+        step_values,
+        eval_times,
+        start_time=0.0,
+        initial_value=0.0,
+    )
 
 
 def _pseudo_counting_candidate_cumhaz(fit: SurvfitResult, ctype: int) -> list[float]:
@@ -8845,32 +8879,13 @@ def _survfit_multistate_integrated_estimate(
     t0: float,
     eval_times: Sequence[float],
 ) -> list[float]:
-    times = [float(value) for value in curve_time]
-    values = [float(value) for value in estimates]
-    result: list[float] = []
-    for target_value in eval_times:
-        target = float(target_value)
-        if target <= t0:
-            result.append(0.0)
-            continue
-        area = 0.0
-        previous_time = t0
-        previous_value = float(initial)
-        for time, value in zip(times, values, strict=True):
-            if time < t0:
-                previous_value = value
-                continue
-            upper = min(target, time)
-            if upper > previous_time:
-                area += previous_value * (upper - previous_time)
-                previous_time = upper
-            if time > target:
-                break
-            previous_value = value
-        if target > previous_time:
-            area += previous_value * (target - previous_time)
-        result.append(area)
-    return result
+    return _integrated_step_values(
+        curve_time,
+        estimates,
+        eval_times,
+        start_time=t0,
+        initial_value=initial,
+    )
 
 
 def _survfit_multistate_estimates_at_times(
