@@ -273,11 +273,10 @@ impl ProportionalityTest {
         }
     }
 }
-pub(crate) fn proportional_hazards_test(
+pub(crate) fn proportional_hazards_chi2(
     schoenfeld_residuals: &[Vec<f64>],
     event_times: &[f64],
-    _weights: Option<&[f64]>,
-) -> ProportionalityTest {
+) -> Vec<f64> {
     let n_events = schoenfeld_residuals.len();
     let n_vars = if n_events > 0 {
         schoenfeld_residuals[0].len()
@@ -285,21 +284,18 @@ pub(crate) fn proportional_hazards_test(
         0
     };
     if n_events < 2 || n_vars == 0 {
-        return ProportionalityTest {
-            variable_names: vec![],
-            chi2_values: vec![],
-            p_values: vec![],
-            global_chi2: 0.0,
-            global_df: 0,
-            global_p_value: 1.0,
-        };
+        return vec![];
     }
     let mut sorted_indices: Vec<usize> = (0..n_events).collect();
     sorted_indices.sort_by(|&a, &b| event_times[a].total_cmp(&event_times[b]));
     let transformed_time: Vec<f64> = sorted_indices.iter().map(|&idx| event_times[idx]).collect();
+    let mean_time = transformed_time.iter().sum::<f64>() / n_events as f64;
+    let centered_time: Vec<f64> = transformed_time
+        .iter()
+        .map(|&value| value - mean_time)
+        .collect();
+    let var_time = centered_time.iter().map(|value| value * value).sum::<f64>();
     let mut chi2_values = Vec::with_capacity(n_vars);
-    let mut p_values = Vec::with_capacity(n_vars);
-    let mut global_chi2 = 0.0;
     for var in 0..n_vars {
         let residuals: Vec<f64> = sorted_indices
             .iter()
@@ -309,16 +305,13 @@ pub(crate) fn proportional_hazards_test(
                     .and_then(|row| row.get(var).copied())
             })
             .collect();
-        let mean_time: f64 = transformed_time.iter().sum::<f64>() / n_events as f64;
         let mean_resid: f64 = residuals.iter().sum::<f64>() / n_events as f64;
         let mut cov = 0.0;
-        let mut var_time = 0.0;
         let mut var_resid = 0.0;
         for i in 0..n_events {
-            let r_diff = transformed_time[i] - mean_time;
+            let r_diff = centered_time[i];
             let resid_diff = residuals[i] - mean_resid;
             cov += r_diff * resid_diff;
-            var_time += r_diff * r_diff;
             var_resid += resid_diff * resid_diff;
         }
         let correlation = if var_time > 0.0 && var_resid > 0.0 {
@@ -327,11 +320,20 @@ pub(crate) fn proportional_hazards_test(
             0.0
         };
         let chi2 = correlation * correlation * (n_events - 2) as f64;
-        let p_value = chi2_sf(chi2, 1);
         chi2_values.push(chi2);
-        p_values.push(p_value);
-        global_chi2 += chi2;
     }
+    chi2_values
+}
+
+pub(crate) fn proportional_hazards_test(
+    schoenfeld_residuals: &[Vec<f64>],
+    event_times: &[f64],
+    _weights: Option<&[f64]>,
+) -> ProportionalityTest {
+    let chi2_values = proportional_hazards_chi2(schoenfeld_residuals, event_times);
+    let n_vars = chi2_values.len();
+    let p_values = chi2_values.iter().map(|&chi2| chi2_sf(chi2, 1)).collect();
+    let global_chi2 = chi2_values.iter().sum();
     let global_p_value = chi2_sf(global_chi2, n_vars);
     ProportionalityTest {
         variable_names: (0..n_vars).map(|i| format!("var{}", i)).collect(),

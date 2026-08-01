@@ -56,7 +56,7 @@ pub use coxph_detail_module::{CoxphDetail, CoxphDetailRow, coxph_detail};
 pub use coxph_diagnostics::{
     clustered_crossprod, clustered_sandwich_variance, cox_dfbeta_from_score_residuals,
     cox_event_indices, cox_interval_cumulative_hazard_se, cox_zph_group_variance,
-    cox_zph_term_matrix, prediction_se_from_variance, scale_schoenfeld_residuals,
+    cox_zph_term_matrix, cox_zph_tests, prediction_se_from_variance, scale_schoenfeld_residuals,
     term_prediction_se_from_variance,
 };
 pub use coxph_wtest_module::coxph_wtest;
