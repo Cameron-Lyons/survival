@@ -4378,6 +4378,20 @@ def test_survfit_confint_matches_r_exported_helper():
         selow=0.05,
         ulimit=False,
     )
+    empty_p_log = survival.survfit_confint([], 0.1, conf_type="log")
+    empty_se_log = survival.survfit_confint(0.5, [], conf_type="log")
+    empty_selow_log = survival.survfit_confint(
+        [0.2, 0.5],
+        [0.0, 0.1],
+        conf_type="log",
+        selow=[],
+    )
+    recycled_logse = survival.survfit_confint(
+        [0.2, 0.5],
+        0.1,
+        logse=False,
+        conf_type="plain",
+    )
 
     assert plain.lower == pytest.approx([0.16080072, 0.4020018, 0.7236032])
     assert plain.upper == pytest.approx([0.23919928, 0.5979982, 1.0])
@@ -4395,6 +4409,14 @@ def test_survfit_confint_matches_r_exported_helper():
     assert recycled.upper == pytest.approx([0.23919928, 0.69599640, 0.31759784])
     assert scaled.lower == pytest.approx([0.4020018])
     assert scaled.upper == pytest.approx([0.6959964])
+    assert len(empty_p_log.lower) == len(empty_p_log.upper) == 1
+    assert math.isnan(empty_p_log.lower[0])
+    assert math.isnan(empty_p_log.upper[0])
+    assert empty_se_log.lower == empty_se_log.upper == []
+    assert empty_selow_log.lower[0] == pytest.approx(0.2)
+    assert math.isnan(empty_selow_log.lower[1])
+    assert recycled_logse.lower == pytest.approx([0.004003602, 0.010009004])
+    assert recycled_logse.upper == pytest.approx([0.3959964, 0.9899910])
     assert tuple(scaled) == (scaled.lower, scaled.upper)
     dotted_conf = survival.survfit_confint(
         0.5,

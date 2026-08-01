@@ -930,6 +930,7 @@ BINDINGS = (
     "survexp_mn",
     "survexp_us",
     "survexp_usr",
+    "survfit_confint_native",
     "survfit_curve_from_tables",
     "survfit_from_cumhaz",
     "survfit_from_hazard",

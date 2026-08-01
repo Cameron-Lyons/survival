@@ -5817,6 +5817,15 @@ def survfit_multistate(
     transition_hazards: list[list[list[float]]],
     initial_state: int,
 ) -> SurvfitMatrixResult: ...
+def survfit_confint_native(
+    p: list[float],
+    se: list[float],
+    logse: bool,
+    conf_type: str,
+    z: float,
+    selow: list[float] | None = None,
+    ulimit: bool = True,
+) -> tuple[list[float], list[float]]: ...
 def step_values_at(
     times: list[float],
     values: list[float],

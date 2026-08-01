@@ -1777,6 +1777,29 @@ test_that("R formula wrappers delegate to the Python survival package", {
     reference_survfit_confint(0.5, 0.1, logse = FALSE, conf.type = "plain", selow = 0.05, ulimit = FALSE),
     tolerance = 1e-12
   )
+  expect_equal(
+    survfit_confint(c(0.2, 0.5), 0.1, logse = FALSE, conf.type = "plain"),
+    reference_survfit_confint(c(0.2, 0.5), 0.1, logse = FALSE, conf.type = "plain"),
+    tolerance = 1e-12
+  )
+  for (conf_type in c("plain", "log", "log-log", "logit", "arcsin")) {
+    for (case in list(
+      list(p = numeric(), se = 0.1, selow = 0.05),
+      list(p = 0.5, se = numeric(), selow = 0.05),
+      list(p = c(0.2, 0.5), se = c(0, 0.1), selow = numeric())
+    )) {
+      expect_equal(
+        survfit_confint(case$p, case$se, conf.type = conf_type, selow = case$selow),
+        suppressWarnings(reference_survfit_confint(
+          case$p,
+          case$se,
+          conf.type = conf_type,
+          selow = case$selow
+        )),
+        tolerance = 1e-12
+      )
+    }
+  }
   expect_error(survfit_confint(0.5, 0.1, conf.type = "p"), "invalid conf.int type")
   pseudo_data <- data.frame(time = c(1, 2, 3, 4), status = c(1, 0, 1, 1))
   pseudo_fit <- survfit(Surv(time, status) ~ 1, data = pseudo_data, model = TRUE)

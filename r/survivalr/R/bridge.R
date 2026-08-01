@@ -7773,10 +7773,24 @@ survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
     selow = if (missing(selow)) NULL else .as_python_vector(selow),
     ulimit = ulimit
   )
-  list(
-    lower = .as_numeric_vector(.result_field(result, "lower")),
-    upper = .as_numeric_vector(.result_field(result, "upper"))
-  )
+  lower <- .as_numeric_vector(.result_field(result, "lower"))
+  upper <- .as_numeric_vector(.result_field(result, "upper"))
+  prepared_type_se <- if (isTRUE(logse)) {
+    se
+  } else {
+    suppressWarnings(ifelse(se == 0, 0, se / p))
+  }
+  logical_result <- all(is.na(prepared_type_se))
+  if (logical_result && conf.type == "log") {
+    lower <- as.logical(lower)
+    if (!isTRUE(ulimit)) {
+      upper <- as.logical(upper)
+    }
+  } else if (logical_result && conf.type %in% c("log-log", "logit")) {
+    lower <- as.logical(lower)
+    upper <- as.logical(upper)
+  }
+  list(lower = lower, upper = upper)
 }
 
 pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {

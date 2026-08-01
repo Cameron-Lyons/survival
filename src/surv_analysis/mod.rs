@@ -18,6 +18,8 @@ pub(crate) mod pseudo_module;
 pub(crate) mod semi_markov;
 #[path = "statefig.rs"]
 pub(crate) mod statefig_module;
+#[path = "survfit_confint.rs"]
+pub(crate) mod survfit_confint_module;
 pub(crate) mod survfit_matrix;
 #[path = "survfitaj_extended.rs"]
 pub(crate) mod survfitaj_extended_module;
@@ -63,6 +65,7 @@ pub use semi_markov::{
 pub use statefig_module::{
     StateFigData, statefig, statefig_matplotlib_code, statefig_transition_matrix, statefig_validate,
 };
+pub use survfit_confint_module::survfit_confint_native;
 pub use survfit_matrix::{
     SurvfitMatrixResult, basehaz, condition_cox_survfit_curves, cox_survfit_from_baseline,
     step_values_at, survfit_from_cumhaz, survfit_from_hazard, survfit_from_matrix,
