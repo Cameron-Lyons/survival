@@ -96,6 +96,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfit_multistate, m)?)?;
     m.add_function(wrap_pyfunction!(condition_cox_survfit_curves, m)?)?;
     m.add_function(wrap_pyfunction!(step_values_at, m)?)?;
+    m.add_function(wrap_pyfunction!(step_matrix_values_at, m)?)?;
     m.add_function(wrap_pyfunction!(cox_survfit_from_baseline, m)?)?;
     m.add_function(wrap_pyfunction!(basehaz, m)?)?;
     m.add_function(wrap_pyfunction!(statefig, m)?)?;

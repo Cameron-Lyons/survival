@@ -8827,15 +8827,9 @@ def _pseudo_counting_residual_rows(
     times = [float(value) for value in fit.time]
     requested_times = [float(value) for value in eval_times]
     if pseudo_type == "survival":
-        return [
-            _core.step_values_at(times, [float(value) for value in row], requested_times, 0.0)
-            for row in influence.influence_surv
-        ]
+        return _core.step_matrix_values_at(times, influence.influence_surv, requested_times, 0.0)
     if pseudo_type == "cumhaz":
-        return [
-            _core.step_values_at(times, [float(value) for value in row], requested_times, 0.0)
-            for row in influence.influence_chaz
-        ]
+        return _core.step_matrix_values_at(times, influence.influence_chaz, requested_times, 0.0)
     return [
         _pseudo_integrated_step_values(times, [float(value) for value in row], requested_times)
         for row in influence.influence_surv
@@ -11329,19 +11323,13 @@ def _survfit_residual_rows_at_times(
     curve_times = [float(value) for value in influence.time]
     eval_times = [float(value) for value in times]
     if residual_type == "cumhaz":
-        return [
-            _core.step_values_at(curve_times, [float(value) for value in row], eval_times, 0.0)
-            for row in influence.influence_chaz
-        ]
+        return _core.step_matrix_values_at(curve_times, influence.influence_chaz, eval_times, 0.0)
     if residual_type == "auc":
         return [
             _pseudo_integrated_step_values(curve_times, [float(value) for value in row], eval_times)
             for row in influence.influence_surv
         ]
-    return [
-        _core.step_values_at(curve_times, [float(value) for value in row], eval_times, 0.0)
-        for row in influence.influence_surv
-    ]
+    return _core.step_matrix_values_at(curve_times, influence.influence_surv, eval_times, 0.0)
 
 
 def _survfit_residual_matrix(

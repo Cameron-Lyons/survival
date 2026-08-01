@@ -907,6 +907,7 @@ BINDINGS = (
     "statefig_matplotlib_code",
     "statefig_transition_matrix",
     "statefig_validate",
+    "step_matrix_values_at",
     "step_values_at",
     "strata",
     "strata_str",

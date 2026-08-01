@@ -65,8 +65,8 @@ pub use statefig_module::{
 };
 pub use survfit_matrix::{
     SurvfitMatrixResult, basehaz, condition_cox_survfit_curves, cox_survfit_from_baseline,
-    step_values_at, survfit_from_cumhaz, survfit_from_hazard, survfit_from_matrix,
-    survfit_multistate,
+    step_matrix_values_at, step_values_at, survfit_from_cumhaz, survfit_from_hazard,
+    survfit_from_matrix, survfit_multistate,
 };
 pub use survfitaj_extended_module::{
     AalenJohansenExtendedConfig, AalenJohansenExtendedResult, TransitionMatrix, TransitionType,
