@@ -41,6 +41,11 @@ familiar `tdc`, `cumtdc`, `event`, and `cumevent` expressions locally, uses the
 Rust-backed sweep kernels, and returns an ordinary R `tmerge` object with
 `tm.retain` and `tcount` attributes preserved across repeated calls.
 
+`pyears` formulas containing `tcut(...)` terms also use the Rust interval
+sweep. Right-censored and counting-process responses, case weights, multiple
+cut dimensions, ordinary factor dimensions, event placement, and off-table
+time retain the upstream R result shape.
+
 ```r
 baseline <- data.frame(id = 1:2, group = c("control", "treated"))
 spans <- data.frame(id = 1:2, stop = c(10, 8))

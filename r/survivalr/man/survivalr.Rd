@@ -904,7 +904,8 @@ bridged fitted Cox model accepted by \code{survival.r_api}.}
 \item{na.rm}{Logical flag controlling whether missing \code{Surv} rows are
 removed before computing survival quantiles.}
 \item{group}{Optional group vector for direct \code{survdiff} and
-\code{pyears} calls.}
+\code{pyears} calls. Python \code{pyears} also accepts a \code{tcut} result
+for a time-changing group.}
 \item{by}{Optional grouping vector or list for aggregating Python-backed Cox
 \code{survfit} prediction curves across their \code{data} margin.}
 \item{FUN}{Summary function for \code{aggregate.survival_py_survfit};

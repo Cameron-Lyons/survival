@@ -133,6 +133,8 @@ fn tcut_breaks_and_default_labels(
 #[pyclass(from_py_object)]
 pub struct TcutResult {
     #[pyo3(get)]
+    pub values: Vec<f64>,
+    #[pyo3(get)]
     pub codes: Vec<i32>,
     #[pyo3(get)]
     pub levels: Vec<String>,
@@ -193,6 +195,7 @@ fn tcut_from_vecs(
     }
 
     Ok(TcutResult {
+        values: value,
         codes,
         levels: interval_labels,
         breaks: cut_breaks,

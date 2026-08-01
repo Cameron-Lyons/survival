@@ -3228,7 +3228,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "RttrightResult": {"weights", "time", "status", "order"},
         "Surv2DataResult": {"id", "time1", "time2", "status", "row_index"},
         "CondenseResult": {"id", "time1", "time2", "status", "row_map"},
-        "TcutResult": {"codes", "levels", "breaks", "counts"},
+        "TcutResult": {"values", "codes", "levels", "breaks", "counts"},
         "TimelineResult": {"id", "states", "time_points"},
         "IntervalResult": {"id", "time1", "time2", "status"},
     }

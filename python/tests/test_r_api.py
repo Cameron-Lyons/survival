@@ -2827,6 +2827,17 @@ def test_r_style_pyears_tabulates_surv_inputs():
         scale=1,
     )
     no_event_result = survival.pyears([10.0, 20.0, 30.0], group=data["group"], scale=1)
+    tcut_result = survival.pyears(
+        survival.Surv([25.0, 8.0], [1, 0]),
+        group=survival.tcut([0.0, 5.0], [0.0, 10.0, 20.0, 30.0]),
+        scale=1,
+    )
+    tcut_subset = survival.pyears(
+        survival.Surv([25.0, 8.0], [1, 0]),
+        group=survival.tcut([0.0, 5.0], [0.0, 10.0, 20.0, 30.0]),
+        subset=[True, False],
+        scale=1,
+    )
     frame = survival.as_data_frame(formula_result)
 
     assert isinstance(formula_result, survival.PyearsResult)
@@ -2841,6 +2852,12 @@ def test_r_style_pyears_tabulates_surv_inputs():
     assert counting_result.event == pytest.approx([1.0])
     assert no_event_result.event is None
     assert no_event_result.pyears == pytest.approx([30.0, 30.0])
+    assert tcut_result.group == ["0+ thru 10", "10+ thru 20", "20+ thru 30"]
+    assert tcut_result.pyears == pytest.approx([15.0, 13.0, 5.0])
+    assert tcut_result.n == pytest.approx([2.0, 2.0, 1.0])
+    assert tcut_result.event == pytest.approx([0.0, 0.0, 1.0])
+    assert tcut_result.tcut is True
+    assert tcut_subset.pyears == pytest.approx([10.0, 10.0, 5.0])
     assert frame == {
         "group": ["a", "b"],
         "pyears": pytest.approx([30.0, 30.0]),

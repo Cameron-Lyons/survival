@@ -3893,6 +3893,122 @@ test_that("data-prep helpers match R survival shapes", {
     )$pyears
   )
 
+  pyears_tcut_data <- data.frame(
+    time = c(25, 8),
+    status = c(1, 0),
+    base = c(0, 5)
+  )
+  bridged_pyears_tcut <- pyears(
+    Surv(time, status) ~ tcut(base, c(0, 10, 20, 30)),
+    data = pyears_tcut_data,
+    scale = 1
+  )
+  reference_pyears_tcut <- survival::pyears(
+    survival::Surv(time, status) ~ tcut(base, c(0, 10, 20, 30)),
+    data = pyears_tcut_data,
+    scale = 1
+  )
+  expect_equal(bridged_pyears_tcut$pyears, reference_pyears_tcut$pyears)
+  expect_equal(bridged_pyears_tcut$n, reference_pyears_tcut$n)
+  expect_equal(bridged_pyears_tcut$event, reference_pyears_tcut$event)
+  expect_equal(bridged_pyears_tcut$offtable, reference_pyears_tcut$offtable)
+  expect_true(bridged_pyears_tcut$tcut)
+
+  bridged_pyears_tcut_frame <- pyears(
+    Surv(time, status) ~ tcut(base, c(0, 10, 20, 30)),
+    data = pyears_tcut_data,
+    scale = 1,
+    data.frame = TRUE
+  )
+  reference_pyears_tcut_frame <- survival::pyears(
+    survival::Surv(time, status) ~ tcut(base, c(0, 10, 20, 30)),
+    data = pyears_tcut_data,
+    scale = 1,
+    data.frame = TRUE
+  )
+  expect_equal(bridged_pyears_tcut_frame$data, reference_pyears_tcut_frame$data)
+
+  pyears_tcut_counting_data <- data.frame(
+    start = c(5, 12),
+    stop = c(25, 18),
+    status = c(1, 0),
+    base = c(0, 5)
+  )
+  bridged_pyears_tcut_counting <- pyears(
+    Surv(start, stop, status) ~ tcut(base, c(0, 10, 20, 30, 40)),
+    data = pyears_tcut_counting_data,
+    scale = 1
+  )
+  reference_pyears_tcut_counting <- survival::pyears(
+    survival::Surv(start, stop, status) ~ tcut(base, c(0, 10, 20, 30, 40)),
+    data = pyears_tcut_counting_data,
+    scale = 1
+  )
+  expect_equal(bridged_pyears_tcut_counting$pyears, reference_pyears_tcut_counting$pyears)
+  expect_equal(bridged_pyears_tcut_counting$n, reference_pyears_tcut_counting$n)
+  expect_equal(bridged_pyears_tcut_counting$event, reference_pyears_tcut_counting$event)
+
+  pyears_tcut_mixed_data <- data.frame(
+    time = c(25, 8, 12),
+    status = c(1, 0, 1),
+    base = c(0, 5, 15),
+    sex = factor(c("f", "m", "f"), levels = c("f", "m"))
+  )
+  bridged_pyears_tcut_mixed <- pyears(
+    Surv(time, status) ~ tcut(base, c(0, 10, 20, 30, 40)) + sex,
+    data = pyears_tcut_mixed_data,
+    scale = 1
+  )
+  reference_pyears_tcut_mixed <- survival::pyears(
+    survival::Surv(time, status) ~ tcut(base, c(0, 10, 20, 30, 40)) + sex,
+    data = pyears_tcut_mixed_data,
+    scale = 1
+  )
+  expect_equal(bridged_pyears_tcut_mixed$pyears, reference_pyears_tcut_mixed$pyears)
+  expect_equal(bridged_pyears_tcut_mixed$n, reference_pyears_tcut_mixed$n)
+  expect_equal(bridged_pyears_tcut_mixed$event, reference_pyears_tcut_mixed$event)
+
+  pyears_tcut_outside_data <- data.frame(
+    time = c(10, 10, 10),
+    status = c(1, 1, 1),
+    base = c(-5, 25, 35)
+  )
+  bridged_pyears_tcut_outside <- pyears(
+    Surv(time, status) ~ tcut(base, c(0, 10, 20, 30)),
+    data = pyears_tcut_outside_data,
+    scale = 1
+  )
+  reference_pyears_tcut_outside <- survival::pyears(
+    survival::Surv(time, status) ~ tcut(base, c(0, 10, 20, 30)),
+    data = pyears_tcut_outside_data,
+    scale = 1
+  )
+  expect_equal(bridged_pyears_tcut_outside$pyears, reference_pyears_tcut_outside$pyears)
+  expect_equal(bridged_pyears_tcut_outside$event, reference_pyears_tcut_outside$event)
+  expect_equal(bridged_pyears_tcut_outside$offtable, reference_pyears_tcut_outside$offtable)
+
+  pyears_tcut_weighted_data <- data.frame(
+    time = c(20, 20),
+    status = c(1, 1),
+    base = c(0, 0),
+    wt = c(2, 0.5)
+  )
+  bridged_pyears_tcut_weighted <- pyears(
+    Surv(time, status) ~ tcut(base, c(0, 10, 20)),
+    data = pyears_tcut_weighted_data,
+    weights = wt,
+    scale = 1
+  )
+  reference_pyears_tcut_weighted <- survival::pyears(
+    survival::Surv(time, status) ~ tcut(base, c(0, 10, 20)),
+    data = pyears_tcut_weighted_data,
+    weights = wt,
+    scale = 1
+  )
+  expect_equal(bridged_pyears_tcut_weighted$pyears, reference_pyears_tcut_weighted$pyears)
+  expect_equal(bridged_pyears_tcut_weighted$n, reference_pyears_tcut_weighted$n)
+  expect_equal(bridged_pyears_tcut_weighted$event, reference_pyears_tcut_weighted$event)
+
   bridged_finegray <- finegray(
     c(0, 0, 0, 0),
     tstop = c(1, 2, 3, 4),
