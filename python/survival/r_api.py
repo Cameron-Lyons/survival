@@ -4386,14 +4386,33 @@ def tcut(
 ) -> TcutResult:
     """Create a Rust-backed R-style ``tcut`` interval result."""
 
-    x_values = _float_vector(x, "x")
-    break_values = _float_vector(breaks, "breaks")
-    if len(break_values) < 2:
-        raise ValueError("breaks must have at least 2 elements")
+    x_values = [
+        math.nan if _is_missing_value(value) else float(value)
+        for value in _materialize_1d(x, "x")
+    ]
+    break_values = [
+        math.nan if _is_missing_value(value) else float(value)
+        for value in _scalar_or_vector(breaks, "breaks")
+    ]
+    if not break_values:
+        raise ValueError("breaks must have at least 1 element")
+    if any(math.isnan(value) for value in break_values):
+        raise ValueError("breaks must be given in ascending order and contain no NA's")
+    if len(break_values) == 1:
+        label_values = (
+            None
+            if labels is None
+            else [str(value) for value in _materialize_1d(labels, "labels")]
+        )
+        return _core.tcut(
+            [value * _normalize_positive_scale(scale) for value in x_values],
+            break_values[0],
+            label_values,
+        )
     if any(
-        later <= earlier for earlier, later in zip(break_values[:-1], break_values[1:], strict=True)
+        later < earlier for earlier, later in zip(break_values[:-1], break_values[1:], strict=True)
     ):
-        raise ValueError("breaks must be strictly increasing")
+        raise ValueError("breaks must be given in ascending order and contain no NA's")
     scale_value = _normalize_positive_scale(scale)
     label_values = (
         _tcut_default_labels(break_values)

@@ -1413,8 +1413,9 @@ attrassign.lm <- function(object, ...) {
 }
 
 .tcut_default_labels <- function(breaks) {
-  formatted <- format(breaks)
-  paste0(formatted[-length(formatted)], "+ thru ", formatted[-1L])
+  left <- format(breaks[-length(breaks)])
+  right <- format(breaks[-1L])
+  paste0(left, "+ thru ", right)
 }
 
 .is_integerish_vector <- function(value) {
@@ -2186,14 +2187,21 @@ tcut <- function(x, breaks, labels, scale = 1) {
   x <- as.numeric(x)
   breaks <- as.numeric(breaks)
   scale <- .as_finite_scalar(scale, "scale", positive = TRUE)
-  if (length(breaks) < 2L) {
-    stop("breaks must have at least 2 elements", call. = FALSE)
+  if (length(breaks) < 1L) {
+    stop("breaks must have at least 1 element", call. = FALSE)
   }
-  if (any(!is.finite(x)) || any(!is.finite(breaks))) {
-    stop("x and breaks must contain only finite values", call. = FALSE)
+  if (length(breaks) == 1L) {
+    labels_value <- if (missing(labels)) NULL else as.character(labels)
+    result <- .call_data_prep("tcut", x, breaks, labels_value)
+    return(structure(
+      x * scale,
+      cutpoints = as.numeric(result$breaks) * scale,
+      labels = as.character(result$levels),
+      class = "tcut"
+    ))
   }
-  if (any(diff(breaks) <= 0)) {
-    stop("breaks must be strictly increasing", call. = FALSE)
+  if (anyNA(breaks) || is.unsorted(breaks, strictly = FALSE)) {
+    stop("breaks must be given in ascending order and contain no NA's", call. = FALSE)
   }
   labels <- if (missing(labels)) {
     .tcut_default_labels(breaks)
