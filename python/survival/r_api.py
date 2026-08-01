@@ -13138,8 +13138,6 @@ def survfit(
         and (response.start is None or id_values is None)
     ):
         raise ValueError("survfit entry=TRUE requires counting-process Surv input and id")
-    if istate is not None and response.type not in {"mright", "mcounting"}:
-        raise NotImplementedError("survfit istate requires a multi-state Surv response")
     if response.type in {"mright", "mcounting"}:
         if robust_value is False:
             raise ValueError("multi-state survfit supports only a robust variance")
@@ -19968,8 +19966,6 @@ def coxph(
     singular_ok_value = _normalize_bool_option_with_default(singular_ok, "singular_ok", True)
     nocenter_values = _normalize_numeric_sequence_or_none(nocenter, "nocenter")
     id_arg = id
-    if istate is not None or statedata is not None:
-        raise NotImplementedError("coxph multi-state istate/statedata inputs are not supported")
     if init is not None and initial_beta is not None:
         raise ValueError("use only one of init or initial_beta")
     max_iter = _integer_scalar(max_iter, "max_iter")
@@ -19986,11 +19982,15 @@ def coxph(
     time_transform_expanded = False
     time_transform_observed_n: int | None = None
     formula_x = False
+    istate_column: str | None = None
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
         weights = _column_or_values(data, weights, "weights") if weights is not None else None
         id_arg = _column_or_values(data, id_arg, "id") if id_arg is not None else None
+        istate_column = istate if isinstance(istate, str) else None
+        if istate_column is not None:
+            istate = _column(data, istate_column)
         if subset is not None:
             data, aligned = _subset_formula_inputs(
                 response,
@@ -20001,12 +20001,14 @@ def coxph(
                 strata=strata,
                 cluster=cluster,
                 id=id_arg,
+                istate=istate,
             )
             weights = aligned["weights"]
             offset = aligned["offset"]
             strata = aligned["strata"]
             cluster = aligned["cluster"]
             id_arg = aligned["id"]
+            istate = aligned["istate"]
             subset = None
         data, aligned = _apply_formula_na_action(
             response,
@@ -20017,12 +20019,14 @@ def coxph(
             strata=strata,
             cluster=cluster,
             id=id_arg,
+            istate=istate,
         )
         weights = aligned["weights"]
         offset = aligned["offset"]
         strata = aligned["strata"]
         cluster = aligned["cluster"]
         id_arg = aligned["id"]
+        istate = aligned["istate"]
         na_action = "pass"
         if x is not None:
             if not _is_bool_like(x):
@@ -20064,6 +20068,7 @@ def coxph(
         strata = _subset_optional_sequence(strata, indices, "strata")
         cluster = _subset_optional_sequence(cluster, indices, "cluster")
         id_arg = _subset_optional_sequence(id_arg, indices, "id")
+        istate = _subset_optional_sequence(istate, indices, "istate")
     response, aligned = _apply_surv_na_action(
         response,
         na_action,
@@ -20074,6 +20079,7 @@ def coxph(
         strata=strata,
         cluster=cluster,
         id=id_arg,
+        istate=istate,
     )
     x = aligned["x"]
     weights = aligned["weights"]
@@ -20081,6 +20087,7 @@ def coxph(
     strata = aligned["strata"]
     cluster = aligned["cluster"]
     id_arg = aligned["id"]
+    istate = aligned["istate"]
     if response.type not in {"right", "counting"}:
         raise NotImplementedError(
             "coxph currently supports right-censored and counting Surv responses"
@@ -20098,6 +20105,7 @@ def coxph(
         offset = _subset_optional_sequence(offset, source_indices, "offset")
         cluster = _subset_optional_sequence(cluster, source_indices, "cluster")
         id_arg = _subset_optional_sequence(id_arg, source_indices, "id")
+        istate = _subset_optional_sequence(istate, source_indices, "istate")
         transform_weights = _optional_float_vector(weights, "weights", expanded_n)
         transformed = _cox_time_transform_values(
             formula_model_data,
@@ -20126,6 +20134,9 @@ def coxph(
     id_values = _materialize_labels(id_arg, "id") if id_arg is not None else None
     if id_values is not None and len(id_values) != n:
         raise ValueError("id must have the same length as the Surv response")
+    istate_values = _materialize_1d(istate, "istate") if istate is not None else None
+    if istate_values is not None and len(istate_values) != n:
+        raise ValueError("istate must have the same length as the Surv response")
     fit_strata = _encode_groups(strata, n) if strata is not None else None
     fit_weights = _optional_float_vector(weights, "weights", n)
     case_weights = fit_weights if explicit_weights else None
@@ -20155,6 +20166,14 @@ def coxph(
                 id=id_values,
             )
         )
+        if istate_values is not None:
+            model_frame["(istate)"] = istate_values
+            if (
+                istate_column is not None
+                and formula_model_data is not None
+                and istate_column not in model_frame
+            ):
+                model_frame[istate_column] = _column(formula_model_data, istate_column)
 
     fit_times = list(response.time)
     entry_times = list(response.start) if response.start is not None else None

@@ -6875,3 +6875,57 @@ test_that("low-level Cox survival curves match individual trajectories", {
     tolerance = 1e-10
   )
 })
+
+test_that("ordinary istate inputs match R model-frame semantics", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1, 2, 3, 4, 5, 6, 7, 8),
+    status = c(1, 1, 0, 1, 0, 1, 0, 1),
+    x = c(0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5),
+    state = factor(c("entry", "other", "entry", "other", "entry", "other", "entry", "other"))
+  )
+  reference_survfit <- getS3method("survfit", "formula", envir = asNamespace("survival"))
+
+  bridged_curve <- survfit(
+    Surv(time, status) ~ 1,
+    data = data,
+    istate = state,
+    model = TRUE
+  )
+  reference_curve <- reference_survfit(
+    survival::Surv(time, status) ~ 1,
+    data = data,
+    istate = state,
+    model = TRUE
+  )
+  expect_equal(bridged_curve$surv, reference_curve$surv, tolerance = 1e-12)
+  bridged_curve_frame <- model.frame(bridged_curve)
+  curve_istate_name <- grep("istate", names(bridged_curve_frame), value = TRUE)
+  expect_length(curve_istate_name, 1L)
+  expect_equal(as.character(bridged_curve_frame[[curve_istate_name]]), as.character(data$state))
+
+  bridged_fit <- coxph(
+    Surv(time, status) ~ x,
+    data = data,
+    istate = state,
+    statedata = data.frame(state = levels(data$state)),
+    model = TRUE,
+    control = coxph.control(iter.max = 50L, eps = 1e-09)
+  )
+  reference_fit <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    istate = state,
+    statedata = data.frame(state = levels(data$state)),
+    model = TRUE,
+    control = survival::coxph.control(iter.max = 50L, eps = 1e-09)
+  )
+  expect_equal(coef(bridged_fit), coef(reference_fit), tolerance = 1e-5)
+  bridged_fit_frame <- model.frame(bridged_fit)
+  fit_istate_name <- grep("istate", names(bridged_fit_frame), value = TRUE)
+  expect_length(fit_istate_name, 1L)
+  expect_equal(as.character(bridged_fit_frame[[fit_istate_name]]), as.character(data$state))
+})
