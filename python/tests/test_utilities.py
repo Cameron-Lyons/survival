@@ -325,6 +325,7 @@ def test_timeline_public_apis_and_validation():
     )
     intervals = survival.from_timeline(timeline.id, timeline.states, timeline.time_points)
     precise = survival.to_timeline([1, 1], [0.0, 1.0004], [1.0004, 1.0008], [0, 1])
+    tolerance_reversed = survival.to_timeline([1], [1.0 + 0.5e-9], [1.0], [9])
 
     assert timeline.id == [1, 2]
     assert timeline.time_points == pytest.approx([0.0, 5.0, 10.0])
@@ -335,6 +336,7 @@ def test_timeline_public_apis_and_validation():
     assert intervals.status == [0, 1, 2, 2]
     assert precise.time_points == pytest.approx([0.0, 1.0004, 1.0008])
     assert precise.states == [[0, 1, 1]]
+    assert tolerance_reversed.states == [[9]]
 
     with pytest.raises(ValueError, match="time1 must have same length as id"):
         survival.to_timeline([1], [], [1.0], [0])
