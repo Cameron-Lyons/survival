@@ -1237,6 +1237,18 @@ def test_survcondense_accepts_formula_and_preserves_direct_api():
         weights="wt",
         id="id",
     )
+    missing_values = survival.survcondense(
+        "Surv(tstart, tstop, event) ~ x",
+        data={
+            "id": ["b", "a", "b", "a"],
+            "tstart": [0.0, 0.0, 1.0, 1.0],
+            "tstop": [1.0, 1.0, 2.0, 2.0],
+            "event": [0, 0, 0, 0],
+            "x": [None, "x", None, "x"],
+        },
+        id="id",
+        na_action="pass",
+    )
     special_data = {
         **data,
         "site": ["south", "north", "north", "south"],
@@ -1304,6 +1316,13 @@ def test_survcondense_accepts_formula_and_preserves_direct_api():
         "event": [0, 0],
     }
     assert no_drops == {"x": [], "wt": [], "id": [], "tstart": [], "tstop": [], "event": []}
+    assert missing_values == {
+        "x": [None, "x"],
+        "id": ["b", "a"],
+        "tstart": [0.0, 0.0],
+        "tstop": [2.0, 2.0],
+        "event": [0, 0],
+    }
     assert strata == {
         "strata(site)": ["north", "south"],
         "id": [1, 2],
