@@ -2196,6 +2196,52 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_lt(max(abs(bridged_brier$rsquared - reference_brier$rsquared)), 3e-3)
   expect_lt(max(abs(bridged_brier$phat - reference_brier$phat)), 3e-3)
 
+  brier_weighted_data <- transform(brier_data, wt = 1)
+  brier_weighted_newdata <- transform(
+    brier_weighted_data,
+    wt = c(8, 1, 1, 1, 1, 1, 1, 1)
+  )
+  brier_weighted_fit <- coxph(
+    Surv(time, status) ~ x,
+    data = brier_weighted_data,
+    weights = wt,
+    max_iter = 50,
+    model = TRUE
+  )
+  reference_brier_weighted_fit <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = brier_weighted_data,
+    weights = wt,
+    iter.max = 50,
+    model = TRUE,
+    y = TRUE
+  )
+  bridged_brier_weighted <- brier(
+    brier_weighted_fit,
+    times = c(2, 4, 6),
+    newdata = brier_weighted_newdata,
+    detail = TRUE
+  )
+  reference_brier_weighted <- survival::brier(
+    reference_brier_weighted_fit,
+    times = c(2, 4, 6),
+    newdata = brier_weighted_newdata,
+    detail = TRUE
+  )
+  expect_equal(
+    bridged_brier_weighted$eff.n,
+    reference_brier_weighted$eff.n,
+    tolerance = 1e-12
+  )
+  expect_lt(
+    max(abs(bridged_brier_weighted$brier - reference_brier_weighted$brier)),
+    3e-3
+  )
+  expect_lt(
+    max(abs(bridged_brier_weighted$rsquared - reference_brier_weighted$rsquared)),
+    3e-3
+  )
+
   brier_counting_data <- data.frame(
     start = rep(0, nrow(brier_data)),
     stop = brier_data$time,
@@ -2275,6 +2321,46 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_lt(max(abs(bridged_brier_common_start$brier - reference_brier_common_start$brier)), 3e-3)
   expect_equal(bridged_brier_common_start$rsquared, reference_brier_common_start$rsquared, tolerance = 3e-3)
   expect_lt(max(abs(bridged_brier_common_start$phat - reference_brier_common_start$phat)), 3e-3)
+
+  brier_custom_id_data <- transform(
+    brier_common_start_data[names(brier_common_start_data) != "id"],
+    subject = brier_common_start_data$id
+  )
+  brier_custom_id_fit <- coxph(
+    Surv(start, stop, status) ~ x,
+    data = brier_custom_id_data,
+    id = subject,
+    max_iter = 0,
+    model = TRUE
+  )
+  reference_brier_custom_id_fit <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x,
+    data = brier_custom_id_data,
+    id = subject,
+    iter.max = 0,
+    model = TRUE,
+    y = TRUE
+  )
+  brier_bad_id_newdata <- transform(
+    brier_custom_id_data,
+    subject = c(1, 2, 2, 1, 3, 3)
+  )
+  expect_error(
+    brier(
+      brier_custom_id_fit,
+      times = c(3, 5, 7),
+      newdata = brier_bad_id_newdata
+    ),
+    "survcheck"
+  )
+  expect_error(
+    survival::brier(
+      reference_brier_custom_id_fit,
+      times = c(3, 5, 7),
+      newdata = brier_bad_id_newdata
+    ),
+    "survcheck"
+  )
 
   brier_gap_data <- transform(brier_common_start_data, start = c(0, 3, 0, 3, 0, 4))
   brier_gap_fit <- coxph(

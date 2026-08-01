@@ -8094,6 +8094,12 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") 
     parent.frame(),
     vector_args = c("weights", "offset", "strata", "cluster", "id")
   )
+  if (!is.null(dots$weights) && is.name(dots$weights)) {
+    evaluated_dots[["_weights_column"]] <- as.character(dots$weights)
+  }
+  if (!is.null(dots$id) && is.name(dots$id)) {
+    evaluated_dots[["_id_column"]] <- as.character(dots$id)
+  }
   do.call(
     .call_r_api,
     c(

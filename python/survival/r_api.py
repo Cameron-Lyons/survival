@@ -265,10 +265,12 @@ class _FormulaFit:
     formula: str | None = None
     coefficient_names: tuple[str, ...] | None = None
     case_weights: list[float] | None = None
+    case_weight_column: str | None = None
     robust_variance: list[list[float]] | None = None
     naive_variance: list[list[float]] | None = None
     cluster: list[Any] | None = None
     id_values: list[Any] | None = None
+    id_column: str | None = None
     x_matrix: list[list[float]] | None = None
     y_response: Surv | None = None
     model_frame: dict[str, Any] | None = None
@@ -1503,8 +1505,26 @@ def _brier_fit_response_and_data(fit: Any, newdata: Any | None) -> tuple[Surv, A
     return Surv(list(model.event_times), list(model.status)), None
 
 
-def _brier_case_weights(fit: Any, n: int) -> list[float]:
-    weights = _model_residual_weights(fit, n)
+def _brier_case_weights(
+    fit: Any,
+    model_data: Any | None,
+    n: int,
+    *,
+    use_newdata: bool,
+) -> list[float]:
+    weight_column = getattr(fit, "case_weight_column", None)
+    if use_newdata and weight_column is not None:
+        if model_data is None:
+            raise ValueError("newdata is required to evaluate case weights")
+        try:
+            source = _column(model_data, weight_column)
+        except KeyError as exc:
+            raise ValueError(f"newdata is missing weights column {weight_column!r}") from exc
+        weights = _float_vector(source, "weights")
+        if len(weights) != n:
+            raise ValueError("weights must have the same length as the Surv response")
+    else:
+        weights = _model_residual_weights(fit, n)
     if any(not math.isfinite(weight) for weight in weights):
         raise ValueError("weights must be finite")
     if any(weight < 0.0 for weight in weights):
@@ -1526,7 +1546,25 @@ def _brier_id_column(data: Any | None, name: str) -> list[Any] | None:
         return None
 
 
-def _brier_id_values(fit: Any, model_data: Any | None, n: int) -> list[Any] | None:
+def _brier_id_values(
+    fit: Any,
+    model_data: Any | None,
+    n: int,
+    *,
+    use_newdata: bool,
+) -> list[Any] | None:
+    id_column = getattr(fit, "id_column", None)
+    if use_newdata and id_column is not None:
+        if model_data is None:
+            raise ValueError("newdata is required to evaluate id")
+        try:
+            values = _materialize_labels(_column(model_data, id_column), "id")
+        except KeyError as exc:
+            raise ValueError(f"newdata is missing id column {id_column!r}") from exc
+        if len(values) != n:
+            raise ValueError("id must have the same length as the Surv response")
+        return values
+
     for name in ("(id)", "id"):
         values = _brier_id_column(model_data, name)
         if values is not None:
@@ -1687,10 +1725,21 @@ def brier(
     timefix_value = _normalize_bool_option(timefix, "timefix")
     efron_value = _normalize_bool_option(efron, "efron")
     response, prediction_data = _brier_fit_response_and_data(fit, newdata)
-    id_values = _brier_id_values(fit, prediction_data, len(response))
+    using_newdata = newdata is not None
+    id_values = _brier_id_values(
+        fit,
+        prediction_data,
+        len(response),
+        use_newdata=using_newdata,
+    )
     dtime, dstat = _brier_event_times(response, timefix_value, id_values)
     n = len(dtime)
-    weights = _brier_case_weights(fit, n)
+    weights = _brier_case_weights(
+        fit,
+        prediction_data,
+        n,
+        use_newdata=using_newdata,
+    )
     eval_times = (
         _float_vector(times, "times")
         if times is not None
@@ -20535,6 +20584,8 @@ def coxph(
 ):
     """Fit a Cox proportional hazards model from Surv plus covariates."""
 
+    case_weight_column = kwargs.pop("_weights_column", None)
+    id_column = kwargs.pop("_id_column", None)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     singular_ok = _pop_dotted_keyword(
         kwargs,
@@ -20550,6 +20601,16 @@ def coxph(
     method_name = _cox_tie_method(method, ties)
     robust_value = _normalize_optional_bool_option(robust, "robust")
     explicit_weights = weights is not None
+    if case_weight_column is None and isinstance(weights, str):
+        case_weight_column = weights
+    if id_column is None and isinstance(id, str):
+        id_column = id
+    for column, name in (
+        (case_weight_column, "_weights_column"),
+        (id_column, "_id_column"),
+    ):
+        if column is not None and (not isinstance(column, str) or not column):
+            raise TypeError(f"{name} must be a non-empty string")
     keep_model = _normalize_bool_option_with_default(model, "model", False)
     keep_y = _normalize_bool_option_with_default(y, "y", True)
     singular_ok_value = _normalize_bool_option_with_default(singular_ok, "singular_ok", True)
@@ -20576,6 +20637,8 @@ def coxph(
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
+        weights = _column_or_values(data, weights, "weights") if weights is not None else None
+        id_arg = _column_or_values(data, id_arg, "id") if id_arg is not None else None
         if subset is not None:
             data, aligned = _subset_formula_inputs(
                 response,
@@ -20818,10 +20881,12 @@ def coxph(
             formula=formula_string,
             coefficient_names=direct_coefficient_names,
             case_weights=case_weights,
+            case_weight_column=case_weight_column,
             robust_variance=robust_variance,
             naive_variance=naive_variance,
             cluster=cluster_values,
             id_values=id_values,
+            id_column=id_column,
             x_matrix=formula_x_matrix,
             y_response=response if formula_design is not None and keep_y else None,
             model_frame=model_frame,

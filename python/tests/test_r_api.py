@@ -713,6 +713,7 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
         "status": [1, 1, 0, 1, 0, 1, 1, 0],
         "x": [0.2, 0.4, 0.1, 0.8, 1.0, 1.2, 0.6, 1.4],
+        "wt": [1.0] * 8,
     }
     fit = survival.coxph("Surv(time, status) ~ x", data=data, model=True, max_iter=50)
     assert fit.coefficients[0] == pytest.approx([-2.1132119551866904], abs=3e-5)
@@ -729,6 +730,30 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
     )
     assert len(result["phat"]) == 3
     assert all(len(row) == len(data["time"]) for row in result["phat"])
+
+    weighted_fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        weights="wt",
+        model=True,
+        max_iter=50,
+    )
+    weighted_newdata = {**data, "wt": [8.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}
+    weighted_result = survival.r_api.brier(
+        weighted_fit,
+        times=[2.0, 4.0, 6.0],
+        newdata=weighted_newdata,
+        detail=True,
+    )
+    assert weighted_result["eff.n"] == pytest.approx([3.1690140845, 3.1163434903, 3.0356177407])
+    assert weighted_result["brier"] == pytest.approx(
+        [0.21987334, 0.09626662, 0.12947811],
+        abs=1e-6,
+    )
+    assert weighted_result["rsquared"] == pytest.approx(
+        [0.0838611, 0.5575983, 0.2284805],
+        abs=1e-6,
+    )
 
     counting_data = {
         "start": [0.0] * len(data["time"]),
@@ -790,6 +815,25 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
     )
     with pytest.raises(ValueError, match="survcheck"):
         survival.r_api.brier(gap_fit, times=[3.0, 5.0, 7.0])
+
+    custom_id_data = {
+        **{name: values for name, values in common_start_data.items() if name != "id"},
+        "subject": common_start_data["id"],
+    }
+    custom_id_fit = survival.coxph(
+        "Surv(start, stop, status) ~ x",
+        data=custom_id_data,
+        id="subject",
+        model=True,
+        max_iter=0,
+    )
+    bad_id_newdata = {**custom_id_data, "subject": [1, 2, 2, 1, 3, 3]}
+    with pytest.raises(ValueError, match="survcheck"):
+        survival.r_api.brier(
+            custom_id_fit,
+            times=[3.0, 5.0, 7.0],
+            newdata=bad_id_newdata,
+        )
 
     staggered_data = {**counting_data, "start": [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]}
     staggered_fit = survival.coxph(
