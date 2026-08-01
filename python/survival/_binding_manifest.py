@@ -875,6 +875,7 @@ BINDINGS = (
     "rmst_comparison",
     "rmst_optimal_threshold",
     "robust_counting_survfit_variance",
+    "robust_right_survfit_variance",
     "robust_survfitkm",
     "robustness_analysis",
     "roc_plot_data",

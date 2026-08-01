@@ -4087,6 +4087,15 @@ def test_survfit_non_km_right_censored_curves_support_robust_variance():
 
     fh = survival.survfit(response, cluster=cluster, type="fleming-harrington")
     fh2 = survival.survfit(response, cluster=cluster, type="fh2")
+    reverse_fh2 = survival.survfit(response, cluster=cluster, type="fh2", reverse=True)
+    reverse_influence = survival.survfitkm_influence(
+        time,
+        status,
+        cluster,
+        reverse=True,
+        stype=2,
+        ctype=2,
+    )
     km_survival_fh2_hazard = survival.survfit(response, cluster=cluster, stype=1, ctype=2)
     grouped = survival.survfit(
         response,
@@ -4111,6 +4120,18 @@ def test_survfit_non_km_right_censored_curves_support_robust_variance():
     assert fh2.std_err == pytest.approx([0.1627183900, 0.1508161491, 0.1508161491])
     assert fh2.std_chaz == pytest.approx([0.2347891095, 0.5007272489, 0.5007272489])
     assert fh2.conf_lower == pytest.approx([0.4374272533, 0.1128825508, 0.1128825508])
+    assert reverse_fh2.std_err == pytest.approx(
+        [
+            math.sqrt(sum(row[column] ** 2 for row in reverse_influence.influence_surv))
+            for column in range(len(reverse_influence.time))
+        ]
+    )
+    assert reverse_fh2.std_chaz == pytest.approx(
+        [
+            math.sqrt(sum(row[column] ** 2 for row in reverse_influence.influence_chaz))
+            for column in range(len(reverse_influence.time))
+        ]
+    )
     assert km_survival_fh2_hazard.estimate == pytest.approx([2.0 / 3.0, 2.0 / 9.0, 2.0 / 9.0])
     assert km_survival_fh2_hazard.std_err == pytest.approx(
         [0.1924500897, 0.1924500897, 0.1924500897]
