@@ -16512,12 +16512,13 @@ def _cox_detail_row_order(
 
 def _cox_detail_strata_table(
     strata: list[int],
-    event_groups: list[tuple[int, float]],
+    detail_rows: Sequence[Any],
 ) -> dict[int, int] | None:
     if len(set(strata)) <= 1:
         return None
     table: dict[int, int] = {}
-    for stratum, _event_time in event_groups:
+    for row in detail_rows:
+        stratum = int(row.stratum)
         table[stratum] = table.get(stratum, 0) + 1
     return table
 
@@ -19644,7 +19645,6 @@ def coxph_detail(
         riskmat=include_riskmat,
     )
     detail_rows = list(detail.rows)
-    event_groups = [(int(row.stratum), float(row.time)) for row in detail_rows]
 
     row_order = _cox_detail_row_order(time, status, strata, rorder_name)
     x_rows = [rows[idx] for idx in row_order]
@@ -19657,11 +19657,7 @@ def coxph_detail(
         native_risk_matrix = detail.riskmat
         if native_risk_matrix is None:
             raise RuntimeError("native Cox detail omitted the requested risk matrix")
-        risk_matrix = (
-            native_risk_matrix
-            if rorder_name == "data"
-            else [native_risk_matrix[idx] for idx in row_order]
-        )
+        risk_matrix = [list(native_risk_matrix[idx]) for idx in row_order]
 
     has_case_weights = any(abs(weight - 1.0) > 1e-12 for weight in weights)
     return CoxPHDetailResult(
@@ -19679,7 +19675,7 @@ def coxph_detail(
         wtrisk=[float(row.wtrisk) for row in detail_rows],
         x=x_rows,
         y=y_rows,
-        strata=_cox_detail_strata_table(strata, event_groups),
+        strata=_cox_detail_strata_table(strata, detail_rows),
         riskmat=risk_matrix,
         weights=ordered_weights if has_case_weights else None,
         nevent_wt=[float(row.n_event_weight) for row in detail_rows] if has_case_weights else None,
