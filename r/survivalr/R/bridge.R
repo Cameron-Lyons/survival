@@ -2904,6 +2904,24 @@ ratetable <- function(...) {
   x
 }
 
+`[.ratetable2` <- function(x, rows, cols, drop = FALSE) {
+  if (!missing(cols)) {
+    stop("This should never be called!")
+  }
+  att <- attributes(x)
+  attributes(x) <- att[c("dim", "dimnames")]
+  result <- x[rows, , drop = FALSE]
+  attr(result, "isDate") <- att$isDate
+  attr(result, "levlist") <- att$levlist
+  class(result) <- "ratetable2"
+  result
+}
+
+is.na.ratetable2 <- function(x) {
+  attributes(x) <- list(dim = dim(x))
+  as.vector((1 * is.na(x)) %*% rep(1, ncol(x)) > 0)
+}
+
 match.ratetable <- function(R, ratetable) {
   datecheck <- function(x) {
     inherits(x, c("Date", "POSIXt", "date", "chron", "rtabledate"))
@@ -3029,15 +3047,16 @@ lvcf <- function(id, x, time) {
     return(factor(.as_nullable_character_vector(result), levels = levels(x)))
   }
   if (is.integer(x)) {
-    return(as.integer(.as_nullable_numeric_vector(result)))
+    output <- as.integer(.as_nullable_numeric_vector(result))
+  } else if (is.numeric(x)) {
+    output <- .as_nullable_numeric_vector(result)
+  } else if (is.logical(x)) {
+    output <- .as_nullable_logical_vector(result)
+  } else {
+    output <- .as_nullable_character_vector(result)
   }
-  if (is.numeric(x)) {
-    return(.as_nullable_numeric_vector(result))
-  }
-  if (is.logical(x)) {
-    return(.as_nullable_logical_vector(result))
-  }
-  .as_nullable_character_vector(result)
+  attributes(output) <- attributes(x)
+  output
 }
 
 nostutter <- function(id, x, censor = 0, single = FALSE) {

@@ -3653,6 +3653,29 @@ test_that("data-prep helpers match R survival shapes", {
       lvcf(lvcf_factor_id, c(NA, 1, 2, NA)),
       reference_lvcf(lvcf_factor_id, c(NA, 1, 2, NA))
     )
+    for (structured in list(
+      structure(c(1, NA, 3), names = c("a", "b", "c")),
+      structure(c(1L, NA, 3L), names = c("a", "b", "c")),
+      structure(c(TRUE, NA, FALSE), names = c("a", "b", "c")),
+      structure(c("x", NA, "z"), names = c("a", "b", "c")),
+      structure(c(1, NA, 3), names = c("a", "b", "c"), source = "probe")
+    )) {
+      expect_equal(lvcf(c(1, 1, 1), structured), reference_lvcf(c(1, 1, 1), structured))
+    }
+    lvcf_matrix <- matrix(
+      c(1, NA, 3, 4, NA, 6),
+      nrow = 3,
+      dimnames = list(c("a", "b", "c"), c("u", "v"))
+    )
+    expect_equal(lvcf(rep(1, 6), lvcf_matrix), reference_lvcf(rep(1, 6), lvcf_matrix))
+    named_lvcf_factor <- structure(
+      factor(c("a", NA, "b"), levels = c("a", "b")),
+      names = c("a", "b", "c")
+    )
+    expect_equal(
+      lvcf(c(1, 1, 1), named_lvcf_factor),
+      reference_lvcf(c(1, 1, 1), named_lvcf_factor)
+    )
   }
   lvcf_factor <- factor(c("a", NA, "b", NA), levels = c("a", "b"))
   expect_equal(
@@ -3762,6 +3785,35 @@ test_that("data-prep helpers match R survival shapes", {
     year = as.Date(c("2000-01-01", "2001-01-01"))
   )
   expect_equal(bridged_rtable, reference_rtable)
+  bridged_subset_method <- get("[.ratetable2", envir = asNamespace("survivalr"))
+  reference_subset_method <- get("[.ratetable2", envir = asNamespace("survival"))
+  subset_rows <- c(2L, 1L, 2L)
+  expect_equal(
+    bridged_subset_method(bridged_rtable, subset_rows),
+    reference_subset_method(bridged_rtable, subset_rows)
+  )
+  expect_equal(
+    bridged_subset_method(bridged_rtable, 1L, drop = TRUE),
+    reference_subset_method(bridged_rtable, 1L, drop = TRUE)
+  )
+  expect_error(
+    bridged_subset_method(bridged_rtable, 1L, 1L),
+    "This should never be called!",
+    fixed = TRUE
+  )
+
+  missing_rtable <- ratetable(
+    age = c(50, NA, 70) * 365.25,
+    sex = factor(c("male", "female", NA), levels = c("female", "male")),
+    year = as.Date(c("2000-01-01", "2001-01-01", NA))
+  )
+  bridged_missing_method <- get("is.na.ratetable2", envir = asNamespace("survivalr"))
+  reference_missing_method <- get("is.na.ratetable2", envir = asNamespace("survival"))
+  expect_equal(
+    bridged_missing_method(missing_rtable),
+    reference_missing_method(missing_rtable)
+  )
+  expect_equal(is.na(missing_rtable), c(FALSE, TRUE, TRUE))
   bridged_match <- match.ratetable(bridged_rtable, survival::survexp.us)
   reference_match <- survival::match.ratetable(reference_rtable, survival::survexp.us)
   expect_equal(bridged_match, reference_match)

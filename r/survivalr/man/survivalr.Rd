@@ -28,6 +28,8 @@
 \alias{ratetableDate.integer}
 \alias{ratetableDate.POSIXt}
 \alias{ratetable}
+\alias{[.ratetable2}
+\alias{is.na.ratetable2}
 \alias{match.ratetable}
 \alias{cch}
 \alias{coef.cch}
@@ -400,6 +402,10 @@ is.ratetable(x, verbose = FALSE)
 ratetableDate(x)
 
 ratetable(...)
+
+\method{[}{ratetable2}(x, rows, cols, drop = FALSE)
+
+\method{is.na}{ratetable2}(x)
 
 match.ratetable(R, ratetable)
 
@@ -1064,9 +1070,9 @@ Cox coefficient tables.}
 compatibility.}
 \item{quote}{Logical flag controlling whether printed survival-time labels are
 quoted.}
-\item{i, j, name, exact, drop}{Row and column subset controls for native
-\code{Surv} and \code{Surv2} objects, plus list-field extraction controls for
-Python-backed \code{survfit} objects.}
+\item{i, j, rows, cols, name, exact, drop}{Row and column subset controls for
+native \code{Surv}, \code{Surv2}, and \code{ratetable2} objects, plus
+list-field extraction controls for Python-backed \code{survfit} objects.}
 \item{centered}{Logical flag for centered baseline hazards.}
 \item{rho}{Fleming--Harrington weight exponent for \code{survdiff}.}
 \item{riskmat, rorder}{Logical risk-matrix request and data/time row-order
