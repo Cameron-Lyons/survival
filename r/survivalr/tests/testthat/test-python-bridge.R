@@ -4519,10 +4519,49 @@ test_that("data-prep helpers match R survival shapes", {
   expect_s3_class(bridged_obrien_factor$keeper, "factor")
   expect_equal(levels(bridged_obrien_factor$keeper), c("b", "a"))
   expect_equal(bridged_obrien_factor, reference_obrien_factor)
-  expect_false(.survobrien_formula_python_eligible(
-    survival::Surv(time, status) ~ x + keeper + strata(group),
+  factor_strata_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
+  expect_true(.survobrien_formula_python_eligible(
+    factor_strata_formula,
     obrien_factor_data
   ))
+  expect_equal(
+    survobrien(factor_strata_formula, data = obrien_factor_data),
+    survival::survobrien(factor_strata_formula, data = obrien_factor_data)
+  )
+  for (wrapper in c("factor", "as.factor")) {
+    wrapper_formula <- stats::as.formula(paste0(
+      "survival::Surv(time, status) ~ x + ", wrapper, "(group) + strata(group)"
+    ))
+    expect_true(.survobrien_formula_python_eligible(wrapper_formula, obrien_factor_data))
+    expect_equal(
+      survobrien(wrapper_formula, data = obrien_factor_data),
+      survival::survobrien(wrapper_formula, data = obrien_factor_data)
+    )
+  }
+  obrien_factor_row_names <- data.frame(
+    time = c(5, 7, 1, 6),
+    status = c(0, 1, 1, 1),
+    x = c(0.1, 0.4, 0.2, 0.8),
+    group = c("a", "b", "b", "b")
+  )
+  obrien_factor_row_names$keeper <- factor(obrien_factor_row_names$group)
+  row_name_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
+  expect_equal(
+    survobrien(row_name_formula, data = obrien_factor_row_names),
+    survival::survobrien(row_name_formula, data = obrien_factor_row_names)
+  )
+  obrien_empty_risk <- data.frame(
+    time = c(2, 3, 4),
+    status = c(1, 1, 0),
+    x = c(0.1, 0.4, 0.2),
+    group = c("a", "b", "b")
+  )
+  obrien_empty_risk$keeper <- factor(obrien_empty_risk$group)
+  empty_risk_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
+  expect_equal(
+    survobrien(empty_risk_formula, data = obrien_empty_risk),
+    survival::survobrien(empty_risk_formula, data = obrien_empty_risk)
+  )
 
   obrien_counting_data <- data.frame(
     start = c(0, 0, 1, 2),
@@ -4560,6 +4599,23 @@ test_that("data-prep helpers match R survival shapes", {
     ),
     survival::survobrien(
       survival::Surv(start, stop, status) ~ x + strata(group),
+      data = obrien_counting_strata_data
+    )
+  )
+  obrien_counting_strata_data$keeper <- factor(
+    obrien_counting_strata_data$group,
+    levels = c("b", "a")
+  )
+  counting_factor_strata_formula <-
+    survival::Surv(start, stop, status) ~ x + keeper + strata(group)
+  expect_true(.survobrien_formula_python_eligible(
+    counting_factor_strata_formula,
+    obrien_counting_strata_data
+  ))
+  expect_equal(
+    survobrien(counting_factor_strata_formula, data = obrien_counting_strata_data),
+    survival::survobrien(
+      counting_factor_strata_formula,
       data = obrien_counting_strata_data
     )
   )

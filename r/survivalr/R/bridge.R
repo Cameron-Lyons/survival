@@ -3521,8 +3521,52 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
   )
 }
 
+.survobrien_result_frame <- function(result, data) {
+  frame <- as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE)
+  if (ncol(frame) > 0L || length(result) == 0L) {
+    return(frame)
+  }
+  empty_columns <- lapply(names(result), function(column) {
+    if (column %in% names(data)) {
+      return(data[[column]][integer()])
+    }
+    if (column %in% c("status", ".id.", ".strata.")) {
+      return(integer())
+    }
+    numeric()
+  })
+  names(empty_columns) <- names(result)
+  as.data.frame(empty_columns, check.names = TRUE, stringsAsFactors = FALSE)
+}
+
+.survobrien_restore_row_names <- function(frame, call, formula, data, enclos) {
+  if (nrow(frame) <= 1L || !".id." %in% names(frame) ||
+      anyDuplicated(frame[[".id."]])) {
+    return(frame)
+  }
+  model_args <- match(
+    c("formula", "data", "subset", "na.action"),
+    names(call),
+    nomatch = 0L
+  )
+  model_call <- call[c(1L, model_args[model_args > 0L])]
+  model_call[[1L]] <- quote(stats::model.frame)
+  model_call$formula <- stats::terms(
+    formula,
+    c("strata", "cluster", "tt"),
+    data = data
+  )
+  model_rows <- row.names(eval(model_call, enclos))
+  output_rows <- model_rows[as.integer(frame[[".id."]])]
+  if (!identical(output_rows, as.character(seq_len(nrow(frame))))) {
+    row.names(frame) <- output_rows
+  }
+  frame
+}
+
 survobrien <- function(formula, data, subset, na.action, transform,
                        time, status, covariate, strata = NULL) {
+  call <- match.call()
   direct_time <- NULL
   if (!missing(time)) {
     direct_time <- time
@@ -3539,10 +3583,16 @@ survobrien <- function(formula, data, subset, na.action, transform,
         `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
         transform = if (missing(transform)) NULL else transform
       )
-      frame <- as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE)
+      frame <- .survobrien_result_frame(result, data)
+      frame <- .survobrien_restore_row_names(
+        frame,
+        call,
+        formula,
+        data,
+        parent.frame()
+      )
       return(.restore_r_column_classes(frame, data))
     }
-    call <- match.call()
     call[[1L]] <- quote(survival::survobrien)
     return(eval.parent(call))
   }
@@ -3573,14 +3623,27 @@ survobrien <- function(formula, data, subset, na.action, transform,
     return(is.factor(value) || (is.numeric(value) && !inherits(value, "AsIs")))
   }
   match <- regexec(
-    "^(log|sqrt|exp|identity|as\\.numeric)\\(([[:space:]]*[^()]+[[:space:]]*)\\)$",
+    paste0(
+      "^(log|sqrt|exp|identity|as\\.numeric|factor|as\\.factor)",
+      "\\(([[:space:]]*[^()]+[[:space:]]*)\\)$"
+    ),
     label
   )
   pieces <- regmatches(label, match)[[1L]]
   if (length(pieces) == 0L) {
     return(FALSE)
   }
+  transform <- pieces[[2L]]
   column <- trimws(pieces[[3L]])
+  if (transform %in% c("factor", "as.factor")) {
+    return(
+      column %in% names(data) &&
+        (is.factor(data[[column]]) ||
+          is.character(data[[column]]) ||
+          is.numeric(data[[column]]) ||
+          is.logical(data[[column]]))
+    )
+  }
   column %in% names(data) && is.numeric(data[[column]]) && !is.factor(data[[column]])
 }
 
@@ -3603,10 +3666,14 @@ survobrien <- function(formula, data, subset, na.action, transform,
   }
   factor_terms <- vapply(
     labels,
-    function(label) label %in% names(data) && is.factor(data[[label]]),
+    function(label) {
+      (label %in% names(data) && is.factor(data[[label]])) ||
+        grepl("^(factor|as\\.factor)\\(", label)
+    },
     logical(1)
   )
-  if (any(factor_terms) && length(specials$strata) > 0L) {
+  if (any(factor_terms) && length(specials$strata) > 0L &&
+      length(specials$cluster) > 0L) {
     return(FALSE)
   }
   all(vapply(labels, .survobrien_formula_supported_term, logical(1), data = data))
