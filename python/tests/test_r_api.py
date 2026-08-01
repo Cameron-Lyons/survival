@@ -3288,6 +3288,7 @@ def test_r_style_nsk_wraps_native_spline_basis():
         knots=[2.0, 4.0],
         boundary_knots=[2.5, 3.5],
     )
+    missing = survival.nsk([1.0, math.nan, 2.0, 3.0, 4.0, 5.0], df=3)
 
     assert isinstance(basis, survival._survival.SplineBasisResult)
     assert survival.nsk is survival.r_api.nsk
@@ -3322,10 +3323,20 @@ def test_r_style_nsk_wraps_native_spline_basis():
     assert inside_boundary.boundary_knots == pytest.approx((2.0, 4.0))
     assert inside_boundary.basis[0] == pytest.approx(-0.5)
 
+    assert missing.n_rows == 6
+    assert missing.n_cols == basis.n_cols
+    assert missing.knots == pytest.approx(basis.knots)
+    assert missing.boundary_knots == pytest.approx(basis.boundary_knots)
+    assert all(math.isnan(value) for value in missing.basis[3:6])
+    assert missing.basis[:3] == pytest.approx(basis.basis[:3])
+    assert missing.basis[6:] == pytest.approx(basis.basis[3:])
+
     with pytest.raises(ValueError, match="Boundary.knots"):
         survival.nsk([1.0, 2.0, 3.0], knots=[2.0], Boundary_knots=None)
     with pytest.raises(ValueError, match="x must contain only finite values"):
-        survival.nsk([1.0, math.nan], df=3)
+        survival.nsk([1.0, math.inf], df=3)
+    with pytest.raises(ValueError, match="at least one non-missing"):
+        survival.nsk([math.nan, math.nan], df=3)
 
 
 def test_r_style_pspline_builds_survival_basis_contract():
