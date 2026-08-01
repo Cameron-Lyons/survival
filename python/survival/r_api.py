@@ -4259,6 +4259,27 @@ def _strata_default_shortlabel(columns: Sequence[Sequence[Any]], labels: Any) ->
     )
 
 
+def _strata_combination_labels(
+    term_labels: Sequence[str],
+    column_level_labels: Sequence[Sequence[str]],
+    short: bool,
+) -> list[list[str]]:
+    """Match ``survival::strata`` formatting of component labels."""
+
+    result: list[list[str]] = []
+    for term_idx, level_labels in enumerate(column_level_labels):
+        pieces = (
+            list(level_labels)
+            if short
+            else [f"{term_labels[term_idx]}={level_label}" for level_label in level_labels]
+        )
+        if not short and term_idx > 0 and pieces:
+            width = max(map(len, pieces))
+            pieces = [piece.ljust(width) for piece in pieces]
+        result.append(pieces)
+    return result
+
+
 def strata(
     *variables: Any,
     na_group: bool = False,
@@ -4294,12 +4315,14 @@ def strata(
         column_codes,
         [len(levels) for levels in column_levels],
     )
+    combination_labels = _strata_combination_labels(
+        term_labels,
+        column_level_labels,
+        short,
+    )
     levels: list[str] = []
     for parts in observed_parts:
-        pieces: list[str] = []
-        for term_idx, part_idx in enumerate(parts):
-            level_label = column_level_labels[term_idx][part_idx]
-            pieces.append(level_label if short else f"{term_labels[term_idx]}={level_label}")
+        pieces = [combination_labels[term_idx][part_idx] for term_idx, part_idx in enumerate(parts)]
         levels.append(sep.join(pieces))
     row_labels = [None if code is None else levels[code - 1] for code in codes]
     return StrataFactor(codes=codes, levels=levels, labels=row_labels, counts=counts)
