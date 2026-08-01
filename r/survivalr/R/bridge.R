@@ -2230,7 +2230,7 @@ makepredictcall.pspline <- function(var, call) {
   }
   new_call <- call[1L:2L]
   index <- match(
-    c("nterm", "intercept", "Boundary.knots", "combine", "degree"),
+    c("nterm", "intercept", "Boundary.knots", "combine", "degree", "df"),
     names(attributes(var)),
     nomatch = 0
   )
