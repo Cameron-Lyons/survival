@@ -4679,56 +4679,6 @@ def _computed_nsk_knots(
     return [_quantile_type7(inside, idx / (n_interior + 1)) for idx in range(1, n_interior + 1)]
 
 
-def _pspline_basis_row(knots: Sequence[float], x: float, order: int) -> list[float]:
-    n_basis = len(knots) - order
-    values = [0.0] * (len(knots) - 1)
-    for idx in range(len(knots) - 1):
-        if knots[idx] <= x < knots[idx + 1] or (
-            x == knots[-1] and knots[idx] <= x <= knots[idx + 1]
-        ):
-            values[idx] = 1.0
-
-    for current_order in range(2, order + 1):
-        next_values = [0.0] * (len(knots) - current_order)
-        for idx in range(len(next_values)):
-            left_denominator = knots[idx + current_order - 1] - knots[idx]
-            right_denominator = knots[idx + current_order] - knots[idx + 1]
-            left = (
-                0.0
-                if left_denominator == 0.0
-                else (x - knots[idx]) / left_denominator * values[idx]
-            )
-            right = (
-                0.0
-                if right_denominator == 0.0
-                else (knots[idx + current_order] - x) / right_denominator * values[idx + 1]
-            )
-            next_values[idx] = left + right
-        values = next_values
-    return values[:n_basis]
-
-
-def _pspline_basis_derivative_row(
-    knots: Sequence[float],
-    x: float,
-    order: int,
-) -> list[float]:
-    lower_order = _pspline_basis_row(knots, x, order - 1)
-    n_basis = len(knots) - order
-    result: list[float] = []
-    for idx in range(n_basis):
-        left_denominator = knots[idx + order - 1] - knots[idx]
-        right_denominator = knots[idx + order] - knots[idx + 1]
-        left = 0.0 if left_denominator == 0.0 else (order - 1) / left_denominator * lower_order[idx]
-        right = (
-            0.0
-            if right_denominator == 0.0
-            else (order - 1) / right_denominator * lower_order[idx + 1]
-        )
-        result.append(left - right)
-    return result
-
-
 def _pspline_difference_penalty(n_cols: int) -> list[list[float]]:
     if n_cols == 0:
         return []
@@ -4887,7 +4837,6 @@ def pspline(
     degree_value = _integer_scalar(degree, "degree")
     if degree_value < 1:
         raise ValueError("degree must be positive")
-    order = degree_value + 1
     intercept_value = _normalize_bool_option(intercept, "intercept")
     penalty_value = _normalize_bool_option(penalty, "penalty")
 
@@ -4908,43 +4857,17 @@ def pspline(
         if len(boundary_values) != 2:
             raise ValueError("Invalid values for Boundary.knots")
         boundary = (boundary_values[0], boundary_values[1])
-    if (
-        not math.isfinite(boundary[0])
-        or not math.isfinite(boundary[1])
-        or boundary[0] >= boundary[1]
-    ):
+    if not math.isfinite(boundary[0]) or not math.isfinite(boundary[1]):
+        raise ValueError("Invalid values for Boundary.knots")
+    if boundary[0] > boundary[1] or (boundary_arg is not None and boundary[0] == boundary[1]):
         raise ValueError("Invalid values for Boundary.knots")
 
-    dx = (boundary[1] - boundary[0]) / nterm_value
-    knots = [boundary[0] + dx * idx for idx in range(-degree_value, nterm_value)] + [
-        boundary[1] + dx * idx for idx in range(0, degree_value + 1)
-    ]
-
-    left_basis = _pspline_basis_row(knots, boundary[0], order)
-    left_derivative = _pspline_basis_derivative_row(knots, boundary[0], order)
-    right_basis = _pspline_basis_row(knots, boundary[1], order)
-    right_derivative = _pspline_basis_derivative_row(knots, boundary[1], order)
-
-    full_matrix: list[list[float]] = []
-    for value in x_values:
-        if math.isnan(value):
-            full_matrix.append([math.nan] * (nterm_value + degree_value))
-        elif value < boundary[0]:
-            full_matrix.append(
-                [
-                    basis + (value - boundary[0]) * derivative
-                    for basis, derivative in zip(left_basis, left_derivative, strict=True)
-                ]
-            )
-        elif value > boundary[1]:
-            full_matrix.append(
-                [
-                    basis + (value - boundary[1]) * derivative
-                    for basis, derivative in zip(right_basis, right_derivative, strict=True)
-                ]
-            )
-        else:
-            full_matrix.append(_pspline_basis_row(knots, value, order))
+    full_matrix, knots = _core.pspline_basis(
+        x_values,
+        nterm_value,
+        degree_value,
+        boundary,
+    )
 
     full_matrix, combine_values = _pspline_combine_matrix(
         full_matrix,

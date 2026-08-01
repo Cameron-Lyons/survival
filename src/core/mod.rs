@@ -8,4 +8,4 @@ pub(crate) mod pspline;
 pub use coxcount1_module::{CoxCountOutput, coxcount1, coxcount2};
 pub use coxscho::schoenfeld_residuals;
 pub use nsk_module::{NaturalSplineKnot, SplineBasisResult, nsk};
-pub use pspline::PSpline;
+pub use pspline::{PSpline, pspline_basis};

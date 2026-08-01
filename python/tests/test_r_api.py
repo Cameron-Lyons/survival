@@ -3663,6 +3663,8 @@ def test_r_style_pspline_builds_survival_basis_contract():
         df=3,
         combine=[1] * 10,
     )
+    constant = survival.pspline([2.0, 2.0, 2.0], df=2)
+    missing = survival.pspline([1.0, float("nan"), 2.0], df=2)
 
     assert survival.pspline is survival.r_api.pspline
     assert basis["method"] == "df"
@@ -3687,6 +3689,10 @@ def test_r_style_pspline_builds_survival_basis_contract():
     assert aic["n_cols"] == 17
     assert combined["combine"] == [1] * 10
     assert combined["n_cols"] == 1
+    assert constant["boundary_knots"] == [2.0, 2.0]
+    assert constant["basis"][0] == pytest.approx([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    assert constant["basis"] == [constant["basis"][0]] * 3
+    assert all(math.isnan(value) for value in missing["basis"][1])
 
     with pytest.raises(ValueError, match="Invalid value for theta"):
         survival.pspline([1.0, 2.0, 3.0], theta=1.0)

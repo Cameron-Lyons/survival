@@ -846,6 +846,7 @@ BINDINGS = (
     "pseudo",
     "pseudo_fast",
     "pseudo_gee_regression",
+    "pspline_basis",
     "publication_bias_tests",
     "pwp_gap_time",
     "pwp_model",

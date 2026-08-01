@@ -9135,6 +9135,7 @@ def test_core_utility_bindings_are_typed():
         "SplineBasisResult",
         "PSpline",
         "nsk",
+        "pspline_basis",
         "cox_score_residuals",
         "schoenfeld_residuals",
         "concordance",
@@ -9171,6 +9172,7 @@ def test_core_utility_bindings_are_typed():
 
     expected_args = {
         "nsk": ["x", "df", "knots", "boundary_knots"],
+        "pspline_basis": ["x", "nterm", "degree", "boundary_knots"],
         "cox_score_residuals": ["y", "strata", "covar", "score", "weights", "nvar", "method"],
         "schoenfeld_residuals": ["y", "score", "strata", "covar", "nvar", "method"],
         "concordance": ["y", "x", "wt", "timewt", "sortstart", "sortstop"],
@@ -9178,6 +9180,17 @@ def test_core_utility_bindings_are_typed():
     for name, args in expected_args.items():
         assert list(inspect.signature(getattr(core, name)).parameters) == args
         assert _pyi_function_arg_names(stub_path, name) == args
+
+    constant_basis, constant_knots = core.pspline_basis(
+        [2.0, float("nan"), 2.0],
+        5,
+        3,
+        (2.0, 2.0),
+    )
+    assert constant_basis[0] == pytest.approx([0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    assert all(math.isnan(value) for value in constant_basis[1])
+    assert constant_basis[2] == pytest.approx(constant_basis[0])
+    assert constant_knots == pytest.approx([2.0] * 12)
 
     assert _pyi_class_annotation_names(stub_path, "CovariateMatrix") == {
         "values",
