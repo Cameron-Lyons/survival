@@ -198,6 +198,37 @@ def test_strata_counts_high_cardinality_levels_once():
     assert result.counts == [1] * len(values)
 
 
+def test_strata_matches_r_multicolumn_label_padding():
+    result = survival.strata(
+        ["b", "a", None, "b"],
+        [2, 1, 1, None],
+        [True, False, None, True],
+        na_group=True,
+        labels=["x", "y", "z"],
+    )
+    short = survival.strata(
+        ["b", "a", None, "b"],
+        [2, 1, 1, None],
+        [True, False, None, True],
+        na_group=True,
+        shortlabel=True,
+    )
+
+    assert result.codes == [2, 1, 4, 3]
+    assert result.levels == [
+        "x=a, y=1 , z=FALSE",
+        "x=b, y=2 , z=TRUE ",
+        "x=b, y=NA, z=TRUE ",
+        "x=NA, y=1 , z=NA   ",
+    ]
+    assert short.levels == [
+        "a, 1, FALSE",
+        "b, 2, TRUE",
+        "b, NA, TRUE",
+        "NA, 1, NA",
+    ]
+
+
 def test_strata_compaction_matches_python_reference():
     rng = random.Random(20260801)  # noqa: S311
     for _ in range(300):
