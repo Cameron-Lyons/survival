@@ -32,6 +32,7 @@ __all__ = bind_names(
         "IntervalResult",
         "TimelineResult",
         "from_timeline",
+        "lvcf_indices",
         "to_timeline",
         "tmerge",
         "tmerge2",

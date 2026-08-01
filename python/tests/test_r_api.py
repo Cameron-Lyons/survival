@@ -853,6 +853,18 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
 def test_lvcf_and_nostutter_match_r_data_prep_helpers():
     carried = survival.lvcf([1, 1, 1, 2, 2], [10.0, None, 12.0, None, 20.0])
     carried_by_time = survival.lvcf([1, 1, 1], [None, 10.0, None], time=[2.0, 1.0, 3.0])
+    carried_with_missing_time = survival.lvcf([1, 1, 1], [10.0, None, 20.0], time=[1.0, None, 2.0])
+    carried_with_infinite_time = survival.lvcf(
+        [1, 1, 1], [10.0, None, 20.0], time=[1.0, math.inf, 2.0]
+    )
+    carried_with_negative_infinity = survival.lvcf(
+        [1, 1, 1], [10.0, None, 20.0], time=[1.0, -math.inf, 2.0]
+    )
+    carried_by_character_time = survival.lvcf([1, 1, 1], ["x", None, None], time=["b", "a", "c"])
+    factor_id = survival.r_api._r_factor(["b", "a", "b", "a"], ["b", "a"])
+    carried_by_factor_id = survival.lvcf(factor_id, [None, 1, 2, None])
+    factor_time = survival.r_api._r_factor(["b", "a", "c"], ["c", "b", "a"])
+    carried_by_factor_time = survival.lvcf([1, 1, 1], ["x", None, None], factor_time)
     stuttered = survival.nostutter([1, 1, 1, 2, 2], [0, 1, 1, 1, 1])
     stuttered_with_missing = survival.nostutter([1, 1, 1], [None, 1, 1])
     stuttered_single = survival.nostutter(
@@ -865,6 +877,12 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
 
     assert carried == [10.0, 10.0, 12.0, None, 20.0]
     assert carried_by_time == [10.0, 10.0, 10.0]
+    assert carried_with_missing_time == [10.0, 20.0, 20.0]
+    assert carried_with_infinite_time == [10.0, 20.0, 20.0]
+    assert carried_with_negative_infinity == [10.0, None, 20.0]
+    assert carried_by_character_time == ["x", None, "x"]
+    assert carried_by_factor_id == [None, 1, 2, 1]
+    assert carried_by_factor_time == ["x", "x", None]
     assert stuttered == [0, 1, 0, 1, 0]
     assert stuttered_with_missing == [None, 1, 0]
     assert stuttered_single == [1, 2, 0, 3, 1, 0, 2]
@@ -873,8 +891,6 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
 
     with pytest.raises(ValueError, match="same length"):
         survival.lvcf([1], [1, None])
-    with pytest.raises(ValueError, match="finite"):
-        survival.lvcf([1], [1], time=[float("inf")])
     with pytest.raises(ValueError, match="missing"):
         survival.nostutter([1, None], [0, 1])
 
