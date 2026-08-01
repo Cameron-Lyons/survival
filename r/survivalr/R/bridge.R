@@ -4961,6 +4961,319 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
   out
 }
 
+`[.aareg` <- function(x, ..., drop = FALSE) {
+  if (!inherits(x, "aareg")) stop("Must be an aareg object")
+  index <- ..1
+  if (is.matrix(x$coefficient)) {
+    x$coefficient <- x$coefficient[, index, drop = drop]
+    x$tweight <- x$tweight[, index, drop = drop]
+  } else {
+    stop("Subsripting impossible, coefficient component not a matrix")
+  }
+  if (!is.null(x$dfbeta)) {
+    x$dfbeta <- x$dfbeta[, index, , drop = drop]
+    x$test.var2 <- x$test.var2[index, index, drop = drop]
+  }
+  x$test.statistic <- x$test.statistic[index, drop = drop]
+  x$test.var <- x$test.var[index, index, drop = drop]
+  x
+}
+
+labels.aareg <- function(object, ...) {
+  attr(object$terms, "term.labels")
+}
+
+.aareg_plot_data <- function(x, se = FALSE, maxtime) {
+  if (!inherits(x, "aareg")) stop("Must be an aareg object")
+  keep <- if (missing(maxtime)) {
+    seq_along(x$times)
+  } else {
+    seq_len(sum(x$times <= maxtime))
+  }
+  if (is.matrix(x$coefficient) && ncol(x$coefficient) > 1L) {
+    cumulative <- apply(x$coefficient[keep, , drop = FALSE], 2L, cumsum)
+    cumulative <- rbind(0, cumulative)
+    if (se) {
+      if (!is.null(x$dfbeta)) {
+        dimensions <- dim(x$dfbeta)
+        unique_times <- seq_along(unique(x$times[keep]))
+        influence <- matrix(x$dfbeta[, , unique_times, drop = FALSE], nrow = dimensions[[1L]])
+        increments <- matrix(apply(influence^2, 2L, sum), nrow = dimensions[[2L]])
+        standard_error <- sqrt(apply(t(increments), 2L, cumsum))
+      } else {
+        standard_error <- sqrt(apply(x$coefficient[keep, , drop = FALSE]^2, 2L, cumsum))
+      }
+      standard_error <- rbind(0, standard_error)
+    }
+    curve_count <- ncol(cumulative)
+  } else {
+    cumulative <- cumsum(c(0, x$coefficient[keep]))
+    if (se) {
+      if (!is.null(x$dfbeta)) {
+        dimensions <- dim(x$dfbeta)
+        unique_times <- seq_along(unique(x$times[keep]))
+        influence <- matrix(x$dfbeta[, , unique_times, drop = FALSE], nrow = dimensions[[1L]])
+        standard_error <- sqrt(cumsum(c(0, apply(influence^2, 2L, sum))))
+      } else {
+        standard_error <- sqrt(cumsum(c(0, x$coefficient[keep]^2)))
+      }
+    }
+    curve_count <- 1L
+  }
+  time <- c(0, x$times[keep])
+  last_at_time <- 1L + length(time) - rev(match(unique(rev(time)), rev(time)))
+  time <- time[last_at_time]
+  cumulative <- as.matrix(cumulative)[last_at_time, , drop = FALSE]
+  if (se && is.null(x$dfbeta)) {
+    standard_error <- as.matrix(standard_error)[last_at_time, , drop = FALSE]
+  }
+  list(
+    time = time,
+    cumulative = cumulative,
+    standard_error = if (se) standard_error else NULL,
+    curve_count = curve_count,
+    labels = names(x$test.statistic)
+  )
+}
+
+lines.aareg <- function(x, se = FALSE, maxtime, type = "s", ...) {
+  curves <- if (missing(maxtime)) {
+    .aareg_plot_data(x, se = se)
+  } else {
+    .aareg_plot_data(x, se = se, maxtime = maxtime)
+  }
+  if (se) {
+    values <- cbind(
+      curves$cumulative,
+      curves$cumulative + 1.96 * curves$standard_error,
+      curves$cumulative - 1.96 * curves$standard_error
+    )
+    if (curves$curve_count > 1L) {
+      for (i in seq_len(curves$curve_count)) {
+        columns <- c(i, i + curves$curve_count, i + 2L * curves$curve_count)
+        graphics::matlines(
+          curves$time,
+          values[, columns],
+          type = type,
+          ...,
+          col = 1,
+          lty = c(1, 2, 2)
+        )
+      }
+    } else {
+      graphics::matlines(
+        curves$time,
+        values,
+        type = type,
+        ...,
+        col = 1,
+        lty = c(1, 2, 2)
+      )
+    }
+  } else {
+    graphics::matlines(curves$time, curves$cumulative, type = type, ..., xlab = "Time")
+  }
+}
+
+plot.aareg <- function(x, se = TRUE, maxtime, type = "s", ...) {
+  curves <- if (missing(maxtime)) {
+    .aareg_plot_data(x, se = se)
+  } else {
+    .aareg_plot_data(x, se = se, maxtime = maxtime)
+  }
+  if (se) {
+    values <- cbind(
+      curves$cumulative,
+      curves$cumulative + 1.96 * curves$standard_error,
+      curves$cumulative - 1.96 * curves$standard_error
+    )
+    if (curves$curve_count > 1L) {
+      for (i in seq_len(curves$curve_count)) {
+        columns <- c(i, i + curves$curve_count, i + 2L * curves$curve_count)
+        graphics::matplot(
+          curves$time,
+          values[, columns],
+          type = type,
+          ...,
+          col = 1,
+          lty = c(1, 2, 2),
+          xlab = "Time",
+          ylab = curves$labels[[i]]
+        )
+      }
+    } else {
+      graphics::matplot(
+        curves$time,
+        values,
+        type = type,
+        ...,
+        col = 1,
+        lty = c(1, 2, 2),
+        xlab = "Time",
+        ylab = curves$labels
+      )
+    }
+  } else {
+    graphics::matplot(curves$time, curves$cumulative, type = type, ..., xlab = "Time")
+  }
+}
+
+summary.aareg <- function(object, maxtime, test = c("aalen", "nrisk"), scale = 1, ...) {
+  if (!inherits(object, "aareg")) stop("Must be an aareg object")
+  if (missing(test)) test <- object$test
+  test <- match.arg(test)
+  time_count <- if (missing(maxtime)) {
+    nrow(object$coefficient)
+  } else {
+    sum(object$times <= maxtime)
+  }
+  times <- object$times[seq_len(time_count)]
+  if (test == "aalen") {
+    time_weight <- as.matrix(object$tweight)[seq_len(time_count), , drop = FALSE]
+    scale <- apply(time_weight, 2L, sum) / scale
+  } else {
+    time_weight <- object$nrisk[seq_len(time_count)]
+    scale <- time_count / scale
+  }
+  weighted_coefficient <- as.matrix(time_weight * object$coefficient[seq_len(time_count), ])
+  cumulative <- apply(weighted_coefficient, 2L, cumsum)
+  time_variance <- if (is.matrix(time_weight) && ncol(time_weight) > 1L) {
+    apply(time_weight * times^2, 2L, sum)
+  } else {
+    sum(time_weight * times^2)
+  }
+  slope <- if (ncol(cumulative) > 1L) {
+    apply(cumulative * times, 2L, sum) / time_variance
+  } else {
+    sum(cumulative * times) / time_variance
+  }
+
+  if (!missing(maxtime) || object$test != test) {
+    test_statistic <- apply(weighted_coefficient, 2L, sum)
+    test_variance <- t(weighted_coefficient) %*% weighted_coefficient
+    if (!is.null(object$dfbeta)) {
+      dimensions <- dim(object$dfbeta)
+      indices <- match(unique(times), object$times)
+      influence <- matrix(0, dimensions[[1L]], dimensions[[2L]])
+      for (i in seq_along(indices)) {
+        if (test == "aalen") {
+          influence <- influence + object$dfbeta[, , i] %*% diag(time_weight[indices[[i]], ])
+        } else {
+          influence <- influence + object$dfbeta[, , i] * object$nrisk[indices[[i]]]
+        }
+      }
+      if (!is.null(object$cluster)) influence <- rowsum(influence, object$cluster)
+      robust_variance <- t(influence) %*% influence
+    } else {
+      robust_variance <- NULL
+    }
+  } else {
+    test_statistic <- object$test.statistic
+    test_variance <- object$test.var
+    robust_variance <- object$test.var2
+  }
+
+  standard_error <- sqrt(diag(test_variance))
+  if (is.null(robust_variance)) {
+    table <- cbind(
+      slope,
+      test_statistic / scale,
+      standard_error / scale,
+      test_statistic / standard_error,
+      2 * stats::pnorm(-abs(test_statistic / standard_error))
+    )
+    dimnames(table) <- list(
+      dimnames(object$coefficient)[[2L]],
+      c("slope", "coef", "se(coef)", "z", "p")
+    )
+    chi_square <- test_statistic[-1L] %*%
+      solve(test_variance[-1L, -1L], test_statistic[-1L])
+  } else {
+    robust_error <- sqrt(diag(robust_variance))
+    table <- cbind(
+      slope,
+      test_statistic / scale,
+      standard_error / scale,
+      robust_error / scale,
+      test_statistic / robust_error,
+      2 * stats::pnorm(-abs(test_statistic / robust_error))
+    )
+    dimnames(table) <- list(
+      dimnames(object$coefficient)[[2L]],
+      c("slope", "coef", "se(coef)", "robust se", "z", "p")
+    )
+    chi_square <- test_statistic[-1L] %*%
+      solve(robust_variance[-1L, -1L], test_statistic[-1L])
+  }
+  structure(
+    list(
+      table = table,
+      test = test,
+      test.statistic = test_statistic,
+      test.var = test_variance,
+      test.var2 = robust_variance,
+      chisq = chi_square,
+      n = c(object$n[[1L]], length(unique(times)), object$n[[3L]])
+    ),
+    class = "summary.aareg"
+  )
+}
+
+print.summary.aareg <- function(x, ...) {
+  print(signif(x$table, 3))
+  degrees_freedom <- length(x$test.statistic) - 1L
+  probability_digits <- max(1, getOption("digits") - 4)
+  cat(
+    "\nChisq=", format(round(x$chisq, 2)), " on ", degrees_freedom, " df, p=",
+    base::format.pval(
+      stats::pchisq(x$chisq, degrees_freedom, lower.tail = FALSE),
+      digits = probability_digits
+    ),
+    "; test weights=", x$test, "\n",
+    sep = ""
+  )
+  invisible(x$table)
+}
+
+print.aareg <- function(x, maxtime, test = c("aalen", "nrisk"), scale = 1, ...) {
+  if (!inherits(x, "aareg")) stop("Must be an addreg object")
+  if (!is.null(call <- x$call)) {
+    cat("Call:\n")
+    dput(call)
+    cat("\n")
+  }
+  if (missing(test)) {
+    test <- x$test
+  } else {
+    test <- match.arg(test)
+  }
+  result <- if (missing(maxtime)) {
+    summary.aareg(x, test = test, scale = scale)
+  } else {
+    summary.aareg(x, maxtime = maxtime, test = test, scale = scale)
+  }
+  omitted <- x$na.action
+  if (length(omitted)) {
+    cat("  n=", x$n[[1L]], " (", stats::naprint(omitted), ")\n", sep = "")
+  } else {
+    cat("  n=", x$n[[1L]], "\n")
+  }
+  cat("   ", result$n[[2L]], "out of", x$n[[3L]], "unique event times used\n\n")
+  print(signif(result$table, 3))
+  degrees_freedom <- nrow(result$table) - 1L
+  probability_digits <- max(1, getOption("digits") - 4)
+  cat(
+    "\nChisq=", format(round(result$chisq, 2)), " on ", degrees_freedom, " df, p=",
+    base::format.pval(
+      stats::pchisq(result$chisq, degrees_freedom, lower.tail = FALSE),
+      digits = probability_digits
+    ),
+    "; test weights=", x$test, "\n",
+    sep = ""
+  )
+  invisible(x)
+}
+
 cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
                 method = c("Prentice", "SelfPrentice", "LinYing",
                            "I.Borgan", "II.Borgan"),

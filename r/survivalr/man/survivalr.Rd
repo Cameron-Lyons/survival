@@ -5,6 +5,13 @@
 \alias{Surv2}
 \alias{Surv2data}
 \alias{aareg}
+\alias{[.aareg}
+\alias{labels.aareg}
+\alias{lines.aareg}
+\alias{plot.aareg}
+\alias{print.aareg}
+\alias{print.summary.aareg}
+\alias{summary.aareg}
 \alias{agexact.fit}
 \alias{agreg.fit}
 \alias{attrassign}
@@ -367,6 +374,22 @@ aareg(formula, data, weights, subset, na.action, qrtol = 1e-07,
   nmin, dfbeta = FALSE, taper = 1,
   test = c("aalen", "variance", "nrisk"), cluster,
   model = FALSE, x = FALSE, y = FALSE)
+
+\method{[}{aareg}(x, ..., drop = FALSE)
+
+\method{labels}{aareg}(object, ...)
+
+\method{lines}{aareg}(x, se = FALSE, maxtime, type = "s", ...)
+
+\method{plot}{aareg}(x, se = TRUE, maxtime, type = "s", ...)
+
+\method{print}{aareg}(x, maxtime, test = c("aalen", "nrisk"),
+  scale = 1, ...)
+
+\method{summary}{aareg}(object, maxtime, test = c("aalen", "nrisk"),
+  scale = 1, ...)
+
+\method{print}{summary.aareg}(x, ...)
 
 attrassign(object, ...)
 
@@ -1012,7 +1035,8 @@ long data frame instead of a matrix.}
 \code{cipoisson} and the survival probabilities for
 \code{survfit_confint}.}
 \item{probs}{Survival quantile probabilities.}
-\item{se}{Standard-error vector for \code{survfit_confint}.}
+\item{se}{Standard-error vector for \code{survfit_confint}, or logical flag
+controlling confidence curves for \code{aareg} plots.}
 \item{logse}{Logical flag indicating whether \code{se} is already on the
 log-survival scale for \code{survfit_confint}.}
 \item{conf.type}{Confidence interval transform for \code{survfit_confint}
@@ -1086,7 +1110,9 @@ supported.}
 summary coefficients, the standard \code{extractAIC} scale argument, divisor
 for survival quantile and \code{summary.survival_py_survfit} times, or a
 logical flag controlling whether \code{ridge} scales the penalty by column
-variance.}
+variance. It also scales \code{aareg} summary coefficients.}
+\item{maxtime}{Optional upper time limit for \code{aareg} summaries and
+cumulative-coefficient plots.}
 \item{k}{Penalty multiplier for \code{extractAIC}, or observed Poisson event
 count for \code{cipoisson}.}
 \item{test}{Test name for bridged model analysis of variance, \code{aareg}
