@@ -823,6 +823,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "offset",
             "method",
             "center",
+            "riskmat",
         ],
     }
     for name, args in expected_args.items():
@@ -907,6 +908,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     }
     assert _pyi_class_property_names(stub_path, "CoxphDetail") == {
         "rows",
+        "riskmat",
         "n_events",
         "n_observations",
         "n_covariates",
@@ -1001,6 +1003,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     assert detail.n_events == sum(status)
     assert detail.n_observations == len(time)
     assert detail.n_covariates == 1
+    assert detail.riskmat is None
     assert len(detail.rows) == sum(status)
     assert detail.times() == pytest.approx([1.0, 3.0, 4.0, 6.0, 8.0])
     assert len(detail.hazards()) == sum(status)
@@ -1012,6 +1015,17 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     assert len(detail.variance_hazards()) == sum(status)
     assert len(detail.weighted_risk()) == sum(status)
     assert len(detail.schoenfeld_residuals()) == sum(status)
+
+    detail_with_riskmat = core.coxph_detail(
+        time,
+        status,
+        covariates,
+        fit.coefficients[-1],
+        riskmat=True,
+    )
+    assert detail_with_riskmat.riskmat is not None
+    assert detail_with_riskmat.riskmat[0] == [1, 0, 0, 0, 0]
+    assert detail_with_riskmat.riskmat[-1] == [1, 1, 1, 1, 1]
 
     first_row = detail.rows[0]
     assert type(first_row).__name__ == "CoxphDetailRow"

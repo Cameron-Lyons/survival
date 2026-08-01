@@ -1106,6 +1106,8 @@ class CoxphDetail:
     @property
     def rows(self) -> list[CoxphDetailRow]: ...
     @property
+    def riskmat(self) -> list[list[int]] | None: ...
+    @property
     def n_events(self) -> int: ...
     @property
     def n_observations(self) -> int: ...
@@ -6800,6 +6802,7 @@ def coxph_detail(
     offset: list[float] | None = None,
     method: str = "breslow",
     center: float = 0.0,
+    riskmat: bool = False,
 ) -> CoxphDetail: ...
 def clustered_crossprod(
     rows: list[list[float]],
