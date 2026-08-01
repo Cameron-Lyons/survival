@@ -547,6 +547,12 @@ class CondenseResult:
     @property
     def row_map(self) -> list[list[int]]: ...
 
+class CondensePlanResult:
+    @property
+    def start(self) -> list[float]: ...
+    @property
+    def keep(self) -> list[int]: ...
+
 class TcutResult:
     @property
     def values(self) -> list[float]: ...
@@ -5732,6 +5738,12 @@ def survcondense(
     time2: list[float],
     status: list[int],
 ) -> CondenseResult: ...
+def survcondense_plan(
+    id_order: list[int],
+    start: list[float],
+    stop: list[float],
+    row_code: list[int],
+) -> CondensePlanResult: ...
 def tcut(
     value: list[float],
     breaks: float | list[float],

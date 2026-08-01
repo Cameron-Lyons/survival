@@ -23,6 +23,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge3, m)?)?;
     m.add_function(wrap_pyfunction!(survsplit, m)?)?;
     m.add_function(wrap_pyfunction!(survcondense, m)?)?;
+    m.add_function(wrap_pyfunction!(survcondense_plan, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline_rows, m)?)?;
@@ -46,6 +47,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_classes!(
         m,
         SplitResult,
+        CondensePlanResult,
         CondenseResult,
         Surv2DataResult,
         Surv2TimelineResult,

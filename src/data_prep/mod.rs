@@ -36,7 +36,9 @@ pub use surv2data_module::{
     FromTimelineRowsResult, Surv2DataResult, Surv2TimelineResult, from_timeline_rows, surv2data,
     surv2data_timeline,
 };
-pub use survcondense_module::{CondenseResult, survcondense};
+pub use survcondense_module::{
+    CondensePlanResult, CondenseResult, survcondense, survcondense_plan,
+};
 pub use survsplit_module::{SplitResult, survsplit};
 pub use tcut_module::{TcutResult, tcut, tcut_expand};
 pub use timeline::{IntervalResult, TimelineResult, from_timeline, to_timeline};

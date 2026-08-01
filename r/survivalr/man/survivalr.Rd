@@ -46,6 +46,8 @@
 \alias{blog}
 \alias{aeqSurv}
 \alias{tcut}
+\alias{[.tcut}
+\alias{levels.tcut}
 \alias{neardate}
 \alias{lvcf}
 \alias{nostutter}
@@ -735,6 +737,10 @@ yates_setup(fit, ...)
 survival_python_config()
 
 tcut(x, breaks, labels, scale = 1)
+
+\method{[}{tcut}(x, ..., drop = FALSE)
+
+\method{levels}{tcut}(x)
 
 neardate(id1, id2, y1, y2, best = c("after", "prior"),
   nomatch = NA_integer_)
