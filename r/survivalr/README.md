@@ -30,6 +30,10 @@ custom four-argument transform function.
 kernel directly, including weights, subsets, missing-data handling, strata,
 counting-process histories, and delayed entry. Censoring risk sets are computed
 with sorted sweeps, and factor and `I(...)` column classes are restored in R.
+Low-level `coxsurv.fit` and `survfitcoxph.fit` calls use a Rust risk-set sweep
+for weighted, stratified, tied-event, and counting-process baselines. Their R
+assembly preserves multiple prediction rows, standard errors, and individual
+time-dependent trajectories.
 Low-level `survreg.fit` calls for the built-in extreme-value, logistic,
 Gaussian, and Student-t distributions use the Rust AFT optimizer directly.
 The returned coefficient, null-fit, covariance, likelihood, score, and linear

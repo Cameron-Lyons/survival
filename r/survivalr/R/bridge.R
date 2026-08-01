@@ -62,6 +62,21 @@ if (getRversion() >= "2.15.1") {
   reticulate::py_get_attr(.survival_regression_module(), name)
 }
 
+.survival_analysis_module <- local({
+  module <- NULL
+
+  function() {
+    if (is.null(module)) {
+      module <<- reticulate::import("survival.surv_analysis", convert = TRUE)
+    }
+    module
+  }
+})
+
+.survival_analysis_attr <- function(name) {
+  reticulate::py_get_attr(.survival_analysis_module(), name)
+}
+
 .survival_residuals_module <- local({
   module <- NULL
 
@@ -446,11 +461,17 @@ attrassign.lm <- function(object, ...) {
 }
 
 .survsplit_response_names <- function(formula, response) {
+  response_expr <- formula[[2L]]
+  if (is.call(response_expr)) {
+    args <- as.list(response_expr[-1L])
+    if (length(args) >= 2L && all(vapply(args, is.name, logical(1)))) {
+      return(vapply(args, as.character, character(1)))
+    }
+  }
   response_names <- colnames(response)
   if (!is.null(response_names) && length(response_names) >= 2L) {
     return(response_names)
   }
-  response_expr <- formula[[2L]]
   if (!is.call(response_expr)) {
     return(character())
   }
@@ -498,8 +519,18 @@ attrassign.lm <- function(object, ...) {
   stop("Surv response requires at least two arguments", call. = FALSE)
 }
 
+.warn_deprecated_surv_mstate_type <- function(type) {
+  if (identical(type, "mstate")) {
+    warning(
+      "type= 'mstate' is deprecated, use a factor variable as status",
+      call. = FALSE
+    )
+  }
+}
+
 .survsplit_model_frame_surv <- function(time, time2, event, type = NULL,
                                         origin = 0, time1, start, stop, status) {
+  .warn_deprecated_surv_mstate_type(type)
   use_named_response <- !missing(time1) || !missing(start) ||
     !missing(stop) || !missing(status)
 
@@ -534,6 +565,10 @@ attrassign.lm <- function(object, ...) {
     if (!missing(event)) {
       args <- c(args, list(event))
     }
+  }
+  factor_response <- .surv_factor_response(args, type = type, origin = origin)
+  if (!is.null(factor_response)) {
+    return(factor_response)
   }
   args <- c(args, .compact_null(list(type = type, origin = origin)))
   .survsplit_minimal_surv(args)
@@ -1420,6 +1455,10 @@ attrassign.lm <- function(object, ...) {
   do.call(.regression_attr(name), .compact_null(list(...)))
 }
 
+.call_survival_analysis <- function(name, ...) {
+  do.call(.survival_analysis_attr(name), .compact_null(list(...)))
+}
+
 .core_nsk_basis <- function(x, df, knots, intercept, boundary_knots) {
   constructor <- .core_attr("NaturalSplineKnot")
   boundary_knots <- do.call(reticulate::tuple, as.list(as.numeric(boundary_knots)))
@@ -2229,6 +2268,8 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   }
   matched_type <- if (is.null(type)) {
     NULL
+  } else if (identical(type, "mstate")) {
+    "mstate"
   } else {
     match.arg(type, c("right", "left", "interval", "counting", "interval2"))
   }
@@ -2265,6 +2306,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
 
 .native_model_frame_surv <- function(time, time2, event, type = NULL,
                                      origin = 0, time1, start, stop, status) {
+  .warn_deprecated_surv_mstate_type(type)
   use_named_response <- !missing(time1) || !missing(start) ||
     !missing(stop) || !missing(status)
 
@@ -2309,6 +2351,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
 }
 
 Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop, status) {
+  .warn_deprecated_surv_mstate_type(type)
   use_named_response <- !missing(time1) || !missing(start) ||
     !missing(stop) || !missing(status)
 
@@ -4672,20 +4715,307 @@ tmerge <- function(data1, data2, id, ..., tstart, tstop, options) {
   output
 }
 
+.coxsurv_baseline <- function(y, x, wt, risk, survtype, vartype) {
+  y <- as.matrix(y)
+  x <- as.matrix(x)
+  if (!ncol(y) %in% c(2L, 3L)) {
+    stop("y must have 2 or 3 columns", call. = FALSE)
+  }
+  if (nrow(x) != nrow(y)) {
+    stop("x and y have different numbers of rows", call. = FALSE)
+  }
+  result <- .call_survival_analysis(
+    "cox_survfit_baseline",
+    y = y,
+    x = x,
+    weights = .as_python_vector(as.numeric(wt)),
+    risk = .as_python_vector(as.numeric(risk)),
+    survtype = as.integer(survtype),
+    vartype = as.integer(vartype)
+  )
+  out <- list(
+    n = as.integer(.result_field(result, "n")),
+    time = .as_numeric_vector(.result_field(result, "time")),
+    n.event = .as_numeric_vector(.result_field(result, "n_event")),
+    n.risk = .as_numeric_vector(.result_field(result, "n_risk")),
+    n.censor = .as_numeric_vector(.result_field(result, "n_censor")),
+    hazard = .as_numeric_vector(.result_field(result, "hazard")),
+    cumhaz = .as_numeric_vector(.result_field(result, "cumhaz")),
+    varhaz = .as_numeric_vector(.result_field(result, "varhaz")),
+    ndeath = matrix(
+      .as_numeric_vector(.result_field(result, "ndeath")),
+      ncol = 1L
+    ),
+    xbar = .as_numeric_matrix(.result_field(result, "xbar"))
+  )
+  survival_steps <- .result_field(result, "surv")
+  if (!is.null(survival_steps)) {
+    out$surv <- .as_numeric_vector(survival_steps)
+  }
+  dimnames(out$ndeath) <- list(as.character(out$time), NULL)
+  out
+}
+
+.coxsurv_coefficient_variance <- function(hazard, xbar, xrow, varmat) {
+  ntime <- length(hazard)
+  if (length(xrow) == 0L) {
+    return(rep(0, ntime))
+  }
+  delta <- outer(hazard, as.numeric(xrow), "*") - xbar
+  delta <- apply(delta, 2L, cumsum)
+  if (ntime == 1L) {
+    delta <- matrix(delta, nrow = 1L)
+  }
+  rowSums((delta %*% varmat) * delta)
+}
+
+.coxsurv_expand <- function(fit, x2, risk2, varmat, se.fit, survtype) {
+  baseline_survival <- if (survtype == 1L) {
+    cumprod(fit$surv)
+  } else {
+    exp(-fit$cumhaz)
+  }
+  if (is.matrix(x2) && nrow(x2) > 1L) {
+    fit$surv <- outer(baseline_survival, risk2, "^")
+    dimnames(fit$surv) <- list(NULL, row.names(x2))
+    if (se.fit) {
+      variance <- vapply(seq_len(nrow(x2)), function(index) {
+        coefficient_variance <- .coxsurv_coefficient_variance(
+          fit$hazard,
+          fit$xbar,
+          x2[index, ],
+          varmat
+        )
+        (cumsum(fit$varhaz) + coefficient_variance) * risk2[index]^2
+      }, numeric(length(fit$varhaz)))
+      if (length(fit$varhaz) == 1L) {
+        variance <- matrix(variance, nrow = 1L)
+      }
+      fit$std.err <- sqrt(variance)
+    }
+    fit$cumhaz <- outer(fit$cumhaz, risk2, "*")
+  } else {
+    fit$surv <- baseline_survival^risk2
+    if (se.fit) {
+      coefficient_variance <- .coxsurv_coefficient_variance(
+        fit$hazard,
+        fit$xbar,
+        c(x2),
+        varmat
+      )
+      fit$std.err <- sqrt(
+        (cumsum(fit$varhaz) + coefficient_variance) * risk2^2
+      )
+    }
+    fit$cumhaz <- fit$cumhaz * risk2
+  }
+  fit
+}
+
+.coxsurv_one_curve <- function(survlist, x2, y2, strata2, risk2, se.fit,
+                               survtype, varmat, strata) {
+  ntarget <- nrow(x2)
+  time <- hazard <- survival_step <- n.event <- n.risk <- n.censor <-
+    variance_step <- delta <- vector("list", ntarget)
+  stratum_index <- as.integer(strata2)
+  time_offset <- 0
+  for (index in seq_len(ntarget)) {
+    if (index > 1L) {
+      time_offset <- time_offset + y2[index - 1L, 2L] - y2[index, 1L]
+    }
+    baseline <- survlist[[stratum_index[index]]]
+    keep <- which(baseline$time > y2[index, 1L] & baseline$time <= y2[index, 2L])
+    if (length(keep) == 0L) {
+      next
+    }
+    time[[index]] <- time_offset + baseline$time[keep]
+    hazard[[index]] <- baseline$hazard[keep] * risk2[index]
+    if (survtype == 1L) {
+      survival_step[[index]] <- baseline$surv[keep]^risk2[index]
+    }
+    n.event[[index]] <- baseline$n.event[keep]
+    n.risk[[index]] <- baseline$n.risk[keep]
+    n.censor[[index]] <- baseline$n.censor[keep]
+    delta[[index]] <- (
+      outer(baseline$hazard[keep], x2[index, ], "*") -
+        baseline$xbar[keep, , drop = FALSE]
+    ) * risk2[index]
+    variance_step[[index]] <- baseline$varhaz[keep] * risk2[index]^2
+  }
+  cumulative_hazard <- cumsum(unlist(hazard, use.names = FALSE))
+  curve <- if (survtype == 1L) {
+    cumprod(unlist(survival_step, use.names = FALSE))
+  } else {
+    exp(-cumulative_hazard)
+  }
+  output <- list(
+    n = as.vector(table(strata)[stratum_index[1L]]),
+    time = unlist(time, use.names = FALSE),
+    n.risk = unlist(n.risk, use.names = FALSE),
+    n.event = unlist(n.event, use.names = FALSE),
+    n.censor = unlist(n.censor, use.names = FALSE),
+    surv = curve,
+    cumhaz = cumulative_hazard
+  )
+  if (se.fit) {
+    delta_matrix <- do.call(rbind, delta)
+    if (is.null(delta_matrix) || nrow(delta_matrix) == 0L) {
+      output$std.err <- numeric()
+    } else if (ncol(delta_matrix) == 0L) {
+      output$std.err <- sqrt(cumsum(unlist(variance_step, use.names = FALSE)))
+    } else {
+      cumulative_delta <- apply(delta_matrix, 2L, cumsum)
+      if (nrow(delta_matrix) == 1L) {
+        cumulative_delta <- matrix(cumulative_delta, nrow = 1L)
+      }
+      coefficient_variance <- rowSums(
+        (cumulative_delta %*% varmat) * cumulative_delta
+      )
+      output$std.err <- sqrt(
+        cumsum(unlist(variance_step, use.names = FALSE)) + coefficient_variance
+      )
+    }
+  }
+  output
+}
+
+.coxsurv_unlist <- function(result, se.fit, x2, has_id) {
+  if (length(result) == 1L) {
+    fields <- c("n", "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz")
+    if (se.fit) {
+      fields <- c(fields, "std.err")
+    }
+    return(result[[1L]][fields])
+  }
+  output <- list(
+    n = unlist(lapply(result, `[[`, "n"), use.names = FALSE),
+    time = unlist(lapply(result, `[[`, "time"), use.names = FALSE),
+    n.risk = unlist(lapply(result, `[[`, "n.risk"), use.names = FALSE),
+    n.event = unlist(lapply(result, `[[`, "n.event"), use.names = FALSE),
+    n.censor = unlist(lapply(result, `[[`, "n.censor"), use.names = FALSE),
+    strata = vapply(result, function(item) length(item$time), integer(1))
+  )
+  names(output$strata) <- names(result)
+  if (!has_id && is.matrix(x2) && nrow(x2) > 1L) {
+    ncurve <- nrow(x2)
+    output$surv <- t(matrix(
+      unlist(lapply(result, function(item) t(item$surv)), use.names = FALSE),
+      nrow = ncurve
+    ))
+    dimnames(output$surv) <- list(NULL, row.names(x2))
+    output$cumhaz <- t(matrix(
+      unlist(lapply(result, function(item) t(item$cumhaz)), use.names = FALSE),
+      nrow = ncurve
+    ))
+    if (se.fit) {
+      output$std.err <- t(matrix(
+        unlist(lapply(result, function(item) t(item$std.err)), use.names = FALSE),
+        nrow = ncurve
+      ))
+    }
+  } else {
+    output$surv <- unlist(lapply(result, `[[`, "surv"), use.names = FALSE)
+    output$cumhaz <- unlist(lapply(result, `[[`, "cumhaz"), use.names = FALSE)
+    if (se.fit) {
+      output$std.err <- unlist(lapply(result, `[[`, "std.err"), use.names = FALSE)
+    }
+  }
+  output
+}
+
 coxsurv.fit <- function(ctype, stype, se.fit, varmat, cluster, y, x, wt, risk,
                         position, strata, oldid, y2, x2, risk2, strata2,
                         id2, unlist = TRUE) {
-  call <- match.call()
-  call[[1L]] <- quote(survival::coxsurv.fit)
-  eval.parent(call)
+  if (missing(strata) || is.null(strata) || length(strata) == 0L) {
+    strata <- rep(0L, nrow(y))
+  }
+  stratum_levels <- if (is.factor(strata)) levels(strata) else sort(unique(strata))
+  survtype <- if (stype == 1L) 1L else as.integer(ctype) + 1L
+  vartype <- survtype
+  if (missing(wt) || is.null(wt)) {
+    wt <- rep(1, nrow(y))
+  }
+  survlist <- lapply(stratum_levels, function(level) {
+    keep <- which(strata == level)
+    .coxsurv_baseline(
+      y[keep, , drop = FALSE],
+      x[keep, , drop = FALSE],
+      wt[keep],
+      risk[keep],
+      survtype,
+      vartype
+    )
+  })
+  names(survlist) <- stratum_levels
+
+  has_id <- !missing(id2) && !is.null(id2)
+  if (!has_id) {
+    result <- lapply(
+      survlist,
+      .coxsurv_expand,
+      x2 = x2,
+      risk2 = risk2,
+      varmat = varmat,
+      se.fit = se.fit,
+      survtype = survtype
+    )
+  } else if (all(id2 == id2[1L])) {
+    result <- list(.coxsurv_one_curve(
+      survlist, x2, y2, strata2, risk2, se.fit, survtype, varmat, strata
+    ))
+  } else {
+    unique_id <- unique(id2)
+    result <- lapply(unique_id, function(value) {
+      keep <- which(id2 == value)
+      .coxsurv_one_curve(
+        survlist,
+        x2[keep, , drop = FALSE],
+        y2[keep, , drop = FALSE],
+        strata2[keep],
+        risk2[keep],
+        se.fit,
+        survtype,
+        varmat,
+        strata
+      )
+    })
+    names(result) <- unique_id
+  }
+  if (unlist) {
+    .coxsurv_unlist(result, se.fit, x2, has_id)
+  } else {
+    names(result) <- stratum_levels
+    result
+  }
 }
 
 survfitcoxph.fit <- function(y, x, wt, x2, risk, newrisk, strata, se.fit,
                              survtype, vartype, varmat, id, y2, strata2,
                              unlist = TRUE) {
-  call <- match.call()
-  call[[1L]] <- quote(survival::survfitcoxph.fit)
-  eval.parent(call)
+  if (missing(survtype)) {
+    stype <- 1L
+    ctype <- 1L
+  } else {
+    stype <- c(1L, 2L, 2L)[survtype]
+    ctype <- c(1L, 1L, 2L)[survtype]
+  }
+  coxsurv.fit(
+    ctype = ctype,
+    stype = stype,
+    se.fit = se.fit,
+    varmat = varmat,
+    y = y,
+    x = x,
+    wt = if (missing(wt)) NULL else wt,
+    risk = risk,
+    strata = if (missing(strata)) NULL else strata,
+    y2 = if (missing(y2)) NULL else y2,
+    x2 = x2,
+    risk2 = if (missing(newrisk)) risk else newrisk,
+    strata2 = if (missing(strata2)) NULL else strata2,
+    id2 = if (missing(id)) NULL else id,
+    unlist = unlist
+  )
 }
 
 survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
@@ -5842,7 +6172,7 @@ model.frame.formula <- function(formula, ...) {
       stop = time,
       status = status
     )
-    attr(out, "type") <- "counting"
+    attr(out, "type") <- surv_type
   } else if (!is.null(time2)) {
     time2 <- .as_numeric_vector(time2)
     if (identical(surv_type, "interval2")) {
@@ -5866,6 +6196,9 @@ model.frame.formula <- function(formula, ...) {
   } else {
     out <- cbind(time = time, status = status)
     attr(out, "type") <- surv_type
+  }
+  if (surv_type %in% c("mright", "mcounting")) {
+    attr(out, "states") <- as.character(.result_field(x, "states"))
   }
   class(out) <- "Surv"
   out
@@ -7551,10 +7884,19 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
     id = if (missing(id)) NULL else as.character(id),
     zero = zero
   )
-  .restore_r_column_classes(
+  output <- .restore_r_column_classes(
     as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE),
     covariates
   )
+  states <- attr(response, "states")
+  if (!is.null(states)) {
+    output[[event_name]] <- factor(
+      as.integer(output[[event_name]]),
+      levels = 0:length(states),
+      labels = c("censor", states)
+    )
+  }
+  output
 }
 
 survcondense <- function(formula, data, subset, weights, na.action = na.pass,
@@ -7563,6 +7905,30 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
     stop("id is required", call. = FALSE)
   }
   env <- parent.frame()
+  start_missing <- missing(start)
+  end_missing <- missing(end)
+  event_missing <- missing(event)
+  event_source <- NULL
+  response_call <- formula[[2L]]
+  if (
+    is.call(response_call) &&
+      is.name(response_call[[1L]]) &&
+      identical(response_call[[1L]], quote(Surv))
+  ) {
+    matched_response <- match.call(Surv, response_call)
+    if (start_missing && !is.null(matched_response$time) && is.name(matched_response$time)) {
+      start <- as.character(matched_response$time)
+    }
+    if (end_missing && !is.null(matched_response$time2) && is.name(matched_response$time2)) {
+      end <- as.character(matched_response$time2)
+    }
+    if (event_missing && !is.null(matched_response$event) && is.name(matched_response$event)) {
+      event <- as.character(matched_response$event)
+    }
+    if (!is.null(matched_response$event)) {
+      event_source <- eval(matched_response$event, data, env)
+    }
+  }
   id_name <- paste(deparse(substitute(id), width.cutoff = 500L), collapse = " ")
   weight_name <- if (missing(weights)) {
     NULL
@@ -7591,7 +7957,15 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
   for (column in strata_columns) {
     frame[[column]] <- factor(frame[[column]])
   }
-  .restore_r_column_classes(frame, data)
+  event_values <- frame[[event]]
+  frame <- .restore_r_column_classes(frame, data)
+  if (is.factor(event_source)) {
+    frame[[event]] <- factor(
+      as.character(event_values),
+      levels = c("censor", levels(event_source)[-1L])
+    )
+  }
+  frame
 }
 
 coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
@@ -8046,24 +8420,81 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
                                           timewt = c("n", "S", "S/G", "n/G2", "I"),
                                           influence = 0, ranks = FALSE, timefix = TRUE,
                                           keepstrata = 10) {
-  extra <- list(...)
-  if (length(extra) > 0L) {
-    stop("multiple fitted model concordance is not implemented", call. = FALSE)
+  Call <- match.call()
+  fits <- list(object, ...)
+  nfit <- length(fits)
+  fit_names <- as.character(Call)[1L + seq_len(nfit)]
+  fit_class <- if (inherits(object, "survival_py_coxph")) {
+    "survival_py_coxph"
+  } else if (inherits(object, "survival_py_survreg")) {
+    "survival_py_survreg"
+  } else {
+    stop("object is not an appropriate fit object", call. = FALSE)
+  }
+  valid_fit <- vapply(fits, inherits, logical(1), what = fit_class)
+  if (any(!valid_fit)) {
+    index <- which(!valid_fit)[[1L]]
+    call_name <- names(Call)[index + 1L]
+    label <- if (!is.null(call_name) && nzchar(call_name) && call_name != "object") {
+      call_name
+    } else {
+      fit_names[[index]]
+    }
+    stop(label, " argument is not an appropriate fit object", call. = FALSE)
   }
   timewt <- match.arg(timewt)
-  response <- if (missing(newdata)) {
-    .model_concordance_response(object)
+  responses <- if (missing(newdata)) {
+    lapply(fits, .model_concordance_response)
   } else {
-    .model_concordance_response(object, newdata)
+    lapply(fits, .model_concordance_response, newdata = newdata)
   }
+  sample_sizes <- vapply(responses, nrow, integer(1))
+  if (any(sample_sizes != sample_sizes[[1L]])) {
+    stop("all models must have the same sample size", call. = FALSE)
+  }
+  response <- responses[[1L]]
+  same_response <- vapply(responses[-1L], function(value) {
+    identical(attr(value, "type"), attr(response, "type")) &&
+      isTRUE(all.equal(unclass(value), unclass(response), check.attributes = FALSE))
+  }, logical(1))
+  if (length(same_response) > 0L && any(!same_response)) {
+    warning("models do not have the same response vector", call. = FALSE)
+  }
+
   scores <- if (missing(newdata)) {
-    predict(object, type = "lp")
+    lapply(fits, predict, type = "lp")
   } else {
-    predict(object, newdata = newdata, type = "lp")
+    lapply(fits, predict, newdata = newdata, type = "lp")
+  }
+  if (any(vapply(scores, length, integer(1)) != sample_sizes[[1L]])) {
+    stop("model predictions must match the response length", call. = FALSE)
+  }
+  score_matrix <- do.call(cbind, lapply(scores, as.numeric))
+  colnames(score_matrix) <- fit_names
+
+  fit_weights <- if (missing(newdata)) {
+    lapply(fits, weights)
+  } else {
+    rep(list(NULL), nfit)
+  }
+  has_weights <- !vapply(fit_weights, is.null, logical(1))
+  if (any(has_weights) && !all(has_weights)) {
+    stop("all models must have the same weight vector", call. = FALSE)
+  }
+  if (all(has_weights)) {
+    reference_weights <- as.numeric(fit_weights[[1L]])
+    same_weights <- vapply(fit_weights[-1L], function(value) {
+      isTRUE(all.equal(as.numeric(value), reference_weights, check.attributes = FALSE))
+    }, logical(1))
+    if (length(same_weights) > 0L && any(!same_weights)) {
+      stop("all models must have the same weight vector", call. = FALSE)
+    }
+  } else {
+    reference_weights <- NULL
   }
   fit_args <- list(
     y = response,
-    x = scores,
+    x = score_matrix,
     timewt = timewt,
     influence = influence,
     ranks = ranks,
@@ -8074,6 +8505,9 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
   if (!missing(cluster)) {
     fit_args$cluster <- cluster
   }
+  if (!is.null(reference_weights)) {
+    fit_args$weights <- reference_weights
+  }
   if (!missing(ymin)) {
     fit_args$ymin <- ymin
   }
@@ -8081,7 +8515,7 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
     fit_args$ymax <- ymax
   }
   result <- do.call(concordancefit, fit_args)
-  result$call <- match.call()
+  result$call <- Call
   class(result) <- "concordance"
   result
 }
@@ -8200,7 +8634,7 @@ survConcordance.fit <- function(y, x, strata, weight) {
   values
 }
 
-.concordancefit_count <- function(result) {
+.concordancefit_count <- function(result, score_names = NULL) {
   concordant <- .as_numeric_vector(.result_field(result, "concordant"))
   comparable <- .as_numeric_vector(.result_field(result, "comparable"))
   tied_x <- .as_numeric_vector(.result_field(result, "tied_x"))
@@ -8223,20 +8657,33 @@ survConcordance.fit <- function(y, x, strata, weight) {
     names(out) <- colnames(count)
     return(out)
   }
-  rownames(count) <- .result_field(result, "score_names")
+  rownames(count) <- if (is.null(score_names)) {
+    .result_field(result, "score_names")
+  } else {
+    score_names
+  }
   count
 }
 
-.concordancefit_rows <- function(rows) {
+.concordancefit_rows <- function(rows, fit = NULL) {
   if (is.null(rows) || !is.list(rows) || length(rows) == 0L) {
     return(NULL)
   }
-  data.frame(
+  frame <- data.frame(
     time = .as_numeric_vector(lapply(rows, `[[`, "time")),
     rank = .as_numeric_vector(lapply(rows, `[[`, "rank")),
     timewt = .as_numeric_vector(lapply(rows, `[[`, "timewt")),
     casewt = .as_numeric_vector(lapply(rows, `[[`, "casewt"))
   )
+  if (!is.null(fit)) {
+    frame <- data.frame(
+      fit = rep(fit, nrow(frame)),
+      frame,
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  }
+  frame
 }
 
 concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
@@ -8247,6 +8694,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (any(is.na(x)) || any(is.na(y))) {
     return(NULL)
   }
+  input_score_names <- if (is.matrix(x) || is.data.frame(x)) colnames(x) else NULL
   timewt <- match.arg(timewt)
   influence <- as.integer(influence)
   if (!isTRUE(std.err)) {
@@ -8272,31 +8720,80 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   )
 
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))
+  multi_score <- length(concordance) > 1L
+  score_names <- if (!is.null(input_score_names) && length(input_score_names) == length(concordance)) {
+    as.character(input_score_names)
+  } else {
+    as.character(.result_field(result, "score_names"))
+  }
+  if (multi_score) {
+    names(concordance) <- score_names
+  }
   out <- list(
     concordance = if (length(concordance) == 1L) concordance[[1L]] else concordance,
-    count = .concordancefit_count(result),
+    count = .concordancefit_count(result, if (multi_score) score_names else NULL),
     n = as.integer(.result_field(result, "n"))
   )
   variance <- .result_field(result, "variance")
+  dfbeta <- .result_field(result, "dfbeta")
+  dfbeta_matrix <- NULL
+  if (multi_score && !is.null(dfbeta)) {
+    dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
+    n_obs <- length(dfbeta_columns[[1L]])
+    if (any(vapply(dfbeta_columns, length, integer(1)) != n_obs)) {
+      stop("concordance dfbeta values must be rectangular", call. = FALSE)
+    }
+    dfbeta_matrix <- do.call(cbind, dfbeta_columns)
+  }
   if (isTRUE(std.err) && !is.null(variance)) {
-    out$var <- 4 * .as_numeric_vector(variance)
-    out$cvar <- out$var
+    if (multi_score && !is.null(dfbeta_matrix)) {
+      out$var <- 4 * crossprod(dfbeta_matrix)
+      out$cvar <- 4 * .as_numeric_vector(variance)
+    } else {
+      out$var <- 4 * .as_numeric_vector(variance)
+      out$cvar <- out$var
+    }
   }
   if (influence %in% c(1L, 3L)) {
-    dfbeta <- .result_field(result, "dfbeta")
     if (!is.null(dfbeta)) {
-      out$dfbeta <- 2 * .as_numeric_vector(dfbeta)
+      out$dfbeta <- if (multi_score && !is.null(dfbeta_matrix)) {
+        2 * dfbeta_matrix
+      } else {
+        2 * .as_numeric_vector(dfbeta)
+      }
     }
   }
   if (influence >= 2L) {
     influence_rows <- .result_field(result, "influence")
     if (!is.null(influence_rows)) {
-      out$influence <- 2 * .as_numeric_matrix(influence_rows)
-      colnames(out$influence) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
+      if (multi_score) {
+        influence_matrices <- lapply(influence_rows, .as_numeric_matrix)
+        matrix_dims <- lapply(influence_matrices, dim)
+        if (!all(vapply(matrix_dims, identical, logical(1), matrix_dims[[1L]]))) {
+          stop("concordance influence values must be rectangular", call. = FALSE)
+        }
+        out$influence <- array(
+          2 * unlist(influence_matrices, use.names = FALSE),
+          dim = c(matrix_dims[[1L]], length(influence_matrices))
+        )
+        dimnames(out$influence) <- list(
+          NULL,
+          c("concordant", "discordant", "tied.x", "tied.y", "tied.xy"),
+          score_names
+        )
+      } else {
+        out$influence <- 2 * .as_numeric_matrix(influence_rows)
+        colnames(out$influence) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
+      }
     }
   }
   if (isTRUE(ranks)) {
-    out$ranks <- .concordancefit_rows(.result_field(result, "ranks"))
+    rank_rows <- .result_field(result, "ranks")
+    out$ranks <- if (multi_score) {
+      do.call(rbind, Map(.concordancefit_rows, rank_rows, score_names))
+    } else {
+      .concordancefit_rows(rank_rows)
+    }
   }
   out
 }

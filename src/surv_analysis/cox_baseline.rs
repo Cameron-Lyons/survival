@@ -105,7 +105,8 @@ fn validate_baseline_survival_steps_inputs(
     for (time_index, &deaths) in ndeath.iter().enumerate() {
         if deaths == 1 {
             let contribution = wt[death_index] * risk[death_index];
-            if contribution > denom[time_index] {
+            let tolerance = f64::EPSILON * contribution.abs().max(denom[time_index].abs()) * 16.0;
+            if contribution - denom[time_index] > tolerance {
                 return Err(value_error(format!(
                     "death contribution must not exceed denom at index {time_index}"
                 )));
@@ -538,7 +539,9 @@ pub fn compute_baseline_survival_steps(
             0 => km[i] = 1.0,
             1 => {
                 let numerator = wt_slice[j] * risk_slice[j];
-                km[i] = (1.0 - numerator / denom_slice[i]).powf(1.0 / risk_slice[j]);
+                km[i] = (1.0 - numerator / denom_slice[i])
+                    .max(0.0)
+                    .powf(1.0 / risk_slice[j]);
                 j += 1;
             }
             _ => {

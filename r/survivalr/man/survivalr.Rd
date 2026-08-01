@@ -1053,7 +1053,7 @@ Python fit exposes extra parameters such as estimated survreg scale terms.}
 logistic, Gaussian, and Student-t \code{survreg.fit} distributions use the
 Rust optimizer; custom density callbacks retain the upstream fallback.}
 \item{varmat, wt, risk, newrisk, position, oldid, x2, risk2, strata2,
-survtype, vartype, unlist}{Low-level delegated Cox survival-curve inputs.}
+survtype, vartype, unlist}{Low-level Cox survival-curve inputs.}
 \item{var}{Variance matrix for \code{coxph.wtest}.}
 \item{parm}{Optional coefficient names or 1-based coefficient indices.}
 \item{level}{Confidence level for coefficient intervals.}
@@ -1099,6 +1099,11 @@ expansion directly. The bridge supports weights, subsets, missing-data actions,
 strata, counting-process histories, and delayed entry; computes censoring risk
 sets with sorted sweeps; and restores factor and \code{I(...)} column classes
 on the returned data frame.
+
+\code{coxsurv.fit} and \code{survfitcoxph.fit} use a Rust risk-set sweep for
+weighted right-censored and counting-process baselines, including strata and
+tied events. R-side assembly retains compatible curve, cumulative-hazard,
+standard-error, and individual-trajectory output shapes.
 
 Built-in \code{survreg.fit} matrix calls use positive-definite
 observed-information steps with an outer-product fallback. Fixed and

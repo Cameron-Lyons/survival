@@ -180,6 +180,38 @@ def test_agsurv5_alias_matches_validated_tied_baseline_summaries():
         survival.agsurv5(1, 1, [0], [1.0], [0.0], [1.0], [0.0])
 
 
+def test_cox_survfit_baseline_handles_ties_weights_and_delayed_entry():
+    result = survival.cox_survfit_baseline(
+        y=[
+            [0.0, 2.0, 1.0],
+            [1.0, 3.0, 1.0],
+            [2.0, 4.0, 0.0],
+        ],
+        x=[[0.0], [1.0], [2.0]],
+        weights=[1.0, 1.0, 1.0],
+        risk=[1.0, 2.0, 4.0],
+        survtype=3,
+        vartype=3,
+    )
+
+    assert result["time"] == pytest.approx([2.0, 3.0, 4.0])
+    assert result["n_risk"] == pytest.approx([2.0, 2.0, 1.0])
+    assert result["n_event"] == pytest.approx([1.0, 1.0, 0.0])
+    assert result["n_censor"] == pytest.approx([0.0, 0.0, 1.0])
+    assert result["hazard"] == pytest.approx([1.0 / 3.0, 1.0 / 6.0, 0.0])
+    assert result["cumhaz"] == pytest.approx([1.0 / 3.0, 0.5, 0.5])
+
+    with pytest.raises(ValueError, match="start must be less than stop"):
+        survival.cox_survfit_baseline(
+            [[1.0, 1.0, 0.0]],
+            [[0.0]],
+            [1.0],
+            [1.0],
+            2,
+            2,
+        )
+
+
 def test_agmart():
     n = 5
     method = 0

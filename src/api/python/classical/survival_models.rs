@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agsurv4, m)?)?;
     m.add_function(wrap_pyfunction!(agsurv5, m)?)?;
+    m.add_function(wrap_pyfunction!(cox_survfit_baseline, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_with_options, m)?)?;
     m.add_function(wrap_pyfunction!(robust_survfitkm, m)?)?;

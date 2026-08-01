@@ -4302,7 +4302,10 @@ def strata(
             pieces.append(level_label if short else f"{term_labels[term_idx]}={level_label}")
         levels.append(sep.join(pieces))
     row_labels = [None if code is None else levels[code - 1] for code in codes]
-    counts = [sum(1 for code in codes if code == idx + 1) for idx in range(len(levels))]
+    counts = [0] * len(levels)
+    for code in codes:
+        if code is not None:
+            counts[code - 1] += 1
     return StrataFactor(codes=codes, levels=levels, labels=row_labels, counts=counts)
 
 
@@ -7693,7 +7696,7 @@ def _survcondense_from_formula(
     weights = aligned["weights"]
     response, terms = _parse_formula(formula, data)
     _reject_formula_clusters("survcondense", terms)
-    if response.type != "counting":
+    if response.type not in {"counting", "mcounting"}:
         raise ValueError("survcondense requires a counting-process Surv response")
     if response.start is None:
         raise ValueError("counting Surv response is missing start times")
@@ -7743,7 +7746,13 @@ def _survcondense_from_formula(
     }
     output[start] = [starts[idx] for idx in keep_indices]
     output[end] = [response.time[idx] for idx in keep_indices]
-    output[event] = [response.event[idx] for idx in keep_indices]
+    if response.type == "mcounting":
+        output[event] = [
+            "censor" if response.event[idx] == 0 else response.states[int(response.event[idx]) - 1]
+            for idx in keep_indices
+        ]
+    else:
+        output[event] = [response.event[idx] for idx in keep_indices]
     return output
 
 
@@ -7982,8 +7991,10 @@ def _rttright_validate_id(response: Surv, id: Any | None) -> list[Any] | None:
     id_values = _materialize_labels(id, "id")
     if len(id_values) != len(response):
         raise ValueError("id must have the same length as the Surv response")
-    if response.type not in {"right", "counting"}:
-        raise NotImplementedError("rttright id handling is currently supported only for right data")
+    if response.type not in {"right", "mright", "counting"}:
+        raise NotImplementedError(
+            "rttright id handling is currently supported only for right-censored data"
+        )
 
     seen: set[Any] = set()
     for value in id_values:
@@ -7997,6 +8008,10 @@ def _rttright_validate_id(response: Surv, id: Any | None) -> list[Any] | None:
             raise ValueError("one or more flags are >0 in survcheck")
         seen.add(key)
     return id_values
+
+
+def _rttright_binary_status(response: Surv) -> list[int]:
+    return [1 if int(value) > 0 else 0 for value in response.event]
 
 
 def _rttright_divide(numerator: float, denominator: float) -> float:
@@ -8432,10 +8447,11 @@ def _rttright_core_weights(
     timefix: bool,
     renorm: bool,
 ) -> list[float]:
+    status = _rttright_binary_status(response)
     if group is not None:
         result = _core.rttright_stratified(
             list(response.time),
-            list(response.event),
+            status,
             list(group),
             None if weights is None else _float_vector(weights, "weights"),
             timefix,
@@ -8444,7 +8460,7 @@ def _rttright_core_weights(
         return [float(weight) for weight in result.weights]
     result = _core.rttright(
         list(response.time),
-        list(response.event),
+        status,
         None if weights is None else _float_vector(weights, "weights"),
         timefix,
         renorm,
@@ -8617,33 +8633,67 @@ def _pseudo_curve_values(
     return _pseudo_rmst_values(times, [float(value) for value in curve.estimate], eval_times)
 
 
+def _integrated_step_values(
+    curve_time: Sequence[float],
+    step_values: Sequence[float],
+    eval_times: Sequence[float],
+    *,
+    start_time: float,
+    initial_value: float,
+) -> list[float]:
+    times = [float(value) for value in curve_time]
+    values = [float(value) for value in step_values]
+    if len(times) != len(values):
+        raise ValueError("curve_time and step_values must have the same length")
+
+    origin = float(start_time)
+    value_at_origin = float(initial_value)
+    active_times: list[float] = []
+    active_values: list[float] = []
+    prefix_areas: list[float] = []
+    previous_time = origin
+    previous_value = value_at_origin
+    area = 0.0
+    for time, value in zip(times, values, strict=True):
+        if time < origin:
+            value_at_origin = value
+            previous_value = value
+            continue
+        area += previous_value * (time - previous_time)
+        active_times.append(time)
+        active_values.append(value)
+        prefix_areas.append(area)
+        previous_time = time
+        previous_value = value
+
+    result: list[float] = []
+    for eval_time in eval_times:
+        target = float(eval_time)
+        if target <= origin:
+            result.append(0.0)
+            continue
+        position = bisect_right(active_times, target) - 1
+        if position < 0:
+            result.append(value_at_origin * (target - origin))
+            continue
+        result.append(
+            prefix_areas[position] + active_values[position] * (target - active_times[position])
+        )
+    return result
+
+
 def _pseudo_integrated_step_values(
     curve_time: Sequence[float],
     step_values: Sequence[float],
     eval_times: Sequence[float],
 ) -> list[float]:
-    result: list[float] = []
-    times = [float(value) for value in curve_time]
-    values = [float(value) for value in step_values]
-    for eval_time in eval_times:
-        target = float(eval_time)
-        area = 0.0
-        previous_time = 0.0
-        previous_value = 0.0
-        for time, value in zip(times, values, strict=True):
-            if target <= previous_time:
-                break
-            upper = min(target, time)
-            if upper > previous_time:
-                area += previous_value * (upper - previous_time)
-                previous_time = upper
-            if time > target:
-                break
-            previous_value = value
-        if target > previous_time:
-            area += previous_value * (target - previous_time)
-        result.append(area)
-    return result
+    return _integrated_step_values(
+        curve_time,
+        step_values,
+        eval_times,
+        start_time=0.0,
+        initial_value=0.0,
+    )
 
 
 def _pseudo_counting_candidate_cumhaz(fit: SurvfitResult, ctype: int) -> list[float]:
@@ -8845,32 +8895,13 @@ def _survfit_multistate_integrated_estimate(
     t0: float,
     eval_times: Sequence[float],
 ) -> list[float]:
-    times = [float(value) for value in curve_time]
-    values = [float(value) for value in estimates]
-    result: list[float] = []
-    for target_value in eval_times:
-        target = float(target_value)
-        if target <= t0:
-            result.append(0.0)
-            continue
-        area = 0.0
-        previous_time = t0
-        previous_value = float(initial)
-        for time, value in zip(times, values, strict=True):
-            if time < t0:
-                previous_value = value
-                continue
-            upper = min(target, time)
-            if upper > previous_time:
-                area += previous_value * (upper - previous_time)
-                previous_time = upper
-            if time > target:
-                break
-            previous_value = value
-        if target > previous_time:
-            area += previous_value * (target - previous_time)
-        result.append(area)
-    return result
+    return _integrated_step_values(
+        curve_time,
+        estimates,
+        eval_times,
+        start_time=t0,
+        initial_value=initial,
+    )
 
 
 def _survfit_multistate_estimates_at_times(
@@ -9143,6 +9174,8 @@ def rttright(
 
     if not isinstance(response, Surv):
         raise TypeError("rttright response must be a Surv object, formula, or time vector")
+    if response.type == "mcounting":
+        raise NotImplementedError("function not defined for delayed entry or multistate data")
     _rttright_validate_id(response, id_values)
     if response.type == "counting":
         return _rttright_counting_result(
@@ -9154,12 +9187,13 @@ def rttright(
             timefix,
             renorm,
         )
-    if response.type != "right":
+    if response.type not in {"right", "mright"}:
         raise ValueError(f"rttright is not valid for {response.type} censored survival data")
     if times is not None:
+        status_values = _rttright_binary_status(response)
         return _rttright_time_matrix(
             list(response.time),
-            list(response.event),
+            status_values,
             weights,
             times,
             group,
@@ -9989,7 +10023,7 @@ def survSplit(
 
     if not isinstance(response, Surv):
         raise TypeError("survSplit response must be a Surv object")
-    if response.type not in {"right", "counting"}:
+    if response.type not in {"right", "mright", "counting", "mcounting"}:
         raise ValueError(f"not valid for {response.type} censored survival data")
 
     cut_values = _float_vector(cut, "cut")
@@ -12430,10 +12464,14 @@ def aggregate_survfit_result(
     if len(set(group_codes)) == 1:
         return aggregate_survfit_result(result, weights=curve_weights)
 
+    indices_by_group: dict[int, list[int]] = {}
+    for idx, code in enumerate(group_codes):
+        indices_by_group.setdefault(code, []).append(idx)
+
     aggregates = []
     linear_predictors = []
-    for code in sorted(set(group_codes)):
-        indices = [idx for idx, group_code in enumerate(group_codes) if group_code == code]
+    for code in sorted(indices_by_group):
+        indices = indices_by_group[code]
         group_weights = (
             [curve_weights[idx] for idx in indices] if curve_weights is not None else None
         )
@@ -16693,13 +16731,15 @@ def _cox_detail_event_times(
     status: list[int],
     strata: list[int],
 ) -> list[tuple[int, float]]:
-    groups: list[tuple[int, float]] = []
-    for stratum in sorted(set(strata)):
-        values = sorted(
-            {time[idx] for idx, event in enumerate(status) if event == 1 and strata[idx] == stratum}
-        )
-        groups.extend((stratum, value) for value in values)
-    return groups
+    event_times: dict[int, set[float]] = {}
+    for event_time, event, stratum in zip(time, status, strata, strict=True):
+        if event == 1:
+            event_times.setdefault(stratum, set()).add(event_time)
+    return [
+        (stratum, event_time)
+        for stratum in sorted(event_times)
+        for event_time in sorted(event_times[stratum])
+    ]
 
 
 def _cox_detail_at_risk(
@@ -19184,153 +19224,6 @@ def _concordance_summary(
     return _unsupported_concordance_response()
 
 
-def _concordance_time_multiplier(
-    timewt: str,
-    total_weight: float,
-    survival: float,
-    censoring_survival: float,
-    nrisk: float,
-) -> float:
-    if nrisk <= 0.0:
-        return 0.0
-    if timewt == "S":
-        return total_weight * survival / nrisk
-    if timewt == "S/G":
-        if censoring_survival > 0.0:
-            return total_weight * survival / (censoring_survival * nrisk)
-        return 0.0
-    if timewt == "n/G2":
-        if censoring_survival > 0.0:
-            return 1.0 / (censoring_survival * censoring_survival)
-        return 0.0
-    if timewt == "I":
-        return 1.0 / nrisk
-    return 1.0
-
-
-def _right_concordance_time_multipliers(
-    time: list[float],
-    status: list[int],
-    weights: list[float] | None,
-    timewt: str,
-) -> dict[float, float]:
-    if timewt == "n":
-        return {time[idx]: 1.0 for idx, event in enumerate(status) if event == 1}
-
-    case_weights = [1.0] * len(time) if weights is None else weights
-    total_weight = math.fsum(case_weights)
-    survival = 1.0
-    censoring_survival = 1.0
-    multipliers: dict[float, float] = {}
-    for event_time in sorted(set(time)):
-        indices = [idx for idx, value in enumerate(time) if value == event_time]
-        nrisk = math.fsum(
-            weight for weight, value in zip(case_weights, time, strict=True) if value >= event_time
-        )
-        death_weight = math.fsum(case_weights[idx] for idx in indices if status[idx] == 1)
-        censor_weight = math.fsum(case_weights[idx] for idx in indices if status[idx] != 1)
-        if death_weight > 0.0:
-            multipliers[event_time] = _concordance_time_multiplier(
-                timewt,
-                total_weight,
-                survival,
-                censoring_survival,
-                nrisk,
-            )
-            if nrisk > 0.0:
-                survival *= max((nrisk - death_weight) / nrisk, 0.0)
-        if censor_weight > 0.0 and nrisk > 0.0:
-            censoring_survival *= max((nrisk - censor_weight) / nrisk, 0.0)
-    return multipliers
-
-
-def _right_concordance_tie_counts(
-    response: Surv,
-    risk_values: list[float],
-    weights: list[float] | None,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-) -> tuple[float, float, float]:
-    data = _right_concordance_data(response, timefix, ymin, ymax)
-    case_weights = [1.0] * len(data.times) if weights is None else weights
-    multipliers = _right_concordance_time_multipliers(data.times, data.status, weights, timewt)
-    tied_x = 0.0
-    tied_y = 0.0
-    tied_xy = 0.0
-    for left in range(len(data.times)):
-        for right in range(left + 1, len(data.times)):
-            pair_weight = case_weights[left] * case_weights[right]
-            same_event_time = (
-                data.status[left] == 1
-                and data.status[right] == 1
-                and data.times[left] == data.times[right]
-            )
-            if same_event_time:
-                pair_weight *= multipliers.get(data.times[left], 0.0)
-                if pair_weight <= 0.0:
-                    continue
-                if abs(risk_values[left] - risk_values[right]) < 1e-12:
-                    tied_xy += pair_weight
-                else:
-                    tied_y += pair_weight
-                continue
-
-            if data.status[left] == 1 and data.times[left] < data.times[right]:
-                event_idx, risk_idx = left, right
-            elif data.status[right] == 1 and data.times[right] < data.times[left]:
-                event_idx, risk_idx = right, left
-            else:
-                continue
-            pair_weight *= multipliers.get(data.times[event_idx], 0.0)
-            if pair_weight > 0.0 and abs(risk_values[event_idx] - risk_values[risk_idx]) < 1e-12:
-                tied_x += pair_weight
-    return tied_x, tied_y, tied_xy
-
-
-def _concordance_tie_counts(
-    response: Surv,
-    risk_values: list[float],
-    weights: list[float] | None,
-    strata: Any | None,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-) -> tuple[float, float, float]:
-    if response.type != "right":
-        return 0.0, 0.0, 0.0
-    if strata is None:
-        return _right_concordance_tie_counts(
-            response,
-            risk_values,
-            weights,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-        )
-    strata_codes = _encode_groups(strata, len(response))
-    totals = [0.0, 0.0, 0.0]
-    for indices in _group_indices(strata_codes, len(response)).values():
-        group_response = _subset_surv(response, indices)
-        group_risk = [risk_values[idx] for idx in indices]
-        group_weights = [weights[idx] for idx in indices] if weights is not None else None
-        counts = _right_concordance_tie_counts(
-            group_response,
-            group_risk,
-            group_weights,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-        )
-        for idx, value in enumerate(counts):
-            totals[idx] += value
-    return tuple(totals)
-
-
 def _single_score_concordance_result(
     response: Surv,
     score_values: list[float],
@@ -19359,16 +19252,9 @@ def _single_score_concordance_result(
         lower_bound,
         upper_bound,
     )
-    tied_x, tied_y, tied_xy = _concordance_tie_counts(
-        response,
-        risk_values,
-        weight_values,
-        strata_values,
-        fix_time,
-        time_weight,
-        lower_bound,
-        upper_bound,
-    )
+    tied_x = float(summary.get("tied_x", 0.0))
+    tied_y = float(summary.get("tied_y", 0.0))
+    tied_xy = float(summary.get("tied_xy", 0.0))
     rank_rows = (
         _concordance_ranks(
             response,

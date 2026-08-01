@@ -5,6 +5,7 @@ pub(crate) mod agsurv4_module;
 #[path = "agsurv5.rs"]
 pub(crate) mod agsurv5_module;
 pub(crate) mod cox_baseline;
+pub(crate) mod cox_survfit;
 pub(crate) mod illness_death;
 pub(crate) mod logrank_components;
 pub(crate) mod multi_state;
@@ -34,6 +35,7 @@ pub use cox_baseline::{
     compute_baseline_survival_steps, compute_tied_baseline_summaries,
     cox_expected_baseline_by_stratum,
 };
+pub use cox_survfit::cox_survfit_baseline;
 pub use illness_death::{
     IllnessDeathConfig, IllnessDeathPrediction, IllnessDeathResult, IllnessDeathType,
     TransitionHazard, fit_illness_death, predict_illness_death,
