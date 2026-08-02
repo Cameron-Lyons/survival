@@ -7077,6 +7077,114 @@ as.logical.survival_py_surv <- function(x, ...) {
   as.logical.Surv(.as_native_surv(x), ...)
 }
 
+barplot.Surv <- function(height, ...) {
+  stop("not defined for a Surv object", call. = FALSE)
+}
+
+barplot.survival_py_surv <- function(height, ...) {
+  barplot.Surv(.as_native_surv(height), ...)
+}
+
+density.Surv <- function(x, ...) {
+  stop("method not defined for a Surv object", call. = FALSE)
+}
+
+density.survival_py_surv <- function(x, ...) {
+  density.Surv(.as_native_surv(x), ...)
+}
+
+hist.Surv <- function(x, ...) {
+  stop("method not defined for a Surv object", call. = FALSE)
+}
+
+hist.Surv2 <- function(x, ...) {
+  stop("method not defined for a Surv2 object", call. = FALSE)
+}
+
+hist.survival_py_surv <- function(x, ...) {
+  hist.Surv(.as_native_surv(x), ...)
+}
+
+identify.Surv <- function(x, ...) {
+  stop("method not defined for a Surv object", call. = FALSE)
+}
+
+identify.Surv2 <- function(x, ...) {
+  stop("method not defined for a Surv2 object", call. = FALSE)
+}
+
+identify.survival_py_surv <- function(x, ...) {
+  identify.Surv(.as_native_surv(x), ...)
+}
+
+image.Surv <- function(x, ...) {
+  stop("method not defined for a Surv object", call. = FALSE)
+}
+
+image.Surv2 <- function(x, ...) {
+  stop("method not defined for a Surv2 object", call. = FALSE)
+}
+
+image.survival_py_surv <- function(x, ...) {
+  image.Surv(.as_native_surv(x), ...)
+}
+
+lines.Surv <- function(x, ...) {
+  stop("method not defined for a Surv object", call. = FALSE)
+}
+
+lines.Surv2 <- function(x, ...) {
+  stop("method not defined for a Surv2 object", call. = FALSE)
+}
+
+lines.survival_py_surv <- function(x, ...) {
+  lines.Surv(.as_native_surv(x), ...)
+}
+
+pairs.Surv <- function(x, ...) {
+  stop("method not defined for a Surv object", call. = FALSE)
+}
+
+pairs.Surv2 <- function(x, ...) {
+  stop("method not defined for a Surv2 object", call. = FALSE)
+}
+
+pairs.survival_py_surv <- function(x, ...) {
+  pairs.Surv(.as_native_surv(x), ...)
+}
+
+plot.Surv <- function(x, ...) {
+  graphics::plot(survfit(x), ...)
+}
+
+plot.survival_py_surv <- function(x, ...) {
+  plot.Surv(.as_native_surv(x), ...)
+}
+
+points.Surv <- function(x, ...) {
+  stop("method not defined for a Surv object", call. = FALSE)
+}
+
+points.Surv2 <- function(x, ...) {
+  stop("method not defined for a Surv2 object", call. = FALSE)
+}
+
+points.survival_py_surv <- function(x, ...) {
+  points.Surv(.as_native_surv(x), ...)
+}
+
+text.Surv <- function(x, ...) {
+  stop("method not defined for a Surv object", call. = FALSE)
+}
+
+text.Surv2 <- function(x, ...) {
+  stop("method not defined for a Surv2 object", call. = FALSE)
+}
+
+text.survival_py_surv <- function(x, ...) {
+  text.Surv(.as_native_surv(x), ...)
+}
+
 .as_surv_arg <- function(x) {
   if (inherits(x, "survival_py_surv")) {
     return(.as_native_surv(x))
