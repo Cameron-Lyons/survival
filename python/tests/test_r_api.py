@@ -2727,6 +2727,7 @@ def test_surv2_response_matches_r_multistate_shape():
 
     response = survival.Surv2([1.0, 2.0, 3.0], ["a", "b", "c"])
     missing = survival.Surv2([1.0, math.nan, 3.0], [None, "b", "c"], repeated=True)
+    repeated_first = survival.Surv2([1.0, 2.0], ["a", "a"], repeated="first")
     categorical = survival.Surv2(
         [1.0, 2.0, 3.0],
         Factor(
@@ -2745,6 +2746,7 @@ def test_surv2_response_matches_r_multistate_shape():
     assert missing.status == (None, 0, 1)
     assert missing.states == ("c",)
     assert missing.repeated is True
+    assert repeated_first.repeated == "first"
     assert survival.is_na_surv(missing) == [True, True, False]
     assert survival.format_surv(missing) == ["1? ", "NA+", "3:c"]
     assert categorical.status == (1, 3, 2)
@@ -2794,6 +2796,23 @@ def test_surv2data_converts_timeline_rows_to_counting_transitions():
         repeated=False,
     )
     assert repeated_result["status"] == [0, 2]
+
+    repeated_first_result = survival.Surv2data(
+        [0.0, 1.0, 2.0, 3.0],
+        [1, 2, 1, 2],
+        states=["entry", "death"],
+        id=[1, 1, 1, 1],
+        repeated="first",
+    )
+    assert repeated_first_result["status"] == [2, 0, 0]
+
+    ordinary_result = survival.Surv2data(
+        [0.0, 0.0, 2.0, 3.0, 5.0, 6.0],
+        [0, 0, 1, 1, 1, 0],
+        id=[1, 2, 1, 2, 1, 2],
+    )
+    assert ordinary_result["row"] == [0, 1, 2, 3]
+    assert ordinary_result["status"] == [1, 1, 1, 0]
 
     with pytest.raises(ValueError, match="duplicated time"):
         survival.Surv2data([0.0, 0.0], [1, 2], states=["a", "b"], id=[1, 1])
