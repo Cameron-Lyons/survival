@@ -39,7 +39,7 @@ class Surv2:
     time: tuple[float, ...]
     status: tuple[int | None, ...]
     states: tuple[str, ...]
-    repeated: bool
+    repeated: bool | str
     def __init__(self, time: Any, event: Any, repeated: Any = False) -> None: ...
     def __len__(self) -> int: ...
 

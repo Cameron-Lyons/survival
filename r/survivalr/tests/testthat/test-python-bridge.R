@@ -363,6 +363,10 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_true(attr(missing_surv2, "repeated"))
   expect_error(Surv2(c(1, 2), c("a")), "different lengths")
   expect_error(Surv2(c(1, 2), c("a", "b"), repeated = c(TRUE, FALSE)), "repeated")
+  expect_identical(
+    attr(Surv2(c(1, 2), c("a", "a"), repeated = "first"), "repeated"),
+    "first"
+  )
 
   timeline_data <- data.frame(
     id = c(1, 1, 1, 2, 2),
@@ -375,8 +379,12 @@ test_that("R formula wrappers delegate to the Python survival package", {
     x = c(10, 11, 12, 20, 21)
   )
   expect_equal(
-    Surv2data(survival::Surv2(time, state) ~ z + x, data = timeline_data, id = id),
-    survival::Surv2data(survival::Surv2(time, state) ~ z + x, data = timeline_data, id = id)
+    fromtimeline(Surv2(time, state) ~ z + x, data = timeline_data, id = id),
+    survival::fromtimeline(
+      survival::Surv2(time, state) ~ z + x,
+      data = timeline_data,
+      id = id
+    )
   )
   timeline_missing_data <- data.frame(
     id = c(1, 2, 1, 2, 1, 2),
@@ -391,12 +399,12 @@ test_that("R formula wrappers delegate to the Python survival package", {
     visit = as.Date("2026-01-01") + c(0, 1, NA, NA, 4, 5)
   )
   expect_equal(
-    Surv2data(
-      survival::Surv2(time, state) ~ x + z + observed + visit,
+    fromtimeline(
+      Surv2(time, state) ~ x + z + observed + visit,
       data = timeline_missing_data,
       id = id
     ),
-    survival::Surv2data(
+    survival::fromtimeline(
       survival::Surv2(time, state) ~ x + z + observed + visit,
       data = timeline_missing_data,
       id = id
@@ -412,22 +420,34 @@ test_that("R formula wrappers delegate to the Python survival package", {
     z = c("A", "A", "B"),
     x = c(10, 10, 20)
   )
-  expect_equal(
-    totimeline(Surv(start, stop, state) ~ z + x, data = counting_data, id = id, istate = istate),
-    survival::totimeline(survival::Surv(start, stop, state) ~ z + x, data = counting_data, id = id, istate = istate)
+  legacy_timeline <- totimeline(
+    Surv(start, stop, state) ~ z + x,
+    data = counting_data,
+    id = id,
+    istate = istate
   )
+  expect_identical(names(legacy_timeline), c("stop", "state", "z", "x", "id"))
+  expect_equal(legacy_timeline$stop, c(0, 2, 5, 0, 3))
+  expect_equal(
+    as.character(legacy_timeline$state),
+    c("entry", "ill", "death", "entry", "censor")
+  )
+  expect_equal(legacy_timeline$id, c(1, 1, 1, 2, 2))
   counting_no_istate <- counting_data[c("id", "start", "stop", "state", "z", "x")]
-  expect_equal(
-    totimeline(Surv(start, stop, state) ~ z + x, data = counting_no_istate, id = id),
-    survival::totimeline(survival::Surv(start, stop, state) ~ z + x, data = counting_no_istate, id = id)
+  legacy_timeline_without_istate <- totimeline(
+    Surv(start, stop, state) ~ z + x,
+    data = counting_no_istate,
+    id = id
   )
+  expect_s3_class(legacy_timeline_without_istate, "data.frame")
+  expect_equal(nrow(legacy_timeline_without_istate), 5L)
 
   timeline_right <- data.frame(
-    id = c(1, 1, 1, 2, 2, 2),
-    time = c(0, 2, 5, 0, 3, 6),
-    status = c(1, 1, 1, 1, 1, 0),
-    z = c("A", "A", "A", "B", "B", "B"),
-    x = c(10, 11, 12, 20, 21, 22)
+    id = c(1, 2, 1, 2, 1, 2),
+    time = c(0, 0, 2, 3, 5, 6),
+    status = c(0, 0, 1, 1, 1, 0),
+    z = c("A", "B", "A", "B", "A", "B"),
+    x = c(10, 20, 11, 21, 12, 22)
   )
   expect_equal(
     fromtimeline(Surv(time, status) ~ z + x, data = timeline_right, id = id),
@@ -1620,6 +1640,11 @@ test_that("R formula wrappers delegate to the Python survival package", {
     id = seq_along(time),
     model = TRUE
   )
+  reference_km_id$model <- stats::model.frame.default(
+    survival::Surv(time, status) ~ 1,
+    data = data,
+    id = seq_along(time)
+  )
   expect_equal(
     pseudo(km_from_string_id, times = 2),
     survival::pseudo(reference_km_id, times = 2),
@@ -1635,6 +1660,10 @@ test_that("R formula wrappers delegate to the Python survival package", {
     data = data,
     model = TRUE
   )
+  reference_grouped_model_fit$model <- stats::model.frame.default(
+    survival::Surv(time, status) ~ group,
+    data = data
+  )
   grouped_model_frame <- model.frame(grouped_model_fit)
   expect_equal(grouped_model_frame$time, data$time)
   expect_equal(grouped_model_frame$status, data$status)
@@ -1644,6 +1673,10 @@ test_that("R formula wrappers delegate to the Python survival package", {
     survival::Surv(time, status) ~ 1,
     data = data,
     model = TRUE
+  )
+  reference_direct_model_fit$model <- stats::model.frame.default(
+    survival::Surv(time, status) ~ 1,
+    data = data
   )
   direct_model_frame <- model.frame(direct_model_fit)
   expect_equal(direct_model_frame$time, data$time)
@@ -2201,6 +2234,11 @@ test_that("R formula wrappers delegate to the Python survival package", {
     id = counting_pseudo_data$id,
     model = TRUE
   )
+  reference_counting_pseudo_fit$model <- stats::model.frame.default(
+    survival::Surv(start, stop, status) ~ 1,
+    data = counting_pseudo_data,
+    id = counting_pseudo_data$id
+  )
   for (pseudo_type in c("survival", "cumhaz", "rmst")) {
     expect_equal(
       pseudo(counting_pseudo_fit, times = c(3, 5, 7), type = pseudo_type),
@@ -2258,6 +2296,11 @@ test_that("R formula wrappers delegate to the Python survival package", {
     data = grouped_counting_pseudo_data,
     id = grouped_counting_pseudo_data$id,
     model = TRUE
+  )
+  reference_grouped_counting_pseudo_fit$model <- stats::model.frame.default(
+    survival::Surv(start, stop, status) ~ group,
+    data = grouped_counting_pseudo_data,
+    id = grouped_counting_pseudo_data$id
   )
   for (pseudo_type in c("survival", "cumhaz", "rmst")) {
     expect_equal(
@@ -2519,6 +2562,13 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(names(royston(royston_fit)), names(survival::royston(reference_royston_fit)))
   expect_equal(royston(royston_fit), survival::royston(reference_royston_fit), tolerance = 2e-3)
 
+  reference_brier_with_newdata <- function(fit, times, newdata, detail = FALSE) {
+    model_env <- new.env(parent = environment(fit$terms))
+    model_env$newdata <- newdata
+    environment(fit$terms) <- model_env
+    survival::brier(fit, times = times, newdata = newdata, detail = detail)
+  }
+
   brier_data <- data.frame(
     time = c(1, 2, 3, 4, 5, 6, 7, 8),
     status = c(1, 1, 0, 1, 0, 1, 1, 0),
@@ -2533,7 +2583,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     y = TRUE
   )
   bridged_brier <- brier(brier_fit, times = c(2, 4, 6), newdata = brier_data, detail = TRUE)
-  reference_brier <- survival::brier(
+  reference_brier <- reference_brier_with_newdata(
     reference_brier_fit,
     times = c(2, 4, 6),
     newdata = brier_data,
@@ -2573,7 +2623,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     newdata = brier_weighted_newdata,
     detail = TRUE
   )
-  reference_brier_weighted <- survival::brier(
+  reference_brier_weighted <- reference_brier_with_newdata(
     reference_brier_weighted_fit,
     times = c(2, 4, 6),
     newdata = brier_weighted_newdata,
@@ -2621,7 +2671,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     newdata = brier_counting_data,
     detail = TRUE
   )
-  reference_brier_counting <- survival::brier(
+  reference_brier_counting <- reference_brier_with_newdata(
     reference_brier_counting_fit,
     times = c(2, 4, 6),
     newdata = brier_counting_data,
@@ -2661,7 +2711,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     newdata = brier_common_start_data,
     detail = TRUE
   )
-  reference_brier_common_start <- survival::brier(
+  reference_brier_common_start <- reference_brier_with_newdata(
     reference_brier_common_start_fit,
     times = c(3, 5, 7),
     newdata = brier_common_start_data,
@@ -2705,7 +2755,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     "survcheck"
   )
   expect_error(
-    survival::brier(
+    reference_brier_with_newdata(
       reference_brier_custom_id_fit,
       times = c(3, 5, 7),
       newdata = brier_bad_id_newdata
@@ -6606,6 +6656,12 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
+  # survival 3.8.x does not retain this requested frame, and reconstructing it
+  # later loses testthat-local data before the residual comparisons run.
+  diagnostic_reference$model <- stats::model.frame.default(
+    survival::Surv(time, event) ~ 1,
+    data = data
+  )
   for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
     expect_equal(
       residuals(diagnostic_bridged, times = c(2, 5), type = diagnostic_type),
@@ -6649,6 +6705,10 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
+  grouped_diagnostic_reference$model <- stats::model.frame.default(
+    survival::Surv(time, event) ~ group,
+    data = data
+  )
   for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
     expect_equal(
       residuals(
@@ -6691,6 +6751,11 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     weights = diagnostic_weights,
     model = TRUE
   )
+  weighted_diagnostic_reference$model <- stats::model.frame.default(
+    survival::Surv(time, event) ~ 1,
+    data = data,
+    weights = diagnostic_weights
+  )
   for (weighted_value in c(FALSE, TRUE)) {
     expect_equal(
       residuals(
@@ -6732,6 +6797,11 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = counting_data,
     id = counting_data$id,
     model = TRUE
+  )
+  counting_diagnostic_reference$model <- stats::model.frame.default(
+    survival::Surv(start, stop, event) ~ 1,
+    data = counting_data,
+    id = id
   )
   for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
     expect_equal(

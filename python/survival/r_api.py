@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date as _Date
 from datetime import datetime as _DateTime
 from functools import lru_cache
-from itertools import combinations, product
+from itertools import combinations, groupby, product
 from numbers import Real
 from operator import index
 from statistics import NormalDist
@@ -5217,7 +5217,7 @@ class Surv2:
     time: tuple[float, ...]
     status: tuple[int | None, ...]
     states: tuple[str, ...]
-    repeated: bool
+    repeated: bool | str
 
     def __init__(self, time: Any, event: Any, repeated: Any = False) -> None:
         time_values = [
@@ -5227,9 +5227,10 @@ class Surv2:
         event_values = _materialize_1d(event, "event")
         if len(event_values) != len(time_values):
             raise ValueError("Time and event are different lengths")
-        if not _is_bool_like(repeated):
+        repeated_is_first = isinstance(repeated, str) and repeated.lower() == "first"
+        if not (_is_bool_like(repeated) or repeated_is_first):
             raise ValueError("invalid value for repeated option")
-        repeated_value = bool(repeated)
+        repeated_value: bool | str = "first" if repeated_is_first else bool(repeated)
 
         levels = _surv2_levels(event)
         states = levels[1:]
@@ -5317,12 +5318,65 @@ def Surv2data(
         math.isnan(value) for value in time_values
     ):
         raise ValueError("id and time cannot be missing")
-    repeated_value = _normalize_bool_option(repeated, "repeated")
     state_values = (
         [str(value) for value in _materialize_1d(states, "states")] if states is not None else []
     )
 
     id_codes = _encode_labels(id_values, "id")
+    repeated_is_first = isinstance(repeated, str) and repeated.lower() == "first"
+    if repeated_is_first:
+        seen_by_id: dict[int, set[int]] = {}
+        for row_idx in sorted(
+            range(len(time_values)),
+            key=lambda idx: (id_codes[idx], time_values[idx]),
+        ):
+            status_value = status_values[row_idx]
+            if status_value in (None, 0):
+                continue
+            seen = seen_by_id.setdefault(id_codes[row_idx], set())
+            if status_value in seen:
+                status_values[row_idx] = 0
+            else:
+                seen.add(status_value)
+        repeated_value = True
+    else:
+        repeated_value = _normalize_bool_option(repeated, "repeated")
+    if not state_values:
+        order = sorted(
+            range(len(time_values)),
+            key=lambda idx: (id_codes[idx], time_values[idx]),
+        )
+        intervals: list[tuple[int, float, float, int, Any]] = []
+        for _, grouped_rows_iter in groupby(order, key=lambda idx: id_codes[idx]):
+            grouped_rows = list(grouped_rows_iter)
+            for current_row, next_row in zip(grouped_rows[:-1], grouped_rows[1:], strict=True):
+                next_status = status_values[next_row]
+                intervals.append(
+                    (
+                        current_row,
+                        time_values[current_row],
+                        time_values[next_row],
+                        0 if next_status is None else next_status,
+                        id_values[current_row],
+                    )
+                )
+        intervals.sort(key=lambda interval: interval[0])
+        rows = [interval[0] for interval in intervals]
+        starts = [interval[1] for interval in intervals]
+        stops = [interval[2] for interval in intervals]
+        output_status = [interval[3] for interval in intervals]
+        output_ids = [interval[4] for interval in intervals]
+        response_type = "right" if starts and all(value == 0.0 for value in starts) else "counting"
+        return {
+            "row": rows,
+            "start": starts,
+            "stop": stops,
+            "status": output_status,
+            "id": output_ids,
+            "istate": [0] * len(rows),
+            "states": [],
+            "type": response_type,
+        }
     result = _core.surv2data_timeline(
         id_codes,
         time_values,

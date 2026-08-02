@@ -662,7 +662,8 @@ cch(formula, data, subcoh, id, stratum = NULL, cohort.size,
 clogit(formula, data, weights, subset, na.action,
   method = c("exact", "approximate", "efron", "breslow"), ...)
 
-fromtimeline(formula, data, id, istate = "istate")
+fromtimeline(formula, data, subset, id, repeated = FALSE,
+  lvcf = TRUE, yname = c("tstart", "tstop", "status"))
 
 tmerge(data1, data2, id, ..., tstart, tstop, options)
 
@@ -932,7 +933,12 @@ quantile inversion.}
 \item{breaks}{Strictly increasing cut points for \code{tcut}.}
 \item{labels}{Optional interval labels for \code{tcut}.}
 \item{cut}{Cut points for \code{survSplit}.}
-\item{repeated}{Logical flag accepted by \code{Surv2} for repeated events.}
+\item{repeated}{Logical flag or \code{"first"} accepted by \code{Surv2}
+and timeline conversion for repeated events.}
+\item{lvcf}{Logical flag controlling last-value-carried-forward handling in
+\code{fromtimeline}.}
+\item{yname}{Optional two- or three-element output response names for
+\code{fromtimeline}.}
 \item{id1}{Query IDs for \code{neardate}.}
 \item{id2}{Reference IDs for \code{neardate}, or second subject identifiers
 for low-level Cox survival-curve inputs.}

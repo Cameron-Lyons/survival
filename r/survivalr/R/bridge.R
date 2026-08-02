@@ -2506,8 +2506,33 @@ Surv2 <- function(time, event, repeated = FALSE) {
   if (missing(event)) {
     stop("must have an event argument", call. = FALSE)
   }
-  if (!is.logical(repeated) || length(repeated) != 1L || is.na(repeated)) {
+  if (length(event) != length(time)) {
+    stop("Time and event are different lengths", call. = FALSE)
+  }
+  if (length(repeated) != 1L ||
+      !(is.logical(repeated) || is.character(repeated) && repeated == "first") ||
+      is.na(repeated)) {
     stop("invalid value for repeated option", call. = FALSE)
+  }
+  if (any(is.na(event) & !is.na(time))) {
+    fill <- if (is.numeric(event) && any(event == 0, na.rm = TRUE)) {
+      0
+    } else if (is.logical(event) && any(!event, na.rm = TRUE)) {
+      FALSE
+    } else if (is.factor(event)) {
+      levels(event)[1L]
+    } else {
+      NA
+    }
+    event[is.na(event) & !is.na(time)] <- fill
+  }
+  event <- as.factor(event)
+  input_attributes <- list()
+  if (!is.null(attributes(time))) {
+    input_attributes$time <- attributes(time)
+  }
+  if (!is.null(attributes(event))) {
+    input_attributes$event <- attributes(event)
   }
   time_values <- .as_python_vector(as.numeric(time))
   if (!is.list(time_values)) {
@@ -2525,8 +2550,11 @@ Surv2 <- function(time, event, repeated = FALSE) {
   )
   status <- as.integer(.as_nullable_numeric_vector(.result_field(result, "status")))
   out <- cbind(time = as.numeric(time), status = status)
+  if (length(input_attributes) > 0L) {
+    attr(out, "inputAttributes") <- input_attributes
+  }
   attr(out, "states") <- as.character(.result_field(result, "states"))
-  attr(out, "repeated") <- isTRUE(.result_field(result, "repeated"))
+  attr(out, "repeated") <- .result_field(result, "repeated")
   class(out) <- "Surv2"
   out
 }
@@ -4831,160 +4859,101 @@ survobrien <- function(formula, data, subset, na.action, transform,
   all(vapply(labels, .survobrien_formula_supported_term, logical(1), data = data))
 }
 
-fromtimeline <- function(formula, data, id, istate = "istate") {
+fromtimeline <- function(formula, data, subset, id, repeated = FALSE,
+                         lvcf = TRUE,
+                         yname = c("tstart", "tstop", "status")) {
   call <- match.call()
+  keep <- match(c("formula", "data", "subset", "id"), names(call), nomatch = 0L)
+  if (keep[[1L]] == 0L) {
+    stop("a formula argument is required", call. = FALSE)
+  }
+  if (keep[[2L]] == 0L) {
+    stop("the data argument is required", call. = FALSE)
+  }
+  if (keep[[4L]] == 0L) {
+    stop("the id argument is required", call. = FALSE)
+  }
   model_formula <- formula
   if (inherits(model_formula, "formula")) {
     model_env <- new.env(parent = environment(model_formula))
     model_env$Surv <- .native_model_frame_surv
     environment(model_formula) <- model_env
   }
-  keep <- match(c("formula", "data", "id"), names(call), nomatch = 0L)
-  tcall <- call[c(1L, keep)]
-  tcall$formula <- model_formula
-  tcall[[1L]] <- quote(stats::model.frame)
-  mf <- eval(tcall, parent.frame())
-  id_values <- stats::model.extract(mf, "id")
-  response <- stats::model.response(mf)
-  if (!inherits(response, "Surv")) {
-    stop("response must be a Surv object", call. = FALSE)
+  frame_call <- call[c(1L, keep)]
+  frame_call$formula <- model_formula
+  frame_call$na.action <- stats::na.pass
+  frame_call[[1L]] <- quote(stats::model.frame)
+  frame <- eval(frame_call, parent.frame())
+  response <- stats::model.response(frame)
+  converted <- .surv2counting_model_frame(
+    frame,
+    repeated = repeated,
+    lvcf = lvcf
+  )
+  istate_index <- match("(istate)", names(converted))
+  if (!is.na(istate_index) && !any(names(frame) == "istate")) {
+    names(converted)[[istate_index]] <- "istate"
   }
-  response_type <- attr(response, "type")
-  if (!(response_type %in% c("right", "mright"))) {
-    stop("only valid for a right censored response", call. = FALSE)
-  }
+  converted["(id)"] <- NULL
 
-  tname <- c("tstart", "tstop")
-  sname <- "state"
-  lhs <- formula[[2L]]
-  if ((is.name(lhs[[1L]]) && identical(lhs[[1L]], quote(Surv))) ||
-      identical(deparse(lhs[[1L]]), "survival::Surv")) {
-    if (is.name(lhs[[2L]])) {
-      temp <- as.character(lhs[[2L]])
-      tname <- paste0(temp, 1:2)
+  converted_response <- converted[[1L]]
+  states <- attr(converted_response, "states")
+  response_columns <- ncol(converted_response)
+  if (is.null(states)) {
+    status <- converted_response[, response_columns]
+  } else {
+    status <- factor(
+      converted_response[, response_columns],
+      0:length(states),
+      c("censor", states)
+    )
+  }
+  if (response_columns == 3L) {
+    response_data <- data.frame(
+      tstart = converted_response[, 1L],
+      tstop = converted_response[, 2L],
+      status = status
+    )
+  } else {
+    response_data <- data.frame(
+      tstart = converted_response[, 1L],
+      status = status
+    )
+  }
+  if (!missing(yname)) {
+    if (any(!is.na(match(yname, names(converted))))) {
+      stop("element of yname conflicts with an existing name in the data", call. = FALSE)
     }
-    if (is.name(lhs[[3L]])) {
-      sname <- as.character(lhs[[3L]])
-    } else if (is.call(lhs[[3L]])) {
-      temp <- lhs[[3L]]
-      if (identical(deparse(temp[[1L]]), "factor") && is.name(temp[[2L]])) {
-        sname <- as.character(temp[[2L]])
+    if (response_columns == 2L) {
+      if (!(length(yname) %in% 2:3)) {
+        stop("wrong length for yname", call. = FALSE)
+      }
+      names(response_data) <- c(yname[[1L]], yname[[length(yname)]])
+    } else {
+      if (length(yname) != 3L) {
+        stop("wrong length for yname", call. = FALSE)
+      }
+      names(response_data) <- yname
+    }
+  } else {
+    response_call <- formula[[2L]]
+    if (is.name(response_call[[2L]])) {
+      if (response_columns == 2L) {
+        yname <- c(as.character(response_call[[2L]]), yname[[3L]])
+      } else {
+        yname[1:2] <- paste0(as.character(response_call[[2L]]), 1:2)
       }
     }
-  } else if (is.name(lhs[[1L]])) {
-    tname <- paste0(lhs[[1L]], 1:2)
-  }
-
-  if (is.name(call$id)) {
-    idname <- as.character(call$id)
-    if (is.na(match(idname, names(mf)))) {
-      names(mf)[match("(id)", names(mf))] <- idname
+    if (is.name(response_call[[3L]])) {
+      yname[[length(yname)]] <- as.character(response_call[[3L]])
     }
-  } else {
-    stop("id must be a simple variable name", call. = FALSE)
-  }
-
-  result <- .call_r_api(
-    "fromtimeline",
-    time = .as_python_vector(response[, 1L]),
-    status = .as_python_vector(response[, 2L]),
-    id = .as_python_vector(id_values),
-    states = attr(response, "states"),
-    data = .as_python_data(mf[-1L]),
-    id_name = idname
-  )
-  removed_id <- .result_field(result, "removed_id")
-  if (!is.null(removed_id) && length(removed_id) > 0L) {
-    warning("identifiers with only 1 row were removed", call. = FALSE)
-  }
-
-  static <- as.logical(.result_field(result, "static"))
-  static_rows <- as.integer(.as_numeric_vector(.result_field(result, "static_row"))) + 1L
-  dynamic_rows <- as.integer(.as_numeric_vector(.result_field(result, "dynamic_row"))) + 1L
-  n_out <- length(static_rows)
-  data_names <- names(mf)[-1L]
-
-  output <- list()
-  static_names <- data_names[static]
-  for (name in static_names) {
-    output[[name]] <- mf[[name]][static_rows]
-  }
-  while (!is.na(match(sname, data_names))) {
-    sname <- paste0(sname, "1")
-  }
-  output[[tname[[1L]]]] <- .as_numeric_vector(.result_field(result, "start"))
-  output[[tname[[2L]]]] <- .as_numeric_vector(.result_field(result, "stop"))
-  status_values <- as.integer(.as_numeric_vector(.result_field(result, "status")))
-  state_levels <- as.character(.result_field(result, "state_levels"))
-  if (length(state_levels) > 0L) {
-    status_column <- factor(status_values, seq.int(0L, length(state_levels) - 1L), state_levels)
-  } else {
-    status_column <- as.numeric(status_values)
-  }
-  output[[sname]] <- status_column
-  dynamic_names <- data_names[!static]
-  if (length(dynamic_names) > 0L) {
-    for (name in dynamic_names) {
-      output[[name]] <- mf[[name]][dynamic_rows]
+    conflict <- match(yname, names(converted), nomatch = 0L)
+    if (any(conflict > 0L)) {
+      yname[conflict > 0L] <- paste0("_", yname[conflict > 0L], "_")
     }
+    names(response_data) <- yname
   }
-
-  if (any(istate == names(output))) {
-    stop("istate option duplicates an existing variable", call. = FALSE)
-  }
-  istate_values <- as.integer(.as_numeric_vector(.result_field(result, "istate")))
-  istate_levels <- as.character(.result_field(result, "istate_levels"))
-  output[[istate]] <- if (length(istate_levels) > 0L) {
-    factor(istate_values, seq_along(istate_levels), istate_levels)
-  } else {
-    as.numeric(istate_values)
-  }
-
-  out <- as.data.frame(output, stringsAsFactors = FALSE, optional = TRUE)
-  row.names(out) <- seq_len(n_out)
-  n_subject <- length(unique(static_rows))
-  tcount_rows <- c(sname, dynamic_names)
-  tcount <- matrix(
-    0,
-    nrow = length(tcount_rows),
-    ncol = 9L,
-    dimnames = list(
-      tcount_rows,
-      c("early", "late", "gap", "within", "boundary", "leading", "trailing", "tied", "missid")
-    )
-  )
-  if (length(tcount_rows) > 0L) {
-    middle_count <- max(0L, n_out - n_subject)
-    tcount[sname, "within"] <- middle_count
-    tcount[sname, "leading"] <- n_subject
-    tcount[sname, "trailing"] <- n_subject
-    if (length(dynamic_names) > 0L) {
-      tcount[dynamic_names, "boundary"] <- middle_count
-      tcount[dynamic_names, "leading"] <- n_subject
-      tcount[dynamic_names, "trailing"] <- n_subject
-    }
-  }
-  attr(out, "tm.retain") <- list(
-    tname = list(idname = idname, tstartname = tname[[1L]], tstopname = tname[[2L]]),
-    n = as.integer(n_out),
-    tevent = list(name = sname, censor = stats::setNames(list(0), sname)),
-    tdcvar = dynamic_names
-  )
-  attr(out, "tcount") <- tcount
-  call_parts <- c(
-    "tmerge(data1 = new, data2 = d2, id = ", idname,
-    ", ", sname, " = event(.y1., .y2.)"
-  )
-  if (length(dynamic_names) > 0L) {
-    call_parts <- c(
-      call_parts,
-      paste0(", ", dynamic_names, " = tdc(.y1., ", dynamic_names, ")", collapse = "")
-    )
-  }
-  call_parts <- c(call_parts, ")")
-  attr(out, "call") <- parse(text = paste0(call_parts, collapse = ""))[[1L]]
-  class(out) <- c("tmerge", "data.frame")
-  out
+  cbind(converted[, -1L, drop = FALSE], response_data)
 }
 
 totimeline <- function(formula, data, id, istate) {
@@ -5147,6 +5116,52 @@ totimeline <- function(formula, data, id, istate) {
     }
   }
   frame
+}
+
+.surv2counting_model_frame <- function(frame, repeated = FALSE, lvcf = TRUE) {
+  response <- stats::model.response(frame)
+  if (!(inherits(response, "Surv") || inherits(response, "Surv2"))) {
+    stop("response must be a survival object", call. = FALSE)
+  }
+  if (inherits(response, "Surv") &&
+      attr(response, "type") %in% c("counting", "mcounting")) {
+    stop("response cannot be of counting process type", call. = FALSE)
+  }
+  if (length(lvcf) != 1L || !is.logical(lvcf) || is.na(lvcf)) {
+    stop("invalid value for lvcf option", call. = FALSE)
+  }
+  id_values <- stats::model.extract(frame, "id")
+  if (is.null(id_values) || !any(duplicated(id_values))) {
+    stop("data does not appear to be timeline data", call. = FALSE)
+  }
+  result <- .call_r_api(
+    "Surv2data",
+    time = .as_python_vector(response[, 1L]),
+    status = .as_python_vector(response[, 2L]),
+    states = attr(response, "states"),
+    repeated = repeated,
+    id = .as_python_vector(id_values)
+  )
+  rows <- as.integer(.as_numeric_vector(.result_field(result, "row"))) + 1L
+  converted <- frame[rows, , drop = FALSE]
+  if (lvcf) {
+    converted <- .surv2data_fill_model_frame(
+      converted,
+      id_values[rows],
+      .as_numeric_vector(.result_field(result, "start"))
+    )
+  }
+  converted[[1L]] <- .as_surv2data_response(result)
+  states <- as.character(.result_field(result, "states"))
+  istate <- as.integer(.as_numeric_vector(.result_field(result, "istate")))
+  if (length(states) > 0L && any(istate > 0L, na.rm = TRUE)) {
+    converted[["(istate)"]] <- factor(
+      istate,
+      levels = seq_along(states),
+      labels = states
+    )
+  }
+  converted
 }
 
 Surv2data <- function(formula, data, subset, id) {
@@ -9914,6 +9929,9 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
   )
   states <- attr(response, "states")
   if (!is.null(states)) {
+    if (!missing(id)) {
+      output[[as.character(id)]] <- NULL
+    }
     output[[event_name]] <- factor(
       as.integer(output[[event_name]]),
       levels = 0:length(states),
