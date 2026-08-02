@@ -7859,15 +7859,9 @@ print.Surv2 <- function(x, quote = FALSE, ...) {
 }
 
 model.frame.formula <- function(formula, ...) {
-  frame_args <- list(...)
-  do.call(
-    stats::model.frame.default,
-    c(
-      list(
-        formula = .formula_with_native_surv_response(formula, parent.frame())
-      ),
-      frame_args
-    )
+  stats::model.frame.default(
+    .formula_with_native_surv_response(formula, parent.frame()),
+    ...
   )
 }
 
