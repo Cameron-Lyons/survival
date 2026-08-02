@@ -6606,6 +6606,12 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
+  # survival 3.8.x does not retain this requested frame, and reconstructing it
+  # later loses testthat-local data before the residual comparisons run.
+  diagnostic_reference$model <- stats::model.frame.default(
+    survival::Surv(time, event) ~ 1,
+    data = data
+  )
   for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
     expect_equal(
       residuals(diagnostic_bridged, times = c(2, 5), type = diagnostic_type),
@@ -6649,6 +6655,10 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
+  grouped_diagnostic_reference$model <- stats::model.frame.default(
+    survival::Surv(time, event) ~ group,
+    data = data
+  )
   for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
     expect_equal(
       residuals(
@@ -6691,6 +6701,11 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     weights = diagnostic_weights,
     model = TRUE
   )
+  weighted_diagnostic_reference$model <- stats::model.frame.default(
+    survival::Surv(time, event) ~ 1,
+    data = data,
+    weights = diagnostic_weights
+  )
   for (weighted_value in c(FALSE, TRUE)) {
     expect_equal(
       residuals(
@@ -6732,6 +6747,11 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = counting_data,
     id = counting_data$id,
     model = TRUE
+  )
+  counting_diagnostic_reference$model <- stats::model.frame.default(
+    survival::Surv(start, stop, event) ~ 1,
+    data = counting_data,
+    id = id
   )
   for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
     expect_equal(
