@@ -40,6 +40,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cluster, m)?)?;
     m.add_function(wrap_pyfunction!(cluster_str, m)?)?;
     m.add_function(wrap_pyfunction!(strata, m)?)?;
+    m.add_function(wrap_pyfunction!(strata_compact, m)?)?;
     m.add_function(wrap_pyfunction!(strata_str, m)?)?;
     m.add_function(wrap_pyfunction!(neardate, m)?)?;
     m.add_function(wrap_pyfunction!(neardate_str, m)?)?;

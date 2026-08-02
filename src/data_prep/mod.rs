@@ -36,7 +36,7 @@ pub use nostutter::{
 pub use rttright_module::{
     RttrightResult, rttright, rttright_matrix, rttright_stratified, rttright_time_matrix,
 };
-pub use strata_module::{StrataResult, strata, strata_str};
+pub use strata_module::{StrataResult, strata, strata_compact, strata_str};
 pub use surv2data_module::{
     FromTimelineRowsResult, Surv2DataResult, Surv2TimelineResult, from_timeline_rows, surv2data,
     surv2data_timeline,

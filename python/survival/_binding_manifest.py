@@ -930,6 +930,7 @@ BINDINGS = (
     "step_matrix_values_at",
     "step_values_at",
     "strata",
+    "strata_compact",
     "strata_str",
     "stratified_concordance_influence_rows",
     "stratified_concordance_rank_rows",
