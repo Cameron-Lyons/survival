@@ -64,6 +64,28 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_error(sum(response), "Invalid operation on a survival time")
   expect_error(response + 1, "Invalid operation on a survival time")
   expect_error(log(response), "Invalid operation on a survival time")
+  plot_to_null_device <- function(x) {
+    grDevices::pdf(NULL)
+    on.exit(grDevices::dev.off())
+    plot(x)
+  }
+  expect_equal(
+    plot_to_null_device(response),
+    plot_to_null_device(survival::Surv(data$time, data$status))
+  )
+  for (graphics_method in list(
+    function(x) barplot(x),
+    function(x) density(x),
+    function(x) hist(x),
+    function(x) identify(x),
+    function(x) image(x),
+    function(x) lines(x),
+    function(x) pairs(x),
+    function(x) points(x),
+    function(x) text(x)
+  )) {
+    expect_error(graphics_method(response), "not defined for a Surv object", fixed = TRUE)
+  }
   expect_equal(capture.output(print(response)), "[1] 1  2  3+ 4 ")
   native_response <- .as_native_surv(response)
   expect_equal(capture.output(print(native_response)), "[1] 1  2  3+ 4 ")
@@ -153,6 +175,21 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_error(sum(surv2_frame_response), "Invalid operation on a survival time")
   expect_error(surv2_frame_response + 1, "Invalid operation on a survival time")
   expect_error(log(surv2_frame_response), "Invalid operation on a survival time")
+  for (graphics_method in list(
+    function(x) hist(x),
+    function(x) identify(x),
+    function(x) image(x),
+    function(x) lines(x),
+    function(x) pairs(x),
+    function(x) points(x),
+    function(x) text(x)
+  )) {
+    expect_error(
+      graphics_method(surv2_frame_response),
+      "not defined for a Surv2 object",
+      fixed = TRUE
+    )
+  }
   expect_equal(capture.output(print(surv2_frame_response)), "[1]  1+   2:b NA? ")
   surv2_response_frame <- as.data.frame(surv2_frame_response)
   expect_s3_class(surv2_response_frame, "data.frame")
