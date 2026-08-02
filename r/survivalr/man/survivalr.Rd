@@ -932,7 +932,8 @@ quantile inversion.}
 \item{breaks}{Strictly increasing cut points for \code{tcut}.}
 \item{labels}{Optional interval labels for \code{tcut}.}
 \item{cut}{Cut points for \code{survSplit}.}
-\item{repeated}{Logical flag accepted by \code{Surv2} for repeated events.}
+\item{repeated}{Logical flag or \code{"first"} accepted by \code{Surv2} for
+repeated events.}
 \item{id1}{Query IDs for \code{neardate}.}
 \item{id2}{Reference IDs for \code{neardate}, or second subject identifiers
 for low-level Cox survival-curve inputs.}

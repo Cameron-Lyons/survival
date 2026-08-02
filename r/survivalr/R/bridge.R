@@ -2503,30 +2503,52 @@ Surv2 <- function(time, event, repeated = FALSE) {
   if (!is.numeric(time)) {
     stop("Time variable is not numeric", call. = FALSE)
   }
+  n <- length(time)
+  valid_repeated <- length(repeated) == 1L && (
+    is.logical(repeated) ||
+      (is.character(repeated) && !is.na(repeated) && identical(repeated, "first"))
+  )
+  if (!valid_repeated) {
+    stop("invalid value for repeated option", call. = FALSE)
+  }
   if (missing(event)) {
     stop("must have an event argument", call. = FALSE)
   }
-  if (!is.logical(repeated) || length(repeated) != 1L || is.na(repeated)) {
-    stop("invalid value for repeated option", call. = FALSE)
+  if (length(event) != n) {
+    stop("Time and event are different lengths", call. = FALSE)
   }
-  time_values <- .as_python_vector(as.numeric(time))
-  if (!is.list(time_values)) {
-    time_values <- as.list(time_values)
+  missing_event <- is.na(event) & !is.na(time)
+  if (any(missing_event)) {
+    fill <- if (is.numeric(event) && any(event == 0, na.rm = TRUE)) {
+      0
+    } else if (is.logical(event) && any(!event, na.rm = TRUE)) {
+      FALSE
+    } else if (is.factor(event)) {
+      levels(event)[[1L]]
+    } else {
+      NA
+    }
+    event[missing_event] <- fill
   }
-  event_values <- .as_python_vector(event)
-  if (!is.factor(event) && !is.list(event_values)) {
-    event_values <- as.list(event_values)
+  event <- as.factor(event)
+  input_attributes <- list()
+  if (!is.null(attributes(time))) {
+    input_attributes$time <- attributes(time)
   }
-  result <- .call_r_api(
-    "Surv2",
-    time_values,
-    event_values,
-    repeated = repeated
-  )
-  status <- as.integer(.as_nullable_numeric_vector(.result_field(result, "status")))
+  if (!is.null(attributes(event))) {
+    input_attributes$event <- attributes(event)
+  }
+  states <- levels(event)[-1L]
+  if (any(is.na(states) | states == "")) {
+    stop("each state must have a non-blank name", call. = FALSE)
+  }
+  status <- as.integer(event) - 1L
   out <- cbind(time = as.numeric(time), status = status)
-  attr(out, "states") <- as.character(.result_field(result, "states"))
-  attr(out, "repeated") <- isTRUE(.result_field(result, "repeated"))
+  attr(out, "states") <- states
+  attr(out, "repeated") <- repeated
+  if (length(input_attributes) > 0L) {
+    attr(out, "inputAttributes") <- input_attributes
+  }
   class(out) <- "Surv2"
   out
 }
@@ -4942,6 +4964,13 @@ fromtimeline <- function(formula, data, id, istate = "istate") {
 
   out <- as.data.frame(output, stringsAsFactors = FALSE, optional = TRUE)
   row.names(out) <- seq_len(n_out)
+  if (length(state_levels) > 0L) {
+    covariate_names <- setdiff(data_names, idname)
+    column_order <- unique(c(covariate_names, istate, tname, sname))
+    out <- out[column_order[column_order %in% names(out)]]
+    row.names(out) <- as.integer(row.names(mf)[dynamic_rows])
+    return(out)
+  }
   n_subject <- length(unique(static_rows))
   tcount_rows <- c(sname, dynamic_names)
   tcount <- matrix(
@@ -9896,6 +9925,7 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
     event
   }
   covariates <- model_frame[-1L]
+  states <- attr(response, "states")
   result <- .call_r_api(
     "survSplit",
     response = py_response,
@@ -9905,14 +9935,13 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
     end = end_name,
     event = event_name,
     episode = if (missing(episode)) NULL else as.character(episode),
-    id = if (missing(id)) NULL else as.character(id),
+    id = if (missing(id) || !is.null(states)) NULL else as.character(id),
     zero = zero
   )
   output <- .restore_r_column_classes(
     as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE),
     covariates
   )
-  states <- attr(response, "states")
   if (!is.null(states)) {
     output[[event_name]] <- factor(
       as.integer(output[[event_name]]),

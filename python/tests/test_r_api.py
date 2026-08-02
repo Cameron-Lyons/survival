@@ -2695,6 +2695,12 @@ def test_surv2_response_matches_r_multistate_shape():
             ["censor", "entry", "ill", "death"],
         ),
     )
+    repeated_first = survival.Surv2([1.0, 2.0, 3.0], [None, 0, 1], repeated="first")
+    logical_missing = survival.Surv2([1.0, 2.0, 3.0], [None, False, True])
+    categorical_missing = survival.Surv2(
+        [1.0, 2.0, 3.0],
+        Factor([None, "death", "ill"], ["censor", "ill", "death"]),
+    )
 
     assert len(response) == 3
     assert response.time == pytest.approx((1.0, 2.0, 3.0))
@@ -2710,6 +2716,13 @@ def test_surv2_response_matches_r_multistate_shape():
     assert survival.format_surv(missing) == ["1? ", "NA+", "3:c"]
     assert categorical.status == (1, 3, 2)
     assert categorical.states == ("entry", "ill", "death")
+    assert repeated_first.status == (0, 0, 1)
+    assert repeated_first.states == ("1",)
+    assert repeated_first.repeated == "first"
+    assert logical_missing.status == (0, 0, 1)
+    assert logical_missing.states == ("TRUE",)
+    assert categorical_missing.status == (0, 2, 1)
+    assert categorical_missing.states == ("ill", "death")
 
     with pytest.raises(ValueError, match="different lengths"):
         survival.Surv2([1.0, 2.0], ["a"])

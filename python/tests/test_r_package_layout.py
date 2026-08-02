@@ -34,7 +34,7 @@ def test_r_bridge_package_metadata_is_present():
     assert "Author: Cameron Lyons" in description
     assert "Maintainer: Cameron Lyons" in description
     assert "reticulate" in description
-    assert "    survival (>= 3.8-6)," in description
+    assert "    survival (>= 3.8-8)," in description
     assert "SystemRequirements: Python" in description
     assert (R_PACKAGE / "LICENSE").is_file()
     assert (R_PACKAGE / "R" / "bridge.R").is_file()

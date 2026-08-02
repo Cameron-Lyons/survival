@@ -13,7 +13,7 @@ from itertools import combinations, product
 from numbers import Real
 from operator import index
 from statistics import NormalDist
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 from . import _survival as _core
 
@@ -5208,7 +5208,7 @@ class Surv2:
     time: tuple[float, ...]
     status: tuple[int | None, ...]
     states: tuple[str, ...]
-    repeated: bool
+    repeated: bool | Literal["first"]
 
     def __init__(self, time: Any, event: Any, repeated: Any = False) -> None:
         time_values = [
@@ -5218,9 +5218,48 @@ class Surv2:
         event_values = _materialize_1d(event, "event")
         if len(event_values) != len(time_values):
             raise ValueError("Time and event are different lengths")
-        if not _is_bool_like(repeated):
+        repeated_is_first = isinstance(repeated, str) and repeated == "first"
+        if not (_is_bool_like(repeated) or repeated_is_first):
             raise ValueError("invalid value for repeated option")
-        repeated_value = bool(repeated)
+        repeated_value: bool | Literal["first"] = "first" if repeated_is_first else bool(repeated)
+
+        missing_at_observed_time = [
+            index
+            for index, (time_value, event_value) in enumerate(
+                zip(time_values, event_values, strict=True)
+            )
+            if not math.isnan(time_value) and _is_missing_value(event_value)
+        ]
+        if missing_at_observed_time:
+            observed_events = [value for value in event_values if not _is_missing_value(value)]
+            categories = _mstate_categories(event)
+            category_values = (
+                []
+                if categories is None
+                else [
+                    value
+                    for value in _materialize_1d(categories, "event categories")
+                    if not _is_missing_value(value)
+                ]
+            )
+            fill_value: Any = _MISSING
+            if category_values:
+                fill_value = category_values[0]
+            elif observed_events and all(isinstance(value, bool) for value in observed_events):
+                if any(not value for value in observed_events):
+                    fill_value = False
+            elif (
+                observed_events
+                and all(
+                    isinstance(value, Real) and not isinstance(value, bool)
+                    for value in observed_events
+                )
+                and any(float(value) == 0.0 for value in observed_events)
+            ):
+                fill_value = 0
+            if fill_value is not _MISSING:
+                for index in missing_at_observed_time:
+                    event_values[index] = fill_value
 
         levels = _surv2_levels(event)
         states = levels[1:]

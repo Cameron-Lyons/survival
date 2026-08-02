@@ -1,5 +1,5 @@
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from ._survival import SplineBasisResult as _SplineBasisResult
 
@@ -39,7 +39,7 @@ class Surv2:
     time: tuple[float, ...]
     status: tuple[int | None, ...]
     states: tuple[str, ...]
-    repeated: bool
+    repeated: bool | Literal["first"]
     def __init__(self, time: Any, event: Any, repeated: Any = False) -> None: ...
     def __len__(self) -> int: ...
 

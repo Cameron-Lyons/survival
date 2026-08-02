@@ -16,6 +16,6 @@ Imports:
     stats,
     utils
 Suggests:
-    survival (>= 3.8-6),
+    survival (>= 3.8-8),
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
