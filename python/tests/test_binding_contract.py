@@ -3035,7 +3035,16 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
         "scale_schoenfeld_residuals": ["raw", "beta", "information_matrix"],
         "cox_dfbeta_from_score_residuals": ["score", "information_matrix", "scaled"],
         "cox_zph_term_matrix": ["scaled", "groups", "beta"],
-        "cox_zph_tests": ["scaled", "transformed_time", "groups", "beta", "single_df"],
+        "cox_zph_tests": [
+            "event_scores",
+            "event_information",
+            "transformed_time",
+            "event_counts",
+            "groups",
+            "beta",
+            "single_df",
+            "global_test",
+        ],
         "cox_zph_group_variance": ["information_matrix", "groups", "beta"],
         "prediction_se_from_variance": ["rows", "variance"],
         "term_prediction_se_from_variance": ["rows", "variance", "groups"],
@@ -3111,13 +3120,20 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
     ] == pytest.approx([4.5, 3.0])
     zph_tests = core.cox_zph_tests(
         [[1.0, 0.5], [0.5, 1.5], [2.0, -0.5]],
+        [
+            [[2.0, 0.2], [0.2, 1.5]],
+            [[1.0, 0.1], [0.1, 2.0]],
+            [[1.5, 0.0], [0.0, 1.0]],
+        ],
         [3.0, 1.0, 2.0],
+        [1, 1, 1],
         [[0], [1]],
         [0.25, -0.5],
         False,
+        True,
     )
     assert len(zph_tests.chi2_values) == 2
-    assert zph_tests.global_chi2 == pytest.approx(sum(zph_tests.chi2_values))
+    assert zph_tests.global_chi2 >= 0.0
     assert zph_tests.global_df == 2
     group_variance = core.cox_zph_group_variance(
         [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],

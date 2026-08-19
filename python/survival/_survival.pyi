@@ -7158,11 +7158,14 @@ def cox_zph_term_matrix(
     beta: list[float],
 ) -> list[list[float]]: ...
 def cox_zph_tests(
-    scaled: list[list[float]],
+    event_scores: list[list[float]],
+    event_information: list[list[list[float]]],
     transformed_time: list[float],
+    event_counts: list[int],
     groups: list[list[int]],
     beta: list[float],
     single_df: bool,
+    global_test: bool,
 ) -> ProportionalityTest: ...
 def cox_zph_group_variance(
     information_matrix: list[list[float]],

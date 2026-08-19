@@ -10760,13 +10760,12 @@ def test_predict_expected_and_residuals_share_martingale_identity():
     assert all(math.isfinite(value) for value in deviance)
 
 
-def test_cox_zph_rank_transform_matches_low_level_ph_test():
+def test_cox_zph_rank_transform_uses_full_model_times():
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=10, eps=1e-5)
-    raw = fit.schoenfeld_residuals()
     scaled = fit.scaled_schoenfeld_residuals()
-    ranks = list(range(1, len(raw) + 1))
-    low_level = survival.ph_test(scaled, ranks, None)
-    raw_level = survival.ph_test(raw, ranks, None)
+    event_indices = survival.r_api._cox_event_indices(fit)
+    all_ranks = survival.r_api._average_ranks([float(value) for value in fit.event_times])
+    ranks = [all_ranks[idx] for idx in event_indices]
 
     result = survival.cox_zph(fit, transform="rank", terms=False)
 
@@ -10774,12 +10773,11 @@ def test_cox_zph_rank_transform_matches_low_level_ph_test():
     assert result.variable_names == ["x1", "x2"]
     assert result.x == pytest.approx(ranks)
     assert result.time == pytest.approx(_fit_event_times(fit))
-    assert result.chi2_values == pytest.approx(low_level.chi2_values)
-    assert result.p_values == pytest.approx(low_level.p_values)
-    assert result.global_chi2 == pytest.approx(low_level.global_chi2)
-    assert result.global_df == low_level.global_df
-    assert result.global_p_value == pytest.approx(low_level.global_p_value)
-    assert result.global_chi2 != pytest.approx(raw_level.global_chi2)
+    assert len(result.chi2_values) == 2
+    assert all(value >= 0.0 for value in result.chi2_values)
+    assert result.global_df == 2
+    assert result.global_chi2 is not None
+    assert result.global_chi2 >= 0.0
     for actual, expected in zip(result.y, scaled, strict=True):
         assert actual == pytest.approx(expected)
     assert result.table[-1]["name"] == "GLOBAL"
@@ -10837,23 +10835,25 @@ def test_cox_zph_clustered_fit_uses_robust_scaled_schoenfeld_residuals():
         max_iter=10,
         eps=1e-5,
     )
-    raw = fit.schoenfeld_residuals()
     robust_scaled = survival.r_api.residuals(fit, type="scaledsch")
     naive_scaled = fit.fit.scaled_schoenfeld_residuals()
-    ranks = list(range(1, len(raw) + 1))
-    low_level = survival.ph_test(robust_scaled, ranks, None)
-    naive_level = survival.ph_test(naive_scaled, ranks, None)
+    ordinary = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
 
     result = survival.cox_zph(fit, transform="rank", terms=False)
+    ordinary_result = survival.cox_zph(ordinary, transform="rank", terms=False)
 
     assert result.variable_names == ["x1", "x2"]
-    assert result.x == pytest.approx(ranks)
-    assert result.chi2_values == pytest.approx(low_level.chi2_values)
-    assert result.p_values == pytest.approx(low_level.p_values)
-    assert result.global_chi2 == pytest.approx(low_level.global_chi2)
-    assert result.global_df == low_level.global_df
-    assert result.global_p_value == pytest.approx(low_level.global_p_value)
-    assert result.global_chi2 != pytest.approx(naive_level.global_chi2)
+    assert result.x == pytest.approx(ordinary_result.x)
+    assert result.chi2_values == pytest.approx(ordinary_result.chi2_values)
+    assert result.p_values == pytest.approx(ordinary_result.p_values)
+    assert result.global_chi2 == pytest.approx(ordinary_result.global_chi2)
+    assert result.global_df == ordinary_result.global_df
+    assert result.global_p_value == pytest.approx(ordinary_result.global_p_value)
     for actual, expected in zip(fit.scaled_schoenfeld_residuals(), robust_scaled, strict=True):
         assert actual == pytest.approx(expected)
     assert fit.scaled_schoenfeld_residuals()[0] != pytest.approx(naive_scaled[0])
@@ -10891,7 +10891,9 @@ def test_cox_zph_identity_and_km_transforms_expose_r_style_time_axes():
     assert identity_prefix.transform == "identity"
     assert identity_prefix.x == pytest.approx(identity.x)
     assert ranked.transform == "rank"
-    assert ranked.x == pytest.approx(list(range(1, len(event_times) + 1)))
+    all_ranks = survival.r_api._average_ranks([float(value) for value in fit.event_times])
+    event_indices = survival.r_api._cox_event_indices(fit)
+    assert ranked.x == pytest.approx([all_ranks[idx] for idx in event_indices])
     assert ranked_prefix.transform == "rank"
     assert ranked_prefix.x == pytest.approx(ranked.x)
     assert km.transform == "km"
@@ -10903,6 +10905,54 @@ def test_cox_zph_identity_and_km_transforms_expose_r_style_time_axes():
     assert logged_prefix.transform == "log"
     assert logged_prefix.x == pytest.approx([math.log(time) for time in event_times])
     assert km.x != pytest.approx(identity.x)
+
+
+def test_cox_zph_callable_transform_receives_all_model_times():
+    data = _toy_data()
+    fit = survival.coxph("Surv(time, status) ~ x1", data=data, max_iter=10, eps=1e-5)
+    received = []
+
+    def squared(values):
+        received.extend(values)
+        return [value * value for value in values]
+
+    result = survival.cox_zph(fit, transform=squared)
+    event_indices = survival.r_api._cox_event_indices(fit)
+
+    assert received == pytest.approx(data["time"])
+    assert result.x == pytest.approx([data["time"][idx] ** 2 for idx in event_indices])
+    assert result.transform == "squared"
+
+    with pytest.raises(ValueError, match="same length as model times"):
+        survival.cox_zph(fit, transform=lambda values: values[:-1])
+
+
+def test_cox_zph_km_transform_handles_event_times_that_restart_by_stratum():
+    data = {
+        "time": [2.0, 4.0, 5.0, 4.0, 7.0, 8.0],
+        "status": [1, 1, 0, 1, 1, 0],
+        "x": [0.2, 0.8, 0.4, 1.1, 0.3, 0.7],
+        "group": ["a", "a", "a", "b", "b", "b"],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x + strata(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+    result = survival.cox_zph(fit, transform="km")
+    low_level = survival.survfitkm(data["time"], data["status"], conf_type="none")
+    expected = []
+    for event_time in result.time:
+        cursor = 0
+        while cursor < len(low_level.time) and low_level.time[cursor] < event_time - 1e-9:
+            cursor += 1
+        expected.append(1.0 - (low_level.estimate[cursor - 1] if cursor else 1.0))
+
+    assert result.x == pytest.approx(expected)
+    time_four = [value for time, value in zip(result.time, result.x, strict=True) if time == 4.0]
+    assert len(time_four) == 2
+    assert time_four[0] == pytest.approx(time_four[1])
 
 
 def test_cox_zph_rejects_unknown_transform():
