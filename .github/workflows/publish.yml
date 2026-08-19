@@ -275,6 +275,35 @@ jobs:
             echo "Version ${VERSION} not found on crates.io, will publish"
           fi
 
+      - name: Check if shim version exists on crates.io
+        id: check-shim
+        run: |
+          if curl -s "https://crates.io/api/v1/crates/survival-pyo3-macros-shim/0.1.0" | grep -q '"version"'; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Shim version 0.1.0 already exists on crates.io, skipping publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Shim version 0.1.0 not found on crates.io, will publish"
+          fi
+
+      - name: Publish shim to crates.io
+        if: steps.check.outputs.exists == 'false' && steps.check-shim.outputs.exists == 'false'
+        run: cargo publish --manifest-path survival-pyo3-macros-shim/Cargo.toml
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for shim index availability
+        if: steps.check.outputs.exists == 'false' && steps.check-shim.outputs.exists == 'false'
+        run: |
+          for attempt in {1..30}; do
+            if curl -fsS "https://crates.io/api/v1/crates/survival-pyo3-macros-shim/0.1.0" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for survival-pyo3-macros-shim 0.1.0 on crates.io" >&2
+          exit 1
+
       - name: Publish to crates.io
         if: steps.check.outputs.exists == 'false'
         run: cargo publish
