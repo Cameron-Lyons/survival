@@ -627,6 +627,7 @@ BINDINGS = (
     "cox_zph_group_variance",
     "cox_zph_term_matrix",
     "cox_zph_tests",
+    "cox_zph_tests_from_data",
     "coxcount1",
     "coxcount2",
     "coxmart",

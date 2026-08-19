@@ -14209,20 +14209,12 @@ def cox_zph(
         event_times,
         transform,
     )
-    event_scores, event_information, event_counts = _cox_zph_event_detail(
+    test = _cox_zph_native_tests(
         fit,
         active_columns,
         beta,
-    )
-    detail_time = _cox_zph_detail_transform(event_counts, transformed_time)
-
-    test = _core.cox_zph_tests(
-        event_scores,
-        event_information,
-        detail_time,
-        event_counts,
+        transformed_time,
         [columns for _name, columns in groups],
-        beta,
         single_df,
         include_global,
     )
@@ -14760,11 +14752,15 @@ def _cox_zph_transform(
     return "identity", select_events(all_times)
 
 
-def _cox_zph_event_detail(
+def _cox_zph_native_tests(
     fit: Any,
     active_columns: list[int],
     beta: list[float],
-) -> tuple[list[list[float]], list[list[list[float]]], list[int]]:
+    transformed_events: list[float],
+    groups: list[list[int]],
+    single_df: bool,
+    global_test: bool,
+) -> Any:
     model = _unwrap_formula_fit(fit)
     full_beta = _cox_beta(model)
     full_rows = _cox_training_rows(model, len(full_beta))
@@ -14794,45 +14790,21 @@ def _cox_zph_event_detail(
     weights = _model_residual_weights(model, len(time))
     strata = _cox_training_strata(model, len(time))
     method = "efron" if str(getattr(model, "method", "breslow")).lower() == "efron" else "breslow"
-    native = _core.coxph_detail(
+    return _core.cox_zph_tests_from_data(
         time,
         status,
         rows,
         beta,
-        weights,
+        transformed_events,
+        groups,
+        single_df,
+        global_test,
+        weights=weights,
         entry_times=entry,
         strata=strata,
         offset=offset,
         method=method,
     )
-    detail_rows = list(native.rows)
-    return (
-        [[float(value) for value in row.score] for row in detail_rows],
-        [
-            [[float(value) for value in matrix_row] for matrix_row in row.imat]
-            for row in detail_rows
-        ],
-        [int(row.n_event) for row in detail_rows],
-    )
-
-
-def _cox_zph_detail_transform(
-    event_counts: list[int],
-    transformed_events: list[float],
-) -> list[float]:
-    transformed_time: list[float] = []
-    cursor = 0
-    for count in event_counts:
-        if count <= 0 or cursor + count > len(transformed_events):
-            raise ValueError("Cox detail event counts do not match transformed event times")
-        tied = transformed_events[cursor : cursor + count]
-        if any(abs(value - tied[0]) > _SURVFIT_TIME_EPSILON for value in tied[1:]):
-            raise ValueError("tied events have inconsistent transformed times")
-        transformed_time.append(tied[0])
-        cursor += count
-    if cursor != len(transformed_events):
-        raise ValueError("Cox detail event counts do not match transformed event times")
-    return transformed_time
 
 
 def _matrix_columns(rows: list[list[float]], columns: list[int]) -> list[list[float]]:

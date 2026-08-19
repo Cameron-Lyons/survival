@@ -10,6 +10,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cox_zph_group_variance, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_term_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_tests, m)?)?;
+    m.add_function(wrap_pyfunction!(cox_zph_tests_from_data, m)?)?;
     m.add_function(wrap_pyfunction!(coxph_wtest, m)?)?;
     m.add_function(wrap_pyfunction!(leverage_cox, m)?)?;
     m.add_function(wrap_pyfunction!(prediction_se_from_variance, m)?)?;

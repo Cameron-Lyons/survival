@@ -7167,6 +7167,21 @@ def cox_zph_tests(
     single_df: bool,
     global_test: bool,
 ) -> ProportionalityTest: ...
+def cox_zph_tests_from_data(
+    time: list[float],
+    status: list[int],
+    covariates: list[list[float]],
+    coefficients: list[float],
+    transformed_events: list[float],
+    groups: list[list[int]],
+    single_df: bool,
+    global_test: bool,
+    weights: list[float] | None = None,
+    entry_times: list[float] | None = None,
+    strata: list[int] | None = None,
+    offset: list[float] | None = None,
+    method: str = "breslow",
+) -> ProportionalityTest: ...
 def cox_zph_group_variance(
     information_matrix: list[list[float]],
     groups: list[list[int]],
