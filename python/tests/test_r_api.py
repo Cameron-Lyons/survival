@@ -10783,6 +10783,26 @@ def test_cox_zph_rank_transform_uses_full_model_times():
     assert result.table[-1]["name"] == "GLOBAL"
 
 
+def test_cox_zph_uses_fit_owned_native_diagnostics(monkeypatch):
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_toy_data(),
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    def reject_fallback(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("legacy Cox zph data export should not run")
+
+    monkeypatch.setattr(survival.r_api, "_cox_zph_native_tests", reject_fallback)
+
+    result = survival.cox_zph(fit, transform="rank", terms=False)
+
+    assert result.variable_names == ["x1", "x2"]
+    assert len(result.y) == sum(_toy_data()["status"])
+
+
 def test_cox_zph_scales_variance_preserves_strata_and_subsets_variables():
     data = _toy_data()
     fit = survival.coxph(

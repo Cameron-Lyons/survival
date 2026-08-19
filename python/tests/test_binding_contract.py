@@ -849,6 +849,15 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "schoenfeld_residuals": ["self"],
         "scaled_schoenfeld_residuals": ["self"],
         "scaled_schoenfeld_residuals_with_variance": ["self", "information_matrix"],
+        "cox_zph_diagnostics": [
+            "self",
+            "transformed_events",
+            "active_columns",
+            "groups",
+            "information_matrix",
+            "single_df",
+            "global_test",
+        ],
         "partial_residuals": ["self"],
     }
     for method_name, args in coxph_fit_methods.items():
@@ -998,6 +1007,41 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     )
     for actual, expected in zip(custom_scaled, expected_custom, strict=True):
         assert actual == pytest.approx(expected)
+    transformed_events = [value for value, event in zip(time, status, strict=True) if event == 1]
+    fused_scaled, fused_test = fit.cox_zph_diagnostics(
+        transformed_events,
+        [0],
+        [[0]],
+        custom_variance,
+        False,
+        True,
+    )
+    for actual, expected in zip(fused_scaled, custom_scaled, strict=True):
+        assert actual == pytest.approx(expected)
+    beta = fit.coefficients[-1]
+    offset = [
+        linear_predictor - row[0] * beta[0]
+        for row, linear_predictor in zip(covariates, fit.linear_predictors, strict=True)
+    ]
+    expected_test = core.cox_zph_tests_from_data(
+        time,
+        status,
+        covariates,
+        beta,
+        transformed_events,
+        [[0]],
+        False,
+        True,
+        fit.weights,
+        None,
+        fit.strata,
+        offset,
+        "breslow",
+    )
+    assert fused_test.chi2_values == pytest.approx(expected_test.chi2_values)
+    assert fused_test.p_values == pytest.approx(expected_test.p_values)
+    assert fused_test.global_chi2 == pytest.approx(expected_test.global_chi2)
+    assert fused_test.global_p_value == pytest.approx(expected_test.global_p_value)
     assert len(fit.partial_residuals()) == len(time)
 
     detail = core.coxph_detail(

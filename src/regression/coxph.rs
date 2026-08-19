@@ -504,6 +504,26 @@ impl CoxPHFit {
         self.scaled_schoenfeld_residuals_with_variance_internal(&information_matrix)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn cox_zph_diagnostics(
+        &self,
+        transformed_events: Vec<f64>,
+        active_columns: Vec<usize>,
+        groups: Vec<Vec<usize>>,
+        information_matrix: Vec<Vec<f64>>,
+        single_df: bool,
+        global_test: bool,
+    ) -> PyResult<(Vec<Vec<f64>>, crate::validation::ProportionalityTest)> {
+        self.cox_zph_diagnostics_internal(
+            transformed_events,
+            active_columns,
+            groups,
+            information_matrix,
+            single_df,
+            global_test,
+        )
+    }
+
     pub fn partial_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
         self.partial_residuals_internal()
     }
