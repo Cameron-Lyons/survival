@@ -1,6 +1,7 @@
 use crate::constants::TIME_EPSILON;
 use crate::internal::cox_risk::{cox_risk_shift, shifted_weighted_exp_eta_with_shift};
 use crate::internal::validation::validate_binary_i32;
+use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow};
 use pyo3::prelude::*;
 use std::borrow::Cow;
@@ -73,6 +74,7 @@ pub(crate) struct CoxphDetailOptions<'a> {
     pub entry_times: Option<&'a [f64]>,
     pub strata: Option<&'a [i32]>,
     pub offset: Option<&'a [f64]>,
+    pub linear_predictors: Option<&'a [f64]>,
     pub method: &'a str,
     pub center: f64,
     pub include_riskmat: bool,
@@ -340,12 +342,19 @@ pub(crate) fn compute_coxph_detail_with_options(
         entry_times,
         strata,
         offset,
+        linear_predictors,
         method,
         center,
         include_riskmat,
     } = options;
     let n = time.len();
     let nvar = coefficients.len();
+
+    if linear_predictors.is_some_and(|values| values.len() != n) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "linear_predictors must have the same length as time",
+        ));
+    }
 
     if n == 0 {
         return Ok(CoxphDetail {
@@ -368,21 +377,22 @@ pub(crate) fn compute_coxph_detail_with_options(
     let strata_values = strata
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned(vec![0; n]));
-    let offsets = offset
-        .map(Cow::Borrowed)
-        .unwrap_or_else(|| Cow::Owned(vec![0.0; n]));
 
-    let linear_predictors: Vec<f64> = covariates
-        .iter()
-        .enumerate()
-        .map(|(idx, cov)| {
-            let mut lp = offsets[idx];
-            for j in 0..nvar {
-                lp += cov[j] * coefficients[j];
-            }
-            lp
-        })
-        .collect();
+    let linear_predictors = linear_predictors.map(Cow::Borrowed).unwrap_or_else(|| {
+        Cow::Owned(
+            covariates
+                .iter()
+                .enumerate()
+                .map(|(idx, cov)| {
+                    let mut lp = offset.map_or(0.0, |values| values[idx]);
+                    for j in 0..nvar {
+                        lp += cov[j] * coefficients[j];
+                    }
+                    lp
+                })
+                .collect(),
+        )
+    });
     let risk_shift = cox_risk_shift_optional(&linear_predictors, weights);
     let risk_weights = shifted_weighted_exp_eta_optional(&linear_predictors, weights, risk_shift);
 
@@ -577,6 +587,80 @@ pub(crate) fn compute_coxph_detail_with_options(
     })
 }
 
+pub(crate) fn fitted_coxph_detail(fit: &CoxPHFit, include_riskmat: bool) -> PyResult<CoxphDetail> {
+    let beta = fit.coefficients.first().ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("model has no fitted coefficients")
+    })?;
+    let n = fit.event_times.len();
+    let nvar = beta.len();
+    if fit.status.len() != n
+        || fit.covariates.len() != n
+        || fit.linear_predictors.len() != n
+        || fit.weights.len() != n
+        || fit.strata.len() != n
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "fitted Cox model detail arrays have inconsistent lengths",
+        ));
+    }
+    if fit.covariates.iter().any(|row| row.len() != nvar) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "fitted Cox model covariates do not match coefficient width",
+        ));
+    }
+    if fit.means.len() != nvar {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "fitted Cox model means do not match coefficient width",
+        ));
+    }
+    if fit
+        .entry_times
+        .as_ref()
+        .is_some_and(|values| values.len() != n)
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "fitted Cox model entry times do not match event rows",
+        ));
+    }
+
+    let offset_sum = fit
+        .covariates
+        .iter()
+        .zip(&fit.linear_predictors)
+        .map(|(row, &linear_predictor)| {
+            linear_predictor
+                - row
+                    .iter()
+                    .zip(beta)
+                    .map(|(&value, &coefficient)| value * coefficient)
+                    .sum::<f64>()
+        })
+        .sum::<f64>();
+    let offset_center = if n == 0 { 0.0 } else { offset_sum / n as f64 };
+    let center = fit
+        .means
+        .iter()
+        .zip(beta)
+        .map(|(&value, &coefficient)| value * coefficient)
+        .sum::<f64>()
+        + offset_center;
+
+    compute_coxph_detail_with_options(CoxphDetailOptions {
+        time: &fit.event_times,
+        status: &fit.status,
+        covariates: &fit.covariates,
+        coefficients: beta,
+        weights: Some(&fit.weights),
+        entry_times: fit.entry_times.as_deref(),
+        strata: Some(&fit.strata),
+        offset: None,
+        linear_predictors: Some(&fit.linear_predictors),
+        method: &fit.method,
+        center,
+        include_riskmat,
+    })
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     time,
@@ -725,6 +809,7 @@ pub fn coxph_detail(
         entry_times: entry_times.as_deref(),
         strata: strata.as_deref(),
         offset: offset.as_deref(),
+        linear_predictors: None,
         method: &method,
         center,
         include_riskmat: riskmat,
@@ -809,6 +894,7 @@ mod tests {
             entry_times: None,
             strata: None,
             offset: None,
+            linear_predictors: None,
             method: "breslow",
             center: 0.0,
             include_riskmat: false,
@@ -847,6 +933,7 @@ mod tests {
             entry_times: None,
             strata: None,
             offset: None,
+            linear_predictors: None,
             method: "efron",
             center: 0.0,
             include_riskmat: false,
@@ -862,6 +949,7 @@ mod tests {
             entry_times: None,
             strata: None,
             offset: None,
+            linear_predictors: None,
             method: "efron",
             center: 0.0,
             include_riskmat: false,
@@ -887,6 +975,7 @@ mod tests {
             entry_times: None,
             strata: None,
             offset: None,
+            linear_predictors: None,
             method: "efron",
             center: 0.0,
             include_riskmat: false,
@@ -921,6 +1010,7 @@ mod tests {
             entry_times: None,
             strata: None,
             offset: None,
+            linear_predictors: None,
             method: "breslow",
             center: 0.0,
             include_riskmat: false,
@@ -935,6 +1025,7 @@ mod tests {
             entry_times: None,
             strata: None,
             offset: None,
+            linear_predictors: None,
             method: "efron",
             center: 0.0,
             include_riskmat: false,
@@ -964,6 +1055,7 @@ mod tests {
             entry_times: None,
             strata: None,
             offset: None,
+            linear_predictors: None,
             method: "breslow",
             center: 0.0,
             include_riskmat: false,
@@ -997,6 +1089,7 @@ mod tests {
             entry_times: None,
             strata: None,
             offset: None,
+            linear_predictors: None,
             method: "breslow",
             center: 0.0,
             include_riskmat: false,
@@ -1026,6 +1119,7 @@ mod tests {
             entry_times: None,
             strata: Some(&strata),
             offset: None,
+            linear_predictors: None,
             method: "breslow",
             center: 0.0,
             include_riskmat: true,
@@ -1061,6 +1155,7 @@ mod tests {
             entry_times: Some(&entry),
             strata: Some(&strata),
             offset: None,
+            linear_predictors: None,
             method: "breslow",
             center: 0.0,
             include_riskmat: true,
@@ -1109,6 +1204,7 @@ mod tests {
             entry_times: Some(&entry),
             strata: Some(&strata),
             offset: Some(&offsets),
+            linear_predictors: None,
             method: "breslow",
             center: 0.0,
             include_riskmat: true,

@@ -19689,6 +19689,7 @@ def coxph_detail(
     rorder_name = _cox_detail_rorder(rorder)
     model = _unwrap_formula_fit(fit)
     method = _cox_detail_method(model)
+    native_detail = getattr(model, "coxph_detail", None)
     beta = _cox_beta(model)
     nvar = len(beta)
     rows = _cox_training_rows(model, nvar)
@@ -19704,25 +19705,27 @@ def coxph_detail(
         raise ValueError("fitted Cox model entry times do not match event rows")
     weights = _model_residual_weights(model, n)
     strata = _cox_training_strata(model, n)
-    linear_predictors = [float(value) for value in model.linear_predictors]
-    if len(linear_predictors) != n:
-        raise ValueError("fitted Cox model linear predictors do not match event rows")
-
-    center = _cox_reference_center(model, "sample")
-    offset = _cox_fit_offset(model, beta)
-    detail = _core.coxph_detail(
-        time,
-        status,
-        rows,
-        beta,
-        weights,
-        entry_times=entry,
-        strata=strata,
-        offset=offset,
-        method=method,
-        center=center,
-        riskmat=include_riskmat,
-    )
+    if native_detail is not None:
+        detail = native_detail(include_riskmat)
+    else:
+        linear_predictors = [float(value) for value in model.linear_predictors]
+        if len(linear_predictors) != n:
+            raise ValueError("fitted Cox model linear predictors do not match event rows")
+        center = _cox_reference_center(model, "sample")
+        offset = _cox_fit_offset(model, beta)
+        detail = _core.coxph_detail(
+            time,
+            status,
+            rows,
+            beta,
+            weights,
+            entry_times=entry,
+            strata=strata,
+            offset=offset,
+            method=method,
+            center=center,
+            riskmat=include_riskmat,
+        )
     detail_rows = list(detail.rows)
 
     row_order = _cox_detail_row_order(time, status, strata, rorder_name)

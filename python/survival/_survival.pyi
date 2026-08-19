@@ -1103,6 +1103,7 @@ class CoxPHFit:
     def scaled_schoenfeld_residuals_with_variance(
         self, information_matrix: list[list[float]]
     ) -> list[list[float]]: ...
+    def coxph_detail(self, riskmat: bool) -> CoxphDetail: ...
     def cox_zph_diagnostics(
         self,
         transformed_events: list[float],

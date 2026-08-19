@@ -4,6 +4,7 @@ use crate::constants::{
 };
 use crate::internal::validation::validate_binary_i32;
 use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod};
+use crate::regression::coxph_detail_module::{CoxphDetail, fitted_coxph_detail};
 pub use crate::regression::coxph_model::{CoxPHModel, Subject};
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use ndarray::{Array1, Array2};
@@ -502,6 +503,10 @@ impl CoxPHFit {
         information_matrix: Vec<Vec<f64>>,
     ) -> PyResult<Vec<Vec<f64>>> {
         self.scaled_schoenfeld_residuals_with_variance_internal(&information_matrix)
+    }
+
+    pub fn coxph_detail(&self, riskmat: bool) -> PyResult<CoxphDetail> {
+        fitted_coxph_detail(self, riskmat)
     }
 
     #[allow(clippy::too_many_arguments)]

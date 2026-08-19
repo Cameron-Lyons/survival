@@ -1476,19 +1476,6 @@ impl CoxPHFit {
             ));
         }
         validate_matrix_width(&self.covariates, nvar, "covariates")?;
-        let offset: Vec<f64> = self
-            .covariates
-            .iter()
-            .zip(&self.linear_predictors)
-            .map(|(row, &linear_predictor)| {
-                linear_predictor
-                    - row
-                        .iter()
-                        .zip(beta)
-                        .map(|(&value, &coefficient)| value * coefficient)
-                        .sum::<f64>()
-            })
-            .collect();
         let method = if matches!(self.tie_method(), CoxMethod::Efron) {
             "efron"
         } else {
@@ -1502,7 +1489,8 @@ impl CoxPHFit {
             weights: Some(&self.weights),
             entry_times: self.entry_times.as_deref(),
             strata: Some(&self.strata),
-            offset: Some(&offset),
+            offset: None,
+            linear_predictors: Some(&self.linear_predictors),
             method,
             center: 0.0,
             include_riskmat: false,
