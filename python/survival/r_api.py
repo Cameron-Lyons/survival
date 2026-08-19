@@ -321,6 +321,10 @@ class _FormulaFit:
         return getattr(self.fit, name)
 
     def _cox_scaled_schoenfeld_residuals(self) -> list[list[float]]:
+        variance = [[float(value) for value in row] for row in self.information_matrix]
+        native = getattr(self.fit, "scaled_schoenfeld_residuals_with_variance", None)
+        if native is not None:
+            return [[float(value) for value in row] for row in native(variance)]
         raw = [[float(value) for value in row] for row in self.fit.schoenfeld_residuals()]
         return _cox_scaled_schoenfeld_from_raw(self, raw)
 
@@ -14159,16 +14163,16 @@ def cox_zph(
         raise TypeError(f"unexpected cox_zph argument(s): {unexpected}")
     if _is_clogit_fit(fit) and getattr(_unwrap_formula_fit(fit), "method", None) == "exact":
         raise ValueError("schoenfeld residuals are not available for the exact method")
-    if _is_survreg_fit(fit) or not hasattr(fit, "schoenfeld_residuals"):
+    if _is_survreg_fit(fit):
+        raise TypeError("cox_zph requires a fitted Cox model")
+    scaled_method = getattr(fit, "scaled_schoenfeld_residuals", None)
+    if scaled_method is None:
         raise TypeError("cox_zph requires a fitted Cox model")
     group_terms = _normalize_bool_option(terms, "terms")
     single_df = _normalize_bool_option(singledf, "singledf")
     include_global = _normalize_bool_option(global_test, "global")
 
-    raw = [[float(value) for value in row] for row in fit.schoenfeld_residuals()]
-    scaled = _cox_scaled_schoenfeld_from_raw(fit, raw)
-    if len(raw) != len(scaled):
-        raise ValueError("Schoenfeld residual arrays have inconsistent lengths")
+    scaled = [[float(value) for value in row] for row in scaled_method()]
     beta = _cox_beta(fit)
     aliases = _cox_alias_mask(fit)
     if len(aliases) != len(beta):
@@ -14176,12 +14180,12 @@ def cox_zph(
     active_columns = [idx for idx, aliased in enumerate(aliases) if not aliased]
     if not active_columns:
         raise ValueError("cox_zph requires at least one estimable coefficient")
-    if not raw:
+    if not scaled:
         raise ValueError("cox_zph requires at least one event")
 
-    full_nvar = len(raw[0])
-    if any(len(row) != full_nvar for row in raw) or any(len(row) != full_nvar for row in scaled):
-        raise ValueError("Schoenfeld residual arrays must be rectangular")
+    full_nvar = len(scaled[0])
+    if any(len(row) != full_nvar for row in scaled):
+        raise ValueError("scaled Schoenfeld residuals must be rectangular")
     if len(beta) != full_nvar:
         raise ValueError("fitted Cox model coefficients do not match residual width")
     groups = _cox_zph_active_groups(
@@ -14192,7 +14196,7 @@ def cox_zph(
     beta = [beta[idx] for idx in active_columns]
 
     event_indices = _cox_event_indices(fit)
-    if len(event_indices) != len(raw):
+    if len(event_indices) != len(scaled):
         raise ValueError("fitted Cox model event times do not match Schoenfeld residuals")
     event_times = [float(fit.event_times[idx]) for idx in event_indices]
     row_strata = _cox_training_strata(fit, len(fit.status))
@@ -14231,7 +14235,7 @@ def cox_zph(
         x=transformed_time,
         time=event_times,
         y=grouped_y,
-        var=_cox_zph_group_variance(fit, groups, beta, active_columns, len(raw)),
+        var=_cox_zph_group_variance(fit, groups, beta, active_columns, len(scaled)),
         transform=transform_name,
         global_chi2=float(test.global_chi2) if include_global else None,
         global_df=int(test.global_df) if include_global else None,
@@ -19529,6 +19533,12 @@ def residuals(
     use_weights = (
         residual_type in {"dfbeta", "dfbetas"} if weighted_value is None else weighted_value
     )
+
+    if residual_type == "scaledsch" and not use_weights:
+        method = getattr(fit, "scaled_schoenfeld_residuals", None)
+        if method is None:
+            raise TypeError("model does not support scaledsch residuals")
+        return [[float(value) for value in row] for row in method()]
 
     if residual_type in {"schoenfeld", "scaledsch"}:
         method = getattr(fit, "schoenfeld_residuals", None)

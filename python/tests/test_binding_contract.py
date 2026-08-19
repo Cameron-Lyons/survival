@@ -848,6 +848,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "dfbetas": ["self"],
         "schoenfeld_residuals": ["self"],
         "scaled_schoenfeld_residuals": ["self"],
+        "scaled_schoenfeld_residuals_with_variance": ["self", "information_matrix"],
         "partial_residuals": ["self"],
     }
     for method_name, args in coxph_fit_methods.items():
@@ -987,6 +988,16 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     assert len(fit.dfbetas()) == len(time)
     assert len(fit.schoenfeld_residuals()) == sum(status)
     assert len(fit.scaled_schoenfeld_residuals()) == sum(status)
+    raw_schoenfeld = fit.schoenfeld_residuals()
+    custom_variance = [[0.25]]
+    custom_scaled = fit.scaled_schoenfeld_residuals_with_variance(custom_variance)
+    expected_custom = core.scale_schoenfeld_residuals(
+        raw_schoenfeld,
+        fit.coefficients[-1],
+        custom_variance,
+    )
+    for actual, expected in zip(custom_scaled, expected_custom, strict=True):
+        assert actual == pytest.approx(expected)
     assert len(fit.partial_residuals()) == len(time)
 
     detail = core.coxph_detail(

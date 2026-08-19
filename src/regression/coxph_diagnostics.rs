@@ -218,13 +218,21 @@ pub fn scale_schoenfeld_residuals(
     beta: Vec<f64>,
     information_matrix: Vec<Vec<f64>>,
 ) -> PyResult<Vec<Vec<f64>>> {
+    scale_schoenfeld_residuals_impl(raw, &beta, &information_matrix)
+}
+
+fn scale_schoenfeld_residuals_impl(
+    raw: Vec<Vec<f64>>,
+    beta: &[f64],
+    information_matrix: &[Vec<f64>],
+) -> PyResult<Vec<Vec<f64>>> {
     let nvar = beta.len();
     if nvar == 0 || raw.is_empty() {
         return Ok(raw);
     }
-    validate_finite_slice(&beta, "beta")?;
+    validate_finite_slice(beta, "beta")?;
     validate_matrix_width(&raw, nvar, "raw")?;
-    validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
+    validate_square_matrix(information_matrix, nvar, "information_matrix")?;
     let event_count = raw.len() as f64;
     Ok(raw
         .iter()
@@ -1348,44 +1356,18 @@ impl CoxPHFit {
     }
 
     pub(crate) fn scaled_schoenfeld_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
+        self.scaled_schoenfeld_residuals_with_variance_internal(&self.information_matrix)
+    }
+
+    pub(crate) fn scaled_schoenfeld_residuals_with_variance_internal(
+        &self,
+        information_matrix: &[Vec<f64>],
+    ) -> PyResult<Vec<Vec<f64>>> {
         let schoenfeld = self.schoenfeld_residuals_internal()?;
         let beta = self.coefficients.first().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
         })?;
-        let nvar = beta.len();
-        if nvar == 0 || schoenfeld.is_empty() {
-            return Ok(schoenfeld);
-        }
-        if self.information_matrix.len() != nvar
-            || self.information_matrix.iter().any(|row| row.len() != nvar)
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model information matrix does not match coefficient width",
-            ));
-        }
-        if schoenfeld.iter().any(|row| row.len() != nvar) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model Schoenfeld residuals do not match coefficient width",
-            ));
-        }
-
-        let event_count = schoenfeld.len() as f64;
-        Ok(schoenfeld
-            .iter()
-            .map(|row| {
-                (0..nvar)
-                    .map(|col_idx| {
-                        beta[col_idx]
-                            + event_count
-                                * (0..nvar)
-                                    .map(|inner_idx| {
-                                        row[inner_idx] * self.information_matrix[inner_idx][col_idx]
-                                    })
-                                    .sum::<f64>()
-                    })
-                    .collect()
-            })
-            .collect())
+        scale_schoenfeld_residuals_impl(schoenfeld, beta, information_matrix)
     }
 
     pub(crate) fn schoenfeld_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
@@ -2095,6 +2077,46 @@ mod tests {
                 assert!((actual - expected).abs() < 1e-12);
             }
         }
+    }
+
+    #[test]
+    fn scaled_schoenfeld_residuals_accept_custom_variance() {
+        let fit = CoxPHFit {
+            coefficients: vec![vec![0.25]],
+            means: vec![0.0],
+            score_vector: vec![],
+            information_matrix: vec![vec![0.5]],
+            log_likelihood: vec![],
+            score_test: 0.0,
+            convergence_flag: 0,
+            iterations: 0,
+            risk_scores: vec![],
+            event_times: vec![1.0, 2.0, 3.0],
+            status: vec![1, 0, 1],
+            linear_predictors: vec![0.1, -0.2, 0.3],
+            entry_times: None,
+            weights: vec![1.0, 1.0, 1.0],
+            covariates: vec![vec![1.0], vec![0.0], vec![2.0]],
+            strata: vec![0, 0, 0],
+            method: "breslow".to_string(),
+            nocenter: Vec::new(),
+        };
+        let raw = fit
+            .schoenfeld_residuals_internal()
+            .expect("Schoenfeld residuals should compute");
+        let custom_variance = vec![vec![0.75]];
+        let expected = scale_schoenfeld_residuals_impl(
+            raw,
+            fit.coefficients.first().expect("test coefficient exists"),
+            &custom_variance,
+        )
+        .expect("custom scaling should compute");
+
+        let actual = fit
+            .scaled_schoenfeld_residuals_with_variance_internal(&custom_variance)
+            .expect("fused custom scaling should compute");
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
