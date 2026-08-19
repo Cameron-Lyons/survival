@@ -10785,6 +10785,50 @@ def test_cox_zph_rank_transform_matches_low_level_ph_test():
     assert result.table[-1]["name"] == "GLOBAL"
 
 
+def test_cox_zph_scales_variance_preserves_strata_and_subsets_variables():
+    data = _toy_data()
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2 + strata(group)",
+        data=data,
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    result = survival.cox_zph(fit, transform="rank", terms=False)
+    event_indices = survival.r_api._cox_event_indices(fit)
+    event_count = len(event_indices)
+
+    assert result.strata == [data["group"][idx] for idx in event_indices]
+    for actual, expected in zip(result.var, fit.information_matrix, strict=True):
+        assert actual == pytest.approx([event_count * value for value in expected])
+
+    reversed_result = result.subset([1, 0])
+    assert reversed_result.variable_names == ["x2", "x1"]
+    assert reversed_result.chi2_values == pytest.approx(
+        [result.chi2_values[1], result.chi2_values[0]]
+    )
+    assert reversed_result.strata == result.strata
+    assert reversed_result.global_chi2 is None
+    for actual, expected in zip(reversed_result.y, result.y, strict=True):
+        assert actual == pytest.approx([expected[1], expected[0]])
+    assert reversed_result.var[0] == pytest.approx([result.var[1][1], result.var[1][0]])
+    assert reversed_result.var[1] == pytest.approx([result.var[0][1], result.var[0][0]])
+
+    with_global = result.subset([0], include_global=True)
+    assert [row["name"] for row in with_global.table] == ["x1", "GLOBAL"]
+
+    empty = result.subset([])
+    assert empty.variable_names == []
+    assert empty.x == []
+    assert empty.time == []
+    assert empty.y == []
+    assert empty.var == []
+    assert empty.strata == []
+
+    with pytest.raises(IndexError, match="out of range"):
+        result.subset([2])
+
+
 def test_cox_zph_clustered_fit_uses_robust_scaled_schoenfeld_residuals():
     data = {**_toy_data(), "subject": ["a", "a", "b", "b", "c", "c", "d", "d"]}
     fit = survival.coxph(
@@ -10815,6 +10859,9 @@ def test_cox_zph_clustered_fit_uses_robust_scaled_schoenfeld_residuals():
     assert fit.scaled_schoenfeld_residuals()[0] != pytest.approx(naive_scaled[0])
     for actual, expected in zip(result.y, robust_scaled, strict=True):
         assert actual == pytest.approx(expected)
+    event_count = len(survival.r_api._cox_event_indices(fit))
+    for actual, expected in zip(result.var, fit.naive_information_matrix, strict=True):
+        assert actual == pytest.approx([event_count * value for value in expected])
 
 
 def test_cox_zph_identity_and_km_transforms_expose_r_style_time_axes():

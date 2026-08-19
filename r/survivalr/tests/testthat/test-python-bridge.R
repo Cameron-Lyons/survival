@@ -6296,6 +6296,84 @@ test_that("Cox zph bridge remaps partially aliased terms like R survival", {
   }
 })
 
+test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = 1:12,
+    status = c(1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1),
+    x1 = c(0.2, 0.4, 0.1, 0.8, 1, 1.2, 0.6, 1.4, 0.3, 0.9, 1.1, 0.5),
+    x2 = c(1, 0.9, 1.1, 0.7, 0.4, 0.3, 0.6, 0.2, 0.8, 0.5, 0.25, 0.65),
+    group = rep(c("control", "treated"), each = 6)
+  )
+  bridged_fit <- coxph(
+    Surv(time, status) ~ x1 + x2 + strata(group),
+    data = data,
+    max_iter = 50,
+    eps = 1e-09
+  )
+  reference_fit <- survival::coxph(
+    survival::Surv(time, status) ~ x1 + x2 + strata(group),
+    data = data,
+    x = TRUE,
+    control = survival::coxph.control(iter.max = 50, eps = 1e-09)
+  )
+  bridged <- cox.zph(bridged_fit, transform = "rank")
+  reference <- survival::cox.zph(reference_fit, transform = "rank")
+
+  expect_equal(bridged$strata, as.character(reference$strata))
+  expect_equal(do.call(rbind, bridged$var), unname(reference$var), tolerance = 1e-08)
+
+  for (selector in list(c("x2", "x1"), 1L, -1L)) {
+    bridged_subset <- bridged[selector]
+    reference_subset <- reference[selector]
+    expect_s3_class(bridged_subset, "survival_py_cox_zph")
+    expect_equal(
+      bridged_subset$variable_names,
+      colnames(reference_subset$y)
+    )
+    expect_equal(
+      do.call(rbind, bridged_subset$y),
+      unname(reference_subset$y),
+      tolerance = 1e-08
+    )
+    expect_equal(
+      do.call(rbind, bridged_subset$var),
+      unname(reference_subset$var),
+      tolerance = 1e-08
+    )
+    expect_equal(bridged_subset$strata, as.character(reference_subset$strata))
+    expect_equal(
+      as.data.frame(bridged_subset)$name,
+      rownames(reference_subset$table)
+    )
+  }
+
+  expect_error(bridged["missing"], "invalid variable requested")
+  expect_error(bridged[3], "invalid variable requested")
+
+  data$subject <- rep(letters[1:6], each = 2)
+  clustered_bridged <- cox.zph(coxph(
+    Surv(time, status) ~ x1 + x2 + cluster(subject),
+    data = data,
+    max_iter = 50,
+    eps = 1e-09
+  ))
+  clustered_reference <- survival::cox.zph(survival::coxph(
+    survival::Surv(time, status) ~ x1 + x2 + survival::cluster(subject),
+    data = data,
+    x = TRUE,
+    control = survival::coxph.control(iter.max = 50, eps = 1e-09)
+  ))
+  expect_equal(
+    do.call(rbind, clustered_bridged$var),
+    unname(clustered_reference$var),
+    tolerance = 1e-08
+  )
+})
+
 test_that("survreg.fit matches built-in low-level fits", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

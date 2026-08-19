@@ -629,6 +629,47 @@ class CoxZPHResult:
     global_chi2: float | None
     global_df: int | None
     global_p_value: float | None
+    strata: list[Any] | None = None
+
+    def subset(
+        self,
+        indices: Sequence[int],
+        *,
+        include_global: bool = False,
+    ) -> CoxZPHResult:
+        """Return diagnostics for the selected variables."""
+
+        selected = [index(value) for value in indices]
+        width = len(self.variable_names)
+        if any(value < 0 or value >= width for value in selected):
+            raise IndexError("cox_zph variable index out of range")
+
+        y = [[row[col_idx] for col_idx in selected] for row in self.y]
+        keep = list(range(len(y)))
+        if self.strata is not None:
+            keep = [
+                row_idx
+                for row_idx, row in enumerate(y)
+                if not all(math.isnan(value) for value in row)
+            ]
+
+        return CoxZPHResult(
+            variable_names=[self.variable_names[col_idx] for col_idx in selected],
+            chi2_values=[self.chi2_values[col_idx] for col_idx in selected],
+            df=[self.df[col_idx] for col_idx in selected],
+            p_values=[self.p_values[col_idx] for col_idx in selected],
+            x=[self.x[row_idx] for row_idx in keep],
+            time=[self.time[row_idx] for row_idx in keep],
+            y=[y[row_idx] for row_idx in keep],
+            var=[[self.var[row][col] for col in selected] for row in selected],
+            transform=self.transform,
+            global_chi2=self.global_chi2 if include_global else None,
+            global_df=self.global_df if include_global else None,
+            global_p_value=self.global_p_value if include_global else None,
+            strata=(
+                [self.strata[row_idx] for row_idx in keep] if self.strata is not None else None
+            ),
+        )
 
     @property
     def table(self) -> list[dict[str, float | int | str]]:
@@ -14154,6 +14195,14 @@ def cox_zph(
     if len(event_indices) != len(raw):
         raise ValueError("fitted Cox model event times do not match Schoenfeld residuals")
     event_times = [float(fit.event_times[idx]) for idx in event_indices]
+    row_strata = _cox_training_strata(fit, len(fit.status))
+    event_strata_codes = [row_strata[idx] for idx in event_indices]
+    design = _formula_design_for_fit(fit)
+    event_strata = None
+    if (design is not None and design.strata) or len(set(row_strata)) > 1:
+        event_strata = _cox_strata_labels_for_fit(fit, event_strata_codes)
+        if event_strata is None:
+            event_strata = event_strata_codes
     transform_name, transformed_time = _cox_zph_transform(fit, event_times, transform)
     test_residuals = scaled
 
@@ -14177,11 +14226,12 @@ def cox_zph(
         x=transformed_time,
         time=event_times,
         y=grouped_y,
-        var=_cox_zph_group_variance(fit, groups, beta, active_columns),
+        var=_cox_zph_group_variance(fit, groups, beta, active_columns, len(raw)),
         transform=transform_name,
         global_chi2=float(test.global_chi2) if include_global else None,
         global_df=int(test.global_df) if include_global else None,
         global_p_value=float(test.global_p_value) if include_global else None,
+        strata=event_strata,
     )
 
 
@@ -14750,8 +14800,11 @@ def _cox_zph_group_variance(
     groups: list[tuple[str, list[int]]],
     beta: list[float],
     active_columns: list[int],
+    event_count: int,
 ) -> list[list[float]]:
-    raw_variance = getattr(fit, "information_matrix", None)
+    raw_variance = getattr(fit, "naive_information_matrix", None)
+    if raw_variance is None:
+        raw_variance = getattr(fit, "information_matrix", None)
     if raw_variance is None:
         return []
     full_variance = [[float(value) for value in row] for row in raw_variance]
@@ -14764,7 +14817,12 @@ def _cox_zph_group_variance(
     nvar = len(beta)
     if len(variance) != nvar or any(len(row) != nvar for row in variance):
         return []
-    return _core.cox_zph_group_variance(variance, [columns for _name, columns in groups], beta)
+    grouped = _core.cox_zph_group_variance(
+        variance,
+        [columns for _name, columns in groups],
+        beta,
+    )
+    return [[event_count * value for value in row] for row in grouped]
 
 
 def _cox_beta(fit: Any) -> list[float]:
