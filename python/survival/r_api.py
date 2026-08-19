@@ -14189,11 +14189,15 @@ def cox_zph(
     dense_groups = [columns for _name, columns in groups]
     active_beta = [beta[idx] for idx in active_columns]
 
-    event_indices = _cox_event_indices(fit)
+    all_times = [float(value) for value in model.event_times]
+    all_status = [int(value) for value in model.status]
+    if len(all_times) != len(all_status):
+        raise ValueError("fitted Cox model times and status have inconsistent lengths")
+    row_strata = _cox_training_strata(model, len(all_status))
+    event_indices = _cox_event_indices_from_arrays(all_times, all_status, row_strata)
     if not event_indices:
         raise ValueError("cox_zph requires at least one event")
-    event_times = [float(fit.event_times[idx]) for idx in event_indices]
-    row_strata = _cox_training_strata(fit, len(fit.status))
+    event_times = [all_times[idx] for idx in event_indices]
     event_strata_codes = [row_strata[idx] for idx in event_indices]
     design = _formula_design_for_fit(fit)
     event_strata = None
@@ -14201,8 +14205,14 @@ def cox_zph(
         event_strata = _cox_strata_labels_for_fit(fit, event_strata_codes)
         if event_strata is None:
             event_strata = event_strata_codes
+    raw_entry_times = getattr(model, "entry_times", None)
+    entry_times = (
+        [float(value) for value in raw_entry_times] if raw_entry_times is not None else None
+    )
     transform_name, transformed_time = _cox_zph_transform(
-        fit,
+        all_times,
+        all_status,
+        entry_times,
         event_indices,
         event_times,
         transform,
@@ -14211,7 +14221,7 @@ def cox_zph(
         variance = getattr(fit, "information_matrix", None)
         if variance is None:
             raise TypeError("model does not expose coefficient variance")
-        scaled_result, test = native_method(
+        grouped_result, test = native_method(
             transformed_time,
             active_columns,
             dense_groups,
@@ -14219,7 +14229,11 @@ def cox_zph(
             single_df,
             include_global,
         )
-        scaled = [[float(value) for value in row] for row in scaled_result]
+        grouped_y = [[float(value) for value in row] for row in grouped_result]
+        if len(event_indices) != len(grouped_y):
+            raise ValueError("fitted Cox model event times do not match diagnostic residuals")
+        if any(len(row) != len(groups) for row in grouped_y):
+            raise ValueError("Cox zph diagnostic residuals must be rectangular")
     else:
         if scaled_method is None:
             raise TypeError("cox_zph requires a fitted Cox model")
@@ -14236,15 +14250,15 @@ def cox_zph(
             single_df,
             include_global,
         )
-    if len(event_indices) != len(scaled):
-        raise ValueError("fitted Cox model event times do not match Schoenfeld residuals")
-    if any(len(row) != len(active_columns) for row in scaled):
-        raise ValueError("scaled Schoenfeld residuals must be rectangular")
-    grouped_y = (
-        _cox_zph_term_matrix(scaled, groups, active_beta)
-        if group_terms and groups
-        else _matrix_columns(scaled, [idx for _name, columns in groups for idx in columns])
-    )
+        if len(event_indices) != len(scaled):
+            raise ValueError("fitted Cox model event times do not match Schoenfeld residuals")
+        if any(len(row) != len(active_columns) for row in scaled):
+            raise ValueError("scaled Schoenfeld residuals must be rectangular")
+        grouped_y = (
+            _cox_zph_term_matrix(scaled, groups, active_beta)
+            if group_terms and groups
+            else _matrix_columns(scaled, [idx for _name, columns in groups for idx in columns])
+        )
     return CoxZPHResult(
         variable_names=[name for name, _columns in groups],
         chi2_values=[float(value) for value in test.chi2_values],
@@ -14253,7 +14267,7 @@ def cox_zph(
         x=transformed_time,
         time=event_times,
         y=grouped_y,
-        var=_cox_zph_group_variance(fit, groups, active_beta, active_columns, len(scaled)),
+        var=_cox_zph_group_variance(fit, groups, active_beta, active_columns, len(event_indices)),
         transform=transform_name,
         global_chi2=float(test.global_chi2) if include_global else None,
         global_df=int(test.global_df) if include_global else None,
@@ -14657,12 +14671,19 @@ def _cox_partial_residuals(
     ]
 
 
-def _cox_event_indices(fit: Any) -> list[int]:
-    status = [int(value) for value in fit.status]
-    times = [float(value) for value in fit.event_times]
-    strata_values = fit.strata if hasattr(fit, "strata") else [0] * len(status)
-    strata = [int(value) for value in strata_values]
+def _cox_event_indices_from_arrays(
+    times: list[float], status: list[int], strata: list[int]
+) -> list[int]:
     return [int(idx) for idx in _core.cox_event_indices(times, status, strata)]
+
+
+def _cox_event_indices(fit: Any) -> list[int]:
+    model = _unwrap_formula_fit(fit)
+    status = [int(value) for value in model.status]
+    times = [float(value) for value in model.event_times]
+    raw_strata = getattr(model, "strata", None)
+    strata = [int(value) for value in raw_strata] if raw_strata is not None else [0] * len(status)
+    return _cox_event_indices_from_arrays(times, status, strata)
 
 
 def _cox_scaled_schoenfeld_from_raw(fit: Any, raw: list[list[float]]) -> list[list[float]]:
@@ -14710,14 +14731,16 @@ def _average_ranks(values: list[float]) -> list[float]:
     return ranks
 
 
-def _cox_zph_km_transform(fit: Any, event_times: list[float]) -> list[float]:
-    all_times = [float(value) for value in fit.event_times]
-    status = [int(value) for value in fit.status]
-    entry_times = getattr(fit, "entry_times", None)
+def _cox_zph_km_transform(
+    all_times: list[float],
+    status: list[int],
+    entry_times: list[float] | None,
+    event_times: list[float],
+) -> list[float]:
     km = _core.survfitkm(
         all_times,
         status,
-        entry_times=[float(value) for value in entry_times] if entry_times is not None else None,
+        entry_times=entry_times,
         conf_type="none",
     )
     curve_times = [float(value) for value in km.time]
@@ -14731,12 +14754,13 @@ def _cox_zph_km_transform(fit: Any, event_times: list[float]) -> list[float]:
 
 
 def _cox_zph_transform(
-    fit: Any,
+    all_times: list[float],
+    status: list[int],
+    entry_times: list[float] | None,
     event_indices: list[int],
     event_times: list[float],
     transform: Any,
 ) -> tuple[str, list[float]]:
-    all_times = [float(value) for value in fit.event_times]
     if any(idx < 0 or idx >= len(all_times) for idx in event_indices):
         raise ValueError("event indices do not match fitted model times")
 
@@ -14764,7 +14788,7 @@ def _cox_zph_transform(
     )
 
     if normalized == "km":
-        return "km", _cox_zph_km_transform(fit, event_times)
+        return "km", _cox_zph_km_transform(all_times, status, entry_times, event_times)
     if normalized == "rank":
         return "rank", select_events(_average_ranks(all_times))
     if normalized == "log":
