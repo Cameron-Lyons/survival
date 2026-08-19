@@ -11541,6 +11541,29 @@ dim.survival_py_survfit <- function(x) {
   NULL
 }
 
+`[.survival_py_cox_zph` <- function(x, ..., drop = FALSE) {
+  i <- ..1
+  variable_names <- as.character(.result_field(x, "variable_names"))
+  if (is.logical(i)) {
+    i <- which(i)
+  } else if (is.character(i)) {
+    i <- match(i, variable_names)
+  }
+  if (any(is.na(i) | i > length(variable_names))) {
+    stop("invalid variable requested", call. = FALSE)
+  }
+
+  selected <- seq_along(variable_names)[i]
+  has_global <- !is.null(.result_field(x, "global_chi2"))
+  table_rows <- seq_len(length(variable_names) + as.integer(has_global))[i]
+  include_global <- has_global && (length(variable_names) + 1L) %in% table_rows
+  result <- x$subset(
+    as.list(as.integer(selected - 1L)),
+    include_global = include_global
+  )
+  .wrap_python(result, c("survival_py_cox_zph", "survival_py_object"))
+}
+
 `[.survival_py_survfit` <- function(x, i, j, ..., drop = TRUE) {
   if (length(list(...)) > 0L) {
     stop("incorrect number of dimensions", call. = FALSE)

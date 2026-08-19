@@ -418,6 +418,13 @@ class CoxZPHResult:
     global_chi2: float | None
     global_df: int | None
     global_p_value: float | None
+    strata: list[Any] | None
+    def subset(
+        self,
+        indices: Sequence[int],
+        *,
+        include_global: bool = False,
+    ) -> CoxZPHResult: ...
     @property
     def table(self) -> list[dict[str, float | int | str]]: ...
 

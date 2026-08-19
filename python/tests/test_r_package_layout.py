@@ -175,6 +175,7 @@ def test_r_bridge_registers_model_s3_methods():
         ("summary", "survival_py_survdiff"),
         ("summary", "survival_py_concordance"),
         ("summary", "survival_py_cox_zph"),
+        ("[", "survival_py_cox_zph"),
         ("summary", "survival_py_coxph_detail"),
         ("summary", "survival_py_anova"),
         ("survfit", "character"),
