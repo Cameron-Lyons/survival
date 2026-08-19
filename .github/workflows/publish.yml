@@ -248,6 +248,8 @@ jobs:
       - name: Publish to PyPI
         if: steps.check.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
   publish-crates:
     name: Publish to crates.io
