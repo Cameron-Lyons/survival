@@ -2,7 +2,9 @@
 name = "survival-pyo3-macros-shim"
 version = "0.1.0"
 edition = "2024"
+description = "Internal no-op PyO3 attribute macros for survival's Rust-only builds"
+license = "MIT"
+repository = "https://github.com/Cameron-Lyons/survival"
 
 [lib]
 proc-macro = true
-
