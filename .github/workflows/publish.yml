@@ -267,7 +267,7 @@ jobs:
         env:
           VERSION: ${{ needs.resolve-publish-ref.outputs.version }}
         run: |
-          if curl -s "https://crates.io/api/v1/crates/survival/${VERSION}" | grep -q '"version"'; then
+          if curl -s -A "survival-release-workflow (https://github.com/Cameron-Lyons/survival)" "https://crates.io/api/v1/crates/survival/${VERSION}" | grep -q '"version"'; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "Version ${VERSION} already exists on crates.io, skipping publish"
           else
@@ -278,7 +278,7 @@ jobs:
       - name: Check if shim version exists on crates.io
         id: check-shim
         run: |
-          if curl -s "https://crates.io/api/v1/crates/survival-pyo3-macros-shim/0.1.0" | grep -q '"version"'; then
+          if curl -s -A "survival-release-workflow (https://github.com/Cameron-Lyons/survival)" "https://crates.io/api/v1/crates/survival-pyo3-macros-shim/0.1.0" | grep -q '"version"'; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Shim version 0.1.0 already exists on crates.io, skipping publish"
           else
@@ -296,7 +296,7 @@ jobs:
         if: steps.check.outputs.exists == 'false' && steps.check-shim.outputs.exists == 'false'
         run: |
           for attempt in {1..30}; do
-            if curl -fsS "https://crates.io/api/v1/crates/survival-pyo3-macros-shim/0.1.0" >/dev/null; then
+            if curl -fsS -A "survival-release-workflow (https://github.com/Cameron-Lyons/survival)" "https://crates.io/api/v1/crates/survival-pyo3-macros-shim/0.1.0" >/dev/null; then
               exit 0
             fi
             sleep 10
