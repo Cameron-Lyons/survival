@@ -315,6 +315,7 @@ pub fn cox_zph_term_matrix(
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn cox_zph_tests(
     event_scores: Vec<Vec<f64>>,
     event_information: Vec<Vec<Vec<f64>>>,
