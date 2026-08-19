@@ -6251,6 +6251,11 @@ test_that("Cox bridge reports converged aliased coefficients like R survival", {
     )
     expect_equal(bridged_zph$name, rownames(reference_zph$table))
     expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+    expect_equal(
+      bridged_zph$chisq,
+      unname(reference_zph$table[, "chisq"]),
+      tolerance = 1e-09
+    )
   }
 })
 
@@ -6293,6 +6298,11 @@ test_that("Cox zph bridge remaps partially aliased terms like R survival", {
     )
     expect_equal(bridged_zph$name, rownames(reference_zph$table))
     expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+    expect_equal(
+      bridged_zph$chisq,
+      unname(reference_zph$table[, "chisq"]),
+      tolerance = 1e-09
+    )
   }
 })
 
@@ -6320,6 +6330,59 @@ test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
     x = TRUE,
     control = survival::coxph.control(iter.max = 50, eps = 1e-09)
   )
+  for (transform in c("identity", "log", "rank", "km")) {
+    transformed_bridged <- cox.zph(bridged_fit, transform = transform)
+    transformed_reference <- survival::cox.zph(reference_fit, transform = transform)
+    bridged_table <- as.data.frame(transformed_bridged)
+
+    expect_equal(transformed_bridged$x, transformed_reference$x, tolerance = 1e-12)
+    expect_equal(
+      bridged_table$chisq,
+      unname(transformed_reference$table[, "chisq"]),
+      tolerance = 1e-09
+    )
+    expect_equal(
+      bridged_table$p,
+      unname(transformed_reference$table[, "p"]),
+      tolerance = 1e-09
+    )
+  }
+
+  custom_transform <- function(value) rank(value)^2
+  custom_bridged <- cox.zph(bridged_fit, transform = custom_transform)
+  custom_reference <- survival::cox.zph(reference_fit, transform = custom_transform)
+  expect_equal(custom_bridged$x, custom_reference$x, tolerance = 1e-12)
+  expect_equal(
+    as.data.frame(custom_bridged)$chisq,
+    unname(custom_reference$table[, "chisq"]),
+    tolerance = 1e-09
+  )
+
+  data$dose <- factor(
+    rep(c("low", "medium", "high"), 4L),
+    levels = c("low", "medium", "high")
+  )
+  grouped_bridged <- as.data.frame(cox.zph(
+    coxph(Surv(time, status) ~ dose + x1, data = data, max_iter = 50, eps = 1e-09),
+    transform = "rank",
+    singledf = TRUE
+  ))
+  grouped_reference <- survival::cox.zph(
+    survival::coxph(
+      survival::Surv(time, status) ~ dose + x1,
+      data = data,
+      x = TRUE,
+      control = survival::coxph.control(iter.max = 50, eps = 1e-09)
+    ),
+    transform = "rank",
+    singledf = TRUE
+  )
+  expect_equal(
+    grouped_bridged$chisq,
+    unname(grouped_reference$table[, "chisq"]),
+    tolerance = 1e-09
+  )
+
   bridged <- cox.zph(bridged_fit, transform = "rank")
   reference <- survival::cox.zph(reference_fit, transform = "rank")
 
@@ -6351,6 +6414,42 @@ test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
     )
   }
 
+  for (selector in list(1L, "x2")) {
+    bridged_curve <- plot(
+      bridged,
+      var = selector,
+      df = 3,
+      nsmo = 17,
+      plot = FALSE
+    )
+    reference_curve <- plot(
+      reference,
+      var = selector,
+      df = 3,
+      nsmo = 17,
+      plot = FALSE
+    )
+    expect_equal(bridged_curve$x, reference_curve$x, tolerance = 1e-12)
+    expect_equal(bridged_curve$y, reference_curve$y, tolerance = 1e-08)
+  }
+
+  no_band <- plot(bridged, var = 1L, se = FALSE, plot = FALSE)
+  expect_length(no_band$x, 40L)
+  expect_identical(dim(no_band$y), c(40L, 1L))
+  expect_error(plot(bridged, var = "missing", plot = FALSE), "Invalid variable requested")
+  expect_error(plot(bridged, hr = "yes", plot = FALSE), "hr parameter must be TRUE/FALSE")
+
+  plot_file <- tempfile(fileext = ".pdf")
+  grDevices::pdf(plot_file)
+  plot_result <- tryCatch(
+    plot(bridged[1L], resid = TRUE, se = TRUE, hr = TRUE),
+    finally = {
+      grDevices::dev.off()
+      unlink(plot_file)
+    }
+  )
+  expect_null(plot_result)
+
   expect_error(bridged["missing"], "invalid variable requested")
   expect_error(bridged[3], "invalid variable requested")
 
@@ -6371,6 +6470,85 @@ test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
     do.call(rbind, clustered_bridged$var),
     unname(clustered_reference$var),
     tolerance = 1e-08
+  )
+})
+
+test_that("Cox zph score tests preserve tied, weighted, and counting-process risk sets", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  compare_zph <- function(bridged_fit, reference_fit) {
+    for (transform in c("rank", "km")) {
+      bridged <- cox.zph(bridged_fit, transform = transform)
+      reference <- survival::cox.zph(reference_fit, transform = transform)
+      bridged_table <- as.data.frame(bridged)
+      expect_equal(bridged$x, reference$x, tolerance = 1e-12)
+      expect_equal(
+        bridged_table$chisq,
+        unname(reference$table[, "chisq"]),
+        tolerance = 1e-09
+      )
+      expect_equal(
+        bridged_table$p,
+        unname(reference$table[, "p"]),
+        tolerance = 1e-09
+      )
+    }
+  }
+
+  tied <- data.frame(
+    time = c(1, 1, 2, 3, 3, 4, 5, 6),
+    status = c(1, 1, 0, 1, 1, 0, 1, 0),
+    x1 = c(0.2, 0.8, 0.4, 1.1, 0.3, 0.7, 1.4, 0.1),
+    x2 = c(1, 0.5, 0.9, 0.2, 0.8, 0.4, 0.1, 0.7),
+    weight = c(1, 2, 0.5, 1.5, 0.75, 1, 2, 0.5)
+  )
+  for (method in c("breslow", "efron", "exact")) {
+    case_weights <- if (identical(method, "exact")) NULL else tied$weight
+    compare_zph(
+      coxph(
+        Surv(time, status) ~ x1 + x2,
+        data = tied,
+        weights = case_weights,
+        ties = method,
+        max_iter = 100,
+        eps = 1e-10
+      ),
+      survival::coxph(
+        survival::Surv(time, status) ~ x1 + x2,
+        data = tied,
+        weights = case_weights,
+        ties = method,
+        x = TRUE,
+        control = survival::coxph.control(iter.max = 100, eps = 1e-10)
+      )
+    )
+  }
+
+  counting <- data.frame(
+    start = c(0, 0, 1, 0, 2, 0, 1, 3),
+    stop = c(2, 3, 4, 5, 6, 4, 5, 7),
+    status = c(1, 0, 1, 1, 0, 1, 0, 1),
+    x1 = c(0.2, 0.8, 0.4, 1.1, 0.3, 0.7, 1.4, 0.1),
+    x2 = c(1, 0.5, 0.9, 0.2, 0.8, 0.4, 0.1, 0.7),
+    group = rep(c("a", "b"), each = 4)
+  )
+  compare_zph(
+    coxph(
+      Surv(start, stop, status) ~ x1 + x2 + strata(group),
+      data = counting,
+      ties = "efron",
+      max_iter = 100,
+      eps = 1e-10
+    ),
+    survival::coxph(
+      survival::Surv(start, stop, status) ~ x1 + x2 + survival::strata(group),
+      data = counting,
+      ties = "efron",
+      x = TRUE,
+      control = survival::coxph.control(iter.max = 100, eps = 1e-10)
+    )
   )
 })
 

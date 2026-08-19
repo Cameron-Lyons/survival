@@ -14203,15 +14203,28 @@ def cox_zph(
         event_strata = _cox_strata_labels_for_fit(fit, event_strata_codes)
         if event_strata is None:
             event_strata = event_strata_codes
-    transform_name, transformed_time = _cox_zph_transform(fit, event_times, transform)
-    test_residuals = scaled
+    transform_name, transformed_time = _cox_zph_transform(
+        fit,
+        event_indices,
+        event_times,
+        transform,
+    )
+    event_scores, event_information, event_counts = _cox_zph_event_detail(
+        fit,
+        active_columns,
+        beta,
+    )
+    detail_time = _cox_zph_detail_transform(event_counts, transformed_time)
 
     test = _core.cox_zph_tests(
-        test_residuals,
-        transformed_time,
+        event_scores,
+        event_information,
+        detail_time,
+        event_counts,
         [columns for _name, columns in groups],
         beta,
         single_df,
+        include_global,
     )
     grouped_y = (
         _cox_zph_term_matrix(scaled, groups, beta)
@@ -14696,12 +14709,8 @@ def _cox_zph_km_transform(fit: Any, event_times: list[float]) -> list[float]:
     curve_times = [float(value) for value in km.time]
     estimates = [float(value) for value in km.estimate]
     transformed: list[float] = []
-    cursor = 0
     for event_time in event_times:
-        while (
-            cursor < len(curve_times) and curve_times[cursor] < event_time - _SURVFIT_TIME_EPSILON
-        ):
-            cursor += 1
+        cursor = bisect_left(curve_times, event_time - _SURVFIT_TIME_EPSILON)
         previous_survival = estimates[cursor - 1] if cursor > 0 else 1.0
         transformed.append(1.0 - previous_survival)
     return transformed
@@ -14709,14 +14718,22 @@ def _cox_zph_km_transform(fit: Any, event_times: list[float]) -> list[float]:
 
 def _cox_zph_transform(
     fit: Any,
+    event_indices: list[int],
     event_times: list[float],
     transform: Any,
 ) -> tuple[str, list[float]]:
+    all_times = [float(value) for value in fit.event_times]
+    if any(idx < 0 or idx >= len(all_times) for idx in event_indices):
+        raise ValueError("event indices do not match fitted model times")
+
+    def select_events(values: list[float]) -> list[float]:
+        return [values[idx] for idx in event_indices]
+
     if callable(transform):
-        transformed = _float_vector(transform(event_times), "transform result")
-        if len(transformed) != len(event_times):
-            raise ValueError("transform result must have the same length as event times")
-        return getattr(transform, "__name__", "user"), transformed
+        transformed = _float_vector(transform(all_times), "transform result")
+        if len(transformed) != len(all_times):
+            raise ValueError("transform result must have the same length as model times")
+        return getattr(transform, "__name__", "user"), select_events(transformed)
 
     message = "transform must be 'km', 'rank', 'identity', 'log', or a callable"
     transform_name = "km" if transform is None else str(transform).strip().lower()
@@ -14735,12 +14752,87 @@ def _cox_zph_transform(
     if normalized == "km":
         return "km", _cox_zph_km_transform(fit, event_times)
     if normalized == "rank":
-        return "rank", _average_ranks(event_times)
+        return "rank", select_events(_average_ranks(all_times))
     if normalized == "log":
-        if any(value <= 0.0 for value in event_times):
-            raise ValueError("log transform requires positive event times")
-        return "log", [math.log(value) for value in event_times]
-    return "identity", event_times
+        if any(value <= 0.0 for value in all_times):
+            raise ValueError("log transform requires positive model times")
+        return "log", select_events([math.log(value) for value in all_times])
+    return "identity", select_events(all_times)
+
+
+def _cox_zph_event_detail(
+    fit: Any,
+    active_columns: list[int],
+    beta: list[float],
+) -> tuple[list[list[float]], list[list[list[float]]], list[int]]:
+    model = _unwrap_formula_fit(fit)
+    full_beta = _cox_beta(model)
+    full_rows = _cox_training_rows(model, len(full_beta))
+    if not full_rows:
+        raise ValueError("fitted Cox model does not expose its training design")
+    rows = _matrix_columns(full_rows, active_columns)
+    time = [float(value) for value in model.event_times]
+    status = [int(value) for value in model.status]
+    if len(time) != len(status) or len(rows) != len(time):
+        raise ValueError("fitted Cox model detail arrays have inconsistent lengths")
+
+    linear_predictors = [float(value) for value in model.linear_predictors]
+    if len(linear_predictors) != len(time):
+        raise ValueError("fitted Cox model linear predictors do not match training rows")
+    offset = [
+        linear_predictor
+        - sum(value * coefficient for value, coefficient in zip(row, beta, strict=True))
+        for row, linear_predictor in zip(rows, linear_predictors, strict=True)
+    ]
+    if all(abs(value) <= 1e-12 for value in offset):
+        offset = None
+
+    entry_values = getattr(model, "entry_times", None)
+    entry = [float(value) for value in entry_values] if entry_values is not None else None
+    if entry is not None and len(entry) != len(time):
+        raise ValueError("fitted Cox model entry times do not match training rows")
+    weights = _model_residual_weights(model, len(time))
+    strata = _cox_training_strata(model, len(time))
+    method = "efron" if str(getattr(model, "method", "breslow")).lower() == "efron" else "breslow"
+    native = _core.coxph_detail(
+        time,
+        status,
+        rows,
+        beta,
+        weights,
+        entry_times=entry,
+        strata=strata,
+        offset=offset,
+        method=method,
+    )
+    detail_rows = list(native.rows)
+    return (
+        [[float(value) for value in row.score] for row in detail_rows],
+        [
+            [[float(value) for value in matrix_row] for matrix_row in row.imat]
+            for row in detail_rows
+        ],
+        [int(row.n_event) for row in detail_rows],
+    )
+
+
+def _cox_zph_detail_transform(
+    event_counts: list[int],
+    transformed_events: list[float],
+) -> list[float]:
+    transformed_time: list[float] = []
+    cursor = 0
+    for count in event_counts:
+        if count <= 0 or cursor + count > len(transformed_events):
+            raise ValueError("Cox detail event counts do not match transformed event times")
+        tied = transformed_events[cursor : cursor + count]
+        if any(abs(value - tied[0]) > _SURVFIT_TIME_EPSILON for value in tied[1:]):
+            raise ValueError("tied events have inconsistent transformed times")
+        transformed_time.append(tied[0])
+        cursor += count
+    if cursor != len(transformed_events):
+        raise ValueError("Cox detail event counts do not match transformed event times")
+    return transformed_time
 
 
 def _matrix_columns(rows: list[list[float]], columns: list[int]) -> list[list[float]]:

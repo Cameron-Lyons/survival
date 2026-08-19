@@ -11564,6 +11564,175 @@ dim.survival_py_survfit <- function(x) {
   .wrap_python(result, c("survival_py_cox_zph", "survival_py_object"))
 }
 
+.cox_zph_plot_components <- function(x) {
+  variable_names <- as.character(.result_field(x, "variable_names"))
+  y <- .as_numeric_matrix(.result_field(x, "y"))
+  variance <- .as_numeric_matrix(.result_field(x, "var"))
+  transformed_time <- .as_numeric_vector(.result_field(x, "x"))
+  event_time <- .as_numeric_vector(.result_field(x, "time"))
+
+  if (ncol(y) != length(variable_names) ||
+      !identical(dim(variance), c(length(variable_names), length(variable_names)))) {
+    stop("cox.zph result dimensions are inconsistent", call. = FALSE)
+  }
+  if (nrow(y) != length(transformed_time) || length(event_time) != length(transformed_time)) {
+    stop("cox.zph result times are inconsistent", call. = FALSE)
+  }
+  colnames(y) <- variable_names
+  dimnames(variance) <- list(variable_names, variable_names)
+  list(
+    x = transformed_time,
+    time = event_time,
+    y = y,
+    var = variance,
+    transform = as.character(.result_field(x, "transform"))[[1L]]
+  )
+}
+
+plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
+                                     nsmo = 40, var, xlab = "Time", ylab = "",
+                                     lty = 1:2, col = 1, lwd = 1, pch = 1,
+                                     cex = 1, hr = FALSE, plot = TRUE, ...) {
+  components <- .cox_zph_plot_components(x)
+  observed_x <- components$x
+  residual_matrix <- components$y
+  df <- max(df)
+  variable_count <- ncol(residual_matrix)
+  prediction_x <- seq(
+    from = min(observed_x),
+    to = max(observed_x),
+    length.out = nsmo
+  )
+  basis <- splines::ns(c(prediction_x, observed_x), df = df, intercept = TRUE)
+  prediction_basis <- basis[seq_len(nsmo), , drop = FALSE]
+  observed_basis <- basis[-seq_len(nsmo), , drop = FALSE]
+
+  if (!is.logical(hr)) {
+    stop("hr parameter must be TRUE/FALSE", call. = FALSE)
+  }
+  if (missing(ylab)) {
+    prefix <- if (hr) "HR(t) for" else "Beta(t) for"
+    ylab <- paste(prefix, colnames(residual_matrix))
+  }
+  if (missing(var)) {
+    selected <- seq_len(variable_count)
+  } else {
+    selected <- var
+    if (is.character(selected)) {
+      selected <- match(selected, colnames(residual_matrix))
+    }
+    if (any(is.na(selected)) || max(selected) > variable_count || min(selected) < 1L) {
+      stop("Invalid variable requested", call. = FALSE)
+    }
+  }
+  if (!plot) {
+    resid <- FALSE
+  }
+
+  draw_default_axis <- !("xaxt" %in% ...names())
+  plotted_x <- observed_x
+  curve_x <- prediction_x
+  if (identical(components$transform, "log")) {
+    plotted_x <- exp(plotted_x)
+    curve_x <- exp(curve_x)
+  } else if (!identical(components$transform, "identity")) {
+    unique_x <- !duplicated(plotted_x)
+    axis_targets <- seq(min(plotted_x), max(plotted_x), length.out = 17L)[2L * seq_len(8L)]
+    axis_times <- signif(
+      stats::approx(plotted_x[unique_x], components$time[unique_x], axis_targets)$y,
+      2L
+    )
+    axis_values <- stats::approx(components$time[unique_x], plotted_x[unique_x], axis_times)$y
+    axis_labels <- format(axis_times)
+  }
+
+  col <- rep(col, length.out = 2L)
+  lwd <- rep(lwd, length.out = 2L)
+  lty <- rep(lty, length.out = 2L)
+
+  for (variable_index in selected) {
+    residuals <- residual_matrix[, variable_index]
+    keep <- !is.na(residuals)
+    fit_residuals <- residuals[keep]
+    fit_basis <- observed_basis[keep, , drop = FALSE]
+    decomposition <- qr(fit_basis)
+    if (decomposition$rank < df) {
+      warning("spline fit is singular, variable ", variable_index, " skipped")
+      next
+    }
+
+    fitted_curve <- drop(prediction_basis %*% qr.coef(decomposition, fit_residuals))
+    y_range <- if (resid) range(fitted_curve, fit_residuals) else range(fitted_curve)
+    upper_curve <- lower_curve <- NULL
+    if (se) {
+      inverse_r <- backsolve(
+        decomposition$qr[seq_len(df), seq_len(df), drop = FALSE],
+        diag(df)
+      )
+      coefficient_variance <- inverse_r %*% t(inverse_r)
+      prediction_variance <- rowSums((prediction_basis %*% coefficient_variance) * prediction_basis)
+      band <- 2 * sqrt(components$var[variable_index, variable_index] * prediction_variance)
+      upper_curve <- fitted_curve + band
+      lower_curve <- fitted_curve - band
+      y_range <- range(y_range, upper_curve, lower_curve)
+    }
+
+    if (!plot) {
+      curve_matrix <- if (se) {
+        cbind(fitted_curve, upper_curve, lower_curve)
+      } else {
+        matrix(fitted_curve, ncol = 1L)
+      }
+      return(list(x = curve_x, y = unname(curve_matrix)))
+    }
+
+    display_range <- if (hr) exp(y_range) else y_range
+    display_residuals <- if (hr) exp(fit_residuals) else fit_residuals
+    display_curve <- if (hr) exp(fitted_curve) else fitted_curve
+    display_upper <- if (hr) exp(upper_curve) else upper_curve
+    display_lower <- if (hr) exp(lower_curve) else lower_curve
+    log_axis <- if (hr) "y" else ""
+    if (identical(components$transform, "log")) {
+      log_axis <- paste0("x", log_axis)
+    }
+
+    plot_x_range <- if (identical(components$transform, "identity")) {
+      range(plotted_x)
+    } else {
+      range(plotted_x[keep])
+    }
+    plot_args <- list(
+      x = plot_x_range,
+      y = display_range,
+      type = "n",
+      xlab = xlab,
+      ylab = ylab[variable_index]
+    )
+    if (nzchar(log_axis)) {
+      plot_args$log <- log_axis
+    }
+    if (!identical(components$transform, "identity") &&
+        !identical(components$transform, "log") && draw_default_axis) {
+      plot_args$xaxt <- "n"
+    }
+    do.call(graphics::plot, c(plot_args, list(...)))
+    if (!identical(components$transform, "identity") &&
+        !identical(components$transform, "log") && draw_default_axis) {
+      graphics::axis(1L, axis_values, axis_labels)
+    }
+    if (resid) {
+      graphics::points(plotted_x[keep], display_residuals, pch = pch, cex = cex)
+    }
+    graphics::lines(curve_x, display_curve, lty = lty[[1L]], col = col[[1L]], lwd = lwd[[1L]])
+    if (se) {
+      graphics::lines(curve_x, display_upper, lty = lty[[2L]], col = col[[2L]], lwd = lwd[[2L]])
+      graphics::lines(curve_x, display_lower, lty = lty[[2L]], col = col[[2L]], lwd = lwd[[2L]])
+    }
+  }
+
+  invisible(NULL)
+}
+
 `[.survival_py_survfit` <- function(x, i, j, ..., drop = TRUE) {
   if (length(list(...)) > 0L) {
     stop("incorrect number of dimensions", call. = FALSE)

@@ -13,6 +13,7 @@ SystemRequirements: Python (>= 3.11) with the survival Python package
 Imports:
     graphics,
     reticulate,
+    splines,
     stats,
     utils
 Suggests:

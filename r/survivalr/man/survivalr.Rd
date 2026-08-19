@@ -278,6 +278,7 @@
 \alias{summary.survival_py_concordance}
 \alias{summary.survival_py_cox_zph}
 \alias{[.survival_py_cox_zph}
+\alias{plot.survival_py_cox_zph}
 \alias{summary.survival_py_coxph_detail}
 \alias{summary.survival_py_anova}
 \alias{coef.concordance}
@@ -873,6 +874,10 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{[}{survival_py_cox_zph}(x, ..., drop = FALSE)
 
+\method{plot}{survival_py_cox_zph}(x, resid = TRUE, se = TRUE, df = 4,
+  nsmo = 40, var, xlab = "Time", ylab = "", lty = 1:2, col = 1,
+  lwd = 1, pch = 1, cex = 1, hr = FALSE, plot = TRUE, ...)
+
 \method{summary}{survival_py_coxph_detail}(object, ...)
 
 \method{summary}{survival_py_anova}(object, ...)
@@ -977,7 +982,7 @@ for low-level Cox survival-curve inputs.}
 The bridge also accepts \code{"closest"} as a Python-backed extension.}
 \item{nomatch}{Scalar value used when \code{neardate} cannot find a match.}
 \item{df}{Optional degrees of freedom for \code{nsk}, \code{ridge},
-\code{frailty.*}, and \code{pspline}.}
+\code{frailty.*}, \code{pspline}, and the \code{cox.zph} plot smoother.}
 \item{knots}{Optional interior knot locations for \code{nsk}.}
 \item{intercept}{Logical flag controlling whether \code{nsk} includes the
 first knot-height column, or whether \code{pspline} includes an intercept.}
@@ -1073,6 +1078,9 @@ options handled by the native bridge.}
 \code{survival::survobrien}, or the time-axis transform for \code{cox.zph}.}
 \item{terms, singledf, global}{Logical controls for term grouping,
 single-degree-of-freedom tests, and the global test in \code{cox.zph}.}
+\item{nsmo, hr, plot}{Number of smoothing-grid points, hazard-ratio display
+flag, and drawing flag for \code{plot.survival_py_cox_zph}. Set
+\code{plot = FALSE} to return the smoothed curve data.}
 \item{covariate}{Direct numeric covariate vector for Python-backed
 \code{survobrien}.}
 \item{scores, risk.scores}{Optional direct concordance score vectors or
@@ -1143,7 +1151,7 @@ long data frame instead of a matrix.}
 \code{survfit_confint}.}
 \item{probs}{Survival quantile probabilities.}
 \item{se}{Standard-error vector for \code{survfit_confint}, or logical flag
-controlling confidence curves for \code{aareg} plots.}
+controlling confidence curves for \code{aareg} and \code{cox.zph} plots.}
 \item{logse}{Logical flag indicating whether \code{se} is already on the
 log-survival scale for \code{survfit_confint}.}
 \item{conf.type}{Confidence interval transform for \code{survfit_confint}
@@ -1206,8 +1214,9 @@ logistic, Gaussian, and Student-t \code{survreg.fit} distributions use the
 Rust optimizer; custom density callbacks retain the upstream fallback.}
 \item{varmat, wt, risk, newrisk, position, oldid, x2, risk2, strata2,
 survtype, vartype, unlist}{Low-level Cox survival-curve inputs.}
-\item{var}{Variance matrix for \code{coxph.wtest}, or a constructed spline
-basis passed to a \code{makepredictcall} method.}
+\item{var}{Variance matrix for \code{coxph.wtest}, a constructed spline
+basis passed to a \code{makepredictcall} method, or variables selected for a
+\code{cox.zph} plot.}
 \item{parm}{Optional coefficient names or 1-based coefficient indices.}
 \item{level}{Confidence level for coefficient intervals.}
 \item{se.fit}{Logical flag requesting standard errors when supported.}
