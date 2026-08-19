@@ -2,7 +2,7 @@ from importlib import import_module as _import_module
 
 from ._binding_manifest import MODULE_BINDINGS
 
-__version__ = "2.0.0"
+__version__ = "1.3.0"
 
 _PUBLIC_MODULES = {
     "bayesian": ".bayesian",
