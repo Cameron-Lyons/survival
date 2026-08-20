@@ -9710,13 +9710,15 @@ def test_coxph_formula_gaussian_frailty_rejects_unsupported_modes():
     for option, exception, message in (
         ("distribution='gamma',theta=.5", NotImplementedError, "only distribution"),
         ("distribution='gaussian'", NotImplementedError, "fixed theta"),
-        ("distribution='gaussian',method='aic'", NotImplementedError, "fixed theta"),
+        ("distribution='gaussian',method='reml'", NotImplementedError, "fixed theta"),
         ("distribution='gaussian',method='fixed'", ValueError, "requires theta"),
         ("distribution='gaussian',method='df'", ValueError, "requires df"),
         ("distribution='gaussian',theta=0", ValueError, "positive"),
         ("distribution='gaussian',df=-1", ValueError, "positive"),
         ("distribution='gaussian',df=2,eps=0", ValueError, "positive"),
         ("distribution='gaussian',theta=.5,df=2", ValueError, "both"),
+        ("distribution='gaussian',method='aic',theta=.5", ValueError, "cannot include theta"),
+        ("distribution='gaussian',method='aic',df=2", ValueError, "must be zero"),
         ("distribution='gaussian',df=6,sparse=False", ValueError, "between"),
         ("distribution='gaussian',theta=.5,sparse=True", NotImplementedError, "sparse"),
     ):
@@ -9803,6 +9805,78 @@ def test_coxph_formula_gaussian_frailty_calibrates_target_df_reference():
     ) == pytest.approx([-0.0770749029582383, -0.288527919654661], abs=1e-12)
 
 
+def test_coxph_formula_gaussian_frailty_selects_variance_by_aic_reference():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+        "g": list("abcd") * 3,
+    }
+    frailty_term = 'frailty(g,distribution="gaussian",df=0,eps=1e-5,sparse=False)'
+    fit = survival.coxph(
+        f"Surv(time,status) ~ x + {frailty_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [
+            -0.594635689882725,
+            6.30802133373296e-07,
+            -2.68305721642421e-07,
+            -1.56466049342734e-07,
+            -2.0603036238814e-07,
+        ],
+        abs=1e-12,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-11.6900898701181, -12.3745229008121],
+        abs=1e-12,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"x": 0.999999826778145, frailty_term: 4.72923581254938e-06},
+        abs=1e-12,
+    )
+    history = fit.history[frailty_term]
+    assert history["theta"] == pytest.approx(1e-7, abs=1e-18)
+    assert history["done"] is True
+    assert [row["theta"] for row in history["history"]] == pytest.approx(
+        [0.1, 1.0, 0.55, 0.01, 0.001, 0.0001, 0.00001, 0.000001],
+        abs=1e-15,
+    )
+    assert history["history"][0] == pytest.approx(
+        {
+            "theta": 0.1,
+            "loglik": -12.3302130527257,
+            "df": 0.407054874024239,
+            "aic": -12.7372679267499,
+            "aicc": -13.3428269330076,
+        },
+        abs=1e-12,
+    )
+    assert history["history"][-1] == pytest.approx(
+        {
+            "theta": 1e-6,
+            "loglik": -12.3745229008121,
+            "df": 4.72923581254938e-06,
+            "aic": -12.3745276300479,
+            "aicc": -12.7078635907402,
+        },
+        abs=1e-12,
+    )
+
+    method_alias = survival.coxph(
+        "Surv(time,status) ~ x + "
+        'frailty(g,distribution="gaussian",method="aic",eps=1e-5,sparse=False)',
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+    assert method_alias.coefficients[0] == pytest.approx(fit.coefficients[0], abs=1e-12)
+    assert method_alias.log_likelihood == pytest.approx(fit.log_likelihood, abs=1e-12)
+
+
 def test_coxph_formula_pspline_calibrates_target_df_against_reference():
     data = {
         "time": [float(value) for value in range(1, 13)],
@@ -9869,7 +9943,7 @@ def test_penalty_df_controller_safeguards_nonmonotone_history_boundary():
     assert theta == pytest.approx(1.5)
     assert done is False
     assert half == 1
-    assert survival.r_api._pspline_aic_history_row(0.5, -3.0, 2.0, 4)["aicc"] == -math.inf
+    assert survival.r_api._penalty_aic_history_row(0.5, -3.0, 2.0, 4)["aicc"] == -math.inf
 
 
 def test_coxph_formula_pspline_selects_smoothing_by_aic_reference():
