@@ -13537,23 +13537,7 @@ def _concordance_core_time_values(
 
 
 def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
-    fixed = [list(vector) for vector in vectors]
-    points = [
-        (value, vector_idx, row_idx)
-        for vector_idx, vector in enumerate(fixed)
-        for row_idx, value in enumerate(vector)
-    ]
-    points.sort(key=lambda item: (item[0], item[1], item[2]))
-    cursor = 0
-    while cursor < len(points):
-        base = points[cursor][0]
-        scan = cursor + 1
-        while scan < len(points) and points[scan][0] - base < _SURVFIT_TIME_EPSILON:
-            _value, vector_idx, row_idx = points[scan]
-            fixed[vector_idx][row_idx] = base
-            scan += 1
-        cursor = scan
-    return tuple(fixed)
+    return tuple(_core.timefix_vectors(list(vectors), _SURVFIT_TIME_EPSILON))
 
 
 def _survdiff_result_from_components(components: Any, rho: float) -> Any:
