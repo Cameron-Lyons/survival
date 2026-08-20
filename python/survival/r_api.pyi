@@ -78,6 +78,19 @@ class SurvExpResult:
     method: str
     n: int
 
+class SurvExpFormulaResult:
+    time: list[float]
+    surv: list[list[float]]
+    n_risk: list[list[float]]
+    cumhaz: list[list[float]]
+    method: str
+    n: int
+    group_labels: list[str]
+    summary: str | None
+    model: Any | None
+    x: list[int] | None
+    y: Surv | None
+
 class PyearsResult:
     pyears: list[float]
     n: list[float]
@@ -214,18 +227,26 @@ def ratetableDate(
 ) -> Any: ...
 def survexp(
     time: Any,
-    age: Any,
-    year: Any,
+    age: Any | None = None,
+    year: Any | None = None,
     ratetable: Any | None = None,
     sex: Any | None = None,
     times: Any | None = None,
     method: Any | None = None,
     *,
+    data: Any | None = None,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    rmap: Any | None = None,
     cohort: Any = True,
     conditional: Any = False,
     scale: Any = 1.0,
     se_fit: Any | None = None,
-) -> SurvExpResult | list[float]: ...
+    model: Any = False,
+    x: Any = False,
+    y: Any = False,
+) -> SurvExpResult | SurvExpFormulaResult | list[float]: ...
 def survexp_individual(
     time: Any,
     age: Any,

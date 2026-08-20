@@ -60,6 +60,7 @@ _R_EXPORTS = [
     "PyearsResult",
     "SurvObrienResult",
     "SurvExpResult",
+    "SurvExpFormulaResult",
     "SurvfitConfidenceIntervalResult",
     "SurvfitMultiStateResult",
     "TMergeFrame",

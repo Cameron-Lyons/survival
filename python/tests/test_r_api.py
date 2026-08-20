@@ -3046,6 +3046,12 @@ def test_r_style_ratetable_helpers_delegate_to_population_core():
     assert isinstance(scaled, survival.SurvExpResult)
     assert scaled.time == pytest.approx([1.0, 2.0])
     assert scaled.method == "ederer"
+    assert survival.as_data_frame(scaled) == {
+        "time": scaled.time,
+        "surv": scaled.surv,
+        "n.risk": scaled.n_risk,
+        "cumhaz": scaled.cumhaz,
+    }
     assert conditional.method == "conditional"
     assert individual_surv == pytest.approx(direct_individual)
     assert individual_hazard == pytest.approx([-math.log(value) for value in direct_individual])
@@ -3075,6 +3081,105 @@ def test_r_style_ratetable_helpers_delegate_to_population_core():
         survival.ratetableDate(2001, 2, 29)
     with pytest.raises(TypeError, match="month and day"):
         survival.ratetableDate(2000, month=2)
+
+
+def test_survexp_formula_maps_rate_data_and_returns_grouped_curves():
+    data = {
+        "futime": [365.25, 730.5, 1095.75],
+        "status": [1, 0, 1],
+        "age": [50 * 365.25, 60 * 365.25, 70 * 365.25],
+        "sex": ["male", "female", "male"],
+        "entry": [date(2000, 1, 1), date(2001, 1, 1), date(2002, 1, 1)],
+        "group": ["a", "a", "b"],
+    }
+
+    result = survival.survexp(
+        "Surv(futime, status) ~ group",
+        data=data,
+        rmap={"year": "entry"},
+        times=[365.25, 730.5],
+        scale=365.25,
+        model=True,
+        x=True,
+        y=True,
+    )
+    group_a = survival.survexp(
+        [365.25, 730.5],
+        [50 * 365.25, 60 * 365.25],
+        [2000.0, 2001.0],
+        sex=[0, 1],
+        times=[365.25, 730.5],
+    )
+    group_b = survival.survexp(
+        [1095.75],
+        [70 * 365.25],
+        [2002.0],
+        sex=[0],
+        times=[365.25, 730.5],
+    )
+
+    assert isinstance(result, survival.SurvExpFormulaResult)
+    assert result.time == pytest.approx([1.0, 2.0])
+    assert result.group_labels == ["a", "b"]
+    assert result.surv[0] == pytest.approx(group_a.surv)
+    assert result.surv[1] == pytest.approx(group_b.surv)
+    assert result.n_risk[0] == pytest.approx(group_a.n_risk)
+    assert result.n_risk[1] == pytest.approx(group_b.n_risk)
+    assert result.x == [0, 0, 1]
+    assert result.y is not None
+    assert result.model == data
+    frame = survival.as_data_frame(result)
+    assert frame["group"] == ["a", "a", "b", "b"]
+    assert frame["time"] == pytest.approx([1.0, 2.0, 1.0, 2.0])
+    assert frame["surv"] == pytest.approx([*group_a.surv, *group_b.surv])
+
+
+def test_survexp_formula_supports_positional_data_subset_na_and_individual_output():
+    data = {
+        "futime": [365.25, 730.5, 1095.75, 1461.0],
+        "status": [1, 0, 1, 1],
+        "age_days": [40 * 365.25, 50 * 365.25, 60 * 365.25, 70 * 365.25],
+        "sex_code": ["male", None, "female", "male"],
+        "entry": [date(1999, 1, 1), date(2000, 1, 1), date(2001, 1, 1), date(2002, 1, 1)],
+    }
+    mapping = {"age": "age_days", "sex": "sex_code", "year": "entry"}
+
+    result = survival.survexp(
+        "Surv(futime, status) ~ 1",
+        data,
+        rmap=mapping,
+        subset=[True, True, True, False],
+        na_action="omit",
+        times=[365.25],
+    )
+    individual = survival.survexp(
+        "Surv(futime, status) ~ 1",
+        data,
+        rmap=mapping,
+        na_action="omit",
+        method="individual.s",
+    )
+
+    assert isinstance(result, survival.SurvExpFormulaResult)
+    assert result.n == 2
+    assert result.group_labels == ["all"]
+    assert len(individual) == 3
+    with pytest.warns(RuntimeWarning, match="weights ignored"):
+        survival.survexp(
+            "Surv(futime, status) ~ 1",
+            data,
+            rmap=mapping,
+            na_action="omit",
+            weights=[2.0, 2.0, 1.0, 1.0],
+            times=[365.25],
+        )
+    with pytest.raises(ValueError, match="interaction"):
+        survival.survexp(
+            "Surv(futime, status) ~ age_days * status",
+            data,
+            rmap=mapping,
+            na_action="omit",
+        )
 
 
 def test_match_ratetable_reorders_columns_and_encodes_factor_levels():

@@ -41,6 +41,7 @@ __all__ = [
     "StrataFactor",
     "SurvObrienResult",
     "SurvExpResult",
+    "SurvExpFormulaResult",
     "SurvfitResult",
     "SurvfitMultiStateResult",
     "SurvfitConfidenceIntervalResult",
@@ -604,6 +605,23 @@ class SurvExpResult:
     cumhaz: list[float]
     method: str
     n: int
+
+
+@dataclass(frozen=True)
+class SurvExpFormulaResult:
+    """Expected-survival curves produced from a formula and mapped rate data."""
+
+    time: list[float]
+    surv: list[list[float]]
+    n_risk: list[list[float]]
+    cumhaz: list[list[float]]
+    method: str
+    n: int
+    group_labels: list[str]
+    summary: str | None = None
+    model: Any | None = None
+    x: list[int] | None = None
+    y: Surv | None = None
 
 
 @dataclass(frozen=True)
@@ -6110,21 +6128,265 @@ def _survexp_result_from_core(result: Any, scale: float) -> SurvExpResult:
     )
 
 
+def _survexp_rmap_columns(
+    formula: str,
+    data: Any,
+    ratetable: RateTable,
+    rmap: Any | None,
+) -> dict[str, list[Any]]:
+    dimension_names = [str(dimension.name) for dimension in ratetable.dimension_specs()]
+    if rmap is None:
+        mapping: Mapping[Any, Any] = {}
+    elif isinstance(rmap, Mapping):
+        mapping = rmap
+    else:
+        raise TypeError("rmap must be a mapping from rate-table dimensions to data columns")
+    unknown = sorted(str(name) for name in mapping if str(name) not in dimension_names)
+    if unknown:
+        raise KeyError(f"rate-table dimensions not found: {', '.join(unknown)}")
+
+    response_columns = _formula_response_args(formula)
+    n = len(_column(data, response_columns[0]))
+    columns: dict[str, list[Any]] = {}
+    for name in dimension_names:
+        source = mapping.get(name, name)
+        if isinstance(source, str):
+            values = _column(data, source)
+        else:
+            values = _materialize_1d(source, f"rmap[{name!r}]")
+            if len(values) == 1 and n != 1:
+                values *= n
+        if len(values) != n:
+            raise ValueError(f"rmap value for {name!r} must have length {n}")
+        columns[name] = values
+    return columns
+
+
+def _survexp_formula_coordinates(
+    matched: Mapping[str, Any],
+    ratetable: RateTable,
+) -> tuple[list[float], list[float], list[int] | None]:
+    dimensions = list(ratetable.dimension_specs())
+    age_dimensions = [
+        dimension for dimension in dimensions if dimension.dim_type == _core.DimType.Age
+    ]
+    year_dimensions = [
+        dimension for dimension in dimensions if dimension.dim_type == _core.DimType.Year
+    ]
+    sex_dimensions = [
+        dimension
+        for dimension in dimensions
+        if dimension.dim_type == _core.DimType.Factor and "sex" in str(dimension.name).casefold()
+    ]
+    unsupported = [
+        dimension
+        for dimension in dimensions
+        if dimension.dim_type == _core.DimType.Continuous
+        or (
+            dimension.dim_type == _core.DimType.Factor
+            and dimension not in sex_dimensions
+        )
+    ]
+    if len(age_dimensions) != 1 or len(year_dimensions) != 1 or len(sex_dimensions) > 1:
+        raise ValueError(
+            "survexp formula rate tables need one age, one year, and at most one sex dimension"
+        )
+    if unsupported:
+        names = ", ".join(str(dimension.name) for dimension in unsupported)
+        raise ValueError(f"survexp formula does not yet support rate dimensions: {names}")
+
+    coords = matched["coords"]
+    age = [float(value) for value in coords[str(age_dimensions[0].name)]]
+    year = [float(value) for value in coords[str(year_dimensions[0].name)]]
+    sex = (
+        [int(value) for value in coords[str(sex_dimensions[0].name)]]
+        if sex_dimensions
+        else None
+    )
+    return age, year, sex
+
+
+def _survexp_group_label(value: Any) -> str:
+    if isinstance(value, tuple):
+        return ", ".join(str(item) for item in value)
+    return str(value)
+
+
+def _survexp_formula(
+    formula: str,
+    data: Any,
+    ratetable: Any | None,
+    times: Any | None,
+    method: Any | None,
+    cohort: Any,
+    conditional: Any,
+    scale: Any,
+    se_fit: Any | None,
+    weights: Any | None,
+    subset: Any | None,
+    na_action: str | None,
+    rmap: Any | None,
+    model: Any,
+    include_x: Any,
+    include_y: Any,
+) -> SurvExpFormulaResult | list[float]:
+    table = _survexp_ratetable(ratetable)
+    mapped_columns = _survexp_rmap_columns(formula, data, table, rmap)
+    weight_values = _formula_weight_values(data, weights)
+    aligned: dict[str, Any] = {
+        **{f"rate_{name}": values for name, values in mapped_columns.items()},
+        "weights": weight_values,
+    }
+    if subset is not None:
+        data, aligned = _subset_formula_inputs(formula, data, subset, **aligned)
+    data, aligned = _apply_formula_na_action(formula, data, na_action, **aligned)
+    mapped_columns = {
+        name: aligned[f"rate_{name}"] for name in mapped_columns
+    }
+    weight_values = aligned["weights"]
+
+    response, terms = _parse_formula(formula, data)
+    if response.type != "right":
+        raise ValueError("survexp formula requires a right-censored Surv response")
+    if terms.offsets or terms.clusters:
+        raise ValueError("survexp formula does not support offset() or cluster() terms")
+    if any(isinstance(term, _InteractionTerm) for term in terms.covariates):
+        raise ValueError("survexp formula does not support interaction terms")
+    if weight_values is not None:
+        fitted_weights = _concordance_weight_values(weight_values, len(response))
+        if fitted_weights is not None and any(value != 1.0 for value in fitted_weights):
+            warnings.warn(
+                "weights ignored for population rate tables",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+    if se_fit is not None and _normalize_bool_option(se_fit, "se_fit"):
+        warnings.warn("se_fit value ignored", RuntimeWarning, stacklevel=3)
+
+    matched = match_ratetable(mapped_columns, table)
+    age_values, year_values, sex_values = _survexp_formula_coordinates(matched, table)
+    time_values = [float(value) for value in response.time]
+    method_value = _normalize_survexp_method(method, cohort, conditional)
+    scale_value = _normalize_positive_scale(scale)
+    if method_value in {"individual.h", "individual.s"}:
+        individual = [
+            float(value)
+            for value in _core.survexp_individual(
+                time_values,
+                age_values,
+                year_values,
+                table,
+                sex_values,
+            )
+        ]
+        if method_value == "individual.s":
+            return individual
+        return [-math.log(value) if value > 0.0 else math.inf for value in individual]
+
+    if terms.covariates or terms.strata:
+        groups = _combined_formula_groups(data, terms.strata, terms.covariates, len(response))
+    else:
+        groups = ["all"] * len(response)
+    levels = _label_levels(groups, "survexp groups")
+    eval_times = (
+        sorted(set(time_values))
+        if times is None
+        else _float_vector(times, "times")
+    )
+    curves: list[SurvExpResult] = []
+    group_codes = [0] * len(response)
+    for group_index, level in enumerate(levels):
+        indices = [row for row, value in enumerate(groups) if value == level]
+        for row in indices:
+            group_codes[row] = group_index
+        core_result = _core.survexp(
+            [time_values[index] for index in indices],
+            [age_values[index] for index in indices],
+            [year_values[index] for index in indices],
+            table,
+            None if sex_values is None else [sex_values[index] for index in indices],
+            eval_times,
+            method_value,
+        )
+        curves.append(_survexp_result_from_core(core_result, scale_value))
+
+    return SurvExpFormulaResult(
+        time=[value / scale_value for value in eval_times],
+        surv=[curve.surv for curve in curves],
+        n_risk=[curve.n_risk for curve in curves],
+        cumhaz=[curve.cumhaz for curve in curves],
+        method=method_value,
+        n=len(response),
+        group_labels=[_survexp_group_label(level) for level in levels],
+        summary=str(matched["summ"]) if matched.get("summ") is not None else None,
+        model=data if _normalize_bool_option(model, "model") else None,
+        x=group_codes if _normalize_bool_option(include_x, "x") else None,
+        y=response if _normalize_bool_option(include_y, "y") else None,
+    )
+
+
 def survexp(
     time: Any,
-    age: Any,
-    year: Any,
+    age: Any | None = None,
+    year: Any | None = None,
     ratetable: Any | None = None,
     sex: Any | None = None,
     times: Any | None = None,
     method: Any | None = None,
     *,
+    data: Any | None = None,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    rmap: Any | None = None,
     cohort: Any = True,
     conditional: Any = False,
     scale: Any = 1.0,
     se_fit: Any | None = None,
-) -> SurvExpResult | list[float]:
-    """Compute expected survival from direct vectors and a population rate table."""
+    model: Any = False,
+    x: Any = False,
+    y: Any = False,
+) -> SurvExpResult | SurvExpFormulaResult | list[float]:
+    """Compute expected survival from direct vectors or an R-style formula."""
+
+    if isinstance(time, str):
+        if data is None and age is not None:
+            data = age
+            age = None
+        elif data is not None and age is not None:
+            raise TypeError("formula survexp received data both positionally and by keyword")
+        if data is None:
+            raise ValueError("data is required when survexp uses a formula")
+        if year is not None or sex is not None:
+            raise TypeError("formula survexp uses data and rmap instead of age, year, and sex")
+        return _survexp_formula(
+            time,
+            data,
+            ratetable,
+            times,
+            method,
+            cohort,
+            conditional,
+            scale,
+            se_fit,
+            weights,
+            subset,
+            na_action,
+            rmap,
+            model,
+            x,
+            y,
+        )
+
+    if age is None or year is None:
+        raise TypeError("direct survexp requires age and year")
+    if any(value is not None for value in (data, weights, subset, rmap)) or na_action != "fail":
+        raise TypeError(
+            "data, weights, subset, na_action, and rmap are only valid with formula survexp"
+        )
+    output_flags = ((model, "model"), (x, "x"), (y, "y"))
+    if any(_normalize_bool_option(value, name) for value, name in output_flags):
+        raise TypeError("model, x, and y are only valid with formula survexp")
 
     if se_fit is not None and _normalize_bool_option(se_fit, "se_fit"):
         warnings.warn("se_fit value ignored", RuntimeWarning, stacklevel=2)
@@ -16310,6 +16572,42 @@ def _surv_response_frame(response: Surv) -> dict[str, list[Any]]:
     return frame
 
 
+def _survexp_formula_frame(result: SurvExpFormulaResult) -> dict[str, list[Any]]:
+    frame: dict[str, list[Any]] = {
+        "group": [],
+        "time": [],
+        "surv": [],
+        "n.risk": [],
+        "cumhaz": [],
+    }
+    for label, survival, n_risk, cumhaz in zip(
+        result.group_labels,
+        result.surv,
+        result.n_risk,
+        result.cumhaz,
+        strict=True,
+    ):
+        if not (len(survival) == len(n_risk) == len(cumhaz) == len(result.time)):
+            raise ValueError("survexp formula curves must match the time grid")
+        frame["group"].extend([label] * len(result.time))
+        frame["time"].extend(result.time)
+        frame["surv"].extend(survival)
+        frame["n.risk"].extend(n_risk)
+        frame["cumhaz"].extend(cumhaz)
+    return frame
+
+
+def _survexp_frame(result: SurvExpResult) -> dict[str, list[Any]]:
+    if not (len(result.time) == len(result.surv) == len(result.n_risk) == len(result.cumhaz)):
+        raise ValueError("survexp result columns must have the same length")
+    return {
+        "time": list(result.time),
+        "surv": list(result.surv),
+        "n.risk": list(result.n_risk),
+        "cumhaz": list(result.cumhaz),
+    }
+
+
 def as_data_frame(result: Any) -> dict[str, list[Any]]:
     """Return a plain column-oriented table for common R-style result objects."""
 
@@ -16341,6 +16639,10 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _coxph_detail_frame(result)
     if isinstance(result, ConcordanceResult):
         return _concordance_frame(result)
+    if isinstance(result, SurvExpFormulaResult):
+        return _survexp_formula_frame(result)
+    if isinstance(result, SurvExpResult):
+        return _survexp_frame(result)
     if isinstance(result, PyearsResult):
         return _pyears_result_frame(result)
     if isinstance(result, FineGrayFrame):
