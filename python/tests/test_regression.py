@@ -237,6 +237,28 @@ def test_landmark_cox_analysis_matches_reference_fit():
     )
 
 
+def test_time_varying_cox_matches_piecewise_reference_fits():
+    result = survival.time_varying_cox(
+        [0.0, 0.0, 1.5, 2.5, 0.0, 3.0],
+        [2.0, 2.0, 4.0, 5.0, 5.0, 6.0],
+        [1, 1, 1, 0, 1, 0],
+        [[0.2], [0.8], [0.4], [1.1], [0.7], [0.3]],
+        3,
+    )
+
+    assert result.coefficient_times == pytest.approx([2.0, 4.0, 6.0])
+    assert result.coefficients == pytest.approx(
+        [-0.564476974597113, -3.78307802046011, -4.16333634234434e-16],
+        abs=1e-10,
+    )
+    assert [row[0] for row in result.standard_errors] == pytest.approx(
+        [3.10382831906421, 6.03869251099547, 3.06186217847897],
+        abs=1e-10,
+    )
+    assert result.log_likelihood == pytest.approx(-4.61505332099366, abs=1e-10)
+    assert result.n_events == 4
+
+
 def test_coxmart():
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
     status = [1, 1, 0, 1, 0, 1, 1, 0]
