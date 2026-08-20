@@ -12068,6 +12068,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "SurvExpFormulaResult" in survival.__all__
     assert "SurvregDeviance" in survival.__all__
     assert "SurvregDistribution" in survival.__all__
+    assert "SurvregFitResult" in survival.__all__
     assert "TMergeFrame" in survival.__all__
     assert "TMergeOperation" in survival.__all__
     assert "aic" in survival.__all__
@@ -12131,6 +12132,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "survSplit" in survival.__all__
     assert "survreg" in survival.__all__
     assert "survreg_distributions" in survival.__all__
+    assert "survreg_fit" in survival.__all__
     assert "tdc" in survival.__all__
     assert "tmerge" in survival.__all__
     assert "vcov" in survival.__all__
@@ -12150,6 +12152,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.SurvExpFormulaResult is survival.r_api.SurvExpFormulaResult
     assert survival.SurvregDeviance is survival.r_api.SurvregDeviance
     assert survival.SurvregDistribution is survival.r_api.SurvregDistribution
+    assert survival.SurvregFitResult is survival.r_api.SurvregFitResult
     assert survival.TMergeFrame is survival.r_api.TMergeFrame
     assert survival.TMergeOperation is survival.r_api.TMergeOperation
     assert survival.aic is survival.r_api.aic
@@ -12217,6 +12220,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.survSplit is survival.r_api.survSplit
     assert survival.survreg is survival.r_api.survreg
     assert survival.survreg_distributions is survival.r_api.survreg_distributions
+    assert survival.survreg_fit is survival.r_api.survreg_fit
     assert survival.survreg is not survival.regression.survreg
     assert survival.tdc is survival.r_api.tdc
     assert survival.tmerge is survival.r_api.tmerge
@@ -12926,6 +12930,29 @@ def test_r_api_stub_tracks_survreg_distribution_helper_signatures():
     for name, expected in expected_by_name.items():
         assert list(inspect.signature(getattr(survival.r_api, name)).parameters) == expected
         assert _pyi_function_arg_names(stub_path, name) == expected
+
+
+def test_r_api_stub_tracks_survreg_fit_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+    expected = [
+        "x",
+        "y",
+        "weights",
+        "offset",
+        "init",
+        "controlvals",
+        "dist",
+        "scale",
+        "nstrat",
+        "strata",
+        "parms",
+        "assign",
+    ]
+
+    assert list(inspect.signature(survival.r_api.survreg_fit).parameters) == expected
+    assert _pyi_function_arg_names(stub_path, "survreg_fit") == expected
 
 
 def test_r_api_stub_tracks_survdiff_public_signature():

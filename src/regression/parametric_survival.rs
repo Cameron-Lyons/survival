@@ -640,7 +640,7 @@ fn calculate_variance_matrix(
     }
 }
 
-fn validate_time_values(time: &[f64]) -> PyResult<()> {
+fn validate_time_values(time: &[f64], require_positive: bool) -> PyResult<()> {
     if time.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "time must not be empty",
@@ -653,7 +653,7 @@ fn validate_time_values(time: &[f64]) -> PyResult<()> {
                 idx
             )));
         }
-        if value <= 0.0 {
+        if require_positive && value <= 0.0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "time[{}] must be positive",
                 idx
@@ -684,6 +684,7 @@ fn validate_time2_values(
     time: &[f64],
     status: &[f64],
     time2: Option<Vec<f64>>,
+    require_positive: bool,
 ) -> PyResult<Option<Vec<f64>>> {
     let has_interval_rows = status.contains(&3.0);
     if !has_interval_rows && time2.is_none() {
@@ -716,7 +717,7 @@ fn validate_time2_values(
                     idx
                 )));
             }
-            if end <= 0.0 {
+            if require_positive && end <= 0.0 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "time2[{}] must be positive",
                     idx
@@ -852,9 +853,10 @@ pub fn survreg(
             status.len()
         )));
     }
-    validate_time_values(&time)?;
+    let require_positive_time = dist_type.uses_log_time();
+    validate_time_values(&time, require_positive_time)?;
     validate_status_values(&status)?;
-    let time2_values = validate_time2_values(&time, &status, time2)?;
+    let time2_values = validate_time2_values(&time, &status, time2, require_positive_time)?;
     if !config.eps.is_finite() || config.eps <= 0.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "eps must be a finite positive value",
@@ -1314,6 +1316,54 @@ mod tests {
             requested_distribution_name(Some("student-t"), DistributionType::StudentT),
             "t"
         );
+    }
+
+    #[test]
+    fn base_distributions_accept_transformed_nonpositive_responses() {
+        let arguments = || {
+            (
+                vec![-2.0, -1.0, 0.0, 1.0, 2.0, 3.0],
+                vec![1.0; 6],
+                vec![vec![1.0]; 6],
+            )
+        };
+        let (time, status, covariates) = arguments();
+        let gaussian = survreg(
+            time,
+            status,
+            covariates,
+            None,
+            None,
+            Some(vec![0.5, 0.0]),
+            None,
+            Some("gaussian"),
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(gaussian.is_ok());
+
+        let (time, status, covariates) = arguments();
+        let weibull = survreg(
+            time,
+            status,
+            covariates,
+            None,
+            None,
+            None,
+            None,
+            Some("weibull"),
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(weibull.is_err());
     }
 
     #[test]
