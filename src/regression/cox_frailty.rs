@@ -112,6 +112,11 @@ impl CoxPHFrailtyFit {
     }
 
     #[getter]
+    pub fn entry_times(&self) -> Option<Vec<f64>> {
+        self.diagnostic_fit.entry_times.clone()
+    }
+
+    #[getter]
     pub fn weights(&self) -> Vec<f64> {
         self.diagnostic_fit.weights.clone()
     }
@@ -427,6 +432,8 @@ struct IterationState {
 struct SparseFrailtySolver {
     time: Vec<f64>,
     status: Vec<i32>,
+    entry_times: Option<Vec<f64>>,
+    entry_order: Option<Vec<usize>>,
     covariates: Array2<f64>,
     groups: Vec<usize>,
     strata_end: Vec<bool>,
@@ -459,6 +466,32 @@ struct SolverResult {
 }
 
 impl SparseFrailtySolver {
+    fn update_risk_moments(
+        &self,
+        person: usize,
+        risk: f64,
+        direction: f64,
+        denominator: &mut f64,
+        risk_sum: &mut [f64],
+        cross_sum: &mut Array2<f64>,
+    ) {
+        let nfrail = risk_sum.len() - self.covariates.ncols();
+        let adjusted_risk = direction * risk;
+        let group = self.groups[person];
+        *denominator += adjusted_risk;
+        risk_sum[group] += adjusted_risk;
+        for variable in 0..self.covariates.ncols() {
+            let value = self.covariates[(person, variable)];
+            let weighted = adjusted_risk * value;
+            risk_sum[nfrail + variable] += weighted;
+            cross_sum[(variable, group)] += weighted;
+            for other in 0..=variable {
+                cross_sum[(variable, nfrail + other)] +=
+                    weighted * self.covariates[(person, other)];
+            }
+        }
+    }
+
     fn partial_log_likelihood(&self, beta: &[f64], frailty: &[f64]) -> f64 {
         self.iteration(beta, frailty).penalized_log_likelihood + self.penalty_value(beta, frailty)
     }
@@ -500,6 +533,22 @@ impl SparseFrailtySolver {
         let mut risk_means = vec![0.0; width];
         let mut log_likelihood = 0.0;
         let mut stratum_start = 0usize;
+        let linear_predictors = (0..self.time.len())
+            .map(|person| {
+                let mut value = self.offset[person] + frailty[self.groups[person]];
+                for (variable, coefficient) in beta.iter().enumerate() {
+                    value += coefficient * self.covariates[(person, variable)];
+                }
+                value
+            })
+            .collect::<Vec<_>>();
+        let risks = linear_predictors
+            .iter()
+            .zip(&self.weights)
+            .map(|(linear_predictor, weight)| {
+                linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp() * weight
+            })
+            .collect::<Vec<_>>();
 
         while stratum_start < self.time.len() {
             let mut stratum_end = stratum_start;
@@ -509,6 +558,7 @@ impl SparseFrailtySolver {
             let mut denominator = 0.0;
             risk_sum.fill(0.0);
             cross_sum.fill(0.0);
+            let mut entry_ptr = stratum_start;
 
             let mut time_start = stratum_start;
             while time_start <= stratum_end {
@@ -526,24 +576,16 @@ impl SparseFrailtySolver {
 
                 for person in time_start..=time_end {
                     let group = self.groups[person];
-                    let mut linear_predictor = self.offset[person] + frailty[group];
-                    for (variable, &coefficient) in beta.iter().enumerate() {
-                        linear_predictor += coefficient * self.covariates[(person, variable)];
-                    }
-                    let risk = linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
-                        * self.weights[person];
-                    denominator += risk;
-                    risk_sum[group] += risk;
-                    for variable in 0..nvar {
-                        let value = self.covariates[(person, variable)];
-                        let weighted = risk * value;
-                        risk_sum[nfrail + variable] += weighted;
-                        cross_sum[(variable, group)] += weighted;
-                        for other in 0..=variable {
-                            cross_sum[(variable, nfrail + other)] +=
-                                weighted * self.covariates[(person, other)];
-                        }
-                    }
+                    let linear_predictor = linear_predictors[person];
+                    let risk = risks[person];
+                    self.update_risk_moments(
+                        person,
+                        risk,
+                        1.0,
+                        &mut denominator,
+                        &mut risk_sum,
+                        &mut cross_sum,
+                    );
 
                     if self.status[person] != 0 {
                         death_count += 1;
@@ -563,6 +605,24 @@ impl SparseFrailtySolver {
                                     weighted * self.covariates[(person, other)];
                             }
                         }
+                    }
+                }
+                if let (Some(entry_times), Some(entry_order)) =
+                    (self.entry_times.as_ref(), self.entry_order.as_ref())
+                {
+                    while entry_ptr <= stratum_end
+                        && entry_times[entry_order[entry_ptr]] >= event_time
+                    {
+                        let person = entry_order[entry_ptr];
+                        self.update_risk_moments(
+                            person,
+                            risks[person],
+                            -1.0,
+                            &mut denominator,
+                            &mut risk_sum,
+                            &mut cross_sum,
+                        );
+                        entry_ptr += 1;
                     }
                 }
 
@@ -1135,7 +1195,7 @@ fn validate_penalty(values: Option<Vec<Vec<f64>>>, nvar: usize) -> PyResult<Arra
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, groups, theta, strata=None, weights=None, offset=None, initial_beta=None, initial_frailty=None, max_iter=None, eps=None, toler=None, method=None, nocenter=None, penalty_matrix=None))]
+#[pyo3(signature = (time, status, covariates, groups, theta, strata=None, weights=None, offset=None, initial_beta=None, initial_frailty=None, max_iter=None, eps=None, toler=None, method=None, nocenter=None, penalty_matrix=None, entry_times=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_frailty_fit(
     time: Vec<f64>,
@@ -1154,6 +1214,7 @@ pub fn coxph_frailty_fit(
     method: Option<&str>,
     nocenter: Option<Vec<f64>>,
     penalty_matrix: Option<Vec<Vec<f64>>>,
+    entry_times: Option<Vec<f64>>,
 ) -> PyResult<CoxPHFrailtyFit> {
     let n = time.len();
     if n == 0 {
@@ -1216,6 +1277,7 @@ pub fn coxph_frailty_fit(
     check_optional("strata", strata.as_ref().map(Vec::len))?;
     check_optional("weights", weights.as_ref().map(Vec::len))?;
     check_optional("offset", offset.as_ref().map(Vec::len))?;
+    check_optional("entry_times", entry_times.as_ref().map(Vec::len))?;
     if let Some(values) = weights.as_ref() {
         validate_finite("weights", values)?;
         if values.iter().any(|value| *value <= 0.0) {
@@ -1226,6 +1288,16 @@ pub fn coxph_frailty_fit(
     }
     if let Some(values) = offset.as_ref() {
         validate_finite("offset", values)?;
+    }
+    if let Some(values) = entry_times.as_ref() {
+        validate_finite("entry_times", values)?;
+        for (index, (&start, &stop)) in values.iter().zip(&time).enumerate() {
+            if start >= stop {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "entry_times[{index}] must be less than time[{index}]"
+                )));
+            }
+        }
     }
     let beta = initial_beta.unwrap_or_else(|| vec![0.0; nvar]);
     if beta.len() != nvar {
@@ -1294,6 +1366,19 @@ pub fn coxph_frailty_fit(
     let sorted_status = order.iter().map(|&index| status[index]).collect::<Vec<_>>();
     let sorted_groups = order.iter().map(|&index| groups[index]).collect::<Vec<_>>();
     let sorted_offset = order.iter().map(|&index| offset[index]).collect::<Vec<_>>();
+    let sorted_entry_times = entry_times
+        .as_ref()
+        .map(|values| order.iter().map(|&index| values[index]).collect::<Vec<_>>());
+    let entry_order = sorted_entry_times.as_ref().map(|values| {
+        let mut positions = (0..n).collect::<Vec<_>>();
+        positions.sort_by(|&left, &right| {
+            strata[order[left]]
+                .cmp(&strata[order[right]])
+                .then_with(|| values[right].total_cmp(&values[left]))
+                .then_with(|| left.cmp(&right))
+        });
+        positions
+    });
     let sorted_weights = order
         .iter()
         .map(|&index| weights[index])
@@ -1308,6 +1393,8 @@ pub fn coxph_frailty_fit(
     let solver = SparseFrailtySolver {
         time: sorted_time,
         status: sorted_status,
+        entry_times: sorted_entry_times,
+        entry_order,
         covariates: sorted_covariates,
         groups: sorted_groups,
         strata_end,
@@ -1373,7 +1460,7 @@ pub fn coxph_frailty_fit(
         event_times: time,
         status,
         linear_predictors,
-        entry_times: None,
+        entry_times,
         weights,
         covariates,
         strata,
@@ -1425,5 +1512,42 @@ mod tests {
     #[test]
     fn penalty_validation_rejects_indefinite_zero_diagonal_matrix() {
         assert!(validate_penalty(Some(vec![vec![0.0, 1.0], vec![1.0, 0.0]]), 2).is_err());
+    }
+
+    #[test]
+    fn counting_process_fit_matches_reference() {
+        let fit = coxph_frailty_fit(
+            (1..=18).map(f64::from).collect(),
+            vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+            [
+                1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0, 0.6, 1.7, 0.1, 1.3,
+                0.8, 1.6,
+            ]
+            .into_iter()
+            .map(|value| vec![value])
+            .collect(),
+            (0..18).map(|value| value % 6).collect(),
+            0.5,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(50),
+            Some(1e-12),
+            Some(1e-13),
+            Some("breslow"),
+            None,
+            None,
+            Some(vec![
+                0.0, 0.0, 0.5, 1.0, 0.0, 2.0, 3.0, 1.0, 4.0, 2.0, 6.0, 5.0, 7.0, 8.0, 6.0, 10.0,
+                11.0, 9.0,
+            ]),
+        )
+        .expect("counting-process frailty fit should compute");
+
+        assert!((fit.coefficients()[0][0] - -0.736602816003447).abs() < 1e-12);
+        assert!((fit.frailty_degrees_of_freedom - 2.25629339890398).abs() < 1e-12);
+        assert!((fit.log_likelihood()[1] - -17.1661166752336).abs() < 1e-12);
     }
 }

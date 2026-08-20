@@ -1089,6 +1089,8 @@ class CoxPHFrailtyFit:
     @property
     def status(self) -> list[int]: ...
     @property
+    def entry_times(self) -> list[float] | None: ...
+    @property
     def weights(self) -> list[float]: ...
     @property
     def covariates(self) -> list[list[float]]: ...
@@ -7269,6 +7271,7 @@ def coxph_frailty_fit(
     method: str | None = None,
     nocenter: list[float] | None = None,
     penalty_matrix: list[list[float]] | None = None,
+    entry_times: list[float] | None = None,
 ) -> CoxPHFrailtyFit: ...
 def coxph_fit(
     time: list[float],

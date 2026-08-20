@@ -23629,9 +23629,6 @@ def coxph(
         raise NotImplementedError(
             "coxph currently supports right-censored and counting Surv responses"
         )
-    if sparse_formula_frailty_block is not None and response.type == "counting":
-        raise NotImplementedError("sparse frailty currently supports right-censored responses")
-
     if time_transform_terms:
         if formula_design is None or formula_model_data is None:
             raise AssertionError("tt terms require formula design metadata")
@@ -23794,6 +23791,7 @@ def coxph(
                 method=method_name,
                 nocenter=nocenter_values,
                 penalty_matrix=quadratic_penalty,
+                entry_times=entry_times,
             )
         return _core.coxph_fit(
             fit_times,

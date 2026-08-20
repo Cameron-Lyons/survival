@@ -10073,6 +10073,111 @@ def test_coxph_formula_sparse_gaussian_frailty_diagnostics_match_reference():
         survival.r_api._core.chi_square_survival(1.0, 0.0)
 
 
+def test_coxph_formula_sparse_gaussian_frailty_counting_diagnostics_match_reference():
+    data = {
+        "start": [
+            0.0,
+            0.0,
+            0.5,
+            1.0,
+            0.0,
+            2.0,
+            3.0,
+            1.0,
+            4.0,
+            2.0,
+            6.0,
+            5.0,
+            7.0,
+            8.0,
+            6.0,
+            10.0,
+            11.0,
+            9.0,
+        ],
+        "stop": [float(value) for value in range(1, 19)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "x": [
+            1.2,
+            0.7,
+            1.5,
+            0.2,
+            1.1,
+            0.4,
+            1.8,
+            0.9,
+            0.5,
+            1.4,
+            0.3,
+            1.0,
+            0.6,
+            1.7,
+            0.1,
+            1.3,
+            0.8,
+            1.6,
+        ],
+        "g": list("abcdef") * 3,
+    }
+    frailty_term = "frailty(g,distribution='gaussian',theta=.5,sparse=True)"
+    fit = survival.coxph(
+        f"Surv(start,stop,status) ~ x + {frailty_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "eps": 1e-12, "toler.chol": 1e-13},
+    )
+
+    assert fit.coefficients[0] == pytest.approx([-0.736602816003447], abs=1e-12)
+    assert fit.frailty == pytest.approx(
+        [
+            -0.00812087501187664,
+            0.218837152806033,
+            0.0991854342400643,
+            -0.173140923804785,
+            -0.0974646990423705,
+            -0.0392960891870656,
+        ],
+        abs=1e-12,
+    )
+    assert fit.log_likelihood == pytest.approx([-18.2340928191392, -17.1661166752336], abs=1e-12)
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"x": 0.888227879539063, frailty_term: 2.25629339890398},
+        abs=1e-12,
+    )
+    assert fit.entry_times == pytest.approx(data["start"])
+    martingale = survival.r_api.residuals(fit, type="martingale")
+    assert martingale == pytest.approx(
+        [
+            0.78680259343823,
+            -0.386633789125276,
+            0.693678564362922,
+            0.531790739907214,
+            -0.47013144359686,
+            0.310373469321417,
+            -0.170120512926997,
+            0.241542077524079,
+            0.410472033926048,
+            -0.424822874893011,
+            0.47997124924087,
+            0.396718673574081,
+            -0.632923875384168,
+            0.58276595714111,
+            -0.905779412034988,
+            -0.453249742653264,
+            -0.204769370324214,
+            -0.785684337497186,
+        ],
+        abs=1e-12,
+    )
+    zph = survival.cox_zph(fit)
+    assert zph.variable_names == ["x"]
+    assert zph.chi2_values == pytest.approx([0.4639006607031987], abs=1e-12)
+    assert zph.df == pytest.approx([0.8882278795390629], abs=1e-12)
+    assert zph.p_values == pytest.approx([0.4493447341614195], abs=5e-12)
+    assert zph.global_df == pytest.approx(3.1445212784430461, abs=1e-12)
+    assert zph.global_p_value == pytest.approx(0.9375988048538871, abs=5e-12)
+
+
 def test_coxph_formula_gaussian_frailty_rejects_unsupported_modes():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
