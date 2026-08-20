@@ -586,6 +586,21 @@ class CoxphFitResult:
     coefficient_names: list[str]
     row_names: list[str]
 
+class AgregFitResult(CoxphFitResult):
+    coefficients: list[float]
+    var: list[list[float]]
+    loglik: list[float]
+    score: float
+    iter: int
+    linear_predictors: list[float]
+    residuals: list[float] | None
+    means: list[float]
+    method: str
+    coefficient_names: list[str]
+    row_names: list[str]
+    first: list[float]
+    info: dict[str, int]
+
 class CoxBaseHazardResult:
     time: list[float]
     cumhaz: list[float] | list[list[float]]
@@ -1057,6 +1072,19 @@ def coxph_fit(
     resid: Any = True,
     nocenter: Any | None = None,
 ) -> CoxphFitResult: ...
+def agreg_fit(
+    x: Any,
+    y: Any,
+    strata: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    control: Any | None = None,
+    weights: Any | None = None,
+    method: Any = "efron",
+    rownames: Any | None = None,
+    resid: Any = True,
+    nocenter: Any | None = None,
+) -> AgregFitResult: ...
 def cch(
     formula: str,
     data: Any,

@@ -25,6 +25,7 @@ __all__ = [
     "Surv",
     "Surv2",
     "Surv2data",
+    "AgregFitResult",
     "CoxSurvfitResult",
     "CoxBaseHazardResult",
     "CoxPHDetailResult",
@@ -54,6 +55,7 @@ __all__ = [
     "TcutResult",
     "aic",
     "aareg",
+    "agreg_fit",
     "aeqSurv",
     "as_data_frame",
     "basehaz",
@@ -986,6 +988,14 @@ class CoxphFitResult:
     method: str
     coefficient_names: list[str]
     row_names: list[str]
+
+
+@dataclass(frozen=True)
+class AgregFitResult(CoxphFitResult):
+    """Counting-process matrix fit returned by ``agreg_fit()``."""
+
+    first: list[float]
+    info: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -21534,43 +21544,85 @@ def aareg(
     )
 
 
-def _coxph_fit_response(y: Any) -> tuple[list[float], list[int]]:
+@dataclass(frozen=True)
+class _CoxLowLevelComputation:
+    fit: Any
+    result: CoxphFitResult
+
+
+def _cox_fit_response(
+    y: Any,
+    *,
+    counting: bool,
+) -> tuple[list[float], list[int], list[float] | None]:
     if isinstance(y, Surv):
-        if y.type != "right":
+        expected_type = "counting" if counting else "right"
+        if y.type != expected_type:
             raise ValueError("Invalid survival response")
         if any(value is None for value in y.event):
             raise ValueError("Invalid survival response")
-        return [float(value) for value in y.time], [int(value) for value in y.event]
+        return (
+            [float(value) for value in y.time],
+            [int(value) for value in y.event],
+            [float(value) for value in y.start] if counting and y.start is not None else None,
+        )
 
     response = _as_matrix_rows(y, "y", allow_empty_columns=False)
     width = len(response[0])
-    if width != 2 or any(len(row) != width for row in response):
+    expected_width = 3 if counting else 2
+    if width != expected_width or any(len(row) != width for row in response):
         raise ValueError("Invalid survival response")
     if any(not math.isfinite(value) for row in response for value in row):
         raise ValueError("Invalid survival response")
     status = [row[-1] for row in response]
     if any(not value.is_integer() or int(value) not in {0, 1} for value in status):
         raise ValueError("Invalid survival response")
-    return [row[0] for row in response], [int(value) for value in status]
+    if counting and any(row[0] >= row[1] for row in response):
+        raise ValueError("Invalid survival response")
+    return (
+        [row[1] if counting else row[0] for row in response],
+        [int(value) for value in status],
+        [row[0] for row in response] if counting else None,
+    )
 
 
-def coxph_fit(
+def _agreg_fit_means(
+    rows: list[list[float]],
+    nocenter: list[float] | None,
+) -> list[float]:
+    width = len(rows[0]) if rows else 0
+    return [
+        (
+            0.0
+            if nocenter is not None
+            and all(any(row[col_idx] == value for value in nocenter) for row in rows)
+            else math.fsum(row[col_idx] for row in rows) / len(rows)
+        )
+        for col_idx in range(width)
+    ]
+
+
+def _cox_low_level_fit(
     x: Any,
     y: Any,
-    strata: Any | None = None,
-    offset: Any | None = None,
-    init: Any | None = None,
-    control: Any | None = None,
-    weights: Any | None = None,
-    method: Any = "efron",
-    rownames: Any | None = None,
-    resid: Any = True,
-    nocenter: Any | None = None,
-) -> CoxphFitResult:
-    """Fit the matrix-oriented low-level model exported as R ``coxph.fit``."""
+    strata: Any | None,
+    offset: Any | None,
+    init: Any | None,
+    control: Any | None,
+    weights: Any | None,
+    method: Any,
+    rownames: Any | None,
+    resid: Any,
+    nocenter: Any | None,
+    *,
+    counting: bool,
+) -> _CoxLowLevelComputation:
+    function_name = "agreg_fit" if counting else "coxph_fit"
 
     rows = _as_matrix_rows(x, "x", allow_empty_columns=True)
-    time, status = _coxph_fit_response(y)
+    time, status, entry_times = _cox_fit_response(y, counting=counting)
+    if counting and not any(status):
+        raise ValueError("Can't fit a Cox model with 0 failures")
     n = len(time)
     if len(rows) != n:
         raise ValueError("x and y have different numbers of rows")
@@ -21608,7 +21660,7 @@ def coxph_fit(
         method,
         "method",
         ("efron", "breslow"),
-        "coxph_fit method must be 'efron' or 'breslow'",
+        f"{function_name} method must be 'efron' or 'breslow'",
     )
     keep_residuals = _normalize_bool_option_with_default(resid, "resid", True)
     nocenter_values = _normalize_numeric_sequence_or_none(nocenter, "nocenter")
@@ -21632,14 +21684,14 @@ def coxph_fit(
         eps=eps,
         toler=toler,
         method=method_name,
-        entry_times=None,
+        entry_times=entry_times,
         nocenter=nocenter_values,
     )
     if max_iter > 1 and int(fit.convergence_flag) == _COX_NONCONVERGENCE_FLAG:
         warnings.warn(
             "Ran out of iterations and did not converge",
             RuntimeWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
 
     raw_coefficients = [float(value) for value in fit.coefficients[0]]
@@ -21648,7 +21700,11 @@ def coxph_fit(
         math.nan if aliases[index] else value
         for index, value in enumerate(raw_coefficients)
     ]
-    means = [float(value) for value in fit.means]
+    means = (
+        _agreg_fit_means(rows, nocenter_values)
+        if counting
+        else [float(value) for value in fit.means]
+    )
     center = math.fsum(
         mean * coefficient
         for mean, coefficient in zip(means, raw_coefficients, strict=True)
@@ -21659,7 +21715,7 @@ def coxph_fit(
         if input_names is not None
         else [f"X{index + 1}" for index in range(nvar)]
     )
-    return CoxphFitResult(
+    result = CoxphFitResult(
         coefficients=coefficients,
         var=[[float(value) for value in row] for row in fit.information_matrix],
         loglik=[float(value) for value in fit.log_likelihood],
@@ -21675,6 +21731,93 @@ def coxph_fit(
         method=method_name,
         coefficient_names=coefficient_names,
         row_names=row_names,
+    )
+    return _CoxLowLevelComputation(fit=fit, result=result)
+
+
+def coxph_fit(
+    x: Any,
+    y: Any,
+    strata: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    control: Any | None = None,
+    weights: Any | None = None,
+    method: Any = "efron",
+    rownames: Any | None = None,
+    resid: Any = True,
+    nocenter: Any | None = None,
+) -> CoxphFitResult:
+    """Fit the matrix-oriented low-level model exported as R ``coxph.fit``."""
+
+    return _cox_low_level_fit(
+        x,
+        y,
+        strata,
+        offset,
+        init,
+        control,
+        weights,
+        method,
+        rownames,
+        resid,
+        nocenter,
+        counting=False,
+    ).result
+
+
+def agreg_fit(
+    x: Any,
+    y: Any,
+    strata: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    control: Any | None = None,
+    weights: Any | None = None,
+    method: Any = "efron",
+    rownames: Any | None = None,
+    resid: Any = True,
+    nocenter: Any | None = None,
+) -> AgregFitResult:
+    """Fit the counting-process model exported as R ``agreg.fit``."""
+
+    computation = _cox_low_level_fit(
+        x,
+        y,
+        strata,
+        offset,
+        init,
+        control,
+        weights,
+        method,
+        rownames,
+        resid,
+        nocenter,
+        counting=True,
+    )
+    fit = computation.fit
+    result = computation.result
+    flag = int(fit.convergence_flag)
+    rank = len(result.coefficients) if flag == _COX_NONCONVERGENCE_FLAG else flag
+    return AgregFitResult(
+        coefficients=result.coefficients,
+        var=result.var,
+        loglik=result.loglik,
+        score=result.score,
+        iter=result.iter,
+        linear_predictors=result.linear_predictors,
+        residuals=result.residuals,
+        means=result.means,
+        method=result.method,
+        coefficient_names=result.coefficient_names,
+        row_names=result.row_names,
+        first=[float(value) for value in fit.score_vector],
+        info={
+            "rank": rank,
+            "rescale": 0,
+            "step halving": 0,
+            "convergence": int(flag == _COX_NONCONVERGENCE_FLAG),
+        },
     )
 
 

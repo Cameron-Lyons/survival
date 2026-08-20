@@ -964,6 +964,88 @@ def test_coxph_fit_matches_reference_tied_event_fits():
     assert stratified.residuals[1::2] == pytest.approx(expected["efron"]["residuals"])
 
 
+def test_agreg_fit_matches_reference_weighted_counting_process_fit():
+    x = {
+        "x1": [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5],
+        "x2": [1.0, 0.2, 0.7, 1.3, 0.4, 1.1, 0.5, 0.9],
+    }
+    start = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0, 4.0]
+    stop = [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0]
+    status = [1, 1, 0, 1, 1, 0, 1, 0]
+    response = survival.Surv(start, stop, status)
+    control = survival.coxph_control(iter_max=50, eps=1e-10)
+    fit = survival.agreg_fit(
+        x,
+        response,
+        offset=[0.1, -0.1, 0.0, 0.2, -0.2, 0.0, 0.1, -0.1],
+        weights=[1.0, 2.0, 1.0, 1.0, 1.5, 1.0, 1.0, 1.0],
+        control=control,
+        rownames=[f"r{index}" for index in range(1, 9)],
+    )
+
+    assert fit.coefficients == pytest.approx([1.76410174709304, -0.862933647039358])
+    for actual, expected in zip(
+        fit.var,
+        [
+            [2.59123300754202, 0.216795183663814],
+            [0.216795183663814, 1.47156616986026],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert fit.loglik == pytest.approx([-6.74131413711341, -5.51281874396037])
+    assert fit.score == pytest.approx(2.22409095009432)
+    assert fit.iter == 5
+    assert fit.linear_predictors == pytest.approx(
+        [
+            -0.92084379920238,
+            0.627964166684932,
+            -0.409143355671964,
+            0.507967679069551,
+            0.178967262567756,
+            -0.930726989197011,
+            1.45113494611965,
+            -0.505319910370531,
+        ]
+    )
+    assert fit.residuals == pytest.approx(
+        [
+            0.76671911432341,
+            -0.097786557750981,
+            -0.571145998821449,
+            -0.0290004043812491,
+            0.259487353182028,
+            -0.360230625391793,
+            0.123851225826562,
+            -0.123851225826562,
+        ]
+    )
+    assert fit.means == pytest.approx([0.6625, 0.7625])
+    assert fit.first == pytest.approx([0.0, 0.0], abs=1e-12)
+    assert fit.info == {
+        "rank": 2,
+        "rescale": 0,
+        "step halving": 0,
+        "convergence": 0,
+    }
+    assert fit.coefficient_names == ["x1", "x2"]
+    assert fit.row_names == [f"r{index}" for index in range(1, 9)]
+
+    matrix_response = [
+        [left, right, float(event)]
+        for left, right, event in zip(start, stop, status, strict=True)
+    ]
+    without_residuals = survival.agreg_fit(
+        [[left, right] for left, right in zip(x["x1"], x["x2"], strict=True)],
+        matrix_response,
+        control=control,
+        resid=False,
+    )
+    assert without_residuals.residuals is None
+    with pytest.raises(ValueError, match="0 failures"):
+        survival.agreg_fit(x, survival.Surv(start, stop, [0] * len(stop)))
+
+
 def test_r_api_brier_returns_r_style_cox_model_fields():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
