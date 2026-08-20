@@ -9373,6 +9373,125 @@ def test_coxph_formula_ridge_matches_fixed_theta_reference(
         assert direct.coefficients[0] == pytest.approx(fit.coefficients[0], abs=1e-12)
         assert direct.log_likelihood == pytest.approx(fit.log_likelihood, abs=1e-12)
         assert survival.degrees_freedom(direct) == pytest.approx(expected_df, abs=1e-12)
+        initialized = survival.coxph(
+            f"Surv(time, status) ~ {formula_term}",
+            data=data,
+            ties="breslow",
+            init=[0.3, -0.2],
+            max_iter=50,
+            eps=1e-12,
+        )
+        assert initialized.log_likelihood == pytest.approx(
+            [-7.437876575836944, expected_loglik],
+            abs=1e-9,
+        )
+
+
+@pytest.mark.parametrize(
+    ("scale", "expected_coef", "expected_term_df", "expected_theta", "expected_loglik"),
+    [
+        (
+            False,
+            [-0.15353588627729625, -1.668638682939801, -0.23690761755886491],
+            [0.9857019276300647, 1.0000000094775481],
+            1.3975818316778199,
+            -5.507410305475691,
+        ),
+        (
+            True,
+            [-0.15488534478532989, -0.86614548887439535, -0.3332292349614121],
+            [0.9953704075718302, 1.0000000001974716],
+            3.36491277866726,
+            -7.9012879078774105,
+        ),
+    ],
+)
+def test_coxph_formula_ridge_calibrates_target_df_against_reference(
+    scale,
+    expected_coef,
+    expected_term_df,
+    expected_theta,
+    expected_loglik,
+):
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "z": [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5, -1.2, 0.2, 0.8, 1.1, -0.8, 0.4],
+        "x1": [0.2, 0.5, 0.8, 1.0, 1.4, 1.8, 2.1, 2.5, 2.8, 3.1, 3.3, 3.6],
+        "x2": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+    }
+    ridge_term = f"ridge(x1,x2,df=1,eps=1e-8,scale={scale})"
+    fit = survival.coxph(
+        f"Surv(time,status) ~ z + {ridge_term}",
+        data=data,
+        ties="breslow",
+        control={
+            "eps": 1e-12,
+            "toler.chol": 1e-13,
+            "iter.max": 50,
+            "outer.max": 30,
+        },
+    )
+
+    assert fit.coefficients[0] == pytest.approx(expected_coef, abs=1e-9)
+    assert fit.log_likelihood == pytest.approx(
+        [-12.619505923287514, expected_loglik],
+        abs=1e-9,
+    )
+    assert list(fit.term_degrees_of_freedom) == ["z", ridge_term]
+    assert list(fit.term_degrees_of_freedom.values()) == pytest.approx(
+        expected_term_df,
+        abs=1e-9,
+    )
+    assert survival.degrees_freedom(fit) == pytest.approx(
+        sum(expected_term_df),
+        abs=1e-9,
+    )
+    history = fit.history[ridge_term]
+    assert history["done"] is True
+    assert history["theta"] == pytest.approx(expected_theta, abs=1e-6)
+    assert history["history"][0] == {"theta": 0.0, "df": 2.0}
+    assert history["history"][-1]["df"] == pytest.approx(1.0, abs=1e-8)
+    anova = survival.anova(fit)
+    assert [row.df for row in anova.rows] == pytest.approx(
+        [0.0, 1.0, sum(expected_term_df)],
+        abs=1e-8,
+    )
+
+
+def test_coxph_formula_ridge_defaults_to_half_the_term_width():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1],
+        "x1": [0.2, 0.5, 0.8, 1.0, 1.4, 1.8, 2.1, 2.5],
+        "x2": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9],
+    }
+    default = survival.coxph(
+        "Surv(time,status) ~ ridge(x1,x2)",
+        data=data,
+        ties="breslow",
+    )
+    explicit = survival.coxph(
+        "Surv(time,status) ~ ridge(x1,x2,df=1)",
+        data=data,
+        ties="breslow",
+    )
+
+    assert default.coefficients[0] == pytest.approx(explicit.coefficients[0])
+    assert survival.degrees_freedom(default) == pytest.approx(
+        survival.degrees_freedom(explicit),
+    )
+
+    limited_term = "ridge(x1,x2,df=.5,eps=1e-12)"
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        limited = survival.coxph(
+            f"Surv(time,status) ~ {limited_term}",
+            data=data,
+            ties="breslow",
+            control={"outer.max": 1},
+        )
+    assert limited.history[limited_term]["done"] is False
+    assert len(limited.history[limited_term]["history"]) == 2
 
 
 def test_coxph_ridge_rejects_ambiguous_or_invalid_penalties():
@@ -9385,8 +9504,6 @@ def test_coxph_ridge_rejects_ambiguous_or_invalid_penalties():
     response = survival.Surv(data["time"], data["status"])
     rows = [[x1, x2] for x1, x2 in zip(data["x1"], data["x2"], strict=True)]
 
-    with pytest.raises(NotImplementedError, match="require theta"):
-        survival.coxph("Surv(time, status) ~ ridge(x1, x2, df=1)", data=data)
     with pytest.raises(ValueError, match="Only one of df or theta"):
         survival.coxph(
             "Surv(time, status) ~ ridge(x1, x2, theta=0.2, df=1)",
@@ -9402,6 +9519,17 @@ def test_coxph_ridge_rejects_ambiguous_or_invalid_penalties():
         survival.coxph(response, x=rows, ridge_penalty=[0.2])
     with pytest.raises(ValueError, match="non-negative"):
         survival.coxph(response, x=rows, ridge_penalty=[0.2, -0.1])
+    for option, message in (("df=0", "between"), ("df=3", "between"), ("eps=0", "positive")):
+        with pytest.raises(ValueError, match=message):
+            survival.coxph(
+                f"Surv(time, status) ~ ridge(x1, x2, {option})",
+                data=data,
+            )
+    with pytest.raises(ValueError, match="overlapping columns"):
+        survival.coxph(
+            "Surv(time, status) ~ ridge(x1, theta=.2) + ridge(x1, x2, theta=.3)",
+            data=data,
+        )
 
 
 def test_coxph_formula_accepts_rep_constant_response_argument():
