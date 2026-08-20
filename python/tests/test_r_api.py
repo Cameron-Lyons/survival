@@ -2,6 +2,7 @@ import math
 import random
 from bisect import bisect_right
 from dataclasses import replace
+from datetime import date
 from itertools import combinations
 from statistics import NormalDist
 
@@ -3074,6 +3075,53 @@ def test_r_style_ratetable_helpers_delegate_to_population_core():
         survival.ratetableDate(2001, 2, 29)
     with pytest.raises(TypeError, match="month and day"):
         survival.ratetableDate(2000, month=2)
+
+
+def test_match_ratetable_reorders_columns_and_encodes_factor_levels():
+    table = survival.survexp_us()
+    result = survival.match_ratetable(
+        {
+            "sex": ["m", "female"],
+            "unused": [1, 2],
+            "age": [30 * 365.25, 40 * 365.25],
+            "year": [2000.0, date(2001, 7, 2)],
+        },
+        table,
+    )
+
+    assert result["dim_names"] == ["year", "age", "sex"]
+    assert result["R"][0] == pytest.approx([2000.0, 30 * 365.25, 1.0])
+    assert result["R"][1] == pytest.approx([2001.5, 40 * 365.25, 2.0], abs=2e-3)
+    assert result["cutpoints"][0] == pytest.approx(
+        [float(value) for value in range(1940, 2021, 10)]
+    )
+    assert result["cutpoints"][2] is None
+    assert result["summ"] == table.summary
+    assert table.lookup_many(result["coords"]) == pytest.approx(
+        [
+            table.lookup({"year": 2000.0, "age": 30 * 365.25, "sex": 0.0}),
+            table.lookup({"year": result["R"][1][0], "age": 40 * 365.25, "sex": 1.0}),
+        ]
+    )
+
+
+def test_match_ratetable_validates_required_columns_and_factor_codes():
+    table = survival.survexp_us()
+    with pytest.raises(KeyError, match="'sex'.*not found"):
+        survival.match_ratetable(
+            {"age": [30 * 365.25], "year": [2000.0]},
+            table,
+        )
+    with pytest.raises(ValueError, match="levels do not match"):
+        survival.match_ratetable(
+            {"age": [30 * 365.25], "year": [2000.0], "sex": ["unknown"]},
+            table,
+        )
+    with pytest.raises(ValueError, match="out of range"):
+        survival.match_ratetable(
+            {"age": [30 * 365.25], "year": [2000.0], "sex": [3]},
+            table,
+        )
 
 
 def test_survexp_ederer_keeps_the_full_reference_cohort():

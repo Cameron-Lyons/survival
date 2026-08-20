@@ -86,6 +86,7 @@ __all__ = [
     "is_surv",
     "is_na_surv",
     "is_ratetable",
+    "match_ratetable",
     "loglik",
     "lvcf",
     "model_formula",
@@ -5820,6 +5821,116 @@ def is_ratetable(
             _normalize_bool_option(has_dims, "has_dims"),
         )
     return isinstance(x, RateTable)
+
+
+def _ratetable_factor_code(value: Any, levels: Sequence[str], name: str) -> float:
+    if _is_missing_value(value):
+        return math.nan
+    if isinstance(value, str):
+        folded = value.casefold()
+        exact = [index for index, level in enumerate(levels) if level.casefold() == folded]
+        matches = exact or [
+            index for index, level in enumerate(levels) if level.casefold().startswith(folded)
+        ]
+        if not matches:
+            raise ValueError(f"levels do not match for rate-table variable {name!r}")
+        if len(matches) != 1:
+            raise ValueError(f"non-unique rate-table match for variable {name!r}")
+        return float(matches[0] + 1)
+    if isinstance(value, bool):
+        raise TypeError(f"rate-table factor variable {name!r} must use labels or integer codes")
+    numeric = _finite_float(value, name)
+    if not numeric.is_integer() or numeric <= 0.0 or numeric > len(levels):
+        raise ValueError(f"rate-table factor variable {name!r} is out of range")
+    return numeric
+
+
+def _ratetable_year_coordinate(value: _Date | _DateTime) -> float:
+    date_value = value.date() if isinstance(value, _DateTime) else value
+    year_start = _Date(date_value.year, 1, 1)
+    next_year = _Date(date_value.year + 1, 1, 1)
+    return date_value.year + (date_value - year_start).days / (next_year - year_start).days
+
+
+def _ratetable_continuous_value(value: Any, name: str, is_year: bool) -> float:
+    if _is_missing_value(value):
+        return math.nan
+    if isinstance(value, _Date | _DateTime):
+        if not is_year:
+            raise TypeError(
+                f"rate-table variable {name!r} contains dates but is not a year dimension"
+            )
+        return _ratetable_year_coordinate(value)
+    return _finite_float(value, name)
+
+
+def match_ratetable(data: Any, ratetable: Any) -> dict[str, Any]:
+    """Align named data columns to a population rate table, like R's helper."""
+
+    if not isinstance(ratetable, RateTable):
+        raise TypeError("ratetable must be a RateTable")
+    names = _data_column_names(data)
+    if names is None:
+        raise TypeError("data must be a mapping or named table")
+    dimensions = list(ratetable.dimension_specs())
+    dimension_names = [str(dimension.name) for dimension in dimensions]
+    if len(set(dimension_names)) != len(dimension_names):
+        raise ValueError("a rate-table dimension appears more than once")
+    for name in dimension_names:
+        occurrences = sum(column == name for column in names)
+        if occurrences == 0:
+            raise KeyError(f"argument {name!r} needed by the ratetable was not found in the data")
+        if occurrences > 1:
+            raise ValueError(f"rate-table argument {name!r} appears twice in the data")
+
+    columns = [_column(data, name) for name in dimension_names]
+    row_count = len(columns[0]) if columns else 0
+    if any(len(column) != row_count for column in columns):
+        raise ValueError("rate-table data columns must have the same length")
+
+    encoded_columns: list[list[float]] = []
+    cutpoints: list[list[float] | None] = []
+    for dimension, column in zip(dimensions, columns, strict=True):
+        name = str(dimension.name)
+        if dimension.dim_type == _core.DimType.Factor:
+            levels = list(dimension.levels or [])
+            if not levels:
+                raise ValueError(f"rate-table factor dimension {name!r} has no levels")
+            encoded_columns.append(
+                [_ratetable_factor_code(value, levels, name) for value in column]
+            )
+            cutpoints.append(None)
+        else:
+            is_year = dimension.dim_type == _core.DimType.Year
+            encoded_columns.append(
+                [_ratetable_continuous_value(value, name, is_year) for value in column]
+            )
+            cutpoints.append([float(value) for value in dimension.cutpoints])
+
+    rows = [
+        [column[row] for column in encoded_columns]
+        for row in range(row_count)
+    ]
+    lookup_columns = {
+        name: (
+            [value - 1.0 if math.isfinite(value) else value for value in column]
+            if dimension.dim_type == _core.DimType.Factor
+            else list(column)
+        )
+        for name, dimension, column in zip(
+            dimension_names,
+            dimensions,
+            encoded_columns,
+            strict=True,
+        )
+    }
+    return {
+        "R": rows,
+        "cutpoints": cutpoints,
+        "summ": ratetable.summary,
+        "dim_names": dimension_names,
+        "coords": lookup_columns,
+    }
 
 
 def _ratetable_date_from_components(
