@@ -12079,6 +12079,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "agreg_fit" in survival.__all__
     assert "anova" in survival.__all__
     assert "as_data_frame" in survival.__all__
+    assert "attrassign" in survival.__all__
     assert "basehaz" in survival.__all__
     assert "bcloglog" in survival.__all__
     assert "cipoisson" in survival.__all__
@@ -12088,6 +12089,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "coef" in survival.__all__
     assert "coef_names" in survival.__all__
     assert "clogit" in survival.__all__
+    assert "cluster" in survival.__all__
     assert "confint" in survival.__all__
     assert "concordancefit" in survival.__all__
     assert "cox_zph" in survival.__all__
@@ -12141,6 +12143,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "survreg_fit" in survival.__all__
     assert "tdc" in survival.__all__
     assert "tmerge" in survival.__all__
+    assert "untangle_specials" in survival.__all__
     assert "vcov" in survival.__all__
     assert "validation" in survival.__all__
     assert "ridge_fit" not in survival.__all__
@@ -12169,6 +12172,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.agreg_fit is survival.r_api.agreg_fit
     assert survival.anova is survival.r_api.anova
     assert survival.as_data_frame is survival.r_api.as_data_frame
+    assert survival.attrassign is survival.r_api.attrassign
     assert survival.basehaz is survival.r_api.basehaz
     assert survival.bcloglog is survival.r_api.bcloglog
     assert survival.cipoisson is survival.r_api.cipoisson
@@ -12179,6 +12183,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.survfit0 is survival.r_api.survfit0
     assert survival.coef_names is survival.r_api.coef_names
     assert survival.clogit is survival.r_api.clogit
+    assert survival.cluster is survival.r_api.cluster
     assert survival.confint is survival.r_api.confint
     assert survival.concordancefit is survival.r_api.concordancefit
     assert survival.cox_zph is survival.r_api.cox_zph
@@ -12238,6 +12243,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.tdc is survival.r_api.tdc
     assert survival.tmerge is survival.r_api.tmerge
     assert survival.tmerge is not survival.data_prep.tmerge
+    assert survival.untangle_specials is survival.r_api.untangle_specials
     assert survival.vcov is survival.r_api.vcov
     assert survival.ridge_fit is survival.regression.ridge_fit
     assert "ridge_fit" not in vars(survival)
@@ -12927,6 +12933,21 @@ def test_r_api_stub_tracks_strata_public_signature():
     ]
     assert node.args.vararg is not None
     assert node.args.vararg.arg == "variables"
+
+
+def test_r_api_stub_tracks_formula_helper_signatures():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+    expected_by_name = {
+        "attrassign": ["object", "tt"],
+        "cluster": ["x"],
+        "untangle_specials": ["tt", "special", "order"],
+    }
+
+    for name, expected in expected_by_name.items():
+        assert list(inspect.signature(getattr(survival.r_api, name)).parameters) == expected
+        assert _pyi_function_arg_names(stub_path, name) == expected
 
 
 def test_r_api_stub_tracks_survreg_distribution_helper_signatures():

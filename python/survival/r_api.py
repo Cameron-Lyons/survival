@@ -58,6 +58,7 @@ __all__ = [
     "agexact_fit",
     "agreg_fit",
     "aeqSurv",
+    "attrassign",
     "as_data_frame",
     "basehaz",
     "anova",
@@ -70,6 +71,7 @@ __all__ = [
     "concordance",
     "concordancefit",
     "clogit",
+    "cluster",
     "cch",
     "coxph",
     "coxph_control",
@@ -150,6 +152,7 @@ __all__ = [
     "survreg_fit",
     "tcut",
     "totimeline",
+    "untangle_specials",
     "yates",
     "yates_contrast",
     "yates_pairwise",
@@ -4614,6 +4617,12 @@ def strata(
         levels.append(sep.join(pieces))
     row_labels = [None if code is None else levels[code - 1] for code in codes]
     return StrataFactor(codes=codes, levels=levels, labels=row_labels, counts=counts)
+
+
+def cluster(x: Any) -> Any:
+    """Return ``x`` unchanged, matching the formula-special helper in R."""
+
+    return x
 
 
 def _lvcf_order_key(value: Any) -> tuple[int, Any]:
@@ -15849,6 +15858,213 @@ def model_matrix(fit: Any) -> dict[str, Any]:
         "data": matrix,
         "columns": _model_matrix_column_names(fit, width),
         "assign": _model_matrix_assignments(fit, width),
+    }
+
+
+def _formula_model_term_factors(term: _FormulaModelTerm) -> list[str]:
+    if isinstance(term, _ModelCovariateTerm):
+        return [_covariate_term_name(factor) for factor in _covariate_factors(term.term)]
+    if isinstance(term, _ModelStrataTerm):
+        return [f"strata({','.join(term.columns)})"]
+    if isinstance(term, _ModelClusterTerm):
+        return [f"cluster({term.column})"]
+    return [f"offset({_covariate_term_name(term.term)})"]
+
+
+def _combine_formula_metadata_terms(
+    groups: Sequence[Sequence[tuple[str, ...]]],
+) -> list[tuple[str, ...]]:
+    combined: list[tuple[str, ...]] = []
+    for choices in product(*groups):
+        factors: list[str] = []
+        for choice in choices:
+            for factor in choice:
+                if factor not in factors:
+                    factors.append(factor)
+        value = tuple(factors)
+        if value and value not in combined:
+            combined.append(value)
+    return combined
+
+
+def _merge_formula_metadata_terms(terms: Sequence[tuple[str, ...]]) -> tuple[str, ...]:
+    factors: list[str] = []
+    for term in terms:
+        for factor in term:
+            if factor not in factors:
+                factors.append(factor)
+    return tuple(factors)
+
+
+def _formula_metadata_expression(expression: str) -> list[tuple[str, ...]]:
+    expression = _strip_outer_formula_parentheses(expression)
+    additive_tokens = _formula_tokens(expression)
+    if len(additive_tokens) > 1 or (additive_tokens and additive_tokens[0][0] == "-"):
+        result: list[tuple[str, ...]] = []
+        for operator, token in additive_tokens:
+            values = _formula_metadata_expression(token)
+            if operator == "-":
+                _remove_values(result, values)
+            else:
+                _append_unique(result, values)
+        return result
+
+    power_parts = _split_top_level(expression, "^")
+    if len(power_parts) > 1:
+        if len(power_parts) != 2:
+            raise ValueError("formula ^ expressions must contain one degree")
+        base = _formula_metadata_expression(power_parts[0])
+        degree = _parse_formula_power_degree(power_parts[1])
+        expanded: list[tuple[str, ...]] = []
+        for size in range(1, min(degree, len(base)) + 1):
+            for selection in combinations(base, size):
+                _append_unique(expanded, [_merge_formula_metadata_terms(selection)])
+        return expanded
+
+    nested_parts = _split_top_level(expression, "/")
+    if len(nested_parts) > 1:
+        parsed = [_formula_metadata_expression(part) for part in nested_parts]
+        expanded = list(parsed[0])
+        current = parsed[0]
+        for group in parsed[1:]:
+            current = _combine_formula_metadata_terms((current, group))
+            _append_unique(expanded, current)
+        return expanded
+
+    crossed_parts = _split_top_level(expression, "*")
+    if len(crossed_parts) > 1:
+        groups = [_formula_metadata_expression(part) for part in crossed_parts]
+        expanded: list[tuple[str, ...]] = []
+        for group in groups:
+            _append_unique(expanded, group)
+        for size in range(2, len(groups) + 1):
+            for selection in combinations(groups, size):
+                _append_unique(expanded, _combine_formula_metadata_terms(selection))
+        return expanded
+
+    interaction_parts = _split_top_level(expression, ":")
+    if len(interaction_parts) > 1:
+        return _combine_formula_metadata_terms(
+            [_formula_metadata_expression(part) for part in interaction_parts]
+        )
+
+    value = expression.strip()
+    if not value or value in {"0", "1"}:
+        return []
+    return [(value,)]
+
+
+def _formula_term_metadata(formula: str) -> tuple[list[str], list[list[str]]]:
+    _lhs, separator, rhs = formula.partition("~")
+    if not separator:
+        raise ValueError("formula must contain '~'")
+    try:
+        parsed = _split_terms(rhs)
+    except ValueError:
+        metadata_terms = _formula_metadata_expression(rhs)
+        ordered_metadata = sorted(metadata_terms, key=len)
+        factors = [list(term) for term in ordered_metadata]
+    else:
+        ordered = sorted(
+            parsed.model_terms,
+            key=lambda term: len(_formula_model_term_factors(term)),
+        )
+        factors = [_formula_model_term_factors(term) for term in ordered]
+    return [":".join(values) for values in factors], factors
+
+
+def _attrassign_term_labels(tt: Any) -> list[str]:
+    if isinstance(tt, str):
+        labels, _factors = _formula_term_metadata(tt)
+        return labels
+    if isinstance(tt, Mapping):
+        labels = tt.get("term.labels", tt.get("term_labels"))
+        if labels is None:
+            raise ValueError("tt must provide term labels")
+        return [str(value) for value in _materialize_1d(labels, "term labels")]
+    if isinstance(tt, Sequence) and not isinstance(tt, str | bytes):
+        return [str(value) for value in tt]
+    if _is_model_fit(tt):
+        return model_term_names(tt)
+    raise TypeError("tt must be a formula, fitted model, term-label sequence, or mapping")
+
+
+def attrassign(object: Any, tt: Any | None = None) -> dict[str, list[int]]:
+    """Group one-based model-matrix columns by their formula term."""
+
+    if _is_model_fit(object):
+        matrix = model_matrix(object)
+        assignments = matrix["assign"]
+        labels = model_term_names(object) if tt is None else _attrassign_term_labels(tt)
+    elif isinstance(object, Mapping):
+        if "assign" not in object:
+            raise ValueError("argument is not really a model matrix")
+        assignments = object["assign"]
+        if tt is None:
+            labels_value = object.get("term.labels", object.get("term_labels"))
+            if labels_value is None:
+                raise ValueError("tt is required when term labels are absent")
+            labels = [str(value) for value in _materialize_1d(labels_value, "term labels")]
+        else:
+            labels = _attrassign_term_labels(tt)
+    else:
+        assignments = getattr(object, "assign", None)
+        if assignments is None:
+            raise ValueError("argument is not really a model matrix")
+        if tt is None:
+            raise ValueError("tt is required for an unlabelled model matrix")
+        labels = _attrassign_term_labels(tt)
+
+    codes = _integer_code_vector(assignments, "assign", "non-negative term codes")
+    if any(code < 0 or code > len(labels) for code in codes):
+        raise ValueError("assign contains a term code outside the supplied labels")
+    result: dict[str, list[int]] = {}
+    for position, code in enumerate(codes, start=1):
+        label = "(Intercept)" if code == 0 else labels[code - 1]
+        result.setdefault(label, []).append(position)
+    return result
+
+
+def untangle_specials(tt: Any, special: Any, order: Any = 1) -> dict[str, list[Any]]:
+    """Locate special calls and their one-based formula-term positions."""
+
+    if not isinstance(special, str) or not special:
+        raise TypeError("special must be a non-empty string")
+    formula = tt.formula if isinstance(tt, _FormulaFit) else tt
+    if not isinstance(formula, str):
+        raise TypeError("tt must be a formula string or formula-based fitted model")
+    labels, term_factors = _formula_term_metadata(formula)
+    del labels
+    try:
+        allowed_orders = {_integer_scalar(order, "order")}
+    except (TypeError, ValueError):
+        allowed_orders = set(_integer_code_vector(order, "order", "positive integers"))
+    if not allowed_orders or any(value < 1 for value in allowed_orders):
+        raise ValueError("order must contain positive integers")
+
+    prefix = f"{special}("
+    variables: list[str] = []
+    for factors in term_factors:
+        for factor in factors:
+            if factor.startswith(prefix) and factor.endswith(")") and factor not in variables:
+                variables.append(factor)
+    if not variables:
+        return {"vars": [], "terms": []}
+
+    all_variables: list[str] = []
+    for factors in term_factors:
+        for factor in factors:
+            if factor not in all_variables:
+                all_variables.append(factor)
+    terms = [
+        index
+        for index, factors in enumerate(term_factors, start=1)
+        if len(factors) in allowed_orders and any(variable in factors for variable in variables)
+    ]
+    return {
+        "vars": variables,
+        "tvar": [all_variables.index(variable) + 1 for variable in variables],
+        "terms": terms,
     }
 
 
