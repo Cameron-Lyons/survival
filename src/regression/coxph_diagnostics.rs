@@ -3,7 +3,9 @@ use crate::internal::matrix::{lu_solve, matrix_inverse};
 use crate::internal::statistical::chi2_sf;
 use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
-use crate::regression::coxph_detail_module::coxph_detail;
+use crate::regression::coxph_detail_module::{
+    CoxphDetail, CoxphDetailOptions, compute_coxph_detail_with_options, coxph_detail,
+};
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
@@ -496,6 +498,114 @@ pub fn cox_zph_tests(
     })
 }
 
+fn transformed_detail_times(
+    detail: &CoxphDetail,
+    transformed_events: &[f64],
+) -> PyResult<Vec<f64>> {
+    validate_finite_slice(transformed_events, "transformed_events")?;
+    let mut transformed_time = Vec::with_capacity(detail.rows.len());
+    let mut cursor = 0usize;
+    for row in &detail.rows {
+        let end = cursor
+            .checked_add(row.n_event)
+            .filter(|&end| end <= transformed_events.len())
+            .ok_or_else(|| {
+                value_error("Cox detail event counts do not match transformed event times")
+            })?;
+        let tied = &transformed_events[cursor..end];
+        let first = tied.first().copied().ok_or_else(|| {
+            value_error("Cox detail event counts do not match transformed event times")
+        })?;
+        if tied
+            .iter()
+            .skip(1)
+            .any(|&value| (value - first).abs() > TIME_EPSILON)
+        {
+            return Err(value_error(
+                "tied events have inconsistent transformed times",
+            ));
+        }
+        transformed_time.push(first);
+        cursor = end;
+    }
+    if cursor != transformed_events.len() {
+        return Err(value_error(
+            "Cox detail event counts do not match transformed event times",
+        ));
+    }
+    Ok(transformed_time)
+}
+
+fn validate_selected_columns(columns: &[usize], full_width: usize) -> PyResult<()> {
+    if columns.is_empty() {
+        return Err(value_error("selected Cox detail columns cannot be empty"));
+    }
+    let mut seen = vec![false; full_width];
+    for &column in columns {
+        if column >= full_width {
+            return Err(value_error(format!(
+                "selected Cox detail column {column} must be less than {full_width}"
+            )));
+        }
+        if seen[column] {
+            return Err(value_error(format!(
+                "selected Cox detail column {column} is duplicated"
+            )));
+        }
+        seen[column] = true;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cox_zph_tests_from_detail(
+    detail: CoxphDetail,
+    transformed_events: &[f64],
+    columns: &[usize],
+    groups: Vec<Vec<usize>>,
+    beta: Vec<f64>,
+    single_df: bool,
+    global_test: bool,
+) -> PyResult<ProportionalityTest> {
+    let full_width = detail.n_covariates;
+    if beta.len() != columns.len() {
+        return Err(value_error(
+            "selected Cox detail columns must match coefficient width",
+        ));
+    }
+    validate_selected_columns(columns, full_width)?;
+
+    let transformed_time = transformed_detail_times(&detail, transformed_events)?;
+    let mut event_scores = Vec::with_capacity(detail.rows.len());
+    let mut event_information = Vec::with_capacity(detail.rows.len());
+    let mut event_counts = Vec::with_capacity(detail.rows.len());
+    for row in detail.rows {
+        event_scores.push(columns.iter().map(|&column| row.score[column]).collect());
+        event_information.push(
+            columns
+                .iter()
+                .map(|&row_idx| {
+                    columns
+                        .iter()
+                        .map(|&col_idx| row.imat[row_idx][col_idx])
+                        .collect()
+                })
+                .collect(),
+        );
+        event_counts.push(row.n_event);
+    }
+    cox_zph_tests(
+        event_scores,
+        event_information,
+        transformed_time,
+        event_counts,
+        groups,
+        beta,
+        single_df,
+        global_test,
+    )
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     time,
@@ -528,7 +638,6 @@ pub fn cox_zph_tests_from_data(
     offset: Option<Vec<f64>>,
     method: String,
 ) -> PyResult<ProportionalityTest> {
-    validate_finite_slice(&transformed_events, "transformed_events")?;
     let detail = coxph_detail(
         time,
         status,
@@ -542,51 +651,11 @@ pub fn cox_zph_tests_from_data(
         0.0,
         false,
     )?;
-
-    let mut transformed_time = Vec::with_capacity(detail.rows.len());
-    let mut cursor = 0usize;
-    for row in &detail.rows {
-        let end = cursor
-            .checked_add(row.n_event)
-            .filter(|&end| end <= transformed_events.len())
-            .ok_or_else(|| {
-                value_error("Cox detail event counts do not match transformed event times")
-            })?;
-        let tied = &transformed_events[cursor..end];
-        let first = tied.first().copied().ok_or_else(|| {
-            value_error("Cox detail event counts do not match transformed event times")
-        })?;
-        if tied
-            .iter()
-            .skip(1)
-            .any(|&value| (value - first).abs() > TIME_EPSILON)
-        {
-            return Err(value_error(
-                "tied events have inconsistent transformed times",
-            ));
-        }
-        transformed_time.push(first);
-        cursor = end;
-    }
-    if cursor != transformed_events.len() {
-        return Err(value_error(
-            "Cox detail event counts do not match transformed event times",
-        ));
-    }
-
-    let mut event_scores = Vec::with_capacity(detail.rows.len());
-    let mut event_information = Vec::with_capacity(detail.rows.len());
-    let mut event_counts = Vec::with_capacity(detail.rows.len());
-    for row in detail.rows {
-        event_scores.push(row.score);
-        event_information.push(row.imat);
-        event_counts.push(row.n_event);
-    }
-    cox_zph_tests(
-        event_scores,
-        event_information,
-        transformed_time,
-        event_counts,
+    let columns = (0..coefficients.len()).collect::<Vec<_>>();
+    cox_zph_tests_from_detail(
+        detail,
+        &transformed_events,
+        &columns,
         groups,
         coefficients,
         single_df,
@@ -1370,6 +1439,87 @@ impl CoxPHFit {
         scale_schoenfeld_residuals_impl(schoenfeld, beta, information_matrix)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cox_zph_diagnostics_internal(
+        &self,
+        transformed_events: Vec<f64>,
+        active_columns: Vec<usize>,
+        groups: Vec<Vec<usize>>,
+        information_matrix: Vec<Vec<f64>>,
+        single_df: bool,
+        global_test: bool,
+    ) -> PyResult<(Vec<Vec<f64>>, ProportionalityTest)> {
+        let beta = self.coefficients.first().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
+        })?;
+        let nvar = beta.len();
+        validate_selected_columns(&active_columns, nvar)?;
+        validate_column_groups(&groups, active_columns.len())?;
+        validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
+
+        let scaled_full =
+            self.scaled_schoenfeld_residuals_with_variance_internal(&information_matrix)?;
+        let scaled = scaled_full
+            .into_iter()
+            .map(|row| active_columns.iter().map(|&column| row[column]).collect())
+            .collect();
+
+        let n = self.event_times.len();
+        if self.status.len() != n
+            || self.covariates.len() != n
+            || self.linear_predictors.len() != n
+            || self.weights.len() != n
+            || self.strata.len() != n
+        {
+            return Err(value_error(
+                "fitted Cox model diagnostic arrays have inconsistent lengths",
+            ));
+        }
+        validate_matrix_width(&self.covariates, nvar, "covariates")?;
+        let offset: Vec<f64> = self
+            .covariates
+            .iter()
+            .zip(&self.linear_predictors)
+            .map(|(row, &linear_predictor)| {
+                linear_predictor
+                    - row
+                        .iter()
+                        .zip(beta)
+                        .map(|(&value, &coefficient)| value * coefficient)
+                        .sum::<f64>()
+            })
+            .collect();
+        let method = if matches!(self.tie_method(), CoxMethod::Efron) {
+            "efron"
+        } else {
+            "breslow"
+        };
+        let detail = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &self.event_times,
+            status: &self.status,
+            covariates: &self.covariates,
+            coefficients: beta,
+            weights: Some(&self.weights),
+            entry_times: self.entry_times.as_deref(),
+            strata: Some(&self.strata),
+            offset: Some(&offset),
+            method,
+            center: 0.0,
+            include_riskmat: false,
+        })?;
+        let active_beta = active_columns.iter().map(|&column| beta[column]).collect();
+        let test = cox_zph_tests_from_detail(
+            detail,
+            &transformed_events,
+            &active_columns,
+            groups,
+            active_beta,
+            single_df,
+            global_test,
+        )?;
+        Ok((scaled, test))
+    }
+
     pub(crate) fn schoenfeld_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
         let beta = self.coefficients.first().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
@@ -2026,6 +2176,103 @@ mod tests {
         assert_eq!(native.p_values, materialized.p_values);
         assert_eq!(native.global_chi2, materialized.global_chi2);
         assert_eq!(native.global_p_value, materialized.global_p_value);
+    }
+
+    #[test]
+    fn fit_owned_cox_zph_path_matches_selected_data_path() {
+        let time = vec![1.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 0, 1, 1, 0];
+        let covariates = vec![
+            vec![0.2, 1.0],
+            vec![0.8, 0.5],
+            vec![0.4, 0.9],
+            vec![1.1, 0.2],
+            vec![0.3, 0.8],
+            vec![0.7, 0.4],
+        ];
+        let coefficients = vec![0.15, -0.2];
+        let weights = vec![1.0, 2.0, 0.5, 1.5, 0.75, 1.0];
+        let entry_times = vec![0.0, 0.0, 0.5, 0.0, 1.0, 0.0];
+        let transformed_events = vec![1.5, 1.5, 4.0, 5.0];
+        let variance = vec![vec![0.4, 0.1], vec![0.1, 0.3]];
+        let linear_predictors = covariates
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .zip(&coefficients)
+                    .map(|(&value, &coefficient)| value * coefficient)
+                    .sum()
+            })
+            .collect::<Vec<f64>>();
+        let fit = CoxPHFit {
+            coefficients: vec![coefficients.clone()],
+            means: vec![0.0; coefficients.len()],
+            score_vector: vec![0.0; coefficients.len()],
+            information_matrix: variance.clone(),
+            log_likelihood: vec![0.0, 0.0],
+            score_test: 0.0,
+            convergence_flag: 0,
+            iterations: 0,
+            risk_scores: linear_predictors.iter().map(|value| value.exp()).collect(),
+            event_times: time.clone(),
+            status: status.clone(),
+            linear_predictors: linear_predictors.clone(),
+            entry_times: Some(entry_times.clone()),
+            weights: weights.clone(),
+            covariates: covariates.clone(),
+            strata: vec![0; time.len()],
+            method: "efron".to_string(),
+            nocenter: Vec::new(),
+        };
+
+        let (scaled, test) = fit
+            .cox_zph_diagnostics_internal(
+                transformed_events.clone(),
+                vec![1],
+                vec![vec![0]],
+                variance.clone(),
+                false,
+                true,
+            )
+            .expect("fit-owned Cox zph diagnostic should compute");
+        let expected_scaled = fit
+            .scaled_schoenfeld_residuals_with_variance_internal(&variance)
+            .expect("scaled residuals should compute");
+        for (actual, expected) in scaled.iter().zip(&expected_scaled) {
+            assert_eq!(actual, &vec![expected[1]]);
+        }
+
+        let selected_rows = covariates
+            .iter()
+            .map(|row| vec![row[1]])
+            .collect::<Vec<_>>();
+        let selected_beta = vec![coefficients[1]];
+        let offset = selected_rows
+            .iter()
+            .zip(&linear_predictors)
+            .map(|(row, &linear_predictor)| linear_predictor - row[0] * selected_beta[0])
+            .collect();
+        let expected_test = cox_zph_tests_from_data(
+            time,
+            status,
+            selected_rows,
+            selected_beta,
+            transformed_events,
+            vec![vec![0]],
+            false,
+            true,
+            Some(weights),
+            Some(entry_times),
+            Some(vec![0; covariates.len()]),
+            Some(offset),
+            "efron".to_string(),
+        )
+        .expect("selected data diagnostic should compute");
+
+        assert_eq!(test.chi2_values, expected_test.chi2_values);
+        assert_eq!(test.p_values, expected_test.p_values);
+        assert_eq!(test.global_chi2, expected_test.global_chi2);
+        assert_eq!(test.global_p_value, expected_test.global_p_value);
     }
 
     #[test]

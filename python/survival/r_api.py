@@ -14165,14 +14165,15 @@ def cox_zph(
         raise ValueError("schoenfeld residuals are not available for the exact method")
     if _is_survreg_fit(fit):
         raise TypeError("cox_zph requires a fitted Cox model")
+    model = _unwrap_formula_fit(fit)
+    native_method = getattr(model, "cox_zph_diagnostics", None)
     scaled_method = getattr(fit, "scaled_schoenfeld_residuals", None)
-    if scaled_method is None:
+    if native_method is None and scaled_method is None:
         raise TypeError("cox_zph requires a fitted Cox model")
     group_terms = _normalize_bool_option(terms, "terms")
     single_df = _normalize_bool_option(singledf, "singledf")
     include_global = _normalize_bool_option(global_test, "global")
 
-    scaled = [[float(value) for value in row] for row in scaled_method()]
     beta = _cox_beta(fit)
     aliases = _cox_alias_mask(fit)
     if len(aliases) != len(beta):
@@ -14180,24 +14181,17 @@ def cox_zph(
     active_columns = [idx for idx, aliased in enumerate(aliases) if not aliased]
     if not active_columns:
         raise ValueError("cox_zph requires at least one estimable coefficient")
-    if not scaled:
-        raise ValueError("cox_zph requires at least one event")
-
-    full_nvar = len(scaled[0])
-    if any(len(row) != full_nvar for row in scaled):
-        raise ValueError("scaled Schoenfeld residuals must be rectangular")
-    if len(beta) != full_nvar:
-        raise ValueError("fitted Cox model coefficients do not match residual width")
+    full_nvar = len(beta)
     groups = _cox_zph_active_groups(
         _cox_zph_column_groups(fit, full_nvar, group_terms),
         active_columns,
     )
-    scaled = _matrix_columns(scaled, active_columns)
-    beta = [beta[idx] for idx in active_columns]
+    dense_groups = [columns for _name, columns in groups]
+    active_beta = [beta[idx] for idx in active_columns]
 
     event_indices = _cox_event_indices(fit)
-    if len(event_indices) != len(scaled):
-        raise ValueError("fitted Cox model event times do not match Schoenfeld residuals")
+    if not event_indices:
+        raise ValueError("cox_zph requires at least one event")
     event_times = [float(fit.event_times[idx]) for idx in event_indices]
     row_strata = _cox_training_strata(fit, len(fit.status))
     event_strata_codes = [row_strata[idx] for idx in event_indices]
@@ -14213,17 +14207,41 @@ def cox_zph(
         event_times,
         transform,
     )
-    test = _cox_zph_native_tests(
-        fit,
-        active_columns,
-        beta,
-        transformed_time,
-        [columns for _name, columns in groups],
-        single_df,
-        include_global,
-    )
+    if native_method is not None:
+        variance = getattr(fit, "information_matrix", None)
+        if variance is None:
+            raise TypeError("model does not expose coefficient variance")
+        scaled_result, test = native_method(
+            transformed_time,
+            active_columns,
+            dense_groups,
+            [[float(value) for value in row] for row in variance],
+            single_df,
+            include_global,
+        )
+        scaled = [[float(value) for value in row] for row in scaled_result]
+    else:
+        if scaled_method is None:
+            raise TypeError("cox_zph requires a fitted Cox model")
+        scaled_full = [[float(value) for value in row] for row in scaled_method()]
+        if any(len(row) != full_nvar for row in scaled_full):
+            raise ValueError("scaled Schoenfeld residuals must be rectangular")
+        scaled = _matrix_columns(scaled_full, active_columns)
+        test = _cox_zph_native_tests(
+            fit,
+            active_columns,
+            active_beta,
+            transformed_time,
+            dense_groups,
+            single_df,
+            include_global,
+        )
+    if len(event_indices) != len(scaled):
+        raise ValueError("fitted Cox model event times do not match Schoenfeld residuals")
+    if any(len(row) != len(active_columns) for row in scaled):
+        raise ValueError("scaled Schoenfeld residuals must be rectangular")
     grouped_y = (
-        _cox_zph_term_matrix(scaled, groups, beta)
+        _cox_zph_term_matrix(scaled, groups, active_beta)
         if group_terms and groups
         else _matrix_columns(scaled, [idx for _name, columns in groups for idx in columns])
     )
@@ -14235,7 +14253,7 @@ def cox_zph(
         x=transformed_time,
         time=event_times,
         y=grouped_y,
-        var=_cox_zph_group_variance(fit, groups, beta, active_columns, len(scaled)),
+        var=_cox_zph_group_variance(fit, groups, active_beta, active_columns, len(scaled)),
         transform=transform_name,
         global_chi2=float(test.global_chi2) if include_global else None,
         global_df=int(test.global_df) if include_global else None,

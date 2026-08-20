@@ -1103,6 +1103,15 @@ class CoxPHFit:
     def scaled_schoenfeld_residuals_with_variance(
         self, information_matrix: list[list[float]]
     ) -> list[list[float]]: ...
+    def cox_zph_diagnostics(
+        self,
+        transformed_events: list[float],
+        active_columns: list[int],
+        groups: list[list[int]],
+        information_matrix: list[list[float]],
+        single_df: bool,
+        global_test: bool,
+    ) -> tuple[list[list[float]], ProportionalityTest]: ...
     def partial_residuals(self) -> list[list[float]]: ...
     @property
     def covariates(self) -> list[list[float]]: ...
