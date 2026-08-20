@@ -12059,6 +12059,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "FineGrayFrame" in survival.__all__
     assert "FineGrayOutput" in survival.__all__
     assert "RateTable" in survival.__all__
+    assert "RatetableFrame" in survival.__all__
     assert "PyearsResult" in survival.__all__
     assert "SurvObrienResult" in survival.__all__
     assert "SurvExpResult" in survival.__all__
@@ -12107,6 +12108,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "pseudo" in survival.__all__
     assert "psurvreg" in survival.__all__
     assert "qsurvreg" in survival.__all__
+    assert "ratetable" in survival.__all__
     assert "ratetableDate" in survival.__all__
     assert "rsurvreg" in survival.__all__
     assert "rttright" in survival.__all__
@@ -12136,6 +12138,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.FineGrayFrame is survival.r_api.FineGrayFrame
     assert survival.FineGrayOutput is survival.r_api.FineGrayOutput
     assert survival.RateTable is survival.r_api.RateTable
+    assert survival.RatetableFrame is survival.r_api.RatetableFrame
     assert survival.PyearsResult is survival.r_api.PyearsResult
     assert survival.SurvObrienResult is survival.r_api.SurvObrienResult
     assert survival.SurvExpResult is survival.r_api.SurvExpResult
@@ -12189,6 +12192,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.pseudo is survival.r_api.pseudo
     assert survival.psurvreg is survival.r_api.psurvreg
     assert survival.qsurvreg is survival.r_api.qsurvreg
+    assert survival.ratetable is survival.r_api.ratetable
     assert survival.ratetableDate is survival.r_api.ratetableDate
     assert survival.rsurvreg is survival.r_api.rsurvreg
     assert survival.rttright is survival.r_api.rttright
@@ -12520,6 +12524,9 @@ def test_r_api_stub_tracks_surv_utility_public_signatures():
         inspect.signature(survival.r_api.ratetableDate).parameters["origin_year"].kind
         is inspect.Parameter.KEYWORD_ONLY
     )
+    ratetable_params = inspect.signature(survival.r_api.ratetable).parameters
+    assert list(ratetable_params) == ["columns"]
+    assert ratetable_params["columns"].kind is inspect.Parameter.VAR_KEYWORD
 
 
 def test_r_api_stub_tracks_survexp_public_signature():

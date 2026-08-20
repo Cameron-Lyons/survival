@@ -91,6 +91,18 @@ class SurvExpFormulaResult:
     x: list[int] | None
     y: Surv | None
 
+class RatetableFrame:
+    values: list[list[float]]
+    column_names: list[str]
+    is_date: list[bool]
+    levels: list[list[str] | None]
+    def __iter__(self): ...
+    def __len__(self) -> int: ...
+    @property
+    def isDate(self) -> dict[str, bool]: ...
+    @property
+    def levlist(self) -> list[list[str] | None]: ...
+
 class PyearsResult:
     pyears: list[float]
     n: list[float]
@@ -218,6 +230,7 @@ def is_ratetable(
     verbose: Any = False,
 ) -> bool: ...
 def match_ratetable(data: Any, ratetable: Any) -> dict[str, Any]: ...
+def ratetable(**columns: Any) -> RatetableFrame: ...
 def ratetableDate(
     x: Any,
     month: Any | None = None,
