@@ -16,6 +16,25 @@ fn rttright_time_matrix_py(
     py.detach(move || rttright_time_matrix(time, status, times, weights, strata, timefix, renorm))
 }
 
+#[pyfunction(name = "rttright_counting_matrix")]
+#[pyo3(signature = (start, stop, status, weights, last, strata, delta, times=None))]
+#[allow(clippy::too_many_arguments)]
+fn rttright_counting_matrix_py(
+    py: Python<'_>,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    weights: Vec<f64>,
+    last: Vec<bool>,
+    strata: Vec<i32>,
+    delta: f64,
+    times: Option<Vec<f64>>,
+) -> PyResult<Vec<Vec<f64>>> {
+    py.detach(move || {
+        rttright_counting_matrix(start, stop, status, weights, last, strata, delta, times)
+    })
+}
+
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge, m)?)?;
     m.add_function(wrap_pyfunction!(tmerge_plan, m)?)?;
@@ -47,6 +66,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tcut, m)?)?;
     m.add_function(wrap_pyfunction!(tcut_expand, m)?)?;
     m.add_function(wrap_pyfunction!(rttright, m)?)?;
+    m.add_function(wrap_pyfunction!(rttright_counting_matrix_py, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_stratified, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_time_matrix_py, m)?)?;

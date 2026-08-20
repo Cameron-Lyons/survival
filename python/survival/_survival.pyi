@@ -5729,6 +5729,16 @@ def rttright(
     timefix: bool = True,
     renorm: bool = True,
 ) -> RttrightResult: ...
+def rttright_counting_matrix(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    weights: list[float],
+    last: list[bool],
+    strata: list[int],
+    delta: float,
+    times: list[float] | None = None,
+) -> list[list[float]]: ...
 def rttright_matrix(
     time: list[float],
     status: list[int],

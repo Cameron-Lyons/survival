@@ -8059,14 +8059,6 @@ def _rttright_binary_status(response: Surv) -> list[int]:
     return [1 if int(value) > 0 else 0 for value in response.event]
 
 
-def _rttright_divide(numerator: float, denominator: float) -> float:
-    if denominator != 0.0:
-        return numerator / denominator
-    if numerator == 0.0:
-        return math.nan
-    return math.inf
-
-
 def _rttright_counting_common_start(
     start: Sequence[float],
     id_values: Sequence[Any],
@@ -8170,43 +8162,6 @@ def _rttright_counting_delta(
     return min(diffs) / 2.0
 
 
-def _rttright_counting_km(
-    start: Sequence[float],
-    stop: Sequence[float],
-    censor: Sequence[int],
-    weights: Sequence[float],
-) -> tuple[list[float], list[float]]:
-    event_times = sorted({float(stop[idx]) for idx, value in enumerate(censor) if value == 1})
-    survival_times: list[float] = []
-    survival_values: list[float] = []
-    current = 1.0
-    for event_time in event_times:
-        risk = sum(
-            float(weight)
-            for left, right, weight in zip(start, stop, weights, strict=True)
-            if float(left) < event_time <= float(right)
-        )
-        events = sum(
-            float(weights[idx])
-            for idx, value in enumerate(censor)
-            if value == 1 and float(stop[idx]) == event_time
-        )
-        if risk > 0.0:
-            current *= 1.0 - events / risk
-        survival_times.append(event_time)
-        survival_values.append(current)
-    return survival_times, survival_values
-
-
-def _rttright_km_survival_at(
-    survival_times: Sequence[float],
-    survival_values: Sequence[float],
-    time: float,
-) -> float:
-    index = bisect_left(survival_times, float(time))
-    return 1.0 if index == 0 else float(survival_values[index - 1])
-
-
 def _rttright_time_matrix(
     time: Sequence[float],
     status: Sequence[int],
@@ -8247,60 +8202,6 @@ def _rttright_time_matrix(
 
     if len(query_times) == 1:
         return [row[0] for row in matrix]
-    return matrix
-
-
-def _rttright_counting_group_result(
-    start: Sequence[float],
-    stop: Sequence[float],
-    status: Sequence[int],
-    weights: Sequence[float],
-    last: Sequence[bool],
-    query_times: Sequence[float] | None,
-    delta: float,
-) -> list[float] | list[list[float]]:
-    km_stop = [float(value) for value in stop]
-    censor = [
-        1 if is_last and int(event) == 0 else 0 for is_last, event in zip(last, status, strict=True)
-    ]
-    for row_idx, value in enumerate(censor):
-        if value == 1:
-            km_stop[row_idx] += delta
-    survival_times, survival_values = _rttright_counting_km(start, km_stop, censor, weights)
-
-    if query_times is None:
-        result: list[float] = []
-        for row_stop, row_status, row_weight, is_last in zip(
-            stop,
-            status,
-            weights,
-            last,
-            strict=True,
-        ):
-            if is_last and int(row_status) > 0:
-                gwt = _rttright_km_survival_at(survival_times, survival_values, float(row_stop))
-                result.append(_rttright_divide(float(row_weight), gwt))
-            else:
-                result.append(0.0)
-        return result
-
-    matrix = [[0.0] * len(query_times) for _ in range(len(start))]
-    gwt = [_rttright_km_survival_at(survival_times, survival_values, time) for time in query_times]
-    gwt2 = [
-        _rttright_km_survival_at(survival_times, survival_values, row_stop) for row_stop in stop
-    ]
-    for row_idx, (row_start, row_stop, _row_status, row_weight, is_last) in enumerate(
-        zip(start, stop, status, weights, last, strict=True)
-    ):
-        for col_idx, query_time in enumerate(query_times):
-            if float(row_start) < float(query_time) <= float(row_stop):
-                matrix[row_idx][col_idx] = _rttright_divide(float(row_weight), gwt[col_idx])
-        if is_last and float(row_stop) > 0.0:
-            for col_idx, query_gwt in enumerate(gwt):
-                matrix[row_idx][col_idx] = _rttright_divide(
-                    float(row_weight),
-                    max(gwt2[row_idx], query_gwt),
-                )
     return matrix
 
 
@@ -8354,38 +8255,18 @@ def _rttright_counting_result(
     case_weights = _rttright_counting_case_weights(weights, id_labels, group_values, n, renorm)
     delta = _rttright_counting_delta(start, stop, query_times)
 
-    matrix: list[list[float]] | None = None
-    vector = [0.0] * n
-    if query_times is not None:
-        matrix = [[0.0] * len(query_times) for _ in range(n)]
-
-    group_indices: dict[int, list[int]] = {}
-    for row_idx, group_value in enumerate(group_values):
-        group_indices.setdefault(group_value, []).append(row_idx)
-
-    for indices in group_indices.values():
-        group_result = _rttright_counting_group_result(
-            [start[idx] for idx in indices],
-            [stop[idx] for idx in indices],
-            [status_values[idx] for idx in indices],
-            [case_weights[idx] for idx in indices],
-            [last[idx] for idx in indices],
-            query_times,
-            delta,
-        )
-        if query_times is None:
-            for local_idx, row_idx in enumerate(indices):
-                vector[row_idx] = float(group_result[local_idx])
-        else:
-            if matrix is None:
-                raise RuntimeError("rttright counting matrix was not initialized")
-            for local_idx, row_idx in enumerate(indices):
-                matrix[row_idx] = [float(value) for value in group_result[local_idx]]
-
+    matrix = _core.rttright_counting_matrix(
+        start,
+        stop,
+        status_values,
+        case_weights,
+        last,
+        group_values,
+        delta,
+        query_times,
+    )
     if query_times is None:
-        return vector
-    if matrix is None:
-        raise RuntimeError("rttright counting matrix was not initialized")
+        return [float(row[0]) for row in matrix]
     if len(query_times) == 1:
         return [row[0] for row in matrix]
     return matrix
