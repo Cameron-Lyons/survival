@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 use crate::constants::{clamped_normal_ci_95, same_time};
+use crate::regression::coxph::coxph_fit;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -404,10 +405,51 @@ pub fn landmark_cox_analysis(
     landmark_time: f64,
     horizon: f64,
 ) -> PyResult<LandmarkAnalysisResult> {
-    if time.len() != event.len() || time.len() != covariates.len() {
+    let n = time.len();
+    if n == 0 || event.len() != n || covariates.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Input arrays must have the same length",
+            "time, event, and covariates must be non-empty and have the same length",
         ));
+    }
+    if !landmark_time.is_finite() || landmark_time < 0.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "landmark_time must be finite and non-negative",
+        ));
+    }
+    if !horizon.is_finite() || horizon <= 0.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "horizon must be finite and positive",
+        ));
+    }
+    for (idx, &value) in time.iter().enumerate() {
+        if !value.is_finite() || value < 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "time must contain finite non-negative values; invalid value at index {idx}"
+            )));
+        }
+    }
+    if let Some((idx, &value)) = event
+        .iter()
+        .enumerate()
+        .find(|(_, value)| !matches!(value, 0 | 1))
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "event must contain only 0/1 values; got {value} at index {idx}"
+        )));
+    }
+    let n_features = covariates[0].len();
+    for (row_idx, row) in covariates.iter().enumerate() {
+        if row.len() != n_features {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "covariates must be rectangular; row {row_idx} has {} columns, expected {n_features}",
+                row.len()
+            )));
+        }
+        if row.iter().any(|value| !value.is_finite()) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "covariates row {row_idx} contains a non-finite value"
+            )));
+        }
     }
 
     let at_risk_indices: Vec<usize> = time
@@ -424,75 +466,70 @@ pub fn landmark_cox_analysis(
         ));
     }
 
-    let n_features = if covariates.is_empty() {
-        0
-    } else {
-        covariates[0].len()
-    };
-
-    let mut coefficients = vec![0.0; n_features];
-    let standard_errors = vec![0.1; n_features];
-
     let filtered_time: Vec<f64> = at_risk_indices
         .iter()
-        .map(|&i| time[i] - landmark_time)
+        .map(|&i| (time[i] - landmark_time).min(horizon))
         .collect();
-    let filtered_event: Vec<i32> = at_risk_indices.iter().map(|&i| event[i]).collect();
-    let filtered_cov: Vec<&Vec<f64>> = at_risk_indices.iter().map(|&i| &covariates[i]).collect();
-
-    let learning_rate = 0.01;
-    for _ in 0..100 {
-        let linear_pred: Vec<f64> = filtered_cov
-            .iter()
-            .map(|x| {
-                x.iter()
-                    .zip(coefficients.iter())
-                    .map(|(&xi, &bi)| xi * bi)
-                    .sum()
-            })
-            .collect();
-
-        let exp_lp: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
-
-        let mut indices: Vec<usize> = (0..filtered_time.len()).collect();
-        indices.sort_by(|&a, &b| filtered_time[b].total_cmp(&filtered_time[a]));
-
-        let mut gradient = vec![0.0; n_features];
-        let mut risk_sum = 0.0;
-        let mut weighted_sum = vec![0.0; n_features];
-
-        for &i in &indices {
-            risk_sum += exp_lp[i];
-            for (j, &xij) in filtered_cov[i].iter().enumerate() {
-                weighted_sum[j] += xij * exp_lp[i];
-            }
-
-            if filtered_event[i] == 1 && filtered_time[i] <= horizon {
-                for (j, g) in gradient.iter_mut().enumerate() {
-                    *g += filtered_cov[i][j] - weighted_sum[j] / risk_sum;
-                }
-            }
-        }
-
-        for (b, g) in coefficients.iter_mut().zip(gradient.iter()) {
-            *b += learning_rate * g / n_at_risk as f64;
-        }
+    let filtered_event: Vec<i32> = at_risk_indices
+        .iter()
+        .map(|&i| i32::from(event[i] == 1 && time[i] - landmark_time <= horizon))
+        .collect();
+    let filtered_covariates: Vec<Vec<f64>> = at_risk_indices
+        .iter()
+        .map(|&i| covariates[i].clone())
+        .collect();
+    let n_events = filtered_event.iter().filter(|&&value| value == 1).count();
+    if n_events == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "No events occur within the landmark horizon",
+        ));
     }
 
-    let n_events = at_risk_indices
-        .iter()
-        .filter(|&&i| event[i] == 1 && time[i] - landmark_time <= horizon)
-        .count();
+    let fit = coxph_fit(
+        filtered_time,
+        filtered_event,
+        filtered_covariates,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("efron"),
+        None,
+        None,
+    )?;
+    let coefficients = fit.coefficients.first().cloned().unwrap_or_default();
+    let standard_errors = (0..n_features)
+        .map(|idx| {
+            fit.information_matrix
+                .get(idx)
+                .and_then(|row| row.get(idx))
+                .copied()
+                .unwrap_or(0.0)
+                .max(0.0)
+                .sqrt()
+        })
+        .collect();
 
     let n_pred_times = 10;
     let prediction_times: Vec<f64> = (0..=n_pred_times)
         .map(|i| landmark_time + horizon * i as f64 / n_pred_times as f64)
         .collect();
-
-    let baseline_hazard = n_events as f64 / (n_at_risk as f64 * horizon);
+    let (baseline_times, baseline_hazard) = fit.basehaz(false)?;
     let survival_probabilities: Vec<f64> = prediction_times
         .iter()
-        .map(|&t| (-baseline_hazard * (t - landmark_time)).exp())
+        .map(|&time_point| {
+            let relative_time = time_point - landmark_time;
+            let upper = baseline_times.partition_point(|&value| value <= relative_time);
+            let cumulative_hazard = if upper == 0 {
+                0.0
+            } else {
+                baseline_hazard[upper - 1]
+            };
+            (-cumulative_hazard).exp().clamp(0.0, 1.0)
+        })
         .collect();
 
     Ok(LandmarkAnalysisResult {
@@ -835,6 +872,75 @@ mod tests {
         let result = landmark_cox_analysis(time, event, covariates, 2.0, 5.0).unwrap();
         assert_eq!(result.landmark_time, 2.0);
         assert!(result.n_at_risk > 0);
+    }
+
+    #[test]
+    fn landmark_analysis_matches_reference_cox_fit() {
+        let n = 60;
+        let covariate: Vec<f64> = (0..n).map(|idx| (idx % 2) as f64).collect();
+        let time: Vec<f64> = (0..n)
+            .map(|idx| {
+                if covariate[idx] == 1.0 {
+                    (idx / 2 + 1) as f64
+                } else {
+                    (idx / 2 + 15) as f64
+                }
+            })
+            .collect();
+        let event: Vec<i32> = (0..n).map(|idx| i32::from(idx % 3 != 0)).collect();
+        let covariates = covariate.into_iter().map(|value| vec![value]).collect();
+
+        let result = landmark_cox_analysis(time, event, covariates, 0.0, 40.0).unwrap();
+
+        assert_eq!(result.n_at_risk, 60);
+        assert_eq!(result.n_events, 37);
+        assert!((result.coefficients[0] - 1.626_508_609_808_191).abs() <= 1e-10);
+        assert!((result.standard_errors[0] - 0.404_578_738_022_738_47).abs() <= 1e-10);
+        let expected_survival = [
+            1.0,
+            0.982_894_484_757_097_2,
+            0.970_258_397_753_705_8,
+            0.948_905_021_064_294_4,
+            0.914_909_862_091_863_1,
+            0.864_591_083_085_711_5,
+            0.800_731_835_636_512_1,
+            0.685_981_794_435_110_5,
+            0.541_587_809_055_044_6,
+            0.447_464_015_103_637_3,
+            0.280_265_951_301_933_4,
+        ];
+        for (&actual, &expected) in result.survival_probabilities.iter().zip(&expected_survival) {
+            assert!((actual - expected).abs() <= 1e-10);
+        }
+    }
+
+    #[test]
+    fn landmark_analysis_validates_public_inputs() {
+        #[cfg(feature = "python")]
+        pyo3::Python::initialize();
+
+        let time = vec![1.0, 2.0, 3.0];
+        let event = vec![1, 0, 1];
+        let covariates = vec![vec![0.0], vec![1.0], vec![0.0]];
+        assert!(
+            landmark_cox_analysis(
+                time.clone(),
+                event[..2].to_vec(),
+                covariates.clone(),
+                0.0,
+                3.0
+            )
+            .is_err()
+        );
+        assert!(
+            landmark_cox_analysis(time.clone(), vec![1, 2, 0], covariates.clone(), 0.0, 3.0,)
+                .is_err()
+        );
+        assert!(
+            landmark_cox_analysis(time.clone(), event.clone(), covariates.clone(), -1.0, 3.0,)
+                .is_err()
+        );
+        assert!(landmark_cox_analysis(time, event, covariates, 0.0, 0.0).is_err());
     }
 
     #[test]

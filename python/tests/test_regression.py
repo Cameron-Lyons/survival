@@ -203,6 +203,40 @@ def test_predict_hazard_spline_intervals_follow_parameter_uncertainty():
         assert uncertain_width > precise_width
 
 
+def test_landmark_cox_analysis_matches_reference_fit():
+    n = 60
+    covariate = [float(idx % 2) for idx in range(n)]
+    time = [
+        float(idx // 2 + 1) if covariate[idx] == 1.0 else float(idx // 2 + 15) for idx in range(n)
+    ]
+    event = [1 if idx % 3 else 0 for idx in range(n)]
+
+    result = survival.landmark_cox_analysis(
+        time, event, [[value] for value in covariate], 0.0, 40.0
+    )
+
+    assert result.n_at_risk == 60
+    assert result.n_events == 37
+    assert result.coefficients == pytest.approx([1.6265086098081909], abs=1e-10)
+    assert result.standard_errors == pytest.approx([0.40457873802273847], abs=1e-10)
+    assert result.survival_probabilities == pytest.approx(
+        [
+            1.0,
+            0.9828944847570972,
+            0.9702583977537058,
+            0.9489050210642944,
+            0.9149098620918631,
+            0.8645910830857115,
+            0.8007318356365121,
+            0.6859817944351105,
+            0.5415878090550446,
+            0.4474640151036373,
+            0.2802659513019334,
+        ],
+        abs=1e-10,
+    )
+
+
 def test_coxmart():
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
     status = [1, 1, 0, 1, 0, 1, 1, 0]
