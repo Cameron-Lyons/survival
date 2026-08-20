@@ -82,6 +82,40 @@ def test_flexible_parametric_model_revalidates_mutated_spline_config():
         survival.flexible_parametric_model(time, event, covariates, config)
 
 
+def test_flexible_parametric_model_converges_on_finite_data():
+    time = [0.1 * value for value in range(1, 101)]
+    event = [1 if idx % 3 == 0 else 0 for idx in range(100)]
+    covariates = [[(idx % 11) * 0.1 - 0.5, (idx % 7) * 0.15 - 0.45] for idx in range(100)]
+
+    model = survival.flexible_parametric_model(time, event, covariates)
+
+    assert model.converged
+    assert model.n_iterations < 100
+    assert math.isfinite(model.log_likelihood)
+    assert all(math.isfinite(value) for value in model.coefficients)
+    assert all(math.isfinite(value) for value in model.spline_coefficients)
+    assert all(math.isfinite(value) and value > 0.0 for value in model.std_errors)
+
+
+def test_flexible_parametric_model_validates_public_inputs():
+    time = [float(value) for value in range(1, 21)]
+    event = [1 if idx % 3 == 0 else 0 for idx in range(20)]
+    covariates = [[idx * 0.1] for idx in range(20)]
+
+    with pytest.raises(ValueError, match="event length"):
+        survival.flexible_parametric_model(time, event[:-1], covariates)
+    with pytest.raises(ValueError, match="time values must be positive"):
+        survival.flexible_parametric_model([0.0, *time[1:]], event, covariates)
+    with pytest.raises(ValueError, match="event values must be 0 or 1"):
+        survival.flexible_parametric_model(time, [2, *event[1:]], covariates)
+    with pytest.raises(ValueError, match="at least one event"):
+        survival.flexible_parametric_model(time, [0] * 20, covariates)
+    with pytest.raises(ValueError, match="one row per observation"):
+        survival.flexible_parametric_model(time, event, covariates[:-1])
+    with pytest.raises(ValueError, match="rectangular"):
+        survival.flexible_parametric_model(time, event, [[0.0], *covariates[1:-1], [0.0, 1.0]])
+
+
 def test_restricted_cubic_spline_validates_public_inputs():
     x = [float(value) for value in range(1, 6)]
 
@@ -133,7 +167,7 @@ def test_predict_hazard_spline_validates_public_inputs():
 
     bad_spline_coefficients = survival.FlexibleParametricResult(
         model.coefficients,
-        model.spline_coefficients[:-1],
+        model.spline_coefficients[: len(model.knots) - 1],
         model.std_errors,
         model.knots,
         model.log_likelihood,

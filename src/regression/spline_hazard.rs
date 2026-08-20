@@ -1,6 +1,8 @@
+use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 
 use crate::constants::clamped_normal_ci_bounds_95;
+use crate::internal::matrix::{matrix_inverse, regularized_lu_solve};
 
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug)]
@@ -35,9 +37,9 @@ fn build_spline_config(
     knot_placement: String,
     boundary_knots: Option<(f64, f64)>,
 ) -> PyResult<SplineConfig> {
-    if n_knots == 0 {
+    if n_knots < 2 {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "n_knots must be positive",
+            "n_knots must be at least 2",
         ));
     }
     if degree == 0 {
@@ -123,20 +125,26 @@ fn validate_hazard_prediction_inputs(
     model_result: &FlexibleParametricResult,
     eval_times: &[f64],
     covariate_values: Option<&[f64]>,
-) -> PyResult<()> {
+) -> PyResult<usize> {
     validate_eval_times(eval_times)?;
     validate_finite_values("coefficients", &model_result.coefficients)?;
     validate_finite_values("spline_coefficients", &model_result.spline_coefficients)?;
     validate_finite_values("knots", &model_result.knots)?;
+    if model_result.knots.len() < 2 || model_result.knots.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "knots must contain at least two strictly increasing values",
+        ));
+    }
 
-    let expected_spline_coefficients = model_result.knots.len() + 2;
-    if model_result.spline_coefficients.len() != expected_spline_coefficients {
+    if model_result.spline_coefficients.len() < model_result.knots.len() {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "spline_coefficients length must be knots length + 2 for cubic prediction; got {} and expected {}",
+            "spline_coefficients length must be at least knots length; got {} and {}",
             model_result.spline_coefficients.len(),
-            expected_spline_coefficients
+            model_result.knots.len()
         )));
     }
+    let degree = model_result.spline_coefficients.len() + 1 - model_result.knots.len();
 
     if let Some(covariates) = covariate_values {
         if covariates.len() != model_result.coefficients.len() {
@@ -149,7 +157,7 @@ fn validate_hazard_prediction_inputs(
         validate_finite_values("covariate_values", covariates)?;
     }
 
-    Ok(())
+    Ok(degree)
 }
 
 fn validate_restricted_cubic_knots(knots: &[f64]) -> PyResult<()> {
@@ -220,6 +228,267 @@ impl FlexibleParametricResult {
     }
 }
 
+struct PoissonHazardFit {
+    parameters: Vec<f64>,
+    information: Array2<f64>,
+    log_likelihood: f64,
+    n_iterations: usize,
+    converged: bool,
+}
+
+fn validate_flexible_parametric_inputs(
+    time: &[f64],
+    event: &[i32],
+    covariates: &[Vec<f64>],
+) -> PyResult<usize> {
+    let n = time.len();
+    if n < 10 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Need at least 10 observations",
+        ));
+    }
+    if event.len() != n {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "event length must match time length; got {} and {n}",
+            event.len()
+        )));
+    }
+    validate_finite_values("time", time)?;
+    if let Some((idx, &value)) = time.iter().enumerate().find(|(_, value)| **value <= 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "time values must be positive; got {value} at index {idx}"
+        )));
+    }
+    if let Some((idx, &value)) = event
+        .iter()
+        .enumerate()
+        .find(|(_, value)| !matches!(value, 0 | 1))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "event values must be 0 or 1; got {value} at index {idx}"
+        )));
+    }
+    if !event.contains(&1) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "at least one event is required",
+        ));
+    }
+
+    if covariates.is_empty() {
+        return Ok(0);
+    }
+    if covariates.len() != n {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "covariates must contain one row per observation; got {} rows for {n} observations",
+            covariates.len()
+        )));
+    }
+    let p = covariates[0].len();
+    for (row_idx, row) in covariates.iter().enumerate() {
+        if row.len() != p {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "covariates must be rectangular; row {row_idx} has {} columns, expected {p}",
+                row.len()
+            )));
+        }
+        validate_finite_values("covariates", row)?;
+    }
+    Ok(p)
+}
+
+fn poisson_hazard_state(
+    design: &[f64],
+    time: &[f64],
+    event: &[i32],
+    parameters: &[f64],
+) -> Option<(f64, Array1<f64>, Array2<f64>)> {
+    let n_params = parameters.len();
+    if n_params == 0 || design.len() != time.len().checked_mul(n_params)? {
+        return None;
+    }
+
+    let mut log_likelihood = 0.0;
+    let mut score = Array1::zeros(n_params);
+    let mut information = Array2::zeros((n_params, n_params));
+    for ((row, &exposure), &outcome) in design.chunks_exact(n_params).zip(time).zip(event) {
+        let linear_predictor = row
+            .iter()
+            .zip(parameters)
+            .map(|(&value, &parameter)| value * parameter)
+            .sum::<f64>();
+        if !linear_predictor.is_finite() || linear_predictor > 700.0 {
+            return None;
+        }
+        let mean = exposure * linear_predictor.exp();
+        if !mean.is_finite() {
+            return None;
+        }
+        log_likelihood += outcome as f64 * linear_predictor - mean;
+        let residual = outcome as f64 - mean;
+        for left in 0..n_params {
+            score[left] += row[left] * residual;
+            for right in 0..=left {
+                information[[left, right]] += mean * row[left] * row[right];
+            }
+        }
+        if !log_likelihood.is_finite() {
+            return None;
+        }
+    }
+    for left in 0..n_params {
+        for right in 0..left {
+            information[[right, left]] = information[[left, right]];
+        }
+    }
+    Some((log_likelihood, score, information))
+}
+
+fn poisson_hazard_log_likelihood(
+    design: &[f64],
+    time: &[f64],
+    event: &[i32],
+    parameters: &[f64],
+) -> Option<f64> {
+    let n_params = parameters.len();
+    if n_params == 0 || design.len() != time.len().checked_mul(n_params)? {
+        return None;
+    }
+    let mut log_likelihood = 0.0;
+    for ((row, &exposure), &outcome) in design.chunks_exact(n_params).zip(time).zip(event) {
+        let linear_predictor = row
+            .iter()
+            .zip(parameters)
+            .map(|(&value, &parameter)| value * parameter)
+            .sum::<f64>();
+        if !linear_predictor.is_finite() || linear_predictor > 700.0 {
+            return None;
+        }
+        let mean = exposure * linear_predictor.exp();
+        log_likelihood += outcome as f64 * linear_predictor - mean;
+        if !log_likelihood.is_finite() {
+            return None;
+        }
+    }
+    Some(log_likelihood)
+}
+
+fn fit_poisson_hazard(
+    design: &[f64],
+    time: &[f64],
+    event: &[i32],
+    mut parameters: Vec<f64>,
+) -> PyResult<PoissonHazardFit> {
+    const MAX_ITERATIONS: usize = 100;
+    const SCORE_TOLERANCE: f64 = 1e-8;
+    const MIN_STEP_SCALE: f64 = 9.313_225_746_154_785e-10;
+
+    let event_count = event.iter().map(|&value| value as f64).sum::<f64>();
+    let mut n_iterations = 0;
+    let mut converged = false;
+    for iteration in 0..MAX_ITERATIONS {
+        n_iterations = iteration + 1;
+        let (current_log_likelihood, score, information) =
+            poisson_hazard_state(design, time, event, &parameters).ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err(
+                    "spline hazard likelihood became non-finite",
+                )
+            })?;
+        let max_score = score.iter().map(|value| value.abs()).fold(0.0, f64::max);
+        if max_score <= SCORE_TOLERANCE * (1.0 + event_count) {
+            converged = true;
+            break;
+        }
+
+        let step = regularized_lu_solve(&information, &score).map_err(|_| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "spline hazard information matrix is singular",
+            )
+        })?;
+        let directional_derivative = score.dot(&step);
+        if !directional_derivative.is_finite() || directional_derivative <= 0.0 {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "spline hazard optimizer could not find an ascent direction",
+            ));
+        }
+
+        let mut scale = 1.0;
+        let mut accepted = None;
+        while scale >= MIN_STEP_SCALE {
+            let candidate: Vec<f64> = parameters
+                .iter()
+                .zip(step.iter())
+                .map(|(&parameter, &increment)| parameter + scale * increment)
+                .collect();
+            if let Some(candidate_log_likelihood) =
+                poisson_hazard_log_likelihood(design, time, event, &candidate)
+                && candidate_log_likelihood
+                    >= current_log_likelihood + 1e-4 * scale * directional_derivative
+            {
+                accepted = Some(candidate);
+                break;
+            }
+            scale *= 0.5;
+        }
+
+        let Some(candidate) = accepted else {
+            break;
+        };
+        parameters = candidate;
+    }
+
+    let (log_likelihood, score, information) =
+        poisson_hazard_state(design, time, event, &parameters).ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("spline hazard likelihood became non-finite")
+        })?;
+    let max_score = score.iter().map(|value| value.abs()).fold(0.0, f64::max);
+    converged |= max_score <= SCORE_TOLERANCE * (1.0 + event_count);
+
+    Ok(PoissonHazardFit {
+        parameters,
+        information,
+        log_likelihood,
+        n_iterations,
+        converged,
+    })
+}
+
+fn information_standard_errors(information: &Array2<f64>) -> PyResult<Vec<f64>> {
+    let inverse = matrix_inverse(information).or_else(|| {
+        let scale = information
+            .diag()
+            .iter()
+            .map(|value| value.abs())
+            .fold(0.0_f64, f64::max)
+            .max(1.0);
+        (0..8).find_map(|power| {
+            let mut regularized = information.clone();
+            let ridge = scale * 10.0_f64.powi(power - 12);
+            for idx in 0..regularized.nrows() {
+                regularized[[idx, idx]] += ridge;
+            }
+            matrix_inverse(&regularized)
+        })
+    });
+    let inverse = inverse.ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "spline hazard information matrix could not be inverted",
+        )
+    })?;
+    inverse
+        .diag()
+        .iter()
+        .map(|&variance| {
+            if variance.is_finite() && variance >= 0.0 {
+                Ok(variance.sqrt())
+            } else {
+                Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "spline hazard information matrix produced an invalid variance",
+                ))
+            }
+        })
+        .collect()
+}
+
 #[pyfunction]
 #[pyo3(signature = (time, event, covariates, config=None))]
 pub fn flexible_parametric_model(
@@ -234,168 +503,100 @@ pub fn flexible_parametric_model(
     };
 
     let n = time.len();
-    if n < 10 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "Need at least 10 observations",
-        ));
-    }
+    let p = validate_flexible_parametric_inputs(&time, &event, &covariates)?;
+    let log_time: Vec<f64> = time.iter().map(|t| t.ln()).collect();
 
-    let p = if !covariates.is_empty() && !covariates[0].is_empty() {
-        covariates[0].len()
-    } else {
-        0
-    };
-
-    let log_time: Vec<f64> = time.iter().map(|t| t.max(0.001).ln()).collect();
-
-    let knots = compute_knots(&log_time, &event, &config);
+    let knots = compute_knots(&log_time, &event, &config)?;
     let n_spline = knots.len() + config.degree - 1;
-
     let spline_basis = compute_bspline_basis(&log_time, &knots, config.degree);
-
-    let mut beta: Vec<f64> = vec![0.0; p];
-    let mut gamma: Vec<f64> = vec![0.0; n_spline];
-    let mut converged = false;
-    let mut n_iterations = 0;
-
-    let learning_rate = 0.01;
-    let max_iter = 500;
-
-    for iter in 0..max_iter {
-        n_iterations = iter + 1;
-
-        let mut eta: Vec<f64> = vec![0.0; n];
-        for i in 0..n {
-            for j in 0..n_spline.min(spline_basis[i].len()) {
-                eta[i] += gamma[j] * spline_basis[i][j];
-            }
-            for j in 0..p {
-                eta[i] += beta[j] * covariates[i][j];
-            }
-        }
-
-        let hazard: Vec<f64> = eta.iter().map(|e| e.exp()).collect();
-
-        let mut _log_lik = 0.0;
-        for i in 0..n {
-            if event[i] == 1 {
-                _log_lik += eta[i];
-            }
-            _log_lik -= hazard[i] * time[i];
-        }
-
-        let mut grad_gamma: Vec<f64> = vec![0.0; n_spline];
-        let mut grad_beta: Vec<f64> = vec![0.0; p];
-
-        for i in 0..n {
-            let residual = event[i] as f64 - hazard[i] * time[i];
-
-            for j in 0..n_spline.min(spline_basis[i].len()) {
-                grad_gamma[j] += spline_basis[i][j] * residual;
-            }
-            for j in 0..p {
-                grad_beta[j] += covariates[i][j] * residual;
-            }
-        }
-
-        let grad_norm: f64 = grad_gamma
-            .iter()
-            .chain(grad_beta.iter())
-            .map(|g| g * g)
-            .sum::<f64>()
-            .sqrt();
-
-        if grad_norm < 1e-6 {
-            converged = true;
-            break;
-        }
-
-        for j in 0..n_spline {
-            gamma[j] += learning_rate * grad_gamma[j];
-        }
-        for j in 0..p {
-            beta[j] += learning_rate * grad_beta[j];
-        }
-    }
-
-    let mut eta: Vec<f64> = vec![0.0; n];
-    for i in 0..n {
-        for j in 0..n_spline.min(spline_basis[i].len()) {
-            eta[i] += gamma[j] * spline_basis[i][j];
-        }
-        for j in 0..p {
-            eta[i] += beta[j] * covariates[i][j];
-        }
-    }
-
-    let hazard: Vec<f64> = eta.iter().map(|e| e.exp()).collect();
-
-    let mut log_lik = 0.0;
-    for i in 0..n {
-        if event[i] == 1 {
-            log_lik += eta[i];
-        }
-        log_lik -= hazard[i] * time[i];
-    }
-
     let n_params = p + n_spline;
-    let aic = -2.0 * log_lik + 2.0 * n_params as f64;
-    let bic = -2.0 * log_lik + (n as f64).ln() * n_params as f64;
+    let mut design = Vec::with_capacity(n * n_params);
+    for row in 0..n {
+        if p > 0 {
+            design.extend_from_slice(&covariates[row]);
+        }
+        design.extend_from_slice(&spline_basis[row]);
+    }
+    let baseline_log_hazard =
+        (event.iter().map(|&value| value as f64).sum::<f64>() / time.iter().sum::<f64>()).ln();
+    let mut initial_parameters = vec![0.0; n_params];
+    initial_parameters[p..].fill(baseline_log_hazard);
+    let fit = fit_poisson_hazard(&design, &time, &event, initial_parameters)?;
+    let std_errors = information_standard_errors(&fit.information)?;
 
-    let std_errors = compute_approximate_se(&beta, &gamma, n);
+    let aic = -2.0 * fit.log_likelihood + 2.0 * n_params as f64;
+    let bic = -2.0 * fit.log_likelihood + (n as f64).ln() * n_params as f64;
 
     Ok(FlexibleParametricResult {
-        coefficients: beta,
-        spline_coefficients: gamma,
+        coefficients: fit.parameters[..p].to_vec(),
+        spline_coefficients: fit.parameters[p..].to_vec(),
         std_errors,
         knots,
-        log_likelihood: log_lik,
+        log_likelihood: fit.log_likelihood,
         aic,
         bic,
-        n_iterations,
-        converged,
+        n_iterations: fit.n_iterations,
+        converged: fit.converged,
     })
 }
 
-fn compute_knots(log_time: &[f64], event: &[i32], config: &SplineConfig) -> Vec<f64> {
-    let event_times: Vec<f64> = log_time
+fn compute_knots(log_time: &[f64], event: &[i32], config: &SplineConfig) -> PyResult<Vec<f64>> {
+    let mut event_times: Vec<f64> = log_time
         .iter()
         .zip(event.iter())
         .filter(|(_, e)| **e == 1)
         .map(|(t, _)| *t)
         .collect();
 
-    if event_times.is_empty() {
-        return vec![0.0; config.n_knots];
-    }
-
-    let mut sorted_times = event_times.clone();
-    sorted_times.sort_by(f64::total_cmp);
+    event_times.sort_by(f64::total_cmp);
 
     let (min_t, max_t) = match &config.boundary_knots {
         Some((l, u)) => (l.ln(), u.ln()),
-        None => (
-            sorted_times.first().cloned().unwrap_or(0.0),
-            sorted_times.last().cloned().unwrap_or(1.0),
+        None => log_time.iter().copied().fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(lower, upper), value| (lower.min(value), upper.max(value)),
         ),
     };
+    if min_t >= max_t {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "time values or boundary_knots must span a non-zero interval",
+        ));
+    }
 
-    match config.knot_placement.as_str() {
+    let mut knots = match config.knot_placement.as_str() {
         "quantile" => (0..config.n_knots)
-            .map(|i| {
-                let q = (i as f64 + 1.0) / (config.n_knots as f64 + 1.0);
-                let idx = (q * (sorted_times.len() as f64 - 1.0)).round() as usize;
-                sorted_times[idx.min(sorted_times.len() - 1)]
+            .map(|idx| {
+                if idx == 0 {
+                    return min_t;
+                }
+                if idx + 1 == config.n_knots {
+                    return max_t;
+                }
+                let q = idx as f64 / (config.n_knots - 1) as f64;
+                let position = q * (event_times.len() - 1) as f64;
+                let lower_idx = position.floor() as usize;
+                let upper_idx = position.ceil() as usize;
+                let fraction = position - lower_idx as f64;
+                (event_times[lower_idx]
+                    + fraction * (event_times[upper_idx] - event_times[lower_idx]))
+                    .clamp(min_t, max_t)
             })
-            .collect(),
+            .collect::<Vec<_>>(),
         "equal" => {
-            let step = (max_t - min_t) / (config.n_knots as f64 + 1.0);
+            let step = (max_t - min_t) / (config.n_knots - 1) as f64;
             (0..config.n_knots)
-                .map(|i| min_t + (i as f64 + 1.0) * step)
+                .map(|i| min_t + i as f64 * step)
                 .collect()
         }
         _ => unreachable!("knot_placement is validated before knot computation"),
+    };
+    if knots.windows(2).any(|pair| pair[0] >= pair[1]) {
+        let step = (max_t - min_t) / (config.n_knots - 1) as f64;
+        knots = (0..config.n_knots)
+            .map(|idx| min_t + idx as f64 * step)
+            .collect();
     }
+    Ok(knots)
 }
 
 fn compute_bspline_basis(x: &[f64], knots: &[f64], degree: usize) -> Vec<Vec<f64>> {
@@ -408,7 +609,14 @@ fn compute_bspline_basis(x: &[f64], knots: &[f64], degree: usize) -> Vec<Vec<f64
 
     let mut basis: Vec<Vec<f64>> = vec![vec![0.0; n_basis]; n];
 
+    let lower = knots.first().copied().unwrap_or(0.0);
+    let upper = knots.last().copied().unwrap_or(1.0);
     for (i, &xi) in x.iter().enumerate() {
+        let xi = xi.clamp(lower, upper);
+        if xi == upper {
+            basis[i][n_basis - 1] = 1.0;
+            continue;
+        }
         for (j, basis_val) in basis[i].iter_mut().enumerate().take(n_basis) {
             *basis_val = bspline_basis_value(xi, j, degree, &extended_knots);
         }
@@ -444,19 +652,6 @@ fn bspline_basis_value(x: f64, j: usize, degree: usize, knots: &[f64]) -> f64 {
     }
 
     result
-}
-
-fn compute_approximate_se(beta: &[f64], gamma: &[f64], n: usize) -> Vec<f64> {
-    let mut se = Vec::with_capacity(beta.len() + gamma.len());
-
-    for b in beta {
-        se.push((b.abs() / (n as f64).sqrt()).max(0.01));
-    }
-    for g in gamma {
-        se.push((g.abs() / (n as f64).sqrt()).max(0.01));
-    }
-
-    se
 }
 
 #[pyclass(from_py_object)]
@@ -613,12 +808,13 @@ pub fn predict_hazard_spline(
     eval_times: Vec<f64>,
     covariate_values: Option<Vec<f64>>,
 ) -> PyResult<HazardSplineResult> {
-    validate_hazard_prediction_inputs(&model_result, &eval_times, covariate_values.as_deref())?;
+    let degree =
+        validate_hazard_prediction_inputs(&model_result, &eval_times, covariate_values.as_deref())?;
 
     let n_times = eval_times.len();
 
     let log_times: Vec<f64> = eval_times.iter().map(|t| t.max(0.001).ln()).collect();
-    let spline_basis = compute_bspline_basis(&log_times, &model_result.knots, 3);
+    let spline_basis = compute_bspline_basis(&log_times, &model_result.knots, degree);
 
     let cov_contribution: f64 = match covariate_values.as_deref() {
         Some(cov) => cov
@@ -645,7 +841,9 @@ pub fn predict_hazard_spline(
 
         hazard[i] = log_hazard.exp();
 
-        if i > 0 {
+        if i == 0 {
+            cumulative_hazard[i] = hazard[i] * eval_times[i];
+        } else {
             let dt = eval_times[i] - eval_times[i - 1];
             cumulative_hazard[i] =
                 cumulative_hazard[i - 1] + (hazard[i - 1] + hazard[i]) / 2.0 * dt;
@@ -683,6 +881,84 @@ mod tests {
 
         assert!(!result.knots.is_empty());
         assert!(result.log_likelihood.is_finite());
+        assert!(result.converged);
+        assert!(result.n_iterations < 100);
+        assert!(result.coefficients.iter().all(|value| value.is_finite()));
+        assert!(
+            result
+                .spline_coefficients
+                .iter()
+                .all(|value| value.is_finite())
+        );
+        assert!(
+            result
+                .std_errors
+                .iter()
+                .all(|&value| value.is_finite() && value > 0.0)
+        );
+    }
+
+    #[test]
+    fn poisson_hazard_newton_matches_intercept_only_mle() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let event = vec![1, 0, 1, 0, 1];
+        let design = vec![1.0; time.len()];
+        let expected_parameter = (3.0_f64 / time.iter().sum::<f64>()).ln();
+
+        let fit = fit_poisson_hazard(&design, &time, &event, vec![0.0]).unwrap();
+
+        assert!(fit.converged);
+        assert!((fit.parameters[0] - expected_parameter).abs() <= 1e-10);
+        assert!((fit.information[[0, 0]] - 3.0).abs() <= 1e-10);
+        let standard_errors = information_standard_errors(&fit.information).unwrap();
+        assert!((standard_errors[0] - 1.0 / 3.0_f64.sqrt()).abs() <= 1e-10);
+    }
+
+    #[test]
+    fn flexible_parametric_model_rejects_malformed_inputs() {
+        #[cfg(feature = "python")]
+        pyo3::Python::initialize();
+
+        let time: Vec<f64> = (1..=20).map(|value| value as f64).collect();
+        let event: Vec<i32> = (0..20).map(|idx| i32::from(idx % 3 == 0)).collect();
+        let covariates = vec![vec![0.0]; 20];
+
+        assert!(
+            flexible_parametric_model(
+                time.clone(),
+                event[..19].to_vec(),
+                covariates.clone(),
+                None,
+            )
+            .is_err()
+        );
+        let mut invalid_time = time.clone();
+        invalid_time[3] = 0.0;
+        assert!(
+            flexible_parametric_model(invalid_time, event.clone(), covariates.clone(), None)
+                .is_err()
+        );
+        let mut invalid_event = event.clone();
+        invalid_event[3] = 2;
+        assert!(
+            flexible_parametric_model(time.clone(), invalid_event, covariates.clone(), None)
+                .is_err()
+        );
+        assert!(
+            flexible_parametric_model(time.clone(), vec![0; 20], covariates.clone(), None).is_err()
+        );
+        assert!(
+            flexible_parametric_model(
+                time.clone(),
+                event.clone(),
+                covariates[..19].to_vec(),
+                None,
+            )
+            .is_err()
+        );
+        let mut ragged_covariates = covariates;
+        ragged_covariates[4].push(1.0);
+        assert!(flexible_parametric_model(time, event, ragged_covariates, None).is_err());
     }
 
     #[test]
@@ -721,7 +997,7 @@ mod tests {
         assert_eq!(basis.len(), 5);
         for row in &basis {
             let sum: f64 = row.iter().sum();
-            assert!(sum >= 0.0);
+            assert!((sum - 1.0).abs() <= 1e-12);
         }
     }
 
@@ -744,6 +1020,8 @@ mod tests {
         for s in &result.survival {
             assert!(*s >= 0.0 && *s <= 1.0);
         }
+        assert!(result.survival[0] < 1.0);
+        assert!(result.survival.windows(2).all(|pair| pair[1] <= pair[0]));
     }
 
     #[test]
@@ -773,13 +1051,16 @@ mod tests {
         assert!(predict_hazard_spline(nonfinite_model, vec![1.0, 2.0], Some(vec![0.5])).is_err());
 
         let mut mismatched_model = model;
-        mismatched_model.spline_coefficients.pop();
+        mismatched_model
+            .spline_coefficients
+            .truncate(mismatched_model.knots.len() - 1);
         assert!(predict_hazard_spline(mismatched_model, vec![1.0, 2.0], Some(vec![0.5])).is_err());
     }
 
     #[test]
     fn test_spline_config_validates_options() {
         assert!(SplineConfig::new(0, 3, "quantile".to_string(), None).is_err());
+        assert!(SplineConfig::new(1, 3, "quantile".to_string(), None).is_err());
         assert!(SplineConfig::new(3, 0, "quantile".to_string(), None).is_err());
         assert!(SplineConfig::new(3, 3, "unknown".to_string(), None).is_err());
         assert!(SplineConfig::new(3, 3, "quantile".to_string(), Some((0.0, 5.0))).is_err());

@@ -1,6 +1,7 @@
 use std::hint::black_box;
 use survival::regression::{
-    CoxPHModel, aareg_fit, agexact, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg,
+    CoxPHModel, SplineConfig, aareg_fit, agexact, cch_borgan_fit, cch_fit, coxph_fit, finegray,
+    flexible_parametric_model, survreg,
 };
 use survival::residuals::smooth_schoenfeld;
 use survival::{
@@ -801,6 +802,37 @@ mod schoenfeld_smoothing {
                 "identity",
             )
             .expect("benchmark Schoenfeld smoothing should succeed");
+            black_box(result);
+        });
+    }
+}
+
+mod spline_hazard_bench {
+    use super::*;
+
+    #[divan::bench(args = [100, 500, 1000])]
+    fn flexible_parametric_fit(bencher: divan::Bencher, n: usize) {
+        let time: Vec<f64> = (1..=n).map(|value| value as f64 * 0.1).collect();
+        let event: Vec<i32> = (0..n).map(|idx| i32::from(idx % 3 == 0)).collect();
+        let covariates: Vec<Vec<f64>> = (0..n)
+            .map(|idx| {
+                vec![
+                    (idx % 11) as f64 * 0.1 - 0.5,
+                    (idx % 7) as f64 * 0.15 - 0.45,
+                ]
+            })
+            .collect();
+        let config = SplineConfig::new(4, 3, "quantile".to_string(), None)
+            .expect("benchmark spline configuration should be valid");
+
+        bencher.bench_local(|| {
+            let result = flexible_parametric_model(
+                time.clone(),
+                event.clone(),
+                covariates.clone(),
+                Some(config.clone()),
+            )
+            .expect("benchmark spline hazard fit should succeed");
             black_box(result);
         });
     }
