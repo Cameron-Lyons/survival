@@ -816,6 +816,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "entry_times",
             "nocenter",
             "ridge_penalty",
+            "penalty_matrix",
         ],
         "coxph_detail": [
             "time",
@@ -13112,6 +13113,7 @@ def test_r_api_stub_tracks_fit_control_public_signatures():
             "singular_ok",
             "nocenter",
             "ridge_penalty",
+            "penalty_matrix",
             "control",
         ],
         "survreg": [

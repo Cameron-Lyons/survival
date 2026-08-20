@@ -9459,6 +9459,39 @@ def test_coxph_formula_ridge_calibrates_target_df_against_reference(
     )
 
 
+def test_coxph_quadratic_penalty_matches_pspline_reference():
+    time = [float(value) for value in range(1, 13)]
+    status = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1]
+    x = [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0]
+    spline = survival.pspline(x, theta=0.5, nterm=4)
+
+    fit = survival.coxph(
+        survival.Surv(time, status),
+        x=spline["basis"],
+        penalty_matrix=spline["dmat"],
+        ties="breslow",
+        max_iter=50,
+        eps=1e-10,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [
+            -0.41492053741738832,
+            -0.78864078647868041,
+            -1.03126164890587702,
+            -1.12718264236020893,
+            -1.30622837711029272,
+            -1.52834364408458501,
+        ],
+        abs=1e-9,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-12.619505923287514, -12.317017585688493],
+        abs=1e-9,
+    )
+    assert survival.degrees_freedom(fit) == pytest.approx(1.5042707367453212, abs=1e-9)
+
+
 def test_coxph_formula_ridge_defaults_to_half_the_term_width():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
@@ -9519,6 +9552,19 @@ def test_coxph_ridge_rejects_ambiguous_or_invalid_penalties():
         survival.coxph(response, x=rows, ridge_penalty=[0.2])
     with pytest.raises(ValueError, match="non-negative"):
         survival.coxph(response, x=rows, ridge_penalty=[0.2, -0.1])
+    with pytest.raises(ValueError, match="use only one"):
+        survival.coxph(
+            response,
+            x=rows,
+            ridge_penalty=[0.2, 0.2],
+            penalty_matrix=[[1.0, 0.0], [0.0, 1.0]],
+        )
+    with pytest.raises(ValueError, match="shape"):
+        survival.coxph(response, x=rows, penalty_matrix=[[1.0]])
+    with pytest.raises(ValueError, match="symmetric"):
+        survival.coxph(response, x=rows, penalty_matrix=[[1.0, 0.0], [1.0, 1.0]])
+    with pytest.raises(ValueError, match="positive semidefinite"):
+        survival.coxph(response, x=rows, penalty_matrix=[[1.0, 2.0], [2.0, 1.0]])
     for option, message in (("df=0", "between"), ("df=3", "between"), ("eps=0", "positive")):
         with pytest.raises(ValueError, match=message):
             survival.coxph(

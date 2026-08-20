@@ -109,6 +109,7 @@ pub fn wlw_model(
         None,
         None,
         None,
+        None,
     )?;
     let beta = fit.coefficients.first().cloned().unwrap_or_default();
     let covariance = fit.information_matrix.clone();

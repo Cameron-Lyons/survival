@@ -626,8 +626,81 @@ fn validate_method_weights(method: CoxMethod, weights: Option<&[f64]>) -> PyResu
     Ok(())
 }
 
+fn validate_penalty_matrix(values: &[Vec<f64>], nvar: usize) -> PyResult<Array2<f64>> {
+    if values.len() != nvar || values.iter().any(|row| row.len() != nvar) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "penalty_matrix must have shape ({nvar}, {nvar})"
+        )));
+    }
+    for (row_index, row) in values.iter().enumerate() {
+        validate_finite_values(&format!("penalty_matrix[{row_index}]"), row)?;
+    }
+
+    let scale = values
+        .iter()
+        .flatten()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    let tolerance = 1e-10 * scale.max(f64::MIN_POSITIVE);
+    let mut matrix = Array2::zeros((nvar, nvar));
+    for row in 0..nvar {
+        for column in 0..nvar {
+            let left = values[row][column];
+            let right = values[column][row];
+            if (left - right).abs() > tolerance {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "penalty_matrix must be symmetric",
+                ));
+            }
+            matrix[(row, column)] = 0.5 * (left + right);
+        }
+    }
+
+    // A diagonally pivoted LDL decomposition accepts positive-semidefinite
+    // matrices, including rank-deficient and badly scaled difference penalties.
+    let mut factor = matrix.clone();
+    for pivot_index in 0..nvar {
+        let largest_diagonal = (pivot_index..nvar)
+            .max_by(|&left, &right| factor[(left, left)].total_cmp(&factor[(right, right)]))
+            .unwrap_or(pivot_index);
+        if largest_diagonal != pivot_index {
+            for column in 0..nvar {
+                factor.swap((pivot_index, column), (largest_diagonal, column));
+            }
+            for row in 0..nvar {
+                factor.swap((row, pivot_index), (row, largest_diagonal));
+            }
+        }
+        let pivot = factor[(pivot_index, pivot_index)];
+        if pivot < -tolerance {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "penalty_matrix must be positive semidefinite",
+            ));
+        }
+        if pivot <= tolerance {
+            if (pivot_index..nvar).any(|row| {
+                (pivot_index..nvar).any(|column| factor[(row, column)].abs() > tolerance)
+            }) {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "penalty_matrix must be positive semidefinite",
+                ));
+            }
+            continue;
+        }
+        for row in (pivot_index + 1)..nvar {
+            for column in row..nvar {
+                let updated = factor[(row, column)]
+                    - factor[(row, pivot_index)] * factor[(column, pivot_index)] / pivot;
+                factor[(row, column)] = updated;
+                factor[(column, row)] = updated;
+            }
+        }
+    }
+    Ok(matrix)
+}
+
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None, ridge_penalty=None))]
+#[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None, ridge_penalty=None, penalty_matrix=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_fit(
     time: Vec<f64>,
@@ -644,6 +717,7 @@ pub fn coxph_fit(
     entry_times: Option<Vec<f64>>,
     nocenter: Option<Vec<f64>>,
     ridge_penalty: Option<Vec<f64>>,
+    penalty_matrix: Option<Vec<Vec<f64>>>,
 ) -> PyResult<CoxPHFit> {
     let n = time.len();
     if n == 0 {
@@ -740,6 +814,15 @@ pub fn coxph_fit(
             ));
         }
     }
+    if ridge_penalty.is_some() && penalty_matrix.is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "use only one of ridge_penalty or penalty_matrix",
+        ));
+    }
+    let penalty_matrix = penalty_matrix
+        .as_deref()
+        .map(|values| validate_penalty_matrix(values, nvar))
+        .transpose()?;
     if let Some(value) = eps
         && (!value.is_finite() || value <= 0.0)
     {
@@ -830,6 +913,8 @@ pub fn coxph_fit(
     })?;
     if let Some(values) = ridge_penalty.as_ref() {
         cox_fit.set_ridge_penalty(values);
+    } else if let Some(values) = penalty_matrix.as_ref() {
+        cox_fit.set_quadratic_penalty(values);
     }
     cox_fit
         .fit()
@@ -852,13 +937,23 @@ pub fn coxph_fit(
         .outer_iter()
         .map(|row| row.iter().copied().collect())
         .collect::<Vec<Vec<f64>>>();
-    let degrees_of_freedom = match ridge_penalty.as_ref() {
-        Some(penalty) => (0..nvar)
+    let degrees_of_freedom = if let Some(penalty) = ridge_penalty.as_ref() {
+        (0..nvar)
             .map(|column| (1.0 - penalty[column] * information_matrix[column][column]).max(0.0))
-            .sum(),
-        None => (0..nvar)
+            .sum()
+    } else if let Some(penalty) = penalty_matrix.as_ref() {
+        let trace = (0..nvar)
+            .flat_map(|row| {
+                let information_matrix = &information_matrix;
+                (0..nvar)
+                    .map(move |column| penalty[(row, column)] * information_matrix[column][row])
+            })
+            .sum::<f64>();
+        (nvar as f64 - trace).clamp(0.0, nvar as f64)
+    } else {
+        (0..nvar)
             .filter(|&column| information_matrix[column][column] != 0.0)
-            .count() as f64,
+            .count() as f64
     };
 
     Ok(CoxPHFit {
@@ -1127,6 +1222,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("default-control Efron fit should succeed");
 
@@ -1168,6 +1264,7 @@ mod tests {
             None,
             None,
             Some(vec![0.2, 0.2]),
+            None,
         )
         .expect("ridge-penalized fit should succeed");
 
@@ -1187,6 +1284,73 @@ mod tests {
             &fit.log_likelihood,
             &[-8.034_979_350_644_857, -3.234_095_317_374_364_5],
         );
+    }
+
+    #[test]
+    fn quadratic_penalty_matches_r_pspline_reference_fit() {
+        let time = (1..=12).map(f64::from).collect();
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1];
+        let x = vec![1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0];
+        let (full_basis, _) = crate::core::pspline::pspline_basis_core(&x, 4, 3, (0.2, 1.8))
+            .expect("P-spline basis should be valid");
+        let covariates = full_basis
+            .into_iter()
+            .map(|row| row.into_iter().skip(1).collect())
+            .collect();
+        let penalty = vec![
+            vec![5.0, -4.0, 1.0, 0.0, 0.0, 0.0],
+            vec![-4.0, 6.0, -4.0, 1.0, 0.0, 0.0],
+            vec![1.0, -4.0, 6.0, -4.0, 1.0, 0.0],
+            vec![0.0, 1.0, -4.0, 6.0, -4.0, 1.0],
+            vec![0.0, 0.0, 1.0, -4.0, 5.0, -2.0],
+            vec![0.0, 0.0, 0.0, 1.0, -2.0, 1.0],
+        ];
+
+        let fit = coxph_fit(
+            time,
+            status,
+            covariates,
+            None,
+            None,
+            None,
+            None,
+            Some(50),
+            Some(1e-10),
+            None,
+            Some("breslow"),
+            None,
+            None,
+            None,
+            Some(penalty),
+        )
+        .expect("quadratic-penalized fit should succeed");
+
+        assert_close_vec(
+            &fit.coefficients[0],
+            &[
+                -0.414_920_537_417_388_3,
+                -0.788_640_786_478_680_4,
+                -1.031_261_648_905_877,
+                -1.127_182_642_360_209,
+                -1.306_228_377_110_292_7,
+                -1.528_343_644_084_585,
+            ],
+        );
+        assert_close_vec(
+            &fit.log_likelihood,
+            &[-12.619_505_923_287_514, -12.317_017_585_688_493],
+        );
+        assert!((fit.degrees_of_freedom - 1.504_270_736_745_321_2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn quadratic_penalty_validation_rejects_invalid_matrices() {
+        assert!(validate_penalty_matrix(&[vec![1.0, -1.0], vec![-1.0, 1.0]], 2).is_ok());
+        assert!(validate_penalty_matrix(&[vec![1e-12, 1e-6], vec![1e-6, 1.0]], 2).is_ok());
+        assert!(validate_penalty_matrix(&[vec![1.0], vec![0.0]], 2).is_err());
+        assert!(validate_penalty_matrix(&[vec![1.0, 0.0], vec![1.0, 1.0]], 2).is_err());
+        assert!(validate_penalty_matrix(&[vec![1.0, 2.0], vec![2.0, 1.0]], 2).is_err());
+        assert!(validate_penalty_matrix(&[vec![1e-12, 2e-12], vec![2e-12, 1e-12]], 2).is_err());
     }
 
     #[test]
@@ -1244,6 +1408,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("tied Cox fit should succeed");
             let actual = fit
@@ -1265,6 +1430,7 @@ mod tests {
             None,
             Some("efron"),
             Some(vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0, 4.0]),
+            None,
             None,
             None,
         )
@@ -1318,6 +1484,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("near-collinear fit should succeed")
         };
@@ -1360,6 +1527,7 @@ mod tests {
             None,
             None,
             Some("breslow"),
+            None,
             None,
             None,
             None,

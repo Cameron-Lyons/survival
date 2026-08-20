@@ -151,6 +151,7 @@ pub fn pwp_model(
         entry_times,
         None,
         None,
+        None,
     )?;
     let beta = fit.coefficients.first().cloned().unwrap_or_default();
     let covariance = fit.information_matrix.clone();
