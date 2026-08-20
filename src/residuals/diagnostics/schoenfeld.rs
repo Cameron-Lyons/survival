@@ -105,35 +105,37 @@ pub fn smooth_schoenfeld(
     let mut smoothed: Vec<Vec<f64>> = vec![vec![0.0; n_covariates]; n_events];
     let mut coefficient_path: Vec<Vec<f64>> = vec![vec![0.0; n_covariates]; n_events];
 
-    for i in 0..n_events {
+    for (i, (smoothed_row, coefficient_row)) in smoothed
+        .iter_mut()
+        .zip(coefficient_path.iter_mut())
+        .enumerate()
+    {
         let t_i = transformed_times[i];
+        let mut sum_w = 0.0;
+        let mut sum_wy = vec![0.0; n_covariates];
 
-        for j in 0..n_covariates {
-            let mut sum_w = 0.0;
-            let mut sum_wy = 0.0;
-            let mut _sum_wty = 0.0;
-            let mut _sum_wt = 0.0;
-            let mut _sum_wtt = 0.0;
-
-            for k in 0..n_events {
-                let t_k = transformed_times[k];
-                let diff = (t_i - t_k) / h;
-                let w = (-0.5 * diff * diff).exp();
-
-                let y = schoenfeld_residuals[k * n_covariates + j];
-
-                sum_w += w;
-                sum_wy += w * y;
-                _sum_wty += w * t_k * y;
-                _sum_wt += w * t_k;
-                _sum_wtt += w * t_k * t_k;
+        for (k, &t_k) in transformed_times.iter().enumerate() {
+            let diff = (t_i - t_k) / h;
+            let weight = (-0.5 * diff * diff).exp();
+            sum_w += weight;
+            let residual_row = &schoenfeld_residuals
+                [k * n_covariates..(k + 1) * n_covariates];
+            for (weighted_sum, &residual) in sum_wy.iter_mut().zip(residual_row) {
+                *weighted_sum += weight * residual;
             }
+        }
 
-            if sum_w > 1e-10 {
-                let y_mean = sum_wy / sum_w;
-                smoothed[i][j] = y_mean;
-
-                coefficient_path[i][j] = coefficients[j] + y_mean;
+        if sum_w > 1e-10 {
+            for (((smoothed_value, coefficient_value), &weighted_sum), &coefficient) in
+                smoothed_row
+                    .iter_mut()
+                    .zip(coefficient_row.iter_mut())
+                    .zip(&sum_wy)
+                    .zip(&coefficients)
+            {
+                let mean = weighted_sum / sum_w;
+                *smoothed_value = mean;
+                *coefficient_value = coefficient + mean;
             }
         }
     }

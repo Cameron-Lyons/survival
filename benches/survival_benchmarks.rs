@@ -2,6 +2,7 @@ use std::hint::black_box;
 use survival::regression::{
     CoxPHModel, aareg_fit, agexact, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg,
 };
+use survival::residuals::smooth_schoenfeld;
 use survival::{
     KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
     nelson_aalen, pseudo, uno_c_index, weighted_logrank_test,
@@ -769,6 +770,38 @@ mod cox_regression {
         bencher.bench_local(|| {
             let variance = black_box(&model).vcov();
             black_box(variance);
+        });
+    }
+}
+
+mod schoenfeld_smoothing {
+    use super::*;
+
+    #[divan::bench(args = [100, 500, 1000])]
+    fn gaussian_smoothing(bencher: divan::Bencher, n_events: usize) {
+        const N_COVARIATES: usize = 8;
+        let event_times: Vec<f64> = (0..n_events)
+            .map(|idx| idx as f64 * 0.25 + (idx % 7) as f64 * 0.01)
+            .collect();
+        let residuals: Vec<f64> = (0..n_events)
+            .flat_map(|event| {
+                (0..N_COVARIATES)
+                    .map(move |covariate| ((event * (covariate + 3)) % 17) as f64 * 0.02 - 0.16)
+            })
+            .collect();
+        let coefficients = vec![0.1; N_COVARIATES];
+
+        bencher.bench_local(|| {
+            let result = smooth_schoenfeld(
+                event_times.clone(),
+                residuals.clone(),
+                N_COVARIATES,
+                coefficients.clone(),
+                None,
+                "identity",
+            )
+            .expect("benchmark Schoenfeld smoothing should succeed");
+            black_box(result);
         });
     }
 }
