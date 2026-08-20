@@ -381,6 +381,29 @@ def test_finegray_regression_and_cif_public_api():
     assert len(cif.times) == len(cif.cif)
 
 
+def test_finegray_regression_matches_reference_expansion_fit():
+    x1 = [0.2, -1.0, 0.7, 0.0, -0.6, 1.1, -0.2, 0.5, 1.2, -0.8, 0.3, -1.1, 0.9, -0.4]
+    x2 = [1.0, 0.4, -0.9, 0.2, 0.8, -0.5, 1.1, -0.3, 0.6, 1.3, -0.7, 0.5, -1.2, 0.1]
+    time = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 7.0, 8.0, 9.0]
+    status = [1, 2, 1, 0, 1, 1, 1, 0, 1, 2, 1, 0, 2, 1]
+
+    result = survival.finegray_regression(
+        time,
+        status,
+        [list(row) for row in zip(x1, x2, strict=True)],
+        1,
+        max_iter=100,
+        eps=1e-9,
+    )
+
+    assert result.coefficients == pytest.approx([0.9262513307123474, 0.6708780177415743], abs=1e-9)
+    assert result.std_errors == pytest.approx([0.5333226364854614, 0.5259212543997720], abs=1e-9)
+    assert result.log_likelihood_null == pytest.approx(-17.242724975366503, abs=1e-9)
+    assert result.log_likelihood == pytest.approx(-15.740994444075035, abs=1e-9)
+    assert result.convergence
+    assert result.iterations <= 5
+
+
 def test_finegray_regression_and_cif_validate_public_inputs():
     with pytest.raises(ValueError, match="time must not be empty"):
         survival.finegray_regression([], [], [], 1)

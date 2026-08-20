@@ -1,13 +1,14 @@
 use pyo3::prelude::*;
-use rayon::prelude::*;
 use std::fmt;
 
 use crate::constants::{
-    IPCW_SURVIVAL_FLOOR, PARALLEL_THRESHOLD_LARGE, Z_SCORE_90, Z_SCORE_95, Z_SCORE_99,
-    clamped_normal_ci_bounds, exp_clamped, normal_ci_bounds_95, same_time,
+    IPCW_SURVIVAL_FLOOR, Z_SCORE_90, Z_SCORE_95, Z_SCORE_99, clamped_normal_ci_bounds, exp_clamped,
+    normal_ci_bounds_95, same_time,
 };
 use crate::internal::matrix::invert_matrix;
-use crate::internal::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
+#[cfg(test)]
+use crate::internal::statistical::compute_censoring_km;
+use crate::internal::statistical::normal_cdf;
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
@@ -217,44 +218,38 @@ pub(crate) fn finegray_regression_core(
         .count();
     let n_censored = status.iter().filter(|&&s| s == 0).count();
 
-    let (km_times, km_values) = compute_censoring_km(time, status);
-
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
+    let event_groups = target_event_groups(&indices, time, status, event_type);
+    let censoring_survival = censoring_survival_before(&indices, time, status);
 
     let mut beta = vec![0.0; p];
     let mut converged = false;
     let mut iterations = 0;
 
-    let event_indices: Vec<usize> = indices
-        .iter()
-        .filter(|&&i| status[i] == event_type)
-        .copied()
-        .collect();
-
-    let log_likelihood_null = compute_log_likelihood(
-        &event_indices,
+    let (_, _, log_likelihood_null) = compute_gradient_hessian(
+        &event_groups,
         &vec![0.0; p],
         time,
         status,
         covariates,
         event_type,
-        &km_times,
-        &km_values,
+        &indices,
+        &censoring_survival,
     );
 
     for iter in 0..max_iter {
         iterations = iter + 1;
 
         let (gradient, hessian, _ll) = compute_gradient_hessian(
-            &event_indices,
+            &event_groups,
             &beta,
             time,
             status,
             covariates,
             event_type,
-            &km_times,
-            &km_values,
+            &indices,
+            &censoring_survival,
         );
 
         let neg_hessian: Vec<Vec<f64>> = hessian
@@ -286,26 +281,15 @@ pub(crate) fn finegray_regression_core(
         }
     }
 
-    let log_likelihood = compute_log_likelihood(
-        &event_indices,
+    let (_, hessian, log_likelihood) = compute_gradient_hessian(
+        &event_groups,
         &beta,
         time,
         status,
         covariates,
         event_type,
-        &km_times,
-        &km_values,
-    );
-
-    let (_, hessian, _) = compute_gradient_hessian(
-        &event_indices,
-        &beta,
-        time,
-        status,
-        covariates,
-        event_type,
-        &km_times,
-        &km_values,
+        &indices,
+        &censoring_survival,
     );
 
     let neg_hessian: Vec<Vec<f64>> = hessian
@@ -358,182 +342,184 @@ pub(crate) fn finegray_regression_core(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn compute_log_likelihood(
-    event_indices: &[usize],
-    beta: &[f64],
+fn target_event_groups(
+    sorted_indices: &[usize],
     time: &[f64],
     status: &[i32],
-    covariates: &[Vec<f64>],
     event_type: i32,
-    km_times: &[f64],
-    km_values: &[f64],
-) -> f64 {
-    let n = time.len();
-    let p = beta.len();
+) -> Vec<Vec<usize>> {
+    let event_indices = sorted_indices
+        .iter()
+        .copied()
+        .filter(|&idx| status[idx] == event_type)
+        .collect::<Vec<_>>();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for idx in event_indices {
+        if groups
+            .last()
+            .is_some_and(|group| same_time(time[group[0]], time[idx]))
+        {
+            groups.last_mut().expect("event group exists").push(idx);
+        } else {
+            groups.push(vec![idx]);
+        }
+    }
+    groups
+}
 
-    let mut ll = 0.0;
+fn censoring_survival_before(sorted_indices: &[usize], time: &[f64], status: &[i32]) -> Vec<f64> {
+    let mut survival_before = vec![1.0; time.len()];
+    let mut survival = 1.0;
+    let mut at_risk = time.len();
+    let mut group_start = 0;
 
-    for &i in event_indices {
-        let t_i = time[i];
-
-        let mut eta_i = 0.0;
-        for k in 0..p {
-            eta_i += beta[k] * covariates[i][k];
+    while group_start < sorted_indices.len() {
+        let group_time = time[sorted_indices[group_start]];
+        let mut group_end = group_start + 1;
+        while group_end < sorted_indices.len()
+            && same_time(time[sorted_indices[group_end]], group_time)
+        {
+            group_end += 1;
         }
 
-        let mut sum_exp_eta = 0.0;
-        for j in 0..n {
-            let in_risk_set = if status[j] == 0 || status[j] == event_type {
-                time[j] >= t_i
-            } else {
-                true
-            };
-
-            if in_risk_set {
-                let mut eta_j = 0.0;
-                for k in 0..p {
-                    eta_j += beta[k] * covariates[j][k];
-                }
-
-                let weight = if status[j] != 0 && status[j] != event_type && time[j] < t_i {
-                    let g_ti = km_step_prob_at(t_i, km_times, km_values).max(IPCW_SURVIVAL_FLOOR);
-                    let g_tj =
-                        km_step_prob_at(time[j], km_times, km_values).max(IPCW_SURVIVAL_FLOOR);
-                    g_ti / g_tj
-                } else {
-                    1.0
-                };
-
-                sum_exp_eta += weight * exp_clamped(eta_j);
-            }
+        let group = &sorted_indices[group_start..group_end];
+        for &idx in group {
+            survival_before[idx] = survival;
         }
-
-        ll += eta_i - sum_exp_eta.ln();
+        let censored = group.iter().filter(|&&idx| status[idx] == 0).count();
+        let failures = group.len() - censored;
+        let censoring_risk = at_risk.saturating_sub(failures);
+        if censored > 0 && censoring_risk > 0 {
+            survival *= 1.0 - censored as f64 / censoring_risk as f64;
+        }
+        at_risk -= group.len();
+        group_start = group_end;
     }
 
-    ll
+    survival_before
+}
+
+#[derive(Clone)]
+struct RiskMoments {
+    scalar: f64,
+    first: Vec<f64>,
+    second: Vec<Vec<f64>>,
+}
+
+impl RiskMoments {
+    fn new(n_vars: usize) -> Self {
+        Self {
+            scalar: 0.0,
+            first: vec![0.0; n_vars],
+            second: vec![vec![0.0; n_vars]; n_vars],
+        }
+    }
+
+    fn add(&mut self, covariates: &[f64], weighted_risk: f64) {
+        self.scalar += weighted_risk;
+        for (column, &value) in covariates.iter().enumerate() {
+            self.first[column] += weighted_risk * value;
+            for (other_column, &other_value) in covariates.iter().enumerate() {
+                self.second[column][other_column] += weighted_risk * value * other_value;
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn compute_gradient_hessian(
-    event_indices: &[usize],
+    event_groups: &[Vec<usize>],
     beta: &[f64],
     time: &[f64],
     status: &[i32],
     covariates: &[Vec<f64>],
     event_type: i32,
-    km_times: &[f64],
-    km_values: &[f64],
+    sorted_indices: &[usize],
+    censoring_survival: &[f64],
 ) -> (Vec<f64>, Vec<Vec<f64>>, f64) {
-    let n = time.len();
-    let p = beta.len();
+    let n_vars = beta.len();
+    let linear_predictors = covariates
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(beta)
+                .map(|(&value, &coefficient)| value * coefficient)
+                .sum::<f64>()
+        })
+        .collect::<Vec<_>>();
+    let risk_scores = linear_predictors
+        .iter()
+        .map(|&value| exp_clamped(value))
+        .collect::<Vec<_>>();
 
-    let mut gradient = vec![0.0; p];
-    let mut hessian = vec![vec![0.0; p]; p];
-    let mut ll = 0.0;
-
-    let compute_event_contribution = |i: usize| -> (Vec<f64>, Vec<Vec<f64>>, f64) {
-        let t_i = time[i];
-        let mut local_grad = vec![0.0; p];
-        let mut local_hess = vec![vec![0.0; p]; p];
-
-        let mut eta_i = 0.0;
-        for k in 0..p {
-            eta_i += beta[k] * covariates[i][k];
-        }
-
-        let mut s0 = 0.0;
-        let mut s1 = vec![0.0; p];
-        let mut s2 = vec![vec![0.0; p]; p];
-
-        for j in 0..n {
-            let in_risk_set = if status[j] == 0 || status[j] == event_type {
-                time[j] >= t_i
-            } else {
-                true
-            };
-
-            if in_risk_set {
-                let mut eta_j = 0.0;
-                for k in 0..p {
-                    eta_j += beta[k] * covariates[j][k];
-                }
-
-                let weight = if status[j] != 0 && status[j] != event_type && time[j] < t_i {
-                    let g_ti = km_step_prob_at(t_i, km_times, km_values).max(IPCW_SURVIVAL_FLOOR);
-                    let g_tj =
-                        km_step_prob_at(time[j], km_times, km_values).max(IPCW_SURVIVAL_FLOOR);
-                    g_ti / g_tj
-                } else {
-                    1.0
-                };
-
-                let exp_eta = exp_clamped(eta_j);
-                let w_exp = weight * exp_eta;
-
-                s0 += w_exp;
-
-                for k in 0..p {
-                    s1[k] += w_exp * covariates[j][k];
-                }
-
-                for k in 0..p {
-                    for l in 0..p {
-                        s2[k][l] += w_exp * covariates[j][k] * covariates[j][l];
-                    }
-                }
+    let mut competing_prefixes = Vec::with_capacity(event_groups.len());
+    let mut competing_prefix = RiskMoments::new(n_vars);
+    let mut row_cursor = 0;
+    for group in event_groups {
+        let event_time = time[group[0]];
+        while row_cursor < sorted_indices.len()
+            && time[sorted_indices[row_cursor]] < event_time
+            && !same_time(time[sorted_indices[row_cursor]], event_time)
+        {
+            let idx = sorted_indices[row_cursor];
+            if status[idx] != 0 && status[idx] != event_type {
+                let normalized_risk =
+                    risk_scores[idx] / censoring_survival[idx].max(IPCW_SURVIVAL_FLOOR);
+                competing_prefix.add(&covariates[idx], normalized_risk);
             }
+            row_cursor += 1;
         }
-
-        let local_ll = eta_i - s0.ln();
-
-        for k in 0..p {
-            local_grad[k] = covariates[i][k] - s1[k] / s0;
-        }
-
-        for k in 0..p {
-            for l in 0..p {
-                local_hess[k][l] = -(s2[k][l] / s0 - (s1[k] / s0) * (s1[l] / s0));
-            }
-        }
-
-        (local_grad, local_hess, local_ll)
-    };
-
-    if event_indices.len() > PARALLEL_THRESHOLD_LARGE {
-        let results: Vec<_> = event_indices
-            .par_iter()
-            .map(|&i| compute_event_contribution(i))
-            .collect();
-
-        for (local_grad, local_hess, local_ll) in results {
-            ll += local_ll;
-            for k in 0..p {
-                gradient[k] += local_grad[k];
-            }
-            for k in 0..p {
-                for l in 0..p {
-                    hessian[k][l] += local_hess[k][l];
-                }
-            }
-        }
-    } else {
-        for &i in event_indices {
-            let (local_grad, local_hess, local_ll) = compute_event_contribution(i);
-            ll += local_ll;
-            for k in 0..p {
-                gradient[k] += local_grad[k];
-            }
-            for k in 0..p {
-                for l in 0..p {
-                    hessian[k][l] += local_hess[k][l];
-                }
-            }
-        }
+        competing_prefixes.push(competing_prefix.clone());
     }
 
-    (gradient, hessian, ll)
+    let mut gradient = vec![0.0; n_vars];
+    let mut hessian = vec![vec![0.0; n_vars]; n_vars];
+    let mut log_likelihood = 0.0;
+    let mut ordinary_risk = RiskMoments::new(n_vars);
+    let mut reverse_cursor = sorted_indices.len();
+
+    for (group_idx, group) in event_groups.iter().enumerate().rev() {
+        let event_time = time[group[0]];
+        while reverse_cursor > 0 {
+            let idx = sorted_indices[reverse_cursor - 1];
+            if time[idx] < event_time && !same_time(time[idx], event_time) {
+                break;
+            }
+            ordinary_risk.add(&covariates[idx], risk_scores[idx]);
+            reverse_cursor -= 1;
+        }
+
+        let censoring_weight = censoring_survival[group[0]].max(IPCW_SURVIVAL_FLOOR);
+        let prefix = &competing_prefixes[group_idx];
+        let risk_sum =
+            (ordinary_risk.scalar + censoring_weight * prefix.scalar).max(IPCW_SURVIVAL_FLOOR);
+        let event_count = group.len() as f64;
+        let mut means = vec![0.0; n_vars];
+
+        for column in 0..n_vars {
+            let first = ordinary_risk.first[column] + censoring_weight * prefix.first[column];
+            means[column] = first / risk_sum;
+            let event_covariate_sum = group
+                .iter()
+                .map(|&idx| covariates[idx][column])
+                .sum::<f64>();
+            gradient[column] += event_covariate_sum - event_count * means[column];
+        }
+
+        for column in 0..n_vars {
+            for other_column in 0..n_vars {
+                let second = ordinary_risk.second[column][other_column]
+                    + censoring_weight * prefix.second[column][other_column];
+                hessian[column][other_column] -=
+                    event_count * (second / risk_sum - means[column] * means[other_column]);
+            }
+        }
+
+        log_likelihood += group.iter().map(|&idx| linear_predictors[idx]).sum::<f64>()
+            - event_count * risk_sum.ln();
+    }
+
+    (gradient, hessian, log_likelihood)
 }
 
 pub(crate) fn competing_risks_cif_core(
@@ -791,6 +777,22 @@ mod tests {
     }
 
     #[test]
+    fn censoring_weights_order_tied_failures_before_censoring() {
+        let time: Vec<f64> = vec![1.0, 2.0, 2.0, 3.0, 4.0];
+        let status = vec![1, 1, 0, 0, 2];
+        let mut indices = (0..time.len()).collect::<Vec<_>>();
+        indices.sort_by(|&left, &right| time[left].total_cmp(&time[right]));
+
+        let survival = censoring_survival_before(&indices, &time, &status);
+
+        assert_eq!(survival[0], 1.0);
+        assert_eq!(survival[1], 1.0);
+        assert_eq!(survival[2], 1.0);
+        assert!((survival[3] - 2.0 / 3.0).abs() < 1e-12);
+        assert!((survival[4] - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
     fn test_finegray_no_competing() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 0, 1, 0];
@@ -858,6 +860,7 @@ mod tests {
 
     #[test]
     fn test_finegray_public_api_rejects_malformed_inputs() {
+        pyo3::Python::initialize();
         assert!(
             finegray_regression(vec![], vec![], vec![], 1, 25, 1e-9)
                 .unwrap_err()
@@ -886,6 +889,7 @@ mod tests {
 
     #[test]
     fn test_competing_risks_cif_public_api_rejects_malformed_inputs() {
+        pyo3::Python::initialize();
         assert!(
             competing_risks_cif(vec![1.0], vec![], 1, 0.95)
                 .unwrap_err()
