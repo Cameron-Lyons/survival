@@ -5005,10 +5005,22 @@ def test_survfitaj_binding_is_typed():
         "influence_weights",
     ]
 
-    assert {"SurvFitAJ", "survfit_counting_positions", "survfitaj"} <= stub_names
+    assert {
+        "SurvFitAJ",
+        "survfit_counting_positions",
+        "survfit_initial_indices",
+        "survfit_subject_history",
+        "survfitaj",
+    } <= stub_names
     position_arg_names = ["start", "stop", "id", "tolerance"]
+    initial_arg_names = ["group", "id", "start"]
+    history_arg_names = ["start", "stop", "event", "id", "provided_states", "tolerance"]
     assert list(inspect.signature(core.survfit_counting_positions).parameters) == position_arg_names
     assert _pyi_function_arg_names(stub_path, "survfit_counting_positions") == position_arg_names
+    assert list(inspect.signature(core.survfit_initial_indices).parameters) == initial_arg_names
+    assert _pyi_function_arg_names(stub_path, "survfit_initial_indices") == initial_arg_names
+    assert list(inspect.signature(core.survfit_subject_history).parameters) == history_arg_names
+    assert _pyi_function_arg_names(stub_path, "survfit_subject_history") == history_arg_names
     assert list(inspect.signature(core.survfitaj).parameters) == arg_names
     assert _pyi_function_arg_names(stub_path, "survfitaj") == arg_names
     assert _pyi_class_property_names(stub_path, "SurvFitAJ") == {

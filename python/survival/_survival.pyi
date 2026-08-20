@@ -6247,6 +6247,19 @@ def survfit_counting_positions(
     id: list[int],
     tolerance: float,
 ) -> list[int]: ...
+def survfit_initial_indices(
+    group: list[int],
+    id: list[int],
+    start: list[float] | None = None,
+) -> list[int]: ...
+def survfit_subject_history(
+    start: list[float] | None,
+    stop: list[float],
+    event: list[int | None],
+    id: list[int],
+    provided_states: list[int] | None,
+    tolerance: float,
+) -> list[int]: ...
 def survfitaj(
     y: list[float],
     sort1: list[int],

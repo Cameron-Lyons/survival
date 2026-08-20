@@ -352,6 +352,33 @@ def test_survfit_counting_positions_marks_subject_boundaries():
         survival.survfit_counting_positions([0.0], [1.0], [0], -1.0)
 
 
+def test_survfit_subject_ordering_helpers_preserve_history():
+    current = survival.survfit_subject_history(
+        [1.0, 0.0, 0.0],
+        [2.0, 1.0, 1.0],
+        [0, 2, 0],
+        [0, 0, 1],
+        None,
+        0.0,
+    )
+    assert current == [1, 0, 0]
+    assert survival.survfit_initial_indices(
+        [1, 0, 0, 1],
+        [0, 0, 0, 0],
+        [0.0, 2.0, 1.0, 1.0],
+    ) == [2, 0]
+
+    with pytest.raises(ValueError, match="gap between time intervals"):
+        survival.survfit_subject_history(
+            [0.0, 1.5],
+            [1.0, 2.0],
+            [0, 0],
+            [0, 0],
+            None,
+            0.0,
+        )
+
+
 def test_survfitaj_returns_standard_errors_when_requested():
     result = survival.survfitaj(**_survfitaj_kwargs(sefit=1))
 
