@@ -404,6 +404,48 @@ def test_finegray_regression_matches_reference_expansion_fit():
     assert result.iterations <= 5
 
 
+def test_competing_risks_cif_variance_matches_reference_fit():
+    time = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 7.0, 8.0, 9.0]
+    status = [1, 2, 1, 0, 1, 1, 1, 0, 1, 2, 1, 0, 2, 1]
+    result = survival.competing_risks_cif(time, status, 1)
+
+    assert result.cif == pytest.approx(
+        [
+            0.07142857142857143,
+            0.14285714285714285,
+            0.2142857142857143,
+            0.3730158730158731,
+            0.45238095238095244,
+            0.5476190476190477,
+            0.5476190476190477,
+            0.5476190476190477,
+            0.6904761904761906,
+        ]
+    )
+    assert [value**0.5 for value in result.variance] == pytest.approx(
+        [
+            0.06883029368995938,
+            0.09352195295828245,
+            0.10966421051124832,
+            0.13298562022664268,
+            0.13767692788533334,
+            0.1425323847047763,
+            0.1425323847047763,
+            0.1425323847047763,
+            0.1477037525490764,
+        ],
+        abs=1e-12,
+    )
+    assert result.n_risk == [14, 13, 11, 9, 7, 5, 3, 2, 1]
+    assert result.n_events == [1, 1, 1, 2, 1, 1, 0, 0, 1]
+
+    narrower = survival.competing_risks_cif(time, status, 1, confidence_level=0.8)
+    assert narrower.ci_lower[5] > result.ci_lower[5]
+    assert narrower.ci_upper[5] < result.ci_upper[5]
+
+    sparse_codes = survival.competing_risks_cif([1.0, 2.0], [1, 1_000_000], 1)
+    assert sparse_codes.cif == pytest.approx([0.5, 0.5])
+
 def test_finegray_regression_and_cif_validate_public_inputs():
     with pytest.raises(ValueError, match="time must not be empty"):
         survival.finegray_regression([], [], [], 1)

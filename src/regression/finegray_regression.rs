@@ -2,13 +2,12 @@ use pyo3::prelude::*;
 use std::fmt;
 
 use crate::constants::{
-    IPCW_SURVIVAL_FLOOR, Z_SCORE_90, Z_SCORE_95, Z_SCORE_99, clamped_normal_ci_bounds, exp_clamped,
-    normal_ci_bounds_95, same_time,
+    IPCW_SURVIVAL_FLOOR, clamped_normal_ci_bounds, exp_clamped, normal_ci_bounds_95, same_time,
 };
 use crate::internal::matrix::invert_matrix;
 #[cfg(test)]
 use crate::internal::statistical::compute_censoring_km;
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
@@ -552,45 +551,62 @@ pub(crate) fn competing_risks_cif_core(
     let mut n_risk_values = Vec::new();
     let mut n_events_values = Vec::new();
 
-    let mut km_surv = 1.0;
-    let mut cum_inc = 0.0;
-    let mut variance = 0.0;
+    let mut cause_codes = status
+        .iter()
+        .copied()
+        .filter(|&value| value > 0)
+        .collect::<Vec<_>>();
+    cause_codes.push(event_type);
+    cause_codes.sort_unstable();
+    cause_codes.dedup();
+    let n_causes = cause_codes.len();
+    let target_cause_idx = cause_codes
+        .binary_search(&event_type)
+        .expect("event type was inserted into cause codes");
+    let mut state_probabilities = vec![0.0; n_causes + 1];
+    state_probabilities[0] = 1.0;
+    let mut state_covariance = vec![vec![0.0; n_causes + 1]; n_causes + 1];
     let mut at_risk = n;
 
     let mut i = 0;
     while i < n {
         let current_time = time[indices[i]];
-        let mut n_event_type = 0;
-        let mut n_other_events = 0;
+        let mut event_counts = vec![0usize; n_causes];
         let mut total_at_time = 0;
 
         while i < n && same_time(time[indices[i]], current_time) {
             let s = status[indices[i]];
-            if s == event_type {
-                n_event_type += 1;
-            } else if s != 0 {
-                n_other_events += 1;
+            if s > 0 {
+                let cause_idx = cause_codes
+                    .binary_search(&s)
+                    .expect("observed event type exists in cause codes");
+                event_counts[cause_idx] += 1;
             }
             total_at_time += 1;
             i += 1;
         }
 
-        if n_event_type > 0 && at_risk > 0 {
-            let hazard = n_event_type as f64 / at_risk as f64;
-            cum_inc += km_surv * hazard;
-
-            let term1 = if at_risk > n_event_type {
-                hazard / (at_risk - n_event_type) as f64
-            } else {
-                0.0
-            };
-            variance += km_surv * km_surv * hazard * (1.0 - hazard) / at_risk as f64 + term1;
+        let hazards = event_counts
+            .iter()
+            .map(|&count| count as f64 / at_risk as f64)
+            .collect::<Vec<_>>();
+        let survival_before = state_probabilities[0];
+        state_covariance = updated_aj_covariance(
+            &state_covariance,
+            survival_before,
+            &hazards,
+            &event_counts,
+            at_risk,
+        );
+        for (cause_idx, &hazard) in hazards.iter().enumerate() {
+            state_probabilities[cause_idx + 1] += survival_before * hazard;
         }
+        state_probabilities[0] *= 1.0 - hazards.iter().sum::<f64>();
 
-        let total_events = n_event_type + n_other_events;
-        if total_events > 0 && at_risk > 0 {
-            km_surv *= 1.0 - total_events as f64 / at_risk as f64;
-        }
+        let n_event_type = event_counts[target_cause_idx];
+        let target_state = target_cause_idx + 1;
+        let cum_inc = state_probabilities[target_state];
+        let variance = state_covariance[target_state][target_state].max(0.0);
 
         unique_times.push(current_time);
         cif_values.push(cum_inc);
@@ -601,12 +617,7 @@ pub(crate) fn competing_risks_cif_core(
         at_risk -= total_at_time;
     }
 
-    let z = match confidence_level {
-        x if (x - 0.90).abs() < 0.01 => Z_SCORE_90,
-        x if (x - 0.95).abs() < 0.01 => Z_SCORE_95,
-        x if (x - 0.99).abs() < 0.01 => Z_SCORE_99,
-        _ => Z_SCORE_95,
-    };
+    let z = normal_inverse_cdf(0.5 + confidence_level / 2.0);
 
     let cif_se: Vec<f64> = variance_values.iter().map(|&v| v.sqrt()).collect();
     let (ci_lower, ci_upper) = clamped_normal_ci_bounds(&cif_values, &cif_se, z, 0.0, 1.0);
@@ -621,6 +632,56 @@ pub(crate) fn competing_risks_cif_core(
         n_events: n_events_values,
         event_type,
     }
+}
+
+fn updated_aj_covariance(
+    covariance: &[Vec<f64>],
+    survival: f64,
+    hazards: &[f64],
+    event_counts: &[usize],
+    at_risk: usize,
+) -> Vec<Vec<f64>> {
+    let n_states = hazards.len() + 1;
+    let survival_scale = 1.0 - hazards.iter().sum::<f64>();
+    let mut left_product = vec![vec![0.0; n_states]; n_states];
+    for state in 0..n_states {
+        for column in 0..n_states {
+            left_product[state][column] = if state == 0 {
+                survival_scale * covariance[0][column]
+            } else {
+                covariance[state][column] + hazards[state - 1] * covariance[0][column]
+            };
+        }
+    }
+
+    let mut updated = vec![vec![0.0; n_states]; n_states];
+    for state in 0..n_states {
+        updated[state][0] = survival_scale * left_product[state][0];
+        for column in 1..n_states {
+            updated[state][column] =
+                left_product[state][column] + hazards[column - 1] * left_product[state][0];
+        }
+    }
+
+    let risk = at_risk as f64;
+    let risk_squared = risk * risk;
+    let risk_cubed = risk_squared * risk;
+    let survival_squared = survival * survival;
+    for (cause, &cause_events) in event_counts.iter().enumerate() {
+        for (other_cause, &other_events) in event_counts.iter().enumerate() {
+            let mut hazard_covariance = -(cause_events as f64) * (other_events as f64) / risk_cubed;
+            if cause == other_cause {
+                hazard_covariance += cause_events as f64 / risk_squared;
+            }
+            let contribution = survival_squared * hazard_covariance;
+            updated[0][0] += contribution;
+            updated[0][other_cause + 1] -= contribution;
+            updated[cause + 1][0] -= contribution;
+            updated[cause + 1][other_cause + 1] += contribution;
+        }
+    }
+
+    updated
 }
 
 #[pyfunction]
