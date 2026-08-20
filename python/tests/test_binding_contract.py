@@ -986,13 +986,13 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
 
     assert len(predictions) == 2
     assert len(hazard_ratios) == 1
-    assert len(base_times) == len(base_hazards) == 5
+    assert len(base_times) == len(base_hazards) == len(time)
     assert strata_times == base_times
     assert strata_hazards == base_hazards
     assert baseline_strata == [0] * len(base_times)
-    assert curve_times == base_times
+    assert len(curve_times) == sum(status)
     assert len(survival_curves) == 2
-    assert all(len(curve) == len(base_times) for curve in survival_curves)
+    assert all(len(curve) == len(curve_times) for curve in survival_curves)
     assert len(fit.expected_events()) == len(time)
     assert len(fit.martingale_residuals()) == len(time)
     assert len(fit.deviance_residuals()) == len(time)
@@ -1551,9 +1551,9 @@ def test_cause_specific_cox_bindings_are_typed_to_runtime_surface():
     assert len(result.hazard_ratios) == 1
     assert len(result.hr_ci_lower) == 1
     assert len(result.hr_ci_upper) == 1
-    assert len(result.baseline_hazard_times) == result.n_events
-    assert len(result.baseline_hazard) == result.n_events
-    assert len(result.cumulative_baseline_hazard) == result.n_events
+    assert len(result.baseline_hazard_times) == len(set(time))
+    assert len(result.baseline_hazard) == len(set(time))
+    assert len(result.cumulative_baseline_hazard) == len(set(time))
     assert result.n_iter <= 20
 
     cumulative_hazard = result.predict_cumulative_hazard([0.0], 1)
@@ -1563,9 +1563,9 @@ def test_cause_specific_cox_bindings_are_typed_to_runtime_surface():
     assert len(cumulative_hazard) == 1
     assert len(survival) == 1
     assert len(cif) == 1
-    assert len(cumulative_hazard[0]) == result.n_events
-    assert len(survival[0]) == result.n_events
-    assert len(cif[0]) == result.n_events
+    assert len(cumulative_hazard[0]) == len(set(time))
+    assert len(survival[0]) == len(set(time))
+    assert len(cif[0]) == len(set(time))
     assert all(math.isfinite(value) for row in cumulative_hazard for value in row)
     assert all(math.isfinite(value) for row in survival for value in row)
     assert all(math.isfinite(value) for row in cif for value in row)
@@ -1761,18 +1761,18 @@ def test_joint_competing_risk_bindings_are_typed_to_runtime_surface():
     assert len(first_cause.coefficients) == 1
     assert len(first_cause.std_errors) == 1
     assert len(first_cause.hazard_ratios) == 1
-    assert len(first_cause.baseline_hazard_times) == result.n_events_by_cause[0]
-    assert len(first_cause.baseline_hazard) == result.n_events_by_cause[0]
-    assert len(first_cause.cumulative_baseline_hazard) == result.n_events_by_cause[0]
+    assert len(first_cause.baseline_hazard_times) == len(set(time))
+    assert len(first_cause.baseline_hazard) == len(set(time))
+    assert len(first_cause.cumulative_baseline_hazard) == len(set(time))
 
     cif = result.predict_cif([0.0], 1, 0)
     overall_survival = result.predict_overall_survival([0.0], 1)
     assert len(cif) == 1
-    assert len(cif[0]) == result.n_events_by_cause[0]
+    assert len(cif[0]) == len(set(time))
     assert all(math.isfinite(value) for row in cif for value in row)
     assert all(0.0 <= value <= 1.0 for row in cif for value in row)
     assert len(overall_survival) == 1
-    assert len(overall_survival[0]) == result.n_events_by_cause[0]
+    assert len(overall_survival[0]) == len(set(time))
     assert all(math.isfinite(value) for row in overall_survival for value in row)
     assert all(0.0 <= value <= 1.0 for row in overall_survival for value in row)
 
@@ -1795,7 +1795,7 @@ def test_joint_competing_risks_match_reference_and_align_prediction_times():
         (
             [1.0046774476980949, 0.8108994771525215],
             [0.5873650496929306, 0.559619090488565],
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 9.0],
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
             [
                 0.04492149122855391,
                 0.08592522991424981,
@@ -1803,14 +1803,26 @@ def test_joint_competing_risks_match_reference_and_align_prediction_times():
                 0.25557984346508395,
                 0.3410067911069257,
                 0.613319626711523,
+                0.613319626711523,
+                0.613319626711523,
                 1.9915233911638635,
             ],
         ),
         (
             [-0.7967587926547319, -0.1497635142431922],
             [1.5166789564241598, 1.4879764771811892],
-            [2.0, 6.0, 8.0],
-            [0.07971754982615732, 0.20518606879557588, 0.830006692686018],
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+            [
+                0.0,
+                0.07971754982615732,
+                0.07971754982615732,
+                0.07971754982615732,
+                0.07971754982615732,
+                0.20518606879557588,
+                0.20518606879557588,
+                0.830006692686018,
+                0.830006692686018,
+            ],
         ),
     ]
     assert result.converged

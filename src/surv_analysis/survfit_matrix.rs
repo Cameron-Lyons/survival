@@ -494,13 +494,9 @@ fn basehaz_with_entry_times(
     risk_scale: f64,
 ) -> (Vec<f64>, Vec<f64>) {
     let n = time.len();
-    let mut event_times: Vec<f64> = time
-        .iter()
-        .zip(status.iter())
-        .filter_map(|(&event_time, &event)| (event == 1).then_some(event_time))
-        .collect();
-    event_times.sort_by(f64::total_cmp);
-    event_times.dedup_by(|a, b| same_time(*a, *b));
+    let mut output_times = time.to_vec();
+    output_times.sort_by(f64::total_cmp);
+    output_times.dedup_by(|a, b| same_time(*a, *b));
 
     let mut entry_order: Vec<usize> = (0..n).collect();
     entry_order.sort_by(|&a, &b| entry[a].total_cmp(&entry[b]).then_with(|| a.cmp(&b)));
@@ -515,10 +511,10 @@ fn basehaz_with_entry_times(
     let mut event_pos = 0;
     let mut risk_sum = 0.0;
     let mut cum_hazard = 0.0;
-    let mut hazard = Vec::with_capacity(event_times.len());
+    let mut hazard = Vec::with_capacity(output_times.len());
 
-    for &event_time in &event_times {
-        while entry_pos < entry_order.len() && entry[entry_order[entry_pos]] < event_time {
+    for &output_time in &output_times {
+        while entry_pos < entry_order.len() && entry[entry_order[entry_pos]] < output_time {
             let idx = entry_order[entry_pos];
             if !active[idx] {
                 active[idx] = true;
@@ -526,7 +522,7 @@ fn basehaz_with_entry_times(
             }
             entry_pos += 1;
         }
-        while stop_pos < stop_order.len() && time[stop_order[stop_pos]] < event_time {
+        while stop_pos < stop_order.len() && time[stop_order[stop_pos]] < output_time {
             let idx = stop_order[stop_pos];
             if active[idx] {
                 active[idx] = false;
@@ -536,13 +532,14 @@ fn basehaz_with_entry_times(
         }
 
         while event_pos < event_order.len()
-            && time[event_order[event_pos]] < event_time
-            && !same_time(time[event_order[event_pos]], event_time)
+            && time[event_order[event_pos]] < output_time
+            && !same_time(time[event_order[event_pos]], output_time)
         {
             event_pos += 1;
         }
         let mut events = 0.0;
-        while event_pos < event_order.len() && same_time(time[event_order[event_pos]], event_time) {
+        while event_pos < event_order.len() && same_time(time[event_order[event_pos]], output_time)
+        {
             events += case_weight(weights, event_order[event_pos]);
             event_pos += 1;
         }
@@ -551,7 +548,7 @@ fn basehaz_with_entry_times(
         hazard.push(cum_hazard);
     }
 
-    (event_times, hazard)
+    (output_times, hazard)
 }
 
 fn validate_sorted_step_times(name: &str, times: &[f64], stratum: i32) -> PyResult<()> {
@@ -1152,18 +1149,12 @@ pub fn basehaz(
         let group_start = i;
         let current_time = time[indices[i]];
         let mut events = 0.0;
-        let mut has_event = false;
 
         while i < n && same_time(time[indices[i]], current_time) {
             if status[indices[i]] == 1 {
-                has_event = true;
                 events += case_weight(weights_ref, indices[i]);
             }
             i += 1;
-        }
-
-        if !has_event {
-            continue;
         }
 
         let risk_sum = cumulative_risk[group_start];
@@ -1508,11 +1499,13 @@ mod tests {
         let lp = vec![0.0, 0.1, -0.1, 0.2, 0.0];
         let (times, haz) = basehaz(time, status, lp, true, None, None).unwrap();
 
-        assert_eq!(times.len(), 3);
-        assert_eq!(haz.len(), 3);
+        assert_eq!(times, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(haz.len(), 5);
         assert!(haz[0] > 0.0);
-        assert!(haz[1] > haz[0]);
+        assert_eq!(haz[1], haz[0]);
         assert!(haz[2] > haz[1]);
+        assert_eq!(haz[3], haz[2]);
+        assert!(haz[4] > haz[3]);
     }
 
     #[test]
@@ -1632,10 +1625,11 @@ mod tests {
         let entry = vec![0.0, 0.0, 1.5, 2.5, 0.0, 3.0];
         let (times, haz) = basehaz(time, status, lp, false, Some(entry), None).unwrap();
 
-        assert_eq!(times, vec![2.0, 4.0, 5.0]);
+        assert_eq!(times, vec![2.0, 4.0, 5.0, 6.0]);
         assert!((haz[0] - 0.5).abs() < 1e-12);
         assert!((haz[1] - 0.75).abs() < 1e-12);
         assert!((haz[2] - (0.75 + 1.0 / 3.0)).abs() < 1e-12);
+        assert_eq!(haz[3], haz[2]);
     }
 
     #[test]
@@ -1646,11 +1640,7 @@ mod tests {
         let entry = vec![0.0, 0.0, 1.5, 2.5, 0.0, 3.0];
         let weights = vec![1.0, 2.0, 0.5, 1.5, 1.0, 0.25];
 
-        let mut expected_times: Vec<f64> = time
-            .iter()
-            .zip(status.iter())
-            .filter_map(|(&event_time, &event)| (event == 1).then_some(event_time))
-            .collect();
+        let mut expected_times = time.clone();
         expected_times.sort_by(f64::total_cmp);
         expected_times.dedup_by(|left, right| same_time(*left, *right));
 

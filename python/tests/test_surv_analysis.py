@@ -1411,9 +1411,10 @@ def test_anova_and_basehaz_public_apis():
     assert len(single.rows) == 2
     assert single.rows[0].model_name == "Null"
     assert single.rows[1].chisq == pytest.approx(4.0)
-    assert times == pytest.approx([1.0, 3.0, 4.0])
-    assert len(hazard) == 3
-    assert hazard[0] < hazard[1] < hazard[2]
+    assert times == pytest.approx([1.0, 2.0, 3.0, 4.0])
+    assert len(hazard) == 4
+    assert hazard[0] == pytest.approx(hazard[1])
+    assert hazard[1] < hazard[2] < hazard[3]
 
     large_lp_times, large_lp_hazard = survival.basehaz(
         time=[1.0, 2.0, 3.0],
