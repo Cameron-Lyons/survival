@@ -823,6 +823,22 @@ def cox_zph(
     global_test: bool = True,
     **kwargs: Any,
 ) -> CoxZPHResult: ...
+def coxph_control(
+    eps: Any = 1e-9,
+    toler_chol: Any = ...,
+    iter_max: Any = 20,
+    toler_inf: Any | None = None,
+    outer_max: Any = 10,
+    timefix: Any = True,
+) -> dict[str, Any]: ...
+def survreg_control(
+    maxiter: Any = 30,
+    rel_tolerance: Any = 1e-9,
+    toler_chol: Any = 1e-10,
+    iter_max: Any | None = None,
+    debug: Any = 0,
+    outer_max: Any = 10,
+) -> dict[str, Any]: ...
 def coef(fit: Any) -> list[float]: ...
 def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]: ...
 def confint(

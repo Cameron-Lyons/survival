@@ -12820,6 +12820,74 @@ def test_coxph_control_timefix_matches_r_near_tie_behavior():
         )
 
 
+def test_r_style_control_constructors_match_reference_defaults_and_feed_fits():
+    cox_control = survival.coxph_control()
+    assert cox_control == {
+        "eps": 1e-9,
+        "toler.chol": pytest.approx(2.220446049250313e-16**0.75),
+        "iter.max": 20,
+        "toler.inf": pytest.approx(math.sqrt(1e-9)),
+        "outer.max": 10,
+        "timefix": True,
+    }
+    custom_cox_control = survival.coxph_control(
+        eps=1e-8,
+        toler_chol=1e-10,
+        iter_max=3.9,
+        toler_inf=2e-4,
+        outer_max=4.9,
+        timefix=False,
+    )
+    assert custom_cox_control["iter.max"] == 3
+    assert custom_cox_control["outer.max"] == 4
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=_toy_data(),
+        control=custom_cox_control,
+    )
+    assert fit.iterations <= 3
+
+    survreg_defaults = survival.survreg_control()
+    assert survreg_defaults == {
+        "iter.max": 30,
+        "rel.tolerance": 1e-9,
+        "toler.chol": 1e-10,
+        "debug": 0,
+        "maxiter": 30,
+        "outer.max": 10,
+    }
+    survreg_custom = survival.survreg_control(maxiter=30, iter_max=4, rel_tolerance=1e-6)
+    assert survreg_custom["iter.max"] == 4
+    assert survreg_custom["maxiter"] == 4
+    aft = survival.survreg(
+        "Surv(time, status) ~ x1",
+        data=_toy_data(),
+        control=survreg_custom,
+    )
+    assert aft.iterations <= 4
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"eps": 0.0}, "eps must be positive"),
+        ({"toler_chol": 0.0}, "toler_chol must be positive"),
+        ({"iter_max": -1}, "iter_max must be non-negative"),
+        ({"toler_inf": 0.0}, "toler_inf must be positive"),
+        ({"outer_max": 0}, "outer_max must be positive"),
+        ({"timefix": 1}, "timefix must be True or False"),
+    ],
+)
+def test_coxph_control_rejects_invalid_options(kwargs, error):
+    with pytest.raises((TypeError, ValueError), match=error):
+        survival.coxph_control(**kwargs)
+
+
+def test_coxph_control_warns_when_factorization_tolerance_is_not_smaller():
+    with pytest.warns(RuntimeWarning, match="toler_chol should be less than eps"):
+        survival.coxph_control(eps=1e-9, toler_chol=1e-8)
+
+
 def test_coxph_control_timefix_applies_to_counting_process_endpoints():
     start = [0.0, 0.0, 0.5, 1.0 + 5e-10, 0.0]
     stop = [1.0, 1.0 + 5e-10, 2.0, 3.0, 4.0]

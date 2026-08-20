@@ -18,6 +18,7 @@ from typing import Any, NoReturn
 from . import _survival as _core
 
 _COX_NONCONVERGENCE_FLAG = 1000
+_COXPH_CONTROL_TOLER_CHOL = math.ulp(1.0) ** 0.75
 
 __all__ = [
     "Surv",
@@ -60,6 +61,7 @@ __all__ = [
     "clogit",
     "cch",
     "coxph",
+    "coxph_control",
     "coxph_detail",
     "coxph_wtest",
     "cox_zph",
@@ -128,6 +130,7 @@ __all__ = [
     "survfitkm_influence",
     "survSplit",
     "survreg",
+    "survreg_control",
     "tcut",
     "totimeline",
     "yates",
@@ -9988,6 +9991,83 @@ def _normalize_optional_bool_option(value: Any | None, name: str) -> bool | None
     if value is None:
         return None
     return _normalize_bool_option(value, name)
+
+
+def _r_control_integer(value: Any, name: str, *, positive: bool) -> int:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be numeric")
+    numeric = _finite_float(value, name)
+    if (positive and numeric <= 0.0) or (not positive and numeric < 0.0):
+        qualifier = "positive" if positive else "non-negative"
+        raise ValueError(f"{name} must be {qualifier}")
+    return int(numeric)
+
+
+def coxph_control(
+    eps: Any = 1e-9,
+    toler_chol: Any = _COXPH_CONTROL_TOLER_CHOL,
+    iter_max: Any = 20,
+    toler_inf: Any | None = None,
+    outer_max: Any = 10,
+    timefix: Any = True,
+) -> dict[str, Any]:
+    """Construct validated Cox fit controls using R-compatible names and defaults."""
+
+    eps_value = _finite_float(eps, "eps")
+    if eps_value <= 0.0:
+        raise ValueError("eps must be positive")
+    toler_chol_value = _finite_float(toler_chol, "toler_chol")
+    if toler_chol_value <= 0.0:
+        raise ValueError("toler_chol must be positive")
+    if eps_value <= toler_chol_value:
+        warnings.warn(
+            "for numerical accuracy, toler_chol should be less than eps",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    iter_max_value = _r_control_integer(iter_max, "iter_max", positive=False)
+    toler_inf_value = (
+        math.sqrt(eps_value)
+        if toler_inf is None
+        else _finite_float(
+            toler_inf,
+            "toler_inf",
+        )
+    )
+    if toler_inf_value <= 0.0:
+        raise ValueError("toler_inf must be positive")
+    outer_max_value = _r_control_integer(outer_max, "outer_max", positive=True)
+    timefix_value = _normalize_bool_option(timefix, "timefix")
+    return {
+        "eps": eps_value,
+        "toler.chol": toler_chol_value,
+        "iter.max": iter_max_value,
+        "toler.inf": toler_inf_value,
+        "outer.max": outer_max_value,
+        "timefix": timefix_value,
+    }
+
+
+def survreg_control(
+    maxiter: Any = 30,
+    rel_tolerance: Any = 1e-9,
+    toler_chol: Any = 1e-10,
+    iter_max: Any | None = None,
+    debug: Any = 0,
+    outer_max: Any = 10,
+) -> dict[str, Any]:
+    """Construct accelerated-failure-time fit controls with R-compatible keys."""
+
+    iteration_limit = maxiter if iter_max is None else iter_max
+    effective_maxiter = iteration_limit if iter_max is not None else maxiter
+    return {
+        "iter.max": iteration_limit,
+        "rel.tolerance": rel_tolerance,
+        "toler.chol": toler_chol,
+        "debug": debug,
+        "maxiter": effective_maxiter,
+        "outer.max": outer_max,
+    }
 
 
 def _control_mapping(control: Any | None, name: str) -> dict[str, Any]:
