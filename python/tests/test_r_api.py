@@ -9604,18 +9604,87 @@ def test_coxph_formula_combines_ridge_and_pspline_penalties():
     )
 
 
+def test_coxph_formula_pspline_calibrates_target_df_against_reference():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+    }
+    spline_term = "pspline(x,df=3,nterm=4,eps=1e-8)"
+    fit = survival.coxph(
+        f"Surv(time,status) ~ {spline_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [
+            -1.3262095926023851,
+            -2.023066127857264,
+            -2.346025536232983,
+            -1.509227076382628,
+            -2.521469352358868,
+            -4.498020356600968,
+        ],
+        abs=1e-9,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-12.619505923287514, -12.031600366843284],
+        abs=1e-9,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx({spline_term: 3.0}, abs=1e-8)
+    history = fit.history[spline_term]
+    assert history["theta"] == pytest.approx(0.029770489342229, abs=1e-8)
+    assert history["done"] is True
+    assert history["history"][:2] == [{"theta": 1.0, "df": 1.0}, {"theta": 0.0, "df": 4.0}]
+    assert history["history"][-1]["df"] == pytest.approx(3.0, abs=1e-8)
+    assert history["half"] == 0
+
+    default = survival.coxph(
+        "Surv(time,status) ~ pspline(x)",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+    assert default.log_likelihood == pytest.approx(
+        [-12.619505923287514, -11.747296351072482],
+        abs=1e-9,
+    )
+    assert survival.degrees_freedom(default) == pytest.approx(3.9982394766562623, abs=1e-9)
+    assert default.history["pspline(x)"]["theta"] == pytest.approx(
+        0.15882808031689258,
+        abs=1e-12,
+    )
+
+
+def test_penalty_df_controller_safeguards_nonmonotone_history_boundary():
+    theta, done, half = survival.r_api._ridge_control_next_theta(
+        2.5,
+        0.1,
+        2,
+        [(0.0, 1.0), (1.0, 3.0), (2.0, 2.0)],
+        0,
+    )
+
+    assert theta == pytest.approx(1.5)
+    assert done is False
+    assert half == 1
+
+
 def test_coxph_formula_pspline_rejects_unsupported_or_invalid_options():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],
         "status": [1, 0, 1, 1],
         "x": [0.2, 0.5, 0.8, 1.0],
     }
-    with pytest.raises(NotImplementedError, match="require fixed theta"):
-        survival.coxph("Surv(time,status) ~ pspline(x,df=3)", data=data)
     for option, message in (
         ("theta=1", "between 0 and 1"),
         ("theta=.5,nterm=2", "at least 3"),
         ("theta=.5,degree=0", "positive"),
+        ("df=1", "greater"),
+        ("df=5,nterm=4", "between"),
+        ("df=3,eps=0", "positive"),
     ):
         with pytest.raises(ValueError, match=message):
             survival.coxph(f"Surv(time,status) ~ pspline(x,{option})", data=data)
