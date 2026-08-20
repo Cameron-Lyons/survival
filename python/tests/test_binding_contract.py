@@ -862,6 +862,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "information_matrix",
             "single_df",
             "global_test",
+            "penalty_matrix",
         ],
         "partial_residuals": ["self"],
     }

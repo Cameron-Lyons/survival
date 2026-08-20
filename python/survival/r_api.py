@@ -426,6 +426,7 @@ class _FormulaFit:
     effective_degrees_of_freedom: float | None = None
     term_degrees_of_freedom: dict[str, float] | None = None
     reported_log_likelihood: list[float] | None = None
+    penalty_matrix: list[list[float]] | None = None
     conditional_logistic: bool = False
     n_observations: int | None = None
     sparse_frailty: _SparseFrailtyFitMetadata | None = None
@@ -977,7 +978,7 @@ class TMergeFrame(Mapping[str, list[Any]]):
 class CoxZPHResult:
     variable_names: list[str]
     chi2_values: list[float]
-    df: list[int]
+    df: list[float | int]
     p_values: list[float]
     x: list[float]
     time: list[float]
@@ -985,7 +986,7 @@ class CoxZPHResult:
     var: list[list[float]]
     transform: str
     global_chi2: float | None
-    global_df: int | None
+    global_df: float | int | None
     global_p_value: float | None
     strata: list[Any] | None = None
 
@@ -15869,6 +15870,7 @@ def cox_zph(
             [[float(value) for value in row] for row in variance],
             single_df,
             include_global,
+            fit.penalty_matrix if isinstance(fit, _FormulaFit) else None,
         )
         grouped_y = [[float(value) for value in row] for row in grouped_result]
         if len(event_indices) != len(grouped_y):
@@ -15900,19 +15902,60 @@ def cox_zph(
             if group_terms and groups
             else _matrix_columns(scaled, [idx for _name, columns in groups for idx in columns])
         )
+    term_df = (
+        fit.term_degrees_of_freedom
+        if isinstance(fit, _FormulaFit)
+        and fit.term_degrees_of_freedom is not None
+        and group_terms
+        and not single_df
+        else None
+    )
+    reported_df: list[float | int] = [
+        (
+            float(term_df.get(name, len(columns)))
+            if term_df is not None
+            else 1
+            if single_df
+            else len(columns)
+        )
+        for name, columns in groups
+    ]
+    effective_df = (
+        float(fit.effective_degrees_of_freedom)
+        if isinstance(fit, _FormulaFit) and fit.effective_degrees_of_freedom is not None
+        else None
+    )
+    p_values = (
+        [
+            float(_core.chi_square_survival(float(chi2), float(df)))
+            for chi2, df in zip(test.chi2_values, reported_df, strict=True)
+        ]
+        if term_df is not None
+        else [float(value) for value in test.p_values]
+    )
+    global_df: float | int | None = (
+        effective_df if effective_df is not None else int(test.global_df)
+    )
+    global_p_value = (
+        float(_core.chi_square_survival(float(test.global_chi2), effective_df))
+        if include_global and effective_df is not None
+        else float(test.global_p_value)
+        if include_global
+        else None
+    )
     return CoxZPHResult(
         variable_names=[name for name, _columns in groups],
         chi2_values=[float(value) for value in test.chi2_values],
-        df=[1 if single_df else len(columns) for _name, columns in groups],
-        p_values=[float(value) for value in test.p_values],
+        df=reported_df,
+        p_values=p_values,
         x=transformed_time,
         time=event_times,
         y=grouped_y,
         var=_cox_zph_group_variance(fit, groups, active_beta, active_columns, len(event_indices)),
         transform=transform_name,
         global_chi2=float(test.global_chi2) if include_global else None,
-        global_df=int(test.global_df) if include_global else None,
-        global_p_value=float(test.global_p_value) if include_global else None,
+        global_df=global_df if include_global else None,
+        global_p_value=global_p_value,
         strata=event_strata,
     )
 
@@ -16524,16 +16567,15 @@ def _cox_zph_column_groups(
     design = _formula_design_for_fit(fit)
     if design is None:
         return [(f"var{idx}", [idx]) for idx in range(nvar)]
+    if terms:
+        return _cox_predict_term_groups(fit, nvar)
 
     groups: list[tuple[str, list[int]]] = []
     cursor = 0
     for term in design.covariates:
         output_names = _design_term_output_names(term)
         indices = list(range(cursor, cursor + len(output_names)))
-        if terms:
-            groups.append((_design_term_name(term), indices))
-        else:
-            groups.extend((name, [idx]) for name, idx in zip(output_names, indices, strict=True))
+        groups.extend((name, [idx]) for name, idx in zip(output_names, indices, strict=True))
         cursor += len(output_names)
 
     if cursor != nvar:
@@ -24249,6 +24291,15 @@ def coxph(
             effective_degrees_of_freedom=effective_degrees_of_freedom,
             term_degrees_of_freedom=term_degrees_of_freedom,
             reported_log_likelihood=reported_log_likelihood,
+            penalty_matrix=(
+                fit_penalty_matrix
+                if fit_penalty_matrix is not None
+                else (
+                    [[float(value)] * len(fit_ridge_penalty) for value in fit_ridge_penalty]
+                    if fit_ridge_penalty is not None
+                    else None
+                )
+            ),
             n_observations=time_transform_observed_n,
             sparse_frailty=sparse_frailty_metadata,
         )

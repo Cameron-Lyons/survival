@@ -552,6 +552,7 @@ impl CoxPHFit {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (transformed_events, active_columns, groups, information_matrix, single_df, global_test, penalty_matrix=None))]
     pub fn cox_zph_diagnostics(
         &self,
         transformed_events: Vec<f64>,
@@ -560,6 +561,7 @@ impl CoxPHFit {
         information_matrix: Vec<Vec<f64>>,
         single_df: bool,
         global_test: bool,
+        penalty_matrix: Option<Vec<Vec<f64>>>,
     ) -> PyResult<(Vec<Vec<f64>>, crate::validation::ProportionalityTest)> {
         self.cox_zph_diagnostics_internal(
             transformed_events,
@@ -568,6 +570,7 @@ impl CoxPHFit {
             information_matrix,
             single_df,
             global_test,
+            penalty_matrix,
         )
     }
 

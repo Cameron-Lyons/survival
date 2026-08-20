@@ -1137,6 +1137,7 @@ class CoxPHFrailtyFit:
         information_matrix: list[list[float]],
         single_df: bool,
         global_test: bool,
+        penalty_matrix: list[list[float]] | None = None,
     ) -> tuple[list[list[float]], ProportionalityTest]: ...
     def partial_residuals(self) -> list[list[float]]: ...
     def score_residuals(self) -> list[list[float]]: ...
@@ -1212,6 +1213,7 @@ class CoxPHFit:
         information_matrix: list[list[float]],
         single_df: bool,
         global_test: bool,
+        penalty_matrix: list[list[float]] | None = None,
     ) -> tuple[list[list[float]], ProportionalityTest]: ...
     def partial_residuals(self) -> list[list[float]]: ...
     @property
@@ -7358,6 +7360,7 @@ def cox_dfbeta_from_score_residuals(
     information_matrix: list[list[float]],
     scaled: bool = False,
 ) -> list[list[float]]: ...
+def chi_square_survival(statistic: float, degrees_of_freedom: float) -> float: ...
 def cox_zph_term_matrix(
     scaled: list[list[float]],
     groups: list[list[int]],

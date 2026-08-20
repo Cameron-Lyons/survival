@@ -56,10 +56,10 @@ pub use cox_frailty::{CoxPHFrailtyFit, coxph_frailty_fit};
 pub use coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit};
 pub use coxph_detail_module::{CoxphDetail, CoxphDetailRow, coxph_detail};
 pub use coxph_diagnostics::{
-    clustered_crossprod, clustered_sandwich_variance, cox_dfbeta_from_score_residuals,
-    cox_event_indices, cox_interval_cumulative_hazard_se, cox_zph_group_variance,
-    cox_zph_term_matrix, cox_zph_tests, cox_zph_tests_from_data, prediction_se_from_variance,
-    scale_schoenfeld_residuals, term_prediction_se_from_variance,
+    chi_square_survival, clustered_crossprod, clustered_sandwich_variance,
+    cox_dfbeta_from_score_residuals, cox_event_indices, cox_interval_cumulative_hazard_se,
+    cox_zph_group_variance, cox_zph_term_matrix, cox_zph_tests, cox_zph_tests_from_data,
+    prediction_se_from_variance, scale_schoenfeld_residuals, term_prediction_se_from_variance,
 };
 pub use coxph_wtest_module::coxph_wtest;
 pub use cure_models::{

@@ -553,6 +553,7 @@ BINDINGS = (
     "cause_specific_cox_all",
     "cch_borgan_fit",
     "cch_fit",
+    "chi_square_survival",
     "cipoisson",
     "cipoisson_anscombe",
     "cipoisson_exact",
