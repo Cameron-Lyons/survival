@@ -7144,114 +7144,21 @@ def _survobrien_formula_terms(
 def _survobrien_event_sets(
     response: Surv,
     strata_values: list[Any] | None,
-) -> list[tuple[float, list[int]]]:
-    if response.type == "right":
-        if strata_values is None:
-            event_times = sorted(
-                {
-                    float(time)
-                    for time, event in zip(response.time, response.event, strict=True)
-                    if event == 1
-                }
-            )
-            return [
-                (
-                    event_time,
-                    [idx for idx, time in enumerate(response.time) if float(time) >= event_time],
-                )
-                for event_time in event_times
-            ]
+) -> tuple[list[int], list[int], list[float], list[int]]:
+    if response.type not in {"right", "counting"}:
+        raise ValueError("Response must be right censored or (start, stop] data")
+    if response.type == "counting" and response.start is None:
+        raise ValueError("counting Surv response is missing start times")
 
-        seen: set[tuple[float, Any]] = set()
-        result: list[tuple[float, list[int]]] = []
-        for event_time, event, stratum in zip(
-            response.time,
-            response.event,
-            strata_values,
-            strict=True,
-        ):
-            if event != 1:
-                continue
-            key = (float(event_time), _hashable_group_value(stratum))
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(
-                (
-                    float(event_time),
-                    [
-                        idx
-                        for idx, (row_event, row_stratum) in enumerate(
-                            zip(response.event, strata_values, strict=True)
-                        )
-                        if float(row_event) >= float(event_time) and row_stratum == stratum
-                    ],
-                )
-            )
-        return result
-
-    if response.type == "counting":
-        if response.start is None:
-            raise ValueError("counting Surv response is missing start times")
-        if strata_values is None:
-            event_times = sorted(
-                {
-                    float(stop)
-                    for stop, event in zip(response.time, response.event, strict=True)
-                    if event == 1
-                }
-            )
-            return [
-                (
-                    event_time,
-                    [
-                        idx
-                        for idx, (start, stop) in enumerate(
-                            zip(response.start, response.time, strict=True)
-                        )
-                        if float(start) < event_time <= float(stop)
-                    ],
-                )
-                for event_time in event_times
-            ]
-
-        seen: set[tuple[float, Any]] = set()
-        result: list[tuple[float, list[int]]] = []
-        for event_time, event, stratum in zip(
-            response.time,
-            response.event,
-            strata_values,
-            strict=True,
-        ):
-            if event != 1:
-                continue
-            event_time_float = float(event_time)
-            stratum_key = _hashable_group_value(stratum)
-            key = (event_time_float, stratum_key)
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(
-                (
-                    event_time_float,
-                    [
-                        idx
-                        for idx, (start, stop, row_stratum) in enumerate(
-                            zip(
-                                response.start,
-                                response.time,
-                                strata_values,
-                                strict=True,
-                            )
-                        )
-                        if float(start) < event_time_float <= float(stop)
-                        and _hashable_group_value(row_stratum) != stratum_key
-                    ],
-                )
-            )
-        return result
-
-    raise ValueError("Response must be right censored or (start, stop] data")
+    strata_groups = (
+        None if strata_values is None else _encode_groups(strata_values, len(response))
+    )
+    return _core.survobrien_event_sets(
+        None if response.start is None else list(response.start),
+        list(response.time),
+        [int(event) for event in response.event],
+        strata_groups,
+    )
 
 
 def _survobrien_formula_frame(
@@ -7273,15 +7180,10 @@ def _survobrien_formula_frame(
     n = len(response)
     keepers, continuous = _survobrien_formula_terms(data, terms, n)
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else None
-    event_sets = _survobrien_event_sets(response, strata_values)
-
-    row_indices: list[int] = []
-    set_numbers: list[int] = []
-    event_times: list[float] = []
-    for set_idx, (event_time, indices) in enumerate(event_sets, start=1):
-        row_indices.extend(indices)
-        set_numbers.extend([set_idx] * len(indices))
-        event_times.extend([event_time] * len(indices))
+    row_indices, group_sizes, event_times, set_numbers = _survobrien_event_sets(
+        response,
+        strata_values,
+    )
 
     frame: dict[str, list[Any]] = {}
     if response.type == "counting":
@@ -7300,7 +7202,6 @@ def _survobrien_formula_frame(
     if not terms.clusters:
         frame[".id."] = [idx + 1 for idx in row_indices]
 
-    group_sizes = [len(indices) for _event_time, indices in event_sets]
     if transform is None:
         transformed_columns = _core.survobrien_transform_groups(
             [values for _name, values in continuous],

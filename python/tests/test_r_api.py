@@ -3823,6 +3823,78 @@ def test_survobrien_group_transform_matches_python_reference():
             assert actual_column == pytest.approx(expected_column)
 
 
+def test_survobrien_event_sets_match_python_reference():
+    def reference(
+        stop: list[float],
+        status: list[int],
+        start: list[float] | None,
+        strata: list[int] | None,
+    ) -> tuple[list[int], list[int], list[float], list[int]]:
+        if strata is None:
+            unique_event_times = {
+                stop[idx] for idx in range(len(stop)) if status[idx] == 1
+            }
+            event_sets = [(time, None) for time in sorted(unique_event_times)]
+        else:
+            event_sets = []
+            seen: set[tuple[float, int]] = set()
+            for event_time, event, stratum in zip(stop, status, strata, strict=True):
+                key = (event_time, stratum)
+                if event == 1 and key not in seen:
+                    seen.add(key)
+                    event_sets.append((event_time, stratum))
+
+        row_indices: list[int] = []
+        group_sizes: list[int] = []
+        event_times: list[float] = []
+        set_numbers: list[int] = []
+        for set_number, (event_time, event_stratum) in enumerate(event_sets, start=1):
+            group_start = len(row_indices)
+            for idx in range(len(stop)):
+                if start is None and strata is None:
+                    at_risk = stop[idx] >= event_time
+                elif start is None:
+                    assert strata is not None
+                    assert event_stratum is not None
+                    at_risk = status[idx] >= event_time and strata[idx] == event_stratum
+                elif strata is None:
+                    at_risk = start[idx] < event_time <= stop[idx]
+                else:
+                    assert event_stratum is not None
+                    at_risk = (
+                        start[idx] < event_time <= stop[idx]
+                        and strata[idx] != event_stratum
+                    )
+                if at_risk:
+                    row_indices.append(idx)
+            group_size = len(row_indices) - group_start
+            group_sizes.append(group_size)
+            event_times.extend([event_time] * group_size)
+            set_numbers.extend([set_number] * group_size)
+        return row_indices, group_sizes, event_times, set_numbers
+
+    rng = random.Random(20260820)  # noqa: S311
+    for _ in range(200):
+        n_rows = rng.randrange(1, 40)
+        stop = [float(rng.randrange(1, 15)) for _ in range(n_rows)]
+        status = [rng.randrange(2) for _ in range(n_rows)]
+        start = [float(rng.randrange(int(value))) for value in stop]
+        strata = [rng.randrange(4) for _ in range(n_rows)]
+        for row_start, row_strata in (
+            (None, None),
+            (None, strata),
+            (start, None),
+            (start, strata),
+        ):
+            actual = survival._survival.survobrien_event_sets(
+                row_start,
+                stop,
+                status,
+                row_strata,
+            )
+            assert actual == reference(stop, status, row_start, row_strata)
+
+
 def test_r_style_yates_direct_helpers_wrap_rust_kernels():
     result = survival.yates(
         [1.0, 2.0, 4.0, 8.0],

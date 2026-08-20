@@ -976,6 +976,7 @@ BINDINGS = (
     "survival_meta_analysis",
     "survival_quantile",
     "survobrien",
+    "survobrien_event_sets",
     "survobrien_transform_groups",
     "survreg",
     "survreg_dfbeta_residuals",

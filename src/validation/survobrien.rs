@@ -1,5 +1,5 @@
 use crate::constants::same_time;
-use crate::internal::numpy_utils::{extract_vec_f64, extract_vec_i32};
+use crate::internal::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
 use crate::internal::statistical::chi2_sf;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
@@ -7,8 +7,10 @@ use crate::internal::validation::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 const RANK_TIE_TOLERANCE: f64 = 1e-10;
+type SurvobrienEventSetExpansion = (Vec<usize>, Vec<usize>, Vec<f64>, Vec<usize>);
 
 fn validate_survobrien_inputs(
     time: &[f64],
@@ -90,6 +92,132 @@ pub fn survobrien(
     validate_survobrien_inputs(&time_vec, &status_vec, &covariate_vec, strata)?;
     let result = compute_survobrien(&time_vec, &status_vec, &covariate_vec, strata);
     Ok(result)
+}
+
+fn validate_survobrien_event_set_inputs(
+    start: Option<&[f64]>,
+    stop: &[f64],
+    status: &[i32],
+    strata: Option<&[i32]>,
+) -> PyResult<()> {
+    validate_length(stop.len(), status.len(), "status")?;
+    if let Some(start) = start {
+        validate_length(stop.len(), start.len(), "start")?;
+        validate_finite(start, "start")?;
+    }
+    if let Some(strata) = strata {
+        validate_length(stop.len(), strata.len(), "strata")?;
+    }
+    validate_finite(stop, "stop")?;
+    validate_binary_i32(status, "status")?;
+    Ok(())
+}
+
+fn survobrien_event_key(time: f64, stratum: i32) -> (u64, i32) {
+    let normalized_time = if time == 0.0 { 0.0 } else { time };
+    (normalized_time.to_bits(), stratum)
+}
+
+fn expand_survobrien_event_sets(
+    start: Option<&[f64]>,
+    stop: &[f64],
+    status: &[i32],
+    strata: Option<&[i32]>,
+) -> SurvobrienEventSetExpansion {
+    let event_sets = if let Some(strata) = strata {
+        let mut seen = HashSet::new();
+        stop.iter()
+            .zip(status)
+            .zip(strata)
+            .filter_map(|((&event_time, &event), &stratum)| {
+                if event != 1 || !seen.insert(survobrien_event_key(event_time, stratum)) {
+                    None
+                } else {
+                    Some((event_time, Some(stratum)))
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let mut event_times = stop
+            .iter()
+            .zip(status)
+            .filter_map(|(&event_time, &event)| (event == 1).then_some(event_time))
+            .collect::<Vec<_>>();
+        event_times.sort_unstable_by(f64::total_cmp);
+        event_times.dedup_by(|left, right| *left == *right);
+        event_times
+            .into_iter()
+            .map(|event_time| (event_time, None))
+            .collect::<Vec<_>>()
+    };
+
+    let mut row_indices = Vec::new();
+    let mut group_sizes = Vec::with_capacity(event_sets.len());
+    let mut event_times = Vec::new();
+    let mut set_numbers = Vec::new();
+
+    for (set_index, (event_time, event_stratum)) in event_sets.into_iter().enumerate() {
+        let group_start = row_indices.len();
+        for row_index in 0..stop.len() {
+            let at_risk = match (start, strata, event_stratum) {
+                (None, None, None) => stop[row_index] >= event_time,
+                // Preserve survival::survobrien's stratified formula selection exactly.
+                (None, Some(row_strata), Some(stratum)) => {
+                    f64::from(status[row_index]) >= event_time && row_strata[row_index] == stratum
+                }
+                (Some(row_start), None, None) => {
+                    row_start[row_index] < event_time && event_time <= stop[row_index]
+                }
+                // Preserve survival::survobrien's counting-process stratum complement.
+                (Some(row_start), Some(row_strata), Some(stratum)) => {
+                    row_start[row_index] < event_time
+                        && event_time <= stop[row_index]
+                        && row_strata[row_index] != stratum
+                }
+                _ => unreachable!("event strata and row strata must be present together"),
+            };
+            if at_risk {
+                row_indices.push(row_index);
+            }
+        }
+
+        let group_size = row_indices.len() - group_start;
+        group_sizes.push(group_size);
+        event_times.extend(std::iter::repeat_n(event_time, group_size));
+        set_numbers.extend(std::iter::repeat_n(set_index + 1, group_size));
+    }
+
+    (row_indices, group_sizes, event_times, set_numbers)
+}
+
+#[pyfunction]
+#[pyo3(signature = (start, stop, status, strata=None))]
+pub fn survobrien_event_sets(
+    py: Python<'_>,
+    start: Option<&Bound<'_, PyAny>>,
+    stop: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
+    strata: Option<&Bound<'_, PyAny>>,
+) -> PyResult<SurvobrienEventSetExpansion> {
+    let start_vec = extract_optional_vec_f64(start)?;
+    let stop_vec = extract_vec_f64(stop)?;
+    let status_vec = extract_vec_i32(status)?;
+    let strata_vec = strata.map(extract_vec_i32).transpose()?;
+    validate_survobrien_event_set_inputs(
+        start_vec.as_deref(),
+        &stop_vec,
+        &status_vec,
+        strata_vec.as_deref(),
+    )?;
+
+    Ok(py.detach(move || {
+        expand_survobrien_event_sets(
+            start_vec.as_deref(),
+            &stop_vec,
+            &status_vec,
+            strata_vec.as_deref(),
+        )
+    }))
 }
 
 fn validate_survobrien_transform_groups(
@@ -377,6 +505,69 @@ mod tests {
         let result = compute_survobrien(&[], &[], &[], None);
         assert_eq!(result.statistic, 0.0);
         assert_eq!(result.p_value, 1.0);
+    }
+
+    #[test]
+    fn test_survobrien_event_sets_expand_right_censored_risk_sets() {
+        let actual = expand_survobrien_event_sets(None, &[1.0, 2.0, 3.0], &[1, 0, 1], None);
+
+        assert_eq!(actual.0, vec![0, 1, 2, 2]);
+        assert_eq!(actual.1, vec![3, 1]);
+        assert_eq!(actual.2, vec![1.0, 1.0, 1.0, 3.0]);
+        assert_eq!(actual.3, vec![1, 1, 1, 2]);
+    }
+
+    #[test]
+    fn test_survobrien_event_sets_match_r_stratified_selection() {
+        let right = expand_survobrien_event_sets(
+            None,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[1, 0, 1, 1],
+            Some(&[0, 0, 1, 1]),
+        );
+        assert_eq!(right.0, vec![0]);
+        assert_eq!(right.1, vec![1, 0, 0]);
+        assert_eq!(right.2, vec![1.0]);
+        assert_eq!(right.3, vec![1]);
+
+        let counting = expand_survobrien_event_sets(
+            Some(&[0.0, 0.0, 1.0, 2.0, 0.0, 3.0]),
+            &[1.0, 2.0, 3.0, 4.0, 2.0, 5.0],
+            &[1, 0, 1, 1, 1, 0],
+            Some(&[0, 0, 1, 1, 0, 1]),
+        );
+        assert_eq!(counting.0, vec![2]);
+        assert_eq!(counting.1, vec![0, 0, 0, 1]);
+        assert_eq!(counting.2, vec![2.0]);
+        assert_eq!(counting.3, vec![4]);
+    }
+
+    #[test]
+    fn test_survobrien_event_sets_validate_shapes_and_values() {
+        let length_error =
+            validate_survobrien_event_set_inputs(None, &[1.0], &[], None).unwrap_err();
+        assert!(length_error.to_string().contains("status length mismatch"));
+
+        let start_error =
+            validate_survobrien_event_set_inputs(Some(&[0.0]), &[1.0, 2.0], &[1, 0], None)
+                .unwrap_err();
+        assert!(start_error.to_string().contains("start length mismatch"));
+
+        let status_error =
+            validate_survobrien_event_set_inputs(None, &[1.0], &[2], None).unwrap_err();
+        assert!(
+            status_error
+                .to_string()
+                .contains("status must contain only 0/1")
+        );
+
+        let time_error =
+            validate_survobrien_event_set_inputs(None, &[f64::INFINITY], &[1], None).unwrap_err();
+        assert!(
+            time_error
+                .to_string()
+                .contains("stop contains non-finite value")
+        );
     }
 
     #[test]

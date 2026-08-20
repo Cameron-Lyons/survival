@@ -3860,6 +3860,7 @@ def test_survobrien_and_trend_bindings_are_typed():
         "SurvObrienResult",
         "TrendTestResult",
         "survobrien",
+        "survobrien_event_sets",
         "survobrien_transform_groups",
         "logrank_trend",
     } <= stub_names
@@ -3868,6 +3869,12 @@ def test_survobrien_and_trend_bindings_are_typed():
         "time",
         "status",
         "covariate",
+        "strata",
+    ]
+    assert list(inspect.signature(core.survobrien_event_sets).parameters) == [
+        "start",
+        "stop",
+        "status",
         "strata",
     ]
     assert list(inspect.signature(core.survobrien_transform_groups).parameters) == [
@@ -3885,6 +3892,12 @@ def test_survobrien_and_trend_bindings_are_typed():
         "time",
         "status",
         "covariate",
+        "strata",
+    ]
+    assert _pyi_function_arg_names(stub_path, "survobrien_event_sets") == [
+        "start",
+        "stop",
+        "status",
         "strata",
     ]
     assert _pyi_function_arg_names(stub_path, "survobrien_transform_groups") == [
@@ -3919,6 +3932,12 @@ def test_survobrien_and_trend_bindings_are_typed():
         [0.2, 0.5, 0.9],
         None,
     )
+    event_sets = core.survobrien_event_sets(
+        None,
+        [1.0, 2.0, 3.0],
+        [1, 0, 1],
+        None,
+    )
     transformed = core.survobrien_transform_groups(
         [[4.0, 1.0, 1.0, 3.0]],
         [0, 1, 2, 3, 2],
@@ -3932,6 +3951,7 @@ def test_survobrien_and_trend_bindings_are_typed():
     )
 
     assert type(obrien).__name__ == "SurvObrienResult"
+    assert event_sets == ([0, 1, 2, 2], [3, 1], [1.0, 1.0, 1.0, 3.0], [1, 1, 1, 2])
     assert transformed[0] == pytest.approx(
         [
             1.9459101490553132,
