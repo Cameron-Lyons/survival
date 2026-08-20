@@ -1576,6 +1576,29 @@ def test_cause_specific_cox_bindings_are_typed_to_runtime_surface():
     assert [item.n_events for item in all_results] == [4, 2]
 
 
+def test_cause_specific_cox_ties_match_reference_fits():
+    setup_survival_import()
+    core = importlib.import_module("survival._survival")
+    x1 = [0.2, -1.0, 0.7, 0.0, -0.6, 1.1, -0.2, 0.5, 1.2, -0.8, 0.3, -1.1, 0.9, -0.4]
+    x2 = [1.0, 0.4, -0.9, 0.2, 0.8, -0.5, 1.1, -0.3, 0.6, 1.3, -0.7, 0.5, -1.2, 0.1]
+    x = [value for row in zip(x1, x2, strict=True) for value in row]
+    time = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 7.0, 8.0, 9.0]
+    cause = [1, 2, 1, 0, 1, 1, 1, 0, 1, 2, 1, 0, 2, 1]
+    weights = [1.0, 1.2, 0.8, 1.5, 0.9, 1.1, 0.75, 1.3, 1.0, 0.85, 1.25, 0.95, 1.4, 1.05]
+    expected = {
+        "breslow": ([1.0046774476980949, 0.8108994771525215], -13.884743933880371),
+        "efron": ([1.0029646789269757, 0.8090613798416071], -13.766109932025635),
+    }
+
+    for ties, (coefficients, log_likelihood) in expected.items():
+        config = core.CauseSpecificCoxConfig(1, core.CensoringType.Censored, 100, 1e-9, ties)
+        result = core.cause_specific_cox(x, len(time), 2, time, cause, config, weights)
+        assert result.coefficients == pytest.approx(coefficients, abs=1e-9)
+        assert result.log_likelihood == pytest.approx(log_likelihood, abs=1e-9)
+        assert result.converged
+        assert result.n_iter == 4
+
+
 def test_joint_competing_risk_bindings_are_typed_to_runtime_surface():
     setup_survival_import()
     core = importlib.import_module("survival._survival")
