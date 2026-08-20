@@ -353,9 +353,9 @@ mod tests {
         assert_eq!(gap.n_events, 112);
         assert!(gap.converged);
         assert_eq!(gap.event_specific_coef.len(), 4);
-        assert_eq!(gap.baseline_cumhaz.len(), 55);
-        assert_eq!(gap.baseline_times.len(), 55);
-        assert_eq!(gap.baseline_strata.len(), 55);
+        assert_eq!(gap.baseline_cumhaz.len(), 88);
+        assert_eq!(gap.baseline_times.len(), 88);
+        assert_eq!(gap.baseline_strata.len(), 88);
         assert_close(gap.coef[0], -0.279_004_515_497_076_56, 1e-9);
         assert_close(gap.coef[1], 0.007_415_087_501_994_803, 1e-9);
         assert_close(gap.coef[2], 0.158_045_899_958_246_67, 1e-9);
@@ -367,9 +367,9 @@ mod tests {
         assert_eq!(total.n_subjects, 85);
         assert_eq!(total.n_events, 112);
         assert!(total.converged);
-        assert_eq!(total.baseline_cumhaz.len(), 68);
-        assert_eq!(total.baseline_times.len(), 68);
-        assert_eq!(total.baseline_strata.len(), 68);
+        assert_eq!(total.baseline_cumhaz.len(), 100);
+        assert_eq!(total.baseline_times.len(), 100);
+        assert_eq!(total.baseline_strata.len(), 100);
         assert_close(total.coef[0], -0.333_488_726_434_080_34, 1e-9);
         assert_close(total.coef[1], -0.008_494_666_106_611_051, 1e-9);
         assert_close(total.coef[2], 0.119_617_237_977_565_67, 1e-9);

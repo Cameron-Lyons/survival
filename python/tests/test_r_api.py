@@ -9865,8 +9865,11 @@ def test_coxph_detail_exposes_r_style_event_contributions():
     assert detail.n_event == detail.nevent
     assert detail.nrisk == [len(data["time"]) - idx for idx in event_indices]
     assert detail.n_risk_at_times() == detail.nrisk
-    assert detail.cumulative_hazard == pytest.approx(baseline_cumhaz)
-    assert detail.cumulative_hazards() == pytest.approx(baseline_cumhaz)
+    event_baseline = [
+        baseline_cumhaz[baseline_times.index(event_time)] for event_time in detail.time
+    ]
+    assert detail.cumulative_hazard == pytest.approx(event_baseline)
+    assert detail.cumulative_hazards() == pytest.approx(event_baseline)
     assert detail.hazards() == pytest.approx(detail.hazard)
     expected_x = [[x1, x2] for x1, x2 in zip(data["x1"], data["x2"], strict=True)]
     expected_y = [
@@ -9879,7 +9882,7 @@ def test_coxph_detail_exposes_r_style_event_contributions():
     assert [sum(row[col_idx] for row in detail.score) for col_idx in range(2)] == pytest.approx(
         fit.score_vector
     )
-    assert baseline_times == pytest.approx(detail.time)
+    assert baseline_times == pytest.approx(sorted(set(data["time"])))
     assert all(value > 0.0 for value in detail.varhaz)
 
 
@@ -11869,7 +11872,7 @@ def test_predict_expected_uses_counting_process_entry_intervals():
     expected = survival.predict(fit, type="expected")
     martingale = survival.r_api.residuals(fit, type="martingale")
 
-    assert hazard_times == pytest.approx([2.0, 4.0, 5.0])
+    assert hazard_times == pytest.approx([2.0, 4.0, 5.0, 6.0])
     assert expected[3] == pytest.approx(hazards[-1] - hazards[0])
     assert martingale[3] == pytest.approx(-expected[3])
 
@@ -14091,14 +14094,12 @@ def test_basehaz_uses_fitted_coxph_strata():
     times, hazards, strata = fit.basehaz_with_strata(False)
     result = survival.basehaz(fit, centered=False)
     unpacked_times, unpacked_hazards = result
-    expected_event_times = [1.0, 2.0, 3.0, 4.0]
-    expected_event_hazards = [1.0 / 3.0, 1.0 / 3.0 + 1.0 / 2.0, 1.0 / 2.0, 1.5]
     expected_times = [1.0, 2.0, 4.0, 1.0, 3.0, 4.0]
     expected_hazards = [1.0 / 3.0, 5.0 / 6.0, 5.0 / 6.0, 0.0, 0.5, 1.5]
 
-    assert times == pytest.approx(expected_event_times)
-    assert hazards == pytest.approx(expected_event_hazards)
-    assert strata == [0, 0, 1, 1]
+    assert times == pytest.approx(expected_times)
+    assert hazards == pytest.approx(expected_hazards)
+    assert strata == [0, 0, 0, 1, 1, 1]
     assert unpacked_times == pytest.approx(expected_times)
     assert unpacked_hazards == pytest.approx(expected_hazards)
     assert result.time == pytest.approx(expected_times)
@@ -14176,17 +14177,19 @@ def test_basehaz_uses_efron_tie_increments_for_fitted_coxph():
     efron_times, efron_hazard = efron.basehaz(False)
     detail = survival.coxph_detail(efron)
 
-    assert breslow_times == pytest.approx([1.0, 3.0])
+    assert breslow_times == pytest.approx([1.0, 2.0, 3.0])
     assert efron_times == pytest.approx(breslow_times)
-    assert breslow_hazard == pytest.approx([2.0 / 4.0, 2.0 / 4.0 + 1.0 / 1.0])
-    assert efron_hazard == pytest.approx([1.0 / 4.0 + 1.0 / 3.0, 1.0 / 4.0 + 1.0 / 3.0 + 1.0])
+    assert breslow_hazard == pytest.approx([2.0 / 4.0, 2.0 / 4.0, 2.0 / 4.0 + 1.0])
+    assert efron_hazard == pytest.approx(
+        [1.0 / 4.0 + 1.0 / 3.0, 1.0 / 4.0 + 1.0 / 3.0, 1.0 / 4.0 + 1.0 / 3.0 + 1.0]
+    )
     assert efron_hazard[0] > breslow_hazard[0]
-    assert efron_hazard == pytest.approx(detail.cumulative_hazard)
+    assert [efron_hazard[0], efron_hazard[2]] == pytest.approx(detail.cumulative_hazard)
     surv = survival.survfit(efron)
     event_only = survival.survfit(efron, censor=False)
     assert surv.time == pytest.approx([1.0, 2.0, 3.0])
-    assert surv.cumhaz[0] == pytest.approx([efron_hazard[0], efron_hazard[0], efron_hazard[1]])
-    assert event_only.cumhaz[0] == pytest.approx(efron_hazard)
+    assert surv.cumhaz[0] == pytest.approx(efron_hazard)
+    assert event_only.cumhaz[0] == pytest.approx([efron_hazard[0], efron_hazard[2]])
 
 
 def test_survfit_coxph_stratified_default_returns_one_curve_per_stratum():

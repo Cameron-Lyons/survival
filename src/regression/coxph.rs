@@ -128,7 +128,7 @@ impl CoxPHFit {
             0.0
         };
         let (base_times, base_hazards, base_strata) =
-            self.basehaz_with_strata_internal(centered)?;
+            self.event_basehaz_with_strata_internal(centered)?;
         let baseline =
             StratifiedBaselineLookup::from_components(&base_times, &base_hazards, &base_strata);
         let times = baseline.times_for_strata(strata);
@@ -158,6 +158,21 @@ impl CoxPHFit {
     pub(crate) fn basehaz_with_strata_internal(
         &self,
         centered: bool,
+    ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
+        self.compute_basehaz_with_strata(centered, true)
+    }
+
+    fn event_basehaz_with_strata_internal(
+        &self,
+        centered: bool,
+    ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
+        self.compute_basehaz_with_strata(centered, false)
+    }
+
+    fn compute_basehaz_with_strata(
+        &self,
+        centered: bool,
+        include_censor_times: bool,
     ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
         let n = self.event_times.len();
         if n == 0 {
@@ -191,26 +206,36 @@ impl CoxPHFit {
                 });
         }
 
-        let total_event_count = self.status.iter().filter(|&&status| status == 1).count();
-        let mut out_times = Vec::with_capacity(total_event_count);
-        let mut out_hazards = Vec::with_capacity(total_event_count);
-        let mut out_strata = Vec::with_capacity(total_event_count);
+        let capacity = if include_censor_times {
+            n
+        } else {
+            self.status.iter().filter(|&&status| status == 1).count()
+        };
+        let mut out_times = Vec::with_capacity(capacity);
+        let mut out_hazards = Vec::with_capacity(capacity);
+        let mut out_strata = Vec::with_capacity(capacity);
         let use_entry_times = self.entry_times.is_some();
         let use_efron = self.method == "efron";
 
         for (stratum, mut rows) in rows_by_stratum {
             let stratum_event_count = rows.iter().filter(|row| row.status == 1).count();
-            let mut event_times = Vec::with_capacity(stratum_event_count);
+            let mut output_times = Vec::with_capacity(if include_censor_times {
+                rows.len()
+            } else {
+                stratum_event_count
+            });
             let mut death_order = Vec::with_capacity(stratum_event_count);
             for (row_idx, row) in rows.iter().enumerate() {
+                if include_censor_times || row.status == 1 {
+                    output_times.push(row.stop);
+                }
                 if row.status == 1 {
-                    event_times.push(row.stop);
                     death_order.push(row_idx);
                 }
             }
-            event_times.sort_by(|a, b| a.total_cmp(b));
-            event_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
-            if event_times.is_empty() {
+            output_times.sort_by(|a, b| a.total_cmp(b));
+            output_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
+            if output_times.is_empty() {
                 continue;
             }
 
@@ -255,13 +280,13 @@ impl CoxPHFit {
             }
 
             let mut cumulative = 0.0;
-            for event_time in event_times {
-                active.advance_to(event_time, |_, _| {});
+            for output_time in output_times {
+                active.advance_to(output_time, |_, _| {});
 
                 let lower = death_order
-                    .partition_point(|&row_idx| rows[row_idx].stop <= event_time - TIME_EPSILON);
+                    .partition_point(|&row_idx| rows[row_idx].stop <= output_time - TIME_EPSILON);
                 let upper = death_order
-                    .partition_point(|&row_idx| rows[row_idx].stop < event_time + TIME_EPSILON);
+                    .partition_point(|&row_idx| rows[row_idx].stop < output_time + TIME_EPSILON);
                 let deaths = upper - lower;
                 let events = death_weight_prefix[upper] - death_weight_prefix[lower];
                 if active.risk_sum > 0.0 {
@@ -278,7 +303,7 @@ impl CoxPHFit {
                         cumulative += scaled_hazard_increment(events, active.risk_sum, risk_scale);
                     }
                 }
-                out_times.push(event_time);
+                out_times.push(output_time);
                 out_hazards.push(cumulative);
                 out_strata.push(stratum);
             }
@@ -369,7 +394,7 @@ impl CoxPHFit {
         } else {
             0.0
         };
-        let (times, hazards) = self.basehaz(centered)?;
+        let (times, hazards, _) = self.event_basehaz_with_strata_internal(centered)?;
         let curves = rows
             .iter()
             .map(|row| {
@@ -422,7 +447,7 @@ impl CoxPHFit {
             0.0
         };
         let (base_times, base_hazards, base_strata) =
-            self.basehaz_with_strata_internal(centered)?;
+            self.event_basehaz_with_strata_internal(centered)?;
         let baseline =
             StratifiedBaselineLookup::from_components(&base_times, &base_hazards, &base_strata);
 
@@ -939,25 +964,22 @@ mod tests {
         let mut out_strata = Vec::new();
 
         for stratum in strata_values {
-            let mut event_times: Vec<f64> = fit
+            let mut output_times: Vec<f64> = fit
                 .event_times
                 .iter()
-                .zip(fit.status.iter())
                 .zip(row_strata.iter())
-                .filter_map(|((&time, &status), &row_stratum)| {
-                    (status == 1 && row_stratum == stratum).then_some(time)
-                })
+                .filter_map(|(&time, &row_stratum)| (row_stratum == stratum).then_some(time))
                 .collect();
-            event_times.sort_by(|a, b| a.total_cmp(b));
-            event_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
+            output_times.sort_by(|a, b| a.total_cmp(b));
+            output_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
 
             let mut cumulative = 0.0;
-            for event_time in event_times {
+            for output_time in output_times {
                 let death_indices: Vec<usize> = (0..n)
                     .filter(|&idx| {
                         row_strata[idx] == stratum
                             && fit.status[idx] == 1
-                            && (fit.event_times[idx] - event_time).abs() < TIME_EPSILON
+                            && (fit.event_times[idx] - output_time).abs() < TIME_EPSILON
                     })
                     .collect();
                 let events = death_indices
@@ -967,11 +989,11 @@ mod tests {
                 let risk_sum = (0..n)
                     .filter(|&idx| {
                         row_strata[idx] == stratum
-                            && fit.event_times[idx] >= event_time
+                            && fit.event_times[idx] >= output_time
                             && fit
                                 .entry_times
                                 .as_ref()
-                                .is_none_or(|entry| entry[idx] < event_time)
+                                .is_none_or(|entry| entry[idx] < output_time)
                     })
                     .map(|idx| risk_scores[idx])
                     .sum::<f64>();
@@ -993,7 +1015,7 @@ mod tests {
                         cumulative += events / risk_sum;
                     }
                 }
-                out_times.push(event_time);
+                out_times.push(output_time);
                 out_hazards.push(cumulative);
                 out_strata.push(stratum);
             }
@@ -1143,6 +1165,34 @@ mod tests {
                 assert_eq!(actual.2, expected.2);
             }
         }
+    }
+
+    #[test]
+    fn test_coxph_fit_basehaz_includes_censor_times_and_zero_event_strata() {
+        let fit = coxph_fit(
+            vec![2.0, 3.0, 1.0, 4.0],
+            vec![1, 0, 0, 0],
+            vec![vec![0.0]; 4],
+            Some(vec![1, 1, 2, 2]),
+            None,
+            None,
+            Some(vec![0.0]),
+            Some(0),
+            None,
+            None,
+            Some("breslow"),
+            None,
+            None,
+        )
+        .expect("baseline-only stratified fit should succeed");
+
+        let (times, hazards, strata) = fit
+            .basehaz_with_strata_internal(false)
+            .expect("baseline hazard should be computed");
+
+        assert_eq!(times, vec![2.0, 3.0, 1.0, 4.0]);
+        assert_close_vec(&hazards, &[0.5, 0.5, 0.0, 0.0]);
+        assert_eq!(strata, vec![1, 1, 2, 2]);
     }
 
     #[test]
