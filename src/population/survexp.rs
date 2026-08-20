@@ -4,6 +4,7 @@ use crate::internal::validation::{validate_finite, validate_non_negative};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use std::collections::HashMap;
 
 const DAYS_PER_YEAR: f64 = 365.25;
 const SUBJECT_BATCH_SIZE: usize = 2048;
@@ -134,6 +135,273 @@ pub fn survexp(
         "conditional" => compute_conditional(&time, &age, &year, sex, ratetable, &eval_times),
         "individual" => compute_individual(&time, &age, &year, sex, ratetable, &eval_times),
         _ => compute_hakulinen(&time, &age, &year, sex, ratetable, &eval_times),
+    }
+}
+
+fn coordinate_rows(columns: &[Vec<f64>], row_count: usize) -> Vec<f64> {
+    let mut rows = Vec::with_capacity(row_count.saturating_mul(columns.len()));
+    for row in 0..row_count {
+        rows.extend(columns.iter().map(|column| column[row]));
+    }
+    rows
+}
+
+fn subject_coordinate_cumulative_hazards(
+    base_coordinates: &[f64],
+    ratetable: &RateTable,
+    eval_times: &[f64],
+) -> PyResult<Vec<f64>> {
+    let mut result = Vec::with_capacity(eval_times.len());
+    let mut previous_time = 0.0;
+    let mut cumulative_hazard = 0.0;
+    for &eval_time in eval_times {
+        if eval_time < previous_time {
+            cumulative_hazard =
+                ratetable.cumulative_hazard_from_values(base_coordinates, eval_time)?;
+        } else {
+            cumulative_hazard += ratetable.cumulative_hazard_interval_from_values(
+                base_coordinates,
+                previous_time,
+                eval_time,
+            )?;
+        }
+        result.push(cumulative_hazard);
+        previous_time = eval_time;
+    }
+    Ok(result)
+}
+
+fn compute_coordinate_curve_averages(
+    time: &[f64],
+    coordinates: &[f64],
+    dimension_count: usize,
+    ratetable: &RateTable,
+    eval_times: &[f64],
+    observed_risk_set: bool,
+) -> PyResult<CurveAverages> {
+    let n_times = eval_times.len();
+    let mut survival_totals = vec![0.0; n_times];
+    let mut hazard_totals = vec![0.0; n_times];
+    let mut n_risk = vec![0.0; n_times];
+
+    for batch_start in (0..time.len()).step_by(SUBJECT_BATCH_SIZE) {
+        let batch_end = (batch_start + SUBJECT_BATCH_SIZE).min(time.len());
+        let batch_hazards = (batch_start..batch_end)
+            .into_par_iter()
+            .map(|row| {
+                let start = row * dimension_count;
+                subject_coordinate_cumulative_hazards(
+                    &coordinates[start..start + dimension_count],
+                    ratetable,
+                    eval_times,
+                )
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+
+        for (offset, hazards) in batch_hazards.into_iter().enumerate() {
+            let subject = batch_start + offset;
+            for (time_index, (&eval_time, cumulative_hazard)) in
+                eval_times.iter().zip(hazards).enumerate()
+            {
+                if observed_risk_set && time[subject] < eval_time {
+                    continue;
+                }
+                survival_totals[time_index] += (-cumulative_hazard).exp();
+                hazard_totals[time_index] += cumulative_hazard;
+                n_risk[time_index] += 1.0;
+            }
+        }
+    }
+
+    let mut survival = Vec::with_capacity(n_times);
+    let mut mean_cumhaz = Vec::with_capacity(n_times);
+    for ((survival_total, hazard_total), count) in
+        survival_totals.into_iter().zip(hazard_totals).zip(&n_risk)
+    {
+        if *count > 0.0 {
+            survival.push(survival_total / count);
+            mean_cumhaz.push(hazard_total / count);
+        } else {
+            survival.push(0.0);
+            mean_cumhaz.push(0.0);
+        }
+    }
+    Ok(CurveAverages {
+        survival,
+        mean_cumhaz,
+        n_risk,
+    })
+}
+
+fn compute_coordinate_conditional(
+    time: &[f64],
+    coordinates: &[f64],
+    dimension_count: usize,
+    ratetable: &RateTable,
+    eval_times: &[f64],
+) -> PyResult<SurvExpResult> {
+    let mut surv = vec![1.0; eval_times.len()];
+    let mut cumhaz = vec![0.0; eval_times.len()];
+    let mut n_risk = vec![time.len() as f64; eval_times.len()];
+    let mut previous_time = 0.0;
+    let mut previous_survival: f64 = 1.0;
+
+    for (time_index, &eval_time) in eval_times.iter().enumerate() {
+        let mut at_risk = 0usize;
+        let mut total_hazard = 0.0;
+        for (row, &follow_up) in time.iter().enumerate() {
+            if follow_up < eval_time {
+                continue;
+            }
+            at_risk += 1;
+            let start = row * dimension_count;
+            total_hazard += ratetable.cumulative_hazard_interval_from_values(
+                &coordinates[start..start + dimension_count],
+                previous_time,
+                eval_time,
+            )?;
+        }
+        n_risk[time_index] = at_risk as f64;
+        if at_risk == 0 {
+            surv[time_index] = previous_survival;
+            cumhaz[time_index] = if previous_survival > 0.0 {
+                -previous_survival.ln()
+            } else {
+                f64::INFINITY
+            };
+            continue;
+        }
+        let interval_survival = (-(total_hazard / at_risk as f64)).exp();
+        previous_survival *= interval_survival;
+        surv[time_index] = previous_survival;
+        cumhaz[time_index] = if previous_survival > 0.0 {
+            -previous_survival.ln()
+        } else {
+            f64::INFINITY
+        };
+        previous_time = eval_time;
+    }
+
+    Ok(SurvExpResult {
+        time: eval_times.to_vec(),
+        surv,
+        n_risk,
+        cumhaz,
+        method: "conditional".to_string(),
+        n: time.len(),
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, ratetable, coordinates, times=None, method=None))]
+pub fn survexp_from_coords(
+    time: Vec<f64>,
+    ratetable: &RateTable,
+    coordinates: HashMap<String, Vec<f64>>,
+    times: Option<Vec<f64>>,
+    method: Option<&str>,
+) -> PyResult<SurvExpResult> {
+    validate_finite(&time, "time")?;
+    validate_non_negative(&time, "time")?;
+    let coordinate_columns = ratetable.aligned_coordinate_columns(&coordinates, time.len())?;
+    let dimension_count = coordinate_columns.len();
+    let coordinate_rows = coordinate_rows(&coordinate_columns, time.len());
+    let calculation = method.unwrap_or("hakulinen");
+    if !["ederer", "hakulinen", "conditional", "individual"].contains(&calculation) {
+        return Err(value_error(
+            "method must be 'ederer', 'hakulinen', 'conditional', or 'individual'",
+        ));
+    }
+    if time.is_empty() {
+        return Ok(SurvExpResult {
+            time: vec![],
+            surv: vec![],
+            n_risk: vec![],
+            cumhaz: vec![],
+            method: calculation.to_string(),
+            n: 0,
+        });
+    }
+    let eval_times = match times {
+        Some(values) => values,
+        None => {
+            let mut values = time.clone();
+            values.sort_by(f64::total_cmp);
+            values.dedup_by(|left, right| same_time(*left, *right));
+            values
+        }
+    };
+    validate_eval_times(&eval_times)?;
+    if calculation == "conditional" {
+        return compute_coordinate_conditional(
+            &time,
+            &coordinate_rows,
+            dimension_count,
+            ratetable,
+            &eval_times,
+        );
+    }
+    let observed_risk_set = calculation != "ederer";
+    let averages = compute_coordinate_curve_averages(
+        &time,
+        &coordinate_rows,
+        dimension_count,
+        ratetable,
+        &eval_times,
+        observed_risk_set,
+    )?;
+    let cumhaz = if calculation == "individual" {
+        averages
+            .survival
+            .iter()
+            .map(|&value| {
+                if value > 0.0 {
+                    -value.ln()
+                } else {
+                    f64::INFINITY
+                }
+            })
+            .collect()
+    } else {
+        averages.mean_cumhaz
+    };
+    Ok(SurvExpResult {
+        time: eval_times,
+        surv: averages.survival,
+        n_risk: averages.n_risk,
+        cumhaz,
+        method: calculation.to_string(),
+        n: time.len(),
+    })
+}
+
+#[pyfunction]
+pub fn survexp_individual_from_coords(
+    time: Vec<f64>,
+    ratetable: &RateTable,
+    coordinates: HashMap<String, Vec<f64>>,
+) -> PyResult<Vec<f64>> {
+    validate_finite(&time, "time")?;
+    validate_non_negative(&time, "time")?;
+    let coordinate_columns = ratetable.aligned_coordinate_columns(&coordinates, time.len())?;
+    let dimension_count = coordinate_columns.len();
+    let coordinate_rows = coordinate_rows(&coordinate_columns, time.len());
+    let expected_for_subject = |row: usize| {
+        let start = row * dimension_count;
+        ratetable
+            .cumulative_hazard_from_values(
+                &coordinate_rows[start..start + dimension_count],
+                time[row],
+            )
+            .map(|hazard| (-hazard).exp())
+    };
+    if time.len() > PARALLEL_THRESHOLD_XLARGE {
+        (0..time.len())
+            .into_par_iter()
+            .map(expected_for_subject)
+            .collect()
+    } else {
+        (0..time.len()).map(expected_for_subject).collect()
     }
 }
 
@@ -465,7 +733,7 @@ pub fn survexp_individual(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::population::ratetable::create_simple_ratetable;
+    use crate::population::ratetable::{DimType, RateDimension, create_simple_ratetable};
 
     fn create_test_ratetable() -> RateTable {
         let age_breaks = vec![0.0, 36500.0, 73000.0];
@@ -503,6 +771,125 @@ mod tests {
 
         assert_eq!(result.n, 0);
         assert!(result.time.is_empty());
+    }
+
+    #[test]
+    fn coordinate_survexp_matches_specialized_age_year_sex_path() {
+        let rt = create_test_ratetable();
+        let time = vec![180.0, 730.5, 1095.75];
+        let age = vec![14610.0, 18262.5, 25567.5];
+        let year = vec![1999.0, 2000.0, 2001.0];
+        let sex = vec![0, 1, 0];
+        let times = vec![90.0, 365.25, 730.5];
+        let coordinates = HashMap::from([
+            ("age".to_string(), age.clone()),
+            ("year".to_string(), year.clone()),
+            (
+                "sex".to_string(),
+                sex.iter().map(|&value| f64::from(value)).collect(),
+            ),
+        ]);
+
+        for method in ["ederer", "hakulinen", "conditional", "individual"] {
+            let specialized = survexp(
+                time.clone(),
+                age.clone(),
+                year.clone(),
+                &rt,
+                Some(sex.clone()),
+                Some(times.clone()),
+                Some(method),
+            )
+            .unwrap();
+            let generic = survexp_from_coords(
+                time.clone(),
+                &rt,
+                coordinates.clone(),
+                Some(times.clone()),
+                Some(method),
+            )
+            .unwrap();
+            assert_eq!(generic.time, specialized.time);
+            assert_eq!(generic.n_risk, specialized.n_risk);
+            for (actual, expected) in generic.surv.iter().zip(&specialized.surv) {
+                assert!((actual - expected).abs() < 1e-12);
+            }
+            for (actual, expected) in generic.cumhaz.iter().zip(&specialized.cumhaz) {
+                assert!((actual - expected).abs() < 1e-12);
+            }
+        }
+
+        let specialized = survexp_individual(time.clone(), age, year, &rt, Some(sex)).unwrap();
+        let generic = survexp_individual_from_coords(time, &rt, coordinates).unwrap();
+        for (actual, expected) in generic.iter().zip(&specialized) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn coordinate_survexp_uses_custom_factor_and_continuous_dimensions() {
+        let ratetable = RateTable::new(
+            vec![
+                RateDimension::new("age".to_string(), DimType::Age, vec![0.0, 100.0], None),
+                RateDimension::new(
+                    "year".to_string(),
+                    DimType::Year,
+                    vec![2000.0, 2010.0],
+                    None,
+                ),
+                RateDimension::new(
+                    "region".to_string(),
+                    DimType::Factor,
+                    vec![],
+                    Some(vec!["urban".to_string(), "rural".to_string()]),
+                ),
+                RateDimension::new(
+                    "exposure".to_string(),
+                    DimType::Continuous,
+                    vec![0.0, 1.0, 2.0],
+                    None,
+                ),
+            ],
+            vec![0.001, 0.002, 0.003, 0.004],
+            None,
+        )
+        .unwrap();
+        let coordinates = HashMap::from([
+            ("age".to_string(), vec![20.0]),
+            ("year".to_string(), vec![2001.0]),
+            ("region".to_string(), vec![1.0]),
+            ("exposure".to_string(), vec![1.5]),
+        ]);
+
+        let actual = survexp_individual_from_coords(vec![10.0], &ratetable, coordinates).unwrap();
+        assert!((actual[0] - (-0.04_f64).exp()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn coordinate_survexp_validates_named_column_contract() {
+        Python::initialize();
+        let ratetable = create_test_ratetable();
+        let valid = HashMap::from([
+            ("age".to_string(), vec![20.0]),
+            ("year".to_string(), vec![2001.0]),
+            ("sex".to_string(), vec![0.0]),
+        ]);
+
+        let mut missing = valid.clone();
+        missing.remove("year");
+        assert!(survexp_individual_from_coords(vec![10.0], &ratetable, missing).is_err());
+
+        let mut ragged = valid.clone();
+        ragged.insert("age".to_string(), vec![20.0, 30.0]);
+        assert!(survexp_individual_from_coords(vec![10.0], &ratetable, ragged).is_err());
+
+        let mut unknown = valid.clone();
+        unknown.insert("region".to_string(), vec![0.0]);
+        assert!(survexp_individual_from_coords(vec![10.0], &ratetable, unknown).is_err());
+
+        let mut fractional_factor = valid;
+        fractional_factor.insert("sex".to_string(), vec![0.5]);
+        assert!(survexp_individual_from_coords(vec![10.0], &ratetable, fractional_factor).is_err());
     }
 
     #[test]

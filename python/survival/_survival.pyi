@@ -6546,12 +6546,24 @@ def survexp(
     times: list[float] | None = None,
     method: str | None = None,
 ) -> SurvExpResult: ...
+def survexp_from_coords(
+    time: list[float],
+    ratetable: RateTable,
+    coordinates: dict[str, list[float]],
+    times: list[float] | None = None,
+    method: str | None = None,
+) -> SurvExpResult: ...
 def survexp_individual(
     time: list[float],
     age: list[float],
     year: list[float],
     ratetable: RateTable,
     sex: list[int] | None = None,
+) -> list[float]: ...
+def survexp_individual_from_coords(
+    time: list[float],
+    ratetable: RateTable,
+    coordinates: dict[str, list[float]],
 ) -> list[float]: ...
 def summary_pyears(
     pyears: list[float],

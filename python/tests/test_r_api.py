@@ -3182,6 +3182,52 @@ def test_survexp_formula_supports_positional_data_subset_na_and_individual_outpu
         )
 
 
+def test_survexp_formula_supports_custom_factor_and_continuous_rate_dimensions():
+    table = survival.RateTable(
+        [
+            survival.RateDimension("age", survival.DimType.Age, [0.0, 100.0]),
+            survival.RateDimension("year", survival.DimType.Year, [2000.0, 2010.0]),
+            survival.RateDimension(
+                "region",
+                survival.DimType.Factor,
+                [],
+                ["urban", "rural"],
+            ),
+            survival.RateDimension(
+                "exposure",
+                survival.DimType.Continuous,
+                [0.0, 1.0, 2.0],
+            ),
+        ],
+        [0.001, 0.002, 0.003, 0.004],
+    )
+    data = {
+        "followup": [10.0, 10.0],
+        "status": [1, 1],
+        "age": [20.0, 20.0],
+        "year": [2001.0, 2001.0],
+        "region": ["urban", "rural"],
+        "exposure": [0.5, 1.5],
+    }
+
+    individual = survival.survexp(
+        "Surv(followup, status) ~ 1",
+        data,
+        ratetable=table,
+        method="individual.s",
+    )
+    cohort = survival.survexp(
+        "Surv(followup, status) ~ 1",
+        data,
+        ratetable=table,
+        times=[10.0],
+    )
+
+    assert individual == pytest.approx([math.exp(-0.01), math.exp(-0.04)])
+    assert isinstance(cohort, survival.SurvExpFormulaResult)
+    assert cohort.surv[0] == pytest.approx([sum(individual) / 2.0])
+
+
 def test_match_ratetable_reorders_columns_and_encodes_factor_levels():
     table = survival.survexp_us()
     result = survival.match_ratetable(
