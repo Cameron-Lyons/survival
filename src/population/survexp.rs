@@ -1,5 +1,5 @@
 use super::ratetable::RateTable;
-use crate::constants::same_time;
+use crate::constants::{PARALLEL_THRESHOLD_XLARGE, same_time};
 use crate::internal::validation::{validate_finite, validate_non_negative};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -447,15 +447,17 @@ pub fn survexp_individual(
     let sex = sex.as_deref();
     validate_optional_sex(sex, n)?;
 
-    let mut expected = Vec::with_capacity(n);
-
-    for i in 0..n {
+    let expected_for_subject = |i: usize| {
         let age_end = age[i] + time[i];
-        let exp_s = ratetable
+        ratetable
             .expected_survival(age[i], age_end, year[i], Some(sex_at(sex, i)))
-            .unwrap_or(1.0);
-        expected.push(exp_s);
-    }
+            .unwrap_or(1.0)
+    };
+    let expected = if n > PARALLEL_THRESHOLD_XLARGE {
+        (0..n).into_par_iter().map(expected_for_subject).collect()
+    } else {
+        (0..n).map(expected_for_subject).collect()
+    };
 
     Ok(expected)
 }
@@ -594,6 +596,44 @@ mod tests {
         let explicit_zero_individual =
             survexp_individual(time, age, year, &rt, Some(vec![0; 3])).unwrap();
         assert_eq!(default_individual, explicit_zero_individual);
+    }
+
+    #[test]
+    fn parallel_individual_survival_matches_scalar_boundary() {
+        let rt = create_test_ratetable();
+        let n = PARALLEL_THRESHOLD_XLARGE + 7;
+        let time = (0..n)
+            .map(|index| 100.0 + (index % 1200) as f64)
+            .collect::<Vec<_>>();
+        let age = (0..n)
+            .map(|index| 1000.0 + (index % 90) as f64 * 365.25)
+            .collect::<Vec<_>>();
+        let year = (0..n)
+            .map(|index| 1990.0 + (index % 30) as f64)
+            .collect::<Vec<_>>();
+        let sex = (0..n).map(|index| (index % 2) as i32).collect::<Vec<_>>();
+
+        let actual = survexp_individual(
+            time.clone(),
+            age.clone(),
+            year.clone(),
+            &rt,
+            Some(sex.clone()),
+        )
+        .unwrap();
+        let expected = (0..n)
+            .map(|index| {
+                rt.expected_survival(
+                    age[index],
+                    age[index] + time[index],
+                    year[index],
+                    Some(sex[index]),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
