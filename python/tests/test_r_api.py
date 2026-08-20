@@ -4669,6 +4669,7 @@ def test_r_style_frailty_encoding_normalizes_levels_and_sparse_default():
         levels=list("abcdef"),
         sparse=None,
     )
+    numeric_encoded = survival.r_api._frailty_encoding([10.0, 2.0, 1.0], sparse=False)
 
     assert encoded["codes"] == [2, 1, None, 2]
     assert encoded["levels"] == ["a", "b"]
@@ -4676,6 +4677,8 @@ def test_r_style_frailty_encoding_normalizes_levels_and_sparse_default():
     assert encoded["sparse"] is False
     assert sparse_encoded["codes"] == [1, 2, 3, 4, 5, 6]
     assert sparse_encoded["sparse"] is True
+    assert numeric_encoded["levels"] == ["1", "2", "10"]
+    assert numeric_encoded["codes"] == [3, 2, 1]
 
     with pytest.raises(ValueError, match="outside supplied levels"):
         survival.r_api._frailty_encoding(["c"], levels=["a", "b"])
@@ -9602,6 +9605,129 @@ def test_coxph_formula_combines_ridge_and_pspline_penalties():
         {ridge_term: 0.8806780229162634, spline_term: 1.4386713799659729},
         abs=1e-9,
     )
+
+
+def test_coxph_formula_gaussian_frailty_matches_fixed_theta_reference():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+        "g": list("abcd") * 3,
+    }
+    frailty_term = 'frailty(g,distribution="gaussian",theta=.5,sparse=False)'
+    fit = survival.coxph(
+        f"Surv(time,status) ~ x + {frailty_term}",
+        data=data,
+        ties="breslow",
+        max_iter=50,
+        eps=1e-12,
+        x=True,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [
+            -0.561937998585795,
+            0.182835639923556,
+            -0.0855299896454619,
+            -0.0416593468813984,
+            -0.0556463033966961,
+        ],
+        abs=1e-12,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-14.9089656949863, -12.250218462573],
+        abs=1e-12,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"x": 0.97569029553287, frailty_term: 1.31107496223349},
+        abs=1e-12,
+    )
+    assert survival.degrees_freedom(fit) == pytest.approx(2.28676525776636, abs=1e-12)
+    assert fit.history == {frailty_term: {"theta": 0.5, "done": True}}
+    assert survival.coef_names(fit) == ["x", "gauss:a", "gauss:b", "gauss:c", "gauss:d"]
+    assert [row[index] for index, row in enumerate(survival.vcov(fit))] == pytest.approx(
+        [
+            0.811603304706432,
+            0.336524661295475,
+            0.35974275183276,
+            0.328803828741119,
+            0.319391277013901,
+        ],
+        abs=1e-12,
+    )
+    assert survival.model_matrix(fit)["assign"] == [1, 2, 2, 2, 2]
+    assert survival.attrassign(fit) == {"x": [1], frailty_term: [2, 3, 4, 5]}
+    assert survival.predict(
+        fit,
+        {"x": [0.8, 1.3], "g": ["b", "d"]},
+        type="lp",
+    ) == pytest.approx([-0.019970556477119, -0.271055869521251], abs=1e-12)
+
+    automatic_dense = survival.coxph(
+        'Surv(time,status) ~ frailty(g,distribution="gaussian",theta=.5)',
+        data=data,
+    )
+    assert survival.coef_names(automatic_dense) == [
+        "gauss:a",
+        "gauss:b",
+        "gauss:c",
+        "gauss:d",
+    ]
+
+    ridge_term = "ridge(x,theta=.2,scale=False)"
+    mixed = survival.coxph(
+        f"Surv(time,status) ~ {ridge_term} + {frailty_term}",
+        data=data,
+        max_iter=50,
+        eps=1e-12,
+    )
+    assert mixed.coefficients[0] == pytest.approx(
+        [
+            -0.484294444061657,
+            0.18618129882343,
+            -0.0904754313597812,
+            -0.0357597993978543,
+            -0.059946068065795,
+        ],
+        abs=1e-12,
+    )
+    assert mixed.log_likelihood == pytest.approx(
+        [-14.9089656949863, -12.2518180546788],
+        abs=1e-12,
+    )
+    assert mixed.term_degrees_of_freedom == pytest.approx(
+        {ridge_term: 0.843372173660269, frailty_term: 1.3122461440832},
+        abs=1e-12,
+    )
+
+
+def test_coxph_formula_gaussian_frailty_rejects_unsupported_modes():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": [1, 0, 1, 1, 0, 1],
+        "g": list("abcdef"),
+    }
+    for option, exception, message in (
+        ("distribution='gamma',theta=.5", NotImplementedError, "only distribution"),
+        ("distribution='gaussian'", NotImplementedError, "fixed theta"),
+        ("distribution='gaussian',df=2", NotImplementedError, "fixed theta"),
+        ("distribution='gaussian',method='fixed'", ValueError, "requires theta"),
+        ("distribution='gaussian',theta=0", ValueError, "positive"),
+        ("distribution='gaussian',theta=.5,sparse=True", NotImplementedError, "sparse"),
+    ):
+        with pytest.raises(exception, match=message):
+            survival.coxph(f"Surv(time,status) ~ frailty(g,{option})", data=data)
+
+    with pytest.raises(NotImplementedError, match="sparse"):
+        survival.coxph(
+            'Surv(time,status) ~ frailty(g,distribution="gaussian",theta=.5)',
+            data=data,
+        )
+    with pytest.raises(NotImplementedError, match="supported only by coxph"):
+        survival.survreg(
+            'Surv(time,status) ~ frailty(g,distribution="gaussian",theta=.5,sparse=False)',
+            data=data,
+        )
 
 
 def test_coxph_formula_pspline_calibrates_target_df_against_reference():

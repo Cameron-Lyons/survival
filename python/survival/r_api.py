@@ -258,6 +258,20 @@ class _ModelPSplineTerm:
     pspline: _PSplineFormulaTerm
 
 
+@dataclass(frozen=True)
+class _FrailtyFormulaTerm:
+    term: _CovariateTerm
+    distribution: str
+    theta: float
+    sparse: bool | None
+    label: str
+
+
+@dataclass(frozen=True)
+class _ModelFrailtyTerm:
+    frailty: _FrailtyFormulaTerm
+
+
 _FormulaModelTerm = (
     _ModelCovariateTerm
     | _ModelStrataTerm
@@ -265,6 +279,7 @@ _FormulaModelTerm = (
     | _ModelClusterTerm
     | _ModelRidgeTerm
     | _ModelPSplineTerm
+    | _ModelFrailtyTerm
 )
 
 
@@ -276,6 +291,7 @@ class _FormulaTerms:
     clusters: list[str]
     ridge: list[_RidgeFormulaTerm] = field(default_factory=list)
     pspline: list[_PSplineFormulaTerm] = field(default_factory=list)
+    frailty: list[_FrailtyFormulaTerm] = field(default_factory=list)
     model_terms: list[_FormulaModelTerm] = field(default_factory=list)
     intercept: bool = True
 
@@ -288,6 +304,7 @@ class _CachedFormulaTerms:
     clusters: tuple[str, ...]
     ridge: tuple[_RidgeFormulaTerm, ...] = ()
     pspline: tuple[_PSplineFormulaTerm, ...] = ()
+    frailty: tuple[_FrailtyFormulaTerm, ...] = ()
     model_terms: tuple[_FormulaModelTerm, ...] = ()
     intercept: bool = True
 
@@ -318,7 +335,13 @@ class _PSplineDesignTerm:
     boundary_knots: tuple[float, float]
 
 
-_DesignTerm = _SingleDesignTerm | _InteractionDesignTerm | _PSplineDesignTerm
+@dataclass(frozen=True)
+class _FrailtyDesignTerm:
+    formula: _FrailtyFormulaTerm
+    levels: tuple[str, ...]
+
+
+_DesignTerm = _SingleDesignTerm | _InteractionDesignTerm | _PSplineDesignTerm | _FrailtyDesignTerm
 
 
 @dataclass(frozen=True)
@@ -355,6 +378,13 @@ class _PSplinePenaltyBlock:
     initial_theta: float
     maximum_df: float
     selection: str
+
+
+@dataclass(frozen=True)
+class _FrailtyPenaltyBlock:
+    label: str
+    columns: tuple[int, ...]
+    theta: float
 
 
 @dataclass(frozen=True)
@@ -3494,6 +3524,78 @@ def _parse_pspline_formula_term(term: str) -> _PSplineFormulaTerm:
     )
 
 
+def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
+    parts = _formula_response_parts(term[8:-1])
+    column: str | None = None
+    distribution = "gamma"
+    theta: float | None = None
+    df: float | None = None
+    method: str | None = None
+    sparse: bool | None = None
+    saw_option = False
+    seen_options: set[str] = set()
+    for part in parts:
+        option = _formula_named_option(part)
+        if option is None:
+            if saw_option or column is not None:
+                raise ValueError("frailty() requires one column before named options")
+            column, quoted = _formula_name(part)
+            if _unsupported_formula_name(column, quoted):
+                raise ValueError(f"unsupported frailty() formula column: {column}")
+            continue
+
+        saw_option = True
+        name, raw_value = option
+        name = name.lower()
+        if name in seen_options:
+            raise ValueError(f"frailty() contains multiple {name}= options")
+        seen_options.add(name)
+        value = _parse_formula_literal(raw_value)
+        if name == "distribution":
+            distribution = str(value).lower()
+        elif name == "theta":
+            theta = _finite_float(value, "frailty theta")
+        elif name == "df":
+            df = _finite_float(value, "frailty df")
+        elif name == "method":
+            method = str(value).lower()
+        elif name == "sparse":
+            sparse = _normalize_bool_option(value, "frailty sparse")
+        else:
+            raise ValueError(f"unsupported frailty() formula option: {name}")
+
+    if column is None:
+        raise ValueError("frailty() requires one column")
+    if distribution != "gaussian":
+        raise NotImplementedError(
+            "frailty() formulas currently support only distribution='gaussian'"
+        )
+    if method is None:
+        if theta is not None:
+            method = "fixed"
+        elif df == 0.0:
+            method = "aic"
+        elif df is not None:
+            method = "df"
+        else:
+            method = "reml"
+    if method != "fixed":
+        raise NotImplementedError("Gaussian frailty formulas currently require fixed theta")
+    if theta is None:
+        raise ValueError("fixed Gaussian frailty requires theta")
+    if df is not None:
+        raise ValueError("fixed Gaussian frailty cannot include df")
+    if theta <= 0.0:
+        raise ValueError("frailty theta must be positive")
+    return _FrailtyFormulaTerm(
+        term=_CovariateTerm(column, transform="frailty"),
+        distribution=distribution,
+        theta=theta,
+        sparse=sparse,
+        label=term,
+    )
+
+
 def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
     return _FormulaTerms(
         covariates=list(terms.covariates),
@@ -3502,6 +3604,7 @@ def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
         clusters=list(terms.clusters),
         ridge=list(terms.ridge),
         pspline=list(terms.pspline),
+        frailty=list(terms.frailty),
         model_terms=list(terms.model_terms),
         intercept=terms.intercept,
     )
@@ -3518,6 +3621,7 @@ def _split_terms_cached(
     clusters: list[str] = []
     ridge: list[_RidgeFormulaTerm] = []
     pspline: list[_PSplineFormulaTerm] = []
+    frailty: list[_FrailtyFormulaTerm] = []
     model_terms: list[_FormulaModelTerm] = []
     unsupported: list[str] = []
     intercept = True
@@ -3572,6 +3676,24 @@ def _split_terms_cached(
             else:
                 _append_unique(covariates, [covariate_term])
                 _append_unique(pspline, [pspline_term])
+                _append_unique(model_terms, [model_item])
+            continue
+        if term.startswith("frailty(") and term.endswith(")"):
+            frailty_term = _parse_frailty_formula_term(term)
+            if any(
+                existing.term == frailty_term.term and existing != frailty_term
+                for existing in frailty
+            ):
+                raise ValueError("frailty() formula terms must not reuse a column")
+            model_item = _ModelFrailtyTerm(frailty_term)
+            covariate_term = frailty_term.term
+            if op == "-":
+                _remove_values(covariates, [covariate_term])
+                _remove_values(frailty, [frailty_term])
+                _remove_values(model_terms, [model_item])
+            else:
+                _append_unique(covariates, [covariate_term])
+                _append_unique(frailty, [frailty_term])
                 _append_unique(model_terms, [model_item])
             continue
         if term.startswith("strata(") and term.endswith(")"):
@@ -3637,6 +3759,7 @@ def _split_terms_cached(
         clusters=tuple(clusters),
         ridge=tuple(ridge),
         pspline=tuple(pspline),
+        frailty=tuple(frailty),
         model_terms=tuple(model_terms),
         intercept=intercept,
     )
@@ -3977,7 +4100,10 @@ def _formula_factor_order(terms: Sequence[_CovariateSpec]) -> dict[_CovariateTer
 def _formula_model_term_degree(term: _FormulaModelTerm) -> int:
     if isinstance(term, _ModelCovariateTerm):
         return len(_covariate_factors(term.term))
-    if isinstance(term, _ModelStrataTerm | _ModelRidgeTerm | _ModelPSplineTerm):
+    if isinstance(
+        term,
+        _ModelStrataTerm | _ModelRidgeTerm | _ModelPSplineTerm | _ModelFrailtyTerm,
+    ):
         return 1
     return 0
 
@@ -3987,6 +4113,8 @@ def _formula_model_term_label(term: _FormulaModelTerm) -> str:
         return term.ridge.label
     if isinstance(term, _ModelPSplineTerm):
         return term.pspline.label
+    if isinstance(term, _ModelFrailtyTerm):
+        return term.frailty.label
     return ":".join(_formula_model_term_factors(term))
 
 
@@ -3999,6 +4127,20 @@ def _fit_pspline_design_term(
     if not values or any(not math.isfinite(value) for value in values):
         raise ValueError("pspline() formula columns must contain finite values")
     return _PSplineDesignTerm(formula, (min(values), max(values)))
+
+
+def _fit_frailty_design_term(
+    data: Any,
+    formula: _FrailtyFormulaTerm,
+    n: int,
+) -> _FrailtyDesignTerm:
+    encoding = _frailty_encoding(
+        _term_raw_values(data, formula.term, n),
+        sparse=formula.sparse,
+    )
+    if encoding["sparse"]:
+        raise NotImplementedError("sparse Gaussian frailty is not yet supported; pass sparse=False")
+    return _FrailtyDesignTerm(formula, tuple(encoding["levels"]))
 
 
 def _categorical_design_factors(spec: _DesignTerm) -> list[_CategoricalDesignTerm]:
@@ -4043,9 +4185,12 @@ def _fit_formula_design(
     *,
     include_intercept: bool = False,
     allow_pspline: bool = False,
+    allow_frailty: bool = False,
 ) -> _FormulaDesign:
     if terms.pspline and not allow_pspline:
         raise NotImplementedError("pspline() formula terms are currently supported only by coxph")
+    if terms.frailty and not allow_frailty:
+        raise NotImplementedError("frailty() formula terms are currently supported only by coxph")
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
     factor_order = _formula_factor_order(terms.covariates)
     ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
@@ -4055,7 +4200,11 @@ def _fit_formula_design(
             for term in terms.model_terms
             if isinstance(
                 term,
-                _ModelCovariateTerm | _ModelStrataTerm | _ModelRidgeTerm | _ModelPSplineTerm,
+                _ModelCovariateTerm
+                | _ModelStrataTerm
+                | _ModelRidgeTerm
+                | _ModelPSplineTerm
+                | _ModelFrailtyTerm,
             )
         ),
         key=_formula_model_term_degree,
@@ -4069,17 +4218,21 @@ def _fit_formula_design(
                 term_assignments[ridge_term] = term_index
         elif isinstance(model_term, _ModelPSplineTerm):
             term_assignments[model_term.pspline.term] = term_index
+        elif isinstance(model_term, _ModelFrailtyTerm):
+            term_assignments[model_term.frailty.term] = term_index
     contrast_intercept = terms.intercept if include_intercept else True
     covered_terms: set[frozenset[_CovariateTerm]] = {frozenset()} if contrast_intercept else set()
     promoted_no_intercept_factor = contrast_intercept
     design_terms: list[_DesignTerm] = []
     pspline_terms = {formula.term: formula for formula in terms.pspline}
+    frailty_terms = {formula.term: formula for formula in terms.frailty}
     for term in ordered_terms:
-        fitted_term = (
-            _fit_pspline_design_term(data, pspline_terms[term], n)
-            if isinstance(term, _CovariateTerm) and term in pspline_terms
-            else _fit_design_term(data, term, n, factor_order)
-        )
+        if isinstance(term, _CovariateTerm) and term in pspline_terms:
+            fitted_term = _fit_pspline_design_term(data, pspline_terms[term], n)
+        elif isinstance(term, _CovariateTerm) and term in frailty_terms:
+            fitted_term = _fit_frailty_design_term(data, frailty_terms[term], n)
+        else:
+            fitted_term = _fit_design_term(data, term, n, factor_order)
         raw_factors = frozenset(_covariate_factors(term))
         categorical_factors = _categorical_design_factors(fitted_term)
         full_factors = {
@@ -4147,6 +4300,16 @@ def _design_term_columns(
     n: int,
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
 ) -> list[list[float]]:
+    if isinstance(spec, _FrailtyDesignTerm):
+        values = [
+            _strata_value_label(value) for value in _term_raw_values(data, spec.formula.term, n)
+        ]
+        unknown = next((value for value in values if value not in spec.levels), None)
+        if unknown is not None:
+            raise ValueError(
+                f"newdata column {spec.formula.term.column!r} contains unknown level {unknown!r}"
+            )
+        return [[1.0 if value == level else 0.0 for value in values] for level in spec.levels]
     if isinstance(spec, _PSplineDesignTerm):
         values = _numeric_term_values(
             _term_raw_values(data, spec.formula.term, n),
@@ -4282,12 +4445,30 @@ def _pspline_formula_blocks(design: _FormulaDesign) -> list[_PSplinePenaltyBlock
     return blocks
 
 
+def _frailty_formula_blocks(design: _FormulaDesign) -> list[_FrailtyPenaltyBlock]:
+    blocks: list[_FrailtyPenaltyBlock] = []
+    cursor = 1 if design.intercept else 0
+    for term in design.covariates:
+        width = len(_design_term_output_names(term))
+        if isinstance(term, _FrailtyDesignTerm):
+            blocks.append(
+                _FrailtyPenaltyBlock(
+                    label=term.formula.label,
+                    columns=tuple(range(cursor, cursor + width)),
+                    theta=term.formula.theta,
+                )
+            )
+        cursor += width
+    return blocks
+
+
 def _formula_penalty_matrix(
     width: int,
     ridge_blocks: Sequence[_RidgePenaltyBlock],
     ridge_thetas: Sequence[float],
     pspline_blocks: Sequence[_PSplinePenaltyBlock],
     pspline_thetas: Sequence[float],
+    frailty_blocks: Sequence[_FrailtyPenaltyBlock],
 ) -> list[list[float]]:
     penalty = [[0.0] * width for _ in range(width)]
     for block, theta in zip(ridge_blocks, ridge_thetas, strict=True):
@@ -4298,7 +4479,17 @@ def _formula_penalty_matrix(
         for local_row, row in enumerate(block.columns):
             for local_column, column in enumerate(block.columns):
                 penalty[row][column] += smoothing * block.penalty[local_row][local_column]
+    for block in frailty_blocks:
+        precision = 1.0 / block.theta
+        for column in block.columns:
+            penalty[column][column] += precision
     return penalty
+
+
+def _frailty_loglik_constant(blocks: Sequence[_FrailtyPenaltyBlock]) -> float:
+    return 0.5 * math.fsum(
+        len(block.columns) * math.log(2.0 * math.pi * block.theta) for block in blocks
+    )
 
 
 def _diagonal_penalty_matrix(penalty: Sequence[float]) -> list[list[float]]:
@@ -4597,6 +4788,8 @@ def _display_single_design_term(spec: _SingleDesignTerm) -> str:
 
 
 def _design_term_name(spec: _DesignTerm) -> str:
+    if isinstance(spec, _FrailtyDesignTerm):
+        return spec.formula.label
     if isinstance(spec, _PSplineDesignTerm):
         return spec.formula.label
     if isinstance(spec, _InteractionDesignTerm):
@@ -4614,6 +4807,8 @@ def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
 
 
 def _design_term_output_names(spec: _DesignTerm) -> list[str]:
+    if isinstance(spec, _FrailtyDesignTerm):
+        return [f"gauss:{level}" for level in spec.levels]
     if isinstance(spec, _PSplineDesignTerm):
         width = spec.formula.nterm + spec.formula.degree
         if not spec.formula.intercept:
@@ -4627,6 +4822,8 @@ def _design_term_output_names(spec: _DesignTerm) -> list[str]:
 
 
 def _design_term_columns_used(spec: _DesignTerm) -> list[str]:
+    if isinstance(spec, _FrailtyDesignTerm):
+        return [spec.formula.term.column]
     if isinstance(spec, _PSplineDesignTerm):
         return [spec.formula.term.column]
     if isinstance(spec, _InteractionDesignTerm):
@@ -5735,7 +5932,7 @@ def _pspline_difference_penalty(n_cols: int) -> list[list[float]]:
 
 
 def _frailty_missing(value: Any) -> bool:
-    return value is None or (isinstance(value, float) and math.isnan(value))
+    return _is_missing_value(value)
 
 
 def _frailty_encoding(
@@ -5746,9 +5943,14 @@ def _frailty_encoding(
 ) -> dict[str, Any]:
     values = _materialize_labels(x, "x")
     if levels is None:
-        level_values = sorted({str(value) for value in values if not _frailty_missing(value)})
+        observed = [value for value in values if not _frailty_missing(value)]
+        if all(isinstance(value, Real) and not isinstance(value, bool) for value in observed):
+            ordered = sorted(set(observed), key=float)
+            level_values = [_strata_value_label(value) for value in ordered]
+        else:
+            level_values = sorted({_strata_value_label(value) for value in observed})
     else:
-        level_values = [str(value) for value in _materialize_1d(levels, "levels")]
+        level_values = [_strata_value_label(value) for value in _materialize_1d(levels, "levels")]
     level_index = {level: idx + 1 for idx, level in enumerate(level_values)}
 
     codes: list[int | None] = []
@@ -5756,7 +5958,7 @@ def _frailty_encoding(
         if _frailty_missing(value):
             codes.append(None)
         else:
-            key = str(value)
+            key = _strata_value_label(value)
             if key not in level_index:
                 raise ValueError(f"x contains value {key!r} outside supplied levels")
             codes.append(level_index[key])
@@ -16665,6 +16867,8 @@ def _formula_model_term_factors(term: _FormulaModelTerm) -> list[str]:
         return [_covariate_term_name(factor) for factor in term.ridge.terms]
     if isinstance(term, _ModelPSplineTerm):
         return [_covariate_term_name(term.pspline.term)]
+    if isinstance(term, _ModelFrailtyTerm):
+        return [_covariate_term_name(term.frailty.term)]
     if isinstance(term, _ModelStrataTerm):
         return [f"strata({','.join(term.columns)})"]
     if isinstance(term, _ModelClusterTerm):
@@ -22937,6 +23141,7 @@ def coxph(
     formula_cluster_columns: tuple[str, ...] = ()
     formula_ridge_blocks: list[_RidgePenaltyBlock] = []
     formula_pspline_blocks: list[_PSplinePenaltyBlock] = []
+    formula_frailty_blocks: list[_FrailtyPenaltyBlock] = []
     direct_coefficient_names: tuple[str, ...] | None = None
     time_transform_terms: list[_CovariateTerm] = []
     time_transform_functions: list[Any | None] = []
@@ -23017,6 +23222,7 @@ def coxph(
             terms,
             len(response),
             allow_pspline=True,
+            allow_frailty=True,
         )
         formula_ridge_blocks = _ridge_formula_blocks(
             data,
@@ -23024,7 +23230,8 @@ def coxph(
             len(response),
         )
         formula_pspline_blocks = _pspline_formula_blocks(formula_design)
-        if (formula_ridge_blocks or formula_pspline_blocks) and (
+        formula_frailty_blocks = _frailty_formula_blocks(formula_design)
+        if (formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks) and (
             ridge_penalty is not None or penalty_matrix is not None
         ):
             raise ValueError("use only one of formula penalties, ridge_penalty, or penalty_matrix")
@@ -23120,7 +23327,7 @@ def coxph(
     pspline_thetas = [block.initial_theta for block in formula_pspline_blocks]
     reported_ridge_thetas = list(ridge_thetas)
     reported_pspline_thetas = list(pspline_thetas)
-    if formula_pspline_blocks:
+    if formula_pspline_blocks or formula_frailty_blocks:
         fit_ridge_penalty = None
         fit_penalty_matrix = _formula_penalty_matrix(
             width,
@@ -23128,6 +23335,7 @@ def coxph(
             ridge_thetas,
             formula_pspline_blocks,
             pspline_thetas,
+            formula_frailty_blocks,
         )
     elif formula_ridge_blocks:
         fit_ridge_penalty = _ridge_penalty_vector(width, formula_ridge_blocks, ridge_thetas)
@@ -23233,6 +23441,7 @@ def coxph(
     ]
     ridge_history: dict[str, dict[str, Any]] | None = None
     reported_log_likelihood: list[float] | None = None
+    frailty_loglik_constant = _frailty_loglik_constant(formula_frailty_blocks)
     if target_ridge_blocks or target_pspline_blocks or aic_pspline_blocks:
         ridge_histories = [
             [(0.0, float(len(block.columns)))] if block.target_df is not None else []
@@ -23261,18 +23470,19 @@ def coxph(
                 formula_ridge_blocks,
                 fitted_ridge_thetas,
             )
-            if formula_pspline_blocks:
+            if formula_pspline_blocks or formula_frailty_blocks:
                 fit_penalty_matrix = _formula_penalty_matrix(
                     width,
                     formula_ridge_blocks,
                     fitted_ridge_thetas,
                     formula_pspline_blocks,
                     fitted_pspline_thetas,
+                    formula_frailty_blocks,
                 )
                 fit_ridge_penalty = None
             fit = run_fit(fit_ridge_penalty, fit_penalty_matrix, start)
             if initial_log_likelihood is None:
-                initial_log_likelihood = float(fit.log_likelihood[0])
+                initial_log_likelihood = float(fit.log_likelihood[0]) - frailty_loglik_constant
             next_ridge_thetas = list(fitted_ridge_thetas)
             next_pspline_thetas = list(fitted_pspline_thetas)
             next_reported_pspline_thetas = list(fitted_pspline_thetas)
@@ -23391,9 +23601,9 @@ def coxph(
         }
     else:
         fit = run_fit(fit_ridge_penalty, fit_penalty_matrix, initial_values)
-        if formula_ridge_blocks or formula_pspline_blocks:
+        if formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks:
             reported_log_likelihood = [
-                float(fit.log_likelihood[0]),
+                float(fit.log_likelihood[0]) - frailty_loglik_constant,
                 float(fit.log_likelihood[-1]),
             ]
             ridge_history = {
@@ -23428,9 +23638,17 @@ def coxph(
                 for index, block in enumerate(formula_pspline_blocks)
             }
         )
+    if formula_frailty_blocks:
+        if ridge_history is None:
+            ridge_history = {}
+        ridge_history.update(
+            {block.label: {"theta": block.theta, "done": True} for block in formula_frailty_blocks}
+        )
     term_degrees_of_freedom = None
     effective_degrees_of_freedom = None
-    if (formula_ridge_blocks or formula_pspline_blocks) and formula_design is not None:
+    if (
+        formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks
+    ) and formula_design is not None:
         if fit_penalty_matrix is not None:
             term_degrees_of_freedom = _quadratic_formula_term_degrees_of_freedom(
                 fit,
