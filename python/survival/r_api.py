@@ -16577,13 +16577,13 @@ def _cox_detail_row_order(
 
 def _cox_detail_strata_table(
     strata: list[int],
-    detail_rows: Sequence[Any],
+    detail_strata: Sequence[int],
 ) -> dict[int, int] | None:
     if len(set(strata)) <= 1:
         return None
     table: dict[int, int] = {}
-    for row in detail_rows:
-        stratum = int(row.stratum)
+    for value in detail_strata:
+        stratum = int(value)
         table[stratum] = table.get(stratum, 0) + 1
     return table
 
@@ -19726,7 +19726,17 @@ def coxph_detail(
             center=center,
             riskmat=include_riskmat,
         )
-    detail_rows = list(detail.rows)
+    detail_time = list(detail.times())
+    detail_nevent = list(detail.event_counts())
+    detail_nrisk = list(detail.n_risk_at_times())
+    detail_means = list(detail.means())
+    detail_score = list(detail.scores())
+    detail_imat = list(detail.information_matrices())
+    detail_hazard = list(detail.hazards())
+    detail_varhaz = list(detail.variance_hazards())
+    detail_wtrisk = list(detail.weighted_risk())
+    detail_event_weights = list(detail.event_weights())
+    detail_strata = list(detail.strata_at_times())
 
     row_order = _cox_detail_row_order(time, status, strata, rorder_name)
     x_rows = [rows[idx] for idx in row_order]
@@ -19743,25 +19753,22 @@ def coxph_detail(
 
     has_case_weights = any(abs(weight - 1.0) > 1e-12 for weight in weights)
     return CoxPHDetailResult(
-        time=[float(row.time) for row in detail_rows],
-        nevent=[int(row.n_event) for row in detail_rows],
-        nrisk=[int(row.n_risk) for row in detail_rows],
-        means=[[float(value) for value in row.means] for row in detail_rows],
-        score=[[float(value) for value in row.score] for row in detail_rows],
-        imat=[
-            [[float(value) for value in matrix_row] for matrix_row in row.imat]
-            for row in detail_rows
-        ],
-        hazard=[float(row.hazard) for row in detail_rows],
-        varhaz=[float(row.varhaz) for row in detail_rows],
-        wtrisk=[float(row.wtrisk) for row in detail_rows],
+        time=detail_time,
+        nevent=detail_nevent,
+        nrisk=detail_nrisk,
+        means=detail_means,
+        score=detail_score,
+        imat=detail_imat,
+        hazard=detail_hazard,
+        varhaz=detail_varhaz,
+        wtrisk=detail_wtrisk,
         x=x_rows,
         y=y_rows,
-        strata=_cox_detail_strata_table(strata, detail_rows),
+        strata=_cox_detail_strata_table(strata, detail_strata),
         riskmat=risk_matrix,
         weights=ordered_weights if has_case_weights else None,
-        nevent_wt=[float(row.n_event_weight) for row in detail_rows] if has_case_weights else None,
-        nrisk_wt=[float(row.wtrisk) for row in detail_rows] if has_case_weights else None,
+        nevent_wt=detail_event_weights if has_case_weights else None,
+        nrisk_wt=detail_wtrisk if has_case_weights else None,
         sortorder=sortorder,
     )
 

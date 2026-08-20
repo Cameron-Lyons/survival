@@ -871,6 +871,9 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "hazards",
         "cumulative_hazards",
         "n_risk_at_times",
+        "event_counts",
+        "event_weights",
+        "strata_at_times",
         "scores",
         "means",
         "information_matrices",
@@ -1071,6 +1074,9 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     assert len(detail.hazards()) == sum(status)
     assert len(detail.cumulative_hazards()) == sum(status)
     assert detail.n_risk_at_times() == [8, 6, 5, 3, 1]
+    assert detail.event_counts() == [1, 1, 1, 1, 1]
+    assert detail.event_weights() == pytest.approx([1.0, 1.0, 1.0, 1.0, 1.0])
+    assert detail.strata_at_times() == [0, 0, 0, 0, 0]
     assert len(detail.scores()) == sum(status)
     assert len(detail.means()) == sum(status)
     assert len(detail.information_matrices()) == sum(status)

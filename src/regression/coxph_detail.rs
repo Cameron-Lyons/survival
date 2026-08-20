@@ -107,6 +107,18 @@ impl CoxphDetail {
         self.rows.iter().map(|r| r.n_risk).collect()
     }
 
+    pub fn event_counts(&self) -> Vec<usize> {
+        self.rows.iter().map(|r| r.n_event).collect()
+    }
+
+    pub fn event_weights(&self) -> Vec<f64> {
+        self.rows.iter().map(|r| r.n_event_weight).collect()
+    }
+
+    pub fn strata_at_times(&self) -> Vec<i32> {
+        self.rows.iter().map(|r| r.stratum).collect()
+    }
+
     pub fn scores(&self) -> Vec<Vec<f64>> {
         self.rows.iter().map(|r| r.score.clone()).collect()
     }
