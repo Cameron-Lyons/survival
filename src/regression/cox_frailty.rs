@@ -50,6 +50,49 @@ pub struct CoxPHFrailtyFit {
     pub linear_predictors: Vec<f64>,
     #[pyo3(get)]
     pub theta: f64,
+    #[pyo3(get)]
+    pub event_times: Vec<f64>,
+    #[pyo3(get)]
+    pub status: Vec<i32>,
+    #[pyo3(get)]
+    pub weights: Vec<f64>,
+    #[pyo3(get)]
+    pub covariates: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub strata: Vec<i32>,
+    #[pyo3(get)]
+    pub method: String,
+    #[pyo3(get)]
+    pub nocenter: Vec<f64>,
+    #[pyo3(get)]
+    pub offset: Vec<f64>,
+}
+
+#[pymethods]
+impl CoxPHFrailtyFit {
+    pub fn predict(&self, covariates: Vec<Vec<f64>>) -> PyResult<Vec<f64>> {
+        let beta = self.coefficients.first().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
+        })?;
+        covariates
+            .into_iter()
+            .map(|row| {
+                if row.len() != beta.len() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "covariate row has {} columns but model expects {}",
+                        row.len(),
+                        beta.len()
+                    )));
+                }
+                validate_finite("covariates row", &row)?;
+                Ok(row
+                    .iter()
+                    .zip(beta)
+                    .map(|(value, coefficient)| value * coefficient)
+                    .sum())
+            })
+            .collect()
+    }
 }
 
 struct IterationState {
@@ -1001,6 +1044,18 @@ pub fn coxph_frailty_fit(
         risk_scores,
         linear_predictors,
         theta,
+        event_times: time,
+        status,
+        weights,
+        covariates,
+        strata,
+        method: match ties {
+            Ties::Breslow => "breslow",
+            Ties::Efron => "efron",
+        }
+        .to_string(),
+        nocenter,
+        offset,
     })
 }
 
