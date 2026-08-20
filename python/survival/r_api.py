@@ -23582,8 +23582,6 @@ def coxph(
             if sparse_formula_frailty_block is not None
             else None
         )
-        if sparse_formula_frailty_block is not None and time_transform_terms:
-            raise NotImplementedError("sparse frailty is not supported with tt() terms")
         if (formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks) and (
             ridge_penalty is not None or penalty_matrix is not None
         ):
@@ -23636,6 +23634,16 @@ def coxph(
         expansion = _cox_time_transform_expansion(response, strata, fix_time)
         source_indices = expansion.source_indices
         expanded_n = len(source_indices)
+        if sparse_formula_frailty_block is not None:
+            if sparse_formula_frailty_index is None:
+                raise AssertionError("sparse frailty index is missing")
+            sparse_formula_frailty_block = replace(
+                sparse_formula_frailty_block,
+                groups=tuple(
+                    sparse_formula_frailty_block.groups[index] for index in source_indices
+                ),
+            )
+            formula_frailty_blocks[sparse_formula_frailty_index] = sparse_formula_frailty_block
         expanded_data = _subset_data(formula_model_data, source_indices)
         weights = _subset_optional_sequence(weights, source_indices, "weights")
         offset = _subset_optional_sequence(offset, source_indices, "offset")

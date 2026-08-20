@@ -14639,6 +14639,66 @@ def test_coxph_accepts_unused_tt_argument_without_time_transform_terms():
     assert unused_tt.log_likelihood == pytest.approx(baseline.log_likelihood)
 
 
+def test_coxph_sparse_gaussian_frailty_with_tt_matches_reference():
+    data = {
+        "time": [float(value) for value in range(1, 19)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "x": [
+            1.2,
+            0.7,
+            1.5,
+            0.2,
+            1.1,
+            0.4,
+            1.8,
+            0.9,
+            0.5,
+            1.4,
+            0.3,
+            1.0,
+            0.6,
+            1.7,
+            0.1,
+            1.3,
+            0.8,
+            1.6,
+        ],
+        "g": list("abcdef") * 3,
+    }
+    frailty_term = "frailty(g,distribution='gaussian',theta=.5,sparse=True)"
+
+    def transform(values, times, _riskset, _weights):
+        return [value * math.log(time + 1.0) for value, time in zip(values, times, strict=True)]
+
+    fit = survival.coxph(
+        f"Surv(time,status) ~ tt(x) + {frailty_term}",
+        data=data,
+        tt=transform,
+        ties="breslow",
+        control={"iter.max": 50, "eps": 1e-12, "toler.chol": 1e-13},
+    )
+
+    assert fit.coefficients[0] == pytest.approx([-0.430128845950534], abs=1e-12)
+    assert fit.frailty == pytest.approx(
+        [
+            -0.0338836197577876,
+            0.389864514018792,
+            -0.0441141563108985,
+            -0.0994720978792039,
+            -0.245657480406089,
+            0.0332628403351868,
+        ],
+        abs=1e-12,
+    )
+    assert fit.log_likelihood == pytest.approx([-23.3506715493412, -21.6755087910397], abs=1e-12)
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"tt(x)": 0.70759025968027, frailty_term: 2.09784752792522},
+        abs=1e-12,
+    )
+    assert fit.n_observations == len(data["time"])
+    assert len(fit.event_times) > len(data["time"])
+
+
 def test_coxph_right_censored_tt_transform_matches_r():
     data = {
         "time": [5, 1, 9, 3, 12, 7, 2, 10, 4, 11, 6, 8],
