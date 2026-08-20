@@ -12,6 +12,15 @@ from .helpers import setup_survival_import
 survival = setup_survival_import()
 
 
+def test_label_encoder_preserves_first_seen_order_and_validation():
+    values = ["later", "first", "later", 3, "first", 3, ("x", 1)]
+
+    assert survival.r_api._encode_labels(values, "group") == [0, 1, 0, 2, 1, 2, 3]
+    assert survival.r_api._encode_labels([], "group") == []
+    with pytest.raises(TypeError, match="group contains unhashable labels"):
+        survival.r_api._encode_labels([["nested"]], "group")
+
+
 def _toy_data():
     return {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
