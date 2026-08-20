@@ -12058,6 +12058,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "regression" in survival.__all__
     assert "StrataFactor" in survival.__all__
     assert "Surv" in survival.__all__
+    assert "CoxphFitResult" in survival.__all__
     assert "FineGrayFrame" in survival.__all__
     assert "FineGrayOutput" in survival.__all__
     assert "RateTable" in survival.__all__
@@ -12088,6 +12089,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "concordancefit" in survival.__all__
     assert "cox_zph" in survival.__all__
     assert "coxph_detail" in survival.__all__
+    assert "coxph_fit" in survival.__all__
     assert "cumevent" in survival.__all__
     assert "cumtdc" in survival.__all__
     assert "df_residual" in survival.__all__
@@ -12142,6 +12144,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "ridge_fit" in survival.__deprecated_root_exports__
     assert "ridge_fit" not in vars(survival)
     assert survival.StrataFactor is survival.r_api.StrataFactor
+    assert survival.CoxphFitResult is survival.r_api.CoxphFitResult
     assert survival.Surv is survival.r_api.Surv
     assert survival.FineGrayFrame is survival.r_api.FineGrayFrame
     assert survival.FineGrayOutput is survival.r_api.FineGrayOutput
@@ -12174,6 +12177,8 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.concordancefit is survival.r_api.concordancefit
     assert survival.cox_zph is survival.r_api.cox_zph
     assert survival.coxph_detail is survival.r_api.coxph_detail
+    assert survival.coxph_fit is survival.r_api.coxph_fit
+    assert survival.coxph_fit is not survival.regression.coxph_fit
     assert survival.cumevent is survival.r_api.cumevent
     assert survival.cumtdc is survival.r_api.cumtdc
     assert survival.df_residual is survival.r_api.df_residual
@@ -12963,6 +12968,28 @@ def test_r_api_stub_tracks_survreg_fit_signature():
         "dlist",
         "verbose",
     ]
+
+
+def test_r_api_stub_tracks_coxph_fit_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+    expected = [
+        "x",
+        "y",
+        "strata",
+        "offset",
+        "init",
+        "control",
+        "weights",
+        "method",
+        "rownames",
+        "resid",
+        "nocenter",
+    ]
+
+    assert list(inspect.signature(survival.r_api.coxph_fit).parameters) == expected
+    assert _pyi_function_arg_names(stub_path, "coxph_fit") == expected
 
 
 def test_r_api_stub_tracks_survdiff_public_signature():
