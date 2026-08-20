@@ -1,7 +1,8 @@
 use std::hint::black_box;
 use survival::regression::{
-    CoxPHModel, SplineConfig, aareg_fit, agexact, cch_borgan_fit, cch_fit, coxph_fit, finegray,
-    flexible_parametric_model, landmark_cox_analysis, survreg, time_varying_cox,
+    ClogitDataSet, ConditionalLogisticRegression, CoxPHModel, SplineConfig, aareg_fit, agexact,
+    cch_borgan_fit, cch_fit, coxph_fit, finegray, flexible_parametric_model, landmark_cox_analysis,
+    survreg, time_varying_cox,
 };
 use survival::residuals::smooth_schoenfeld;
 use survival::{
@@ -884,6 +885,41 @@ mod time_varying_cox_bench {
             )
             .expect("benchmark time-varying Cox fit should succeed");
             black_box(result);
+        });
+    }
+}
+
+mod conditional_logistic_bench {
+    use super::*;
+
+    fn matched_sets(n_strata: usize) -> ClogitDataSet {
+        let mut data = ClogitDataSet::new();
+        for stratum in 0..n_strata {
+            for row in 0..4 {
+                data.add_observation(
+                    u8::from(row == 0 || row == 2),
+                    stratum as u8,
+                    vec![
+                        ((stratum * 3 + row * 5) % 17) as f64 * 0.1,
+                        ((stratum * 7 + row * 2) % 13) as f64 * 0.1,
+                    ],
+                )
+                .expect("benchmark matched-set row should be valid");
+            }
+        }
+        data
+    }
+
+    #[divan::bench(args = [20, 100, 200])]
+    fn exact_fit(bencher: divan::Bencher, n_strata: usize) {
+        bencher.bench_local(|| {
+            let mut model =
+                ConditionalLogisticRegression::new(matched_sets(black_box(n_strata)), 50, 1e-9)
+                    .expect("benchmark conditional logistic model should initialize");
+            model
+                .fit()
+                .expect("benchmark conditional logistic fit should succeed");
+            black_box(model);
         });
     }
 }
