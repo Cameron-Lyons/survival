@@ -7,7 +7,7 @@ use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
     compute_quantile_prediction, compute_response_prediction, compute_se_linear_predictor,
 };
-use crate::regression::survregc1::{SurvivalDist, survregc1};
+use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survregc1};
 use crate::residuals::survreg_resid::{
     SurvregResidType, SurvregResiduals, compute_deviance_residuals_survreg_with_parameter,
     compute_dfbeta_survreg_with_parameter, compute_ldcase_with_parameter,
@@ -530,41 +530,20 @@ struct LikelihoodInput<'a> {
     beta: &'a [f64],
     distribution: &'a DistributionType,
     distribution_parameter: Option<f64>,
-    strata: &'a [usize],
+    strata: &'a ArrayView1<'a, i32>,
     offsets: &'a Array1<f64>,
     time1: &'a ArrayView1<'a, f64>,
     time2: Option<&'a ArrayView1<'a, f64>>,
-    status: &'a ArrayView1<'a, f64>,
+    status: &'a ArrayView1<'a, i32>,
     weights: &'a Array1<f64>,
     covariates: &'a Array2<f64>,
-}
-
-struct LikelihoodOutput<'a> {
-    imat: &'a mut Array2<f64>,
-    jj: &'a mut Array2<f64>,
-    u: &'a mut Array1<f64>,
+    frailty: &'a ArrayView1<'a, i32>,
 }
 
 fn calculate_likelihood(
     input: &LikelihoodInput<'_>,
-    output: &mut LikelihoodOutput<'_>,
-) -> Result<f64, Box<dyn std::error::Error>> {
-    let n = input.n;
-    let nvar = input.nvar;
-    let nstrat = input.nstrat;
-    let beta = input.beta;
-    let distribution = input.distribution;
-    let strata = input.strata;
-    let offsets = input.offsets;
-    let time1 = input.time1;
-    let time2 = input.time2;
-    let status = input.status;
-    let weights = input.weights;
-    let covariates = input.covariates;
-    let imat = &mut *output.imat;
-    let jj = &mut *output.jj;
-    let u = &mut *output.u;
-    let dist = match distribution {
+) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
+    let dist = match input.distribution {
         DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
         DistributionType::Logistic => SurvivalDist::Logistic,
         DistributionType::Gaussian => SurvivalDist::Gaussian,
@@ -577,46 +556,24 @@ fn calculate_likelihood(
                 .ok_or_else(|| "Student-t degrees of freedom are missing".to_string())?,
         ),
     };
-    let strat_vec: Vec<i32> = strata.iter().map(|&s| (s + 1) as i32).collect();
-    let strat_arr = Array1::from_vec(strat_vec);
-    let status_vec: Vec<i32> = status.iter().map(|&s| s as i32).collect();
-    let status_arr = Array1::from_vec(status_vec);
-    let beta_arr = Array1::from_vec(beta.to_vec());
-    let frail_arr = Array1::from_vec(vec![0i32; n]);
-    let nvar2 = nvar + nstrat;
-    let result = survregc1(
-        n,
-        nvar,
-        nstrat,
+    let beta = ArrayView1::from(input.beta);
+    survregc1(
+        input.n,
+        input.nvar,
+        input.nstrat,
         false,
-        &beta_arr.view(),
+        &beta,
         dist,
-        &strat_arr.view(),
-        &offsets.view(),
-        time1,
-        time2,
-        &status_arr.view(),
-        &weights.view(),
-        &covariates.view(),
+        input.strata,
+        &input.offsets.view(),
+        input.time1,
+        input.time2,
+        input.status,
+        &input.weights.view(),
+        &input.covariates.view(),
         0,
-        &frail_arr.view(),
-    )?;
-    let copy_len = nvar2.min(u.len()).min(result.u.len());
-    u.iter_mut()
-        .zip(result.u.iter())
-        .take(copy_len)
-        .for_each(|(dest, &src)| *dest = src);
-
-    let copy_rows = nvar2.min(imat.nrows()).min(result.imat.nrows());
-    let copy_cols = nvar2.min(imat.ncols()).min(result.imat.ncols());
-    imat.slice_mut(ndarray::s![..copy_rows, ..copy_cols])
-        .assign(&result.imat.slice(ndarray::s![..copy_rows, ..copy_cols]));
-
-    let copy_rows_jj = nvar2.min(jj.nrows()).min(result.jj.nrows());
-    let copy_cols_jj = nvar2.min(jj.ncols()).min(result.jj.ncols());
-    jj.slice_mut(ndarray::s![..copy_rows_jj, ..copy_cols_jj])
-        .assign(&result.jj.slice(ndarray::s![..copy_rows_jj, ..copy_cols_jj]));
-    Ok(result.loglik)
+        input.frailty,
+    )
 }
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
@@ -1091,9 +1048,6 @@ fn compute_survreg(
     let ny = y.ncols();
     let estimated_scale_count = if fixed_scale.is_some() { 0 } else { nstrat };
     let nvar2 = nvar + estimated_scale_count;
-    let mut imat = Array2::zeros((nvar2, nvar2));
-    let mut jj = Array2::zeros((nvar2, nvar2));
-    let mut u = Array1::zeros(nvar2);
     let mut beta = if let Some(scale) = fixed_scale {
         let mut values = beta;
         values.push(scale.ln());
@@ -1105,10 +1059,10 @@ fn compute_survreg(
     let uses_log_time = distribution.uses_log_time();
     let transform_time = |t: f64| if uses_log_time { t.ln() } else { t };
     let time1_vec: Vec<f64> = y.column(0).iter().map(|&t| transform_time(t)).collect();
-    let status_vec: Vec<f64> = if ny == 2 {
-        y.column(1).iter().copied().collect()
+    let status_vec: Vec<i32> = if ny == 2 {
+        y.column(1).iter().map(|&status| status as i32).collect()
     } else {
-        y.column(2).iter().copied().collect()
+        y.column(2).iter().map(|&status| status as i32).collect()
     };
     let time2_vec: Option<Vec<f64>> = if ny == 3 {
         Some(y.column(1).iter().map(|&t| transform_time(t)).collect())
@@ -1118,8 +1072,12 @@ fn compute_survreg(
     let time1_arr = Array1::from_vec(time1_vec);
     let status_arr = Array1::from_vec(status_vec);
     let time2_arr = time2_vec.map(Array1::from_vec);
+    let strata_arr = Array1::from_iter(strata.iter().map(|&value| (value + 1) as i32));
+    let frailty_arr = Array1::<i32>::zeros(n);
     let time1 = time1_arr.view();
     let status = status_arr.view();
+    let strata = strata_arr.view();
+    let frailty = frailty_arr.view();
     let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());
     let input = LikelihoodInput {
         n,
@@ -1128,20 +1086,20 @@ fn compute_survreg(
         beta: &beta,
         distribution: &distribution,
         distribution_parameter,
-        strata,
+        strata: &strata,
         offsets,
         time1: &time1,
         time2: time2_view.as_ref(),
         status: &status,
         weights,
         covariates,
+        frailty: &frailty,
     };
-    let mut output = LikelihoodOutput {
-        imat: &mut imat,
-        jj: &mut jj,
-        u: &mut u,
-    };
-    let mut loglik = calculate_likelihood(&input, &mut output)?;
+    let initial_likelihood = calculate_likelihood(&input)?;
+    let mut loglik = initial_likelihood.loglik;
+    let mut imat = initial_likelihood.imat;
+    let mut jj = initial_likelihood.jj;
+    let mut u = initial_likelihood.u;
     usave.assign(&u);
     let mut iter = 0;
     let mut converged = false;
@@ -1168,9 +1126,6 @@ fn compute_survreg(
                     .for_each(|(nb, (b, d))| *nb = b + d * step_factor);
                 adjust_strata(&mut candidate_beta, &beta, nvar, estimated_scale_count);
 
-                let mut candidate_imat = Array2::zeros((nvar2, nvar2));
-                let mut candidate_jj = Array2::zeros((nvar2, nvar2));
-                let mut candidate_u = Array1::zeros(nvar2);
                 let candidate_input = LikelihoodInput {
                     n,
                     nvar,
@@ -1178,32 +1133,27 @@ fn compute_survreg(
                     beta: &candidate_beta,
                     distribution: &distribution,
                     distribution_parameter,
-                    strata,
+                    strata: &strata,
                     offsets,
                     time1: &time1,
                     time2: time2_view.as_ref(),
                     status: &status,
                     weights,
                     covariates,
+                    frailty: &frailty,
                 };
-                let mut candidate_output = LikelihoodOutput {
-                    imat: &mut candidate_imat,
-                    jj: &mut candidate_jj,
-                    u: &mut candidate_u,
-                };
-                let candidate_loglik =
-                    calculate_likelihood(&candidate_input, &mut candidate_output)?;
-                if candidate_loglik.is_finite()
-                    && candidate_loglik >= old_loglik
+                let candidate = calculate_likelihood(&candidate_input)?;
+                if candidate.loglik.is_finite()
+                    && candidate.loglik >= old_loglik
                     && (!uses_observed_information
-                        || is_positive_definite(&candidate_imat, tol_chol))
+                        || is_positive_definite(&candidate.imat, tol_chol))
                 {
                     accepted = Some((
                         candidate_beta,
-                        candidate_loglik,
-                        candidate_imat,
-                        candidate_jj,
-                        candidate_u,
+                        candidate.loglik,
+                        candidate.imat,
+                        candidate.jj,
+                        candidate.u,
                     ));
                     break;
                 }

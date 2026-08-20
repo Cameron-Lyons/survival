@@ -1,4 +1,4 @@
-use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, PARALLEL_THRESHOLD_MEDIUM};
+use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
 use crate::internal::statistical::{erf, erfc, student_t_cdf, student_t_pdf};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
@@ -10,6 +10,7 @@ type DistributionEval = [f64; 4];
 const SMALL: f64 = -200.0;
 const SPI: f64 = 2.506628274631001;
 const ROOT_2: f64 = std::f64::consts::SQRT_2;
+const SURVREG_PARALLEL_THRESHOLD: usize = 10_000;
 
 #[derive(Debug)]
 pub(crate) enum DistributionError {
@@ -84,7 +85,7 @@ pub(crate) fn survregc1(
     let nvar2 = nvar + nstrat;
     let nvar3 = nvar2 + nf;
 
-    if n < PARALLEL_THRESHOLD_MEDIUM || whichcase {
+    if n < SURVREG_PARALLEL_THRESHOLD || whichcase {
         return survregc1_sequential(
             n, nvar, nstrat, whichcase, beta, dist, strat, offset, time1, time2, status, wt, covar,
             nf, frail,
@@ -884,6 +885,83 @@ mod tests {
         assert!(lik.loglik.is_finite());
         assert_eq!(lik.u.len(), nvar + nstrat);
         assert_eq!(lik.imat.nrows(), nvar + nstrat);
+    }
+
+    #[test]
+    fn parallel_likelihood_matches_sequential_at_threshold() {
+        let n = SURVREG_PARALLEL_THRESHOLD;
+        let nvar = 2;
+        let nstrat = 1;
+        let beta = Array1::from_vec(vec![0.1, -0.2, 0.05]);
+        let strat = Array1::from_vec(vec![1i32; n]);
+        let offset = Array1::from_vec((0..n).map(|person| (person % 7) as f64 * 0.01).collect());
+        let time1 = Array1::from_vec(
+            (0..n)
+                .map(|person| 0.2 + (person % 101) as f64 * 0.01)
+                .collect(),
+        );
+        let status = Array1::from_vec(
+            (0..n)
+                .map(|person| if person % 3 == 0 { 0 } else { 1 })
+                .collect(),
+        );
+        let weights = Array1::from_vec(
+            (0..n)
+                .map(|person| 0.75 + (person % 5) as f64 * 0.05)
+                .collect(),
+        );
+        let covariates = Array2::from_shape_fn((nvar, n), |(column, person)| {
+            (person % (17 + column)) as f64 * 0.02 - 0.1 * column as f64
+        });
+        let frailty = Array1::from_vec(vec![0i32; n]);
+
+        let parallel = survregc1(
+            n,
+            nvar,
+            nstrat,
+            false,
+            &beta.view(),
+            SurvivalDist::Weibull,
+            &strat.view(),
+            &offset.view(),
+            &time1.view(),
+            None,
+            &status.view(),
+            &weights.view(),
+            &covariates.view(),
+            0,
+            &frailty.view(),
+        )
+        .unwrap();
+        let sequential = survregc1_sequential(
+            n,
+            nvar,
+            nstrat,
+            false,
+            &beta.view(),
+            SurvivalDist::Weibull,
+            &strat.view(),
+            &offset.view(),
+            &time1.view(),
+            None,
+            &status.view(),
+            &weights.view(),
+            &covariates.view(),
+            0,
+            &frailty.view(),
+        )
+        .unwrap();
+
+        assert_close(parallel.loglik, sequential.loglik, 1e-10);
+        for (actual, expected) in parallel.u.iter().zip(sequential.u.iter()) {
+            assert_close(*actual, *expected, 1e-10);
+        }
+        for (actual, expected) in parallel.imat.iter().zip(sequential.imat.iter()) {
+            assert_close(*actual, *expected, 1e-10);
+        }
+        for (actual, expected) in parallel.jj.iter().zip(sequential.jj.iter()) {
+            assert_close(*actual, *expected, 1e-10);
+        }
     }
 
     #[test]
