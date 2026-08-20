@@ -1,5 +1,9 @@
-use crate::constants::same_time;
-use crate::internal::matrix::invert_matrix;
+use crate::constants::{exp_clamped, same_time};
+use crate::internal::validation::{validate_finite, validate_no_nan};
+use crate::regression::cause_specific_cox_module::{
+    CauseSpecificCoxConfig, CensoringType, cause_specific_cox_fit, validate_cause_specific_inputs,
+};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -67,15 +71,18 @@ impl JointCompetingRisksConfig {
                 "num_causes must be at least 2",
             ));
         }
-        if frailty_variance <= 0.0 {
+        if !frailty_variance.is_finite() || frailty_variance <= 0.0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "frailty_variance must be positive",
+                "frailty_variance must be finite and positive",
             ));
         }
         if max_iter == 0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "max_iter must be positive",
             ));
+        }
+        if !tol.is_finite() || tol <= 0.0 {
+            return Err(PyValueError::new_err("tol must be finite and positive"));
         }
 
         Ok(JointCompetingRisksConfig {
@@ -148,348 +155,247 @@ impl JointCompetingRisksResult {
 
     fn predict_cif(&self, x: Vec<f64>, n_obs: usize, cause_idx: usize) -> PyResult<Vec<Vec<f64>>> {
         if cause_idx >= self.cause_specific_results.len() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "cause_idx out of range",
-            ));
+            return Err(PyValueError::new_err("cause_idx out of range"));
         }
 
-        let cs = &self.cause_specific_results[cause_idx];
-        let n_vars = cs.coefficients.len();
-        let n_times = cs.baseline_hazard_times.len();
-
-        let all_cum_hazards: Vec<Vec<Vec<f64>>> = self
+        let output_grid = &self.cause_specific_results[cause_idx].baseline_hazard_times;
+        let grid = union_event_grid(&self.cause_specific_results);
+        let aligned_baselines = self
             .cause_specific_results
             .iter()
-            .map(|cr| {
-                (0..n_obs)
-                    .map(|i| {
-                        let mut lp = 0.0;
-                        for j in 0..cr.coefficients.len().min(n_vars) {
-                            lp += x[i * n_vars + j] * cr.coefficients[j];
-                        }
-                        let exp_lp = lp.exp();
-                        cr.cumulative_baseline_hazard
+            .map(|result| cumulative_hazard_on_grid(result, &grid))
+            .collect::<Vec<_>>();
+        let risk_scores = self.prediction_risk_scores(&x, n_obs)?;
+
+        Ok(risk_scores
+            .into_par_iter()
+            .map(|row_scores| {
+                let mut values = Vec::with_capacity(output_grid.len());
+                let mut output_idx = 0;
+                let mut previous_total_hazard = 0.0;
+                let mut previous_cause_hazard = 0.0;
+                let mut survival = 1.0;
+                let mut cumulative_incidence = 0.0;
+
+                for time_idx in 0..grid.len() {
+                    let total_hazard = aligned_baselines
+                        .iter()
+                        .zip(&row_scores)
+                        .map(|(hazards, &risk_score)| {
+                            scaled_cumulative_hazard(hazards[time_idx], risk_score)
+                        })
+                        .fold(0.0, saturating_nonnegative_add);
+                    let cause_hazard = scaled_cumulative_hazard(
+                        aligned_baselines[cause_idx][time_idx],
+                        row_scores[cause_idx],
+                    );
+                    let total_increment =
+                        nonnegative_increment(total_hazard, previous_total_hazard);
+                    let cause_increment =
+                        nonnegative_increment(cause_hazard, previous_cause_hazard)
+                            .min(total_increment);
+
+                    if total_increment > 0.0 {
+                        let event_probability = -(-total_increment).exp_m1();
+                        cumulative_incidence += survival
+                            * event_probability
+                            * (cause_increment / total_increment).clamp(0.0, 1.0);
+                        survival *= (-total_increment).exp();
+                    }
+
+                    if output_idx < output_grid.len()
+                        && same_time(grid[time_idx], output_grid[output_idx])
+                    {
+                        values.push(cumulative_incidence.clamp(0.0, 1.0));
+                        output_idx += 1;
+                    }
+                    previous_total_hazard = total_hazard;
+                    previous_cause_hazard = cause_hazard;
+                }
+
+                debug_assert_eq!(values.len(), output_grid.len());
+                values
+            })
+            .collect())
+    }
+
+    fn predict_overall_survival(&self, x: Vec<f64>, n_obs: usize) -> PyResult<Vec<Vec<f64>>> {
+        let first_result = self
+            .cause_specific_results
+            .first()
+            .ok_or_else(|| PyValueError::new_err("model has no cause-specific results"))?;
+        let grid = &first_result.baseline_hazard_times;
+        let aligned_baselines = self
+            .cause_specific_results
+            .iter()
+            .map(|result| cumulative_hazard_on_grid(result, grid))
+            .collect::<Vec<_>>();
+        let risk_scores = self.prediction_risk_scores(&x, n_obs)?;
+
+        Ok(risk_scores
+            .into_par_iter()
+            .map(|row_scores| {
+                (0..grid.len())
+                    .map(|time_idx| {
+                        let total_hazard = aligned_baselines
                             .iter()
-                            .map(|&h0| h0 * exp_lp)
-                            .collect()
+                            .zip(&row_scores)
+                            .map(|(hazards, &risk_score)| {
+                                scaled_cumulative_hazard(hazards[time_idx], risk_score)
+                            })
+                            .fold(0.0, saturating_nonnegative_add);
+                        (-total_hazard).exp().clamp(0.0, 1.0)
                     })
                     .collect()
             })
-            .collect();
-
-        let cif: Vec<Vec<f64>> = (0..n_obs)
-            .into_par_iter()
-            .map(|i| {
-                let mut cif_vec = Vec::with_capacity(n_times);
-                let mut cum_inc = 0.0;
-                let mut prev_surv = 1.0;
-
-                for t in 0..n_times {
-                    let mut total_hazard = 0.0;
-                    for cause_hazards in all_cum_hazards
-                        .iter()
-                        .take(self.cause_specific_results.len())
-                    {
-                        if t < cause_hazards[i].len() {
-                            let h_t = if t == 0 {
-                                cause_hazards[i][t]
-                            } else {
-                                cause_hazards[i][t] - cause_hazards[i][t - 1]
-                            };
-                            total_hazard += h_t.max(0.0);
-                        }
-                    }
-
-                    let h_cause_t = if t == 0 {
-                        all_cum_hazards[cause_idx][i][t]
-                    } else {
-                        all_cum_hazards[cause_idx][i][t] - all_cum_hazards[cause_idx][i][t - 1]
-                    };
-
-                    cum_inc += prev_surv * h_cause_t.max(0.0);
-                    prev_surv *= (-total_hazard).exp();
-                    cif_vec.push(cum_inc.min(1.0));
-                }
-
-                cif_vec
-            })
-            .collect();
-
-        Ok(cif)
+            .collect())
     }
+}
 
-    fn predict_overall_survival(&self, x: Vec<f64>, n_obs: usize) -> Vec<Vec<f64>> {
-        let n_times = self.cause_specific_results[0].baseline_hazard_times.len();
-        let n_vars = self.cause_specific_results[0].coefficients.len();
+impl JointCompetingRisksResult {
+    fn prediction_risk_scores(&self, x: &[f64], n_obs: usize) -> PyResult<Vec<Vec<f64>>> {
+        let first_result = self
+            .cause_specific_results
+            .first()
+            .ok_or_else(|| PyValueError::new_err("model has no cause-specific results"))?;
+        let n_vars = first_result.coefficients.len();
+        if n_vars == 0 {
+            return Err(PyValueError::new_err(
+                "cannot predict with a model that has no coefficients",
+            ));
+        }
+        if self
+            .cause_specific_results
+            .iter()
+            .any(|result| result.coefficients.len() != n_vars)
+        {
+            return Err(PyValueError::new_err(
+                "cause-specific coefficient dimensions are inconsistent",
+            ));
+        }
 
-        (0..n_obs)
-            .into_par_iter()
-            .map(|i| {
-                let mut surv_vec = Vec::with_capacity(n_times);
-                let mut cum_surv = 1.0;
+        let expected_len = n_obs.checked_mul(n_vars).ok_or_else(|| {
+            PyValueError::new_err("n_obs * n_vars overflowed while validating x length")
+        })?;
+        if x.len() != expected_len {
+            return Err(PyValueError::new_err("x length must equal n_obs * n_vars"));
+        }
+        validate_no_nan(x, "x")?;
+        validate_finite(x, "x")?;
 
-                for t in 0..n_times {
-                    let mut total_hazard = 0.0;
-
-                    for cs in &self.cause_specific_results {
-                        let mut lp = 0.0;
-                        for j in 0..cs.coefficients.len().min(n_vars) {
-                            lp += x[i * n_vars + j] * cs.coefficients[j];
-                        }
-                        let exp_lp = lp.exp();
-
-                        let h_t = if t == 0 {
-                            cs.cumulative_baseline_hazard
-                                .first()
-                                .copied()
-                                .unwrap_or(0.0)
-                        } else {
-                            cs.cumulative_baseline_hazard.get(t).copied().unwrap_or(0.0)
-                                - cs.cumulative_baseline_hazard
-                                    .get(t - 1)
-                                    .copied()
-                                    .unwrap_or(0.0)
-                        };
-
-                        total_hazard += h_t * exp_lp;
-                    }
-
-                    cum_surv *= (-total_hazard).exp();
-                    surv_vec.push(cum_surv.clamp(0.0, 1.0));
-                }
-
-                surv_vec
+        x.par_chunks_exact(n_vars)
+            .map(|row| {
+                self.cause_specific_results
+                    .iter()
+                    .map(|result| {
+                        let linear_predictor = row
+                            .iter()
+                            .zip(&result.coefficients)
+                            .map(|(&value, &coefficient)| value * coefficient)
+                            .sum::<f64>();
+                        (!linear_predictor.is_nan()).then(|| exp_clamped(linear_predictor))
+                    })
+                    .collect::<Option<Vec<_>>>()
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| PyValueError::new_err("x produced an undefined linear predictor"))
     }
+}
+
+fn cumulative_hazard_on_grid(result: &CauseResult, grid: &[f64]) -> Vec<f64> {
+    let mut result_idx = 0;
+    let mut cumulative_hazard = 0.0;
+
+    grid.iter()
+        .map(|&grid_time| {
+            while result_idx < result.baseline_hazard_times.len()
+                && (result.baseline_hazard_times[result_idx] < grid_time
+                    || same_time(result.baseline_hazard_times[result_idx], grid_time))
+            {
+                cumulative_hazard = result
+                    .cumulative_baseline_hazard
+                    .get(result_idx)
+                    .copied()
+                    .unwrap_or(cumulative_hazard);
+                result_idx += 1;
+            }
+            cumulative_hazard
+        })
+        .collect()
+}
+
+fn union_event_grid(results: &[CauseResult]) -> Vec<f64> {
+    let mut times = results
+        .iter()
+        .flat_map(|result| result.baseline_hazard_times.iter().copied())
+        .collect::<Vec<_>>();
+    times.sort_by(f64::total_cmp);
+    times.dedup_by(|left, right| same_time(*left, *right));
+    times
 }
 
 #[inline]
-fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
-    weights.map_or(1.0, |values| values[idx])
+fn scaled_cumulative_hazard(baseline_hazard: f64, risk_score: f64) -> f64 {
+    let value = baseline_hazard.max(0.0) * risk_score;
+    if value.is_finite() { value } else { f64::MAX }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn fit_cause_specific_cox(
+#[inline]
+fn saturating_nonnegative_add(left: f64, right: f64) -> f64 {
+    let value = left + right;
+    if value.is_finite() { value } else { f64::MAX }
+}
+
+#[inline]
+fn nonnegative_increment(current: f64, previous: f64) -> f64 {
+    if current <= previous {
+        0.0
+    } else {
+        let increment = current - previous;
+        if increment.is_finite() {
+            increment
+        } else {
+            f64::MAX
+        }
+    }
+}
+
+fn validate_joint_config(config: &JointCompetingRisksConfig) -> PyResult<()> {
+    if config.num_causes < 2 {
+        return Err(PyValueError::new_err("num_causes must be at least 2"));
+    }
+    if !config.frailty_variance.is_finite() || config.frailty_variance <= 0.0 {
+        return Err(PyValueError::new_err(
+            "frailty_variance must be finite and positive",
+        ));
+    }
+    if config.max_iter == 0 {
+        return Err(PyValueError::new_err("max_iter must be positive"));
+    }
+    if !config.tol.is_finite() || config.tol <= 0.0 {
+        return Err(PyValueError::new_err("tol must be finite and positive"));
+    }
+    Ok(())
+}
+
+fn validate_joint_inputs(
     x: &[f64],
-    n: usize,
-    p: usize,
+    n_obs: usize,
+    n_vars: usize,
     time: &[f64],
     cause: &[i32],
     weights: Option<&[f64]>,
-    cause_of_interest: i32,
-    max_iter: usize,
-    tol: f64,
-) -> (Vec<f64>, Vec<f64>, f64, bool, usize) {
-    let mut beta = vec![0.0; p];
-    let mut converged = false;
-    let mut n_iter = 0;
-    let mut loglik = 0.0;
-
-    for iter in 0..max_iter {
-        n_iter = iter + 1;
-
-        let (gradient, hessian, ll) =
-            compute_gradient_hessian(x, n, p, time, cause, weights, &beta, cause_of_interest);
-        loglik = ll;
-
-        let delta = match solve_system(&hessian, &gradient) {
-            Some(d) => d,
-            None => break,
-        };
-
-        let max_change: f64 = delta.iter().map(|d| d.abs()).fold(0.0, f64::max);
-
-        for j in 0..p {
-            beta[j] += delta[j];
-        }
-
-        if max_change < tol {
-            converged = true;
-            break;
+    num_causes: usize,
+) -> PyResult<()> {
+    validate_cause_specific_inputs(x, n_obs, n_vars, time, cause, weights)?;
+    for (idx, &value) in cause.iter().enumerate() {
+        if value as usize > num_causes {
+            return Err(PyValueError::new_err(format!(
+                "cause values must be between 0 and num_causes; got {value} at index {idx}"
+            )));
         }
     }
-
-    let (_, final_hessian, _) =
-        compute_gradient_hessian(x, n, p, time, cause, weights, &beta, cause_of_interest);
-
-    let var_cov = invert_matrix(&final_hessian).unwrap_or_else(|| vec![vec![0.0; p]; p]);
-    let std_errors: Vec<f64> = (0..p)
-        .map(|j| {
-            var_cov[j][j]
-                .abs()
-                .sqrt()
-                .max(crate::constants::DIVISION_FLOOR)
-        })
-        .collect();
-
-    (beta, std_errors, loglik, converged, n_iter)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compute_gradient_hessian(
-    x: &[f64],
-    n: usize,
-    p: usize,
-    time: &[f64],
-    cause: &[i32],
-    weights: Option<&[f64]>,
-    beta: &[f64],
-    cause_of_interest: i32,
-) -> (Vec<f64>, Vec<Vec<f64>>, f64) {
-    let eta: Vec<f64> = (0..n)
-        .map(|i| {
-            let mut e = 0.0;
-            for j in 0..p {
-                e += x[i * p + j] * beta[j];
-            }
-            e.clamp(-700.0, 700.0)
-        })
-        .collect();
-
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
-
-    let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
-
-    let mut gradient = vec![0.0; p];
-    let mut hessian = vec![vec![0.0; p]; p];
-    let mut loglik = 0.0;
-
-    let mut risk_sum = 0.0;
-    let mut weighted_x = vec![0.0; p];
-    let mut weighted_x_outer = vec![vec![0.0; p]; p];
-
-    for &idx in &sorted_indices {
-        let case_weight = observation_weight(weights, idx);
-        let w = case_weight * exp_eta[idx];
-        risk_sum += w;
-
-        for j in 0..p {
-            let xij = x[idx * p + j];
-            weighted_x[j] += w * xij;
-
-            for k in 0..p {
-                let xik = x[idx * p + k];
-                weighted_x_outer[j][k] += w * xij * xik;
-            }
-        }
-
-        if cause[idx] == cause_of_interest && risk_sum > 0.0 {
-            loglik += case_weight * (eta[idx] - risk_sum.ln());
-
-            for j in 0..p {
-                let xij = x[idx * p + j];
-                let x_bar = weighted_x[j] / risk_sum;
-                gradient[j] += case_weight * (xij - x_bar);
-
-                for k in 0..p {
-                    let x_bar_k = weighted_x[k] / risk_sum;
-                    let x_outer_bar = weighted_x_outer[j][k] / risk_sum;
-                    hessian[j][k] -= case_weight * (x_outer_bar - x_bar * x_bar_k);
-                }
-            }
-        }
-    }
-
-    (gradient, hessian, loglik)
-}
-
-fn solve_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
-    let n = b.len();
-    let mut aug: Vec<Vec<f64>> = a.to_vec();
-    let mut rhs = b.to_vec();
-
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k][i].abs() > aug[max_row][i].abs() {
-                max_row = k;
-            }
-        }
-        aug.swap(i, max_row);
-        rhs.swap(i, max_row);
-
-        if aug[i][i].abs() < 1e-12 {
-            return None;
-        }
-
-        let (pivot_rows, lower_rows) = aug.split_at_mut(i + 1);
-        let pivot_tail = &pivot_rows[i][i..n];
-        for k in (i + 1)..n {
-            let lower_row = &mut lower_rows[k - i - 1];
-            let factor = lower_row[i] / pivot_rows[i][i];
-            rhs[k] -= factor * rhs[i];
-            for (aug_kj, &aug_ij) in lower_row[i..n].iter_mut().zip(pivot_tail) {
-                *aug_kj -= factor * aug_ij;
-            }
-        }
-    }
-
-    let mut x = vec![0.0; n];
-    for i in (0..n).rev() {
-        x[i] = rhs[i];
-        for j in (i + 1)..n {
-            x[i] -= aug[i][j] * x[j];
-        }
-        x[i] /= aug[i][i];
-    }
-
-    Some(x)
-}
-
-fn compute_baseline_hazard(
-    n: usize,
-    time: &[f64],
-    cause: &[i32],
-    weights: Option<&[f64]>,
-    exp_eta: &[f64],
-    cause_of_interest: i32,
-) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-
-    let mut unique_times = Vec::new();
-    let mut baseline = Vec::new();
-    let mut cumulative = Vec::new();
-    let mut cum_h0 = 0.0;
-
-    let mut i = 0;
-    while i < n {
-        let idx = sorted_indices[i];
-        if cause[idx] != cause_of_interest {
-            i += 1;
-            continue;
-        }
-
-        let current_time = time[idx];
-        let mut n_events = 0.0;
-
-        while i < n && same_time(time[sorted_indices[i]], current_time) {
-            if cause[sorted_indices[i]] == cause_of_interest {
-                n_events += observation_weight(weights, sorted_indices[i]);
-            }
-            i += 1;
-        }
-
-        let mut risk_sum = 0.0;
-        for &j in &sorted_indices {
-            if time[j] >= current_time {
-                risk_sum += observation_weight(weights, j) * exp_eta[j];
-            }
-        }
-
-        if risk_sum > 0.0 && n_events > 0.0 {
-            let h0 = n_events / risk_sum;
-            cum_h0 += h0;
-
-            unique_times.push(current_time);
-            baseline.push(h0);
-            cumulative.push(cum_h0);
-        }
-    }
-
-    (unique_times, baseline, cumulative)
+    Ok(())
 }
 
 #[pyfunction]
@@ -503,24 +409,16 @@ pub fn joint_competing_risks(
     config: &JointCompetingRisksConfig,
     weights: Option<Vec<f64>>,
 ) -> PyResult<JointCompetingRisksResult> {
-    if x.len() != n_obs * n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "x length must equal n_obs * n_vars",
-        ));
-    }
-    if time.len() != n_obs || cause.len() != n_obs {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time and cause must have length n_obs",
-        ));
-    }
-    if let Some(values) = weights.as_ref()
-        && values.len() != n_obs
-    {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "weights must have length n_obs",
-        ));
-    }
-
+    validate_joint_config(config)?;
+    validate_joint_inputs(
+        &x,
+        n_obs,
+        n_vars,
+        &time,
+        &cause,
+        weights.as_deref(),
+        config.num_causes,
+    )?;
     let weights = weights.as_deref();
 
     let n_events_by_cause: Vec<usize> = (1..=config.num_causes as i32)
@@ -534,45 +432,28 @@ pub fn joint_competing_risks(
     let mut cause_specific_results = Vec::with_capacity(config.num_causes);
 
     for c in 1..=config.num_causes as i32 {
-        let (beta, std_errors, loglik, converged, n_iter) = fit_cause_specific_cox(
-            &x,
-            n_obs,
-            n_vars,
-            &time,
-            &cause,
-            weights,
+        let cause_config = CauseSpecificCoxConfig::new(
             c,
+            CensoringType::Censored,
             config.max_iter,
             config.tol,
-        );
+            "breslow",
+        )?;
+        let result =
+            cause_specific_cox_fit(&x, n_obs, n_vars, &time, &cause, &cause_config, weights)?;
 
-        total_loglik += loglik;
-        total_n_iter = total_n_iter.max(n_iter);
-        all_converged = all_converged && converged;
-
-        let exp_eta: Vec<f64> = (0..n_obs)
-            .map(|i| {
-                let mut e = 0.0;
-                for j in 0..n_vars {
-                    e += x[i * n_vars + j] * beta[j];
-                }
-                e.clamp(-700.0, 700.0).exp()
-            })
-            .collect();
-
-        let (times, baseline, cumulative) =
-            compute_baseline_hazard(n_obs, &time, &cause, weights, &exp_eta, c);
-
-        let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
+        total_loglik += result.log_likelihood;
+        total_n_iter = total_n_iter.max(result.n_iter);
+        all_converged = all_converged && result.converged;
 
         cause_specific_results.push(CauseResult {
             cause: c as usize,
-            coefficients: beta,
-            std_errors,
-            hazard_ratios,
-            baseline_hazard_times: times,
-            baseline_hazard: baseline,
-            cumulative_baseline_hazard: cumulative,
+            coefficients: result.coefficients,
+            std_errors: result.std_errors,
+            hazard_ratios: result.hazard_ratios,
+            baseline_hazard_times: result.baseline_hazard_times,
+            baseline_hazard: result.baseline_hazard,
+            cumulative_baseline_hazard: result.cumulative_baseline_hazard,
         });
     }
 
@@ -644,12 +525,36 @@ mod tests {
     }
 
     #[test]
-    fn test_solve_system_pivots_without_singular_matrix() {
-        let solution = solve_system(&[vec![0.0, 2.0], vec![1.0, 1.0]], &[4.0, 3.0]).unwrap();
+    fn prediction_grid_aligns_each_cause_by_event_time() {
+        let first = CauseResult {
+            cause: 1,
+            coefficients: vec![0.0],
+            std_errors: vec![1.0],
+            hazard_ratios: vec![1.0],
+            baseline_hazard_times: vec![1.0, 3.0],
+            baseline_hazard: vec![0.1, 0.3],
+            cumulative_baseline_hazard: vec![0.1, 0.4],
+        };
+        let second = CauseResult {
+            cause: 2,
+            coefficients: vec![0.0],
+            std_errors: vec![1.0],
+            hazard_ratios: vec![1.0],
+            baseline_hazard_times: vec![2.0],
+            baseline_hazard: vec![0.2],
+            cumulative_baseline_hazard: vec![0.2],
+        };
 
-        assert!((solution[0] - 1.0).abs() < 1e-12);
-        assert!((solution[1] - 2.0).abs() < 1e-12);
-        assert!(solve_system(&[vec![0.0, 0.0], vec![0.0, 1.0]], &[1.0, 2.0]).is_none());
+        let grid = union_event_grid(&[first.clone(), second.clone()]);
+        assert_eq!(grid, vec![1.0, 2.0, 3.0]);
+        assert_eq!(
+            cumulative_hazard_on_grid(&first, &grid),
+            vec![0.1, 0.1, 0.4]
+        );
+        assert_eq!(
+            cumulative_hazard_on_grid(&second, &grid),
+            vec![0.0, 0.2, 0.2]
+        );
     }
 
     #[test]
@@ -731,6 +636,7 @@ mod tests {
 
     #[test]
     fn test_joint_competing_risks_rejects_bad_weights_length() {
+        pyo3::Python::initialize();
         let config =
             JointCompetingRisksConfig::new(2, CorrelationType::Independent, 1.0, 100, 1e-5, true)
                 .unwrap();
