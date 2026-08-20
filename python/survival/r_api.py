@@ -391,6 +391,7 @@ class _FrailtyPenaltyBlock:
     target_df: float | None
     eps: float
     initial_theta: float
+    selection: str
 
 
 @dataclass(frozen=True)
@@ -3602,9 +3603,15 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
         if df <= 0.0:
             raise ValueError("frailty df must be positive")
         selection = "df"
+    elif method == "aic":
+        if theta is not None:
+            raise ValueError("AIC Gaussian frailty cannot include theta")
+        if df not in {None, 0.0}:
+            raise ValueError("AIC Gaussian frailty df must be zero")
+        selection = "aic"
     else:
         raise NotImplementedError(
-            "Gaussian frailty formulas currently support fixed theta or target df"
+            "Gaussian frailty formulas currently support fixed theta, target df, or AIC"
         )
     if theta is not None and theta <= 0.0:
         raise ValueError("frailty theta must be positive")
@@ -4480,10 +4487,13 @@ def _frailty_formula_blocks(design: _FormulaDesign, n: int) -> list[_FrailtyPena
         if isinstance(term, _FrailtyDesignTerm):
             initial_theta = term.formula.theta
             if initial_theta is None:
-                target_df = term.formula.target_df
-                if target_df is None:
-                    raise AssertionError("Gaussian frailty smoothing target is missing")
-                initial_theta = 3.0 * target_df / n
+                if term.formula.selection == "aic":
+                    initial_theta = 0.1
+                else:
+                    target_df = term.formula.target_df
+                    if target_df is None:
+                        raise AssertionError("Gaussian frailty smoothing target is missing")
+                    initial_theta = 3.0 * target_df / n
             blocks.append(
                 _FrailtyPenaltyBlock(
                     label=term.formula.label,
@@ -4492,6 +4502,7 @@ def _frailty_formula_blocks(design: _FormulaDesign, n: int) -> list[_FrailtyPena
                     target_df=term.formula.target_df,
                     eps=term.formula.eps,
                     initial_theta=initial_theta,
+                    selection=term.formula.selection,
                 )
             )
         cursor += width
@@ -4720,7 +4731,7 @@ def _ridge_control_next_theta(
     return theta, converged, 0
 
 
-def _pspline_aic_history_row(
+def _penalty_aic_history_row(
     theta: float,
     log_likelihood: float,
     degrees_of_freedom: float,
@@ -4750,8 +4761,8 @@ def _pspline_aic_history_row(
 def _frailty_brent(
     theta: Sequence[float],
     criterion: Sequence[float],
-    lower: float,
-    upper: float,
+    lower: float | None,
+    upper: float | None,
 ) -> float:
     if len(theta) != len(criterion):
         raise ValueError("theta and criterion histories must have equal lengths")
@@ -4767,12 +4778,12 @@ def _frailty_brent(
     center = best[0]
     if center == 0:
         new_theta = x[0] - 3.0 * (x[1] - x[0])
-        if new_theta < lower:
+        if lower is not None and new_theta < lower:
             new_theta = lower + (min(value for value in x if value > lower) - lower) / 10.0
         return new_theta
     if center == len(x) - 1:
         new_theta = x[-1] + 3.0 * (x[-1] - x[-2])
-        if new_theta > upper:
+        if upper is not None and new_theta > upper:
             new_theta = upper + (max(value for value in x if value < upper) - upper) / 10.0
         return new_theta
 
@@ -4813,6 +4824,26 @@ def _pspline_aic_next_theta(
         new_theta = 2.0 * max(theta)
     else:
         new_theta = _frailty_brent(theta, criterion, 0.0, 1.0)
+    return new_theta, converged
+
+
+def _frailty_aic_next_theta(
+    eps: float,
+    iteration: int,
+    history: Sequence[Mapping[str, float]],
+) -> tuple[float, bool]:
+    if iteration == 1:
+        return 1.0, False
+    theta = [float(row["theta"]) for row in history]
+    if iteration == 2:
+        return math.fsum(theta) / len(theta), False
+    criterion = [float(row["aic"]) for row in history]
+    previous = criterion[-2]
+    converged = previous != 0.0 and abs(1.0 - criterion[-1] / previous) < eps
+    if theta[-1] == max(criterion) and theta[-1] == max(theta):
+        new_theta = 2.0 * max(theta)
+    else:
+        new_theta = _frailty_brent(theta, criterion, 0.0, None)
     return new_theta, converged
 
 
@@ -23486,9 +23517,18 @@ def coxph(
     target_frailty_blocks = [
         index for index, block in enumerate(formula_frailty_blocks) if block.target_df is not None
     ]
+    aic_frailty_blocks = [
+        index for index, block in enumerate(formula_frailty_blocks) if block.selection == "aic"
+    ]
     ridge_history: dict[str, dict[str, Any]] | None = None
     reported_log_likelihood: list[float] | None = None
-    if target_ridge_blocks or target_pspline_blocks or aic_pspline_blocks or target_frailty_blocks:
+    if (
+        target_ridge_blocks
+        or target_pspline_blocks
+        or aic_pspline_blocks
+        or target_frailty_blocks
+        or aic_frailty_blocks
+    ):
         ridge_histories = [
             [(0.0, float(len(block.columns)))] if block.target_df is not None else []
             for block in formula_ridge_blocks
@@ -23503,12 +23543,15 @@ def coxph(
         frailty_histories = [
             [(0.0, 0.0)] if block.target_df is not None else [] for block in formula_frailty_blocks
         ]
+        frailty_aic_histories: list[list[dict[str, float]]] = [
+            [] for _block in formula_frailty_blocks
+        ]
         ridge_halves = [0] * len(formula_ridge_blocks)
         pspline_halves = [0] * len(formula_pspline_blocks)
         frailty_halves = [0] * len(formula_frailty_blocks)
         ridge_done = [block.target_df is None for block in formula_ridge_blocks]
         pspline_done = [block.selection == "fixed" for block in formula_pspline_blocks]
-        frailty_done = [block.target_df is None for block in formula_frailty_blocks]
+        frailty_done = [block.selection == "fixed" for block in formula_frailty_blocks]
         event_count = sum(int(value) for value in response.event)
         start = initial_values
         initial_log_likelihood = None
@@ -23605,7 +23648,7 @@ def coxph(
                     block.columns,
                 )
                 pspline_aic_histories[block_index].append(
-                    _pspline_aic_history_row(
+                    _penalty_aic_history_row(
                         fitted_pspline_thetas[block_index],
                         float(fit.log_likelihood[-1]),
                         term_df,
@@ -23644,6 +23687,33 @@ def coxph(
                 next_frailty_thetas[block_index] = max(next_theta, 1e-12)
                 frailty_done[block_index] = converged
                 frailty_halves[block_index] = half
+            for block_index in aic_frailty_blocks:
+                block = formula_frailty_blocks[block_index]
+                if fit_penalty_matrix is None:
+                    raise AssertionError(
+                        "Gaussian frailty AIC selection requires a quadratic penalty"
+                    )
+                term_df = _quadratic_term_degrees_of_freedom(
+                    fit,
+                    fit_penalty_matrix,
+                    block.columns,
+                )
+                frailty_aic_histories[block_index].append(
+                    _penalty_aic_history_row(
+                        fitted_frailty_thetas[block_index],
+                        float(fit.log_likelihood[-1]),
+                        term_df,
+                        event_count,
+                    )
+                )
+                next_theta, converged = _frailty_aic_next_theta(
+                    block.eps,
+                    outer_iteration,
+                    frailty_aic_histories[block_index],
+                )
+                next_reported_frailty_thetas[block_index] = next_theta
+                next_frailty_thetas[block_index] = max(next_theta, 1e-12)
+                frailty_done[block_index] = converged
             reported_ridge_thetas = next_ridge_thetas
             reported_pspline_thetas = next_reported_pspline_thetas
             reported_frailty_thetas = next_reported_frailty_thetas
@@ -23739,7 +23809,15 @@ def coxph(
                         "half": frailty_halves[index],
                     }
                     if block.target_df is not None
-                    else {"theta": frailty_thetas[index], "done": True}
+                    else (
+                        {
+                            "theta": reported_frailty_thetas[index],
+                            "done": frailty_done[index],
+                            "history": frailty_aic_histories[index],
+                        }
+                        if block.selection == "aic"
+                        else {"theta": frailty_thetas[index], "done": True}
+                    )
                 )
                 for index, block in enumerate(formula_frailty_blocks)
             }
