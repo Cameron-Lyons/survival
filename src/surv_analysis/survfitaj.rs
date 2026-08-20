@@ -132,6 +132,55 @@ fn observation_target(y: &[f64], idx: usize) -> Option<usize> {
     (y[idx * 3 + 2] as usize).checked_sub(1)
 }
 
+#[pyfunction]
+#[pyo3(signature = (start, stop, id, tolerance))]
+pub fn survfit_counting_positions(
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    id: Vec<usize>,
+    tolerance: f64,
+) -> PyResult<Vec<usize>> {
+    let n = start.len();
+    if stop.len() != n || id.len() != n {
+        return Err(PyValueError::new_err(
+            "start, stop, and id must have the same length",
+        ));
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(PyValueError::new_err(
+            "tolerance must be a non-negative finite value",
+        ));
+    }
+    validate_finite(&start, "start")?;
+    validate_finite(&stop, "stop")?;
+
+    let mut order = (0..n).collect::<Vec<_>>();
+    order.sort_unstable_by(|&left, &right| {
+        id[left]
+            .cmp(&id[right])
+            .then_with(|| {
+                stop[left]
+                    .partial_cmp(&stop[right])
+                    .expect("stop values were validated as finite")
+            })
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut positions = vec![0; n];
+    for (order_idx, &row_idx) in order.iter().enumerate() {
+        let first = order_idx == 0 || {
+            let previous = order[order_idx - 1];
+            id[previous] != id[row_idx] || stop[previous] < start[row_idx] - tolerance
+        };
+        let last = order_idx + 1 == n || {
+            let following = order[order_idx + 1];
+            id[following] != id[row_idx] || stop[row_idx] < start[following] - tolerance
+        };
+        positions[row_idx] = usize::from(first) + 2 * usize::from(last);
+    }
+    Ok(positions)
+}
+
 fn compute_survfitaj_counts(
     data: &SurvFitAJData<'_>,
     params: &SurvFitAJParams<'_>,
@@ -1001,6 +1050,34 @@ mod tests {
         vec![vec![1, 0], vec![1, 1]]
     }
 
+    fn reference_counting_positions(
+        start: &[f64],
+        stop: &[f64],
+        id: &[usize],
+        tolerance: f64,
+    ) -> Vec<usize> {
+        let mut order = (0..stop.len()).collect::<Vec<_>>();
+        order.sort_by(|&left, &right| {
+            id[left]
+                .cmp(&id[right])
+                .then_with(|| stop[left].partial_cmp(&stop[right]).unwrap())
+                .then_with(|| left.cmp(&right))
+        });
+        let mut positions = vec![0; stop.len()];
+        for (order_idx, &row_idx) in order.iter().enumerate() {
+            let previous = order_idx.checked_sub(1).map(|idx| order[idx]);
+            let following = order.get(order_idx + 1).copied();
+            let first = previous.is_none_or(|previous| {
+                id[previous] != id[row_idx] || stop[previous] < start[row_idx] - tolerance
+            });
+            let last = following.is_none_or(|following| {
+                id[following] != id[row_idx] || stop[row_idx] < start[following] - tolerance
+            });
+            positions[row_idx] = usize::from(first) + 2 * usize::from(last);
+        }
+        positions
+    }
+
     fn minimal_survfitaj(p0: Vec<f64>) -> PyResult<SurvFitAJ> {
         survfitaj(
             vec![0.0, 1.0, 2.0, 0.0, 2.0, 0.0],
@@ -1028,6 +1105,60 @@ mod tests {
         let err = minimal_survfitaj(vec![0.6, 0.6]).expect_err("non-normalized p0 should fail");
 
         assert!(err.to_string().contains("p0 probabilities must sum to 1"));
+    }
+
+    #[test]
+    fn counting_positions_marks_contiguous_subject_boundaries() {
+        let positions = survfit_counting_positions(
+            vec![0.0, 1.0, 0.0],
+            vec![1.0, 3.0, 2.0],
+            vec![0, 0, 1],
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(positions, vec![1, 2, 3]);
+
+        let gaps = survfit_counting_positions(
+            vec![0.0, 1.1, 0.0],
+            vec![1.0, 3.0, 2.0],
+            vec![0, 0, 1],
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(gaps, vec![3, 3, 3]);
+    }
+
+    #[test]
+    fn counting_positions_matches_reference_across_deterministic_fixtures() {
+        let mut seed = 0xa11e_4a7e_5eed_u64;
+        for fixture in 0..500 {
+            let n = fixture % 101;
+            let mut start = Vec::with_capacity(n);
+            let mut stop = Vec::with_capacity(n);
+            let mut id = Vec::with_capacity(n);
+            for row in 0..n {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                let subject = ((seed >> 32) % 13) as usize;
+                let left = ((seed >> 16) % 100) as f64 / 10.0 + row as f64 * 1e-12;
+                let width = ((seed >> 8) % 7 + 1) as f64 / 10.0;
+                start.push(left);
+                stop.push(left + width);
+                id.push(subject);
+            }
+            let tolerance = if fixture % 2 == 0 { 0.0 } else { 1e-9 };
+            let expected = reference_counting_positions(&start, &stop, &id, tolerance);
+            assert_eq!(
+                survfit_counting_positions(start, stop, id, tolerance).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn counting_positions_validates_public_inputs() {
+        assert!(survfit_counting_positions(vec![0.0], vec![], vec![0], 0.0).is_err());
+        assert!(survfit_counting_positions(vec![0.0], vec![1.0], vec![0], f64::NAN).is_err());
+        assert!(survfit_counting_positions(vec![f64::INFINITY], vec![1.0], vec![0], 0.0).is_err());
     }
 
     #[test]

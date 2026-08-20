@@ -337,6 +337,21 @@ def test_survfitaj_basic_outputs_are_consistent():
     assert result.n_transition[1] == pytest.approx([1.0, 1.0])
 
 
+def test_survfit_counting_positions_marks_subject_boundaries():
+    positions = survival.survfit_counting_positions(
+        [0.0, 1.0, 0.0],
+        [1.0, 3.0, 2.0],
+        [0, 0, 1],
+        0.0,
+    )
+    assert positions == [1, 2, 3]
+
+    with pytest.raises(ValueError, match="same length"):
+        survival.survfit_counting_positions([0.0], [], [0], 0.0)
+    with pytest.raises(ValueError, match="non-negative finite"):
+        survival.survfit_counting_positions([0.0], [1.0], [0], -1.0)
+
+
 def test_survfitaj_returns_standard_errors_when_requested():
     result = survival.survfitaj(**_survfitaj_kwargs(sefit=1))
 
