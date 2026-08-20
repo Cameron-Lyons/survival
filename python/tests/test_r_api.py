@@ -9750,6 +9750,200 @@ def test_coxph_formula_sparse_gaussian_frailty_matches_fixed_theta_reference():
     assert survival.predict(fit, type="lp") == pytest.approx(fit.fit.linear_predictors, abs=1e-12)
 
 
+def test_coxph_formula_sparse_gaussian_frailty_diagnostics_match_reference():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+        "g": list("abcd") * 3,
+    }
+    fit = survival.coxph(
+        'Surv(time,status) ~ x + frailty(g,distribution="gaussian",theta=.5,sparse=True)',
+        data=data,
+        ties="breslow",
+        max_iter=50,
+        eps=1e-12,
+    )
+
+    uncentered = survival.basehaz(fit, centered=False)
+    centered = survival.basehaz(fit, centered=True)
+    assert uncentered.time == data["time"]
+    assert uncentered.cumhaz == pytest.approx(
+        [
+            0.134441510131342,
+            0.134441510131342,
+            0.294341962704855,
+            0.466061956894083,
+            0.466061956894083,
+            0.693811632738709,
+            0.693811632738709,
+            1.00356137586226,
+            1.38446208114318,
+            1.38446208114318,
+            2.09119307373803,
+            3.84526184237544,
+        ],
+        abs=1e-12,
+    )
+    assert centered.cumhaz == pytest.approx(
+        [
+            0.080320052582916,
+            0.080320052582916,
+            0.175850166356478,
+            0.278441687006181,
+            0.278441687006181,
+            0.414507295921993,
+            0.414507295921993,
+            0.599562608309686,
+            0.827125989940434,
+            0.827125989940434,
+            1.24935176255887,
+            2.29729369353962,
+        ],
+        abs=1e-12,
+    )
+
+    martingale = [
+        0.918035166835483,
+        -0.0830044116892781,
+        0.878421315072226,
+        0.605820553020766,
+        -0.301733333672231,
+        0.48862774254375,
+        -0.24329018205156,
+        0.426369756732696,
+        -0.250630493117321,
+        -0.57668329032542,
+        -0.718449425408107,
+        -1.143483397941,
+    ]
+    assert survival.r_api.residuals(fit, type="martingale") == pytest.approx(
+        martingale,
+        abs=1e-12,
+    )
+    assert survival.predict(fit, type="expected") == pytest.approx(
+        [event - residual for event, residual in zip(data["status"], martingale, strict=True)],
+        abs=1e-12,
+    )
+    assert survival.r_api.residuals(fit, type="deviance") == pytest.approx(
+        [
+            1.77956726240856,
+            -0.407441803670851,
+            1.56765576461516,
+            0.806385107951608,
+            -0.776831170425378,
+            0.603373389006663,
+            -0.697553126366099,
+            0.5087248942062,
+            -0.232304431612478,
+            -1.07394905868521,
+            -0.595024433164164,
+            -0.872984691983822,
+        ],
+        abs=1e-12,
+    )
+
+    score = [row[0] for row in survival.r_api.residuals(fit, type="score")]
+    assert score == pytest.approx(
+        [
+            0.373022049128043,
+            0.00777531078273041,
+            0.648999446396258,
+            -0.292983787820385,
+            -0.104817268358599,
+            -0.172126683629953,
+            -0.254834829413058,
+            0.0901743091024614,
+            0.101400042611265,
+            -0.388842755700694,
+            0.364212967646999,
+            -0.37197880074551,
+        ],
+        abs=1e-12,
+    )
+    schoenfeld = [row[0] for row in survival.r_api.residuals(fit, type="schoenfeld")]
+    assert schoenfeld == pytest.approx(
+        [
+            0.406326535849242,
+            0.73689927317794,
+            -0.510813740734503,
+            -0.352409862722556,
+            0.18058166669338,
+            -0.180899327599474,
+            -0.279684544664472,
+            0.0,
+        ],
+        abs=1e-12,
+    )
+    scaled = [row[0] for row in survival.r_api.residuals(fit, type="scaledsch")]
+    assert scaled == pytest.approx(
+        [
+            2.09514203661493,
+            4.25684740543519,
+            -3.90228859203682,
+            -2.86644239277842,
+            0.618934713587477,
+            -1.74488818482766,
+            -2.39087168550923,
+            -0.561938099930235,
+        ],
+        abs=1e-12,
+    )
+    dfbeta = [row[0] for row in survival.r_api.residuals(fit, type="dfbeta")]
+    assert dfbeta == pytest.approx(
+        [
+            0.304911625806061,
+            0.00635560996314171,
+            0.530498067903729,
+            -0.239487620873765,
+            -0.0856785913392485,
+            -0.140697921404102,
+            -0.208304314262329,
+            0.0737093028646461,
+            0.0828853198401464,
+            -0.31784361568104,
+            0.297711002243669,
+            -0.304058865061271,
+        ],
+        abs=1e-12,
+    )
+    dfbetas = [row[0] for row in survival.r_api.residuals(fit, type="dfbetas")]
+    assert dfbetas == pytest.approx(
+        [
+            0.337251774585605,
+            0.00702971142204604,
+            0.586764818631626,
+            -0.264888637543569,
+            -0.0947660060411578,
+            -0.15562090670895,
+            -0.230397904484925,
+            0.0815272068713478,
+            0.0916764689745365,
+            -0.351555383123752,
+            0.329287424036098,
+            -0.336308566619307,
+        ],
+        abs=1e-12,
+    )
+
+    newdata = {
+        "time": [5.0, 9.0],
+        "status": [1, 1],
+        "x": [0.8, 1.3],
+        "g": ["b", "d"],
+    }
+    assert survival.predict(fit, newdata, type="expected") == pytest.approx(
+        [0.297462883365754, 0.664488131299761],
+        abs=1e-12,
+    )
+    assert survival.predict(fit, newdata, type="survival") == pytest.approx(
+        [math.exp(-0.297462883365754), math.exp(-0.664488131299761)],
+        abs=1e-12,
+    )
+    partial = survival.r_api.residuals(fit, type="partial")
+    assert all(len(row) == 1 for row in partial)
+
+
 def test_coxph_formula_gaussian_frailty_rejects_unsupported_modes():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],

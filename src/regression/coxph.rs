@@ -177,17 +177,32 @@ impl CoxPHFit {
         include_censor_times: bool,
     ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
         let n = self.event_times.len();
-        if n == 0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "time must not be empty",
-            ));
-        }
-        let row_strata = self.explicit_row_strata();
         let center = if centered && !self.linear_predictors.is_empty() {
             self.linear_predictors.iter().sum::<f64>() / n as f64
         } else {
             0.0
         };
+        self.compute_basehaz_with_predictors(&self.linear_predictors, center, include_censor_times)
+    }
+
+    pub(crate) fn compute_basehaz_with_predictors(
+        &self,
+        linear_predictors: &[f64],
+        center: f64,
+        include_censor_times: bool,
+    ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
+        let n = self.event_times.len();
+        if n == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "time must not be empty",
+            ));
+        }
+        if linear_predictors.len() != n || !center.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "baseline predictors do not match fitted rows",
+            ));
+        }
+        let row_strata = self.explicit_row_strata();
 
         let mut rows_by_stratum: BTreeMap<i32, Vec<CoxSweepRow>> = BTreeMap::new();
         for idx in 0..n {
@@ -244,7 +259,7 @@ impl CoxPHFit {
             let max_shifted_lp = rows
                 .iter()
                 .filter_map(|row| {
-                    (row.weight > 0.0).then_some(self.linear_predictors[row.original_idx] - center)
+                    (row.weight > 0.0).then_some(linear_predictors[row.original_idx] - center)
                 })
                 .fold(f64::NEG_INFINITY, f64::max);
             let risk_scale = if max_shifted_lp.is_finite() {
@@ -257,7 +272,7 @@ impl CoxPHFit {
                     0.0
                 } else {
                     row.weight
-                        * (self.linear_predictors[row.original_idx] - center - max_shifted_lp).exp()
+                        * (linear_predictors[row.original_idx] - center - max_shifted_lp).exp()
                 };
             }
 

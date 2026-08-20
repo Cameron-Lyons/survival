@@ -2,6 +2,9 @@ use crate::constants::{
     CONVERGENCE_FLAG, COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, EXP_CLAMP_MAX,
     EXP_CLAMP_MIN,
 };
+use crate::regression::coxph::CoxPHFit;
+use crate::regression::coxph_detail_module::CoxphDetail;
+use crate::regression::coxph_support::StratifiedBaselineLookup;
 use ndarray::Array2;
 use pyo3::prelude::*;
 
@@ -15,15 +18,7 @@ enum Ties {
 #[derive(Clone)]
 pub struct CoxPHFrailtyFit {
     #[pyo3(get)]
-    pub coefficients: Vec<Vec<f64>>,
-    #[pyo3(get)]
     pub frailty: Vec<f64>,
-    #[pyo3(get)]
-    pub means: Vec<f64>,
-    #[pyo3(get)]
-    pub score_vector: Vec<f64>,
-    #[pyo3(get)]
-    pub information_matrix: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub naive_information_matrix: Vec<Vec<f64>>,
     #[pyo3(get)]
@@ -33,65 +28,389 @@ pub struct CoxPHFrailtyFit {
     #[pyo3(get)]
     pub frailty_degrees_of_freedom: f64,
     #[pyo3(get)]
-    pub degrees_of_freedom: f64,
-    #[pyo3(get)]
-    pub log_likelihood: Vec<f64>,
-    #[pyo3(get)]
     pub penalized_log_likelihood: f64,
-    #[pyo3(get)]
-    pub score_test: f64,
-    #[pyo3(get)]
-    pub convergence_flag: i32,
-    #[pyo3(get)]
-    pub iterations: usize,
-    #[pyo3(get)]
-    pub risk_scores: Vec<f64>,
-    #[pyo3(get)]
-    pub linear_predictors: Vec<f64>,
     #[pyo3(get)]
     pub theta: f64,
     #[pyo3(get)]
-    pub event_times: Vec<f64>,
-    #[pyo3(get)]
-    pub status: Vec<i32>,
-    #[pyo3(get)]
-    pub weights: Vec<f64>,
-    #[pyo3(get)]
-    pub covariates: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub strata: Vec<i32>,
-    #[pyo3(get)]
-    pub method: String,
-    #[pyo3(get)]
-    pub nocenter: Vec<f64>,
-    #[pyo3(get)]
     pub offset: Vec<f64>,
+    diagnostic_fit: CoxPHFit,
 }
 
 #[pymethods]
 impl CoxPHFrailtyFit {
-    pub fn predict(&self, covariates: Vec<Vec<f64>>) -> PyResult<Vec<f64>> {
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        covariates
-            .into_iter()
-            .map(|row| {
-                if row.len() != beta.len() {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "covariate row has {} columns but model expects {}",
-                        row.len(),
-                        beta.len()
-                    )));
-                }
-                validate_finite("covariates row", &row)?;
-                Ok(row
-                    .iter()
-                    .zip(beta)
-                    .map(|(value, coefficient)| value * coefficient)
-                    .sum())
-            })
+    #[getter]
+    pub fn coefficients(&self) -> Vec<Vec<f64>> {
+        self.diagnostic_fit.coefficients.clone()
+    }
+
+    #[getter]
+    pub fn means(&self) -> Vec<f64> {
+        self.diagnostic_fit.means.clone()
+    }
+
+    #[getter]
+    pub fn score_vector(&self) -> Vec<f64> {
+        self.diagnostic_fit.score_vector.clone()
+    }
+
+    #[getter]
+    pub fn information_matrix(&self) -> Vec<Vec<f64>> {
+        self.diagnostic_fit.information_matrix.clone()
+    }
+
+    #[getter]
+    pub fn degrees_of_freedom(&self) -> f64 {
+        self.diagnostic_fit.degrees_of_freedom
+    }
+
+    #[getter]
+    pub fn log_likelihood(&self) -> Vec<f64> {
+        self.diagnostic_fit.log_likelihood.clone()
+    }
+
+    #[getter]
+    pub fn score_test(&self) -> f64 {
+        self.diagnostic_fit.score_test
+    }
+
+    #[getter]
+    pub fn convergence_flag(&self) -> i32 {
+        self.diagnostic_fit.convergence_flag
+    }
+
+    #[getter]
+    pub fn iterations(&self) -> usize {
+        self.diagnostic_fit.iterations
+    }
+
+    #[getter]
+    pub fn linear_predictors(&self) -> Vec<f64> {
+        let center = self.ordinary_linear_predictor_center();
+        self.diagnostic_fit
+            .linear_predictors
+            .iter()
+            .map(|value| value - center)
             .collect()
+    }
+
+    #[getter]
+    pub fn risk_scores(&self) -> Vec<f64> {
+        self.linear_predictors()
+            .into_iter()
+            .map(|value| value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
+            .collect()
+    }
+
+    #[getter]
+    pub fn event_times(&self) -> Vec<f64> {
+        self.diagnostic_fit.event_times.clone()
+    }
+
+    #[getter]
+    pub fn status(&self) -> Vec<i32> {
+        self.diagnostic_fit.status.clone()
+    }
+
+    #[getter]
+    pub fn weights(&self) -> Vec<f64> {
+        self.diagnostic_fit.weights.clone()
+    }
+
+    #[getter]
+    pub fn covariates(&self) -> Vec<Vec<f64>> {
+        self.diagnostic_fit.covariates.clone()
+    }
+
+    #[getter]
+    pub fn strata(&self) -> Vec<i32> {
+        self.diagnostic_fit.strata.clone()
+    }
+
+    #[getter]
+    pub fn method(&self) -> String {
+        self.diagnostic_fit.method.clone()
+    }
+
+    #[getter]
+    pub fn nocenter(&self) -> Vec<f64> {
+        self.diagnostic_fit.nocenter.clone()
+    }
+
+    pub fn predict(&self, covariates: Vec<Vec<f64>>) -> PyResult<Vec<f64>> {
+        self.diagnostic_fit.predict(covariates)
+    }
+
+    pub fn hazard_ratios(&self) -> Vec<f64> {
+        self.diagnostic_fit.hazard_ratios()
+    }
+
+    #[pyo3(signature = (centered = true))]
+    pub fn basehaz(&self, centered: bool) -> PyResult<(Vec<f64>, Vec<f64>)> {
+        let (times, hazards, _) = self.basehaz_with_strata(centered)?;
+        Ok((times, hazards))
+    }
+
+    #[pyo3(signature = (centered = true))]
+    pub fn basehaz_with_strata(&self, centered: bool) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
+        self.baseline_with_strata(centered, true)
+    }
+
+    #[pyo3(signature = (covariates = None, centered = true))]
+    pub fn survival_curve(
+        &self,
+        covariates: Option<Vec<Vec<f64>>>,
+        centered: bool,
+    ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+        let beta = self.ordinary_coefficients()?;
+        let rows = match covariates {
+            Some(rows) => rows,
+            None => {
+                let strata = self.unique_strata();
+                return self.survival_curves_with_strata(
+                    std::slice::from_ref(&self.diagnostic_fit.means),
+                    &strata,
+                    centered,
+                    true,
+                );
+            }
+        };
+        self.validate_prediction_rows(&rows, beta.len())?;
+        let center = self.baseline_center(centered);
+        let (times, hazards, _) = self.baseline_with_strata(centered, false)?;
+        let curves = rows
+            .iter()
+            .map(|row| {
+                let risk = (Self::row_linear_predictor(row, beta) - center)
+                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
+                    .exp();
+                hazards
+                    .iter()
+                    .map(|hazard| (-(hazard * risk)).exp().clamp(0.0, 1.0))
+                    .collect()
+            })
+            .collect();
+        Ok((times, curves))
+    }
+
+    #[pyo3(signature = (covariates, strata, centered = true))]
+    pub fn survival_curve_with_strata(
+        &self,
+        covariates: Vec<Vec<f64>>,
+        strata: Vec<i32>,
+        centered: bool,
+    ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+        self.survival_curves_with_strata(&covariates, &strata, centered, false)
+    }
+
+    pub fn expected_events(&self) -> PyResult<Vec<f64>> {
+        self.diagnostic_fit.expected_events()
+    }
+
+    pub fn expected_basehaz_with_strata(&self) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
+        self.diagnostic_fit.basehaz_with_strata(false)
+    }
+
+    pub fn martingale_residuals(&self) -> PyResult<Vec<f64>> {
+        self.diagnostic_fit.martingale_residuals()
+    }
+
+    pub fn deviance_residuals(&self) -> PyResult<Vec<f64>> {
+        self.diagnostic_fit.deviance_residuals()
+    }
+
+    pub fn schoenfeld_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
+        self.diagnostic_fit.schoenfeld_residuals()
+    }
+
+    pub fn scaled_schoenfeld_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
+        self.diagnostic_fit.scaled_schoenfeld_residuals()
+    }
+
+    pub fn scaled_schoenfeld_residuals_with_variance(
+        &self,
+        information_matrix: Vec<Vec<f64>>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        self.diagnostic_fit
+            .scaled_schoenfeld_residuals_with_variance(information_matrix)
+    }
+
+    pub fn coxph_detail(&self, riskmat: bool) -> PyResult<CoxphDetail> {
+        self.diagnostic_fit.coxph_detail(riskmat)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn cox_zph_diagnostics(
+        &self,
+        transformed_events: Vec<f64>,
+        active_columns: Vec<usize>,
+        groups: Vec<Vec<usize>>,
+        information_matrix: Vec<Vec<f64>>,
+        single_df: bool,
+        global_test: bool,
+    ) -> PyResult<(Vec<Vec<f64>>, crate::validation::ProportionalityTest)> {
+        self.diagnostic_fit.cox_zph_diagnostics(
+            transformed_events,
+            active_columns,
+            groups,
+            information_matrix,
+            single_df,
+            global_test,
+        )
+    }
+
+    pub fn partial_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
+        self.diagnostic_fit.partial_residuals()
+    }
+
+    pub fn score_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
+        self.diagnostic_fit.score_residuals()
+    }
+
+    pub fn dfbeta(&self) -> PyResult<Vec<Vec<f64>>> {
+        self.diagnostic_fit.dfbeta()
+    }
+
+    pub fn dfbetas(&self) -> PyResult<Vec<Vec<f64>>> {
+        self.diagnostic_fit.dfbetas()
+    }
+}
+
+impl CoxPHFrailtyFit {
+    fn ordinary_coefficients(&self) -> PyResult<&[f64]> {
+        self.diagnostic_fit
+            .coefficients
+            .first()
+            .map(Vec::as_slice)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
+            })
+    }
+
+    fn ordinary_linear_predictor_center(&self) -> f64 {
+        self.diagnostic_fit
+            .means
+            .iter()
+            .zip(
+                self.diagnostic_fit
+                    .coefficients
+                    .first()
+                    .into_iter()
+                    .flatten(),
+            )
+            .map(|(mean, coefficient)| mean * coefficient)
+            .sum()
+    }
+
+    fn baseline_center(&self, centered: bool) -> f64 {
+        if !centered {
+            return 0.0;
+        }
+        let weight_sum = self.diagnostic_fit.weights.iter().sum::<f64>();
+        let offset_center = if weight_sum > 0.0 {
+            self.offset
+                .iter()
+                .zip(&self.diagnostic_fit.weights)
+                .map(|(offset, weight)| offset * weight)
+                .sum::<f64>()
+                / weight_sum
+        } else {
+            0.0
+        };
+        self.ordinary_linear_predictor_center() + offset_center
+    }
+
+    fn baseline_linear_predictors(&self) -> PyResult<Vec<f64>> {
+        let beta = self.ordinary_coefficients()?;
+        Ok(self
+            .diagnostic_fit
+            .covariates
+            .iter()
+            .zip(&self.offset)
+            .map(|(row, offset)| Self::row_linear_predictor(row, beta) + offset)
+            .collect())
+    }
+
+    fn baseline_with_strata(
+        &self,
+        centered: bool,
+        include_censor_times: bool,
+    ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
+        self.diagnostic_fit.compute_basehaz_with_predictors(
+            &self.baseline_linear_predictors()?,
+            self.baseline_center(centered),
+            include_censor_times,
+        )
+    }
+
+    fn unique_strata(&self) -> Vec<i32> {
+        let mut strata = self.diagnostic_fit.strata.clone();
+        strata.sort_unstable();
+        strata.dedup();
+        if strata.is_empty() { vec![0] } else { strata }
+    }
+
+    fn validate_prediction_rows(&self, rows: &[Vec<f64>], width: usize) -> PyResult<()> {
+        for (index, row) in rows.iter().enumerate() {
+            if row.len() != width {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "covariates must have {width} columns"
+                )));
+            }
+            validate_finite(&format!("covariates[{index}]"), row)?;
+        }
+        Ok(())
+    }
+
+    fn row_linear_predictor(row: &[f64], beta: &[f64]) -> f64 {
+        row.iter()
+            .zip(beta)
+            .map(|(value, coefficient)| value * coefficient)
+            .sum()
+    }
+
+    fn survival_curves_with_strata(
+        &self,
+        covariates: &[Vec<f64>],
+        strata: &[i32],
+        centered: bool,
+        shared_row: bool,
+    ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+        let beta = self.ordinary_coefficients()?;
+        if (!shared_row && covariates.len() != strata.len())
+            || (shared_row && covariates.len() != 1)
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "strata must have one entry per covariate row",
+            ));
+        }
+        self.validate_prediction_rows(covariates, beta.len())?;
+        let center = self.baseline_center(centered);
+        let (base_times, base_hazards, base_strata) = self.baseline_with_strata(centered, false)?;
+        let baseline =
+            StratifiedBaselineLookup::from_components(&base_times, &base_hazards, &base_strata);
+        let times = baseline.times_for_strata(strata);
+        let curves = strata
+            .iter()
+            .enumerate()
+            .map(|(index, &stratum)| {
+                let row = if shared_row {
+                    &covariates[0]
+                } else {
+                    &covariates[index]
+                };
+                let risk = (Self::row_linear_predictor(row, beta) - center)
+                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
+                    .exp();
+                times
+                    .iter()
+                    .map(|&time| {
+                        let hazard = baseline.cumulative_hazard_at(stratum, time);
+                        (-(hazard * risk)).exp().clamp(0.0, 1.0)
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok((times, curves))
     }
 }
 
@@ -999,8 +1318,7 @@ pub fn coxph_frailty_fit(
         tolerance: toler,
     };
     let result = solver.solve(means, beta, frailty);
-    let mut linear_predictors = Vec::with_capacity(n);
-    let mut risk_scores = Vec::with_capacity(n);
+    let mut centered_linear_predictors = Vec::with_capacity(n);
     for row in 0..n {
         let linear_predictor = offset[row]
             + result.frailty[groups[row]]
@@ -1010,8 +1328,7 @@ pub fn coxph_frailty_fit(
                 .zip(&result.beta)
                 .map(|((&value, &mean), &coefficient)| (value - mean) * coefficient)
                 .sum::<f64>();
-        linear_predictors.push(linear_predictor);
-        risk_scores.push(linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp());
+        centered_linear_predictors.push(linear_predictor);
     }
     let covariance = result
         .covariance
@@ -1024,38 +1341,53 @@ pub fn coxph_frailty_fit(
         .map(|row| row.to_vec())
         .collect::<Vec<_>>();
     let degrees_of_freedom = result.covariate_df.iter().sum::<f64>() + result.frailty_df;
-
-    Ok(CoxPHFrailtyFit {
+    let ordinary_center = result
+        .means
+        .iter()
+        .zip(&result.beta)
+        .map(|(mean, coefficient)| mean * coefficient)
+        .sum::<f64>();
+    let linear_predictors = centered_linear_predictors
+        .iter()
+        .map(|value| value + ordinary_center)
+        .collect::<Vec<_>>();
+    let method = match ties {
+        Ties::Breslow => "breslow",
+        Ties::Efron => "efron",
+    }
+    .to_string();
+    let diagnostic_fit = CoxPHFit {
         coefficients: vec![result.beta],
-        frailty: result.frailty,
         means: result.means,
         score_vector: result.score,
         information_matrix: covariance,
+        degrees_of_freedom,
+        log_likelihood: vec![result.initial_log_likelihood, result.final_log_likelihood],
+        score_test: result.score_test,
+        convergence_flag: result.flag,
+        iterations: result.iterations,
+        risk_scores: Vec::new(),
+        event_times: time,
+        status,
+        linear_predictors,
+        entry_times: None,
+        weights,
+        covariates,
+        strata,
+        method,
+        nocenter,
+    };
+
+    Ok(CoxPHFrailtyFit {
+        frailty: result.frailty,
         naive_information_matrix: naive_covariance,
         frailty_variance: result.frailty_variance,
         covariate_degrees_of_freedom: result.covariate_df,
         frailty_degrees_of_freedom: result.frailty_df,
-        degrees_of_freedom,
-        log_likelihood: vec![result.initial_log_likelihood, result.final_log_likelihood],
         penalized_log_likelihood: result.penalized_log_likelihood,
-        score_test: result.score_test,
-        convergence_flag: result.flag,
-        iterations: result.iterations,
-        risk_scores,
-        linear_predictors,
         theta,
-        event_times: time,
-        status,
-        weights,
-        covariates,
-        strata,
-        method: match ties {
-            Ties::Breslow => "breslow",
-            Ties::Efron => "efron",
-        }
-        .to_string(),
-        nocenter,
         offset,
+        diagnostic_fit,
     })
 }
 

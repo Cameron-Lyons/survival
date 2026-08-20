@@ -16246,6 +16246,7 @@ def _cox_predict_term_groups(fit: Any, nvar: int) -> list[tuple[str, list[int]]]
             columns,
         )
         for assignment, columns in grouped_columns.items()
+        if columns
     ]
 
 
@@ -18520,6 +18521,23 @@ def _location_beta(fit: Any) -> list[float]:
 
 
 def _training_linear_predictor_center(fit: Any) -> float:
+    if _sparse_frailty_for_fit(fit) is not None:
+        model = _unwrap_formula_fit(fit)
+        beta = _cox_beta(model)
+        means = [float(value) for value in model.means]
+        coefficient_center = math.fsum(
+            mean * coefficient for mean, coefficient in zip(means, beta, strict=True)
+        )
+        offsets = [float(value) for value in model.offset]
+        weights = [float(value) for value in model.weights]
+        weight_sum = math.fsum(weights)
+        offset_center = (
+            math.fsum(offset * weight for offset, weight in zip(offsets, weights, strict=True))
+            / weight_sum
+            if weight_sum > 0.0
+            else 0.0
+        )
+        return coefficient_center + offset_center
     values = getattr(fit, "linear_predictors", None)
     if values is None:
         return 0.0
@@ -20504,8 +20522,11 @@ def _cox_expected_events_for_newdata(
     if model_is_counting != (response.start is not None):
         raise ValueError("newdata survival type differs from the fitted Cox model")
 
+    expected_basehaz = getattr(model, "expected_basehaz_with_strata", None)
     basehaz_with_strata = getattr(model, "basehaz_with_strata", None)
-    if basehaz_with_strata is None:
+    if expected_basehaz is not None:
+        base_times, base_hazards, base_strata = expected_basehaz()
+    elif basehaz_with_strata is None:
         base_times, base_hazards = model.basehaz(False)
         base_strata = [0] * len(base_times)
     else:
