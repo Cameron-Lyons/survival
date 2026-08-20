@@ -24,6 +24,7 @@ from . import spatial as spatial
 from . import surv_analysis as surv_analysis
 from . import validation as validation
 from .r_api import (
+    AgregFitResult,
     CchModelResult,
     CoxphFitResult,
     FineGrayFrame,
@@ -49,6 +50,7 @@ from .r_api import (
     YatesPairwiseResult,
     YatesResult,
     aeqSurv,
+    agreg_fit,
     aic,
     anova,
     as_data_frame,

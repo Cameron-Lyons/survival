@@ -12058,6 +12058,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "regression" in survival.__all__
     assert "StrataFactor" in survival.__all__
     assert "Surv" in survival.__all__
+    assert "AgregFitResult" in survival.__all__
     assert "CoxphFitResult" in survival.__all__
     assert "FineGrayFrame" in survival.__all__
     assert "FineGrayOutput" in survival.__all__
@@ -12074,6 +12075,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "TMergeOperation" in survival.__all__
     assert "aic" in survival.__all__
     assert "aeqSurv" in survival.__all__
+    assert "agreg_fit" in survival.__all__
     assert "anova" in survival.__all__
     assert "as_data_frame" in survival.__all__
     assert "basehaz" in survival.__all__
@@ -12144,6 +12146,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "ridge_fit" in survival.__deprecated_root_exports__
     assert "ridge_fit" not in vars(survival)
     assert survival.StrataFactor is survival.r_api.StrataFactor
+    assert survival.AgregFitResult is survival.r_api.AgregFitResult
     assert survival.CoxphFitResult is survival.r_api.CoxphFitResult
     assert survival.Surv is survival.r_api.Surv
     assert survival.FineGrayFrame is survival.r_api.FineGrayFrame
@@ -12161,6 +12164,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.TMergeOperation is survival.r_api.TMergeOperation
     assert survival.aic is survival.r_api.aic
     assert survival.aeqSurv is survival.r_api.aeqSurv
+    assert survival.agreg_fit is survival.r_api.agreg_fit
     assert survival.anova is survival.r_api.anova
     assert survival.as_data_frame is survival.r_api.as_data_frame
     assert survival.basehaz is survival.r_api.basehaz
@@ -12990,6 +12994,8 @@ def test_r_api_stub_tracks_coxph_fit_signature():
 
     assert list(inspect.signature(survival.r_api.coxph_fit).parameters) == expected
     assert _pyi_function_arg_names(stub_path, "coxph_fit") == expected
+    assert list(inspect.signature(survival.r_api.agreg_fit).parameters) == expected
+    assert _pyi_function_arg_names(stub_path, "agreg_fit") == expected
 
 
 def test_r_api_stub_tracks_survdiff_public_signature():

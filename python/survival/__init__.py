@@ -49,6 +49,7 @@ _SKLEARN_EXPORTS = [
 
 _R_EXPORTS = [
     "AaregModelResult",
+    "AgregFitResult",
     "StrataFactor",
     "CchModelResult",
     "CoxphFitResult",
@@ -75,6 +76,7 @@ _R_EXPORTS = [
     "YatesResult",
     "aic",
     "aareg",
+    "agreg_fit",
     "aeqSurv",
     "anova",
     "as_data_frame",

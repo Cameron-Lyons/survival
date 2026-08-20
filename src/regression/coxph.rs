@@ -1170,6 +1170,39 @@ mod tests {
                 .expect("martingale residuals should compute");
             assert_close_vec(&actual, &expected);
         }
+
+        let counting_fit = coxph_fit(
+            vec![1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0],
+            status,
+            covariates,
+            None,
+            Some(vec![1.0, 2.0, 1.0, 1.0, 1.5, 1.0, 1.0, 1.0]),
+            Some(vec![0.1, -0.1, 0.0, 0.2, -0.2, 0.0, 0.1, -0.1]),
+            None,
+            Some(50),
+            Some(1e-10),
+            None,
+            Some("efron"),
+            Some(vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0, 4.0]),
+            None,
+        )
+        .expect("counting-process Cox fit should succeed");
+        let actual = counting_fit
+            .martingale_residuals()
+            .expect("counting-process martingale residuals should compute");
+        assert_close_vec(
+            &actual,
+            &[
+                0.766_719_114_323_41,
+                -0.097_786_557_750_981,
+                -0.571_145_998_821_449,
+                -0.029_000_404_381_249_1,
+                0.259_487_353_182_028,
+                -0.360_230_625_391_793,
+                0.123_851_225_826_562,
+                -0.123_851_225_826_562,
+            ],
+        );
     }
 
     #[test]
