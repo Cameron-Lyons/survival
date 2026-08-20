@@ -1,8 +1,8 @@
-use crate::constants::{exp_ci_bounds_95, same_time};
-use crate::internal::matrix::invert_matrix;
+use crate::constants::exp_ci_bounds_95;
 use crate::internal::validation::{
     validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
 };
+use crate::regression::coxph::coxph_fit;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -271,190 +271,41 @@ fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
     weights.map_or(1.0, |values| values[idx])
 }
 
-#[allow(clippy::too_many_arguments)]
-fn compute_cause_specific_gradient_hessian(
-    x: &[f64],
-    n: usize,
-    p: usize,
-    time: &[f64],
+fn cause_specific_case_weights(
     cause: &[i32],
     weights: Option<&[f64]>,
-    beta: &[f64],
     cause_of_interest: i32,
     treat_other_as: CensoringType,
-    _ties: &str,
-) -> (Vec<f64>, Vec<Vec<f64>>, f64) {
-    let eta: Vec<f64> = (0..n)
-        .map(|i| {
-            let mut e = 0.0;
-            for j in 0..p {
-                e += x[i * p + j] * beta[j];
+) -> Vec<f64> {
+    cause
+        .iter()
+        .enumerate()
+        .map(|(idx, &value)| {
+            let weight = observation_weight(weights, idx);
+            if treat_other_as == CensoringType::Competing && value > 0 && value != cause_of_interest
+            {
+                0.0
+            } else {
+                weight
             }
-            e.clamp(-700.0, 700.0)
         })
-        .collect();
-
-    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp()).collect();
-
-    let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
-
-    let is_at_risk = |idx: usize| -> bool {
-        match treat_other_as {
-            CensoringType::Censored => true,
-            CensoringType::Competing => cause[idx] == 0 || cause[idx] == cause_of_interest,
-        }
-    };
-
-    let mut gradient = vec![0.0; p];
-    let mut hessian = vec![vec![0.0; p]; p];
-    let mut loglik = 0.0;
-
-    let mut risk_sum = 0.0;
-    let mut weighted_x = vec![0.0; p];
-    let mut weighted_x_outer = vec![vec![0.0; p]; p];
-
-    for &idx in &sorted_indices {
-        let case_weight = observation_weight(weights, idx);
-        if is_at_risk(idx) {
-            let w = case_weight * exp_eta[idx];
-            risk_sum += w;
-
-            for j in 0..p {
-                let xij = x[idx * p + j];
-                weighted_x[j] += w * xij;
-
-                for k in 0..p {
-                    let xik = x[idx * p + k];
-                    weighted_x_outer[j][k] += w * xij * xik;
-                }
-            }
-        }
-
-        if cause[idx] == cause_of_interest && risk_sum > 0.0 {
-            loglik += case_weight * (eta[idx] - risk_sum.ln());
-
-            for j in 0..p {
-                let xij = x[idx * p + j];
-                let x_bar = weighted_x[j] / risk_sum;
-                gradient[j] += case_weight * (xij - x_bar);
-
-                for k in 0..p {
-                    let x_bar_k = weighted_x[k] / risk_sum;
-                    let x_outer_bar = weighted_x_outer[j][k] / risk_sum;
-                    hessian[j][k] -= case_weight * (x_outer_bar - x_bar * x_bar_k);
-                }
-            }
-        }
-    }
-
-    (gradient, hessian, loglik)
+        .collect()
 }
 
-fn solve_linear_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
-    let n = b.len();
-    let mut aug: Vec<Vec<f64>> = a.to_vec();
-    let mut rhs = b.to_vec();
-
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k][i].abs() > aug[max_row][i].abs() {
-                max_row = k;
-            }
-        }
-        aug.swap(i, max_row);
-        rhs.swap(i, max_row);
-
-        if aug[i][i].abs() < 1e-12 {
-            return None;
-        }
-
-        let (pivot_rows, lower_rows) = aug.split_at_mut(i + 1);
-        let pivot_tail = &pivot_rows[i][i..n];
-        for k in (i + 1)..n {
-            let lower_row = &mut lower_rows[k - i - 1];
-            let factor = lower_row[i] / pivot_rows[i][i];
-            rhs[k] -= factor * rhs[i];
-            for (aug_kj, &aug_ij) in lower_row[i..n].iter_mut().zip(pivot_tail) {
-                *aug_kj -= factor * aug_ij;
-            }
-        }
-    }
-
-    let mut x = vec![0.0; n];
-    for i in (0..n).rev() {
-        x[i] = rhs[i];
-        for j in (i + 1)..n {
-            x[i] -= aug[i][j] * x[j];
-        }
-        x[i] /= aug[i][i];
-    }
-
-    Some(x)
+fn row_major_covariates(x: &[f64], n_vars: usize) -> Vec<Vec<f64>> {
+    x.chunks_exact(n_vars).map(<[f64]>::to_vec).collect()
 }
 
-fn compute_baseline_hazard(
-    n: usize,
-    time: &[f64],
-    cause: &[i32],
-    weights: Option<&[f64]>,
-    exp_eta: &[f64],
-    cause_of_interest: i32,
-    treat_other_as: CensoringType,
-) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-
-    let is_at_risk = |idx: usize| -> bool {
-        match treat_other_as {
-            CensoringType::Censored => true,
-            CensoringType::Competing => cause[idx] == 0 || cause[idx] == cause_of_interest,
-        }
-    };
-
-    let mut unique_event_times = Vec::new();
-    let mut baseline_hazard = Vec::new();
-    let mut cumulative_hazard = Vec::new();
-
-    let mut cum_h0 = 0.0;
-    let mut i = 0;
-
-    while i < n {
-        let idx = sorted_indices[i];
-        if cause[idx] != cause_of_interest {
-            i += 1;
-            continue;
-        }
-
-        let current_time = time[idx];
-
-        let mut n_events = 0.0;
-        while i < n && same_time(time[sorted_indices[i]], current_time) {
-            if cause[sorted_indices[i]] == cause_of_interest {
-                n_events += observation_weight(weights, sorted_indices[i]);
-            }
-            i += 1;
-        }
-
-        let mut risk_sum = 0.0;
-        for &j in &sorted_indices {
-            if time[j] >= current_time && is_at_risk(j) {
-                risk_sum += observation_weight(weights, j) * exp_eta[j];
-            }
-        }
-
-        if risk_sum > 0.0 && n_events > 0.0 {
-            let h0 = n_events / risk_sum;
-            cum_h0 += h0;
-
-            unique_event_times.push(current_time);
-            baseline_hazard.push(h0);
-            cumulative_hazard.push(cum_h0);
-        }
-    }
-
-    (unique_event_times, baseline_hazard, cumulative_hazard)
+fn hazard_increments(cumulative: &[f64]) -> Vec<f64> {
+    let mut previous = 0.0;
+    cumulative
+        .iter()
+        .map(|&value| {
+            let increment = value - previous;
+            previous = value;
+            increment
+        })
+        .collect()
 }
 
 #[pyfunction]
@@ -499,96 +350,79 @@ fn cause_specific_cox_fit(
         .count();
     let n_censored = cause.iter().filter(|&&c| c == 0).count();
 
-    let mut beta = vec![0.0; n_vars];
-    let mut converged = false;
-    let mut n_iter = 0;
-    let mut loglik = 0.0;
-
-    for iter in 0..config.max_iter {
-        n_iter = iter + 1;
-
-        let (gradient, hessian, ll) = compute_cause_specific_gradient_hessian(
-            x,
-            n_obs,
-            n_vars,
-            time,
-            cause,
-            weights,
-            &beta,
-            config.cause_of_interest,
-            config.treat_other_causes_as,
-            &config.ties,
-        );
-        loglik = ll;
-
-        let neg_hessian: Vec<Vec<f64>> = hessian.to_vec();
-
-        let delta = match solve_linear_system(&neg_hessian, &gradient) {
-            Some(d) => d,
-            None => break,
-        };
-
-        let max_change: f64 = delta.iter().map(|d| d.abs()).fold(0.0, f64::max);
-
-        for j in 0..n_vars {
-            beta[j] += delta[j];
-        }
-
-        if max_change < config.tol {
-            converged = true;
-            break;
-        }
-    }
-
-    let (_, final_hessian, _) = compute_cause_specific_gradient_hessian(
-        x,
-        n_obs,
-        n_vars,
-        time,
+    let case_weights = cause_specific_case_weights(
         cause,
         weights,
-        &beta,
         config.cause_of_interest,
         config.treat_other_causes_as,
-        &config.ties,
     );
+    if n_events == 0 || case_weights.iter().all(|&weight| weight == 0.0) {
+        let coefficients = vec![0.0; n_vars];
+        let std_errors = vec![crate::constants::DIVISION_FLOOR; n_vars];
+        let hazard_ratios = vec![1.0; n_vars];
+        let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&coefficients, &std_errors);
+        return Ok(CauseSpecificCoxResult {
+            coefficients,
+            std_errors,
+            hazard_ratios,
+            hr_ci_lower,
+            hr_ci_upper,
+            log_likelihood: 0.0,
+            n_events,
+            n_at_risk: n_obs,
+            n_competing,
+            n_censored,
+            n_iter: 0,
+            converged: false,
+            cause_of_interest: config.cause_of_interest,
+            baseline_hazard_times: Vec::new(),
+            baseline_hazard: Vec::new(),
+            cumulative_baseline_hazard: Vec::new(),
+        });
+    }
 
-    let neg_hessian: Vec<Vec<f64>> = final_hessian.to_vec();
-
-    let var_cov = invert_matrix(&neg_hessian).unwrap_or_else(|| vec![vec![0.0; n_vars]; n_vars]);
-
-    let std_errors: Vec<f64> = (0..n_vars)
-        .map(|j| {
-            var_cov[j][j]
+    let status = cause
+        .iter()
+        .map(|&value| i32::from(value == config.cause_of_interest))
+        .collect();
+    let fit = coxph_fit(
+        time.to_vec(),
+        status,
+        row_major_covariates(x, n_vars),
+        None,
+        Some(case_weights),
+        None,
+        None,
+        Some(config.max_iter),
+        Some(config.tol),
+        None,
+        Some(&config.ties),
+        None,
+        None,
+    )?;
+    let beta = fit
+        .coefficients
+        .first()
+        .cloned()
+        .unwrap_or_else(|| vec![0.0; n_vars]);
+    let std_errors = (0..n_vars)
+        .map(|column| {
+            fit.information_matrix
+                .get(column)
+                .and_then(|row| row.get(column))
+                .copied()
+                .unwrap_or(0.0)
                 .abs()
                 .sqrt()
                 .max(crate::constants::DIVISION_FLOOR)
         })
-        .collect();
-
-    let hazard_ratios: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
-
+        .collect::<Vec<_>>();
+    let hazard_ratios = beta.iter().map(|&value| value.exp()).collect::<Vec<_>>();
     let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&beta, &std_errors);
-
-    let exp_eta: Vec<f64> = (0..n_obs)
-        .map(|i| {
-            let mut e = 0.0;
-            for j in 0..n_vars {
-                e += x[i * n_vars + j] * beta[j];
-            }
-            e.clamp(-700.0, 700.0).exp()
-        })
-        .collect();
-
-    let (baseline_times, baseline_hazard, cum_baseline_hazard) = compute_baseline_hazard(
-        n_obs,
-        time,
-        cause,
-        weights,
-        &exp_eta,
-        config.cause_of_interest,
-        config.treat_other_causes_as,
-    );
+    let (baseline_times, cum_baseline_hazard) = fit.basehaz(false)?;
+    let baseline_hazard = hazard_increments(&cum_baseline_hazard);
+    let loglik = fit.log_likelihood.last().copied().unwrap_or(0.0);
+    let converged = fit.iterations < config.max_iter && loglik.is_finite();
 
     Ok(CauseSpecificCoxResult {
         coefficients: beta,
@@ -601,7 +435,7 @@ fn cause_specific_cox_fit(
         n_at_risk: n_obs,
         n_competing,
         n_censored,
-        n_iter,
+        n_iter: fit.iterations,
         converged,
         cause_of_interest: config.cause_of_interest,
         baseline_hazard_times: baseline_times,
@@ -694,6 +528,95 @@ mod tests {
         );
     }
 
+    fn reference_fit(ties: &str) -> CauseSpecificCoxResult {
+        let x1 = [
+            0.2, -1.0, 0.7, 0.0, -0.6, 1.1, -0.2, 0.5, 1.2, -0.8, 0.3, -1.1, 0.9, -0.4,
+        ];
+        let x2 = [
+            1.0, 0.4, -0.9, 0.2, 0.8, -0.5, 1.1, -0.3, 0.6, 1.3, -0.7, 0.5, -1.2, 0.1,
+        ];
+        let x = x1
+            .iter()
+            .zip(x2.iter())
+            .flat_map(|(&left, &right)| [left, right])
+            .collect();
+        let time = vec![
+            1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 7.0, 8.0, 9.0,
+        ];
+        let cause = vec![1, 2, 1, 0, 1, 1, 1, 0, 1, 2, 1, 0, 2, 1];
+        let weights = vec![
+            1.0, 1.2, 0.8, 1.5, 0.9, 1.1, 0.75, 1.3, 1.0, 0.85, 1.25, 0.95, 1.4, 1.05,
+        ];
+        let config =
+            CauseSpecificCoxConfig::new(1, CensoringType::Censored, 100, 1e-9, ties).unwrap();
+
+        cause_specific_cox(x, time.len(), 2, time, cause, &config, Some(weights)).unwrap()
+    }
+
+    fn assert_reference_values(
+        result: &CauseSpecificCoxResult,
+        coefficients: &[f64],
+        std_errors: &[f64],
+        log_likelihood: f64,
+        cumulative_baseline_hazard: &[f64],
+    ) {
+        let tolerance = 1e-9;
+        for (actual, expected) in result.coefficients.iter().zip(coefficients) {
+            assert!((actual - expected).abs() <= tolerance);
+        }
+        for (actual, expected) in result.std_errors.iter().zip(std_errors) {
+            assert!((actual - expected).abs() <= tolerance);
+        }
+        assert!((result.log_likelihood - log_likelihood).abs() <= tolerance);
+        assert_eq!(
+            result.baseline_hazard_times,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 9.0]
+        );
+        for (actual, expected) in result
+            .cumulative_baseline_hazard
+            .iter()
+            .zip(cumulative_baseline_hazard)
+        {
+            assert!((actual - expected).abs() <= tolerance);
+        }
+        assert!(result.converged);
+        assert_eq!(result.n_iter, 4);
+    }
+
+    #[test]
+    fn native_tied_fits_match_reference_cox_models() {
+        assert_reference_values(
+            &reference_fit("breslow"),
+            &[1.0046774476980949, 0.8108994771525215],
+            &[0.5873650496929306, 0.559619090488565],
+            -13.884_743_933_880_37,
+            &[
+                0.04492149122855391,
+                0.085_925_229_914_249_8,
+                0.13558418931321614,
+                0.25557984346508395,
+                0.3410067911069257,
+                0.613319626711523,
+                1.9915233911638635,
+            ],
+        );
+        assert_reference_values(
+            &reference_fit("efron"),
+            &[1.0029646789269757, 0.8090613798416071],
+            &[0.5826568579896737, 0.5568223789788628],
+            -13.766109932025635,
+            &[
+                0.04497616447743583,
+                0.08602423033317065,
+                0.1357435932796217,
+                0.2641243522003811,
+                0.34967045633704197,
+                0.6219041739263703,
+                1.9994172210368464,
+            ],
+        );
+    }
+
     #[test]
     fn test_config() {
         let config =
@@ -712,15 +635,6 @@ mod tests {
         assert!(
             CauseSpecificCoxConfig::new(1, CensoringType::Censored, 100, 1e-9, "invalid").is_err()
         );
-    }
-
-    #[test]
-    fn test_solve_linear_system_pivots_without_singular_matrix() {
-        let solution = solve_linear_system(&[vec![0.0, 2.0], vec![1.0, 1.0]], &[4.0, 3.0]).unwrap();
-
-        assert!((solution[0] - 1.0).abs() < 1e-12);
-        assert!((solution[1] - 2.0).abs() < 1e-12);
-        assert!(solve_linear_system(&[vec![0.0, 0.0], vec![0.0, 1.0]], &[1.0, 2.0]).is_none());
     }
 
     #[test]
