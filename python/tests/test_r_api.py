@@ -9883,6 +9883,79 @@ def test_coxph_detail_exposes_r_style_event_contributions():
     assert all(value > 0.0 for value in detail.varhaz)
 
 
+def test_coxph_detail_uses_fit_owned_native_path(monkeypatch):
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_toy_data(),
+        init=[0.0, 0.0],
+        max_iter=0,
+        method="breslow",
+    )
+
+    def reject_exported_arrays(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("fitted Cox detail should not export arrays to the low-level binding")
+
+    monkeypatch.setattr(survival.r_api._core, "coxph_detail", reject_exported_arrays)
+
+    detail = survival.coxph_detail(fit, riskmat=True)
+
+    assert detail.nevent == [1] * sum(_toy_data()["status"])
+    assert detail.riskmat is not None
+
+
+def test_coxph_detail_fit_owned_path_matches_export_fallback():
+    data = _counting_cox_data() | {
+        "group": ["A", "A", "A", "A", "B", "B"],
+        "binary": [0, 1, 0, 1, 0, 1],
+        "offset": [0.1, -0.2, 0.05, 0.0, 0.2, -0.1],
+    }
+    weights = [1.0, 1.5, 0.75, 2.0, 1.25, 0.5]
+    fit = survival.coxph(
+        "Surv(start, stop, status) ~ x1 + binary + offset(offset) + strata(group)",
+        data=data,
+        weights=weights,
+        init=[0.2, -0.1],
+        max_iter=0,
+        method="efron",
+    )
+
+    class HideNativeDetail:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            if name == "coxph_detail":
+                raise AttributeError(name)
+            return getattr(self.inner, name)
+
+    fallback_fit = replace(fit, fit=HideNativeDetail(fit.fit))
+    native = survival.coxph_detail(fit, riskmat=True, rorder="time")
+    fallback = survival.coxph_detail(fallback_fit, riskmat=True, rorder="time")
+
+    assert native.time == pytest.approx(fallback.time)
+    assert native.nevent == fallback.nevent
+    assert native.nrisk == fallback.nrisk
+    for actual, expected in zip(native.means, fallback.means, strict=True):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(native.score, fallback.score, strict=True):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(native.imat, fallback.imat, strict=True):
+        for actual_row, expected_row in zip(actual, expected, strict=True):
+            assert actual_row == pytest.approx(expected_row)
+    assert native.hazard == pytest.approx(fallback.hazard)
+    assert native.varhaz == pytest.approx(fallback.varhaz)
+    assert native.wtrisk == pytest.approx(fallback.wtrisk)
+    assert native.x == fallback.x
+    assert native.y == fallback.y
+    assert native.strata == fallback.strata
+    assert native.riskmat == fallback.riskmat
+    assert native.weights == pytest.approx(fallback.weights)
+    assert native.nevent_wt == pytest.approx(fallback.nevent_wt)
+    assert native.nrisk_wt == pytest.approx(fallback.nrisk_wt)
+    assert native.sortorder == fallback.sortorder
+
+
 def test_coxph_detail_efron_tie_averages_step_risk_means():
     data = {
         "time": [1.0, 1.0, 2.0],

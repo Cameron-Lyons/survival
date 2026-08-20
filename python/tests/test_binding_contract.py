@@ -849,6 +849,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "schoenfeld_residuals": ["self"],
         "scaled_schoenfeld_residuals": ["self"],
         "scaled_schoenfeld_residuals_with_variance": ["self", "information_matrix"],
+        "coxph_detail": ["self", "riskmat"],
         "cox_zph_diagnostics": [
             "self",
             "transformed_events",
@@ -1076,6 +1077,12 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     assert len(detail.variance_hazards()) == sum(status)
     assert len(detail.weighted_risk()) == sum(status)
     assert len(detail.schoenfeld_residuals()) == sum(status)
+
+    fitted_detail = fit.coxph_detail(True)
+    assert type(fitted_detail).__name__ == "CoxphDetail"
+    assert fitted_detail.n_events == detail.n_events
+    assert fitted_detail.n_observations == detail.n_observations
+    assert fitted_detail.riskmat == detail.riskmat
 
     detail_with_riskmat = core.coxph_detail(
         time,
