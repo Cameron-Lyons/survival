@@ -155,6 +155,7 @@ _R_EXPORTS = [
     "survreg",
     "survreg_control",
     "survreg_distributions",
+    "survreg_dtest",
     "survreg_fit",
     "tdc",
     "tcut",

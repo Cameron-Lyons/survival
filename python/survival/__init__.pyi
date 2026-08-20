@@ -123,6 +123,7 @@ from .r_api import (
     survobrien,
     survreg,
     survreg_distributions,
+    survreg_dtest,
     survreg_fit,
     survSplit,
     tcut,

@@ -12132,6 +12132,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "survSplit" in survival.__all__
     assert "survreg" in survival.__all__
     assert "survreg_distributions" in survival.__all__
+    assert "survreg_dtest" in survival.__all__
     assert "survreg_fit" in survival.__all__
     assert "tdc" in survival.__all__
     assert "tmerge" in survival.__all__
@@ -12220,6 +12221,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.survSplit is survival.r_api.survSplit
     assert survival.survreg is survival.r_api.survreg
     assert survival.survreg_distributions is survival.r_api.survreg_distributions
+    assert survival.survreg_dtest is survival.r_api.survreg_dtest
     assert survival.survreg_fit is survival.r_api.survreg_fit
     assert survival.survreg is not survival.regression.survreg
     assert survival.tdc is survival.r_api.tdc
@@ -12953,6 +12955,14 @@ def test_r_api_stub_tracks_survreg_fit_signature():
 
     assert list(inspect.signature(survival.r_api.survreg_fit).parameters) == expected
     assert _pyi_function_arg_names(stub_path, "survreg_fit") == expected
+    assert list(inspect.signature(survival.r_api.survreg_dtest).parameters) == [
+        "dlist",
+        "verbose",
+    ]
+    assert _pyi_function_arg_names(stub_path, "survreg_dtest") == [
+        "dlist",
+        "verbose",
+    ]
 
 
 def test_r_api_stub_tracks_survdiff_public_signature():

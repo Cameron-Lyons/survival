@@ -148,6 +148,7 @@ class SurvregFitResult:
     icoef_names: list[str]
 
 survreg_distributions: Mapping[str, SurvregDistribution]
+def survreg_dtest(dlist: Any, verbose: Any = False) -> bool | list[str]: ...
 
 class PyearsResult:
     pyears: list[float]
