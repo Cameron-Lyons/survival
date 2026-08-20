@@ -1046,6 +1046,107 @@ def test_agreg_fit_matches_reference_weighted_counting_process_fit():
         survival.agreg_fit(x, survival.Surv(start, stop, [0] * len(stop)))
 
 
+def test_agexact_fit_matches_reference_right_and_counting_process_fits():
+    x = {
+        "x1": [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5],
+        "x2": [1.0, 0.2, 0.7, 1.3, 0.4, 1.1, 0.5, 0.9],
+    }
+    stop = [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0]
+    status = [1, 1, 0, 1, 1, 0, 1, 0]
+    fixtures = [
+        (
+            survival.Surv(stop, status),
+            [0.189909180165605, -1.1018604712744],
+            [
+                [2.17021886721069, 1.01176740045738],
+                [1.01176740045738, 2.91144555149508],
+            ],
+            [-6.3279367837292, -6.02166478557382],
+            0.613318905217953,
+            4,
+            [
+                -0.349524857754264,
+                0.645909027364623,
+                0.0190151196611789,
+                -0.50916473698754,
+                0.406546015093182,
+                -0.440719986865143,
+                0.410305476065105,
+                -0.182366056577141,
+            ],
+            [
+                0.838273503739839,
+                0.562384575300701,
+                -0.233795450797506,
+                0.625837762907696,
+                0.0651367663178406,
+                -0.400668436041613,
+                -0.582362314565589,
+                -0.874806406861369,
+            ],
+        ),
+        (
+            survival.Surv([0, 0, 0, 1, 1, 2, 3, 4], stop, status),
+            [6.25393495620695, 1.77351117102195],
+            [
+                [125.483201267342, 80.1723633215414],
+                [80.1723633215414, 58.7122483503],
+            ],
+            [-2.89037175789616, -1.4457985963911],
+            2.30774005337968,
+            8,
+            [
+                -2.471236014128,
+                -0.137683977221393,
+                -1.7525023741932,
+                3.68935879776484,
+                -0.408375238637698,
+                -1.66849140140511,
+                3.52133685218867,
+                -0.772406644368111,
+            ],
+            [
+                0.850370489560222,
+                -0.543355691578768,
+                -0.307014797981455,
+                -0.958247626531567,
+                0.967472976120623,
+                -0.0092253495890561,
+                0.0134698039760716,
+                -0.0134698039760717,
+            ],
+        ),
+    ]
+    control = survival.coxph_control(iter_max=50, eps=1e-10)
+    for (
+        response,
+        coefficients,
+        variance,
+        loglik,
+        score,
+        iterations,
+        linear_predictors,
+        residuals,
+    ) in fixtures:
+        fit = survival.agexact_fit(x, response, control=control)
+        assert fit.coefficients == pytest.approx(coefficients)
+        for actual, expected in zip(fit.var, variance, strict=True):
+            assert actual == pytest.approx(expected)
+        assert fit.loglik == pytest.approx(loglik)
+        assert fit.score == pytest.approx(score)
+        assert fit.iter == iterations
+        assert fit.linear_predictors == pytest.approx(linear_predictors)
+        assert fit.residuals == pytest.approx(residuals)
+        assert fit.means == pytest.approx([0.6625, 0.7625])
+        assert fit.method == "coxph"
+        assert fit.coefficient_names == ["x1", "x2"]
+
+    with pytest.raises(ValueError, match="Case weights"):
+        survival.agexact_fit(x, fixtures[0][0], weights=[2.0] * len(stop))
+    with pytest.raises(ValueError, match="must be 'exact'"):
+        survival.agexact_fit(x, fixtures[0][0], method="efron")
+
+
 def test_r_api_brier_returns_r_style_cox_model_fields():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],

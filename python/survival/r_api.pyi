@@ -1085,6 +1085,19 @@ def agreg_fit(
     resid: Any = True,
     nocenter: Any | None = None,
 ) -> AgregFitResult: ...
+def agexact_fit(
+    x: Any,
+    y: Any,
+    strata: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    control: Any | None = None,
+    weights: Any | None = None,
+    method: Any = "exact",
+    rownames: Any | None = None,
+    resid: Any = True,
+    nocenter: Any | None = None,
+) -> CoxphFitResult: ...
 def cch(
     formula: str,
     data: Any,
