@@ -1,4 +1,4 @@
-use crate::constants::exp_ci_bounds_95;
+use crate::constants::{exp_ci_bounds_95, exp_clamped};
 use crate::internal::validation::{
     validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
 };
@@ -133,62 +133,76 @@ impl CauseSpecificCoxResult {
         )
     }
 
-    fn predict_cumulative_hazard(&self, x: Vec<f64>, n_obs: usize) -> Vec<Vec<f64>> {
-        let n_vars = self.coefficients.len();
+    fn predict_cumulative_hazard(&self, x: Vec<f64>, n_obs: usize) -> PyResult<Vec<Vec<f64>>> {
+        let risk_scores = self.prediction_risk_scores(&x, n_obs)?;
 
-        (0..n_obs)
+        Ok(risk_scores
             .into_par_iter()
-            .map(|i| {
-                let mut linear_pred = 0.0;
-                for j in 0..n_vars {
-                    linear_pred += x[i * n_vars + j] * self.coefficients[j];
-                }
-                let exp_lp = linear_pred.exp();
-
+            .map(|risk_score| {
                 self.cumulative_baseline_hazard
                     .iter()
-                    .map(|&h0| h0 * exp_lp)
+                    .map(|&hazard| hazard * risk_score)
                     .collect()
             })
-            .collect()
+            .collect())
     }
 
-    fn predict_survival(&self, x: Vec<f64>, n_obs: usize) -> Vec<Vec<f64>> {
-        let cum_haz = self.predict_cumulative_hazard(x, n_obs);
-        cum_haz
+    fn predict_survival(&self, x: Vec<f64>, n_obs: usize) -> PyResult<Vec<Vec<f64>>> {
+        let cumulative_hazard = self.predict_cumulative_hazard(x, n_obs)?;
+        Ok(cumulative_hazard
             .into_par_iter()
-            .map(|h| h.iter().map(|&ch| (-ch).exp()).collect())
-            .collect()
-    }
-
-    fn predict_cif(&self, x: Vec<f64>, n_obs: usize) -> Vec<Vec<f64>> {
-        let n_vars = self.coefficients.len();
-        let n_times = self.baseline_hazard_times.len();
-
-        (0..n_obs)
-            .into_par_iter()
-            .map(|i| {
-                let mut linear_pred = 0.0;
-                for j in 0..n_vars {
-                    linear_pred += x[i * n_vars + j] * self.coefficients[j];
-                }
-                let exp_lp = linear_pred.exp();
-
-                let mut cif = Vec::with_capacity(n_times);
-                let mut cum_inc = 0.0;
-                let mut prev_surv = 1.0;
-
-                for t in 0..n_times {
-                    let h0_t = self.baseline_hazard[t];
-                    let h_t = h0_t * exp_lp;
-                    cum_inc += prev_surv * h_t;
-                    prev_surv *= (1.0 - h_t).max(0.0);
-                    cif.push(cum_inc);
-                }
-
-                cif
+            .map(|hazards| {
+                hazards
+                    .into_iter()
+                    .map(|hazard| (-hazard).exp().clamp(0.0, 1.0))
+                    .collect()
             })
-            .collect()
+            .collect())
+    }
+
+    fn predict_cif(&self, x: Vec<f64>, n_obs: usize) -> PyResult<Vec<Vec<f64>>> {
+        let cumulative_hazard = self.predict_cumulative_hazard(x, n_obs)?;
+        Ok(cumulative_hazard
+            .into_par_iter()
+            .map(|hazards| {
+                hazards
+                    .into_iter()
+                    .map(|hazard| (-(-hazard).exp_m1()).clamp(0.0, 1.0))
+                    .collect()
+            })
+            .collect())
+    }
+}
+
+impl CauseSpecificCoxResult {
+    fn prediction_risk_scores(&self, x: &[f64], n_obs: usize) -> PyResult<Vec<f64>> {
+        let n_vars = self.coefficients.len();
+        if n_vars == 0 {
+            return Err(PyValueError::new_err(
+                "cannot predict with a model that has no coefficients",
+            ));
+        }
+
+        let expected_len = n_obs.checked_mul(n_vars).ok_or_else(|| {
+            PyValueError::new_err("n_obs * n_vars overflowed while validating x length")
+        })?;
+        if x.len() != expected_len {
+            return Err(PyValueError::new_err("x length must equal n_obs * n_vars"));
+        }
+        validate_no_nan(x, "x")?;
+        validate_finite(x, "x")?;
+
+        x.par_chunks_exact(n_vars)
+            .map(|row| {
+                let linear_predictor = row
+                    .iter()
+                    .zip(&self.coefficients)
+                    .map(|(&value, &coefficient)| value * coefficient)
+                    .sum::<f64>();
+                (!linear_predictor.is_nan()).then(|| exp_clamped(linear_predictor))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| PyValueError::new_err("x produced an undefined linear predictor"))
     }
 }
 
@@ -417,7 +431,10 @@ fn cause_specific_cox_fit(
                 .max(crate::constants::DIVISION_FLOOR)
         })
         .collect::<Vec<_>>();
-    let hazard_ratios = beta.iter().map(|&value| value.exp()).collect::<Vec<_>>();
+    let hazard_ratios = beta
+        .iter()
+        .map(|&value| exp_clamped(value))
+        .collect::<Vec<_>>();
     let (hr_ci_lower, hr_ci_upper) = exp_ci_bounds_95(&beta, &std_errors);
     let (baseline_times, cum_baseline_hazard) = fit.basehaz(false)?;
     let baseline_hazard = hazard_increments(&cum_baseline_hazard);
@@ -712,6 +729,7 @@ mod tests {
 
     #[test]
     fn test_cause_specific_cox_validates_public_inputs() {
+        pyo3::Python::initialize();
         let config =
             CauseSpecificCoxConfig::new(1, CensoringType::Censored, 100, 1e-5, "breslow").unwrap();
 

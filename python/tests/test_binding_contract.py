@@ -1599,6 +1599,32 @@ def test_cause_specific_cox_ties_match_reference_fits():
         assert result.n_iter == 4
 
 
+def test_cause_specific_predictions_validate_inputs_and_stay_bounded():
+    setup_survival_import()
+    core = importlib.import_module("survival._survival")
+    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    cause = [1, 0, 1, 2, 1, 0]
+    config = core.CauseSpecificCoxConfig(1, core.CensoringType.Censored, 20, 1e-8, "breslow")
+    result = core.cause_specific_cox([-1.0, -0.5, 0.0, 0.5, 1.0, 1.5], 6, 1, time, cause, config)
+
+    for method_name in ["predict_cumulative_hazard", "predict_survival", "predict_cif"]:
+        method = getattr(result, method_name)
+        with pytest.raises(ValueError, match=r"x length must equal n_obs \* n_vars"):
+            method([0.0], 2)
+        with pytest.raises(ValueError, match="x contains non-finite value"):
+            method([math.inf], 1)
+        with pytest.raises(ValueError, match="x contains NaN"):
+            method([math.nan], 1)
+
+    survival = result.predict_survival([1e300], 1)[0]
+    cif = result.predict_cif([1e300], 1)[0]
+    assert all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in survival + cif)
+    assert survival == sorted(survival, reverse=True)
+    assert cif == sorted(cif)
+    assert cif == pytest.approx([1.0 - value for value in survival])
+    assert result.predict_survival([], 0) == []
+
+
 def test_joint_competing_risk_bindings_are_typed_to_runtime_surface():
     setup_survival_import()
     core = importlib.import_module("survival._survival")
