@@ -150,6 +150,63 @@ mod tests {
     }
 
     #[test]
+    fn wlw_matches_stratified_cluster_reference() {
+        let n_subjects = 30;
+        let mut id = Vec::with_capacity(n_subjects * 3);
+        let mut time = Vec::with_capacity(n_subjects * 3);
+        let mut event = Vec::with_capacity(n_subjects * 3);
+        let mut stratum = Vec::with_capacity(n_subjects * 3);
+        let mut covariates = Vec::with_capacity(n_subjects * 6);
+        for subject in 1..=n_subjects {
+            for event_order in 1..=3 {
+                let row = id.len();
+                id.push(subject as i32);
+                stratum.push(event_order as i32);
+                time.push(((row * 5 + subject * 3 + event_order) % 40 + 1) as f64);
+                event.push(i32::from((row + subject + event_order) % 4 != 0));
+                covariates.push(((row * 3 + subject * 2) % 17) as f64 * 0.1);
+                covariates.push(((row * 7 + subject) % 13) as f64 * 0.1);
+            }
+        }
+
+        let result = wlw_model(
+            id.clone(),
+            time.clone(),
+            event.clone(),
+            stratum.clone(),
+            covariates.clone(),
+            &WLWConfig::new(50, 1e-9, true, false),
+        )
+        .expect("WLW reference fit should succeed");
+
+        assert_close(result.coef[0], -0.262_198_198_154_192, 1e-10);
+        assert_close(result.coef[1], 0.207_452_690_273_597, 1e-10);
+        assert_close(result.std_errors[0], 0.267_872_851_791_448, 1e-10);
+        assert_close(result.std_errors[1], 0.352_068_828_626_283, 1e-10);
+        assert_close(result.robust_std_errors[0], 0.251_017_039_175_710, 1e-10);
+        assert_close(result.robust_std_errors[1], 0.273_495_948_040_538, 1e-10);
+        assert_close(result.log_likelihood, -148.584_208_908_079, 1e-10);
+        assert_close(result.global_test_stat, 1.695_741_210_843_69, 1e-10);
+        assert_eq!(result.n_iter, 3);
+        assert!(result.converged);
+
+        let common_baseline = wlw_model(
+            id,
+            time,
+            event,
+            stratum,
+            covariates,
+            &WLWConfig::new(50, 1e-9, true, true),
+        )
+        .expect("common-baseline WLW reference fit should succeed");
+        assert_close(common_baseline.coef[0], -0.040_828_254_348_441_3, 1e-10);
+        assert_close(common_baseline.coef[1], 0.024_655_056_553_873_553, 1e-10);
+        assert_close(common_baseline.log_likelihood, -215.996_228_891_643_6, 1e-10);
+        assert_close(common_baseline.global_test_stat, 0.046_431_337_489_869_93, 1e-10);
+        assert_eq!(common_baseline.n_iter, 2);
+    }
+
+    #[test]
     fn test_bladder_recurrent_event_models() {
         let bladder = load_legacy_bladder_data();
 
@@ -241,11 +298,19 @@ mod tests {
         assert_eq!(wlw.n_events, 112);
         assert_eq!(wlw.n_strata, 4);
         assert!(wlw.converged);
-        assert_close(wlw.coef[0], -0.5798694870405632, 1e-9);
-        assert_close(wlw.coef[1], -0.050935433404071695, 1e-9);
-        assert_close(wlw.coef[2], 0.20849094150265948, 1e-9);
-        assert_close(wlw.global_test_stat, 12.37081136240878, 1e-9);
-        assert_close(wlw.global_test_pvalue, 0.006215083463136151, 1e-12);
+        assert_close(wlw.coef[0], -0.584_793_457_410_789_8, 1e-9);
+        assert_close(wlw.coef[1], -0.051_616_982_656_100_99, 1e-9);
+        assert_close(wlw.coef[2], 0.210_293_707_384_945_54, 1e-9);
+        assert_close(wlw.std_errors[0], 0.201_050_602_379_388_63, 1e-9);
+        assert_close(wlw.std_errors[1], 0.069_734_320_003_082_08, 1e-9);
+        assert_close(wlw.std_errors[2], 0.046_754_789_784_791_15, 1e-9);
+        assert_close(wlw.robust_std_errors[0], 0.307_946_258_183_588_84, 1e-9);
+        assert_close(wlw.robust_std_errors[1], 0.094_586_644_025_190_86, 1e-9);
+        assert_close(wlw.robust_std_errors[2], 0.066_641_686_829_874_4, 1e-9);
+        assert_close(wlw.log_likelihood, -426.146_832_546_882_1, 1e-9);
+        assert_close(wlw.global_test_stat, 15.537_046_791_588_393, 1e-9);
+        assert_close(wlw.global_test_pvalue, 0.001_410_738_150_921_807, 1e-12);
+        assert_eq!(wlw.n_iter, 4);
 
         assert!(gap.hazard_ratios[0] < 1.0);
         assert!(total.hazard_ratios[0] < gap.hazard_ratios[0]);

@@ -1,8 +1,8 @@
 use std::hint::black_box;
 use survival::regression::{
-    ClogitDataSet, ConditionalLogisticRegression, CoxPHModel, SplineConfig, aareg_fit, agexact,
-    anderson_gill_model, cch_borgan_fit, cch_fit, coxph_fit, finegray, flexible_parametric_model,
-    landmark_cox_analysis, survreg, time_varying_cox,
+    ClogitDataSet, ConditionalLogisticRegression, CoxPHModel, SplineConfig, WLWConfig, aareg_fit,
+    agexact, anderson_gill_model, cch_borgan_fit, cch_fit, coxph_fit, finegray,
+    flexible_parametric_model, landmark_cox_analysis, survreg, time_varying_cox, wlw_model,
 };
 use survival::residuals::smooth_schoenfeld;
 use survival::{
@@ -963,6 +963,49 @@ mod anderson_gill_bench {
                 1e-9,
             )
             .expect("benchmark Andersen-Gill fit should succeed");
+            black_box(result);
+        });
+    }
+}
+
+mod wlw_bench {
+    use super::*;
+
+    type WlwData = (Vec<i32>, Vec<f64>, Vec<i32>, Vec<i32>, Vec<f64>);
+
+    fn recurrent_data(n_subjects: usize) -> WlwData {
+        let mut id = Vec::with_capacity(n_subjects * 3);
+        let mut time = Vec::with_capacity(n_subjects * 3);
+        let mut event = Vec::with_capacity(n_subjects * 3);
+        let mut stratum = Vec::with_capacity(n_subjects * 3);
+        let mut covariates = Vec::with_capacity(n_subjects * 6);
+        for subject in 1..=n_subjects {
+            for event_order in 1..=3 {
+                let row = id.len();
+                id.push(subject as i32);
+                stratum.push(event_order as i32);
+                time.push(((row * 5 + subject * 3 + event_order) % 40 + 1) as f64);
+                event.push(i32::from((row + subject + event_order) % 4 != 0));
+                covariates.push(((row * 3 + subject * 2) % 17) as f64 * 0.1);
+                covariates.push(((row * 7 + subject) % 13) as f64 * 0.1);
+            }
+        }
+        (id, time, event, stratum, covariates)
+    }
+
+    #[divan::bench(args = [30, 100, 200])]
+    fn fit(bencher: divan::Bencher, n_subjects: usize) {
+        let (id, time, event, stratum, covariates) = recurrent_data(n_subjects);
+        bencher.bench_local(|| {
+            let result = wlw_model(
+                id.clone(),
+                time.clone(),
+                event.clone(),
+                stratum.clone(),
+                covariates.clone(),
+                &WLWConfig::new(50, 1e-9, true, false),
+            )
+            .expect("benchmark WLW fit should succeed");
             black_box(result);
         });
     }

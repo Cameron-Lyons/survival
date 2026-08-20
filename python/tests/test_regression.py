@@ -1148,6 +1148,62 @@ def test_anderson_gill_matches_tied_cluster_reference():
     assert result.converged is True
 
 
+def test_wlw_matches_stratified_cluster_reference():
+    n_subjects = 30
+    subject_id = []
+    time = []
+    event = []
+    stratum = []
+    covariates = []
+    for subject in range(1, n_subjects + 1):
+        for event_order in range(1, 4):
+            row = len(subject_id)
+            subject_id.append(subject)
+            stratum.append(event_order)
+            time.append(float((row * 5 + subject * 3 + event_order) % 40 + 1))
+            event.append(int((row + subject + event_order) % 4 != 0))
+            covariates.extend(
+                [
+                    ((row * 3 + subject * 2) % 17) * 0.1,
+                    ((row * 7 + subject) % 13) * 0.1,
+                ]
+            )
+
+    result = survival.wlw_model(
+        subject_id,
+        time,
+        event,
+        stratum,
+        covariates,
+        survival.WLWConfig(50, 1e-9, True, False),
+    )
+
+    assert result.coef == pytest.approx([-0.262198198154192, 0.207452690273597], abs=1e-10)
+    assert result.std_errors == pytest.approx([0.267872851791448, 0.352068828626283], abs=1e-10)
+    assert result.robust_std_errors == pytest.approx(
+        [0.251017039175710, 0.273495948040538], abs=1e-10
+    )
+    assert result.log_likelihood == pytest.approx(-148.584208908079, abs=1e-10)
+    assert result.global_test_stat == pytest.approx(1.69574121084369, abs=1e-10)
+    assert result.n_iter == 3
+    assert result.converged is True
+
+    common_baseline = survival.wlw_model(
+        subject_id,
+        time,
+        event,
+        stratum,
+        covariates,
+        survival.WLWConfig(50, 1e-9, True, True),
+    )
+    assert common_baseline.coef == pytest.approx(
+        [-0.0408282543484413, 0.024655056553873553], abs=1e-10
+    )
+    assert common_baseline.log_likelihood == pytest.approx(-215.9962288916436, abs=1e-10)
+    assert common_baseline.global_test_stat == pytest.approx(0.04643133748986993, abs=1e-10)
+    assert common_baseline.n_iter == 2
+
+
 def test_recurrent_event_regression_validates_public_inputs():
     with pytest.raises(ValueError, match="x length"):
         survival.gap_time_model([0, 1], [0.0, 0.0], [1.0, 1.0], [1, 0], [0.5], 2, 1, 10, 1e-6)
