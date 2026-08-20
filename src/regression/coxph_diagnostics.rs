@@ -1,8 +1,9 @@
-use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, same_time};
+use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, TIME_EPSILON, same_time};
 use crate::internal::matrix::{lu_solve, matrix_inverse};
 use crate::internal::statistical::chi2_sf;
 use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
+use crate::regression::coxph_detail_module::coxph_detail;
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
@@ -485,6 +486,104 @@ pub fn cox_zph_tests(
             1.0
         },
     })
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    time,
+    status,
+    covariates,
+    coefficients,
+    transformed_events,
+    groups,
+    single_df,
+    global_test,
+    weights=None,
+    entry_times=None,
+    strata=None,
+    offset=None,
+    method="breslow".to_string()
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn cox_zph_tests_from_data(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    coefficients: Vec<f64>,
+    transformed_events: Vec<f64>,
+    groups: Vec<Vec<usize>>,
+    single_df: bool,
+    global_test: bool,
+    weights: Option<Vec<f64>>,
+    entry_times: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    offset: Option<Vec<f64>>,
+    method: String,
+) -> PyResult<ProportionalityTest> {
+    validate_finite_slice(&transformed_events, "transformed_events")?;
+    let detail = coxph_detail(
+        time,
+        status,
+        covariates,
+        coefficients.clone(),
+        weights,
+        entry_times,
+        strata,
+        offset,
+        method,
+        0.0,
+        false,
+    )?;
+
+    let mut transformed_time = Vec::with_capacity(detail.rows.len());
+    let mut cursor = 0usize;
+    for row in &detail.rows {
+        let end = cursor
+            .checked_add(row.n_event)
+            .filter(|&end| end <= transformed_events.len())
+            .ok_or_else(|| {
+                value_error("Cox detail event counts do not match transformed event times")
+            })?;
+        let tied = &transformed_events[cursor..end];
+        let first = tied.first().copied().ok_or_else(|| {
+            value_error("Cox detail event counts do not match transformed event times")
+        })?;
+        if tied
+            .iter()
+            .skip(1)
+            .any(|&value| (value - first).abs() > TIME_EPSILON)
+        {
+            return Err(value_error(
+                "tied events have inconsistent transformed times",
+            ));
+        }
+        transformed_time.push(first);
+        cursor = end;
+    }
+    if cursor != transformed_events.len() {
+        return Err(value_error(
+            "Cox detail event counts do not match transformed event times",
+        ));
+    }
+
+    let mut event_scores = Vec::with_capacity(detail.rows.len());
+    let mut event_information = Vec::with_capacity(detail.rows.len());
+    let mut event_counts = Vec::with_capacity(detail.rows.len());
+    for row in detail.rows {
+        event_scores.push(row.score);
+        event_information.push(row.imat);
+        event_counts.push(row.n_event);
+    }
+    cox_zph_tests(
+        event_scores,
+        event_information,
+        transformed_time,
+        event_counts,
+        groups,
+        coefficients,
+        single_df,
+        global_test,
+    )
 }
 
 #[pyfunction]
@@ -1879,6 +1978,72 @@ mod tests {
         .expect("interval SEs should compute");
         assert!((interval_se[0] - 3.0 * 1.83_f64.sqrt()).abs() < 1e-12);
         assert_eq!(interval_se[1], 0.0);
+    }
+
+    #[test]
+    fn native_cox_zph_path_matches_materialized_detail_blocks() {
+        let time = vec![1.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 0, 1, 1, 0];
+        let covariates = vec![
+            vec![0.2, 1.0],
+            vec![0.8, 0.5],
+            vec![0.4, 0.9],
+            vec![1.1, 0.2],
+            vec![0.3, 0.8],
+            vec![0.7, 0.4],
+        ];
+        let coefficients = vec![0.15, -0.2];
+        let weights = vec![1.0, 2.0, 0.5, 1.5, 0.75, 1.0];
+        let entry_times = vec![0.0, 0.0, 0.5, 0.0, 1.0, 0.0];
+        let transformed_events = vec![1.5, 1.5, 4.0, 5.0];
+        let groups = vec![vec![0], vec![1]];
+
+        let detail = coxph_detail(
+            time.clone(),
+            status.clone(),
+            covariates.clone(),
+            coefficients.clone(),
+            Some(weights.clone()),
+            Some(entry_times.clone()),
+            None,
+            None,
+            "efron".to_string(),
+            0.0,
+            false,
+        )
+        .expect("detail blocks should compute");
+        let materialized = cox_zph_tests(
+            detail.rows.iter().map(|row| row.score.clone()).collect(),
+            detail.rows.iter().map(|row| row.imat.clone()).collect(),
+            vec![1.5, 4.0, 5.0],
+            detail.rows.iter().map(|row| row.n_event).collect(),
+            groups.clone(),
+            coefficients.clone(),
+            false,
+            true,
+        )
+        .expect("materialized diagnostic should compute");
+        let native = cox_zph_tests_from_data(
+            time,
+            status,
+            covariates,
+            coefficients,
+            transformed_events,
+            groups,
+            false,
+            true,
+            Some(weights),
+            Some(entry_times),
+            None,
+            None,
+            "efron".to_string(),
+        )
+        .expect("native diagnostic should compute");
+
+        assert_eq!(native.chi2_values, materialized.chi2_values);
+        assert_eq!(native.p_values, materialized.p_values);
+        assert_eq!(native.global_chi2, materialized.global_chi2);
+        assert_eq!(native.global_p_value, materialized.global_p_value);
     }
 
     #[test]

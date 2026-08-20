@@ -2997,6 +2997,7 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
         "cox_zph_group_variance",
         "cox_zph_term_matrix",
         "cox_zph_tests",
+        "cox_zph_tests_from_data",
         "leverage_cox",
         "prediction_se_from_variance",
         "scale_schoenfeld_residuals",
@@ -3044,6 +3045,21 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
             "beta",
             "single_df",
             "global_test",
+        ],
+        "cox_zph_tests_from_data": [
+            "time",
+            "status",
+            "covariates",
+            "coefficients",
+            "transformed_events",
+            "groups",
+            "single_df",
+            "global_test",
+            "weights",
+            "entry_times",
+            "strata",
+            "offset",
+            "method",
         ],
         "cox_zph_group_variance": ["information_matrix", "groups", "beta"],
         "prediction_se_from_variance": ["rows", "variance"],
@@ -3135,6 +3151,29 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
     assert len(zph_tests.chi2_values) == 2
     assert zph_tests.global_chi2 >= 0.0
     assert zph_tests.global_df == 2
+    native_zph = core.cox_zph_tests_from_data(
+        [1.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        [1, 1, 0, 1, 1, 0],
+        [
+            [0.2, 1.0],
+            [0.8, 0.5],
+            [0.4, 0.9],
+            [1.1, 0.2],
+            [0.3, 0.8],
+            [0.7, 0.4],
+        ],
+        [0.15, -0.2],
+        [1.5, 1.5, 4.0, 5.0],
+        [[0], [1]],
+        False,
+        True,
+        weights=[1.0, 2.0, 0.5, 1.5, 0.75, 1.0],
+        entry_times=[0.0, 0.0, 0.5, 0.0, 1.0, 0.0],
+        method="efron",
+    )
+    assert len(native_zph.chi2_values) == 2
+    assert native_zph.global_chi2 >= 0.0
+    assert native_zph.global_df == 2
     group_variance = core.cox_zph_group_variance(
         [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         [[0, 1], [2]],
