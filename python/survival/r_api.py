@@ -14453,7 +14453,7 @@ def _model_residual_weights(fit: Any, n: int) -> list[float]:
     weights = getattr(fit, "weights", None)
     if weights is None:
         return [1.0] * n
-    result = [float(value) for value in weights]
+    result = weights if isinstance(fit, _core.CoxPHFit) else [float(value) for value in weights]
     if len(result) != n:
         raise ValueError("fitted model weights do not match residual length")
     return result
@@ -14989,6 +14989,8 @@ def _cox_alias_mask(fit: Any) -> list[bool]:
 
 def _is_coxph_fit(fit: Any) -> bool:
     model = _unwrap_formula_fit(fit)
+    if isinstance(model, _core.CoxPHFit):
+        return True
     return all(
         hasattr(model, name)
         for name in (
@@ -16680,7 +16682,11 @@ def _cox_training_rows(fit: Any, nvar: int) -> list[list[float]]:
     covariates = getattr(fit, "covariates", None)
     if covariates is None:
         return []
-    rows = [[float(value) for value in row] for row in covariates]
+    rows = (
+        covariates
+        if isinstance(fit, _core.CoxPHFit)
+        else [[float(value) for value in row] for row in covariates]
+    )
     if any(len(row) != nvar for row in rows):
         return []
     return rows
@@ -16690,7 +16696,7 @@ def _cox_training_strata(fit: Any, n: int) -> list[int]:
     values = getattr(fit, "strata", None)
     if values is None:
         return [0] * n
-    strata = [int(value) for value in values]
+    strata = values if isinstance(fit, _core.CoxPHFit) else [int(value) for value in values]
     if len(strata) != n:
         raise ValueError("fitted Cox model strata do not match training rows")
     return strata
@@ -19690,17 +19696,22 @@ def coxph_detail(
     model = _unwrap_formula_fit(fit)
     method = _cox_detail_method(model)
     native_detail = getattr(model, "coxph_detail", None)
+    native_model = isinstance(model, _core.CoxPHFit)
     beta = _cox_beta(model)
     nvar = len(beta)
     rows = _cox_training_rows(model, nvar)
-    time = [float(value) for value in model.event_times]
-    status = [int(value) for value in model.status]
+    time = model.event_times if native_model else [float(value) for value in model.event_times]
+    status = model.status if native_model else [int(value) for value in model.status]
     n = len(time)
     if len(status) != n or len(rows) != n:
         raise ValueError("fitted Cox model detail arrays have inconsistent lengths")
 
     entry_values = getattr(model, "entry_times", None)
-    entry = [float(value) for value in entry_values] if entry_values is not None else None
+    entry = (
+        entry_values
+        if native_model or entry_values is None
+        else [float(value) for value in entry_values]
+    )
     if entry is not None and len(entry) != n:
         raise ValueError("fitted Cox model entry times do not match event rows")
     weights = _model_residual_weights(model, n)

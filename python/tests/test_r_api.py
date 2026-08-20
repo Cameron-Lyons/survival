@@ -9904,6 +9904,24 @@ def test_coxph_detail_uses_fit_owned_native_path(monkeypatch):
     assert detail.riskmat is not None
 
 
+def test_native_coxph_type_check_skips_duck_type_properties(monkeypatch):
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_toy_data(),
+        init=[0.0, 0.0],
+        max_iter=0,
+        method="breslow",
+    )
+
+    def reject_survreg_probe(model):
+        del model
+        raise AssertionError("native Cox fits should not require property-based type probing")
+
+    monkeypatch.setattr(survival.r_api, "_is_survreg_fit", reject_survreg_probe)
+
+    assert survival.r_api._is_coxph_fit(fit.fit)
+
+
 def test_coxph_detail_fit_owned_path_matches_export_fallback():
     data = _counting_cox_data() | {
         "group": ["A", "A", "A", "A", "B", "B"],
