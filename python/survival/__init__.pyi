@@ -109,6 +109,7 @@ from .r_api import (
     qsurvreg,
     ratetable,
     ratetableDate,
+    ridge,
     rsurvreg,
     rttright,
     strata,

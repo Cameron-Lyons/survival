@@ -499,6 +499,7 @@ pub fn landmark_cox_analysis(
         Some("efron"),
         None,
         None,
+        None,
     )?;
     let coefficients = fit.coefficients.first().cloned().unwrap_or_default();
     let standard_errors = (0..n_features)
@@ -753,6 +754,7 @@ fn fit_time_varying_interval(
         None,
         Some("efron"),
         Some(interval_rows.iter().map(|&idx| start_time[idx]).collect()),
+        None,
         None,
     )?;
     let coefficients = fit.coefficients.first().cloned().unwrap_or_default();

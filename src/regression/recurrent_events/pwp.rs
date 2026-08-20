@@ -150,6 +150,7 @@ pub fn pwp_model(
         Some("efron"),
         entry_times,
         None,
+        None,
     )?;
     let beta = fit.coefficients.first().cloned().unwrap_or_default();
     let covariance = fit.information_matrix.clone();

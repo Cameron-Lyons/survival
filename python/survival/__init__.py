@@ -140,6 +140,7 @@ _R_EXPORTS = [
     "ratetableDate",
     "rsurvreg",
     "rttright",
+    "ridge",
     "strata",
     "survdiff",
     "survConcordance",

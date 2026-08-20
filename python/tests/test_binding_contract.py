@@ -815,6 +815,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "method",
             "entry_times",
             "nocenter",
+            "ridge_penalty",
         ],
         "coxph_detail": [
             "time",
@@ -894,6 +895,7 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
         "means",
         "score_vector",
         "information_matrix",
+        "degrees_of_freedom",
         "log_likelihood",
         "score_test",
         "convergence_flag",
@@ -8516,9 +8518,7 @@ def test_population_survival_and_pyears_bindings_are_typed():
     assert [dimension.name for dimension in custom_table.dimension_specs()] == ["age"]
     assert custom_table.summary == "single-age table"
     assert custom_table.lookup({"age": 1000.0}) == pytest.approx(0.001)
-    assert custom_table.lookup_many({"age": [1000.0, 2000.0]}) == pytest.approx(
-        [0.001, 0.001]
-    )
+    assert custom_table.lookup_many({"age": [1000.0, 2000.0]}) == pytest.approx([0.001, 0.001])
 
     ratetable = core.create_simple_ratetable(
         [0.0, 36500.0, 73000.0],
@@ -12122,6 +12122,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "qsurvreg" in survival.__all__
     assert "ratetable" in survival.__all__
     assert "ratetableDate" in survival.__all__
+    assert "ridge" in survival.__all__
     assert "rsurvreg" in survival.__all__
     assert "rttright" in survival.__all__
     assert "strata" in survival.__all__
@@ -12221,6 +12222,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.qsurvreg is survival.r_api.qsurvreg
     assert survival.ratetable is survival.r_api.ratetable
     assert survival.ratetableDate is survival.r_api.ratetableDate
+    assert survival.ridge is survival.r_api.ridge
     assert survival.rsurvreg is survival.r_api.rsurvreg
     assert survival.rttright is survival.r_api.rttright
     assert survival.strata is survival.r_api.strata
@@ -12935,6 +12937,27 @@ def test_r_api_stub_tracks_strata_public_signature():
     assert node.args.vararg.arg == "variables"
 
 
+def test_r_api_stub_tracks_ridge_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+    tree = ast.parse(stub_path.read_text(), filename=str(stub_path))
+    node = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "ridge"
+    )
+
+    runtime_params = inspect.signature(survival.r_api.ridge).parameters
+    assert runtime_params["variables"].kind is inspect.Parameter.VAR_POSITIONAL
+    assert list(_pyi_function_arg_names(stub_path, "ridge")) == [
+        "theta",
+        "df",
+        "eps",
+        "scale",
+    ]
+    assert node.args.vararg is not None
+    assert node.args.vararg.arg == "variables"
+
+
 def test_r_api_stub_tracks_formula_helper_signatures():
     setup_survival_import()
     survival = importlib.import_module("survival")
@@ -13088,6 +13111,7 @@ def test_r_api_stub_tracks_fit_control_public_signatures():
             "statedata",
             "singular_ok",
             "nocenter",
+            "ridge_penalty",
             "control",
         ],
         "survreg": [

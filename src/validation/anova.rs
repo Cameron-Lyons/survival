@@ -1,4 +1,4 @@
-use crate::internal::statistical::chi2_sf;
+use crate::internal::statistical::chi2_cdf;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -9,7 +9,7 @@ pub struct AnovaRow {
     #[pyo3(get)]
     pub loglik: f64,
     #[pyo3(get)]
-    pub df: usize,
+    pub df: f64,
     #[pyo3(get)]
     pub chisq: Option<f64>,
     #[pyo3(get)]
@@ -22,7 +22,7 @@ impl AnovaRow {
     pub fn new(
         model_name: String,
         loglik: f64,
-        df: usize,
+        df: f64,
         chisq: Option<f64>,
         p_value: Option<f64>,
     ) -> Self {
@@ -38,11 +38,11 @@ impl AnovaRow {
     fn __repr__(&self) -> String {
         match (self.chisq, self.p_value) {
             (Some(chi), Some(p)) => format!(
-                "AnovaRow(model='{}', loglik={:.4}, df={}, chisq={:.4}, p={:.4})",
+                "AnovaRow(model='{}', loglik={:.4}, df={:.4}, chisq={:.4}, p={:.4})",
                 self.model_name, self.loglik, self.df, chi, p
             ),
             _ => format!(
-                "AnovaRow(model='{}', loglik={:.4}, df={})",
+                "AnovaRow(model='{}', loglik={:.4}, df={:.4})",
                 self.model_name, self.loglik, self.df
             ),
         }
@@ -97,7 +97,7 @@ impl AnovaCoxphResult {
                 .map(|p| format!("{:.4}", p))
                 .unwrap_or_else(|| "".to_string());
             table.push_str(&format!(
-                "{:<20} {:>12.4} {:>6} {:>12} {:>12}\n",
+                "{:<20} {:>12.4} {:>6.4} {:>12} {:>12}\n",
                 row.model_name, row.loglik, row.df, chisq_str, p_str
             ));
         }
@@ -109,7 +109,7 @@ impl AnovaCoxphResult {
 #[pyo3(signature = (logliks, dfs, model_names=None, test="LRT".to_string()))]
 pub fn anova_coxph(
     logliks: Vec<f64>,
-    dfs: Vec<usize>,
+    dfs: Vec<f64>,
     model_names: Option<Vec<String>>,
     test: String,
 ) -> PyResult<AnovaCoxphResult> {
@@ -122,6 +122,11 @@ pub fn anova_coxph(
     if logliks.len() < 2 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "Need at least 2 models for comparison",
+        ));
+    }
+    if dfs.iter().any(|df| !df.is_finite() || *df < 0.0) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "dfs must contain finite non-negative values",
         ));
     }
 
@@ -149,12 +154,12 @@ pub fn anova_coxph(
 
     for i in 1..logliks.len() {
         let chisq = 2.0 * (logliks[i] - logliks[i - 1]);
-        let df_diff = dfs[i].abs_diff(dfs[i - 1]);
+        let df_diff = (dfs[i] - dfs[i - 1]).abs();
 
-        let p_value = if df_diff == 0 && !chisq.is_nan() {
+        let p_value = if df_diff == 0.0 && !chisq.is_nan() {
             if chisq <= 0.0 { 1.0 } else { 0.0 }
-        } else if df_diff > 0 && chisq >= 0.0 {
-            chi2_sf(chisq, df_diff)
+        } else if df_diff > 0.0 && chisq >= 0.0 {
+            1.0 - chi2_cdf(chisq, df_diff)
         } else {
             f64::NAN
         };
@@ -178,8 +183,8 @@ pub fn anova_coxph(
 pub fn anova_coxph_single(
     loglik_null: f64,
     loglik_full: f64,
-    df_null: usize,
-    df_full: usize,
+    df_null: f64,
+    df_full: f64,
 ) -> PyResult<AnovaCoxphResult> {
     anova_coxph(
         vec![loglik_null, loglik_full],
@@ -317,7 +322,7 @@ mod tests {
     #[test]
     fn test_anova_coxph() {
         let logliks = vec![-100.0, -95.0, -90.0];
-        let dfs = vec![0, 1, 2];
+        let dfs = vec![0.0, 1.0, 2.0];
         let result = anova_coxph(logliks, dfs, None, "LRT".to_string()).unwrap();
 
         assert_eq!(result.rows.len(), 3);
@@ -330,7 +335,7 @@ mod tests {
     fn zero_df_steps_use_degenerate_chi_square_tail() {
         let result = anova_coxph(
             vec![-10.0, -10.0, -9.5, -10.0],
-            vec![1, 1, 1, 1],
+            vec![1.0, 1.0, 1.0, 1.0],
             None,
             "LRT".to_string(),
         )
@@ -339,6 +344,28 @@ mod tests {
         assert_eq!(result.rows[1].p_value, Some(1.0));
         assert_eq!(result.rows[2].p_value, Some(0.0));
         assert_eq!(result.rows[3].p_value, Some(1.0));
+    }
+
+    #[test]
+    fn fractional_df_steps_match_penalized_cox_reference() {
+        let result = anova_coxph(
+            vec![-6.579_251_212_010_1, -1.800_607_808_438_4],
+            vec![0.0, 1.407_418_446_877_92],
+            None,
+            "LRT".to_string(),
+        )
+        .expect("fractional effective degrees of freedom should be accepted");
+
+        assert_close(
+            result.rows[1].chisq.expect("penalized step chisq"),
+            9.557_286_807_143_4,
+            1e-12,
+        );
+        assert_close(
+            result.rows[1].p_value.expect("penalized step p-value"),
+            0.003_887_690_851_626_862,
+            1e-10,
+        );
     }
 
     #[test]
@@ -372,7 +399,7 @@ mod tests {
             "x1 + x2".to_string(),
             "x1 + x2 + x3".to_string(),
         ];
-        let dfs = vec![1, 2, 3];
+        let dfs = vec![1.0, 2.0, 3.0];
         let anova = anova_coxph(
             logliks.clone(),
             dfs.clone(),
@@ -402,7 +429,7 @@ mod tests {
             1e-10,
         );
 
-        let comparison = compare_models(model_names, logliks.clone(), dfs, time.len())
+        let comparison = compare_models(model_names, logliks.clone(), vec![1, 2, 3], time.len())
             .expect("model comparison should succeed");
         assert_eq!(comparison.likelihood_ratio_tests.len(), 3);
 

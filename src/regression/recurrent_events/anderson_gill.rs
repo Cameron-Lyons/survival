@@ -44,6 +44,7 @@ pub fn anderson_gill_model(
         Some("efron"),
         Some(start),
         None,
+        None,
     )?;
     let beta = fit.coefficients.first().cloned().unwrap_or_default();
     let covariance = fit.information_matrix.clone();

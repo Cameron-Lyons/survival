@@ -914,8 +914,7 @@ def test_coxph_fit_matches_reference_tied_event_fits():
 
     rows = [[left, right] for left, right in zip(x["x1"], x["x2"], strict=True)]
     matrix_response = [
-        [time, float(status)]
-        for time, status in zip(response.time, response.event, strict=True)
+        [time, float(status)] for time, status in zip(response.time, response.event, strict=True)
     ]
     without_residuals = survival.coxph_fit(
         rows,
@@ -933,9 +932,7 @@ def test_coxph_fit_matches_reference_tied_event_fits():
         offset=[0.1, -0.1, 0.0, 0.2, -0.2, 0.0, 0.1, -0.1],
         control=control,
     )
-    assert weighted.coefficients == pytest.approx(
-        [-0.40216872122214, -1.92209800660679]
-    )
+    assert weighted.coefficients == pytest.approx([-0.40216872122214, -1.92209800660679])
     assert weighted.loglik == pytest.approx([-11.1844663074745, -10.1805187685592])
     assert weighted.means == pytest.approx([0.678947368421053, 0.68421052631579])
     assert weighted.residuals == pytest.approx(
@@ -1038,8 +1035,7 @@ def test_agreg_fit_matches_reference_weighted_counting_process_fit():
     assert fit.row_names == [f"r{index}" for index in range(1, 9)]
 
     matrix_response = [
-        [left, right, float(event)]
-        for left, right, event in zip(start, stop, status, strict=True)
+        [left, right, float(event)] for left, right, event in zip(start, stop, status, strict=True)
     ]
     without_residuals = survival.agreg_fit(
         [[left, right] for left, right in zip(x["x1"], x["x2"], strict=True)],
@@ -4419,9 +4415,7 @@ def test_survobrien_event_sets_match_python_reference():
         strata: list[int] | None,
     ) -> tuple[list[int], list[int], list[float], list[int]]:
         if strata is None:
-            unique_event_times = {
-                stop[idx] for idx in range(len(stop)) if status[idx] == 1
-            }
+            unique_event_times = {stop[idx] for idx in range(len(stop)) if status[idx] == 1}
             event_sets = [(time, None) for time in sorted(unique_event_times)]
         else:
             event_sets = []
@@ -4449,10 +4443,7 @@ def test_survobrien_event_sets_match_python_reference():
                     at_risk = start[idx] < event_time <= stop[idx]
                 else:
                     assert event_stratum is not None
-                    at_risk = (
-                        start[idx] < event_time <= stop[idx]
-                        and strata[idx] != event_stratum
-                    )
+                    at_risk = start[idx] < event_time <= stop[idx] and strata[idx] != event_stratum
                 if at_risk:
                     row_indices.append(idx)
             group_size = len(row_indices) - group_start
@@ -7556,12 +7547,8 @@ def test_concordancefit_matrix_scores_return_cluster_covariance():
         }
     )
     assert isinstance(result.var, list)
-    assert result.var[0] == pytest.approx(
-        [0.019185089057365538, -0.019185089057365538]
-    )
-    assert result.var[1] == pytest.approx(
-        [-0.019185089057365538, 0.019185089057365538]
-    )
+    assert result.var[0] == pytest.approx([0.019185089057365538, -0.019185089057365538])
+    assert result.var[1] == pytest.approx([-0.019185089057365538, 0.019185089057365538])
     assert result.dfbeta is not None
     assert result.dfbeta[0] == pytest.approx(
         [0.0771349862258953, 0.03305785123966941, -0.11019283746556474]
@@ -9296,6 +9283,125 @@ def test_coxph_formula_returns_fitted_cox_model():
     assert fit.coefficients[0] == pytest.approx(low_level.coefficients[0])
     assert len(fit.risk_scores) == 8
     assert len(fit.predict([[0.5, 0.8]])) == 1
+
+
+def test_ridge_helper_builds_fixed_theta_penalty_metadata():
+    result = survival.ridge(
+        [1.0, 2.0, 3.0],
+        [2.0, 4.0, 8.0],
+        theta=0.2,
+        scale=False,
+    )
+
+    assert result["values"] == [[1.0, 2.0], [2.0, 4.0], [3.0, 8.0]]
+    assert result["n_rows"] == 3
+    assert result["n_vars"] == 2
+    assert result["theta"] == pytest.approx(0.2)
+    assert result["df"] is None
+    assert result["eps"] == pytest.approx(0.1)
+    assert result["scale"] is False
+    assert result["variances"] == pytest.approx([1.0, 28.0 / 3.0])
+    assert result["penalty_diagonal"] == pytest.approx([0.2, 0.2])
+
+
+@pytest.mark.parametrize(
+    ("scale", "expected_coef", "expected_df", "expected_loglik"),
+    [
+        (
+            False,
+            [-3.15621362600671, -0.0283415400908598],
+            1.40741844687792,
+            -1.8006078084384,
+        ),
+        (
+            True,
+            [-3.77032966237141, 0.0106220916824879],
+            1.54340846194763,
+            -1.45946489798387,
+        ),
+    ],
+)
+def test_coxph_formula_ridge_matches_fixed_theta_reference(
+    scale,
+    expected_coef,
+    expected_df,
+    expected_loglik,
+):
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1],
+        "x1": [0.2, 0.5, 0.8, 1.0, 1.4, 1.8, 2.1, 2.5],
+        "x2": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9],
+    }
+    formula_term = f"ridge(x1, x2, theta=0.2, scale={scale})"
+    fit = survival.coxph(
+        f"Surv(time, status) ~ {formula_term}",
+        data=data,
+        ties="breslow",
+        max_iter=50,
+        eps=1e-12,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(expected_coef, abs=1e-9)
+    assert fit.log_likelihood == pytest.approx(
+        [-6.5792512120101, expected_loglik],
+        abs=1e-9,
+    )
+    assert survival.degrees_freedom(fit) == pytest.approx(expected_df, abs=1e-9)
+    assert survival.coef_names(fit) == ["ridge(x1)", "ridge(x2)"]
+    assert survival.model_term_names(fit) == [formula_term]
+    assert survival.model_matrix(fit)["assign"] == [1, 1]
+    assert survival.attrassign(fit) == {formula_term: [1, 2]}
+    assert len(survival.predict(fit, {"x1": [0.6], "x2": [1.4]}, type="terms")[0]) == 1
+    anova = survival.anova(fit)
+    assert [row.df for row in anova.rows] == pytest.approx([0.0, expected_df])
+    assert anova.rows[1].chisq == pytest.approx(
+        2.0 * (expected_loglik + 6.5792512120101),
+        abs=1e-9,
+    )
+
+    if not scale:
+        rows = [[x1, x2] for x1, x2 in zip(data["x1"], data["x2"], strict=True)]
+        direct = survival.coxph(
+            survival.Surv(data["time"], data["status"]),
+            x=rows,
+            ridge_penalty=[0.2, 0.2],
+            ties="breslow",
+            max_iter=50,
+            eps=1e-12,
+        )
+        assert direct.coefficients[0] == pytest.approx(fit.coefficients[0], abs=1e-12)
+        assert direct.log_likelihood == pytest.approx(fit.log_likelihood, abs=1e-12)
+        assert survival.degrees_freedom(direct) == pytest.approx(expected_df, abs=1e-12)
+
+
+def test_coxph_ridge_rejects_ambiguous_or_invalid_penalties():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 0, 1, 1],
+        "x1": [0.2, 0.5, 0.8, 1.0],
+        "x2": [1.2, 0.7, 1.5, 0.2],
+    }
+    response = survival.Surv(data["time"], data["status"])
+    rows = [[x1, x2] for x1, x2 in zip(data["x1"], data["x2"], strict=True)]
+
+    with pytest.raises(NotImplementedError, match="require theta"):
+        survival.coxph("Surv(time, status) ~ ridge(x1, x2, df=1)", data=data)
+    with pytest.raises(ValueError, match="Only one of df or theta"):
+        survival.coxph(
+            "Surv(time, status) ~ ridge(x1, x2, theta=0.2, df=1)",
+            data=data,
+        )
+    with pytest.raises(ValueError, match="use only one"):
+        survival.coxph(
+            "Surv(time, status) ~ ridge(x1, x2, theta=0.2)",
+            data=data,
+            ridge_penalty=[0.2, 0.2],
+        )
+    with pytest.raises(ValueError, match="one value per design-matrix column"):
+        survival.coxph(response, x=rows, ridge_penalty=[0.2])
+    with pytest.raises(ValueError, match="non-negative"):
+        survival.coxph(response, x=rows, ridge_penalty=[0.2, -0.1])
 
 
 def test_coxph_formula_accepts_rep_constant_response_argument():
@@ -16211,11 +16317,7 @@ def test_survreg_fit_matches_reference_base_distribution_fits():
         ),
     }
     for distribution, (coefficients, icoef, loglik) in expected.items():
-        dist = (
-            survival.survreg_distributions["t"]
-            if distribution == "t"
-            else distribution
-        )
+        dist = survival.survreg_distributions["t"] if distribution == "t" else distribution
         fit = survival.survreg_fit(
             x,
             y,

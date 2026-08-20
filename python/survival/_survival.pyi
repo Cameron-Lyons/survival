@@ -1057,6 +1057,8 @@ class CoxPHFit:
     @property
     def information_matrix(self) -> list[list[float]]: ...
     @property
+    def degrees_of_freedom(self) -> float: ...
+    @property
     def log_likelihood(self) -> list[float]: ...
     @property
     def score_test(self) -> float: ...
@@ -3089,7 +3091,7 @@ class AnovaRow:
         self,
         model_name: str,
         loglik: float,
-        df: int,
+        df: float,
         chisq: float | None,
         p_value: float | None,
     ) -> None: ...
@@ -3098,7 +3100,7 @@ class AnovaRow:
     @property
     def loglik(self) -> float: ...
     @property
-    def df(self) -> int: ...
+    def df(self) -> float: ...
     @property
     def chisq(self) -> float | None: ...
     @property
@@ -7048,15 +7050,15 @@ def basehaz(
 ) -> tuple[list[float], list[float]]: ...
 def anova_coxph(
     logliks: list[float],
-    dfs: list[int],
+    dfs: list[float],
     model_names: list[str] | None = None,
     test: str = "LRT",
 ) -> AnovaCoxphResult: ...
 def anova_coxph_single(
     loglik_null: float,
     loglik_full: float,
-    df_null: int,
-    df_full: int,
+    df_null: float,
+    df_full: float,
 ) -> AnovaCoxphResult: ...
 def rmst(
     time: list[float],
@@ -7166,6 +7168,7 @@ def coxph_fit(
     method: str | None = None,
     entry_times: list[float] | None = None,
     nocenter: list[float] | None = None,
+    ridge_penalty: list[float] | None = None,
 ) -> CoxPHFit: ...
 def coxph_detail(
     time: list[float],

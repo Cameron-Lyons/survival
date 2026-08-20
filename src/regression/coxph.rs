@@ -55,6 +55,8 @@ pub struct CoxPHFit {
     #[pyo3(get)]
     pub information_matrix: Vec<Vec<f64>>,
     #[pyo3(get)]
+    pub degrees_of_freedom: f64,
+    #[pyo3(get)]
     pub log_likelihood: Vec<f64>,
     #[pyo3(get)]
     pub score_test: f64,
@@ -625,7 +627,7 @@ fn validate_method_weights(method: CoxMethod, weights: Option<&[f64]>) -> PyResu
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None))]
+#[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None, ridge_penalty=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_fit(
     time: Vec<f64>,
@@ -641,6 +643,7 @@ pub fn coxph_fit(
     method: Option<&str>,
     entry_times: Option<Vec<f64>>,
     nocenter: Option<Vec<f64>>,
+    ridge_penalty: Option<Vec<f64>>,
 ) -> PyResult<CoxPHFit> {
     let n = time.len();
     if n == 0 {
@@ -721,6 +724,21 @@ pub fn coxph_fit(
     }
     if let Some(values) = initial_beta.as_ref() {
         validate_finite_values("initial_beta", values)?;
+    }
+    if let Some(values) = ridge_penalty.as_ref() {
+        if values.len() != nvar {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "ridge_penalty has {} values but covariates has {} columns",
+                values.len(),
+                nvar
+            )));
+        }
+        validate_finite_values("ridge_penalty", values)?;
+        if values.iter().any(|&value| value < 0.0) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "ridge_penalty must contain non-negative values",
+            ));
+        }
     }
     if let Some(value) = eps
         && (!value.is_finite() || value <= 0.0)
@@ -810,6 +828,9 @@ pub fn coxph_fit(
     .map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit initialization failed: {}", e))
     })?;
+    if let Some(values) = ridge_penalty.as_ref() {
+        cox_fit.set_ridge_penalty(values);
+    }
     cox_fit
         .fit()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e)))?;
@@ -830,13 +851,22 @@ pub fn coxph_fit(
     let information_matrix = information
         .outer_iter()
         .map(|row| row.iter().copied().collect())
-        .collect();
+        .collect::<Vec<Vec<f64>>>();
+    let degrees_of_freedom = match ridge_penalty.as_ref() {
+        Some(penalty) => (0..nvar)
+            .map(|column| (1.0 - penalty[column] * information_matrix[column][column]).max(0.0))
+            .sum(),
+        None => (0..nvar)
+            .filter(|&column| information_matrix[column][column] != 0.0)
+            .count() as f64,
+    };
 
     Ok(CoxPHFit {
         coefficients: vec![beta],
         means,
         score_vector,
         information_matrix,
+        degrees_of_freedom,
         log_likelihood: log_likelihood.to_vec(),
         score_test,
         convergence_flag: flag,
@@ -873,6 +903,7 @@ mod tests {
             means: vec![0.0],
             score_vector: vec![],
             information_matrix: vec![],
+            degrees_of_freedom: 0.0,
             log_likelihood: vec![],
             score_test: 0.0,
             convergence_flag: 0,
@@ -923,6 +954,7 @@ mod tests {
             means: vec![0.0, 0.0],
             score_vector: vec![],
             information_matrix: vec![],
+            degrees_of_freedom: 0.0,
             log_likelihood: vec![],
             score_test: 0.0,
             convergence_flag: 0,
@@ -1094,6 +1126,7 @@ mod tests {
             Some("efron"),
             None,
             None,
+            None,
         )
         .expect("default-control Efron fit should succeed");
 
@@ -1107,6 +1140,53 @@ mod tests {
         );
         assert_eq!(fit.convergence_flag, 2);
         assert_eq!(fit.iterations, 4);
+    }
+
+    #[test]
+    fn ridge_penalty_matches_weighted_reference_fit() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1];
+        let x1 = [0.2, 0.5, 0.8, 1.0, 1.4, 1.8, 2.1, 2.5];
+        let x2 = [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9];
+        let covariates = x1
+            .into_iter()
+            .zip(x2)
+            .map(|(left, right)| vec![left, right])
+            .collect();
+        let fit = coxph_fit(
+            time,
+            status,
+            covariates,
+            None,
+            Some(vec![1.0, 1.5, 0.5, 2.0, 1.0, 1.2, 0.8, 1.0]),
+            None,
+            None,
+            Some(50),
+            Some(1e-12),
+            None,
+            Some("breslow"),
+            None,
+            None,
+            Some(vec![0.2, 0.2]),
+        )
+        .expect("ridge-penalized fit should succeed");
+
+        assert_close_vec(
+            &fit.coefficients[0],
+            &[-3.172_789_105_035_07, 0.028_110_388_869_552_8],
+        );
+        assert_close_vec(
+            &[
+                fit.information_matrix[0][0].sqrt(),
+                fit.information_matrix[1][1].sqrt(),
+            ],
+            &[1.475_254_639_861_59, 0.978_155_747_150_241],
+        );
+        assert!((fit.degrees_of_freedom - 1.373_367_016_376_761_3).abs() < 1e-12);
+        assert_close_vec(
+            &fit.log_likelihood,
+            &[-8.034_979_350_644_857, -3.234_095_317_374_364_5],
+        );
     }
 
     #[test]
@@ -1163,6 +1243,7 @@ mod tests {
                 Some(method),
                 None,
                 None,
+                None,
             )
             .expect("tied Cox fit should succeed");
             let actual = fit
@@ -1184,6 +1265,7 @@ mod tests {
             None,
             Some("efron"),
             Some(vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0, 4.0]),
+            None,
             None,
         )
         .expect("counting-process Cox fit should succeed");
@@ -1235,6 +1317,7 @@ mod tests {
                 Some("breslow"),
                 None,
                 None,
+                None,
             )
             .expect("near-collinear fit should succeed")
         };
@@ -1279,6 +1362,7 @@ mod tests {
             Some("breslow"),
             None,
             None,
+            None,
         )
         .expect("baseline-only stratified fit should succeed");
 
@@ -1298,6 +1382,7 @@ mod tests {
             means: vec![0.0],
             score_vector: vec![],
             information_matrix: vec![],
+            degrees_of_freedom: 0.0,
             log_likelihood: vec![],
             score_test: 0.0,
             convergence_flag: 0,
