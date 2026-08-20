@@ -1110,6 +1110,69 @@ mod tests {
     }
 
     #[test]
+    fn tied_martingale_residuals_match_reference_tie_methods() {
+        let time = vec![1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0];
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 0];
+        let x1 = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5];
+        let x2 = [1.0, 0.2, 0.7, 1.3, 0.4, 1.1, 0.5, 0.9];
+        let covariates: Vec<Vec<f64>> = x1
+            .into_iter()
+            .zip(x2)
+            .map(|(left, right)| vec![left, right])
+            .collect();
+
+        for (method, expected) in [
+            (
+                "efron",
+                vec![
+                    0.861_608_853_068_139,
+                    0.666_548_656_403_422,
+                    -0.262_984_425_266_69,
+                    0.649_684_684_102_389,
+                    0.156_645_245_139_72,
+                    -0.481_850_834_571_678,
+                    -0.606_613_012_413_708,
+                    -0.983_039_166_461_595,
+                ],
+            ),
+            (
+                "breslow",
+                vec![
+                    0.823_966_615_029_272,
+                    0.600_683_821_139_988,
+                    -0.238_277_578_337_835,
+                    0.576_244_798_267_363,
+                    0.118_389_088_545_76,
+                    -0.440_106_857_757_063,
+                    -0.517_861_235_008_768,
+                    -0.923_038_651_878_716,
+                ],
+            ),
+        ] {
+            let fit = coxph_fit(
+                time.clone(),
+                status.clone(),
+                covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                Some(50),
+                Some(1e-10),
+                None,
+                Some(method),
+                None,
+                None,
+            )
+            .expect("tied Cox fit should succeed");
+            let actual = fit
+                .martingale_residuals()
+                .expect("martingale residuals should compute");
+            assert_close_vec(&actual, &expected);
+        }
+    }
+
+    #[test]
     fn default_rank_tolerance_preserves_near_collinear_columns() {
         let n = 20;
         let time = (1..=n).map(|value| value as f64).collect::<Vec<_>>();

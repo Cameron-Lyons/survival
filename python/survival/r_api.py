@@ -28,6 +28,7 @@ __all__ = [
     "CoxSurvfitResult",
     "CoxBaseHazardResult",
     "CoxPHDetailResult",
+    "CoxphFitResult",
     "CoxPHWTestResult",
     "CoxZPHResult",
     "CchModelResult",
@@ -70,6 +71,7 @@ __all__ = [
     "coxph",
     "coxph_control",
     "coxph_detail",
+    "coxph_fit",
     "coxph_wtest",
     "cox_zph",
     "dsurvreg",
@@ -967,6 +969,23 @@ class CoxPHWTestResult:
     test: list[float]
     df: int
     solve: list[float] | list[list[float]] | float
+
+
+@dataclass(frozen=True)
+class CoxphFitResult:
+    """Low-level matrix fit returned by ``coxph_fit()``."""
+
+    coefficients: list[float]
+    var: list[list[float]]
+    loglik: list[float]
+    score: float
+    iter: int
+    linear_predictors: list[float]
+    residuals: list[float] | None
+    means: list[float]
+    method: str
+    coefficient_names: list[str]
+    row_names: list[str]
 
 
 @dataclass(frozen=True)
@@ -21512,6 +21531,150 @@ def aareg(
         model=model_frame,
         x=[list(row) for row in rows] if keep_x else None,
         y=response if keep_y else None,
+    )
+
+
+def _coxph_fit_response(y: Any) -> tuple[list[float], list[int]]:
+    if isinstance(y, Surv):
+        if y.type != "right":
+            raise ValueError("Invalid survival response")
+        if any(value is None for value in y.event):
+            raise ValueError("Invalid survival response")
+        return [float(value) for value in y.time], [int(value) for value in y.event]
+
+    response = _as_matrix_rows(y, "y", allow_empty_columns=False)
+    width = len(response[0])
+    if width != 2 or any(len(row) != width for row in response):
+        raise ValueError("Invalid survival response")
+    if any(not math.isfinite(value) for row in response for value in row):
+        raise ValueError("Invalid survival response")
+    status = [row[-1] for row in response]
+    if any(not value.is_integer() or int(value) not in {0, 1} for value in status):
+        raise ValueError("Invalid survival response")
+    return [row[0] for row in response], [int(value) for value in status]
+
+
+def coxph_fit(
+    x: Any,
+    y: Any,
+    strata: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    control: Any | None = None,
+    weights: Any | None = None,
+    method: Any = "efron",
+    rownames: Any | None = None,
+    resid: Any = True,
+    nocenter: Any | None = None,
+) -> CoxphFitResult:
+    """Fit the matrix-oriented low-level model exported as R ``coxph.fit``."""
+
+    rows = _as_matrix_rows(x, "x", allow_empty_columns=True)
+    time, status = _coxph_fit_response(y)
+    n = len(time)
+    if len(rows) != n:
+        raise ValueError("x and y have different numbers of rows")
+    nvar = len(rows[0]) if rows else 0
+    if any(len(row) != nvar for row in rows) or any(
+        not math.isfinite(value) for row in rows for value in row
+    ):
+        raise ValueError("Invalid X matrix")
+
+    strata_values: list[int] | None = None
+    if strata is not None:
+        strata_labels = _materialize_labels(strata, "strata")
+        if len(strata_labels) != n:
+            raise ValueError("strata and y have different numbers of rows")
+        strata_values = _encode_labels(strata_labels, "strata")
+
+    offset_values = None if offset is None else _float_vector(offset, "offset")
+    if offset_values is not None and len(offset_values) != n:
+        raise ValueError("offset and y have different numbers of rows")
+    weight_values = None if weights is None else _float_vector(weights, "weights")
+    if weight_values is not None and len(weight_values) != n:
+        raise ValueError("weights and y have different numbers of rows")
+    initial = None if init is None else _float_vector(init, "init")
+    if initial is not None and len(initial) != nvar:
+        raise ValueError("Wrong length for initial parameters")
+
+    max_iter, eps, toler, _ = _apply_coxph_control(control, 20, None, None)
+    if max_iter < 0:
+        raise ValueError("control.iter.max must be non-negative")
+    if eps is not None and eps <= 0.0:
+        raise ValueError("control.eps must be positive")
+    if toler is not None and toler <= 0.0:
+        raise ValueError("control.toler.chol must be positive")
+    method_name = _match_string_arg(
+        method,
+        "method",
+        ("efron", "breslow"),
+        "coxph_fit method must be 'efron' or 'breslow'",
+    )
+    keep_residuals = _normalize_bool_option_with_default(resid, "resid", True)
+    nocenter_values = _normalize_numeric_sequence_or_none(nocenter, "nocenter")
+
+    if rownames is None:
+        row_names = [str(index + 1) for index in range(n)]
+    else:
+        row_names = [str(value) for value in _materialize_labels(rownames, "rownames")]
+        if len(row_names) != n:
+            raise ValueError("rownames and y have different lengths")
+
+    fit = _core.coxph_fit(
+        time,
+        status,
+        rows,
+        strata=strata_values,
+        weights=weight_values,
+        offset=offset_values,
+        initial_beta=initial,
+        max_iter=max_iter,
+        eps=eps,
+        toler=toler,
+        method=method_name,
+        entry_times=None,
+        nocenter=nocenter_values,
+    )
+    if max_iter > 1 and int(fit.convergence_flag) == _COX_NONCONVERGENCE_FLAG:
+        warnings.warn(
+            "Ran out of iterations and did not converge",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    raw_coefficients = [float(value) for value in fit.coefficients[0]]
+    aliases = _cox_alias_mask(fit)
+    coefficients = [
+        math.nan if aliases[index] else value
+        for index, value in enumerate(raw_coefficients)
+    ]
+    means = [float(value) for value in fit.means]
+    center = math.fsum(
+        mean * coefficient
+        for mean, coefficient in zip(means, raw_coefficients, strict=True)
+    )
+    input_names = _validated_matrix_column_names(_matrix_input_column_names(x), rows)
+    coefficient_names = (
+        list(input_names)
+        if input_names is not None
+        else [f"X{index + 1}" for index in range(nvar)]
+    )
+    return CoxphFitResult(
+        coefficients=coefficients,
+        var=[[float(value) for value in row] for row in fit.information_matrix],
+        loglik=[float(value) for value in fit.log_likelihood],
+        score=float(fit.score_test),
+        iter=int(fit.iterations),
+        linear_predictors=[float(value) - center for value in fit.linear_predictors],
+        residuals=(
+            [float(value) for value in fit.martingale_residuals()]
+            if keep_residuals
+            else None
+        ),
+        means=means,
+        method=method_name,
+        coefficient_names=coefficient_names,
+        row_names=row_names,
     )
 
 

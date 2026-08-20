@@ -573,6 +573,19 @@ class CoxPHWTestResult:
     df: int
     solve: list[float] | list[list[float]] | float
 
+class CoxphFitResult:
+    coefficients: list[float]
+    var: list[list[float]]
+    loglik: list[float]
+    score: float
+    iter: int
+    linear_predictors: list[float]
+    residuals: list[float] | None
+    means: list[float]
+    method: str
+    coefficient_names: list[str]
+    row_names: list[str]
+
 class CoxBaseHazardResult:
     time: list[float]
     cumhaz: list[float] | list[list[float]]
@@ -1031,6 +1044,19 @@ def coxph_detail(
     weights: Any | None = None,
 ) -> Any: ...
 def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult: ...
+def coxph_fit(
+    x: Any,
+    y: Any,
+    strata: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    control: Any | None = None,
+    weights: Any | None = None,
+    method: Any = "efron",
+    rownames: Any | None = None,
+    resid: Any = True,
+    nocenter: Any | None = None,
+) -> CoxphFitResult: ...
 def cch(
     formula: str,
     data: Any,

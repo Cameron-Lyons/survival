@@ -812,6 +812,158 @@ def test_r_api_statefig_matches_r_coordinate_layouts():
         survival.r_api.statefig([2], connect, states=["a"])
 
 
+def test_coxph_fit_matches_reference_tied_event_fits():
+    x = {
+        "x1": [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5],
+        "x2": [1.0, 0.2, 0.7, 1.3, 0.4, 1.1, 0.5, 0.9],
+    }
+    response = survival.Surv(
+        [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0],
+        [1, 1, 0, 1, 1, 0, 1, 0],
+    )
+    expected = {
+        "efron": {
+            "coefficients": [0.103056235224469, -1.02197392929092],
+            "var": [
+                [1.8044465510612, 0.972215965735181],
+                [0.972215965735181, 2.65595638220561],
+            ],
+            "loglik": [-7.71423114484909, -7.43087324393603],
+            "score": 0.569350813053989,
+            "iter": 4,
+            "linear_predictors": [
+                -0.29038231699791,
+                0.589030567569505,
+                0.0368211088342592,
+                -0.504223884083162,
+                0.374330158188875,
+                -0.382274086404554,
+                0.333966506394465,
+                -0.157268053501477,
+            ],
+            "residuals": [
+                0.861608853068139,
+                0.666548656403422,
+                -0.26298442526669,
+                0.649684684102389,
+                0.15664524513972,
+                -0.481850834571678,
+                -0.606613012413708,
+                -0.983039166461595,
+            ],
+        },
+        "breslow": {
+            "coefficients": [0.175692994588651, -0.892080087710396],
+            "var": [
+                [1.76656258499263, 0.788463713849917],
+                [0.788463713849917, 2.33110093210702],
+            ],
+            "loglik": [-8.07090608878782, -7.81881251716252],
+            "score": 0.508802672575121,
+            "iter": 3,
+            "linear_predictors": [
+                -0.29312703082847,
+                0.525952836093037,
+                0.00963559440237904,
+                -0.402627362011803,
+                0.329967519092093,
+                -0.364765740140645,
+                0.346175307074244,
+                -0.151211123680835,
+            ],
+            "residuals": [
+                0.823966615029272,
+                0.600683821139988,
+                -0.238277578337835,
+                0.576244798267363,
+                0.11838908854576,
+                -0.440106857757063,
+                -0.517861235008768,
+                -0.923038651878716,
+            ],
+        },
+    }
+
+    control = survival.coxph_control(iter_max=50, eps=1e-10)
+    for method, reference in expected.items():
+        fit = survival.coxph_fit(
+            x,
+            response,
+            control=control,
+            method=method,
+            rownames=[f"r{index}" for index in range(1, 9)],
+        )
+        assert fit.coefficients == pytest.approx(reference["coefficients"])
+        for actual_row, expected_row in zip(fit.var, reference["var"], strict=True):
+            assert actual_row == pytest.approx(expected_row)
+        assert fit.loglik == pytest.approx(reference["loglik"])
+        assert fit.score == pytest.approx(reference["score"])
+        assert fit.iter == reference["iter"]
+        assert fit.linear_predictors == pytest.approx(reference["linear_predictors"])
+        assert fit.residuals == pytest.approx(reference["residuals"])
+        assert fit.means == pytest.approx([0.6625, 0.7625])
+        assert fit.method == method
+        assert fit.coefficient_names == ["x1", "x2"]
+        assert fit.row_names == [f"r{index}" for index in range(1, 9)]
+
+    rows = [[left, right] for left, right in zip(x["x1"], x["x2"], strict=True)]
+    matrix_response = [
+        [time, float(status)]
+        for time, status in zip(response.time, response.event, strict=True)
+    ]
+    without_residuals = survival.coxph_fit(
+        rows,
+        matrix_response,
+        control=control,
+        resid=False,
+    )
+    assert without_residuals.residuals is None
+    assert without_residuals.coefficient_names == ["X1", "X2"]
+
+    weighted = survival.coxph_fit(
+        x,
+        response,
+        weights=[1.0, 2.0, 1.0, 1.0, 1.5, 1.0, 1.0, 1.0],
+        offset=[0.1, -0.1, 0.0, 0.2, -0.2, 0.0, 0.1, -0.1],
+        control=control,
+    )
+    assert weighted.coefficients == pytest.approx(
+        [-0.40216872122214, -1.92209800660679]
+    )
+    assert weighted.loglik == pytest.approx([-11.1844663074745, -10.1805187685592])
+    assert weighted.means == pytest.approx([0.678947368421053, 0.68421052631579])
+    assert weighted.residuals == pytest.approx(
+        [
+            0.835570297316743,
+            0.5078122191299,
+            -0.340724434535175,
+            0.76407736965228,
+            -0.0476026143591442,
+            -0.482248802433355,
+            -0.78588010475621,
+            -0.935014841965368,
+        ]
+    )
+
+    duplicated_x = {
+        name: [value for value in values for _ in range(2)] for name, values in x.items()
+    }
+    duplicated_response = survival.Surv(
+        [value for value in response.time for _ in range(2)],
+        [value for value in response.event for _ in range(2)],
+    )
+    stratified = survival.coxph_fit(
+        duplicated_x,
+        duplicated_response,
+        strata=[label for _ in response.time for label in ("a", "b")],
+        control=control,
+    )
+    assert stratified.coefficients == pytest.approx(expected["efron"]["coefficients"])
+    assert stratified.residuals is not None
+    assert stratified.residuals[::2] == pytest.approx(expected["efron"]["residuals"])
+    assert stratified.residuals[1::2] == pytest.approx(expected["efron"]["residuals"])
+
+
 def test_r_api_brier_returns_r_style_cox_model_fields():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],

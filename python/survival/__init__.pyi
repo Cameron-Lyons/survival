@@ -25,6 +25,7 @@ from . import surv_analysis as surv_analysis
 from . import validation as validation
 from .r_api import (
     CchModelResult,
+    CoxphFitResult,
     FineGrayFrame,
     FineGrayOutput,
     PyearsResult,
@@ -68,6 +69,7 @@ from .r_api import (
     cox_zph,
     coxph,
     coxph_detail,
+    coxph_fit,
     coxph_wtest,
     cumevent,
     cumtdc,

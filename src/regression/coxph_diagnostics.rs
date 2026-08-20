@@ -8,6 +8,7 @@ use crate::regression::coxph_detail_module::{
 };
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
+use crate::residuals::coxmart_module::{CoxMartSurvivalData, CoxMartWeights, compute_coxmart};
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
 use crate::validation::ProportionalityTest;
 use ndarray::{Array1, Array2};
@@ -815,7 +816,70 @@ pub fn cox_interval_cumulative_hazard_se(
 }
 
 impl CoxPHFit {
+    fn right_censored_expected_events(&self, method: i32) -> PyResult<Vec<f64>> {
+        let n = self.event_times.len();
+        if self.status.len() != n
+            || self.linear_predictors.len() != n
+            || self.weights.len() != n
+            || self.strata.len() != n
+        {
+            return Err(value_error(
+                "fitted Cox model diagnostic arrays have inconsistent lengths",
+            ));
+        }
+
+        let order = diagnostic_order(&self.strata, &self.event_times);
+        let time: Vec<f64> = order.iter().map(|&idx| self.event_times[idx]).collect();
+        let status: Vec<i32> = order.iter().map(|&idx| self.status[idx]).collect();
+        let score: Vec<f64> = order
+            .iter()
+            .map(|&idx| {
+                self.linear_predictors[idx]
+                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
+                    .exp()
+            })
+            .collect();
+        let weights: Vec<f64> = order.iter().map(|&idx| self.weights[idx]).collect();
+        let mut strata = vec![0; n];
+        for sorted_idx in 0..n {
+            if sorted_idx + 1 == n
+                || self.strata[order[sorted_idx + 1]] != self.strata[order[sorted_idx]]
+            {
+                strata[sorted_idx] = 1;
+            }
+        }
+        let mut residuals = vec![0.0; n];
+        compute_coxmart(
+            n,
+            method,
+            CoxMartSurvivalData {
+                time: &time,
+                status: &status,
+                strata: &strata,
+            },
+            CoxMartWeights {
+                score: &score,
+                wt: &weights,
+            },
+            &mut residuals,
+        );
+
+        let mut expected = vec![0.0; n];
+        for (sorted_idx, &original_idx) in order.iter().enumerate() {
+            expected[original_idx] = self.status[original_idx] as f64 - residuals[sorted_idx];
+        }
+        Ok(expected)
+    }
+
     pub(crate) fn expected_events_internal(&self) -> PyResult<Vec<f64>> {
+        if self.entry_times.is_none() {
+            match self.tie_method() {
+                CoxMethod::Breslow => return self.right_censored_expected_events(0),
+                CoxMethod::Efron => return self.right_censored_expected_events(1),
+                CoxMethod::Exact => {}
+            }
+        }
+
         let (times, hazards, hazard_strata) = self.basehaz_with_strata_internal(false)?;
         let baseline = StratifiedBaselineLookup::from_components(&times, &hazards, &hazard_strata);
         let entry_times = self.entry_times.as_deref();
