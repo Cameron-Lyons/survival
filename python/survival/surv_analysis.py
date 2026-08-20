@@ -66,6 +66,7 @@ __all__ = bind_names(
         "survfit_initial_indices",
         "survfit_subject_history",
         "survfitaj",
+        "survfitaj_from_columns",
         "AalenJohansenExtendedConfig",
         "AalenJohansenExtendedResult",
         "TransitionMatrix",

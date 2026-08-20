@@ -77,7 +77,7 @@ pub use survfitaj_extended_module::{
 };
 pub use survfitaj_module::{
     SurvFitAJ, survfit_counting_positions, survfit_initial_indices, survfit_subject_history,
-    survfitaj,
+    survfitaj, survfitaj_from_columns,
 };
 pub use survfitkm_module::{
     CountingSurvfitTables, GroupedSurvFitKMOutput, KaplanMeierConfig, SurvFitKMInfluenceOutput,
