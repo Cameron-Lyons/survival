@@ -228,7 +228,9 @@ class _ModelClusterTerm:
 @dataclass(frozen=True)
 class _RidgeFormulaTerm:
     terms: tuple[_CovariateTerm, ...]
-    theta: float
+    theta: float | None
+    df: float | None
+    eps: float
     scale: bool
     label: str
 
@@ -302,6 +304,16 @@ class _FormulaDesign:
 
 
 @dataclass(frozen=True)
+class _RidgePenaltyBlock:
+    label: str
+    columns: tuple[int, ...]
+    scales: tuple[float, ...]
+    theta: float | None
+    target_df: float | None
+    eps: float
+
+
+@dataclass(frozen=True)
 class _FormulaFit:
     fit: Any
     design: _FormulaDesign | None
@@ -318,6 +330,10 @@ class _FormulaFit:
     y_response: Surv | None = None
     model_frame: dict[str, Any] | None = None
     score_values: list[float] | None = None
+    history: dict[str, dict[str, Any]] | None = None
+    effective_degrees_of_freedom: float | None = None
+    term_degrees_of_freedom: dict[str, float] | None = None
+    reported_log_likelihood: list[float] | None = None
     conditional_logistic: bool = False
     n_observations: int | None = None
 
@@ -362,6 +378,14 @@ class _FormulaFit:
         if name == "dfbetas" and hasattr(self.fit, "score_residuals"):
             return self._cox_dfbetas
         return getattr(self.fit, name)
+
+    @property
+    def log_likelihood(self) -> Any:
+        values = self.reported_log_likelihood
+        if values is not None:
+            return list(values)
+        likelihood = self.fit.log_likelihood
+        return list(likelihood) if isinstance(likelihood, list | tuple) else likelihood
 
     def _cox_scaled_schoenfeld_residuals(self) -> list[list[float]]:
         variance = [[float(value) for value in row] for row in self.information_matrix]
@@ -3283,6 +3307,7 @@ def _parse_ridge_formula_term(term: str) -> _RidgeFormulaTerm:
     columns: list[str] = []
     theta: float | None = None
     df: float | None = None
+    eps = 0.1
     scale = True
     saw_option = False
     for part in parts:
@@ -3323,9 +3348,18 @@ def _parse_ridge_formula_term(term: str) -> _RidgeFormulaTerm:
     if theta is not None and df is not None:
         raise ValueError("Only one of df or theta can be specified")
     if theta is None:
-        raise NotImplementedError("ridge() formula terms currently require theta=")
+        df = len(columns) / 2.0 if df is None else df
+        if df <= 0.0 or df > len(columns):
+            raise ValueError(f"ridge df must be between 0 and {len(columns)}")
     terms = tuple(_CovariateTerm(column, transform="ridge") for column in columns)
-    return _RidgeFormulaTerm(terms=terms, theta=theta, scale=scale, label=term)
+    return _RidgeFormulaTerm(
+        terms=terms,
+        theta=theta,
+        df=df,
+        eps=eps,
+        scale=scale,
+        label=term,
+    )
 
 
 def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
@@ -3966,30 +4000,203 @@ def _design_rows_from_spec(
     return [[column[i] for column in columns] for i in range(n)]
 
 
-def _ridge_formula_penalty(
+def _ridge_formula_blocks(
     data: Any,
     design: _FormulaDesign,
     n: int,
-) -> list[float] | None:
+) -> list[_RidgePenaltyBlock]:
     if not design.ridge:
-        return None
-    by_term: dict[_CovariateTerm, float] = {}
-    for ridge_term in design.ridge:
+        return []
+
+    by_term: dict[_CovariateTerm, tuple[int, float]] = {}
+    for block_index, ridge_term in enumerate(design.ridge):
         for term in ridge_term.terms:
+            if term in by_term:
+                raise ValueError("ridge() formula terms must not contain overlapping columns")
             values = _numeric_term_values(_term_raw_values(data, term, n), term)
             scale = _sample_variance(values) if ridge_term.scale else 1.0
-            by_term[term] = ridge_term.theta * scale
+            by_term[term] = (block_index, scale)
 
-    penalty: list[float] = []
+    columns: list[list[int]] = [[] for _term in design.ridge]
+    scales: list[list[float]] = [[] for _term in design.ridge]
+    cursor = 1 if design.intercept else 0
     for term in design.covariates:
         output_count = len(_design_term_output_names(term))
         if isinstance(term, _NumericDesignTerm) and term.term in by_term:
-            penalty.append(by_term[term.term])
-        else:
-            penalty.extend([0.0] * output_count)
-    if design.intercept:
-        penalty.insert(0, 0.0)
+            block_index, scale = by_term[term.term]
+            columns[block_index].append(cursor)
+            scales[block_index].append(scale)
+        cursor += output_count
+
+    return [
+        _RidgePenaltyBlock(
+            label=term.label,
+            columns=tuple(columns[index]),
+            scales=tuple(scales[index]),
+            theta=term.theta,
+            target_df=term.df,
+            eps=term.eps,
+        )
+        for index, term in enumerate(design.ridge)
+    ]
+
+
+def _ridge_penalty_vector(
+    width: int,
+    blocks: Sequence[_RidgePenaltyBlock],
+    thetas: Sequence[float],
+) -> list[float]:
+    penalty = [0.0] * width
+    for block, theta in zip(blocks, thetas, strict=True):
+        for column, scale in zip(block.columns, block.scales, strict=True):
+            penalty[column] += theta * scale
     return penalty
+
+
+def _ridge_term_degrees_of_freedom(
+    fit: Any,
+    penalty: Sequence[float],
+    columns: Sequence[int],
+) -> float:
+    variance = [[float(value) for value in row] for row in fit.information_matrix]
+    width = len(variance)
+    if not columns:
+        return 0.0
+    if len(penalty) != width or any(len(row) != width for row in variance):
+        raise ValueError("ridge fit returned inconsistent covariance dimensions")
+    if list(columns) == list(range(width)):
+        value = width - math.fsum(
+            float(penalty[column]) * variance[column][column] for column in range(width)
+        )
+        return min(max(value, 0.0), float(width))
+
+    naive = [
+        [
+            variance[row][column]
+            - math.fsum(
+                variance[row][middle] * float(penalty[middle]) * variance[middle][column]
+                for middle in range(width)
+            )
+            for column in range(width)
+        ]
+        for row in range(width)
+    ]
+    term_variance = [[variance[row][column] for column in columns] for row in columns]
+    term_naive = [[naive[row][column] for column in columns] for row in columns]
+    rhs_columns = [
+        [term_naive[row][column] for row in range(len(columns))] for column in range(len(columns))
+    ]
+    _tests, _rank, solve = _core.coxph_wtest(term_variance, rhs_columns, 1e-9)
+    value = math.fsum(solve[index][index] for index in range(len(columns)))
+    return min(max(value, 0.0), float(len(columns)))
+
+
+def _ridge_formula_term_degrees_of_freedom(
+    fit: Any,
+    penalty: Sequence[float],
+    design: _FormulaDesign,
+) -> dict[str, float]:
+    width = len(penalty)
+    cursor = 1 if design.intercept else 0
+    grouped_columns: dict[int, list[int]] = {}
+    for term, assignment in zip(
+        design.covariates,
+        design.term_assignments,
+        strict=True,
+    ):
+        output_count = len(_design_term_output_names(term))
+        grouped_columns.setdefault(assignment, []).extend(
+            range(cursor, cursor + output_count),
+        )
+        cursor += output_count
+    if cursor != width:
+        raise ValueError("ridge formula metadata does not match the fitted covariance matrix")
+    return {
+        (
+            design.term_labels[assignment - 1]
+            if 0 < assignment <= len(design.term_labels)
+            else f"term{assignment}"
+        ): _ridge_term_degrees_of_freedom(fit, penalty, columns)
+        for assignment, columns in grouped_columns.items()
+    }
+
+
+def _ridge_control_fallback_theta(
+    target: float,
+    history: Sequence[tuple[float, float]],
+) -> float:
+    ordered = sorted(history)
+    for (left_theta, left_df), (right_theta, right_df) in zip(
+        ordered,
+        ordered[1:],
+        strict=False,
+    ):
+        if (left_df - target) * (right_df - target) <= 0.0:
+            return (left_theta + right_theta) / 2.0
+    theta, df = history[-1]
+    return theta * 2.0 if df > target else theta / 2.0
+
+
+def _ridge_control_next_theta(
+    target: float,
+    eps: float,
+    iteration: int,
+    history: Sequence[tuple[float, float]],
+    half: int,
+) -> tuple[float, bool, int]:
+    current_theta, current_df = history[-1]
+    if iteration > 1 and abs(current_df - target) < eps:
+        return current_theta, True, half
+
+    if len(history) == 2:
+        first_theta, first_df = history[0]
+        denominator = current_df - first_df
+        if denominator == 0.0:
+            return _ridge_control_fallback_theta(target, history), False, 0
+        theta = first_theta + (current_theta - first_theta) * (target - first_df) / denominator
+        if target > current_df:
+            theta *= 1.5
+        if math.isfinite(theta) and theta >= 0.0:
+            return theta, False, 0
+        return _ridge_control_fallback_theta(target, history), False, 0
+
+    previous_df = history[-2][1]
+    denominator = previous_df - target
+    doing_well = denominator != 0.0 and abs((current_df - target) / denominator) <= 0.6
+    ordered = sorted(history)
+    x = [value[0] for value in ordered]
+    y = [value[1] for value in ordered]
+    adjusted_target = target
+    if (x[0] - x[1]) * (y[0] - y[1]) <= 0.0:
+        y = [-value for value in y]
+        adjusted_target = -target
+
+    if all(value > adjusted_target for value in y):
+        base = 0
+    elif all(value < adjusted_target for value in y):
+        base = len(x) - 3
+    else:
+        base = max(index for index, value in enumerate(y) if value <= adjusted_target)
+        if not doing_well and half < 2:
+            return (x[base] + x[base + 1]) / 2.0, False, half + 1
+        if base + 1 == len(x) - 1 or (
+            base > 0 and adjusted_target - y[base] < y[base + 1] - adjusted_target
+        ):
+            base -= 1
+
+    second = (base + 1, base + 2)
+    try:
+        xx = [math.log(x[index] - x[base]) for index in second]
+        yy = [math.log(y[index] - y[base]) for index in second]
+        power = (yy[1] - yy[0]) / (xx[1] - xx[0])
+        intercept = yy[0] - power * xx[0]
+        step = (math.log(adjusted_target - y[base]) - intercept) / power
+        theta = x[base] + math.exp(step)
+    except (ValueError, ZeroDivisionError, OverflowError):
+        theta = _ridge_control_fallback_theta(target, history)
+    if not math.isfinite(theta) or theta < 0.0:
+        theta = _ridge_control_fallback_theta(target, history)
+    return theta, False, 0
 
 
 def _covariate_term_name(term: _CovariateTerm) -> str:
@@ -10942,10 +11149,10 @@ def _apply_coxph_control(
     max_iter: int,
     eps: float | None,
     toler: float | None,
-) -> tuple[int, float | None, float | None, bool]:
+) -> tuple[int, float | None, float | None, bool, int]:
     values = _control_mapping(control, "coxph control")
     if not values:
-        return max_iter, eps, toler, True
+        return max_iter, eps, toler, True, 10
 
     max_iter_value, name = _pop_control_alias(
         values,
@@ -10981,9 +11188,16 @@ def _apply_coxph_control(
     fix_time = _normalize_bool_option(timefix_value, f"control.{name}") if name else True
 
     _pop_finite_control_value(values, ("toler.inf", "toler_inf"), positive=True)
-    _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
+    outer_max_value = _pop_finite_control_value(
+        values,
+        ("outer.max", "outer_max"),
+        positive=True,
+    )
+    outer_max = 10 if outer_max_value is None else int(outer_max_value)
+    if outer_max < 1:
+        raise ValueError("control.outer.max must be positive")
     _reject_unknown_control_options(values, "coxph")
-    return max_iter, eps, toler, fix_time
+    return max_iter, eps, toler, fix_time, outer_max
 
 
 def _apply_survreg_control(
@@ -15627,14 +15841,17 @@ def _cox_full_loglik(fit: Any) -> float:
 
 
 def _cox_degrees_of_freedom(fit: Any) -> float | int:
-    if _cox_event_count(fit) == 0:
+    model = _unwrap_formula_fit(fit)
+    if _cox_event_count(model) == 0:
         return 0
-    effective = getattr(fit, "degrees_of_freedom", None)
+    if isinstance(fit, _FormulaFit) and fit.effective_degrees_of_freedom is not None:
+        return fit.effective_degrees_of_freedom
+    effective = getattr(model, "degrees_of_freedom", None)
     if effective is not None:
         value = float(effective)
         if not value.is_integer():
             return value
-    return sum(not aliased for aliased in _cox_alias_mask(fit))
+    return sum(not aliased for aliased in _cox_alias_mask(model))
 
 
 def _formula_design_output_names(design: _FormulaDesign) -> list[str]:
@@ -15766,7 +15983,7 @@ def degrees_freedom(fit: Any) -> float | int:
     _require_model_fit(fit, "degrees_freedom")
     if _is_survreg_fit(fit):
         return len(list(fit.coefficients))
-    return _cox_degrees_of_freedom(_unwrap_formula_fit(fit))
+    return _cox_degrees_of_freedom(fit)
 
 
 def df_residual(fit: Any) -> int:
@@ -15931,7 +16148,7 @@ def royston(
         "C.GH": _royston_gonen_heller(eta),
     }
     if newdata is None:
-        loglik_values = _cox_loglik_values(_unwrap_formula_fit(fit))
+        loglik_values = _cox_loglik_values(fit)
         logtest = -2.0 * (loglik_values[0] - loglik_values[1])
         denominator = 1.0 - math.exp(2.0 * loglik_values[0] / n)
         result["R.N"] = (
@@ -16575,7 +16792,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
                 result["distribution_parameters"] = parameter_values
     else:
         model = _unwrap_formula_fit(fit)
-        logliks = _cox_loglik_values(model)
+        logliks = _cox_loglik_values(fit)
         result["null_loglik"] = logliks[0]
         result["score_test"] = float(model.score_test)
         result["n_event"] = sum(1 for event in model.status if int(event) == 1)
@@ -17363,7 +17580,7 @@ def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
     n_columns = len(beta)
     names = ["NULL"]
     dfs = [0]
-    logliks = [_cox_loglik_values(model)[0]]
+    logliks = [_cox_loglik_values(fit)[0]]
     if n_columns == 0:
         return _anova_result(logliks, dfs, names, test_name, with_tests)
 
@@ -17375,7 +17592,7 @@ def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
         names.append(name)
         if idx == len(groups) - 1:
             logliks.append(_cox_full_loglik(model))
-            dfs.append(_cox_degrees_of_freedom(model))
+            dfs.append(_cox_degrees_of_freedom(fit))
         else:
             refit_loglik, refit_df = _cox_refit_loglik_and_df(model, width, offset)
             logliks.append(refit_loglik)
@@ -17386,7 +17603,7 @@ def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
 def _anova_multiple_coxph(fits: tuple[Any, ...], test_name: str, with_tests: bool) -> Any:
     models = [_require_coxph_fit(fit) for fit in fits]
     logliks = [_cox_full_loglik(model) for model in models]
-    dfs = [_cox_degrees_of_freedom(model) for model in models]
+    dfs = [_cox_degrees_of_freedom(fit) for fit in fits]
     names = [f"Model {idx + 1}" for idx in range(len(models))]
     return _anova_result(logliks, dfs, names, test_name, with_tests)
 
@@ -22025,7 +22242,7 @@ def _cox_low_level_fit(
     if initial is not None and len(initial) != nvar:
         raise ValueError("Wrong length for initial parameters")
 
-    max_iter, eps, toler, _ = _apply_coxph_control(control, 20, None, None)
+    max_iter, eps, toler, _, _outer_max = _apply_coxph_control(control, 20, None, None)
     if max_iter < 0:
         raise ValueError("control.iter.max must be non-negative")
     if eps is not None and eps <= 0.0:
@@ -22308,13 +22525,19 @@ def coxph(
     if init is not None and initial_beta is not None:
         raise ValueError("use only one of init or initial_beta")
     max_iter = _integer_scalar(max_iter, "max_iter")
-    max_iter, eps, toler, fix_time = _apply_coxph_control(control, max_iter, eps, toler)
+    max_iter, eps, toler, fix_time, outer_max = _apply_coxph_control(
+        control,
+        max_iter,
+        eps,
+        toler,
+    )
 
     formula_design: _FormulaDesign | None = None
     formula_string: str | None = None
     formula_x_matrix: list[list[float]] | None = None
     formula_model_data: Any | None = None
     formula_cluster_columns: tuple[str, ...] = ()
+    formula_ridge_blocks: list[_RidgePenaltyBlock] = []
     direct_coefficient_names: tuple[str, ...] | None = None
     time_transform_terms: list[_CovariateTerm] = []
     time_transform_functions: list[Any | None] = []
@@ -22390,15 +22613,13 @@ def coxph(
             cluster = _combined_columns(data, terms.clusters, len(response))
             formula_cluster_columns = tuple(terms.clusters)
         formula_design = _fit_formula_design(data, response_spec, terms, len(response))
-        formula_ridge_penalty = _ridge_formula_penalty(
+        formula_ridge_blocks = _ridge_formula_blocks(
             data,
             formula_design,
             len(response),
         )
-        if formula_ridge_penalty is not None:
-            if ridge_penalty is not None:
-                raise ValueError("use only one of formula ridge(...) or ridge_penalty")
-            ridge_penalty = formula_ridge_penalty
+        if formula_ridge_blocks and ridge_penalty is not None:
+            raise ValueError("use only one of formula ridge(...) or ridge_penalty")
         x = _design_rows_from_spec(data, formula_design, len(response))
         formula_x_matrix = [list(row) for row in x] if formula_x else None
         formula_model_data = data
@@ -22477,11 +22698,17 @@ def coxph(
     direct_coefficient_names = _validated_matrix_column_names(direct_coefficient_names, rows)
     if len(rows) != len(response):
         raise ValueError("x must have the same number of rows as the Surv response")
-    fit_ridge_penalty = (
-        None if ridge_penalty is None else _float_vector(ridge_penalty, "ridge_penalty")
-    )
+    width = len(rows[0]) if rows else 0
+    ridge_thetas = [
+        block.theta if block.theta is not None else 1.0 for block in formula_ridge_blocks
+    ]
+    if formula_ridge_blocks:
+        fit_ridge_penalty = _ridge_penalty_vector(width, formula_ridge_blocks, ridge_thetas)
+    elif ridge_penalty is None:
+        fit_ridge_penalty = None
+    else:
+        fit_ridge_penalty = _float_vector(ridge_penalty, "ridge_penalty")
     if fit_ridge_penalty is not None:
-        width = len(rows[0]) if rows else 0
         if len(fit_ridge_penalty) != width:
             raise ValueError("ridge_penalty must have one value per design-matrix column")
         if any(value < 0.0 for value in fit_ridge_penalty):
@@ -22539,26 +22766,130 @@ def coxph(
             fit_times = _survdiff_timefix_values(fit_times, True)
         else:
             entry_times, fit_times = _timefix_vectors(entry_times, fit_times)
-    fit = _core.coxph_fit(
-        fit_times,
-        list(response.event),
-        rows,
-        strata=fit_strata,
-        weights=fit_weights,
-        offset=fit_offset,
-        initial_beta=(
-            _float_vector(initial_beta if initial_beta is not None else init, "init")
-            if init is not None or initial_beta is not None
-            else None
-        ),
-        max_iter=max_iter,
-        eps=eps,
-        toler=toler,
-        method=method_name,
-        entry_times=entry_times,
-        nocenter=nocenter_values,
-        ridge_penalty=fit_ridge_penalty,
+    initial_values = (
+        _float_vector(initial_beta if initial_beta is not None else init, "init")
+        if init is not None or initial_beta is not None
+        else None
     )
+
+    def run_fit(penalty: list[float] | None, start: list[float] | None) -> Any:
+        return _core.coxph_fit(
+            fit_times,
+            list(response.event),
+            rows,
+            strata=fit_strata,
+            weights=fit_weights,
+            offset=fit_offset,
+            initial_beta=start,
+            max_iter=max_iter,
+            eps=eps,
+            toler=toler,
+            method=method_name,
+            entry_times=entry_times,
+            nocenter=nocenter_values,
+            ridge_penalty=penalty,
+        )
+
+    target_blocks = [
+        index for index, block in enumerate(formula_ridge_blocks) if block.target_df is not None
+    ]
+    ridge_history: dict[str, dict[str, Any]] | None = None
+    reported_log_likelihood: list[float] | None = None
+    if target_blocks:
+        histories = [
+            [(0.0, float(len(block.columns)))] if block.target_df is not None else []
+            for block in formula_ridge_blocks
+        ]
+        halves = [0] * len(formula_ridge_blocks)
+        done = [block.target_df is None for block in formula_ridge_blocks]
+        start = initial_values
+        initial_log_likelihood = None
+        fit = None
+        for outer_iteration in range(1, outer_max + 1):
+            fitted_thetas = list(ridge_thetas)
+            fit_ridge_penalty = _ridge_penalty_vector(
+                width,
+                formula_ridge_blocks,
+                fitted_thetas,
+            )
+            fit = run_fit(fit_ridge_penalty, start)
+            if initial_log_likelihood is None:
+                initial_log_likelihood = float(fit.log_likelihood[0])
+            next_thetas = list(fitted_thetas)
+            for block_index in target_blocks:
+                block = formula_ridge_blocks[block_index]
+                target = block.target_df
+                if target is None:
+                    continue
+                term_df = _ridge_term_degrees_of_freedom(
+                    fit,
+                    fit_ridge_penalty,
+                    block.columns,
+                )
+                histories[block_index].append((fitted_thetas[block_index], term_df))
+                next_theta, converged, half = _ridge_control_next_theta(
+                    target,
+                    block.eps,
+                    outer_iteration,
+                    histories[block_index],
+                    halves[block_index],
+                )
+                next_thetas[block_index] = next_theta
+                done[block_index] = converged
+                halves[block_index] = half
+            ridge_thetas = fitted_thetas
+            if all(done):
+                break
+            if outer_iteration == outer_max:
+                warnings.warn(
+                    "ridge df target did not converge within control.outer.max iterations",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                break
+            ridge_thetas = next_thetas
+            start = [float(value) for value in fit.coefficients[0]]
+        if fit is None:
+            raise AssertionError("ridge calibration did not run")
+        if initial_log_likelihood is None:
+            raise AssertionError("ridge calibration did not retain the initial log likelihood")
+        reported_log_likelihood = [
+            initial_log_likelihood,
+            float(fit.log_likelihood[-1]),
+        ]
+        ridge_history = {
+            block.label: (
+                {
+                    "theta": ridge_thetas[index],
+                    "done": done[index],
+                    "history": [{"theta": theta, "df": df} for theta, df in histories[index]],
+                    "half": halves[index],
+                }
+                if block.target_df is not None
+                else {"theta": ridge_thetas[index], "done": True}
+            )
+            for index, block in enumerate(formula_ridge_blocks)
+        }
+    else:
+        fit = run_fit(fit_ridge_penalty, initial_values)
+        if formula_ridge_blocks:
+            reported_log_likelihood = [
+                float(fit.log_likelihood[0]),
+                float(fit.log_likelihood[-1]),
+            ]
+            ridge_history = {
+                block.label: {"theta": ridge_thetas[index], "done": True}
+                for index, block in enumerate(formula_ridge_blocks)
+            }
+    term_degrees_of_freedom = None
+    effective_degrees_of_freedom = None
+    if formula_ridge_blocks and formula_design is not None and fit_ridge_penalty is not None:
+        term_degrees_of_freedom = _ridge_formula_term_degrees_of_freedom(
+            fit,
+            fit_ridge_penalty,
+            formula_design,
+        )
+        effective_degrees_of_freedom = math.fsum(term_degrees_of_freedom.values())
     if not singular_ok_value and any(_cox_alias_mask(fit)):
         raise ValueError(
             "coxph design matrix is singular; use singular_ok=True to allow dependent covariates"
@@ -22619,6 +22950,10 @@ def coxph(
             x_matrix=formula_x_matrix,
             y_response=response if formula_design is not None and keep_y else None,
             model_frame=model_frame,
+            history=ridge_history,
+            effective_degrees_of_freedom=effective_degrees_of_freedom,
+            term_degrees_of_freedom=term_degrees_of_freedom,
+            reported_log_likelihood=reported_log_likelihood,
             n_observations=time_transform_observed_n,
         )
     return fit
