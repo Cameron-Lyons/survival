@@ -3900,8 +3900,14 @@ def _encode_groups(
 
 
 def _encode_labels(values: list[Any], name: str) -> list[int]:
-    labels = {value: idx for idx, value in enumerate(_label_levels(values, name))}
-    return [labels[value] for value in values]
+    labels: dict[Any, int] = {}
+    codes: list[int] = []
+    for value in values:
+        try:
+            codes.append(labels.setdefault(value, len(labels)))
+        except TypeError as exc:
+            raise TypeError(f"{name} contains unhashable labels") from exc
+    return codes
 
 
 def _encode_labels_with_levels(
