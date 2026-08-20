@@ -12039,6 +12039,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "PyearsResult" in survival.__all__
     assert "SurvObrienResult" in survival.__all__
     assert "SurvExpResult" in survival.__all__
+    assert "SurvExpFormulaResult" in survival.__all__
     assert "TMergeFrame" in survival.__all__
     assert "TMergeOperation" in survival.__all__
     assert "aic" in survival.__all__
@@ -12115,6 +12116,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.PyearsResult is survival.r_api.PyearsResult
     assert survival.SurvObrienResult is survival.r_api.SurvObrienResult
     assert survival.SurvExpResult is survival.r_api.SurvExpResult
+    assert survival.SurvExpFormulaResult is survival.r_api.SurvExpFormulaResult
     assert survival.TMergeFrame is survival.r_api.TMergeFrame
     assert survival.TMergeOperation is survival.r_api.TMergeOperation
     assert survival.aic is survival.r_api.aic
@@ -12510,17 +12512,23 @@ def test_r_api_stub_tracks_survexp_public_signature():
         "sex",
         "times",
         "method",
+        "data",
+        "weights",
+        "subset",
+        "na_action",
+        "rmap",
         "cohort",
         "conditional",
         "scale",
         "se_fit",
+        "model",
+        "x",
+        "y",
     ]
     runtime_params = inspect.signature(survival.r_api.survexp).parameters
     assert list(runtime_params) == expected
-    assert runtime_params["cohort"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert runtime_params["conditional"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert runtime_params["scale"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert runtime_params["se_fit"].kind is inspect.Parameter.KEYWORD_ONLY
+    for name in expected[7:]:
+        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
     assert _pyi_function_arg_names(stub_path, "survexp") == expected
 
     expected_individual = ["time", "age", "year", "ratetable", "sex"]
