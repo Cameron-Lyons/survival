@@ -903,6 +903,7 @@ BINDINGS = (
     "royston",
     "royston_from_model",
     "rttright",
+    "rttright_counting_matrix",
     "rttright_matrix",
     "rttright_stratified",
     "rttright_time_matrix",

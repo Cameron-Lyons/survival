@@ -357,6 +357,259 @@ pub fn rttright_time_matrix(
     Ok(matrix)
 }
 
+struct RttrightCountingInputs<'a> {
+    start: &'a [f64],
+    stop: &'a [f64],
+    status: &'a [i32],
+    weights: &'a [f64],
+    last: &'a [bool],
+    strata: &'a [i32],
+    times: Option<&'a [f64]>,
+    delta: f64,
+}
+
+fn validate_rttright_counting_inputs(inputs: &RttrightCountingInputs<'_>) -> PyResult<()> {
+    let n = inputs.stop.len();
+    for (name, len) in [
+        ("start", inputs.start.len()),
+        ("status", inputs.status.len()),
+        ("weights", inputs.weights.len()),
+        ("last", inputs.last.len()),
+        ("strata", inputs.strata.len()),
+    ] {
+        if len != n {
+            return Err(PyValueError::new_err(format!(
+                "{name} must have same length as stop"
+            )));
+        }
+    }
+    validate_finite(inputs.start, "start")?;
+    validate_finite(inputs.stop, "stop")?;
+    validate_binary_i32(inputs.status, "status")?;
+    validate_finite(inputs.weights, "weights")?;
+    validate_non_negative(inputs.weights, "weights")?;
+    if let Some(times) = inputs.times {
+        validate_finite(times, "times")?;
+    }
+    if !inputs.delta.is_finite() || inputs.delta <= 0.0 {
+        return Err(PyValueError::new_err(
+            "delta must be finite and greater than zero",
+        ));
+    }
+    if let Some(index) = inputs
+        .start
+        .iter()
+        .zip(inputs.stop)
+        .position(|(&left, &right)| left >= right)
+    {
+        return Err(PyValueError::new_err(format!(
+            "start must be less than stop at index {index}"
+        )));
+    }
+    Ok(())
+}
+
+fn counting_censor_survival(
+    start: &[f64],
+    km_stop: &[f64],
+    censor: &[bool],
+    weights: &[f64],
+    indices: &[usize],
+) -> (Vec<f64>, Vec<f64>) {
+    let mut censor_events = indices
+        .iter()
+        .filter_map(|&index| censor[index].then_some((km_stop[index], weights[index])))
+        .collect::<Vec<_>>();
+    censor_events.sort_unstable_by(|left, right| left.0.total_cmp(&right.0));
+    if censor_events.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut start_order = indices.to_vec();
+    start_order.sort_unstable_by(|&left, &right| {
+        start[left]
+            .total_cmp(&start[right])
+            .then_with(|| left.cmp(&right))
+    });
+    let mut stop_order = indices.to_vec();
+    stop_order.sort_unstable_by(|&left, &right| {
+        km_stop[left]
+            .total_cmp(&km_stop[right])
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut event_times = Vec::with_capacity(censor_events.len());
+    let mut survival_values = Vec::with_capacity(censor_events.len());
+    let mut current = 1.0;
+    let mut active_weight = 0.0;
+    let mut active_positive_rows = 0usize;
+    let mut start_position = 0;
+    let mut stop_position = 0;
+    let mut event_position = 0;
+
+    while event_position < censor_events.len() {
+        let event_time = censor_events[event_position].0;
+        let mut event_end = event_position + 1;
+        let mut event_weight = censor_events[event_position].1;
+        let mut event_positive_rows = usize::from(event_weight > 0.0);
+        while event_end < censor_events.len() && censor_events[event_end].0 == event_time {
+            event_weight += censor_events[event_end].1;
+            event_positive_rows += usize::from(censor_events[event_end].1 > 0.0);
+            event_end += 1;
+        }
+
+        while start_position < start_order.len() && start[start_order[start_position]] < event_time
+        {
+            let weight = weights[start_order[start_position]];
+            active_weight += weight;
+            active_positive_rows += usize::from(weight > 0.0);
+            start_position += 1;
+        }
+        while stop_position < stop_order.len() && km_stop[stop_order[stop_position]] < event_time {
+            let weight = weights[stop_order[stop_position]];
+            active_weight -= weight;
+            active_positive_rows -= usize::from(weight > 0.0);
+            stop_position += 1;
+        }
+
+        if active_positive_rows == event_positive_rows {
+            active_weight = event_weight;
+        }
+        if active_weight > 0.0 {
+            current *= 1.0 - event_weight / active_weight;
+        }
+        event_times.push(event_time);
+        survival_values.push(current);
+        event_position = event_end;
+    }
+
+    (event_times, survival_values)
+}
+
+#[inline]
+fn counting_survival_before(event_times: &[f64], survival_values: &[f64], time: f64) -> f64 {
+    let event_index = event_times.partition_point(|&event_time| event_time < time);
+    if event_index == 0 {
+        1.0
+    } else {
+        survival_values[event_index - 1]
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_rttright_counting_group(
+    start: &[f64],
+    stop: &[f64],
+    km_stop: &[f64],
+    status: &[i32],
+    weights: &[f64],
+    last: &[bool],
+    censor: &[bool],
+    indices: &[usize],
+    times: Option<&[f64]>,
+) -> Vec<Vec<f64>> {
+    let (survival_times, survival_values) =
+        counting_censor_survival(start, km_stop, censor, weights, indices);
+
+    let Some(times) = times else {
+        return indices
+            .iter()
+            .map(|&index| {
+                let value = if last[index] && status[index] > 0 {
+                    let g =
+                        counting_survival_before(&survival_times, &survival_values, stop[index]);
+                    rttright_divide(weights[index], g)
+                } else {
+                    0.0
+                };
+                vec![value]
+            })
+            .collect();
+    };
+
+    let query_g = times
+        .iter()
+        .map(|&time| counting_survival_before(&survival_times, &survival_values, time))
+        .collect::<Vec<_>>();
+    let make_row = |&index: &usize| {
+        let mut row = vec![0.0; times.len()];
+        for (column, (&query_time, &g)) in times.iter().zip(&query_g).enumerate() {
+            if start[index] < query_time && query_time <= stop[index] {
+                row[column] = rttright_divide(weights[index], g);
+            }
+        }
+        if last[index] && stop[index] > 0.0 {
+            let stop_g = counting_survival_before(&survival_times, &survival_values, stop[index]);
+            for (value, &g) in row.iter_mut().zip(&query_g) {
+                *value = rttright_divide(weights[index], stop_g.max(g));
+            }
+        }
+        row
+    };
+    let work = indices.len().saturating_mul(times.len());
+    if work >= PARALLEL_TIME_MATRIX_WORK {
+        indices.par_iter().map(make_row).collect()
+    } else {
+        indices.iter().map(make_row).collect()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn rttright_counting_matrix(
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    weights: Vec<f64>,
+    last: Vec<bool>,
+    strata: Vec<i32>,
+    delta: f64,
+    times: Option<Vec<f64>>,
+) -> PyResult<Vec<Vec<f64>>> {
+    validate_rttright_counting_inputs(&RttrightCountingInputs {
+        start: &start,
+        stop: &stop,
+        status: &status,
+        weights: &weights,
+        last: &last,
+        strata: &strata,
+        times: times.as_deref(),
+        delta,
+    })?;
+
+    let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (index, stratum) in strata.into_iter().enumerate() {
+        strata_indices.entry(stratum).or_default().push(index);
+    }
+    let censor = (0..stop.len())
+        .map(|index| last[index] && status[index] == 0)
+        .collect::<Vec<_>>();
+    let mut km_stop = stop.clone();
+    for (index, &is_censor) in censor.iter().enumerate() {
+        if is_censor {
+            km_stop[index] += delta;
+        }
+    }
+    let width = times.as_ref().map_or(1, Vec::len);
+    let mut matrix = vec![vec![0.0; width]; stop.len()];
+    for indices in strata_indices.values() {
+        let rows = compute_rttright_counting_group(
+            &start,
+            &stop,
+            &km_stop,
+            &status,
+            &weights,
+            &last,
+            &censor,
+            indices,
+            times.as_deref(),
+        );
+        for (&row_index, row) in indices.iter().zip(rows) {
+            matrix[row_index] = row;
+        }
+    }
+    Ok(matrix)
+}
+
 #[pyfunction]
 #[pyo3(signature = (time, status, strata, weights=None, timefix=true, renorm=true))]
 pub fn rttright_stratified(
@@ -592,6 +845,44 @@ mod tests {
         for (actual_row, expected_row) in actual.iter().zip(expected) {
             assert_close_slice(actual_row, expected_row);
         }
+    }
+
+    fn naive_counting_censor_survival(
+        start: &[f64],
+        km_stop: &[f64],
+        censor: &[bool],
+        weights: &[f64],
+    ) -> (Vec<f64>, Vec<f64>) {
+        let mut event_times = (0..start.len())
+            .filter_map(|index| censor[index].then_some(km_stop[index]))
+            .collect::<Vec<_>>();
+        event_times.sort_unstable_by(f64::total_cmp);
+        event_times.dedup_by(|left, right| *left == *right);
+
+        let mut survival_values = Vec::with_capacity(event_times.len());
+        let mut current = 1.0;
+        for &event_time in &event_times {
+            let risk = (0..start.len())
+                .filter(|&index| start[index] < event_time && event_time <= km_stop[index])
+                .map(|index| weights[index])
+                .sum::<f64>();
+            let events = (0..start.len())
+                .filter(|&index| censor[index] && km_stop[index] == event_time)
+                .map(|index| weights[index])
+                .sum::<f64>();
+            if risk > 0.0 {
+                current *= 1.0 - events / risk;
+            }
+            survival_values.push(current);
+        }
+        (event_times, survival_values)
+    }
+
+    fn next_random(seed: &mut u64) -> u64 {
+        *seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        *seed
     }
 
     #[test]
@@ -844,6 +1135,136 @@ mod tests {
         .unwrap();
         assert_close_slice(&tiny[0], &[0.5]);
         assert_close_slice(&tiny[1], &[0.5]);
+    }
+
+    #[test]
+    fn test_rttright_counting_matrix_matches_r_layout() {
+        let vector = rttright_counting_matrix(
+            vec![0.0, 0.0, 0.0],
+            vec![3.0, 2.0, 4.0],
+            vec![1, 0, 1],
+            vec![1.0 / 3.0; 3],
+            vec![true; 3],
+            vec![0; 3],
+            0.25,
+            None,
+        )
+        .unwrap();
+        assert_nested_close(&vector, &[vec![0.5], vec![0.0], vec![0.5]]);
+
+        let matrix = rttright_counting_matrix(
+            vec![0.0, 0.0, 0.0],
+            vec![3.0, 2.0, 4.0],
+            vec![1, 0, 1],
+            vec![1.0 / 3.0; 3],
+            vec![true; 3],
+            vec![0; 3],
+            0.25,
+            Some(vec![1.0, 2.0, 3.0, 4.0]),
+        )
+        .unwrap();
+        assert_nested_close(
+            &matrix,
+            &[
+                vec![1.0 / 3.0, 1.0 / 3.0, 0.5, 0.5],
+                vec![1.0 / 3.0; 4],
+                vec![1.0 / 3.0, 1.0 / 3.0, 0.5, 0.5],
+            ],
+        );
+    }
+
+    #[test]
+    fn test_rttright_counting_matrix_preserves_strata() {
+        let result = rttright_counting_matrix(
+            vec![0.0, 0.0, 0.0, 0.0],
+            vec![3.0, 2.0, 4.0, 2.0],
+            vec![1, 0, 1, 1],
+            vec![0.5, 0.5, 0.5, 0.5],
+            vec![true; 4],
+            vec![0, 0, 1, 1],
+            0.25,
+            None,
+        )
+        .unwrap();
+
+        assert_nested_close(&result, &[vec![1.0], vec![0.0], vec![0.5], vec![0.5]]);
+    }
+
+    #[test]
+    fn test_rttright_counting_matrix_validates_inputs() {
+        initialize_python();
+        let length_error = rttright_counting_matrix(
+            vec![0.0],
+            vec![1.0, 2.0],
+            vec![1, 0],
+            vec![1.0, 1.0],
+            vec![true, true],
+            vec![0, 0],
+            0.5,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            length_error
+                .to_string()
+                .contains("start must have same length as stop")
+        );
+
+        let interval_error = rttright_counting_matrix(
+            vec![1.0],
+            vec![1.0],
+            vec![1],
+            vec![1.0],
+            vec![true],
+            vec![0],
+            0.5,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            interval_error
+                .to_string()
+                .contains("start must be less than stop")
+        );
+
+        let delta_error = rttright_counting_matrix(
+            vec![0.0],
+            vec![1.0],
+            vec![1],
+            vec![1.0],
+            vec![true],
+            vec![0],
+            0.0,
+            None,
+        )
+        .unwrap_err();
+        assert!(delta_error.to_string().contains("delta must be finite"));
+    }
+
+    #[test]
+    fn test_counting_censor_survival_sweep_matches_naive_risk_sets() {
+        let mut seed = 20_260_820_u64;
+        for _ in 0..500 {
+            let n = (next_random(&mut seed) % 40 + 1) as usize;
+            let mut start = Vec::with_capacity(n);
+            let mut km_stop = Vec::with_capacity(n);
+            let mut censor = Vec::with_capacity(n);
+            let mut weights = Vec::with_capacity(n);
+            for _ in 0..n {
+                let left = (next_random(&mut seed) % 20) as f64 / 3.0;
+                let right = left + (next_random(&mut seed) % 20 + 1) as f64 / 4.0;
+                start.push(left);
+                km_stop.push(right);
+                censor.push(next_random(&mut seed).is_multiple_of(4));
+                weights.push((next_random(&mut seed) % 17) as f64 / 11.0);
+            }
+            let indices = (0..n).collect::<Vec<_>>();
+            let expected = naive_counting_censor_survival(&start, &km_stop, &censor, &weights);
+            let actual = counting_censor_survival(&start, &km_stop, &censor, &weights, &indices);
+
+            assert_eq!(actual.0, expected.0);
+            assert_close_slice(&actual.1, &expected.1);
+        }
     }
 
     #[test]

@@ -3462,6 +3462,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "neardate",
         "neardate_str",
         "rttright",
+        "rttright_counting_matrix",
         "rttright_matrix",
         "rttright_stratified",
         "rttright_time_matrix",
@@ -3500,6 +3501,16 @@ def test_data_prep_low_level_bindings_are_typed():
         "neardate": ["id1", "date1", "id2", "date2", "best", "nomatch"],
         "neardate_str": ["id1", "date1", "id2", "date2", "best", "nomatch"],
         "rttright": ["time", "status", "weights", "timefix", "renorm"],
+        "rttright_counting_matrix": [
+            "start",
+            "stop",
+            "status",
+            "weights",
+            "last",
+            "strata",
+            "delta",
+            "times",
+        ],
         "rttright_matrix": [
             "time",
             "status",
@@ -3642,6 +3653,20 @@ def test_data_prep_low_level_bindings_are_typed():
     assert timed_weights[0] == pytest.approx([1.0 / 3.0, 0.5, 0.5])
     assert timed_weights[1] == pytest.approx([1.0 / 3.0, 0.0, 0.0])
     assert timed_weights[2] == pytest.approx([1.0 / 3.0, 0.5, 0.5])
+
+    counting_weights = core.rttright_counting_matrix(
+        [0.0, 0.0, 0.0],
+        [3.0, 2.0, 4.0],
+        [1, 0, 1],
+        [1.0 / 3.0] * 3,
+        [True] * 3,
+        [0] * 3,
+        0.25,
+        [1.0, 2.0, 3.0, 4.0],
+    )
+    assert counting_weights[0] == pytest.approx([1.0 / 3.0, 1.0 / 3.0, 0.5, 0.5])
+    assert counting_weights[1] == pytest.approx([1.0 / 3.0] * 4)
+    assert counting_weights[2] == pytest.approx([1.0 / 3.0, 1.0 / 3.0, 0.5, 0.5])
 
 
 def test_cox_counting_low_level_bindings_are_typed():
