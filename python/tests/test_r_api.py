@@ -3275,6 +3275,45 @@ def test_match_ratetable_validates_required_columns_and_factor_codes():
         )
 
 
+def test_ratetable_constructor_recycles_scalars_and_preserves_metadata():
+    result = survival.ratetable(
+        age=[50, 60, 70],
+        sex=["male", "female", "male"],
+        entry=[date(2000, 1, 1), date(2001, 7, 2), date(2002, 1, 1)],
+        region=survival.r_api._r_factor(["b", "a", "b"], ["b", "a", "c"]),
+        constant=2,
+    )
+
+    assert isinstance(result, survival.RatetableFrame)
+    assert result.column_names == ["age", "sex", "entry", "region", "constant"]
+    expected_rows = [
+        [50.0, 2.0, 10957.0, 1.0, 2.0],
+        [60.0, 1.0, 11505.0, 2.0, 2.0],
+        [70.0, 2.0, 11688.0, 1.0, 2.0],
+    ]
+    for actual, expected in zip(result.values, expected_rows, strict=True):
+        assert actual == pytest.approx(expected)
+    assert result.isDate == {
+        "age": False,
+        "sex": False,
+        "entry": True,
+        "region": False,
+        "constant": False,
+    }
+    assert result.levlist == [None, ["female", "male"], None, ["b", "a", "c"], None]
+    assert survival.as_data_frame(result) == {
+        "age": [50.0, 60.0, 70.0],
+        "sex": [2.0, 1.0, 2.0],
+        "entry": [10957.0, 11505.0, 11688.0],
+        "region": [1.0, 2.0, 1.0],
+        "constant": [2.0, 2.0, 2.0],
+    }
+    with pytest.raises(ValueError, match="incompatible length"):
+        survival.ratetable(age=[50, 60, 70], sex=["male", "female"])
+    with pytest.raises(ValueError, match="at least one"):
+        survival.ratetable()
+
+
 def test_survexp_ederer_keeps_the_full_reference_cohort():
     ages = [14610.0, 25567.5]
     years = [2000.0, 2000.0]

@@ -37,6 +37,7 @@ __all__ = [
     "PredictResult",
     "PyearsResult",
     "RateTable",
+    "RatetableFrame",
     "AaregModelResult",
     "StrataFactor",
     "SurvObrienResult",
@@ -107,6 +108,7 @@ __all__ = [
     "predict",
     "psurvreg",
     "qsurvreg",
+    "ratetable",
     "ratetableDate",
     "residuals",
     "royston",
@@ -622,6 +624,30 @@ class SurvExpFormulaResult:
     model: Any | None = None
     x: list[int] | None = None
     y: Surv | None = None
+
+
+@dataclass(frozen=True)
+class RatetableFrame:
+    """Numeric covariate matrix and metadata returned by ``ratetable()``."""
+
+    values: list[list[float]]
+    column_names: list[str]
+    is_date: list[bool]
+    levels: list[list[str] | None]
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    @property
+    def isDate(self) -> dict[str, bool]:
+        return dict(zip(self.column_names, self.is_date, strict=True))
+
+    @property
+    def levlist(self) -> list[list[str] | None]:
+        return self.levels
 
 
 @dataclass(frozen=True)
@@ -6007,6 +6033,88 @@ def match_ratetable(data: Any, ratetable: Any) -> dict[str, Any]:
         "dim_names": dimension_names,
         "coords": lookup_columns,
     }
+
+
+def _ratetable_constructor_values(value: Any, name: str) -> list[Any]:
+    if isinstance(value, str | bytes | _Date | _DateTime) or not hasattr(value, "__iter__"):
+        return [value]
+    return _materialize_1d(value, name)
+
+
+def _ratetable_factor_levels(source: Any, values: list[Any], name: str) -> list[str] | None:
+    categories = _mstate_categories(source)
+    if categories is not None:
+        return [
+            str(value)
+            for value in _materialize_1d(categories, f"{name} categories")
+            if not _is_missing_value(value)
+        ]
+    observed = [value for value in values if not _is_missing_value(value)]
+    if observed and all(isinstance(value, str) for value in observed):
+        return sorted({str(value) for value in observed})
+    return None
+
+
+def ratetable(**columns: Any) -> RatetableFrame:
+    """Construct an R-style ``ratetable2`` covariate matrix."""
+
+    if not columns:
+        raise ValueError("ratetable requires at least one named column")
+    names = list(columns)
+    materialized = [
+        _ratetable_constructor_values(source, name) for name, source in columns.items()
+    ]
+    row_count = max(map(len, materialized))
+    if row_count == 0:
+        raise ValueError("ratetable columns must not be empty")
+    recycled: list[list[Any]] = []
+    for name, values in zip(names, materialized, strict=True):
+        if len(values) == 1:
+            recycled.append(values * row_count)
+        elif len(values) == row_count:
+            recycled.append(values)
+        else:
+            raise ValueError(f"ratetable column {name!r} has incompatible length")
+
+    is_date: list[bool] = []
+    levels: list[list[str] | None] = []
+    encoded: list[list[float]] = []
+    for name, source, values in zip(names, columns.values(), recycled, strict=True):
+        nonmissing = [value for value in values if not _is_missing_value(value)]
+        date_column = bool(nonmissing) and all(
+            isinstance(value, _Date | _DateTime) for value in nonmissing
+        )
+        factor_levels = _ratetable_factor_levels(source, values, name)
+        is_date.append(date_column)
+        levels.append(factor_levels)
+        if factor_levels is not None:
+            level_index = {level: index + 1 for index, level in enumerate(factor_levels)}
+            encoded.append(
+                [
+                    math.nan if _is_missing_value(value) else float(level_index[str(value)])
+                    for value in values
+                ]
+            )
+        elif date_column:
+            encoded.append([_ratetable_date_value(value, 1970) for value in values])
+        else:
+            try:
+                encoded.append(
+                    [
+                        math.nan if _is_missing_value(value) else float(value)
+                        for value in values
+                    ]
+                )
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    f"ratetable column {name!r} must be numeric, dates, or labels"
+                ) from exc
+
+    values = [
+        [column[row] for column in encoded]
+        for row in range(row_count)
+    ]
+    return RatetableFrame(values, names, is_date, levels)
 
 
 def _ratetable_date_from_components(
@@ -16571,6 +16679,11 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
 
     if isinstance(result, Surv):
         return _surv_response_frame(result)
+    if isinstance(result, RatetableFrame):
+        return {
+            name: [row[column] for row in result.values]
+            for column, name in enumerate(result.column_names)
+        }
     if isinstance(result, CoxSurvfitResult):
         return _cox_survfit_frame(result)
     if isinstance(result, CoxBaseHazardResult):
