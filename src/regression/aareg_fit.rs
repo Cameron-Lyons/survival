@@ -540,8 +540,324 @@ fn row_at_risk(start: Option<&[f64]>, stop: &[f64], idx: usize, time: f64) -> bo
     stop[idx] >= time && start.is_none_or(|values| values[idx] < time)
 }
 
+#[derive(Clone)]
+struct GroupRiskMoment {
+    weight: f64,
+    first: Vec<f64>,
+    second: Vec<f64>,
+}
+
+impl GroupRiskMoment {
+    fn new(nvar: usize) -> Self {
+        Self {
+            weight: 0.0,
+            first: vec![0.0; nvar],
+            second: vec![0.0; nvar * nvar],
+        }
+    }
+
+    fn update(&mut self, row: &[f64], weight: f64, direction: f64) {
+        let signed_weight = direction * weight;
+        self.weight += signed_weight;
+        for row_idx in 0..row.len() {
+            self.first[row_idx] += signed_weight * row[row_idx];
+            for column_idx in 0..row.len() {
+                self.second[row_idx * row.len() + column_idx] +=
+                    signed_weight * row[row_idx] * row[column_idx];
+            }
+        }
+    }
+}
+
+fn update_group_risk_moments(
+    groups: &mut [GroupRiskMoment],
+    group_codes: &[i32],
+    covariates: &[Vec<f64>],
+    weights: Option<&[f64]>,
+    row_idx: usize,
+    direction: f64,
+) {
+    let group_idx = group_codes[row_idx] as usize;
+    let weight = weights.map_or(1.0, |values| values[row_idx]);
+    groups[group_idx].update(&covariates[row_idx], weight, direction);
+}
+
+fn event_group_moments(
+    moment: &RiskMoment,
+    group_codes: &[i32],
+    covariates: &[Vec<f64>],
+    weights: Option<&[f64]>,
+    group_count: usize,
+    nvar: usize,
+) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let mut event_weight = vec![0.0; group_count];
+    let mut event_first = vec![vec![0.0; nvar]; group_count];
+    for &row_idx in &moment.events {
+        let group_idx = group_codes[row_idx] as usize;
+        let weight = weights.map_or(1.0, |values| values[row_idx]);
+        event_weight[group_idx] += weight;
+        for column in 0..nvar {
+            event_first[group_idx][column] += weight * covariates[row_idx][column];
+        }
+    }
+    (event_weight, event_first)
+}
+
+fn grouped_influence_at_time(
+    moment: &RiskMoment,
+    risk: &GroupRiskMoment,
+    event_weight: f64,
+    event_first: &[f64],
+    total_event_weight: f64,
+    summed_slopes: &[f64],
+) -> (Vec<f64>, Vec<f64>) {
+    let nvar = moment.mean.len();
+    let mut centered_first = vec![0.0; nvar];
+    for (column, value) in centered_first.iter_mut().enumerate() {
+        *value = risk.first[column] - risk.weight * moment.mean[column];
+    }
+
+    let predicted_intercept = total_event_weight / moment.risk;
+    let qsum =
+        event_weight - predicted_intercept * risk.weight - dot(&centered_first, summed_slopes);
+    if nvar == 0 {
+        return (vec![qsum / moment.risk], Vec::new());
+    }
+
+    let mut qcenter = vec![0.0; nvar];
+    for row in 0..nvar {
+        let mut predicted_slope = 0.0;
+        for (column, slope) in summed_slopes.iter().enumerate() {
+            let centered_second = risk.second[row * nvar + column]
+                - moment.mean[row] * risk.first[column]
+                - risk.first[row] * moment.mean[column]
+                + risk.weight * moment.mean[row] * moment.mean[column];
+            predicted_slope += centered_second * slope;
+        }
+        qcenter[row] = event_first[row]
+            - event_weight * moment.mean[row]
+            - predicted_intercept * centered_first[row]
+            - predicted_slope;
+    }
+
+    let score: Vec<f64> = qcenter.iter().map(|value| value / moment.risk).collect();
+    let slopes = matrix_vector_product(&moment.inverse, &score, nvar);
+    let mut temp = Vec::with_capacity(nvar + 1);
+    temp.push(qsum / moment.risk - dot(&slopes, &moment.mean));
+    temp.extend_from_slice(&slopes);
+    (temp, qcenter)
+}
+
+fn add_group_test_influence(
+    influence: &mut [f64],
+    temp: &[f64],
+    qcenter: &[f64],
+    moment: &RiskMoment,
+    test: &str,
+) {
+    let nvar = moment.mean.len();
+    for column in 0..influence.len() {
+        let test_value = if test == "nrisk" {
+            temp[column] * moment.risk
+        } else if test == "variance" && nvar > 1 && column > 0 {
+            qcenter[column - 1]
+        } else {
+            temp[column] * moment.time_weight[column]
+        };
+        influence[column] += test_value;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn influence_values(
+fn influence_values_grouped(
+    moments: &[RiskMoment],
+    covariates: &[Vec<f64>],
+    start: Option<&[f64]>,
+    stop: &[f64],
+    weights: Option<&[f64]>,
+    cluster: &[i32],
+    test_cluster: &[i32],
+    test: &str,
+) -> (Vec<Vec<Vec<f64>>>, Vec<Vec<f64>>) {
+    let n = stop.len();
+    let nvar = covariates.first().map_or(0, Vec::len);
+    let width = nvar + 1;
+    let cluster_count = cluster.iter().max().copied().unwrap_or(0) as usize + 1;
+    let test_cluster_count = test_cluster.iter().max().copied().unwrap_or(0) as usize + 1;
+    let mut dfbeta = vec![vec![vec![0.0; moments.len()]; width]; cluster_count];
+    let mut test_influence = vec![vec![0.0; width]; test_cluster_count];
+    let mut cluster_risk = vec![GroupRiskMoment::new(nvar); cluster_count];
+    let shared_groups = cluster == test_cluster;
+    let mut test_cluster_risk =
+        (!shared_groups).then(|| vec![GroupRiskMoment::new(nvar); test_cluster_count]);
+    let mut active = vec![false; n];
+
+    let mut start_order: Vec<usize> = (0..n).collect();
+    if let Some(values) = start {
+        start_order.sort_by(|&left, &right| {
+            values[left]
+                .total_cmp(&values[right])
+                .then(left.cmp(&right))
+        });
+    }
+    let mut stop_order: Vec<usize> = (0..n).collect();
+    stop_order.sort_by(|&left, &right| stop[left].total_cmp(&stop[right]).then(left.cmp(&right)));
+    let mut start_cursor = 0;
+    let mut stop_cursor = 0;
+
+    if start.is_none() {
+        for (row_idx, is_active) in active.iter_mut().enumerate() {
+            update_group_risk_moments(
+                &mut cluster_risk,
+                cluster,
+                covariates,
+                weights,
+                row_idx,
+                1.0,
+            );
+            if let Some(test_risk) = &mut test_cluster_risk {
+                update_group_risk_moments(
+                    test_risk,
+                    test_cluster,
+                    covariates,
+                    weights,
+                    row_idx,
+                    1.0,
+                );
+            }
+            *is_active = true;
+        }
+        start_cursor = n;
+    }
+
+    for (time_idx, moment) in moments.iter().enumerate() {
+        if let Some(values) = start {
+            while start_cursor < n && values[start_order[start_cursor]] < moment.time {
+                let row_idx = start_order[start_cursor];
+                update_group_risk_moments(
+                    &mut cluster_risk,
+                    cluster,
+                    covariates,
+                    weights,
+                    row_idx,
+                    1.0,
+                );
+                if let Some(test_risk) = &mut test_cluster_risk {
+                    update_group_risk_moments(
+                        test_risk,
+                        test_cluster,
+                        covariates,
+                        weights,
+                        row_idx,
+                        1.0,
+                    );
+                }
+                active[row_idx] = true;
+                start_cursor += 1;
+            }
+        }
+        while stop_cursor < n && stop[stop_order[stop_cursor]] < moment.time {
+            let row_idx = stop_order[stop_cursor];
+            if active[row_idx] {
+                update_group_risk_moments(
+                    &mut cluster_risk,
+                    cluster,
+                    covariates,
+                    weights,
+                    row_idx,
+                    -1.0,
+                );
+                if let Some(test_risk) = &mut test_cluster_risk {
+                    update_group_risk_moments(
+                        test_risk,
+                        test_cluster,
+                        covariates,
+                        weights,
+                        row_idx,
+                        -1.0,
+                    );
+                }
+                active[row_idx] = false;
+            }
+            stop_cursor += 1;
+        }
+
+        let total_event_weight: f64 = moment
+            .events
+            .iter()
+            .map(|&idx| weights.map_or(1.0, |values| values[idx]))
+            .sum();
+        let mut summed_slopes = vec![0.0; nvar];
+        for &event_idx in &moment.events {
+            let coefficient = coefficient_row(moment, event_idx, covariates, weights);
+            for column in 0..nvar {
+                summed_slopes[column] += coefficient[column + 1];
+            }
+        }
+
+        let (cluster_event_weight, cluster_event_first) =
+            event_group_moments(moment, cluster, covariates, weights, cluster_count, nvar);
+        for group_idx in 0..cluster_count {
+            let (temp, qcenter) = grouped_influence_at_time(
+                moment,
+                &cluster_risk[group_idx],
+                cluster_event_weight[group_idx],
+                &cluster_event_first[group_idx],
+                total_event_weight,
+                &summed_slopes,
+            );
+            for column in 0..width {
+                dfbeta[group_idx][column][time_idx] = temp[column];
+            }
+            if shared_groups {
+                add_group_test_influence(
+                    &mut test_influence[group_idx],
+                    &temp,
+                    &qcenter,
+                    moment,
+                    test,
+                );
+            }
+        }
+
+        if let Some(test_risk) = &test_cluster_risk {
+            let (test_event_weight, test_event_first) = event_group_moments(
+                moment,
+                test_cluster,
+                covariates,
+                weights,
+                test_cluster_count,
+                nvar,
+            );
+            for group_idx in 0..test_cluster_count {
+                let (temp, qcenter) = grouped_influence_at_time(
+                    moment,
+                    &test_risk[group_idx],
+                    test_event_weight[group_idx],
+                    &test_event_first[group_idx],
+                    total_event_weight,
+                    &summed_slopes,
+                );
+                add_group_test_influence(
+                    &mut test_influence[group_idx],
+                    &temp,
+                    &qcenter,
+                    moment,
+                    test,
+                );
+            }
+        }
+    }
+
+    let mut robust = vec![0.0; width * width];
+    for row in &test_influence {
+        add_outer_product(&mut robust, row);
+    }
+    (dfbeta, nested_square(robust, width))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn influence_values_scanned(
     moments: &[RiskMoment],
     covariates: &[Vec<f64>],
     start: Option<&[f64]>,
@@ -635,6 +951,53 @@ fn influence_values(
         add_outer_product(&mut robust, row);
     }
     (dfbeta, nested_square(robust, width))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn influence_values(
+    moments: &[RiskMoment],
+    covariates: &[Vec<f64>],
+    start: Option<&[f64]>,
+    stop: &[f64],
+    weights: Option<&[f64]>,
+    cluster: Option<&[i32]>,
+    test_cluster: Option<&[i32]>,
+    test: &str,
+) -> (Vec<Vec<Vec<f64>>>, Vec<Vec<f64>>) {
+    if let Some(cluster_values) = cluster {
+        let test_cluster_values = test_cluster.unwrap_or(cluster_values);
+        let cluster_count = cluster_values.iter().max().copied().unwrap_or(0) as usize + 1;
+        let test_cluster_count =
+            test_cluster_values.iter().max().copied().unwrap_or(0) as usize + 1;
+        let scanned_work = stop.len().saturating_mul(moments.len());
+        let grouped_work = stop.len().saturating_add(
+            moments
+                .len()
+                .saturating_mul(cluster_count.saturating_add(test_cluster_count)),
+        );
+        if scanned_work > grouped_work.saturating_mul(2) {
+            return influence_values_grouped(
+                moments,
+                covariates,
+                start,
+                stop,
+                weights,
+                cluster_values,
+                test_cluster_values,
+                test,
+            );
+        }
+    }
+    influence_values_scanned(
+        moments,
+        covariates,
+        start,
+        stop,
+        weights,
+        cluster,
+        test_cluster,
+        test,
+    )
 }
 
 #[pyfunction]
@@ -921,6 +1284,80 @@ mod tests {
         for (actual_row, expected_row) in robust.iter().zip(expected_robust) {
             for (&actual, expected) in actual_row.iter().zip(expected_row) {
                 assert_close(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_influence_sweep_matches_row_scan() {
+        let stop = vec![1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 7.0];
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1];
+        let start = vec![0.0, 0.0, 0.5, 0.0, 1.0, 1.5, 0.0, 2.0, 1.0, 0.0, 3.0, 2.0];
+        let covariates: Vec<Vec<f64>> = (0..stop.len())
+            .map(|idx| {
+                let value = idx as f64;
+                vec![
+                    (value % 5.0) - 2.0,
+                    ((idx * idx + 3 * idx) % 11) as f64 - 4.0,
+                ]
+            })
+            .collect();
+        let weights: Vec<f64> = (0..stop.len())
+            .map(|idx| 0.75 + (idx % 4) as f64 * 0.25)
+            .collect();
+        let cluster: Vec<i32> = (0..stop.len()).map(|idx| (idx % 3) as i32).collect();
+        let test_cluster: Vec<i32> = (0..stop.len()).map(|idx| (idx % 4) as i32).collect();
+
+        let mut moments =
+            risk_moments(&stop, &status, &covariates, Some(&start), Some(&weights), 2);
+        let retained = prepare_retained_moments(&mut moments, 2, Some(1), 1e-7)
+            .expect("comparison inputs should retain multiple event times");
+        moments.truncate(retained);
+
+        for selected_test_cluster in [&cluster, &test_cluster] {
+            for test in ["aalen", "variance", "nrisk"] {
+                let (scanned_dfbeta, scanned_variance) = influence_values_scanned(
+                    &moments,
+                    &covariates,
+                    Some(&start),
+                    &stop,
+                    Some(&weights),
+                    Some(&cluster),
+                    Some(selected_test_cluster),
+                    test,
+                );
+                let (grouped_dfbeta, grouped_variance) = influence_values_grouped(
+                    &moments,
+                    &covariates,
+                    Some(&start),
+                    &stop,
+                    Some(&weights),
+                    &cluster,
+                    selected_test_cluster,
+                    test,
+                );
+
+                for (actual_cluster, expected_cluster) in grouped_dfbeta.iter().zip(&scanned_dfbeta)
+                {
+                    for (actual_column, expected_column) in
+                        actual_cluster.iter().zip(expected_cluster)
+                    {
+                        for (&actual, &expected) in actual_column.iter().zip(expected_column) {
+                            assert!(
+                                (actual - expected).abs() < 1e-10,
+                                "{test} dfbeta mismatch: expected {expected}, got {actual}"
+                            );
+                        }
+                    }
+                }
+                for (actual_row, expected_row) in grouped_variance.iter().zip(&scanned_variance) {
+                    for (&actual, &expected) in actual_row.iter().zip(expected_row) {
+                        assert!(
+                            (actual - expected).abs() < 1e-9,
+                            "{test} variance mismatch: expected {expected}, got {actual}"
+                        );
+                    }
+                }
             }
         }
     }
