@@ -7938,6 +7938,8 @@ def test_recurrent_event_bindings_are_typed():
         "converged",
         "event_specific_coef",
         "baseline_cumhaz",
+        "baseline_times",
+        "baseline_strata",
     }
     assert _pyi_class_property_names(stub_path, "AndersonGillResult") == {
         "coef",
@@ -8118,6 +8120,8 @@ def test_recurrent_event_bindings_are_typed():
     assert pwp.n_events == 4
     assert len(pwp.coef) == 1
     assert len(pwp.event_specific_coef) == 2
+    assert len(pwp.baseline_times) == len(pwp.baseline_cumhaz)
+    assert len(pwp.baseline_strata) == len(pwp.baseline_cumhaz)
     assert type(anderson_gill).__name__ == "AndersonGillResult"
     assert anderson_gill.n_events == 4
     assert anderson_gill.mean_event_rate == pytest.approx(0.16)
