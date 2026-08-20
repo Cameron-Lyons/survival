@@ -103,6 +103,40 @@ class RatetableFrame:
     @property
     def levlist(self) -> list[list[str] | None]: ...
 
+class SurvregDeviance:
+    center: list[float]
+    loglik: list[float]
+
+class SurvregDistribution:
+    key: str
+    name: str
+    dist: str | None
+    scale: float | None
+    parms: float | None
+    def variance(self, parms: Any | None = None) -> float: ...
+    def init(
+        self,
+        x: Any,
+        weights: Any | None = None,
+        parms: Any | None = None,
+    ) -> list[float]: ...
+    def deviance(
+        self,
+        y: Any,
+        scale: Any,
+        parms: Any | None = None,
+    ) -> SurvregDeviance: ...
+    def density(self, x: Any, parms: Any | None = None) -> list[list[float]]: ...
+    def quantile(self, p: Any, parms: Any | None = None) -> list[float]: ...
+    def trans(self, y: Any) -> list[float]: ...
+    def dtrans(self, y: Any) -> list[float]: ...
+    def itrans(self, x: Any) -> list[float]: ...
+    def transform(self, y: Any) -> list[float]: ...
+    def transform_derivative(self, y: Any) -> list[float]: ...
+    def inverse_transform(self, x: Any) -> list[float]: ...
+
+survreg_distributions: Mapping[str, SurvregDistribution]
+
 class PyearsResult:
     pyears: list[float]
     n: list[float]

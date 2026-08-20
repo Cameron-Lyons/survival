@@ -492,6 +492,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
         "SurvregPrediction",
         "SurvregQuantilePrediction",
         "survreg",
+        "survreg_density_matrix",
         "survreg_distribution",
         "predict_survreg",
         "predict_survreg_quantile",
@@ -541,6 +542,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
             "kind",
             "parms",
         ],
+        "survreg_density_matrix": ["values", "distribution", "parms"],
         "survreg_quantile_prediction_se_matrix": [
             "rows",
             "scales",
@@ -12064,6 +12066,8 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "SurvObrienResult" in survival.__all__
     assert "SurvExpResult" in survival.__all__
     assert "SurvExpFormulaResult" in survival.__all__
+    assert "SurvregDeviance" in survival.__all__
+    assert "SurvregDistribution" in survival.__all__
     assert "TMergeFrame" in survival.__all__
     assert "TMergeOperation" in survival.__all__
     assert "aic" in survival.__all__
@@ -12126,6 +12130,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "survfit0" in survival.__all__
     assert "survSplit" in survival.__all__
     assert "survreg" in survival.__all__
+    assert "survreg_distributions" in survival.__all__
     assert "tdc" in survival.__all__
     assert "tmerge" in survival.__all__
     assert "vcov" in survival.__all__
@@ -12143,6 +12148,8 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.SurvObrienResult is survival.r_api.SurvObrienResult
     assert survival.SurvExpResult is survival.r_api.SurvExpResult
     assert survival.SurvExpFormulaResult is survival.r_api.SurvExpFormulaResult
+    assert survival.SurvregDeviance is survival.r_api.SurvregDeviance
+    assert survival.SurvregDistribution is survival.r_api.SurvregDistribution
     assert survival.TMergeFrame is survival.r_api.TMergeFrame
     assert survival.TMergeOperation is survival.r_api.TMergeOperation
     assert survival.aic is survival.r_api.aic
@@ -12209,6 +12216,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.survexp_usr is survival.r_api.survexp_usr
     assert survival.survSplit is survival.r_api.survSplit
     assert survival.survreg is survival.r_api.survreg
+    assert survival.survreg_distributions is survival.r_api.survreg_distributions
     assert survival.survreg is not survival.regression.survreg
     assert survival.tdc is survival.r_api.tdc
     assert survival.tmerge is survival.r_api.tmerge

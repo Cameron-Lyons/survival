@@ -7355,6 +7355,11 @@ def survreg_distribution(
     kind: str,
     parms: float | None = None,
 ) -> list[float]: ...
+def survreg_density_matrix(
+    values: list[float],
+    distribution: str,
+    parms: float | None = None,
+) -> list[list[float]]: ...
 def survreg_quantile_prediction_se_matrix(
     rows: list[list[float]],
     scales: list[float],

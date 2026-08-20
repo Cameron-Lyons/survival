@@ -520,6 +520,27 @@ fn student_t_d(z: f64, case: i32, df: f64) -> Result<DistributionEval, Distribut
         }),
     }
 }
+
+pub(crate) fn standardized_density_row(
+    z: f64,
+    dist: SurvivalDist,
+) -> Result<[f64; 5], DistributionError> {
+    let (distribution, density) = match dist {
+        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => (exvalue_d(z, 2)?, exvalue_d(z, 1)?),
+        SurvivalDist::Logistic | SurvivalDist::LogLogistic => {
+            (logistic_d(z, 2)?, logistic_d(z, 1)?)
+        }
+        SurvivalDist::Gaussian | SurvivalDist::LogNormal => (gauss_d(z, 2)?, gauss_d(z, 1)?),
+        SurvivalDist::StudentT(df) => (student_t_d(z, 2, df)?, student_t_d(z, 1, df)?),
+    };
+    Ok([
+        distribution[0],
+        distribution[1],
+        distribution[2],
+        density[2],
+        density[3],
+    ])
+}
 #[allow(clippy::too_many_arguments)]
 fn update_derivatives(
     res: &mut SurvivalLikelihood,

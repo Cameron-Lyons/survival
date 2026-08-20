@@ -986,6 +986,7 @@ BINDINGS = (
     "survobrien_event_sets",
     "survobrien_transform_groups",
     "survreg",
+    "survreg_density_matrix",
     "survreg_dfbeta_residuals",
     "survreg_distribution",
     "survreg_influence_residuals",

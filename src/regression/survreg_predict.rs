@@ -1,7 +1,11 @@
 use crate::internal::statistical::{
     normal_cdf, normal_inverse_cdf, student_t_cdf, student_t_inverse_cdf, student_t_pdf,
 };
+use crate::regression::survregc1::{SurvivalDist, standardized_density_row};
 use pyo3::prelude::*;
+use rayon::prelude::*;
+
+const SURVREG_DENSITY_PARALLEL_THRESHOLD: usize = 10_000;
 
 fn value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
@@ -439,6 +443,50 @@ pub fn survreg_distribution(
         }
     }
     Ok(result)
+}
+
+fn standardized_distribution(distribution: &str, parms: Option<f64>) -> PyResult<SurvivalDist> {
+    let key = validated_distribution_key(distribution);
+    match key.as_str() {
+        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
+            Ok(SurvivalDist::ExtremeValue)
+        }
+        "logistic" | "loglogistic" | "log_logistic" => Ok(SurvivalDist::Logistic),
+        "gaussian" | "normal" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => {
+            Ok(SurvivalDist::Gaussian)
+        }
+        key if is_student_t_distribution(key) => {
+            let df = parms.ok_or_else(|| value_error("parms is required for distribution='t'"))?;
+            if !df.is_finite() || df <= 0.0 {
+                return Err(value_error(
+                    "parms for distribution='t' must be a positive finite value",
+                ));
+            }
+            Ok(SurvivalDist::StudentT(df))
+        }
+        _ => unreachable!("distribution was validated"),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (values, distribution, parms=None))]
+pub fn survreg_density_matrix(
+    values: Vec<f64>,
+    distribution: String,
+    parms: Option<f64>,
+) -> PyResult<Vec<Vec<f64>>> {
+    validate_distribution(&distribution)?;
+    let dist = standardized_distribution(&distribution, parms)?;
+    let evaluate = |&value| {
+        standardized_density_row(value, dist)
+            .map(|row| row.to_vec())
+            .map_err(|error| value_error(error.to_string()))
+    };
+    if values.len() >= SURVREG_DENSITY_PARALLEL_THRESHOLD {
+        values.par_iter().map(evaluate).collect()
+    } else {
+        values.iter().map(evaluate).collect()
+    }
 }
 
 pub(crate) fn compute_linear_predictor(
@@ -897,6 +945,75 @@ mod tests {
         assert!((quantiles[0] - 0.3696942).abs() < 1e-7);
         assert!((quantiles[1] - 1.0620325).abs() < 1e-7);
         assert!((quantiles[2] - 2.4399099).abs() < 1e-7);
+    }
+
+    #[test]
+    fn test_survreg_density_matrix_matches_r_reference_values() {
+        let logistic = survreg_density_matrix(vec![-1.0, 0.0, 1.0], "logistic".to_string(), None)
+            .expect("logistic density matrix should compute");
+        let expected_logistic = [
+            [
+                0.2689414213699951,
+                0.7310585786300049,
+                0.19661193324148188,
+                0.46211715726000974,
+                -0.179_671_599_448_891_2,
+            ],
+            [0.5, 0.5, 0.25, 0.0, -0.5],
+            [
+                0.7310585786300049,
+                0.2689414213699951,
+                0.19661193324148185,
+                -0.46211715726000974,
+                -0.17967159944889113,
+            ],
+        ];
+        for (actual, expected) in logistic.iter().zip(expected_logistic) {
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert!((actual - expected).abs() < 1e-14);
+            }
+        }
+
+        let student_t = survreg_density_matrix(vec![-1.0, 0.0, 1.0], "t".to_string(), Some(5.0))
+            .expect("Student-t density matrix should compute");
+        let expected_t = [
+            [
+                0.18160873382456127,
+                0.8183912661754387,
+                0.21967979735098056,
+                1.0,
+                1.0 / 3.0,
+            ],
+            [0.5, 0.5, 0.37960668982249446, 0.0, -1.2],
+            [
+                0.8183912661754387,
+                0.18160873382456127,
+                0.21967979735098056,
+                -1.0,
+                1.0 / 3.0,
+            ],
+        ];
+        for (actual, expected) in student_t.iter().zip(expected_t) {
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert!((actual - expected).abs() < 2e-14);
+            }
+        }
+    }
+
+    #[test]
+    fn test_survreg_density_matrix_parallel_path_preserves_rows() {
+        let values = (0..SURVREG_DENSITY_PARALLEL_THRESHOLD)
+            .map(|index| index as f64 / 1000.0 - 5.0)
+            .collect::<Vec<_>>();
+        let matrix = survreg_density_matrix(values.clone(), "gaussian".to_string(), None)
+            .expect("parallel density matrix should compute");
+
+        assert_eq!(matrix.len(), values.len());
+        for (row, value) in matrix.iter().zip(values) {
+            let expected = standardized_density_row(value, SurvivalDist::Gaussian)
+                .expect("scalar density row should compute");
+            assert_eq!(row.as_slice(), expected.as_slice());
+        }
     }
 
     #[test]
