@@ -5011,16 +5011,37 @@ def test_survfitaj_binding_is_typed():
         "survfit_initial_indices",
         "survfit_subject_history",
         "survfitaj",
+        "survfitaj_from_columns",
     } <= stub_names
     position_arg_names = ["start", "stop", "id", "tolerance"]
     initial_arg_names = ["group", "id", "start"]
     history_arg_names = ["start", "stop", "event", "id", "provided_states", "tolerance"]
+    column_arg_names = [
+        "start",
+        "stop",
+        "event",
+        "utime",
+        "cstate",
+        "wt",
+        "grp",
+        "ngrp",
+        "p0",
+        "i0",
+        "sefit",
+        "entry",
+        "position",
+        "trmat",
+        "t0",
+        "influence_weights",
+    ]
     assert list(inspect.signature(core.survfit_counting_positions).parameters) == position_arg_names
     assert _pyi_function_arg_names(stub_path, "survfit_counting_positions") == position_arg_names
     assert list(inspect.signature(core.survfit_initial_indices).parameters) == initial_arg_names
     assert _pyi_function_arg_names(stub_path, "survfit_initial_indices") == initial_arg_names
     assert list(inspect.signature(core.survfit_subject_history).parameters) == history_arg_names
     assert _pyi_function_arg_names(stub_path, "survfit_subject_history") == history_arg_names
+    assert list(inspect.signature(core.survfitaj_from_columns).parameters) == column_arg_names
+    assert _pyi_function_arg_names(stub_path, "survfitaj_from_columns") == column_arg_names
     assert list(inspect.signature(core.survfitaj).parameters) == arg_names
     assert _pyi_function_arg_names(stub_path, "survfitaj") == arg_names
     assert _pyi_class_property_names(stub_path, "SurvFitAJ") == {

@@ -820,6 +820,97 @@ pub fn survfitaj(
     Ok(result.into_python_result())
 }
 
+#[pyfunction]
+#[pyo3(signature = (start, stop, event, utime, cstate, wt, grp, ngrp, p0, i0, sefit, entry, position, trmat, t0, influence_weights=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn survfitaj_from_columns(
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    event: Vec<usize>,
+    utime: Vec<f64>,
+    cstate: Vec<usize>,
+    wt: Vec<f64>,
+    grp: Vec<usize>,
+    ngrp: usize,
+    p0: Vec<f64>,
+    i0: Vec<f64>,
+    sefit: i32,
+    entry: bool,
+    position: Vec<usize>,
+    trmat: Vec<Vec<usize>>,
+    t0: f64,
+    influence_weights: Option<Vec<f64>>,
+) -> PyResult<SurvFitAJ> {
+    let n = start.len();
+    if stop.len() != n || event.len() != n {
+        return Err(PyValueError::new_err(
+            "start, stop, and event must have the same length",
+        ));
+    }
+
+    let nstate = p0.len();
+    let nhaz = trmat.len();
+    let mut hindx = vec![vec![nhaz; nstate]; nstate];
+    for (transition, row) in trmat.iter().enumerate() {
+        if row.len() != 2 {
+            return Err(PyValueError::new_err(
+                "Invalid trmat array: matrix must have exactly 2 columns",
+            ));
+        }
+        let (from, to) = (row[0], row[1]);
+        if from >= nstate || to >= nstate {
+            return Err(PyValueError::new_err(format!(
+                "trmat transition {from}->{to} at row {transition} is out of range for {nstate} states"
+            )));
+        }
+        if hindx[from][to] != nhaz {
+            return Err(PyValueError::new_err(format!(
+                "trmat contains duplicate transition {from}->{to}"
+            )));
+        }
+        hindx[from][to] = transition;
+    }
+
+    let mut sort1 = (0..n).collect::<Vec<_>>();
+    sort1.sort_unstable_by(|&left, &right| {
+        start[left]
+            .partial_cmp(&start[right])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.cmp(&right))
+    });
+    let mut sort2 = (0..n).collect::<Vec<_>>();
+    sort2.sort_unstable_by(|&left, &right| {
+        stop[left]
+            .partial_cmp(&stop[right])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.cmp(&right))
+    });
+    let mut y = Vec::with_capacity(n.saturating_mul(3));
+    for idx in 0..n {
+        y.extend_from_slice(&[start[idx], stop[idx], event[idx] as f64]);
+    }
+
+    survfitaj(
+        y,
+        sort1,
+        sort2,
+        utime,
+        cstate,
+        wt,
+        grp,
+        ngrp,
+        p0,
+        i0,
+        sefit,
+        entry,
+        position,
+        hindx,
+        trmat,
+        t0,
+        influence_weights,
+    )
+}
+
 fn matrix_from_rows(rows: Vec<Vec<usize>>, name: &'static str) -> PyResult<Array2<usize>> {
     let n_rows = rows.len();
     let n_cols = rows
@@ -1257,6 +1348,27 @@ mod tests {
         )
     }
 
+    fn minimal_survfitaj_from_columns(p0: Vec<f64>) -> PyResult<SurvFitAJ> {
+        survfitaj_from_columns(
+            vec![0.0, 0.0],
+            vec![1.0, 2.0],
+            vec![2, 0],
+            vec![1.0, 2.0],
+            vec![0, 0],
+            vec![1.0, 1.0],
+            vec![0, 1],
+            2,
+            p0,
+            vec![0.0; 4],
+            0,
+            false,
+            vec![3, 3],
+            vec![vec![0, 1]],
+            0.0,
+            None,
+        )
+    }
+
     #[test]
     fn survfitaj_rejects_non_normalized_initial_state_distribution() {
         let err = minimal_survfitaj(vec![0.6, 0.6]).expect_err("non-normalized p0 should fail");
@@ -1490,6 +1602,64 @@ mod tests {
 
         assert_eq!(result.pstate.len(), 2);
         assert_eq!(result.pstate[0].len(), 2);
+    }
+
+    #[test]
+    fn survfitaj_column_entry_matches_preassembled_input() {
+        let expected = minimal_survfitaj(vec![1.0, 0.0]).unwrap();
+        let actual = minimal_survfitaj_from_columns(vec![1.0, 0.0]).unwrap();
+
+        assert_eq!(actual.n_risk, expected.n_risk);
+        assert_eq!(actual.n_event, expected.n_event);
+        assert_eq!(actual.n_censor, expected.n_censor);
+        assert_eq!(actual.pstate, expected.pstate);
+        assert_eq!(actual.cumhaz, expected.cumhaz);
+        assert_eq!(actual.n_transition, expected.n_transition);
+    }
+
+    #[test]
+    fn survfitaj_column_entry_validates_shape_and_transitions() {
+        let shape_error = survfitaj_from_columns(
+            vec![0.0],
+            vec![],
+            vec![0],
+            vec![1.0],
+            vec![0],
+            vec![1.0],
+            vec![0],
+            1,
+            vec![1.0],
+            vec![0.0],
+            0,
+            false,
+            vec![3],
+            vec![],
+            0.0,
+            None,
+        )
+        .unwrap_err();
+        assert!(shape_error.to_string().contains("same length"));
+
+        let duplicate_error = survfitaj_from_columns(
+            vec![0.0],
+            vec![1.0],
+            vec![2],
+            vec![1.0],
+            vec![0],
+            vec![1.0],
+            vec![0],
+            1,
+            vec![1.0, 0.0],
+            vec![0.0, 0.0],
+            0,
+            false,
+            vec![3],
+            vec![vec![0, 1], vec![0, 1]],
+            0.0,
+            None,
+        )
+        .unwrap_err();
+        assert!(duplicate_error.to_string().contains("duplicate transition"));
     }
 
     #[test]

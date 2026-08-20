@@ -12440,9 +12440,6 @@ def _survfit_multistate_curve(
 
     state_count = len(states)
     transition_count = len(transitions)
-    hindx = [[transition_count] * state_count for _ in range(state_count)]
-    for transition_idx, (source, target) in enumerate(transitions):
-        hindx[source][target] = transition_idx
 
     cluster_codes, cluster_count = _survfit_multistate_cluster_codes(n, cluster, id_values)
     p0, initial_influence = _survfit_multistate_initial_distribution(
@@ -12469,20 +12466,10 @@ def _survfit_multistate_curve(
         if include_se and report_initial_error and all(value < 1.0 for value in p0)
         else None
     )
-    y = [
-        value
-        for start, end, event in zip(
-            start,
-            stop,
-            response.event,
-            strict=True,
-        )
-        for value in (start, end, float(event))
-    ]
-    raw = _core.survfitaj(
-        y=y,
-        sort1=sorted(range(n), key=lambda idx: (start[idx], idx)),
-        sort2=sorted(range(n), key=lambda idx: (stop[idx], idx)),
+    raw = _core.survfitaj_from_columns(
+        start=start,
+        stop=stop,
+        event=response.event,
         utime=output_times,
         cstate=current_states,
         wt=case_weights,
@@ -12493,7 +12480,6 @@ def _survfit_multistate_curve(
         sefit=2 if include_se and save_influence else 1 if include_se else 0,
         entry=include_entry,
         position=positions,
-        hindx=hindx,
         trmat=[list(transition) for transition in transitions],
         t0=t0,
         influence_weights=influence_case_weights,

@@ -6279,6 +6279,24 @@ def survfitaj(
     t0: float,
     influence_weights: list[float] | None = None,
 ) -> SurvFitAJ: ...
+def survfitaj_from_columns(
+    start: list[float],
+    stop: list[float],
+    event: list[int],
+    utime: list[float],
+    cstate: list[int],
+    wt: list[float],
+    grp: list[int],
+    ngrp: int,
+    p0: list[float],
+    i0: list[float],
+    sefit: int,
+    entry: bool,
+    position: list[int],
+    trmat: list[list[int]],
+    t0: float,
+    influence_weights: list[float] | None = None,
+) -> SurvFitAJ: ...
 def survfitaj_extended(
     from_state: list[int],
     to_state: list[int],
