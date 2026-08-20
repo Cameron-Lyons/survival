@@ -222,6 +222,26 @@ def test_conditional_logistic_regression_handles_multi_case_strata():
     assert model.predict([3.0]) > model.predict([0.0])
 
 
+def test_conditional_logistic_regression_matches_multiple_case_reference():
+    dataset = survival.ClogitDataSet()
+    case = [1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0]
+    strata = [1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4]
+    x = [0.2, 0.8, 1.1, 0.4, 0.5, 1.2, 0.9, 0.1, 0.7, 1.0, 0.3, 1.3, 0.6, 0.2, 1.4, 0.9]
+    z = [1.0, 0.3, 0.8, 1.4, 0.2, 1.1, 0.6, 0.9, 0.5, 1.2, 0.1, 0.7, 1.3, 0.4, 0.8, 0.2]
+    for values in zip(case, strata, x, z, strict=True):
+        dataset.add_observation(values[0], values[1], [values[2], values[3]])
+
+    model = survival.ConditionalLogisticRegression(dataset, max_iter=50, tol=1e-9)
+    model.fit()
+
+    assert model.coefficients == pytest.approx(
+        [-0.8457808761181879, 1.4766531964610223],
+        abs=1e-10,
+    )
+    assert model.iterations == 3
+    assert model.converged is True
+
+
 def test_case_cohort_prentice_accepts_public_enum_value():
     cohort = survival.CohortData.new()
     assert len(cohort) == 0

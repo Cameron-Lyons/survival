@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::constants::{DIVISION_FLOOR, exp_clamped};
+use crate::constants::exp_clamped;
+use crate::internal::matrix::invert_matrix;
+use crate::regression::exact_ties::exact_tied_moments;
+use ndarray::Array2;
 use pyo3::prelude::*;
 
 fn value_error(message: impl Into<String>) -> PyErr {
@@ -180,67 +183,77 @@ impl ConditionalLogisticRegression {
             return Ok(());
         }
 
-        let n_strata = strata_groups.len() as f64;
-
-        self.coefficients = vec![0.0; num_covariates];
+        let n = self.data.get_num_observations();
+        let covariates = Array2::from_shape_vec(
+            (n, num_covariates),
+            self.data.covariates.iter().flatten().copied().collect(),
+        )
+        .map_err(|error| value_error(format!("invalid covariate matrix: {error}")))?;
+        let groups = strata_groups.into_values().collect::<Vec<_>>();
+        let mut coefficients = vec![0.0; num_covariates];
+        let (mut log_likelihood, mut score, mut information) = conditional_likelihood_moments(
+            &coefficients,
+            &covariates,
+            &self.data.case_control_status,
+            &groups,
+        )?;
         self.iterations = 0;
         self.converged = false;
 
-        let learning_rate = 0.1;
-        while self.iterations < self.max_iter {
-            let mut gradient = vec![0.0; num_covariates];
-
-            for indices in strata_groups.values() {
-                let mut linear_predictors = Vec::with_capacity(indices.len());
-                let mut covariate_rows = Vec::with_capacity(indices.len());
-                let mut case_count = 0_usize;
-                let mut case_sums = vec![0.0; num_covariates];
-
-                for &observation in indices {
-                    let covariates = self.data.get_covariates(observation);
-                    let case_status = self.data.get_case_control_status(observation) as usize;
-                    case_count += case_status;
-
-                    for (sum, value) in case_sums.iter_mut().zip(covariates.iter()) {
-                        *sum += case_status as f64 * value;
-                    }
-
-                    let linear_predictor: f64 = self
-                        .coefficients
-                        .iter()
-                        .zip(covariates.iter())
-                        .map(|(coef, cov)| coef * cov)
-                        .sum();
-                    linear_predictors.push(linear_predictor);
-                    covariate_rows.push(covariates.as_slice());
-                }
-
-                let expected_sums = exact_subset_expected_sums(
-                    &covariate_rows,
-                    &linear_predictors,
-                    case_count,
-                    num_covariates,
+        for iteration in 1..=self.max_iter {
+            let Some(inverse) = invert_matrix(&information) else {
+                break;
+            };
+            let update = inverse
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .zip(&score)
+                        .map(|(&value, &score_value)| value * score_value)
+                        .sum::<f64>()
+                })
+                .collect::<Vec<_>>();
+            let mut candidate = coefficients
+                .iter()
+                .zip(&update)
+                .map(|(&coefficient, &delta)| coefficient + delta)
+                .collect::<Vec<_>>();
+            let (mut candidate_ll, mut candidate_score, mut candidate_information) =
+                conditional_likelihood_moments(
+                    &candidate,
+                    &covariates,
+                    &self.data.case_control_status,
+                    &groups,
                 )?;
-
-                for covariate_idx in 0..num_covariates {
-                    gradient[covariate_idx] +=
-                        case_sums[covariate_idx] - expected_sums[covariate_idx];
+            let mut halvings = 0;
+            while candidate_ll < log_likelihood && halvings < 20 {
+                for (value, &coefficient) in candidate.iter_mut().zip(&coefficients) {
+                    *value = (*value + coefficient) * 0.5;
                 }
+                (candidate_ll, candidate_score, candidate_information) =
+                    conditional_likelihood_moments(
+                        &candidate,
+                        &covariates,
+                        &self.data.case_control_status,
+                        &groups,
+                    )?;
+                halvings += 1;
             }
-
-            let mut max_change = 0.0_f64;
-            for (coefficient, gradient_component) in self.coefficients.iter_mut().zip(gradient) {
-                let delta = (learning_rate * gradient_component / n_strata).clamp(-0.5, 0.5);
-                *coefficient += delta;
-                max_change = max_change.max(delta.abs());
+            if candidate_ll < log_likelihood {
+                break;
             }
-
-            self.iterations += 1;
-            if max_change < self.tol {
+            let relative_change = (1.0 - log_likelihood / candidate_ll).abs();
+            coefficients = candidate;
+            log_likelihood = candidate_ll;
+            score = candidate_score;
+            information = candidate_information;
+            self.iterations = iteration;
+            if relative_change <= self.tol {
                 self.converged = true;
                 break;
             }
         }
+        self.coefficients = coefficients;
 
         Ok(())
     }
@@ -291,116 +304,57 @@ fn validate_solver_controls(max_iter: u32, tol: f64) -> PyResult<()> {
     Ok(())
 }
 
-fn exact_subset_expected_sums(
-    covariates: &[&[f64]],
-    linear_predictors: &[f64],
-    selected_count: usize,
-    num_covariates: usize,
-) -> PyResult<Vec<f64>> {
-    debug_assert_eq!(covariates.len(), linear_predictors.len());
-    debug_assert!(selected_count > 0);
-    debug_assert!(selected_count < covariates.len());
-
-    let max_linear_predictor = linear_predictors
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
-    let mut subset_weights = vec![0.0; selected_count + 1];
-    let mut weighted_sums = vec![0.0; (selected_count + 1) * num_covariates];
-    subset_weights[0] = 1.0;
-
-    for (observation_idx, covariate_row) in covariates.iter().enumerate() {
-        let weight = exp_clamped(linear_predictors[observation_idx] - max_linear_predictor);
-        let max_k = selected_count.min(observation_idx + 1);
-
-        for k in (1..=max_k).rev() {
-            let previous_weight = subset_weights[k - 1];
-            if previous_weight <= 0.0 {
-                continue;
-            }
-
-            let added_weight = previous_weight * weight;
-            subset_weights[k] += added_weight;
-
-            let current_offset = k * num_covariates;
-            let previous_offset = (k - 1) * num_covariates;
-            for covariate_idx in 0..num_covariates {
-                weighted_sums[current_offset + covariate_idx] += weight
-                    * (weighted_sums[previous_offset + covariate_idx]
-                        + previous_weight * covariate_row[covariate_idx]);
-            }
-        }
-
-        normalize_conditional_dp(
-            &mut subset_weights,
-            &mut weighted_sums,
-            max_k,
-            num_covariates,
-        )?;
-    }
-
-    let denominator = subset_weights[selected_count];
-    if !denominator.is_finite() || denominator <= DIVISION_FLOOR {
-        return Err(value_error(
-            "conditional likelihood denominator is numerically unstable",
-        ));
-    }
-
-    let expected_offset = selected_count * num_covariates;
-    let expected_sums = weighted_sums[expected_offset..expected_offset + num_covariates]
-        .iter()
-        .map(|value| value / denominator)
+fn conditional_likelihood_moments(
+    coefficients: &[f64],
+    covariates: &Array2<f64>,
+    case_status: &[u8],
+    strata_groups: &[Vec<usize>],
+) -> PyResult<(f64, Vec<f64>, Vec<Vec<f64>>)> {
+    let nvar = coefficients.len();
+    let linear_predictors = covariates
+        .rows()
+        .into_iter()
+        .map(|row| {
+            row.iter()
+                .zip(coefficients)
+                .map(|(&value, &coefficient)| value * coefficient)
+                .sum::<f64>()
+        })
         .collect::<Vec<_>>();
-    if expected_sums.iter().any(|value| !value.is_finite()) {
-        return Err(value_error(
-            "conditional likelihood expectation is numerically unstable",
-        ));
-    }
+    let mut log_likelihood = 0.0;
+    let mut score = vec![0.0; nvar];
+    let mut information = vec![vec![0.0; nvar]; nvar];
 
-    Ok(expected_sums)
-}
-
-fn normalize_conditional_dp(
-    subset_weights: &mut [f64],
-    weighted_sums: &mut [f64],
-    max_k: usize,
-    num_covariates: usize,
-) -> PyResult<()> {
-    let mut max_abs = 0.0_f64;
-    for value in subset_weights.iter().take(max_k + 1) {
-        if !value.is_finite() {
+    for indices in strata_groups {
+        let deaths = indices.iter().filter(|&&idx| case_status[idx] == 1).count();
+        let moments = exact_tied_moments(indices, deaths, &linear_predictors, covariates);
+        if !moments.log_denom.is_finite()
+            || moments.mean.iter().any(|value| !value.is_finite())
+            || moments.covariance.iter().any(|value| !value.is_finite())
+        {
             return Err(value_error(
-                "conditional likelihood weights are numerically unstable",
+                "conditional likelihood moments are numerically unstable",
             ));
         }
-        max_abs = max_abs.max(value.abs());
-    }
-
-    for k in 0..=max_k {
-        let offset = k * num_covariates;
-        for value in &weighted_sums[offset..offset + num_covariates] {
-            if !value.is_finite() {
-                return Err(value_error(
-                    "conditional likelihood sums are numerically unstable",
-                ));
+        for &idx in indices {
+            if case_status[idx] == 0 {
+                continue;
             }
-            max_abs = max_abs.max(value.abs());
+            log_likelihood += linear_predictors[idx];
+            for variable in 0..nvar {
+                score[variable] += covariates[(idx, variable)];
+            }
         }
-    }
-
-    if max_abs > 1e100 {
-        for value in subset_weights.iter_mut().take(max_k + 1) {
-            *value /= max_abs;
-        }
-        for k in 0..=max_k {
-            let offset = k * num_covariates;
-            for value in &mut weighted_sums[offset..offset + num_covariates] {
-                *value /= max_abs;
+        log_likelihood -= moments.log_denom;
+        for (variable, information_row) in information.iter_mut().enumerate() {
+            score[variable] -= moments.mean[variable];
+            for (other, value) in information_row.iter_mut().enumerate() {
+                *value += moments.covariance[(variable, other)];
             }
         }
     }
 
-    Ok(())
+    Ok((log_likelihood, score, information))
 }
 
 #[cfg(test)]
@@ -476,22 +430,28 @@ mod tests {
     }
 
     #[test]
-    fn exact_subset_expectation_handles_multiple_cases() {
-        let rows = [vec![2.0], vec![3.0], vec![0.0]];
-        let covariates = rows.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let linear_predictors = vec![2.0, 3.0, 0.0];
+    fn exact_fit_matches_multiple_case_reference() {
+        let mut dataset = ClogitDataSet::new();
+        let case = [1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0];
+        let strata = [1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4];
+        let x = [
+            0.2, 0.8, 1.1, 0.4, 0.5, 1.2, 0.9, 0.1, 0.7, 1.0, 0.3, 1.3, 0.6, 0.2, 1.4, 0.9,
+        ];
+        let z = [
+            1.0, 0.3, 0.8, 1.4, 0.2, 1.1, 0.6, 0.9, 0.5, 1.2, 0.1, 0.7, 1.3, 0.4, 0.8, 0.2,
+        ];
+        for idx in 0..case.len() {
+            dataset
+                .add_observation(case[idx], strata[idx], vec![x[idx], z[idx]])
+                .unwrap();
+        }
 
-        let expected = exact_subset_expected_sums(&covariates, &linear_predictors, 2, 1).unwrap();
+        let mut model = ConditionalLogisticRegression::new(dataset, 50, 1e-9).unwrap();
+        model.fit().unwrap();
 
-        let w01 = (2.0_f64 + 3.0).exp();
-        let w02 = 2.0_f64.exp();
-        let w12 = 3.0_f64.exp();
-        let denominator = w01 + w02 + w12;
-        let manual = (5.0 * w01 + 2.0 * w02 + 3.0 * w12) / denominator;
-        let softmax_approximation = 2.0 * (2.0 * 2.0_f64.exp() + 3.0 * 3.0_f64.exp())
-            / (2.0_f64.exp() + 3.0_f64.exp() + 1.0);
-
-        assert!((expected[0] - manual).abs() < 1e-12);
-        assert!((expected[0] - softmax_approximation).abs() > 1e-2);
+        assert!((model.coefficients[0] - (-0.845_780_876_118_187_9)).abs() <= 1e-10);
+        assert!((model.coefficients[1] - 1.476_653_196_461_022_3).abs() <= 1e-10);
+        assert_eq!(model.iterations, 3);
+        assert!(model.converged);
     }
 }
