@@ -1148,6 +1148,82 @@ def test_anderson_gill_matches_tied_cluster_reference():
     assert result.converged is True
 
 
+def test_pwp_matches_stratified_cluster_references():
+    n_subjects = 40
+    subject_id = []
+    start = []
+    stop = []
+    event = []
+    event_number = []
+    covariates = []
+    for subject in range(1, n_subjects + 1):
+        current_time = 0.0
+        for order in range(1, 4):
+            duration = float((subject * 3 + order * 5) % 7 + 1)
+            next_time = current_time + duration
+            event_status = (
+                subject % 5 != 0
+                if order == 1
+                else subject % 4 != 0
+                if order == 2
+                else subject % 3 != 0
+            )
+            subject_id.append(subject)
+            start.append(current_time)
+            stop.append(next_time)
+            event.append(int(event_status))
+            event_number.append(order)
+            covariates.extend([((subject * 3) % 17) * 0.1, ((subject * 7) % 13) * 0.1])
+            current_time = next_time
+            if not event_status:
+                break
+
+    gap = survival.pwp_model(
+        subject_id,
+        start,
+        stop,
+        event,
+        event_number,
+        covariates,
+        survival.PWPConfig(survival.PWPTimescale("gap"), 50, 1e-9, True, True),
+    )
+    assert gap.coef == pytest.approx([-0.1119886505201431, -0.09609960840861262], abs=1e-10)
+    assert gap.std_errors == pytest.approx([0.23427861376536063, 0.32711685380162836], abs=1e-10)
+    assert gap.robust_std_errors == pytest.approx(
+        [0.1870388397988903, 0.2375322686956159], abs=1e-10
+    )
+    assert gap.log_likelihood == pytest.approx(-196.71243583550853, abs=1e-10)
+    assert gap.n_iter == 3
+    assert gap.baseline_times == pytest.approx(list(range(1, 8)) * 3)
+    assert gap.baseline_strata == [1] * 7 + [2] * 7 + [3] * 7
+    assert [gap.baseline_cumhaz[index] for index in (0, 6, 7, 20)] == pytest.approx(
+        [0.1522893507866691, 2.7724532591183286, 0.15208198886653895, 1.8174806735297702],
+        abs=1e-10,
+    )
+
+    total = survival.pwp_model(
+        subject_id,
+        start,
+        stop,
+        event,
+        event_number,
+        covariates,
+        survival.PWPConfig(survival.PWPTimescale("total"), 50, 1e-9, True, True),
+    )
+    assert total.coef == pytest.approx([-0.23383708712773932, -0.028246466279691063], abs=1e-10)
+    assert total.std_errors == pytest.approx([0.24099121499426532, 0.33012687580049327], abs=1e-10)
+    assert total.robust_std_errors == pytest.approx(
+        [0.2547983074398024, 0.3354847353289795], abs=1e-10
+    )
+    assert total.log_likelihood == pytest.approx(-183.34095738382274, abs=1e-10)
+    assert total.n_iter == 3
+    assert total.baseline_strata == [1] * 7 + [2] * 7 + [3] * 7
+    assert [total.baseline_cumhaz[index] for index in (0, 6, 7, 20)] == pytest.approx(
+        [0.16056813352599322, 2.915964520738541, 0.37800932492720163, 3.0233717410320966],
+        abs=1e-10,
+    )
+
+
 def test_wlw_matches_stratified_cluster_reference():
     n_subjects = 30
     subject_id = []

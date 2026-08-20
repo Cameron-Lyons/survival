@@ -135,6 +135,92 @@ mod tests {
     }
 
     #[test]
+    fn pwp_matches_stratified_cluster_references() {
+        let n_subjects = 40;
+        let mut id = Vec::new();
+        let mut start = Vec::new();
+        let mut stop = Vec::new();
+        let mut event = Vec::new();
+        let mut event_number = Vec::new();
+        let mut covariates = Vec::new();
+        for subject in 1..=n_subjects {
+            let mut current_time = 0.0;
+            for order in 1..=3 {
+                let duration = ((subject * 3 + order * 5) % 7 + 1) as f64;
+                let next_time = current_time + duration;
+                let event_status = match order {
+                    1 => subject % 5 != 0,
+                    2 => subject % 4 != 0,
+                    _ => subject % 3 != 0,
+                };
+                id.push(subject);
+                start.push(current_time);
+                stop.push(next_time);
+                event.push(i32::from(event_status));
+                event_number.push(order);
+                covariates.push(((subject * 3) % 17) as f64 * 0.1);
+                covariates.push(((subject * 7) % 13) as f64 * 0.1);
+                current_time = next_time;
+                if !event_status {
+                    break;
+                }
+            }
+        }
+
+        let gap = pwp_model(
+            id.clone(),
+            start.clone(),
+            stop.clone(),
+            event.clone(),
+            event_number.clone(),
+            covariates.clone(),
+            &PWPConfig::new(PWPTimescale::Gap, 50, 1e-9, true, true),
+        )
+        .expect("gap-time PWP reference fit should succeed");
+        assert_close(gap.coef[0], -0.111_988_650_520_143_1, 1e-10);
+        assert_close(gap.coef[1], -0.096_099_608_408_612_62, 1e-10);
+        assert_close(gap.std_errors[0], 0.234_278_613_765_360_63, 1e-10);
+        assert_close(gap.std_errors[1], 0.327_116_853_801_628_36, 1e-10);
+        assert_close(gap.robust_std_errors[0], 0.187_038_839_798_890_3, 1e-10);
+        assert_close(gap.robust_std_errors[1], 0.237_532_268_695_615_9, 1e-10);
+        assert_close(gap.log_likelihood, -196.712_435_835_508_53, 1e-10);
+        assert_eq!(gap.n_iter, 3);
+        assert_eq!(gap.baseline_cumhaz.len(), 21);
+        assert_eq!(gap.baseline_times.len(), 21);
+        assert_eq!(gap.baseline_strata, [vec![1; 7], vec![2; 7], vec![3; 7]].concat());
+        assert_close(gap.baseline_cumhaz[0], 0.152_289_350_786_669_1, 1e-10);
+        assert_close(gap.baseline_cumhaz[6], 2.772_453_259_118_328_6, 1e-10);
+        assert_close(gap.baseline_cumhaz[7], 0.152_081_988_866_538_95, 1e-10);
+        assert_close(gap.baseline_cumhaz[20], 1.817_480_673_529_770_2, 1e-10);
+
+        let total = pwp_model(
+            id,
+            start,
+            stop,
+            event,
+            event_number,
+            covariates,
+            &PWPConfig::new(PWPTimescale::Total, 50, 1e-9, true, true),
+        )
+        .expect("total-time PWP reference fit should succeed");
+        assert_close(total.coef[0], -0.233_837_087_127_739_32, 1e-10);
+        assert_close(total.coef[1], -0.028_246_466_279_691_063, 1e-10);
+        assert_close(total.std_errors[0], 0.240_991_214_994_265_32, 1e-10);
+        assert_close(total.std_errors[1], 0.330_126_875_800_493_27, 1e-10);
+        assert_close(total.robust_std_errors[0], 0.254_798_307_439_802_4, 1e-10);
+        assert_close(total.robust_std_errors[1], 0.335_484_735_328_979_5, 1e-10);
+        assert_close(total.log_likelihood, -183.340_957_383_822_74, 1e-10);
+        assert_eq!(total.n_iter, 3);
+        assert_eq!(total.baseline_cumhaz.len(), 21);
+        assert_eq!(total.baseline_times.len(), 21);
+        assert_eq!(total.baseline_strata, [vec![1; 7], vec![2; 7], vec![3; 7]].concat());
+        assert_close(total.baseline_cumhaz[0], 0.160_568_133_525_993_22, 1e-10);
+        assert_close(total.baseline_cumhaz[6], 2.915_964_520_738_541, 1e-10);
+        assert_close(total.baseline_cumhaz[7], 0.378_009_324_927_201_63, 1e-10);
+        assert_close(total.baseline_cumhaz[20], 3.023_371_741_032_096_6, 1e-10);
+    }
+
+    #[test]
     fn test_wlw_model() {
         let id = vec![1, 1, 2, 2, 3, 3];
         let time = vec![10.0, 20.0, 5.0, 15.0, 8.0, 25.0];
@@ -213,7 +299,7 @@ mod tests {
         assert_eq!(bladder.id.len(), 178);
         assert_eq!(bladder.event.iter().filter(|&&e| e == 1).count(), 112);
 
-        let gap_config = PWPConfig::new(PWPTimescale::Gap, 100, 1e-6, true, true);
+        let gap_config = PWPConfig::new(PWPTimescale::Gap, 100, 1e-9, true, true);
         let gap = pwp_model(
             bladder.id.clone(),
             bladder.start.clone(),
@@ -226,7 +312,7 @@ mod tests {
         assert!(gap.is_ok());
         let gap = gap.expect("gap-time PWP result should be present");
 
-        let total_config = PWPConfig::new(PWPTimescale::Total, 100, 1e-6, true, true);
+        let total_config = PWPConfig::new(PWPTimescale::Total, 100, 1e-9, true, true);
         let total = pwp_model(
             bladder.id.clone(),
             bladder.start.clone(),
@@ -267,17 +353,30 @@ mod tests {
         assert_eq!(gap.n_events, 112);
         assert!(gap.converged);
         assert_eq!(gap.event_specific_coef.len(), 4);
-        assert_eq!(gap.baseline_cumhaz.len(), 28);
-        assert_close(gap.coef[0], -0.2695101867681618, 1e-9);
-        assert_close(gap.coef[1], 0.0068363097719597865, 1e-9);
-        assert_close(gap.coef[2], 0.15353662917417513, 1e-9);
+        assert_eq!(gap.baseline_cumhaz.len(), 55);
+        assert_eq!(gap.baseline_times.len(), 55);
+        assert_eq!(gap.baseline_strata.len(), 55);
+        assert_close(gap.coef[0], -0.279_004_515_497_076_56, 1e-9);
+        assert_close(gap.coef[1], 0.007_415_087_501_994_803, 1e-9);
+        assert_close(gap.coef[2], 0.158_045_899_958_246_67, 1e-9);
+        assert_close(gap.std_errors[0], 0.207_347_725_416_916_23, 1e-9);
+        assert_close(gap.robust_std_errors[0], 0.215_623_869_338_403_88, 1e-9);
+        assert_close(gap.log_likelihood, -358.968_485_369_266_4, 1e-9);
+        assert_eq!(gap.n_iter, 4);
 
         assert_eq!(total.n_subjects, 85);
         assert_eq!(total.n_events, 112);
         assert!(total.converged);
-        assert_close(total.coef[0], -0.5167094835791394, 1e-9);
-        assert_close(total.coef[1], -0.007743184659185533, 1e-9);
-        assert_close(total.coef[2], 0.10287711173954855, 1e-9);
+        assert_eq!(total.baseline_cumhaz.len(), 68);
+        assert_eq!(total.baseline_times.len(), 68);
+        assert_eq!(total.baseline_strata.len(), 68);
+        assert_close(total.coef[0], -0.333_488_726_434_080_34, 1e-9);
+        assert_close(total.coef[1], -0.008_494_666_106_611_051, 1e-9);
+        assert_close(total.coef[2], 0.119_617_237_977_565_67, 1e-9);
+        assert_close(total.std_errors[0], 0.216_167_915_402_341_34, 1e-9);
+        assert_close(total.robust_std_errors[0], 0.204_786_771_935_949_46, 1e-9);
+        assert_close(total.log_likelihood, -315.990_824_871_805_84, 1e-9);
+        assert_eq!(total.n_iter, 4);
 
         assert_eq!(ag.n_subjects, 85);
         assert_eq!(ag.n_events, 112);

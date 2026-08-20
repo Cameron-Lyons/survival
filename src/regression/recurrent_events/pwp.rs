@@ -91,6 +91,10 @@ pub struct PWPResult {
     pub event_specific_coef: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub baseline_cumhaz: Vec<f64>,
+    #[pyo3(get)]
+    pub baseline_times: Vec<f64>,
+    #[pyo3(get)]
+    pub baseline_strata: Vec<i32>,
 }
 
 #[pyfunction]
@@ -118,210 +122,75 @@ pub fn pwp_model(
 
     let max_event_num = *event_number.iter().max().unwrap_or(&1) as usize;
 
-    let mut beta = vec![0.0; p];
-    let mut converged = false;
-    let mut n_iter = 0;
-    let mut prev_loglik = f64::NEG_INFINITY;
-
-    let time_var: Vec<f64> = match config.timescale {
-        PWPTimescale::Gap => stop
-            .iter()
-            .zip(start.iter())
-            .map(|(&s, &st)| s - st)
-            .collect(),
-        PWPTimescale::Total => stop.clone(),
+    let covariate_rows = x_mat
+        .chunks_exact(p)
+        .map(<[f64]>::to_vec)
+        .collect::<Vec<_>>();
+    let (time_var, entry_times) = match config.timescale {
+        PWPTimescale::Gap => (
+            stop.iter()
+                .zip(&start)
+                .map(|(&end, &begin)| end - begin)
+                .collect(),
+            None,
+        ),
+        PWPTimescale::Total => (stop, Some(start)),
     };
-
-    for iter in 0..config.max_iter {
-        n_iter = iter + 1;
-
-        let mut loglik = 0.0;
-        let mut gradient = vec![0.0; p];
-        let mut hessian = vec![vec![0.0; p]; p];
-
-        let mut sorted_indices: Vec<usize> = (0..n).collect();
-        sorted_indices.sort_by(|&a, &b| {
-            time_var[b].total_cmp(&time_var[a])
-        });
-
-        for &i in &sorted_indices {
-            if event[i] != 1 {
-                continue;
-            }
-
-            let strata = if config.stratify_by_event {
-                event_number[i]
-            } else {
-                1
-            };
-
-            let mut eta_i = 0.0;
-            for j in 0..p {
-                eta_i += x_mat[i * p + j] * beta[j];
-            }
-
-            let mut risk_sum = 0.0;
-            let mut risk_x_sum = vec![0.0; p];
-            let mut risk_xx_sum = vec![vec![0.0; p]; p];
-
-            for &k in &sorted_indices {
-                let in_strata = !config.stratify_by_event || event_number[k] == strata;
-                let at_risk = time_var[k] >= time_var[i];
-
-                if in_strata && at_risk {
-                    let mut eta_k = 0.0;
-                    for j in 0..p {
-                        eta_k += x_mat[k * p + j] * beta[j];
-                    }
-                    let exp_eta_k = eta_k.exp();
-
-                    risk_sum += exp_eta_k;
-                    for j in 0..p {
-                        risk_x_sum[j] += x_mat[k * p + j] * exp_eta_k;
-                    }
-                    for j1 in 0..p {
-                        for j2 in 0..p {
-                            risk_xx_sum[j1][j2] +=
-                                x_mat[k * p + j1] * x_mat[k * p + j2] * exp_eta_k;
-                        }
-                    }
-                }
-            }
-
-            if risk_sum > DIVISION_FLOOR {
-                loglik += eta_i - risk_sum.ln();
-
-                for j in 0..p {
-                    let x_bar = risk_x_sum[j] / risk_sum;
-                    gradient[j] += x_mat[i * p + j] - x_bar;
-                }
-
-                for j1 in 0..p {
-                    let x_bar1 = risk_x_sum[j1] / risk_sum;
-                    for j2 in 0..p {
-                        let x_bar2 = risk_x_sum[j2] / risk_sum;
-                        hessian[j1][j2] += risk_xx_sum[j1][j2] / risk_sum - x_bar1 * x_bar2;
-                    }
-                }
-            }
-        }
-
-        let mut inv_hess = vec![vec![0.0; p]; p];
-        for j in 0..p {
-            inv_hess[j][j] = if hessian[j][j].abs() > DIVISION_FLOOR {
-                1.0 / hessian[j][j]
-            } else {
-                0.0
-            };
-        }
-
-        for j in 0..p {
-            beta[j] += inv_hess[j][j] * gradient[j];
-            beta[j] = beta[j].clamp(-10.0, 10.0);
-        }
-
-        if (loglik - prev_loglik).abs() < config.tol {
-            converged = true;
-            break;
-        }
-        prev_loglik = loglik;
-    }
-
-    let mut info_matrix = vec![vec![0.0; p]; p];
-    let mut score_residuals: Vec<Vec<f64>> = unique_ids.iter().map(|_| vec![0.0; p]).collect();
+    let fit = coxph_fit(
+        time_var,
+        event,
+        covariate_rows,
+        config.stratify_by_event.then_some(event_number),
+        None,
+        None,
+        None,
+        Some(config.max_iter),
+        Some(config.tol),
+        None,
+        Some("efron"),
+        entry_times,
+        None,
+    )?;
+    let beta = fit.coefficients.first().cloned().unwrap_or_default();
+    let covariance = fit.information_matrix.clone();
 
     let id_to_idx = index_by_i32(&unique_ids);
+    let clusters = id
+        .iter()
+        .map(|value| id_to_idx[value])
+        .collect::<Vec<_>>();
+    let robust_covariance = clustered_sandwich_variance(
+        fit.score_residuals()?,
+        vec![1.0; n],
+        clusters,
+        covariance.clone(),
+    )?;
 
-    let mut sorted_indices: Vec<usize> = (0..n).collect();
-    sorted_indices.sort_by(|&a, &b| {
-        time_var[b].total_cmp(&time_var[a])
-    });
-
-    for &i in &sorted_indices {
-        if event[i] != 1 {
-            continue;
-        }
-
-        let strata = if config.stratify_by_event {
-            event_number[i]
-        } else {
-            1
-        };
-
-        let mut risk_sum = 0.0;
-        let mut risk_x_sum = vec![0.0; p];
-        let mut risk_xx_sum = vec![vec![0.0; p]; p];
-
-        for &k in &sorted_indices {
-            let in_strata = !config.stratify_by_event || event_number[k] == strata;
-            let at_risk = time_var[k] >= time_var[i];
-
-            if in_strata && at_risk {
-                let mut eta_k = 0.0;
-                for j in 0..p {
-                    eta_k += x_mat[k * p + j] * beta[j];
-                }
-                let exp_eta_k = eta_k.exp();
-
-                risk_sum += exp_eta_k;
-                for j in 0..p {
-                    risk_x_sum[j] += x_mat[k * p + j] * exp_eta_k;
-                }
-                for j1 in 0..p {
-                    for j2 in 0..p {
-                        risk_xx_sum[j1][j2] += x_mat[k * p + j1] * x_mat[k * p + j2] * exp_eta_k;
-                    }
-                }
-            }
-        }
-
-        if risk_sum > DIVISION_FLOOR {
-            for j1 in 0..p {
-                let x_bar1 = risk_x_sum[j1] / risk_sum;
-                for j2 in 0..p {
-                    let x_bar2 = risk_x_sum[j2] / risk_sum;
-                    info_matrix[j1][j2] += risk_xx_sum[j1][j2] / risk_sum - x_bar1 * x_bar2;
-                }
-            }
-
-            if let Some(&subj_idx) = id_to_idx.get(&id[i]) {
-                for j in 0..p {
-                    let x_bar = risk_x_sum[j] / risk_sum;
-                    score_residuals[subj_idx][j] += x_mat[i * p + j] - x_bar;
-                }
-            }
-        }
-    }
-
-    let std_errors: Vec<f64> = (0..p)
-        .map(|j| {
-            if info_matrix[j][j] > DIVISION_FLOOR {
-                (1.0 / info_matrix[j][j]).sqrt()
+    let std_errors = (0..p)
+        .map(|idx| {
+            let variance = covariance
+                .get(idx)
+                .and_then(|row| row.get(idx))
+                .copied()
+                .unwrap_or(0.0);
+            if variance > 0.0 {
+                variance.sqrt()
             } else {
                 f64::INFINITY
             }
         })
-        .collect();
-
-    let mut robust_var = vec![vec![0.0; p]; p];
-    for subj_scores in &score_residuals {
-        for j1 in 0..p {
-            for j2 in 0..p {
-                robust_var[j1][j2] += subj_scores[j1] * subj_scores[j2];
-            }
-        }
-    }
-
-    let robust_std_errors: Vec<f64> = (0..p)
-        .map(|j| {
-            let inv_info = if info_matrix[j][j] > DIVISION_FLOOR {
-                1.0 / info_matrix[j][j]
-            } else {
-                0.0
-            };
-            (inv_info * robust_var[j][j] * inv_info).sqrt()
+        .collect::<Vec<_>>();
+    let robust_std_errors = (0..p)
+        .map(|idx| {
+            robust_covariance
+                .get(idx)
+                .and_then(|row| row.get(idx))
+                .copied()
+                .unwrap_or(0.0)
+                .max(0.0)
+                .sqrt()
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     let se_to_use = if config.robust_variance {
         &robust_std_errors
@@ -351,19 +220,8 @@ pub fn pwp_model(
     let (hr_lower, hr_upper) = exp_ci_bounds_95(&beta, se_to_use);
 
     let event_specific_coef: Vec<Vec<f64>> = (1..=max_event_num).map(|_| beta.clone()).collect();
-
-    let mut event_times: Vec<f64> = (0..n)
-        .filter(|&i| event[i] == 1)
-        .map(|i| time_var[i])
-        .collect();
-    event_times.sort_by(f64::total_cmp);
-    event_times.dedup();
-
-    let baseline_cumhaz: Vec<f64> = event_times
-        .iter()
-        .enumerate()
-        .map(|(idx, _)| (idx + 1) as f64 * 0.01)
-        .collect();
+    let (baseline_times, baseline_cumhaz, baseline_strata) =
+        fit.basehaz_with_strata(false)?;
 
     Ok(PWPResult {
         coef: beta,
@@ -374,12 +232,14 @@ pub fn pwp_model(
         hazard_ratios,
         hr_lower,
         hr_upper,
-        log_likelihood: prev_loglik,
+        log_likelihood: fit.log_likelihood.last().copied().unwrap_or(0.0),
         n_events: n_events_total,
         n_subjects,
-        n_iter,
-        converged,
+        n_iter: fit.iterations,
+        converged: fit.convergence_flag != CONVERGENCE_FLAG,
         event_specific_coef,
         baseline_cumhaz,
+        baseline_times,
+        baseline_strata,
     })
 }

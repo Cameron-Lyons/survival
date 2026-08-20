@@ -1,8 +1,9 @@
 use std::hint::black_box;
 use survival::regression::{
-    ClogitDataSet, ConditionalLogisticRegression, CoxPHModel, SplineConfig, WLWConfig, aareg_fit,
-    agexact, anderson_gill_model, cch_borgan_fit, cch_fit, coxph_fit, finegray,
-    flexible_parametric_model, landmark_cox_analysis, survreg, time_varying_cox, wlw_model,
+    ClogitDataSet, ConditionalLogisticRegression, CoxPHModel, PWPConfig, PWPTimescale,
+    SplineConfig, WLWConfig, aareg_fit, agexact, anderson_gill_model, cch_borgan_fit, cch_fit,
+    coxph_fit, finegray, flexible_parametric_model, landmark_cox_analysis, pwp_model, survreg,
+    time_varying_cox, wlw_model,
 };
 use survival::residuals::smooth_schoenfeld;
 use survival::{
@@ -963,6 +964,63 @@ mod anderson_gill_bench {
                 1e-9,
             )
             .expect("benchmark Andersen-Gill fit should succeed");
+            black_box(result);
+        });
+    }
+}
+
+mod pwp_bench {
+    use super::*;
+
+    type PwpData = (Vec<i32>, Vec<f64>, Vec<f64>, Vec<i32>, Vec<i32>, Vec<f64>);
+
+    fn recurrent_data(n_subjects: usize) -> PwpData {
+        let mut id = Vec::new();
+        let mut start = Vec::new();
+        let mut stop = Vec::new();
+        let mut event = Vec::new();
+        let mut event_number = Vec::new();
+        let mut covariates = Vec::new();
+        for subject in 1..=n_subjects {
+            let mut current_time = 0.0;
+            for order in 1..=3 {
+                let duration = ((subject * 3 + order * 5) % 7 + 1) as f64;
+                let next_time = current_time + duration;
+                let event_status = match order {
+                    1 => subject % 5 != 0,
+                    2 => subject % 4 != 0,
+                    _ => subject % 3 != 0,
+                };
+                id.push(subject as i32);
+                start.push(current_time);
+                stop.push(next_time);
+                event.push(i32::from(event_status));
+                event_number.push(order as i32);
+                covariates.push(((subject * 3) % 17) as f64 * 0.1);
+                covariates.push(((subject * 7) % 13) as f64 * 0.1);
+                current_time = next_time;
+                if !event_status {
+                    break;
+                }
+            }
+        }
+        (id, start, stop, event, event_number, covariates)
+    }
+
+    #[divan::bench(args = [40, 100, 200])]
+    fn total_time_fit(bencher: divan::Bencher, n_subjects: usize) {
+        let (id, start, stop, event, event_number, covariates) = recurrent_data(n_subjects);
+        bencher.bench_local(|| {
+            let result = pwp_model(
+                id.clone(),
+                start.clone(),
+                stop.clone(),
+                event.clone(),
+                event_number.clone(),
+                covariates.clone(),
+                &PWPConfig::new(PWPTimescale::Total, 50, 1e-9, true, true),
+            )
+            .expect("benchmark total-time PWP fit should succeed");
             black_box(result);
         });
     }
