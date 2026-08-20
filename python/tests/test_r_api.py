@@ -6933,6 +6933,136 @@ def test_survConcordance_deprecated_wrappers_keep_legacy_direction():
     assert list(fit_stats) == ["concordant", "discordant", "tied.risk", "tied.time", "std(c-d)"]
 
 
+def test_concordancefit_matches_reference_counts_variance_and_influence():
+    response = survival.Surv([1, 2, 2, 3, 4, 5], [1, 1, 1, 0, 1, 0])
+    scores = [0.2, 0.4, 0.4, 0.8, 1.0, 0.5]
+    weights = [1.0, 2.0, 1.0, 0.5, 1.5, 1.0]
+
+    result = survival.concordancefit(
+        response,
+        scores,
+        weights=weights,
+        influence=3,
+        ranks=True,
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx(0.9090909090909092)
+    assert result.count == pytest.approx(
+        {
+            "concordant": 15.0,
+            "discordant": 1.5,
+            "tied.x": 0.0,
+            "tied.y": 0.0,
+            "tied.xy": 2.0,
+        }
+    )
+    assert result.var == pytest.approx(0.009774681450113454)
+    assert result.cvar == pytest.approx(0.043880362062180246)
+    assert result.dfbeta == pytest.approx(
+        [
+            0.03305785123966942,
+            0.04407713498622588,
+            0.02203856749311294,
+            0.01101928374655647,
+            -0.04958677685950413,
+            -0.06060606060606061,
+        ]
+    )
+    assert result.influence is not None
+    expected_influence = [
+        [6.0, 0.0, 0.0, 0.0, 0.0],
+        [4.0, 0.0, 0.0, 0.0, 1.0],
+        [4.0, 0.0, 0.0, 0.0, 2.0],
+        [4.0, 0.0, 0.0, 0.0, 0.0],
+        [4.0, 1.0, 0.0, 0.0, 0.0],
+        [4.0, 1.5, 0.0, 0.0, 0.0],
+    ]
+    for actual, expected in zip(result.influence, expected_influence, strict=True):
+        assert actual == pytest.approx(expected)
+    assert result.ranks is not None
+    assert [row["rank"] for row in result.ranks] == pytest.approx(
+        [0.8571428571428571, 0.5, 0.5, -0.4]
+    )
+
+
+def test_concordancefit_matrix_scores_return_cluster_covariance():
+    response = survival.Surv([1, 2, 2, 3, 4, 5], [1, 1, 1, 0, 1, 0])
+    scores = {
+        "x1": [0.2, 0.4, 0.4, 0.8, 1.0, 0.5],
+        "x2": [1.0, 0.8, 0.8, 0.4, 0.2, 0.6],
+    }
+
+    result = survival.concordancefit(
+        response,
+        scores,
+        weights=[1.0, 2.0, 1.0, 0.5, 1.5, 1.0],
+        cluster=["a", "a", "b", "b", "c", "c"],
+        influence=3,
+        ranks=True,
+    )
+
+    assert result is not None
+    assert result.score_names == ["x1", "x2"]
+    assert result.concordance == pytest.approx([0.9090909090909092, 0.09090909090909088])
+    assert isinstance(result.count, list)
+    assert result.count[0] == pytest.approx(
+        {
+            "concordant": 15.0,
+            "discordant": 1.5,
+            "tied.x": 0.0,
+            "tied.y": 0.0,
+            "tied.xy": 2.0,
+        }
+    )
+    assert result.count[1] == pytest.approx(
+        {
+            "concordant": 1.5,
+            "discordant": 15.0,
+            "tied.x": 0.0,
+            "tied.y": 0.0,
+            "tied.xy": 2.0,
+        }
+    )
+    assert isinstance(result.var, list)
+    assert result.var[0] == pytest.approx(
+        [0.019185089057365538, -0.019185089057365538]
+    )
+    assert result.var[1] == pytest.approx(
+        [-0.019185089057365538, 0.019185089057365538]
+    )
+    assert result.dfbeta is not None
+    assert result.dfbeta[0] == pytest.approx(
+        [0.0771349862258953, 0.03305785123966941, -0.11019283746556474]
+    )
+    assert result.dfbeta[1] == pytest.approx(
+        [-0.0771349862258953, -0.03305785123966941, 0.11019283746556474]
+    )
+
+
+def test_concordancefit_honors_reference_direction_and_standard_error_switch():
+    response = survival.Surv([1, 2, 2, 3, 4, 5], [1, 1, 1, 0, 1, 0])
+    scores = [0.2, 0.4, 0.4, 0.8, 1.0, 0.5]
+    result = survival.concordancefit(
+        response,
+        scores,
+        reverse=True,
+        influence=3,
+        ranks=True,
+        **{"std.err": False},
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx(1.0 / 12.0)
+    assert result.reverse is True
+    assert result.variance is None
+    assert result.conditional_variance is None
+    assert result.dfbeta is None
+    assert result.influence is None
+    assert result.ranks is None
+    assert survival.concordancefit(response, [0.2, math.nan, 0.4, 0.8, 1.0, 0.5]) is None
+
+
 def test_concordance_ranks_return_weighted_event_contributions():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],

@@ -13,7 +13,7 @@ from itertools import combinations, groupby, product
 from numbers import Real
 from operator import index
 from statistics import NormalDist
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 from . import _survival as _core
 
@@ -58,6 +58,7 @@ __all__ = [
     "coef_names",
     "confint",
     "concordance",
+    "concordancefit",
     "clogit",
     "cch",
     "coxph",
@@ -489,7 +490,7 @@ class ConcordanceResult:
     ranks: list[dict[str, float]] | list[list[dict[str, float]] | None] | None = None
     dfbeta: list[float] | list[list[float] | None] | None = None
     influence: list[list[float]] | list[list[list[float]] | None] | None = None
-    variance: float | list[float | None] | None = None
+    variance: float | list[float | None] | list[list[float]] | None = None
     conditional_variance: float | list[float] | None = None
     score_names: list[str] | None = None
 
@@ -498,12 +499,69 @@ class ConcordanceResult:
         return self.concordance
 
     @property
-    def var(self) -> float | list[float | None] | None:
+    def var(self) -> float | list[float | None] | list[list[float]] | None:
         return self.variance
 
     @property
     def cvar(self) -> float | list[float] | None:
         return self.conditional_variance
+
+    @property
+    def discordant(self) -> float | list[float]:
+        """Return raw discordant counts, excluding tied-score pairs."""
+
+        if isinstance(self.concordant, list):
+            comparable = self.comparable if isinstance(self.comparable, list) else []
+            tied_x = self.tied_x if isinstance(self.tied_x, list) else []
+            return [
+                max(float(total) - float(concordant) - 0.5 * float(tied), 0.0)
+                for concordant, total, tied in zip(
+                    self.concordant,
+                    comparable,
+                    tied_x,
+                    strict=True,
+                )
+            ]
+        return max(
+            float(self.comparable) - float(self.concordant) - 0.5 * float(self.tied_x),
+            0.0,
+        )
+
+    @property
+    def count(self) -> dict[str, float] | list[dict[str, float]]:
+        """Return R-style concordance, discordance, and tie counts."""
+
+        if isinstance(self.concordant, list):
+            discordant = cast(list[float], self.discordant)
+            comparable = self.comparable if isinstance(self.comparable, list) else []
+            tied_x = self.tied_x if isinstance(self.tied_x, list) else []
+            tied_y = self.tied_y if isinstance(self.tied_y, list) else []
+            tied_xy = self.tied_xy if isinstance(self.tied_xy, list) else []
+            return [
+                {
+                    "concordant": float(concordant) - 0.5 * float(score_ties),
+                    "discordant": float(discordance),
+                    "tied.x": float(score_ties),
+                    "tied.y": float(time_ties),
+                    "tied.xy": float(joint_ties),
+                }
+                for concordant, discordance, _total, score_ties, time_ties, joint_ties in zip(
+                    self.concordant,
+                    discordant,
+                    comparable,
+                    tied_x,
+                    tied_y,
+                    tied_xy,
+                    strict=True,
+                )
+            ]
+        return {
+            "concordant": float(self.concordant) - 0.5 * float(self.tied_x),
+            "discordant": float(self.discordant),
+            "tied.x": float(self.tied_x),
+            "tied.y": float(self.tied_y),
+            "tied.xy": float(self.tied_xy),
+        }
 
 
 @dataclass(frozen=True)
@@ -19103,6 +19161,201 @@ def concordance(
         upper_bound,
         influence_value,
         include_ranks,
+    )
+
+
+def _concordancefit_missing_response(response: Surv) -> bool:
+    vectors: tuple[Sequence[Any] | None, ...] = (
+        response.start,
+        response.time,
+        response.event,
+    )
+    return any(
+        _is_missing_value(value)
+        for values in vectors
+        if values is not None
+        for value in values
+    )
+
+
+def _concordancefit_covariance(
+    dfbeta: list[float] | list[list[float] | None] | None,
+) -> float | list[list[float]] | None:
+    if dfbeta is None:
+        return None
+    if not dfbeta or isinstance(dfbeta[0], int | float):
+        values = [float(value) for value in dfbeta]
+        return math.fsum(value * value for value in values)
+
+    columns = [
+        [] if values is None else [float(value) for value in values]
+        for values in dfbeta
+    ]
+    return [
+        [math.fsum(left * right for left, right in zip(a, b, strict=True)) for b in columns]
+        for a in columns
+    ]
+
+
+def _concordancefit_dfbeta(
+    dfbeta: list[float] | list[list[float] | None] | None,
+) -> list[float] | list[list[float] | None] | None:
+    if dfbeta is None:
+        return None
+    if not dfbeta or isinstance(dfbeta[0], int | float):
+        return [2.0 * float(value) for value in dfbeta]
+    return [
+        None if values is None else [2.0 * float(value) for value in values]
+        for values in dfbeta
+    ]
+
+
+def _concordancefit_influence(
+    influence: Any,
+    weights: list[float] | None,
+    n_scores: int,
+) -> Any:
+    if influence is None:
+        return None
+    case_weights = weights or [1.0] * len(influence if n_scores == 1 else influence[0])
+
+    def scale_rows(rows: list[list[float]]) -> list[list[float]]:
+        return [
+            [
+                (2.0 * float(value) / case_weight if case_weight > 0.0 else 0.0)
+                for value in row
+            ]
+            for row, case_weight in zip(rows, case_weights, strict=True)
+        ]
+
+    if n_scores == 1:
+        return scale_rows(influence)
+    return [None if rows is None else scale_rows(rows) for rows in influence]
+
+
+def concordancefit(
+    y: Any,
+    x: Any,
+    strata: Any | None = None,
+    weights: Any | None = None,
+    ymin: Any | None = None,
+    ymax: Any | None = None,
+    timewt: Any = "n",
+    cluster: Any | None = None,
+    influence: Any = 0,
+    ranks: Any = False,
+    reverse: Any = False,
+    timefix: Any = True,
+    keepstrata: Any = 10,
+    std_err: Any = True,
+    **kwargs: Any,
+) -> ConcordanceResult | None:
+    """Compute the low-level concordance fit used by R's public wrapper."""
+
+    std_err = _pop_dotted_keyword(kwargs, "std.err", "std_err", std_err, True)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"concordancefit got unexpected keyword argument(s): {unexpected}")
+
+    if isinstance(y, Surv):
+        response = y
+    else:
+        raw_response = _coerce_array_like(y, "y")
+        if any(_is_missing_value(value) for value in raw_response):
+            return None
+        response = Surv(raw_response)
+    raw_scores = _coerce_array_like(x, "x")
+    if _concordancefit_missing_response(response) or any(
+        _is_missing_value(value)
+        for row in raw_scores
+        for value in (row if isinstance(row, list | tuple) else [row])
+    ):
+        return None
+
+    score_columns, score_names = _external_concordance_score_columns(x, len(response))
+    input_names = _matrix_input_column_names(x)
+    if input_names is not None:
+        score_names = list(input_names)
+    weight_values = _concordance_weight_values(weights, len(response))
+    strata_values = None
+    if strata is not None:
+        candidate = _materialize_labels(strata, "strata")
+        if candidate:
+            if len(candidate) != len(response):
+                raise ValueError("y and strata must have the same length")
+            strata_values = candidate
+    cluster_values = None
+    if cluster is not None:
+        candidate = _materialize_labels(cluster, "cluster")
+        if candidate:
+            cluster_values = _concordance_cluster_values(candidate, len(response))
+
+    time_weight = _normalize_concordance_timewt(timewt)
+    influence_value = _normalize_concordance_influence(influence)
+    include_standard_error = _normalize_bool_option(std_err, "std_err")
+    include_ranks = include_standard_error and _normalize_bool_option(ranks, "ranks")
+    reverse_value = _normalize_bool_option(reverse, "reverse")
+    fix_time = _normalize_bool_option(timefix, "timefix")
+    _validate_concordance_keepstrata(keepstrata)
+    internal_influence = 3 if include_standard_error else 0
+    lower_bound = _normalize_concordance_time_bound(ymin, "ymin")
+    upper_bound = _normalize_concordance_time_bound(ymax, "ymax")
+
+    if len(score_columns) == 1:
+        computed = _single_score_concordance_result(
+            response,
+            score_columns[0],
+            weight_values,
+            strata_values,
+            cluster_values,
+            not reverse_value,
+            fix_time,
+            time_weight,
+            lower_bound,
+            upper_bound,
+            internal_influence,
+            include_ranks,
+        )
+    else:
+        computed = _multi_score_concordance_result(
+            response,
+            score_columns,
+            score_names,
+            weight_values,
+            strata_values,
+            cluster_values,
+            not reverse_value,
+            fix_time,
+            time_weight,
+            lower_bound,
+            upper_bound,
+            internal_influence,
+            include_ranks,
+        )
+
+    dfbeta = _concordancefit_dfbeta(computed.dfbeta)
+    variance = _concordancefit_covariance(dfbeta) if include_standard_error else None
+    fitted_influence = _concordancefit_influence(
+        computed.influence,
+        weight_values,
+        len(score_columns),
+    )
+    return ConcordanceResult(
+        concordance=computed.concordance,
+        n=computed.n,
+        n_event=computed.n_event,
+        reverse=reverse_value,
+        concordant=computed.concordant,
+        comparable=computed.comparable,
+        tied_x=computed.tied_x,
+        tied_y=computed.tied_y,
+        tied_xy=computed.tied_xy,
+        ranks=computed.ranks if include_ranks else None,
+        dfbeta=dfbeta if influence_value in {1, 3} else None,
+        influence=fitted_influence if influence_value in {2, 3} else None,
+        variance=variance,
+        conditional_variance=(computed.conditional_variance if include_standard_error else None),
+        score_names=score_names if len(score_columns) > 1 else None,
     )
 
 

@@ -12055,6 +12055,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "coef_names" in survival.__all__
     assert "clogit" in survival.__all__
     assert "confint" in survival.__all__
+    assert "concordancefit" in survival.__all__
     assert "cox_zph" in survival.__all__
     assert "coxph_detail" in survival.__all__
     assert "cumevent" in survival.__all__
@@ -12131,6 +12132,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.coef_names is survival.r_api.coef_names
     assert survival.clogit is survival.r_api.clogit
     assert survival.confint is survival.r_api.confint
+    assert survival.concordancefit is survival.r_api.concordancefit
     assert survival.cox_zph is survival.r_api.cox_zph
     assert survival.coxph_detail is survival.r_api.coxph_detail
     assert survival.cumevent is survival.r_api.cumevent
@@ -12526,6 +12528,33 @@ def test_r_api_stub_tracks_survexp_public_signature():
         list(inspect.signature(survival.r_api.survexp_individual).parameters) == expected_individual
     )
     assert _pyi_function_arg_names(stub_path, "survexp_individual") == expected_individual
+
+
+def test_r_api_stub_tracks_concordancefit_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = [
+        "y",
+        "x",
+        "strata",
+        "weights",
+        "ymin",
+        "ymax",
+        "timewt",
+        "cluster",
+        "influence",
+        "ranks",
+        "reverse",
+        "timefix",
+        "keepstrata",
+        "std_err",
+    ]
+    runtime_params = inspect.signature(survival.r_api.concordancefit).parameters
+    assert list(runtime_params) == [*expected, "kwargs"]
+    assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+    assert _pyi_function_arg_names(stub_path, "concordancefit") == expected
 
 
 def test_r_api_stub_tracks_cipoisson_public_signature():
