@@ -1,6 +1,7 @@
 import math
 import random
 from bisect import bisect_right
+from dataclasses import replace
 from itertools import combinations
 from statistics import NormalDist
 
@@ -10801,6 +10802,33 @@ def test_cox_zph_uses_fit_owned_native_diagnostics(monkeypatch):
 
     assert result.variable_names == ["x1", "x2"]
     assert len(result.y) == sum(_toy_data()["status"])
+
+
+def test_cox_zph_materializes_fit_times_once():
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_toy_data(),
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    class FitReadCounter:
+        def __init__(self, inner):
+            self.inner = inner
+            self.event_time_reads = 0
+
+        def __getattr__(self, name):
+            if name == "event_times":
+                self.event_time_reads += 1
+            return getattr(self.inner, name)
+
+    counter = FitReadCounter(fit.fit)
+    wrapped = replace(fit, fit=counter)
+
+    result = survival.cox_zph(wrapped, transform="km")
+
+    assert len(result.y) == sum(_toy_data()["status"])
+    assert counter.event_time_reads == 1
 
 
 def test_cox_zph_scales_variance_preserves_strata_and_subsets_variables():

@@ -1462,7 +1462,7 @@ impl CoxPHFit {
         let scaled = scaled_full
             .into_iter()
             .map(|row| active_columns.iter().map(|&column| row[column]).collect())
-            .collect();
+            .collect::<Vec<Vec<f64>>>();
 
         let n = self.event_times.len();
         if self.status.len() != n
@@ -1507,7 +1507,8 @@ impl CoxPHFit {
             center: 0.0,
             include_riskmat: false,
         })?;
-        let active_beta = active_columns.iter().map(|&column| beta[column]).collect();
+        let active_beta: Vec<f64> = active_columns.iter().map(|&column| beta[column]).collect();
+        let grouped = cox_zph_term_matrix(scaled, groups.clone(), active_beta.clone())?;
         let test = cox_zph_tests_from_detail(
             detail,
             &transformed_events,
@@ -1517,7 +1518,7 @@ impl CoxPHFit {
             single_df,
             global_test,
         )?;
-        Ok((scaled, test))
+        Ok((grouped, test))
     }
 
     pub(crate) fn schoenfeld_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
@@ -2225,7 +2226,7 @@ mod tests {
             nocenter: Vec::new(),
         };
 
-        let (scaled, test) = fit
+        let (grouped, test) = fit
             .cox_zph_diagnostics_internal(
                 transformed_events.clone(),
                 vec![1],
@@ -2238,8 +2239,24 @@ mod tests {
         let expected_scaled = fit
             .scaled_schoenfeld_residuals_with_variance_internal(&variance)
             .expect("scaled residuals should compute");
-        for (actual, expected) in scaled.iter().zip(&expected_scaled) {
+        for (actual, expected) in grouped.iter().zip(&expected_scaled) {
             assert_eq!(actual, &vec![expected[1]]);
+        }
+        let (grouped_term, _) = fit
+            .cox_zph_diagnostics_internal(
+                transformed_events.clone(),
+                vec![0, 1],
+                vec![vec![0, 1]],
+                variance.clone(),
+                false,
+                true,
+            )
+            .expect("grouped fit-owned Cox zph diagnostic should compute");
+        for (actual, expected) in grouped_term.iter().zip(&expected_scaled) {
+            assert_eq!(
+                actual,
+                &vec![expected[0] * coefficients[0] + expected[1] * coefficients[1]]
+            );
         }
 
         let selected_rows = covariates
