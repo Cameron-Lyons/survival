@@ -246,6 +246,7 @@ class _PSplineFormulaTerm:
     theta: float | None
     target_df: float | None
     eps: float
+    selection: str
     nterm: int
     degree: int
     intercept: bool
@@ -353,6 +354,7 @@ class _PSplinePenaltyBlock:
     eps: float
     initial_theta: float
     maximum_df: float
+    selection: str
 
 
 @dataclass(frozen=True)
@@ -3413,6 +3415,7 @@ def _parse_pspline_formula_term(term: str) -> _PSplineFormulaTerm:
     degree = 3
     intercept = False
     eps = 0.1
+    method: str | None = None
     saw_option = False
     seen_options: set[str] = set()
     for part in parts:
@@ -3444,32 +3447,46 @@ def _parse_pspline_formula_term(term: str) -> _PSplineFormulaTerm:
             intercept = _normalize_bool_option(value, "pspline intercept")
         elif name == "eps":
             eps = _finite_float(value, "pspline eps")
+        elif name == "method":
+            method = str(value).lower()
         else:
             raise ValueError(f"unsupported pspline() formula option: {name}")
 
     if column is None:
         raise ValueError("pspline() requires one column")
+    if method is not None and method != "aic":
+        raise ValueError("pspline method must be 'aic'")
     if theta is not None and (theta <= 0.0 or theta >= 1.0):
         raise ValueError("pspline theta must be between 0 and 1")
-    if df <= 0.0:
-        raise ValueError("pspline df must be positive")
-    if theta is None and df <= 1.0:
-        raise ValueError("pspline df must be greater than 1")
+    aic_selection = theta is None and (df == 0.0 or method == "aic")
+    if theta is not None and (df == 0.0 or method is not None):
+        raise ValueError("pspline fixed theta cannot be combined with df=0 or method='aic'")
+    if aic_selection:
+        nterm = 15
+    else:
+        if df <= 0.0:
+            raise ValueError("pspline df must be positive")
+        if theta is None and df <= 1.0:
+            raise ValueError("pspline df must be greater than 1")
+        if nterm is None:
+            nterm = int(round(2.5 * df))
     if nterm is None:
-        nterm = int(round(2.5 * df))
+        raise AssertionError("pspline nterm normalization failed")
     if nterm < 3:
         raise ValueError("pspline nterm must be at least 3")
     if degree < 1:
         raise ValueError("pspline degree must be positive")
     if eps <= 0.0:
         raise ValueError("pspline eps must be positive")
-    if theta is None and df > nterm:
+    if theta is None and not aic_selection and df > nterm:
         raise ValueError(f"pspline df must be between 1 and {nterm}")
+    selection = "fixed" if theta is not None else "aic" if aic_selection else "df"
     return _PSplineFormulaTerm(
         term=_CovariateTerm(column, transform="pspline"),
         theta=theta,
-        target_df=df if theta is None else None,
+        target_df=df if selection == "df" else None,
         eps=eps,
+        selection=selection,
         nterm=nterm,
         degree=degree,
         intercept=intercept,
@@ -4242,7 +4259,11 @@ def _pspline_formula_blocks(design: _FormulaDesign) -> list[_PSplinePenaltyBlock
             initial_theta = (
                 term.formula.theta
                 if term.formula.theta is not None
-                else 1.0 - float(term.formula.target_df) / term.formula.nterm
+                else (
+                    0.5
+                    if term.formula.selection == "aic"
+                    else 1.0 - float(term.formula.target_df) / term.formula.nterm
+                )
             )
             blocks.append(
                 _PSplinePenaltyBlock(
@@ -4254,6 +4275,7 @@ def _pspline_formula_blocks(design: _FormulaDesign) -> list[_PSplinePenaltyBlock
                     eps=term.formula.eps,
                     initial_theta=initial_theta,
                     maximum_df=float(term.formula.nterm),
+                    selection=term.formula.selection,
                 )
             )
         cursor += width
@@ -4464,6 +4486,102 @@ def _ridge_control_next_theta(
     if not math.isfinite(theta) or theta < 0.0:
         theta = _ridge_control_fallback_theta(target, history)
     return theta, converged, 0
+
+
+def _pspline_aic_history_row(
+    theta: float,
+    log_likelihood: float,
+    degrees_of_freedom: float,
+    events: int,
+) -> dict[str, float]:
+    if events < degrees_of_freedom + 2.0:
+        corrected_df = (
+            degrees_of_freedom
+            - events
+            + (degrees_of_freedom + 1.0) * degrees_of_freedom / 2.0
+            - 1.0
+        )
+    else:
+        denominator = 1.0 - (degrees_of_freedom + 2.0) / events
+        corrected_df = (
+            math.inf if denominator == 0.0 else -1.0 + (degrees_of_freedom + 1.0) / denominator
+        )
+    return {
+        "theta": theta,
+        "loglik": log_likelihood,
+        "df": degrees_of_freedom,
+        "aic": log_likelihood - degrees_of_freedom,
+        "aicc": log_likelihood - corrected_df,
+    }
+
+
+def _frailty_brent(
+    theta: Sequence[float],
+    criterion: Sequence[float],
+    lower: float,
+    upper: float,
+) -> float:
+    if len(theta) != len(criterion):
+        raise ValueError("theta and criterion histories must have equal lengths")
+    if len(theta) < 3:
+        return math.fsum(theta) / len(theta)
+    ordered = sorted(zip(theta, criterion, strict=True))
+    x = [value[0] for value in ordered]
+    y = [value[1] for value in ordered]
+    maximum = max(y)
+    best = [index for index, value in enumerate(y) if value == maximum]
+    if len(best) != 1:
+        raise ValueError("AIC smoothing search encountered tied optima")
+    center = best[0]
+    if center == 0:
+        new_theta = x[0] - 3.0 * (x[1] - x[0])
+        if new_theta < lower:
+            new_theta = lower + (min(value for value in x if value > lower) - lower) / 10.0
+        return new_theta
+    if center == len(x) - 1:
+        new_theta = x[-1] + 3.0 * (x[-1] - x[-2])
+        if new_theta > upper:
+            new_theta = upper + (max(value for value in x if value < upper) - upper) / 10.0
+        return new_theta
+
+    local_x = x[center - 1 : center + 2]
+    local_y = y[center - 1 : center + 2]
+    first = (local_x[1] - local_x[0]) ** 2 * (local_y[1] - local_y[2]) - (
+        local_x[1] - local_x[2]
+    ) ** 2 * (local_y[1] - local_y[0])
+    second = (local_x[1] - local_x[0]) * (local_y[1] - local_y[2]) - (local_x[1] - local_x[2]) * (
+        local_y[1] - local_y[0]
+    )
+    new_theta = local_x[1] - 0.5 * first / second
+    if (
+        new_theta < local_x[0]
+        or new_theta > local_x[2]
+        or (len(x) > 4 and new_theta - theta[-1] > 0.5 * abs(theta[-2] - theta[-3]))
+    ):
+        if local_x[1] - local_x[0] > local_x[2] - local_x[1]:
+            return local_x[1] - 0.38 * (local_x[1] - local_x[0])
+        return local_x[1] + 0.32 * (local_x[2] - local_x[1])
+    return new_theta
+
+
+def _pspline_aic_next_theta(
+    eps: float,
+    iteration: int,
+    history: Sequence[Mapping[str, float]],
+) -> tuple[float, bool]:
+    if iteration == 1:
+        return 0.95, False
+    theta = [float(row["theta"]) for row in history]
+    if iteration == 2:
+        return math.fsum(theta) / len(theta), False
+    criterion = [float(row["aic"]) for row in history]
+    previous = criterion[-2]
+    converged = previous != 0.0 and abs(1.0 - criterion[-1] / previous) < eps
+    if theta[-1] == max(criterion) and theta[-1] == max(theta):
+        new_theta = 2.0 * max(theta)
+    else:
+        new_theta = _frailty_brent(theta, criterion, 0.0, 1.0)
+    return new_theta, converged
 
 
 def _covariate_term_name(term: _CovariateTerm) -> str:
@@ -23110,9 +23228,12 @@ def coxph(
     target_pspline_blocks = [
         index for index, block in enumerate(formula_pspline_blocks) if block.target_df is not None
     ]
+    aic_pspline_blocks = [
+        index for index, block in enumerate(formula_pspline_blocks) if block.selection == "aic"
+    ]
     ridge_history: dict[str, dict[str, Any]] | None = None
     reported_log_likelihood: list[float] | None = None
-    if target_ridge_blocks or target_pspline_blocks:
+    if target_ridge_blocks or target_pspline_blocks or aic_pspline_blocks:
         ridge_histories = [
             [(0.0, float(len(block.columns)))] if block.target_df is not None else []
             for block in formula_ridge_blocks
@@ -23121,10 +23242,14 @@ def coxph(
             [(1.0, 1.0), (0.0, block.maximum_df)] if block.target_df is not None else []
             for block in formula_pspline_blocks
         ]
+        pspline_aic_histories: list[list[dict[str, float]]] = [
+            [] for _block in formula_pspline_blocks
+        ]
         ridge_halves = [0] * len(formula_ridge_blocks)
         pspline_halves = [0] * len(formula_pspline_blocks)
         ridge_done = [block.target_df is None for block in formula_ridge_blocks]
-        pspline_done = [block.target_df is None for block in formula_pspline_blocks]
+        pspline_done = [block.selection == "fixed" for block in formula_pspline_blocks]
+        event_count = sum(int(value) for value in response.event)
         start = initial_values
         initial_log_likelihood = None
         fit = None
@@ -23150,6 +23275,7 @@ def coxph(
                 initial_log_likelihood = float(fit.log_likelihood[0])
             next_ridge_thetas = list(fitted_ridge_thetas)
             next_pspline_thetas = list(fitted_pspline_thetas)
+            next_reported_pspline_thetas = list(fitted_pspline_thetas)
             for block_index in target_ridge_blocks:
                 block = formula_ridge_blocks[block_index]
                 target = block.target_df
@@ -23197,18 +23323,44 @@ def coxph(
                     pspline_histories[block_index],
                     pspline_halves[block_index],
                 )
+                next_reported_pspline_thetas[block_index] = next_theta
                 next_pspline_thetas[block_index] = min(max(next_theta, 0.0), 1.0 - 1e-12)
                 pspline_done[block_index] = converged
                 pspline_halves[block_index] = half
+            for block_index in aic_pspline_blocks:
+                block = formula_pspline_blocks[block_index]
+                if fit_penalty_matrix is None:
+                    raise AssertionError("P-spline AIC selection requires a quadratic penalty")
+                term_df = _quadratic_term_degrees_of_freedom(
+                    fit,
+                    fit_penalty_matrix,
+                    block.columns,
+                )
+                pspline_aic_histories[block_index].append(
+                    _pspline_aic_history_row(
+                        fitted_pspline_thetas[block_index],
+                        float(fit.log_likelihood[-1]),
+                        term_df,
+                        event_count,
+                    )
+                )
+                next_theta, converged = _pspline_aic_next_theta(
+                    block.eps,
+                    outer_iteration,
+                    pspline_aic_histories[block_index],
+                )
+                next_reported_pspline_thetas[block_index] = next_theta
+                next_pspline_thetas[block_index] = min(max(next_theta, 0.0), 1.0 - 1e-12)
+                pspline_done[block_index] = converged
             reported_ridge_thetas = next_ridge_thetas
-            reported_pspline_thetas = next_pspline_thetas
+            reported_pspline_thetas = next_reported_pspline_thetas
             ridge_thetas = fitted_ridge_thetas
             pspline_thetas = fitted_pspline_thetas
             if all(ridge_done) and all(pspline_done):
                 break
             if outer_iteration == outer_max:
                 warnings.warn(
-                    "penalty df target did not converge within control.outer.max iterations",
+                    "penalty smoothing did not converge within control.outer.max iterations",
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -23263,7 +23415,15 @@ def coxph(
                         "half": pspline_halves[index],
                     }
                     if block.target_df is not None
-                    else {"theta": pspline_thetas[index], "done": True}
+                    else (
+                        {
+                            "theta": reported_pspline_thetas[index],
+                            "done": pspline_done[index],
+                            "history": pspline_aic_histories[index],
+                        }
+                        if block.selection == "aic"
+                        else {"theta": pspline_thetas[index], "done": True}
+                    )
                 )
                 for index, block in enumerate(formula_pspline_blocks)
             }

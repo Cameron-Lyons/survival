@@ -9670,6 +9670,73 @@ def test_penalty_df_controller_safeguards_nonmonotone_history_boundary():
     assert theta == pytest.approx(1.5)
     assert done is False
     assert half == 1
+    assert survival.r_api._pspline_aic_history_row(0.5, -3.0, 2.0, 4)["aicc"] == -math.inf
+
+
+def test_coxph_formula_pspline_selects_smoothing_by_aic_reference():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+    }
+    spline_term = "pspline(x,df=0,nterm=6,eps=1e-5)"
+    fit = survival.coxph(
+        f"Surv(time,status) ~ {spline_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [
+            -0.06342800228119114,
+            -0.12685599976420664,
+            -0.19028397632400523,
+            -0.2537119320016198,
+            -0.31713985866099714,
+            -0.3805677474285247,
+            -0.44399559129040445,
+            -0.5074233856127166,
+            -0.5708511184994904,
+            -0.6342787964033647,
+            -0.6977064579768901,
+            -0.7611341228007429,
+            -0.8245617942367536,
+            -0.8879894901934888,
+            -0.9514172104836964,
+            -1.0148449429647086,
+            -1.0782726774775209,
+        ],
+        abs=5e-8,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-12.619505923287514, -12.374523115442782],
+        abs=5e-8,
+    )
+    assert survival.degrees_freedom(fit) == pytest.approx(1.000002537133492, abs=1e-6)
+    history = fit.history[spline_term]
+    assert history["theta"] == pytest.approx(0.999999995, abs=1e-12)
+    assert history["done"] is True
+    assert len(history["history"]) == 9
+    assert history["history"][0] == pytest.approx(
+        {
+            "theta": 0.5,
+            "loglik": -11.727614939265358,
+            "df": 3.7979500052106823,
+            "aic": -15.52556494447604,
+            "aicc": -28.1584635269505,
+        },
+        abs=1e-9,
+    )
+
+    method_alias = survival.coxph(
+        "Surv(time,status) ~ pspline(x,method='aic',nterm=4,eps=1e-5)",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+    assert method_alias.coefficients[0] == pytest.approx(fit.coefficients[0], abs=1e-10)
+    assert method_alias.log_likelihood == pytest.approx(fit.log_likelihood, abs=1e-10)
 
 
 def test_coxph_formula_pspline_rejects_unsupported_or_invalid_options():
@@ -9685,6 +9752,8 @@ def test_coxph_formula_pspline_rejects_unsupported_or_invalid_options():
         ("df=1", "greater"),
         ("df=5,nterm=4", "between"),
         ("df=3,eps=0", "positive"),
+        ("method='gcv'", "must be 'aic'"),
+        ("theta=.5,method='aic'", "cannot be combined"),
     ):
         with pytest.raises(ValueError, match=message):
             survival.coxph(f"Surv(time,status) ~ pspline(x,{option})", data=data)
