@@ -180,6 +180,29 @@ def test_predict_hazard_spline_validates_public_inputs():
         survival.predict_hazard_spline(bad_spline_coefficients, [1.0, 2.0], [0.5])
 
 
+def test_predict_hazard_spline_intervals_follow_parameter_uncertainty():
+    def model(standard_error):
+        return survival.FlexibleParametricResult(
+            [],
+            [-2.0, -2.0],
+            [standard_error, standard_error],
+            [0.0, 1.0],
+            -1.0,
+            6.0,
+            6.0,
+            1,
+            True,
+        )
+
+    precise = survival.predict_hazard_spline(model(0.01), [1.0, 2.0], None)
+    uncertain = survival.predict_hazard_spline(model(10.0), [1.0, 2.0], None)
+
+    for idx in range(2):
+        precise_width = precise.upper_ci[idx] - precise.lower_ci[idx]
+        uncertain_width = uncertain.upper_ci[idx] - uncertain.lower_ci[idx]
+        assert uncertain_width > precise_width
+
+
 def test_coxmart():
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
     status = [1, 1, 0, 1, 0, 1, 1, 0]

@@ -145,6 +145,28 @@ fn validate_hazard_prediction_inputs(
         )));
     }
     let degree = model_result.spline_coefficients.len() + 1 - model_result.knots.len();
+    let n_params = model_result.coefficients.len() + model_result.spline_coefficients.len();
+    if model_result.std_errors.len() != n_params {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "std_errors length must match the total coefficient count; got {} and expected {n_params}",
+            model_result.std_errors.len()
+        )));
+    }
+    validate_finite_values("std_errors", &model_result.std_errors)?;
+    if model_result.std_errors.iter().any(|&value| value < 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "std_errors must be non-negative",
+        ));
+    }
+    if let Some(covariance) = &model_result.covariance
+        && (covariance.len() != n_params
+            || covariance.iter().any(|row| row.len() != n_params)
+            || covariance.iter().flatten().any(|value| !value.is_finite()))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "model covariance must be a finite square matrix matching the coefficient count",
+        ));
+    }
 
     if let Some(covariates) = covariate_values {
         if covariates.len() != model_result.coefficients.len() {
@@ -197,6 +219,7 @@ pub struct FlexibleParametricResult {
     pub n_iterations: usize,
     #[pyo3(get)]
     pub converged: bool,
+    covariance: Option<Vec<Vec<f64>>>,
 }
 
 #[pymethods]
@@ -214,6 +237,14 @@ impl FlexibleParametricResult {
         n_iterations: usize,
         converged: bool,
     ) -> Self {
+        let n_params = coefficients.len() + spline_coefficients.len();
+        let covariance = (std_errors.len() == n_params).then(|| {
+            let mut matrix = vec![vec![0.0; n_params]; n_params];
+            for (idx, &standard_error) in std_errors.iter().enumerate() {
+                matrix[idx][idx] = standard_error * standard_error;
+            }
+            matrix
+        });
         Self {
             coefficients,
             spline_coefficients,
@@ -224,6 +255,7 @@ impl FlexibleParametricResult {
             bic,
             n_iterations,
             converged,
+            covariance,
         }
     }
 }
@@ -452,7 +484,7 @@ fn fit_poisson_hazard(
     })
 }
 
-fn information_standard_errors(information: &Array2<f64>) -> PyResult<Vec<f64>> {
+fn information_covariance(information: &Array2<f64>) -> PyResult<Array2<f64>> {
     let inverse = matrix_inverse(information).or_else(|| {
         let scale = information
             .diag()
@@ -474,19 +506,16 @@ fn information_standard_errors(information: &Array2<f64>) -> PyResult<Vec<f64>> 
             "spline hazard information matrix could not be inverted",
         )
     })?;
-    inverse
+    if inverse
         .diag()
         .iter()
-        .map(|&variance| {
-            if variance.is_finite() && variance >= 0.0 {
-                Ok(variance.sqrt())
-            } else {
-                Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "spline hazard information matrix produced an invalid variance",
-                ))
-            }
-        })
-        .collect()
+        .any(|&variance| !variance.is_finite() || variance < 0.0)
+    {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "spline hazard information matrix produced an invalid variance",
+        ));
+    }
+    Ok(inverse)
 }
 
 #[pyfunction]
@@ -522,7 +551,13 @@ pub fn flexible_parametric_model(
     let mut initial_parameters = vec![0.0; n_params];
     initial_parameters[p..].fill(baseline_log_hazard);
     let fit = fit_poisson_hazard(&design, &time, &event, initial_parameters)?;
-    let std_errors = information_standard_errors(&fit.information)?;
+    let covariance = information_covariance(&fit.information)?;
+    let std_errors = covariance
+        .diag()
+        .iter()
+        .map(|variance| variance.sqrt())
+        .collect();
+    let covariance_rows = covariance.outer_iter().map(|row| row.to_vec()).collect();
 
     let aic = -2.0 * fit.log_likelihood + 2.0 * n_params as f64;
     let bic = -2.0 * fit.log_likelihood + (n as f64).ln() * n_params as f64;
@@ -537,6 +572,7 @@ pub fn flexible_parametric_model(
         bic,
         n_iterations: fit.n_iterations,
         converged: fit.converged,
+        covariance: Some(covariance_rows),
     })
 }
 
@@ -816,44 +852,82 @@ pub fn predict_hazard_spline(
     let log_times: Vec<f64> = eval_times.iter().map(|t| t.max(0.001).ln()).collect();
     let spline_basis = compute_bspline_basis(&log_times, &model_result.knots, degree);
 
-    let cov_contribution: f64 = match covariate_values.as_deref() {
-        Some(cov) => cov
-            .iter()
-            .zip(model_result.coefficients.iter())
-            .map(|(c, b)| c * b)
-            .sum(),
-        None => 0.0,
-    };
+    let n_params = model_result.coefficients.len() + model_result.spline_coefficients.len();
+    let mut parameters = Vec::with_capacity(n_params);
+    parameters.extend_from_slice(&model_result.coefficients);
+    parameters.extend_from_slice(&model_result.spline_coefficients);
+    let covariance = model_result.covariance.clone().unwrap_or_else(|| {
+        let mut matrix = vec![vec![0.0; n_params]; n_params];
+        for (idx, &standard_error) in model_result.std_errors.iter().enumerate() {
+            matrix[idx][idx] = standard_error * standard_error;
+        }
+        matrix
+    });
+    let covariate_row =
+        covariate_values.unwrap_or_else(|| vec![0.0; model_result.coefficients.len()]);
 
     let mut hazard = vec![0.0; n_times];
     let mut cumulative_hazard = vec![0.0; n_times];
     let mut survival = vec![1.0; n_times];
+    let mut survival_se = vec![0.0; n_times];
+    let mut cumulative_gradient = vec![0.0; n_params];
+    let mut previous_hazard_gradient = vec![0.0; n_params];
     for i in 0..n_times {
-        let mut log_hazard = cov_contribution;
-
-        for (coef, &basis_val) in model_result
-            .spline_coefficients
+        let mut design_row = Vec::with_capacity(n_params);
+        design_row.extend_from_slice(&covariate_row);
+        design_row.extend_from_slice(&spline_basis[i]);
+        let log_hazard = parameters
             .iter()
-            .zip(spline_basis[i].iter())
-        {
-            log_hazard += coef * basis_val;
-        }
-
+            .zip(&design_row)
+            .map(|(&parameter, &value)| parameter * value)
+            .sum::<f64>();
         hazard[i] = log_hazard.exp();
+        if !hazard[i].is_finite() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "spline hazard prediction became non-finite",
+            ));
+        }
+        let hazard_gradient: Vec<f64> = design_row.iter().map(|&value| hazard[i] * value).collect();
 
         if i == 0 {
             cumulative_hazard[i] = hazard[i] * eval_times[i];
+            for (gradient, &hazard_derivative) in
+                cumulative_gradient.iter_mut().zip(&hazard_gradient)
+            {
+                *gradient = eval_times[i] * hazard_derivative;
+            }
         } else {
             let dt = eval_times[i] - eval_times[i - 1];
             cumulative_hazard[i] =
                 cumulative_hazard[i - 1] + (hazard[i - 1] + hazard[i]) / 2.0 * dt;
+            for ((gradient, &previous), &current) in cumulative_gradient
+                .iter_mut()
+                .zip(&previous_hazard_gradient)
+                .zip(&hazard_gradient)
+            {
+                *gradient += 0.5 * dt * (previous + current);
+            }
         }
 
         survival[i] = (-cumulative_hazard[i]).exp();
+        let mut cumulative_hazard_variance = 0.0;
+        for (row, &left_gradient) in covariance.iter().zip(&cumulative_gradient) {
+            let row_product = row
+                .iter()
+                .zip(&cumulative_gradient)
+                .map(|(&value, &right_gradient)| value * right_gradient)
+                .sum::<f64>();
+            cumulative_hazard_variance += left_gradient * row_product;
+        }
+        if !cumulative_hazard_variance.is_finite() || cumulative_hazard_variance < -1e-10 {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "spline hazard covariance produced an invalid prediction variance",
+            ));
+        }
+        survival_se[i] = survival[i] * cumulative_hazard_variance.max(0.0).sqrt();
+        previous_hazard_gradient = hazard_gradient;
     }
 
-    let se_factor = 0.1;
-    let survival_se: Vec<f64> = survival.iter().map(|&s| s * se_factor).collect();
     let (lower_ci, upper_ci) = clamped_normal_ci_bounds_95(&survival, &survival_se, 0.0, 1.0);
 
     Ok(HazardSplineResult {
@@ -910,8 +984,8 @@ mod tests {
         assert!(fit.converged);
         assert!((fit.parameters[0] - expected_parameter).abs() <= 1e-10);
         assert!((fit.information[[0, 0]] - 3.0).abs() <= 1e-10);
-        let standard_errors = information_standard_errors(&fit.information).unwrap();
-        assert!((standard_errors[0] - 1.0 / 3.0_f64.sqrt()).abs() <= 1e-10);
+        let covariance = information_covariance(&fit.information).unwrap();
+        assert!((covariance[[0, 0]].sqrt() - 1.0 / 3.0_f64.sqrt()).abs() <= 1e-10);
     }
 
     #[test]
@@ -1022,6 +1096,40 @@ mod tests {
         }
         assert!(result.survival[0] < 1.0);
         assert!(result.survival.windows(2).all(|pair| pair[1] <= pair[0]));
+        for ((&lower, &estimate), &upper) in result
+            .lower_ci
+            .iter()
+            .zip(&result.survival)
+            .zip(&result.upper_ci)
+        {
+            assert!(lower <= estimate && estimate <= upper);
+        }
+    }
+
+    #[test]
+    fn spline_prediction_intervals_use_parameter_uncertainty() {
+        let model = |standard_error: f64| {
+            FlexibleParametricResult::new(
+                vec![],
+                vec![-2.0, -2.0],
+                vec![standard_error; 2],
+                vec![0.0, 1.0],
+                -1.0,
+                6.0,
+                6.0,
+                1,
+                true,
+            )
+        };
+
+        let precise = predict_hazard_spline(model(0.01), vec![1.0, 2.0], None).unwrap();
+        let uncertain = predict_hazard_spline(model(10.0), vec![1.0, 2.0], None).unwrap();
+
+        for idx in 0..2 {
+            let precise_width = precise.upper_ci[idx] - precise.lower_ci[idx];
+            let uncertain_width = uncertain.upper_ci[idx] - uncertain.lower_ci[idx];
+            assert!(uncertain_width > precise_width);
+        }
     }
 
     #[test]
