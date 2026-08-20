@@ -12739,6 +12739,7 @@ def _survfit_multistate(
     p0_override = supplied_p0
     if p0_override is None and same_initial_state:
         p0_override = [float(state == initial_states[0]) for state in range(len(states))]
+    starts_at_observed_minimum = response.start is not None and t0 == min(response.start)
 
     def fit_curve(indices: list[int]) -> SurvfitMultiStateResult:
         curve_response = _subset_surv(response, indices)
@@ -12769,7 +12770,7 @@ def _survfit_multistate(
             [True] * len(indices)
             if curve_response.start is None
             else [
-                start <= t0 <= stop if t0 == min(response.start) else start < t0 <= stop
+                start <= t0 <= stop if starts_at_observed_minimum else start < t0 <= stop
                 for start, stop in zip(
                     curve_response.start,
                     curve_response.time,
