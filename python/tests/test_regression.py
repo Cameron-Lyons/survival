@@ -1115,6 +1115,39 @@ def test_survreg_residual_apis_validate_numeric_inputs():
         )
 
 
+def test_anderson_gill_matches_tied_cluster_reference():
+    n_subjects = 20
+    subject_id = []
+    start = []
+    stop = []
+    event = []
+    covariates = []
+    for subject in range(1, n_subjects + 1):
+        for interval in range(3):
+            row = len(subject_id)
+            subject_id.append(subject)
+            start.append(float(interval))
+            stop.append(float(interval + 1))
+            event.append(int(row % 4 != 0))
+            covariates.extend(
+                [
+                    ((row * 3 + subject * 2) % 17) * 0.1,
+                    ((row * 7 + subject) % 13) * 0.1,
+                ]
+            )
+
+    result = survival.anderson_gill_model(subject_id, start, stop, event, covariates, 50, 1e-9)
+
+    assert result.coef == pytest.approx([-0.176545463952229, 0.0386815494247862], abs=1e-10)
+    assert result.std_errors == pytest.approx([0.309771133238645, 0.4072363513213], abs=1e-10)
+    assert result.robust_std_errors == pytest.approx(
+        [0.272213095533931, 0.34197721951329], abs=1e-10
+    )
+    assert result.log_likelihood == pytest.approx(-112.465975135154, abs=1e-10)
+    assert result.n_iter == 3
+    assert result.converged is True
+
+
 def test_recurrent_event_regression_validates_public_inputs():
     with pytest.raises(ValueError, match="x length"):
         survival.gap_time_model([0, 1], [0.0, 0.0], [1.0, 1.0], [1, 0], [0.5], 2, 1, 10, 1e-6)
