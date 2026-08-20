@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use survival::regression::{
     CoxPHModel, SplineConfig, aareg_fit, agexact, cch_borgan_fit, cch_fit, coxph_fit, finegray,
-    flexible_parametric_model, landmark_cox_analysis, survreg,
+    flexible_parametric_model, landmark_cox_analysis, survreg, time_varying_cox,
 };
 use survival::residuals::smooth_schoenfeld;
 use survival::{
@@ -853,6 +853,36 @@ mod landmark_cox_bench {
             let result =
                 landmark_cox_analysis(time.clone(), event.clone(), covariates.clone(), 0.0, 60.0)
                     .expect("benchmark landmark Cox fit should succeed");
+            black_box(result);
+        });
+    }
+}
+
+mod time_varying_cox_bench {
+    use super::*;
+
+    #[divan::bench(args = [100, 500, 1000])]
+    fn piecewise_fit(bencher: divan::Bencher, n: usize) {
+        let stop_time: Vec<f64> = (0..n).map(|idx| (idx % 80 + 1) as f64).collect();
+        let start_time: Vec<f64> = stop_time
+            .iter()
+            .enumerate()
+            .map(|(idx, &stop)| (stop - (idx % 5 + 1) as f64).max(0.0))
+            .collect();
+        let event: Vec<i32> = (0..n).map(|idx| i32::from(idx % 4 != 0)).collect();
+        let covariates: Vec<Vec<f64>> = (0..n)
+            .map(|idx| vec![(idx % 3) as f64, ((idx * 7) % 11) as f64 * 0.1])
+            .collect();
+
+        bencher.bench_local(|| {
+            let result = time_varying_cox(
+                start_time.clone(),
+                stop_time.clone(),
+                event.clone(),
+                covariates.clone(),
+                10,
+            )
+            .expect("benchmark time-varying Cox fit should succeed");
             black_box(result);
         });
     }

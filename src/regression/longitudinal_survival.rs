@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::constants::{clamped_normal_ci_95, same_time};
+use crate::constants::clamped_normal_ci_95;
 use crate::regression::coxph::coxph_fit;
 
 #[derive(Debug, Clone)]
@@ -701,6 +701,79 @@ impl TimeVaryingCoxResult {
     }
 }
 
+struct TimeVaryingIntervalFit {
+    coefficients: Vec<f64>,
+    standard_errors: Vec<f64>,
+    log_likelihood: f64,
+}
+
+fn fit_time_varying_interval(
+    start_time: &[f64],
+    stop_time: &[f64],
+    event: &[i32],
+    covariates: &[Vec<f64>],
+    interval_start: f64,
+    interval_stop: f64,
+    n_features: usize,
+) -> PyResult<TimeVaryingIntervalFit> {
+    let interval_rows: Vec<usize> = (0..start_time.len())
+        .filter(|&idx| stop_time[idx] > interval_start && start_time[idx] < interval_stop)
+        .collect();
+    let interval_event: Vec<i32> = interval_rows
+        .iter()
+        .map(|&idx| {
+            i32::from(
+                event[idx] == 1
+                    && stop_time[idx] > interval_start
+                    && stop_time[idx] <= interval_stop,
+            )
+        })
+        .collect();
+    if !interval_event.contains(&1) {
+        return Ok(TimeVaryingIntervalFit {
+            coefficients: vec![0.0; n_features],
+            standard_errors: vec![f64::INFINITY; n_features],
+            log_likelihood: 0.0,
+        });
+    }
+
+    let fit = coxph_fit(
+        interval_rows.iter().map(|&idx| stop_time[idx]).collect(),
+        interval_event,
+        interval_rows
+            .iter()
+            .map(|&idx| covariates[idx].clone())
+            .collect(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("efron"),
+        Some(interval_rows.iter().map(|&idx| start_time[idx]).collect()),
+        None,
+    )?;
+    let coefficients = fit.coefficients.first().cloned().unwrap_or_default();
+    let standard_errors = (0..n_features)
+        .map(|idx| {
+            fit.information_matrix
+                .get(idx)
+                .and_then(|row| row.get(idx))
+                .copied()
+                .unwrap_or(0.0)
+                .max(0.0)
+                .sqrt()
+        })
+        .collect();
+    Ok(TimeVaryingIntervalFit {
+        coefficients,
+        standard_errors,
+        log_likelihood: fit.log_likelihood.last().copied().unwrap_or(0.0),
+    })
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     start_time,
@@ -722,94 +795,83 @@ pub fn time_varying_cox(
             "Input arrays must have the same non-zero length",
         ));
     }
+    if n_time_points == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_time_points must be positive",
+        ));
+    }
+    for (idx, (&start, &stop)) in start_time.iter().zip(&stop_time).enumerate() {
+        if !start.is_finite() || start < 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "start_time must contain finite non-negative values; invalid value at index {idx}"
+            )));
+        }
+        if !stop.is_finite() || stop <= start {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "stop_time must be finite and greater than start_time at index {idx}"
+            )));
+        }
+    }
+    if let Some((idx, &value)) = event
+        .iter()
+        .enumerate()
+        .find(|(_, value)| !matches!(value, 0 | 1))
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "event must contain only 0/1 values; got {value} at index {idx}"
+        )));
+    }
+    let n_features = covariates[0].len();
+    for (row_idx, row) in covariates.iter().enumerate() {
+        if row.len() != n_features {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "covariates must be rectangular; row {row_idx} has {} columns, expected {n_features}",
+                row.len()
+            )));
+        }
+        if row.iter().any(|value| !value.is_finite()) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "covariates row {row_idx} contains a non-finite value"
+            )));
+        }
+    }
 
-    let n_features = if covariates.is_empty() {
-        0
-    } else {
-        covariates[0].len()
-    };
-
-    let max_time = stop_time.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let max_time = stop_time.iter().copied().fold(0.0, f64::max);
     let coefficient_times: Vec<f64> = (0..n_time_points)
         .map(|i| max_time * (i + 1) as f64 / n_time_points as f64)
         .collect();
 
-    let mut all_coefficients = Vec::new();
-    let mut all_standard_errors = Vec::new();
+    let interval_bounds: Vec<(f64, f64)> = coefficient_times
+        .iter()
+        .enumerate()
+        .map(|(idx, &stop)| {
+            let start = idx
+                .checked_sub(1)
+                .map_or(0.0, |previous| coefficient_times[previous]);
+            (start, stop)
+        })
+        .collect();
+    let interval_fits: Vec<TimeVaryingIntervalFit> = interval_bounds
+        .par_iter()
+        .map(|&(start, stop)| {
+            fit_time_varying_interval(
+                &start_time,
+                &stop_time,
+                &event,
+                &covariates,
+                start,
+                stop,
+                n_features,
+            )
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let mut all_coefficients = Vec::with_capacity(n_time_points * n_features);
+    let mut all_standard_errors = Vec::with_capacity(n_time_points);
     let mut total_ll = 0.0;
-
-    for &time_point in &coefficient_times {
-        let at_risk: Vec<usize> = (0..n)
-            .filter(|&i| start_time[i] < time_point && stop_time[i] >= time_point)
-            .collect();
-
-        if at_risk.is_empty() {
-            all_coefficients.extend(vec![0.0; n_features]);
-            all_standard_errors.push(vec![f64::INFINITY; n_features]);
-            continue;
-        }
-
-        let mut coefficients = vec![0.0; n_features];
-        let learning_rate = 0.01;
-
-        for _ in 0..50 {
-            let linear_pred: Vec<f64> = at_risk
-                .iter()
-                .map(|&i| {
-                    covariates[i]
-                        .iter()
-                        .zip(coefficients.iter())
-                        .map(|(&x, &b)| x * b)
-                        .sum()
-                })
-                .collect();
-
-            let exp_lp: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
-            let risk_sum: f64 = exp_lp.iter().sum();
-
-            let mut gradient = vec![0.0; n_features];
-
-            for &i in at_risk.iter() {
-                if event[i] == 1 && same_time(stop_time[i], time_point) {
-                    for (j, &xij) in covariates[i].iter().enumerate() {
-                        let weighted_mean: f64 = at_risk
-                            .iter()
-                            .enumerate()
-                            .map(|(k, &kk)| covariates[kk][j] * exp_lp[k])
-                            .sum::<f64>()
-                            / risk_sum;
-                        gradient[j] += xij - weighted_mean;
-                    }
-                }
-            }
-
-            for (b, g) in coefficients.iter_mut().zip(gradient.iter()) {
-                *b += learning_rate * g;
-            }
-        }
-
-        let linear_pred: Vec<f64> = at_risk
-            .iter()
-            .map(|&i| {
-                covariates[i]
-                    .iter()
-                    .zip(coefficients.iter())
-                    .map(|(&x, &b)| x * b)
-                    .sum()
-            })
-            .collect();
-
-        let exp_lp: Vec<f64> = linear_pred.iter().map(|&lp| lp.exp()).collect();
-        let risk_sum: f64 = exp_lp.iter().sum();
-
-        for (idx, &i) in at_risk.iter().enumerate() {
-            if event[i] == 1 && same_time(stop_time[i], time_point) {
-                total_ll += linear_pred[idx] - risk_sum.ln();
-            }
-        }
-
-        all_coefficients.extend(coefficients.clone());
-        all_standard_errors.push(vec![0.1; n_features]);
+    for fit in interval_fits {
+        all_coefficients.extend(fit.coefficients);
+        all_standard_errors.push(fit.standard_errors);
+        total_ll += fit.log_likelihood;
     }
 
     let n_events = event.iter().filter(|&&e| e == 1).count();
@@ -980,5 +1042,81 @@ mod tests {
         let result = time_varying_cox(start_time, stop_time, event, covariates, 5).unwrap();
         assert_eq!(result.coefficient_times.len(), 5);
         assert_eq!(result.n_events, 3);
+    }
+
+    #[test]
+    fn time_varying_cox_matches_piecewise_reference_fits() {
+        let start_time = vec![0.0, 0.0, 1.5, 2.5, 0.0, 3.0];
+        let stop_time = vec![2.0, 2.0, 4.0, 5.0, 5.0, 6.0];
+        let event = vec![1, 1, 1, 0, 1, 0];
+        let covariates = vec![
+            vec![0.2],
+            vec![0.8],
+            vec![0.4],
+            vec![1.1],
+            vec![0.7],
+            vec![0.3],
+        ];
+
+        let result = time_varying_cox(start_time, stop_time, event, covariates, 3).unwrap();
+
+        let expected_coefficients = [
+            -0.564_476_974_597_113,
+            -3.783_078_020_460_11,
+            -4.163_336_342_344_34e-16,
+        ];
+        let expected_standard_errors = [
+            3.103_828_319_064_21,
+            6.038_692_510_995_47,
+            3.061_862_178_478_97,
+        ];
+        for (&actual, &expected) in result.coefficients.iter().zip(&expected_coefficients) {
+            assert!((actual - expected).abs() <= 1e-10);
+        }
+        for (actual, &expected) in result.standard_errors.iter().zip(&expected_standard_errors) {
+            assert!((actual[0] - expected).abs() <= 1e-10);
+        }
+        assert!((result.log_likelihood - (-4.615_053_320_993_66)).abs() <= 1e-10);
+        assert_eq!(result.n_events, 4);
+    }
+
+    #[test]
+    fn time_varying_cox_validates_public_inputs() {
+        let start = vec![0.0, 1.0];
+        let stop = vec![1.0, 2.0];
+        let event = vec![1, 0];
+        let covariates = vec![vec![0.0], vec![1.0]];
+
+        assert!(
+            time_varying_cox(
+                start.clone(),
+                stop.clone(),
+                event.clone(),
+                covariates.clone(),
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            time_varying_cox(
+                vec![0.0, 2.0],
+                stop.clone(),
+                event.clone(),
+                covariates.clone(),
+                2,
+            )
+            .is_err()
+        );
+        assert!(
+            time_varying_cox(
+                start.clone(),
+                stop.clone(),
+                vec![1, 2],
+                covariates.clone(),
+                2,
+            )
+            .is_err()
+        );
+        assert!(time_varying_cox(start, stop, event, vec![vec![0.0], vec![]], 2).is_err());
     }
 }
