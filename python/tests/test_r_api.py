@@ -9492,6 +9492,150 @@ def test_coxph_quadratic_penalty_matches_pspline_reference():
     assert survival.degrees_freedom(fit) == pytest.approx(1.5042707367453212, abs=1e-9)
 
 
+def test_coxph_formula_pspline_matches_fixed_theta_reference():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "z": [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5, -1.2, 0.2, 0.8, 1.1, -0.8, 0.4],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+    }
+    spline_term = "pspline(x,theta=.5,nterm=4)"
+
+    fit = survival.coxph(
+        f"Surv(time,status) ~ z + {spline_term}",
+        data=data,
+        ties="breslow",
+        max_iter=50,
+        eps=1e-10,
+        x=True,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [
+            -0.0741067284776349,
+            -0.38009804955227167,
+            -0.7221627767130293,
+            -0.9529432423453882,
+            -1.0600127429211976,
+            -1.2717072754485976,
+            -1.5308282581475483,
+        ],
+        abs=1e-9,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-12.619505923287514, -12.310245007337597],
+        abs=1e-9,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"z": 0.9278043469011386, spline_term: 1.4412471548812449},
+        abs=1e-9,
+    )
+    assert survival.degrees_freedom(fit) == pytest.approx(2.3690515017823834, abs=1e-9)
+    assert fit.history == {spline_term: {"theta": 0.5, "done": True}}
+    assert survival.coef_names(fit) == [
+        "z",
+        "ps(x)3",
+        "ps(x)4",
+        "ps(x)5",
+        "ps(x)6",
+        "ps(x)7",
+        "ps(x)8",
+    ]
+    assert survival.model_matrix(fit)["assign"] == [1, 2, 2, 2, 2, 2, 2]
+    assert survival.attrassign(fit) == {"z": [1], spline_term: [2, 3, 4, 5, 6, 7]}
+    assert survival.predict(fit, {"z": [0.3], "x": [0.8]}, type="lp") == pytest.approx(
+        [-0.0043472678247675],
+        abs=1e-12,
+    )
+
+    intercept_fit = survival.coxph(
+        "Surv(time,status) ~ pspline(x,theta=.5,nterm=4,intercept=True)",
+        data=data,
+        ties="breslow",
+    )
+    assert survival.coef_names(intercept_fit) == [f"ps(x){index}" for index in range(1, 8)]
+    assert math.isnan(survival.coef(intercept_fit)[-1])
+    assert intercept_fit.log_likelihood == pytest.approx(
+        [-12.619505923287514, -12.317017585688493],
+        abs=1e-9,
+    )
+    assert survival.degrees_freedom(intercept_fit) == pytest.approx(
+        1.504270736745309,
+        abs=1e-9,
+    )
+
+
+def test_coxph_formula_combines_ridge_and_pspline_penalties():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "z": [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5, -1.2, 0.2, 0.8, 1.1, -0.8, 0.4],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+    }
+    ridge_term = "ridge(z,theta=.2,scale=False)"
+    spline_term = "pspline(x,theta=.5,nterm=4)"
+    fit = survival.coxph(
+        f"Surv(time,status) ~ {ridge_term} + {spline_term}",
+        data=data,
+        ties="breslow",
+        max_iter=50,
+        eps=1e-10,
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [
+            -0.070320444853245,
+            -0.3819001744055665,
+            -0.7256071084823391,
+            -0.9570044084300517,
+            -1.0634835877829907,
+            -1.2734692251277087,
+            -1.530654949333059,
+        ],
+        abs=1e-9,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-12.619505923287514, -12.310127952662103],
+        abs=1e-9,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {ridge_term: 0.8806780229162634, spline_term: 1.4386713799659729},
+        abs=1e-9,
+    )
+
+
+def test_coxph_formula_pspline_rejects_unsupported_or_invalid_options():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 0, 1, 1],
+        "x": [0.2, 0.5, 0.8, 1.0],
+    }
+    with pytest.raises(NotImplementedError, match="require fixed theta"):
+        survival.coxph("Surv(time,status) ~ pspline(x,df=3)", data=data)
+    for option, message in (
+        ("theta=1", "between 0 and 1"),
+        ("theta=.5,nterm=2", "at least 3"),
+        ("theta=.5,degree=0", "positive"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            survival.coxph(f"Surv(time,status) ~ pspline(x,{option})", data=data)
+    with pytest.raises(ValueError, match="one column"):
+        survival.coxph("Surv(time,status) ~ pspline(x,status,theta=.5)", data=data)
+    with pytest.raises(ValueError, match="must not reuse"):
+        survival.coxph(
+            "Surv(time,status) ~ pspline(x,theta=.4) + pspline(x,theta=.6)",
+            data=data,
+        )
+    with pytest.raises(ValueError, match="use only one"):
+        survival.coxph(
+            "Surv(time,status) ~ pspline(x,theta=.5,nterm=3)",
+            data=data,
+            penalty_matrix=[[1.0] * 5 for _ in range(5)],
+        )
+    with pytest.raises(NotImplementedError, match="supported only by coxph"):
+        survival.survreg("Surv(time,status) ~ pspline(x,theta=.5)", data=data)
+
+
 def test_coxph_formula_ridge_defaults_to_half_the_term_width():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],

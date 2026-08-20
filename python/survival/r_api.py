@@ -240,8 +240,28 @@ class _ModelRidgeTerm:
     ridge: _RidgeFormulaTerm
 
 
+@dataclass(frozen=True)
+class _PSplineFormulaTerm:
+    term: _CovariateTerm
+    theta: float
+    nterm: int
+    degree: int
+    intercept: bool
+    label: str
+
+
+@dataclass(frozen=True)
+class _ModelPSplineTerm:
+    pspline: _PSplineFormulaTerm
+
+
 _FormulaModelTerm = (
-    _ModelCovariateTerm | _ModelStrataTerm | _ModelOffsetTerm | _ModelClusterTerm | _ModelRidgeTerm
+    _ModelCovariateTerm
+    | _ModelStrataTerm
+    | _ModelOffsetTerm
+    | _ModelClusterTerm
+    | _ModelRidgeTerm
+    | _ModelPSplineTerm
 )
 
 
@@ -252,6 +272,7 @@ class _FormulaTerms:
     offsets: list[_CovariateTerm]
     clusters: list[str]
     ridge: list[_RidgeFormulaTerm] = field(default_factory=list)
+    pspline: list[_PSplineFormulaTerm] = field(default_factory=list)
     model_terms: list[_FormulaModelTerm] = field(default_factory=list)
     intercept: bool = True
 
@@ -263,6 +284,7 @@ class _CachedFormulaTerms:
     offsets: tuple[_CovariateTerm, ...]
     clusters: tuple[str, ...]
     ridge: tuple[_RidgeFormulaTerm, ...] = ()
+    pspline: tuple[_PSplineFormulaTerm, ...] = ()
     model_terms: tuple[_FormulaModelTerm, ...] = ()
     intercept: bool = True
 
@@ -287,7 +309,13 @@ class _InteractionDesignTerm:
     factors: tuple[_SingleDesignTerm, ...]
 
 
-_DesignTerm = _SingleDesignTerm | _InteractionDesignTerm
+@dataclass(frozen=True)
+class _PSplineDesignTerm:
+    formula: _PSplineFormulaTerm
+    boundary_knots: tuple[float, float]
+
+
+_DesignTerm = _SingleDesignTerm | _InteractionDesignTerm | _PSplineDesignTerm
 
 
 @dataclass(frozen=True)
@@ -311,6 +339,14 @@ class _RidgePenaltyBlock:
     theta: float | None
     target_df: float | None
     eps: float
+
+
+@dataclass(frozen=True)
+class _PSplinePenaltyBlock:
+    label: str
+    columns: tuple[int, ...]
+    penalty: tuple[tuple[float, ...], ...]
+    theta: float
 
 
 @dataclass(frozen=True)
@@ -3362,6 +3398,70 @@ def _parse_ridge_formula_term(term: str) -> _RidgeFormulaTerm:
     )
 
 
+def _parse_pspline_formula_term(term: str) -> _PSplineFormulaTerm:
+    parts = _formula_response_parts(term[8:-1])
+    column: str | None = None
+    theta: float | None = None
+    df = 4.0
+    nterm: int | None = None
+    degree = 3
+    intercept = False
+    saw_option = False
+    seen_options: set[str] = set()
+    for part in parts:
+        option = _formula_named_option(part)
+        if option is None:
+            if saw_option or column is not None:
+                raise ValueError("pspline() requires one column before named options")
+            column, quoted = _formula_name(part)
+            if _unsupported_formula_name(column, quoted):
+                raise ValueError(f"unsupported pspline() formula column: {column}")
+            continue
+
+        saw_option = True
+        name, raw_value = option
+        name = name.lower()
+        if name in seen_options:
+            raise ValueError(f"pspline() contains multiple {name}= options")
+        seen_options.add(name)
+        value = _parse_formula_literal(raw_value)
+        if name == "theta":
+            theta = _finite_float(value, "pspline theta")
+        elif name == "df":
+            df = _finite_float(value, "pspline df")
+        elif name == "nterm":
+            nterm = _integer_scalar(value, "pspline nterm")
+        elif name == "degree":
+            degree = _integer_scalar(value, "pspline degree")
+        elif name == "intercept":
+            intercept = _normalize_bool_option(value, "pspline intercept")
+        else:
+            raise ValueError(f"unsupported pspline() formula option: {name}")
+
+    if column is None:
+        raise ValueError("pspline() requires one column")
+    if theta is None:
+        raise NotImplementedError("pspline() formula terms currently require fixed theta=")
+    if theta <= 0.0 or theta >= 1.0:
+        raise ValueError("pspline theta must be between 0 and 1")
+    if df <= 0.0:
+        raise ValueError("pspline df must be positive")
+    if nterm is None:
+        nterm = int(round(2.5 * df))
+    if nterm < 3:
+        raise ValueError("pspline nterm must be at least 3")
+    if degree < 1:
+        raise ValueError("pspline degree must be positive")
+    return _PSplineFormulaTerm(
+        term=_CovariateTerm(column, transform="pspline"),
+        theta=theta,
+        nterm=nterm,
+        degree=degree,
+        intercept=intercept,
+        label=term,
+    )
+
+
 def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
     return _FormulaTerms(
         covariates=list(terms.covariates),
@@ -3369,6 +3469,7 @@ def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
         offsets=list(terms.offsets),
         clusters=list(terms.clusters),
         ridge=list(terms.ridge),
+        pspline=list(terms.pspline),
         model_terms=list(terms.model_terms),
         intercept=terms.intercept,
     )
@@ -3384,6 +3485,7 @@ def _split_terms_cached(
     offsets: list[_CovariateTerm] = []
     clusters: list[str] = []
     ridge: list[_RidgeFormulaTerm] = []
+    pspline: list[_PSplineFormulaTerm] = []
     model_terms: list[_FormulaModelTerm] = []
     unsupported: list[str] = []
     intercept = True
@@ -3420,6 +3522,24 @@ def _split_terms_cached(
             else:
                 _append_unique(covariates, covariate_terms)
                 _append_unique(ridge, [ridge_term])
+                _append_unique(model_terms, [model_item])
+            continue
+        if term.startswith("pspline(") and term.endswith(")"):
+            pspline_term = _parse_pspline_formula_term(term)
+            if any(
+                existing.term == pspline_term.term and existing != pspline_term
+                for existing in pspline
+            ):
+                raise ValueError("pspline() formula terms must not reuse a column")
+            model_item = _ModelPSplineTerm(pspline_term)
+            covariate_term = pspline_term.term
+            if op == "-":
+                _remove_values(covariates, [covariate_term])
+                _remove_values(pspline, [pspline_term])
+                _remove_values(model_terms, [model_item])
+            else:
+                _append_unique(covariates, [covariate_term])
+                _append_unique(pspline, [pspline_term])
                 _append_unique(model_terms, [model_item])
             continue
         if term.startswith("strata(") and term.endswith(")"):
@@ -3484,6 +3604,7 @@ def _split_terms_cached(
         offsets=tuple(offsets),
         clusters=tuple(clusters),
         ridge=tuple(ridge),
+        pspline=tuple(pspline),
         model_terms=tuple(model_terms),
         intercept=intercept,
     )
@@ -3692,7 +3813,7 @@ def _apply_numeric_transform(values: list[float], transform: str | None, term: s
         return [math.sqrt(value) for value in values]
     if transform == "exp":
         return [math.exp(value) for value in values]
-    if transform in {"I", "identity", "as.numeric", "ridge", "tt"}:
+    if transform in {"I", "identity", "as.numeric", "ridge", "pspline", "tt"}:
         return values
     raise ValueError(f"unsupported formula transform {transform!r}")
 
@@ -3824,7 +3945,7 @@ def _formula_factor_order(terms: Sequence[_CovariateSpec]) -> dict[_CovariateTer
 def _formula_model_term_degree(term: _FormulaModelTerm) -> int:
     if isinstance(term, _ModelCovariateTerm):
         return len(_covariate_factors(term.term))
-    if isinstance(term, _ModelStrataTerm | _ModelRidgeTerm):
+    if isinstance(term, _ModelStrataTerm | _ModelRidgeTerm | _ModelPSplineTerm):
         return 1
     return 0
 
@@ -3832,7 +3953,20 @@ def _formula_model_term_degree(term: _FormulaModelTerm) -> int:
 def _formula_model_term_label(term: _FormulaModelTerm) -> str:
     if isinstance(term, _ModelRidgeTerm):
         return term.ridge.label
+    if isinstance(term, _ModelPSplineTerm):
+        return term.pspline.label
     return ":".join(_formula_model_term_factors(term))
+
+
+def _fit_pspline_design_term(
+    data: Any,
+    formula: _PSplineFormulaTerm,
+    n: int,
+) -> _PSplineDesignTerm:
+    values = _numeric_term_values(_term_raw_values(data, formula.term, n), formula.term)
+    if not values or any(not math.isfinite(value) for value in values):
+        raise ValueError("pspline() formula columns must contain finite values")
+    return _PSplineDesignTerm(formula, (min(values), max(values)))
 
 
 def _categorical_design_factors(spec: _DesignTerm) -> list[_CategoricalDesignTerm]:
@@ -3876,7 +4010,10 @@ def _fit_formula_design(
     n: int,
     *,
     include_intercept: bool = False,
+    allow_pspline: bool = False,
 ) -> _FormulaDesign:
+    if terms.pspline and not allow_pspline:
+        raise NotImplementedError("pspline() formula terms are currently supported only by coxph")
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
     factor_order = _formula_factor_order(terms.covariates)
     ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
@@ -3884,7 +4021,10 @@ def _fit_formula_design(
         (
             term
             for term in terms.model_terms
-            if isinstance(term, _ModelCovariateTerm | _ModelStrataTerm | _ModelRidgeTerm)
+            if isinstance(
+                term,
+                _ModelCovariateTerm | _ModelStrataTerm | _ModelRidgeTerm | _ModelPSplineTerm,
+            )
         ),
         key=_formula_model_term_degree,
     )
@@ -3895,12 +4035,19 @@ def _fit_formula_design(
         elif isinstance(model_term, _ModelRidgeTerm):
             for ridge_term in model_term.ridge.terms:
                 term_assignments[ridge_term] = term_index
+        elif isinstance(model_term, _ModelPSplineTerm):
+            term_assignments[model_term.pspline.term] = term_index
     contrast_intercept = terms.intercept if include_intercept else True
     covered_terms: set[frozenset[_CovariateTerm]] = {frozenset()} if contrast_intercept else set()
     promoted_no_intercept_factor = contrast_intercept
     design_terms: list[_DesignTerm] = []
+    pspline_terms = {formula.term: formula for formula in terms.pspline}
     for term in ordered_terms:
-        fitted_term = _fit_design_term(data, term, n, factor_order)
+        fitted_term = (
+            _fit_pspline_design_term(data, pspline_terms[term], n)
+            if isinstance(term, _CovariateTerm) and term in pspline_terms
+            else _fit_design_term(data, term, n, factor_order)
+        )
         raw_factors = frozenset(_covariate_factors(term))
         categorical_factors = _categorical_design_factors(fitted_term)
         full_factors = {
@@ -3968,6 +4115,20 @@ def _design_term_columns(
     n: int,
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
 ) -> list[list[float]]:
+    if isinstance(spec, _PSplineDesignTerm):
+        values = _numeric_term_values(
+            _term_raw_values(data, spec.formula.term, n),
+            spec.formula.term,
+        )
+        matrix, _knots = _core.pspline_basis(
+            values,
+            spec.formula.nterm,
+            spec.formula.degree,
+            spec.boundary_knots,
+        )
+        if not spec.formula.intercept:
+            matrix = [row[1:] for row in matrix]
+        return [list(column) for column in zip(*matrix, strict=True)]
     if isinstance(spec, _InteractionDesignTerm):
         factor_columns = [
             _single_design_columns(data, factor, n, time_transform_values)
@@ -4053,29 +4214,92 @@ def _ridge_penalty_vector(
     return penalty
 
 
-def _ridge_term_degrees_of_freedom(
+def _pspline_formula_blocks(design: _FormulaDesign) -> list[_PSplinePenaltyBlock]:
+    blocks: list[_PSplinePenaltyBlock] = []
+    cursor = 1 if design.intercept else 0
+    for term in design.covariates:
+        width = len(_design_term_output_names(term))
+        if isinstance(term, _PSplineDesignTerm):
+            full_width = term.formula.nterm + term.formula.degree
+            penalty = _pspline_difference_penalty(full_width)
+            if not term.formula.intercept:
+                penalty = [row[1:] for row in penalty[1:]]
+            smoothing = term.formula.theta / (1.0 - term.formula.theta)
+            blocks.append(
+                _PSplinePenaltyBlock(
+                    label=term.formula.label,
+                    columns=tuple(range(cursor, cursor + width)),
+                    penalty=tuple(tuple(smoothing * value for value in row) for row in penalty),
+                    theta=term.formula.theta,
+                )
+            )
+        cursor += width
+    return blocks
+
+
+def _formula_penalty_matrix(
+    width: int,
+    ridge_blocks: Sequence[_RidgePenaltyBlock],
+    ridge_thetas: Sequence[float],
+    pspline_blocks: Sequence[_PSplinePenaltyBlock],
+) -> list[list[float]]:
+    penalty = [[0.0] * width for _ in range(width)]
+    for block, theta in zip(ridge_blocks, ridge_thetas, strict=True):
+        for column, scale in zip(block.columns, block.scales, strict=True):
+            penalty[column][column] += theta * scale
+    for block in pspline_blocks:
+        for local_row, row in enumerate(block.columns):
+            for local_column, column in enumerate(block.columns):
+                penalty[row][column] += block.penalty[local_row][local_column]
+    return penalty
+
+
+def _diagonal_penalty_matrix(penalty: Sequence[float]) -> list[list[float]]:
+    width = len(penalty)
+    return [
+        [float(penalty[row]) if row == column else 0.0 for column in range(width)]
+        for row in range(width)
+    ]
+
+
+def _quadratic_term_degrees_of_freedom(
     fit: Any,
-    penalty: Sequence[float],
+    penalty: Sequence[Sequence[float]],
     columns: Sequence[int],
 ) -> float:
     variance = [[float(value) for value in row] for row in fit.information_matrix]
     width = len(variance)
     if not columns:
         return 0.0
-    if len(penalty) != width or any(len(row) != width for row in variance):
-        raise ValueError("ridge fit returned inconsistent covariance dimensions")
+    if (
+        len(penalty) != width
+        or any(len(row) != width for row in penalty)
+        or any(len(row) != width for row in variance)
+    ):
+        raise ValueError("quadratic fit returned inconsistent covariance dimensions")
     if list(columns) == list(range(width)):
-        value = width - math.fsum(
-            float(penalty[column]) * variance[column][column] for column in range(width)
+        trace = math.fsum(
+            float(penalty[row][column]) * variance[column][row]
+            for row in range(width)
+            for column in range(width)
         )
-        return min(max(value, 0.0), float(width))
+        rank = sum(variance[column][column] != 0.0 for column in range(width))
+        return min(max(rank - trace, 0.0), float(rank))
 
+    variance_penalty = [
+        [
+            math.fsum(
+                variance[row][middle] * float(penalty[middle][column]) for middle in range(width)
+            )
+            for column in range(width)
+        ]
+        for row in range(width)
+    ]
     naive = [
         [
             variance[row][column]
             - math.fsum(
-                variance[row][middle] * float(penalty[middle]) * variance[middle][column]
-                for middle in range(width)
+                variance_penalty[row][middle] * variance[middle][column] for middle in range(width)
             )
             for column in range(width)
         ]
@@ -4091,34 +4315,52 @@ def _ridge_term_degrees_of_freedom(
     return min(max(value, 0.0), float(len(columns)))
 
 
-def _ridge_formula_term_degrees_of_freedom(
+def _quadratic_formula_term_degrees_of_freedom(
     fit: Any,
-    penalty: Sequence[float],
+    penalty: Sequence[Sequence[float]],
     design: _FormulaDesign,
 ) -> dict[str, float]:
     width = len(penalty)
     cursor = 1 if design.intercept else 0
     grouped_columns: dict[int, list[int]] = {}
-    for term, assignment in zip(
-        design.covariates,
-        design.term_assignments,
-        strict=True,
-    ):
+    for term, assignment in zip(design.covariates, design.term_assignments, strict=True):
         output_count = len(_design_term_output_names(term))
-        grouped_columns.setdefault(assignment, []).extend(
-            range(cursor, cursor + output_count),
-        )
+        grouped_columns.setdefault(assignment, []).extend(range(cursor, cursor + output_count))
         cursor += output_count
     if cursor != width:
-        raise ValueError("ridge formula metadata does not match the fitted covariance matrix")
+        raise ValueError("formula metadata does not match the fitted covariance matrix")
     return {
         (
             design.term_labels[assignment - 1]
             if 0 < assignment <= len(design.term_labels)
             else f"term{assignment}"
-        ): _ridge_term_degrees_of_freedom(fit, penalty, columns)
+        ): _quadratic_term_degrees_of_freedom(fit, penalty, columns)
         for assignment, columns in grouped_columns.items()
     }
+
+
+def _ridge_term_degrees_of_freedom(
+    fit: Any,
+    penalty: Sequence[float],
+    columns: Sequence[int],
+) -> float:
+    return _quadratic_term_degrees_of_freedom(
+        fit,
+        _diagonal_penalty_matrix(penalty),
+        columns,
+    )
+
+
+def _ridge_formula_term_degrees_of_freedom(
+    fit: Any,
+    penalty: Sequence[float],
+    design: _FormulaDesign,
+) -> dict[str, float]:
+    return _quadratic_formula_term_degrees_of_freedom(
+        fit,
+        _diagonal_penalty_matrix(penalty),
+        design,
+    )
 
 
 def _ridge_control_fallback_theta(
@@ -4212,6 +4454,8 @@ def _display_single_design_term(spec: _SingleDesignTerm) -> str:
 
 
 def _design_term_name(spec: _DesignTerm) -> str:
+    if isinstance(spec, _PSplineDesignTerm):
+        return spec.formula.label
     if isinstance(spec, _InteractionDesignTerm):
         return ":".join(_display_single_design_term(factor) for factor in spec.factors)
     return _display_single_design_term(spec)
@@ -4227,6 +4471,12 @@ def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
 
 
 def _design_term_output_names(spec: _DesignTerm) -> list[str]:
+    if isinstance(spec, _PSplineDesignTerm):
+        width = spec.formula.nterm + spec.formula.degree
+        if not spec.formula.intercept:
+            width -= 1
+        start = 1 if spec.formula.intercept else 3
+        return [f"ps({spec.formula.term.column}){index}" for index in range(start, start + width)]
     if isinstance(spec, _InteractionDesignTerm):
         factor_names = [_single_design_term_output_names(factor) for factor in spec.factors]
         return [":".join(reversed(combo)) for combo in product(*reversed(factor_names))]
@@ -4234,6 +4484,8 @@ def _design_term_output_names(spec: _DesignTerm) -> list[str]:
 
 
 def _design_term_columns_used(spec: _DesignTerm) -> list[str]:
+    if isinstance(spec, _PSplineDesignTerm):
+        return [spec.formula.term.column]
     if isinstance(spec, _InteractionDesignTerm):
         columns: list[str] = []
         for factor in spec.factors:
@@ -16268,6 +16520,8 @@ def _formula_model_term_factors(term: _FormulaModelTerm) -> list[str]:
         return [_covariate_term_name(factor) for factor in _covariate_factors(term.term)]
     if isinstance(term, _ModelRidgeTerm):
         return [_covariate_term_name(factor) for factor in term.ridge.terms]
+    if isinstance(term, _ModelPSplineTerm):
+        return [_covariate_term_name(term.pspline.term)]
     if isinstance(term, _ModelStrataTerm):
         return [f"strata({','.join(term.columns)})"]
     if isinstance(term, _ModelClusterTerm):
@@ -22539,6 +22793,7 @@ def coxph(
     formula_model_data: Any | None = None
     formula_cluster_columns: tuple[str, ...] = ()
     formula_ridge_blocks: list[_RidgePenaltyBlock] = []
+    formula_pspline_blocks: list[_PSplinePenaltyBlock] = []
     direct_coefficient_names: tuple[str, ...] | None = None
     time_transform_terms: list[_CovariateTerm] = []
     time_transform_functions: list[Any | None] = []
@@ -22613,14 +22868,23 @@ def coxph(
                 raise ValueError("use only one of formula cluster(...) or cluster")
             cluster = _combined_columns(data, terms.clusters, len(response))
             formula_cluster_columns = tuple(terms.clusters)
-        formula_design = _fit_formula_design(data, response_spec, terms, len(response))
+        formula_design = _fit_formula_design(
+            data,
+            response_spec,
+            terms,
+            len(response),
+            allow_pspline=True,
+        )
         formula_ridge_blocks = _ridge_formula_blocks(
             data,
             formula_design,
             len(response),
         )
-        if formula_ridge_blocks and (ridge_penalty is not None or penalty_matrix is not None):
-            raise ValueError("use only one of formula ridge(...), ridge_penalty, or penalty_matrix")
+        formula_pspline_blocks = _pspline_formula_blocks(formula_design)
+        if (formula_ridge_blocks or formula_pspline_blocks) and (
+            ridge_penalty is not None or penalty_matrix is not None
+        ):
+            raise ValueError("use only one of formula penalties, ridge_penalty, or penalty_matrix")
         x = _design_rows_from_spec(data, formula_design, len(response))
         formula_x_matrix = [list(row) for row in x] if formula_x else None
         formula_model_data = data
@@ -22710,7 +22974,15 @@ def coxph(
     ridge_thetas = [
         block.theta if block.theta is not None else 1.0 for block in formula_ridge_blocks
     ]
-    if formula_ridge_blocks:
+    if formula_pspline_blocks:
+        fit_ridge_penalty = None
+        fit_penalty_matrix = _formula_penalty_matrix(
+            width,
+            formula_ridge_blocks,
+            ridge_thetas,
+            formula_pspline_blocks,
+        )
+    elif formula_ridge_blocks:
         fit_ridge_penalty = _ridge_penalty_vector(width, formula_ridge_blocks, ridge_thetas)
     elif ridge_penalty is None:
         fit_ridge_penalty = None
@@ -22780,7 +23052,11 @@ def coxph(
         else None
     )
 
-    def run_fit(penalty: list[float] | None, start: list[float] | None) -> Any:
+    def run_fit(
+        diagonal_penalty: list[float] | None,
+        quadratic_penalty: list[list[float]] | None,
+        start: list[float] | None,
+    ) -> Any:
         return _core.coxph_fit(
             fit_times,
             list(response.event),
@@ -22795,8 +23071,8 @@ def coxph(
             method=method_name,
             entry_times=entry_times,
             nocenter=nocenter_values,
-            ridge_penalty=penalty,
-            penalty_matrix=fit_penalty_matrix,
+            ridge_penalty=diagonal_penalty,
+            penalty_matrix=quadratic_penalty,
         )
 
     target_blocks = [
@@ -22821,7 +23097,15 @@ def coxph(
                 formula_ridge_blocks,
                 fitted_thetas,
             )
-            fit = run_fit(fit_ridge_penalty, start)
+            if formula_pspline_blocks:
+                fit_penalty_matrix = _formula_penalty_matrix(
+                    width,
+                    formula_ridge_blocks,
+                    fitted_thetas,
+                    formula_pspline_blocks,
+                )
+                fit_ridge_penalty = None
+            fit = run_fit(fit_ridge_penalty, fit_penalty_matrix, start)
             if initial_log_likelihood is None:
                 initial_log_likelihood = float(fit.log_likelihood[0])
             next_thetas = list(fitted_thetas)
@@ -22830,10 +23114,18 @@ def coxph(
                 target = block.target_df
                 if target is None:
                     continue
-                term_df = _ridge_term_degrees_of_freedom(
-                    fit,
-                    fit_ridge_penalty,
-                    block.columns,
+                term_df = (
+                    _quadratic_term_degrees_of_freedom(
+                        fit,
+                        fit_penalty_matrix,
+                        block.columns,
+                    )
+                    if fit_penalty_matrix is not None
+                    else _ridge_term_degrees_of_freedom(
+                        fit,
+                        fit_ridge_penalty,
+                        block.columns,
+                    )
                 )
                 histories[block_index].append((fitted_thetas[block_index], term_df))
                 next_theta, converged, half = _ridge_control_next_theta(
@@ -22880,8 +23172,8 @@ def coxph(
             for index, block in enumerate(formula_ridge_blocks)
         }
     else:
-        fit = run_fit(fit_ridge_penalty, initial_values)
-        if formula_ridge_blocks:
+        fit = run_fit(fit_ridge_penalty, fit_penalty_matrix, initial_values)
+        if formula_ridge_blocks or formula_pspline_blocks:
             reported_log_likelihood = [
                 float(fit.log_likelihood[0]),
                 float(fit.log_likelihood[-1]),
@@ -22890,14 +23182,29 @@ def coxph(
                 block.label: {"theta": ridge_thetas[index], "done": True}
                 for index, block in enumerate(formula_ridge_blocks)
             }
+    if formula_pspline_blocks:
+        if ridge_history is None:
+            ridge_history = {}
+        ridge_history.update(
+            {block.label: {"theta": block.theta, "done": True} for block in formula_pspline_blocks}
+        )
     term_degrees_of_freedom = None
     effective_degrees_of_freedom = None
-    if formula_ridge_blocks and formula_design is not None and fit_ridge_penalty is not None:
-        term_degrees_of_freedom = _ridge_formula_term_degrees_of_freedom(
-            fit,
-            fit_ridge_penalty,
-            formula_design,
-        )
+    if (formula_ridge_blocks or formula_pspline_blocks) and formula_design is not None:
+        if fit_penalty_matrix is not None:
+            term_degrees_of_freedom = _quadratic_formula_term_degrees_of_freedom(
+                fit,
+                fit_penalty_matrix,
+                formula_design,
+            )
+        elif fit_ridge_penalty is not None:
+            term_degrees_of_freedom = _ridge_formula_term_degrees_of_freedom(
+                fit,
+                fit_ridge_penalty,
+                formula_design,
+            )
+        else:
+            raise AssertionError("formula penalty metadata did not produce a penalty")
         effective_degrees_of_freedom = math.fsum(term_degrees_of_freedom.values())
     if not singular_ok_value and any(_cox_alias_mask(fit)):
         raise ValueError(
