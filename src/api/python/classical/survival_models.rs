@@ -29,6 +29,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(finegray_regression, m)?)?;
     m.add_function(wrap_pyfunction!(competing_risks_cif, m)?)?;
     m.add_function(wrap_pyfunction!(survreg, m)?)?;
+    m.add_function(wrap_pyfunction!(survreg_density_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(survreg_distribution, m)?)?;
     m.add_function(wrap_pyfunction!(flexible_parametric_model, m)?)?;
     m.add_function(wrap_pyfunction!(restricted_cubic_spline, m)?)?;

@@ -15634,6 +15634,104 @@ def test_survreg_distribution_helpers_match_r_reference_values(monkeypatch):
         survival.dsurvreg([1.0], mean=0.0, distribution="t")
 
 
+def test_survreg_distribution_registry_matches_reference_metadata_and_kernels():
+    registry = survival.survreg_distributions
+    assert list(registry) == [
+        "extreme",
+        "logistic",
+        "gaussian",
+        "weibull",
+        "exponential",
+        "rayleigh",
+        "loggaussian",
+        "lognormal",
+        "loglogistic",
+        "t",
+    ]
+    assert registry["extreme"].name == "Extreme value"
+    assert registry["weibull"].dist == "extreme"
+    assert registry["exponential"].scale == 1.0
+    assert registry["rayleigh"].scale == 0.5
+    assert registry["lognormal"].dist == "gaussian"
+    assert registry["t"].name == "Student-t"
+    assert registry["t"].parms == 4.0
+
+    logistic = registry["logistic"]
+    assert logistic.variance() == pytest.approx(math.pi**2 / 3.0)
+    assert logistic.init([-1.0, 0.0, 2.0], [1.0, 2.0, 1.0]) == pytest.approx([0.25, 0.37109375])
+    assert logistic.quantile([0.1, 0.5, 0.9]) == pytest.approx(
+        [-2.197224577336219, 0.0, 2.1972245773362196]
+    )
+    expected_density = [
+        [
+            0.2689414213699951,
+            0.7310585786300049,
+            0.19661193324148188,
+            0.46211715726000974,
+            -0.17967159944889119,
+        ],
+        [0.5, 0.5, 0.25, 0.0, -0.5],
+        [
+            0.7310585786300049,
+            0.2689414213699951,
+            0.19661193324148185,
+            -0.46211715726000974,
+            -0.17967159944889113,
+        ],
+    ]
+    for actual, expected in zip(logistic.density([-1.0, 0.0, 1.0]), expected_density, strict=True):
+        assert actual == pytest.approx(expected)
+
+    weibull = registry["weibull"]
+    assert weibull.trans([1.0, math.e]) == pytest.approx([0.0, 1.0])
+    assert weibull.dtrans([1.0, 2.0]) == pytest.approx([1.0, 0.5])
+    assert weibull.itrans([0.0, 1.0]) == pytest.approx([1.0, math.e])
+    assert weibull.quantile([0.1, 0.5, 0.9]) == pytest.approx(
+        [0.10536051565782628, 0.6931471805599453, 2.302585092994046]
+    )
+
+    student_t = registry["t"]
+    assert student_t.variance(5) == pytest.approx(5.0 / 3.0)
+    assert student_t.init([-1.0, 0.0, 2.0], [1.0, 2.0, 1.0], 5) == pytest.approx([0.25, 0.7125])
+    expected_t_density = [
+        [0.18160873382456127, 0.8183912661754387, 0.21967979735098056, 1.0, 1 / 3],
+        [0.5, 0.5, 0.37960668982249446, 0.0, -1.2],
+        [0.8183912661754387, 0.18160873382456127, 0.21967979735098056, -1.0, 1 / 3],
+    ]
+    for actual, expected in zip(
+        student_t.density([-1.0, 0.0, 1.0], 5), expected_t_density, strict=True
+    ):
+        assert actual == pytest.approx(expected)
+
+
+def test_survreg_distribution_registry_deviance_matches_reference_values():
+    y = [[0.2, 0.0, 1.0], [-0.4, 0.0, 0.0], [-1.0, 0.0, 2.0], [-0.5, 0.8, 3.0]]
+    expected = {
+        "extreme": (
+            [0.2, -0.4, -1.0, 0.09009759627910896],
+            [-1.1823215567939547, 0.0, 0.0, -0.607783786101253],
+        ),
+        "logistic": (
+            [0.2, -0.4, -1.0, 0.15],
+            [-1.5686159179138452, 0.0, 0.0, -1.3302918560688046],
+        ),
+        "gaussian": (
+            [0.2, -0.4, -1.0, 0.15],
+            [-1.1012600899986274, 0.0, 0.0, -0.8868488216508697],
+        ),
+    }
+    for name, (center, loglik) in expected.items():
+        result = survival.survreg_distributions[name].deviance(y, 1.2)
+        assert isinstance(result, survival.SurvregDeviance)
+        assert result.center == pytest.approx(center)
+        assert result.loglik == pytest.approx(loglik)
+
+    student_t = survival.survreg_distributions["t"].deviance(y, 1.2, 5)
+    assert student_t.center == pytest.approx([0.2, -0.4, -1.0, 1.1])
+    assert student_t.loglik[:3] == pytest.approx([0.7862980322607696, 0.0, 0.0])
+    assert math.isnan(student_t.loglik[3])
+
+
 def test_survreg_loglik_and_response_transform_follow_r_distribution_scale():
     data = _toy_data()
 

@@ -13,6 +13,7 @@ from itertools import combinations, groupby, product
 from numbers import Real
 from operator import index
 from statistics import NormalDist
+from types import MappingProxyType
 from typing import Any, NoReturn, cast
 
 from . import _survival as _core
@@ -43,6 +44,8 @@ __all__ = [
     "SurvObrienResult",
     "SurvExpResult",
     "SurvExpFormulaResult",
+    "SurvregDeviance",
+    "SurvregDistribution",
     "SurvfitResult",
     "SurvfitMultiStateResult",
     "SurvfitConfidenceIntervalResult",
@@ -136,6 +139,7 @@ __all__ = [
     "survSplit",
     "survreg",
     "survreg_control",
+    "survreg_distributions",
     "tcut",
     "totimeline",
     "yates",
@@ -648,6 +652,84 @@ class RatetableFrame:
     @property
     def levlist(self) -> list[list[str] | None]:
         return self.levels
+
+
+@dataclass(frozen=True)
+class SurvregDeviance:
+    """Initial centers and log-likelihoods for a survival-regression family."""
+
+    center: list[float]
+    loglik: list[float]
+
+
+@dataclass(frozen=True)
+class SurvregDistribution:
+    """Descriptor for one entry in ``survreg_distributions``."""
+
+    key: str
+    name: str
+    dist: str | None = None
+    scale: float | None = None
+    parms: float | None = None
+
+    def variance(self, parms: Any | None = None) -> float:
+        return _survreg_descriptor_variance(self, parms)
+
+    def init(
+        self,
+        x: Any,
+        weights: Any | None = None,
+        parms: Any | None = None,
+    ) -> list[float]:
+        return _survreg_descriptor_init(self, x, weights, parms)
+
+    def deviance(
+        self,
+        y: Any,
+        scale: Any,
+        parms: Any | None = None,
+    ) -> SurvregDeviance:
+        return _survreg_descriptor_deviance(self, y, scale, parms)
+
+    def density(self, x: Any, parms: Any | None = None) -> list[list[float]]:
+        return _survreg_descriptor_density(self, x, parms)
+
+    def quantile(self, p: Any, parms: Any | None = None) -> list[float]:
+        return _survreg_descriptor_quantile(self, p, parms)
+
+    def trans(self, y: Any) -> list[float]:
+        return _survreg_descriptor_transform(self, y, "transform")
+
+    def dtrans(self, y: Any) -> list[float]:
+        return _survreg_descriptor_transform(self, y, "derivative")
+
+    def itrans(self, x: Any) -> list[float]:
+        return _survreg_descriptor_transform(self, x, "inverse")
+
+    def transform(self, y: Any) -> list[float]:
+        return self.trans(y)
+
+    def transform_derivative(self, y: Any) -> list[float]:
+        return self.dtrans(y)
+
+    def inverse_transform(self, x: Any) -> list[float]:
+        return self.itrans(x)
+
+
+survreg_distributions: Mapping[str, SurvregDistribution] = MappingProxyType(
+    {
+        "extreme": SurvregDistribution("extreme", "Extreme value"),
+        "logistic": SurvregDistribution("logistic", "Logistic"),
+        "gaussian": SurvregDistribution("gaussian", "Gaussian"),
+        "weibull": SurvregDistribution("weibull", "Weibull", dist="extreme"),
+        "exponential": SurvregDistribution("exponential", "Exponential", dist="extreme", scale=1.0),
+        "rayleigh": SurvregDistribution("rayleigh", "Rayleigh", dist="extreme", scale=0.5),
+        "loggaussian": SurvregDistribution("loggaussian", "Log Normal", dist="gaussian"),
+        "lognormal": SurvregDistribution("lognormal", "Log Normal", dist="gaussian"),
+        "loglogistic": SurvregDistribution("loglogistic", "Log logistic", dist="logistic"),
+        "t": SurvregDistribution("t", "Student-t", parms=4.0),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -17565,6 +17647,282 @@ def _survreg_t_fit_degrees_of_freedom(parms: Any | None) -> float:
     if df <= 2.0:
         raise ValueError("Degrees of freedom must be >=3")
     return df
+
+
+def _survreg_descriptor_base(
+    descriptor: SurvregDistribution,
+) -> SurvregDistribution:
+    return descriptor if descriptor.dist is None else survreg_distributions[descriptor.dist]
+
+
+def _survreg_descriptor_parms(
+    descriptor: SurvregDistribution,
+    parms: Any | None,
+    *,
+    require_variance: bool = False,
+) -> float | None:
+    base = _survreg_descriptor_base(descriptor)
+    if base.key != "t":
+        return None
+    value = base.parms if parms is None else parms
+    return (
+        _survreg_t_fit_degrees_of_freedom(value)
+        if require_variance
+        else _survreg_t_degrees_of_freedom(value)
+    )
+
+
+def _survreg_descriptor_variance(
+    descriptor: SurvregDistribution,
+    parms: Any | None,
+) -> float:
+    base = _survreg_descriptor_base(descriptor)
+    if base.key == "extreme":
+        return math.pi**2 / 6.0
+    if base.key == "logistic":
+        return math.pi**2 / 3.0
+    if base.key == "gaussian":
+        return 1.0
+    df = _survreg_descriptor_parms(descriptor, parms, require_variance=True)
+    if df is None:
+        raise RuntimeError("Student-t distribution parameters are missing")
+    return df / (df - 2.0)
+
+
+def _survreg_descriptor_transform(
+    descriptor: SurvregDistribution,
+    values: Any,
+    operation: str,
+) -> list[float]:
+    numeric = _survreg_numeric_vector(values, "values")
+    if descriptor.dist is None:
+        return [1.0] * len(numeric) if operation == "derivative" else numeric
+
+    result: list[float] = []
+    for value in numeric:
+        if operation == "transform":
+            if math.isnan(value) or value < 0.0:
+                result.append(math.nan)
+            elif value == 0.0:
+                result.append(-math.inf)
+            else:
+                result.append(math.log(value))
+        elif operation == "inverse":
+            try:
+                result.append(math.exp(value))
+            except OverflowError:
+                result.append(math.inf)
+        elif operation == "derivative":
+            result.append(math.copysign(math.inf, value) if value == 0.0 else 1.0 / value)
+        else:
+            raise RuntimeError("unknown survival-regression transform operation")
+    return result
+
+
+def _survreg_descriptor_init(
+    descriptor: SurvregDistribution,
+    x: Any,
+    weights: Any | None,
+    parms: Any | None,
+) -> list[float]:
+    values = _survreg_numeric_vector(x, "x")
+    if not values:
+        raise ValueError("x must not be empty")
+    if descriptor.dist is not None:
+        values = descriptor.trans(values)
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("x must contain valid finite observations")
+
+    weight_values = (
+        [1.0] * len(values) if weights is None else _survreg_numeric_vector(weights, "weights")
+    )
+    if len(weight_values) == 1:
+        weight_values *= len(values)
+    elif len(weight_values) != len(values):
+        raise ValueError(f"weights must have length 1 or {len(values)}")
+    if any(not math.isfinite(value) or value < 0.0 for value in weight_values):
+        raise ValueError("weights must contain finite non-negative values")
+    weight_sum = math.fsum(weight_values)
+    if weight_sum <= 0.0:
+        raise ValueError("weights must contain at least one positive value")
+
+    mean = (
+        math.fsum(value * weight for value, weight in zip(values, weight_values, strict=True))
+        / weight_sum
+    )
+    variance = (
+        math.fsum(
+            weight * (value - mean) ** 2
+            for value, weight in zip(values, weight_values, strict=True)
+        )
+        / weight_sum
+    )
+    base = _survreg_descriptor_base(descriptor)
+    if base.key == "extreme":
+        return [mean + 0.572, variance / 1.64]
+    if base.key == "logistic":
+        return [mean, variance / 3.2]
+    if base.key == "gaussian":
+        return [mean, variance]
+    df = _survreg_descriptor_parms(descriptor, parms, require_variance=True)
+    if df is None:
+        raise RuntimeError("Student-t distribution parameters are missing")
+    return [mean, variance * (df - 2.0) / df]
+
+
+def _survreg_descriptor_density(
+    descriptor: SurvregDistribution,
+    x: Any,
+    parms: Any | None,
+) -> list[list[float]]:
+    base = _survreg_descriptor_base(descriptor)
+    values = _survreg_numeric_vector(x, "x")
+    df = _survreg_descriptor_parms(descriptor, parms)
+    return _core.survreg_density_matrix(values, base.key, df)
+
+
+def _survreg_descriptor_quantile(
+    descriptor: SurvregDistribution,
+    p: Any,
+    parms: Any | None,
+) -> list[float]:
+    base = _survreg_descriptor_base(descriptor)
+    probabilities = _survreg_numeric_vector(p, "p")
+    df = _survreg_descriptor_parms(descriptor, parms)
+    result = _core.survreg_distribution(
+        probabilities,
+        [0.0] * len(probabilities),
+        [1.0] * len(probabilities),
+        base.key,
+        "quantile",
+        df,
+    )
+    return descriptor.itrans(result) if descriptor.dist is not None else result
+
+
+def _survreg_descriptor_deviance(
+    descriptor: SurvregDistribution,
+    y: Any,
+    scale: Any,
+    parms: Any | None,
+) -> SurvregDeviance:
+    rows = _as_matrix_rows(y, "y", allow_empty_columns=False)
+    if any(len(row) < 2 for row in rows):
+        raise ValueError("y must contain a response and status column")
+    statuses: list[int] = []
+    for row in rows:
+        status = row[-1]
+        if not status.is_integer() or int(status) not in {0, 1, 2, 3}:
+            raise ValueError("y status must use 0/1/2/3 interval censoring codes")
+        if int(status) == 3 and len(row) < 3:
+            raise ValueError("interval-censored y rows require two endpoints")
+        statuses.append(int(status))
+
+    scale_values = _survreg_numeric_vector(scale, "scale")
+    if len(scale_values) != 1:
+        raise ValueError("scale must be a single value")
+    scale_value = scale_values[0]
+    if not math.isfinite(scale_value) or scale_value <= 0.0:
+        raise ValueError("scale must be a positive finite value")
+
+    transformed = [list(row) for row in rows]
+    if descriptor.dist is not None:
+        for row, status in zip(transformed, statuses, strict=True):
+            row[0] = descriptor.trans(row[0])[0]
+            if status == 3:
+                row[1] = descriptor.trans(row[1])[0]
+        if any(
+            not math.isfinite(row[endpoint])
+            for row, status in zip(transformed, statuses, strict=True)
+            for endpoint in range(2 if status == 3 else 1)
+        ):
+            raise ValueError("y must contain valid positive response values")
+
+    base = _survreg_descriptor_base(descriptor)
+    df = _survreg_descriptor_parms(descriptor, parms)
+    widths: list[float] = []
+    for row, status in zip(transformed, statuses, strict=True):
+        width = (row[1] - row[0]) / scale_value if status == 3 else 0.0
+        if width < 0.0:
+            raise ValueError("interval-censored y endpoints must be ordered")
+        widths.append(width)
+    student_t_evaluations = (
+        _core.survreg_density_matrix(
+            [width / 2.0 for width in widths],
+            "t",
+            df,
+        )
+        if base.key == "t" and df is not None
+        else None
+    )
+
+    center: list[float] = []
+    loglik: list[float] = []
+    for row_index, (row, status, width) in enumerate(
+        zip(transformed, statuses, widths, strict=True)
+    ):
+        left = row[0]
+
+        if base.key == "extreme":
+            effective_width = width if status == 3 else 1.0
+            if effective_width == 0.0:
+                temp = math.nan
+                interval_tail = math.nan
+            elif effective_width > _EXP_CLAMP_MAX:
+                temp = 0.0
+                interval_tail = 0.0
+            else:
+                temp = effective_width / math.expm1(effective_width)
+                interval_tail = math.log1p(-math.exp(-math.exp(effective_width)))
+            interval_center = math.inf if temp == 0.0 else left - math.log(temp)
+            center.append(interval_center if status == 3 else left)
+            interval_loglik = -temp + interval_tail
+            loglik.append(
+                -(1.0 + math.log(scale_value))
+                if status == 1
+                else interval_loglik
+                if status == 3
+                else 0.0
+            )
+        elif base.key == "logistic":
+            center.append((left + row[1]) / 2.0 if status == 3 else left)
+            interval_loglik = math.log(math.tanh(width / 4.0)) if width > 0.0 else -math.inf
+            loglik.append(
+                -math.log(4.0 * scale_value)
+                if status == 1
+                else interval_loglik
+                if status == 3
+                else 0.0
+            )
+        elif base.key == "gaussian":
+            center.append((left + row[1]) / 2.0 if status == 3 else left)
+            probability = 2.0 * NormalDist().cdf(width / 2.0) - 1.0
+            interval_loglik = math.log(probability) if probability > 0.0 else -math.inf
+            loglik.append(
+                -math.log(math.sqrt(2.0 * math.pi) * scale_value)
+                if status == 1
+                else interval_loglik
+                if status == 3
+                else 0.0
+            )
+        else:
+            if df is None or student_t_evaluations is None:
+                raise RuntimeError("Student-t distribution parameters are missing")
+            center.append(math.fsum(row) / len(row) if status == 3 else left)
+            cdf = student_t_evaluations[row_index][0]
+            interval_probability = 1.0 - 2.0 * cdf
+            interval_loglik = (
+                math.log(interval_probability) if interval_probability > 0.0 else math.nan
+            )
+            density_zero = student_t_evaluations[row_index][2]
+            loglik.append(
+                -math.log(density_zero * scale_value)
+                if status == 1
+                else interval_loglik
+                if status == 3
+                else 0.0
+            )
+    return SurvregDeviance(center, loglik)
 
 
 def _expand_survreg_distribution_inputs(
