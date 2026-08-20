@@ -62,6 +62,7 @@ __all__ = bind_names(
         "survfit_from_matrix",
         "survfit_multistate",
         "SurvFitAJ",
+        "survfit_counting_positions",
         "survfitaj",
         "AalenJohansenExtendedConfig",
         "AalenJohansenExtendedResult",

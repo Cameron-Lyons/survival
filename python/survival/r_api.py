@@ -12344,24 +12344,8 @@ def _survfit_counting_positions(
     timefix: bool,
 ) -> list[int]:
     id_codes = _encode_labels(list(ids), "id")
-    order = sorted(range(len(stop)), key=lambda idx: (id_codes[idx], stop[idx], idx))
-    positions = [0] * len(stop)
     tolerance = _SURVFIT_TIME_EPSILON if timefix else 0.0
-    for order_idx, row_idx in enumerate(order):
-        previous = order[order_idx - 1] if order_idx > 0 else None
-        following = order[order_idx + 1] if order_idx + 1 < len(order) else None
-        first = (
-            previous is None
-            or id_codes[previous] != id_codes[row_idx]
-            or stop[previous] < start[row_idx] - tolerance
-        )
-        last = (
-            following is None
-            or id_codes[following] != id_codes[row_idx]
-            or stop[row_idx] < start[following] - tolerance
-        )
-        positions[row_idx] = int(first) + 2 * int(last)
-    return positions
+    return list(_core.survfit_counting_positions(start, stop, id_codes, tolerance))
 
 
 def _survfit_multistate_initial_distribution(

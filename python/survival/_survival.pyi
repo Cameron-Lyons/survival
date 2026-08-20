@@ -6241,6 +6241,12 @@ def survfit_curve_from_tables(
     conf_level: float | None = None,
     conf_type: str | None = None,
 ) -> SurvfitCurveResult: ...
+def survfit_counting_positions(
+    start: list[float],
+    stop: list[float],
+    id: list[int],
+    tolerance: float,
+) -> list[int]: ...
 def survfitaj(
     y: list[float],
     sort1: list[int],
