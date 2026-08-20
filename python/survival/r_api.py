@@ -387,6 +387,7 @@ class _PSplinePenaltyBlock:
 @dataclass(frozen=True)
 class _FrailtyPenaltyBlock:
     label: str
+    distribution: str
     columns: tuple[int, ...]
     theta: float | None
     target_df: float | None
@@ -3591,9 +3592,32 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
 
     if column is None:
         raise ValueError("frailty() requires one column")
-    if distribution != "gaussian":
+    if distribution not in {"gaussian", "gamma"}:
         raise NotImplementedError(
-            "frailty() formulas currently support only distribution='gaussian'"
+            "frailty() formulas currently support gamma or Gaussian distributions"
+        )
+    if distribution == "gamma":
+        if theta is not None and df is not None:
+            raise ValueError("gamma frailty cannot include both theta and df")
+        if method is None:
+            method = "fixed" if theta is not None else "em"
+        if method != "fixed" or theta is None:
+            raise NotImplementedError(
+                "gamma frailty currently supports fixed theta with sparse=True"
+            )
+        if theta <= 0.0:
+            raise ValueError("frailty theta must be positive")
+        if eps is not None and eps <= 0.0:
+            raise ValueError("frailty eps must be positive")
+        return _FrailtyFormulaTerm(
+            term=_CovariateTerm(column, transform="frailty"),
+            distribution=distribution,
+            theta=theta,
+            target_df=None,
+            eps=0.1 if eps is None else eps,
+            selection="fixed",
+            sparse=sparse,
+            label=term,
         )
     if method is None:
         if theta is not None:
@@ -4530,6 +4554,7 @@ def _frailty_formula_blocks(
             blocks.append(
                 _FrailtyPenaltyBlock(
                     label=term.formula.label,
+                    distribution=term.formula.distribution,
                     columns=tuple(range(cursor, cursor + width)),
                     theta=term.formula.theta,
                     target_df=term.formula.target_df,
@@ -23576,6 +23601,10 @@ def coxph(
         sparse_blocks = [block for block in formula_frailty_blocks if block.sparse]
         if len(sparse_blocks) > 1:
             raise ValueError("coxph formulas support at most one sparse frailty term")
+        if any(
+            block.distribution == "gamma" and not block.sparse for block in formula_frailty_blocks
+        ):
+            raise NotImplementedError("gamma frailty currently requires sparse=True")
         sparse_formula_frailty_block = sparse_blocks[0] if sparse_blocks else None
         sparse_formula_frailty_index = (
             formula_frailty_blocks.index(sparse_formula_frailty_block)
@@ -23800,6 +23829,7 @@ def coxph(
                 nocenter=nocenter_values,
                 penalty_matrix=quadratic_penalty,
                 entry_times=entry_times,
+                distribution=sparse_formula_frailty_block.distribution,
             )
         return _core.coxph_fit(
             fit_times,

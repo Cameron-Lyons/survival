@@ -14,6 +14,12 @@ enum Ties {
     Efron,
 }
 
+#[derive(Clone, Copy)]
+enum FrailtyDistribution {
+    Gaussian,
+    Gamma,
+}
+
 #[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct CoxPHFrailtyFit {
@@ -31,6 +37,8 @@ pub struct CoxPHFrailtyFit {
     pub penalized_log_likelihood: f64,
     #[pyo3(get)]
     pub theta: f64,
+    #[pyo3(get)]
+    pub distribution: String,
     #[pyo3(get)]
     pub offset: Vec<f64>,
     diagnostic_fit: CoxPHFit,
@@ -440,6 +448,7 @@ struct SparseFrailtySolver {
     offset: Vec<f64>,
     weights: Vec<f64>,
     theta: f64,
+    distribution: FrailtyDistribution,
     ordinary_penalty: Array2<f64>,
     ties: Ties,
     max_iter: usize,
@@ -466,6 +475,36 @@ struct SolverResult {
 }
 
 impl SparseFrailtySolver {
+    fn recenter_frailty(&self, frailty: &mut [f64]) {
+        let center = match self.distribution {
+            FrailtyDistribution::Gaussian => frailty.iter().sum::<f64>() / frailty.len() as f64,
+            FrailtyDistribution::Gamma => {
+                let maximum = frailty.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                maximum
+                    + (frailty
+                        .iter()
+                        .map(|value| (value - maximum).exp())
+                        .sum::<f64>()
+                        / frailty.len() as f64)
+                        .ln()
+            }
+        };
+        for value in frailty {
+            *value -= center;
+        }
+    }
+
+    fn frailty_penalty_second(&self, frailty: &[f64]) -> Vec<f64> {
+        let precision = 1.0 / self.theta;
+        match self.distribution {
+            FrailtyDistribution::Gaussian => vec![precision; frailty.len()],
+            FrailtyDistribution::Gamma => frailty
+                .iter()
+                .map(|value| value.exp() * precision)
+                .collect(),
+        }
+    }
+
     fn update_risk_moments(
         &self,
         person: usize,
@@ -496,13 +535,21 @@ impl SparseFrailtySolver {
         self.iteration(beta, frailty).penalized_log_likelihood + self.penalty_value(beta, frailty)
     }
 
+    fn frailty_penalty_value(&self, frailty: &[f64]) -> f64 {
+        match self.distribution {
+            FrailtyDistribution::Gaussian => {
+                0.5 * frailty
+                    .iter()
+                    .map(|value| {
+                        value * value / self.theta + (2.0 * std::f64::consts::PI * self.theta).ln()
+                    })
+                    .sum::<f64>()
+            }
+            FrailtyDistribution::Gamma => -frailty.iter().sum::<f64>() / self.theta,
+        }
+    }
+
     fn penalty_value(&self, beta: &[f64], frailty: &[f64]) -> f64 {
-        let frailty_penalty = 0.5
-            * (frailty
-                .iter()
-                .map(|value| value * value / self.theta)
-                .sum::<f64>()
-                + frailty.len() as f64 * (2.0 * std::f64::consts::PI * self.theta).ln());
         let ordinary_penalty = 0.5
             * beta
                 .iter()
@@ -516,7 +563,7 @@ impl SparseFrailtySolver {
                             .sum::<f64>()
                 })
                 .sum::<f64>();
-        frailty_penalty + ordinary_penalty
+        self.frailty_penalty_value(frailty) + ordinary_penalty
     }
 
     fn iteration(&self, beta: &[f64], frailty: &[f64]) -> IterationState {
@@ -662,21 +709,22 @@ impl SparseFrailtySolver {
         }
 
         let precision = 1.0 / self.theta;
-        let center = frailty.iter().sum::<f64>() / nfrail as f64;
-        let centered_frailty = frailty
-            .iter()
-            .map(|value| value - center)
-            .collect::<Vec<_>>();
-        for group in 0..nfrail {
-            score[group] -= centered_frailty[group] * precision;
-            group_diagonal[group] += precision;
+        match self.distribution {
+            FrailtyDistribution::Gaussian => {
+                for group in 0..nfrail {
+                    score[group] -= frailty[group] * precision;
+                    group_diagonal[group] += precision;
+                }
+            }
+            FrailtyDistribution::Gamma => {
+                for group in 0..nfrail {
+                    let relative_risk = frailty[group].exp();
+                    score[group] -= (relative_risk - 1.0) * precision;
+                    group_diagonal[group] += relative_risk * precision;
+                }
+            }
         }
-        log_likelihood -= 0.5
-            * (centered_frailty
-                .iter()
-                .map(|value| value * value * precision)
-                .sum::<f64>()
-                + nfrail as f64 * (2.0 * std::f64::consts::PI * self.theta).ln());
+        log_likelihood -= self.frailty_penalty_value(frailty);
 
         for row in 0..nvar {
             let penalty_score = beta
@@ -714,19 +762,17 @@ impl SparseFrailtySolver {
         let mut iterations = 0;
         for iteration in 0..=self.max_iter {
             iterations = iteration;
-            let center = frailty.iter().sum::<f64>() / nfrail as f64;
-            for value in &mut frailty {
-                *value -= center;
-            }
+            self.recenter_frailty(&mut frailty);
             let state = self.iteration(&beta, &frailty);
             let new_log_likelihood = state.penalized_log_likelihood;
             let mut factor = state.information.clone();
             let diagonal = state.group_diagonal.clone();
             flag = cholesky3(&mut factor, nfrail, &diagonal, self.tolerance);
 
-            if new_log_likelihood.abs() < self.eps
-                || ((1.0 - accepted_log_likelihood / new_log_likelihood).abs() <= self.eps
-                    && !halving)
+            if iteration > 0
+                && (new_log_likelihood.abs() < self.eps
+                    || ((1.0 - accepted_log_likelihood / new_log_likelihood).abs() <= self.eps
+                        && !halving))
             {
                 break;
             }
@@ -762,10 +808,7 @@ impl SparseFrailtySolver {
             }
         }
 
-        let center = frailty.iter().sum::<f64>() / nfrail as f64;
-        for value in &mut frailty {
-            *value -= center;
-        }
+        self.recenter_frailty(&mut frailty);
         let state = self.iteration(&beta, &frailty);
         let penalized_log_likelihood = state.penalized_log_likelihood;
         let final_log_likelihood = penalized_log_likelihood + self.penalty_value(&beta, &frailty);
@@ -784,7 +827,7 @@ impl SparseFrailtySolver {
             &inverse_diagonal,
             nfrail,
             &self.ordinary_penalty,
-            1.0 / self.theta,
+            &self.frailty_penalty_second(&frailty),
         );
 
         let covariate_df = (0..nvar)
@@ -843,7 +886,7 @@ fn covariance_parts(
     inverse_diagonal: &[f64],
     nfrail: usize,
     ordinary_penalty: &Array2<f64>,
-    frailty_precision: f64,
+    frailty_penalty: &[f64],
 ) -> CovarianceParts {
     let nvar = inverse_factor.nrows();
     let dense_diagonal = &inverse_diagonal[nfrail..];
@@ -883,10 +926,9 @@ fn covariance_parts(
     let mut naive_covariance = covariance.clone();
     for row in 0..nvar {
         for column in 0..nvar {
-            naive_covariance[(row, column)] -= frailty_precision
-                * (0..nfrail)
-                    .map(|group| cross[(group, row)] * cross[(group, column)])
-                    .sum::<f64>();
+            naive_covariance[(row, column)] -= (0..nfrail)
+                .map(|group| frailty_penalty[group] * cross[(group, row)] * cross[(group, column)])
+                .sum::<f64>();
             let mut ordinary_adjustment = 0.0;
             for left in 0..nvar {
                 for right in 0..nvar {
@@ -899,7 +941,12 @@ fn covariance_parts(
         }
     }
 
-    let mut frailty_df = nfrail as f64 - frailty_precision * frailty_variance.iter().sum::<f64>();
+    let mut frailty_df = nfrail as f64
+        - frailty_penalty
+            .iter()
+            .zip(&frailty_variance)
+            .map(|(penalty, variance)| penalty * variance)
+            .sum::<f64>();
     if ordinary_penalty.iter().any(|value| *value != 0.0) && nvar > 0 {
         let mut h22 = Array2::<f64>::zeros((nvar, nvar));
         for row in 0..nvar {
@@ -1195,7 +1242,7 @@ fn validate_penalty(values: Option<Vec<Vec<f64>>>, nvar: usize) -> PyResult<Arra
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, groups, theta, strata=None, weights=None, offset=None, initial_beta=None, initial_frailty=None, max_iter=None, eps=None, toler=None, method=None, nocenter=None, penalty_matrix=None, entry_times=None))]
+#[pyo3(signature = (time, status, covariates, groups, theta, strata=None, weights=None, offset=None, initial_beta=None, initial_frailty=None, max_iter=None, eps=None, toler=None, method=None, nocenter=None, penalty_matrix=None, entry_times=None, distribution=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_frailty_fit(
     time: Vec<f64>,
@@ -1215,6 +1262,7 @@ pub fn coxph_frailty_fit(
     nocenter: Option<Vec<f64>>,
     penalty_matrix: Option<Vec<Vec<f64>>>,
     entry_times: Option<Vec<f64>>,
+    distribution: Option<&str>,
 ) -> PyResult<CoxPHFrailtyFit> {
     let n = time.len();
     if n == 0 {
@@ -1331,6 +1379,19 @@ pub fn coxph_frailty_fit(
             ));
         }
     };
+    let distribution = match distribution
+        .unwrap_or("gaussian")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "gaussian" => FrailtyDistribution::Gaussian,
+        "gamma" => FrailtyDistribution::Gamma,
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "distribution must be 'gaussian' or 'gamma'",
+            ));
+        }
+    };
     let strata = strata.unwrap_or_else(|| vec![0; n]);
     let weights = weights.unwrap_or_else(|| vec![1.0; n]);
     let offset = offset.unwrap_or_else(|| vec![0.0; n]);
@@ -1401,6 +1462,7 @@ pub fn coxph_frailty_fit(
         offset: sorted_offset,
         weights: sorted_weights,
         theta,
+        distribution,
         ordinary_penalty,
         ties,
         max_iter: max_iter.unwrap_or(COX_MAX_ITER),
@@ -1476,6 +1538,11 @@ pub fn coxph_frailty_fit(
         frailty_degrees_of_freedom: result.frailty_df,
         penalized_log_likelihood: result.penalized_log_likelihood,
         theta,
+        distribution: match distribution {
+            FrailtyDistribution::Gaussian => "gaussian",
+            FrailtyDistribution::Gamma => "gamma",
+        }
+        .to_string(),
         offset,
         diagnostic_fit,
     })
@@ -1543,11 +1610,55 @@ mod tests {
                 0.0, 0.0, 0.5, 1.0, 0.0, 2.0, 3.0, 1.0, 4.0, 2.0, 6.0, 5.0, 7.0, 8.0, 6.0, 10.0,
                 11.0, 9.0,
             ]),
+            None,
         )
         .expect("counting-process frailty fit should compute");
 
         assert!((fit.coefficients()[0][0] - -0.736602816003447).abs() < 1e-12);
         assert!((fit.frailty_degrees_of_freedom - 2.25629339890398).abs() < 1e-12);
         assert!((fit.log_likelihood()[1] - -17.1661166752336).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fixed_gamma_fit_matches_reference() {
+        let fit = coxph_frailty_fit(
+            (1..=18).map(f64::from).collect(),
+            vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+            [
+                1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0, 0.6, 1.7, 0.1, 1.3,
+                0.8, 1.6,
+            ]
+            .into_iter()
+            .map(|value| vec![value])
+            .collect(),
+            (0..18).map(|value| value % 6).collect(),
+            0.5,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(50),
+            Some(1e-12),
+            Some(1e-13),
+            Some("breslow"),
+            None,
+            None,
+            None,
+            Some("gamma"),
+        )
+        .expect("fixed gamma frailty fit should compute");
+
+        assert!(
+            (fit.coefficients()[0][0] - -0.772237352873988).abs() < 1e-12,
+            "{:?} {:?} {:?} {:?}",
+            fit.coefficients(),
+            fit.frailty,
+            fit.frailty_degrees_of_freedom,
+            fit.log_likelihood()
+        );
+        assert!((fit.frailty[1] - 0.320013468117002).abs() < 1e-12);
+        assert!((fit.frailty_degrees_of_freedom - 2.1898681329284).abs() < 1e-12);
+        assert!((fit.log_likelihood()[1] - -22.045263541983).abs() < 1e-12);
     }
 }

@@ -10188,14 +10188,83 @@ def test_coxph_formula_sparse_gaussian_frailty_counting_diagnostics_match_refere
     assert zph.global_p_value == pytest.approx(0.9375988048538871, abs=5e-12)
 
 
-def test_coxph_formula_gaussian_frailty_rejects_unsupported_modes():
+def test_coxph_formula_fixed_sparse_gamma_frailty_matches_reference():
+    data = {
+        "time": [float(value) for value in range(1, 19)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "x": [
+            1.2,
+            0.7,
+            1.5,
+            0.2,
+            1.1,
+            0.4,
+            1.8,
+            0.9,
+            0.5,
+            1.4,
+            0.3,
+            1.0,
+            0.6,
+            1.7,
+            0.1,
+            1.3,
+            0.8,
+            1.6,
+        ],
+        "g": list("abcdef") * 3,
+    }
+    frailty_term = "frailty(g,theta=.5)"
+    fit = survival.coxph(
+        f"Surv(time,status) ~ x + {frailty_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "eps": 1e-12, "toler.chol": 1e-13},
+    )
+
+    assert fit.distribution == "gamma"
+    assert fit.coefficients[0] == pytest.approx([-0.772237352873988], abs=1e-12)
+    assert fit.frailty == pytest.approx(
+        [
+            -0.0225423330471308,
+            0.320013468117002,
+            0.0282985678155899,
+            -0.147071471297996,
+            -0.241353863249936,
+            -0.0328897968794411,
+        ],
+        abs=1e-12,
+    )
+    assert fit.frailty_variance == pytest.approx(
+        [
+            0.349779203759276,
+            0.278630320838479,
+            0.315367091660762,
+            0.365281044345699,
+            0.311024515152298,
+            0.305171480671998,
+        ],
+        abs=1e-12,
+    )
+    assert fit.log_likelihood == pytest.approx([-23.3506715493412, -22.045263541983], abs=1e-12)
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"x": 0.734999010472532, frailty_term: 2.1898681329284},
+        abs=1e-12,
+    )
+    assert fit.information_matrix[0] == pytest.approx([0.478590809971639], abs=1e-12)
+    assert fit.naive_information_matrix[0] == pytest.approx([0.351763771750402], abs=1e-12)
+
+
+def test_coxph_formula_frailty_rejects_unsupported_modes():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         "status": [1, 0, 1, 1, 0, 1],
         "g": list("abcdef"),
     }
     for option, exception, message in (
-        ("distribution='gamma',theta=.5", NotImplementedError, "only distribution"),
+        ("distribution='gamma'", NotImplementedError, "fixed theta"),
+        ("distribution='gamma',theta=.5,sparse=False", NotImplementedError, "sparse=True"),
+        ("distribution='gamma',theta=0,sparse=True", ValueError, "positive"),
         ("distribution='gaussian',method='ml'", NotImplementedError, "support fixed"),
         ("distribution='gaussian',method='reml',theta=.5", ValueError, "cannot include"),
         ("distribution='gaussian',method='reml',df=2", ValueError, "cannot include"),
