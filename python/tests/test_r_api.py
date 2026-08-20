@@ -9308,19 +9308,30 @@ def test_ridge_helper_builds_fixed_theta_penalty_metadata():
 
 
 @pytest.mark.parametrize(
-    ("scale", "expected_coef", "expected_df", "expected_loglik"),
+    (
+        "scale",
+        "expected_coef",
+        "expected_df",
+        "expected_loglik",
+        "expected_zph_chi2",
+        "expected_zph_p",
+    ),
     [
         (
             False,
             [-3.15621362600671, -0.0283415400908598],
             1.40741844687792,
             -1.8006078084384,
+            2.51367498000039,
+            0.178019246067111,
         ),
         (
             True,
             [-3.77032966237141, 0.0106220916824879],
             1.54340846194763,
             -1.45946489798387,
+            1.92613828135728,
+            0.280898827095077,
         ),
     ],
 )
@@ -9329,6 +9340,8 @@ def test_coxph_formula_ridge_matches_fixed_theta_reference(
     expected_coef,
     expected_df,
     expected_loglik,
+    expected_zph_chi2,
+    expected_zph_p,
 ):
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
@@ -9362,6 +9375,12 @@ def test_coxph_formula_ridge_matches_fixed_theta_reference(
         2.0 * (expected_loglik + 6.5792512120101),
         abs=1e-9,
     )
+    zph = survival.cox_zph(fit)
+    assert zph.chi2_values == pytest.approx([expected_zph_chi2], abs=1e-9)
+    assert zph.df == pytest.approx([expected_df], abs=1e-9)
+    assert zph.p_values == pytest.approx([expected_zph_p], abs=1e-9)
+    assert zph.global_df == pytest.approx(expected_df, abs=1e-9)
+    assert zph.global_p_value == pytest.approx(expected_zph_p, abs=1e-9)
 
     if not scale:
         rows = [[x1, x2] for x1, x2 in zip(data["x1"], data["x2"], strict=True)]
@@ -9942,6 +9961,18 @@ def test_coxph_formula_sparse_gaussian_frailty_diagnostics_match_reference():
     )
     partial = survival.r_api.residuals(fit, type="partial")
     assert all(len(row) == 1 for row in partial)
+    zph = survival.cox_zph(fit)
+    assert zph.variable_names == ["x"]
+    assert zph.chi2_values == pytest.approx([2.07213302673791], abs=1e-12)
+    assert zph.df == pytest.approx([0.967518101717635], abs=1e-12)
+    assert zph.p_values == pytest.approx([0.143944240115272], abs=5e-12)
+    assert zph.global_chi2 == pytest.approx(2.07213302673791, abs=1e-12)
+    assert zph.global_df == pytest.approx(2.44623562895911, abs=1e-12)
+    assert zph.global_p_value == pytest.approx(0.448331695640693, abs=5e-12)
+    with pytest.raises(ValueError, match="non-negative"):
+        survival.r_api._core.chi_square_survival(-1.0, 1.0)
+    with pytest.raises(ValueError, match="positive"):
+        survival.r_api._core.chi_square_survival(1.0, 0.0)
 
 
 def test_coxph_formula_gaussian_frailty_rejects_unsupported_modes():
@@ -10373,6 +10404,14 @@ def test_coxph_formula_pspline_calibrates_target_df_against_reference():
     assert history["history"][:2] == [{"theta": 1.0, "df": 1.0}, {"theta": 0.0, "df": 4.0}]
     assert history["history"][-1]["df"] == pytest.approx(3.0, abs=1e-8)
     assert history["half"] == 0
+    zph = survival.cox_zph(fit)
+    assert zph.variable_names == [spline_term]
+    assert zph.chi2_values == pytest.approx([2.54889507880129], abs=2e-11)
+    assert zph.df == pytest.approx([2.99999999999752], abs=2e-11)
+    assert zph.p_values == pytest.approx([0.466519416614471], abs=5e-12)
+    assert zph.global_chi2 == pytest.approx(2.54889507880129, abs=2e-11)
+    assert zph.global_df == pytest.approx(2.99999999999752, abs=2e-11)
+    assert zph.global_p_value == pytest.approx(0.466519416614471, abs=5e-12)
 
     default = survival.coxph(
         "Surv(time,status) ~ pspline(x)",

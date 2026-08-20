@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(chi_square_survival, m)?)?;
     m.add_function(wrap_pyfunction!(dfbeta_cox, m)?)?;
     m.add_function(wrap_pyfunction!(clustered_crossprod, m)?)?;
     m.add_function(wrap_pyfunction!(clustered_sandwich_variance, m)?)?;

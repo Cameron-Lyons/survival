@@ -1,6 +1,6 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, TIME_EPSILON, same_time};
 use crate::internal::matrix::{lu_solve, matrix_inverse};
-use crate::internal::statistical::chi2_sf;
+use crate::internal::statistical::{chi2_cdf, chi2_sf};
 use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_detail_module::{
@@ -41,6 +41,19 @@ fn validate_matrix_width(matrix: &[Vec<f64>], width: usize, name: &str) -> PyRes
         validate_finite_slice(row, name)?;
     }
     Ok(())
+}
+
+#[pyfunction]
+pub fn chi_square_survival(statistic: f64, degrees_of_freedom: f64) -> PyResult<f64> {
+    if !statistic.is_finite() || statistic < 0.0 {
+        return Err(value_error("statistic must be a finite non-negative value"));
+    }
+    if !degrees_of_freedom.is_finite() || degrees_of_freedom <= 0.0 {
+        return Err(value_error(
+            "degrees_of_freedom must be a finite positive value",
+        ));
+    }
+    Ok((1.0 - chi2_cdf(statistic, degrees_of_freedom)).clamp(0.0, 1.0))
 }
 
 fn validate_square_matrix(matrix: &[Vec<f64>], width: usize, name: &str) -> PyResult<()> {
@@ -339,6 +352,31 @@ pub fn cox_zph_tests(
     single_df: bool,
     global_test: bool,
 ) -> PyResult<ProportionalityTest> {
+    cox_zph_tests_with_penalty(
+        event_scores,
+        event_information,
+        transformed_time,
+        event_counts,
+        groups,
+        beta,
+        single_df,
+        global_test,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cox_zph_tests_with_penalty(
+    event_scores: Vec<Vec<f64>>,
+    event_information: Vec<Vec<Vec<f64>>>,
+    transformed_time: Vec<f64>,
+    event_counts: Vec<usize>,
+    groups: Vec<Vec<usize>>,
+    beta: Vec<f64>,
+    single_df: bool,
+    global_test: bool,
+    penalty_matrix: Option<&[Vec<f64>]>,
+) -> PyResult<ProportionalityTest> {
     let nvar = beta.len();
     let ntime = event_scores.len();
     if event_information.len() != ntime
@@ -362,6 +400,9 @@ pub fn cox_zph_tests(
         validate_square_matrix(information, nvar, &format!("event_information[{time_idx}]"))?;
     }
     validate_column_groups(&groups, nvar)?;
+    if let Some(penalty) = penalty_matrix {
+        validate_square_matrix(penalty, nvar, "penalty_matrix")?;
+    }
 
     let total_events: usize = event_counts.iter().sum();
     let mean_time = transformed_time
@@ -390,6 +431,14 @@ pub fn cox_zph_tests(
                 full_information[row][nvar + col] += time * value;
                 full_information[nvar + row][col] += time * value;
                 full_information[nvar + row][nvar + col] += time * time * value;
+            }
+        }
+    }
+    if let Some(penalty) = penalty_matrix {
+        for row in 0..nvar {
+            for col in 0..nvar {
+                full_information[row][col] += penalty[row][col];
+                full_information[nvar + row][nvar + col] += penalty[row][col];
             }
         }
     }
@@ -568,6 +617,7 @@ fn cox_zph_tests_from_detail(
     beta: Vec<f64>,
     single_df: bool,
     global_test: bool,
+    penalty_matrix: Option<Vec<Vec<f64>>>,
 ) -> PyResult<ProportionalityTest> {
     let full_width = detail.n_covariates;
     if beta.len() != columns.len() {
@@ -596,7 +646,7 @@ fn cox_zph_tests_from_detail(
         );
         event_counts.push(row.n_event);
     }
-    cox_zph_tests(
+    cox_zph_tests_with_penalty(
         event_scores,
         event_information,
         transformed_time,
@@ -605,6 +655,7 @@ fn cox_zph_tests_from_detail(
         beta,
         single_df,
         global_test,
+        penalty_matrix.as_deref(),
     )
 }
 
@@ -662,6 +713,7 @@ pub fn cox_zph_tests_from_data(
         coefficients,
         single_df,
         global_test,
+        None,
     )
 }
 
@@ -1581,6 +1633,7 @@ impl CoxPHFit {
         information_matrix: Vec<Vec<f64>>,
         single_df: bool,
         global_test: bool,
+        penalty_matrix: Option<Vec<Vec<f64>>>,
     ) -> PyResult<(Vec<Vec<f64>>, ProportionalityTest)> {
         let beta = self.coefficients.first().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
@@ -1589,6 +1642,9 @@ impl CoxPHFit {
         validate_selected_columns(&active_columns, nvar)?;
         validate_column_groups(&groups, active_columns.len())?;
         validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
+        if let Some(penalty) = penalty_matrix.as_ref() {
+            validate_square_matrix(penalty, nvar, "penalty_matrix")?;
+        }
 
         let scaled_full =
             self.scaled_schoenfeld_residuals_with_variance_internal(&information_matrix)?;
@@ -1629,6 +1685,17 @@ impl CoxPHFit {
             include_riskmat: false,
         })?;
         let active_beta: Vec<f64> = active_columns.iter().map(|&column| beta[column]).collect();
+        let active_penalty = penalty_matrix.map(|penalty| {
+            active_columns
+                .iter()
+                .map(|&row| {
+                    active_columns
+                        .iter()
+                        .map(|&column| penalty[row][column])
+                        .collect()
+                })
+                .collect()
+        });
         let grouped = cox_zph_term_matrix(scaled, groups.clone(), active_beta.clone())?;
         let test = cox_zph_tests_from_detail(
             detail,
@@ -1638,6 +1705,7 @@ impl CoxPHFit {
             active_beta,
             single_df,
             global_test,
+            active_penalty,
         )?;
         Ok((grouped, test))
     }
@@ -2356,6 +2424,7 @@ mod tests {
                 variance.clone(),
                 false,
                 true,
+                None,
             )
             .expect("fit-owned Cox zph diagnostic should compute");
         let expected_scaled = fit
@@ -2372,6 +2441,7 @@ mod tests {
                 variance.clone(),
                 false,
                 true,
+                None,
             )
             .expect("grouped fit-owned Cox zph diagnostic should compute");
         for (actual, expected) in grouped_term.iter().zip(&expected_scaled) {
