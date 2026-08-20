@@ -1777,6 +1777,79 @@ def test_joint_competing_risk_bindings_are_typed_to_runtime_surface():
     assert all(0.0 <= value <= 1.0 for row in overall_survival for value in row)
 
 
+def test_joint_competing_risks_match_reference_and_align_prediction_times():
+    setup_survival_import()
+    core = importlib.import_module("survival._survival")
+    x1 = [0.2, -1.0, 0.7, 0.0, -0.6, 1.1, -0.2, 0.5, 1.2, -0.8, 0.3, -1.1, 0.9, -0.4]
+    x2 = [1.0, 0.4, -0.9, 0.2, 0.8, -0.5, 1.1, -0.3, 0.6, 1.3, -0.7, 0.5, -1.2, 0.1]
+    x = [value for row in zip(x1, x2, strict=True) for value in row]
+    time = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 7.0, 8.0, 9.0]
+    cause = [1, 2, 1, 0, 1, 1, 1, 0, 1, 2, 1, 0, 2, 1]
+    weights = [1.0, 1.2, 0.8, 1.5, 0.9, 1.1, 0.75, 1.3, 1.0, 0.85, 1.25, 0.95, 1.4, 1.05]
+    config = core.JointCompetingRisksConfig(
+        2, core.CorrelationType.Independent, 1.0, 100, 1e-9, True
+    )
+    result = core.joint_competing_risks(x, len(time), 2, time, cause, config, weights)
+
+    expected = [
+        (
+            [1.0046774476980949, 0.8108994771525215],
+            [0.5873650496929306, 0.559619090488565],
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 9.0],
+            [
+                0.04492149122855391,
+                0.08592522991424981,
+                0.13558418931321614,
+                0.25557984346508395,
+                0.3410067911069257,
+                0.613319626711523,
+                1.9915233911638635,
+            ],
+        ),
+        (
+            [-0.7967587926547319, -0.1497635142431922],
+            [1.5166789564241598, 1.4879764771811892],
+            [2.0, 6.0, 8.0],
+            [0.07971754982615732, 0.20518606879557588, 0.830006692686018],
+        ),
+    ]
+    assert result.converged
+    assert result.n_iter == 4
+    assert result.log_likelihood == pytest.approx(-19.386102758886537, abs=1e-9)
+    for cause_result, (coefficients, std_errors, event_times, cumulative_hazard) in zip(
+        result.cause_specific_results, expected, strict=True
+    ):
+        assert cause_result.coefficients == pytest.approx(coefficients, abs=1e-9)
+        assert cause_result.std_errors == pytest.approx(std_errors, abs=1e-9)
+        assert cause_result.baseline_hazard_times == pytest.approx(event_times, abs=1e-9)
+        assert cause_result.cumulative_baseline_hazard == pytest.approx(cumulative_hazard, abs=1e-9)
+
+    cif1 = result.predict_cif([0.0, 0.0], 1, 0)[0]
+    cif2 = result.predict_cif([0.0, 0.0], 1, 1)[0]
+    survival = result.predict_overall_survival([0.0, 0.0], 1)[0]
+    assert cif1 == sorted(cif1)
+    assert cif2 == sorted(cif2)
+    assert survival == sorted(survival, reverse=True)
+    assert cif1[-1] + cif2[-1] + survival[-1] == pytest.approx(1.0)
+
+    for method, args in [
+        (result.predict_cif, ([0.0], 1, 0)),
+        (result.predict_overall_survival, ([0.0], 1)),
+    ]:
+        with pytest.raises(ValueError, match=r"x length must equal n_obs \* n_vars"):
+            method(*args)
+    with pytest.raises(ValueError, match="cause_idx out of range"):
+        result.predict_cif([0.0, 0.0], 1, 2)
+
+    with pytest.raises(ValueError, match="x contains non-finite value"):
+        core.joint_competing_risks([math.inf, 0.0], 1, 2, [1.0], [1], config)
+    with pytest.raises(ValueError, match="cause values must be between 0 and num_causes"):
+        core.joint_competing_risks([0.0, 0.0], 1, 2, [1.0], [3], config)
+    config.tol = 0.0
+    with pytest.raises(ValueError, match="tol must be finite and positive"):
+        core.joint_competing_risks([0.0, 0.0], 1, 2, [1.0], [1], config)
+
+
 def test_longitudinal_survival_bindings_are_typed_to_runtime_surface():
     setup_survival_import()
     core = importlib.import_module("survival._survival")

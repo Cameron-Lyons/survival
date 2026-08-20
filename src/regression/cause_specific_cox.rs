@@ -222,7 +222,7 @@ fn validate_cause_specific_config(config: &CauseSpecificCoxConfig) -> PyResult<(
     Ok(())
 }
 
-fn validate_cause_specific_inputs(
+pub(crate) fn validate_cause_specific_inputs(
     x: &[f64],
     n_obs: usize,
     n_vars: usize,
@@ -340,7 +340,7 @@ pub fn cause_specific_cox(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn cause_specific_cox_fit(
+pub(crate) fn cause_specific_cox_fit(
     x: &[f64],
     n_obs: usize,
     n_vars: usize,
