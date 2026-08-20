@@ -1,10 +1,10 @@
-use crate::constants::DIVISION_FLOOR;
-use crate::internal::cox_risk::precompute_cox_unit_risk_set_cumsum;
-use crate::internal::matrix::standardize_or_borrow_row_major_matrix;
+use crate::constants::{DIVISION_FLOOR, same_time};
+use crate::internal::matrix::{matrix_inverse, regularized_lu_solve};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_empty,
     validate_non_negative,
 };
+use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -102,79 +102,290 @@ pub fn ridge_fit(
     validate_ridge_inputs(&x, n_obs, n_vars, &time, &status, weights.as_deref())?;
     validate_ridge_penalty(penalty)?;
 
-    let weights = weights.as_deref();
-
-    let (scaled_x, _, scales) =
-        standardize_or_borrow_row_major_matrix(&x, n_obs, n_vars, penalty.scale);
-    let scale_factors = penalty.scale.then_some(scales);
-
-    let (beta, info_diag) =
-        fit_unpenalized(scaled_x.as_ref(), n_obs, n_vars, &time, &status, weights)?;
-
-    let penalized_info: Vec<f64> = info_diag.iter().map(|&i| i + penalty.theta).collect();
-
-    let penalized_beta: Vec<f64> = beta
-        .iter()
-        .zip(info_diag.iter())
-        .zip(penalized_info.iter())
-        .map(|((&b, &i), &pi)| b * i / pi)
-        .collect();
-
-    let std_err: Vec<f64> = penalized_info
-        .iter()
-        .map(|&pi| {
-            if pi > 0.0 {
-                1.0 / pi.sqrt()
-            } else {
-                f64::INFINITY
-            }
-        })
-        .collect();
-
-    let df: f64 = info_diag
-        .iter()
-        .zip(penalized_info.iter())
-        .map(|(&i, &pi)| i / pi)
-        .sum();
-
-    let gcv = compute_gcv(
-        scaled_x.as_ref(),
+    let unit_weights;
+    let weights = match weights.as_deref() {
+        Some(values) => values,
+        None => {
+            unit_weights = vec![1.0; n_obs];
+            &unit_weights
+        }
+    };
+    let scale_factors = penalty
+        .scale
+        .then(|| ridge_scale_factors(&x, n_obs, n_vars));
+    let penalty_diagonal: Vec<f64> = match scale_factors.as_ref() {
+        Some(scales) => scales
+            .iter()
+            .map(|scale| penalty.theta * scale * scale)
+            .collect(),
+        None => vec![penalty.theta; n_vars],
+    };
+    let order = descending_time_order(&time);
+    let (coefficients, stats) = fit_penalized_cox(
+        &x,
         n_obs,
         n_vars,
         &time,
         &status,
-        &penalized_beta,
-        df,
-    );
+        weights,
+        &order,
+        &penalty_diagonal,
+    )?;
+    let mut penalized_information = stats.information.clone();
+    for column in 0..n_vars {
+        penalized_information[column * n_vars + column] += penalty_diagonal[column];
+    }
+    let penalized_information = Array2::from_shape_vec((n_vars, n_vars), penalized_information)
+        .map_err(|_| PyValueError::new_err("failed to construct ridge information matrix"))?;
+    let inverse = ridge_information_inverse(&penalized_information)?;
+    let std_err = (0..n_vars)
+        .map(|column| inverse[[column, column]].max(0.0).sqrt())
+        .collect();
+    let df = (0..n_vars)
+        .map(|row| {
+            (0..n_vars)
+                .map(|column| inverse[[row, column]] * stats.information[column * n_vars + row])
+                .sum::<f64>()
+        })
+        .sum();
 
-    let final_beta = if let Some(ref sf) = scale_factors {
-        penalized_beta
-            .iter()
-            .zip(sf.iter())
-            .map(|(&b, &s)| if s > 0.0 { b / s } else { b })
-            .collect()
-    } else {
-        penalized_beta
-    };
-
-    let final_se = if let Some(ref sf) = scale_factors {
-        std_err
-            .iter()
-            .zip(sf.iter())
-            .map(|(&se, &s)| if s > 0.0 { se / s } else { se })
-            .collect()
-    } else {
-        std_err
-    };
+    let gcv = compute_gcv(&x, n_obs, n_vars, &time, &status, &coefficients, df);
 
     Ok(RidgeResult {
-        coefficients: final_beta,
-        std_err: final_se,
+        coefficients,
+        std_err,
         df,
         gcv,
         theta: penalty.theta,
         scale_factors,
     })
+}
+
+struct PenalizedCoxStats {
+    log_likelihood: f64,
+    score: Vec<f64>,
+    information: Vec<f64>,
+}
+
+fn ridge_scale_factors(x: &[f64], n_obs: usize, n_vars: usize) -> Vec<f64> {
+    (0..n_vars)
+        .map(|column| {
+            let mean = (0..n_obs).map(|row| x[row * n_vars + column]).sum::<f64>() / n_obs as f64;
+            let divisor = n_obs.saturating_sub(1).max(1) as f64;
+            (((0..n_obs)
+                .map(|row| {
+                    let centered = x[row * n_vars + column] - mean;
+                    centered * centered
+                })
+                .sum::<f64>()
+                / divisor)
+                .sqrt())
+            .max(DIVISION_FLOOR)
+        })
+        .collect()
+}
+
+fn ridge_information_inverse(information: &Array2<f64>) -> PyResult<Array2<f64>> {
+    if let Some(inverse) = matrix_inverse(information) {
+        return Ok(inverse);
+    }
+    if information
+        .iter()
+        .all(|value| value.abs() <= DIVISION_FLOOR)
+    {
+        return Ok(Array2::zeros(information.dim()));
+    }
+
+    let n = information.nrows();
+    let mut inverse = Array2::zeros((n, n));
+    for column in 0..n {
+        let mut unit = Array1::zeros(n);
+        unit[column] = 1.0;
+        let solution = regularized_lu_solve(information, &unit)
+            .map_err(|_| PyValueError::new_err("ridge information matrix is singular"))?;
+        for row in 0..n {
+            inverse[[row, column]] = solution[row];
+        }
+    }
+    Ok(inverse)
+}
+
+fn descending_time_order(time: &[f64]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..time.len()).collect();
+    order.sort_by(|&left, &right| time[right].total_cmp(&time[left]));
+    order
+}
+
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
+fn penalized_cox_stats(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    status: &[i32],
+    weights: &[f64],
+    order: &[usize],
+    beta: &[f64],
+) -> PenalizedCoxStats {
+    let eta: Vec<f64> = (0..n_obs)
+        .map(|row| {
+            (0..n_vars)
+                .map(|column| x[row * n_vars + column] * beta[column])
+                .sum()
+        })
+        .collect();
+    let shift = eta
+        .iter()
+        .zip(weights)
+        .filter_map(|(&value, &weight)| (weight > 0.0).then_some(value))
+        .fold(f64::NEG_INFINITY, f64::max);
+    let shift = if shift.is_finite() { shift } else { 0.0 };
+    let mut risk_sum = 0.0;
+    let mut risk_x = vec![0.0; n_vars];
+    let mut risk_xx = vec![0.0; n_vars * n_vars];
+    let mut score = vec![0.0; n_vars];
+    let mut information = vec![0.0; n_vars * n_vars];
+    let mut log_likelihood = 0.0;
+    let mut group_start = 0;
+
+    while group_start < n_obs {
+        let group_time = time[order[group_start]];
+        let mut group_end = group_start + 1;
+        while group_end < n_obs && same_time(time[order[group_end]], group_time) {
+            group_end += 1;
+        }
+
+        for &row in &order[group_start..group_end] {
+            let risk = weights[row] * (eta[row] - shift).exp();
+            risk_sum += risk;
+            for left in 0..n_vars {
+                let x_left = x[row * n_vars + left];
+                risk_x[left] += risk * x_left;
+                for right in left..n_vars {
+                    risk_xx[left * n_vars + right] += risk * x_left * x[row * n_vars + right];
+                }
+            }
+        }
+
+        let mut death_weight = 0.0;
+        let mut death_eta = 0.0;
+        let mut death_x = vec![0.0; n_vars];
+        for &row in &order[group_start..group_end] {
+            if status[row] == 0 || weights[row] == 0.0 {
+                continue;
+            }
+            death_weight += weights[row];
+            death_eta += weights[row] * eta[row];
+            for column in 0..n_vars {
+                death_x[column] += weights[row] * x[row * n_vars + column];
+            }
+        }
+
+        if death_weight > 0.0 && risk_sum > 0.0 {
+            log_likelihood += death_eta - death_weight * (risk_sum.ln() + shift);
+            for left in 0..n_vars {
+                let mean_left = risk_x[left] / risk_sum;
+                score[left] += death_x[left] - death_weight * mean_left;
+                for right in left..n_vars {
+                    let increment = death_weight
+                        * (risk_xx[left * n_vars + right] / risk_sum
+                            - mean_left * risk_x[right] / risk_sum);
+                    information[left * n_vars + right] += increment;
+                    if right != left {
+                        information[right * n_vars + left] += increment;
+                    }
+                }
+            }
+        }
+        group_start = group_end;
+    }
+
+    PenalizedCoxStats {
+        log_likelihood,
+        score,
+        information,
+    }
+}
+
+fn penalized_log_likelihood(
+    stats: &PenalizedCoxStats,
+    beta: &[f64],
+    penalty_diagonal: &[f64],
+) -> f64 {
+    stats.log_likelihood
+        - 0.5
+            * beta
+                .iter()
+                .zip(penalty_diagonal)
+                .map(|(&coefficient, &penalty)| penalty * coefficient * coefficient)
+                .sum::<f64>()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fit_penalized_cox(
+    x: &[f64],
+    n_obs: usize,
+    n_vars: usize,
+    time: &[f64],
+    status: &[i32],
+    weights: &[f64],
+    order: &[usize],
+    penalty_diagonal: &[f64],
+) -> PyResult<(Vec<f64>, PenalizedCoxStats)> {
+    let mut beta = vec![0.0; n_vars];
+    let mut stats = penalized_cox_stats(x, n_obs, n_vars, time, status, weights, order, &beta);
+    let mut objective = penalized_log_likelihood(&stats, &beta, penalty_diagonal);
+
+    for _ in 0..50 {
+        let mut system = stats.information.clone();
+        let mut gradient = stats.score.clone();
+        for column in 0..n_vars {
+            system[column * n_vars + column] += penalty_diagonal[column];
+            gradient[column] -= penalty_diagonal[column] * beta[column];
+        }
+        let system = Array2::from_shape_vec((n_vars, n_vars), system)
+            .map_err(|_| PyValueError::new_err("failed to construct ridge Newton system"))?;
+        let delta = regularized_lu_solve(&system, &Array1::from_vec(gradient))
+            .map_err(|_| PyValueError::new_err("ridge Newton system is singular"))?;
+        if delta
+            .iter()
+            .fold(0.0_f64, |largest, &value| largest.max(value.abs()))
+            < 1e-10
+        {
+            break;
+        }
+
+        let mut step = 1.0;
+        let mut accepted = None;
+        while step >= 1.0 / 1024.0 {
+            let candidate: Vec<f64> = beta
+                .iter()
+                .zip(delta.iter())
+                .map(|(&coefficient, &change)| coefficient + step * change)
+                .collect();
+            let candidate_stats =
+                penalized_cox_stats(x, n_obs, n_vars, time, status, weights, order, &candidate);
+            let candidate_objective =
+                penalized_log_likelihood(&candidate_stats, &candidate, penalty_diagonal);
+            let objective_tolerance = 1e-12 * (1.0 + objective.abs());
+            if candidate_objective + objective_tolerance >= objective {
+                accepted = Some((candidate, candidate_stats, candidate_objective));
+                break;
+            }
+            step *= 0.5;
+        }
+        let Some((candidate, candidate_stats, candidate_objective)) = accepted else {
+            break;
+        };
+        let improvement = candidate_objective - objective;
+        beta = candidate;
+        stats = candidate_stats;
+        objective = candidate_objective;
+        if improvement <= 1e-13 * (1.0 + objective.abs()) {
+            break;
+        }
+    }
+    Ok((beta, stats))
 }
 
 fn validate_ridge_penalty(penalty: &RidgePenalty) -> PyResult<()> {
@@ -230,57 +441,6 @@ fn validate_ridge_inputs(
     }
 
     Ok(())
-}
-
-fn fit_unpenalized(
-    x: &[f64],
-    n_obs: usize,
-    n_vars: usize,
-    time: &[f64],
-    status: &[i32],
-    weights: Option<&[f64]>,
-) -> PyResult<(Vec<f64>, Vec<f64>)> {
-    let mut info_diag = vec![0.0; n_vars];
-    let mut score = vec![0.0; n_vars];
-    let risk_data = precompute_cox_unit_risk_set_cumsum(x, n_obs, n_vars, time, weights);
-
-    for i in 0..n_obs {
-        if status[i] != 1 {
-            continue;
-        }
-
-        let pos = risk_data.risk_set_pos[i];
-        let risk_sum = risk_data.cumsum_exp_eta[pos];
-        if risk_sum <= 0.0 {
-            continue;
-        }
-
-        let weight = observation_weight(weights, i);
-        for j in 0..n_vars {
-            let xij = x[i * n_vars + j];
-            let cumsum_idx = pos * n_vars + j;
-            let x_mean = risk_data.cumsum_weighted_x[cumsum_idx] / risk_sum;
-            let x_sq_mean = risk_data.cumsum_weighted_x_sq[cumsum_idx] / risk_sum;
-
-            score[j] += weight * (xij - x_mean);
-            info_diag[j] += weight * (x_sq_mean - x_mean * x_mean).max(0.0);
-        }
-    }
-
-    let mut final_beta = vec![0.0; n_vars];
-    for j in 0..n_vars {
-        if info_diag[j] > DIVISION_FLOOR {
-            final_beta[j] = score[j] / info_diag[j];
-            info_diag[j] = info_diag[j].max(DIVISION_FLOOR);
-        }
-    }
-
-    Ok((final_beta, info_diag))
-}
-
-#[inline]
-fn observation_weight(weights: Option<&[f64]>, idx: usize) -> f64 {
-    weights.map_or(1.0, |values| values[idx])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -509,8 +669,59 @@ mod tests {
             .scale_factors
             .expect("scaled fit should report scaling factors");
 
-        assert!((scale_factors[0] - (2.0_f64 / 3.0).sqrt()).abs() < 1e-12);
+        assert!((scale_factors[0] - 1.0).abs() < 1e-12);
         assert_eq!(scale_factors[1], DIVISION_FLOOR);
+    }
+
+    #[test]
+    fn test_ridge_fit_matches_weighted_reference() {
+        let x = vec![
+            0.2, 1.2, 0.5, 0.7, 0.8, 1.5, 1.0, 0.2, 1.4, 1.1, 1.8, 0.4, 2.1, 1.8, 2.5, 0.9,
+        ];
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let status = vec![1, 0, 1, 1, 0, 1, 0, 1];
+        let weights = vec![1.0, 1.5, 0.5, 2.0, 1.0, 1.2, 0.8, 1.0];
+
+        let unscaled = ridge_fit(
+            x.clone(),
+            8,
+            2,
+            time.clone(),
+            status.clone(),
+            &RidgePenalty::new(0.2, Some(false)).unwrap(),
+            Some(weights.clone()),
+        )
+        .unwrap();
+        let scaled = ridge_fit(
+            x,
+            8,
+            2,
+            time,
+            status,
+            &RidgePenalty::new(0.2, Some(true)).unwrap(),
+            Some(weights),
+        )
+        .unwrap();
+
+        for (&actual, expected) in unscaled
+            .coefficients
+            .iter()
+            .zip([-3.17278910503507, 0.0281103888695528])
+        {
+            assert!((actual - expected).abs() < 5e-9);
+        }
+        for (&actual, expected) in scaled
+            .coefficients
+            .iter()
+            .zip([-3.81767201833844, 0.113752966479022])
+        {
+            assert!(
+                (actual - expected).abs() < 5e-9,
+                "expected {expected}, got {actual}"
+            );
+        }
+        assert!((unscaled.df - 1.37336701637676).abs() < 5e-9);
+        assert!((scaled.df - 1.52004107720074).abs() < 5e-9);
     }
 
     #[test]
@@ -519,11 +730,11 @@ mod tests {
         let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
         let status = vec![1, 0, 0];
         let weights = vec![1.0, 1.0, 1.0];
+        let order = descending_time_order(&time);
+        let stats = penalized_cox_stats(&x, 3, 1, &time, &status, &weights, &order, &[0.0]);
 
-        let (beta, info_diag) = fit_unpenalized(&x, 3, 1, &time, &status, Some(&weights)).unwrap();
-
-        assert!((beta[0] + 1.5).abs() < 1e-12);
-        assert!((info_diag[0] - 8.0 / 9.0).abs() < 1e-12);
+        assert!((stats.score[0] + 4.0 / 3.0).abs() < 1e-12);
+        assert!((stats.information[0] - 8.0 / 9.0).abs() < 1e-12);
     }
 
     #[test]
@@ -532,11 +743,11 @@ mod tests {
         let time = vec![1.0, 2.0, 3.0];
         let status = vec![1, 0, 0];
         let weights = vec![1.0, 0.0, 1.0];
+        let order = descending_time_order(&time);
+        let stats = penalized_cox_stats(&x, 3, 1, &time, &status, &weights, &order, &[0.0]);
 
-        let (beta, info_diag) = fit_unpenalized(&x, 3, 1, &time, &status, Some(&weights)).unwrap();
-
-        assert!((beta[0] + 1.0).abs() < 1e-12);
-        assert!((info_diag[0] - 1.0).abs() < 1e-12);
+        assert!((stats.score[0] + 1.0).abs() < 1e-12);
+        assert!((stats.information[0] - 1.0).abs() < 1e-12);
     }
 
     #[test]

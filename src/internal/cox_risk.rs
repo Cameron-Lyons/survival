@@ -170,6 +170,7 @@ pub(crate) fn precompute_cox_risk_set_cumsum(
     risk_data
 }
 
+#[cfg(test)]
 pub(crate) fn precompute_cox_unit_risk_set_cumsum(
     x: &[f64],
     n: usize,
@@ -241,6 +242,7 @@ pub(crate) fn precompute_cox_risk_set_cumsum_into(
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::needless_range_loop)]
 pub(crate) fn precompute_cox_unit_risk_set_cumsum_into(
     x: &[f64],
