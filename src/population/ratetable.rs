@@ -187,6 +187,42 @@ impl RateTable {
         Ok(self.rates[flat_idx])
     }
 
+    pub fn lookup_many(&self, coords: HashMap<String, Vec<f64>>) -> PyResult<Vec<f64>> {
+        let Some(row_count) = coords.values().next().map(Vec::len) else {
+            return Err(value_error(
+                "coords must contain at least one coordinate column",
+            ));
+        };
+        for (name, values) in &coords {
+            if values.len() != row_count {
+                return Err(value_error(format!(
+                    "coordinate column '{name}' has length {}; expected {row_count}",
+                    values.len()
+                )));
+            }
+        }
+
+        let columns: Vec<Option<&Vec<f64>>> = self
+            .dimensions
+            .iter()
+            .map(|dimension| coords.get(&dimension.name))
+            .collect();
+        let mut result = Vec::with_capacity(row_count);
+        for row in 0..row_count {
+            let mut flat_idx = 0usize;
+            for (dimension_idx, (dimension, column)) in
+                self.dimensions.iter().zip(&columns).enumerate()
+            {
+                let value = column.map_or(0.0, |values| values[row]);
+                let index = coordinate_index(dimension, value)?
+                    .min(self.shape[dimension_idx].saturating_sub(1));
+                flat_idx = flat_idx * self.shape[dimension_idx] + index;
+            }
+            result.push(self.rates[flat_idx.min(self.rates.len().saturating_sub(1))]);
+        }
+        Ok(result)
+    }
+
     pub fn lookup_interpolate(&self, coords: HashMap<String, f64>) -> PyResult<f64> {
         self.lookup(coords)
     }
@@ -279,29 +315,7 @@ impl RateTable {
 
         for dim in &self.dimensions {
             let value = coords.get(&dim.name).copied().unwrap_or(0.0);
-            if !value.is_finite() {
-                return Err(value_error(format!(
-                    "{} coordinate must be finite",
-                    dim.name
-                )));
-            }
-
-            let idx = match dim.dim_type {
-                DimType::Factor => {
-                    if value < 0.0 {
-                        return Err(value_error(format!(
-                            "{} coordinate must be non-negative",
-                            dim.name
-                        )));
-                    }
-                    let max_idx = dim.levels.as_ref().map_or(0, |l| l.len().saturating_sub(1));
-                    (value as usize).min(max_idx)
-                }
-                DimType::Age | DimType::Year | DimType::Continuous => {
-                    find_interval(&dim.cutpoints, value)
-                }
-            };
-            indices.push(idx);
+            indices.push(coordinate_index(dim, value)?);
         }
 
         Ok(indices)
@@ -318,6 +332,33 @@ impl RateTable {
         }
 
         flat_idx.min(self.rates.len().saturating_sub(1))
+    }
+}
+
+fn coordinate_index(dimension: &RateDimension, value: f64) -> PyResult<usize> {
+    if !value.is_finite() {
+        return Err(value_error(format!(
+            "{} coordinate must be finite",
+            dimension.name
+        )));
+    }
+    match dimension.dim_type {
+        DimType::Factor => {
+            if value < 0.0 {
+                return Err(value_error(format!(
+                    "{} coordinate must be non-negative",
+                    dimension.name
+                )));
+            }
+            let max_idx = dimension
+                .levels
+                .as_ref()
+                .map_or(0, |levels| levels.len().saturating_sub(1));
+            Ok((value as usize).min(max_idx))
+        }
+        DimType::Age | DimType::Year | DimType::Continuous => {
+            Ok(find_interval(&dimension.cutpoints, value))
+        }
     }
 }
 
@@ -562,6 +603,67 @@ mod tests {
         let mut coords = HashMap::new();
         coords.insert("age".to_string(), 15.0);
         assert_eq!(rt.lookup(coords).unwrap(), 0.02);
+    }
+
+    #[test]
+    fn ratetable_batch_lookup_matches_scalar_coordinates() {
+        let dimensions = vec![
+            RateDimension::new("age".to_string(), DimType::Age, vec![0.0, 10.0, 20.0], None),
+            RateDimension::new(
+                "sex".to_string(),
+                DimType::Factor,
+                vec![],
+                Some(vec!["male".to_string(), "female".to_string()]),
+            ),
+        ];
+        let table = RateTable::new(dimensions, vec![0.01, 0.02, 0.03, 0.04], None).unwrap();
+        let mut columns = HashMap::new();
+        columns.insert("age".to_string(), vec![5.0, 15.0, 15.0]);
+        columns.insert("sex".to_string(), vec![0.0, 0.0, 1.0]);
+
+        assert_eq!(table.lookup_many(columns).unwrap(), vec![0.01, 0.03, 0.04]);
+
+        let mut age_only = HashMap::new();
+        age_only.insert("age".to_string(), vec![5.0, 15.0]);
+        assert_eq!(table.lookup_many(age_only).unwrap(), vec![0.01, 0.03]);
+    }
+
+    #[test]
+    fn ratetable_batch_lookup_validates_column_shape_and_values() {
+        let dimensions = vec![RateDimension::new(
+            "age".to_string(),
+            DimType::Age,
+            vec![0.0, 10.0, 20.0],
+            None,
+        )];
+        let table = RateTable::new(dimensions, vec![0.01, 0.02], None).unwrap();
+
+        assert!(
+            table
+                .lookup_many(HashMap::new())
+                .expect_err("empty coordinate columns should fail")
+                .to_string()
+                .contains("at least one coordinate column")
+        );
+        let mut ragged = HashMap::new();
+        ragged.insert("age".to_string(), vec![5.0, 15.0]);
+        ragged.insert("unused".to_string(), vec![1.0]);
+        assert!(
+            table
+                .lookup_many(ragged)
+                .expect_err("ragged coordinate columns should fail")
+                .to_string()
+                .contains("coordinate column")
+        );
+        let mut non_finite = HashMap::new();
+        non_finite.insert("age".to_string(), vec![f64::NAN]);
+        assert!(
+            table
+                .lookup_many(non_finite)
+                .expect_err("non-finite batch coordinate should fail")
+                .to_string()
+                .contains("age coordinate must be finite")
+        );
     }
 
     #[test]

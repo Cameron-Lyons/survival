@@ -8445,6 +8445,7 @@ def test_population_survival_and_pyears_bindings_are_typed():
         "ndim": ["self"],
         "dim_names": ["self"],
         "lookup": ["self", "coords"],
+        "lookup_many": ["self", "coords"],
         "lookup_interpolate": ["self", "coords"],
         "cumulative_hazard": ["self", "age_start", "age_end", "year_start", "sex"],
         "expected_survival": ["self", "age_start", "age_end", "year_start", "sex"],
@@ -8507,6 +8508,9 @@ def test_population_survival_and_pyears_bindings_are_typed():
     assert custom_table.dim_names() == ["age"]
     assert custom_table.summary == "single-age table"
     assert custom_table.lookup({"age": 1000.0}) == pytest.approx(0.001)
+    assert custom_table.lookup_many({"age": [1000.0, 2000.0]}) == pytest.approx(
+        [0.001, 0.001]
+    )
 
     ratetable = core.create_simple_ratetable(
         [0.0, 36500.0, 73000.0],
