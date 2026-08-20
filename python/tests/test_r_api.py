@@ -9709,8 +9709,9 @@ def test_coxph_formula_gaussian_frailty_rejects_unsupported_modes():
     }
     for option, exception, message in (
         ("distribution='gamma',theta=.5", NotImplementedError, "only distribution"),
-        ("distribution='gaussian'", NotImplementedError, "fixed theta"),
-        ("distribution='gaussian',method='reml'", NotImplementedError, "fixed theta"),
+        ("distribution='gaussian',method='ml'", NotImplementedError, "support fixed"),
+        ("distribution='gaussian',method='reml',theta=.5", ValueError, "cannot include"),
+        ("distribution='gaussian',method='reml',df=2", ValueError, "cannot include"),
         ("distribution='gaussian',method='fixed'", ValueError, "requires theta"),
         ("distribution='gaussian',method='df'", ValueError, "requires df"),
         ("distribution='gaussian',theta=0", ValueError, "positive"),
@@ -9875,6 +9876,133 @@ def test_coxph_formula_gaussian_frailty_selects_variance_by_aic_reference():
     )
     assert method_alias.coefficients[0] == pytest.approx(fit.coefficients[0], abs=1e-12)
     assert method_alias.log_likelihood == pytest.approx(fit.log_likelihood, abs=1e-12)
+
+
+def test_coxph_formula_gaussian_frailty_selects_variance_by_reml_reference():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+        "g": list("abcd") * 3,
+    }
+    frailty_term = 'frailty(g,distribution="gaussian",eps=1e-8,sparse=False)'
+    fit = survival.coxph(
+        f"Surv(time,status) ~ x + {frailty_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [
+            -0.594635790457627,
+            6.26646469092777e-09,
+            -2.66538075201931e-09,
+            -1.55435294924874e-09,
+            -2.04673098965972e-09,
+        ],
+        abs=1e-14,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-16.2952600561062, -12.3745234323089],
+        abs=1e-12,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"x": 0.999999998279189, frailty_term: 4.698081260588e-08},
+        abs=5e-15,
+    )
+    history = fit.history[frailty_term]
+    assert history["theta"] == pytest.approx(4.96705373128255e-09, abs=1e-20)
+    assert history["done"] is True
+    assert len(history["history"]) == 27
+    assert history["history"][0] == pytest.approx(
+        {
+            "theta": 1.0,
+            "resid": -0.951019400228325,
+            "fsum": 0.0890149835387062,
+            "trace": 2.18264815143848,
+        },
+        abs=1e-12,
+    )
+    assert history["history"][-1] == pytest.approx(
+        {
+            "theta": 9.9341074625651e-09,
+            "resid": -8.8064565939002e-09,
+            "fsum": 5.29779551107513e-17,
+            "trace": 3.9736429383548e-08,
+        },
+        abs=1e-15,
+    )
+    assert [row[index] for index, row in enumerate(survival.vcov(fit))] == pytest.approx(
+        [
+            0.757893891710502,
+            9.93410736018337e-09,
+            9.93410736869208e-09,
+            9.93410733434179e-09,
+            9.93410732033074e-09,
+        ],
+        abs=1e-14,
+    )
+
+    method_alias = survival.coxph(
+        "Surv(time,status) ~ x + "
+        'frailty(g,distribution="gaussian",method="reml",eps=1e-8,sparse=False)',
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+    assert method_alias.coefficients[0] == pytest.approx(fit.coefficients[0], abs=1e-14)
+
+    default_term = 'frailty(g,distribution="gaussian",sparse=False)'
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        default = survival.coxph(f"Surv(time,status) ~ x + {default_term}", data=data)
+    assert default.history[default_term]["theta"] == pytest.approx(0.000651041666666667)
+    assert default.history[default_term]["done"] is False
+    assert len(default.history[default_term]["history"]) == 10
+
+
+def test_coxph_formula_gaussian_frailty_reml_interpolates_bracketed_variance():
+    group = [level for level in "abcd" for _ in range(8)]
+    within_group = list(range(1, 9)) * 4
+    scales = [1.0] * 8 + [1.4] * 8 + [2.0] * 8 + [3.0] * 8
+    data = {
+        "time": [value * scale for value, scale in zip(within_group, scales, strict=True)],
+        "status": [1] * 32,
+        "g": group,
+    }
+    frailty_term = 'frailty(g,distribution="gaussian",eps=1e-7,sparse=False)'
+    fit = survival.coxph(
+        f"Surv(time,status) ~ {frailty_term}",
+        data=data,
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+    )
+
+    assert fit.coefficients[0] == pytest.approx(
+        [0.85744529968117, 0.353362586933522, -0.246510407574222, -0.96429747904047],
+        abs=1e-12,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-85.2337135889337, -74.4461748981272],
+        abs=1e-12,
+    )
+    history = fit.history[frailty_term]
+    assert history["theta"] == pytest.approx(0.751556384595393, abs=1e-12)
+    assert history["done"] is True
+    assert [row["theta"] for row in history["history"]] == pytest.approx(
+        [1.0, 1.0 / 3.0, 2.0 / 3.0, 0.762850856958159, 0.751444483021004, 0.751556455642174],
+        abs=1e-12,
+    )
+    assert [row["resid"] for row in history["history"]] == pytest.approx(
+        [
+            -0.192335663309711,
+            0.228278667100855,
+            0.0593344640977733,
+            -0.00819315206454252,
+            8.08518529218372e-05,
+            -5.13351791076033e-08,
+        ],
+        abs=1e-12,
+    )
 
 
 def test_coxph_formula_pspline_calibrates_target_df_against_reference():

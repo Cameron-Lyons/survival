@@ -3539,7 +3539,7 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
     df: float | None = None
     method: str | None = None
     sparse: bool | None = None
-    eps = 0.1
+    eps: float | None = None
     saw_option = False
     seen_options: set[str] = set()
     for part in parts:
@@ -3591,7 +3591,7 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
             method = "reml"
     if theta is not None and df is not None:
         raise ValueError("Gaussian frailty cannot include both theta and df")
-    if eps <= 0.0:
+    if eps is not None and eps <= 0.0:
         raise ValueError("frailty eps must be positive")
     if method == "fixed":
         if theta is None:
@@ -3609,12 +3609,18 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
         if df not in {None, 0.0}:
             raise ValueError("AIC Gaussian frailty df must be zero")
         selection = "aic"
+    elif method == "reml":
+        if theta is not None or df is not None:
+            raise ValueError("REML Gaussian frailty cannot include theta or df")
+        selection = "reml"
     else:
         raise NotImplementedError(
-            "Gaussian frailty formulas currently support fixed theta, target df, or AIC"
+            "Gaussian frailty formulas support fixed theta, target df, AIC, or REML"
         )
     if theta is not None and theta <= 0.0:
         raise ValueError("frailty theta must be positive")
+    if eps is None:
+        eps = 0.1 if selection in {"fixed", "df"} else 1e-5
     return _FrailtyFormulaTerm(
         term=_CovariateTerm(column, transform="frailty"),
         distribution=distribution,
@@ -4489,6 +4495,8 @@ def _frailty_formula_blocks(design: _FormulaDesign, n: int) -> list[_FrailtyPena
             if initial_theta is None:
                 if term.formula.selection == "aic":
                     initial_theta = 0.1
+                elif term.formula.selection == "reml":
+                    initial_theta = 1.0
                 else:
                     target_df = term.formula.target_df
                     if target_df is None:
@@ -4844,6 +4852,87 @@ def _frailty_aic_next_theta(
         new_theta = 2.0 * max(theta)
     else:
         new_theta = _frailty_brent(theta, criterion, 0.0, None)
+    return new_theta, converged
+
+
+def _frailty_reml_history_row(
+    fit: Any,
+    columns: Sequence[int],
+    theta: float,
+) -> dict[str, float]:
+    coefficients = [float(fit.coefficients[0][column]) for column in columns]
+    center = math.fsum(coefficients) / len(coefficients)
+    fsum = math.fsum((coefficient - center) ** 2 for coefficient in coefficients)
+    trace = math.fsum(float(fit.information_matrix[column][column]) for column in columns)
+    degrees_of_freedom = len(columns) - trace / theta
+    residual = fsum / degrees_of_freedom - theta
+    return {"theta": theta, "resid": residual, "fsum": fsum, "trace": trace}
+
+
+def _frailty_reml_fallback_theta(history: Sequence[Mapping[str, float]]) -> float:
+    ordered = sorted((float(row["theta"]), float(row["resid"])) for row in history)
+    for (left_theta, left_residual), (right_theta, right_residual) in zip(
+        ordered,
+        ordered[1:],
+        strict=False,
+    ):
+        if left_residual * right_residual <= 0.0:
+            return (left_theta + right_theta) / 2.0
+    theta, residual = ordered[-1]
+    return theta * 2.0 if residual > 0.0 else theta / 2.0
+
+
+def _frailty_reml_next_theta(
+    eps: float,
+    iteration: int,
+    history: Sequence[Mapping[str, float]],
+) -> tuple[float, bool]:
+    current_theta = float(history[-1]["theta"])
+    current_residual = float(history[-1]["resid"])
+    if iteration == 1:
+        return current_theta * 3.0 if current_residual > 0.0 else current_theta / 3.0, False
+
+    residuals = [float(row["resid"]) for row in history]
+    if iteration == 2:
+        if all(residual > 0.0 for residual in residuals):
+            return current_theta * 2.0, False
+        if all(residual < 0.0 for residual in residuals):
+            return current_theta / 2.0, False
+        return math.fsum(float(row["theta"]) for row in history) / len(history), False
+
+    converged = abs(current_residual) < eps
+    theta = [float(row["theta"]) for row in history]
+    if all(residual > 0.0 for residual in residuals):
+        return 2.0 * max(theta), converged
+    if all(residual < 0.0 for residual in residuals):
+        return 0.5 * min(theta), converged
+
+    order = sorted(range(len(history)), key=theta.__getitem__)
+    ordered_theta = [theta[index] for index in order]
+    ordered_residual = [residuals[index] for index in order]
+    center = order.index(len(history) - 1)
+    if center == 0:
+        center = 1
+    elif center == len(history) - 1:
+        center -= 1
+    try:
+        ratio_right = ordered_residual[center] / ordered_residual[center + 1]
+        ratio_left = ordered_residual[center] / ordered_residual[center - 1]
+        ratio = ratio_right / ratio_left
+        numerator = ratio_left * (
+            ratio * (ratio_right - ratio) * (ordered_theta[center + 1] - ordered_theta[center])
+            - (1.0 - ratio_right) * (ordered_theta[center] - ordered_theta[center - 1])
+        )
+        denominator = (ratio - 1.0) * (ratio_right - 1.0) * (ratio_left - 1.0)
+        new_theta = ordered_theta[center] + numerator / denominator
+    except (ValueError, ZeroDivisionError, OverflowError):
+        new_theta = _frailty_reml_fallback_theta(history)
+    if not math.isfinite(new_theta) or new_theta <= 0.0:
+        new_theta = _frailty_reml_fallback_theta(history)
+    elif new_theta > ordered_theta[center + 1]:
+        new_theta = (ordered_theta[center] + ordered_theta[center + 1]) / 2.0
+    elif new_theta < ordered_theta[center - 1]:
+        new_theta = (ordered_theta[center - 1] + ordered_theta[center]) / 2.0
     return new_theta, converged
 
 
@@ -23520,6 +23609,9 @@ def coxph(
     aic_frailty_blocks = [
         index for index, block in enumerate(formula_frailty_blocks) if block.selection == "aic"
     ]
+    reml_frailty_blocks = [
+        index for index, block in enumerate(formula_frailty_blocks) if block.selection == "reml"
+    ]
     ridge_history: dict[str, dict[str, Any]] | None = None
     reported_log_likelihood: list[float] | None = None
     if (
@@ -23528,6 +23620,7 @@ def coxph(
         or aic_pspline_blocks
         or target_frailty_blocks
         or aic_frailty_blocks
+        or reml_frailty_blocks
     ):
         ridge_histories = [
             [(0.0, float(len(block.columns)))] if block.target_df is not None else []
@@ -23544,6 +23637,9 @@ def coxph(
             [(0.0, 0.0)] if block.target_df is not None else [] for block in formula_frailty_blocks
         ]
         frailty_aic_histories: list[list[dict[str, float]]] = [
+            [] for _block in formula_frailty_blocks
+        ]
+        frailty_reml_histories: list[list[dict[str, float]]] = [
             [] for _block in formula_frailty_blocks
         ]
         ridge_halves = [0] * len(formula_ridge_blocks)
@@ -23714,6 +23810,23 @@ def coxph(
                 next_reported_frailty_thetas[block_index] = next_theta
                 next_frailty_thetas[block_index] = max(next_theta, 1e-12)
                 frailty_done[block_index] = converged
+            for block_index in reml_frailty_blocks:
+                block = formula_frailty_blocks[block_index]
+                frailty_reml_histories[block_index].append(
+                    _frailty_reml_history_row(
+                        fit,
+                        block.columns,
+                        fitted_frailty_thetas[block_index],
+                    )
+                )
+                next_theta, converged = _frailty_reml_next_theta(
+                    block.eps,
+                    outer_iteration,
+                    frailty_reml_histories[block_index],
+                )
+                next_reported_frailty_thetas[block_index] = next_theta
+                next_frailty_thetas[block_index] = max(next_theta, 1e-12)
+                frailty_done[block_index] = converged
             reported_ridge_thetas = next_ridge_thetas
             reported_pspline_thetas = next_reported_pspline_thetas
             reported_frailty_thetas = next_reported_frailty_thetas
@@ -23816,7 +23929,15 @@ def coxph(
                             "history": frailty_aic_histories[index],
                         }
                         if block.selection == "aic"
-                        else {"theta": frailty_thetas[index], "done": True}
+                        else (
+                            {
+                                "theta": reported_frailty_thetas[index],
+                                "done": frailty_done[index],
+                                "history": frailty_reml_histories[index],
+                            }
+                            if block.selection == "reml"
+                            else {"theta": frailty_thetas[index], "done": True}
+                        )
                     )
                 )
                 for index, block in enumerate(formula_frailty_blocks)
