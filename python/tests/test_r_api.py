@@ -10067,6 +10067,16 @@ def test_coxph_formula_sparse_gaussian_frailty_diagnostics_match_reference():
     assert zph.global_chi2 == pytest.approx(2.07213302673791, abs=1e-12)
     assert zph.global_df == pytest.approx(2.44623562895911, abs=1e-12)
     assert zph.global_p_value == pytest.approx(0.448331695640693, abs=5e-12)
+    assert survival.r_api._core.chi_square_survival(100.0, 0.5) == pytest.approx(
+        2.788194848158256e-24,
+        rel=1e-9,
+        abs=0.0,
+    )
+    assert survival.r_api._core.chi_square_survival(1000.0, 10.5) == pytest.approx(
+        6.031085185928643e-208,
+        rel=1e-9,
+        abs=0.0,
+    )
     with pytest.raises(ValueError, match="non-negative"):
         survival.r_api._core.chi_square_survival(-1.0, 1.0)
     with pytest.raises(ValueError, match="positive"):
