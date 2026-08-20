@@ -50,6 +50,7 @@ from .r_api import (
     YatesPairwiseResult,
     YatesResult,
     aeqSurv,
+    agexact_fit,
     agreg_fit,
     aic,
     anova,

@@ -76,6 +76,7 @@ _R_EXPORTS = [
     "YatesResult",
     "aic",
     "aareg",
+    "agexact_fit",
     "agreg_fit",
     "aeqSurv",
     "anova",

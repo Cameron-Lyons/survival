@@ -55,6 +55,7 @@ __all__ = [
     "TcutResult",
     "aic",
     "aareg",
+    "agexact_fit",
     "agreg_fit",
     "aeqSurv",
     "as_data_frame",
@@ -21616,8 +21617,9 @@ def _cox_low_level_fit(
     nocenter: Any | None,
     *,
     counting: bool,
+    exact: bool,
 ) -> _CoxLowLevelComputation:
-    function_name = "agreg_fit" if counting else "coxph_fit"
+    function_name = "agexact_fit" if exact else "agreg_fit" if counting else "coxph_fit"
 
     rows = _as_matrix_rows(x, "x", allow_empty_columns=True)
     time, status, entry_times = _cox_fit_response(y, counting=counting)
@@ -21627,6 +21629,8 @@ def _cox_low_level_fit(
     if len(rows) != n:
         raise ValueError("x and y have different numbers of rows")
     nvar = len(rows[0]) if rows else 0
+    if exact and nvar == 0:
+        raise ValueError("Cannot handle a null model with exact calculation")
     if any(len(row) != nvar for row in rows) or any(
         not math.isfinite(value) for row in rows for value in row
     ):
@@ -21645,6 +21649,8 @@ def _cox_low_level_fit(
     weight_values = None if weights is None else _float_vector(weights, "weights")
     if weight_values is not None and len(weight_values) != n:
         raise ValueError("weights and y have different numbers of rows")
+    if exact and weight_values is not None and any(value != 1.0 for value in weight_values):
+        raise ValueError("Case weights are not supported for the exact method")
     initial = None if init is None else _float_vector(init, "init")
     if initial is not None and len(initial) != nvar:
         raise ValueError("Wrong length for initial parameters")
@@ -21656,11 +21662,15 @@ def _cox_low_level_fit(
         raise ValueError("control.eps must be positive")
     if toler is not None and toler <= 0.0:
         raise ValueError("control.toler.chol must be positive")
-    method_name = _match_string_arg(
-        method,
-        "method",
-        ("efron", "breslow"),
-        f"{function_name} method must be 'efron' or 'breslow'",
+    method_name = (
+        _match_string_arg(method, "method", ("exact",), "agexact_fit method must be 'exact'")
+        if exact
+        else _match_string_arg(
+            method,
+            "method",
+            ("efron", "breslow"),
+            f"{function_name} method must be 'efron' or 'breslow'",
+        )
     )
     keep_residuals = _normalize_bool_option_with_default(resid, "resid", True)
     nocenter_values = _normalize_numeric_sequence_or_none(nocenter, "nocenter")
@@ -21763,6 +21773,7 @@ def coxph_fit(
         resid,
         nocenter,
         counting=False,
+        exact=False,
     ).result
 
 
@@ -21794,6 +21805,7 @@ def agreg_fit(
         resid,
         nocenter,
         counting=True,
+        exact=False,
     )
     fit = computation.fit
     result = computation.result
@@ -21819,6 +21831,49 @@ def agreg_fit(
             "convergence": int(flag == _COX_NONCONVERGENCE_FLAG),
         },
     )
+
+
+def agexact_fit(
+    x: Any,
+    y: Any,
+    strata: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    control: Any | None = None,
+    weights: Any | None = None,
+    method: Any = "exact",
+    rownames: Any | None = None,
+    resid: Any = True,
+    nocenter: Any | None = None,
+) -> CoxphFitResult:
+    """Fit the exact partial-likelihood model exported as R ``agexact.fit``."""
+
+    if isinstance(y, Surv):
+        if y.type not in {"right", "counting"}:
+            raise ValueError("Invalid survival response")
+        counting = y.type == "counting"
+        response = y
+    else:
+        response = _as_matrix_rows(y, "y", allow_empty_columns=False)
+        if len(response[0]) not in {2, 3}:
+            raise ValueError("Invalid survival response")
+        counting = len(response[0]) == 3
+    computation = _cox_low_level_fit(
+        x,
+        response,
+        strata,
+        offset,
+        init,
+        control,
+        weights,
+        method,
+        rownames,
+        resid,
+        nocenter,
+        counting=counting,
+        exact=True,
+    )
+    return replace(computation.result, method="coxph")
 
 
 def coxph(

@@ -12075,6 +12075,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert "TMergeOperation" in survival.__all__
     assert "aic" in survival.__all__
     assert "aeqSurv" in survival.__all__
+    assert "agexact_fit" in survival.__all__
     assert "agreg_fit" in survival.__all__
     assert "anova" in survival.__all__
     assert "as_data_frame" in survival.__all__
@@ -12164,6 +12165,7 @@ def test_package_root_marks_curated_and_legacy_exports():
     assert survival.TMergeOperation is survival.r_api.TMergeOperation
     assert survival.aic is survival.r_api.aic
     assert survival.aeqSurv is survival.r_api.aeqSurv
+    assert survival.agexact_fit is survival.r_api.agexact_fit
     assert survival.agreg_fit is survival.r_api.agreg_fit
     assert survival.anova is survival.r_api.anova
     assert survival.as_data_frame is survival.r_api.as_data_frame
@@ -12996,6 +12998,8 @@ def test_r_api_stub_tracks_coxph_fit_signature():
     assert _pyi_function_arg_names(stub_path, "coxph_fit") == expected
     assert list(inspect.signature(survival.r_api.agreg_fit).parameters) == expected
     assert _pyi_function_arg_names(stub_path, "agreg_fit") == expected
+    assert list(inspect.signature(survival.r_api.agexact_fit).parameters) == expected
+    assert _pyi_function_arg_names(stub_path, "agexact_fit") == expected
 
 
 def test_r_api_stub_tracks_survdiff_public_signature():
