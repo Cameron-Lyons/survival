@@ -6616,6 +6616,12 @@ def survobrien(
     covariate: list[float],
     strata: list[int] | None = None,
 ) -> SurvObrienResult: ...
+def survobrien_event_sets(
+    start: list[float] | None,
+    stop: list[float],
+    status: list[int],
+    strata: list[int] | None = None,
+) -> tuple[list[int], list[int], list[float], list[int]]: ...
 def survobrien_transform_groups(
     columns: list[list[float]],
     row_indices: list[int],

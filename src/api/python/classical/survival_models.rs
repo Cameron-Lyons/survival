@@ -32,6 +32,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(brier, m)?)?;
     m.add_function(wrap_pyfunction!(integrated_brier, m)?)?;
     m.add_function(wrap_pyfunction!(survobrien, m)?)?;
+    m.add_function(wrap_pyfunction!(survobrien_event_sets, m)?)?;
     m.add_function(wrap_pyfunction!(survobrien_transform_groups, m)?)?;
     m.add_function(wrap_pyfunction!(nelson_aalen_estimator, m)?)?;
     m.add_function(wrap_pyfunction!(stratified_kaplan_meier, m)?)?;
