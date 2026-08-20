@@ -7169,6 +7169,7 @@ def coxph_fit(
     entry_times: list[float] | None = None,
     nocenter: list[float] | None = None,
     ridge_penalty: list[float] | None = None,
+    penalty_matrix: list[list[float]] | None = None,
 ) -> CoxPHFit: ...
 def coxph_detail(
     time: list[float],

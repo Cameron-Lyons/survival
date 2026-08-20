@@ -516,6 +516,7 @@ mod cox_regression {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("benchmark Cox PH Efron fit should converge");
             black_box(fit);
@@ -543,6 +544,7 @@ mod cox_regression {
                 Some(entry_times.clone()),
                 None,
                 None,
+                None,
             )
             .expect("benchmark counting-process Cox PH Efron fit should converge");
             black_box(fit);
@@ -566,6 +568,7 @@ mod cox_regression {
                 Some(1e-7),
                 Some(1e-9),
                 Some("breslow"),
+                None,
                 None,
                 None,
                 None,
@@ -597,6 +600,7 @@ mod cox_regression {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("benchmark weighted stratified Cox PH fit should converge");
             black_box(fit);
@@ -622,6 +626,7 @@ mod cox_regression {
             Some(1e-9),
             Some("efron"),
             Some(entry_times),
+            None,
             None,
             None,
         )
@@ -652,6 +657,7 @@ mod cox_regression {
             Some(1e-7),
             Some(1e-9),
             Some("efron"),
+            None,
             None,
             None,
             None,
@@ -689,6 +695,7 @@ mod cox_regression {
             Some(entry_times),
             None,
             None,
+            None,
         )
         .expect("benchmark Cox PH fit should converge");
 
@@ -719,6 +726,7 @@ mod cox_regression {
             Some(1e-9),
             Some("efron"),
             Some(entry_times),
+            None,
             None,
             None,
         )

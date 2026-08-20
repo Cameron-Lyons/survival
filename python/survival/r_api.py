@@ -22485,6 +22485,7 @@ def coxph(
     singular_ok: Any = True,
     nocenter: Any = (-1, 0, 1),
     ridge_penalty: Any | None = None,
+    penalty_matrix: Any | None = None,
     control: Any | None = None,
     **kwargs: Any,
 ):
@@ -22618,8 +22619,8 @@ def coxph(
             formula_design,
             len(response),
         )
-        if formula_ridge_blocks and ridge_penalty is not None:
-            raise ValueError("use only one of formula ridge(...) or ridge_penalty")
+        if formula_ridge_blocks and (ridge_penalty is not None or penalty_matrix is not None):
+            raise ValueError("use only one of formula ridge(...), ridge_penalty, or penalty_matrix")
         x = _design_rows_from_spec(data, formula_design, len(response))
         formula_x_matrix = [list(row) for row in x] if formula_x else None
         formula_model_data = data
@@ -22699,6 +22700,13 @@ def coxph(
     if len(rows) != len(response):
         raise ValueError("x must have the same number of rows as the Surv response")
     width = len(rows[0]) if rows else 0
+    if ridge_penalty is not None and penalty_matrix is not None:
+        raise ValueError("use only one of ridge_penalty or penalty_matrix")
+    fit_penalty_matrix = (
+        _as_matrix_rows(penalty_matrix, "penalty_matrix", allow_empty_columns=False)
+        if penalty_matrix is not None
+        else None
+    )
     ridge_thetas = [
         block.theta if block.theta is not None else 1.0 for block in formula_ridge_blocks
     ]
@@ -22788,6 +22796,7 @@ def coxph(
             entry_times=entry_times,
             nocenter=nocenter_values,
             ridge_penalty=penalty,
+            penalty_matrix=fit_penalty_matrix,
         )
 
     target_blocks = [

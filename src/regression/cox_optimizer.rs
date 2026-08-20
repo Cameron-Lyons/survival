@@ -9,6 +9,11 @@ use super::exact_ties::{ExactRiskAccumulator, exact_tied_moments};
 
 const EXACT_COMPATIBILITY_DIRECT_THRESHOLD: usize = 64;
 
+enum CoxPenalty {
+    Diagonal(Vec<f64>),
+    Dense(Array2<f64>),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CoxFitConfig {
     pub method: Method,
@@ -154,7 +159,7 @@ pub(crate) struct CoxFit {
     eps: f64,
     toler: f64,
     scale: Vec<f64>,
-    ridge_penalty: Vec<f64>,
+    penalty: CoxPenalty,
     means: Vec<f64>,
     beta: Vec<f64>,
     u: Vec<f64>,
@@ -334,7 +339,7 @@ impl CoxFit {
             eps: config.eps,
             toler: config.toler,
             scale: vec![1.0; nvar],
-            ridge_penalty: vec![0.0; nvar],
+            penalty: CoxPenalty::Diagonal(vec![0.0; nvar]),
             means: vec![0.0; nvar],
             beta: initial_beta,
             u: vec![0.0; nvar],
@@ -350,13 +355,20 @@ impl CoxFit {
 
     pub(crate) fn set_ridge_penalty(&mut self, penalty: &[f64]) {
         debug_assert_eq!(penalty.len(), self.scale.len());
-        for (target, (&value, &scale)) in self
-            .ridge_penalty
-            .iter_mut()
-            .zip(penalty.iter().zip(&self.scale))
-        {
-            *target = value * scale * scale;
-        }
+        self.penalty = CoxPenalty::Diagonal(
+            penalty
+                .iter()
+                .zip(&self.scale)
+                .map(|(&value, &scale)| value * scale * scale)
+                .collect(),
+        );
+    }
+
+    pub(crate) fn set_quadratic_penalty(&mut self, penalty: &Array2<f64>) {
+        debug_assert_eq!(penalty.dim(), (self.scale.len(), self.scale.len()));
+        self.penalty = CoxPenalty::Dense(Array2::from_shape_fn(penalty.dim(), |(row, column)| {
+            penalty[(row, column)] * self.scale[row] * self.scale[column]
+        }));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1181,14 +1193,33 @@ impl CoxFit {
         } else {
             self.iterate(beta)
         }?;
-        let mut penalty = 0.0;
-        for (variable, (&coefficient, &diagonal)) in
-            beta.iter().zip(&self.ridge_penalty).enumerate()
-        {
-            self.u[variable] -= diagonal * coefficient;
-            self.imat[(variable, variable)] += diagonal;
-            penalty += diagonal * coefficient * coefficient;
-        }
+        let penalty = match &self.penalty {
+            CoxPenalty::Diagonal(values) => {
+                let mut penalty = 0.0;
+                for (variable, (&coefficient, &diagonal)) in beta.iter().zip(values).enumerate() {
+                    self.u[variable] -= diagonal * coefficient;
+                    self.imat[(variable, variable)] += diagonal;
+                    penalty += diagonal * coefficient * coefficient;
+                }
+                penalty
+            }
+            CoxPenalty::Dense(matrix) => {
+                let mut penalty = 0.0;
+                for (row, &coefficient) in beta.iter().enumerate() {
+                    let penalty_score = beta
+                        .iter()
+                        .enumerate()
+                        .map(|(column, &other)| matrix[(row, column)] * other)
+                        .sum::<f64>();
+                    self.u[row] -= penalty_score;
+                    penalty += coefficient * penalty_score;
+                    for column in 0..beta.len() {
+                        self.imat[(row, column)] += matrix[(row, column)];
+                    }
+                }
+                penalty
+            }
+        };
         Ok(log_likelihood - 0.5 * penalty)
     }
 
@@ -1326,7 +1357,18 @@ impl CoxFit {
             for (j, &scale_j) in self.scale.iter().enumerate() {
                 self.imat[(i, j)] *= scale_i * scale_j;
             }
-            self.ridge_penalty[i] /= scale_i * scale_i;
+        }
+        match &mut self.penalty {
+            CoxPenalty::Diagonal(values) => {
+                for (value, &scale) in values.iter_mut().zip(&self.scale) {
+                    *value /= scale * scale;
+                }
+            }
+            CoxPenalty::Dense(matrix) => {
+                for ((row, column), value) in matrix.indexed_iter_mut() {
+                    *value /= self.scale[row] * self.scale[column];
+                }
+            }
         }
     }
     fn cholesky(mat: &mut Array2<f64>, toler: f64) -> i32 {
@@ -1427,13 +1469,29 @@ impl CoxFit {
     }
     pub(crate) fn results(self) -> CoxFitResults {
         let mut log_likelihood = self.loglik;
-        log_likelihood[1] += 0.5
-            * self
+        let penalty = match &self.penalty {
+            CoxPenalty::Diagonal(values) => self
                 .beta
                 .iter()
-                .zip(&self.ridge_penalty)
-                .map(|(&coefficient, &penalty)| penalty * coefficient * coefficient)
-                .sum::<f64>();
+                .zip(values)
+                .map(|(&coefficient, &value)| value * coefficient * coefficient)
+                .sum::<f64>(),
+            CoxPenalty::Dense(matrix) => self
+                .beta
+                .iter()
+                .enumerate()
+                .map(|(row, &coefficient)| {
+                    coefficient
+                        * self
+                            .beta
+                            .iter()
+                            .enumerate()
+                            .map(|(column, &other)| matrix[(row, column)] * other)
+                            .sum::<f64>()
+                })
+                .sum::<f64>(),
+        };
+        log_likelihood[1] += 0.5 * penalty;
         (
             self.beta,
             self.means,

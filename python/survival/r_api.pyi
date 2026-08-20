@@ -1151,6 +1151,7 @@ def coxph(
     singular_ok: Any = True,
     nocenter: Any = (-1, 0, 1),
     ridge_penalty: Any | None = None,
+    penalty_matrix: Any | None = None,
     control: Any | None = None,
     **kwargs: Any,
 ) -> Any: ...
