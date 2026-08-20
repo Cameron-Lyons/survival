@@ -596,6 +596,7 @@ fn fit_weighted_cox(
         Some("efron"),
         Some(start),
         Some(vec![-1.0, 0.0, 1.0]),
+        None,
     )
 }
 

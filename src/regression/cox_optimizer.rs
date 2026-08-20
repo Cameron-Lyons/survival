@@ -154,6 +154,7 @@ pub(crate) struct CoxFit {
     eps: f64,
     toler: f64,
     scale: Vec<f64>,
+    ridge_penalty: Vec<f64>,
     means: Vec<f64>,
     beta: Vec<f64>,
     u: Vec<f64>,
@@ -333,6 +334,7 @@ impl CoxFit {
             eps: config.eps,
             toler: config.toler,
             scale: vec![1.0; nvar],
+            ridge_penalty: vec![0.0; nvar],
             means: vec![0.0; nvar],
             beta: initial_beta,
             u: vec![0.0; nvar],
@@ -344,6 +346,17 @@ impl CoxFit {
         };
         cox.scale_center(doscale)?;
         Ok(cox)
+    }
+
+    pub(crate) fn set_ridge_penalty(&mut self, penalty: &[f64]) {
+        debug_assert_eq!(penalty.len(), self.scale.len());
+        for (target, (&value, &scale)) in self
+            .ridge_penalty
+            .iter_mut()
+            .zip(penalty.iter().zip(&self.scale))
+        {
+            *target = value * scale * scale;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1159,7 +1172,7 @@ impl CoxFit {
     }
 
     fn iterate_with_mode(&mut self, beta: &[f64], mode: FitMode) -> Result<f64, CoxError> {
-        if mode == FitMode::AgexactCompatibility
+        let log_likelihood = if mode == FitMode::AgexactCompatibility
             && self.entry_times.is_some()
             && matches!(self.method, Method::Exact)
             && self.covar.nrows() <= EXACT_COMPATIBILITY_DIRECT_THRESHOLD
@@ -1167,7 +1180,16 @@ impl CoxFit {
             self.iterate_counting_process_exact_compatibility(beta)
         } else {
             self.iterate(beta)
+        }?;
+        let mut penalty = 0.0;
+        for (variable, (&coefficient, &diagonal)) in
+            beta.iter().zip(&self.ridge_penalty).enumerate()
+        {
+            self.u[variable] -= diagonal * coefficient;
+            self.imat[(variable, variable)] += diagonal;
+            penalty += diagonal * coefficient * coefficient;
         }
+        Ok(log_likelihood - 0.5 * penalty)
     }
 
     pub(crate) fn fit(&mut self) -> Result<(), CoxError> {
@@ -1304,6 +1326,7 @@ impl CoxFit {
             for (j, &scale_j) in self.scale.iter().enumerate() {
                 self.imat[(i, j)] *= scale_i * scale_j;
             }
+            self.ridge_penalty[i] /= scale_i * scale_i;
         }
     }
     fn cholesky(mat: &mut Array2<f64>, toler: f64) -> i32 {
@@ -1403,12 +1426,20 @@ impl CoxFit {
         }
     }
     pub(crate) fn results(self) -> CoxFitResults {
+        let mut log_likelihood = self.loglik;
+        log_likelihood[1] += 0.5
+            * self
+                .beta
+                .iter()
+                .zip(&self.ridge_penalty)
+                .map(|(&coefficient, &penalty)| penalty * coefficient * coefficient)
+                .sum::<f64>();
         (
             self.beta,
             self.means,
             self.u,
             self.imat,
-            self.loglik,
+            log_likelihood,
             self.sctest,
             self.flag,
             self.iter,

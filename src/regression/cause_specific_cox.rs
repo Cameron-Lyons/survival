@@ -413,6 +413,7 @@ pub(crate) fn cause_specific_cox_fit(
         Some(&config.ties),
         None,
         None,
+        None,
     )?;
     let beta = fit
         .coefficients
