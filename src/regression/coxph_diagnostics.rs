@@ -1,6 +1,6 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, TIME_EPSILON, same_time};
 use crate::internal::matrix::{lu_solve, matrix_inverse};
-use crate::internal::statistical::{chi2_cdf, chi2_sf};
+use crate::internal::statistical::{chi2_sf, chi2_sf_continuous};
 use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_detail_module::{
@@ -53,7 +53,7 @@ pub fn chi_square_survival(statistic: f64, degrees_of_freedom: f64) -> PyResult<
             "degrees_of_freedom must be a finite positive value",
         ));
     }
-    Ok((1.0 - chi2_cdf(statistic, degrees_of_freedom)).clamp(0.0, 1.0))
+    Ok(chi2_sf_continuous(statistic, degrees_of_freedom).clamp(0.0, 1.0))
 }
 
 fn validate_square_matrix(matrix: &[Vec<f64>], width: usize, name: &str) -> PyResult<()> {

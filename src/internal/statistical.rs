@@ -981,12 +981,21 @@ fn gamma_pdf(x: f64, a: f64) -> f64 {
 
 #[inline]
 pub(crate) fn chi2_sf(x: f64, df: usize) -> f64 {
-    if x <= 0.0 || df == 0 {
+    chi2_sf_continuous(x, df as f64)
+}
+
+#[inline]
+pub(crate) fn chi2_sf_continuous(x: f64, df: f64) -> f64 {
+    if x <= 0.0 || df == 0.0 {
         return 1.0;
     }
-    let k = df as f64 / 2.0;
+    let k = df / 2.0;
     let x_half = x / 2.0;
-    1.0 - lower_incomplete_gamma(k, x_half)
+    if x_half < k + 1.0 {
+        1.0 - gamma_series(k, x_half)
+    } else {
+        gamma_continued_fraction(k, x_half)
+    }
 }
 
 #[inline]
@@ -1755,6 +1764,22 @@ mod tests {
         assert!((chi2_sf(0.0, 1) - 1.0).abs() < 1e-10);
         assert!((chi2_sf(-1.0, 1) - 1.0).abs() < 1e-10);
         assert!((chi2_sf(1.0, 0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn continuous_chi2_sf_preserves_extreme_upper_tails() {
+        for (statistic, df, expected) in [
+            (100.0, 0.5, 2.788194848158256e-24),
+            (50.0, 1.3, 3.2074176568958654e-12),
+            (1000.0, 10.5, 6.031085185928643e-208),
+            (1e-8, 0.25, 0.9026269019296275),
+        ] {
+            let actual = chi2_sf_continuous(statistic, df);
+            assert!(
+                ((actual - expected) / expected).abs() <= 1e-9,
+                "{actual} != {expected}"
+            );
+        }
     }
 
     #[test]
