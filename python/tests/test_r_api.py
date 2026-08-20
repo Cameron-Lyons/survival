@@ -15732,6 +15732,57 @@ def test_survreg_distribution_registry_deviance_matches_reference_values():
     assert math.isnan(student_t.loglik[3])
 
 
+def test_survreg_dtest_validates_builtin_and_custom_distribution_definitions():
+    for definition in survival.survreg_distributions.values():
+        assert survival.survreg_dtest(definition) is True
+
+    custom_base = {
+        "name": "Custom",
+        "init": lambda x, weights, parms=None: [0.0, 1.0],
+        "deviance": lambda y, scale, parms=None: {"center": [], "loglik": []},
+        "density": lambda x, parms=None: [[0.5, 0.5, 0.25, 0.0, -0.5] for _ in x],
+        "quantile": lambda p, parms=None: list(p),
+    }
+    assert survival.survreg_dtest(custom_base) is True
+
+    custom_transform = {
+        "name": "Log custom",
+        "dist": "gaussian",
+        "trans": lambda values: [math.log(value) for value in values],
+        "itrans": lambda values: [math.exp(value) for value in values],
+        "dtrans": lambda values: [1.0 / value for value in values],
+    }
+    assert survival.survreg_dtest(custom_transform) is True
+
+    missing = {"name": None}
+    assert survival.survreg_dtest(missing) is False
+    assert survival.survreg_dtest(missing, verbose=True) == [
+        "Missing a name",
+        "Missing or invalid init function",
+        "Missing or invalid deviance function",
+        "Missing or invalid density function",
+        "Missing or invalid quantile function",
+    ]
+    assert survival.survreg_dtest(
+        {"name": "bad", "dist": "missing"},
+        verbose=True,
+    ) == ["Reference distribution not found"]
+
+    bad_density = {**custom_base, "density": lambda x: [[1.0] for _ in x]}
+    assert survival.survreg_dtest(bad_density, verbose=True) == [
+        "Density function must return a 5 column matrix"
+    ]
+    bad_inverse = {
+        **custom_transform,
+        "itrans": lambda values: [math.exp(value) + 1.0 for value in values],
+        "dtrans": lambda values: [1.0],
+    }
+    assert survival.survreg_dtest(bad_inverse, verbose=True) == [
+        "trans and itrans must be inverses of each other",
+        "dtrans must be a 1-1 function",
+    ]
+
+
 def test_survreg_fit_matches_reference_base_distribution_fits():
     x = [[1.0, value] for value in [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5]]
     y = [

@@ -141,6 +141,7 @@ __all__ = [
     "survreg",
     "survreg_control",
     "survreg_distributions",
+    "survreg_dtest",
     "survreg_fit",
     "tcut",
     "totimeline",
@@ -17941,6 +17942,100 @@ def _survreg_descriptor_deviance(
                 else 0.0
             )
     return SurvregDeviance(center, loglik)
+
+
+def _survreg_definition_component(definition: Any, name: str) -> Any | None:
+    if isinstance(definition, Mapping):
+        return definition.get(name)
+    return getattr(definition, name, None)
+
+
+def _survreg_definition_values(values: Any, name: str) -> list[float]:
+    return _survreg_numeric_vector(values, name)
+
+
+def _survreg_definition_density_valid(definition: Any, density: Any) -> bool:
+    points = [value / 10.0 for value in range(1, 11)]
+    parms = _survreg_definition_component(definition, "parms")
+    if parms is None:
+        values = density(points)
+    else:
+        parameter_values = _survreg_definition_values(parms, "parms")
+        parameter: Any = parameter_values[0] if len(parameter_values) == 1 else parameter_values
+        values = density(points, parameter)
+    try:
+        rows = _as_matrix_rows(values, "density result", allow_empty_columns=False)
+    except (TypeError, ValueError):
+        return False
+    return len(rows) == 10 and all(len(row) == 5 for row in rows)
+
+
+def survreg_dtest(dlist: Any, verbose: Any = False) -> bool | list[str]:
+    """Validate a survival-regression distribution definition like R ``survregDtest``."""
+
+    errors: list[str] = []
+    name = _survreg_definition_component(dlist, "name")
+    if name is None:
+        errors.append("Missing a name")
+    elif not isinstance(name, str):
+        errors.append("Invalid name")
+
+    dist = _survreg_definition_component(dlist, "dist")
+    if dist is not None:
+        if not isinstance(dist, str) or dist not in survreg_distributions:
+            errors.append("Reference distribution not found")
+        else:
+            trans = _survreg_definition_component(dlist, "trans")
+            itrans = _survreg_definition_component(dlist, "itrans")
+            dtrans = _survreg_definition_component(dlist, "dtrans")
+            if not callable(trans):
+                errors.append("Missing or invalid trans component")
+            if not callable(itrans):
+                errors.append("Missing or invalid itrans component")
+            if not callable(dtrans):
+                errors.append("Missing or invalid dtrans component")
+        if not errors:
+            sample = [float(value) for value in range(1, 11)]
+            transformed = _survreg_definition_component(dlist, "trans")(sample)
+            inverse = _survreg_definition_component(dlist, "itrans")(transformed)
+            try:
+                inverse_values = _survreg_definition_values(inverse, "itrans result")
+            except (TypeError, ValueError):
+                inverse_values = []
+            if len(inverse_values) != len(sample) or any(
+                not math.isclose(actual, expected, rel_tol=1e-8, abs_tol=1e-8)
+                for actual, expected in zip(inverse_values, sample, strict=False)
+            ):
+                errors.append("trans and itrans must be inverses of each other")
+            derivative = _survreg_definition_component(dlist, "dtrans")(sample)
+            try:
+                derivative_values = _survreg_definition_values(
+                    derivative,
+                    "dtrans result",
+                )
+            except (TypeError, ValueError):
+                derivative_values = []
+            if len(derivative_values) != 10:
+                errors.append("dtrans must be a 1-1 function")
+    else:
+        init = _survreg_definition_component(dlist, "init")
+        deviance = _survreg_definition_component(dlist, "deviance")
+        density = _survreg_definition_component(dlist, "density")
+        quantile = _survreg_definition_component(dlist, "quantile")
+        if not callable(init):
+            errors.append("Missing or invalid init function")
+        if not callable(deviance):
+            errors.append("Missing or invalid deviance function")
+        if not callable(density):
+            errors.append("Missing or invalid density function")
+        elif not _survreg_definition_density_valid(dlist, density):
+            errors.append("Density function must return a 5 column matrix")
+        if not callable(quantile):
+            errors.append("Missing or invalid quantile function")
+
+    if not errors:
+        return True
+    return errors if _normalize_bool_option(verbose, "verbose") else False
 
 
 def _expand_survreg_distribution_inputs(
