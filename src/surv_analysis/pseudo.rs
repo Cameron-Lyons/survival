@@ -59,7 +59,7 @@ pub fn pseudo(
     let pseudo_matrix = if matches!(pseudo_type, "survival" | "cumhaz") {
         compute_ij_pseudo(&time, &status, &times, pseudo_type)
     } else {
-        compute_jackknife_pseudo(&time, &status, &times, pseudo_type)
+        compute_rmst_jackknife_pseudo(&time, &status, &times)
     };
 
     Ok(PseudoResult {
@@ -196,6 +196,66 @@ fn compute_ij_pseudo(
         .collect()
 }
 
+fn rmst_leave_one_out_values(
+    blocks: &[EventBlock],
+    subject_time: f64,
+    subject_status: i32,
+    eval_times: &[f64],
+    eval_order: &[usize],
+) -> Vec<f64> {
+    let mut values = vec![0.0; eval_times.len()];
+    let mut block_idx = 0;
+    let mut previous_time = 0.0;
+    let mut survival = 1.0;
+    let mut area = 0.0;
+
+    for &eval_idx in eval_order {
+        let eval_time = eval_times[eval_idx];
+        while block_idx < blocks.len() && blocks[block_idx].time <= eval_time {
+            let block = &blocks[block_idx];
+            area += survival * (block.time - previous_time);
+            let risk = block.risk - usize::from(subject_at_risk(subject_time, block.time)) as f64;
+            let events = block.events
+                - usize::from(subject_event_at_time(
+                    subject_time,
+                    subject_status,
+                    block.time,
+                )) as f64;
+            if events > 0.0 && risk > 0.0 {
+                survival *= 1.0 - events / risk;
+            }
+            previous_time = block.time;
+            block_idx += 1;
+        }
+        values[eval_idx] = area + survival * (eval_time - previous_time);
+    }
+    values
+}
+
+fn compute_rmst_block_jackknife_pseudo(
+    time: &[f64],
+    status: &[i32],
+    eval_times: &[f64],
+) -> Vec<Vec<f64>> {
+    let n_f64 = time.len() as f64;
+    let full_rmst = compute_km(time, status, eval_times, "rmst");
+    let blocks = event_blocks(time, status);
+    let eval_order = sorted_time_indices(eval_times);
+
+    (0..time.len())
+        .into_par_iter()
+        .map(|row| {
+            let leave_one_out =
+                rmst_leave_one_out_values(&blocks, time[row], status[row], eval_times, &eval_order);
+            full_rmst
+                .iter()
+                .zip(leave_one_out)
+                .map(|(&full, leave_one_out)| n_f64 * full - (n_f64 - 1.0) * leave_one_out)
+                .collect()
+        })
+        .collect()
+}
+
 fn compute_jackknife_pseudo(
     time: &[f64],
     status: &[i32],
@@ -230,6 +290,26 @@ fn compute_jackknife_pseudo(
                 .collect()
         })
         .collect()
+}
+
+fn has_non_exact_near_ties(time: &[f64]) -> bool {
+    let mut sorted = time.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    sorted
+        .windows(2)
+        .any(|pair| pair[0] != pair[1] && same_time(pair[0], pair[1]))
+}
+
+fn compute_rmst_jackknife_pseudo(
+    time: &[f64],
+    status: &[i32],
+    eval_times: &[f64],
+) -> Vec<Vec<f64>> {
+    if has_non_exact_near_ties(time) {
+        compute_jackknife_pseudo(time, status, eval_times, "rmst")
+    } else {
+        compute_rmst_block_jackknife_pseudo(time, status, eval_times)
+    }
 }
 
 fn validate_pseudo_type(type_: Option<&str>) -> PyResult<&'static str> {
@@ -543,6 +623,56 @@ mod tests {
                     &reference_compute_ij_pseudo(&time, &status, &eval_times, type_),
                 );
             }
+        }
+    }
+
+    #[test]
+    fn rmst_jackknife_dispatch_matches_repeated_leave_one_out_fits() {
+        for case_idx in 0..160 {
+            let n = 3 + case_idx % 23;
+            let time: Vec<f64> = (0..n)
+                .map(|idx| {
+                    let base = 1 + (idx * 11 + case_idx * 5) % 17;
+                    let jitter = if (idx + 2 * case_idx) % 7 == 0 {
+                        TIME_EPSILON / 2.0
+                    } else {
+                        0.0
+                    };
+                    base as f64 + jitter
+                })
+                .collect();
+            let status: Vec<i32> = (0..n)
+                .map(|idx| i32::from((idx * 3 + case_idx) % 5 != 0))
+                .collect();
+            let eval_times: Vec<f64> = (0..21)
+                .map(|idx| ((idx * 13 + case_idx * 7) % 23) as f64 * 0.75)
+                .collect();
+
+            assert_matrix_close(
+                &compute_rmst_jackknife_pseudo(&time, &status, &eval_times),
+                &compute_jackknife_pseudo(&time, &status, &eval_times, "rmst"),
+            );
+        }
+    }
+
+    #[test]
+    fn rmst_block_jackknife_matches_exact_time_leave_one_out_fits() {
+        for case_idx in 0..160 {
+            let n = 3 + case_idx % 23;
+            let time: Vec<f64> = (0..n)
+                .map(|idx| (1 + (idx * 11 + case_idx * 5) % 17) as f64)
+                .collect();
+            let status: Vec<i32> = (0..n)
+                .map(|idx| i32::from((idx * 3 + case_idx) % 5 != 0))
+                .collect();
+            let eval_times: Vec<f64> = (0..21)
+                .map(|idx| ((idx * 13 + case_idx * 7) % 23) as f64 * 0.75)
+                .collect();
+
+            assert_matrix_close(
+                &compute_rmst_block_jackknife_pseudo(&time, &status, &eval_times),
+                &compute_jackknife_pseudo(&time, &status, &eval_times, "rmst"),
+            );
         }
     }
 
