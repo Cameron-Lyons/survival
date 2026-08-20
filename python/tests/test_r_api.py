@@ -199,6 +199,12 @@ def test_strata_matches_r_factor_codes_and_preserves_low_level_call():
         survival.strata(["a", "b"], [1])
 
 
+def test_cluster_is_formula_compatibility_identity():
+    values = ["a", "b", "a"]
+
+    assert survival.cluster(values) is values
+
+
 def test_strata_counts_high_cardinality_levels_once():
     values = [f"group-{idx:04d}" for idx in range(2_000)]
 
@@ -10137,6 +10143,59 @@ def test_model_matrix_assignments_keep_strata_term_positions():
     assert survival.model_term_names(fit) == ["x1", "as.factor(dose)"]
     assert matrix["columns"] == ["x1", "as.factor(dose)1", "as.factor(dose)2"]
     assert matrix["assign"] == [1, 3, 3]
+
+
+def test_attrassign_matches_reference_term_grouping():
+    matrix = {
+        "assign": [0, 1, 2, 2, 3],
+        "term.labels": ["x", "factor(group)", "x:factor(group)"],
+    }
+
+    assert survival.attrassign(matrix) == {
+        "(Intercept)": [1],
+        "x": [2],
+        "factor(group)": [3, 4],
+        "x:factor(group)": [5],
+    }
+
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=_toy_data(),
+        max_iter=0,
+    )
+    assert survival.attrassign(fit) == {"x1": [1], "x2": [2]}
+
+    with pytest.raises(ValueError, match="outside the supplied labels"):
+        survival.attrassign({"assign": [2], "term.labels": ["x"]})
+
+
+def test_untangle_specials_matches_reference_term_positions():
+    formula = "Surv(time, status) ~ x + strata(group) + cluster(id) + tt(z) + x:strata(group)"
+
+    assert survival.untangle_specials(formula, "strata") == {
+        "vars": ["strata(group)"],
+        "tvar": [2],
+        "terms": [2],
+    }
+    assert survival.untangle_specials(formula, "strata", order=[1, 2]) == {
+        "vars": ["strata(group)"],
+        "tvar": [2],
+        "terms": [2, 5],
+    }
+    assert survival.untangle_specials(formula, "cluster") == {
+        "vars": ["cluster(id)"],
+        "tvar": [3],
+        "terms": [3],
+    }
+    assert survival.untangle_specials(formula, "tt") == {
+        "vars": ["tt(z)"],
+        "tvar": [4],
+        "terms": [4],
+    }
+    assert survival.untangle_specials(formula, "offset") == {
+        "vars": [],
+        "terms": [],
+    }
 
 
 def test_direct_model_matrix_preserves_tabular_column_names():
