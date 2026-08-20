@@ -243,7 +243,9 @@ class _ModelRidgeTerm:
 @dataclass(frozen=True)
 class _PSplineFormulaTerm:
     term: _CovariateTerm
-    theta: float
+    theta: float | None
+    target_df: float | None
+    eps: float
     nterm: int
     degree: int
     intercept: bool
@@ -346,7 +348,11 @@ class _PSplinePenaltyBlock:
     label: str
     columns: tuple[int, ...]
     penalty: tuple[tuple[float, ...], ...]
-    theta: float
+    theta: float | None
+    target_df: float | None
+    eps: float
+    initial_theta: float
+    maximum_df: float
 
 
 @dataclass(frozen=True)
@@ -3406,6 +3412,7 @@ def _parse_pspline_formula_term(term: str) -> _PSplineFormulaTerm:
     nterm: int | None = None
     degree = 3
     intercept = False
+    eps = 0.1
     saw_option = False
     seen_options: set[str] = set()
     for part in parts:
@@ -3435,26 +3442,34 @@ def _parse_pspline_formula_term(term: str) -> _PSplineFormulaTerm:
             degree = _integer_scalar(value, "pspline degree")
         elif name == "intercept":
             intercept = _normalize_bool_option(value, "pspline intercept")
+        elif name == "eps":
+            eps = _finite_float(value, "pspline eps")
         else:
             raise ValueError(f"unsupported pspline() formula option: {name}")
 
     if column is None:
         raise ValueError("pspline() requires one column")
-    if theta is None:
-        raise NotImplementedError("pspline() formula terms currently require fixed theta=")
-    if theta <= 0.0 or theta >= 1.0:
+    if theta is not None and (theta <= 0.0 or theta >= 1.0):
         raise ValueError("pspline theta must be between 0 and 1")
     if df <= 0.0:
         raise ValueError("pspline df must be positive")
+    if theta is None and df <= 1.0:
+        raise ValueError("pspline df must be greater than 1")
     if nterm is None:
         nterm = int(round(2.5 * df))
     if nterm < 3:
         raise ValueError("pspline nterm must be at least 3")
     if degree < 1:
         raise ValueError("pspline degree must be positive")
+    if eps <= 0.0:
+        raise ValueError("pspline eps must be positive")
+    if theta is None and df > nterm:
+        raise ValueError(f"pspline df must be between 1 and {nterm}")
     return _PSplineFormulaTerm(
         term=_CovariateTerm(column, transform="pspline"),
         theta=theta,
+        target_df=df if theta is None else None,
+        eps=eps,
         nterm=nterm,
         degree=degree,
         intercept=intercept,
@@ -4224,13 +4239,21 @@ def _pspline_formula_blocks(design: _FormulaDesign) -> list[_PSplinePenaltyBlock
             penalty = _pspline_difference_penalty(full_width)
             if not term.formula.intercept:
                 penalty = [row[1:] for row in penalty[1:]]
-            smoothing = term.formula.theta / (1.0 - term.formula.theta)
+            initial_theta = (
+                term.formula.theta
+                if term.formula.theta is not None
+                else 1.0 - float(term.formula.target_df) / term.formula.nterm
+            )
             blocks.append(
                 _PSplinePenaltyBlock(
                     label=term.formula.label,
                     columns=tuple(range(cursor, cursor + width)),
-                    penalty=tuple(tuple(smoothing * value for value in row) for row in penalty),
+                    penalty=tuple(tuple(value for value in row) for row in penalty),
                     theta=term.formula.theta,
+                    target_df=term.formula.target_df,
+                    eps=term.formula.eps,
+                    initial_theta=initial_theta,
+                    maximum_df=float(term.formula.nterm),
                 )
             )
         cursor += width
@@ -4242,15 +4265,17 @@ def _formula_penalty_matrix(
     ridge_blocks: Sequence[_RidgePenaltyBlock],
     ridge_thetas: Sequence[float],
     pspline_blocks: Sequence[_PSplinePenaltyBlock],
+    pspline_thetas: Sequence[float],
 ) -> list[list[float]]:
     penalty = [[0.0] * width for _ in range(width)]
     for block, theta in zip(ridge_blocks, ridge_thetas, strict=True):
         for column, scale in zip(block.columns, block.scales, strict=True):
             penalty[column][column] += theta * scale
-    for block in pspline_blocks:
+    for block, theta in zip(pspline_blocks, pspline_thetas, strict=True):
+        smoothing = theta / (1.0 - theta)
         for local_row, row in enumerate(block.columns):
             for local_column, column in enumerate(block.columns):
-                penalty[row][column] += block.penalty[local_row][local_column]
+                penalty[row][column] += smoothing * block.penalty[local_row][local_column]
     return penalty
 
 
@@ -4387,8 +4412,7 @@ def _ridge_control_next_theta(
     half: int,
 ) -> tuple[float, bool, int]:
     current_theta, current_df = history[-1]
-    if iteration > 1 and abs(current_df - target) < eps:
-        return current_theta, True, half
+    converged = iteration > 1 and abs(current_df - target) < eps
 
     if len(history) == 2:
         first_theta, first_df = history[0]
@@ -4419,8 +4443,9 @@ def _ridge_control_next_theta(
         base = len(x) - 3
     else:
         base = max(index for index, value in enumerate(y) if value <= adjusted_target)
+        base = min(base, len(x) - 2)
         if not doing_well and half < 2:
-            return (x[base] + x[base + 1]) / 2.0, False, half + 1
+            return (x[base] + x[base + 1]) / 2.0, converged, half + 1
         if base + 1 == len(x) - 1 or (
             base > 0 and adjusted_target - y[base] < y[base + 1] - adjusted_target
         ):
@@ -4438,7 +4463,7 @@ def _ridge_control_next_theta(
         theta = _ridge_control_fallback_theta(target, history)
     if not math.isfinite(theta) or theta < 0.0:
         theta = _ridge_control_fallback_theta(target, history)
-    return theta, False, 0
+    return theta, converged, 0
 
 
 def _covariate_term_name(term: _CovariateTerm) -> str:
@@ -22974,6 +22999,9 @@ def coxph(
     ridge_thetas = [
         block.theta if block.theta is not None else 1.0 for block in formula_ridge_blocks
     ]
+    pspline_thetas = [block.initial_theta for block in formula_pspline_blocks]
+    reported_ridge_thetas = list(ridge_thetas)
+    reported_pspline_thetas = list(pspline_thetas)
     if formula_pspline_blocks:
         fit_ridge_penalty = None
         fit_penalty_matrix = _formula_penalty_matrix(
@@ -22981,6 +23009,7 @@ def coxph(
             formula_ridge_blocks,
             ridge_thetas,
             formula_pspline_blocks,
+            pspline_thetas,
         )
     elif formula_ridge_blocks:
         fit_ridge_penalty = _ridge_penalty_vector(width, formula_ridge_blocks, ridge_thetas)
@@ -23075,41 +23104,53 @@ def coxph(
             penalty_matrix=quadratic_penalty,
         )
 
-    target_blocks = [
+    target_ridge_blocks = [
         index for index, block in enumerate(formula_ridge_blocks) if block.target_df is not None
+    ]
+    target_pspline_blocks = [
+        index for index, block in enumerate(formula_pspline_blocks) if block.target_df is not None
     ]
     ridge_history: dict[str, dict[str, Any]] | None = None
     reported_log_likelihood: list[float] | None = None
-    if target_blocks:
-        histories = [
+    if target_ridge_blocks or target_pspline_blocks:
+        ridge_histories = [
             [(0.0, float(len(block.columns)))] if block.target_df is not None else []
             for block in formula_ridge_blocks
         ]
-        halves = [0] * len(formula_ridge_blocks)
-        done = [block.target_df is None for block in formula_ridge_blocks]
+        pspline_histories = [
+            [(1.0, 1.0), (0.0, block.maximum_df)] if block.target_df is not None else []
+            for block in formula_pspline_blocks
+        ]
+        ridge_halves = [0] * len(formula_ridge_blocks)
+        pspline_halves = [0] * len(formula_pspline_blocks)
+        ridge_done = [block.target_df is None for block in formula_ridge_blocks]
+        pspline_done = [block.target_df is None for block in formula_pspline_blocks]
         start = initial_values
         initial_log_likelihood = None
         fit = None
         for outer_iteration in range(1, outer_max + 1):
-            fitted_thetas = list(ridge_thetas)
+            fitted_ridge_thetas = list(ridge_thetas)
+            fitted_pspline_thetas = list(pspline_thetas)
             fit_ridge_penalty = _ridge_penalty_vector(
                 width,
                 formula_ridge_blocks,
-                fitted_thetas,
+                fitted_ridge_thetas,
             )
             if formula_pspline_blocks:
                 fit_penalty_matrix = _formula_penalty_matrix(
                     width,
                     formula_ridge_blocks,
-                    fitted_thetas,
+                    fitted_ridge_thetas,
                     formula_pspline_blocks,
+                    fitted_pspline_thetas,
                 )
                 fit_ridge_penalty = None
             fit = run_fit(fit_ridge_penalty, fit_penalty_matrix, start)
             if initial_log_likelihood is None:
                 initial_log_likelihood = float(fit.log_likelihood[0])
-            next_thetas = list(fitted_thetas)
-            for block_index in target_blocks:
+            next_ridge_thetas = list(fitted_ridge_thetas)
+            next_pspline_thetas = list(fitted_pspline_thetas)
+            for block_index in target_ridge_blocks:
                 block = formula_ridge_blocks[block_index]
                 target = block.target_df
                 if target is None:
@@ -23127,33 +23168,58 @@ def coxph(
                         block.columns,
                     )
                 )
-                histories[block_index].append((fitted_thetas[block_index], term_df))
+                ridge_histories[block_index].append((fitted_ridge_thetas[block_index], term_df))
                 next_theta, converged, half = _ridge_control_next_theta(
                     target,
                     block.eps,
                     outer_iteration,
-                    histories[block_index],
-                    halves[block_index],
+                    ridge_histories[block_index],
+                    ridge_halves[block_index],
                 )
-                next_thetas[block_index] = next_theta
-                done[block_index] = converged
-                halves[block_index] = half
-            ridge_thetas = fitted_thetas
-            if all(done):
+                next_ridge_thetas[block_index] = next_theta
+                ridge_done[block_index] = converged
+                ridge_halves[block_index] = half
+            for block_index in target_pspline_blocks:
+                block = formula_pspline_blocks[block_index]
+                target = block.target_df
+                if target is None or fit_penalty_matrix is None:
+                    raise AssertionError("P-spline calibration requires a quadratic penalty")
+                term_df = _quadratic_term_degrees_of_freedom(
+                    fit,
+                    fit_penalty_matrix,
+                    block.columns,
+                )
+                pspline_histories[block_index].append((fitted_pspline_thetas[block_index], term_df))
+                next_theta, converged, half = _ridge_control_next_theta(
+                    target,
+                    block.eps,
+                    outer_iteration,
+                    pspline_histories[block_index],
+                    pspline_halves[block_index],
+                )
+                next_pspline_thetas[block_index] = min(max(next_theta, 0.0), 1.0 - 1e-12)
+                pspline_done[block_index] = converged
+                pspline_halves[block_index] = half
+            reported_ridge_thetas = next_ridge_thetas
+            reported_pspline_thetas = next_pspline_thetas
+            ridge_thetas = fitted_ridge_thetas
+            pspline_thetas = fitted_pspline_thetas
+            if all(ridge_done) and all(pspline_done):
                 break
             if outer_iteration == outer_max:
                 warnings.warn(
-                    "ridge df target did not converge within control.outer.max iterations",
+                    "penalty df target did not converge within control.outer.max iterations",
                     RuntimeWarning,
                     stacklevel=2,
                 )
                 break
-            ridge_thetas = next_thetas
+            ridge_thetas = next_ridge_thetas
+            pspline_thetas = next_pspline_thetas
             start = [float(value) for value in fit.coefficients[0]]
         if fit is None:
-            raise AssertionError("ridge calibration did not run")
+            raise AssertionError("penalty calibration did not run")
         if initial_log_likelihood is None:
-            raise AssertionError("ridge calibration did not retain the initial log likelihood")
+            raise AssertionError("penalty calibration did not retain the initial log likelihood")
         reported_log_likelihood = [
             initial_log_likelihood,
             float(fit.log_likelihood[-1]),
@@ -23161,10 +23227,10 @@ def coxph(
         ridge_history = {
             block.label: (
                 {
-                    "theta": ridge_thetas[index],
-                    "done": done[index],
-                    "history": [{"theta": theta, "df": df} for theta, df in histories[index]],
-                    "half": halves[index],
+                    "theta": reported_ridge_thetas[index],
+                    "done": ridge_done[index],
+                    "history": [{"theta": theta, "df": df} for theta, df in ridge_histories[index]],
+                    "half": ridge_halves[index],
                 }
                 if block.target_df is not None
                 else {"theta": ridge_thetas[index], "done": True}
@@ -23186,7 +23252,21 @@ def coxph(
         if ridge_history is None:
             ridge_history = {}
         ridge_history.update(
-            {block.label: {"theta": block.theta, "done": True} for block in formula_pspline_blocks}
+            {
+                block.label: (
+                    {
+                        "theta": reported_pspline_thetas[index],
+                        "done": pspline_done[index],
+                        "history": [
+                            {"theta": theta, "df": df} for theta, df in pspline_histories[index]
+                        ],
+                        "half": pspline_halves[index],
+                    }
+                    if block.target_df is not None
+                    else {"theta": pspline_thetas[index], "done": True}
+                )
+                for index, block in enumerate(formula_pspline_blocks)
+            }
         )
     term_degrees_of_freedom = None
     effective_degrees_of_freedom = None
