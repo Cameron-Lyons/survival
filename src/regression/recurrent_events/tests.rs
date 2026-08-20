@@ -225,9 +225,17 @@ mod tests {
         assert_eq!(ag.n_subjects, 85);
         assert_eq!(ag.n_events, 112);
         assert!(ag.converged);
-        assert_close(ag.coef[0], -0.45978826074398993, 1e-9);
-        assert_close(ag.coef[1], -0.04256340004595282, 1e-9);
-        assert_close(ag.coef[2], 0.17164542460626836, 1e-9);
+        assert_close(ag.coef[0], -0.464_686_952_943_429, 1e-9);
+        assert_close(ag.coef[1], -0.043_660_276_089_821_9, 1e-9);
+        assert_close(ag.coef[2], 0.174_960_381_319_399, 1e-9);
+        assert_close(ag.std_errors[0], 0.199_732_188_827_129, 1e-9);
+        assert_close(ag.std_errors[1], 0.069_050_852_511_246, 1e-9);
+        assert_close(ag.std_errors[2], 0.047_074_058_440_440_7, 1e-9);
+        assert_close(ag.robust_std_errors[0], 0.265_560_811_898_887, 1e-9);
+        assert_close(ag.robust_std_errors[1], 0.077_616_112_681_007_7, 1e-9);
+        assert_close(ag.robust_std_errors[2], 0.063_040_543_200_655_3, 1e-9);
+        assert_close(ag.log_likelihood, -449.980_642_001_765, 1e-9);
+        assert_eq!(ag.n_iter, 4);
 
         assert_eq!(wlw.n_subjects, 85);
         assert_eq!(wlw.n_events, 112);
@@ -270,6 +278,39 @@ mod tests {
         assert_eq!(result.n_subjects, 3);
         assert_eq!(result.n_events, 3);
         assert!(result.mean_event_rate > 0.0);
+    }
+
+    #[test]
+    fn anderson_gill_matches_tied_cluster_reference() {
+        let n_subjects = 20;
+        let mut id = Vec::with_capacity(n_subjects * 3);
+        let mut start = Vec::with_capacity(n_subjects * 3);
+        let mut stop = Vec::with_capacity(n_subjects * 3);
+        let mut event = Vec::with_capacity(n_subjects * 3);
+        let mut covariates = Vec::with_capacity(n_subjects * 6);
+        for subject in 1..=n_subjects {
+            for interval in 0..3 {
+                let row = id.len();
+                id.push(subject as i32);
+                start.push(interval as f64);
+                stop.push((interval + 1) as f64);
+                event.push(i32::from(row % 4 != 0));
+                covariates.push(((row * 3 + subject * 2) % 17) as f64 * 0.1);
+                covariates.push(((row * 7 + subject) % 13) as f64 * 0.1);
+            }
+        }
+
+        let result = anderson_gill_model(id, start, stop, event, covariates, 50, 1e-9).unwrap();
+
+        assert_close(result.coef[0], -0.176_545_463_952_229, 1e-10);
+        assert_close(result.coef[1], 0.038_681_549_424_786_2, 1e-10);
+        assert_close(result.std_errors[0], 0.309_771_133_238_645, 1e-10);
+        assert_close(result.std_errors[1], 0.407_236_351_321_3, 1e-10);
+        assert_close(result.robust_std_errors[0], 0.272_213_095_533_931, 1e-10);
+        assert_close(result.robust_std_errors[1], 0.341_977_219_513_29, 1e-10);
+        assert_close(result.log_likelihood, -112.465_975_135_154, 1e-10);
+        assert_eq!(result.n_iter, 3);
+        assert!(result.converged);
     }
 
     #[test]

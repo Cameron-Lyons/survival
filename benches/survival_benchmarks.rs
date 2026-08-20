@@ -1,8 +1,8 @@
 use std::hint::black_box;
 use survival::regression::{
     ClogitDataSet, ConditionalLogisticRegression, CoxPHModel, SplineConfig, aareg_fit, agexact,
-    cch_borgan_fit, cch_fit, coxph_fit, finegray, flexible_parametric_model, landmark_cox_analysis,
-    survreg, time_varying_cox,
+    anderson_gill_model, cch_borgan_fit, cch_fit, coxph_fit, finegray, flexible_parametric_model,
+    landmark_cox_analysis, survreg, time_varying_cox,
 };
 use survival::residuals::smooth_schoenfeld;
 use survival::{
@@ -920,6 +920,50 @@ mod conditional_logistic_bench {
                 .fit()
                 .expect("benchmark conditional logistic fit should succeed");
             black_box(model);
+        });
+    }
+}
+
+mod anderson_gill_bench {
+    use super::*;
+
+    type RecurrentData = (Vec<i32>, Vec<f64>, Vec<f64>, Vec<i32>, Vec<f64>);
+
+    fn recurrent_data(n_subjects: usize) -> RecurrentData {
+        let mut id = Vec::with_capacity(n_subjects * 3);
+        let mut start = Vec::with_capacity(n_subjects * 3);
+        let mut stop = Vec::with_capacity(n_subjects * 3);
+        let mut event = Vec::with_capacity(n_subjects * 3);
+        let mut covariates = Vec::with_capacity(n_subjects * 6);
+        for subject in 1..=n_subjects {
+            for interval in 0..3 {
+                let row = id.len();
+                id.push(subject as i32);
+                start.push(interval as f64);
+                stop.push((interval + 1) as f64);
+                event.push(i32::from(row % 4 != 0));
+                covariates.push(((row * 3 + subject * 2) % 17) as f64 * 0.1);
+                covariates.push(((row * 7 + subject) % 13) as f64 * 0.1);
+            }
+        }
+        (id, start, stop, event, covariates)
+    }
+
+    #[divan::bench(args = [20, 100, 200])]
+    fn fit(bencher: divan::Bencher, n_subjects: usize) {
+        let (id, start, stop, event, covariates) = recurrent_data(n_subjects);
+        bencher.bench_local(|| {
+            let result = anderson_gill_model(
+                id.clone(),
+                start.clone(),
+                stop.clone(),
+                event.clone(),
+                covariates.clone(),
+                50,
+                1e-9,
+            )
+            .expect("benchmark Andersen-Gill fit should succeed");
+            black_box(result);
         });
     }
 }
