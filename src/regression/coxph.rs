@@ -497,6 +497,13 @@ impl CoxPHFit {
         self.scaled_schoenfeld_residuals_internal()
     }
 
+    pub fn scaled_schoenfeld_residuals_with_variance(
+        &self,
+        information_matrix: Vec<Vec<f64>>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        self.scaled_schoenfeld_residuals_with_variance_internal(&information_matrix)
+    }
+
     pub fn partial_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
         self.partial_residuals_internal()
     }
