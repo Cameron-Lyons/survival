@@ -75,7 +75,10 @@ pub use survfitaj_extended_module::{
     AalenJohansenExtendedConfig, AalenJohansenExtendedResult, TransitionMatrix, TransitionType,
     VarianceEstimator, survfitaj_extended,
 };
-pub use survfitaj_module::{SurvFitAJ, survfit_counting_positions, survfitaj};
+pub use survfitaj_module::{
+    SurvFitAJ, survfit_counting_positions, survfit_initial_indices, survfit_subject_history,
+    survfitaj,
+};
 pub use survfitkm_module::{
     CountingSurvfitTables, GroupedSurvFitKMOutput, KaplanMeierConfig, SurvFitKMInfluenceOutput,
     SurvFitKMOutput, SurvfitCurveResult, SurvfitKMOptions, compute_robust_survfitkm_with_timefix,

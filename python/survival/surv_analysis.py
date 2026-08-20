@@ -63,6 +63,8 @@ __all__ = bind_names(
         "survfit_multistate",
         "SurvFitAJ",
         "survfit_counting_positions",
+        "survfit_initial_indices",
+        "survfit_subject_history",
         "survfitaj",
         "AalenJohansenExtendedConfig",
         "AalenJohansenExtendedResult",

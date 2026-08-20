@@ -12291,40 +12291,16 @@ def _survfit_multistate_state_data(
         if any(left >= right for left, right in zip(start, stop, strict=True)):
             raise ValueError("timefix produced an empty multi-state interval")
 
-    current_states = [0] * n
-    if response.start is None:
-        seen_ids: set[int] = set()
-        for idx in sorted(range(n), key=lambda row: (id_codes[row], stop[row], row)):
-            subject = id_codes[idx]
-            if subject in seen_ids:
-                raise ValueError("a subject has overlapping right-censored multi-state rows")
-            seen_ids.add(subject)
-            current_states[idx] = 0 if provided_states is None else provided_states[idx]
-    else:
-        previous_by_id: dict[int, int] = {}
-        for idx in sorted(
-            range(n),
-            key=lambda row: (id_codes[row], stop[row], start[row], row),
-        ):
-            subject = id_codes[idx]
-            previous = previous_by_id.get(subject)
-            if previous is None:
-                current = 0 if provided_states is None else provided_states[idx]
-            else:
-                tolerance = _SURVFIT_TIME_EPSILON if timefix else 0.0
-                if start[idx] < stop[previous] - tolerance:
-                    raise ValueError("a subject has overlapping time intervals")
-                if start[idx] > stop[previous] + tolerance:
-                    raise ValueError("a subject has a gap between time intervals")
-                prior_event = mapped_events[previous]
-                expected = (
-                    current_states[previous] if prior_event in {None, 0} else int(prior_event) - 1
-                )
-                if provided_states is not None and provided_states[idx] != expected:
-                    raise ValueError("istate is inconsistent with the subject transition history")
-                current = expected
-            current_states[idx] = current
-            previous_by_id[subject] = idx
+    current_states = list(
+        _core.survfit_subject_history(
+            start,
+            stop,
+            mapped_events,
+            id_codes,
+            provided_states,
+            _SURVFIT_TIME_EPSILON if timefix else 0.0,
+        )
+    )
 
     normalized = Surv._from_normalized(
         time=stop,
@@ -12653,23 +12629,13 @@ def _survfit_multistate(
     ) -> list[int]:
         group_codes = _encode_labels(list(curve_groups), "group")
         id_codes = _encode_labels(list(curve_ids), "id")
-        order = sorted(
-            range(len(curve_response)),
-            key=lambda idx: (
-                group_codes[idx],
-                id_codes[idx],
-                curve_response.start[idx] if curve_response.start is not None else 0.0,
-                idx,
-            ),
+        return list(
+            _core.survfit_initial_indices(
+                group_codes,
+                id_codes,
+                curve_response.start,
+            )
         )
-        first_indices: list[int] = []
-        seen_subjects: set[tuple[int, int]] = set()
-        for idx in order:
-            key = (group_codes[idx], id_codes[idx])
-            if key not in seen_subjects:
-                seen_subjects.add(key)
-                first_indices.append(idx)
-        return first_indices
 
     group_values = [0] * len(response) if group is None else _materialize_labels(group, "group")
     initial_indices = initial_curve_indices(response, group_values, ids)

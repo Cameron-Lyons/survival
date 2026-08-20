@@ -1,7 +1,7 @@
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::error::Error;
+use std::{collections::HashMap, error::Error};
 
 use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 #[pyclass(from_py_object)]
@@ -179,6 +179,163 @@ pub fn survfit_counting_positions(
         positions[row_idx] = usize::from(first) + 2 * usize::from(last);
     }
     Ok(positions)
+}
+
+#[pyfunction]
+#[pyo3(signature = (start, stop, event, id, provided_states, tolerance))]
+pub fn survfit_subject_history(
+    start: Option<Vec<f64>>,
+    stop: Vec<f64>,
+    event: Vec<Option<usize>>,
+    id: Vec<usize>,
+    provided_states: Option<Vec<usize>>,
+    tolerance: f64,
+) -> PyResult<Vec<usize>> {
+    let n = stop.len();
+    if event.len() != n || id.len() != n {
+        return Err(PyValueError::new_err(
+            "stop, event, and id must have the same length",
+        ));
+    }
+    if start.as_ref().is_some_and(|values| values.len() != n) {
+        return Err(PyValueError::new_err(
+            "start must have the same length as stop",
+        ));
+    }
+    if provided_states
+        .as_ref()
+        .is_some_and(|values| values.len() != n)
+    {
+        return Err(PyValueError::new_err(
+            "provided_states must have the same length as stop",
+        ));
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(PyValueError::new_err(
+            "tolerance must be a non-negative finite value",
+        ));
+    }
+    validate_finite(&stop, "stop")?;
+    if let Some(start) = start.as_ref() {
+        validate_finite(start, "start")?;
+    }
+
+    let mut current_states = vec![0; n];
+    let mut order = (0..n).collect::<Vec<_>>();
+    if let Some(start) = start.as_ref() {
+        order.sort_unstable_by(|&left, &right| {
+            id[left]
+                .cmp(&id[right])
+                .then_with(|| {
+                    stop[left]
+                        .partial_cmp(&stop[right])
+                        .expect("stop values were validated as finite")
+                })
+                .then_with(|| {
+                    start[left]
+                        .partial_cmp(&start[right])
+                        .expect("start values were validated as finite")
+                })
+                .then_with(|| left.cmp(&right))
+        });
+        let mut previous_by_id: HashMap<usize, usize> = HashMap::new();
+        for idx in order {
+            let previous = previous_by_id.get(&id[idx]).copied();
+            let current = if let Some(previous) = previous {
+                if start[idx] < stop[previous] - tolerance {
+                    return Err(PyValueError::new_err(
+                        "a subject has overlapping time intervals",
+                    ));
+                }
+                if start[idx] > stop[previous] + tolerance {
+                    return Err(PyValueError::new_err(
+                        "a subject has a gap between time intervals",
+                    ));
+                }
+                let expected = event[previous]
+                    .filter(|&value| value != 0)
+                    .map_or(current_states[previous], |value| value - 1);
+                if provided_states
+                    .as_ref()
+                    .is_some_and(|states| states[idx] != expected)
+                {
+                    return Err(PyValueError::new_err(
+                        "istate is inconsistent with the subject transition history",
+                    ));
+                }
+                expected
+            } else {
+                provided_states.as_ref().map_or(0, |states| states[idx])
+            };
+            current_states[idx] = current;
+            previous_by_id.insert(id[idx], idx);
+        }
+    } else {
+        let mut previous_id = None;
+        order.sort_unstable_by(|&left, &right| {
+            id[left]
+                .cmp(&id[right])
+                .then_with(|| {
+                    stop[left]
+                        .partial_cmp(&stop[right])
+                        .expect("stop values were validated as finite")
+                })
+                .then_with(|| left.cmp(&right))
+        });
+        for idx in order {
+            if previous_id == Some(id[idx]) {
+                return Err(PyValueError::new_err(
+                    "a subject has overlapping right-censored multi-state rows",
+                ));
+            }
+            previous_id = Some(id[idx]);
+            current_states[idx] = provided_states.as_ref().map_or(0, |states| states[idx]);
+        }
+    }
+    Ok(current_states)
+}
+
+#[pyfunction]
+#[pyo3(signature = (group, id, start=None))]
+pub fn survfit_initial_indices(
+    group: Vec<usize>,
+    id: Vec<usize>,
+    start: Option<Vec<f64>>,
+) -> PyResult<Vec<usize>> {
+    let n = group.len();
+    if id.len() != n || start.as_ref().is_some_and(|values| values.len() != n) {
+        return Err(PyValueError::new_err(
+            "group, id, and start must have the same length",
+        ));
+    }
+    if let Some(start) = start.as_ref() {
+        validate_finite(start, "start")?;
+    }
+
+    let mut order = (0..n).collect::<Vec<_>>();
+    order.sort_unstable_by(|&left, &right| {
+        group[left]
+            .cmp(&group[right])
+            .then_with(|| id[left].cmp(&id[right]))
+            .then_with(|| match start.as_ref() {
+                Some(start) => start[left]
+                    .partial_cmp(&start[right])
+                    .expect("start values were validated as finite"),
+                None => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut initial = Vec::new();
+    let mut previous_key = None;
+    for idx in order {
+        let key = (group[idx], id[idx]);
+        if previous_key != Some(key) {
+            initial.push(idx);
+            previous_key = Some(key);
+        }
+    }
+    Ok(initial)
 }
 
 fn compute_survfitaj_counts(
@@ -1159,6 +1316,172 @@ mod tests {
         assert!(survfit_counting_positions(vec![0.0], vec![], vec![0], 0.0).is_err());
         assert!(survfit_counting_positions(vec![0.0], vec![1.0], vec![0], f64::NAN).is_err());
         assert!(survfit_counting_positions(vec![f64::INFINITY], vec![1.0], vec![0], 0.0).is_err());
+    }
+
+    #[test]
+    fn subject_history_reconstructs_counting_process_states() {
+        let current = survfit_subject_history(
+            Some(vec![1.0, 0.0, 0.0]),
+            vec![2.0, 1.0, 1.0],
+            vec![Some(0), Some(2), Some(0)],
+            vec![0, 0, 1],
+            None,
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(current, vec![1, 0, 0]);
+
+        let provided = survfit_subject_history(
+            Some(vec![1.0, 0.0, 0.0]),
+            vec![2.0, 1.0, 1.0],
+            vec![Some(0), Some(2), Some(0)],
+            vec![0, 0, 1],
+            Some(vec![1, 0, 0]),
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(provided, current);
+    }
+
+    #[test]
+    fn subject_history_matches_generated_valid_histories() {
+        let mut seed = 0x0051_a7e5_u64;
+        for fixture in 0..200 {
+            let subjects = fixture % 17 + 1;
+            let intervals = fixture % 5 + 1;
+            let mut rows = Vec::with_capacity(subjects * intervals);
+            for subject in 0..subjects {
+                let mut state = 0;
+                for interval in 0..intervals {
+                    seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                    let next_state = (state + 1) % 3;
+                    rows.push((
+                        seed,
+                        interval as f64,
+                        (interval + 1) as f64,
+                        Some(next_state + 1),
+                        subject,
+                        state,
+                    ));
+                    state = next_state;
+                }
+            }
+            rows.sort_unstable_by_key(|row| row.0);
+            let start = rows.iter().map(|row| row.1).collect();
+            let stop = rows.iter().map(|row| row.2).collect();
+            let event = rows.iter().map(|row| row.3).collect();
+            let id = rows.iter().map(|row| row.4).collect();
+            let expected = rows.iter().map(|row| row.5).collect::<Vec<_>>();
+            assert_eq!(
+                survfit_subject_history(Some(start), stop, event, id, None, 0.0).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn subject_history_reports_r_compatible_validation_errors() {
+        let overlap = survfit_subject_history(
+            Some(vec![0.0, 0.5]),
+            vec![1.0, 2.0],
+            vec![Some(0), Some(0)],
+            vec![0, 0],
+            None,
+            0.0,
+        )
+        .unwrap_err();
+        assert!(overlap.to_string().contains("overlapping time intervals"));
+
+        let gap = survfit_subject_history(
+            Some(vec![0.0, 1.5]),
+            vec![1.0, 2.0],
+            vec![Some(0), Some(0)],
+            vec![0, 0],
+            None,
+            0.0,
+        )
+        .unwrap_err();
+        assert!(gap.to_string().contains("gap between time intervals"));
+
+        let inconsistent = survfit_subject_history(
+            Some(vec![0.0, 1.0]),
+            vec![1.0, 2.0],
+            vec![Some(2), Some(0)],
+            vec![0, 0],
+            Some(vec![0, 0]),
+            0.0,
+        )
+        .unwrap_err();
+        assert!(inconsistent.to_string().contains("istate is inconsistent"));
+
+        let duplicate_right = survfit_subject_history(
+            None,
+            vec![1.0, 2.0],
+            vec![Some(0), Some(0)],
+            vec![0, 0],
+            None,
+            0.0,
+        )
+        .unwrap_err();
+        assert!(
+            duplicate_right
+                .to_string()
+                .contains("overlapping right-censored")
+        );
+    }
+
+    #[test]
+    fn initial_indices_select_earliest_row_per_group_and_subject() {
+        let indices = survfit_initial_indices(
+            vec![1, 0, 0, 1],
+            vec![0, 0, 0, 0],
+            Some(vec![0.0, 2.0, 1.0, 1.0]),
+        )
+        .unwrap();
+        assert_eq!(indices, vec![2, 0]);
+
+        assert_eq!(
+            survfit_initial_indices(vec![1, 0, 0], vec![0, 0, 1], None).unwrap(),
+            vec![1, 2, 0]
+        );
+    }
+
+    #[test]
+    fn initial_indices_match_reference_across_deterministic_fixtures() {
+        let mut seed = 0x01a1_71a1_u64;
+        for fixture in 0..500 {
+            let n = fixture % 101;
+            let mut group = Vec::with_capacity(n);
+            let mut id = Vec::with_capacity(n);
+            let mut start = Vec::with_capacity(n);
+            for row in 0..n {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                group.push(((seed >> 32) % 7) as usize);
+                id.push(((seed >> 24) % 13) as usize);
+                start.push(((seed >> 16) % 31) as f64 + row as f64 * 1e-12);
+            }
+            let mut order = (0..n).collect::<Vec<_>>();
+            order.sort_by(|&left, &right| {
+                group[left]
+                    .cmp(&group[right])
+                    .then_with(|| id[left].cmp(&id[right]))
+                    .then_with(|| start[left].partial_cmp(&start[right]).unwrap())
+                    .then_with(|| left.cmp(&right))
+            });
+            let mut expected = Vec::new();
+            let mut previous = None;
+            for idx in order {
+                let key = (group[idx], id[idx]);
+                if previous != Some(key) {
+                    expected.push(idx);
+                    previous = Some(key);
+                }
+            }
+            assert_eq!(
+                survfit_initial_indices(group, id, Some(start)).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
