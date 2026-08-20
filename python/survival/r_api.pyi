@@ -135,6 +135,18 @@ class SurvregDistribution:
     def transform_derivative(self, y: Any) -> list[float]: ...
     def inverse_transform(self, x: Any) -> list[float]: ...
 
+class SurvregFitResult:
+    coefficients: list[float]
+    icoef: list[float]
+    var: list[list[float]]
+    loglik: list[float]
+    iter: int
+    linear_predictors: list[float]
+    df: int
+    score: list[float]
+    coefficient_names: list[str]
+    icoef_names: list[str]
+
 survreg_distributions: Mapping[str, SurvregDistribution]
 
 class PyearsResult:
@@ -931,6 +943,20 @@ def survreg_control(
     debug: Any = 0,
     outer_max: Any = 10,
 ) -> dict[str, Any]: ...
+def survreg_fit(
+    x: Any,
+    y: Any,
+    weights: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    controlvals: Any | None = None,
+    dist: Any = "extreme",
+    scale: Any = 0,
+    nstrat: Any = 1,
+    strata: Any | None = None,
+    parms: Any | None = None,
+    assign: Any | None = None,
+) -> SurvregFitResult: ...
 def coef(fit: Any) -> list[float]: ...
 def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]: ...
 def confint(

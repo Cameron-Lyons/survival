@@ -15732,6 +15732,142 @@ def test_survreg_distribution_registry_deviance_matches_reference_values():
     assert math.isnan(student_t.loglik[3])
 
 
+def test_survreg_fit_matches_reference_base_distribution_fits():
+    x = [[1.0, value] for value in [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5]]
+    y = [
+        [value, status]
+        for value, status in zip(
+            [-1.0, -0.2, 0.1, 0.4, 0.8, 1.2],
+            [1, 1, 0, 1, 0, 1],
+            strict=True,
+        )
+    ]
+    control = survival.survreg_control(maxiter=50)
+    expected = {
+        "extreme": (
+            [0.1206776, 0.7658180, -2.2272481],
+            [0.8021786, -0.3925395],
+            [-6.5888076, 0.5906926],
+        ),
+        "logistic": (
+            [0.05408951, 0.82088516, -2.38034448],
+            [0.4959668, -0.6066702],
+            [-6.7868434, 0.3800443],
+        ),
+        "gaussian": (
+            [0.05105152, 0.83852864, -1.88889161],
+            [0.4635011, -0.1017661],
+            [-6.6435170, 0.5969226],
+        ),
+        "t": (
+            [0.05543034, 0.81723579, -1.96075911],
+            [0.4986273, -0.1877182],
+            [-6.8416310, 0.3181591],
+        ),
+    }
+    for distribution, (coefficients, icoef, loglik) in expected.items():
+        dist = (
+            survival.survreg_distributions["t"]
+            if distribution == "t"
+            else distribution
+        )
+        fit = survival.survreg_fit(
+            x,
+            y,
+            controlvals=control,
+            dist=dist,
+            parms=5 if distribution == "t" else None,
+        )
+        assert isinstance(fit, survival.SurvregFitResult)
+        assert fit.coefficients == pytest.approx(coefficients, abs=1e-7)
+        assert fit.icoef == pytest.approx(icoef, abs=1e-7)
+        assert fit.loglik == pytest.approx(loglik, abs=5e-7)
+        assert fit.linear_predictors == pytest.approx(
+            [
+                sum(
+                    value * coefficient
+                    for value, coefficient in zip(row, coefficients, strict=False)
+                )
+                for row in x
+            ],
+            abs=1e-6,
+        )
+        assert fit.df == 3
+        assert fit.coefficient_names == ["x 1", "x 2", "Log(scale)"]
+        assert fit.icoef_names == ["Intercept", "Log(scale)"]
+        assert max(map(abs, fit.score)) < 1e-6
+
+    with pytest.raises(ValueError, match="Missing density"):
+        survival.survreg_fit(x, y, controlvals=control, dist="weibull")
+
+
+def test_survreg_fit_handles_fixed_stratified_and_interval_scales():
+    control = survival.survreg_control(maxiter=150, rel_tolerance=1e-10)
+    fixed_x = [[1.0, value] for value in [-1, 0, 1, 2, 3, 4]]
+    fixed_y = [
+        [time, status]
+        for time, status in zip(
+            [1.2, 2.1, 3.0, 4.5, 6.2, 8.1],
+            [1, 1, 0, 1, 1, 0],
+            strict=True,
+        )
+    ]
+    fixed = survival.survreg_fit(
+        fixed_x,
+        fixed_y,
+        controlvals=control,
+        dist="gaussian",
+        scale=1.5,
+    )
+    assert fixed.coefficients == pytest.approx([2.38298862410971, 1.52750792609955], abs=2e-6)
+    assert fixed.icoef == pytest.approx([4.60050257311683, math.log(1.5)], abs=2e-6)
+    assert fixed.loglik == pytest.approx([-14.6047018944946, -6.4901538833549], abs=3e-6)
+    assert fixed.df == 2
+
+    stratified_x = [[1.0, value] for value in [-2, -1, 0, 1, -2, -1, 0, 1]]
+    stratified_y = [
+        [time, status]
+        for time, status in zip(
+            [1, 2, 3, 5, 2, 4, 6, 9],
+            [1, 1, 0, 1, 1, 0, 1, 1],
+            strict=True,
+        )
+    ]
+    stratified = survival.survreg_fit(
+        stratified_x,
+        stratified_y,
+        controlvals=control,
+        dist="gaussian",
+        nstrat=2,
+        strata=[1, 1, 1, 1, 2, 2, 2, 2],
+    )
+    assert stratified.coefficients == pytest.approx(
+        [6.43457440600755, 2.26013738226735, 0.892132480029949, -1.2128532127838],
+        abs=2e-6,
+    )
+    assert stratified.loglik == pytest.approx([-15.4972185765783, -8.2110887379925], abs=2e-6)
+
+    interval = survival.survreg_fit(
+        [[1.0, value] for value in [0.2, 0.4, 0.1, 0.8, 1.0]],
+        [
+            [left, right, status]
+            for left, right, status in zip(
+                [1, 2, 3, 4, 5],
+                [1, 2, 3, 4.5, 5],
+                [1, 2, 0, 3, 1],
+                strict=True,
+            )
+        ],
+        controlvals=control,
+        dist="gaussian",
+    )
+    assert interval.coefficients == pytest.approx(
+        [1.45643939259366, 3.13805449972623, 0.240749787846651],
+        abs=2e-6,
+    )
+    assert interval.loglik == pytest.approx([-8.58620884169789, -7.65247644462936], abs=2e-6)
+
+
 def test_survreg_loglik_and_response_transform_follow_r_distribution_scale():
     data = _toy_data()
 

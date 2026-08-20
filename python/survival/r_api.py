@@ -46,6 +46,7 @@ __all__ = [
     "SurvExpFormulaResult",
     "SurvregDeviance",
     "SurvregDistribution",
+    "SurvregFitResult",
     "SurvfitResult",
     "SurvfitMultiStateResult",
     "SurvfitConfidenceIntervalResult",
@@ -140,6 +141,7 @@ __all__ = [
     "survreg",
     "survreg_control",
     "survreg_distributions",
+    "survreg_fit",
     "tcut",
     "totimeline",
     "yates",
@@ -714,6 +716,22 @@ class SurvregDistribution:
 
     def inverse_transform(self, x: Any) -> list[float]:
         return self.itrans(x)
+
+
+@dataclass(frozen=True)
+class SurvregFitResult:
+    """Low-level matrix fit returned by ``survreg_fit()``."""
+
+    coefficients: list[float]
+    icoef: list[float]
+    var: list[list[float]]
+    loglik: list[float]
+    iter: int
+    linear_predictors: list[float]
+    df: int
+    score: list[float]
+    coefficient_names: list[str]
+    icoef_names: list[str]
 
 
 survreg_distributions: Mapping[str, SurvregDistribution] = MappingProxyType(
@@ -18054,6 +18072,334 @@ def rsurvreg(
         distribution_name,
         "quantile",
         distribution_parms,
+    )
+
+
+def _survreg_fit_distribution(
+    dist: Any,
+    parms: Any | None,
+) -> tuple[str, float | None]:
+    if isinstance(dist, SurvregDistribution):
+        descriptor = dist
+    elif isinstance(dist, str):
+        descriptor = survreg_distributions.get(dist)
+        if descriptor is None:
+            raise ValueError("Unrecognized distribution")
+    else:
+        raise TypeError("dist must be a distribution name or SurvregDistribution")
+    if descriptor.dist is not None:
+        raise ValueError("Missing density function in the definition of the distribution")
+    if descriptor.key not in {"extreme", "logistic", "gaussian", "t"}:
+        raise ValueError("Unrecognized distribution")
+    parameter = (
+        _survreg_t_fit_degrees_of_freedom(descriptor.parms if parms is None else parms)
+        if descriptor.key == "t"
+        else None
+    )
+    return descriptor.key, parameter
+
+
+def _survreg_fit_weighted_location(
+    rows: list[list[float]],
+    target: list[float],
+    weights: list[float],
+    tol_chol: float,
+) -> list[float]:
+    nvar = len(rows[0]) if rows else 0
+    if nvar == 0:
+        return []
+    information = [
+        [
+            math.fsum(
+                weight * row[column] * row[other]
+                for row, weight in zip(rows, weights, strict=True)
+            )
+            for other in range(nvar)
+        ]
+        for column in range(nvar)
+    ]
+    rhs = [
+        math.fsum(
+            weight * row[column] * value
+            for row, value, weight in zip(rows, target, weights, strict=True)
+        )
+        for column in range(nvar)
+    ]
+    try:
+        _tests, _rank, solve_rows = _core.coxph_wtest(information, [rhs], tol_chol)
+    except ValueError:
+        return [0.0] * nvar
+    return [
+        value if math.isfinite(value) else 0.0
+        for row in solve_rows
+        for value in row[:1]
+    ]
+
+
+def _survreg_fit_start(
+    y: list[list[float]],
+    rows: list[list[float]],
+    weights: list[float],
+    offsets: list[float],
+    strata: list[int],
+    nstrat: int,
+    fixed_scale: float | None,
+    tol_chol: float,
+    null_scale: list[float] | None = None,
+) -> list[float]:
+    statuses = [int(row[-1]) for row in y]
+    proxy = [
+        (row[0] + row[1]) / 2.0 if status == 3 else row[0]
+        for row, status in zip(y, statuses, strict=True)
+    ]
+    target = [
+        value - offset for value, offset in zip(proxy, offsets, strict=True)
+    ]
+    location = _survreg_fit_weighted_location(rows, target, weights, tol_chol)
+    if fixed_scale is not None:
+        return location
+    if null_scale is not None:
+        return [*location, *null_scale]
+
+    weight_sum = math.fsum(weights)
+    center = math.fsum(
+        weight * value for value, weight in zip(target, weights, strict=True)
+    ) / weight_sum
+    residual = [value - center for value in target]
+    scale_floor = math.sqrt(math.ulp(1.0))
+    log_scale: list[float] = []
+    for group in range(nstrat):
+        group_weight = math.fsum(
+            weight
+            for code, weight in zip(strata, weights, strict=True)
+            if code == group
+        )
+        variance = math.fsum(
+            weight * value * value
+            for code, value, weight in zip(strata, residual, weights, strict=True)
+            if code == group
+        ) / group_weight
+        log_scale.append(math.log(max(math.sqrt(variance), scale_floor)))
+    return [center, *log_scale]
+
+
+def _survreg_fit_core(
+    y: list[list[float]],
+    rows: list[list[float]],
+    weights: list[float],
+    offsets: list[float],
+    initial: list[float],
+    strata: list[int],
+    distribution: str,
+    distribution_parameter: float | None,
+    fixed_scale: float | None,
+    max_iter: int,
+    eps: float,
+    tol_chol: float,
+) -> Any:
+    return _core.survreg(
+        [row[0] for row in y],
+        [row[-1] for row in y],
+        rows,
+        weights=weights,
+        offsets=offsets,
+        initial_beta=initial,
+        strata=strata,
+        distribution=distribution,
+        max_iter=max_iter,
+        eps=eps,
+        tol_chol=tol_chol,
+        time2=[row[1] for row in y] if len(y[0]) == 3 else None,
+        fixed_scale=fixed_scale,
+        distribution_parameter=distribution_parameter,
+    )
+
+
+def survreg_fit(
+    x: Any,
+    y: Any,
+    weights: Any | None = None,
+    offset: Any | None = None,
+    init: Any | None = None,
+    controlvals: Any | None = None,
+    dist: Any = "extreme",
+    scale: Any = 0,
+    nstrat: Any = 1,
+    strata: Any | None = None,
+    parms: Any | None = None,
+    assign: Any | None = None,
+) -> SurvregFitResult:
+    """Fit the matrix-oriented low-level model exported as R ``survreg.fit``."""
+
+    del assign
+    rows = _as_matrix_rows(x, "x", allow_empty_columns=True)
+    response = _as_matrix_rows(y, "y", allow_empty_columns=False)
+    if len(response) != len(rows) or any(len(row) not in {2, 3} for row in response):
+        raise ValueError("Invalid survival response")
+    response_width = len(response[0])
+    if any(len(row) != response_width for row in response):
+        raise ValueError("Invalid survival response")
+    for row in response:
+        status = row[-1]
+        if not status.is_integer() or int(status) not in {0, 1, 2, 3}:
+            raise ValueError("Invalid survival response")
+        if not math.isfinite(row[0]):
+            raise ValueError("Invalid survival response")
+        if int(status) == 3 and (
+            response_width != 3 or not math.isfinite(row[1]) or row[1] <= row[0]
+        ):
+            raise ValueError("Invalid survival response")
+    n = len(rows)
+    nvar = len(rows[0]) if rows else 0
+    if any(len(row) != nvar for row in rows) or any(
+        not math.isfinite(value) for row in rows for value in row
+    ):
+        raise ValueError("Invalid X matrix")
+
+    weight_values = (
+        [1.0] * n if weights is None else _survreg_numeric_vector(weights, "weights")
+    )
+    if len(weight_values) != n or any(
+        not math.isfinite(value) or value <= 0.0 for value in weight_values
+    ):
+        raise ValueError("Invalid weights, must be >0")
+    offset_values = (
+        [0.0] * n if offset is None else _survreg_numeric_vector(offset, "offset")
+    )
+    if len(offset_values) != n or any(not math.isfinite(value) for value in offset_values):
+        raise ValueError("Invalid offset")
+
+    scale_value = _finite_float(scale, "scale")
+    if scale_value < 0.0:
+        raise ValueError("Invalid scale")
+    nstrat_value = _integer_scalar(nstrat, "nstrat")
+    if nstrat_value < 1:
+        raise ValueError("nstrat must be positive")
+    if scale_value > 0.0 and nstrat_value > 1:
+        raise ValueError("Cannot have both a fixed scale and strata")
+    if nstrat_value == 1:
+        strata_values = [0] * n
+    else:
+        if strata is None:
+            raise ValueError("Invalid strata variable")
+        raw_strata = _integer_code_vector(strata, "strata", "1-based stratum codes")
+        if len(raw_strata) != n or any(
+            value < 1 or value > nstrat_value for value in raw_strata
+        ):
+            raise ValueError("Invalid strata variable")
+        strata_values = [value - 1 for value in raw_strata]
+
+    distribution, distribution_parameter = _survreg_fit_distribution(dist, parms)
+    max_iter, eps, tol_chol = _apply_survreg_control(
+        survreg_control() if controlvals is None else controlvals,
+        None,
+        None,
+        None,
+    )
+    if max_iter is None or max_iter < 0:
+        raise ValueError("control.iter.max must be non-negative")
+    if eps is None or eps <= 0.0:
+        raise ValueError("control.rel.tolerance must be positive")
+    if tol_chol is None or tol_chol <= 0.0:
+        raise ValueError("control.toler.chol must be positive")
+
+    fixed_scale = scale_value if scale_value > 0.0 else None
+    null_rows = [[1.0] for _ in range(n)]
+    null_start = _survreg_fit_start(
+        response,
+        null_rows,
+        weight_values,
+        offset_values,
+        strata_values,
+        nstrat_value,
+        fixed_scale,
+        tol_chol,
+    )
+    null_fit = _survreg_fit_core(
+        response,
+        null_rows,
+        weight_values,
+        offset_values,
+        null_start,
+        strata_values,
+        distribution,
+        distribution_parameter,
+        fixed_scale,
+        20,
+        eps,
+        tol_chol,
+    )
+    null_coefficients = [float(value) for value in null_fit.coefficients]
+    null_scale = [] if fixed_scale is not None else null_coefficients[1:]
+
+    if init is None:
+        initial = _survreg_fit_start(
+            response,
+            rows,
+            weight_values,
+            offset_values,
+            strata_values,
+            nstrat_value,
+            fixed_scale,
+            tol_chol,
+            null_scale,
+        )
+    else:
+        initial = _survreg_numeric_vector(init, "init")
+        if fixed_scale is None and len(initial) == nvar:
+            initial.extend(null_scale)
+        expected = nvar + (0 if fixed_scale is not None else nstrat_value)
+        if len(initial) != expected:
+            raise ValueError("Wrong length for initial parameters")
+
+    fit = _survreg_fit_core(
+        response,
+        rows,
+        weight_values,
+        offset_values,
+        initial,
+        strata_values,
+        distribution,
+        distribution_parameter,
+        fixed_scale,
+        max_iter,
+        eps,
+        tol_chol,
+    )
+    if max_iter > 1 and int(fit.convergence_flag) != 0:
+        warnings.warn(
+            "Ran out of iterations and did not converge",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    input_names = _validated_matrix_column_names(_matrix_input_column_names(x), rows)
+    coefficient_names = (
+        list(input_names)
+        if input_names is not None
+        else [f"x {index + 1}" for index in range(nvar)]
+    )
+    if fixed_scale is None:
+        coefficient_names.extend(["Log(scale)"] * nstrat_value)
+    coefficients = [float(value) for value in fit.coefficients]
+    icoef = (
+        null_coefficients
+        if fixed_scale is None
+        else [*null_coefficients, math.log(fixed_scale)]
+    )
+    full_loglik = float(fit.log_likelihood)
+    mean_only = nvar == 1 and all(row[0] == 1.0 for row in rows)
+    return SurvregFitResult(
+        coefficients=coefficients,
+        icoef=icoef,
+        var=[[float(value) for value in row] for row in fit.variance_matrix],
+        loglik=[full_loglik if mean_only else float(null_fit.log_likelihood), full_loglik],
+        iter=int(fit.iterations),
+        linear_predictors=[float(value) for value in fit.linear_predictors],
+        df=len(coefficients),
+        score=[float(value) for value in fit.score_vector],
+        coefficient_names=coefficient_names,
+        icoef_names=["Intercept", *(["Log(scale)"] * nstrat_value)],
     )
 
 
