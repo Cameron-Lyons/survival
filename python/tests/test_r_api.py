@@ -9410,6 +9410,104 @@ def test_coxph_formula_ridge_matches_fixed_theta_reference(
 
 
 @pytest.mark.parametrize(
+    "penalty_term",
+    [
+        "ridge(x,z,theta=.2)",
+        "pspline(x,df=3,nterm=4,eps=1e-8)",
+        "frailty(g,distribution='gaussian',theta=.5,sparse=False)",
+        "frailty(g,distribution='gaussian',theta=.5,sparse=True)",
+    ],
+)
+def test_coxph_formula_penalties_ignore_robust_variance_like_reference(penalty_term):
+    data = {
+        "time": [float(value) for value in range(1, 19)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "x": [
+            1.2,
+            0.7,
+            1.5,
+            0.2,
+            1.1,
+            0.4,
+            1.8,
+            0.9,
+            0.5,
+            1.4,
+            0.3,
+            1.0,
+            0.6,
+            1.7,
+            0.1,
+            1.3,
+            0.8,
+            1.6,
+        ],
+        "z": [
+            0.2,
+            0.5,
+            0.8,
+            1.0,
+            1.4,
+            1.8,
+            2.1,
+            2.5,
+            0.1,
+            0.6,
+            1.2,
+            1.7,
+            0.3,
+            0.9,
+            1.5,
+            2.0,
+            2.3,
+            2.7,
+        ],
+        "g": list("abcdef") * 3,
+    }
+    with pytest.warns(
+        RuntimeWarning,
+        match="robust variance is not defined for a penalized model, option ignored",
+    ):
+        fit = survival.coxph(
+            f"Surv(time,status) ~ {penalty_term}",
+            data=data,
+            ties="breslow",
+            robust=True,
+            control={"iter.max": 50, "outer.max": 30, "eps": 1e-10},
+        )
+
+    assert fit.robust is False
+    assert fit.naive_var is None
+    for actual, expected in zip(survival.vcov(fit), fit.fit.information_matrix, strict=True):
+        assert actual == pytest.approx(expected)
+
+
+def test_coxph_formula_penalty_ignores_implicitly_requested_robust_variance():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1],
+        "x": [0.2, 0.5, 0.8, 1.0, 1.4, 1.8, 2.1, 2.5],
+        "g": list("aabbccdd"),
+    }
+    for kwargs in (
+        {"cluster": data["g"]},
+        {"weights": [0.5, 1.0] * 4},
+    ):
+        with pytest.warns(
+            RuntimeWarning,
+            match="robust variance is not defined for a penalized model, option ignored",
+        ):
+            fit = survival.coxph(
+                "Surv(time,status) ~ ridge(x,theta=.2)",
+                data=data,
+                ties="breslow",
+                **kwargs,
+            )
+        assert fit.robust is False
+        assert fit.naive_var is None
+
+
+@pytest.mark.parametrize(
     ("scale", "expected_coef", "expected_term_df", "expected_theta", "expected_loglik"),
     [
         (

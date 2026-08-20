@@ -24233,6 +24233,16 @@ def coxph(
             stacklevel=2,
         )
         cluster = None
+    if use_robust_variance and (
+        formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks
+    ):
+        warnings.warn(
+            "the robust variance is not defined for a penalized model, option ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        use_robust_variance = False
+        cluster = None
 
     robust_cluster = None
     if use_robust_variance:
@@ -24247,8 +24257,6 @@ def coxph(
     naive_variance = None
     cluster_values = None
     if robust_cluster is not None:
-        if sparse_formula_frailty_block is not None:
-            raise NotImplementedError("robust variance is not yet supported with sparse frailty")
         robust_variance, naive_variance, cluster_values = _cox_robust_variance_matrix(
             fit,
             robust_cluster,
