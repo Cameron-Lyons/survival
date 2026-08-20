@@ -56,6 +56,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nostutter_str_numeric, m)?)?;
     m.add_function(wrap_pyfunction!(nostutter_str_str, m)?)?;
     m.add_function(wrap_pyfunction!(aeq_surv, m)?)?;
+    m.add_function(wrap_pyfunction!(timefix_vectors, m)?)?;
     m.add_function(wrap_pyfunction!(cluster, m)?)?;
     m.add_function(wrap_pyfunction!(cluster_str, m)?)?;
     m.add_function(wrap_pyfunction!(strata, m)?)?;

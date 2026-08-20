@@ -252,6 +252,10 @@ def test_surv2data_and_survcondense_public_apis():
 
 def test_aeq_surv_neardate_and_tcut_public_apis():
     adjusted = survival.aeq_surv([1.0, 1.0 + 1e-10, 2.0], 1e-8)
+    fixed_vectors = survival.timefix_vectors(
+        [[0.0, 1.0 + 5e-10], [1.0, 1.0 + 1.5e-9]],
+        1e-9,
+    )
     transitive_adjusted = survival.aeq_surv([1.0, 1.0 + 9e-9, 1.0 + 18e-9], 1e-8)
     relative_adjusted = survival.aeq_surv([1e9, 1e9 + 1.0, 1e9 + 20.0], 1e-8)
     no_adjust = survival.aeq_surv([1.0, 1.0 + 1e-10], -1.0)
@@ -277,6 +281,8 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
     assert adjusted.time[0] == pytest.approx(adjusted.time[1])
     assert adjusted.adjusted_count == 1
     assert adjusted.adjusted_indices == [1]
+    assert fixed_vectors[0] == pytest.approx([0.0, 1.0])
+    assert fixed_vectors[1] == pytest.approx([1.0, 1.0 + 1.5e-9])
     assert transitive_adjusted.time == pytest.approx([1.0, 1.0, 1.0])
     assert transitive_adjusted.adjusted_indices == [1, 2]
     assert relative_adjusted.time == pytest.approx([1e9, 1e9, 1e9 + 20.0])
@@ -333,6 +339,10 @@ def test_aeq_surv_neardate_and_tcut_public_apis():
         survival.aeq_surv([1.0], float("inf"))
     with pytest.raises(ValueError, match="time values must be finite"):
         survival.aeq_surv([1.0, float("nan")])
+    with pytest.raises(ValueError, match="non-negative finite"):
+        survival.timefix_vectors([[1.0]], -1.0)
+    with pytest.raises(ValueError, match="time values must be finite"):
+        survival.timefix_vectors([[float("nan")]], 1e-9)
     missing_query = survival.neardate([1], [float("nan")], [1], [1.0])
     infinite_reference = survival.neardate_str(["a"], [1.0], ["a"], [float("inf")])
     assert missing_query.indices == [None]

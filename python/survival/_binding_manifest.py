@@ -1000,6 +1000,7 @@ BINDINGS = (
     "time_dependent_roc",
     "time_varying_auc",
     "time_varying_cox",
+    "timefix_vectors",
     "tipping_point_analysis",
     "tmerge",
     "tmerge2",
@@ -1143,6 +1144,7 @@ MODULE_BINDINGS = {
     "data_prep": (
         "AeqSurvResult",
         "aeq_surv",
+        "timefix_vectors",
         "ClusterResult",
         "cluster",
         "cluster_str",

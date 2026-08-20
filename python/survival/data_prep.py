@@ -5,6 +5,7 @@ __all__ = bind_names(
     [
         "AeqSurvResult",
         "aeq_surv",
+        "timefix_vectors",
         "ClusterResult",
         "cluster",
         "cluster_str",

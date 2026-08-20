@@ -24,7 +24,7 @@ pub(crate) mod timeline;
 #[path = "tmerge.rs"]
 pub(crate) mod tmerge_module;
 
-pub use aeq_surv_module::{AeqSurvResult, aeq_surv};
+pub use aeq_surv_module::{AeqSurvResult, aeq_surv, timefix_vectors};
 pub use cluster_module::{ClusterResult, cluster, cluster_str};
 pub use collapse_module::collapse;
 pub use lvcf::{lvcf_indices, lvcf_numeric_indices};
