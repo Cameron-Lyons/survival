@@ -83,6 +83,7 @@ _R_EXPORTS = [
     "coef_names",
     "confint",
     "concordance",
+    "concordancefit",
     "clogit",
     "cch",
     "coxph",

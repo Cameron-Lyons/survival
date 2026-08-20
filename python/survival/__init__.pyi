@@ -58,6 +58,7 @@ from .r_api import (
     coef,
     coef_names,
     concordance,
+    concordancefit,
     confint,
     cox_zph,
     coxph,

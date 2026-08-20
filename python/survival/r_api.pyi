@@ -389,15 +389,19 @@ class ConcordanceResult:
     ranks: list[dict[str, float]] | list[list[dict[str, float]] | None] | None
     dfbeta: list[float] | list[list[float] | None] | None
     influence: list[list[float]] | list[list[list[float]] | None] | None
-    variance: float | list[float | None] | None
+    variance: float | list[float | None] | list[list[float]] | None
     conditional_variance: float | list[float] | None
     score_names: list[str] | None
     @property
     def c_index(self) -> float | list[float]: ...
     @property
-    def var(self) -> float | list[float | None] | None: ...
+    def var(self) -> float | list[float | None] | list[list[float]] | None: ...
     @property
     def cvar(self) -> float | list[float] | None: ...
+    @property
+    def discordant(self) -> float | list[float]: ...
+    @property
+    def count(self) -> dict[str, float] | list[dict[str, float]]: ...
 
 class PredictResult:
     fit: Any
@@ -635,6 +639,23 @@ def concordance(
     keepstrata: Any = 10,
     **kwargs: Any,
 ) -> ConcordanceResult: ...
+def concordancefit(
+    y: Any,
+    x: Any,
+    strata: Any | None = None,
+    weights: Any | None = None,
+    ymin: Any | None = None,
+    ymax: Any | None = None,
+    timewt: Any = "n",
+    cluster: Any | None = None,
+    influence: Any = 0,
+    ranks: Any = False,
+    reverse: Any = False,
+    timefix: Any = True,
+    keepstrata: Any = 10,
+    std_err: Any = True,
+    **kwargs: Any,
+) -> ConcordanceResult | None: ...
 def survConcordance(
     formula: Any,
     data: Any | None = None,
