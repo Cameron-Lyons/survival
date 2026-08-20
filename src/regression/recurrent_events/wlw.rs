@@ -90,184 +90,62 @@ pub fn wlw_model(
 
     let n_events_total = event.iter().filter(|&&e| e == 1).count();
 
+    let covariate_rows = x_mat
+        .chunks_exact(p)
+        .map(<[f64]>::to_vec)
+        .collect::<Vec<_>>();
+    let fit = coxph_fit(
+        time,
+        event,
+        covariate_rows,
+        (!config.common_baseline).then_some(stratum),
+        None,
+        None,
+        None,
+        Some(config.max_iter),
+        Some(config.tol),
+        None,
+        Some("efron"),
+        None,
+        None,
+    )?;
+    let beta = fit.coefficients.first().cloned().unwrap_or_default();
+    let covariance = fit.information_matrix.clone();
+
     let id_to_idx = index_by_i32(&unique_ids);
+    let clusters = id
+        .iter()
+        .map(|value| id_to_idx[value])
+        .collect::<Vec<_>>();
+    let robust_covariance = clustered_sandwich_variance(
+        fit.score_residuals()?,
+        vec![1.0; n],
+        clusters,
+        covariance.clone(),
+    )?;
 
-    let mut beta = vec![0.0; p];
-    let mut converged = false;
-    let mut n_iter = 0;
-    let mut prev_loglik = f64::NEG_INFINITY;
-
-    for iter in 0..config.max_iter {
-        n_iter = iter + 1;
-
-        let mut loglik = 0.0;
-        let mut gradient = vec![0.0; p];
-        let mut hessian = vec![vec![0.0; p]; p];
-
-        for &strat in &unique_strata {
-            let strata_indices: Vec<usize> = (0..n).filter(|&i| stratum[i] == strat).collect();
-
-            let mut sorted_indices = strata_indices.clone();
-            sorted_indices.sort_by(|&a, &b| {
-                time[b].total_cmp(&time[a])
-            });
-
-            for &i in &sorted_indices {
-                if event[i] != 1 {
-                    continue;
-                }
-
-                let mut eta_i = 0.0;
-                for j in 0..p {
-                    eta_i += x_mat[i * p + j] * beta[j];
-                }
-
-                let mut risk_sum = 0.0;
-                let mut risk_x_sum = vec![0.0; p];
-                let mut risk_xx_sum = vec![vec![0.0; p]; p];
-
-                for &k in &sorted_indices {
-                    if time[k] >= time[i] {
-                        let mut eta_k = 0.0;
-                        for j in 0..p {
-                            eta_k += x_mat[k * p + j] * beta[j];
-                        }
-                        let exp_eta_k = eta_k.exp();
-
-                        risk_sum += exp_eta_k;
-                        for j in 0..p {
-                            risk_x_sum[j] += x_mat[k * p + j] * exp_eta_k;
-                        }
-                        for j1 in 0..p {
-                            for j2 in 0..p {
-                                risk_xx_sum[j1][j2] +=
-                                    x_mat[k * p + j1] * x_mat[k * p + j2] * exp_eta_k;
-                            }
-                        }
-                    }
-                }
-
-                if risk_sum > DIVISION_FLOOR {
-                    loglik += eta_i - risk_sum.ln();
-
-                    for j in 0..p {
-                        let x_bar = risk_x_sum[j] / risk_sum;
-                        gradient[j] += x_mat[i * p + j] - x_bar;
-                    }
-
-                    for j1 in 0..p {
-                        let x_bar1 = risk_x_sum[j1] / risk_sum;
-                        for j2 in 0..p {
-                            let x_bar2 = risk_x_sum[j2] / risk_sum;
-                            hessian[j1][j2] += risk_xx_sum[j1][j2] / risk_sum - x_bar1 * x_bar2;
-                        }
-                    }
-                }
-            }
-        }
-
-        for j in 0..p {
-            if hessian[j][j].abs() > DIVISION_FLOOR {
-                beta[j] += gradient[j] / hessian[j][j];
-                beta[j] = beta[j].clamp(-10.0, 10.0);
-            }
-        }
-
-        if (loglik - prev_loglik).abs() < config.tol {
-            converged = true;
-            break;
-        }
-        prev_loglik = loglik;
-    }
-
-    let mut info_matrix = vec![vec![0.0; p]; p];
-    let mut score_residuals: Vec<Vec<f64>> = unique_ids.iter().map(|_| vec![0.0; p]).collect();
-
-    for &strat in &unique_strata {
-        let strata_indices: Vec<usize> = (0..n).filter(|&i| stratum[i] == strat).collect();
-        let mut sorted_indices = strata_indices.clone();
-        sorted_indices.sort_by(|&a, &b| {
-            time[b].total_cmp(&time[a])
-        });
-
-        for &i in &sorted_indices {
-            if event[i] != 1 {
-                continue;
-            }
-
-            let mut risk_sum = 0.0;
-            let mut risk_x_sum = vec![0.0; p];
-            let mut risk_xx_sum = vec![vec![0.0; p]; p];
-
-            for &k in &sorted_indices {
-                if time[k] >= time[i] {
-                    let mut eta_k = 0.0;
-                    for j in 0..p {
-                        eta_k += x_mat[k * p + j] * beta[j];
-                    }
-                    let exp_eta_k = eta_k.exp();
-
-                    risk_sum += exp_eta_k;
-                    for j in 0..p {
-                        risk_x_sum[j] += x_mat[k * p + j] * exp_eta_k;
-                    }
-                    for j1 in 0..p {
-                        for j2 in 0..p {
-                            risk_xx_sum[j1][j2] +=
-                                x_mat[k * p + j1] * x_mat[k * p + j2] * exp_eta_k;
-                        }
-                    }
-                }
-            }
-
-            if risk_sum > DIVISION_FLOOR {
-                for j1 in 0..p {
-                    let x_bar1 = risk_x_sum[j1] / risk_sum;
-                    for j2 in 0..p {
-                        let x_bar2 = risk_x_sum[j2] / risk_sum;
-                        info_matrix[j1][j2] += risk_xx_sum[j1][j2] / risk_sum - x_bar1 * x_bar2;
-                    }
-                }
-
-                if let Some(&subj_idx) = id_to_idx.get(&id[i]) {
-                    for j in 0..p {
-                        let x_bar = risk_x_sum[j] / risk_sum;
-                        score_residuals[subj_idx][j] += x_mat[i * p + j] - x_bar;
-                    }
-                }
-            }
-        }
-    }
-
-    let std_errors: Vec<f64> = (0..p)
-        .map(|j| {
-            if info_matrix[j][j] > DIVISION_FLOOR {
-                (1.0 / info_matrix[j][j]).sqrt()
-            } else {
-                f64::INFINITY
-            }
+    let std_errors = (0..p)
+        .map(|idx| {
+            covariance
+                .get(idx)
+                .and_then(|row| row.get(idx))
+                .copied()
+                .unwrap_or(0.0)
+                .max(0.0)
+                .sqrt()
         })
-        .collect();
-
-    let mut robust_var = vec![vec![0.0; p]; p];
-    for subj_scores in &score_residuals {
-        for j1 in 0..p {
-            for j2 in 0..p {
-                robust_var[j1][j2] += subj_scores[j1] * subj_scores[j2];
-            }
-        }
-    }
-
-    let robust_std_errors: Vec<f64> = (0..p)
-        .map(|j| {
-            let inv_info = if info_matrix[j][j] > DIVISION_FLOOR {
-                1.0 / info_matrix[j][j]
-            } else {
-                0.0
-            };
-            (inv_info * robust_var[j][j] * inv_info).sqrt()
+        .collect::<Vec<_>>();
+    let robust_std_errors = (0..p)
+        .map(|idx| {
+            robust_covariance
+                .get(idx)
+                .and_then(|row| row.get(idx))
+                .copied()
+                .unwrap_or(0.0)
+                .max(0.0)
+                .sqrt()
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     let se_to_use = if config.robust_variance {
         &robust_std_errors
@@ -298,7 +176,26 @@ pub fn wlw_model(
 
     let stratum_coef: Vec<Vec<f64>> = unique_strata.iter().map(|_| beta.clone()).collect();
 
-    let global_test_stat: f64 = z_scores.iter().map(|&z| z * z).sum();
+    let test_covariance = if config.robust_variance {
+        &robust_covariance
+    } else {
+        &covariance
+    };
+    let global_test_stat = invert_matrix(test_covariance)
+        .map(|inverse| {
+            beta.iter()
+                .enumerate()
+                .map(|(row, &left)| {
+                    left * beta
+                        .iter()
+                        .enumerate()
+                        .map(|(column, &right)| inverse[row][column] * right)
+                        .sum::<f64>()
+                })
+                .sum::<f64>()
+        })
+        .unwrap_or_else(|| z_scores.iter().map(|&z| z * z).sum())
+        .max(0.0);
     let global_test_pvalue = 1.0 - chi2_cdf(global_test_stat, p as f64);
 
     Ok(WLWResult {
@@ -310,12 +207,12 @@ pub fn wlw_model(
         hazard_ratios,
         hr_lower,
         hr_upper,
-        log_likelihood: prev_loglik,
+        log_likelihood: fit.log_likelihood.last().copied().unwrap_or(0.0),
         n_events: n_events_total,
         n_subjects,
         n_strata,
-        n_iter,
-        converged,
+        n_iter: fit.iterations,
+        converged: fit.convergence_flag != CONVERGENCE_FLAG,
         stratum_coef,
         global_test_stat,
         global_test_pvalue,
