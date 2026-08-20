@@ -446,7 +446,6 @@ def test_competing_risks_cif_variance_matches_reference_fit():
     sparse_codes = survival.competing_risks_cif([1.0, 2.0], [1, 1_000_000], 1)
     assert sparse_codes.cif == pytest.approx([0.5, 0.5])
 
-
 def test_finegray_regression_and_cif_validate_public_inputs():
     with pytest.raises(ValueError, match="time must not be empty"):
         survival.finegray_regression([], [], [], 1)
