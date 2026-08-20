@@ -1,6 +1,7 @@
 use crate::constants::TIME_EPSILON;
 use crate::internal::cox_risk::{cox_risk_shift, shifted_weighted_exp_eta_with_shift};
 use crate::internal::validation::validate_binary_i32;
+use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow};
 use pyo3::prelude::*;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -254,71 +255,77 @@ fn nested_matrix_from_flat(values: &[f64], nvar: usize) -> Vec<Vec<f64>> {
     values.chunks(nvar).map(|row| row.to_vec()).collect()
 }
 
-fn event_groups(time: &[f64], status: &[i32], strata: &[i32]) -> Vec<(i32, f64)> {
-    let mut groups: Vec<(i32, f64)> = Vec::new();
-    let mut times_by_stratum: BTreeMap<i32, Vec<f64>> = BTreeMap::new();
+struct CoxphEventGroup {
+    time: f64,
+    deaths: Vec<usize>,
+    n_censor: usize,
+}
 
-    for idx in 0..time.len() {
-        if status[idx] == 1 {
-            times_by_stratum
-                .entry(strata[idx])
-                .or_default()
-                .push(time[idx]);
+fn event_groups_for_stratum(
+    time: &[f64],
+    status: &[i32],
+    indices: &[usize],
+) -> Vec<CoxphEventGroup> {
+    let mut deaths: Vec<usize> = indices
+        .iter()
+        .copied()
+        .filter(|&idx| status[idx] == 1)
+        .collect();
+    deaths.sort_by(|&left, &right| {
+        time[left]
+            .total_cmp(&time[right])
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut groups: Vec<CoxphEventGroup> = Vec::new();
+    for death_idx in deaths {
+        if let Some(group) = groups.last_mut()
+            && (time[death_idx] - group.time).abs() < TIME_EPSILON
+        {
+            group.deaths.push(death_idx);
+        } else {
+            groups.push(CoxphEventGroup {
+                time: time[death_idx],
+                deaths: vec![death_idx],
+                n_censor: 0,
+            });
         }
     }
 
-    for (stratum, mut times) in times_by_stratum {
-        times.sort_by(|a, b| a.total_cmp(b));
-        times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
-        groups.extend(times.into_iter().map(|event_time| (stratum, event_time)));
+    let mut censors: Vec<usize> = indices
+        .iter()
+        .copied()
+        .filter(|&idx| status[idx] == 0)
+        .collect();
+    censors.sort_by(|&left, &right| {
+        time[left]
+            .total_cmp(&time[right])
+            .then_with(|| left.cmp(&right))
+    });
+    for group in &mut groups {
+        let first = censors.partition_point(|&idx| time[idx] <= group.time - TIME_EPSILON);
+        let end = censors.partition_point(|&idx| time[idx] < group.time + TIME_EPSILON);
+        group.n_censor = end - first;
     }
     groups
 }
 
-fn fill_at_risk_indices(
-    target: &mut Vec<usize>,
-    time: &[f64],
-    entry_times: Option<&[f64]>,
-    strata: &[i32],
-    stratum: i32,
-    event_time: f64,
+fn update_weighted_sums_for_row(
+    covariates: &[Vec<f64>],
+    row_idx: usize,
+    risk_weight: f64,
+    direction: f64,
+    s1: &mut [f64],
+    s2: &mut [f64],
 ) {
-    target.clear();
-    target.extend((0..time.len()).filter(|&idx| {
-        strata[idx] == stratum
-            && time[idx] >= event_time
-            && entry_times.is_none_or(|entry| entry[idx] < event_time)
-    }));
-}
-
-fn fill_event_indices(
-    target: &mut Vec<usize>,
-    time: &[f64],
-    status: &[i32],
-    strata: &[i32],
-    stratum: i32,
-    event_time: f64,
-) {
-    target.clear();
-    target.extend((0..time.len()).filter(|&idx| {
-        strata[idx] == stratum && status[idx] == 1 && (time[idx] - event_time).abs() < TIME_EPSILON
-    }));
-}
-
-fn censor_count(
-    time: &[f64],
-    status: &[i32],
-    strata: &[i32],
-    stratum: i32,
-    event_time: f64,
-) -> usize {
-    (0..time.len())
-        .filter(|&idx| {
-            strata[idx] == stratum
-                && status[idx] == 0
-                && (time[idx] - event_time).abs() < TIME_EPSILON
-        })
-        .count()
+    let nvar = s1.len();
+    for col in 0..nvar {
+        let weighted_value = direction * risk_weight * covariates[row_idx][col];
+        s1[col] += weighted_value;
+        for inner in 0..nvar {
+            s2[col * nvar + inner] += weighted_value * covariates[row_idx][inner];
+        }
+    }
 }
 
 pub(crate) fn compute_coxph_detail_with_options(
@@ -379,17 +386,24 @@ pub(crate) fn compute_coxph_detail_with_options(
     let risk_shift = cox_risk_shift_optional(&linear_predictors, weights);
     let risk_weights = shifted_weighted_exp_eta_optional(&linear_predictors, weights, risk_shift);
 
-    let groups = event_groups(time, status, strata_values.as_ref());
-    let mut rows = Vec::with_capacity(groups.len());
-    let mut riskmat = include_riskmat.then(|| vec![vec![0; groups.len()]; n]);
+    let mut indices_by_stratum: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (idx, &stratum) in strata_values.iter().enumerate() {
+        indices_by_stratum.entry(stratum).or_default().push(idx);
+    }
+    let strata_data: Vec<(i32, Vec<usize>, Vec<CoxphEventGroup>)> = indices_by_stratum
+        .into_iter()
+        .map(|(stratum, indices)| {
+            let groups = event_groups_for_stratum(time, status, &indices);
+            (stratum, indices, groups)
+        })
+        .collect();
+    let group_count = strata_data.iter().map(|(_, _, groups)| groups.len()).sum();
+    let mut rows = Vec::with_capacity(group_count);
+    let mut riskmat = include_riskmat.then(|| vec![vec![0; group_count]; n]);
     let mut total_events = 0;
-    let mut current_stratum = None;
-    let mut cumhaz = 0.0_f64;
     let hazard_scale = (center - risk_shift).exp();
     let hazard_scale_squared = (2.0 * (center - risk_shift)).exp();
     let risk_output_scale = risk_shift.exp();
-    let mut at_risk = Vec::with_capacity(n);
-    let mut deaths = Vec::with_capacity(status.iter().filter(|&&value| value == 1).count());
     let mut event_covariates = vec![0.0; nvar];
     let mut risk_s1 = vec![0.0; nvar];
     let mut risk_s2 = vec![0.0; nvar * nvar];
@@ -400,131 +414,158 @@ pub(crate) fn compute_coxph_detail_with_options(
     let mut imat = vec![0.0; nvar * nvar];
     let mut step_means = vec![0.0; nvar];
     let mut step_covariance = vec![0.0; nvar * nvar];
+    let mut group_index = 0usize;
 
-    for (group_index, (stratum, event_time)) in groups.into_iter().enumerate() {
-        if current_stratum != Some(stratum) {
-            current_stratum = Some(stratum);
-            cumhaz = 0.0;
-        }
-        fill_at_risk_indices(
-            &mut at_risk,
-            time,
-            entry_times,
-            strata_values.as_ref(),
-            stratum,
-            event_time,
-        );
-        if let Some(matrix) = riskmat.as_mut() {
-            for &row_index in &at_risk {
-                matrix[row_index][group_index] = 1;
-            }
-        }
-        fill_event_indices(
-            &mut deaths,
-            time,
-            status,
-            strata_values.as_ref(),
-            stratum,
-            event_time,
-        );
-        let event_weight = deaths
+    for (stratum, stratum_indices, groups) in strata_data {
+        let sweep_rows: Vec<CoxSweepRow> = stratum_indices
             .iter()
-            .map(|&idx| observation_weight(weights, idx))
-            .sum::<f64>();
-        let mean_event_weight = event_weight / deaths.len() as f64;
-        event_covariates.fill(0.0);
-        for &idx in &deaths {
-            let weight = observation_weight(weights, idx);
-            for col in 0..nvar {
-                event_covariates[col] += weight * covariates[idx][col];
-            }
-        }
-
-        let s0 = weighted_sums_into(
-            covariates,
-            &risk_weights,
-            &at_risk,
-            &mut risk_s1,
-            &mut risk_s2,
-        );
-        mean_and_covariance_into(s0, &risk_s1, &risk_s2, &mut means, &mut imat);
-        for col in 0..nvar {
-            score[col] = event_covariates[col] - event_weight * means[col];
-        }
-        scale_matrix_in_place(&mut imat, event_weight);
-        let mut hazard = if s0 > 0.0 {
-            event_weight * hazard_scale / s0
+            .map(|&idx| CoxSweepRow {
+                original_idx: idx,
+                stop: time[idx],
+                entry: entry_times.map_or(f64::NEG_INFINITY, |values| values[idx]),
+                risk: risk_weights[idx],
+                weight: observation_weight(weights, idx),
+                status: status[idx],
+            })
+            .collect();
+        let use_entry_times = entry_times.is_some();
+        let mut active_count = if use_entry_times { 0 } else { sweep_rows.len() };
+        if use_entry_times {
+            risk_s1.fill(0.0);
+            risk_s2.fill(0.0);
         } else {
-            0.0
-        };
-        let mut varhaz = if s0 > 0.0 {
-            event_weight * mean_event_weight * hazard_scale_squared / (s0 * s0)
-        } else {
-            0.0
-        };
-
-        if method == "efron" && deaths.len() > 1 {
-            let d0 = weighted_sums_into(
+            weighted_sums_into(
                 covariates,
                 &risk_weights,
-                &deaths,
-                &mut death_s1,
-                &mut death_s2,
+                &stratum_indices,
+                &mut risk_s1,
+                &mut risk_s2,
             );
-            score.copy_from_slice(&event_covariates);
-            imat.fill(0.0);
-            means.fill(0.0);
-            hazard = 0.0;
-            varhaz = 0.0;
-            let step_weight = mean_event_weight;
-            for step in 0..deaths.len() {
-                let fraction = step as f64 / deaths.len() as f64;
-                let step_s0 = s0 - fraction * d0;
-                efron_step_mean_and_covariance_into(
-                    step_s0,
-                    &risk_s1,
-                    &death_s1,
-                    &risk_s2,
-                    &death_s2,
-                    fraction,
-                    &mut step_means,
-                    &mut step_covariance,
-                );
-                for col in 0..nvar {
-                    means[col] += step_means[col] / deaths.len() as f64;
-                    score[col] -= step_weight * step_means[col];
+        }
+        let mut active = ActiveRiskSet::new(&sweep_rows, use_entry_times);
+        let mut cumhaz = 0.0_f64;
+
+        for group in groups {
+            let event_time = group.time;
+            active.advance_to(event_time, |row_idx, entered| {
+                if entered {
+                    active_count += 1;
+                } else {
+                    active_count -= 1;
                 }
-                add_matrix(&mut imat, &step_covariance, step_weight);
-                if step_s0 > 0.0 {
-                    hazard += step_weight * hazard_scale / step_s0;
-                    varhaz +=
-                        step_weight * step_weight * hazard_scale_squared / (step_s0 * step_s0);
+                let row = sweep_rows[row_idx];
+                update_weighted_sums_for_row(
+                    covariates,
+                    row.original_idx,
+                    row.risk,
+                    if entered { 1.0 } else { -1.0 },
+                    &mut risk_s1,
+                    &mut risk_s2,
+                );
+            });
+            if let Some(matrix) = riskmat.as_mut() {
+                for row in &sweep_rows {
+                    if row.stop >= event_time && (!use_entry_times || row.entry < event_time) {
+                        matrix[row.original_idx][group_index] = 1;
+                    }
                 }
             }
-        }
 
-        cumhaz += hazard;
-        total_events += deaths.len();
-        rows.push(CoxphDetailRow {
-            stratum,
-            time: event_time,
-            n_risk: at_risk.len(),
-            n_event: deaths.len(),
-            n_censor: censor_count(time, status, strata_values.as_ref(), stratum, event_time),
-            hazard,
-            cumhaz,
-            varhaz,
-            wtrisk: if s0 > 0.0 {
-                s0 * risk_output_scale
+            let deaths = &group.deaths;
+            let event_weight = deaths
+                .iter()
+                .map(|&idx| observation_weight(weights, idx))
+                .sum::<f64>();
+            let mean_event_weight = event_weight / deaths.len() as f64;
+            event_covariates.fill(0.0);
+            for &idx in deaths {
+                let weight = observation_weight(weights, idx);
+                for col in 0..nvar {
+                    event_covariates[col] += weight * covariates[idx][col];
+                }
+            }
+
+            let s0 = active.risk_sum;
+            mean_and_covariance_into(s0, &risk_s1, &risk_s2, &mut means, &mut imat);
+            for col in 0..nvar {
+                score[col] = event_covariates[col] - event_weight * means[col];
+            }
+            scale_matrix_in_place(&mut imat, event_weight);
+            let mut hazard = if s0 > 0.0 {
+                event_weight * hazard_scale / s0
             } else {
                 0.0
-            },
-            n_event_weight: event_weight,
-            schoenfeld: Some(score.clone()),
-            means: means.clone(),
-            imat: nested_matrix_from_flat(&imat, nvar),
-            score: score.clone(),
-        });
+            };
+            let mut varhaz = if s0 > 0.0 {
+                event_weight * mean_event_weight * hazard_scale_squared / (s0 * s0)
+            } else {
+                0.0
+            };
+
+            if method == "efron" && deaths.len() > 1 {
+                let d0 = weighted_sums_into(
+                    covariates,
+                    &risk_weights,
+                    deaths,
+                    &mut death_s1,
+                    &mut death_s2,
+                );
+                score.copy_from_slice(&event_covariates);
+                imat.fill(0.0);
+                means.fill(0.0);
+                hazard = 0.0;
+                varhaz = 0.0;
+                let step_weight = mean_event_weight;
+                for step in 0..deaths.len() {
+                    let fraction = step as f64 / deaths.len() as f64;
+                    let step_s0 = s0 - fraction * d0;
+                    efron_step_mean_and_covariance_into(
+                        step_s0,
+                        &risk_s1,
+                        &death_s1,
+                        &risk_s2,
+                        &death_s2,
+                        fraction,
+                        &mut step_means,
+                        &mut step_covariance,
+                    );
+                    for col in 0..nvar {
+                        means[col] += step_means[col] / deaths.len() as f64;
+                        score[col] -= step_weight * step_means[col];
+                    }
+                    add_matrix(&mut imat, &step_covariance, step_weight);
+                    if step_s0 > 0.0 {
+                        hazard += step_weight * hazard_scale / step_s0;
+                        varhaz +=
+                            step_weight * step_weight * hazard_scale_squared / (step_s0 * step_s0);
+                    }
+                }
+            }
+
+            cumhaz += hazard;
+            total_events += deaths.len();
+            rows.push(CoxphDetailRow {
+                stratum,
+                time: event_time,
+                n_risk: active_count,
+                n_event: deaths.len(),
+                n_censor: group.n_censor,
+                hazard,
+                cumhaz,
+                varhaz,
+                wtrisk: if s0 > 0.0 {
+                    s0 * risk_output_scale
+                } else {
+                    0.0
+                },
+                n_event_weight: event_weight,
+                schoenfeld: Some(score.clone()),
+                means: means.clone(),
+                imat: nested_matrix_from_flat(&imat, nvar),
+                score: score.clone(),
+            });
+            group_index += 1;
+        }
     }
 
     Ok(CoxphDetail {
@@ -1035,5 +1076,117 @@ mod tests {
                 vec![0, 0, 1]
             ])
         );
+    }
+
+    #[test]
+    fn test_coxph_detail_sweep_matches_scanned_weighted_counting_risk_sets() {
+        let time = vec![2.0, 2.0, 4.0, 5.0, 5.0, 6.0, 3.0, 7.0, 7.0, 8.0];
+        let status = vec![1, 1, 1, 0, 1, 0, 0, 1, 1, 0];
+        let entry = vec![0.0, 0.0, 1.5, 2.5, 0.0, 3.0, 0.0, 2.0, 4.0, 1.0];
+        let strata = vec![0, 0, 0, 0, 1, 1, 0, 1, 1, 1];
+        let weights = vec![1.0, 1.5, 0.75, 2.0, 1.25, 0.5, 1.0, 1.75, 0.8, 1.1];
+        let covariates = vec![
+            vec![0.2, 1.0],
+            vec![0.8, -0.5],
+            vec![0.4, 0.3],
+            vec![1.1, -0.2],
+            vec![0.7, 0.6],
+            vec![0.3, 1.2],
+            vec![-0.4, 0.5],
+            vec![1.3, -0.7],
+            vec![0.1, 0.9],
+            vec![0.6, -0.1],
+        ];
+        let coefficients = vec![0.35, -0.2];
+        let offsets = vec![0.1, 0.0, -0.1, 0.2, 0.0, -0.2, 0.1, 0.0, 0.15, -0.05];
+
+        let detail = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &time,
+            status: &status,
+            covariates: &covariates,
+            coefficients: &coefficients,
+            weights: Some(&weights),
+            entry_times: Some(&entry),
+            strata: Some(&strata),
+            offset: Some(&offsets),
+            method: "breslow",
+            center: 0.0,
+            include_riskmat: true,
+        })
+        .expect("weighted counting-process detail should compute");
+
+        let linear_predictors: Vec<f64> = covariates
+            .iter()
+            .zip(&offsets)
+            .map(|(row, &offset)| {
+                offset
+                    + row
+                        .iter()
+                        .zip(&coefficients)
+                        .map(|(&value, &coefficient)| value * coefficient)
+                        .sum::<f64>()
+            })
+            .collect();
+        let shift = cox_risk_shift_optional(&linear_predictors, Some(&weights));
+        let risk_weights =
+            shifted_weighted_exp_eta_optional(&linear_predictors, Some(&weights), shift);
+        let riskmat = detail.riskmat.as_ref().expect("risk matrix should exist");
+
+        for (group_idx, row) in detail.rows.iter().enumerate() {
+            let at_risk: Vec<usize> = (0..time.len())
+                .filter(|&idx| {
+                    strata[idx] == row.stratum && entry[idx] < row.time && time[idx] >= row.time
+                })
+                .collect();
+            let deaths: Vec<usize> = (0..time.len())
+                .filter(|&idx| {
+                    strata[idx] == row.stratum
+                        && status[idx] == 1
+                        && (time[idx] - row.time).abs() < TIME_EPSILON
+                })
+                .collect();
+            let mut s1 = vec![0.0; coefficients.len()];
+            let mut s2 = vec![0.0; coefficients.len() * coefficients.len()];
+            let s0 = weighted_sums_into(&covariates, &risk_weights, &at_risk, &mut s1, &mut s2);
+            let mut expected_means = vec![0.0; coefficients.len()];
+            let mut expected_imat = vec![0.0; coefficients.len() * coefficients.len()];
+            mean_and_covariance_into(s0, &s1, &s2, &mut expected_means, &mut expected_imat);
+            let event_weight = deaths.iter().map(|&idx| weights[idx]).sum::<f64>();
+            scale_matrix_in_place(&mut expected_imat, event_weight);
+
+            assert_eq!(row.n_risk, at_risk.len());
+            assert_eq!(row.n_event, deaths.len());
+            assert_eq!(
+                row.n_censor,
+                (0..time.len())
+                    .filter(|&idx| {
+                        strata[idx] == row.stratum
+                            && status[idx] == 0
+                            && (time[idx] - row.time).abs() < TIME_EPSILON
+                    })
+                    .count()
+            );
+            assert_vec_close(&row.means, &expected_means);
+            assert_nested_vec_close(
+                &row.imat,
+                &nested_matrix_from_flat(&expected_imat, coefficients.len()),
+            );
+            assert_close(row.wtrisk, s0 * shift.exp());
+            for (idx, risk_row) in riskmat.iter().enumerate() {
+                let expected = if at_risk.contains(&idx) { 1 } else { 0 };
+                assert_eq!(risk_row[group_idx], expected);
+            }
+        }
+    }
+
+    #[test]
+    fn event_groups_preserve_overlapping_censor_tolerance_windows() {
+        let time = vec![1.0, 1.0 + 1.5 * TIME_EPSILON, 1.0 + 0.75 * TIME_EPSILON];
+        let status = vec![1, 1, 0];
+        let groups = event_groups_for_stratum(&time, &status, &[0, 1, 2]);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].n_censor, 1);
+        assert_eq!(groups[1].n_censor, 1);
     }
 }
