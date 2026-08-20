@@ -1344,9 +1344,18 @@ def test_ridge_public_apis_and_validation():
         x=[0.0, 2.0, 2.0],
         n_obs=3,
         n_vars=1,
+        time=[1.0, 1.0 + 5e-10, 2.0],
+        status=[1, 0, 0],
+        penalty=survival.RidgePenalty(0.2, False),
+        weights=None,
+    )
+    exact_tied_fit = survival.ridge_fit(
+        x=[0.0, 2.0, 2.0],
+        n_obs=3,
+        n_vars=1,
         time=[1.0, 1.0, 2.0],
         status=[1, 0, 0],
-        penalty=survival.RidgePenalty(0.0, False),
+        penalty=survival.RidgePenalty(0.2, False),
         weights=None,
     )
 
@@ -1360,7 +1369,7 @@ def test_ridge_public_apis_and_validation():
     assert fit.scale_factors is None
     assert best_theta in [0.01, 0.1, 1.0]
     assert len(cv_scores) == 3
-    assert tied_fit.coefficients == pytest.approx([-1.5])
+    assert tied_fit.coefficients == pytest.approx(exact_tied_fit.coefficients)
 
     with pytest.raises(ValueError, match="x length must equal n_obs \\* n_vars"):
         survival.ridge_fit([1.0], 2, 1, [1.0, 2.0], [1, 1], penalty, None)
@@ -1387,6 +1396,54 @@ def test_ridge_public_apis_and_validation():
 
     with pytest.raises(ValueError, match="n_folds must be between 2 and n_obs"):
         survival.ridge_cv([1.0, 2.0], 2, 1, [1.0, 2.0], [1, 1], [0.1], 0)
+
+
+def test_ridge_fit_matches_weighted_reference_fits():
+    x1 = [0.2, 0.5, 0.8, 1.0, 1.4, 1.8, 2.1, 2.5]
+    x2 = [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9]
+    x = [value for row in zip(x1, x2, strict=True) for value in row]
+    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    status = [1, 0, 1, 1, 0, 1, 0, 1]
+    weights = [1.0, 1.5, 0.5, 2.0, 1.0, 1.2, 0.8, 1.0]
+
+    unscaled = survival.ridge_fit(
+        x,
+        len(time),
+        2,
+        time,
+        status,
+        survival.RidgePenalty(0.2, False),
+        weights,
+    )
+    scaled = survival.ridge_fit(
+        x,
+        len(time),
+        2,
+        time,
+        status,
+        survival.RidgePenalty(0.2, True),
+        weights,
+    )
+
+    assert unscaled.coefficients == pytest.approx(
+        [-3.17278910503507, 0.0281103888695528], rel=2e-9, abs=5e-11
+    )
+    assert unscaled.std_err == pytest.approx(
+        [1.47525463986159, 0.978155747150241], rel=2e-9
+    )
+    assert unscaled.df == pytest.approx(1.37336701637676, rel=2e-9)
+    assert unscaled.scale_factors is None
+
+    assert scaled.coefficients == pytest.approx(
+        [-3.81767201833844, 0.113752966479022], rel=2e-9
+    )
+    assert scaled.std_err == pytest.approx(
+        [1.78317401451112, 1.08563381793622], rel=2e-9
+    )
+    assert scaled.df == pytest.approx(1.52004107720074, rel=2e-9)
+    assert scaled.scale_factors == pytest.approx(
+        [0.804340901430659, 0.539179270479018], rel=2e-9
+    )
 
 
 def test_anova_and_basehaz_public_apis():
