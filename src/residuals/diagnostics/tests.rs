@@ -33,15 +33,50 @@ mod tests {
     #[test]
     fn test_schoenfeld_smooth() {
         let event_times = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let schoenfeld = vec![0.1, -0.1, 0.2, -0.2, 0.1];
-        let coefficients = vec![0.5];
+        let schoenfeld = vec![0.1, 1.0, -0.1, 0.5, 0.2, 0.0, -0.2, -0.5, 0.1, -1.0];
+        let coefficients = vec![0.5, -0.25];
+        let bandwidth = 1.25;
 
-        let result =
-            smooth_schoenfeld(event_times, schoenfeld, 1, coefficients, None, "identity").unwrap();
+        let result = smooth_schoenfeld(
+            event_times.clone(),
+            schoenfeld.clone(),
+            2,
+            coefficients.clone(),
+            Some(bandwidth),
+            "identity",
+        )
+        .unwrap();
 
         assert_eq!(result.n_events, 5);
-        assert_eq!(result.n_vars, 1);
+        assert_eq!(result.n_vars, 2);
         assert_eq!(result.smoothed_residuals.len(), 5);
+        for (event_idx, (&time, actual_row)) in event_times
+            .iter()
+            .zip(&result.smoothed_residuals)
+            .enumerate()
+        {
+            for covariate in 0..2 {
+                let mut weight_sum = 0.0;
+                let mut weighted_residual_sum = 0.0;
+                for (row, &other_time) in event_times.iter().enumerate() {
+                    let difference = (time - other_time) / bandwidth;
+                    let weight = (-0.5_f64 * difference * difference).exp();
+                    weight_sum += weight;
+                    weighted_residual_sum += weight * schoenfeld[row * 2 + covariate];
+                }
+                let expected = weighted_residual_sum / weight_sum;
+                assert!(
+                    (actual_row[covariate] - expected).abs() <= 1e-15,
+                    "event={event_idx}, covariate={covariate}"
+                );
+                assert!(
+                    (result.coefficient_path[event_idx][covariate]
+                        - (coefficients[covariate] + expected))
+                        .abs()
+                        <= 1e-15
+                );
+            }
+        }
     }
 
     #[test]
@@ -127,6 +162,9 @@ mod tests {
 
     #[test]
     fn test_schoenfeld_smooth_validates_inputs() {
+        #[cfg(feature = "python")]
+        pyo3::Python::initialize();
+
         let bad_bandwidth =
             smooth_schoenfeld(vec![1.0, 2.0], vec![0.1, 0.2], 1, vec![0.5], Some(0.0), "identity")
                 .unwrap_err()
