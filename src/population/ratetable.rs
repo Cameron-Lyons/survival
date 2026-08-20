@@ -181,6 +181,10 @@ impl RateTable {
         self.dimensions.iter().map(|d| d.name.clone()).collect()
     }
 
+    pub fn dimension_specs(&self) -> Vec<RateDimension> {
+        self.dimensions.clone()
+    }
+
     pub fn lookup(&self, coords: HashMap<String, f64>) -> PyResult<f64> {
         let indices = self.coords_to_indices(&coords)?;
         let flat_idx = self.indices_to_flat(&indices);

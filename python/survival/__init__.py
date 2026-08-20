@@ -104,6 +104,7 @@ _R_EXPORTS = [
     "is_surv",
     "is_na_surv",
     "is_ratetable",
+    "match_ratetable",
     "loglik",
     "lvcf",
     "model_formula",

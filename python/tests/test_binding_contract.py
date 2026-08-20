@@ -8444,6 +8444,7 @@ def test_population_survival_and_pyears_bindings_are_typed():
     rate_table_methods = {
         "ndim": ["self"],
         "dim_names": ["self"],
+        "dimension_specs": ["self"],
         "lookup": ["self", "coords"],
         "lookup_many": ["self", "coords"],
         "lookup_interpolate": ["self", "coords"],
@@ -8506,6 +8507,7 @@ def test_population_survival_and_pyears_bindings_are_typed():
     custom_table = core.RateTable([dimension], [0.001], "single-age table")
     assert custom_table.ndim() == 1
     assert custom_table.dim_names() == ["age"]
+    assert [dimension.name for dimension in custom_table.dimension_specs()] == ["age"]
     assert custom_table.summary == "single-age table"
     assert custom_table.lookup({"age": 1000.0}) == pytest.approx(0.001)
     assert custom_table.lookup_many({"age": [1000.0, 2000.0]}) == pytest.approx(
