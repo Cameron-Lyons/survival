@@ -337,6 +337,136 @@ impl RateTable {
 
         flat_idx.min(self.rates.len().saturating_sub(1))
     }
+
+    pub(crate) fn aligned_coordinate_columns(
+        &self,
+        coordinates: &HashMap<String, Vec<f64>>,
+        row_count: usize,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        for name in coordinates.keys() {
+            if !self
+                .dimensions
+                .iter()
+                .any(|dimension| dimension.name == *name)
+            {
+                return Err(value_error(format!(
+                    "coordinate {name:?} is not a rate-table dimension"
+                )));
+            }
+        }
+
+        self.dimensions
+            .iter()
+            .map(|dimension| {
+                let values = coordinates.get(&dimension.name).ok_or_else(|| {
+                    value_error(format!(
+                        "coordinate {:?} is required by the rate table",
+                        dimension.name
+                    ))
+                })?;
+                if values.len() != row_count {
+                    return Err(value_error(format!(
+                        "coordinate {:?} must have length {row_count}",
+                        dimension.name
+                    )));
+                }
+                for (row, &value) in values.iter().enumerate() {
+                    coordinate_index(dimension, value)?;
+                    if dimension.dim_type == DimType::Age && value < 0.0 {
+                        return Err(value_error(format!(
+                            "{} coordinate must be non-negative; got {value} at row {row}",
+                            dimension.name
+                        )));
+                    }
+                    if dimension.dim_type == DimType::Factor {
+                        let level_count = dimension.levels.as_ref().map_or(0, Vec::len);
+                        if value.fract() != 0.0 || value as usize >= level_count {
+                            return Err(value_error(format!(
+                                "{} coordinate must be an integer from 0 to {}; got {value} at row {row}",
+                                dimension.name,
+                                level_count.saturating_sub(1)
+                            )));
+                        }
+                    }
+                }
+                Ok(values.clone())
+            })
+            .collect()
+    }
+
+    pub(crate) fn cumulative_hazard_from_values(
+        &self,
+        base_coordinates: &[f64],
+        duration: f64,
+    ) -> PyResult<f64> {
+        if base_coordinates.len() != self.dimensions.len() {
+            return Err(value_error(
+                "coordinate count must match rate-table dimensions",
+            ));
+        }
+        if !duration.is_finite() || duration < 0.0 {
+            return Err(value_error("duration must be finite and non-negative"));
+        }
+        if duration == 0.0 {
+            return Ok(0.0);
+        }
+
+        let mut indices = vec![0usize; self.dimensions.len()];
+        let mut cumulative_hazard = 0.0;
+        let mut elapsed = 0.0;
+        while elapsed < duration {
+            let mut interval = duration - elapsed;
+            for (dimension_index, dimension) in self.dimensions.iter().enumerate() {
+                let value = match dimension.dim_type {
+                    DimType::Age => base_coordinates[dimension_index] + elapsed,
+                    DimType::Year => base_coordinates[dimension_index] + elapsed / DAYS_PER_YEAR,
+                    DimType::Factor | DimType::Continuous => base_coordinates[dimension_index],
+                };
+                indices[dimension_index] = coordinate_index(dimension, value)?;
+                match dimension.dim_type {
+                    DimType::Age => {
+                        if let Some(boundary) = next_cutpoint(&dimension.cutpoints, value) {
+                            interval = interval.min(boundary - value);
+                        }
+                    }
+                    DimType::Year => {
+                        if let Some(boundary) = next_cutpoint(&dimension.cutpoints, value) {
+                            interval = interval.min((boundary - value) * DAYS_PER_YEAR);
+                        }
+                    }
+                    DimType::Factor | DimType::Continuous => {}
+                }
+            }
+            if interval <= 0.0 {
+                return Err(value_error("rate-table integration did not advance"));
+            }
+            cumulative_hazard += self.rates[self.indices_to_flat(&indices)] * interval;
+            elapsed += interval;
+        }
+        Ok(cumulative_hazard)
+    }
+
+    pub(crate) fn cumulative_hazard_interval_from_values(
+        &self,
+        base_coordinates: &[f64],
+        start: f64,
+        stop: f64,
+    ) -> PyResult<f64> {
+        if !start.is_finite() || !stop.is_finite() || start < 0.0 || stop < start {
+            return Err(value_error(
+                "integration start and stop must be finite with 0 <= start <= stop",
+            ));
+        }
+        let mut advanced = base_coordinates.to_vec();
+        for (value, dimension) in advanced.iter_mut().zip(&self.dimensions) {
+            match dimension.dim_type {
+                DimType::Age => *value += start,
+                DimType::Year => *value += start / DAYS_PER_YEAR,
+                DimType::Factor | DimType::Continuous => {}
+            }
+        }
+        self.cumulative_hazard_from_values(&advanced, stop - start)
+    }
 }
 
 fn coordinate_index(dimension: &RateDimension, value: f64) -> PyResult<usize> {

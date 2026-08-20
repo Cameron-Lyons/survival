@@ -10,7 +10,9 @@ pub use ratetable::{
     DimType, RateDimension, RateTable, RatetableDateResult, create_simple_ratetable, days_to_date,
     is_ratetable, ratetable_date,
 };
-pub use survexp_module::{SurvExpResult, survexp, survexp_individual};
+pub use survexp_module::{
+    SurvExpResult, survexp, survexp_from_coords, survexp_individual, survexp_individual_from_coords,
+};
 pub use survexp_us_module::{
     ExpectedSurvivalResult, compute_expected_survival, survexp_mn, survexp_us, survexp_usr,
 };

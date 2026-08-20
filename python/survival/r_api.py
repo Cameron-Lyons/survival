@@ -6162,50 +6162,6 @@ def _survexp_rmap_columns(
     return columns
 
 
-def _survexp_formula_coordinates(
-    matched: Mapping[str, Any],
-    ratetable: RateTable,
-) -> tuple[list[float], list[float], list[int] | None]:
-    dimensions = list(ratetable.dimension_specs())
-    age_dimensions = [
-        dimension for dimension in dimensions if dimension.dim_type == _core.DimType.Age
-    ]
-    year_dimensions = [
-        dimension for dimension in dimensions if dimension.dim_type == _core.DimType.Year
-    ]
-    sex_dimensions = [
-        dimension
-        for dimension in dimensions
-        if dimension.dim_type == _core.DimType.Factor and "sex" in str(dimension.name).casefold()
-    ]
-    unsupported = [
-        dimension
-        for dimension in dimensions
-        if dimension.dim_type == _core.DimType.Continuous
-        or (
-            dimension.dim_type == _core.DimType.Factor
-            and dimension not in sex_dimensions
-        )
-    ]
-    if len(age_dimensions) != 1 or len(year_dimensions) != 1 or len(sex_dimensions) > 1:
-        raise ValueError(
-            "survexp formula rate tables need one age, one year, and at most one sex dimension"
-        )
-    if unsupported:
-        names = ", ".join(str(dimension.name) for dimension in unsupported)
-        raise ValueError(f"survexp formula does not yet support rate dimensions: {names}")
-
-    coords = matched["coords"]
-    age = [float(value) for value in coords[str(age_dimensions[0].name)]]
-    year = [float(value) for value in coords[str(year_dimensions[0].name)]]
-    sex = (
-        [int(value) for value in coords[str(sex_dimensions[0].name)]]
-        if sex_dimensions
-        else None
-    )
-    return age, year, sex
-
-
 def _survexp_group_label(value: Any) -> str:
     if isinstance(value, tuple):
         return ", ".join(str(item) for item in value)
@@ -6264,19 +6220,20 @@ def _survexp_formula(
         warnings.warn("se_fit value ignored", RuntimeWarning, stacklevel=3)
 
     matched = match_ratetable(mapped_columns, table)
-    age_values, year_values, sex_values = _survexp_formula_coordinates(matched, table)
+    coordinate_values = {
+        str(name): [float(value) for value in values]
+        for name, values in matched["coords"].items()
+    }
     time_values = [float(value) for value in response.time]
     method_value = _normalize_survexp_method(method, cohort, conditional)
     scale_value = _normalize_positive_scale(scale)
     if method_value in {"individual.h", "individual.s"}:
         individual = [
             float(value)
-            for value in _core.survexp_individual(
+            for value in _core.survexp_individual_from_coords(
                 time_values,
-                age_values,
-                year_values,
                 table,
-                sex_values,
+                coordinate_values,
             )
         ]
         if method_value == "individual.s":
@@ -6299,12 +6256,13 @@ def _survexp_formula(
         indices = [row for row, value in enumerate(groups) if value == level]
         for row in indices:
             group_codes[row] = group_index
-        core_result = _core.survexp(
+        core_result = _core.survexp_from_coords(
             [time_values[index] for index in indices],
-            [age_values[index] for index in indices],
-            [year_values[index] for index in indices],
             table,
-            None if sex_values is None else [sex_values[index] for index in indices],
+            {
+                name: [values[index] for index in indices]
+                for name, values in coordinate_values.items()
+            },
             eval_times,
             method_value,
         )

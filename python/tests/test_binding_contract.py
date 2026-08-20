@@ -8396,7 +8396,9 @@ def test_population_survival_and_pyears_bindings_are_typed():
         "ratetable_date",
         "days_to_date",
         "survexp",
+        "survexp_from_coords",
         "survexp_individual",
+        "survexp_individual_from_coords",
         "summary_pyears",
         "pyears_by_cell",
         "pyears_ci",
@@ -8428,7 +8430,9 @@ def test_population_survival_and_pyears_bindings_are_typed():
         "ratetable_date": ["year", "month", "day", "origin_year"],
         "days_to_date": ["days", "origin_year"],
         "survexp": ["time", "age", "year", "ratetable", "sex", "times", "method"],
+        "survexp_from_coords": ["time", "ratetable", "coordinates", "times", "method"],
         "survexp_individual": ["time", "age", "year", "ratetable", "sex"],
+        "survexp_individual_from_coords": ["time", "ratetable", "coordinates"],
         "summary_pyears": ["pyears", "pn", "pcount", "pexpect", "offtable"],
         "pyears_by_cell": ["pyears", "pn", "pcount", "pexpect"],
         "pyears_ci": ["observed", "expected", "conf_level"],
@@ -8553,6 +8557,25 @@ def test_population_survival_and_pyears_bindings_are_typed():
     )
     assert len(individual) == 2
     assert all(0.0 < value <= 1.0 for value in individual)
+    coordinates = {
+        "age": [18250.0, 21900.0],
+        "year": [2000.0, 2000.0],
+        "sex": [0.0, 1.0],
+    }
+    coordinate_survexp = core.survexp_from_coords(
+        [365.0, 730.0],
+        ratetable,
+        coordinates,
+        None,
+        "conditional",
+    )
+    coordinate_individual = core.survexp_individual_from_coords(
+        [365.0, 730.0],
+        ratetable,
+        coordinates,
+    )
+    assert coordinate_survexp.surv == pytest.approx(survexp.surv)
+    assert coordinate_individual == pytest.approx(individual)
 
     summary = core.summary_pyears([2.0, 3.0], [1.0, 1.0], [1.0, 2.0], [0.5, 1.5], 0.25)
     cells = core.pyears_by_cell([2.0, 3.0], [1.0, 1.0], [1.0, 2.0], [0.5, 1.5])
