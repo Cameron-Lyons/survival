@@ -8858,7 +8858,7 @@ survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, 
 }
 
 survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRUE) {
-  if (missing(se.fit) && .is_multistate_cox_fit(formula)) {
+  if (.is_multistate_cox_fit(formula)) {
     se.fit <- FALSE
   }
   .call_r_api(
@@ -11576,8 +11576,12 @@ summary.survival_py_anova <- function(object, ...) {
   }
   fields[["states"]] <- states
   fields[["type"]] <- as.character(fields[["type"]])[[1L]]
-  fields[["conf.type"]] <- as.character(fields[["conf.type"]])[[1L]]
-  fields[["conf.int"]] <- as.numeric(fields[["conf.int"]])[[1L]]
+  if (!is.null(fields[["conf.type"]])) {
+    fields[["conf.type"]] <- as.character(fields[["conf.type"]])[[1L]]
+  }
+  if (!is.null(fields[["conf.int"]])) {
+    fields[["conf.int"]] <- as.numeric(fields[["conf.int"]])[[1L]]
+  }
   fields[["t0"]] <- as.numeric(fields[["t0"]])[[1L]]
   fields
 }
