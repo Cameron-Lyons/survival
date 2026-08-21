@@ -2,6 +2,7 @@ use crate::constants::{
     CONVERGENCE_FLAG, COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE,
     PARALLEL_THRESHOLD_MEDIUM,
 };
+use crate::internal::statistical::ln_gamma;
 use ndarray::{Array1, Array2};
 use rayon::prelude::*;
 
@@ -12,6 +13,18 @@ const EXACT_COMPATIBILITY_DIRECT_THRESHOLD: usize = 64;
 enum CoxPenalty {
     Diagonal(Vec<f64>),
     Dense(Array2<f64>),
+    Frailty {
+        ordinary: Array2<f64>,
+        columns: Vec<usize>,
+        theta: f64,
+        distribution: CoxFrailtyPenalty,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CoxFrailtyPenalty {
+    Gamma,
+    StudentT(f64),
 }
 
 #[derive(Debug, Clone)]
@@ -369,6 +382,178 @@ impl CoxFit {
         self.penalty = CoxPenalty::Dense(Array2::from_shape_fn(penalty.dim(), |(row, column)| {
             penalty[(row, column)] * self.scale[row] * self.scale[column]
         }));
+    }
+
+    pub(crate) fn set_frailty_penalty(
+        &mut self,
+        ordinary: &Array2<f64>,
+        columns: Vec<usize>,
+        theta: f64,
+        distribution: CoxFrailtyPenalty,
+    ) {
+        debug_assert_eq!(ordinary.dim(), (self.scale.len(), self.scale.len()));
+        self.penalty = CoxPenalty::Frailty {
+            ordinary: Array2::from_shape_fn(ordinary.dim(), |(row, column)| {
+                ordinary[(row, column)] * self.scale[row] * self.scale[column]
+            }),
+            columns,
+            theta,
+            distribution,
+        };
+    }
+
+    fn recenter_penalty(&self, beta: &mut [f64]) {
+        let CoxPenalty::Frailty {
+            columns,
+            theta,
+            distribution,
+            ..
+        } = &self.penalty
+        else {
+            return;
+        };
+        if columns.is_empty() {
+            return;
+        }
+        let center = match distribution {
+            CoxFrailtyPenalty::Gamma => {
+                let maximum = columns
+                    .iter()
+                    .map(|&column| beta[column])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                maximum
+                    + (columns
+                        .iter()
+                        .map(|&column| (beta[column] - maximum).exp())
+                        .sum::<f64>()
+                        / columns.len() as f64)
+                        .ln()
+            }
+            CoxFrailtyPenalty::StudentT(degrees_of_freedom) => {
+                let denominator = *theta * (*degrees_of_freedom - 2.0);
+                let (first_sum, second_sum) =
+                    columns
+                        .iter()
+                        .fold((0.0, 0.0), |(first_sum, second_sum), &column| {
+                            let value = beta[column];
+                            let scaled_square = value * value / denominator;
+                            let temp = 1.0 + scaled_square;
+                            (
+                                first_sum + value / temp,
+                                second_sum + 1.0 / temp - 2.0 * scaled_square / (temp * temp),
+                            )
+                        });
+                first_sum / second_sum
+            }
+        };
+        for &column in columns {
+            beta[column] -= center;
+        }
+    }
+
+    fn penalty_value(&self, beta: &[f64]) -> f64 {
+        match &self.penalty {
+            CoxPenalty::Diagonal(values) => {
+                0.5 * beta
+                    .iter()
+                    .zip(values)
+                    .map(|(&coefficient, &value)| value * coefficient * coefficient)
+                    .sum::<f64>()
+            }
+            CoxPenalty::Dense(matrix) => {
+                0.5 * beta
+                    .iter()
+                    .enumerate()
+                    .map(|(row, &coefficient)| {
+                        coefficient
+                            * beta
+                                .iter()
+                                .enumerate()
+                                .map(|(column, &other)| matrix[(row, column)] * other)
+                                .sum::<f64>()
+                    })
+                    .sum::<f64>()
+            }
+            CoxPenalty::Frailty {
+                ordinary,
+                columns,
+                theta,
+                distribution,
+            } => {
+                let ordinary_value = 0.5
+                    * beta
+                        .iter()
+                        .enumerate()
+                        .map(|(row, &coefficient)| {
+                            coefficient
+                                * beta
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(column, &other)| ordinary[(row, column)] * other)
+                                    .sum::<f64>()
+                        })
+                        .sum::<f64>();
+                let frailty_value = match distribution {
+                    CoxFrailtyPenalty::Gamma => {
+                        -columns.iter().map(|&column| beta[column]).sum::<f64>() / theta
+                    }
+                    CoxFrailtyPenalty::StudentT(degrees_of_freedom) => {
+                        let denominator = theta * (degrees_of_freedom - 2.0);
+                        let constant = 0.5 * (std::f64::consts::PI * denominator).ln()
+                            + ln_gamma(degrees_of_freedom / 2.0)
+                            - ln_gamma((degrees_of_freedom + 1.0) / 2.0);
+                        columns
+                            .iter()
+                            .map(|&column| {
+                                constant
+                                    + 0.5
+                                        * (degrees_of_freedom + 1.0)
+                                        * (1.0 + beta[column] * beta[column] / denominator).ln()
+                            })
+                            .sum::<f64>()
+                    }
+                };
+                ordinary_value + frailty_value
+            }
+        }
+    }
+
+    pub(crate) fn penalty_hessian(&self) -> Array2<f64> {
+        let width = self.beta.len();
+        match &self.penalty {
+            CoxPenalty::Diagonal(values) => {
+                Array2::from_shape_fn((width, width), |(row, column)| {
+                    if row == column { values[row] } else { 0.0 }
+                })
+            }
+            CoxPenalty::Dense(matrix) => matrix.clone(),
+            CoxPenalty::Frailty {
+                ordinary,
+                columns,
+                theta,
+                distribution,
+            } => {
+                let mut result = ordinary.clone();
+                for &column in columns {
+                    let second = match distribution {
+                        CoxFrailtyPenalty::Gamma => self.beta[column].exp() / theta,
+                        CoxFrailtyPenalty::StudentT(degrees_of_freedom) => {
+                            let denominator = theta * (degrees_of_freedom - 2.0);
+                            let scaled_square = self.beta[column] * self.beta[column] / denominator;
+                            let temp = 1.0 + scaled_square;
+                            (degrees_of_freedom + 1.0) / denominator
+                                * (1.0 / temp - 2.0 * scaled_square / (temp * temp))
+                        }
+                    };
+                    result[(column, column)] += second;
+                }
+                result
+            }
+        }
+    }
+
+    pub(crate) fn penalized_log_likelihood(&self) -> f64 {
+        self.loglik[1]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1219,8 +1404,60 @@ impl CoxFit {
                 }
                 penalty
             }
+            CoxPenalty::Frailty {
+                ordinary,
+                columns,
+                theta,
+                distribution,
+            } => {
+                let mut penalty = 0.0;
+                for (row, &coefficient) in beta.iter().enumerate() {
+                    let penalty_score = beta
+                        .iter()
+                        .enumerate()
+                        .map(|(column, &other)| ordinary[(row, column)] * other)
+                        .sum::<f64>();
+                    self.u[row] -= penalty_score;
+                    penalty += 0.5 * coefficient * penalty_score;
+                    for column in 0..beta.len() {
+                        self.imat[(row, column)] += ordinary[(row, column)];
+                    }
+                }
+                match distribution {
+                    CoxFrailtyPenalty::Gamma => {
+                        for &column in columns {
+                            let relative_risk = beta[column].exp();
+                            self.u[column] -= (relative_risk - 1.0) / theta;
+                            self.imat[(column, column)] += relative_risk / theta;
+                            penalty -= beta[column] / theta;
+                        }
+                    }
+                    CoxFrailtyPenalty::StudentT(degrees_of_freedom) => {
+                        let denominator = theta * (degrees_of_freedom - 2.0);
+                        let scale = (degrees_of_freedom + 1.0) / denominator;
+                        let constant = 0.5 * (std::f64::consts::PI * denominator).ln()
+                            + ln_gamma(degrees_of_freedom / 2.0)
+                            - ln_gamma((degrees_of_freedom + 1.0) / 2.0);
+                        for &column in columns {
+                            let value = beta[column];
+                            let scaled_square = value * value / denominator;
+                            let temp = 1.0 + scaled_square;
+                            self.u[column] -= scale * value / temp;
+                            self.imat[(column, column)] +=
+                                scale * (1.0 / temp - 2.0 * scaled_square / (temp * temp));
+                            penalty += constant + 0.5 * (degrees_of_freedom + 1.0) * temp.ln();
+                        }
+                    }
+                }
+                penalty
+            }
         };
-        Ok(log_likelihood - 0.5 * penalty)
+        Ok(log_likelihood
+            - if matches!(self.penalty, CoxPenalty::Frailty { .. }) {
+                penalty
+            } else {
+                0.5 * penalty
+            })
     }
 
     pub(crate) fn fit(&mut self) -> Result<(), CoxError> {
@@ -1238,7 +1475,9 @@ impl CoxFit {
         let mut a = vec![0.0; nvar];
         let mut halving = 0;
         let mut _notfinite;
-        let beta_copy = self.beta.clone();
+        let mut beta_copy = self.beta.clone();
+        self.recenter_penalty(&mut beta_copy);
+        self.beta.copy_from_slice(&beta_copy);
         self.loglik[0] = self.iterate_with_mode(&beta_copy, mode)?;
         self.loglik[1] = self.loglik[0];
         if nvar == 0 {
@@ -1265,6 +1504,7 @@ impl CoxFit {
         let mut newlk = self.loglik[1];
         for iter in 1..=self.max_iter {
             self.iter = iter;
+            self.recenter_penalty(&mut newbeta);
             newlk = match self.iterate_with_mode(&newbeta, mode) {
                 Ok(lk) if lk.is_finite() => lk,
                 _ => {
@@ -1337,7 +1577,9 @@ impl CoxFit {
             self.flag = CONVERGENCE_FLAG;
             return Ok(());
         }
-        let beta_final = self.beta.clone();
+        let mut beta_final = self.beta.clone();
+        self.recenter_penalty(&mut beta_final);
+        self.beta.copy_from_slice(&beta_final);
         self.loglik[1] = self.iterate_with_mode(&beta_final, mode)?;
         self.flag = Self::cholesky(&mut self.imat, self.toler);
         Self::chinv(&mut self.imat);
@@ -1366,6 +1608,11 @@ impl CoxFit {
             }
             CoxPenalty::Dense(matrix) => {
                 for ((row, column), value) in matrix.indexed_iter_mut() {
+                    *value /= self.scale[row] * self.scale[column];
+                }
+            }
+            CoxPenalty::Frailty { ordinary, .. } => {
+                for ((row, column), value) in ordinary.indexed_iter_mut() {
                     *value /= self.scale[row] * self.scale[column];
                 }
             }
@@ -1469,29 +1716,7 @@ impl CoxFit {
     }
     pub(crate) fn results(self) -> CoxFitResults {
         let mut log_likelihood = self.loglik;
-        let penalty = match &self.penalty {
-            CoxPenalty::Diagonal(values) => self
-                .beta
-                .iter()
-                .zip(values)
-                .map(|(&coefficient, &value)| value * coefficient * coefficient)
-                .sum::<f64>(),
-            CoxPenalty::Dense(matrix) => self
-                .beta
-                .iter()
-                .enumerate()
-                .map(|(row, &coefficient)| {
-                    coefficient
-                        * self
-                            .beta
-                            .iter()
-                            .enumerate()
-                            .map(|(column, &other)| matrix[(row, column)] * other)
-                            .sum::<f64>()
-                })
-                .sum::<f64>(),
-        };
-        log_likelihood[1] += 0.5 * penalty;
+        log_likelihood[1] += self.penalty_value(&self.beta);
         (
             self.beta,
             self.means,
