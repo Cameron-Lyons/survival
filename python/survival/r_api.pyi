@@ -711,6 +711,7 @@ class SurvfitMultiStateResult:
     influence_chaz: list[list[float]] | None
     influence_auc: list[list[float]] | None
     cox_model: bool
+    cox_source: bool
     def __iter__(self): ...
     @property
     def curve_count(self) -> int: ...
@@ -730,6 +731,7 @@ class SurvfitMultiStateResult:
 class SurvfitMultiStateCoxResult:
     curves: tuple[SurvfitMultiStateResult, ...]
     model: dict[str, Any] | None
+    curve_labels: tuple[str, ...] | None
     def __iter__(self): ...
     def __getattr__(self, name: str) -> Any: ...
     @property

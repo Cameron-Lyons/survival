@@ -11450,9 +11450,16 @@ summary.survival_py_anova <- function(object, ...) {
 .as_survival_py_multistate_list <- function(x) {
   fields <- .call_r_api("_survfit_multistate_structure", x)
   cox_model <- isTRUE(as.logical(fields[["_cox_model"]])[[1L]])
+  cox_source <- isTRUE(as.logical(fields[["_cox_source"]])[[1L]])
   cox_curve_count <- as.integer(fields[["_cox_curve_count"]])[[1L]]
+  cox_curve_names <- fields[["_cox_curve_names"]]
+  if (!is.null(cox_curve_names)) {
+    cox_curve_names <- as.character(cox_curve_names)
+  }
   fields[["_cox_model"]] <- NULL
+  fields[["_cox_source"]] <- NULL
   fields[["_cox_curve_count"]] <- NULL
+  fields[["_cox_curve_names"]] <- NULL
   states <- as.character(fields[["states"]])
   transition_names <- as.character(fields[["_transition_names"]])
   fields[["_transition_names"]] <- NULL
@@ -11511,10 +11518,13 @@ summary.survival_py_anova <- function(object, ...) {
     if (cox_curve_count < 1L || nrow(pstate) %% cox_curve_count != 0L) {
       stop("multi-state Cox curve dimensions are inconsistent", call. = FALSE)
     }
+    if (!is.null(cox_curve_names) && length(cox_curve_names) != cox_curve_count) {
+      stop("multi-state Cox curve labels are inconsistent", call. = FALSE)
+    }
     fields[["pstate"]] <- array(
       as.numeric(pstate),
       dim = c(nrow(pstate) %/% cox_curve_count, cox_curve_count, ncol(pstate)),
-      dimnames = list(NULL, NULL, states)
+      dimnames = list(NULL, cox_curve_names, states)
     )
     if (!is.null(fields[["cumhaz"]])) {
       cumhaz <- .as_numeric_matrix(fields[["cumhaz"]])
@@ -11524,7 +11534,7 @@ summary.survival_py_anova <- function(object, ...) {
       fields[["cumhaz"]] <- array(
         as.numeric(cumhaz),
         dim = c(nrow(cumhaz) %/% cox_curve_count, cox_curve_count, ncol(cumhaz)),
-        dimnames = list(NULL, NULL, transition_names)
+        dimnames = list(NULL, cox_curve_names, transition_names)
       )
     }
   }
@@ -11558,7 +11568,7 @@ summary.survival_py_anova <- function(object, ...) {
       unlist(fields[["n.id"]], recursive = TRUE, use.names = FALSE)
     )
   }
-  if (!is.null(strata_names)) {
+  if (!is.null(strata_names) && !cox_source) {
     names(fields[["n"]]) <- strata_names
     if (!is.null(fields[["n.id"]])) {
       names(fields[["n.id"]]) <- strata_names

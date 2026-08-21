@@ -13484,6 +13484,8 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     )
     assert isinstance(batched_curve, survival.SurvfitMultiStateCoxResult)
     assert batched_curve.curve_count == 2
+    assert batched_curve.curve_labels is None
+    assert all(curve.cox_source for curve in batched_curve.curves)
     assert batched_curve.time == pytest.approx(list(range(13)))
     assert batched_curve.pstate[0][-1] == pytest.approx(expected_pstate[-1], abs=1e-12)
     assert batched_curve.pstate[1][-1] == pytest.approx(
@@ -13514,6 +13516,7 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     averaged_curve = survival.r_api.aggregate_survfit_result(aggregate_source)
     assert isinstance(averaged_curve, survival.SurvfitMultiStateResult)
     assert averaged_curve.cox_model is False
+    assert averaged_curve.cox_source is True
     assert averaged_curve.pstate[-1] == pytest.approx(
         [0.22713617194521979, 0.36661942336069081, 0.4062444046940894],
         abs=1e-12,
@@ -13526,6 +13529,7 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     )
     assert isinstance(grouped_curve, survival.SurvfitMultiStateCoxResult)
     assert grouped_curve.curve_count == 2
+    assert grouped_curve.curve_labels == ("1", "2")
     assert grouped_curve.pstate[0][-1] == pytest.approx(
         [0.21304991590588035, 0.40057642090756906, 0.38637366318655059],
         abs=1e-12,
@@ -13534,6 +13538,19 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
         [0.25530868402389867, 0.29870542826693436, 0.44598588770916708],
         abs=1e-12,
     )
+    assert survival.r_api._survfit_multistate_structure(grouped_curve)["_cox_curve_names"] == [
+        "1",
+        "2",
+    ]
+    relabeled_subset = survival.r_api._subset_survfit_multistate(
+        grouped_curve,
+        [0, 2],
+        [1, 0],
+    )
+    assert isinstance(relabeled_subset, survival.SurvfitMultiStateCoxResult)
+    assert relabeled_subset.curve_labels == ("2", "1")
+    with pytest.raises(ValueError, match="labels must match"):
+        survival.SurvfitMultiStateCoxResult(grouped_curve.curves, curve_labels=("1",))
     with pytest.raises(ValueError, match="same length"):
         survival.r_api.aggregate_survfit_result(aggregate_source, groups=[1])
     with pytest.raises(ValueError, match="positive integer"):
@@ -13584,10 +13601,12 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     stratified_structure = survival.r_api._survfit_multistate_structure(stratified_curves)
     assert stratified_structure["strata"] == {"g1": 7, "g2": 7}
     assert stratified_structure["_cox_curve_count"] == 2
+    assert stratified_structure["_cox_source"] is True
     assert len(stratified_structure["pstate"]) == 28
     stratified_average = survival.r_api.aggregate_survfit_result(stratified_curves)
     assert list(stratified_average) == ["g1", "g2"]
     for label in stratified_curves:
+        assert stratified_average[label].cox_source is True
         assert stratified_average[label].pstate[-1] == pytest.approx(
             [
                 sum(values) / 2.0

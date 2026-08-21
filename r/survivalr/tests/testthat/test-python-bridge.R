@@ -8420,7 +8420,9 @@ test_that("single-formula multi-state Cox models match survival", {
     )
   )
   expect_equal(nrow(stratified_frame), 84L)
-  expect_equal(table(stratified_frame$strata), c(g1 = 42L, g2 = 42L))
+  stratified_counts <- table(stratified_frame$strata)
+  expect_equal(as.integer(stratified_counts), c(42L, 42L))
+  expect_equal(names(stratified_counts), c("g1", "g2"))
 
   formula_data <- transform(
     competing,
