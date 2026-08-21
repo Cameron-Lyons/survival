@@ -1255,6 +1255,14 @@ class CoxPHFit:
         global_test: bool,
         penalty_matrix: list[list[float]] | None = None,
     ) -> tuple[list[list[float]], ProportionalityTest]: ...
+    def cox_zph_diagnostics_with_surface(
+        self,
+        transformed_events: list[float],
+        active_columns: list[int],
+        groups: list[list[int]],
+        single_df: bool,
+        global_test: bool,
+    ) -> tuple[list[list[float]], list[list[float]], ProportionalityTest]: ...
     def partial_residuals(self) -> list[list[float]]: ...
     @property
     def covariates(self) -> list[list[float]]: ...

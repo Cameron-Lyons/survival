@@ -15,6 +15,10 @@ use crate::validation::ProportionalityTest;
 use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 
+pub(crate) type CoxZphMatrix = Vec<Vec<f64>>;
+pub(crate) type CoxZphSurfaceDiagnostics = (CoxZphMatrix, CoxZphMatrix, ProportionalityTest);
+type CoxZphSurface = (CoxZphMatrix, CoxZphMatrix);
+
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
 }
@@ -77,6 +81,19 @@ fn validate_column_groups(groups: &[Vec<usize>], width: usize) -> PyResult<()> {
         }
     }
     Ok(())
+}
+
+fn invert_square_rows(matrix: &[Vec<f64>], name: &str) -> PyResult<Vec<Vec<f64>>> {
+    let width = matrix.len();
+    validate_square_matrix(matrix, width, name)?;
+    let values = matrix.iter().flatten().copied().collect::<Vec<_>>();
+    let array = Array2::from_shape_vec((width, width), values)
+        .map_err(|_| value_error(format!("failed to construct {name}")))?;
+    let inverse =
+        matrix_inverse(&array).ok_or_else(|| value_error(format!("{name} is singular")))?;
+    Ok((0..width)
+        .map(|row| (0..width).map(|column| inverse[[row, column]]).collect())
+        .collect())
 }
 
 fn validate_cluster_codes(codes: &[usize], nrows: usize, name: &str) -> PyResult<usize> {
@@ -1710,6 +1727,273 @@ impl CoxPHFit {
         Ok((grouped, test))
     }
 
+    pub(crate) fn cox_zph_diagnostics_with_surface_internal(
+        &self,
+        transformed_events: Vec<f64>,
+        active_columns: Vec<usize>,
+        groups: Vec<Vec<usize>>,
+        single_df: bool,
+        global_test: bool,
+    ) -> PyResult<CoxZphSurfaceDiagnostics> {
+        let beta = self.coefficients.first().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
+        })?;
+        let nvar = beta.len();
+        validate_selected_columns(&active_columns, nvar)?;
+        validate_column_groups(&groups, active_columns.len())?;
+
+        let n = self.event_times.len();
+        if self.status.len() != n
+            || self.covariates.len() != n
+            || self.linear_predictors.len() != n
+            || self.weights.len() != n
+            || self.strata.len() != n
+        {
+            return Err(value_error(
+                "fitted Cox model diagnostic arrays have inconsistent lengths",
+            ));
+        }
+        validate_matrix_width(&self.covariates, nvar, "covariates")?;
+
+        let method = if matches!(self.tie_method(), CoxMethod::Efron) {
+            "efron"
+        } else {
+            "breslow"
+        };
+        let detail = compute_coxph_detail_with_options(CoxphDetailOptions {
+            time: &self.event_times,
+            status: &self.status,
+            covariates: &self.covariates,
+            coefficients: beta,
+            weights: Some(&self.weights),
+            entry_times: self.entry_times.as_deref(),
+            strata: Some(&self.strata),
+            offset: None,
+            linear_predictors: Some(&self.linear_predictors),
+            method,
+            center: 0.0,
+            include_riskmat: false,
+        })?;
+        let active_beta = active_columns
+            .iter()
+            .map(|&column| beta[column])
+            .collect::<Vec<_>>();
+        let raw_full = self.schoenfeld_residuals_internal()?;
+        let (surface, variance) = self.cox_zph_residual_surface(
+            raw_full,
+            &detail,
+            &active_columns,
+            &groups,
+            &active_beta,
+        )?;
+        let test = cox_zph_tests_from_detail(
+            detail,
+            &transformed_events,
+            &active_columns,
+            groups,
+            active_beta,
+            single_df,
+            global_test,
+            None,
+        )?;
+        Ok((surface, variance, test))
+    }
+
+    fn cox_zph_residual_surface(
+        &self,
+        raw_full: Vec<Vec<f64>>,
+        detail: &CoxphDetail,
+        active_columns: &[usize],
+        groups: &[Vec<usize>],
+        active_beta: &[f64],
+    ) -> PyResult<CoxZphSurface> {
+        let nvar = self.coefficients.first().map_or(0, Vec::len);
+        validate_matrix_width(&raw_full, nvar, "Schoenfeld residuals")?;
+        let active_width = active_columns.len();
+        let raw = raw_full
+            .into_iter()
+            .map(|row| active_columns.iter().map(|&column| row[column]).collect())
+            .collect::<Vec<Vec<f64>>>();
+
+        let mut strata_levels = self.strata.clone();
+        strata_levels.sort_unstable();
+        strata_levels.dedup();
+        let mut strata_rows = vec![Vec::new(); strata_levels.len()];
+        for (row, &stratum) in self.strata.iter().enumerate() {
+            let stratum_index = strata_levels
+                .binary_search(&stratum)
+                .expect("fitted stratum must be present in its level set");
+            strata_rows[stratum_index].push(row);
+        }
+
+        let mut used = vec![vec![0usize; active_width]; strata_levels.len()];
+        for (stratum_index, rows) in strata_rows.iter().enumerate() {
+            let event_count = rows.iter().filter(|&&row| self.status[row] == 1).count();
+            if rows.is_empty() || event_count == 0 {
+                continue;
+            }
+            for (dense_column, &column) in active_columns.iter().enumerate() {
+                let first = self.covariates[rows[0]][column];
+                if rows
+                    .iter()
+                    .skip(1)
+                    .any(|&row| self.covariates[row][column] != first)
+                {
+                    used[stratum_index][dense_column] = event_count;
+                }
+            }
+        }
+
+        for columns in groups {
+            if columns.len() > 1
+                && used
+                    .iter()
+                    .any(|row| columns.iter().any(|&column| row[column] == 0))
+            {
+                for row in &mut used {
+                    let maximum = columns.iter().map(|&column| row[column]).max().unwrap_or(0);
+                    for &column in columns {
+                        row[column] = maximum;
+                    }
+                }
+            }
+        }
+
+        let mut information = vec![vec![0.0; active_width]; active_width];
+        for detail_row in &detail.rows {
+            validate_square_matrix(&detail_row.imat, nvar, "Cox detail information matrix")?;
+            for (dense_row, &row) in active_columns.iter().enumerate() {
+                for (dense_column, &column) in active_columns.iter().enumerate() {
+                    information[dense_row][dense_column] += detail_row.imat[row][column];
+                }
+            }
+        }
+
+        let mut weight = vec![vec![0.0; active_width]; active_width];
+        for stratum_used in &used {
+            for row in 0..active_width {
+                for column in 0..active_width {
+                    weight[row][column] += stratum_used[row].min(stratum_used[column]) as f64;
+                }
+            }
+        }
+        let mean_information = (0..active_width)
+            .map(|row| {
+                (0..active_width)
+                    .map(|column| {
+                        information[row][column]
+                            / if weight[row][column] == 0.0 {
+                                1.0
+                            } else {
+                                weight[row][column]
+                            }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let group_count = groups.len();
+        let mut loadings = vec![vec![0.0; group_count]; active_width];
+        for (group_index, columns) in groups.iter().enumerate() {
+            if columns.len() == 1 {
+                loadings[columns[0]][group_index] = 1.0;
+            } else {
+                for &column in columns {
+                    loadings[column][group_index] = active_beta[column];
+                }
+            }
+        }
+        let grouped_raw = cox_zph_term_matrix(raw, groups.to_vec(), active_beta.to_vec())?;
+        let grouped_mean_information = (0..group_count)
+            .map(|left_group| {
+                (0..group_count)
+                    .map(|right_group| {
+                        (0..active_width)
+                            .map(|row| {
+                                (0..active_width)
+                                    .map(|column| {
+                                        loadings[row][left_group]
+                                            * mean_information[row][column]
+                                            * loadings[column][right_group]
+                                    })
+                                    .sum::<f64>()
+                            })
+                            .sum::<f64>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let grouped_used = used
+            .iter()
+            .map(|row| {
+                groups
+                    .iter()
+                    .map(|columns| row[columns[0]])
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let event_indices = diagnostic_order(&self.strata, &self.event_times)
+            .into_iter()
+            .filter(|&row| self.status[row] == 1)
+            .collect::<Vec<_>>();
+        if event_indices.len() != grouped_raw.len() {
+            return Err(value_error(
+                "fitted Cox model event order does not match Schoenfeld residuals",
+            ));
+        }
+        let mut surface = vec![vec![f64::NAN; group_count]; grouped_raw.len()];
+        for (stratum_index, &stratum) in strata_levels.iter().enumerate() {
+            let active_groups = grouped_used[stratum_index]
+                .iter()
+                .enumerate()
+                .filter_map(|(group, &count)| (count > 0).then_some(group))
+                .collect::<Vec<_>>();
+            if active_groups.is_empty() {
+                continue;
+            }
+            let stratum_mean = active_groups
+                .iter()
+                .map(|&row| {
+                    active_groups
+                        .iter()
+                        .map(|&column| grouped_mean_information[row][column])
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let inverse = invert_square_rows(&stratum_mean, "Cox zph stratum information matrix")?;
+            for (event_row, &source_row) in event_indices.iter().enumerate() {
+                if self.strata[source_row] != stratum {
+                    continue;
+                }
+                for (output_column, &group) in active_groups.iter().enumerate() {
+                    surface[event_row][group] = active_groups
+                        .iter()
+                        .enumerate()
+                        .map(|(input_column, &input_group)| {
+                            grouped_raw[event_row][input_group]
+                                * inverse[input_column][output_column]
+                        })
+                        .sum();
+                }
+            }
+        }
+        for row in &mut surface {
+            for (group, columns) in groups.iter().enumerate() {
+                row[group] += if columns.len() == 1 {
+                    active_beta[columns[0]]
+                } else {
+                    1.0
+                };
+            }
+        }
+        let variance = invert_square_rows(
+            &grouped_mean_information,
+            "Cox zph grouped information matrix",
+        )?;
+        Ok((surface, variance))
+    }
+
     pub(crate) fn schoenfeld_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
         let beta = self.coefficients.first().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
@@ -2482,6 +2766,80 @@ mod tests {
         assert_eq!(test.p_values, expected_test.p_values);
         assert_eq!(test.global_chi2, expected_test.global_chi2);
         assert_eq!(test.global_p_value, expected_test.global_p_value);
+    }
+
+    #[test]
+    fn fit_owned_cox_zph_surface_scales_each_stratum_by_active_terms() {
+        let event_times = vec![1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0];
+        let status = vec![1, 1, 1, 0, 1, 1, 1, 0];
+        let covariates = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![2.0, 0.0],
+            vec![3.0, 0.0],
+            vec![0.0, 0.0],
+            vec![0.0, 1.0],
+            vec![0.0, 2.0],
+            vec![0.0, 3.0],
+        ];
+        let coefficients = vec![0.1, -0.2];
+        let linear_predictors = covariates
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .zip(&coefficients)
+                    .map(|(&value, &coefficient)| value * coefficient)
+                    .sum()
+            })
+            .collect::<Vec<f64>>();
+        let fit = CoxPHFit {
+            coefficients: vec![coefficients],
+            means: vec![0.0, 0.0],
+            score_vector: vec![0.0, 0.0],
+            information_matrix: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+            degrees_of_freedom: 0.0,
+            log_likelihood: vec![0.0, 0.0],
+            score_test: 0.0,
+            convergence_flag: 0,
+            iterations: 0,
+            risk_scores: linear_predictors.iter().map(|value| value.exp()).collect(),
+            event_times,
+            status,
+            linear_predictors,
+            entry_times: None,
+            weights: vec![1.0; 8],
+            covariates,
+            strata: vec![0, 0, 0, 0, 1, 1, 1, 1],
+            method: "efron".to_string(),
+            nocenter: Vec::new(),
+        };
+
+        let (surface, variance, test) = fit
+            .cox_zph_diagnostics_with_surface_internal(
+                vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
+                vec![0, 1],
+                vec![vec![0], vec![1]],
+                false,
+                true,
+            )
+            .expect("stratified Cox zph surface should compute");
+
+        assert_eq!(surface.len(), 6);
+        for row in &surface[..3] {
+            assert!(row[0].is_finite());
+            assert!(row[1].is_nan());
+        }
+        for row in &surface[3..] {
+            assert!(row[0].is_nan());
+            assert!(row[1].is_finite());
+        }
+        assert_eq!(variance.len(), 2);
+        assert!(variance[0][0].is_finite() && variance[0][0] > 0.0);
+        assert!(variance[1][1].is_finite() && variance[1][1] > 0.0);
+        assert!(variance[0][1].abs() < 1e-12);
+        assert!(variance[1][0].abs() < 1e-12);
+        assert_eq!(test.chi2_values.len(), 2);
+        assert!(test.global_chi2.is_finite());
     }
 
     #[test]

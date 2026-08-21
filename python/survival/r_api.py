@@ -16332,8 +16332,13 @@ def cox_zph(
         raise TypeError("cox_zph requires a fitted Cox model")
     model = _unwrap_formula_fit(fit)
     native_method = getattr(model, "cox_zph_diagnostics", None)
+    surface_method = (
+        getattr(model, "cox_zph_diagnostics_with_surface", None)
+        if isinstance(fit, _FormulaFit) and fit.multi_state is not None
+        else None
+    )
     scaled_method = getattr(fit, "scaled_schoenfeld_residuals", None)
-    if native_method is None and scaled_method is None:
+    if native_method is None and surface_method is None and scaled_method is None:
         raise TypeError("cox_zph requires a fitted Cox model")
     group_terms = _normalize_bool_option(terms, "terms")
     single_df = _normalize_bool_option(singledf, "singledf")
@@ -16384,7 +16389,26 @@ def cox_zph(
         event_times,
         transform,
     )
-    if native_method is not None:
+    grouped_variance: list[list[float]] | None = None
+    if surface_method is not None:
+        grouped_result, raw_grouped_variance, test = surface_method(
+            transformed_time,
+            active_columns,
+            dense_groups,
+            single_df,
+            include_global,
+        )
+        grouped_y = [[float(value) for value in row] for row in grouped_result]
+        grouped_variance = [[float(value) for value in row] for row in raw_grouped_variance]
+        if len(event_indices) != len(grouped_y):
+            raise ValueError("fitted Cox model event times do not match diagnostic residuals")
+        if any(len(row) != len(groups) for row in grouped_y):
+            raise ValueError("Cox zph diagnostic residuals must be rectangular")
+        if len(grouped_variance) != len(groups) or any(
+            len(row) != len(groups) for row in grouped_variance
+        ):
+            raise ValueError("Cox zph diagnostic variance must match diagnostic terms")
+    elif native_method is not None:
         variance = getattr(fit, "information_matrix", None)
         if variance is None:
             raise TypeError("model does not expose coefficient variance")
@@ -16476,7 +16500,17 @@ def cox_zph(
         x=transformed_time,
         time=event_times,
         y=grouped_y,
-        var=_cox_zph_group_variance(fit, groups, active_beta, active_columns, len(event_indices)),
+        var=(
+            grouped_variance
+            if grouped_variance is not None
+            else _cox_zph_group_variance(
+                fit,
+                groups,
+                active_beta,
+                active_columns,
+                len(event_indices),
+            )
+        ),
         transform=transform_name,
         global_chi2=float(test.global_chi2) if include_global else None,
         global_df=global_df if include_global else None,
