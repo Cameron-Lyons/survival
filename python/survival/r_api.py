@@ -410,10 +410,38 @@ class _SparseFrailtyFitMetadata:
 
 
 @dataclass(frozen=True)
+class _MultiStateFormulaRule:
+    lhs: str
+    rhs: str
+    common: bool
+    shared: bool
+
+
+@dataclass(frozen=True)
+class _MultiStateFormulaSpec:
+    formulas: tuple[str, ...]
+    default_formula: str
+    union_formula: str
+    rules: tuple[_MultiStateFormulaRule, ...]
+
+
+@dataclass(frozen=True)
+class _MultiStateFormulaMaps:
+    coefficient_map: tuple[tuple[int, ...], ...]
+    ph_coefficient_map: tuple[int, ...]
+    stack_coefficient_map: tuple[tuple[int, ...], ...]
+    baseline_map: tuple[int, ...]
+    coefficient_names: tuple[str, ...]
+    ph_column_count: int
+
+
+@dataclass(frozen=True)
 class _MultiStateCoxFitMetadata:
     states: tuple[str, ...]
     transitions: tuple[tuple[int, int], ...]
     response: Surv
+    normalized_response: Surv
+    current_states: tuple[int, ...]
     source_rows: tuple[int, ...]
     transition_indices: tuple[int, ...]
     original_rows: tuple[tuple[float, ...], ...]
@@ -423,6 +451,9 @@ class _MultiStateCoxFitMetadata:
     strata_levels: tuple[Any, ...]
     row_names: tuple[str, ...]
     original_width: int
+    coefficient_map: tuple[tuple[int, ...], ...]
+    ph_coefficient_map: tuple[int, ...]
+    baseline_map: tuple[int, ...]
     reported_means: tuple[float, ...]
     user_strata_count: int
     timefix: bool
@@ -20973,7 +21004,11 @@ def _cox_multistate_predictions(
 
     beta = _cox_beta(fit)
     transition_count = len(metadata.transitions)
-    if len(beta) != metadata.original_width * transition_count:
+    mapped_coefficients = [
+        value for row in metadata.coefficient_map for value in row if value >= 0
+    ] + [value for value in metadata.ph_coefficient_map if value >= 0]
+    expected_width = max(mapped_coefficients, default=-1) + 1
+    if len(beta) != expected_width:
         raise ValueError("multi-state coefficient width does not match transition metadata")
     center_values = (
         [0.0] * metadata.original_width if reference == "zero" else list(metadata.reported_means)
@@ -20991,12 +21026,17 @@ def _cox_multistate_predictions(
         prediction_row: list[float] = []
         se_row: list[float] = []
         for transition_idx in range(transition_count):
-            first = transition_idx * metadata.original_width
-            coefficients = beta[first : first + metadata.original_width]
+            design_row = [0.0] * len(beta)
+            for column, coefficient_idx in enumerate(metadata.coefficient_map[transition_idx]):
+                if coefficient_idx >= 0:
+                    design_row[coefficient_idx] = centered_row[column]
+            ph_coefficient = metadata.ph_coefficient_map[transition_idx]
+            if ph_coefficient >= 0:
+                design_row[ph_coefficient] = 1.0
             value = (
                 math.fsum(
                     covariate * coefficient
-                    for covariate, coefficient in zip(centered_row, coefficients, strict=True)
+                    for covariate, coefficient in zip(design_row, beta, strict=True)
                 )
                 + float(row_offset)
                 - offset_center
@@ -21004,11 +21044,7 @@ def _cox_multistate_predictions(
             prediction = _safe_exp(value) if predict_type == "risk" else value
             prediction_row.append(prediction)
             if variance is not None:
-                block = [
-                    values[first : first + metadata.original_width]
-                    for values in variance[first : first + metadata.original_width]
-                ]
-                se = math.sqrt(max(_quadratic_form(centered_row, block), 0.0))
+                se = math.sqrt(max(_quadratic_form(design_row, variance), 0.0))
                 se_row.append(se * prediction if predict_type == "risk" else se)
         predictions.append(prediction_row)
         if variance is not None:
@@ -21758,6 +21794,8 @@ def _cox_multistate_baseline_increments(
     times: Sequence[float],
     start_time: float,
     user_stratum: int = 0,
+    row: Sequence[float] | None = None,
+    offset: float = 0.0,
 ) -> list[list[float]]:
     metadata = fit.multi_state
     if metadata is None:
@@ -21766,7 +21804,7 @@ def _cox_multistate_baseline_increments(
     baselines = _cox_baselines_by_stratum(base_times, base_hazards, base_strata)
     cumulative_by_transition: list[list[float]] = []
     for transition_idx in range(len(metadata.transitions)):
-        stratum = transition_idx * metadata.user_strata_count + user_stratum
+        stratum = metadata.baseline_map[transition_idx] * metadata.user_strata_count + user_stratum
         transition_times, transition_hazards = baselines.get(stratum, ([], []))
         at_start = _core.step_values_at(
             transition_times,
@@ -21785,6 +21823,90 @@ def _cox_multistate_baseline_increments(
                 )
             ]
         )
+
+    baseline_groups: dict[int, list[int]] = {}
+    for transition_idx, baseline in enumerate(metadata.baseline_map):
+        baseline_groups.setdefault(baseline, []).append(transition_idx)
+    shared_groups = [indices for indices in baseline_groups.values() if len(indices) > 1]
+    if shared_groups:
+        if row is None:
+            raise ValueError("shared multi-state baselines require a covariate profile")
+        beta = _cox_beta(fit)
+        response = metadata.normalized_response
+        training_start = list(response.start) if response.start is not None else None
+        training_stop = list(response.time)
+        training_event = list(response.event)
+        weights = fit.case_weights or [1.0] * len(training_stop)
+        strata_codes = (
+            _encode_groups(metadata.original_strata, len(training_stop))
+            if metadata.original_strata is not None
+            else [0] * len(training_stop)
+        )
+        for transition_indices in shared_groups:
+            event_weights: dict[float, float] = {}
+            for row_idx, event_time in enumerate(training_stop):
+                if strata_codes[row_idx] != user_stratum:
+                    continue
+                if any(
+                    metadata.current_states[row_idx] == metadata.transitions[index][0]
+                    and training_event[row_idx] == metadata.transitions[index][1] + 1
+                    for index in transition_indices
+                ):
+                    event_weights[event_time] = event_weights.get(event_time, 0.0) + float(
+                        weights[row_idx]
+                    )
+            event_times = sorted(event_weights)
+            risk_rows: list[tuple[float | None, float, float]] = []
+            for transition_idx in transition_indices:
+                source = metadata.transitions[transition_idx][0]
+                ph_coefficient = metadata.ph_coefficient_map[transition_idx]
+                for row_idx in range(len(training_stop)):
+                    if (
+                        strata_codes[row_idx] != user_stratum
+                        or metadata.current_states[row_idx] != source
+                    ):
+                        continue
+                    linear_predictor = metadata.original_offsets[row_idx] - float(offset)
+                    for column, coefficient_idx in enumerate(
+                        metadata.coefficient_map[transition_idx]
+                    ):
+                        if coefficient_idx >= 0:
+                            linear_predictor += (
+                                metadata.original_rows[row_idx][column] - float(row[column])
+                            ) * beta[coefficient_idx]
+                    if ph_coefficient >= 0:
+                        linear_predictor += beta[ph_coefficient]
+                    risk_rows.append(
+                        (
+                            None if training_start is None else training_start[row_idx],
+                            training_stop[row_idx],
+                            float(weights[row_idx]) * _safe_exp(linear_predictor),
+                        )
+                    )
+            cumulative = [0.0] * len(transition_indices)
+            cumulative_rows: list[list[float]] = []
+            for event_time in event_times:
+                numerator = event_weights[event_time]
+                denominator = math.fsum(
+                    risk
+                    for entry, stop, risk in risk_rows
+                    if stop >= event_time and (entry is None or entry < event_time)
+                )
+                if denominator <= 0.0:
+                    raise ValueError("shared multi-state baseline has an empty risk set")
+                shared_increment = numerator / denominator
+                for position, transition_idx in enumerate(transition_indices):
+                    ph_coefficient = metadata.ph_coefficient_map[transition_idx]
+                    scale = _safe_exp(beta[ph_coefficient]) if ph_coefficient >= 0 else 1.0
+                    cumulative[position] += shared_increment * scale
+                cumulative_rows.append(list(cumulative))
+            for position, transition_idx in enumerate(transition_indices):
+                values = [values[position] for values in cumulative_rows]
+                at_start = _core.step_values_at(event_times, values, [start_time], 0.0)[0]
+                cumulative_by_transition[transition_idx] = [
+                    max(value - at_start, 0.0)
+                    for value in _core.step_values_at(event_times, values, list(times), 0.0)
+                ]
 
     previous = [0.0] * len(metadata.transitions)
     increments: list[list[float]] = []
@@ -21807,16 +21929,23 @@ def _cox_multistate_curve_risk(
     if metadata is None:
         raise AssertionError("multi-state Cox metadata is missing")
     beta = _cox_beta(fit)
-    return [
-        _safe_exp(
-            math.fsum(
-                float(row[column]) * beta[transition_idx * metadata.original_width + column]
-                for column in range(metadata.original_width)
-            )
-            + float(offset)
-        )
-        for transition_idx in range(len(metadata.transitions))
-    ]
+    baseline_counts = {
+        baseline: metadata.baseline_map.count(baseline) for baseline in metadata.baseline_map
+    }
+    risks: list[float] = []
+    for transition_idx in range(len(metadata.transitions)):
+        if baseline_counts[metadata.baseline_map[transition_idx]] > 1:
+            risks.append(1.0)
+            continue
+        linear_predictor = float(offset)
+        for column, coefficient_idx in enumerate(metadata.coefficient_map[transition_idx]):
+            if coefficient_idx >= 0:
+                linear_predictor += float(row[column]) * beta[coefficient_idx]
+        ph_coefficient = metadata.ph_coefficient_map[transition_idx]
+        if ph_coefficient >= 0:
+            linear_predictor += beta[ph_coefficient]
+        risks.append(_safe_exp(linear_predictor))
+    return risks
 
 
 def _cox_multistate_survfit_result(
@@ -21891,19 +22020,41 @@ def _cox_multistate_survfit_result(
             ]
             shell = _select_multistate_curve_times(shell, keep)
 
-        increments = _cox_multistate_baseline_increments(
-            fit,
-            shell.time,
-            shell.t0,
-            user_stratum,
-        )
-        native_curves = _core.cox_multistate_curves(
-            increments,
-            [list(transition) for transition in metadata.transitions],
-            risks,
-            shell.p0,
-            stype == 2,
-        )
+        shared_baselines = len(set(metadata.baseline_map)) < len(metadata.baseline_map)
+        if shared_baselines:
+            native_profile_curves = [
+                _core.cox_multistate_curve(
+                    _cox_multistate_baseline_increments(
+                        fit,
+                        shell.time,
+                        shell.t0,
+                        user_stratum,
+                        row,
+                        offset,
+                    ),
+                    [list(transition) for transition in metadata.transitions],
+                    risk,
+                    shell.p0,
+                    stype == 2,
+                )
+                for row, offset, risk in zip(rows, row_offsets, risks, strict=True)
+            ]
+            profile_curves = [(curve.pstate, curve.cumhaz) for curve in native_profile_curves]
+        else:
+            increments = _cox_multistate_baseline_increments(
+                fit,
+                shell.time,
+                shell.t0,
+                user_stratum,
+            )
+            native_curves = _core.cox_multistate_curves(
+                increments,
+                [list(transition) for transition in metadata.transitions],
+                risks,
+                shell.p0,
+                stype == 2,
+            )
+            profile_curves = list(zip(native_curves.pstate, native_curves.cumhaz, strict=True))
         curves = tuple(
             replace(
                 shell,
@@ -21912,11 +22063,7 @@ def _cox_multistate_survfit_result(
                 model=model_frame,
                 cox_model=True,
             )
-            for profile_pstate, profile_cumhaz in zip(
-                native_curves.pstate,
-                native_curves.cumhaz,
-                strict=True,
-            )
+            for profile_pstate, profile_cumhaz in profile_curves
         )
         if len(curves) == 1:
             return curves[0]
@@ -24335,6 +24482,421 @@ def _cox_multistate_transitions(
     )
 
 
+def _find_top_level_formula_character(expression: str, target: str) -> int | None:
+    depth = 0
+    in_backtick = False
+    quote: str | None = None
+    for position, char in enumerate(expression):
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'} and not in_backtick:
+            quote = char
+        elif char == "`":
+            in_backtick = not in_backtick
+        elif not in_backtick and char == "(":
+            depth += 1
+        elif not in_backtick and char == ")":
+            depth = max(depth - 1, 0)
+        elif not in_backtick and depth == 0 and char == target:
+            return position
+    if in_backtick:
+        raise ValueError("unterminated backtick in formula")
+    if quote is not None:
+        raise ValueError("unterminated quote in formula")
+    return None
+
+
+def _multi_state_formula_rhs(rhs: str) -> tuple[str, bool, bool]:
+    slash = _find_top_level_formula_character(rhs, "/")
+    if slash is None:
+        return rhs.strip(), False, False
+    covariates = rhs[:slash].strip()
+    options = _strip_outer_formula_parentheses(rhs[slash + 1 :].strip())
+    if not covariates or not options:
+        raise ValueError("multi-state covariate formula '/' requires terms and options")
+    common = False
+    shared = False
+    for operator, option in _formula_tokens(options):
+        if operator == "-":
+            raise ValueError("multi-state formula options cannot be removed")
+        option = option.strip()
+        if option == "common":
+            common = True
+        elif option == "shared":
+            shared = True
+        elif option == "init" or (option.startswith("init(") and option.endswith(")")):
+            # The reference parser accepts this marker but the current fitter
+            # does not consume its values. Keep accepting it for call parity.
+            continue
+        else:
+            raise ValueError(f"option not recognized in a covariates formula: {option}")
+    return covariates, common, shared
+
+
+def _multi_state_formula_spec(formulas: Sequence[Any]) -> _MultiStateFormulaSpec:
+    values = tuple(formulas)
+    if len(values) < 2:
+        raise ValueError("a multi-state formula list requires a default and at least one rule")
+    if any(not isinstance(value, str) for value in values):
+        raise TypeError("every multi-state formula list element must be a string")
+    default_formula = cast(str, values[0]).strip()
+    default_lhs, separator, default_rhs = default_formula.partition("~")
+    if not separator:
+        raise ValueError("formula must contain '~'")
+    rules: list[_MultiStateFormulaRule] = []
+    union_terms: list[str] = []
+    for formula in cast(tuple[str, ...], values[1:]):
+        lhs, separator, rhs = formula.partition("~")
+        if not separator or not lhs.strip() or not rhs.strip():
+            raise ValueError("all multi-state formulas must have a left and right side")
+        covariate_rhs, common, shared = _multi_state_formula_rhs(rhs)
+        rules.append(_MultiStateFormulaRule(lhs.strip(), covariate_rhs, common, shared))
+        for _operator, term in _formula_tokens(covariate_rhs):
+            if term not in {"0", "1"}:
+                union_terms.append(term)
+    union_rhs = default_rhs.strip()
+    if union_terms:
+        union_rhs = " + ".join([union_rhs, *union_terms])
+    return _MultiStateFormulaSpec(
+        formulas=cast(tuple[str, ...], values),
+        default_formula=default_formula,
+        union_formula=f"{default_lhs.strip()} ~ {union_rhs}",
+        rules=tuple(rules),
+    )
+
+
+def _multi_state_selector_atoms(expression: str) -> list[Any]:
+    expression = _strip_outer_formula_parentheses(expression.strip())
+    if expression.startswith("c(") and expression.endswith(")"):
+        values: list[Any] = []
+        for part in _formula_response_parts(expression[2:-1]):
+            values.extend(_multi_state_selector_atoms(part))
+        return values
+    colon = _find_top_level_formula_character(expression, ":")
+    if colon is not None:
+        left = _multi_state_selector_atoms(expression[:colon])
+        right = _multi_state_selector_atoms(expression[colon + 1 :])
+        if len(left) != 1 or len(right) != 1:
+            raise ValueError("state ranges require scalar endpoints")
+        try:
+            first = int(left[0])
+            last = int(right[0])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("state ranges require integer endpoints") from exc
+        if first != left[0] or last != right[0]:
+            raise ValueError("state ranges require integer endpoints")
+        step = 1 if last >= first else -1
+        return list(range(first, last + step, step))
+    if len(expression) >= 2 and expression[0] == expression[-1] and expression[0] in {"'", '"'}:
+        return [expression[1:-1]]
+    if expression in {"TRUE", "T"}:
+        return [True]
+    if expression in {"FALSE", "F"}:
+        return [False]
+    try:
+        value = float(expression)
+    except ValueError:
+        return [_formula_name(expression)[0]]
+    return [int(value) if value.is_integer() else value]
+
+
+def _multi_state_selector_call(expression: str) -> tuple[str, list[Any]] | None:
+    expression = _strip_outer_formula_parentheses(expression.strip())
+    opening = expression.find("(")
+    if opening <= 0 or not expression.endswith(")"):
+        return None
+    name = _formula_name(expression[:opening])[0]
+    values: list[Any] = []
+    for part in _formula_response_parts(expression[opening + 1 : -1]):
+        values.extend(_multi_state_selector_atoms(part))
+    return name, values
+
+
+def _multi_state_statedata(
+    statedata: Any | None,
+    states: Sequence[str],
+) -> dict[str, list[Any]]:
+    if statedata is None:
+        return {"state": list(states)}
+    names = _data_column_names(statedata)
+    if names is None or "state" not in names:
+        raise ValueError("statedata must contain a 'state' column")
+    state_values = _column(statedata, "state")
+    positions: list[int] = []
+    for state in states:
+        try:
+            positions.append(state_values.index(state))
+        except ValueError as exc:
+            raise ValueError(f"statedata does not contain state {state!r}") from exc
+    return {
+        str(name): [_column(statedata, str(name))[position] for position in positions]
+        for name in names
+    }
+
+
+def _multi_state_selector_indices(
+    expression: str,
+    states: Sequence[str],
+    state_data: Mapping[str, Sequence[Any]],
+) -> list[int]:
+    call = _multi_state_selector_call(expression)
+    if call is None:
+        values = _multi_state_selector_atoms(expression)
+        if len(values) == 1 and values[0] == 0:
+            return list(range(len(states)))
+        result: list[int] = []
+        for value in values:
+            if isinstance(value, bool):
+                raise ValueError("state numbers must be integers")
+            if isinstance(value, int | float):
+                integer = int(value)
+                if integer != value:
+                    raise ValueError("non-integer state number")
+                if integer < 1 or integer > len(states):
+                    raise ValueError("numeric state is out of range")
+                index_value = integer - 1
+            else:
+                try:
+                    index_value = list(states).index(str(value))
+                except ValueError as exc:
+                    raise ValueError(f"state {value!r} not found") from exc
+            if index_value not in result:
+                result.append(index_value)
+        return result
+
+    column, values = call
+    if not values:
+        raise ValueError(f"state variable {column!r} has no selector values")
+    if column not in state_data:
+        raise ValueError(f"state variable {column!r} not found")
+    column_values = list(state_data[column])
+    missing = [value for value in values if value not in column_values]
+    if missing:
+        raise ValueError(f"state value {missing[0]!r} not found in {column!r}")
+    return [index_value for index_value, value in enumerate(column_values) if value in values]
+
+
+def _multi_state_rule_transitions(
+    lhs: str,
+    transitions: Sequence[tuple[int, int]],
+    states: Sequence[str],
+    state_data: Mapping[str, Sequence[Any]],
+) -> list[int]:
+    selected: list[int] = []
+    for operator, pair in _formula_tokens(lhs):
+        if operator == "-":
+            raise ValueError("multi-state transition selectors cannot be removed")
+        colon = _find_top_level_formula_character(pair, ":")
+        if colon is None:
+            raise ValueError(f"multi-state transition term {pair!r} does not contain ':'")
+        sources = _multi_state_selector_indices(pair[:colon], states, state_data)
+        targets = _multi_state_selector_indices(pair[colon + 1 :], states, state_data)
+        for source in sources:
+            for target in targets:
+                try:
+                    transition_idx = transitions.index((source, target))
+                except ValueError:
+                    continue
+                if transition_idx not in selected:
+                    selected.append(transition_idx)
+    return selected
+
+
+def _multi_state_rule_assignments(
+    rhs: str,
+    data: Any,
+    response_spec: _SurvResponseSpec,
+    assignment_by_term: Mapping[_CovariateSpec, int],
+) -> tuple[set[int], set[int], bool, bool]:
+    added: set[int] = set()
+    dropped: set[int] = set()
+    add_baseline = False
+    drop_baseline = False
+    dot_terms = _dot_terms(data, response_spec.columns)
+    for operator, term in _formula_tokens(rhs):
+        if term == "1":
+            add_baseline = operator != "-"
+            drop_baseline = operator == "-"
+            continue
+        if term == "0":
+            continue
+        parsed = _split_terms(term, dot_terms)
+        if parsed.strata or parsed.offsets or parsed.clusters:
+            raise ValueError("transition-specific formulas support covariate terms only")
+        if parsed.ridge or parsed.pspline or parsed.frailty:
+            raise ValueError("transition-specific formulas do not support penalty terms")
+        assignments = {assignment_by_term[value] for value in parsed.covariates}
+        if operator == "-":
+            dropped.update(assignments)
+            added.difference_update(assignments)
+        else:
+            added.update(assignments)
+            dropped.difference_update(assignments)
+    return added, dropped, add_baseline, drop_baseline
+
+
+def _cox_multistate_formula_maps(
+    specification: _MultiStateFormulaSpec,
+    data: Any,
+    design: _FormulaDesign,
+    transitions: Sequence[tuple[int, int]],
+    states: Sequence[str],
+    statedata: Any | None,
+) -> _MultiStateFormulaMaps:
+    response_spec = design.response
+    dot_terms = _dot_terms(data, response_spec.columns)
+    _lhs, _separator, default_rhs = specification.default_formula.partition("~")
+    default_terms = _split_terms(default_rhs, dot_terms)
+    ordered_terms = sorted(
+        _split_terms(specification.union_formula.partition("~")[2], dot_terms).covariates,
+        key=lambda term: len(_covariate_factors(term)),
+    )
+    if len(ordered_terms) != len(design.covariates):
+        raise ValueError("multi-state formula terms do not match the fitted design")
+    assignment_by_term = dict(zip(ordered_terms, design.term_assignments, strict=True))
+    default_assignments = {assignment_by_term[term] for term in default_terms.covariates}
+    column_assignments = [
+        assignment
+        for term, assignment in zip(design.covariates, design.term_assignments, strict=True)
+        for _name in _design_term_output_names(term)
+    ]
+    design_names = _formula_design_output_names(design)
+    if len(column_assignments) != len(design_names):
+        raise ValueError("multi-state formula column metadata is inconsistent")
+
+    coefficient_keys: list[list[Any | None]] = [
+        [
+            ("transition", transition_idx, column) if assignment in default_assignments else None
+            for column, assignment in enumerate(column_assignments)
+        ]
+        for transition_idx in range(len(transitions))
+    ]
+    key_anchors: dict[Any, tuple[int, int, int]] = {
+        key: (transition_idx, column, 0)
+        for transition_idx, row in enumerate(coefficient_keys)
+        for column, key in enumerate(row)
+        if key is not None
+    }
+    baseline_keys: list[Any] = [
+        ("transition", transition_idx) for transition_idx in range(len(transitions))
+    ]
+    ph_keys: list[Any | None] = [None] * len(transitions)
+    ph_names: dict[Any, str] = {}
+    state_data = _multi_state_statedata(statedata, states)
+
+    for rule_idx, rule in enumerate(specification.rules):
+        selected = _multi_state_rule_transitions(rule.lhs, transitions, states, state_data)
+        if not selected:
+            continue
+        added, dropped, add_baseline, drop_baseline = _multi_state_rule_assignments(
+            rule.rhs,
+            data,
+            response_spec,
+            assignment_by_term,
+        )
+        if drop_baseline:
+            raise ValueError("multi-state transition formulas cannot remove a baseline hazard")
+        for transition_idx in selected:
+            for column, assignment in enumerate(column_assignments):
+                if assignment in dropped:
+                    coefficient_keys[transition_idx][column] = None
+                if assignment in added:
+                    if rule.common:
+                        key = ("common", rule_idx, column)
+                        coefficient_keys[transition_idx][column] = key
+                        key_anchors[key] = (selected[0], column, rule_idx + 1)
+                    else:
+                        key = ("transition", transition_idx, column)
+                        coefficient_keys[transition_idx][column] = key
+                        key_anchors[key] = (transition_idx, column, 0)
+
+        share_baseline = rule.shared or (rule.common and add_baseline)
+        if add_baseline and not share_baseline:
+            for transition_idx in selected:
+                baseline_keys[transition_idx] = ("transition", transition_idx)
+                ph_keys[transition_idx] = None
+        if share_baseline:
+            baseline_key = ("shared", rule_idx)
+            root = selected[0]
+            for transition_idx in selected:
+                baseline_keys[transition_idx] = baseline_key
+                ph_keys[transition_idx] = None
+            if rule.shared and len(selected) > 1:
+                root_label = f"{transitions[root][0] + 1}:{transitions[root][1] + 1}"
+                for transition_idx in selected[1:]:
+                    key = ("ph", rule_idx, transition_idx)
+                    ph_keys[transition_idx] = key
+                    transition = transitions[transition_idx]
+                    label = f"{transition[0] + 1}:{transition[1] + 1}"
+                    ph_names[key] = f"ph({label}/{root_label})"
+
+    actual_keys = {key for row in coefficient_keys for key in row if key is not None}
+    ordered_actual_keys = sorted(actual_keys, key=lambda key: key_anchors[key])
+    ordered_ph_keys = [key for key in ph_keys if key is not None]
+    ordered_keys = [*ordered_actual_keys, *dict.fromkeys(ordered_ph_keys)]
+    coefficient_indices = {key: position for position, key in enumerate(ordered_keys)}
+    coefficient_map = tuple(
+        tuple(-1 if key is None else coefficient_indices[key] for key in row)
+        for row in coefficient_keys
+    )
+    ph_coefficient_map = tuple(-1 if key is None else coefficient_indices[key] for key in ph_keys)
+
+    keys_by_column = {
+        column: {
+            coefficient_keys[transition_idx][column]
+            for transition_idx in range(len(transitions))
+            if coefficient_keys[transition_idx][column] is not None
+        }
+        for column in range(len(design_names))
+    }
+    names_by_key: dict[Any, str] = {}
+    for column, base_name in enumerate(design_names):
+        for key in keys_by_column[column]:
+            if key is None or key in names_by_key:
+                continue
+            members = [
+                transition_idx
+                for transition_idx in range(len(transitions))
+                if coefficient_keys[transition_idx][column] == key
+            ]
+            if key[0] == "common" or len(keys_by_column[column]) == 1:
+                names_by_key[key] = base_name
+            else:
+                transition = transitions[members[0]]
+                names_by_key[key] = f"{base_name}_{transition[0] + 1}:{transition[1] + 1}"
+    names_by_key.update(ph_names)
+    coefficient_names = tuple(names_by_key[key] for key in ordered_keys)
+
+    baseline_ids: dict[Any, int] = {}
+    baseline_map: list[int] = []
+    for key in baseline_keys:
+        if key not in baseline_ids:
+            baseline_ids[key] = len(baseline_ids)
+        baseline_map.append(baseline_ids[key])
+
+    ph_columns = {key: column for column, key in enumerate(dict.fromkeys(ordered_ph_keys))}
+    stack_coefficient_map = tuple(
+        tuple(
+            [*coefficient_map[transition_idx]]
+            + [
+                coefficient_indices[key] if ph_keys[transition_idx] == key else -1
+                for key in ph_columns
+            ]
+        )
+        for transition_idx in range(len(transitions))
+    )
+    return _MultiStateFormulaMaps(
+        coefficient_map=coefficient_map,
+        ph_coefficient_map=ph_coefficient_map,
+        stack_coefficient_map=stack_coefficient_map,
+        baseline_map=tuple(baseline_map),
+        coefficient_names=coefficient_names,
+        ph_column_count=len(ph_columns),
+    )
+
+
 def _cox_multistate_coefficient_names(
     names: Sequence[str],
     transitions: Sequence[tuple[int, int]],
@@ -24374,7 +24936,7 @@ def _cox_multistate_expand(
 
 
 def coxph(
-    response: Surv | str,
+    response: Surv | str | Sequence[str],
     data: Any | None = None,
     *,
     x: Any | None = None,
@@ -24405,7 +24967,12 @@ def coxph(
     control: Any | None = None,
     **kwargs: Any,
 ):
-    """Fit a Cox proportional hazards model from Surv plus covariates."""
+    """Fit a Cox model from a ``Surv`` response, formula, or multi-state formula list.
+
+    A multi-state formula list starts with the default response formula and
+    follows it with transition selectors whose terms may be separate,
+    ``common``, or use a proportional ``shared`` baseline.
+    """
 
     case_weight_column = kwargs.pop("_weights_column", None)
     id_column = kwargs.pop("_id_column", None)
@@ -24470,6 +25037,10 @@ def coxph(
     time_transform_observed_n: int | None = None
     formula_x = False
     istate_column: str | None = None
+    multi_state_formula_specification: _MultiStateFormulaSpec | None = None
+    if isinstance(response, Sequence) and not isinstance(response, str | Surv):
+        multi_state_formula_specification = _multi_state_formula_spec(response)
+        response = multi_state_formula_specification.union_formula
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
@@ -24582,7 +25153,7 @@ def coxph(
         formula_model_data = data
 
     if not isinstance(response, Surv):
-        raise TypeError("coxph response must be a Surv object or formula")
+        raise TypeError("coxph response must be a Surv object, formula, or formula list")
     if formula_design is None:
         direct_coefficient_names = _matrix_input_column_names(x)
     if subset is not None:
@@ -24618,6 +25189,8 @@ def coxph(
     istate = aligned["istate"]
     row_names = aligned["row_names"]
     is_multistate = response.type in {"mright", "mcounting"}
+    if multi_state_formula_specification is not None and not is_multistate:
+        raise ValueError("a formula list is only valid for a multi-state Cox model")
     if response.type not in {"right", "counting", "mright", "mcounting"}:
         raise NotImplementedError(
             "coxph supports right-censored, counting, and multi-state Surv responses"
@@ -24787,14 +25360,39 @@ def coxph(
             fix_time,
         )
         transitions = _cox_multistate_transitions(normalized, current_states)
+        formula_maps = (
+            _cox_multistate_formula_maps(
+                multi_state_formula_specification,
+                formula_model_data,
+                formula_design,
+                transitions,
+                states,
+                statedata,
+            )
+            if multi_state_formula_specification is not None
+            and formula_design is not None
+            and formula_model_data is not None
+            else None
+        )
+        stack_rows = (
+            [[*row, *([1.0] * formula_maps.ph_column_count)] for row in rows]
+            if formula_maps is not None
+            else rows
+        )
         stack = _core.cox_multistate_stack(
             normalized.start,
             list(normalized.time),
             list(normalized.event),
             current_states,
-            rows,
+            stack_rows,
             [list(transition) for transition in transitions],
             fit_strata,
+            (
+                [list(row) for row in formula_maps.stack_coefficient_map]
+                if formula_maps is not None
+                else None
+            ),
+            list(formula_maps.baseline_map) if formula_maps is not None else None,
         )
         source_rows = [int(index) for index in stack.source_rows]
         original_width = width
@@ -24809,14 +25407,35 @@ def coxph(
         )
         if len(design_names) != original_width:
             design_names = _fallback_coef_names(original_width)
-        direct_coefficient_names = _cox_multistate_coefficient_names(
-            design_names,
-            transitions,
+        coefficient_map = (
+            formula_maps.coefficient_map
+            if formula_maps is not None
+            else tuple(
+                tuple(transition_idx * original_width + column for column in range(original_width))
+                for transition_idx in range(len(transitions))
+            )
+        )
+        ph_coefficient_map = (
+            formula_maps.ph_coefficient_map
+            if formula_maps is not None
+            else tuple(-1 for _transition in transitions)
+        )
+        baseline_map = (
+            formula_maps.baseline_map
+            if formula_maps is not None
+            else tuple(range(len(transitions)))
+        )
+        direct_coefficient_names = (
+            formula_maps.coefficient_names
+            if formula_maps is not None
+            else _cox_multistate_coefficient_names(design_names, transitions)
         )
         multi_state_metadata = _MultiStateCoxFitMetadata(
             states=states,
             transitions=transitions,
             response=stored_response,
+            normalized_response=normalized,
+            current_states=tuple(current_states),
             source_rows=tuple(source_rows),
             transition_indices=tuple(int(index) for index in stack.transition_indices),
             original_rows=tuple(tuple(float(value) for value in row) for row in rows),
@@ -24830,6 +25449,9 @@ def coxph(
             strata_levels=strata_levels,
             row_names=tuple(row_names or (str(index + 1) for index in range(len(rows)))),
             original_width=original_width,
+            coefficient_map=coefficient_map,
+            ph_coefficient_map=ph_coefficient_map,
+            baseline_map=baseline_map,
             reported_means=_cox_multistate_reported_means(rows, nocenter_values),
             user_strata_count=len(strata_levels) or 1,
             timefix=fix_time,

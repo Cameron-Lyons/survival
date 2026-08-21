@@ -7323,6 +7323,8 @@ def cox_multistate_stack(
     covariates: list[list[float]],
     transitions: list[list[int]],
     strata: list[int] | None = None,
+    coefficient_map: list[list[int]] | None = None,
+    baseline_map: list[int] | None = None,
 ) -> MultiStateCoxStack: ...
 def cox_multistate_curve(
     hazard_increments: list[list[float]],

@@ -8414,6 +8414,140 @@ test_that("single-formula multi-state Cox models match survival", {
   expect_equal(nrow(stratified_frame), 84L)
   expect_equal(table(stratified_frame$strata), c(g1 = 42L, g2 = 42L))
 
+  formula_data <- transform(
+    competing,
+    z = c(0.9, -0.2, 0.4, 1.3, -0.5, 0.7, 1.1, -0.8, 0.2, 1.7, -1.2, 0.6)
+  )
+  bridged_common <- coxph(
+    list(
+      Surv(time, status) ~ 1,
+      1:2 + 1:3 ~ x / common
+    ),
+    data = formula_data,
+    id = id,
+    control = coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  reference_common <- survival::coxph(
+    list(
+      survival::Surv(time, status) ~ 1,
+      1:2 + 1:3 ~ x / common
+    ),
+    data = formula_data,
+    id = id,
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  expect_equal(coef(bridged_common), coef(reference_common), tolerance = 1e-12)
+  expect_equal(vcov(bridged_common), vcov(reference_common), tolerance = 1e-12)
+  expect_equal(
+    bridged_common$log_likelihood,
+    reference_common$loglik,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    predict(bridged_common, newdata = formula_data[1:2, ], type = "lp"),
+    predict(reference_common, newdata = formula_data[1:2, ], type = "lp"),
+    tolerance = 1e-12
+  )
+
+  bridged_selective <- coxph(
+    list(
+      Surv(time, status) ~ x + z,
+      1:2 ~ -z
+    ),
+    data = formula_data,
+    id = id,
+    control = coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  reference_selective <- survival::coxph(
+    list(
+      survival::Surv(time, status) ~ x + z,
+      1:2 ~ -z
+    ),
+    data = formula_data,
+    id = id,
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  expect_equal(coef(bridged_selective), coef(reference_selective), tolerance = 1e-12)
+  expect_equal(
+    predict(bridged_selective, newdata = formula_data[1:2, ], type = "lp"),
+    predict(reference_selective, newdata = formula_data[1:2, ], type = "lp"),
+    tolerance = 1e-12
+  )
+
+  bridged_shared <- coxph(
+    list(
+      Surv(time, status) ~ 1,
+      1:2 + 1:3 ~ x / shared
+    ),
+    data = formula_data,
+    id = id,
+    control = coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  reference_shared <- survival::coxph(
+    list(
+      survival::Surv(time, status) ~ 1,
+      1:2 + 1:3 ~ x / shared
+    ),
+    data = formula_data,
+    id = id,
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  expect_equal(coef(bridged_shared), coef(reference_shared), tolerance = 1e-12)
+  expect_equal(
+    bridged_shared$log_likelihood,
+    reference_shared$loglik,
+    tolerance = 1e-12
+  )
+  bridged_shared_curve <- as.list(survfit(
+    bridged_shared,
+    newdata = data.frame(x = 0.5)
+  ))
+  reference_shared_curve <- survival::survfit(
+    reference_shared,
+    newdata = data.frame(x = 0.5),
+    se.fit = FALSE
+  )
+  expect_equal(
+    bridged_shared_curve$pstate,
+    reference_shared_curve$pstate,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    bridged_shared_curve$cumhaz,
+    reference_shared_curve$cumhaz,
+    tolerance = 1e-12
+  )
+
+  state_data <- data.frame(
+    state = c("(s0)", "a", "b"),
+    absorbing = c(0, 1, 1)
+  )
+  bridged_state_selector <- coxph(
+    list(
+      Surv(time, status) ~ 1,
+      state("(s0)"):absorbing(1) ~ x / common
+    ),
+    data = formula_data,
+    id = id,
+    statedata = state_data,
+    control = coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  reference_state_selector <- survival::coxph(
+    list(
+      survival::Surv(time, status) ~ 1,
+      state("(s0)"):absorbing(1) ~ x / common
+    ),
+    data = formula_data,
+    id = id,
+    statedata = state_data,
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  expect_equal(
+    coef(bridged_state_selector),
+    coef(reference_state_selector),
+    tolerance = 1e-12
+  )
+
   histories <- data.frame(
     id = c(1, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10),
     start = c(0, 1, 0, 2, 0, 0, 0, 1.5, 0, 2.5, 0, 3, 0, 0, 2.2, 0),

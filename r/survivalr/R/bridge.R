@@ -114,6 +114,8 @@ if (getRversion() >= "2.15.1") {
 .as_formula_string <- function(value) {
   if (inherits(value, "formula")) {
     paste(deparse(value, width.cutoff = 500L), collapse = " ")
+  } else if (is.list(value)) {
+    lapply(value, .as_formula_string)
   } else if (is.character(value)) {
     paste(value, collapse = " ")
   } else {
