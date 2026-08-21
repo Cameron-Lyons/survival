@@ -245,3 +245,98 @@ def test_sparse_gaussian_frailty_native_fit_validates_entry_times():
         survival.r_api._core.coxph_frailty_fit(*arguments, entry_times=[0.0])
     with pytest.raises(ValueError, match=r"entry_times\[0\] must be less"):
         survival.r_api._core.coxph_frailty_fit(*arguments, entry_times=[1.0, 0.0])
+
+
+def test_sparse_student_t_frailty_native_fit_matches_reference():
+    fit = survival.r_api._core.coxph_frailty_fit(
+        [float(value) for value in range(2, 20)],
+        [1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        [
+            [value]
+            for value in [
+                -1.2,
+                -0.8,
+                -0.4,
+                0.0,
+                0.4,
+                0.8,
+                1.2,
+                -1.0,
+                -0.6,
+                -0.2,
+                0.2,
+                0.6,
+                1.0,
+                1.4,
+                -1.4,
+                -0.9,
+                0.1,
+                0.9,
+            ]
+        ],
+        [value // 3 for value in range(18)],
+        0.5,
+        max_iter=50,
+        eps=1e-10,
+        toler=1e-13,
+        method="breslow",
+        distribution="t",
+        tdf=5.0,
+    )
+
+    assert fit.coefficients[0] == pytest.approx([-0.19743147930125], abs=1e-12)
+    assert fit.frailty == pytest.approx(
+        [
+            0.426144390050408,
+            0.298550076830906,
+            0.136467056887759,
+            -0.00855828519712049,
+            -0.24217955197031,
+            -0.780582477534266,
+        ],
+        abs=1e-12,
+    )
+    assert fit.frailty_variance == pytest.approx(
+        [
+            0.317599821981425,
+            0.249342034909525,
+            0.203691040339686,
+            0.184566103436754,
+            0.18538781841236,
+            0.376879269003266,
+        ],
+        abs=1e-12,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-23.6901985559574, -19.9806323372429],
+        abs=1e-12,
+    )
+    assert fit.covariate_degrees_of_freedom == pytest.approx([0.981376565411526], abs=1e-12)
+    assert fit.frailty_degrees_of_freedom == pytest.approx(1.63990825488468, abs=1e-12)
+    assert fit.distribution == "t"
+    assert fit.tdf == pytest.approx(5.0)
+
+
+@pytest.mark.parametrize("tdf", [2.0, 1.0, float("inf")])
+def test_sparse_student_t_frailty_native_fit_validates_tdf(tdf):
+    with pytest.raises(ValueError, match="greater than 2"):
+        survival.r_api._core.coxph_frailty_fit(
+            [1.0, 2.0],
+            [1, 0],
+            [[0.0], [1.0]],
+            [0, 0],
+            0.5,
+            distribution="t",
+            tdf=tdf,
+        )
+
+    with pytest.raises(ValueError, match="only valid"):
+        survival.r_api._core.coxph_frailty_fit(
+            [1.0, 2.0],
+            [1, 0],
+            [[0.0], [1.0]],
+            [0, 0],
+            0.5,
+            distribution="gaussian",
+            tdf=tdf,
+        )

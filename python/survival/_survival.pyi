@@ -1087,6 +1087,8 @@ class CoxPHFrailtyFit:
     @property
     def distribution(self) -> str: ...
     @property
+    def tdf(self) -> float | None: ...
+    @property
     def event_times(self) -> list[float]: ...
     @property
     def status(self) -> list[int]: ...
@@ -7275,6 +7277,7 @@ def coxph_frailty_fit(
     penalty_matrix: list[list[float]] | None = None,
     entry_times: list[float] | None = None,
     distribution: str | None = None,
+    tdf: float | None = None,
 ) -> CoxPHFrailtyFit: ...
 def coxph_fit(
     time: list[float],
