@@ -13379,6 +13379,16 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     ):
         assert actual == pytest.approx(expected)
 
+    zph = survival.cox_zph(fit, transform="rank")
+    assert zph.variable_names == ["x_1:2", "x_1:3"]
+    assert zph.df == [1, 1]
+    assert zph.chi2_values == pytest.approx(
+        [1.2069072243140258, 0.06051259985681031],
+        abs=1e-12,
+    )
+    assert zph.global_chi2 == pytest.approx(1.2674198241708354, abs=1e-12)
+    assert zph.strata == [1, 1, 1, 1, 2, 2, 2, 2]
+
     predicted = survival.predict(fit, type="lp")
     assert predicted[0] == pytest.approx([1.119748345585229, 0.37210961641001666])
     assert predicted[-1] == pytest.approx([-1.4262057875348704, -0.4739501430064422])
@@ -13664,6 +13674,17 @@ def test_coxph_multistate_formula_lists_match_r_reference():
     }
     assert common_fit.assign == {"x": [1]}
     assert common_fit.share is None
+    common_zph = survival.cox_zph(common_fit, transform="rank")
+    assert common_zph.variable_names == ["x_1:2"]
+    assert common_zph.df == [1]
+    assert common_zph.chi2_values == pytest.approx([0.41439233839228745], abs=1e-12)
+    assert common_zph.strata == [1, 1, 1, 1, 2, 2, 2, 2]
+    common_zph_columns = survival.cox_zph(common_fit, transform="rank", terms=False)
+    assert common_zph_columns.variable_names == ["x"]
+    assert common_zph_columns.chi2_values == pytest.approx(
+        common_zph.chi2_values,
+        abs=1e-12,
+    )
     for actual, expected in zip(
         survival.predict(common_fit, newdata=data.iloc[:2], type="lp"),
         [
@@ -13692,6 +13713,24 @@ def test_coxph_multistate_formula_lists_match_r_reference():
         "columns": ["1:2", "1:3"],
     }
     assert selective_fit.assign == {"x": [1], "z": [2]}
+    selective_zph = survival.cox_zph(selective_fit, transform="rank")
+    assert selective_zph.variable_names == ["x_1:2", "x_1:3", "z_1:3"]
+    assert selective_zph.df == [1, 1, 1]
+    assert selective_zph.chi2_values == pytest.approx(
+        [1.2069072243140258, 0.0031752395090040614, 0.2874867710043486],
+        abs=1e-12,
+    )
+    assert selective_zph.strata == [1, 1, 1, 1, 2, 2, 2, 2]
+    selective_zph_columns = survival.cox_zph(
+        selective_fit,
+        transform="rank",
+        terms=False,
+    )
+    assert selective_zph_columns.variable_names == ["x_1:2", "x_1:3", "z"]
+    assert selective_zph_columns.chi2_values == pytest.approx(
+        selective_zph.chi2_values,
+        abs=1e-12,
+    )
     for actual, expected in zip(
         survival.predict(selective_fit, newdata=data.iloc[:2], type="lp"),
         [
@@ -13730,6 +13769,10 @@ def test_coxph_multistate_formula_lists_match_r_reference():
     assert shared_fit.assign == {"x": [1]}
     assert shared_fit.share["vtype"] == [0, 2]
     assert shared_fit.share["scale"] == pytest.approx([1.0, 0.3377879753621159], abs=1e-12)
+    shared_zph = survival.cox_zph(shared_fit, transform="rank")
+    assert shared_zph.variable_names == ["x_1:2", "x_1:3", "ph(1:3/1:2)"]
+    assert shared_zph.df == [1, 1, 1]
+    assert shared_zph.strata == [1] * 8
     shared_curve = survival.survfit(
         shared_fit,
         newdata=pandas.DataFrame({"x": [0.5]}),
@@ -13781,6 +13824,49 @@ def test_coxph_multistate_formula_lists_match_r_reference():
             data=data,
             id="id",
         )
+
+
+def test_cox_zph_multistate_groups_expanded_factor_terms_like_r():
+    pandas = pytest.importorskip("pandas")
+    data = pandas.DataFrame(
+        {
+            "id": list(range(1, 13)),
+            "time": list(range(1, 13)),
+            "status": pandas.Categorical(
+                ["a", "b", "0", "a", "0", "b", "a", "b", "0", "a", "b", "0"],
+                categories=["0", "a", "b"],
+            ),
+            "x": [0.2, 0.8, 0.3, 1.1, 0.4, 1.4, 0.6, 1.6, 0.7, 1.8, 1.0, 2.0],
+            "q": pandas.Categorical(
+                ["u", "v", "w", "u", "u", "v", "w", "u", "u", "v", "w", "u"],
+                categories=["u", "v", "w"],
+            ),
+        }
+    )
+    fit = survival.coxph(
+        "Surv(time, status) ~ x + q",
+        data=data,
+        id="id",
+        max_iter=20,
+        eps=1e-9,
+    )
+
+    by_term = survival.cox_zph(fit, transform="rank")
+    by_column = survival.cox_zph(fit, transform="rank", terms=False)
+
+    assert by_term.variable_names == ["x_1:2", "q_1:2", "x_1:3", "q_1:3"]
+    assert by_term.df == [1, 2, 1, 2]
+    assert by_column.variable_names == [
+        "x_1:2",
+        "qv_1:2",
+        "qw_1:2",
+        "x_1:3",
+        "qv_1:3",
+        "qw_1:3",
+    ]
+    assert by_column.df == [1, 1, 1, 1, 1, 1]
+    assert by_term.global_chi2 == pytest.approx(by_column.global_chi2, abs=1e-12)
+    assert by_term.strata == by_column.strata == [1, 1, 1, 1, 2, 2, 2, 2]
 
 
 def test_coxph_multistate_counting_histories_match_r_reference():
