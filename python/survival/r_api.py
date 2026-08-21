@@ -419,6 +419,8 @@ class _MultiStateCoxFitMetadata:
     original_rows: tuple[tuple[float, ...], ...]
     original_offsets: tuple[float, ...]
     original_istate: tuple[Any, ...] | None
+    original_strata: tuple[Any, ...] | None
+    strata_levels: tuple[Any, ...]
     row_names: tuple[str, ...]
     original_width: int
     reported_means: tuple[float, ...]
@@ -14181,11 +14183,36 @@ def _cox_survfit_from_aggregates(
 
 
 def aggregate_survfit_result(
-    result: CoxSurvfitResult | SurvfitMultiStateCoxResult,
+    result: CoxSurvfitResult | SurvfitMultiStateCoxResult | Mapping[Any, Any],
     groups: Any | None = None,
     weights: Any | None = None,
-) -> CoxSurvfitResult | SurvfitMultiStateResult | SurvfitMultiStateCoxResult:
+) -> (
+    CoxSurvfitResult
+    | SurvfitMultiStateResult
+    | SurvfitMultiStateCoxResult
+    | dict[Any, SurvfitMultiStateResult | SurvfitMultiStateCoxResult]
+):
     """Average Cox survfit prediction curves, optionally by group code."""
+
+    if isinstance(result, Mapping):
+        if not result or not all(
+            isinstance(curve, SurvfitMultiStateCoxResult)
+            or (isinstance(curve, SurvfitMultiStateResult) and curve.cox_model)
+            for curve in result.values()
+        ):
+            raise TypeError("survfit object does not have a 'data' margin")
+        aggregated: dict[Any, SurvfitMultiStateResult | SurvfitMultiStateCoxResult] = {}
+        for label, curve in result.items():
+            batch = (
+                curve
+                if isinstance(curve, SurvfitMultiStateCoxResult)
+                else SurvfitMultiStateCoxResult((curve,), curve.model)
+            )
+            value = aggregate_survfit_result(batch, groups, weights)
+            if not isinstance(value, SurvfitMultiStateResult | SurvfitMultiStateCoxResult):
+                raise AssertionError("stratified multi-state aggregation returned invalid output")
+            aggregated[label] = value
+        return aggregated
 
     if isinstance(result, SurvfitMultiStateCoxResult):
         n_curves = result.curve_count
@@ -18354,8 +18381,11 @@ def _survfit_multistate_structure(
     result: SurvfitMultiStateResult | SurvfitMultiStateCoxResult | Mapping[Any, Any],
 ) -> dict[str, Any]:
     batch_curves: tuple[SurvfitMultiStateResult, ...] | None = None
+    grouped_batches: list[tuple[Any, SurvfitMultiStateCoxResult]] | None = None
+    cox_curve_count = 1
     if isinstance(result, SurvfitMultiStateCoxResult):
         batch_curves = result.curves
+        cox_curve_count = result.curve_count
         curves = [(None, result.curves[0])]
         grouped = False
     elif isinstance(result, SurvfitMultiStateResult):
@@ -18367,6 +18397,17 @@ def _survfit_multistate_structure(
         and all(isinstance(curve, SurvfitMultiStateResult) for curve in result.values())
     ):
         curves = list(result.items())
+        grouped = True
+    elif (
+        isinstance(result, Mapping)
+        and result
+        and all(isinstance(curve, SurvfitMultiStateCoxResult) for curve in result.values())
+    ):
+        grouped_batches = list(result.items())
+        cox_curve_count = grouped_batches[0][1].curve_count
+        if any(batch.curve_count != cox_curve_count for _label, batch in grouped_batches):
+            raise ValueError("stratified multi-state Cox results must share a data dimension")
+        curves = [(label, batch.curves[0]) for label, batch in grouped_batches]
         grouped = True
     else:
         raise TypeError("survfit structure requires a multi-state result")
@@ -18389,6 +18430,17 @@ def _survfit_multistate_structure(
         return [[float(value) for value in row] for matrix in matrices for row in matrix]
 
     def model_curve_matrix(name: str) -> list[list[float]] | None:
+        if grouped_batches is not None:
+            matrices = [
+                getattr(batch.curves[curve_index], name)
+                for curve_index in range(cox_curve_count)
+                for _label, batch in grouped_batches
+            ]
+            if all(matrix is None for matrix in matrices):
+                return None
+            if any(matrix is None for matrix in matrices):
+                raise ValueError(f"stratified multi-state Cox curves must share {name} output")
+            return [[float(value) for value in row] for matrix in matrices for row in matrix]
         if batch_curves is None:
             return combined_matrix(name)
         matrices = [getattr(curve, name) for curve in batch_curves]
@@ -18472,7 +18524,7 @@ def _survfit_multistate_structure(
             "t0": first.t0,
             "_transition_names": transition_names,
             "_cox_model": first.cox_model,
-            "_cox_curve_count": 1 if batch_curves is None else len(batch_curves),
+            "_cox_curve_count": cox_curve_count,
         }
     )
     if first.oldstate is not None:
@@ -21646,6 +21698,7 @@ def _cox_multistate_baseline_increments(
     fit: _FormulaFit,
     times: Sequence[float],
     start_time: float,
+    user_stratum: int = 0,
 ) -> list[list[float]]:
     metadata = fit.multi_state
     if metadata is None:
@@ -21654,7 +21707,8 @@ def _cox_multistate_baseline_increments(
     baselines = _cox_baselines_by_stratum(base_times, base_hazards, base_strata)
     cumulative_by_transition: list[list[float]] = []
     for transition_idx in range(len(metadata.transitions)):
-        transition_times, transition_hazards = baselines.get(transition_idx, ([], []))
+        stratum = transition_idx * metadata.user_strata_count + user_stratum
+        transition_times, transition_hazards = baselines.get(stratum, ([], []))
         at_start = _core.step_values_at(
             transition_times,
             transition_hazards,
@@ -21720,14 +21774,14 @@ def _cox_multistate_survfit_result(
     conf_level: float,
     conf_type: str,
     keep_model: bool,
-) -> SurvfitMultiStateResult | SurvfitMultiStateCoxResult:
+) -> (
+    SurvfitMultiStateResult
+    | SurvfitMultiStateCoxResult
+    | dict[Any, SurvfitMultiStateResult | SurvfitMultiStateCoxResult]
+):
     metadata = fit.multi_state
     if metadata is None:
         raise AssertionError("multi-state Cox metadata is missing")
-    if metadata.user_strata_count != 1:
-        raise NotImplementedError(
-            "model-based multi-state Cox curves are currently limited to unstratified fits"
-        )
     if rows is None:
         raise ValueError("newdata is required for multi-state Cox survival curves")
     if not rows:
@@ -21738,9 +21792,9 @@ def _cox_multistate_survfit_result(
     if len(row_offsets) != len(rows):
         raise ValueError("multi-state Cox survival curves require one offset per newdata row")
 
-    shell = _survfit_multistate(
+    shells = _survfit_multistate(
         metadata.response,
-        None,
+        metadata.original_strata,
         fit.case_weights,
         fit.id_values,
         None,
@@ -21753,50 +21807,68 @@ def _cox_multistate_survfit_result(
         conf_level=conf_level,
         conf_type=conf_type,
         timefix=metadata.timefix,
-        group_levels=None,
+        group_levels=metadata.strata_levels or None,
         model_frame=None,
     )
-    if not isinstance(shell, SurvfitMultiStateResult):
-        raise AssertionError("multi-state Cox counts unexpectedly produced grouped curves")
-    if not include_censor:
-        transition_counts = shell.n_transition_count or shell.n_transition
-        keep = [
-            index
-            for index, (time, counts) in enumerate(zip(shell.time, transition_counts, strict=True))
-            if any(value > 0.0 for value in counts)
-            or (include_time0 and math.isclose(time, shell.t0, rel_tol=0.0, abs_tol=1e-12))
-        ]
-        shell = _select_multistate_curve_times(shell, keep)
-
-    increments = _cox_multistate_baseline_increments(fit, shell.time, shell.t0)
-    native_curves = _core.cox_multistate_curves(
-        increments,
-        [list(transition) for transition in metadata.transitions],
-        [
-            _cox_multistate_curve_risk(fit, row, offset)
-            for row, offset in zip(rows, row_offsets, strict=True)
-        ],
-        shell.p0,
-        stype == 2,
-    )
     model_frame = _cox_survfit_model_frame(fit, newdata) if keep_model else None
-    curves = tuple(
-        replace(
-            shell,
-            pstate=[[float(value) for value in row] for row in profile_pstate],
-            cumhaz=[[float(value) for value in row] for row in profile_cumhaz],
-            model=model_frame,
-            cox_model=True,
+    risks = [
+        _cox_multistate_curve_risk(fit, row, offset)
+        for row, offset in zip(rows, row_offsets, strict=True)
+    ]
+
+    def fit_shell(
+        shell: SurvfitMultiStateResult,
+        user_stratum: int,
+    ) -> SurvfitMultiStateResult | SurvfitMultiStateCoxResult:
+        if not include_censor:
+            transition_counts = shell.n_transition_count or shell.n_transition
+            keep = [
+                index
+                for index, (time, counts) in enumerate(
+                    zip(shell.time, transition_counts, strict=True)
+                )
+                if any(value > 0.0 for value in counts)
+                or (include_time0 and math.isclose(time, shell.t0, rel_tol=0.0, abs_tol=1e-12))
+            ]
+            shell = _select_multistate_curve_times(shell, keep)
+
+        increments = _cox_multistate_baseline_increments(
+            fit,
+            shell.time,
+            shell.t0,
+            user_stratum,
         )
-        for profile_pstate, profile_cumhaz in zip(
-            native_curves.pstate,
-            native_curves.cumhaz,
-            strict=True,
+        native_curves = _core.cox_multistate_curves(
+            increments,
+            [list(transition) for transition in metadata.transitions],
+            risks,
+            shell.p0,
+            stype == 2,
         )
-    )
-    if len(curves) == 1:
-        return curves[0]
-    return SurvfitMultiStateCoxResult(curves=curves, model=model_frame)
+        curves = tuple(
+            replace(
+                shell,
+                pstate=[[float(value) for value in row] for row in profile_pstate],
+                cumhaz=[[float(value) for value in row] for row in profile_cumhaz],
+                model=model_frame,
+                cox_model=True,
+            )
+            for profile_pstate, profile_cumhaz in zip(
+                native_curves.pstate,
+                native_curves.cumhaz,
+                strict=True,
+            )
+        )
+        if len(curves) == 1:
+            return curves[0]
+        return SurvfitMultiStateCoxResult(curves=curves, model=model_frame)
+
+    if isinstance(shells, SurvfitMultiStateResult):
+        return fit_shell(shells, 0)
+    return {
+        label: fit_shell(shell, user_stratum)
+        for user_stratum, (label, shell) in enumerate(shells.items())
+    }
 
 
 def _cox_survival_curve_with_se(
@@ -24596,7 +24668,15 @@ def coxph(
     istate_values = _materialize_1d(istate, "istate") if istate is not None else None
     if istate_values is not None and len(istate_values) != n:
         raise ValueError("istate must have the same length as the Surv response")
-    fit_strata = _encode_groups(strata, n) if strata is not None else None
+    original_strata_values = _materialize_labels(strata, "strata") if strata is not None else None
+    strata_levels = (
+        _label_levels(original_strata_values, "strata")
+        if original_strata_values is not None
+        else ()
+    )
+    fit_strata = (
+        _encode_groups(original_strata_values, n) if original_strata_values is not None else None
+    )
     fit_weights = _optional_float_vector(weights, "weights", n)
     case_weights = fit_weights if explicit_weights else None
     fit_offset = _optional_float_vector(offset, "offset", n)
@@ -24685,10 +24765,14 @@ def coxph(
                 [0.0] * len(rows) if fit_offset is None else map(float, fit_offset)
             ),
             original_istate=None if istate_values is None else tuple(istate_values),
+            original_strata=(
+                None if original_strata_values is None else tuple(original_strata_values)
+            ),
+            strata_levels=strata_levels,
             row_names=tuple(row_names or (str(index + 1) for index in range(len(rows)))),
             original_width=original_width,
             reported_means=_cox_multistate_reported_means(rows, nocenter_values),
-            user_strata_count=(max(fit_strata) + 1 if fit_strata else 1),
+            user_strata_count=len(strata_levels) or 1,
             timefix=fix_time,
         )
         response = Surv._from_normalized(

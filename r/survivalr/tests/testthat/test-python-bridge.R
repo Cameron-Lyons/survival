@@ -8306,6 +8306,83 @@ test_that("single-formula multi-state Cox models match survival", {
   expect_false("cumhaz" %in% names(as.list(bridged_grouped_average)))
   expect_equal(dim(bridged_grouped_average), c(data = 2L, states = 3L))
 
+  stratified_competing <- transform(
+    competing,
+    g = factor(rep(c("g1", "g2"), each = 6L))
+  )
+  bridged_stratified <- coxph(
+    Surv(time, status) ~ x + strata(g),
+    data = stratified_competing,
+    id = id,
+    control = coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  reference_stratified <- survival::coxph(
+    survival::Surv(time, status) ~ x + strata(g),
+    data = stratified_competing,
+    id = id,
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  expect_equal(coef(bridged_stratified), coef(reference_stratified), tolerance = 1e-12)
+
+  bridged_stratified_curves <- survfit(
+    bridged_stratified,
+    newdata = profile_data,
+    time0 = TRUE
+  )
+  reference_stratified_curves <- survival::survfit(
+    reference_stratified,
+    newdata = profile_data,
+    se.fit = FALSE,
+    time0 = TRUE
+  )
+  bridged_stratified_list <- as.list(bridged_stratified_curves)
+  for (field in c(
+    "n", "time", "strata", "pstate", "cumhaz", "n.risk", "n.event",
+    "n.censor", "n.transition", "n.id", "p0", "states", "transitions"
+  )) {
+    expect_equal(
+      bridged_stratified_list[[field]],
+      reference_stratified_curves[[field]],
+      tolerance = 1e-12,
+      info = paste("stratified field", field)
+    )
+  }
+  expect_equal(
+    dim(bridged_stratified_curves),
+    c(strata = 2L, data = 2L, states = 3L)
+  )
+
+  bridged_stratified_subset <- bridged_stratified_curves[
+    "g2",
+    2L,
+    c("(s0)", "b"),
+    drop = FALSE
+  ]
+  reference_stratified_subset <- reference_stratified_curves[
+    "g2",
+    2L,
+    c("(s0)", "b"),
+    drop = FALSE
+  ]
+  expect_equal(
+    as.list(bridged_stratified_subset)$pstate,
+    reference_stratified_subset$pstate,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    dim(bridged_stratified_subset),
+    c(strata = 1L, data = 1L, states = 2L)
+  )
+
+  bridged_stratified_average <- aggregate(bridged_stratified_curves)
+  reference_stratified_average <- aggregate(reference_stratified_curves)
+  expect_equal(
+    as.list(bridged_stratified_average)$pstate,
+    reference_stratified_average$pstate,
+    tolerance = 1e-12
+  )
+  expect_equal(dim(bridged_stratified_average), c(strata = 2L, states = 3L))
+
   histories <- data.frame(
     id = c(1, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10),
     start = c(0, 1, 0, 2, 0, 0, 0, 1.5, 0, 2.5, 0, 3, 0, 0, 2.2, 0),
