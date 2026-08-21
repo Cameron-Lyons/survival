@@ -14,7 +14,7 @@ avoid changing established numerical conventions unless the change is explicit.
 Use `uv` for the Python environment:
 
 ```sh
-uv sync --extra dev --extra test --extra sklearn --no-install-project
+uv sync --extra dev --extra test --no-install-project
 ```
 
 Build the Python extension into that environment when Python tests need the

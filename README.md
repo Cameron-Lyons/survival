@@ -741,7 +741,7 @@ workflow, feature-test matrix, and binding/stub update process.
 
 Install development dependencies:
 ```sh
-uv sync --extra dev --extra test --extra sklearn --no-install-project
+uv sync --extra dev --extra test --no-install-project
 ```
 
 Build the extension in your current environment:
