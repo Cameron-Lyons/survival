@@ -3607,7 +3607,12 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
         if theta is not None and df is not None:
             raise ValueError("gamma frailty cannot include both theta and df")
         if method is None:
-            method = "fixed" if theta is not None else "em"
+            if theta is not None:
+                method = "fixed"
+            elif df is not None:
+                method = "df"
+            else:
+                method = "em"
         if eps is not None and eps <= 0.0:
             raise ValueError("frailty eps must be positive")
         if method == "fixed":
@@ -3620,19 +3625,33 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
             if theta is not None or df is not None:
                 raise ValueError("EM gamma frailty cannot include theta or df")
             selection = "em"
+        elif method == "df":
+            if theta is not None:
+                raise ValueError("target-df gamma frailty cannot include theta")
+            if df is None:
+                raise ValueError("target-df gamma frailty requires df")
+            if df <= 0.0:
+                raise ValueError("frailty df must be positive")
+            selection = "df"
+        elif method == "aic":
+            if theta is not None or df is not None:
+                raise ValueError("AIC gamma frailty cannot include theta or df")
+            selection = "aic"
         else:
             raise NotImplementedError(
-                "gamma frailty formulas currently support fixed theta or EM with sparse=True"
+                "gamma frailty formulas support fixed theta, EM, target df, or AIC"
             )
         if theta is not None and theta <= 0.0:
             raise ValueError("frailty theta must be positive")
+        if eps is None:
+            eps = 0.1 if selection == "df" else 1e-5
         return _FrailtyFormulaTerm(
             term=_CovariateTerm(column, transform="frailty"),
             distribution=distribution,
             tdf=None,
             theta=theta,
-            target_df=None,
-            eps=1e-5 if eps is None else eps,
+            target_df=df if selection == "df" else None,
+            eps=eps,
             selection=selection,
             sparse=sparse,
             label=term,
@@ -24460,6 +24479,16 @@ def coxph(
                 for index, block in enumerate(formula_frailty_blocks)
             }
         )
+        for index, block in enumerate(formula_frailty_blocks):
+            if block.distribution != "gamma":
+                continue
+            corrected = _gamma_frailty_history_row(
+                frailty_thetas[index],
+                float(fit.penalized_log_likelihood),
+                list(response.event),
+                block.groups,
+            )
+            ridge_history[block.label]["c.loglik"] = corrected["c.loglik"]
     term_degrees_of_freedom = None
     effective_degrees_of_freedom = None
     if (
