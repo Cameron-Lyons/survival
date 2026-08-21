@@ -1447,7 +1447,12 @@ test_that("R formula wrappers delegate to the Python survival package", {
   assign_matrix <- model.matrix(assign_terms, assign_data)
   expect_equal(attrassign(assign_matrix, assign_terms), survival::attrassign(assign_matrix, assign_terms))
   assign_fit <- stats::lm(x ~ group, data = assign_data)
-  expect_equal(attrassign(assign_fit), survival::attrassign(assign_fit))
+  assign_fit_matrix <- stats::model.matrix(assign_fit)
+  assign_fit_terms <- stats::terms(assign_fit)
+  expect_equal(
+    attrassign(assign_fit_matrix, assign_fit_terms),
+    survival::attrassign(assign_fit_matrix, assign_fit_terms)
+  )
 
   cox_control <- coxph.control(iter.max = 0, eps = 1e-05, toler.chol = 1e-08, timefix = FALSE)
   expect_named(cox_control, c("eps", "toler.chol", "iter.max", "toler.inf", "outer.max", "timefix"))

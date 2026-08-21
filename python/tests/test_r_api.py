@@ -14734,6 +14734,36 @@ def test_coxph_interaction_contrasts_match_r_with_virtual_intercept(rhs, columns
 
 
 @pytest.mark.parametrize(
+    ("rhs", "term_names"),
+    [
+        ("g:x", ["g:x"]),
+        ("x + g:x", ["x", "x:g"]),
+        ("g + g:x", ["g", "g:x"]),
+        ("g:x + g + x", ["g", "x", "g:x"]),
+        ("x:g + g + x", ["g", "x", "x:g"]),
+        ("g * h", ["g", "h", "g:h"]),
+    ],
+)
+def test_formula_interaction_term_labels_match_r_factor_order(rhs, term_names):
+    data = _interaction_contrast_data()
+    cox = survival.coxph(
+        f"Surv(time, status) ~ {rhs}",
+        data=data,
+        max_iter=0,
+    )
+    aft = survival.survreg(
+        f"Surv(time, status) ~ {rhs}",
+        data=data,
+        max_iter=0,
+    )
+
+    assert survival.model_term_names(cox) == term_names
+    assert survival.model_term_names(aft) == term_names
+    assert list(survival.attrassign(cox)) == term_names
+    assert list(survival.attrassign(aft)) == ["(Intercept)", *term_names]
+
+
+@pytest.mark.parametrize(
     ("rhs", "intercept_columns", "no_intercept_columns"),
     [
         (

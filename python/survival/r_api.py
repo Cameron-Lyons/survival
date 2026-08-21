@@ -4194,13 +4194,19 @@ def _formula_model_term_degree(term: _FormulaModelTerm) -> int:
     return 0
 
 
-def _formula_model_term_label(term: _FormulaModelTerm) -> str:
+def _formula_model_term_label(
+    term: _FormulaModelTerm,
+    factor_order: Mapping[_CovariateTerm, int],
+) -> str:
     if isinstance(term, _ModelRidgeTerm):
         return term.ridge.label
     if isinstance(term, _ModelPSplineTerm):
         return term.pspline.label
     if isinstance(term, _ModelFrailtyTerm):
         return term.frailty.label
+    if isinstance(term, _ModelCovariateTerm):
+        factors = sorted(_covariate_factors(term.term), key=factor_order.__getitem__)
+        return ":".join(_covariate_term_name(factor) for factor in factors)
     return ":".join(_formula_model_term_factors(term))
 
 
@@ -4344,7 +4350,9 @@ def _fit_formula_design(
         covariates=tuple(design_terms),
         offsets=tuple(terms.offsets),
         term_assignments=tuple(term_assignments[term] for term in ordered_terms),
-        term_labels=tuple(_formula_model_term_label(term) for term in ordered_model_terms),
+        term_labels=tuple(
+            _formula_model_term_label(term, factor_order) for term in ordered_model_terms
+        ),
         strata=tuple(terms.strata),
         strata_levels=_label_levels(strata_values, "strata") if terms.strata else (),
         ridge=tuple(terms.ridge),
