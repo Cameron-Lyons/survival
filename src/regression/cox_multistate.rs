@@ -28,6 +28,15 @@ pub struct MultiStateCoxCurve {
     pub cumhaz: Vec<Vec<f64>>,
 }
 
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct MultiStateCoxCurves {
+    #[pyo3(get)]
+    pub pstate: Vec<Vec<Vec<f64>>>,
+    #[pyo3(get)]
+    pub cumhaz: Vec<Vec<Vec<f64>>>,
+}
+
 fn validate_parallel_length(name: &str, actual: usize, expected: usize) -> PyResult<()> {
     if actual != expected {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -225,18 +234,12 @@ fn matrix_exponential(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
     result
 }
 
-/// Apply direct or matrix-exponential transition updates to a starting state mixture.
-#[pyfunction]
-#[pyo3(signature = (hazard_increments, transitions, risk, p0, exponential=true))]
-pub fn cox_multistate_curve(
-    hazard_increments: Vec<Vec<f64>>,
-    transitions: Vec<Vec<usize>>,
-    risk: Vec<f64>,
-    p0: Vec<f64>,
-    exponential: bool,
-) -> PyResult<MultiStateCoxCurve> {
+fn validate_curve_structure(
+    hazard_increments: &[Vec<f64>],
+    transitions: &[Vec<usize>],
+    p0: &[f64],
+) -> PyResult<()> {
     let transition_count = transitions.len();
-    validate_parallel_length("risk", risk.len(), transition_count)?;
     if transitions.iter().any(|transition| transition.len() != 2) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "each transition must contain source and target state indices",
@@ -252,11 +255,6 @@ pub fn cox_multistate_curve(
     {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "p0 must contain non-negative finite probabilities that sum to 1",
-        ));
-    }
-    if risk.iter().any(|value| !value.is_finite() || *value < 0.0) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "risk must contain non-negative finite values",
         ));
     }
     for (transition_idx, transition) in transitions.iter().enumerate() {
@@ -284,9 +282,29 @@ pub fn cox_multistate_curve(
             "hazard_increments must contain non-negative finite values",
         ));
     }
+    Ok(())
+}
 
+fn validate_curve_risk(risk: &[f64], transition_count: usize) -> PyResult<()> {
+    validate_parallel_length("risk", risk.len(), transition_count)?;
+    if risk.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "risk must contain non-negative finite values",
+        ));
+    }
+    Ok(())
+}
+
+fn compute_multistate_curve(
+    hazard_increments: &[Vec<f64>],
+    transitions: &[Vec<usize>],
+    risk: &[f64],
+    p0: &[f64],
+    exponential: bool,
+) -> MultiStateCoxCurve {
+    let transition_count = transitions.len();
     let state_count = p0.len();
-    let mut probabilities = p0;
+    let mut probabilities = p0.to_vec();
     let mut cumulative_hazard = vec![0.0; transition_count];
     let mut pstate = Vec::with_capacity(hazard_increments.len());
     let mut cumhaz = Vec::with_capacity(hazard_increments.len());
@@ -320,7 +338,61 @@ pub fn cox_multistate_curve(
         cumhaz.push(cumulative_hazard.clone());
     }
 
-    Ok(MultiStateCoxCurve { pstate, cumhaz })
+    MultiStateCoxCurve { pstate, cumhaz }
+}
+
+/// Apply direct or matrix-exponential transition updates to a starting state mixture.
+#[pyfunction]
+#[pyo3(signature = (hazard_increments, transitions, risk, p0, exponential=true))]
+pub fn cox_multistate_curve(
+    hazard_increments: Vec<Vec<f64>>,
+    transitions: Vec<Vec<usize>>,
+    risk: Vec<f64>,
+    p0: Vec<f64>,
+    exponential: bool,
+) -> PyResult<MultiStateCoxCurve> {
+    validate_curve_structure(&hazard_increments, &transitions, &p0)?;
+    validate_curve_risk(&risk, transitions.len())?;
+    Ok(compute_multistate_curve(
+        &hazard_increments,
+        &transitions,
+        &risk,
+        &p0,
+        exponential,
+    ))
+}
+
+/// Apply multi-state transition updates to multiple covariate-profile risk vectors.
+#[pyfunction]
+#[pyo3(signature = (hazard_increments, transitions, risks, p0, exponential=true))]
+pub fn cox_multistate_curves(
+    hazard_increments: Vec<Vec<f64>>,
+    transitions: Vec<Vec<usize>>,
+    risks: Vec<Vec<f64>>,
+    p0: Vec<f64>,
+    exponential: bool,
+) -> PyResult<MultiStateCoxCurves> {
+    validate_curve_structure(&hazard_increments, &transitions, &p0)?;
+    if risks.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "risks must contain at least one covariate profile",
+        ));
+    }
+    for risk in &risks {
+        validate_curve_risk(risk, transitions.len())?;
+    }
+
+    let curves = risks
+        .iter()
+        .map(|risk| {
+            compute_multistate_curve(&hazard_increments, &transitions, risk, &p0, exponential)
+        })
+        .collect::<Vec<_>>();
+    let (pstate, cumhaz) = curves
+        .into_iter()
+        .map(|curve| (curve.pstate, curve.cumhaz))
+        .unzip();
+    Ok(MultiStateCoxCurves { pstate, cumhaz })
 }
 
 #[cfg(test)]
@@ -409,5 +481,34 @@ mod tests {
         assert!((result.pstate[0][1] - (1.0 - remaining) / 3.0).abs() < 1e-14);
         assert!((result.pstate[0][2] - 2.0 * (1.0 - remaining) / 3.0).abs() < 1e-14);
         assert!((result.pstate[0].iter().sum::<f64>() - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn batched_curves_match_individual_profile_updates() {
+        let hazard_increments = vec![vec![0.1, 0.2], vec![0.05, 0.0]];
+        let transitions = vec![vec![0, 1], vec![0, 2]];
+        let risks = vec![vec![1.0, 1.0], vec![2.0, 0.5]];
+        let p0 = vec![1.0, 0.0, 0.0];
+        let result = cox_multistate_curves(
+            hazard_increments.clone(),
+            transitions.clone(),
+            risks.clone(),
+            p0.clone(),
+            true,
+        )
+        .unwrap();
+
+        for (profile, risk) in risks.into_iter().enumerate() {
+            let individual = cox_multistate_curve(
+                hazard_increments.clone(),
+                transitions.clone(),
+                risk,
+                p0.clone(),
+                true,
+            )
+            .unwrap();
+            assert_eq!(result.pstate[profile], individual.pstate);
+            assert_eq!(result.cumhaz[profile], individual.cumhaz);
+        }
     }
 }

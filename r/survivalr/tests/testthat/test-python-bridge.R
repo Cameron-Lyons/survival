@@ -8209,6 +8209,58 @@ test_that("single-formula multi-state Cox models match survival", {
     tolerance = 1e-12
   )
 
+  profile_data <- data.frame(
+    x = c(0.5, 1.5),
+    row.names = c("low", "high")
+  )
+  bridged_profiles <- survfit(
+    bridged,
+    newdata = profile_data,
+    time0 = TRUE
+  )
+  reference_profiles <- survival::survfit(
+    reference,
+    newdata = profile_data,
+    se.fit = FALSE,
+    time0 = TRUE
+  )
+  bridged_profile_list <- as.list(bridged_profiles)
+  for (field in c(
+    "time", "pstate", "cumhaz", "n.risk", "n.event", "n.censor",
+    "n.transition", "p0", "states", "transitions"
+  )) {
+    expect_equal(
+      bridged_profile_list[[field]],
+      reference_profiles[[field]],
+      tolerance = 1e-12,
+      info = paste("batched field", field)
+    )
+  }
+  expect_equal(dim(bridged_profiles), c(data = 2L, states = 3L))
+  expect_error(
+    bridged_profiles[1L],
+    "single index subscripts are not supported"
+  )
+
+  bridged_profile_subset <- as.list(
+    bridged_profiles[2L, c("(s0)", "b"), drop = FALSE]
+  )
+  reference_profile_subset <- reference_profiles[
+    2L,
+    c("(s0)", "b"),
+    drop = FALSE
+  ]
+  expect_equal(
+    bridged_profile_subset$pstate,
+    reference_profile_subset$pstate,
+    tolerance = 1e-12
+  )
+  expect_equal(bridged_profile_subset$states, reference_profile_subset$states)
+  expect_equal(
+    dim(bridged_profiles[2L, c("(s0)", "b"), drop = FALSE]),
+    c(data = 1L, states = 2L)
+  )
+
   histories <- data.frame(
     id = c(1, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10),
     start = c(0, 1, 0, 2, 0, 0, 0, 1.5, 0, 2.5, 0, 3, 0, 0, 2.2, 0),
