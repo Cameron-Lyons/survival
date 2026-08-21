@@ -1276,19 +1276,45 @@ attrassign <- function(object, tt) {
   as.character(.call_r_api("model_term_names", object, terms = terms))
 }
 
-.predict_matrix_result <- function(type) {
-  if (is.null(type)) {
-    return(FALSE)
+.is_multistate_cox_fit <- function(object) {
+  inherits(object, "survival_py_coxph") && !is.null(.result_field(object, "multi_state"))
+}
+
+.multi_state_transition_names <- function(object) {
+  metadata <- .result_field(object, "multi_state")
+  if (is.null(metadata)) {
+    return(NULL)
   }
-  value <- tolower(gsub("-", "_", trimws(type)))
+  transitions <- .result_field(metadata, "transitions")
+  vapply(transitions, function(transition) {
+    values <- as.integer(unlist(transition, use.names = FALSE)) + 1L
+    paste0(values[[1L]], ":", values[[2L]])
+  }, character(1))
+}
+
+.multi_state_row_names <- function(object) {
+  metadata <- .result_field(object, "multi_state")
+  if (is.null(metadata)) {
+    return(NULL)
+  }
+  as.character(.result_field(metadata, "row_names"))
+}
+
+.predict_matrix_result <- function(type, object = NULL) {
+  value <- if (is.null(type)) "lp" else tolower(gsub("-", "_", trimws(type)))
+  if (!is.null(object) && .is_multistate_cox_fit(object) &&
+      (startsWith("lp", value) || startsWith("risk", value))) {
+    return(TRUE)
+  }
   startsWith("terms", value) || startsWith("quantile", value) || startsWith("uquantile", value)
 }
 
 .predict_column_names <- function(object, type, terms = NULL) {
-  if (is.null(type)) {
-    return(NULL)
+  value <- if (is.null(type)) "lp" else tolower(gsub("-", "_", trimws(type)))
+  if (.is_multistate_cox_fit(object) &&
+      (startsWith("lp", value) || startsWith("risk", value))) {
+    return(.multi_state_transition_names(object))
   }
-  value <- tolower(gsub("-", "_", trimws(type)))
   if (startsWith("terms", value)) {
     return(.model_term_names(object, terms = terms))
   }
@@ -10132,7 +10158,8 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") 
         response = .as_formula_string(formula),
         data = .as_python_data(data),
         subset = subset,
-        `na.action` = .as_na_action(na.action)
+        `na.action` = .as_na_action(na.action),
+        `_row_names` = if (is.data.frame(data)) row.names(data) else NULL
       ),
       evaluated_dots,
       list(.wrap = c("survival_py_coxph", "survival_py_model", "survival_py_object"))
@@ -11075,7 +11102,17 @@ weights.survival_py_model <- function(object, ...) {
 }
 
 model.matrix.survival_py_model <- function(object, ...) {
-  .as_model_matrix(.call_r_api("model_matrix", object, ...))
+  result <- .as_model_matrix(.call_r_api("model_matrix", object, ...))
+  fit_rows <- if (.is_multistate_cox_fit(object)) {
+    .multi_state_row_names(object)
+  } else {
+    frame <- tryCatch(model.frame(object), error = function(condition) NULL)
+    if (is.null(frame)) NULL else row.names(frame)
+  }
+  if (length(fit_rows) == nrow(result)) {
+    rownames(result) <- fit_rows
+  }
+  result
 }
 
 model.frame.survival_py_model <- function(formula, ...) {
@@ -11106,7 +11143,7 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
   )
   value <- .as_prediction_result(
     result,
-    matrix_result = .predict_matrix_result(type),
+    matrix_result = .predict_matrix_result(type, object),
     col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
@@ -11212,9 +11249,34 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   )
   value <- .as_prediction_result(
     result,
-    matrix_result = .predict_matrix_result(type),
+    matrix_result = .predict_matrix_result(type, object),
     col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  if (.is_multistate_cox_fit(object)) {
+    prediction_rows <- if (is.data.frame(newdata)) {
+      row.names(newdata)
+    } else if (is.null(newdata)) {
+      .multi_state_row_names(object)
+    } else {
+      NULL
+    }
+    add_row_names <- function(result) {
+      if (is.matrix(result)) {
+        if (length(prediction_rows) == nrow(result)) {
+          rownames(result) <- prediction_rows
+        } else if (is.null(newdata) && is.null(prediction_rows)) {
+          rownames(result) <- as.character(seq_len(nrow(result)))
+        }
+      }
+      result
+    }
+    if (is.list(value) && all(c("fit", "se.fit") %in% names(value))) {
+      value$fit <- add_row_names(value$fit)
+      value$se.fit <- add_row_names(value$se.fit)
+    } else {
+      value <- add_row_names(value)
+    }
+  }
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 

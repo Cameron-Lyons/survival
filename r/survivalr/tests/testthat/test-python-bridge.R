@@ -8081,3 +8081,96 @@ test_that("gamma frailty target degrees of freedom match survival", {
     tolerance = 1e-12
   )
 })
+
+test_that("single-formula multi-state Cox models match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  competing <- data.frame(
+    id = seq_len(12L),
+    time = seq_len(12L),
+    status = factor(
+      c("a", "b", "0", "a", "0", "b", "a", "b", "0", "a", "b", "0"),
+      levels = c("0", "a", "b")
+    ),
+    x = c(0.2, 0.8, 0.3, 1.1, 0.4, 1.4, 0.6, 1.6, 0.7, 1.8, 1, 2)
+  )
+  row.names(competing) <- paste0("case", seq_len(nrow(competing)))
+  bridged <- coxph(
+    Surv(time, status) ~ x,
+    data = competing,
+    id = id,
+    x = TRUE,
+    y = TRUE,
+    model = TRUE,
+    control = coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = competing,
+    id = id,
+    x = TRUE,
+    y = TRUE,
+    model = TRUE,
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+
+  expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+  expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-12)
+  bridged_naive <- matrix(
+    unlist(bridged$naive_var, use.names = FALSE),
+    nrow = length(coef(bridged)),
+    byrow = TRUE,
+    dimnames = dimnames(reference$naive.var)
+  )
+  expect_equal(bridged_naive, reference$naive.var, tolerance = 1e-12)
+  expect_equal(bridged$log_likelihood, reference$loglik, tolerance = 1e-12)
+  expect_equal(unname(unlist(bridged$means)), unname(reference$means), tolerance = 1e-12)
+  expect_equal(model.matrix(bridged), model.matrix(reference), tolerance = 1e-12)
+  expect_equal(predict(bridged, type = "lp"), predict(reference, type = "lp"), tolerance = 1e-12)
+  expect_equal(
+    predict(bridged, newdata = competing[1:2, ], type = "risk"),
+    predict(reference, newdata = competing[1:2, ], type = "risk"),
+    tolerance = 1e-12
+  )
+
+  histories <- data.frame(
+    id = c(1, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10),
+    start = c(0, 1, 0, 2, 0, 0, 0, 1.5, 0, 2.5, 0, 3, 0, 0, 2.2, 0),
+    stop = c(1, 4, 2, 5, 3, 4, 1.5, 6, 2.5, 7, 3, 8, 5, 2.2, 6.5, 7.5),
+    event = factor(
+      c(
+        "ill", "dead", "ill", "0", "dead", "0", "ill", "dead",
+        "ill", "0", "ill", "dead", "dead", "ill", "dead", "0"
+      ),
+      levels = c("0", "ill", "dead")
+    ),
+    x = c(0.2, 0.2, 1.4, 1.4, 0.9, 2, 1.1, 1.1, 0.5, 0.5, 1.8, 1.8, 0.4, 1.6, 1.6, 0.8)
+  )
+  bridged_histories <- coxph(
+    Surv(start, stop, event) ~ x,
+    data = histories,
+    id = id,
+    control = coxph.control(iter.max = 30L, eps = 1e-9)
+  )
+  reference_histories <- survival::coxph(
+    survival::Surv(start, stop, event) ~ x,
+    data = histories,
+    id = id,
+    control = survival::coxph.control(iter.max = 30L, eps = 1e-9)
+  )
+
+  expect_equal(coef(bridged_histories), coef(reference_histories), tolerance = 1e-12)
+  expect_equal(vcov(bridged_histories), vcov(reference_histories), tolerance = 1e-12)
+  expect_equal(
+    bridged_histories$log_likelihood,
+    reference_histories$loglik,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    predict(bridged_histories, type = "lp"),
+    predict(reference_histories, type = "lp"),
+    tolerance = 1e-12
+  )
+})

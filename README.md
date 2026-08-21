@@ -133,9 +133,7 @@ Formula support is intentionally conservative: `+` terms, `.` expansion,
 `factor(...)` / `as.factor(...)`, `strata(...)`, interaction terms with `:`
 or `*`, and numeric `offset(...)` terms are supported, along with one-column
 numeric transforms `log(...)`, `sqrt(...)`, and `exp(...)`, plus
-`I(...)`/`identity(...)` arithmetic with `+`, `-`, `*`, `/`, and `^`;
-time transforms should use the lower-level matrix APIs until they have
-dedicated Rust-backed support.
+`I(...)`/`identity(...)` arithmetic with `+`, `-`, `*`, `/`, and `^`.
 Formula calls also accept `subset=` as a boolean mask or zero-based row indices
 and `na_action="omit"` for row-wise missing-data omission across formula
 columns and external row-aligned arrays such as `weights`, `offset`, and
@@ -171,6 +169,10 @@ shapes for ordinary predictions and individual time-dependent trajectories.
 `survdiff` uses the same right-censored and delayed-entry response forms.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.
+Single-formula multi-state Cox fits support factor-valued right-censored and
+counting-process responses, with transition-specific coefficients and
+baselines, automatic subject-clustered robust covariance, and matrix-valued
+linear-predictor and risk predictions.
 Formula fits support `tt(...)` time-varying coefficient terms for right-censored
 and counting-process responses, including R's default O'Brien rank transform
 and custom `tt(x, time, riskset, weights)` callables.

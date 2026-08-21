@@ -13324,6 +13324,155 @@ def test_coxph_formula_accepts_counting_process_response():
     assert fitted_hazard == pytest.approx(expected_fitted_hazard)
 
 
+def test_coxph_multistate_competing_risks_matches_r_reference():
+    pandas = pytest.importorskip("pandas")
+    data = pandas.DataFrame(
+        {
+            "id": list(range(1, 13)),
+            "time": list(range(1, 13)),
+            "status": pandas.Categorical(
+                ["a", "b", "0", "a", "0", "b", "a", "b", "0", "a", "b", "0"],
+                categories=["0", "a", "b"],
+            ),
+            "x": [0.2, 0.8, 0.3, 1.1, 0.4, 1.4, 0.6, 1.6, 0.7, 1.8, 1.0, 2.0],
+        }
+    )
+
+    fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        id="id",
+        x=True,
+        model=True,
+        max_iter=20,
+        eps=1e-9,
+    )
+
+    assert fit.method == "breslow"
+    assert fit.n == 12
+    assert fit.y.type == "mright"
+    assert fit.y.states == ("a", "b")
+    assert fit.multi_state.states == ("(s0)", "a", "b")
+    assert fit.multi_state.transitions == ((0, 1), (0, 2))
+    assert survival.coef_names(fit) == ["x_1:2", "x_1:3"]
+    assert survival.coef(fit) == pytest.approx([-1.4144189628444996, -0.4700331996758105])
+    for actual, expected in zip(
+        survival.vcov(fit),
+        [[0.671397613845707, 0.026476571021022494], [0.026476571021022497, 0.44513730636616683]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        fit.naive_var,
+        [[1.3375032677987222, 0.0], [0.0, 0.9993039052996079]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-12)
+    assert fit.log_likelihood == pytest.approx([-14.218893499868114, -13.2087337819499])
+    assert fit.score_test == pytest.approx(1.906663642316996)
+    assert fit.iterations == 4
+    assert fit.means == pytest.approx([0.9916666666666667])
+    for actual, expected in zip(
+        survival.model_matrix(fit)["data"],
+        [[value] for value in data["x"]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+
+    predicted = survival.predict(fit, type="lp")
+    assert predicted[0] == pytest.approx([1.119748345585229, 0.37210961641001666])
+    assert predicted[-1] == pytest.approx([-1.4262057875348704, -0.4739501430064422])
+    new_risk = survival.predict(fit, newdata=data.iloc[:2], type="risk")
+    assert new_risk[0] == pytest.approx([3.064083016242497, 1.4507920031883654])
+    assert new_risk[1] == pytest.approx([1.311402228111339, 1.094272431824934])
+
+    with pytest.raises(ValueError, match="id statement"):
+        survival.coxph("Surv(time, status) ~ x", data=data)
+    with pytest.raises(ValueError, match="exact"):
+        survival.coxph("Surv(time, status) ~ x", data=data, id="id", ties="exact")
+    with pytest.raises(ValueError, match="only for linear predictors and risk"):
+        survival.predict(fit, type="terms")
+
+
+def test_coxph_multistate_counting_histories_match_r_reference():
+    pandas = pytest.importorskip("pandas")
+    data = pandas.DataFrame(
+        {
+            "id": [1, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10],
+            "start": [0, 1, 0, 2, 0, 0, 0, 1.5, 0, 2.5, 0, 3, 0, 0, 2.2, 0],
+            "stop": [1, 4, 2, 5, 3, 4, 1.5, 6, 2.5, 7, 3, 8, 5, 2.2, 6.5, 7.5],
+            "event": pandas.Categorical(
+                [
+                    "ill",
+                    "dead",
+                    "ill",
+                    "0",
+                    "dead",
+                    "0",
+                    "ill",
+                    "dead",
+                    "ill",
+                    "0",
+                    "ill",
+                    "dead",
+                    "dead",
+                    "ill",
+                    "dead",
+                    "0",
+                ],
+                categories=["0", "ill", "dead"],
+            ),
+            "x": [
+                0.2,
+                0.2,
+                1.4,
+                1.4,
+                0.9,
+                2.0,
+                1.1,
+                1.1,
+                0.5,
+                0.5,
+                1.8,
+                1.8,
+                0.4,
+                1.6,
+                1.6,
+                0.8,
+            ],
+        }
+    )
+
+    fit = survival.coxph(
+        "Surv(start, stop, event) ~ x",
+        data=data,
+        id="id",
+        max_iter=30,
+        eps=1e-9,
+    )
+
+    assert fit.y.type == "mcounting"
+    assert fit.multi_state.transitions == ((0, 1), (0, 2), (1, 2))
+    assert survival.coef_names(fit) == ["x_1:2", "x_1:3", "x_2:3"]
+    assert survival.coef(fit) == pytest.approx(
+        [-0.0979938076621861, -1.4437693634735, -0.780352420734399]
+    )
+    assert fit.log_likelihood == pytest.approx([-18.5056099547377, -17.8893602429161])
+    assert fit.score_test == pytest.approx(1.18774790520857)
+    assert fit.iterations == 4
+    assert fit.means == pytest.approx([1.08125])
+    expected_variance = [
+        [0.402947954960736, 0.195009590379911, 0.140857455760967],
+        [0.195009590379911, 0.786873446855796, 0.0987994092864489],
+        [0.140857455760967, 0.0987994092864489, 0.822062628464957],
+    ]
+    for actual, expected in zip(survival.vcov(fit), expected_variance, strict=True):
+        assert actual == pytest.approx(expected)
+    assert fit.martingale_residuals()[:3] == pytest.approx(
+        [0.891278877367106, 0.672804906036934, -0.863971641194925]
+    )
+
+
 def test_survfit_accepts_simple_coxph_model():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=10)
