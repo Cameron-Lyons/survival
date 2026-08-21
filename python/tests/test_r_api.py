@@ -13566,6 +13566,26 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
             ],
             abs=1e-12,
         )
+    stratified_unpadded = survival.survfit(
+        stratified_fit,
+        newdata=pandas.DataFrame({"x": [0.5, 1.5]}),
+    )
+    stratified_padded = survival.survfit0(stratified_unpadded)
+    assert all(curve.time[0] == pytest.approx(0.0) for curve in stratified_padded.values())
+    stratified_frame = survival.as_data_frame(stratified_curves)
+    assert list(stratified_frame) == [
+        "curve",
+        "time",
+        "n.risk",
+        "n.event",
+        "n.censor",
+        "pstate",
+        "strata",
+        "state",
+    ]
+    assert len(stratified_frame["time"]) == 84
+    assert stratified_frame["strata"].count("g1") == 42
+    assert stratified_frame["strata"].count("g2") == 42
     selected_curve = survival.r_api._subset_survfit_multistate(batched_curve, [0, 2], [1])
     assert isinstance(selected_curve, survival.SurvfitMultiStateResult)
     assert selected_curve.cox_model is True

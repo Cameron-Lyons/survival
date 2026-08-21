@@ -8383,6 +8383,37 @@ test_that("single-formula multi-state Cox models match survival", {
   )
   expect_equal(dim(bridged_stratified_average), c(strata = 2L, states = 3L))
 
+  bridged_stratified_unpadded <- survfit(
+    bridged_stratified,
+    newdata = profile_data
+  )
+  reference_stratified_unpadded <- survival::survfit(
+    reference_stratified,
+    newdata = profile_data,
+    se.fit = FALSE
+  )
+  bridged_stratified_padded <- as.list(survfit0(bridged_stratified_unpadded))
+  reference_stratified_padded <- survival::survfit0(reference_stratified_unpadded)
+  for (field in c("time", "strata", "pstate", "cumhaz")) {
+    expect_equal(
+      bridged_stratified_padded[[field]],
+      reference_stratified_padded[[field]],
+      tolerance = 1e-12,
+      info = paste("stratified survfit0 field", field)
+    )
+  }
+
+  stratified_frame <- as.data.frame(bridged_stratified_curves)
+  expect_equal(
+    names(stratified_frame),
+    c(
+      "curve", "time", "n.risk", "n.event", "n.censor", "pstate",
+      "strata", "state"
+    )
+  )
+  expect_equal(nrow(stratified_frame), 84L)
+  expect_equal(table(stratified_frame$strata), c(g1 = 42L, g2 = 42L))
+
   histories <- data.frame(
     id = c(1, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10),
     start = c(0, 1, 0, 2, 0, 0, 0, 1.5, 0, 2.5, 0, 3, 0, 0, 2.2, 0),
