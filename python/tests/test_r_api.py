@@ -13386,12 +13386,80 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     assert new_risk[0] == pytest.approx([3.064083016242497, 1.4507920031883654])
     assert new_risk[1] == pytest.approx([1.311402228111339, 1.094272431824934])
 
+    model_curve = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5]}),
+        time0=True,
+    )
+    assert isinstance(model_curve, survival.SurvfitMultiStateResult)
+    assert model_curve.cox_model is True
+    assert model_curve.time == pytest.approx(list(range(13)))
+    expected_pstate = [
+        [1.0, 0.0, 0.0],
+        [0.88214055449886, 0.11785944550114, 0.0],
+        [0.786485756836763, 0.11785944550114, 0.0956547976620965],
+        [0.786485756836763, 0.11785944550114, 0.0956547976620965],
+        [0.628657170591837, 0.275688031746066, 0.0956547976620965],
+        [0.628657170591837, 0.275688031746066, 0.0956547976620965],
+        [0.513518030721509, 0.275688031746066, 0.210793937532425],
+        [0.349795199673971, 0.439410862793604, 0.210793937532425],
+        [0.259149918124965, 0.439410862793604, 0.301439219081431],
+        [0.259149918124965, 0.439410862793604, 0.301439219081431],
+        [0.0709413841958997, 0.627619396722669, 0.301439219081431],
+        [0.0325711455496836, 0.627619396722669, 0.339809457727647],
+        [0.0325711455496836, 0.627619396722669, 0.339809457727647],
+    ]
+    for actual, expected in zip(model_curve.pstate, expected_pstate, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-12)
+    assert model_curve.cumhaz[-1] == pytest.approx([2.028882490343, 1.39544599804186], abs=1e-12)
+
+    direct_curve = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5]}),
+        stype=1,
+        se_fit=False,
+        time0=True,
+    )
+    assert direct_curve.pstate[1] == pytest.approx(
+        [0.874596123170627, 0.125403876829373, 0.0], abs=1e-12
+    )
+    assert direct_curve.pstate[-1] == pytest.approx(
+        [-0.0135356333456674, 0.750605405522721, 0.262930227822946], abs=1e-12
+    )
+    event_curve = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5]}),
+        se_fit=False,
+        censor=False,
+    )
+    assert event_curve.time == pytest.approx([1, 2, 4, 6, 7, 8, 10, 11])
+    conditional_curve = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5]}),
+        se_fit=False,
+        start_time=4,
+        time0=True,
+    )
+    assert conditional_curve.time == pytest.approx([4, 5, 6, 7, 8, 9, 10, 11, 12])
+    assert conditional_curve.pstate[-1] == pytest.approx(
+        [0.0518106641796834, 0.559814444883026, 0.38837489093729],
+        abs=1e-12,
+    )
+    assert conditional_curve.cumhaz[-1] == pytest.approx(
+        [1.67949007004011, 1.2806692086707],
+        abs=1e-12,
+    )
+
     with pytest.raises(ValueError, match="id statement"):
         survival.coxph("Surv(time, status) ~ x", data=data)
     with pytest.raises(ValueError, match="exact"):
         survival.coxph("Surv(time, status) ~ x", data=data, id="id", ties="exact")
     with pytest.raises(ValueError, match="only for linear predictors and risk"):
         survival.predict(fit, type="terms")
+    with pytest.raises(ValueError, match="newdata is required"):
+        survival.survfit(fit, se_fit=False)
+    with pytest.raises(NotImplementedError, match="standard errors"):
+        survival.survfit(fit, newdata=pandas.DataFrame({"x": [0.5]}), se_fit=True)
 
 
 def test_coxph_multistate_counting_histories_match_r_reference():
@@ -13471,6 +13539,22 @@ def test_coxph_multistate_counting_histories_match_r_reference():
     assert fit.martingale_residuals()[:3] == pytest.approx(
         [0.891278877367106, 0.672804906036934, -0.863971641194925]
     )
+
+    model_curve = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.75]}),
+        time0=True,
+    )
+    assert model_curve.time == pytest.approx([0, 1, 1.5, 2, 2.2, 2.5, 3, 4, 5, 6, 6.5, 7, 7.5, 8])
+    assert model_curve.pstate[-1] == pytest.approx(
+        [0.21698552041988, 0.0218072762944774, 0.761207203285642],
+        abs=1e-12,
+    )
+    assert model_curve.cumhaz[-1] == pytest.approx(
+        [0.876765016842523, 0.651159637001111, 3.26788171951954],
+        abs=1e-12,
+    )
+    assert all(sum(row) == pytest.approx(1.0, abs=1e-12) for row in model_curve.pstate)
 
 
 def test_survfit_accepts_simple_coxph_model():

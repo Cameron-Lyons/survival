@@ -1172,6 +1172,12 @@ class MultiStateCoxStack:
     @property
     def transition_indices(self) -> list[int]: ...
 
+class MultiStateCoxCurve:
+    @property
+    def pstate(self) -> list[list[float]]: ...
+    @property
+    def cumhaz(self) -> list[list[float]]: ...
+
 class CoxPHFit:
     @property
     def coefficients(self) -> list[list[float]]: ...
@@ -7312,6 +7318,13 @@ def cox_multistate_stack(
     transitions: list[list[int]],
     strata: list[int] | None = None,
 ) -> MultiStateCoxStack: ...
+def cox_multistate_curve(
+    hazard_increments: list[list[float]],
+    transitions: list[list[int]],
+    risk: list[float],
+    p0: list[float],
+    exponential: bool = True,
+) -> MultiStateCoxCurve: ...
 def coxph_fit(
     time: list[float],
     status: list[int],
