@@ -8323,6 +8323,14 @@ test_that("single-formula multi-state Cox models match survival", {
     control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
   )
   expect_equal(coef(bridged_stratified), coef(reference_stratified), tolerance = 1e-12)
+  for (field in c("states", "transitions", "cmap", "smap", "rmap", "assign", "share")) {
+    expect_equal(
+      bridged_stratified[[field]],
+      reference_stratified[[field]],
+      tolerance = 1e-12,
+      info = paste("stratified multi-state metadata field", field)
+    )
+  }
 
   bridged_stratified_curves <- survfit(
     bridged_stratified,
@@ -8438,6 +8446,24 @@ test_that("single-formula multi-state Cox models match survival", {
   )
   expect_equal(coef(bridged_common), coef(reference_common), tolerance = 1e-12)
   expect_equal(vcov(bridged_common), vcov(reference_common), tolerance = 1e-12)
+  for (field in c("states", "transitions", "cmap", "smap", "rmap", "assign", "share")) {
+    expect_equal(
+      bridged_common[[field]],
+      reference_common[[field]],
+      tolerance = 1e-12,
+      info = paste("common multi-state metadata field", field)
+    )
+  }
+  expect_s3_class(bridged_common$formula, "formula")
+  expect_equal(
+    paste(deparse(bridged_common$formula), collapse = " "),
+    gsub(
+      "survival::",
+      "",
+      paste(deparse(reference_common$formula), collapse = " "),
+      fixed = TRUE
+    )
+  )
   expect_equal(
     bridged_common$log_likelihood,
     reference_common$loglik,
@@ -8468,6 +8494,14 @@ test_that("single-formula multi-state Cox models match survival", {
     control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
   )
   expect_equal(coef(bridged_selective), coef(reference_selective), tolerance = 1e-12)
+  for (field in c("states", "transitions", "cmap", "smap", "rmap", "assign", "share")) {
+    expect_equal(
+      bridged_selective[[field]],
+      reference_selective[[field]],
+      tolerance = 1e-12,
+      info = paste("selective multi-state metadata field", field)
+    )
+  }
   expect_equal(
     predict(bridged_selective, newdata = formula_data[1:2, ], type = "lp"),
     predict(reference_selective, newdata = formula_data[1:2, ], type = "lp"),
@@ -8493,6 +8527,14 @@ test_that("single-formula multi-state Cox models match survival", {
     control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
   )
   expect_equal(coef(bridged_shared), coef(reference_shared), tolerance = 1e-12)
+  for (field in c("states", "transitions", "cmap", "smap", "rmap", "assign", "share")) {
+    expect_equal(
+      bridged_shared[[field]],
+      reference_shared[[field]],
+      tolerance = 1e-12,
+      info = paste("shared multi-state metadata field", field)
+    )
+  }
   expect_equal(
     bridged_shared$log_likelihood,
     reference_shared$loglik,

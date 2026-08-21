@@ -226,6 +226,8 @@
 \alias{points.survival_py_surv}
 \alias{$.survival_py_survfit}
 \alias{[[.survival_py_survfit}
+\alias{$.survival_py_coxph}
+\alias{[[.survival_py_coxph}
 \alias{[.survival_py_survfit}
 \alias{aggregate.survival_py_survfit}
 \alias{as.list.survival_py_survfit}
@@ -615,6 +617,10 @@ survfitKM(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
 \method{[}{survival_py_survfit}(x, i, j, k, ..., drop = TRUE)
 
 \method{$}{survival_py_survfit}(x, name)
+
+\method{[[}{survival_py_coxph}(x, i, ..., exact = TRUE)
+
+\method{$}{survival_py_coxph}(x, name)
 
 \method{rep}{survival_py_surv}(x, ...)
 
