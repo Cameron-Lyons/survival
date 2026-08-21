@@ -8261,6 +8261,51 @@ test_that("single-formula multi-state Cox models match survival", {
     c(data = 1L, states = 2L)
   )
 
+  aggregate_profile_data <- data.frame(x = c(0.5, 1.5, 2.0))
+  aggregate_profiles <- survfit(
+    bridged,
+    newdata = aggregate_profile_data,
+    time0 = TRUE
+  )
+  reference_aggregate_profiles <- survival::survfit(
+    reference,
+    newdata = aggregate_profile_data,
+    se.fit = FALSE,
+    time0 = TRUE
+  )
+  bridged_average <- as.list(aggregate(aggregate_profiles))
+  reference_average <- aggregate(reference_aggregate_profiles)
+  for (field in c(
+    "time", "pstate", "n.risk", "n.event", "n.censor",
+    "n.transition", "p0", "states", "transitions"
+  )) {
+    expect_equal(
+      bridged_average[[field]],
+      reference_average[[field]],
+      tolerance = 1e-12,
+      info = paste("averaged field", field)
+    )
+  }
+  expect_false("cumhaz" %in% names(bridged_average))
+  expect_equal(dim(aggregate(aggregate_profiles)), c(states = 3L))
+
+  aggregate_groups <- c("A", "B", "A")
+  bridged_grouped_average <- aggregate(
+    aggregate_profiles,
+    by = list(aggregate_groups)
+  )
+  reference_grouped_average <- aggregate(
+    reference_aggregate_profiles,
+    by = list(aggregate_groups)
+  )
+  expect_equal(
+    as.list(bridged_grouped_average)$pstate,
+    reference_grouped_average$pstate,
+    tolerance = 1e-12
+  )
+  expect_false("cumhaz" %in% names(as.list(bridged_grouped_average)))
+  expect_equal(dim(bridged_grouped_average), c(data = 2L, states = 3L))
+
   histories <- data.frame(
     id = c(1, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10),
     start = c(0, 1, 0, 2, 0, 0, 0, 1.5, 0, 2.5, 0, 3, 0, 0, 2.2, 0),

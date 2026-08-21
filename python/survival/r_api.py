@@ -14181,11 +14181,71 @@ def _cox_survfit_from_aggregates(
 
 
 def aggregate_survfit_result(
-    result: CoxSurvfitResult,
+    result: CoxSurvfitResult | SurvfitMultiStateCoxResult,
     groups: Any | None = None,
     weights: Any | None = None,
-) -> CoxSurvfitResult:
+) -> CoxSurvfitResult | SurvfitMultiStateResult | SurvfitMultiStateCoxResult:
     """Average Cox survfit prediction curves, optionally by group code."""
+
+    if isinstance(result, SurvfitMultiStateCoxResult):
+        n_curves = result.curve_count
+        curve_weights = _float_vector(weights, "weights") if weights is not None else None
+        group_codes: list[int] | None = None
+        if groups is not None:
+            group_codes = _integer_code_vector(groups, "groups", "integer group codes")
+            if len(group_codes) != n_curves:
+                raise ValueError("groups must have same length as number of curves")
+            if any(code < 1 for code in group_codes):
+                raise ValueError("groups must use positive integer group codes")
+
+        first = result.curves[0]
+        state_aggregates = [
+            _core.aggregate_shared_survfit(
+                first.time,
+                [[float(row[state_index]) for row in curve.pstate] for curve in result.curves],
+                None,
+                curve_weights,
+                group_codes,
+            )
+            for state_index in range(len(first.states))
+        ]
+        aggregate_count = len(state_aggregates[0])
+        if any(len(aggregates) != aggregate_count for aggregates in state_aggregates):
+            raise AssertionError("multi-state aggregate counts are inconsistent")
+
+        aggregate_curves: list[SurvfitMultiStateResult] = []
+        for aggregate_index in range(aggregate_count):
+            aggregate_time = [float(value) for value in state_aggregates[0][aggregate_index].time]
+            if aggregate_time != first.time:
+                raise AssertionError("multi-state aggregate times are inconsistent")
+            pstate = [
+                [
+                    float(state_aggregates[state_index][aggregate_index].surv[time_index])
+                    for state_index in range(len(first.states))
+                ]
+                for time_index in range(len(aggregate_time))
+            ]
+            aggregate_curves.append(
+                replace(
+                    first,
+                    pstate=pstate,
+                    cumhaz=[[] for _ in aggregate_time],
+                    std_err=None,
+                    std_err0=None,
+                    std_chaz=None,
+                    std_auc=None,
+                    conf_lower=None,
+                    conf_upper=None,
+                    influence_state=None,
+                    influence_state0=None,
+                    influence_chaz=None,
+                    influence_auc=None,
+                    cox_model=aggregate_count > 1,
+                )
+            )
+        if aggregate_count == 1:
+            return aggregate_curves[0]
+        return SurvfitMultiStateCoxResult(tuple(aggregate_curves), result.model)
 
     if not isinstance(result, CoxSurvfitResult):
         raise TypeError("survfit object does not have a 'data' margin")
@@ -18351,8 +18411,9 @@ def _survfit_multistate_structure(
         structure["n.transition"] = combined_matrix("n_transition")
     if grouped or first.oldstate is None:
         structure["n.id"] = [curve.n_id for _label, curve in curves] if grouped else first.n_id
-    if first.transitions:
-        structure["cumhaz"] = model_curve_matrix("cumhaz")
+    cumhaz = model_curve_matrix("cumhaz")
+    if first.transitions and cumhaz is not None and any(cumhaz):
+        structure["cumhaz"] = cumhaz
     n_enter = combined_matrix("n_enter")
     if n_enter is not None:
         structure["n.enter"] = n_enter
