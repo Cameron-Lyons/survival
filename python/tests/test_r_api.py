@@ -8501,7 +8501,7 @@ def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
         influence=3,
         ranks=True,
     )
-    multi = survival.concordance("y ~ x + z", data=data, weights="w", influence=3)
+    multi = survival.concordance("y ~ x + z", data=data, weights="w")
     transformed = survival.concordance("log(y + 1) ~ x", data=data)
     forced_rank_weights = survival.concordance("y ~ x", data=data, timewt="S")
     ordinary_rank_weights = survival.concordance("y ~ x", data=data)
@@ -8518,6 +8518,20 @@ def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
     assert fitted.n == fitted.n_event == len(data["y"])
     assert multi.score_names == ["x", "z"]
     assert multi.concordance == pytest.approx([0.753246753246753, 0.233766233766234])
+    assert multi.dfbeta is None
+    assert multi.influence is None
+    for actual, reference in zip(
+        multi.variance,
+        [
+            [0.0028080323121974, -0.00284354488705543],
+            [-0.00284354488705543, 0.0048698240644387],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(reference)
+    assert survival.as_data_frame(multi)["variance"] == pytest.approx(
+        [0.0028080323121974, 0.0048698240644387]
+    )
     assert transformed.concordance == pytest.approx(0.769230769230769)
     assert transformed.variance == pytest.approx(0.00238086901719127)
     assert forced_rank_weights.concordance == pytest.approx(ordinary_rank_weights.concordance)
@@ -8595,7 +8609,7 @@ def test_numeric_concordance_formula_applies_subset_na_action_and_dot_exclusion(
     assert fitted.concordance == pytest.approx([1.0, 0.0])
 
 
-def test_concordance_matrix_scores_return_parallel_cluster_variances():
+def test_concordance_matrix_scores_return_cluster_covariance():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         "status": [1, 1, 0, 1, 1, 0],
@@ -8618,12 +8632,14 @@ def test_concordance_matrix_scores_return_parallel_cluster_variances():
         scores=data["x1"],
         weights=data["wt"],
         cluster=data["cluster"],
+        influence=1,
     )
     x2 = survival.concordance(
         response,
         scores=data["x2"],
         weights=data["wt"],
         cluster=data["cluster"],
+        influence=1,
     )
 
     assert result.score_names == ["score1", "score2"]
@@ -8633,7 +8649,22 @@ def test_concordance_matrix_scores_return_parallel_cluster_variances():
     assert result.tied_x == pytest.approx([x1.tied_x, x2.tied_x])
     assert result.tied_y == pytest.approx([x1.tied_y, x2.tied_y])
     assert result.tied_xy == pytest.approx([x1.tied_xy, x2.tied_xy])
-    assert result.variance == pytest.approx([x1.variance, x2.variance])
+    assert result.dfbeta is None
+    assert result.influence is None
+    assert x1.dfbeta is not None
+    assert x2.dfbeta is not None
+    covariance = [
+        [
+            sum(left * right for left, right in zip(x1.dfbeta, x1.dfbeta, strict=True)),
+            sum(left * right for left, right in zip(x1.dfbeta, x2.dfbeta, strict=True)),
+        ],
+        [
+            sum(left * right for left, right in zip(x2.dfbeta, x1.dfbeta, strict=True)),
+            sum(left * right for left, right in zip(x2.dfbeta, x2.dfbeta, strict=True)),
+        ],
+    ]
+    for actual, expected in zip(result.variance, covariance, strict=True):
+        assert actual == pytest.approx(expected)
     assert result.conditional_variance == pytest.approx(
         [x1.conditional_variance, x2.conditional_variance]
     )

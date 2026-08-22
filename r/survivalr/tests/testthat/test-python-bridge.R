@@ -4166,7 +4166,8 @@ test_that("concordance formulas accept numeric and orderable outcomes", {
     y = c(1, 3, 2, 4, 4, 2),
     x = c(0.2, 0.9, 0.4, 0.7, 0.7, 0.1),
     z = c(1, 0.2, 0.5, 0.8, 0.3, 0.6),
-    w = c(1, 2, 1.5, 0.5, 3, 2.5)
+    w = c(1, 2, 1.5, 0.5, 3, 2.5),
+    cluster = c(1, 1, 2, 2, 3, 3)
   )
   data$binary <- factor(data$y >= 3)
   data$ordinal <- ordered(
@@ -4215,7 +4216,8 @@ test_that("concordance formulas accept numeric and orderable outcomes", {
     0.0112321292487896,
     tolerance = 1e-12
   )
-  expect_concordance_equal(y ~ x + z, weights = data$w, influence = 3)
+  expect_concordance_equal(y ~ x + z, weights = data$w)
+  expect_concordance_equal(y ~ x + z, weights = data$w, cluster = data$cluster)
   expect_concordance_equal(I(y >= 3) ~ x)
   expect_concordance_equal(binary ~ x)
   expect_concordance_equal(ordinal ~ x)
