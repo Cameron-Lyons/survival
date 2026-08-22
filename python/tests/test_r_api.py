@@ -9337,6 +9337,17 @@ def test_concordance_counting_process_uses_delayed_entry_risk_sets():
     assert reversed_result.reverse is True
 
 
+@pytest.mark.parametrize("timewt", ["S/G", "n/G2"])
+def test_concordance_counting_process_rejects_censoring_weights(timewt):
+    response = survival.Surv([0, 1, 2, 0], [1, 3, 4, 5], [1, 0, 1, 1])
+
+    with pytest.raises(
+        ValueError,
+        match="S/G and n/G2 timewt options are not supported for counting-process data",
+    ):
+        survival.concordancefit(response, [0.1, 0.4, 0.2, 0.8], timewt=timewt)
+
+
 def test_concordance_counting_process_ranks_use_delayed_entry_risk_sets():
     data = {
         "start": [0.0, 0.0, 0.5, 1.5],

@@ -4257,6 +4257,58 @@ test_that("concordance censoring weights use the post-death risk set", {
   }
 })
 
+test_that("counting concordance censoring-weight diagnostics match reference", {
+  data <- data.frame(
+    start = c(0, 1, 2, 0),
+    stop = c(1, 3, 4, 5),
+    status = c(1, 0, 1, 1),
+    x = c(0.1, 0.4, 0.2, 0.8)
+  )
+
+  for (time_weight in c("S/G", "n/G2")) {
+    expected_error <- paste(
+      time_weight,
+      "timewt option not supported for (time1, time2) data"
+    )
+    expect_error(
+      concordancefit(
+        Surv(data$start, data$stop, data$status),
+        data$x,
+        timewt = time_weight
+      ),
+      expected_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordancefit(
+        survival::Surv(data$start, data$stop, data$status),
+        data$x,
+        timewt = time_weight
+      ),
+      expected_error,
+      fixed = TRUE
+    )
+    expect_error(
+      concordance(
+        Surv(start, stop, status) ~ x,
+        data = data,
+        timewt = time_weight
+      ),
+      expected_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordance(
+        survival::Surv(start, stop, status) ~ x,
+        data = data,
+        timewt = time_weight
+      ),
+      expected_error,
+      fixed = TRUE
+    )
+  }
+})
+
 test_that("one-event concordance ranks match reference dimensions", {
   data <- data.frame(
     time = c(1, 2, 3),
