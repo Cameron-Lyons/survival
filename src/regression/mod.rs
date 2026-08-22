@@ -55,7 +55,8 @@ pub use cch::{CchFitResult, CchMethod, CohortData, cch_borgan_fit, cch_fit};
 pub use clogit::{ClogitDataSet, ConditionalLogisticRegression};
 pub use cox_frailty::{CoxPHFrailtyFit, coxph_frailty_fit};
 pub use cox_multistate::{
-    MultiStateCoxCurve, MultiStateCoxStack, cox_multistate_curve, cox_multistate_stack,
+    MultiStateCoxCurve, MultiStateCoxCurves, MultiStateCoxStack, cox_multistate_curve,
+    cox_multistate_curves, cox_multistate_stack,
 };
 pub use coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit};
 pub use coxph_detail_module::{CoxphDetail, CoxphDetailRow, coxph_detail};

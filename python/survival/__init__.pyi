@@ -39,6 +39,7 @@ from .r_api import (
     SurvExpFormulaResult,
     SurvExpResult,
     SurvfitConfidenceIntervalResult,
+    SurvfitMultiStateCoxResult,
     SurvfitMultiStateResult,
     SurvObrienResult,
     SurvregDeviance,

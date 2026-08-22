@@ -13449,6 +13449,43 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
         [1.67949007004011, 1.2806692086707],
         abs=1e-12,
     )
+    batched_curve = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5, 1.5]}, index=["low", "high"]),
+        time0=True,
+    )
+    assert isinstance(batched_curve, survival.SurvfitMultiStateCoxResult)
+    assert batched_curve.curve_count == 2
+    assert batched_curve.time == pytest.approx(list(range(13)))
+    assert batched_curve.pstate[0][-1] == pytest.approx(expected_pstate[-1], abs=1e-12)
+    assert batched_curve.pstate[1][-1] == pytest.approx(
+        [0.255308684023899, 0.298705428266934, 0.445985887709167],
+        abs=1e-12,
+    )
+    assert batched_curve.cumhaz[1][-1] == pytest.approx(
+        [0.49315398113911, 0.872127959196026],
+        abs=1e-12,
+    )
+    batch_frame = survival.as_data_frame(batched_curve)
+    rows_per_curve = len(batched_curve.time) * len(batched_curve.states)
+    assert batch_frame["curve"] == [1] * rows_per_curve + [2] * rows_per_curve
+    unpadded_batch = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5, 1.5]}),
+    )
+    padded_batch = survival.survfit0(unpadded_batch)
+    assert isinstance(padded_batch, survival.SurvfitMultiStateCoxResult)
+    assert padded_batch.time[0] == pytest.approx(0.0)
+    assert padded_batch.pstate[0][0] == pytest.approx([1.0, 0.0, 0.0])
+    assert padded_batch.pstate[1][0] == pytest.approx([1.0, 0.0, 0.0])
+    selected_curve = survival.r_api._subset_survfit_multistate(batched_curve, [0, 2], [1])
+    assert isinstance(selected_curve, survival.SurvfitMultiStateResult)
+    assert selected_curve.cox_model is True
+    assert selected_curve.states == ("(s0)", "b")
+    assert selected_curve.pstate[-1] == pytest.approx(
+        [0.255308684023899, 0.445985887709167],
+        abs=1e-12,
+    )
 
     with pytest.raises(ValueError, match="id statement"):
         survival.coxph("Surv(time, status) ~ x", data=data)

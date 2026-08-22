@@ -11367,7 +11367,9 @@ summary.survival_py_anova <- function(object, ...) {
 .as_survival_py_multistate_list <- function(x) {
   fields <- .call_r_api("_survfit_multistate_structure", x)
   cox_model <- isTRUE(as.logical(fields[["_cox_model"]])[[1L]])
+  cox_curve_count <- as.integer(fields[["_cox_curve_count"]])[[1L]]
   fields[["_cox_model"]] <- NULL
+  fields[["_cox_curve_count"]] <- NULL
   states <- as.character(fields[["states"]])
   transition_names <- as.character(fields[["_transition_names"]])
   fields[["_transition_names"]] <- NULL
@@ -11423,16 +11425,22 @@ summary.survival_py_anova <- function(object, ...) {
 
   if (cox_model) {
     pstate <- .as_numeric_matrix(fields[["pstate"]])
+    if (cox_curve_count < 1L || nrow(pstate) %% cox_curve_count != 0L) {
+      stop("multi-state Cox curve dimensions are inconsistent", call. = FALSE)
+    }
     fields[["pstate"]] <- array(
       as.numeric(pstate),
-      dim = c(nrow(pstate), 1L, ncol(pstate)),
+      dim = c(nrow(pstate) %/% cox_curve_count, cox_curve_count, ncol(pstate)),
       dimnames = list(NULL, NULL, states)
     )
     if (!is.null(fields[["cumhaz"]])) {
       cumhaz <- .as_numeric_matrix(fields[["cumhaz"]])
+      if (nrow(cumhaz) %% cox_curve_count != 0L) {
+        stop("multi-state Cox cumulative hazards are inconsistent", call. = FALSE)
+      }
       fields[["cumhaz"]] <- array(
         as.numeric(cumhaz),
-        dim = c(nrow(cumhaz), 1L, ncol(cumhaz)),
+        dim = c(nrow(cumhaz) %/% cox_curve_count, cox_curve_count, ncol(cumhaz)),
         dimnames = list(NULL, NULL, transition_names)
       )
     }
@@ -11602,7 +11610,8 @@ dim.survival_py_survfit <- function(x) {
       return(c(strata = length(unclass(x)), states = state_count))
     }
     if (isTRUE(.result_field(x, "cox_model"))) {
-      return(c(data = 1L, states = state_count))
+      data_count <- as.integer(.result_field(x, "curve_count"))[[1L]]
+      return(c(data = data_count, states = state_count))
     }
     return(c(states = state_count))
   }
@@ -11830,6 +11839,39 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
   }
   if (.is_survival_py_multistate_survfit(x)) {
     states <- .survival_py_multistate_states(x)
+    dimensions <- dim(x)
+    data_count <- if ("data" %in% names(dimensions)) dimensions[["data"]] else NULL
+    if (!is.null(data_count)) {
+      if (!has_second_dimension) {
+        stop(
+          paste(
+            "single index subscripts are not supported for a survfit object",
+            "with both data and state dimensions"
+          ),
+          call. = FALSE
+        )
+      }
+      data_selector <- if (missing(i)) seq_len(data_count) else i
+      state_selector <- if (missing(j)) seq_along(states) else j
+      data_indices <- .survival_py_survfit_group_indices(
+        data_selector,
+        seq_len(data_count),
+        dimension = "data"
+      )
+      state_indices <- .survival_py_survfit_group_indices(
+        state_selector,
+        states,
+        dimension = "states"
+      )
+      return(.wrap_python(
+        .python_attr("_subset_survfit_multistate")(
+          x,
+          as.list(as.integer(state_indices - 1L)),
+          as.list(as.integer(data_indices - 1L))
+        ),
+        c("survival_py_survfit", "survival_py_object")
+      ))
+    }
     state_selector <- if (has_second_dimension) {
       if (missing(j)) seq_along(states) else j
     } else {

@@ -68,6 +68,7 @@ _R_EXPORTS = [
     "SurvregDistribution",
     "SurvregFitResult",
     "SurvfitConfidenceIntervalResult",
+    "SurvfitMultiStateCoxResult",
     "SurvfitMultiStateResult",
     "TMergeFrame",
     "TMergeOperation",
