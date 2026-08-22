@@ -11891,6 +11891,34 @@ concordance <- function(object, ..., formula) {
   UseMethod("concordance")
 }
 
+.concordance_source_row_names <- function(object, data, env) {
+  explicit_row_names <- function(value) {
+    if (is.null(value) || is.null(attr(value, "row.names"))) {
+      return(NULL)
+    }
+    if (.row_names_info(value, type = 1L) < 0L) {
+      return(NULL)
+    }
+    row.names(value)
+  }
+  if (inherits(object, "formula") || is.character(object)) {
+    if (is.data.frame(data)) {
+      return(explicit_row_names(data))
+    }
+    formula <- if (inherits(object, "formula")) {
+      object
+    } else {
+      stats::as.formula(paste(object, collapse = " "), env = env)
+    }
+    frame <- tryCatch(
+      stats::model.frame(formula, data = data, na.action = stats::na.pass),
+      error = function(condition) NULL
+    )
+    return(explicit_row_names(frame))
+  }
+  tryCatch(explicit_row_names(.as_native_surv(object)), error = function(condition) NULL)
+}
+
 concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.scores = NULL,
                                 weights = NULL, cluster = NULL, subset = NULL, na.action = "fail") {
   formula <- object
@@ -11935,6 +11963,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     env,
     vector = TRUE
   )
+  source_row_names <- .concordance_source_row_names(formula, formula_data, env)
   .call_r_api(
     "concordance",
     response = .as_formula_string(formula),
@@ -11945,6 +11974,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     cluster = cluster_values,
     subset = subset_values,
     `na.action` = .as_na_action(na.action),
+    `_row_names` = source_row_names,
     ...,
     .wrap = c("survival_py_concordance", "survival_py_object")
   )
@@ -12120,14 +12150,15 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
   if (identical(name, "ranks")) {
     value <- .result_field(object, name)
     if (is.null(value)) return(NULL)
+    rank_names <- .result_field(object, "rank_names")
     if (multi_score) {
-      frames <- lapply(value, .concordancefit_rows)
+      frames <- lapply(value, .concordancefit_rows, row_names = rank_names)
       for (index in seq_along(frames)) {
         names(frames[[index]]) <- paste0(names(frames[[index]]), ".", score_names[[index]])
       }
       return(do.call(cbind, frames))
     }
-    return(.concordancefit_rows(value))
+    return(.concordancefit_rows(value, row_names = rank_names))
   }
 
   if (identical(name, "dfbeta")) {
@@ -12339,7 +12370,7 @@ survConcordance.fit <- function(y, x, strata, weight) {
   count
 }
 
-.concordancefit_rows <- function(rows, fit = NULL) {
+.concordancefit_rows <- function(rows, fit = NULL, row_names = NULL) {
   if (is.null(rows) || !is.list(rows) || length(rows) == 0L) {
     return(NULL)
   }
@@ -12349,6 +12380,12 @@ survConcordance.fit <- function(y, x, strata, weight) {
     timewt = .as_numeric_vector(lapply(rows, `[[`, "timewt")),
     casewt = .as_numeric_vector(lapply(rows, `[[`, "casewt"))
   )
+  if (!is.null(row_names)) {
+    if (length(row_names) != nrow(frame)) {
+      stop("concordance rank names must match the rank rows", call. = FALSE)
+    }
+    rownames(frame) <- as.character(row_names)
+  }
   if (!is.null(fit)) {
     frame <- data.frame(
       fit = rep(fit, nrow(frame)),
@@ -12391,7 +12428,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     reverse = isTRUE(reverse),
     timefix = timefix,
     keepstrata = keepstrata,
-    std_err = isTRUE(std.err)
+    std_err = isTRUE(std.err),
+    `_row_names` = row.names(.as_native_surv(y))
   )
 
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))
@@ -12468,14 +12506,15 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   }
   if (isTRUE(ranks)) {
     rank_rows <- .result_field(result, "ranks")
+    rank_names <- .result_field(result, "rank_names")
     out$ranks <- if (multi_score) {
-      frames <- lapply(rank_rows, .concordancefit_rows)
+      frames <- lapply(rank_rows, .concordancefit_rows, row_names = rank_names)
       for (index in seq_along(frames)) {
         names(frames[[index]]) <- paste0(names(frames[[index]]), ".", score_names[[index]])
       }
       do.call(cbind, frames)
     } else {
-      .concordancefit_rows(rank_rows)
+      .concordancefit_rows(rank_rows, row_names = rank_names)
     }
   }
   out

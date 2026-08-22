@@ -17,6 +17,8 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 type ConcordanceRankRows = Vec<(f64, f64, f64, f64)>;
+type IndexedConcordanceRankRows = Vec<(usize, f64, f64, f64, f64)>;
+type ConcordanceRankRowsWithIndices = (ConcordanceRankRows, Vec<usize>);
 type ConcordanceInfluenceOutput = (Vec<Vec<f64>>, Vec<f64>, f64);
 type ConcordanceCountRows = Vec<[f64; 5]>;
 
@@ -780,7 +782,7 @@ fn right_concordance_rank_rows_for_vectors(
     order_scores: &[f64],
     case_weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> ConcordanceRankRows {
+) -> IndexedConcordanceRankRows {
     let multipliers =
         right_concordance_time_weight_multipliers(time, status, case_weights, time_weight);
     let mut event_indices: Vec<usize> = status
@@ -840,6 +842,7 @@ fn right_concordance_rank_rows_for_vectors(
                 rank_from_active_risk_set(&at_risk, &risk_levels, risk_scores[event_idx])
             {
                 rows.push((
+                    event_idx,
                     time[event_idx],
                     rank,
                     risk_weight * multiplier,
@@ -861,7 +864,7 @@ fn counting_concordance_rank_rows_for_vectors(
     order_scores: &[f64],
     case_weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> ConcordanceRankRows {
+) -> IndexedConcordanceRankRows {
     let multipliers = counting_concordance_time_weight_multipliers(
         start,
         stop,
@@ -938,6 +941,7 @@ fn counting_concordance_rank_rows_for_vectors(
                     rank_from_active_risk_set(&at_risk, &risk_levels, risk_scores[event_idx])
                 {
                     rows.push((
+                        event_idx,
                         event_time,
                         rank,
                         risk_weight * multiplier,
@@ -955,7 +959,7 @@ fn counting_concordance_rank_rows_for_vectors(
 fn reassemble_stratified_rank_rows(
     n: usize,
     groups: Vec<Vec<usize>>,
-    mut compute_group: impl FnMut(&[usize]) -> ConcordanceRankRows,
+    mut compute_group: impl FnMut(&[usize]) -> IndexedConcordanceRankRows,
 ) -> PyResult<ConcordanceRankRows> {
     let mut result = vec![[0.0; 4]; n];
     for indices in groups {
@@ -966,10 +970,10 @@ fn reassemble_stratified_rank_rows(
         let source: Vec<f64> = (0..4)
             .flat_map(|column| {
                 group_rows.iter().map(move |row| match column {
-                    0 => row.0,
-                    1 => row.1,
-                    2 => row.2,
-                    _ => row.3,
+                    0 => row.1,
+                    1 => row.2,
+                    2 => row.3,
+                    _ => row.4,
                 })
             })
             .collect();
@@ -990,6 +994,16 @@ fn reassemble_stratified_rank_rows(
         .into_iter()
         .map(|row| (row[0], row[1], row[2], row[3]))
         .collect())
+}
+
+fn split_indexed_rank_rows(rows: IndexedConcordanceRankRows) -> ConcordanceRankRowsWithIndices {
+    let mut values = Vec::with_capacity(rows.len());
+    let mut indices = Vec::with_capacity(rows.len());
+    for (index, time, rank, time_weight, case_weight) in rows {
+        indices.push(index);
+        values.push((time, rank, time_weight, case_weight));
+    }
+    (values, indices)
 }
 
 fn stratified_right_concordance_rank_rows(
@@ -1683,14 +1697,14 @@ pub fn stratified_concordance_summary(
 
 #[pyfunction]
 #[pyo3(signature = (time, status, risk_scores, weights=None, timewt="n".to_string(), order_scores=None))]
-pub fn concordance_rank_rows(
+pub fn concordance_rank_rows_with_indices(
     time: Vec<f64>,
     status: Vec<i32>,
     risk_scores: Vec<f64>,
     weights: Option<Vec<f64>>,
     timewt: String,
     order_scores: Option<Vec<f64>>,
-) -> PyResult<ConcordanceRankRows> {
+) -> PyResult<ConcordanceRankRowsWithIndices> {
     validate_right_concordance_inputs(&time, &status, &risk_scores, weights.as_deref())?;
     if order_scores
         .as_ref()
@@ -1702,14 +1716,37 @@ pub fn concordance_rank_rows(
     }
     let time_weight = parse_concordance_time_weight(&timewt)?;
     let order_scores = order_scores.as_deref().unwrap_or(&risk_scores);
-    Ok(right_concordance_rank_rows_for_vectors(
-        &time,
-        &status,
-        &risk_scores,
-        order_scores,
-        weights.as_deref(),
-        time_weight,
+    Ok(split_indexed_rank_rows(
+        right_concordance_rank_rows_for_vectors(
+            &time,
+            &status,
+            &risk_scores,
+            order_scores,
+            weights.as_deref(),
+            time_weight,
+        ),
     ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (time, status, risk_scores, weights=None, timewt="n".to_string(), order_scores=None))]
+pub fn concordance_rank_rows(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    risk_scores: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    timewt: String,
+    order_scores: Option<Vec<f64>>,
+) -> PyResult<ConcordanceRankRows> {
+    Ok(concordance_rank_rows_with_indices(
+        time,
+        status,
+        risk_scores,
+        weights,
+        timewt,
+        order_scores,
+    )?
+    .0)
 }
 
 #[pyfunction]
@@ -1926,7 +1963,7 @@ pub fn stratified_counting_concordance_summary(
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (start, stop, status, risk_scores, weights=None, timewt="n".to_string(), timefix=None, order_scores=None))]
-pub fn counting_concordance_rank_rows(
+pub fn counting_concordance_rank_rows_with_indices(
     start: Vec<f64>,
     stop: Vec<f64>,
     status: Vec<i32>,
@@ -1935,7 +1972,7 @@ pub fn counting_concordance_rank_rows(
     timewt: String,
     timefix: Option<bool>,
     order_scores: Option<Vec<f64>>,
-) -> PyResult<ConcordanceRankRows> {
+) -> PyResult<ConcordanceRankRowsWithIndices> {
     let (start, stop) = prepare_counting_concordance_times(&start, &stop, timefix);
     validate_counting_concordance_inputs(
         &start,
@@ -1955,15 +1992,43 @@ pub fn counting_concordance_rank_rows(
     }
     let time_weight = parse_counting_concordance_time_weight(&timewt)?;
     let order_scores = order_scores.as_deref().unwrap_or(&risk_scores);
-    Ok(counting_concordance_rank_rows_for_vectors(
-        &start,
-        &stop,
-        &status,
-        &risk_scores,
-        order_scores,
-        weights.as_deref(),
-        time_weight,
+    Ok(split_indexed_rank_rows(
+        counting_concordance_rank_rows_for_vectors(
+            &start,
+            &stop,
+            &status,
+            &risk_scores,
+            order_scores,
+            weights.as_deref(),
+            time_weight,
+        ),
     ))
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (start, stop, status, risk_scores, weights=None, timewt="n".to_string(), timefix=None, order_scores=None))]
+pub fn counting_concordance_rank_rows(
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    risk_scores: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    timewt: String,
+    timefix: Option<bool>,
+    order_scores: Option<Vec<f64>>,
+) -> PyResult<ConcordanceRankRows> {
+    Ok(counting_concordance_rank_rows_with_indices(
+        start,
+        stop,
+        status,
+        risk_scores,
+        weights,
+        timewt,
+        timefix,
+        order_scores,
+    )?
+    .0)
 }
 
 #[pyfunction]
@@ -2399,6 +2464,39 @@ mod tests {
         .unwrap();
 
         assert_eq!(unweighted, unit_weighted);
+    }
+
+    #[test]
+    fn concordance_rank_rows_report_original_event_indices() {
+        initialize_python();
+
+        let time = vec![1.0, 3.0, 2.0, 4.0, 4.0, 2.0];
+        let status = vec![1, 0, 1, 1, 0, 1];
+        let scores = vec![0.2, 0.9, 0.4, 0.7, 0.7, 0.1];
+        let risk: Vec<f64> = scores.iter().map(|value| -value).collect();
+        let (_, right_indices) = concordance_rank_rows_with_indices(
+            time.clone(),
+            status.clone(),
+            risk.clone(),
+            None,
+            "n".to_string(),
+            Some(scores.clone()),
+        )
+        .unwrap();
+        let (_, counting_indices) = counting_concordance_rank_rows_with_indices(
+            vec![0.0; time.len()],
+            time,
+            status,
+            risk,
+            None,
+            "n".to_string(),
+            None,
+            Some(scores),
+        )
+        .unwrap();
+
+        assert_eq!(right_indices, vec![0, 2, 5, 3]);
+        assert_eq!(counting_indices, right_indices);
     }
 
     #[test]

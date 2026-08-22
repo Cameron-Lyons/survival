@@ -8872,6 +8872,87 @@ def test_weighted_stratified_concordance_diagnostics_match_reference():
     assert [row["casewt"] for row in result.ranks] == pytest.approx([1.0, 2.5, 1.5, 3.0, 0.5, 2.0])
 
 
+def test_concordance_rank_names_follow_original_event_rows():
+    data = {
+        "time": [1.0, 3.0, 2.0, 4.0, 4.0, 2.0],
+        "status": [1, 0, 1, 1, 0, 1],
+        "x": [0.2, 0.9, 0.4, 0.7, 0.7, 0.1],
+        "z": [0.8, 0.3, 0.5, 0.2, 0.6, 0.4],
+        "group": ["a", "a", "b", "b", "b", "a"],
+    }
+    row_names = ["case-11", "case-22", "case-33", "case-44", "case-55", "case-66"]
+
+    single = survival.concordance(
+        "Surv(time, status) ~ x",
+        data=data,
+        ranks=True,
+        _row_names=row_names,
+    )
+    multi = survival.concordance(
+        "Surv(time, status) ~ x + z",
+        data=data,
+        ranks=True,
+        _row_names=row_names,
+    )
+    counting = survival.concordance(
+        "Surv(start, time, status) ~ x",
+        data={**data, "start": [0.0] * 6},
+        ranks=True,
+        _row_names=row_names,
+    )
+    low_level = survival.concordancefit(
+        survival.Surv(data["time"], data["status"]),
+        data["x"],
+        ranks=True,
+        _row_names=row_names,
+    )
+    subsetted = survival.concordance(
+        "Surv(time, status) ~ x",
+        data=data,
+        subset=[True, True, False, True, True, True],
+        ranks=True,
+        _row_names=row_names,
+    )
+    missing_data = {**data, "x": [0.2, 0.9, 0.4, 0.7, 0.7, None]}
+    omitted = survival.concordance(
+        "Surv(time, status) ~ x",
+        data=missing_data,
+        na_action="omit",
+        ranks=True,
+        _row_names=row_names,
+    )
+    bounded = survival.concordance(
+        "Surv(time, status) ~ x",
+        data=data,
+        ymax=2.0,
+        ranks=True,
+        _row_names=row_names,
+    )
+    stratified_data = {
+        "time": [1.0, 2.0, 1.0, 2.0],
+        "status": [1, 0, 1, 0],
+        "x": [0.9, 0.1, 0.2, 0.8],
+        "group": ["a", "a", "b", "b"],
+    }
+    stratified = survival.concordance(
+        "Surv(time, status) ~ x + strata(group)",
+        data=stratified_data,
+        ranks=True,
+        _row_names=row_names[:4],
+    )
+
+    expected = ["case-11", "case-33", "case-66", "case-44"]
+    assert single.rank_names == expected
+    assert multi.rank_names == expected
+    assert counting.rank_names == expected
+    assert low_level is not None
+    assert low_level.rank_names == expected
+    assert subsetted.rank_names == ["case-11", "case-66", "case-44"]
+    assert omitted.rank_names == ["case-11", "case-33", "case-44"]
+    assert bounded.rank_names == ["case-11", "case-33", "case-66"]
+    assert stratified.rank_names is None
+
+
 def test_weighted_stratified_counting_concordance_diagnostics_match_reference():
     data = {
         "start": [0.0, 0.0, 1.0, 2.5, 0.0, 0.0, 0.5, 2.0],

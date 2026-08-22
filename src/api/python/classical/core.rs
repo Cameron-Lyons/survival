@@ -32,6 +32,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::concordance_rank_rows_with_indices,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
         crate::concordance::basic::stratified_concordance_rank_rows,
         m
     )?)?;
@@ -57,6 +61,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         crate::concordance::basic::counting_concordance_rank_rows,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::concordance::basic::counting_concordance_rank_rows_with_indices,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(

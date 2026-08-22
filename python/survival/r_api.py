@@ -927,6 +927,7 @@ class ConcordanceResult:
     tied_y: float | list[float] = 0.0
     tied_xy: float | list[float] = 0.0
     ranks: list[dict[str, float]] | list[list[dict[str, float]] | None] | None = None
+    rank_names: list[str] | None = None
     dfbeta: list[float] | list[list[float] | None] | None = None
     influence: list[list[float]] | list[list[list[float]] | None] | None = None
     variance: float | list[float | None] | list[list[float]] | None = None
@@ -26269,20 +26270,24 @@ def _single_concordance_ranks(
     timewt: str,
     ymin: float | None,
     ymax: float | None,
-) -> list[dict[str, float]]:
+) -> tuple[list[dict[str, float]], list[int]]:
     case_weights = None if weights is None else list(weights)
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
-        return _concordance_rank_row_dicts(
-            _core.concordance_rank_rows(
-                data.times,
-                data.status,
-                risk_values,
-                case_weights,
-                timewt,
-                order_scores,
+        rows, indices = _core.concordance_rank_rows_with_indices(
+            data.times,
+            data.status,
+            risk_values,
+            case_weights,
+            timewt,
+            order_scores,
+        )
+        return (
+            _concordance_rank_row_dicts(
+                rows,
+                data.display_by_core_time,
             ),
-            data.display_by_core_time,
+            [int(index) for index in indices],
         )
     if response.type == "counting":
         data = _counting_concordance_data(
@@ -26293,17 +26298,19 @@ def _single_concordance_ranks(
             ymax,
             preapply_timefix=True,
         )
-        return _concordance_rank_row_dicts(
-            _core.counting_concordance_rank_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                case_weights,
-                timewt,
-                False,
-                order_scores,
-            )
+        rows, indices = _core.counting_concordance_rank_rows_with_indices(
+            data.start,
+            data.stop,
+            data.status,
+            risk_values,
+            case_weights,
+            timewt,
+            False,
+            order_scores,
+        )
+        return (
+            _concordance_rank_row_dicts(rows),
+            [int(index) for index in indices],
         )
     return _unsupported_concordance_response()
 
@@ -26318,7 +26325,7 @@ def _concordance_ranks(
     timewt: str,
     ymin: float | None,
     ymax: float | None,
-) -> list[dict[str, float]]:
+) -> tuple[list[dict[str, float]], list[int] | None]:
     if strata is None:
         return _single_concordance_ranks(
             response,
@@ -26334,17 +26341,20 @@ def _concordance_ranks(
     case_weights = None if weights is None else list(weights)
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
-        return _concordance_rank_row_dicts(
-            _core.stratified_concordance_rank_rows(
-                data.times,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
-                timewt,
-                order_scores,
+        return (
+            _concordance_rank_row_dicts(
+                _core.stratified_concordance_rank_rows(
+                    data.times,
+                    data.status,
+                    risk_values,
+                    strata_codes,
+                    case_weights,
+                    timewt,
+                    order_scores,
+                ),
+                data.display_by_core_time,
             ),
-            data.display_by_core_time,
+            None,
         )
     if response.type == "counting":
         data = _counting_concordance_data(
@@ -26355,18 +26365,21 @@ def _concordance_ranks(
             ymax,
             preapply_timefix=True,
         )
-        return _concordance_rank_row_dicts(
-            _core.stratified_counting_concordance_rank_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
-                timewt,
-                False,
-                order_scores,
-            )
+        return (
+            _concordance_rank_row_dicts(
+                _core.stratified_counting_concordance_rank_rows(
+                    data.start,
+                    data.stop,
+                    data.status,
+                    risk_values,
+                    strata_codes,
+                    case_weights,
+                    timewt,
+                    False,
+                    order_scores,
+                )
+            ),
+            None,
         )
     return _unsupported_concordance_response()
 
@@ -26635,6 +26648,7 @@ def _single_score_concordance_result(
     upper_bound: float | None,
     influence_value: int,
     include_ranks: bool,
+    row_names: list[str] | None = None,
     retain_strata: bool = False,
     strata_names: list[str] | None = None,
 ) -> ConcordanceResult:
@@ -26655,8 +26669,10 @@ def _single_score_concordance_result(
     tied_x = float(summary.get("tied_x", 0.0))
     tied_y = float(summary.get("tied_y", 0.0))
     tied_xy = float(summary.get("tied_xy", 0.0))
-    rank_rows = (
-        _concordance_ranks(
+    rank_rows = None
+    rank_indices = None
+    if include_ranks:
+        rank_rows, rank_indices = _concordance_ranks(
             response,
             risk_values,
             score_values,
@@ -26667,7 +26683,9 @@ def _single_score_concordance_result(
             lower_bound,
             upper_bound,
         )
-        if include_ranks
+    rank_names = (
+        [row_names[index] for index in rank_indices]
+        if row_names is not None and rank_indices is not None
         else None
     )
     influence_rows, dfbeta, variance = _concordance_influence(
@@ -26693,6 +26711,7 @@ def _single_score_concordance_result(
         tied_y=tied_y,
         tied_xy=tied_xy,
         ranks=rank_rows,
+        rank_names=rank_names,
         dfbeta=dfbeta if influence_value in {1, 3} else None,
         influence=influence_rows if influence_value in {2, 3} else None,
         variance=variance,
@@ -26720,6 +26739,7 @@ def _multi_score_concordance_result(
     upper_bound: float | None,
     influence_value: int,
     include_ranks: bool,
+    row_names: list[str] | None = None,
 ) -> ConcordanceResult:
     # The reference fit always computes dfbeta values for standard errors,
     # even when the caller does not request that diagnostic in the result.
@@ -26737,6 +26757,7 @@ def _multi_score_concordance_result(
             upper_bound,
             3,
             include_ranks,
+            row_names,
         )
         for score_values in score_columns
     ]
@@ -26759,6 +26780,7 @@ def _multi_score_concordance_result(
         tied_y=[float(result.tied_y) for result in results],
         tied_xy=[float(result.tied_xy) for result in results],
         ranks=[result.ranks for result in results] if include_ranks else None,
+        rank_names=results[0].rank_names if results else None,
         dfbeta=dfbeta_columns if influence_value in {1, 3} else None,
         influence=[result.influence for result in results] if influence_value in {2, 3} else None,
         variance=covariance,
@@ -26802,6 +26824,7 @@ def _public_concordance_result(
         tied_y=result.tied_y,
         tied_xy=result.tied_xy,
         ranks=result.ranks,
+        rank_names=result.rank_names,
         dfbeta=_concordancefit_dfbeta(result.dfbeta),
         influence=_concordancefit_influence(result.influence, weights, n_scores),
         variance=_scaled_concordance_variance(result.variance),
@@ -26834,6 +26857,9 @@ def concordance(
 ) -> ConcordanceResult:
     """R-style concordance wrapper backed by Rust Harrell C-index."""
 
+    row_names = kwargs.pop("_row_names", None)
+    if row_names is not None:
+        row_names = [str(value) for value in _materialize_1d(row_names, "_row_names")]
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     timefix = _pop_dotted_keyword(kwargs, "time.fix", "timefix", timefix, True)
     if kwargs:
@@ -26876,6 +26902,7 @@ def concordance(
                     subset,
                     weights=weights,
                     cluster=cluster,
+                    row_names=row_names,
                 )
             else:
                 data, aligned = _subset_formula_inputs_for_columns(
@@ -26885,9 +26912,11 @@ def concordance(
                     concordance_response_spec.columns,
                     weights=weights,
                     cluster=cluster,
+                    row_names=row_names,
                 )
             weights = aligned["weights"]
             cluster = aligned["cluster"]
+            row_names = aligned["row_names"]
             subset = None
         if concordance_response_spec is None:
             data, aligned = _apply_formula_na_action(
@@ -26896,6 +26925,7 @@ def concordance(
                 na_action,
                 weights=weights,
                 cluster=cluster,
+                row_names=row_names,
             )
         else:
             n = len(_column(data, concordance_response_spec.columns[0]))
@@ -26917,9 +26947,11 @@ def concordance(
                 response_values=(("formula response", response_values),),
                 weights=weights,
                 cluster=cluster,
+                row_names=row_names,
             )
         weights = aligned["weights"]
         cluster = aligned["cluster"]
+        row_names = aligned["row_names"]
         na_action = "pass"
         if concordance_response_spec is None:
             response, terms = _parse_formula(response, data)
@@ -26950,6 +26982,7 @@ def concordance(
             external_scores = _subset_sequence(external_scores, indices, "scores")
             weights = _subset_optional_sequence(weights, indices, "weights")
             cluster = _subset_optional_sequence(cluster, indices, "cluster")
+            row_names = _subset_optional_sequence(row_names, indices, "_row_names")
         response, aligned = _apply_surv_na_action(
             response,
             na_action,
@@ -26957,10 +26990,12 @@ def concordance(
             scores=external_scores,
             weights=weights,
             cluster=cluster,
+            row_names=row_names,
         )
         external_scores = aligned["scores"]
         weights = aligned["weights"]
         cluster = aligned["cluster"]
+        row_names = aligned["row_names"]
         score_columns, score_names = _external_concordance_score_columns(
             external_scores,
             len(response),
@@ -26989,6 +27024,7 @@ def concordance(
             upper_bound,
             influence_value,
             include_ranks,
+            row_names,
             retain_strata,
             strata_values.names if strata_values is not None else None,
         )
@@ -27004,6 +27040,7 @@ def concordance(
                 tied_y=result.tied_y,
                 tied_xy=result.tied_xy,
                 ranks=result.ranks,
+                rank_names=result.rank_names,
                 dfbeta=result.dfbeta,
                 influence=result.influence,
                 variance=result.variance,
@@ -27029,6 +27066,7 @@ def concordance(
             upper_bound,
             influence_value,
             include_ranks,
+            row_names,
         ),
         weight_values,
     )
@@ -27112,6 +27150,9 @@ def concordancefit(
 ) -> ConcordanceResult | None:
     """Compute the low-level concordance fit used by R's public wrapper."""
 
+    row_names = kwargs.pop("_row_names", None)
+    if row_names is not None:
+        row_names = [str(value) for value in _materialize_1d(row_names, "_row_names")]
     std_err = _pop_dotted_keyword(kwargs, "std.err", "std_err", std_err, True)
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
@@ -27124,6 +27165,8 @@ def concordancefit(
         if any(_is_missing_value(value) for value in raw_response):
             return None
         response = Surv(raw_response)
+    if row_names is not None and len(row_names) != len(response):
+        raise ValueError("_row_names must have the same length as y")
     raw_scores = _coerce_array_like(x, "x")
     if _concordancefit_missing_response(response) or any(
         _is_missing_value(value)
@@ -27178,6 +27221,7 @@ def concordancefit(
             upper_bound,
             internal_influence,
             include_ranks,
+            row_names,
             retain_strata,
             strata_values.names if strata_values is not None else None,
         )
@@ -27196,6 +27240,7 @@ def concordancefit(
             upper_bound,
             internal_influence,
             include_ranks,
+            row_names,
         )
 
     dfbeta = _concordancefit_dfbeta(computed.dfbeta)
@@ -27216,6 +27261,7 @@ def concordancefit(
         tied_y=computed.tied_y,
         tied_xy=computed.tied_xy,
         ranks=computed.ranks if include_ranks else None,
+        rank_names=computed.rank_names if include_ranks else None,
         dfbeta=dfbeta if influence_value in {1, 3} else None,
         influence=fitted_influence if influence_value in {2, 3} else None,
         variance=variance,

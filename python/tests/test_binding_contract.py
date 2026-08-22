@@ -9729,6 +9729,7 @@ def test_counting_concordance_binding_is_typed():
         "concordance_summary",
         "stratified_concordance_summary",
         "concordance_rank_rows",
+        "concordance_rank_rows_with_indices",
         "stratified_concordance_rank_rows",
         "concordance_influence_rows",
         "stratified_concordance_influence_rows",
@@ -9736,6 +9737,7 @@ def test_counting_concordance_binding_is_typed():
         "counting_concordance_summary",
         "stratified_counting_concordance_summary",
         "counting_concordance_rank_rows",
+        "counting_concordance_rank_rows_with_indices",
         "stratified_counting_concordance_rank_rows",
         "counting_concordance_influence_rows",
         "stratified_counting_concordance_influence_rows",
@@ -9744,6 +9746,7 @@ def test_counting_concordance_binding_is_typed():
     assert "time" in inspect.signature(core.concordance_summary).parameters
     assert "time" in inspect.signature(core.stratified_concordance_summary).parameters
     assert "time" in inspect.signature(core.concordance_rank_rows).parameters
+    assert "time" in inspect.signature(core.concordance_rank_rows_with_indices).parameters
     assert "time" in inspect.signature(core.stratified_concordance_rank_rows).parameters
     assert "time" in inspect.signature(core.concordance_influence_rows).parameters
     assert "time" in inspect.signature(core.stratified_concordance_influence_rows).parameters
@@ -9751,6 +9754,7 @@ def test_counting_concordance_binding_is_typed():
     assert "start" in inspect.signature(core.counting_concordance_summary).parameters
     assert "start" in inspect.signature(core.stratified_counting_concordance_summary).parameters
     assert "start" in inspect.signature(core.counting_concordance_rank_rows).parameters
+    assert "start" in inspect.signature(core.counting_concordance_rank_rows_with_indices).parameters
     assert "start" in inspect.signature(core.stratified_counting_concordance_rank_rows).parameters
     assert "start" in inspect.signature(core.counting_concordance_influence_rows).parameters
     assert (
@@ -9796,6 +9800,14 @@ def test_counting_concordance_binding_is_typed():
         "timewt",
     ]
     assert _pyi_function_arg_names(stub_path, "concordance_rank_rows") == [
+        "time",
+        "status",
+        "risk_scores",
+        "weights",
+        "timewt",
+        "order_scores",
+    ]
+    assert _pyi_function_arg_names(stub_path, "concordance_rank_rows_with_indices") == [
         "time",
         "status",
         "risk_scores",
@@ -9856,6 +9868,16 @@ def test_counting_concordance_binding_is_typed():
         "timefix",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_rank_rows") == [
+        "start",
+        "stop",
+        "status",
+        "risk_scores",
+        "weights",
+        "timewt",
+        "timefix",
+        "order_scores",
+    ]
+    assert _pyi_function_arg_names(stub_path, "counting_concordance_rank_rows_with_indices") == [
         "start",
         "stop",
         "status",
