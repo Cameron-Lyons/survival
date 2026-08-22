@@ -7694,7 +7694,7 @@ test_that("Cox bridge reports converged aliased coefficients like R survival", {
       terms = group_terms
     )
     expect_equal(bridged_zph$name, rownames(reference_zph$table))
-    expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+    expect_equal(bridged_zph$df, unname(reference_zph$table[, "df"]))
     expect_equal(
       bridged_zph$chisq,
       unname(reference_zph$table[, "chisq"]),
@@ -7741,13 +7741,82 @@ test_that("Cox zph bridge remaps partially aliased terms like R survival", {
       terms = group_terms
     )
     expect_equal(bridged_zph$name, rownames(reference_zph$table))
-    expect_equal(bridged_zph$df, as.integer(reference_zph$table[, "df"]))
+    expect_equal(bridged_zph$df, unname(reference_zph$table[, "df"]))
     expect_equal(
       bridged_zph$chisq,
       unname(reference_zph$table[, "chisq"]),
       tolerance = 1e-09
     )
   }
+})
+
+test_that("formula factors retain numeric labels and unused levels", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- survival::lung[
+    stats::complete.cases(survival::lung[, c("time", "status", "age", "ph.ecog")]),
+    c("time", "status", "age", "ph.ecog")
+  ]
+  data$status <- as.integer(data$status == 2L)
+  data$ph.ecog <- factor(data$ph.ecog, levels = 0:4)
+  bridged_cox <- coxph(
+    Surv(time, status) ~ ph.ecog + pspline(age),
+    data = data
+  )
+  reference_cox <- survival::coxph(
+    survival::Surv(time, status) ~ ph.ecog + pspline(age),
+    data = data
+  )
+  active_cox <- !is.na(coef(reference_cox))
+
+  expect_equal(names(coef(bridged_cox)), names(coef(reference_cox)))
+  expect_equal(
+    unname(coef(bridged_cox)[active_cox]),
+    unname(coef(reference_cox)[active_cox]),
+    tolerance = 1e-08
+  )
+  expect_true(is.na(coef(bridged_cox)[["ph.ecog4"]]))
+  expect_equal(
+    as.vector(model.matrix(bridged_cox)),
+    as.vector(model.matrix(reference_cox)),
+    tolerance = 1e-12
+  )
+  bridged_zph <- as.data.frame(cox.zph(bridged_cox, transform = "rank"))
+  reference_zph <- survival::cox.zph(reference_cox, transform = "rank")
+  expect_equal(bridged_zph$name, rownames(reference_zph$table))
+  expect_equal(
+    as.vector(as.matrix(bridged_zph[, c("chisq", "df", "p")])),
+    as.vector(reference_zph$table),
+    tolerance = 1e-08
+  )
+
+  bridged_aft <- survreg(
+    Surv(time, status) ~ ph.ecog + age,
+    data = data,
+    dist = "weibull"
+  )
+  reference_aft <- survival::survreg(
+    survival::Surv(time, status) ~ ph.ecog + age,
+    data = data,
+    dist = "weibull"
+  )
+  active_aft <- !is.na(coef(reference_aft))
+  expect_equal(names(coef(bridged_aft)), names(coef(reference_aft)))
+  expect_equal(
+    unname(coef(bridged_aft)[active_aft]),
+    unname(coef(reference_aft)[active_aft]),
+    tolerance = 1e-08
+  )
+  expect_true(is.na(coef(bridged_aft)[["ph.ecog4"]]))
+  expect_equal(vcov(bridged_aft), vcov(reference_aft), tolerance = 1e-08)
+  expect_equal(logLik(bridged_aft), logLik(reference_aft), tolerance = 1e-08)
+  expect_equal(
+    unname(predict(bridged_aft, type = "lp")),
+    unname(stats::predict(reference_aft, type = "lp")),
+    tolerance = 1e-08
+  )
 })
 
 test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {

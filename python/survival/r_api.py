@@ -4477,6 +4477,10 @@ def _term_columns(
         return interaction_columns
 
     values = _term_raw_values(data, term, n)
+    declared_levels = _formula_declared_factor_levels(data, term)
+    if declared_levels is not None:
+        levels = _categorical_levels(values, term.column, declared_levels)
+        return [[1.0 if value == level else 0.0 for value in values] for level in levels[1:]]
     if not term.categorical:
         if term.transform is not None:
             return [_numeric_term_values(values, term)]
@@ -4491,9 +4495,27 @@ def _term_columns(
     return [[1.0 if value == level else 0.0 for value in values] for level in levels[1:]]
 
 
-def _categorical_levels(values: list[Any], column: str) -> tuple[Any, ...]:
+def _formula_declared_factor_levels(
+    data: Any,
+    term: _CovariateTerm,
+) -> Any | None:
+    if term.arithmetic is not None or (term.transform is not None and not term.categorical):
+        return None
+    return _mstate_categories(_column_source(data, term.column))
+
+
+def _categorical_levels(
+    values: Sequence[Any],
+    column: str,
+    declared_levels: Any | None = None,
+) -> tuple[Any, ...]:
     labels: dict[Any, None] = {}
-    for value in values:
+    source = (
+        values
+        if declared_levels is None
+        else _materialize_1d(declared_levels, f"{column} categories")
+    )
+    for value in source:
         try:
             labels.setdefault(value, None)
         except TypeError as exc:
@@ -4502,6 +4524,15 @@ def _categorical_levels(values: list[Any], column: str) -> tuple[Any, ...]:
     levels = tuple(labels)
     if len(levels) < 2:
         raise ValueError(f"categorical formula term {column!r} must have at least two levels")
+    if declared_levels is not None:
+        unknown = next(
+            (value for value in values if not _is_missing_value(value) and value not in labels),
+            None,
+        )
+        if unknown is not None:
+            raise ValueError(
+                f"categorical formula term {column!r} contains undeclared level {unknown!r}"
+            )
     return levels
 
 
@@ -4511,6 +4542,12 @@ def _fit_single_design_term(
     n: int,
 ) -> _SingleDesignTerm:
     values = _term_raw_values(data, term, n)
+    declared_levels = _formula_declared_factor_levels(data, term)
+    if declared_levels is not None:
+        return _CategoricalDesignTerm(
+            term,
+            _categorical_levels(values, term.column, declared_levels),
+        )
     if not term.categorical:
         if term.transform is not None:
             _numeric_term_values(values, term)
@@ -19764,7 +19801,7 @@ def _cox_zph_frame(result: CoxZPHResult) -> dict[str, list[Any]]:
     return {
         "name": [str(row["name"]) for row in rows],
         "chisq": [float(row["chisq"]) for row in rows],
-        "df": [int(row["df"]) for row in rows],
+        "df": [float(row["df"]) for row in rows],
         "p": [float(row["p"]) for row in rows],
     }
 
@@ -21832,6 +21869,94 @@ def _survreg_fit_start(
         )
         log_scale.append(math.log(max(math.sqrt(variance), scale_floor)))
     return [center, *log_scale]
+
+
+def _survreg_default_start(
+    time: list[float],
+    time2: list[float] | None,
+    status: list[float],
+    rows: list[list[float]],
+    weights: list[float],
+    offsets: list[float],
+    strata: list[int],
+    distribution: str,
+    distribution_parameter: float | None,
+    fixed_scale: float | None,
+    eps: float,
+    tol_chol: float,
+) -> list[float]:
+    uses_log_time = distribution in {
+        "weibull",
+        "exponential",
+        "rayleigh",
+        "lognormal",
+        "loglogistic",
+    }
+
+    def transform(value: float) -> float:
+        return math.log(value) if uses_log_time else value
+
+    response = (
+        [
+            [transform(lower), transform(upper), event]
+            for lower, upper, event in zip(time, time2, status, strict=True)
+        ]
+        if time2 is not None
+        else [[transform(value), event] for value, event in zip(time, status, strict=True)]
+    )
+    n = len(time)
+    nstrat = max(strata, default=0) + 1
+    if fixed_scale is not None:
+        return _survreg_fit_start(
+            response,
+            rows,
+            weights,
+            offsets,
+            strata,
+            nstrat,
+            fixed_scale,
+            tol_chol,
+        )
+
+    null_rows = [[1.0] for _ in range(n)]
+    null_start = _survreg_fit_start(
+        response,
+        null_rows,
+        weights,
+        offsets,
+        strata,
+        nstrat,
+        None,
+        tol_chol,
+    )
+    null_fit = _core.survreg(
+        time,
+        status,
+        null_rows,
+        weights=weights,
+        offsets=offsets,
+        initial_beta=null_start,
+        strata=strata,
+        distribution=distribution,
+        max_iter=20,
+        eps=eps,
+        tol_chol=tol_chol,
+        time2=time2,
+        fixed_scale=None,
+        distribution_parameter=distribution_parameter,
+    )
+    null_scale = [float(value) for value in null_fit.coefficients[1:]]
+    return _survreg_fit_start(
+        response,
+        rows,
+        weights,
+        offsets,
+        strata,
+        nstrat,
+        None,
+        tol_chol,
+        null_scale,
+    )
 
 
 def _survreg_fit_core(
@@ -27817,6 +27942,9 @@ def survreg(
         eps,
         tol_chol,
     )
+    max_iter = 30 if max_iter is None else max_iter
+    eps = 1e-9 if eps is None else eps
+    tol_chol = 1e-10 if tol_chol is None else tol_chol
 
     formula_rows: list[list[float]] | None = None
     formula_design: _FormulaDesign | None = None
@@ -28134,7 +28262,7 @@ def survreg(
         penalty: list[list[float]] | None,
         start: list[float] | None,
     ) -> Any:
-        return _core.survreg(
+        fit = _core.survreg(
             response_time,
             response_status,
             rows,
@@ -28151,6 +28279,40 @@ def survreg(
             distribution_parameter=distribution_parameter,
             penalty_matrix=penalty,
         )
+        if start is not None or max_iter < 30 or int(fit.convergence_flag) == 0:
+            return fit
+        fallback_start = _survreg_default_start(
+            response_time,
+            response_time2,
+            response_status,
+            rows,
+            weight_values if weight_values is not None else [1.0] * n,
+            offset_values if offset_values is not None else [0.0] * n,
+            strata_values if strata_values is not None else [0] * n,
+            distribution_name,
+            distribution_parameter,
+            fixed_scale,
+            eps,
+            tol_chol,
+        )
+        fallback = _core.survreg(
+            response_time,
+            response_status,
+            rows,
+            weights=weight_values,
+            offsets=offset_values,
+            initial_beta=fallback_start,
+            strata=strata_values,
+            distribution=distribution_name,
+            max_iter=max_iter,
+            eps=eps,
+            tol_chol=tol_chol,
+            time2=response_time2,
+            fixed_scale=fixed_scale,
+            distribution_parameter=distribution_parameter,
+            penalty_matrix=penalty,
+        )
+        return fallback if fallback.log_likelihood > fit.log_likelihood else fit
 
     fit_penalty_matrix: list[list[float]] | None = None
     penalty_history: dict[str, dict[str, Any]] | None = None

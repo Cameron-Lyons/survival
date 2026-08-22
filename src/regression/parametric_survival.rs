@@ -970,6 +970,35 @@ pub fn survreg(
         .as_deref()
         .map(|values| validate_penalty_matrix(values, nvar))
         .transpose()?;
+    let active_columns: Vec<usize> = (0..nvar)
+        .filter(|&column| {
+            covariate_rows.iter().any(|row| row[column] != 0.0)
+                || penalty_matrix.as_ref().is_some_and(|penalty| {
+                    (0..nvar).any(|other| {
+                        penalty[(column, other)] != 0.0 || penalty[(other, column)] != 0.0
+                    })
+                })
+        })
+        .collect();
+    let active_nvar = active_columns.len();
+    let has_aliased_columns = active_nvar != nvar;
+    let reduced_covariate_rows = has_aliased_columns.then(|| {
+        covariate_rows
+            .iter()
+            .map(|row| active_columns.iter().map(|&column| row[column]).collect())
+            .collect::<Vec<Vec<f64>>>()
+    });
+    let fit_covariate_rows = reduced_covariate_rows.as_deref().unwrap_or(&covariate_rows);
+    let reduced_penalty_matrix = if has_aliased_columns {
+        penalty_matrix.as_ref().map(|penalty| {
+            Array2::from_shape_fn((active_nvar, active_nvar), |(row, column)| {
+                penalty[(active_columns[row], active_columns[column])]
+            })
+        })
+    } else {
+        None
+    };
+    let fit_penalty_matrix = reduced_penalty_matrix.as_ref().or(penalty_matrix.as_ref());
     let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
     let offsets_vec = offsets.unwrap_or_else(|| vec![0.0; n]);
     let has_strata = strata.is_some();
@@ -1009,10 +1038,16 @@ pub fn survreg(
             expected_initial_len
         )));
     }
-    if let Some(values) = initial_beta.as_ref() {
-        validate_finite_values("initial_beta", values)?;
-    }
     let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; expected_initial_len]);
+    let fit_initial_beta = if has_aliased_columns {
+        let mut values = Vec::with_capacity(active_nvar + estimated_scale_count);
+        values.extend(active_columns.iter().map(|&column| initial_beta[column]));
+        values.extend_from_slice(&initial_beta[nvar..]);
+        values
+    } else {
+        initial_beta
+    };
+    validate_finite_values("initial_beta", &fit_initial_beta)?;
     let y = {
         if let Some(time2) = time2_values.as_ref() {
             let mut y_data = Vec::with_capacity(n * 3);
@@ -1033,12 +1068,12 @@ pub fn survreg(
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
         }
     };
-    let cov_array = if nvar > 0 {
-        let mut flat = Vec::with_capacity(n * nvar);
-        for col_idx in 0..nvar {
-            flat.extend(covariate_rows.iter().map(|row| row[col_idx]));
+    let cov_array = if active_nvar > 0 {
+        let mut flat = Vec::with_capacity(n * active_nvar);
+        for col_idx in 0..active_nvar {
+            flat.extend(fit_covariate_rows.iter().map(|row| row[col_idx]));
         }
-        Array2::from_shape_vec((nvar, n), flat)
+        Array2::from_shape_vec((active_nvar, n), flat)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
     } else {
         Array2::zeros((0, n))
@@ -1049,12 +1084,12 @@ pub fn survreg(
     let distribution_name = requested_distribution_name(distribution, distribution_type);
     let result = compute_survreg(ComputeSurvregInput {
         max_iter: config.max_iter,
-        nvar,
+        nvar: active_nvar,
         y: &y,
         covariates: &cov_array,
         weights: &weights_arr,
         offsets: &offsets_arr,
-        beta: initial_beta,
+        beta: fit_initial_beta,
         nstrat,
         strata: &strata_vec,
         eps: config.eps,
@@ -1062,25 +1097,53 @@ pub fn survreg(
         distribution: distribution_type,
         distribution_parameter,
         fixed_scale,
-        penalty_matrix: penalty_matrix.as_ref(),
+        penalty_matrix: fit_penalty_matrix,
     })
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
-    let variance_matrix = result
-        .variance_matrix
-        .outer_iter()
-        .map(|row| row.iter().copied().collect())
-        .collect();
-    let location_coefficients = result.coefficients[..nvar].to_vec();
+    let fitted_location_coefficients = &result.coefficients[..active_nvar];
+    let mut location_coefficients = vec![f64::NAN; nvar];
+    for (&column, &coefficient) in active_columns
+        .iter()
+        .zip(fitted_location_coefficients.iter())
+    {
+        location_coefficients[column] = coefficient;
+    }
     let scales: Vec<f64> = if let Some(scale) = fixed_scale {
         vec![scale]
     } else {
-        result.coefficients[nvar..nvar + nstrat]
+        result.coefficients[active_nvar..active_nvar + nstrat]
             .iter()
             .map(|value| value.exp())
             .collect()
     };
-    let linear_predictors =
-        compute_linear_predictor(&covariate_rows, &location_coefficients, Some(&offsets_vec));
+    let linear_predictors = compute_linear_predictor(
+        fit_covariate_rows,
+        fitted_location_coefficients,
+        Some(&offsets_vec),
+    );
+    let full_parameter_count = nvar + estimated_scale_count;
+    let active_parameter_indices: Vec<usize> = active_columns
+        .iter()
+        .copied()
+        .chain(nvar..full_parameter_count)
+        .collect();
+    let mut variance_matrix = vec![vec![0.0; full_parameter_count]; full_parameter_count];
+    for (fit_row, &full_row) in active_parameter_indices.iter().enumerate() {
+        for (fit_column, &full_column) in active_parameter_indices.iter().enumerate() {
+            variance_matrix[full_row][full_column] = result.variance_matrix[(fit_row, fit_column)];
+        }
+    }
+    let mut score_vector = vec![0.0; full_parameter_count];
+    for (fit_index, &full_index) in active_parameter_indices.iter().enumerate() {
+        score_vector[full_index] = result.score_vector[fit_index];
+    }
+    let coefficients = if fixed_scale.is_some() {
+        location_coefficients.clone()
+    } else {
+        let mut values = location_coefficients.clone();
+        values.extend_from_slice(&result.coefficients[active_nvar..active_nvar + nstrat]);
+        values
+    };
     let status_values: Vec<i32> = status.iter().map(|&value| value as i32).collect();
     let fitted_covariates = if nvar == 0 {
         vec![vec![]; n]
@@ -1088,11 +1151,7 @@ pub fn survreg(
         covariate_rows
     };
     Ok(SurvivalFit {
-        coefficients: if fixed_scale.is_some() {
-            location_coefficients.clone()
-        } else {
-            result.coefficients
-        },
+        coefficients,
         location_coefficients,
         scale: scales.first().copied().unwrap_or(1.0),
         scales,
@@ -1111,7 +1170,7 @@ pub fn survreg(
         variance_matrix,
         log_likelihood: result.log_likelihood,
         convergence_flag: result.convergence_flag,
-        score_vector: result.score_vector,
+        score_vector,
         penalty_matrix: penalty_matrix
             .as_ref()
             .map(|matrix| {
@@ -1525,6 +1584,69 @@ mod tests {
             None,
         );
         assert!(weibull.is_err());
+    }
+
+    #[test]
+    fn survreg_marks_all_zero_covariates_as_aliased() {
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let status = vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
+        let x = [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5, -1.5, 0.25];
+        let reduced_covariates: Vec<Vec<f64>> = x.iter().map(|&value| vec![1.0, value]).collect();
+        let aliased_covariates: Vec<Vec<f64>> =
+            x.iter().map(|&value| vec![1.0, 0.0, value]).collect();
+        let fit = survreg(
+            time.clone(),
+            status.clone(),
+            aliased_covariates,
+            None,
+            None,
+            None,
+            None,
+            Some("weibull"),
+            Some(100),
+            Some(1e-10),
+            Some(1e-10),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("aliased fit should succeed");
+        let reduced = survreg(
+            time,
+            status,
+            reduced_covariates,
+            None,
+            None,
+            None,
+            None,
+            Some("weibull"),
+            Some(100),
+            Some(1e-10),
+            Some(1e-10),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("reduced fit should succeed");
+
+        assert_eq!(fit.n_covariates, 3);
+        assert_eq!(fit.covariates[0].len(), 3);
+        assert!(fit.location_coefficients[1].is_nan());
+        assert_eq!(fit.variance_matrix.len(), 4);
+        assert!(fit.variance_matrix[1].iter().all(|&value| value == 0.0));
+        assert!(fit.variance_matrix.iter().all(|row| row[1] == 0.0));
+        assert_eq!(fit.score_vector[1], 0.0);
+        for (&actual, &expected) in [fit.location_coefficients[0], fit.location_coefficients[2]]
+            .iter()
+            .zip(reduced.location_coefficients.iter())
+        {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert!((fit.coefficients[3] - reduced.coefficients[2]).abs() < 1e-12);
+        assert_eq!(fit.linear_predictors, reduced.linear_predictors);
+        assert!((fit.log_likelihood - reduced.log_likelihood).abs() < 1e-12);
     }
 
     #[test]

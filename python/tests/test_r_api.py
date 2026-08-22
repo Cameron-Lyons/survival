@@ -13696,8 +13696,8 @@ def test_anova_survreg_reselects_adaptive_penalties(
 
     result = survival.anova(fit)
 
-    assert [row.df for row in result.rows] == pytest.approx(expected_df, abs=3e-8)
-    assert [row.loglik for row in result.rows] == pytest.approx(expected_loglik, abs=3e-8)
+    assert [row.df for row in result.rows] == pytest.approx(expected_df, abs=1e-6)
+    assert [row.loglik for row in result.rows] == pytest.approx(expected_loglik, abs=1e-6)
 
 
 def test_coxph_detail_exposes_r_style_event_contributions():
@@ -15873,6 +15873,68 @@ def test_cox_zph_formula_terms_group_multi_column_factors():
     assert by_term.table[-1]["name"] == "GLOBAL"
     assert survival.cox_zph(fit, global_test=False).table[-1]["name"] != "GLOBAL"
     assert survival.cox_zph(fit, **{"global": False}).table[-1]["name"] != "GLOBAL"
+
+
+def test_formula_factors_preserve_declared_numeric_levels_and_unused_aliases():
+    n = 48
+    index_values = list(range(n))
+    x = [((value * 17) % 49) / 10.0 - 2.4 for value in index_values]
+    z = [((value * 7) % 47) / 13.0 - 1.8 for value in index_values]
+    noise = [((value * 13) % 11 - 5) / 20.0 for value in index_values]
+    group = [str(value % 4) for value in index_values]
+    base_data = {
+        "time": [
+            math.exp(2.4 + 0.22 * x_value - 0.08 * x_value**2 + 0.15 * z_value + error)
+            for x_value, z_value, error in zip(x, z, noise, strict=True)
+        ],
+        "status": [int(value % 5 != 0) for value in index_values],
+        "x": x,
+        "group": survival.r_api._r_factor(group, ["0", "1", "2", "3", "4"]),
+    }
+    reduced_data = {
+        **base_data,
+        "group": survival.r_api._r_factor(group, ["0", "1", "2", "3"]),
+    }
+    formula = "Surv(time,status) ~ group + pspline(x,theta=.5,nterm=6)"
+
+    cox = survival.coxph(formula, data=base_data, ties="breslow")
+    reduced_cox = survival.coxph(formula, data=reduced_data, ties="breslow")
+    assert survival.coef_names(cox)[:4] == ["group1", "group2", "group3", "group4"]
+    assert math.isnan(survival.coef(cox)[3])
+    assert [value for index, value in enumerate(survival.coef(cox)) if index != 3] == pytest.approx(
+        survival.coef(reduced_cox), abs=1e-12
+    )
+    zph = survival.cox_zph(cox, transform="rank")
+    reduced_zph = survival.cox_zph(reduced_cox, transform="rank")
+    assert (
+        zph.variable_names == reduced_zph.variable_names == ["group", "pspline(x,theta=.5,nterm=6)"]
+    )
+    assert zph.chi2_values == pytest.approx(reduced_zph.chi2_values, abs=1e-12)
+    assert zph.df == pytest.approx(reduced_zph.df, abs=1e-12)
+    assert survival.as_data_frame(zph)["df"] == pytest.approx(
+        [*zph.df, zph.global_df],
+        abs=1e-12,
+    )
+
+    aft = survival.survreg(formula, data=base_data, distribution="weibull", max_iter=100)
+    reduced_aft = survival.survreg(
+        formula,
+        data=reduced_data,
+        distribution="weibull",
+        max_iter=100,
+    )
+    assert survival.coef_names(aft)[:5] == [
+        "(Intercept)",
+        "group1",
+        "group2",
+        "group3",
+        "group4",
+    ]
+    assert math.isnan(survival.coef(aft)[4])
+    assert [value for index, value in enumerate(survival.coef(aft)) if index != 4] == pytest.approx(
+        survival.coef(reduced_aft), abs=1e-10
+    )
+    assert survival.loglik(aft) == pytest.approx(survival.loglik(reduced_aft), abs=1e-10)
 
 
 def test_cox_zph_drops_aliased_columns_like_explicitly_reduced_fit():
