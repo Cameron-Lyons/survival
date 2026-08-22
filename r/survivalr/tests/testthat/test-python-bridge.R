@@ -4613,6 +4613,47 @@ test_that("disabled standard errors with multiple scores match reference errors"
   )
 })
 
+test_that("disabled standard errors recycle retained strata counts like reference", {
+  data <- data.frame(
+    time = c(4, 6, 5, 7, 2, 5, 4, 2, 2, 4),
+    status = c(0, 0, 1, 0, 1, 0, 1, 0, 0, 0),
+    x = c(-0.5, -0.5, -1, 1, 0.5, -0.5, 0, -0.5, -1, 0.5),
+    group = c(1, 3, 1, 2, 2, 1, 3, 3, 1, 2)
+  )
+  warning_message <- paste(
+    "data length [15] is not a sub-multiple or multiple",
+    "of the number of columns [6]"
+  )
+
+  bridged <- NULL
+  expect_warning(
+    bridged <- concordancefit(
+      Surv(data$time, data$status),
+      as.matrix(data["x"]),
+      strata = data$group,
+      ymax = 4,
+      keepstrata = TRUE,
+      std.err = FALSE
+    ),
+    warning_message,
+    fixed = TRUE
+  )
+  reference <- NULL
+  expect_warning(
+    reference <- survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      as.matrix(data["x"]),
+      strata = data$group,
+      ymax = 4,
+      keepstrata = TRUE,
+      std.err = FALSE
+    ),
+    warning_message,
+    fixed = TRUE
+  )
+  expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+})
+
 test_that("multi-score influence covariance matches reference shape", {
   time <- c(1, 2, 3, 4, 5, 6)
   status <- c(1, 1, 0, 1, 0, 1)
