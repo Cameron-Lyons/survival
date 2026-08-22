@@ -1302,6 +1302,87 @@ attrassign <- function(object, tt) {
   as.character(.result_field(metadata, "row_names"))
 }
 
+.as_multistate_cox_matrix <- function(field, row.names = TRUE) {
+  columns <- as.character(field[["columns"]])
+  values <- if (length(field[["values"]]) == 0L) {
+    matrix(numeric(), nrow = 0L, ncol = length(columns))
+  } else {
+    .as_numeric_matrix(field[["values"]])
+  }
+  storage.mode(values) <- "integer"
+  dimnames(values) <- list(
+    if (isTRUE(row.names)) as.character(field[["rows"]]) else NULL,
+    columns
+  )
+  values
+}
+
+.as_multistate_cox_component <- function(object, name) {
+  fields <- .call_r_api("_coxph_multistate_structure", object)
+  if (identical(name, "states")) {
+    return(as.character(fields[[name]]))
+  }
+  if (identical(name, "transitions")) {
+    field <- fields[[name]]
+    values <- .as_multistate_cox_matrix(field)
+    names(dimnames(values)) <- c("from", "to")
+    return(as.table(values))
+  }
+  if (name %in% c("cmap", "smap")) {
+    return(.as_multistate_cox_matrix(fields[[name]]))
+  }
+  if (identical(name, "rmap")) {
+    return(.as_multistate_cox_matrix(fields[[name]], row.names = FALSE))
+  }
+  if (identical(name, "assign")) {
+    return(lapply(fields[[name]], function(value) {
+      as.integer(unlist(value, recursive = TRUE, use.names = FALSE))
+    }))
+  }
+  if (identical(name, "share")) {
+    value <- fields[[name]]
+    if (is.null(value)) {
+      return(NULL)
+    }
+    return(list(
+      vtype = as.integer(
+        unlist(value[["vtype"]], recursive = TRUE, use.names = FALSE)
+      ),
+      scale = as.numeric(
+        unlist(value[["scale"]], recursive = TRUE, use.names = FALSE)
+      )
+    ))
+  }
+  NULL
+}
+
+.survival_py_coxph_component <- function(object, name) {
+  metadata_names <- c(
+    "states", "transitions", "cmap", "smap", "rmap", "assign", "share"
+  )
+  if (.is_multistate_cox_fit(object) && name %in% metadata_names) {
+    return(.as_multistate_cox_component(object, name))
+  }
+  if (identical(name, "formula")) {
+    return(stats::as.formula(.call_r_api("model_formula", object)))
+  }
+  if (inherits(object, "python.builtin.object") && reticulate::py_has_attr(object, name)) {
+    return(reticulate::py_to_r(reticulate::py_get_attr(object, name)))
+  }
+  NULL
+}
+
+`$.survival_py_coxph` <- function(x, name) {
+  .survival_py_coxph_component(x, name)
+}
+
+`[[.survival_py_coxph` <- function(x, i, ..., exact = TRUE) {
+  if (is.character(i) && length(i) == 1L) {
+    return(.survival_py_coxph_component(x, i))
+  }
+  NextMethod("[[")
+}
+
 .predict_matrix_result <- function(type, object = NULL) {
   value <- if (is.null(type)) "lp" else tolower(gsub("-", "_", trimws(type)))
   if (!is.null(object) && .is_multistate_cox_fit(object) &&

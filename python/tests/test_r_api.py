@@ -13524,6 +13524,11 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
         [-1.0317081235160794, -0.4847370380673689],
         abs=1e-12,
     )
+    assert stratified_fit.smap == {
+        "values": [[1, 2], [1, 1]],
+        "rows": ["(Baseline)", "strata(g)"],
+        "columns": ["1:2", "1:3"],
+    }
     stratified_curves = survival.survfit(
         stratified_fit,
         newdata=pandas.DataFrame({"x": [0.5, 1.5]}),
@@ -13634,6 +13639,31 @@ def test_coxph_multistate_formula_lists_match_r_reference():
     assert common_fit.log_likelihood == pytest.approx(
         [-14.218893499868114, -13.405027864921383], abs=1e-12
     )
+    assert common_fit.states == ["(s0)", "a", "b"]
+    assert common_fit.transitions == {
+        "values": [[4, 4, 4], [0, 0, 0], [0, 0, 0]],
+        "rows": ["(s0)", "a", "b"],
+        "columns": ["a", "b", "(censored)"],
+    }
+    assert common_fit.cmap == {
+        "values": [[1, 1]],
+        "rows": ["x"],
+        "columns": ["1:2", "1:3"],
+    }
+    assert common_fit.smap == {
+        "values": [[1, 2]],
+        "rows": ["(Baseline)"],
+        "columns": ["1:2", "1:3"],
+    }
+    assert common_fit.rmap == {
+        "values": [
+            *[[row, 1] for row in range(1, 13)],
+            *[[row, 2] for row in range(1, 13)],
+        ],
+        "columns": ["row", "transition"],
+    }
+    assert common_fit.assign == {"x": [1]}
+    assert common_fit.share is None
     for actual, expected in zip(
         survival.predict(common_fit, newdata=data.iloc[:2], type="lp"),
         [
@@ -13656,6 +13686,12 @@ def test_coxph_multistate_formula_lists_match_r_reference():
         [-1.4144189628444992, -0.061213445388027525, -0.5655883618417852],
         abs=1e-12,
     )
+    assert selective_fit.cmap == {
+        "values": [[1, 2], [0, 3]],
+        "rows": ["x", "z"],
+        "columns": ["1:2", "1:3"],
+    }
+    assert selective_fit.assign == {"x": [1], "z": [2]}
     for actual, expected in zip(
         survival.predict(selective_fit, newdata=data.iloc[:2], type="lp"),
         [
@@ -13678,6 +13714,22 @@ def test_coxph_multistate_formula_lists_match_r_reference():
         [-1.466647683417733, -0.4392519639108706, -1.085336872157014],
         abs=1e-12,
     )
+    assert shared_fit.cmap == {
+        "values": [[1, 2], [0, 3]],
+        "rows": ["x", "ph(1:2)"],
+        "columns": ["1:2", "1:3"],
+    }
+    assert shared_fit.smap["values"] == [[1, 1]]
+    assert shared_fit.rmap == {
+        "values": [
+            *[[row, 1] for row in range(1, 13)],
+            *[[row, 1] for row in range(1, 13)],
+        ],
+        "columns": ["row", "transition"],
+    }
+    assert shared_fit.assign == {"x": [1]}
+    assert shared_fit.share["vtype"] == [0, 2]
+    assert shared_fit.share["scale"] == pytest.approx([1.0, 0.3377879753621159], abs=1e-12)
     shared_curve = survival.survfit(
         shared_fit,
         newdata=pandas.DataFrame({"x": [0.5]}),
@@ -13717,6 +13769,8 @@ def test_coxph_multistate_formula_lists_match_r_reference():
         shared_baseline_fit,
         newdata=pandas.DataFrame({"x": [0.5]}),
     )
+    assert shared_baseline_fit.smap["values"] == [[1, 1]]
+    assert shared_baseline_fit.share is None
     assert shared_baseline_curve.cumhaz[-1] == pytest.approx(
         [1.6994484072911114, 1.6994484072911114], abs=1e-12
     )

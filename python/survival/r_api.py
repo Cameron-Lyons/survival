@@ -522,6 +522,16 @@ class _FormulaFit:
             return self.n_observations
         if name == "means" and self.multi_state is not None:
             return list(self.multi_state.reported_means)
+        if self.multi_state is not None and name in {
+            "states",
+            "transitions",
+            "cmap",
+            "smap",
+            "rmap",
+            "assign",
+            "share",
+        }:
+            return _coxph_multistate_structure(self)[name]
         if name == "linear_predictors" and self.multi_state is not None:
             beta = _cox_beta(self.fit)
             center = math.fsum(
@@ -17665,6 +17675,146 @@ def model_matrix(fit: Any) -> dict[str, Any]:
     }
 
 
+def _coxph_multistate_transition_names(
+    metadata: _MultiStateCoxFitMetadata,
+) -> list[str]:
+    return [f"{source + 1}:{target + 1}" for source, target in metadata.transitions]
+
+
+def _coxph_multistate_transition_table(
+    metadata: _MultiStateCoxFitMetadata,
+) -> dict[str, Any]:
+    targets = list(dict.fromkeys(target for _source, target in metadata.transitions))
+    target_columns = {state: idx for idx, state in enumerate(targets)}
+    values = [[0] * (len(targets) + 1) for _state in metadata.states]
+    for source, event in zip(
+        metadata.current_states,
+        metadata.normalized_response.event,
+        strict=True,
+    ):
+        if event is None:
+            continue
+        if event == 0:
+            values[source][-1] += 1
+        else:
+            target = int(event) - 1
+            column = target_columns.get(target)
+            if column is not None:
+                values[source][column] += 1
+    return {
+        "values": values,
+        "rows": list(metadata.states),
+        "columns": [metadata.states[state] for state in targets] + ["(censored)"],
+    }
+
+
+def _coxph_multistate_assignment_map(
+    fit: _FormulaFit,
+    width: int,
+) -> dict[str, list[int]]:
+    assignments = _model_matrix_assignments(fit, width)
+    design = fit.design
+    result: dict[str, list[int]] = {}
+    for column, assignment in enumerate(assignments, start=1):
+        if assignment == 0:
+            continue
+        if design is not None and 0 < assignment <= len(design.term_labels):
+            label = design.term_labels[assignment - 1]
+        else:
+            label = _model_matrix_column_names(fit, width)[column - 1]
+        result.setdefault(label, []).append(column)
+    return result
+
+
+def _coxph_multistate_structure(fit: Any) -> dict[str, Any]:
+    """Return the fitted maps used by R's multi-state Cox model methods."""
+
+    if not isinstance(fit, _FormulaFit) or fit.multi_state is None:
+        raise TypeError("multi-state Cox metadata requires a fitted multi-state coxph model")
+    metadata = fit.multi_state
+    transition_names = _coxph_multistate_transition_names(metadata)
+    design_names = _model_matrix_column_names(fit, metadata.original_width)
+    strata_names = (
+        [name for name in fit.design.term_labels if name.startswith("strata(")]
+        if fit.design is not None
+        else []
+    )
+
+    cmap_values = [
+        [
+            metadata.coefficient_map[transition][column] + 1
+            for transition in range(len(transition_names))
+        ]
+        for column in range(metadata.original_width)
+    ]
+    cmap_names = list(design_names)
+    ph_rows = 0
+    for baseline in dict.fromkeys(metadata.baseline_map):
+        members = [
+            transition
+            for transition, value in enumerate(metadata.baseline_map)
+            if value == baseline
+        ]
+        if not any(metadata.ph_coefficient_map[transition] >= 0 for transition in members):
+            continue
+        root = next(
+            (transition for transition in members if metadata.ph_coefficient_map[transition] < 0),
+            members[0],
+        )
+        cmap_names.append(f"ph({transition_names[root]})")
+        cmap_values.append(
+            [
+                metadata.ph_coefficient_map[transition] + 1 if transition in members else 0
+                for transition in range(len(transition_names))
+            ]
+        )
+        ph_rows += 1
+
+    source_rows = list(metadata.source_rows)
+    transition_indices = list(metadata.transition_indices)
+    if len(source_rows) != len(transition_indices):
+        raise ValueError("multi-state Cox row metadata is inconsistent")
+    rmap = [
+        [source + 1, metadata.baseline_map[transition] + 1]
+        for source, transition in zip(source_rows, transition_indices, strict=True)
+    ]
+
+    share: dict[str, Any] | None = None
+    if ph_rows:
+        beta = _cox_beta(fit.fit)
+        share = {
+            "vtype": [0] * metadata.original_width + [2] * ph_rows,
+            "scale": [
+                (math.exp(beta[coefficient]) if coefficient >= 0 else 1.0)
+                for coefficient in metadata.ph_coefficient_map
+            ],
+        }
+
+    return {
+        "states": list(metadata.states),
+        "transitions": _coxph_multistate_transition_table(metadata),
+        "cmap": {
+            "values": cmap_values,
+            "rows": cmap_names,
+            "columns": transition_names,
+        },
+        "smap": {
+            "values": [
+                [baseline + 1 for baseline in metadata.baseline_map],
+                *[[1] * len(transition_names) for _name in strata_names],
+            ],
+            "rows": ["(Baseline)", *strata_names],
+            "columns": transition_names,
+        },
+        "rmap": {
+            "values": rmap,
+            "columns": ["row", "transition"],
+        },
+        "assign": _coxph_multistate_assignment_map(fit, metadata.original_width),
+        "share": share,
+    }
+
+
 def _formula_model_term_factors(term: _FormulaModelTerm) -> list[str]:
     if isinstance(term, _ModelCovariateTerm):
         return [_covariate_term_name(factor) for factor in _covariate_factors(term.term)]
@@ -24557,8 +24707,14 @@ def _multi_state_formula_spec(formulas: Sequence[Any]) -> _MultiStateFormulaSpec
             if term not in {"0", "1"}:
                 union_terms.append(term)
     union_rhs = default_rhs.strip()
-    if union_terms:
-        union_rhs = " + ".join([union_rhs, *union_terms])
+    default_covariates = {
+        term for _operator, term in _formula_tokens(union_rhs) if term not in {"0", "1"}
+    }
+    added_union_terms = [
+        term for term in dict.fromkeys(union_terms) if term not in default_covariates
+    ]
+    if added_union_terms:
+        union_rhs = " + ".join([*([] if union_rhs == "1" else [union_rhs]), *added_union_terms])
     return _MultiStateFormulaSpec(
         formulas=cast(tuple[str, ...], values),
         default_formula=default_formula,
