@@ -1035,7 +1035,9 @@ at a split point.}
 \item{tt, special, order}{Term-object inputs for \code{attrassign} and
 special-term inputs for \code{untangle.specials}.}
 \item{formula}{Formula, formula string, bridged \code{Surv} response, or
-bridged fitted Cox model accepted by \code{survival.r_api}.}
+bridged fitted Cox model accepted by \code{survival.r_api}. A named prebuilt
+\code{Surv} or \code{Surv2} response in \code{survSplit} is preserved as one
+classed output column.}
 \item{data, newdata}{Optional data frames or Python-compatible data objects.}
 \item{subset}{Optional row subset.}
 \item{na.action}{Missing-data policy, either a string or one of the common

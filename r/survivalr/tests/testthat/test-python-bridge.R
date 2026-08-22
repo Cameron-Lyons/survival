@@ -1033,6 +1033,130 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   expect_equal(bridged_timeline_split, reference_timeline_split)
 
+  expect_named_survsplit_equal <- function(y, data) {
+    if (inherits(y, "Surv2")) {
+      bridged <- survSplit(
+        y ~ x,
+        data = data,
+        id = data$id,
+        cut = c(1.5, 3.5),
+        episode = "ep",
+        added = "add"
+      )
+      reference <- survival::survSplit(
+        y ~ x,
+        data = data,
+        id = data$id,
+        cut = c(1.5, 3.5),
+        episode = "ep",
+        added = "add"
+      )
+    } else {
+      bridged <- survSplit(
+        y ~ x,
+        data = data,
+        cut = c(1.5, 3.5),
+        episode = "ep",
+        added = "add"
+      )
+      reference <- survival::survSplit(
+        y ~ x,
+        data = data,
+        cut = c(1.5, 3.5),
+        episode = "ep",
+        added = "add"
+      )
+    }
+    expect_equal(bridged, reference)
+  }
+
+  named_right_data <- data.frame(time = c(1, 3, 5), status = c(1, 0, 1), x = 1:3)
+  expect_named_survsplit_equal(
+    survival::Surv(named_right_data$time, named_right_data$status),
+    named_right_data
+  )
+  named_mright_data <- data.frame(
+    time = c(1, 3, 5),
+    state = factor(c("a", "censor", "b"), levels = c("censor", "a", "b")),
+    x = 1:3
+  )
+  expect_named_survsplit_equal(
+    survival::Surv(named_mright_data$time, named_mright_data$state),
+    named_mright_data
+  )
+  named_counting_data <- data.frame(
+    start = c(0, 2, 3),
+    stop = c(3, 5, 6),
+    status = c(1, 0, 1),
+    x = 1:3
+  )
+  expect_named_survsplit_equal(
+    survival::Surv(
+      named_counting_data$start,
+      named_counting_data$stop,
+      named_counting_data$status
+    ),
+    named_counting_data
+  )
+  named_mcounting_data <- data.frame(
+    start = c(0, 2, 3),
+    stop = c(3, 5, 6),
+    state = factor(c("a", "censor", "b"), levels = c("censor", "a", "b")),
+    x = 1:3
+  )
+  expect_named_survsplit_equal(
+    survival::Surv(
+      named_mcounting_data$start,
+      named_mcounting_data$stop,
+      named_mcounting_data$state
+    ),
+    named_mcounting_data
+  )
+  expect_named_survsplit_equal(
+    survival::Surv2(timeline_split_data$time, timeline_split_data$event),
+    timeline_split_data
+  )
+
+  named_na_data <- data.frame(time = c(1, 3, 5), status = c(1, 0, 1), x = c(1, NA, 3))
+  named_na_response <- survival::Surv(named_na_data$time, named_na_data$status)
+  expect_equal(
+    survSplit(
+      named_na_response ~ x,
+      data = named_na_data,
+      na.action = stats::na.omit,
+      cut = c(1.5, 3.5)
+    ),
+    survival::survSplit(
+      named_na_response ~ x,
+      data = named_na_data,
+      na.action = stats::na.omit,
+      cut = c(1.5, 3.5)
+    )
+  )
+
+  named_dot_data <- data.frame(x = 1:3, check.names = FALSE)
+  named_dot_data[["..survsplit.source"]] <- 11:13
+  named_dot_data[["..survsplit.start"]] <- 21:23
+  named_dot_data[["..survsplit.end"]] <- 31:33
+  named_dot_data[["..survsplit.event"]] <- 41:43
+  named_dot_data$y <- survival::Surv(c(1, 3, 5), c(1, 0, 1))
+  expect_equal(
+    survSplit(
+      y ~ .,
+      data = named_dot_data,
+      cut = c(1.5, 3.5),
+      episode = "..survsplit.event",
+      added = "..survsplit.start"
+    ),
+    survival::survSplit(
+      y ~ .,
+      data = named_dot_data,
+      cut = c(1.5, 3.5),
+      episode = "..survsplit.event",
+      added = "..survsplit.start"
+    )
+  )
+
   check_data <- data.frame(
     id = c(1, 1, 2),
     start = c(0, 1, 0),
