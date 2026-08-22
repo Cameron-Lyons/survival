@@ -722,7 +722,7 @@ coxph(formula, data = NULL, ..., subset = NULL, na.action = "fail")
 
 coxph.control(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
-  timefix = TRUE)
+  timefix = TRUE, survcheckallow = "gap")
 
 coxph.fit(x, y, strata, offset, init, control, weights, method,
   rownames, resid = TRUE, nocenter = NULL)
@@ -1168,11 +1168,13 @@ quantiles and Cox summaries.}
 \item{parms}{Optional distribution parameters. Used for the Student-t
 \code{survreg} helper distribution; ignored by the other built-in helper
 distributions to match R.}
-\item{eps, toler.chol, iter.max, toler.inf, outer.max, timefix}{Control
+\item{eps, toler.chol, iter.max, toler.inf, outer.max, timefix, survcheckallow}{Control
 options passed through \code{coxph.control}. \code{timefix} also controls
 near-tie correction in \code{survdiff}. \code{eps} is also the
 convergence tolerance used when \code{ridge}, \code{frailty.*}, or
-\code{pspline} searches for a penalty matching \code{df}.}
+\code{pspline} searches for a penalty matching \code{df}.
+\code{survcheckallow} names the state-history issue permitted for
+multi-state Cox fits and defaults to \code{"gap"}.}
 \item{maxiter, rel.tolerance, debug}{Control options passed through
 \code{survreg.control}.}
 \item{dlist}{Distribution-list object for \code{survregDtest}.}

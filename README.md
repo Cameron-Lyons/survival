@@ -172,10 +172,11 @@ shapes for ordinary predictions and individual time-dependent trajectories.
 Single-formula multi-state Cox fits support factor-valued right-censored and
 counting-process responses, with transition-specific coefficients and
 baselines, automatic subject-clustered robust covariance, and matrix-valued
-linear-predictor and risk predictions. Model-based state-probability curves
-support direct or matrix-exponential transition updates for one or more
-covariate profiles across unstratified or stratified baselines, optional
-starting-state mixtures, and conditional start times.
+linear-predictor and risk predictions. Their state-history checks honor
+R-compatible `coxph_control(survcheckallow=...)` policy. Model-based
+state-probability curves support direct or matrix-exponential transition
+updates for one or more covariate profiles across unstratified or stratified
+baselines, optional starting-state mixtures, and conditional start times.
 Formula fits support `tt(...)` time-varying coefficient terms for right-censored
 and counting-process responses, including R's default O'Brien rank transform
 and custom `tt(x, time, riskset, weights)` callables.
