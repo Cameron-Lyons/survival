@@ -392,14 +392,13 @@ fn profile_means(
     Some(means)
 }
 
-fn yates_profile_summary(
+fn validate_profile_inputs(
     x: &[Vec<f64>],
     beta: &[f64],
     draws: &[Vec<f64>],
     n_levels: usize,
     center: &[f64],
-    transform: ProfileTransform,
-) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+) -> PyResult<()> {
     if n_levels < 2 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "n_levels must be at least 2",
@@ -438,6 +437,19 @@ fn yates_profile_summary(
         ));
     }
 
+    Ok(())
+}
+
+fn yates_profile_summary(
+    x: &[Vec<f64>],
+    beta: &[f64],
+    draws: &[Vec<f64>],
+    n_levels: usize,
+    center: &[f64],
+    transform: ProfileTransform,
+) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+    validate_profile_inputs(x, beta, draws, n_levels, center)?;
+
     let Some(estimate) = profile_means(x, beta, n_levels, center, transform) else {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "profile means are non-finite",
@@ -474,6 +486,152 @@ fn yates_profile_summary(
         .collect::<Vec<_>>();
 
     Ok((estimate, covariance))
+}
+
+fn survival_profile_means(
+    x: &[Vec<f64>],
+    beta: &[f64],
+    n_levels: usize,
+    center: &[f64],
+    cumulative_hazard: &[f64],
+    intervals: &[f64],
+) -> Option<Vec<Vec<f64>>> {
+    let rows_per_level = x.len() / n_levels;
+    let mut profiles = vec![vec![0.0; cumulative_hazard.len() + 1]; n_levels];
+    for (level, profile) in profiles.iter_mut().enumerate() {
+        let start = level * rows_per_level;
+        let end = start + rows_per_level;
+        for row in &x[start..end] {
+            let eta = row
+                .iter()
+                .zip(center)
+                .zip(beta)
+                .map(|((&value, &mean), &coefficient)| (value - mean) * coefficient)
+                .sum::<f64>();
+            let risk = eta.exp();
+            let mut restricted_mean = 0.0;
+            for (point, (&hazard, &interval)) in cumulative_hazard.iter().zip(intervals).enumerate()
+            {
+                let survival = (-risk * hazard).exp();
+                if !survival.is_finite() {
+                    return None;
+                }
+                restricted_mean += interval * survival;
+                profile[point + 1] += survival;
+            }
+            if !restricted_mean.is_finite() {
+                return None;
+            }
+            profile[0] += restricted_mean;
+        }
+        for value in profile {
+            *value /= rows_per_level as f64;
+        }
+    }
+    Some(profiles)
+}
+
+type SurvivalProfileSummary = (Vec<f64>, Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>);
+
+#[pyfunction]
+pub fn yates_survival_profiles(
+    x: Vec<Vec<f64>>,
+    beta: Vec<f64>,
+    draws: Vec<Vec<f64>>,
+    n_levels: usize,
+    center: Vec<f64>,
+    cumulative_hazard: Vec<f64>,
+    intervals: Vec<f64>,
+) -> PyResult<SurvivalProfileSummary> {
+    validate_profile_inputs(&x, &beta, &draws, n_levels, &center)?;
+    if cumulative_hazard.is_empty() || cumulative_hazard.len() != intervals.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "cumulative_hazard and intervals must have the same positive length",
+        ));
+    }
+    if cumulative_hazard
+        .iter()
+        .chain(&intervals)
+        .any(|value| !value.is_finite())
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "cumulative_hazard and intervals must be finite",
+        ));
+    }
+
+    let Some(observed) =
+        survival_profile_means(&x, &beta, n_levels, &center, &cumulative_hazard, &intervals)
+    else {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "survival profile means are non-finite",
+        ));
+    };
+    let simulated = draws
+        .par_iter()
+        .map(|draw| {
+            survival_profile_means(&x, draw, n_levels, &center, &cumulative_hazard, &intervals)
+        })
+        .collect::<Vec<_>>();
+    if simulated.iter().any(Option::is_none) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "simulated survival profile means are non-finite",
+        ));
+    }
+    let simulated = simulated.into_iter().flatten().collect::<Vec<_>>();
+    let n_draws = simulated.len();
+    let n_outputs = cumulative_hazard.len() + 1;
+    let mut profile_mean = vec![vec![0.0; n_outputs]; n_levels];
+    for profiles in &simulated {
+        for (mean_row, profile_row) in profile_mean.iter_mut().zip(profiles) {
+            for (mean, &value) in mean_row.iter_mut().zip(profile_row) {
+                *mean += value;
+            }
+        }
+    }
+    for row in &mut profile_mean {
+        for value in row {
+            *value /= n_draws as f64;
+        }
+    }
+
+    let denominator = (n_draws - 1) as f64;
+    let mut profile_variance = vec![vec![0.0; n_outputs]; n_levels];
+    for profiles in &simulated {
+        for ((variance_row, mean_row), profile_row) in
+            profile_variance.iter_mut().zip(&profile_mean).zip(profiles)
+        {
+            for ((variance, &mean), &value) in
+                variance_row.iter_mut().zip(mean_row).zip(profile_row)
+            {
+                *variance += (value - mean).powi(2);
+            }
+        }
+    }
+    for row in &mut profile_variance {
+        for value in row {
+            *value /= denominator;
+        }
+    }
+
+    let covariance = (0..n_levels)
+        .map(|left| {
+            (0..n_levels)
+                .map(|right| {
+                    simulated
+                        .iter()
+                        .map(|profiles| {
+                            (profiles[left][0] - profile_mean[left][0])
+                                * (profiles[right][0] - profile_mean[right][0])
+                        })
+                        .sum::<f64>()
+                        / denominator
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let estimate = observed.into_iter().map(|profile| profile[0]).collect();
+
+    Ok((estimate, covariance, profile_mean, profile_variance))
 }
 
 #[pyfunction]
@@ -811,5 +969,58 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("link must be one of"));
+    }
+
+    #[test]
+    fn test_yates_survival_profiles() {
+        let log_two = 2.0_f64.ln();
+        let log_four = 4.0_f64.ln();
+        let (estimate, covariance, profile_mean, profile_variance) = yates_survival_profiles(
+            vec![vec![0.0], vec![0.0], vec![1.0], vec![1.0]],
+            vec![log_two],
+            vec![vec![0.0], vec![log_two], vec![log_four]],
+            2,
+            vec![0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+
+        let simulated = [
+            1.0 + (-1.0_f64).exp(),
+            1.0 + (-2.0_f64).exp(),
+            1.0 + (-4.0_f64).exp(),
+        ];
+        let simulated_mean = simulated.iter().sum::<f64>() / simulated.len() as f64;
+        let simulated_variance = simulated
+            .iter()
+            .map(|value| (value - simulated_mean).powi(2))
+            .sum::<f64>()
+            / (simulated.len() - 1) as f64;
+
+        assert!((estimate[0] - (1.0 + (-1.0_f64).exp())).abs() < 1e-14);
+        assert!((estimate[1] - (1.0 + (-2.0_f64).exp())).abs() < 1e-14);
+        assert!(covariance[0].iter().all(|value| value.abs() < 1e-15));
+        assert!(covariance[1][0].abs() < 1e-15);
+        assert!((covariance[1][1] - simulated_variance).abs() < 1e-14);
+        assert!((profile_mean[1][0] - simulated_mean).abs() < 1e-14);
+        assert_eq!(profile_mean[0][1], 1.0);
+        assert!(profile_variance[0].iter().all(|value| value.abs() < 1e-15));
+        assert!((profile_variance[1][0] - simulated_variance).abs() < 1e-14);
+    }
+
+    #[test]
+    fn test_yates_survival_profiles_rejects_mismatched_grid() {
+        let error = yates_survival_profiles(
+            vec![vec![0.0], vec![1.0]],
+            vec![0.0],
+            vec![vec![0.0], vec![1.0]],
+            2,
+            vec![0.0],
+            vec![0.0, 1.0],
+            vec![1.0],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("same positive length"));
     }
 }

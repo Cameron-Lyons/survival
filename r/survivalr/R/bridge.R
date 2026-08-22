@@ -5842,8 +5842,105 @@ Surv2data <- function(formula, data, subset, id) {
   list(frame = frame, weights = NULL)
 }
 
+.yates_local_cox_survival_baseline <- function(fit, baseline) {
+  time <- .as_numeric_vector(.result_field(baseline, "time"))
+  stop_time <- .as_numeric_vector(.result_field(fit, "event_times"))
+  status <- as.integer(.result_field(fit, "status"))
+  weights <- .as_numeric_vector(.result_field(fit, "weights"))
+  entry_time <- .result_field(fit, "entry_times")
+  if (!is.null(entry_time)) {
+    entry_time <- .as_numeric_vector(entry_time)
+  }
+  if (length(stop_time) != length(status) || length(stop_time) != length(weights) ||
+      (!is.null(entry_time) && length(entry_time) != length(stop_time))) {
+    stop("fitted Cox response is inconsistent", call. = FALSE)
+  }
+  at_risk <- function(point) {
+    keep <- stop_time >= point
+    if (!is.null(entry_time)) {
+      keep <- keep & entry_time < point
+    }
+    sum(weights[keep])
+  }
+  at_event <- function(point) {
+    sum(weights[status != 0L & stop_time == point])
+  }
+  at_censor <- function(point) {
+    sum(weights[status == 0L & stop_time == point])
+  }
+  structure(
+    list(
+      n = length(stop_time),
+      time = time,
+      n.risk = vapply(time, at_risk, numeric(1L)),
+      n.event = vapply(time, at_event, numeric(1L)),
+      n.censor = vapply(time, at_censor, numeric(1L)),
+      surv = .as_numeric_vector(.result_field(baseline, "surv")),
+      cumhaz = .as_numeric_vector(.result_field(baseline, "cumhaz")),
+      std.err = .as_numeric_vector(.result_field(baseline, "std_chaz")),
+      logse = TRUE,
+      std.chaz = .as_numeric_vector(.result_field(baseline, "std_chaz")),
+      lower = .as_numeric_vector(.result_field(baseline, "conf_lower")),
+      upper = .as_numeric_vector(.result_field(baseline, "conf_upper")),
+      conf.type = "log",
+      conf.int = 0.95,
+      call = quote(survfit(formula = fit, censor = FALSE))
+    ),
+    class = c("survfitcox", "survfit")
+  )
+}
+
+.yates_cox_survival_baseline <- function(fit, options = NULL) {
+  suppressWarnings(baseline <- if (inherits(fit, "survival_py_coxph")) {
+    survfit.survival_py_coxph(fit, censor = FALSE)
+  } else {
+    survival::survfit(fit, censor = FALSE)
+  })
+  if ((inherits(baseline, "survival_py_survfit") &&
+        .is_grouped_survival_py_survfit(baseline)) ||
+      !is.null(baseline$strata)) {
+    stop("stratified models not yet supported", call. = FALSE)
+  }
+  time <- .as_numeric_vector(baseline$time)
+  cumulative_hazard <- c(0, .as_numeric_vector(baseline$cumhaz))
+  rmean <- if (is.null(options) || is.null(options$rmean)) {
+    max(time)
+  } else {
+    options$rmean
+  }
+  if (!is.numeric(rmean) || length(rmean) != 1L || !is.finite(rmean)) {
+    stop("options$rmean must be a finite numeric scalar", call. = FALSE)
+  }
+  intervals <- c(diff(c(0, pmin(rmean, time))), 0)
+  if (length(cumulative_hazard) != length(intervals)) {
+    stop("Cox baseline time and cumulative hazard are inconsistent", call. = FALSE)
+  }
+  list(
+    baseline = baseline,
+    cumulative_hazard = cumulative_hazard,
+    intervals = intervals
+  )
+}
+
+.yates_cox_survival_summary <- function(fit, baseline, profile_mean,
+                                        profile_variance) {
+  if (inherits(baseline, "survival_py_survfit")) {
+    baseline <- .yates_local_cox_survival_baseline(fit, baseline)
+  }
+  bsurv <- t(profile_mean[, -1L, drop = FALSE])
+  std <- t(sqrt(profile_variance[, -1L, drop = FALSE]))
+  chaz <- -log(bsurv)
+  confidence <- if (is.null(baseline$conf.int)) 0.95 else baseline$conf.int
+  zstat <- -stats::qnorm((1 - confidence) / 2)
+  baseline$lower <- exp(-(chaz + zstat * std))
+  baseline$upper <- exp(-(chaz - zstat * std))
+  baseline$surv <- bsurv
+  baseline$std.err <- std / bsurv
+  baseline
+}
+
 .yates_model_term <- function(fit, term, population, levels, levels_missing,
-                              test, predict, method, nsim) {
+                              test, predict, method, nsim, options = NULL) {
   cox_fit <- inherits(fit, c("coxph", "survival_py_coxph"))
   linear_fit <- inherits(fit, "lm")
   glm_fit <- inherits(fit, "glm")
@@ -5867,7 +5964,7 @@ Surv2data <- function(formula, data, subset, id) {
   test_value <- match.arg(test[[1L]], c("global", "trend", "pairwise"))
   method_value <- match.arg(tolower(method[[1L]]), c("direct", "sgtt"))
   allowed_predictions <- if (cox_fit) {
-    c("linear", "lp", "risk")
+    c("linear", "lp", "risk", "survival")
   } else if (glm_fit) {
     c("linear", "link", "response")
   } else {
@@ -5999,6 +6096,7 @@ Surv2data <- function(formula, data, subset, id) {
 
   variance <- stats::vcov(fit)
   risk_scale <- cox_fit && identical(predict, "risk")
+  survival_scale <- cox_fit && identical(predict, "survival")
   response_scale <- glm_fit && identical(predict, "response")
   response_link <- if (response_scale) stats::family(fit)$link else NULL
   standard_links <- c(
@@ -6008,7 +6106,7 @@ Surv2data <- function(formula, data, subset, id) {
   if (response_scale && !(response_link %in% standard_links)) {
     return(NULL)
   }
-  nonlinear_scale <- risk_scale || response_scale
+  nonlinear_scale <- risk_scale || survival_scale || response_scale
   center <- if (cox_fit) as.numeric(fit$means) else numeric(length(beta))
   if (length(center) != length(beta) || any(!is.finite(center))) {
     return(NULL)
@@ -6030,6 +6128,11 @@ Surv2data <- function(formula, data, subset, id) {
     Rmat <- t(ev$vectors %*% (t(ev$vectors) * sqrt(ev$values)))
     bmat <- matrix(stats::rnorm(nsim_value * ncol(variance)), nrow = nsim_value) %*% Rmat
     bmat <- bmat + rep(beta, each = nsim_value)
+    survival_baseline <- if (survival_scale) {
+      .yates_cox_survival_baseline(fit, options)
+    } else {
+      NULL
+    }
     profile_result <- if (risk_scale) {
       .call_r_api(
         "_yates_risk_profiles",
@@ -6039,7 +6142,7 @@ Surv2data <- function(formula, data, subset, id) {
         n_levels = length(contrast_levels),
         center = center
       )
-    } else {
+    } else if (response_scale) {
       .call_r_api(
         "_yates_link_profiles",
         x = do.call(rbind, design_matrices),
@@ -6047,6 +6150,17 @@ Surv2data <- function(formula, data, subset, id) {
         draws = bmat,
         n_levels = length(contrast_levels),
         link = response_link
+      )
+    } else {
+      .call_r_api(
+        "_yates_survival_profiles",
+        x = do.call(rbind, design_matrices),
+        beta = beta,
+        draws = bmat,
+        n_levels = length(contrast_levels),
+        center = center,
+        cumulative_hazard = survival_baseline$cumulative_hazard,
+        intervals = survival_baseline$intervals
       )
     }
     estimate_values <- .as_numeric_vector(.result_field(profile_result, "estimate"))
@@ -6103,6 +6217,14 @@ Surv2data <- function(formula, data, subset, id) {
     mvar = mean_variance
   )
   if (!nonlinear_scale) result$cmat <- cmat
+  if (survival_scale) {
+    result$summary <- .yates_cox_survival_summary(
+      fit,
+      survival_baseline$baseline,
+      .as_numeric_matrix(.result_field(profile_result, "profile_mean")),
+      .as_numeric_matrix(.result_field(profile_result, "profile_variance"))
+    )
+  }
   result
 }
 
@@ -6121,7 +6243,8 @@ yates <- function(fit, term, population = c("data", "factorial", "sas"),
       test = test,
       predict = predict,
       method = method,
-      nsim = nsim
+      nsim = nsim,
+      options = if (missing(options)) NULL else options
     )
     if (!is.null(local_result)) {
       call[[1L]] <- quote(survival::yates)
@@ -6175,34 +6298,22 @@ yates_setup.glm <- function(fit, predict = c("link", "response", "terms", "linea
     return(function(eta, X) exp(eta))
   }
   if (type == "survival") {
-    suppressWarnings(baseline <- survfit(fit, censor = FALSE))
-    rmean <- if (missing(options) || is.null(options$rmean)) {
-      max(baseline$time)
-    } else {
-      options$rmean
-    }
-    if (!is.null(baseline$strata)) {
-      stop("stratified models not yet supported", call. = FALSE)
-    }
-    cumhaz <- c(0, baseline$cumhaz)
-    tt <- c(diff(c(0, pmin(rmean, baseline$time))), 0)
+    setup <- .yates_cox_survival_baseline(
+      fit,
+      if (missing(options)) NULL else options
+    )
     predict_fun <- function(eta, ...) {
-      c2 <- outer(exp(drop(eta)), cumhaz)
+      c2 <- outer(exp(drop(eta)), setup$cumulative_hazard)
       surv <- exp(-c2)
-      meansurv <- apply(rep(tt, each = nrow(c2)) * surv, 1L, sum)
+      meansurv <- apply(
+        rep(setup$intervals, each = nrow(c2)) * surv,
+        1L,
+        sum
+      )
       cbind(meansurv, surv)
     }
     summary_fun <- function(surv, var) {
-      bsurv <- t(surv[, -1L])
-      std <- t(sqrt(var[, -1L]))
-      chaz <- -log(bsurv)
-      zstat <- -stats::qnorm((1 - baseline$conf.int) / 2)
-      baseline$lower <- exp(-(chaz + zstat * std))
-      baseline$upper <- exp(-(chaz - zstat * std))
-      baseline$surv <- bsurv
-      baseline$std.err <- std / bsurv
-      baselinecumhaz <- chaz
-      baseline
+      .yates_cox_survival_summary(fit, setup$baseline, surv, var)
     }
     return(list(predict = predict_fun, summary = summary_fun))
   }
