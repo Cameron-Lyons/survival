@@ -26134,6 +26134,133 @@ class _CountingConcordanceData:
 
 
 @dataclass(frozen=True)
+class _RightConcordanceInputs:
+    times: list[float]
+    status: list[int]
+    risk: list[float]
+    weights: list[float] | None
+    strata: list[int] | None
+    padding_count: int
+
+
+@dataclass(frozen=True)
+class _CountingConcordanceInputs:
+    start: list[float]
+    stop: list[float]
+    status: list[int]
+    risk: list[float]
+    weights: list[float] | None
+    strata: list[int] | None
+    padding_count: int
+
+
+def _concordance_timewt_padding_groups(
+    original_status: list[int],
+    bounded_status: list[int],
+    timewt: str,
+    strata_codes: list[int] | None = None,
+) -> list[int | None]:
+    # The reference selects its one-event fallback before applying ymax.
+    # Zero-weight tail rows preserve that choice without changing pair counts.
+    if timewt == "n":
+        return []
+    if strata_codes is None:
+        original_events = sum(original_status)
+        bounded_events = sum(bounded_status)
+        return (
+            [None] * (2 - bounded_events)
+            if original_events >= 2 and bounded_events < 2
+            else []
+        )
+    groups = sorted(set(strata_codes))
+
+    def event_count(values: list[int], group: int) -> int:
+        return sum(
+            event
+            for event, code in zip(values, strata_codes, strict=True)
+            if code == group
+        )
+
+    padding: list[int | None] = []
+    for group in groups:
+        original_events = event_count(original_status, group)
+        bounded_events = event_count(bounded_status, group)
+        if original_events >= 2 and bounded_events < 2:
+            padding.extend([group] * (2 - bounded_events))
+    return padding
+
+
+def _padded_concordance_weights(
+    weights: list[float] | None,
+    n: int,
+    padding: int,
+) -> list[float] | None:
+    if padding == 0:
+        return weights
+    return [*(weights if weights is not None else [1.0] * n), *([0.0] * padding)]
+
+
+def _right_concordance_inputs(
+    response: Surv,
+    data: _RightConcordanceData,
+    risk: list[float],
+    weights: list[float] | None,
+    timewt: str,
+    strata: list[int] | None = None,
+) -> _RightConcordanceInputs:
+    padding = _concordance_timewt_padding_groups(
+        list(response.event),
+        data.status,
+        timewt,
+        strata,
+    )
+    padding_count = len(padding)
+    return _RightConcordanceInputs(
+        [*data.times, *([max(data.times, default=0.0) + 1.0] * padding_count)],
+        [*data.status, *([1] * padding_count)],
+        [*risk, *([0.0] * padding_count)],
+        _padded_concordance_weights(weights, len(data.status), padding_count),
+        (
+            None
+            if strata is None
+            else [*strata, *(int(group) for group in padding)]
+        ),
+        padding_count,
+    )
+
+
+def _counting_concordance_inputs(
+    response: Surv,
+    data: _CountingConcordanceData,
+    risk: list[float],
+    weights: list[float] | None,
+    timewt: str,
+    strata: list[int] | None = None,
+) -> _CountingConcordanceInputs:
+    padding = _concordance_timewt_padding_groups(
+        list(response.event),
+        data.status,
+        timewt,
+        strata,
+    )
+    padding_count = len(padding)
+    dummy_stop = max(data.stop, default=0.0) + 1.0
+    return _CountingConcordanceInputs(
+        [*data.start, *([0.0] * padding_count)],
+        [*data.stop, *([dummy_stop] * padding_count)],
+        [*data.status, *([1] * padding_count)],
+        [*risk, *([0.0] * padding_count)],
+        _padded_concordance_weights(weights, len(data.status), padding_count),
+        (
+            None
+            if strata is None
+            else [*strata, *(int(group) for group in padding)]
+        ),
+        padding_count,
+    )
+
+
+@dataclass(frozen=True)
 class _ConcordanceStrata:
     values: list[Any]
     levels: tuple[Any, ...]
@@ -26329,16 +26456,16 @@ def _single_concordance_ranks(
     ymin: float | None,
     ymax: float | None,
 ) -> tuple[list[dict[str, float]], list[int]]:
-    case_weights = None if weights is None else list(weights)
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
+        inputs = _right_concordance_inputs(response, data, risk_values, weights, timewt)
         rows, indices = _core.concordance_rank_rows_with_indices(
-            data.times,
-            data.status,
-            risk_values,
-            case_weights,
+            inputs.times,
+            inputs.status,
+            inputs.risk,
+            inputs.weights,
             timewt,
-            order_scores,
+            [*order_scores, *([0.0] * inputs.padding_count)],
         )
         return (
             _concordance_rank_row_dicts(
@@ -26356,15 +26483,16 @@ def _single_concordance_ranks(
             ymax,
             preapply_timefix=True,
         )
+        inputs = _counting_concordance_inputs(response, data, risk_values, weights, timewt)
         rows, indices = _core.counting_concordance_rank_rows_with_indices(
-            data.start,
-            data.stop,
-            data.status,
-            risk_values,
-            case_weights,
+            inputs.start,
+            inputs.stop,
+            inputs.status,
+            inputs.risk,
+            inputs.weights,
             timewt,
             False,
-            order_scores,
+            [*order_scores, *([0.0] * inputs.padding_count)],
         )
         rank_rows = _concordance_rank_row_dicts(rows)
         if data.display_offset > 0.0:
@@ -26397,19 +26525,26 @@ def _concordance_ranks(
             ymax,
         )
     strata_codes = strata.codes(len(response))
-    case_weights = None if weights is None else list(weights)
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
+        inputs = _right_concordance_inputs(
+            response,
+            data,
+            risk_values,
+            weights,
+            timewt,
+            strata_codes,
+        )
         return (
             _concordance_rank_row_dicts(
                 _core.stratified_concordance_rank_rows(
-                    data.times,
-                    data.status,
-                    risk_values,
-                    strata_codes,
-                    case_weights,
+                    inputs.times,
+                    inputs.status,
+                    inputs.risk,
+                    cast(list[int], inputs.strata),
+                    inputs.weights,
                     timewt,
-                    order_scores,
+                    [*order_scores, *([0.0] * inputs.padding_count)],
                 ),
                 data.display_by_core_time,
             ),
@@ -26424,17 +26559,25 @@ def _concordance_ranks(
             ymax,
             preapply_timefix=True,
         )
+        inputs = _counting_concordance_inputs(
+            response,
+            data,
+            risk_values,
+            weights,
+            timewt,
+            strata_codes,
+        )
         rank_rows = _concordance_rank_row_dicts(
             _core.stratified_counting_concordance_rank_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
+                inputs.start,
+                inputs.stop,
+                inputs.status,
+                inputs.risk,
+                cast(list[int], inputs.strata),
+                inputs.weights,
                 timewt,
                 False,
-                order_scores,
+                [*order_scores, *([0.0] * inputs.padding_count)],
             )
         )
         if data.display_offset > 0.0:
@@ -26446,8 +26589,12 @@ def _concordance_ranks(
 
 def _concordance_influence_result(
     result: tuple[list[list[float]], list[float], float],
+    row_count: int | None = None,
 ) -> tuple[list[list[float]], list[float], float]:
     influence_rows, dfbeta, variance = result
+    if row_count is not None:
+        influence_rows = influence_rows[:row_count]
+        dfbeta = dfbeta[:row_count]
     return (
         [[float(value) for value in row] for row in influence_rows],
         [float(value) for value in dfbeta],
@@ -26464,17 +26611,18 @@ def _single_concordance_influence(
     ymin: float | None,
     ymax: float | None,
 ) -> tuple[list[list[float]], list[float], float | None]:
-    case_weights = None if weights is None else list(weights)
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
+        inputs = _right_concordance_inputs(response, data, risk_values, weights, timewt)
         return _concordance_influence_result(
             _core.concordance_influence_rows(
-                data.times,
-                data.status,
-                risk_values,
-                case_weights,
+                inputs.times,
+                inputs.status,
+                inputs.risk,
+                inputs.weights,
                 timewt,
-            )
+            ),
+            len(data.status),
         )
     if response.type == "counting":
         data = _counting_concordance_data(
@@ -26485,16 +26633,18 @@ def _single_concordance_influence(
             ymax,
             preapply_timefix=True,
         )
+        inputs = _counting_concordance_inputs(response, data, risk_values, weights, timewt)
         return _concordance_influence_result(
             _core.counting_concordance_influence_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                case_weights,
+                inputs.start,
+                inputs.stop,
+                inputs.status,
+                inputs.risk,
+                inputs.weights,
                 timewt,
                 False,
-            )
+            ),
+            len(data.status),
         )
     return _unsupported_concordance_response()
 
@@ -26520,18 +26670,26 @@ def _concordance_influence(
             ymax,
         )
     strata_codes = strata.codes(len(response))
-    case_weights = None if weights is None else list(weights)
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
+        inputs = _right_concordance_inputs(
+            response,
+            data,
+            risk_values,
+            weights,
+            timewt,
+            strata_codes,
+        )
         return _concordance_influence_result(
             _core.stratified_concordance_influence_rows(
-                data.times,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
+                inputs.times,
+                inputs.status,
+                inputs.risk,
+                cast(list[int], inputs.strata),
+                inputs.weights,
                 timewt,
-            )
+            ),
+            len(data.status),
         )
     if response.type == "counting":
         data = _counting_concordance_data(
@@ -26542,17 +26700,26 @@ def _concordance_influence(
             ymax,
             preapply_timefix=True,
         )
+        inputs = _counting_concordance_inputs(
+            response,
+            data,
+            risk_values,
+            weights,
+            timewt,
+            strata_codes,
+        )
         return _concordance_influence_result(
             _core.stratified_counting_concordance_influence_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
+                inputs.start,
+                inputs.stop,
+                inputs.status,
+                inputs.risk,
+                cast(list[int], inputs.strata),
+                inputs.weights,
                 timewt,
                 False,
-            )
+            ),
+            len(data.status),
         )
     return _unsupported_concordance_response()
 
@@ -26606,12 +26773,13 @@ def _single_concordance_summary(
 ) -> dict[str, Any]:
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
+        inputs = _right_concordance_inputs(response, data, risk_values, weights, timewt)
         summary = _normalized_concordance_summary(
             _core.concordance_summary(
-                data.times,
-                data.status,
-                risk_values,
-                weights,
+                inputs.times,
+                inputs.status,
+                inputs.risk,
+                inputs.weights,
                 timewt,
             )
         )
@@ -26626,13 +26794,14 @@ def _single_concordance_summary(
             ymax,
             preapply_timefix=False,
         )
+        inputs = _counting_concordance_inputs(response, data, risk_values, weights, timewt)
         summary = _normalized_concordance_summary(
             _core.counting_concordance_summary(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                weights,
+                inputs.start,
+                inputs.stop,
+                inputs.status,
+                inputs.risk,
+                inputs.weights,
                 timewt,
                 timefix,
             )
@@ -26666,16 +26835,26 @@ def _concordance_summary(
     strata_codes = strata.codes(len(response))
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
-        return _normalized_concordance_summary(
+        inputs = _right_concordance_inputs(
+            response,
+            data,
+            risk_values,
+            weights,
+            timewt,
+            strata_codes,
+        )
+        summary = _normalized_concordance_summary(
             _core.stratified_concordance_summary(
-                data.times,
-                data.status,
-                risk_values,
-                strata_codes,
-                weights,
+                inputs.times,
+                inputs.status,
+                inputs.risk,
+                cast(list[int], inputs.strata),
+                inputs.weights,
                 timewt,
             )
         )
+        summary["n_event"] = float(sum(data.status))
+        return summary
     if response.type == "counting":
         data = _counting_concordance_data(
             response,
@@ -26685,18 +26864,28 @@ def _concordance_summary(
             ymax,
             preapply_timefix=False,
         )
-        return _normalized_concordance_summary(
+        inputs = _counting_concordance_inputs(
+            response,
+            data,
+            risk_values,
+            weights,
+            timewt,
+            strata_codes,
+        )
+        summary = _normalized_concordance_summary(
             _core.stratified_counting_concordance_summary(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                strata_codes,
-                weights,
+                inputs.start,
+                inputs.stop,
+                inputs.status,
+                inputs.risk,
+                cast(list[int], inputs.strata),
+                inputs.weights,
                 timewt,
                 timefix,
             )
         )
+        summary["n_event"] = float(sum(data.status))
+        return summary
     return _unsupported_concordance_response()
 
 

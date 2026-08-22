@@ -8778,6 +8778,53 @@ def test_concordance_single_event_strata_use_unweighted_time_counts():
     assert result.conditional_variance == pytest.approx(0.10950413223140498)
 
 
+def test_bounded_concordance_time_weights_use_the_original_event_count():
+    counting = survival.concordancefit(
+        survival.Surv(
+            [2, 0, 1, 3, 3, 0, 4, 2],
+            [4, 1, 3, 5, 4, 4, 7, 5],
+            [0, 1, 1, 1, 1, 1, 0, 1],
+        ),
+        [1, 1, 0, -1, 1, 0.5, 1, 0],
+        strata=[2, 1, 1, 1, 1, 2, 2, 2],
+        ymax=4,
+        timewt="S",
+        influence=3,
+        keepstrata=10,
+        std_err=False,
+        timefix=False,
+    )
+
+    assert counting is not None
+    assert counting.concordance == pytest.approx(0.5)
+    assert counting.strata_counts is not None
+    assert counting.strata_counts[0] == pytest.approx([0, 0, 0, 0, 0])
+    assert counting.strata_counts[1] == pytest.approx([4 / 3, 4 / 3, 0, 0, 0])
+
+    right = survival.concordancefit(
+        survival.Surv(
+            [5, 1, 5, 5, 2, 5, 6, 7, 3],
+            [1, 0, 0, 1, 1, 1, 0, 0, 0],
+        ),
+        [0.5, -1, -1, 0.5, -0.5, -1, 0.5, 1, -0.5],
+        weights=[1.5, 2, 0.5, 0.5, 0.5, 1, 1, 1.5, 0.5],
+        ymin=2,
+        ymax=4,
+        timewt="I",
+        influence=3,
+        ranks=True,
+        timefix=False,
+    )
+
+    assert right is not None
+    assert right.ranks == [
+        {"time": 2.0, "rank": 1 / 9, "timewt": 1.0, "casewt": 0.5}
+    ]
+    assert right.influence is not None
+    assert len(right.influence) == 9
+    assert right.influence[4] == pytest.approx([0.5, 7 / 18, 1 / 18, 0, 0])
+
+
 def test_concordance_stratified_multi_score_remains_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 3, 1, 2, 3], [1, 0, 1, 1, 0, 1]),
