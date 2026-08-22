@@ -249,7 +249,9 @@ Model helpers include `model_formula`, `model_weights`, `df_residual`,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
 Cox and `survreg` models. Analysis-of-deviance comparisons support sequential
 term refits and nested models for both families, including fractional degrees
-of freedom from penalized `survreg` fits.
+of freedom from penalized `survreg` fits. The R bridge returns native Cox and
+accelerated-failure-time analysis tables with their model headings and test
+columns.
 Common result objects can be converted to column-oriented tables with
 `as_data_frame(...)`; the experimental R bridge exposes the same path through
 `as.data.frame(...)`, `summary(...)`, and `print(...)` methods.

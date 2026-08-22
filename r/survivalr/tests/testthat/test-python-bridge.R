@@ -6254,7 +6254,7 @@ test_that("Cox time transforms agree with R survival", {
     x = TRUE
   )
   reference_right <- survival::coxph(
-    survival::Surv(time, status) ~ x1 + tt(x2),
+    Surv(time, status) ~ x1 + tt(x2),
     data = right,
     tt = log_transform,
     control = survival::coxph.control(eps = 1e-10, iter.max = 50),
@@ -6267,6 +6267,11 @@ test_that("Cox time transforms agree with R survival", {
   expect_equal(unname(model.matrix(bridged_right)), unname(model.matrix(reference_right)))
   expect_equal(summary(bridged_right)$n, summary(reference_right)$n)
   expect_equal(nobs(bridged_right), nobs(reference_right))
+  expect_equal(
+    anova(bridged_right),
+    survival:::anova.coxph(reference_right),
+    tolerance = 2e-08
+  )
 
   default_bridged <- coxph(
     Surv(time, status) ~ x1 + tt(x2),
@@ -7137,6 +7142,168 @@ test_that("penalized survreg model metadata matches survival", {
   expect_type(df.residual(bridged), "double")
   expect_equal(extractAIC(bridged), extractAIC(reference), tolerance = 1e-08)
   expect_equal(AIC(bridged), AIC(reference), tolerance = 1e-08)
+})
+
+test_that("coxph analysis of deviance matches survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = c(1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 18),
+    status = c(1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1),
+    x = c(-1, .2, .5, 1.2, -.7, .8, 1.7, -1.3, .4, 1.4, -.2, .9),
+    z = c(0, 1, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1),
+    group = factor(rep(c("a", "b"), 6L)),
+    offset = seq(.1, 1.2, .1),
+    weights = rep(c(1L, 2L), 6L)
+  )
+  formula <- Surv(time, status) ~ x + z
+  bridged <- coxph(formula, data = data)
+  reference <- survival::coxph(formula, data = data)
+
+  expect_equal(
+    anova(bridged),
+    survival:::anova.coxph(reference),
+    tolerance = 2e-08
+  )
+  expect_equal(
+    anova(bridged, test = NULL),
+    survival:::anova.coxph(reference, test = NULL),
+    tolerance = 2e-08
+  )
+  expect_equal(
+    anova(bridged, test = "none"),
+    survival:::anova.coxph(reference, test = "none"),
+    tolerance = 2e-08
+  )
+
+  tied_data <- data
+  tied_data$time <- rep(seq_len(nrow(data) / 2L), each = 2L)
+  bridged_exact <- coxph(formula, data = tied_data, ties = "exact")
+  reference_exact <- survival::coxph(formula, data = tied_data, ties = "exact")
+  expect_equal(
+    anova(bridged_exact),
+    survival:::anova.coxph(reference_exact),
+    tolerance = 2e-07
+  )
+
+  counting_data <- data.frame(
+    start = c(0, 2, 0, 3, 0, 4, 0, 2, 0, 5, 0, 3),
+    stop = c(2, 6, 3, 7, 4, 9, 2, 8, 5, 10, 3, 11),
+    status = rep(c(0, 1), 6L),
+    x = data$x,
+    group = data$group
+  )
+  counting_formula <- Surv(start, stop, status) ~ x + strata(group)
+  bridged_counting <- coxph(counting_formula, data = counting_data)
+  reference_counting <- survival::coxph(counting_formula, data = counting_data)
+  expect_equal(
+    anova(bridged_counting),
+    survival:::anova.coxph(reference_counting),
+    tolerance = 2e-08
+  )
+
+  x_formula <- Surv(time, status) ~ x
+  bridged_x <- coxph(x_formula, data = data)
+  reference_x <- survival::coxph(x_formula, data = data)
+  expect_equal(
+    anova(bridged, bridged_x),
+    survival:::anova.coxph(reference, reference_x),
+    tolerance = 2e-08
+  )
+  expect_equal(
+    anova(bridged_x, bridged),
+    survival:::anova.coxph(reference_x, reference),
+    tolerance = 2e-08
+  )
+  expect_equal(
+    anova(bridged_x, bridged, test = NULL),
+    survival:::anova.coxph(reference_x, reference, test = NULL),
+    tolerance = 2e-08
+  )
+  expect_equal(
+    anova(bridged_x, bridged, test = "none"),
+    survival:::anova.coxph(reference_x, reference, test = "none"),
+    tolerance = 2e-08
+  )
+
+  response_data <- transform(data, other_time = time)
+  other_formula <- Surv(other_time, status) ~ x
+  bridged_other <- coxph(other_formula, data = response_data)
+  reference_other <- survival::coxph(other_formula, data = response_data)
+  expect_warning(
+    bridged_filtered <- anova(bridged, bridged_other),
+    "response.*removed"
+  )
+  reference_filtered <- suppressWarnings(
+    survival:::anova.coxph(reference, reference_other)
+  )
+  expect_equal(bridged_filtered, reference_filtered, tolerance = 2e-08)
+
+  bridged_weighted <- coxph(formula, data = data, weights = weights)
+  reference_weighted <- survival::coxph(formula, data = data, weights = weights)
+  expect_equal(
+    anova(bridged_weighted),
+    survival:::anova.coxph(reference_weighted),
+    tolerance = 2e-08
+  )
+
+  offset_formula <- Surv(time, status) ~ x + z + offset(offset)
+  for (keep_x in c(FALSE, TRUE)) {
+    bridged_offset <- coxph(offset_formula, data = data, x = keep_x)
+    reference_offset <- survival::coxph(offset_formula, data = data, x = keep_x)
+    expect_equal(
+      anova(bridged_offset),
+      survival:::anova.coxph(reference_offset),
+      tolerance = 2e-08
+    )
+  }
+
+  strata_formula <- Surv(time, status) ~ x + strata(group) + z + offset(offset)
+  bridged_strata <- coxph(strata_formula, data = data)
+  reference_strata <- survival::coxph(strata_formula, data = data)
+  expect_equal(
+    anova(bridged_strata),
+    survival:::anova.coxph(reference_strata),
+    tolerance = 2e-08
+  )
+
+  penalty_formula <- Surv(time, status) ~ pspline(x, theta = .5, nterm = 4) + z
+  bridged_penalty <- coxph(penalty_formula, data = data)
+  reference_penalty <- survival::coxph(penalty_formula, data = data)
+  expect_equal(
+    suppressWarnings(anova(bridged_penalty)),
+    suppressWarnings(survival:::anova.coxph(reference_penalty)),
+    tolerance = 2e-08
+  )
+
+  frailty_data <- data.frame(
+    time = 2:19,
+    status = c(1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1),
+    x = c(-1.2, -.8, -.4, 0, .4, .8, 1.2, -1, -.6, -.2, .2, .6, 1, 1.4, -1.4, -.9, .1, .9),
+    z = rep(c(0, 1), 9L),
+    group = rep(letters[1:6], each = 3L)
+  )
+  frailty_formula <- Surv(time, status) ~ x +
+    frailty(group, distribution = "gaussian", theta = .5, sparse = TRUE) + z
+  bridged_frailty <- coxph(frailty_formula, data = frailty_data)
+  reference_frailty <- survival::coxph(frailty_formula, data = frailty_data)
+  expect_equal(
+    anova(bridged_frailty),
+    survival:::anova.coxph(reference_frailty),
+    tolerance = 2e-08
+  )
+
+  robust <- coxph(
+    Surv(time, status) ~ x + z + cluster(group),
+    data = data
+  )
+  expect_error(anova(robust), "robust variances")
+  expect_warning(
+    anova(bridged, ignored = bridged_x),
+    "invalid and dropped"
+  )
 })
 
 test_that("survreg analysis of deviance matches survival", {
@@ -8546,6 +8713,8 @@ test_that("single-formula multi-state Cox models match survival", {
     model = TRUE,
     control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
   )
+
+  expect_error(anova(bridged), "not yet available for multistate")
 
   expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
   expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-12)
