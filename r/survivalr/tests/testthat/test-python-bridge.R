@@ -4967,6 +4967,111 @@ test_that("interaction contrast expansion matches native Cox and survreg fits", 
   }
 })
 
+test_that("numeric formula calls match R designs and prediction rebuilding", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  set.seed(5109)
+  n <- 120L
+  x <- stats::runif(n, -2, 5.5)
+  z <- stats::runif(n, 0.2, 5)
+  exposure <- stats::runif(n, -0.4, 0.7)
+  eta <- 0.18 * pmin(x, 3) -
+    0.24 * log(pmax(z, 1), base = 10) +
+    0.05 * round(abs(x - z), digits = 2) +
+    log(pmax(exposure + 1, 0.5))
+  event_time <- stats::rexp(n, rate = exp(eta) / 8)
+  censor_time <- stats::rexp(n, rate = 1 / 11)
+  data <- data.frame(
+    time = pmax(pmin(event_time, censor_time), 0.01),
+    status = as.integer(event_time <= censor_time),
+    x = x,
+    z = z,
+    exposure = exposure
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ pmin(x, 3) +
+      log(pmax(z, 1), base = 10) +
+      round(abs(x - z), digits = 2) +
+      offset(log(pmax(exposure + 1, 0.5))),
+    data = data,
+    max_iter = 150,
+    eps = 1e-09,
+    toler = 1e-10,
+    x = TRUE
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ pmin(x, 3) +
+      log(pmax(z, 1), base = 10) +
+      round(abs(x - z), digits = 2) +
+      offset(log(pmax(exposure + 1, 0.5))),
+    data = data,
+    x = TRUE,
+    control = survival::coxph.control(
+      iter.max = 150,
+      eps = 1e-09,
+      toler.chol = 1e-10
+    )
+  )
+
+  bridged_matrix <- model.matrix(bridged)
+  reference_matrix <- stats::model.matrix(reference)
+  expect_identical(colnames(bridged_matrix), colnames(reference_matrix))
+  expect_identical(attr(bridged_matrix, "assign"), attr(reference_matrix, "assign"))
+  expect_equal(unname(bridged_matrix), unname(reference_matrix), tolerance = 1e-12)
+  expect_identical(attr(terms(bridged), "term.labels"), attr(terms(reference), "term.labels"))
+  expect_equal(unname(coef(bridged)), unname(coef(reference)), tolerance = 2e-04)
+
+  newdata <- transform(
+    data[c(2, 5, 9, 13), ],
+    x = x + c(0.4, -0.2, 0.7, -0.5),
+    z = z + c(-0.3, 0.5, 0.2, 0.8),
+    exposure = exposure + c(0.1, -0.15, 0.2, -0.05)
+  )
+  expect_equal(
+    unname(predict(bridged, newdata = newdata, type = "lp", reference = "zero")),
+    unname(stats::predict(reference, newdata = newdata, type = "lp", reference = "zero")),
+    tolerance = 3e-04
+  )
+})
+
+test_that("pmin na.rm controls formula row omission like R", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = seq_len(8),
+    status = c(1, 1, 0, 1, 0, 1, 0, 1),
+    x = c(NA, NA, 0, 1, 2, 3, 4, 5),
+    z = c(5, NA, 3, 2, 1, 0, -1, -2)
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ pmin(x, z, na.rm = TRUE),
+    data = data,
+    na.action = na.omit,
+    max_iter = 0,
+    x = TRUE,
+    model = TRUE
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ pmin(x, z, na.rm = TRUE),
+    data = data,
+    na.action = na.omit,
+    x = TRUE,
+    model = TRUE,
+    control = survival::coxph.control(iter.max = 0)
+  )
+
+  expect_identical(nrow(model.frame(bridged)), nrow(model.frame(reference)))
+  expect_equal(
+    unname(model.matrix(bridged)),
+    unname(stats::model.matrix(reference)),
+    tolerance = 1e-12
+  )
+})
+
 test_that("data-prep helpers match R survival shapes", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

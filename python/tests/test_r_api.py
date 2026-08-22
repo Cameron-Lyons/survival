@@ -15643,7 +15643,11 @@ def test_predict_coxph_formula_rebuilds_transformed_offsets_from_newdata():
     rows = [[0.5], [1.0]]
     offsets = [0.2, -0.1]
     newdata = {"x1": [0.5, 1.0], "exposure": [math.exp(value) for value in offsets]}
-    expected = [value + offset for value, offset in zip(fit.predict(rows), offsets, strict=True)]
+    offset_center = sum(data["offset"]) / len(data["offset"])
+    expected = [
+        value + offset - offset_center
+        for value, offset in zip(fit.predict(rows), offsets, strict=True)
+    ]
 
     assert survival.predict(fit, newdata, reference="zero") == pytest.approx(expected)
 
@@ -17090,6 +17094,186 @@ def test_coxph_formula_accepts_numeric_transforms():
 
     assert fit.coefficients[0] == pytest.approx(low_level.coefficients[0])
     assert fit.risk_scores == pytest.approx(low_level.risk_scores)
+
+
+def test_formula_numeric_calls_build_nested_multi_argument_designs():
+    data = _numeric_data()
+    formula = (
+        "Surv(time, status) ~ pmin(x1, 0.9) + "
+        "log(pmax(x2, 0.5), base=10) + round(abs(x1 - x2), digits=2) + atan2(x1, x2)"
+    )
+    fit = survival.coxph(formula, data=data, max_iter=0)
+    expected_rows = [
+        [
+            min(data["x1"][idx], 0.9),
+            math.log(max(data["x2"][idx], 0.5), 10.0),
+            round(abs(data["x1"][idx] - data["x2"][idx]), 2),
+            math.atan2(data["x1"][idx], data["x2"][idx]),
+        ]
+        for idx in range(len(data["time"]))
+    ]
+
+    assert survival.coef_names(fit) == [
+        "pmin(x1, 0.9)",
+        "log(pmax(x2, 0.5), base=10)",
+        "round(abs(x1 - x2), digits=2)",
+        "atan2(x1, x2)",
+    ]
+    for actual, expected in zip(fit.covariates, expected_rows, strict=True):
+        assert actual == pytest.approx(expected)
+
+    integer_literal = survival.coxph(
+        "Surv(time, status) ~ pmin(x1, 1L)",
+        data=data,
+        max_iter=0,
+    )
+    assert [row[0] for row in integer_literal.covariates] == pytest.approx(
+        [min(value, 1.0) for value in data["x1"]]
+    )
+
+    scientific_literal = survival.coxph(
+        "Surv(time, status) ~ pmax(x1, 1e-1)",
+        data=data,
+        max_iter=0,
+    )
+    assert [row[0] for row in scientific_literal.covariates] == pytest.approx(
+        [max(value, 0.1) for value in data["x1"]]
+    )
+
+    named_boolean_operand = survival.coxph(
+        "Surv(time, status) ~ pmin(x1, n=TRUE)",
+        data=data,
+        max_iter=0,
+    )
+    assert [row[0] for row in named_boolean_operand.covariates] == pytest.approx(
+        [min(value, 1.0) for value in data["x1"]]
+    )
+
+
+@pytest.mark.parametrize(
+    ("term", "expected"),
+    [
+        ("abs(x1 - 0.7)", lambda value: abs(value - 0.7)),
+        ("acos(pmin(x1, 0.9))", lambda value: math.acos(min(value, 0.9))),
+        ("acosh(pmax(x1, 1))", lambda value: math.acosh(max(value, 1.0))),
+        ("asin(pmin(x1, 0.9))", lambda value: math.asin(min(value, 0.9))),
+        ("asinh(x1)", math.asinh),
+        ("atan(x1)", math.atan),
+        ("atanh(pmin(x1, 0.9))", lambda value: math.atanh(min(value, 0.9))),
+        ("ceiling(x1 + 0.1)", lambda value: math.ceil(value + 0.1)),
+        ("cos(x1)", math.cos),
+        ("cosh(x1)", math.cosh),
+        ("expm1(x1)", math.expm1),
+        ("floor(-x1)", lambda value: math.floor(-value)),
+        ("log1p(x1)", math.log1p),
+        ("log2(pmax(x1, 0.1))", lambda value: math.log2(max(value, 0.1))),
+        ("log10(pmax(x1, 0.1))", lambda value: math.log10(max(value, 0.1))),
+        ("sign(x1 - 0.7)", lambda value: -1.0 if value < 0.7 else 1.0 if value > 0.7 else 0.0),
+        ("signif(x1 / 3, digits=3)", lambda value: float(f"{value / 3:.3g}")),
+        ("sin(x1)", math.sin),
+        ("sinh(x1)", math.sinh),
+        ("sqrt(abs(x1 - 0.7))", lambda value: math.sqrt(abs(value - 0.7))),
+        ("tan(x1)", math.tan),
+        ("tanh(x1)", math.tanh),
+        ("trunc(-x1)", lambda value: math.trunc(-value)),
+    ],
+)
+def test_formula_numeric_unary_calls_cover_r_math_surface(term, expected):
+    data = _numeric_data()
+    fit = survival.coxph(
+        f"Surv(time, status) ~ {term}",
+        data=data,
+        max_iter=0,
+    )
+
+    assert survival.coef_names(fit) == [term]
+    assert [row[0] for row in fit.covariates] == pytest.approx(
+        [expected(value) for value in data["x1"]]
+    )
+
+
+def test_formula_numeric_calls_rebuild_interactions_offsets_and_predictions():
+    data = _toy_data()
+    formula = (
+        "Surv(time, status) ~ pmin(x1, 0.9):sqrt(abs(x2 - 0.5)) + "
+        "offset(log(pmax(offset + 1.0, 0.5)))"
+    )
+    fit = survival.coxph(formula, data=data, max_iter=10, eps=1e-5)
+    expected_rows = [
+        [min(data["x1"][idx], 0.9) * math.sqrt(abs(data["x2"][idx] - 0.5))]
+        for idx in range(len(data["time"]))
+    ]
+    expected_offsets = [math.log(max(value + 1.0, 0.5)) for value in data["offset"]]
+
+    for actual, expected in zip(fit.covariates, expected_rows, strict=True):
+        assert actual == pytest.approx(expected)
+    assert fit.linear_predictors == pytest.approx(
+        [
+            row[0] * fit.coefficients[0][0] + offset
+            for row, offset in zip(expected_rows, expected_offsets, strict=True)
+        ]
+    )
+
+    newdata = {
+        "x1": [0.25, 1.2],
+        "x2": [0.4, 0.9],
+        "offset": [0.2, -0.3],
+    }
+    new_rows = [[0.25 * math.sqrt(0.1)], [0.9 * math.sqrt(0.4)]]
+    new_offsets = [math.log(1.2), math.log(0.7)]
+    offset_center = sum(expected_offsets) / len(expected_offsets)
+    direct = [
+        value + offset - offset_center
+        for value, offset in zip(fit.predict(new_rows), new_offsets, strict=True)
+    ]
+    coefficient_center = fit.means[0] * fit.coefficients[0][0]
+
+    assert survival.predict(fit, newdata, reference="zero") == pytest.approx(direct)
+    assert survival.predict(fit, newdata) == pytest.approx(
+        [value - coefficient_center for value in direct]
+    )
+
+
+def test_formula_pmin_na_rm_controls_transformed_row_omission():
+    data = _numeric_data()
+    data["x1"] = [None, None, *data["x1"][2:]]
+    data["x2"] = [data["x2"][0], None, *data["x2"][2:]]
+
+    retained = survival.coxph(
+        "Surv(time, status) ~ pmin(x1, x2, na.rm=TRUE)",
+        data=data,
+        na_action="omit",
+        max_iter=0,
+    )
+    omitted = survival.coxph(
+        "Surv(time, status) ~ pmin(x1, x2)",
+        data=data,
+        na_action="omit",
+        max_iter=0,
+    )
+
+    assert retained.event_times == pytest.approx([data["time"][0], *data["time"][2:]])
+    assert [row[0] for row in retained.covariates] == pytest.approx(
+        [
+            data["x2"][0],
+            *[min(x1, x2) for x1, x2 in zip(data["x1"][2:], data["x2"][2:], strict=True)],
+        ]
+    )
+    assert omitted.event_times == pytest.approx(data["time"][2:])
+
+
+@pytest.mark.parametrize(
+    ("term", "message"),
+    [
+        ("pmin()", "at least one numeric argument"),
+        ("pmax(x1, na.rm=x2)", "must be TRUE or FALSE"),
+        ("round(x1, digits=1.5)", "must be an integer"),
+        ("atan2(x1)", "requires y and x"),
+    ],
+)
+def test_formula_numeric_calls_validate_arguments(term, message):
+    with pytest.raises(ValueError, match=message):
+        survival.coxph(f"Surv(time, status) ~ {term}", data=_numeric_data())
 
 
 def test_coxph_formula_accepts_identity_wrappers_for_numeric_terms():
@@ -19687,7 +19871,9 @@ def test_coxph_formula_accepts_offset_only_rhs():
     assert survival.predict(fit, newdata) == pytest.approx(
         [0.2 - offset_center, -0.1 - offset_center]
     )
-    assert survival.predict(fit, newdata, reference="zero") == pytest.approx([0.2, -0.1])
+    assert survival.predict(fit, newdata, reference="zero") == pytest.approx(
+        [0.2 - offset_center, -0.1 - offset_center]
+    )
     assert survival.predict(fit, newdata, type="risk") == pytest.approx(
         [math.exp(0.2 - offset_center), math.exp(-0.1 - offset_center)]
     )
@@ -23009,8 +23195,8 @@ def test_r_api_rejects_unsupported_formula_features():
             data=_toy_data(),
         )
 
-    with pytest.raises(ValueError, match=r"log\(\) requires exactly one column"):
-        survival.coxph("Surv(time, status) ~ log(x1, x2)", data=_toy_data())
+    with pytest.raises(ValueError, match=r"log\(\) received too many arguments"):
+        survival.coxph("Surv(time, status) ~ log(x1, x2, 10)", data=_toy_data())
 
     data_with_zero = _numeric_data()
     data_with_zero["x2"][0] = 0.0
