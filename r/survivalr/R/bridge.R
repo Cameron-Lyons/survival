@@ -11987,7 +11987,8 @@ concordance <- function(object, ..., formula) {
   invisible(NULL)
 }
 
-.concordance_disabled_standard_error_check <- function(n_scores, n_strata, timewt, std.err) {
+.concordance_disabled_standard_error_check <- function(
+    response, n_scores, n_strata, timewt, std.err) {
   disabled <- length(std.err) == 1L &&
     (is.logical(std.err) || is.numeric(std.err)) &&
     !is.na(std.err) &&
@@ -12002,7 +12003,18 @@ concordance <- function(object, ..., formula) {
   if (n_strata <= 1L) {
     matrix(numeric(n_scores * 5L), nrow = n_scores, ncol = 5L)[, 6L]
   } else {
-    count <- matrix(numeric(n_strata * n_scores * 5L), ncol = 6L, byrow = TRUE)
+    survival_response <- inherits(response, "Surv") ||
+      inherits(response, "survival_py_surv")
+    count_width <- if (survival_response && ncol(.as_native_surv(response)) == 3L) {
+      6L
+    } else {
+      5L
+    }
+    count <- matrix(
+      numeric(n_strata * n_scores * count_width),
+      ncol = 6L,
+      byrow = TRUE
+    )
     count <- count[, seq_len(5L), drop = FALSE]
     dimnames(count) <- list(seq_len(n_scores), seq_len(5L))
   }
@@ -12876,6 +12888,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     ymax
   )
   .concordance_disabled_standard_error_check(
+    y,
     n_scores,
     input_strata_count,
     timewt,

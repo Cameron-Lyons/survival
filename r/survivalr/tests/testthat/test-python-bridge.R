@@ -4557,6 +4557,60 @@ test_that("disabled standard errors with multiple scores match reference errors"
     length_warning,
     fixed = TRUE
   )
+
+  counting_y <- Surv(
+    c(4, 3, 0, 1, 3, 2, 3),
+    c(6, 6, 1, 4, 4, 5, 4),
+    c(1, 0, 0, 1, 0, 0, 0)
+  )
+  reference_counting_y <- survival::Surv(
+    c(4, 3, 0, 1, 3, 2, 3),
+    c(6, 6, 1, 4, 4, 5, 4),
+    c(1, 0, 0, 1, 0, 0, 0)
+  )
+  counting_x <- cbind(
+    s1 = c(0.5, 0, 1, -1, 1, 1, 1),
+    s2 = c(-1, 0, -1, 0.5, 0, 0, 0),
+    s3 = c(-0.5, 0.5, 0, 0.5, 0, -1, 1)
+  )
+  counting_strata <- c(3, 3, 1, 2, 1, 1, 2)
+  counting_weights <- c(2, 0.5, 1.5, 0.5, 2, 2, 0.5)
+  expect_no_warning(
+    expect_error(
+      concordancefit(
+        counting_y,
+        counting_x,
+        strata = counting_strata,
+        weights = counting_weights,
+        ymax = 6,
+        influence = 3,
+        ranks = TRUE,
+        reverse = TRUE,
+        keepstrata = 2,
+        std.err = FALSE
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+  )
+  expect_no_warning(
+    expect_error(
+      survival::concordancefit(
+        reference_counting_y,
+        counting_x,
+        strata = counting_strata,
+        weights = counting_weights,
+        ymax = 6,
+        influence = 3,
+        ranks = TRUE,
+        reverse = TRUE,
+        keepstrata = 2,
+        std.err = FALSE
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+  )
 })
 
 test_that("multi-score influence covariance matches reference shape", {
