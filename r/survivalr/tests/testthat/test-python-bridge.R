@@ -4679,6 +4679,117 @@ test_that("stratified multi-score assembly matches reference behavior", {
   }
 })
 
+test_that("empty concordance rank strata match reference diagnostics", {
+  data <- data.frame(
+    time = c(1, 2, 1, 2),
+    status = c(1, 0, 0, 0),
+    x = c(0.1, 0.4, 0.2, 0.8),
+    z = c(0.8, 0.2, 0.6, 0.1),
+    group = c("a", "a", "b", "b")
+  )
+  replacement_error <- "number of items to replace is not a multiple of replacement length"
+  null_error <- "'data' must be of a vector type, was 'NULL'"
+
+  expect_error(
+    concordancefit(
+      Surv(data$time, data$status),
+      data$x,
+      strata = data$group,
+      ranks = TRUE
+    ),
+    replacement_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      data$x,
+      strata = data$group,
+      ranks = TRUE
+    ),
+    replacement_error,
+    fixed = TRUE
+  )
+
+  score_matrix <- as.matrix(data[c("x", "z")])
+  expect_error(
+    concordancefit(
+      Surv(data$time, data$status),
+      score_matrix,
+      strata = data$group,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      score_matrix,
+      strata = data$group,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+  expect_error(
+    concordance(
+      Surv(time, status) ~ x + z + strata(group),
+      data = data,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordance(
+      survival::Surv(time, status) ~ x + z + strata(group),
+      data = data,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+
+  censored_data <- transform(data, status = 0)
+  expect_error(
+    concordancefit(
+      Surv(censored_data$time, censored_data$status),
+      score_matrix,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(censored_data$time, censored_data$status),
+      score_matrix,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+  expect_error(
+    concordance(
+      Surv(time, status) ~ x + z,
+      data = censored_data,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordance(
+      survival::Surv(time, status) ~ x + z,
+      data = censored_data,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+})
+
 test_that("collapsed single-score strata match reference behavior", {
   data <- data.frame(
     time = c(1, 2, 1, 2),

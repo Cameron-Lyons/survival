@@ -8731,6 +8731,30 @@ def test_concordance_stratified_multi_score_remains_available_in_python():
     assert result.variance == [[0.0, 0.0], [0.0, 0.0]]
 
 
+def test_concordance_empty_multi_score_ranks_remain_available_in_python():
+    response = survival.Surv([1, 2, 1, 2], [0, 0, 0, 0])
+    scores = {
+        "x": [0.1, 0.4, 0.2, 0.8],
+        "z": [0.8, 0.2, 0.6, 0.1],
+    }
+    result = survival.concordancefit(response, scores, ranks=True)
+
+    assert result is not None
+    assert result.concordance == pytest.approx([0.5, 0.5])
+    assert result.ranks == [[], []]
+
+    with pytest.raises(
+        ValueError,
+        match="number of items to replace is not a multiple of replacement length",
+    ):
+        survival.concordancefit(
+            response,
+            scores,
+            strata=["a", "a", "b", "b"],
+            ranks=True,
+        )
+
+
 def test_concordance_collapsed_single_score_strata_remain_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 1, 2], [1, 0, 1, 0]),
