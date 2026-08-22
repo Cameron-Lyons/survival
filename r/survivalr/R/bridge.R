@@ -10691,48 +10691,54 @@ survregDtest <- function(dlist, verbose = FALSE) {
   }
 }
 
+.survreg_distribution_helper <- function(distribution) {
+  dist <- survreg.distributions[[casefold(distribution)]]
+  if (is.null(dist)) {
+    stop("Distribution not found", call. = FALSE)
+  }
+  dist
+}
+
 dsurvreg <- function(x, mean, scale = 1, distribution = "weibull", parms) {
-  .as_numeric_vector(.call_r_api(
-    "dsurvreg",
-    x = .as_python_vector(x),
-    mean = .as_python_vector(mean),
-    scale = .as_python_vector(scale),
-    distribution = distribution,
-    parms = if (missing(parms)) NULL else parms
-  ))
+  dist <- .survreg_distribution_helper(distribution)
+  if (!is.null(dist$trans)) {
+    dx <- dist$dtrans(x)
+    x <- (dist$trans(x) - mean) / scale
+    dist <- survreg.distributions[[dist$dist]]
+    return(dist$density(x, parms)[, 3L] * dx / scale)
+  }
+  x <- (x - mean) / scale
+  dist$density(x, parms)[, 3L] / scale
 }
 
 psurvreg <- function(q, mean, scale = 1, distribution = "weibull", parms) {
-  .as_numeric_vector(.call_r_api(
-    "psurvreg",
-    q = .as_python_vector(q),
-    mean = .as_python_vector(mean),
-    scale = .as_python_vector(scale),
-    distribution = distribution,
-    parms = if (missing(parms)) NULL else parms
-  ))
+  dist <- .survreg_distribution_helper(distribution)
+  if (!is.null(dist$trans)) {
+    q <- (dist$trans(q) - mean) / scale
+    dist <- survreg.distributions[[dist$dist]]
+    return(dist$density(q, parms)[, 1L])
+  }
+  q <- (q - mean) / scale
+  dist$density(q, parms)[, 1L]
 }
 
 qsurvreg <- function(p, mean, scale = 1, distribution = "weibull", parms) {
-  .as_numeric_vector(.call_r_api(
-    "qsurvreg",
-    p = .as_python_vector(p),
-    mean = .as_python_vector(mean),
-    scale = .as_python_vector(scale),
-    distribution = distribution,
-    parms = if (missing(parms)) NULL else parms
-  ))
+  dist <- .survreg_distribution_helper(distribution)
+  if (!is.null(dist$trans)) {
+    reference <- survreg.distributions[[dist$dist]]
+    quantiles <- reference$quantile(p, parms)
+    return(dist$itrans(quantiles * scale + mean))
+  }
+  dist$quantile(p, parms) * scale + mean
 }
 
 rsurvreg <- function(n, mean, scale = 1, distribution = "weibull", parms) {
-  args <- .compact_null(list(
-    n = .as_integer_scalar(n, "n", nonnegative = TRUE),
-    mean = .as_python_vector(mean),
-    scale = .as_python_vector(scale),
-    distribution = distribution,
-    parms = if (missing(parms)) NULL else parms
-  ))
-  .as_numeric_vector(do.call(.python_attr("rsurvreg"), args))
+  probabilities <- stats::runif(n)
+  if (missing(parms)) {
+    qsurvreg(probabilities, mean, scale, distribution)
+  } else {
+    qsurvreg(probabilities, mean, scale, distribution, parms)
+  }
 }
 
 .survreg_distribution_name <- function(value) {

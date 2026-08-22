@@ -1932,6 +1932,100 @@ test_that("R formula wrappers delegate to the Python survival package", {
     tolerance = 1e-12
   )
 
+  distributions <- c(
+    "extreme", "logistic", "gaussian", "weibull", "exponential",
+    "rayleigh", "loggaussian", "lognormal", "loglogistic"
+  )
+  values <- setNames(c(0.5, 1.2, 2), c("first", "second", "third"))
+  means <- c(0.1, -0.2, 0.3)
+  scales <- c(0.7, 1.1, 1.4)
+  probabilities <- setNames(c(0.1, 0.5, 0.9), names(values))
+  for (distribution in distributions) {
+    expect_equal(
+      dsurvreg(values, means, scales, distribution),
+      survival::dsurvreg(values, means, scales, distribution),
+      tolerance = 1e-12,
+      info = paste(distribution, "density")
+    )
+    expect_equal(
+      psurvreg(values, means, scales, distribution),
+      survival::psurvreg(values, means, scales, distribution),
+      tolerance = 1e-12,
+      info = paste(distribution, "distribution")
+    )
+    expect_equal(
+      qsurvreg(probabilities, means, scales, distribution),
+      survival::qsurvreg(probabilities, means, scales, distribution),
+      tolerance = 1e-12,
+      info = paste(distribution, "quantile")
+    )
+  }
+
+  expect_warning(
+    recycled_density <- dsurvreg(values, mean = c(0, 1), scale = 1),
+    "longer object length"
+  )
+  expect_equal(
+    recycled_density,
+    suppressWarnings(survival::dsurvreg(values, mean = c(0, 1), scale = 1)),
+    tolerance = 1e-12
+  )
+  expect_warning(
+    recycled_quantiles <- qsurvreg(
+      probabilities,
+      mean = c(0, 1),
+      scale = c(1, 2),
+      distribution = "gaussian"
+    ),
+    "longer object length"
+  )
+  expect_equal(
+    recycled_quantiles,
+    suppressWarnings(
+      survival::qsurvreg(
+        probabilities,
+        mean = c(0, 1),
+        scale = c(1, 2),
+        distribution = "gaussian"
+      )
+    ),
+    tolerance = 1e-12
+  )
+
+  set.seed(20260822)
+  reference_draws <- suppressWarnings(
+    survival::rsurvreg(5, mean = c(0, 1), scale = c(1, 2), distribution = "gaussian")
+  )
+  reference_seed <- .Random.seed
+  set.seed(20260822)
+  expect_warning(
+    bridged_draws <- rsurvreg(
+      5,
+      mean = c(0, 1),
+      scale = c(1, 2),
+      distribution = "gaussian"
+    ),
+    "longer object length"
+  )
+  expect_equal(bridged_draws, reference_draws, tolerance = 1e-12)
+  expect_identical(.Random.seed, reference_seed)
+
+  set.seed(42)
+  reference_t_draws <- survival::rsurvreg(
+    4,
+    mean = 0.5,
+    scale = 1.2,
+    distribution = "t",
+    parms = 5
+  )
+  set.seed(42)
+  expect_equal(
+    rsurvreg(4, mean = 0.5, scale = 1.2, distribution = "t", parms = 5),
+    reference_t_draws,
+    tolerance = 1e-12
+  )
+  expect_error(dsurvreg(1, 0, distribution = "missing"), "Distribution not found")
+
   km <- survfit(Surv(time, status) ~ group, data = data)
   expect_s3_class(km, "survival_py_survfit")
   km_direct <- survfit.formula(Surv(time, status) ~ group, data = data)
