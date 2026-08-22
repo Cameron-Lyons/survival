@@ -5062,6 +5062,49 @@ test_that("data-prep helpers match R survival shapes", {
     group = c("a", "a", "b"),
     wt = c(1, 2, 3)
   )
+  expect_error(pyears(), "A formula argument is required")
+  expect_error(survival::pyears(), "A formula argument is required")
+  expect_error(
+    pyears(
+      Surv(time, status) ~ 1,
+      data = pyears_formula_data,
+      rmap = list(age = time)
+    ),
+    "No rate table specified"
+  )
+  expect_error(
+    survival::pyears(
+      survival::Surv(time, status) ~ 1,
+      data = pyears_formula_data,
+      rmap = list(age = time)
+    ),
+    "No rate table specified"
+  )
+  expect_error(
+    pyears(
+      Surv(time, status) ~ 1,
+      data = pyears_formula_data,
+      ratetable = matrix(1)
+    ),
+    "Invalid rate table"
+  )
+  expect_error(
+    survival::pyears(
+      survival::Surv(time, status) ~ 1,
+      data = pyears_formula_data,
+      ratetable = matrix(1)
+    ),
+    "Invalid rate table"
+  )
+  expect_error(
+    pyears(
+      Surv(time, status) ~ 1,
+      data = pyears_formula_data,
+      ratetable = bridged_survexp_cox_fit,
+      rmap = list(age = time, sex = status)
+    ),
+    "Cox rate models are not supported by pyears"
+  )
   bridged_pyears_formula <- pyears(
     Surv(time, status) ~ group,
     data = pyears_formula_data,
