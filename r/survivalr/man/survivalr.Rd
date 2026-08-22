@@ -1274,6 +1274,11 @@ risk set.
 \code{poly(...)} terms, including interactions. Orthogonal bases retain their
 training coefficients when rebuilding model matrices for new data.
 
+Stateful \code{scale(...)} formula terms use an O(n) Rust implementation,
+accept logical or numeric centering and scaling options, fit before subsetting
+or missing-data omission, and retain their fitted state for ordinary new-data
+model reconstruction. Nested uses follow R's \code{makepredictcall} behavior.
+
 Formula \code{finegray} calls use the Python formula engine and Rust interval
 expansion directly. The bridge supports weights, subsets, missing-data actions,
 strata, counting-process histories, and delayed entry; computes censoring risk

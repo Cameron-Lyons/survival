@@ -255,7 +255,7 @@ class _NumericFormulaBinary:
 class _NumericFormulaCall:
     function: str
     arguments: tuple[_NumericFormulaExpression, ...]
-    option: float | int | bool | None = None
+    option: float | int | bool | tuple[bool | float, bool | float] | None = None
 
 
 _NumericFormulaExpression = (
@@ -265,6 +265,9 @@ _NumericFormulaExpression = (
     | _NumericFormulaBinary
     | _NumericFormulaCall
 )
+
+_ScaleFormulaState = tuple[float | None, float | None]
+_ScaleFormulaStates = tuple[tuple[_NumericFormulaCall, _ScaleFormulaState], ...]
 
 
 @dataclass(frozen=True)
@@ -418,6 +421,7 @@ class _CachedFormulaTerms:
 @dataclass(frozen=True)
 class _NumericDesignTerm:
     term: _CovariateTerm
+    scale_states: _ScaleFormulaStates = ()
 
 
 @dataclass(frozen=True)
@@ -425,6 +429,7 @@ class _PolyDesignTerm:
     term: _CovariateTerm
     alpha: tuple[float, ...]
     norm2: tuple[float, ...]
+    scale_states: _ScaleFormulaStates = ()
 
 
 @dataclass(frozen=True)
@@ -491,6 +496,7 @@ class _FormulaDesign:
 @dataclass(frozen=True)
 class _FormulaSubsetData:
     data: Any
+    scale_states: _ScaleFormulaStates
     poly_states: tuple[
         tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]],
         ...,
@@ -2133,6 +2139,7 @@ def _subset_data(data: Any, indices: list[int]) -> Any:
     if isinstance(data, _FormulaSubsetData):
         return _FormulaSubsetData(
             _subset_data(data.data, indices),
+            data.scale_states,
             data.poly_states,
         )
     if isinstance(data, Mapping):
@@ -3219,6 +3226,7 @@ _NUMERIC_FORMULA_CALLS = _NUMERIC_FORMULA_UNARY_CALLS | {
     "pmax",
     "pmin",
     "round",
+    "scale",
     "signif",
 }
 _NUMERIC_FORMULA_UNARY_FUNCTIONS = MappingProxyType(
@@ -3309,6 +3317,24 @@ def _numeric_formula_bool_literal(value: str, name: str) -> bool:
     raise ValueError(f"{name} must be TRUE or FALSE")
 
 
+def _numeric_formula_scale_option(value: str, name: str) -> bool | float:
+    text = value.strip()
+    if text.startswith("c(") and text.endswith(")"):
+        parts = _formula_response_parts(text[2:-1])
+        if len(parts) != 1:
+            raise ValueError(f"{name} must be TRUE, FALSE, or a numeric scalar")
+        return _numeric_formula_scale_option(parts[0], name)
+    normalized = text.lower()
+    if normalized in {"true", "t"}:
+        return True
+    if normalized in {"false", "f"}:
+        return False
+    literal = _numeric_formula_literal(value)
+    if literal is None or math.isnan(literal):
+        raise ValueError(f"{name} must be TRUE, FALSE, or a numeric scalar")
+    return literal
+
+
 def _numeric_formula_integer_literal(value: str, name: str) -> int:
     literal = _arithmetic_literal(value.strip().removesuffix("L").removesuffix("l"))
     if literal is None or not literal.is_integer():
@@ -3341,6 +3367,24 @@ def _numeric_formula_call_expression(
     function: str,
     parts: Sequence[str],
 ) -> _NumericFormulaCall:
+    if function == "scale":
+        value, center, scale = _numeric_formula_bound_arguments(
+            function,
+            parts,
+            ("x", "center", "scale"),
+        )
+        if value is None:
+            raise ValueError("scale() requires one numeric argument")
+        center_value = (
+            True if center is None else _numeric_formula_scale_option(center, "scale center")
+        )
+        scale_value = True if scale is None else _numeric_formula_scale_option(scale, "scale scale")
+        return _NumericFormulaCall(
+            function,
+            (_parse_numeric_formula_expression(value),),
+            (center_value, scale_value),
+        )
+
     if function in _NUMERIC_FORMULA_UNARY_CALLS:
         (argument,) = _numeric_formula_bound_arguments(function, parts, ("x",))
         if argument is None:
@@ -3585,10 +3629,13 @@ def _numeric_formula_call_values(
     raise ValueError(f"unsupported formula numeric call {function!r}")
 
 
-def _numeric_formula_expression_values(
+def _numeric_formula_expression_values_with_state(
     data: Any,
     expression: _NumericFormulaExpression,
     n: int,
+    scale_states: dict[_NumericFormulaCall, _ScaleFormulaState],
+    *,
+    fit_scales: bool,
 ) -> list[float]:
     if isinstance(expression, _NumericFormulaLiteral):
         return [expression.value] * n
@@ -3611,19 +3658,129 @@ def _numeric_formula_expression_values(
     if isinstance(expression, _NumericFormulaUnary):
         return [
             value if expression.operator == "+" else -value
-            for value in _numeric_formula_expression_values(data, expression.operand, n)
+            for value in _numeric_formula_expression_values_with_state(
+                data,
+                expression.operand,
+                n,
+                scale_states,
+                fit_scales=fit_scales,
+            )
         ]
     if isinstance(expression, _NumericFormulaBinary):
-        left = _numeric_formula_expression_values(data, expression.left, n)
-        right = _numeric_formula_expression_values(data, expression.right, n)
+        left = _numeric_formula_expression_values_with_state(
+            data,
+            expression.left,
+            n,
+            scale_states,
+            fit_scales=fit_scales,
+        )
+        right = _numeric_formula_expression_values_with_state(
+            data,
+            expression.right,
+            n,
+            scale_states,
+            fit_scales=fit_scales,
+        )
         return [
             _numeric_formula_binary_value(expression.operator, left_value, right_value)
             for left_value, right_value in zip(left, right, strict=True)
         ]
     arguments = [
-        _numeric_formula_expression_values(data, argument, n) for argument in expression.arguments
+        _numeric_formula_expression_values_with_state(
+            data,
+            argument,
+            n,
+            scale_states,
+            fit_scales=fit_scales,
+        )
+        for argument in expression.arguments
     ]
+    if expression.function == "scale":
+        state = scale_states.get(expression)
+        if state is None:
+            if not fit_scales:
+                raise ValueError("fitted scale() formula state is unavailable")
+            center_option, scale_option = cast(
+                tuple[bool | float, bool | float],
+                expression.option,
+            )
+            fit_center = isinstance(center_option, bool) and center_option
+            fit_scale = isinstance(scale_option, bool) and scale_option
+            center_value = None if isinstance(center_option, bool) else float(center_option)
+            scale_value = None if isinstance(scale_option, bool) else float(scale_option)
+            values, fitted_center, fitted_scale = _core.scale_values(
+                arguments[0],
+                fit_center,
+                fit_scale,
+                center_value,
+                scale_value,
+            )
+            state = (
+                None if fitted_center is None else float(fitted_center),
+                None if fitted_scale is None else float(fitted_scale),
+            )
+            scale_states[expression] = state
+            return list(values)
+        values, _center, _scale = _core.scale_values(
+            arguments[0],
+            False,
+            False,
+            state[0],
+            state[1],
+        )
+        return list(values)
     return _numeric_formula_call_values(expression, arguments, n)
+
+
+def _numeric_formula_expression_values(
+    data: Any,
+    expression: _NumericFormulaExpression,
+    n: int,
+    scale_states: _ScaleFormulaStates = (),
+    *,
+    fit_scales: bool = True,
+) -> list[float]:
+    return _numeric_formula_expression_values_with_state(
+        data,
+        expression,
+        n,
+        dict(scale_states),
+        fit_scales=fit_scales,
+    )
+
+
+def _fit_numeric_formula_expression(
+    data: Any,
+    expression: _NumericFormulaExpression,
+    n: int,
+    scale_states: _ScaleFormulaStates = (),
+) -> tuple[list[float], _ScaleFormulaStates]:
+    fitted_states = dict(scale_states)
+    values = _numeric_formula_expression_values_with_state(
+        data,
+        expression,
+        n,
+        fitted_states,
+        fit_scales=True,
+    )
+    return values, tuple(fitted_states.items())
+
+
+def _numeric_formula_scale_calls(
+    expression: _NumericFormulaExpression,
+) -> tuple[_NumericFormulaCall, ...]:
+    if isinstance(expression, _NumericFormulaLiteral | _NumericFormulaColumn):
+        return ()
+    if isinstance(expression, _NumericFormulaUnary):
+        return _numeric_formula_scale_calls(expression.operand)
+    if isinstance(expression, _NumericFormulaBinary):
+        calls = list(_numeric_formula_scale_calls(expression.left))
+        _append_unique(calls, _numeric_formula_scale_calls(expression.right))
+        return tuple(calls)
+    calls = [expression] if expression.function == "scale" else []
+    for argument in expression.arguments:
+        _append_unique(calls, _numeric_formula_scale_calls(argument))
+    return tuple(calls)
 
 
 def _is_formula_arithmetic_expression(expression: str) -> bool:
@@ -3748,38 +3905,75 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
-def _formula_subset_poly_states(
+def _formula_transform_states(
     formula: str,
     data: Any,
     n: int,
-) -> tuple[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]], ...]:
+) -> tuple[
+    _ScaleFormulaStates,
+    tuple[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]], ...],
+]:
     response_spec = _formula_response_spec(formula)
     _lhs, _sep, rhs = formula.partition("~")
     terms = _split_terms(rhs, _dot_terms(data, list(response_spec.columns)))
-    states: list[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]]] = []
-    for spec in terms.covariates:
-        for term in _covariate_factors(spec):
-            options = term.poly_options
-            if options is None or options.raw or any(existing == term for existing, _ in states):
-                continue
-            values = _numeric_term_values(_term_raw_values(data, term, n), term)
-            _rows, alpha, norm2 = _core.poly_basis(
-                values,
-                options.degree,
-                False,
-                None,
-                None,
+    formula_terms = [
+        *(term for spec in terms.covariates for term in _covariate_factors(spec)),
+        *terms.offsets,
+    ]
+    unique_terms: list[_CovariateTerm] = []
+    _append_unique(unique_terms, formula_terms)
+    fitted_scale_states: dict[_NumericFormulaCall, _ScaleFormulaState] = {}
+    poly_states: list[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]]] = []
+    for term in unique_terms:
+        expression = term.numeric_expression
+        if expression is not None and _numeric_formula_scale_calls(expression):
+            _values, scale_states = _fit_numeric_formula_expression(
+                data,
+                expression,
+                n,
+                tuple(fitted_scale_states.items()),
             )
-            states.append(
+            fitted_scale_states.update(scale_states)
+        options = term.poly_options
+        if options is None or options.raw:
+            continue
+        scale_states = (
+            ()
+            if expression is None
+            else _expression_scale_states(expression, tuple(fitted_scale_states.items()))
+        )
+        values = _numeric_term_values(
+            _term_raw_values(data, term, n, scale_states),
+            term,
+        )
+        if any(_is_missing_value(value) for value in values):
+            raise ValueError("missing values are not allowed in orthogonal poly")
+        _rows, alpha, norm2 = _core.poly_basis(
+            values,
+            options.degree,
+            False,
+            None,
+            None,
+        )
+        poly_states.append(
+            (
+                term,
                 (
-                    term,
-                    (
-                        tuple(float(value) for value in alpha),
-                        tuple(float(value) for value in norm2),
-                    ),
-                )
+                    tuple(float(value) for value in alpha),
+                    tuple(float(value) for value in norm2),
+                ),
             )
-    return tuple(states)
+        )
+    return tuple(fitted_scale_states.items()), tuple(poly_states)
+
+
+def _formula_state_data(formula: str, data: Any, n: int) -> Any:
+    if isinstance(data, _FormulaSubsetData):
+        return data
+    scale_states, poly_states = _formula_transform_states(formula, data, n)
+    if not scale_states and not poly_states:
+        return data
+    return _FormulaSubsetData(data, scale_states, poly_states)
 
 
 def _subset_formula_inputs(
@@ -3789,16 +3983,13 @@ def _subset_formula_inputs(
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any]]:
     n = len(_column(data, _formula_response_args(formula)[0]))
-    poly_states = _formula_subset_poly_states(formula, data, n)
+    data = _formula_state_data(formula, data, n)
     indices = _subset_indices(subset, n)
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
         for name, values in row_aligned.items()
     }
-    subset_data = _subset_data(data, indices)
-    if poly_states:
-        subset_data = _FormulaSubsetData(subset_data, poly_states)
-    return subset_data, filtered
+    return _subset_data(data, indices), filtered
 
 
 def _apply_formula_na_action(
@@ -3813,9 +4004,10 @@ def _apply_formula_na_action(
     if action == "pass":
         return data, row_aligned
 
-    excluded = set(exclude_columns)
     response_spec = _formula_response_spec(formula)
     n = len(_column(data, response_spec.columns[0]))
+    data = _formula_state_data(formula, data, n)
+    excluded = set(exclude_columns)
     _lhs, _sep, rhs = formula.partition("~")
     terms = _split_terms(rhs, _dot_terms(data, list(response_spec.columns)))
     raw_columns = [
@@ -5427,9 +5619,76 @@ def _numeric_term_values(values: list[Any], term: _CovariateTerm) -> list[float]
     return _apply_numeric_transform(numeric, term.transform, term.column)
 
 
-def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
+def _expression_scale_states(
+    expression: _NumericFormulaExpression,
+    states: _ScaleFormulaStates,
+) -> _ScaleFormulaStates:
+    calls = _numeric_formula_scale_calls(expression)
+    if not calls:
+        return ()
+    by_call = dict(states)
+    missing = next((call for call in calls if call not in by_call), None)
+    if missing is not None:
+        raise ValueError("fitted scale() formula state is unavailable")
+    return tuple((call, by_call[call]) for call in calls)
+
+
+def _term_scale_states(data: Any, term: _CovariateTerm, n: int) -> _ScaleFormulaStates:
+    expression = term.numeric_expression
+    if expression is None or not _numeric_formula_scale_calls(expression):
+        return ()
+    if isinstance(data, _FormulaSubsetData):
+        return _expression_scale_states(expression, data.scale_states)
+    _values, states = _fit_numeric_formula_expression(data, expression, n)
+    return _expression_scale_states(expression, states)
+
+
+def _term_prediction_scale_states(
+    term: _CovariateTerm,
+    states: _ScaleFormulaStates,
+) -> _ScaleFormulaStates:
+    expression = term.numeric_expression
+    if (
+        term.poly_options is not None
+        or not isinstance(expression, _NumericFormulaCall)
+        or expression.function != "scale"
+    ):
+        return ()
+    by_call = dict(states)
+    if expression not in by_call:
+        raise ValueError("fitted scale() formula state is unavailable")
+    return ((expression, by_call[expression]),)
+
+
+def _term_raw_values(
+    data: Any,
+    term: _CovariateTerm,
+    n: int,
+    scale_states: _ScaleFormulaStates | None = None,
+    *,
+    fit_scales: bool | None = None,
+) -> list[Any]:
     if term.numeric_expression is not None:
-        return _numeric_formula_expression_values(data, term.numeric_expression, n)
+        if scale_states is None:
+            if isinstance(data, _FormulaSubsetData):
+                scale_states = _expression_scale_states(
+                    term.numeric_expression,
+                    data.scale_states,
+                )
+            else:
+                values, _states = _fit_numeric_formula_expression(
+                    data,
+                    term.numeric_expression,
+                    n,
+                )
+                return values
+        return _numeric_formula_expression_values(
+            data,
+            term.numeric_expression,
+            n,
+            scale_states,
+            fit_scales=False if fit_scales is None else fit_scales,
+        )
     if term.arithmetic is not None:
         return _arithmetic_expression_values(data, term.arithmetic, n)
     values = _column(data, term.column)
@@ -5832,7 +6091,9 @@ def _fit_single_design_term(
     term: _CovariateTerm,
     n: int,
 ) -> _SingleDesignTerm:
-    values = _term_raw_values(data, term, n)
+    evaluation_scale_states = _term_scale_states(data, term, n)
+    prediction_scale_states = _term_prediction_scale_states(term, evaluation_scale_states)
+    values = _term_raw_values(data, term, n, evaluation_scale_states)
     if term.poly_options is not None:
         numeric = _numeric_term_values(values, term)
         stored_state = (
@@ -5857,6 +6118,7 @@ def _fit_single_design_term(
             term=term,
             alpha=tuple(float(value) for value in alpha),
             norm2=tuple(float(value) for value in norm2),
+            scale_states=prediction_scale_states,
         )
     declared_levels = _formula_declared_factor_levels(data, term)
     if declared_levels is not None and term.factor_options is None:
@@ -5883,13 +6145,13 @@ def _fit_single_design_term(
     if not term.categorical:
         if term.transform is not None:
             _numeric_term_values(values, term)
-            return _NumericDesignTerm(term)
+            return _NumericDesignTerm(term, prediction_scale_states)
         try:
             _numeric_term_values(values, term)
         except (TypeError, ValueError):
             pass
         else:
-            return _NumericDesignTerm(term)
+            return _NumericDesignTerm(term, prediction_scale_states)
     return _CategoricalDesignTerm(
         term,
         _formula_inferred_categorical_levels(data, term, values),
@@ -6166,7 +6428,18 @@ def _single_design_columns(
         if len(values) != n:
             raise ValueError("tt transform result must match the expanded risk-set rows")
         return [values]
-    values = _term_raw_values(data, spec.term, n)
+    prediction_scale_states = (
+        spec.scale_states
+        if prediction and isinstance(spec, _NumericDesignTerm | _PolyDesignTerm)
+        else None
+    )
+    values = _term_raw_values(
+        data,
+        spec.term,
+        n,
+        prediction_scale_states,
+        fit_scales=prediction,
+    )
     if isinstance(spec, _PolyDesignTerm):
         options = cast(_PolyFormulaOptions, spec.term.poly_options)
         recompute = options.simple and prediction

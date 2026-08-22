@@ -135,7 +135,10 @@ or `*`, and numeric `offset(...)` terms. Numeric expressions support nested
 R math calls, row-wise `pmin(...)` / `pmax(...)`, and arithmetic with `+`, `-`,
 `*`, `/`, and `^`. Univariate `poly(...)` terms provide raw or orthogonal
 multi-column bases through an O(n d) native recurrence and retain the fitted
-orthogonalization coefficients for new-data prediction.
+orthogonalization coefficients for new-data prediction. Stateful `scale(...)`
+terms use an O(n) native path, accept R's logical or numeric `center=` and
+`scale=` options, fit before row subsetting or missing-data omission, and reuse
+their fitted state for ordinary new-data model reconstruction.
 Formula calls also accept `subset=` as a boolean mask or zero-based row indices
 and `na_action="omit"` for row-wise missing-data omission across formula
 columns and external row-aligned arrays such as `weights`, `offset`, and

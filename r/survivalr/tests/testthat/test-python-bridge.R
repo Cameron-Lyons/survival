@@ -5211,6 +5211,161 @@ test_that("survreg polynomial formula terms match R", {
   )
 })
 
+test_that("coxph scale formula terms match R", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  set.seed(5211)
+  n <- 100L
+  x <- stats::runif(n, -4, 7)
+  z <- stats::runif(n, 0.2, 5)
+  w <- stats::rnorm(n, sd = 0.4)
+  event_time <- stats::rexp(n, exp(0.12 * x - 0.08 * log(z) + 0.15 * w))
+  censor <- stats::rexp(n, 0.7)
+  data <- data.frame(
+    time = pmax(pmin(event_time, censor), 0.001),
+    status = as.integer(event_time <= censor),
+    x = x,
+    z = z,
+    w = w
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ scale(x) +
+      scale(log(z), center = FALSE) +
+      scale(x, scale = FALSE):w +
+      offset(scale(w)),
+    data = data,
+    ties = "breslow",
+    max_iter = 150,
+    eps = 1e-10,
+    x = TRUE
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ scale(x) +
+      scale(log(z), center = FALSE) +
+      scale(x, scale = FALSE):w +
+      offset(scale(w)),
+    data = data,
+    ties = "breslow",
+    x = TRUE,
+    control = survival::coxph.control(iter.max = 150, eps = 1e-10)
+  )
+
+  bridged_matrix <- model.matrix(bridged)
+  reference_matrix <- stats::model.matrix(reference)
+  expect_identical(colnames(bridged_matrix), colnames(reference_matrix))
+  expect_identical(attr(bridged_matrix, "assign"), attr(reference_matrix, "assign"))
+  expect_equal(unname(bridged_matrix), unname(reference_matrix), tolerance = 1e-12)
+  expect_identical(attr(terms(bridged), "term.labels"), attr(terms(reference), "term.labels"))
+  expect_equal(unname(coef(bridged)), unname(coef(reference)), tolerance = 2e-08)
+
+  newdata <- transform(
+    data[c(2, 8, 17, 31), ],
+    x = x + c(0.7, -0.4, 0.3, -0.8),
+    z = z + c(0.2, 0.4, -0.1, 0.3),
+    w = w + c(-0.2, 0.1, 0.25, -0.15)
+  )
+  expect_equal(
+    as.numeric(predict(bridged, newdata = newdata, type = "lp", reference = "zero")),
+    as.numeric(stats::predict(reference, newdata = newdata, type = "lp", reference = "zero")),
+    tolerance = 2e-08
+  )
+})
+
+test_that("scale and poly state precedes subset and missing omission", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = seq_len(10),
+    status = rep(c(1L, 0L), 5),
+    x = c(-10, -4, -2, -1, 0, 1, 2, 3, 8, 20),
+    z = c(0.1, 0.2, 0.3, NA, 0.5, 0.6, 0.7, 0.8, 0.9, 1)
+  )
+  keep <- c(FALSE, rep(TRUE, 7), FALSE, FALSE)
+  bridged <- coxph(
+    Surv(time, status) ~ poly(scale(x), 2) + z,
+    data = data,
+    subset = keep,
+    na.action = na.omit,
+    max_iter = 0,
+    x = TRUE
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ poly(scale(x), 2) + z,
+    data = data,
+    subset = keep,
+    na.action = na.omit,
+    x = TRUE,
+    control = survival::coxph.control(iter.max = 0)
+  )
+  expect_identical(colnames(model.matrix(bridged)), colnames(stats::model.matrix(reference)))
+  expect_identical(
+    attr(model.matrix(bridged), "assign"),
+    attr(stats::model.matrix(reference), "assign")
+  )
+  expect_equal(
+    unname(model.matrix(bridged)),
+    unname(stats::model.matrix(reference)),
+    tolerance = 1e-12
+  )
+})
+
+test_that("survreg scale formula terms match R", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  set.seed(5212)
+  n <- 90L
+  x <- stats::runif(n, -3, 6)
+  z <- stats::runif(n, 0.3, 5)
+  latent <- exp(1.1 + 0.12 * x - 0.09 * log(z) + stats::rnorm(n, sd = 0.4))
+  censor <- stats::rexp(n, rate = 1 / 15)
+  data <- data.frame(
+    time = pmax(pmin(latent, censor), 0.01),
+    status = as.integer(latent <= censor),
+    x = x,
+    z = z
+  )
+  bridged <- survreg(
+    Surv(time, status) ~ scale(x) + scale(log(z), center = FALSE),
+    data = data,
+    dist = "weibull",
+    max_iter = 150,
+    eps = 1e-10,
+    x = TRUE
+  )
+  reference <- survival::survreg(
+    survival::Surv(time, status) ~ scale(x) +
+      scale(log(z), center = FALSE),
+    data = data,
+    dist = "weibull",
+    x = TRUE,
+    control = survival::survreg.control(maxiter = 150, rel.tolerance = 1e-10)
+  )
+
+  bridged_matrix <- model.matrix(bridged)
+  reference_matrix <- stats::model.matrix(reference)
+  expect_identical(colnames(bridged_matrix), colnames(reference_matrix))
+  expect_identical(attr(bridged_matrix, "assign"), attr(reference_matrix, "assign"))
+  expect_equal(unname(bridged_matrix), unname(reference_matrix), tolerance = 1e-12)
+  expect_equal(unname(coef(bridged)), unname(coef(reference)), tolerance = 2e-08)
+
+  newdata <- transform(
+    data[c(3, 11, 24), ],
+    x = x + c(0.5, -0.3, 0.8),
+    z = z + c(0.2, 0.4, -0.1)
+  )
+  expect_equal(
+    unname(predict(bridged, newdata = newdata, type = "lp")),
+    unname(stats::predict(reference, newdata = newdata, type = "lp")),
+    tolerance = 2e-08
+  )
+})
+
 test_that("pmin na.rm controls formula row omission like R", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

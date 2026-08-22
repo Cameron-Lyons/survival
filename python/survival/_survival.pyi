@@ -7733,6 +7733,13 @@ def poly_basis(
     alpha: list[float] | None = None,
     norm2: list[float] | None = None,
 ) -> tuple[list[list[float]], list[float], list[float]]: ...
+def scale_values(
+    x: list[float],
+    center: bool = True,
+    scale: bool = True,
+    center_value: float | None = None,
+    scale_value: float | None = None,
+) -> tuple[list[float], float | None, float | None]: ...
 def cox_score_residuals(
     y: list[float],
     strata: list[int],

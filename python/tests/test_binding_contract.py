@@ -10014,6 +10014,7 @@ def test_core_utility_bindings_are_typed():
         "nsk",
         "poly_basis",
         "pspline_basis",
+        "scale_values",
         "cox_score_residuals",
         "schoenfeld_residuals",
         "concordance",
@@ -10052,6 +10053,7 @@ def test_core_utility_bindings_are_typed():
         "nsk": ["x", "df", "knots", "boundary_knots"],
         "poly_basis": ["x", "degree", "raw", "alpha", "norm2"],
         "pspline_basis": ["x", "nterm", "degree", "boundary_knots"],
+        "scale_values": ["x", "center", "scale", "center_value", "scale_value"],
         "cox_score_residuals": ["y", "strata", "covar", "score", "weights", "nvar", "method"],
         "schoenfeld_residuals": ["y", "score", "strata", "covar", "nvar", "method"],
         "concordance": ["y", "x", "wt", "timewt", "sortstart", "sortstop"],
@@ -10090,6 +10092,30 @@ def test_core_utility_bindings_are_typed():
     assert rebuilt_poly[0] == pytest.approx([1.31157847467778, 5.16916222373008, 21.9718311398109])
     assert rebuilt_alpha == pytest.approx(poly_alpha)
     assert rebuilt_norm2 == pytest.approx(poly_norm2)
+
+    scaled, scaled_center, scaled_divisor = core.scale_values([1.0, 2.0, float("nan"), 4.0, 8.0])
+    rebuilt_scale, rebuilt_center, rebuilt_divisor = core.scale_values(
+        [3.0, 6.0],
+        False,
+        False,
+        scaled_center,
+        scaled_divisor,
+    )
+    assert scaled == pytest.approx(
+        [
+            -0.888330138395973,
+            -0.565300997161074,
+            float("nan"),
+            0.0807572853087248,
+            1.37287385024832,
+        ],
+        nan_ok=True,
+    )
+    assert scaled_center == pytest.approx(3.75)
+    assert scaled_divisor == pytest.approx(3.09569593683445)
+    assert rebuilt_scale == pytest.approx([-0.242272, 0.726815], abs=1e-6)
+    assert rebuilt_center == scaled_center
+    assert rebuilt_divisor == scaled_divisor
 
     assert _pyi_class_annotation_names(stub_path, "CovariateMatrix") == {
         "values",

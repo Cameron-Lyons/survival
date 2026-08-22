@@ -17369,6 +17369,160 @@ def test_formula_poly_matches_r_missing_value_and_argument_rules():
             survival.coxph(f"Surv(time, status) ~ {term}", data=_numeric_data())
 
 
+def test_formula_scale_terms_match_r_subset_and_prediction_state():
+    data = {
+        "time": [float(index) for index in range(1, 11)],
+        "status": [1, 0] * 5,
+        "x": [-10.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 8.0, 20.0],
+        "z": [float(index * 2) for index in range(1, 11)],
+    }
+    keep = [False, *([True] * 7), False, False]
+    formula = (
+        "Surv(time,status) ~ scale(x) + scale(log(z), center=FALSE) + "
+        "scale(x, scale=FALSE):z + offset(scale(z, center=2, scale=3))"
+    )
+    fit = survival.coxph(formula, data=data, subset=keep, max_iter=0)
+    matrix = survival.model_matrix(fit)
+
+    expected = [
+        [-0.716177363358201, 0.569155246353510, -22.8],
+        [-0.464887060425499, 0.735622484456267, -22.2],
+        [-0.339241908959148, 0.853732869530265, -21.6],
+        [-0.213596757492797, 0.945346401607131, -17.0],
+        [-0.087951606026446, 1.02020010763302, -8.4],
+        [0.037693545439905, 1.08348801430947, 4.2],
+        [0.163338696906256, 1.13831049270702, 20.8],
+    ]
+    assert matrix["columns"] == [
+        "scale(x)",
+        "scale(log(z), center=FALSE)",
+        "scale(x, scale=FALSE):z",
+    ]
+    assert matrix["assign"] == [1, 2, 3]
+    for actual, expected_row in zip(matrix["data"], expected, strict=True):
+        assert actual == pytest.approx(expected_row, abs=1e-13)
+
+    newdata = {"x": [4.0, 9.0], "z": [7.0, 13.0]}
+    rows, offsets = survival.r_api._prediction_inputs(fit, newdata)
+    assert rows is not None
+    assert offsets == pytest.approx([5.0 / 3.0, 11.0 / 3.0], abs=1e-14)
+    assert rows[0] == pytest.approx(
+        [0.288983848372607, 0.798910391132717, 16.1],
+        abs=1e-13,
+    )
+    assert rows[1] == pytest.approx(
+        [0.917209605704362, 1.05306233969745, 94.9],
+        abs=1e-13,
+    )
+    assert survival.predict(fit, newdata, reference="zero") == pytest.approx(
+        [-1.0, 1.0],
+        abs=1e-12,
+    )
+
+
+def test_formula_scale_composes_with_poly_using_r_prediction_state_rules():
+    x = [-10.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 8.0, 20.0]
+    keep = [False, *([True] * 7), False, False]
+    data = {
+        "time": [float(index) for index in range(1, 11)],
+        "status": [1, 0] * 5,
+        "x": x,
+        "z": [float(index) for index in range(10)],
+    }
+    scaled, _center, _divisor = survival._survival.scale_values(x)
+    full_poly, alpha, norm2 = survival._survival.poly_basis(scaled, 2)
+    fit = survival.coxph(
+        "Surv(time,status) ~ poly(scale(x), 2) + z",
+        data=data,
+        subset=keep,
+        max_iter=0,
+    )
+
+    expected = [
+        [*row, z] for row, z, retained in zip(full_poly, data["z"], keep, strict=True) if retained
+    ]
+    for actual, expected_row in zip(fit.covariates, expected, strict=True):
+        assert actual == pytest.approx(expected_row, abs=1e-13)
+
+    new_x = [4.0, 9.0]
+    rebuilt_scale, _center, _divisor = survival._survival.scale_values(new_x)
+    rebuilt_poly, _alpha, _norm2 = survival._survival.poly_basis(
+        rebuilt_scale,
+        2,
+        False,
+        alpha,
+        norm2,
+    )
+    expected_rows = [[*row, z] for row, z in zip(rebuilt_poly, [2.5, 7.5], strict=True)]
+    assert survival.predict(
+        fit,
+        {"x": new_x, "z": [2.5, 7.5]},
+        reference="zero",
+    ) == pytest.approx(fit.predict(expected_rows), abs=1e-12)
+
+
+def test_formula_scale_fits_before_na_omission_like_r():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": [1, 0, 1, 1, 0, 1],
+        "x": [1.0, 2.0, 30.0, 4.0, 8.0, 9.0],
+        "z": [0.2, 0.4, None, 0.8, 1.0, 1.2],
+    }
+    full_scale, _center, _divisor = survival._survival.scale_values(data["x"])
+    fit = survival.coxph(
+        "Surv(time,status) ~ scale(x) + z",
+        data=data,
+        na_action="omit",
+        max_iter=0,
+    )
+    expected = [
+        [scaled, z] for scaled, z in zip(full_scale, data["z"], strict=True) if z is not None
+    ]
+    for actual, expected_row in zip(fit.covariates, expected, strict=True):
+        assert actual == pytest.approx(expected_row, abs=1e-13)
+
+    missing_x = {**data, "x": [1.0, 2.0, None, 4.0, 8.0, 9.0], "z": [0.2] * 6}
+    expected_scale, _center, _divisor = survival._survival.scale_values(
+        [1.0, 2.0, math.nan, 4.0, 8.0, 9.0]
+    )
+    missing_fit = survival.coxph(
+        "Surv(time,status) ~ scale(x)",
+        data=missing_x,
+        na_action="omit",
+        max_iter=0,
+    )
+    assert [row[0] for row in missing_fit.covariates] == pytest.approx(
+        [value for value in expected_scale if not math.isnan(value)],
+        abs=1e-13,
+    )
+
+
+def test_formula_scale_supports_r_options_and_validation_rules():
+    data = _numeric_data()
+    fit = survival.coxph(
+        "Surv(time,status) ~ scale(x1, cen=FALSE, sca=FALSE) + scale(x2, center=c(2), scale=c(-2))",
+        data=data,
+        max_iter=0,
+    )
+    expected = [[x1, (x2 - 2.0) / -2.0] for x1, x2 in zip(data["x1"], data["x2"], strict=True)]
+    for actual, expected_row in zip(
+        survival.model_matrix(fit)["data"],
+        expected,
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected_row)
+
+    for term, message in (
+        ("scale()", "requires one numeric argument"),
+        ("scale(x1, center=x2)", "numeric scalar"),
+        ("scale(x1, center=NA)", "numeric scalar"),
+        ("scale(x1, center=TRUE, scale=TRUE, extra=1)", "unsupported scale.*option"),
+        ("scale(x1, TRUE, TRUE, 1)", "too many arguments"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            survival.coxph(f"Surv(time,status) ~ {term}", data=data)
+
+
 def test_formula_pmin_na_rm_controls_transformed_row_omission():
     data = _numeric_data()
     data["x1"] = [None, None, *data["x1"][2:]]
