@@ -5234,6 +5234,43 @@ test_that("stratified concordance rank errors follow stratum order", {
   )
 })
 
+test_that("non-recyclable rank strata fail before later empty strata", {
+  time <- c(4, 5, 5, 3, 6, 4, 7, 5, 7, 6)
+  status <- c(0, 1, 0, 1, 0, 0, 1, 0, 0, 0)
+  scores <- seq_along(time)
+  groups <- rep(seq_len(2), each = 5)
+  replacement_error <- "number of items to replace is not a multiple of replacement length"
+
+  for (score_input in list(scores, cbind(x = scores, z = rev(scores)))) {
+    expect_error(
+      concordancefit(
+        Surv(time, status),
+        score_input,
+        strata = groups,
+        ymax = 5,
+        timewt = "S",
+        ranks = TRUE,
+        reverse = TRUE
+      ),
+      replacement_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordancefit(
+        survival::Surv(time, status),
+        score_input,
+        strata = groups,
+        ymax = 5,
+        timewt = "S",
+        ranks = TRUE,
+        reverse = TRUE
+      ),
+      replacement_error,
+      fixed = TRUE
+    )
+  }
+})
+
 test_that("multi-score rank errors finish stratum construction first", {
   time <- c(6, 7, 1, 2)
   status <- c(1, 1, 0, 0)

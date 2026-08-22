@@ -12112,7 +12112,8 @@ concordance <- function(object, ..., formula) {
 }
 
 .concordance_empty_rank_strata_check <- function(
-    response, n_scores, strata, ranks, timewt, ymax = NULL, keepstrata = 10) {
+    response, n_scores, strata, ranks, timewt, ymax = NULL, keepstrata = 10,
+    check_recycling = FALSE) {
   survival_response <- inherits(response, "Surv") || inherits(response, "survival_py_surv")
   if (!isTRUE(ranks) || !survival_response) {
     return(invisible(NULL))
@@ -12140,7 +12141,9 @@ concordance <- function(object, ..., formula) {
     n_strata <- 1L
   }
   groups <- droplevels(as.factor(strata_values))
-  event_counts <- vapply(split(status, groups), sum, numeric(1))
+  grouped_status <- split(status, groups)
+  group_sizes <- lengths(grouped_status)
+  event_counts <- vapply(grouped_status, sum, numeric(1))
   rank_status <- status
   if (!is.null(ymax)) rank_status[event_time > ymax] <- 0
   rank_counts <- vapply(split(rank_status, groups), sum, numeric(1))
@@ -12156,6 +12159,13 @@ concordance <- function(object, ..., formula) {
         )
       }
       return(invisible(NULL))
+    }
+    if (isTRUE(check_recycling) && rank_counts[[index]] > 0 &&
+        group_sizes[[index]] %% rank_counts[[index]] != 0) {
+      stop(
+        "number of items to replace is not a multiple of replacement length",
+        call. = FALSE
+      )
     }
     if (n_strata > 1L && rank_counts[[index]] == 0) {
       stop("replacement has length zero", call. = FALSE)
@@ -12176,7 +12186,8 @@ concordance <- function(object, ..., formula) {
       ranks,
       timewt,
       ymax,
-      keepstrata
+      keepstrata,
+      check_recycling = TRUE
     )
     stop(replacement_message, call. = FALSE)
   }
