@@ -864,6 +864,14 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
             "global_test",
             "penalty_matrix",
         ],
+        "cox_zph_diagnostics_with_surface": [
+            "self",
+            "transformed_events",
+            "active_columns",
+            "groups",
+            "single_df",
+            "global_test",
+        ],
         "partial_residuals": ["self"],
     }
     for method_name, args in coxph_fit_methods.items():
@@ -1028,6 +1036,17 @@ def test_coxph_fit_detail_bindings_are_typed_to_runtime_surface():
     )
     for actual, expected in zip(fused_scaled, custom_scaled, strict=True):
         assert actual == pytest.approx(expected)
+    surface, surface_variance, surface_test = fit.cox_zph_diagnostics_with_surface(
+        transformed_events,
+        [0],
+        [[0]],
+        False,
+        True,
+    )
+    assert len(surface) == sum(status)
+    assert all(len(row) == 1 and math.isfinite(row[0]) for row in surface)
+    assert len(surface_variance) == len(surface_variance[0]) == 1
+    assert surface_test.chi2_values == pytest.approx(fused_test.chi2_values)
     beta = fit.coefficients[-1]
     offset = [
         linear_predictor - row[0] * beta[0]

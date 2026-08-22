@@ -574,6 +574,23 @@ impl CoxPHFit {
         )
     }
 
+    pub fn cox_zph_diagnostics_with_surface(
+        &self,
+        transformed_events: Vec<f64>,
+        active_columns: Vec<usize>,
+        groups: Vec<Vec<usize>>,
+        single_df: bool,
+        global_test: bool,
+    ) -> PyResult<crate::regression::coxph_diagnostics::CoxZphSurfaceDiagnostics> {
+        self.cox_zph_diagnostics_with_surface_internal(
+            transformed_events,
+            active_columns,
+            groups,
+            single_df,
+            global_test,
+        )
+    }
+
     pub fn partial_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
         self.partial_residuals_internal()
     }

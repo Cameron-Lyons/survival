@@ -13388,6 +13388,24 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     )
     assert zph.global_chi2 == pytest.approx(1.2674198241708354, abs=1e-12)
     assert zph.strata == [1, 1, 1, 1, 2, 2, 2, 2]
+    expected_zph_y = [
+        [-3.669221667281993, math.nan],
+        [0.0026004251483797702, math.nan],
+        [-3.1442881202041564, math.nan],
+        [1.1532335108846619, math.nan],
+        [math.nan, -0.9929406879072232],
+        [math.nan, 0.40642227808169573],
+        [math.nan, 0.7137814582456097],
+        [math.nan, -2.0073958471233286],
+    ]
+    for actual, expected in zip(zph.y, expected_zph_y, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-12, nan_ok=True)
+    for actual, expected in zip(
+        zph.var,
+        [[5.350013071194888, 0.0], [0.0, 3.997215621198441]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-12)
 
     predicted = survival.predict(fit, type="lp")
     assert predicted[0] == pytest.approx([1.119748345585229, 0.37210961641001666])
@@ -13867,6 +13885,24 @@ def test_cox_zph_multistate_groups_expanded_factor_terms_like_r():
     assert by_column.df == [1, 1, 1, 1, 1, 1]
     assert by_term.global_chi2 == pytest.approx(by_column.global_chi2, abs=1e-12)
     assert by_term.strata == by_column.strata == [1, 1, 1, 1, 2, 2, 2, 2]
+    assert by_term.y[0] == pytest.approx(
+        [-5.633757567751644, 1.8862607213125682, math.nan, math.nan],
+        abs=1e-12,
+        nan_ok=True,
+    )
+    assert by_term.y[-1] == pytest.approx(
+        [math.nan, math.nan, -4.098561984779203, 1.3156632294499375],
+        abs=1e-12,
+        nan_ok=True,
+    )
+    expected_var = [
+        [10.268646785989345, -3.774690061935757, 0.0, 0.0],
+        [-3.774690061935757, 3.2340615532484676, 0.0, 0.0],
+        [0.0, 0.0, 10.902388505769771, -2.723983963059402],
+        [0.0, 0.0, -2.7239839630594016, 1.34103444774544],
+    ]
+    for actual, expected in zip(by_term.var, expected_var, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-12)
 
 
 def test_coxph_multistate_counting_histories_match_r_reference():

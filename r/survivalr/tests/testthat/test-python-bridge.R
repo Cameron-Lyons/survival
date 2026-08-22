@@ -8460,6 +8460,16 @@ test_that("single-formula multi-state Cox models match survival", {
       expect_equal(bridged_zph$time, reference_zph$time, tolerance = 1e-12)
       expect_equal(as.character(bridged_zph$transform), reference_zph$transform)
       expect_equal(
+        do.call(rbind, bridged_zph$y),
+        unname(reference_zph$y),
+        tolerance = 1e-08
+      )
+      expect_equal(
+        do.call(rbind, bridged_zph$var),
+        unname(reference_zph$var),
+        tolerance = 1e-08
+      )
+      expect_equal(
         as.integer(bridged_zph$strata),
         as.integer(reference_zph$strata)
       )
