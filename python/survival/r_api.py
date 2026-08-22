@@ -22224,7 +22224,23 @@ def _concordance_frame(result: ConcordanceResult) -> dict[str, list[Any]]:
     if isinstance(result.concordance, list):
         n_scores = len(result.concordance)
         score_names = result.score_names or [f"score{idx + 1}" for idx in range(n_scores)]
-        variance = result.variance if isinstance(result.variance, list) else [math.nan] * n_scores
+        if (
+            isinstance(result.variance, list)
+            and result.variance
+            and isinstance(result.variance[0], list)
+        ):
+            covariance = cast(list[list[float]], result.variance)
+            variance = [
+                covariance[idx][idx] if idx < len(covariance[idx]) else math.nan
+                for idx in range(min(n_scores, len(covariance)))
+            ]
+            variance.extend([math.nan] * (n_scores - len(variance)))
+        else:
+            variance = (
+                cast(list[float | None], result.variance)
+                if isinstance(result.variance, list)
+                else [math.nan] * n_scores
+            )
         tied_x = result.tied_x if isinstance(result.tied_x, list) else [result.tied_x] * n_scores
         tied_y = result.tied_y if isinstance(result.tied_y, list) else [result.tied_y] * n_scores
         tied_xy = (
@@ -26623,6 +26639,8 @@ def _multi_score_concordance_result(
     influence_value: int,
     include_ranks: bool,
 ) -> ConcordanceResult:
+    # The reference fit always computes dfbeta values for standard errors,
+    # even when the caller does not request that diagnostic in the result.
     results = [
         _single_score_concordance_result(
             response,
@@ -26635,10 +26653,18 @@ def _multi_score_concordance_result(
             time_weight,
             lower_bound,
             upper_bound,
-            influence_value,
+            3,
             include_ranks,
         )
         for score_values in score_columns
+    ]
+    dfbeta_columns = [cast(list[float], result.dfbeta) for result in results]
+    covariance = [
+        [
+            math.fsum(left * right for left, right in zip(left_column, right_column, strict=True))
+            for right_column in dfbeta_columns
+        ]
+        for left_column in dfbeta_columns
     ]
     return ConcordanceResult(
         concordance=[float(result.concordance) for result in results],
@@ -26651,9 +26677,9 @@ def _multi_score_concordance_result(
         tied_y=[float(result.tied_y) for result in results],
         tied_xy=[float(result.tied_xy) for result in results],
         ranks=[result.ranks for result in results] if include_ranks else None,
-        dfbeta=[result.dfbeta for result in results] if influence_value in {1, 3} else None,
+        dfbeta=dfbeta_columns if influence_value in {1, 3} else None,
         influence=[result.influence for result in results] if influence_value in {2, 3} else None,
-        variance=[result.variance for result in results],
+        variance=covariance,
         conditional_variance=[
             float(result.conditional_variance)
             if isinstance(result.conditional_variance, int | float)

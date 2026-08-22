@@ -12088,6 +12088,17 @@ vcov.survival_py_concordance <- function(object, ...) {
   if (nrow(frame) == 1L) {
     return(4 * as.numeric(frame$variance)[[1L]])
   }
+  variance <- .result_field(object, "variance")
+  if (is.matrix(variance) || (
+    is.list(variance) && length(variance) == nrow(frame) &&
+      all(vapply(variance, length, integer(1)) == nrow(frame))
+  )) {
+    covariance <- .as_numeric_matrix(variance)
+    if (!identical(dim(covariance), c(nrow(frame), nrow(frame)))) {
+      stop("concordance covariance must match the score count", call. = FALSE)
+    }
+    return(4 * covariance)
+  }
   dfbeta <- .result_field(object, "dfbeta")
   if (is.null(dfbeta)) {
     values <- 4 * as.numeric(frame$variance)
