@@ -486,6 +486,7 @@ class ConcordanceResult:
     score_names: list[str] | None
     strata_counts: list[list[float]] | None
     strata_names: list[str] | None
+    cluster_names: list[str] | None
     @property
     def c_index(self) -> float | list[float]: ...
     @property
