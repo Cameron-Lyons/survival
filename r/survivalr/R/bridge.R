@@ -12711,8 +12711,12 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     dfbeta_matrix <- do.call(cbind, dfbeta_columns)
   }
   if (isTRUE(std.err) && !is.null(variance)) {
-    if (multi_score && !is.null(dfbeta_matrix)) {
-      out$var <- crossprod(dfbeta_matrix)
+    if (multi_score) {
+      out$var <- if (!is.null(dfbeta_matrix)) {
+        crossprod(dfbeta_matrix)
+      } else {
+        .as_numeric_matrix(variance)
+      }
     } else {
       out$var <- .as_numeric_vector(variance)
     }
