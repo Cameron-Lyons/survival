@@ -189,6 +189,38 @@ class _MissingArgument:
 _MISSING = _MissingArgument()
 
 
+class _FactorNALevel:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "NA"
+
+    def __str__(self) -> str:
+        return "NA"
+
+
+_FACTOR_NA_LEVEL = _FactorNALevel()
+
+
+@dataclass(frozen=True)
+class _FactorFormulaOptions:
+    levels: tuple[Any, ...] | None = None
+    labels: tuple[Any, ...] | None = None
+    exclude: tuple[Any, ...] = ()
+    exclude_missing: bool = True
+    ordered: bool | None = None
+    nmax: int | None = None
+
+
+@dataclass(frozen=True)
+class _FactorEncoding:
+    values: tuple[Any, ...]
+    levels: tuple[Any, ...]
+    contrasts: tuple[tuple[float, ...], ...] | None = None
+    contrast_names: tuple[str, ...] = ()
+    mapping: tuple[tuple[Any, Any], ...] = ()
+
+
 @dataclass(frozen=True)
 class _CovariateTerm:
     column: str
@@ -196,6 +228,8 @@ class _CovariateTerm:
     categorical_wrapper: str | None = None
     transform: str | None = None
     arithmetic: str | None = None
+    factor_options: _FactorFormulaOptions | None = None
+    formula_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -344,6 +378,7 @@ class _CategoricalDesignTerm:
     levels: tuple[Any, ...]
     contrasts: tuple[tuple[float, ...], ...] | None = None
     contrast_names: tuple[str, ...] = ()
+    factor_mapping: tuple[tuple[Any, Any], ...] = ()
     full: bool = False
 
 
@@ -1598,7 +1633,14 @@ class _BridgeVector:
 class _RFactorVector(_BridgeVector):
     """Iterable factor values with level metadata preserved across reticulate."""
 
-    __slots__ = ("categories", "contrasts", "contrast_names")
+    __slots__ = (
+        "categories",
+        "codes",
+        "contrasts",
+        "contrast_names",
+        "factor_source",
+        "ordered",
+    )
 
     def __init__(
         self,
@@ -1606,6 +1648,9 @@ class _RFactorVector(_BridgeVector):
         levels: Any,
         contrasts: Any | None = None,
         contrast_names: Any | None = None,
+        ordered: bool = False,
+        factor_source: Any | None = None,
+        codes: Any | None = None,
     ):
         super().__init__(values)
         self.categories = tuple(levels)
@@ -1613,6 +1658,9 @@ class _RFactorVector(_BridgeVector):
         self.contrast_names = (
             None if contrast_names is None else tuple(str(name) for name in contrast_names)
         )
+        self.ordered = bool(ordered)
+        self.factor_source = self._values if factor_source is None else factor_source
+        self.codes = None if codes is None else tuple(codes)
 
 
 def _r_factor(
@@ -1620,8 +1668,10 @@ def _r_factor(
     levels: Any,
     contrasts: Any | None = None,
     contrast_names: Any | None = None,
+    ordered: bool = False,
+    codes: Any | None = None,
 ) -> _RFactorVector:
-    return _RFactorVector(values, levels, contrasts, contrast_names)
+    return _RFactorVector(values, levels, contrasts, contrast_names, ordered, codes=codes)
 
 
 class _RCharacterVector(_BridgeVector):
@@ -1974,7 +2024,17 @@ def _subset_sequence(
     categories = _mstate_categories(values)
     if categories is not None:
         contrasts, contrast_names = _factor_contrasts(values)
-        return _RFactorVector(subsetted, categories, contrasts, contrast_names)
+        return _RFactorVector(
+            subsetted,
+            categories,
+            contrasts,
+            contrast_names,
+            bool(getattr(values, "ordered", False)),
+            getattr(values, "factor_source", materialized),
+            None
+            if getattr(values, "codes", None) is None
+            else [values.codes[idx] for idx in indices],
+        )
     if isinstance(values, _RCharacterVector):
         return _RCharacterVector(subsetted, values.factor_source)
     if not preserve_factor_source:
@@ -3201,11 +3261,49 @@ def _apply_formula_na_action(
         return data, row_aligned
 
     excluded = set(exclude_columns)
-    columns = [column for column in _formula_columns(formula, data) if column not in excluded]
-    n = len(_column(data, columns[0]))
+    response_spec = _formula_response_spec(formula)
+    n = len(_column(data, response_spec.columns[0]))
+    _lhs, _sep, rhs = formula.partition("~")
+    terms = _split_terms(rhs, _dot_terms(data, list(response_spec.columns)))
+    raw_columns = [
+        *response_spec.columns,
+        *terms.strata,
+        *_offset_columns(terms.offsets),
+        *terms.clusters,
+    ]
+    transformed_columns: list[tuple[str, Sequence[Any]]] = []
+    for spec in terms.covariates:
+        for term in _covariate_factors(spec):
+            term_columns = _covariate_term_columns(term)
+            if any(column in excluded for column in term_columns):
+                continue
+            declared_levels = _formula_declared_factor_levels(data, term)
+            if term.categorical_wrapper is not None:
+                values = _term_raw_values(data, term, n)
+                if declared_levels is not None and term.factor_options is None:
+                    transformed = _factor_normalized_values(
+                        _column_source(data, term.column),
+                        values,
+                    )
+                else:
+                    transformed = _factor_encoding(data, term, values).values
+                transformed_columns.append((_covariate_term_name(term), transformed))
+            elif declared_levels is not None:
+                values = _term_raw_values(data, term, n)
+                transformed_columns.append(
+                    (
+                        _covariate_term_name(term),
+                        _factor_normalized_values(_column_source(data, term.column), values),
+                    )
+                )
+            else:
+                raw_columns.extend(term_columns)
+
+    raw_columns = [column for column in dict.fromkeys(raw_columns) if column not in excluded]
     missing = _missing_row_indices(
         [
-            *[(column, _column(data, column)) for column in columns],
+            *[(column, _column(data, column)) for column in raw_columns],
+            *transformed_columns,
             *((name, values) for name, values in row_aligned.items() if values is not None),
         ],
         n,
@@ -3418,12 +3516,197 @@ def _unsupported_formula_name(name: str, quoted: bool) -> bool:
     return not quoted and any(token in name for token in "():*/+-^%")
 
 
-def _factor_column_items(term: str) -> tuple[str, list[tuple[str, bool]]] | None:
+def _factor_formula_parts(term: str) -> tuple[str, list[str]] | None:
     for wrapper in ("factor", "as.factor"):
         prefix = f"{wrapper}("
         if term.startswith(prefix) and term.endswith(")"):
-            return wrapper, _formula_name_items(term[len(prefix) : -1])
+            return wrapper, _formula_response_parts(term[len(prefix) : -1])
     return None
+
+
+def _factor_formula_literal(value: str, name: str) -> Any:
+    text = value.strip()
+    lowered = text.lower()
+    if lowered in {"na", "na_character_", "na_integer_", "na_real_"}:
+        return None
+    if lowered in {"inf", "+inf"}:
+        return math.inf
+    if lowered == "-inf":
+        return -math.inf
+    try:
+        return _parse_formula_literal(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"{name} must use numeric, boolean, NA, or quoted string literals"
+        ) from exc
+
+
+def _factor_formula_vector(value: str, name: str) -> tuple[tuple[Any, ...], bool]:
+    text = value.strip()
+    if text.lower() == "null":
+        return (), True
+    if text.startswith("c(") and text.endswith(")"):
+        parts = _formula_response_parts(text[2:-1])
+    else:
+        range_parts = _split_top_level(text, ":")
+        if len(range_parts) == 2:
+            start = _factor_formula_literal(range_parts[0], name)
+            stop = _factor_formula_literal(range_parts[1], name)
+            if (
+                isinstance(start, int)
+                and not isinstance(start, bool)
+                and isinstance(stop, int)
+                and not isinstance(stop, bool)
+            ):
+                step = 1 if stop >= start else -1
+                return tuple(range(start, stop + step, step)), False
+        parts = [text]
+    return tuple(_factor_formula_literal(part, name) for part in parts), False
+
+
+def _factor_formula_option_name(name: str, wrapper: str) -> str:
+    formals = (
+        ("x",)
+        if wrapper == "as.factor"
+        else (
+            "x",
+            "levels",
+            "labels",
+            "exclude",
+            "ordered",
+            "nmax",
+        )
+    )
+    lowered = name.strip().lower()
+    if lowered in formals:
+        return lowered
+    matches = [formal for formal in formals if formal.startswith(lowered)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError(f"unsupported {wrapper}() formula option: {name}")
+    raise ValueError(f"ambiguous {wrapper}() formula option: {name}")
+
+
+def _factor_formula_label(term: str) -> str:
+    normalized: list[str] = []
+    quote: str | None = None
+    in_backtick = False
+    for idx, char in enumerate(term):
+        if quote is not None:
+            normalized.append(char)
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'} and not in_backtick:
+            quote = char
+            normalized.append(char)
+            continue
+        if char == "`":
+            in_backtick = not in_backtick
+            normalized.append(char)
+            continue
+        if (
+            not in_backtick
+            and char in {"l", "L"}
+            and idx > 0
+            and term[idx - 1].isdigit()
+            and (idx + 1 == len(term) or term[idx + 1] in {",", ")", " "})
+        ):
+            continue
+        normalized.append(char)
+    return "".join(normalized)
+
+
+def _parse_factor_formula_term(term: str) -> _CovariateTerm | None:
+    parsed = _factor_formula_parts(term)
+    if parsed is None:
+        return None
+    wrapper, parts = parsed
+    formals = (
+        ("x",)
+        if wrapper == "as.factor"
+        else (
+            "x",
+            "levels",
+            "labels",
+            "exclude",
+            "ordered",
+            "nmax",
+        )
+    )
+    arguments: dict[str, str] = {}
+    positional: list[str] = []
+    for part in parts:
+        option = _formula_named_option(part)
+        if option is None:
+            positional.append(part)
+            continue
+        raw_name, raw_value = option
+        name = _factor_formula_option_name(raw_name, wrapper)
+        if name in arguments:
+            raise ValueError(f"{wrapper}() contains multiple {name}= arguments")
+        arguments[name] = raw_value
+
+    available = [name for name in formals if name not in arguments]
+    if len(positional) > len(available):
+        raise ValueError(f"{wrapper}() received too many arguments")
+    for name, raw_value in zip(available, positional, strict=False):
+        arguments[name] = raw_value
+    if "x" not in arguments:
+        raise ValueError(f"{wrapper}() requires one column")
+
+    column, quoted = _formula_name(arguments["x"])
+    if _unsupported_formula_name(column, quoted):
+        raise ValueError(f"unsupported {wrapper}() formula column: {column}")
+    if wrapper == "as.factor":
+        return _CovariateTerm(
+            column,
+            categorical=True,
+            categorical_wrapper=wrapper,
+            formula_label=_factor_formula_label(term),
+        )
+
+    levels = None
+    labels = None
+    exclude: tuple[Any, ...] = ()
+    exclude_missing = True
+    ordered = None
+    nmax = None
+    if "levels" in arguments:
+        levels, _levels_null = _factor_formula_vector(arguments["levels"], "factor levels")
+    if "labels" in arguments:
+        labels, _labels_null = _factor_formula_vector(arguments["labels"], "factor labels")
+    if "exclude" in arguments:
+        exclude, exclude_null = _factor_formula_vector(arguments["exclude"], "factor exclude")
+        exclude_missing = not exclude_null and any(value is None for value in exclude)
+        exclude = tuple(value for value in exclude if value is not None)
+    if "ordered" in arguments:
+        ordered_value = _factor_formula_literal(arguments["ordered"], "factor ordered")
+        if not isinstance(ordered_value, bool):
+            raise ValueError("factor ordered must be TRUE or FALSE")
+        ordered = ordered_value
+    if "nmax" in arguments:
+        nmax_value = _factor_formula_literal(arguments["nmax"], "factor nmax")
+        if nmax_value is not None:
+            nmax = _integer_scalar(nmax_value, "factor nmax")
+            if nmax < 1:
+                raise ValueError("factor nmax must be positive")
+
+    return _CovariateTerm(
+        column,
+        categorical=True,
+        categorical_wrapper=wrapper,
+        factor_options=_FactorFormulaOptions(
+            levels=levels,
+            labels=labels,
+            exclude=exclude,
+            exclude_missing=exclude_missing,
+            ordered=ordered,
+            nmax=nmax,
+        ),
+        formula_label=_factor_formula_label(term),
+    )
 
 
 def _transform_column_items(term: str) -> tuple[str, list[tuple[str, bool]]] | None:
@@ -3459,19 +3742,9 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     if not term:
         raise ValueError("formula interaction terms must not be empty")
 
-    factor_items = _factor_column_items(term)
-    if factor_items is not None:
-        wrapper, column_items = factor_items
-        columns = [column for column, _quoted in column_items]
-        if len(columns) != 1:
-            raise ValueError(f"{wrapper}() requires exactly one column")
-        if any(_unsupported_formula_name(column, quoted) for column, quoted in column_items):
-            raise ValueError(f"unsupported formula term(s): {columns[0]}")
-        return _CovariateTerm(
-            columns[0],
-            categorical=True,
-            categorical_wrapper=wrapper,
-        )
+    factor_term = _parse_factor_formula_term(term)
+    if factor_term is not None:
+        return factor_term
 
     for wrapper in ("I", "identity"):
         prefix = f"{wrapper}("
@@ -4536,6 +4809,12 @@ def _term_values(data: Any, term: _CovariateSpec, n: int) -> list[Any]:
         return [math.prod(values[idx] for values in numeric_values) for idx in range(n)]
 
     values = _term_raw_values(data, term, n)
+    if term.categorical_wrapper is not None:
+        source = _column_source(data, term.column)
+        declared_levels = _formula_declared_factor_levels(data, term)
+        if declared_levels is not None and term.factor_options is None:
+            return _factor_normalized_values(source, values)
+        return list(_factor_encoding(data, term, values).values)
     if term.transform is None:
         return values
     return _numeric_term_values(values, term)
@@ -4557,10 +4836,16 @@ def _term_columns(
 
     values = _term_raw_values(data, term, n)
     declared_levels = _formula_declared_factor_levels(data, term)
-    if declared_levels is not None:
-        levels = _categorical_levels(values, term.column, declared_levels)
+    if declared_levels is not None and term.factor_options is None:
+        source = _column_source(data, term.column)
+        normalized = _factor_normalized_values(source, values)
+        levels = _categorical_levels(normalized, term.column, declared_levels)
         contrasts, _contrast_names = _formula_declared_factor_contrasts(data, term, levels)
-        return _categorical_columns(values, levels, contrasts=contrasts)
+        return _categorical_columns(normalized, levels, contrasts=contrasts)
+    if term.categorical_wrapper is not None:
+        encoding = _factor_encoding(data, term, values)
+        levels = _categorical_levels(encoding.values, term.column, encoding.levels)
+        return _categorical_columns(encoding.values, levels, contrasts=encoding.contrasts)
     if not term.categorical:
         if term.transform is not None:
             return [_numeric_term_values(values, term)]
@@ -4581,7 +4866,13 @@ def _formula_declared_factor_levels(
 ) -> Any | None:
     if term.arithmetic is not None or (term.transform is not None and not term.categorical):
         return None
-    return _mstate_categories(_column_source(data, term.column))
+    categories = _mstate_categories(_column_source(data, term.column))
+    if categories is None:
+        return None
+    return tuple(
+        _FACTOR_NA_LEVEL if _is_missing_value(value) else value
+        for value in _materialize_1d(categories, f"{term.column} categories")
+    )
 
 
 def _formula_declared_factor_contrasts(
@@ -4623,6 +4914,203 @@ def _formula_declared_factor_contrasts(
             f"factor contrast names for {term.column!r} must match the contrast columns"
         )
     return contrasts, names
+
+
+def _factor_value_key(value: Any) -> tuple[bool, str]:
+    if value is _FACTOR_NA_LEVEL or _is_missing_value(value):
+        return True, ""
+    return False, _mstate_event_label(value)
+
+
+def _factor_level_value(value: Any) -> Any:
+    if value is _FACTOR_NA_LEVEL or _is_missing_value(value):
+        return _FACTOR_NA_LEVEL
+    return _mstate_event_label(value)
+
+
+def _factor_normalized_values(source: Any, values: Sequence[Any]) -> list[Any]:
+    normalized = list(values)
+    if not isinstance(source, _RFactorVector) or source.codes is None:
+        return normalized
+    if len(source.codes) != len(normalized):
+        return normalized
+    categories = tuple(
+        _FACTOR_NA_LEVEL if _is_missing_value(value) else value for value in source.categories
+    )
+    for idx, code in enumerate(source.codes):
+        if code is None:
+            normalized[idx] = None
+            continue
+        code_idx = int(code) - 1
+        if code_idx < 0 or code_idx >= len(categories):
+            raise ValueError(f"factor code for row {idx} is outside the declared levels")
+        if categories[code_idx] is _FACTOR_NA_LEVEL:
+            normalized[idx] = _FACTOR_NA_LEVEL
+    return normalized
+
+
+def _factor_source_values(source: Any, values: Sequence[Any]) -> list[Any]:
+    factor_source = getattr(source, "factor_source", values)
+    materialized = _materialize_1d(factor_source, "factor source")
+    if factor_source is source or len(materialized) == len(values):
+        return _factor_normalized_values(source, materialized)
+    return materialized
+
+
+def _factor_inferred_source_levels(source: Any, values: Sequence[Any]) -> tuple[Any, ...]:
+    factor_values = _factor_source_values(source, values)
+    declared = _mstate_categories(source)
+    if declared is not None:
+        observed = {_factor_value_key(value) for value in factor_values}
+        return tuple(
+            level
+            for level in (
+                _FACTOR_NA_LEVEL if _is_missing_value(value) else value
+                for value in _materialize_1d(declared, "factor categories")
+            )
+            if _factor_value_key(level) in observed
+        )
+
+    unique: dict[tuple[bool, str], Any] = {}
+    for value in factor_values:
+        normalized = _FACTOR_NA_LEVEL if _is_missing_value(value) else value
+        unique.setdefault(_factor_value_key(normalized), normalized)
+    nonmissing = [value for value in unique.values() if value is not _FACTOR_NA_LEVEL]
+    if nonmissing and all(
+        isinstance(value, Real) and not isinstance(value, bool) for value in nonmissing
+    ):
+        nonmissing.sort(key=float)
+    elif nonmissing and all(isinstance(value, bool) for value in nonmissing):
+        nonmissing.sort()
+    else:
+        nonmissing.sort(key=_mstate_event_label)
+    if (True, "") in unique:
+        nonmissing.append(_FACTOR_NA_LEVEL)
+    return tuple(nonmissing)
+
+
+@lru_cache(maxsize=96)
+def _ordered_factor_contrasts(
+    level_count: int,
+) -> tuple[tuple[tuple[float, ...], ...], tuple[str, ...]]:
+    if level_count > 95:
+        raise ValueError("ordered formula factors support at most 95 levels")
+    if level_count < 2:
+        return (), ()
+
+    scores = tuple(float(index) for index in range(1, level_count + 1))
+    current = tuple(1.0 / math.sqrt(level_count) for _ in scores)
+    previous: tuple[float, ...] | None = None
+    columns: list[tuple[float, ...]] = []
+    for _degree in range(1, level_count):
+        alpha = math.fsum(
+            score * value * value for score, value in zip(scores, current, strict=True)
+        )
+        beta = (
+            0.0
+            if previous is None
+            else math.fsum(
+                score * value * old
+                for score, value, old in zip(scores, current, previous, strict=True)
+            )
+        )
+        candidate = tuple(
+            (score - alpha) * value - beta * (0.0 if previous is None else old)
+            for score, value, old in zip(
+                scores,
+                current,
+                previous if previous is not None else (0.0,) * level_count,
+                strict=True,
+            )
+        )
+        norm = math.sqrt(math.fsum(value * value for value in candidate))
+        if norm == 0.0:
+            raise ValueError("ordered formula factor contrasts are rank deficient")
+        next_column = tuple(value / norm for value in candidate)
+        columns.append(next_column)
+        previous, current = current, next_column
+
+    names = tuple(
+        (".L", ".Q", ".C")[degree - 1] if degree <= 3 else f"^{degree}"
+        for degree in range(1, level_count)
+    )
+    return tuple(tuple(column[row] for column in columns) for row in range(level_count)), names
+
+
+def _factor_encoding(
+    data: Any,
+    term: _CovariateTerm,
+    values: Sequence[Any],
+) -> _FactorEncoding:
+    source = _column_source(data, term.column)
+    normalized_values = _factor_normalized_values(source, values)
+    options = term.factor_options or _FactorFormulaOptions()
+    if options.levels is None:
+        source_levels = _factor_inferred_source_levels(source, normalized_values)
+    else:
+        source_levels = tuple(
+            _FACTOR_NA_LEVEL if _is_missing_value(value) else value for value in options.levels
+        )
+        keys = [_factor_value_key(level) for level in source_levels]
+        if len(set(keys)) != len(keys):
+            raise ValueError("factor levels contain a duplicate value")
+
+    excluded = {_factor_value_key(value) for value in options.exclude}
+    if options.exclude_missing:
+        excluded.add((True, ""))
+    source_levels = tuple(
+        level for level in source_levels if _factor_value_key(level) not in excluded
+    )
+
+    labels = options.labels
+    if labels is None:
+        output_for_level = tuple(_factor_level_value(level) for level in source_levels)
+    elif len(labels) == 1:
+        prefix = "NA" if _is_missing_value(labels[0]) else _mstate_event_label(labels[0])
+        output_for_level = tuple(f"{prefix}{index}" for index in range(1, len(source_levels) + 1))
+    elif len(labels) == len(source_levels):
+        output_for_level = tuple(_factor_level_value(label) for label in labels)
+    else:
+        raise ValueError(f"factor labels must have length 1 or {len(source_levels)}")
+
+    output_levels = tuple(dict.fromkeys(output_for_level))
+    mapping = tuple(
+        (_factor_value_key(source_level), output_level)
+        for source_level, output_level in zip(source_levels, output_for_level, strict=True)
+    )
+    mapping_by_key = dict(mapping)
+    transformed = tuple(mapping_by_key.get(_factor_value_key(value)) for value in normalized_values)
+    ordered = (
+        bool(getattr(source, "ordered", False)) if options.ordered is None else options.ordered
+    )
+    contrasts = None
+    contrast_names: tuple[str, ...] = ()
+    if ordered and len(output_levels) >= 2:
+        contrasts, contrast_names = _ordered_factor_contrasts(len(output_levels))
+    return _FactorEncoding(
+        transformed,
+        output_levels,
+        contrasts=contrasts,
+        contrast_names=contrast_names,
+        mapping=mapping,
+    )
+
+
+def _mapped_factor_values(values: Sequence[Any], spec: _CategoricalDesignTerm) -> list[Any]:
+    mapping = dict(spec.factor_mapping)
+    mapped: list[Any] = []
+    for value in values:
+        normalized = _FACTOR_NA_LEVEL if _is_missing_value(value) else value
+        if mapping:
+            key = _factor_value_key(normalized)
+            if key not in mapping:
+                raise ValueError(
+                    f"newdata column {spec.term.column!r} contains unknown level {value!r}"
+                )
+            mapped.append(mapping[key])
+        else:
+            mapped.append(normalized)
+    return mapped
 
 
 def _categorical_columns(
@@ -4680,15 +5168,10 @@ def _formula_inferred_categorical_levels(
     values: Sequence[Any],
 ) -> tuple[Any, ...]:
     source = _column_source(data, term.column)
-    r_style_levels = term.categorical_wrapper is not None or isinstance(
-        source,
-        _RCharacterVector,
-    )
+    r_style_levels = isinstance(source, _RCharacterVector)
     if not r_style_levels:
         return _categorical_levels(values, term.column)
-    factor_values = (
-        getattr(source, "factor_source", values) if term.categorical_wrapper is not None else values
-    )
+    factor_values = values
     levels = _categorical_levels(
         [value for value in factor_values if not _is_missing_value(value)],
         term.column,
@@ -4706,14 +5189,26 @@ def _fit_single_design_term(
 ) -> _SingleDesignTerm:
     values = _term_raw_values(data, term, n)
     declared_levels = _formula_declared_factor_levels(data, term)
-    if declared_levels is not None:
-        levels = _categorical_levels(values, term.column, declared_levels)
+    if declared_levels is not None and term.factor_options is None:
+        source = _column_source(data, term.column)
+        normalized = _factor_normalized_values(source, values)
+        levels = _categorical_levels(normalized, term.column, declared_levels)
         contrasts, contrast_names = _formula_declared_factor_contrasts(data, term, levels)
         return _CategoricalDesignTerm(
             term,
             levels,
             contrasts=contrasts,
             contrast_names=contrast_names,
+        )
+    if term.categorical_wrapper is not None:
+        encoding = _factor_encoding(data, term, values)
+        levels = _categorical_levels(encoding.values, term.column, encoding.levels)
+        return _CategoricalDesignTerm(
+            term,
+            levels,
+            contrasts=encoding.contrasts,
+            contrast_names=encoding.contrast_names,
+            factor_mapping=encoding.mapping,
         )
     if not term.categorical:
         if term.transform is not None:
@@ -4864,6 +5359,7 @@ def _set_full_categorical_factors(
             spec.levels,
             contrasts=spec.contrasts,
             contrast_names=spec.contrast_names,
+            factor_mapping=spec.factor_mapping,
             full=spec.term in full_factors,
         )
     if isinstance(spec, _InteractionDesignTerm):
@@ -4874,6 +5370,7 @@ def _set_full_categorical_factors(
                     factor.levels,
                     contrasts=factor.contrasts,
                     contrast_names=factor.contrast_names,
+                    factor_mapping=factor.factor_mapping,
                     full=factor.term in full_factors,
                 )
                 if isinstance(factor, _CategoricalDesignTerm)
@@ -5001,6 +5498,8 @@ def _single_design_columns(
     if isinstance(spec, _NumericDesignTerm):
         return [_numeric_term_values(values, spec.term)]
 
+    source = _column_source(data, spec.term.column)
+    values = _mapped_factor_values(_factor_normalized_values(source, values), spec)
     levels = spec.levels
     for value in values:
         if all(value != level for level in levels):
@@ -5810,6 +6309,8 @@ def _frailty_reml_next_theta(
 
 
 def _covariate_term_name(term: _CovariateTerm) -> str:
+    if term.formula_label is not None:
+        return term.formula_label
     if term.transform is not None:
         return f"{term.transform}({term.column})"
     if term.categorical_wrapper is not None:
