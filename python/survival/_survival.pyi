@@ -3747,6 +3747,7 @@ class SurvivalFit:
     penalty_matrix: list[list[float]]
     penalty: float
     penalized_log_likelihood: float
+    degrees_of_freedom: float | None
     def predict(
         self,
         covariates: list[list[float]] | None = None,

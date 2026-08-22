@@ -131,6 +131,8 @@ pub struct SurvivalFit {
     pub penalty: f64,
     #[pyo3(get)]
     pub penalized_log_likelihood: f64,
+    #[pyo3(get)]
+    pub degrees_of_freedom: Option<f64>,
 }
 
 impl DistributionType {
@@ -1121,6 +1123,7 @@ pub fn survreg(
             .unwrap_or_default(),
         penalty: result.penalty,
         penalized_log_likelihood: result.penalized_log_likelihood,
+        degrees_of_freedom: result.degrees_of_freedom,
     })
 }
 
@@ -1326,6 +1329,16 @@ fn compute_survreg(
     }
     let convergence_flag = if converged { 0 } else { -1 };
     let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
+    let degrees_of_freedom = penalty_matrix.map(|penalty| {
+        let penalty_trace = (0..nvar)
+            .map(|row| {
+                (0..nvar)
+                    .map(|column| penalty[(row, column)] * variance[(column, row)])
+                    .sum::<f64>()
+            })
+            .sum::<f64>();
+        ((nvar2 as f64) - penalty_trace).clamp(0.0, nvar2 as f64)
+    });
     Ok(SurvivalFitComputed {
         coefficients: beta,
         iterations: iter,
@@ -1333,6 +1346,7 @@ fn compute_survreg(
         log_likelihood: loglik,
         penalty: penalty_value,
         penalized_log_likelihood: penalized_loglik,
+        degrees_of_freedom,
         convergence_flag,
         score_vector: usave.to_vec(),
     })
@@ -1344,6 +1358,7 @@ pub(crate) struct SurvivalFitComputed {
     log_likelihood: f64,
     penalty: f64,
     penalized_log_likelihood: f64,
+    degrees_of_freedom: Option<f64>,
     convergence_flag: i32,
     score_vector: Vec<f64>,
 }
@@ -1587,6 +1602,13 @@ mod tests {
         assert!((fit.scale - 0.004_673_727_601_541_054).abs() < 1e-10);
         assert!((fit.penalty - 4.023_383_511_207_064).abs() < 1e-8);
         assert!((fit.log_likelihood - fit.penalized_log_likelihood - fit.penalty).abs() < 1e-12);
+        let degrees_of_freedom = fit
+            .degrees_of_freedom
+            .expect("penalized fit should report effective df");
+        assert!(
+            (degrees_of_freedom - 7.928_923_322_702_46).abs() < 1e-8,
+            "effective df was {degrees_of_freedom}"
+        );
     }
 
     #[test]
@@ -1941,6 +1963,7 @@ mod tests {
             log_likelihood: -50.0,
             penalty: 0.25,
             penalized_log_likelihood: -50.25,
+            degrees_of_freedom: Some(1.75),
             convergence_flag: 0,
             score_vector: vec![0.001, 0.002],
         };
