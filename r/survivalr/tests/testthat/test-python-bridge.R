@@ -4177,6 +4177,55 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("right-censored concordance includes censors at the death time", {
+  data <- data.frame(
+    time = c(1, 3, 2, 4, 4, 5),
+    status = c(1, 0, 1, 1, 0, 1),
+    x = c(0.2, 0.9, 0.4, 0.7, 0.7, 0.1),
+    z = c(0.8, 0.3, 0.5, 0.2, 0.6, 0.4),
+    w = c(1, 2, 0.5, 1.5, 3, 1)
+  )
+  bridged_formula <- concordance(
+    Surv(time, status) ~ x + z,
+    data = data,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_formula <- survival::concordance(
+    survival::Surv(time, status) ~ x + z,
+    data = data,
+    influence = 3,
+    ranks = TRUE
+  )
+  formula_fields <- setdiff(names(reference_formula), "call")
+  expect_identical(names(bridged_formula), names(reference_formula))
+  expect_equal(
+    unclass(bridged_formula)[formula_fields],
+    unclass(reference_formula)[formula_fields],
+    tolerance = 1e-12
+  )
+
+  score_matrix <- as.matrix(data[c("x", "z")])
+  bridged_fit <- concordancefit(
+    Surv(data$time, data$status),
+    score_matrix,
+    weights = data$w,
+    timewt = "S",
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_fit <- survival::concordancefit(
+    survival::Surv(data$time, data$status),
+    score_matrix,
+    weights = data$w,
+    timewt = "S",
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_identical(names(bridged_fit), names(reference_fit))
+  expect_equal(unclass(bridged_fit), unclass(reference_fit), tolerance = 1e-12)
+})
+
 test_that("stratified concordance results match reference shapes and diagnostics", {
   right_data <- data.frame(
     y = c(1, 3, 2, 4, 4, 2),
