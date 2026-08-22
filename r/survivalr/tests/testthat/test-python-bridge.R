@@ -4654,6 +4654,57 @@ test_that("disabled standard errors recycle retained strata counts like referenc
   expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
 })
 
+test_that("disabled standard errors warn before collapsed strata errors", {
+  data <- data.frame(
+    time = c(3, 2, 1, 1, 1, 3, 1, 4),
+    status = c(1, 0, 0, 0, 1, 0, 0, 0),
+    x = c(0.5, 1, -0.5, -1, 0.5, 0, 0, 0),
+    group = c(1, 2, 2, 1, 2, 1, 2, 1)
+  )
+  warning_message <- paste(
+    "data length [10] is not a sub-multiple or multiple",
+    "of the number of columns [6]"
+  )
+  dimension_error <- "'x' must be an array of at least two dimensions"
+
+  expect_warning(
+    expect_error(
+      concordancefit(
+        Surv(data$time, data$status),
+        data$x,
+        strata = data$group,
+        ymin = 3,
+        timewt = "S",
+        reverse = TRUE,
+        keepstrata = 1,
+        std.err = FALSE
+      ),
+      dimension_error,
+      fixed = TRUE
+    ),
+    warning_message,
+    fixed = TRUE
+  )
+  expect_warning(
+    expect_error(
+      survival::concordancefit(
+        survival::Surv(data$time, data$status),
+        data$x,
+        strata = data$group,
+        ymin = 3,
+        timewt = "S",
+        reverse = TRUE,
+        keepstrata = 1,
+        std.err = FALSE
+      ),
+      dimension_error,
+      fixed = TRUE
+    ),
+    warning_message,
+    fixed = TRUE
+  )
+})
+
 test_that("multi-score influence covariance matches reference shape", {
   time <- c(1, 2, 3, 4, 5, 6)
   status <- c(1, 1, 0, 1, 0, 1)

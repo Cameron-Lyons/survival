@@ -11969,7 +11969,8 @@ concordance <- function(object, ..., formula) {
   ncol(design)
 }
 
-.concordance_collapsed_strata_check <- function(n_scores, n_strata, keepstrata, timewt) {
+.concordance_collapsed_strata_check <- function(
+    n_scores, n_strata, keepstrata, timewt, response = NULL, std.err = TRUE) {
   if (n_scores != 1L || n_strata <= 1L) {
     return(invisible(NULL))
   }
@@ -11982,6 +11983,16 @@ concordance <- function(object, ..., formula) {
   }
   time_weight <- match.arg(timewt, c("n", "S", "S/G", "n/G2", "I"))
   if (!retain_strata && !(n_strata > 10L && time_weight %in% c("n", "I"))) {
+    disabled <- length(std.err) == 1L &&
+      (is.logical(std.err) || is.numeric(std.err)) &&
+      !is.na(std.err) &&
+      !as.logical(std.err)
+    survival_response <- inherits(response, "Surv") ||
+      inherits(response, "survival_py_surv")
+    counting_response <- survival_response && ncol(.as_native_surv(response)) == 3L
+    if (disabled && !counting_response) {
+      matrix(numeric(n_strata * 5L), ncol = 6L, byrow = TRUE)
+    }
     colSums(numeric())
   }
   invisible(NULL)
@@ -12972,7 +12983,9 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     n_scores,
     input_strata_count,
     keepstrata,
-    timewt
+    timewt,
+    y,
+    std.err
   )
 
   multi_score <- length(concordance) > 1L
